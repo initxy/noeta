@@ -1,0 +1,462 @@
+{
+  "preset": "main",
+  "provider_tool_schemas": [
+    {
+      "function": {
+        "description": "Reads a file's contents from the workspace, optionally sliced by line.\n\n- `path` is workspace-relative. An absolute path is rejected unless it sits under a skill's `Base directory for this skill:` (shown when a skill activates) — use that base + the skill body's relative reference to read a skill's bundled files. Symlink escapes are always rejected.\n- Reads the whole file by default. `offset` (1-based line) and `limit` (line count) take a slice — use them for large files.\n- The full body is always offloaded as an artifact (`content_ref`); when inline output would exceed the byte budget you get a bounded excerpt plus the ref, never a silently truncated middle.\n- A text target must be valid UTF-8; non-image binary files are rejected (use the right tool for those).\n- Reads image files too (png, jpg, gif, webp): the image is presented to you visually, so you can read screenshots, diagrams, and photos directly.\n- Don't guess a path — locate it first with `grep` (by content) or `glob` (by name).",
+        "name": "read",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "limit": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "offset": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Matches a workspace-relative glob pattern and returns the matching file paths.\n\n- Standard glob semantics — `**` matches recursively (e.g. \"**/*.py\", \"src/**/test_*\"). Results are workspace-relative POSIX paths, sorted, and capped — narrow the pattern if truncated.\n- `pattern` must be workspace-relative: no leading `/` and no `..`. Matches whose real path escapes the workspace via symlink are dropped.\n- To search by file content rather than name use `grep`; to read a known file use `read`.",
+        "name": "glob",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "pattern": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pattern"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Searches file contents across the workspace with a regular expression (Python `re` syntax).\n\n- Returns each match as file path + line number + the matching line. Locate files-with-matches first, then `read` the surrounding lines to keep search noise low.\n- Scope with `path` (a file or sub-directory) and filter with `glob` (e.g. \"**/*.py\").\n- `pattern` is a Python `re` regular expression. Binary files are skipped automatically.\n- `path` is workspace-relative; absolute paths and symlink escapes are rejected.\n- To match by filename rather than content use `glob`; to read a known file use `read`.",
+        "name": "grep",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "glob": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "pattern": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pattern"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Replaces an exact, unique `old` string in an existing file with `new`.\n\n- `old` must match exactly once — zero matches or more than one fails and writes nothing. Include enough surrounding context to make it unique, or target a region that already is.\n- Set `replace_all` to true to replace every occurrence of `old` instead — use this for renames or repeated edits where the same string recurs and you want them all changed.\n- `path` is workspace-relative and must be an existing UTF-8 text file; absolute paths and symlink escapes are rejected.\n- `new` may be empty to delete the matched region. The change is offloaded as a unified diff with before/after hashes.\n- Creating a new file or replacing a whole file body is `write`'s job, not this one's.",
+        "name": "edit",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "new": {
+              "type": "string"
+            },
+            "old": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "replace_all": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "path",
+            "old",
+            "new"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Writes a file to the workspace, creating it or overwriting one you've already read.\n\n- `path` is workspace-relative and its parent directory must already exist. Absolute paths and symlink escapes are rejected.\n- Creating a new file always works. Overwriting an existing file requires you to have `read` it earlier in this session, so you never blindly clobber a file you haven't seen.\n- `content` is UTF-8 text, max 64 KB. The change is offloaded as a unified diff with before/after hashes.\n- For a small change to an existing file, prefer `edit` — it sends a surgical diff instead of replacing the whole body.",
+        "name": "write",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Applies a batch of up to 16 file edits atomically — all succeed or none do.\n\n- Each edit is `replace` (swap a unique substring in an existing file) or `create` (write a brand-new file). All are validated in memory first; an apply-phase failure rolls the whole batch back.\n- Paths are workspace-relative; absolute paths and symlink escapes are rejected. A `replace` target's `old` must occur exactly once — include enough surrounding context to make it unique, and copy it verbatim (indentation, trailing spaces, and newlines must match). A `create` target must not exist yet under an existing parent.\n- Several `replace` edits may target the **same file** to change multiple places in one call; they apply in array order, and each `old` is matched against the file *as left by the earlier edits in this same call* (so don't include text a previous edit already removed). A `create` cannot be combined with any other edit on the same path — a create writes the whole file, so put its final content in one create. Two different spellings of one path that differ only in case or unicode form are rejected.\n- `old`/`new` and `content` each cap at 64 KB (the same safety ceiling as `write`); an absurdly large whole call is rejected — split it into separate calls.\n- Leave `before_sha256` unset. It is an optional staleness guard; if set it must be the SHA-256 of the **entire current file** from a recent read — an empty value is ignored, a wrong one fails the edit.\n- For a single change to one file, prefer `edit`.",
+        "name": "apply_patch",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "edits": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "before_sha256": {
+                    "maxLength": 64,
+                    "type": "string"
+                  },
+                  "content": {
+                    "maxLength": 65536,
+                    "type": "string"
+                  },
+                  "new": {
+                    "maxLength": 65536,
+                    "type": "string"
+                  },
+                  "old": {
+                    "maxLength": 65536,
+                    "type": "string"
+                  },
+                  "op": {
+                    "enum": [
+                      "replace",
+                      "create"
+                    ],
+                    "type": "string"
+                  },
+                  "path": {
+                    "maxLength": 120,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op",
+                  "path"
+                ],
+                "type": "object"
+              },
+              "maxItems": 16,
+              "type": "array"
+            }
+          },
+          "required": [
+            "edits"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Executes a shell command in the workspace and returns its output.\n\n- Runs with `cwd` at the workspace root, a scrubbed (secret-free) environment, and capped output — the full stdout/stderr are offloaded as artifacts and you get the tail inline plus the return code.\n- `timeout` is in milliseconds: default 120000, max 600000.\n- `run_in_background: true` launches the command detached (a server, a long build or test run): the call returns a `job_id` and an output ref immediately and you keep working. Read its output with `shell_poll`, stop it with `shell_kill`. A background job's lifetime follows the session, not this task.\n- On a strict host the command must match an allowlist (git status/diff, pytest, npm/pnpm test, and read-only grep/rg/find/ls) and shell metacharacters are rejected; otherwise the full command runs through bash (pipes, redirection, chaining) and anything not on the allowlist needs a one-time approval.\n- The process is not sandboxed — it runs real workspace code, so use only in a trusted workspace.\n- To only read a file, search content, or list files, prefer `read` / `grep` / `glob` — they are cheaper and need no approval.",
+        "name": "shell_run",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "run_in_background": {
+              "type": "boolean"
+            },
+            "timeout": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Checks the status and latest output of a background shell job.\n\n- Give the `job_id` returned by `shell_run` with `run_in_background: true`. Returns the status (`running` or `exited`), an `exit_code` once finished, and a ref to a fresh snapshot of the output so far — dereference the ref to read the bytes.\n- `truncated: true` means the output overflowed the cap and the snapshot is the most-recent tail (oldest output dropped). Safe and cheap to call repeatedly.\n- To stop the job use `shell_kill`; to start a new command use `shell_run`.",
+        "name": "shell_poll",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "job_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "job_id"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Stops a background shell job you started.\n\n- Give the `job_id` from a `shell_run` call with `run_in_background: true`. Sends SIGTERM, then SIGKILL after a short grace. The call returns immediately; the job's final output snapshot stays readable via its ref.\n- Use it to stop a server, build, or test run you launched and no longer need (e.g. started on the wrong port and want to restart).\n- To only check status or read output, use `shell_poll` instead.\n- Privileged: an operator policy may require approval or deny it.",
+        "name": "shell_kill",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "job_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "job_id"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Fetches a public web page over HTTP(S) and returns its content rendered to Markdown.\n\n- Performs a GET on `url`, converts the HTML to compact Markdown (headings, links, list items; scripts, styles, and `<head>` stripped), and returns `{url, title, content, content_ref, truncated}`. The full rendering is offloaded as an artifact; when inline content would exceed the byte budget you get an excerpt plus the ref and `truncated: true`.\n- `url` must be a well-formed `http://` or `https://` URL.\n- The page must be publicly reachable: webfetch sends no credentials, so authenticated / logged-in / intranet URLs fail (e.g. 401/403). Use an authenticated tool for those.\n- It fetches a URL you already have; it does not search. To read a workspace file, use `read`.",
+        "name": "webfetch",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "url"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Delegate a focused goal to a named sub-agent and get its result back.\n\n## What it does\n\nSpawns ONE sub-agent — picked by `agent`, constrained to the roster of allowed\nnames — to work on `goal`, an independent sub-task. The sub-agent runs to\ncompletion and its final text is returned to you as the result; that text is NOT\nshown to the user, so relay what matters.\n\n## When to use\n\n- The goal fits a sub-agent type: a read-only scout for broad searches, a\n  general-purpose worker for a self-contained coding task, an architect for a\n  plan.\n- Delegating independent work keeps your own context clean, or the answer means\n  sweeping many files and you only need the conclusion, not the file dumps.\n- You want SEVERAL independent sub-agents at once: emit multiple `spawn_subagent`\n  calls in the SAME turn and they fan out and run concurrently, with results\n  returned in call order. This is the direct way to parallelize — plain\n  parallelism does NOT need a workflow. **If the user asks to run sub-agents \"in\n  parallel\", you MUST emit all the `spawn_subagent` calls in a single\n  turn.** A single `spawn_subagent` suspends you until that one child returns, so\n  spawning one per turn is strictly sequential — never parallel. Spawning one at a\n  time, then \"the next after it finishes\", does NOT fan out; batch them.\n\n## When NOT to use\n\n- A single-fact lookup where you already know the file or symbol — just look it up\n  yourself.\n- Orchestrating sub-agents programmatically — loop over a list, branch the next\n  spawn on a prior result, or chain a dependency where each step feeds the next —\n  use `run_workflow` instead. (Plain parallelism is not this: just spawn several\n  at once, see above.)\n- Work already delegated — do not re-spawn for the same thing.\n\n## Preconditions\n\n- Delegation must be enabled for this agent, otherwise the tool is not offered.\n- Pick `agent` only from the roster names shown on the parameter; authorization is\n  enforced by the permission guard, not by this schema.",
+        "name": "spawn_subagent",
+        "parameters": {
+          "properties": {
+            "agent": {
+              "description": "Named sub-agent to delegate to. Available: explore; general-purpose; plan",
+              "enum": [
+                "explore",
+                "general-purpose",
+                "plan"
+              ],
+              "type": "string"
+            },
+            "background": {
+              "description": "Run the sub-agent in the background instead of waiting for it. With background=true you immediately get a 'started' acknowledgement and keep working; the sub-agent runs concurrently and its result is delivered to you automatically when it finishes — you never poll or wait. Use it for independent, longer-running work (research, a broad scan) you want off the critical path. Omit it (the default) to delegate and wait for the result inline. Only a single background spawn is supported per call.",
+              "type": "boolean"
+            },
+            "goal": {
+              "description": "The focused goal for the sub-agent.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "agent",
+            "goal"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Maintain a structured task list for the current task by rewriting it whole.\n\n## What it does\n\nA single call replace-alls the entire checklist — you always send the FULL\nlist, never a delta. Each item is `{id, content, status}` where `status` is one\nof `pending`, `in_progress`, or `completed`. Omitting an item deletes it.\n\n## When to use\n\n- The task is multi-step or non-trivial (roughly three or more distinct steps),\n  or the user handed you several tasks at once.\n- Mark a todo `in_progress` BEFORE you start it and `completed` the moment it is\n  fully done — keep exactly ONE item `in_progress` at a time.\n- Update the list in real time as work lands, so it always reflects reality.\n\n## When NOT to use\n\n- A single, straightforward step, or a purely conversational / informational\n  request — the bookkeeping overhead is not worth it.\n- Work that is one or two actions; just do it and report.\n\n## Preconditions\n\n- The `todo_write` capability must be enabled for this agent, otherwise the tool\n  is not offered.\n- Only mark `completed` when the item truly succeeded; if it is blocked, errored,\n  or tests still fail, leave it `in_progress` and add a follow-up item.",
+        "name": "todo_write",
+        "parameters": {
+          "properties": {
+            "todos": {
+              "description": "The full checklist (replace-all). Each item: {id, content, status}.",
+              "items": {
+                "properties": {
+                  "content": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "pending",
+                      "in_progress",
+                      "completed"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "content",
+                  "status"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "todos"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Ask the user to resolve a decision only they can make, offering preset choices.\n\n## What it does\n\nPresents 1–3 questions at once. Each question has a short `header` chip, the\n`question` text, and optional `choices` (each `{id, label, description}`). When\n`allow_freeform` is true (the default) the user may type their own answer instead\nof picking a choice. An optional top-level `reason` says why you are asking. The\nuser's selections are returned so you can proceed.\n\n## When to use\n\n- You are genuinely blocked on a decision that is the user's to make — one you\n  cannot settle from the request, the code, or sensible defaults — AND guessing\n  wrong would cost more than the round-trip.\n- A fork where the options are mutually exclusive and you can enumerate them.\n\n## When NOT to use\n\n- A reasonable default or guess exists: make it, state the assumption, and keep\n  working — do not stop to ask.\n- Do not ask \"should I proceed?\" / \"is this right?\", and do not ask for facts you\n  can verify yourself in the codebase or decisions that have a conventional\n  default.\n\n## Preconditions\n\n- The `ask_user_question` capability must be enabled for this agent, otherwise\n  the tool is not offered.\n- At most 3 questions, each with at most 5 choices; a question that supplies no\n  choices MUST allow freeform answers.",
+        "name": "ask_user_question",
+        "parameters": {
+          "properties": {
+            "questions": {
+              "items": {
+                "properties": {
+                  "allow_freeform": {
+                    "type": "boolean"
+                  },
+                  "choices": {
+                    "items": {
+                      "properties": {
+                        "description": {
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "label": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "label"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "header": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "question": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "question"
+                ],
+                "type": "object"
+              },
+              "maxItems": 3,
+              "minItems": 1,
+              "type": "array"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "questions"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    }
+  ],
+  "segments": [
+    {
+      "content": [
+        {
+          "__canonical_tag__": "message",
+          "content": [
+            {
+              "__canonical_tag__": "text_block",
+              "text": "You are the top-level coding assistant working inside a single workspace directory, talking directly to the user. You excel at understanding a codebase, making focused changes, and driving a task all the way to done — coordinating subordinate agents when the work is large.\n\nYour strengths:\n  - The full toolset: searching with `grep`/`glob`, reading with `read`, editing with `edit`/`write`/`apply_patch`, running commands with `shell_run`, and fetching URLs with `webfetch`. Issue independent tool calls — searches, reads, commands, and subagent spawns — in parallel, as multiple tool calls in a single message.\n  - Delegating heavy or self-contained work to subagents — a read-only scout (`explore`) for broad searches, a planner (`plan`) for design, and a general-purpose worker for multi-step tasks you want handled end-to-end.\n  - Tracking multi-step work with todos, remembering durable facts across sessions, and asking the user when a decision is genuinely theirs.\n\nRules:\n  1. Read before you edit; search to find the exact lines first.\n  2. Make the minimal change that accomplishes the task, and write code that matches the style and conventions of the surrounding file.\n  3. After editing, review your diff and run the tests. Report what you actually checked — if something failed or you skipped it, say so plainly.\n  4. Confirm before irreversible or outward-facing actions (deleting data, pushing, publishing) unless the user has already told you to proceed.\n  5. Before deleting or overwriting anything, inspect the target; if it differs from what you expected or you did not create it, stop and surface that.\n  6. Use the narrowest appropriate tool: prefer dedicated search/read/edit tools over shell commands when they fit, and treat a denied tool call as feedback to adjust rather than retrying the same call.\n  7. Communicate for a teammate who did not watch the tools run. Before your first tool call, say what you are about to do; while working, give brief updates when you find load-bearing facts or change direction.\n  8. Your final answer must stand on its own because the user may not see raw tool results. Lead with the outcome, include the important checks or failures, and reference code with `path:line` when useful.\n  9. When you have enough information to act, act. If the user is only asking for an assessment, give the assessment and stop; otherwise do the work rather than ending with a plan or a promise.\n  10. You can call multiple tools in a single response. If you intend to call multiple tools and there are no dependencies between them, make all independent tool calls in parallel — this includes launching several subagents at once: emit multiple `spawn_subagent` calls in one message and they fan out concurrently. Maximize use of parallel tool calls where possible to increase efficiency. However, if some tool calls depend on previous calls to inform dependent values, do NOT call these tools in parallel and instead call them sequentially.\n"
+            }
+          ],
+          "role": "system"
+        }
+      ],
+      "name": "stable_prefix",
+      "segment_hash": "ec6ae61cc9a89aeaf2dfeaf890111eae3c30c9bd6d0325eda01bc24dd7ec84c1"
+    },
+    {
+      "content": [],
+      "name": "semi_stable",
+      "segment_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "content": [
+        {
+          "__canonical_tag__": "message",
+          "content": [
+            {
+              "__canonical_tag__": "text_block",
+              "text": "Fixed goal: say hi"
+            }
+          ],
+          "role": "user"
+        },
+        {
+          "__canonical_tag__": "message",
+          "content": [
+            {
+              "__canonical_tag__": "text_block",
+              "text": "When you delegate independent work to sub-agents, send them in a single message with multiple spawn_subagent tool calls so they run concurrently. Spawning one per turn is sequential, not parallel."
+            }
+          ],
+          "origin": "system",
+          "role": "user"
+        }
+      ],
+      "name": "dynamic_suffix",
+      "segment_hash": "bfebaefd62829805cf16e8b541eccae4209a917d4b64a0a3cf1054dffc26f37f"
+    }
+  ]
+}

@@ -1,0 +1,548 @@
+/* The session list is grouped by workspace. Each group is a stack
+   of rows under a sticky label (the registry name, or "Ungrouped" for bare
+   sessions whose private session-<uuid> dir is not a registered workspace). */
+.session-group {
+  display: grid;
+  /* Likewise pin minmax(0,1fr): titles in each group row are truncated with an ellipsis instead of blowing the row out. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s-4);
+}
+
+.session-group + .session-group {
+  margin-top: var(--s-10);
+}
+
+/* The group header is a clickable button: click it to collapse/expand the sessions under that workspace (the chevron flips). */
+.session-group__title {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--s-6);
+  width: 100%;
+  padding: var(--s-4) var(--s-10);
+  border: none;
+  border-radius: var(--r-sm);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--panel);
+  cursor: pointer;
+  text-align: left;
+}
+
+.session-group__title:hover {
+  color: var(--text);
+}
+
+.session-group__chevron {
+  flex: none;
+  transition: transform 0.15s ease;
+}
+
+.session-group__chevron.is-collapsed {
+  transform: rotate(-90deg);
+}
+
+.session-group__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-group__count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  width: 100%;
+  padding: 0 var(--s-6) 0 var(--s-10);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--text);
+}
+
+.session-row:hover {
+  background: color-mix(in srgb, var(--panel-raised) 65%, transparent);
+}
+
+/* selected session reads in the brand colour, not just a darker gray */
+.session-row.active {
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent-soft) 60%, transparent);
+}
+
+/* The row's primary button: fills the remaining width, carries the dot + title, click it to enter the session. */
+.session-row__main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--s-8);
+  min-width: 0;
+  padding: var(--s-6) 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Delete button: hidden by default, appears only on row hover or while awaiting confirmation, so it does not overpower the list. */
+.session-row__del,
+.session-row__stop,
+.session-row__pin {
+  flex: none;
+  opacity: 0;
+  color: var(--muted);
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+
+.session-row:hover .session-row__del,
+.session-row:focus-within .session-row__del,
+.session-row:hover .session-row__stop,
+.session-row:focus-within .session-row__stop,
+.session-row:hover .session-row__pin,
+.session-row:focus-within .session-row__pin {
+  opacity: 1;
+}
+
+/* a pinned row keeps its pin visible (and accented) even when not hovered. */
+.session-row__pin.is-pinned {
+  opacity: 1;
+  color: var(--accent);
+}
+.session-row__pin:hover {
+  color: var(--accent);
+}
+
+.session-row__del:hover {
+  color: var(--error);
+}
+
+.session-row__stop:hover {
+  color: var(--warning);
+}
+
+.session-row__confirm {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.session-row__del-yes {
+  color: var(--error);
+}
+
+.session-row__del-no {
+  color: var(--muted);
+}
+
+/* Highlight the row while awaiting confirmation, giving a "this really will delete now" visual cue. */
+.session-row.confirming {
+  border-color: color-mix(in srgb, var(--error) 45%, transparent);
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+}
+
+/* U7 — titles read in the body font (the mono face stretched CJK and squeezed
+   long titles into vertical bars); still bold + slightly tightened. */
+.session-title {
+  font-family: var(--font);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+}
+
+.session-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--s-6);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.session-dot,
+.ks-cat-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-pill);
+  background: var(--faint);
+  flex: none;
+}
+
+/* Session lifecycle uses colour only; labels live in title/aria-label. */
+.session-dot.running {
+  background: var(--warning);
+  animation: ks-blink 1.2s ease-in-out infinite;
+}
+.session-dot.done { background: var(--success); }
+.session-dot.ready { background: var(--trace-llm); }
+.session-dot.attention { background: var(--trace-message); }
+.session-dot.failed { background: var(--error); }
+.session-dot.closed { background: var(--faint); }
+
+@keyframes ks-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+.chat-main {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* landing screen: a fresh session, before the first goal is sent. Centre the
+   composer in the empty canvas with a title over it; sending a goal drops the
+   .is-landing modifier and the normal transcript layout takes over. */
+.chat-main.is-landing {
+  justify-content: center;
+  align-items: center;
+  padding: var(--s-24);
+}
+
+.chat-hero {
+  width: min(680px, 100%);
+  display: grid;
+  gap: var(--s-24);
+}
+
+.chat-hero__head {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+}
+
+/* codex landing: a single big centred prompt, no avatar / subtitle. */
+.chat-hero__head h1 {
+  margin: 0;
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* in the hero the composer block is already inside a width-bounded column */
+.chat-hero .composer-block {
+  width: 100%;
+  margin: 0;
+}
+
+/* U1 — landing affordance below the hero composer: example prompt chips that
+   fill the composer on click. Purely additive; the hero title + composer above
+   are untouched. */
+.landing-hints {
+  display: grid;
+  gap: var(--s-12);
+  justify-items: center;
+  text-align: center;
+}
+.landing-examples {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--s-8);
+}
+.landing-example {
+  padding: var(--s-6) var(--s-12);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.landing-example:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* U12 / P1 — the toast stack OVERLAYS directly above the composer as an absolute
+   element (bottom:100% of the .composer-dock), so it takes NO in-flow height: it
+   never pushes the composer down on the landing hero (a centred grid) and never
+   overlaps the composer's action row in an active chat. It grows upward with
+   more / taller toasts (into the conversation / hero space), never toward the
+   composer or off the bottom of the viewport. The old inline .banner (pinned
+   absolute at top:58px) is gone. Notice channel + error stay until dismissed;
+   an independent pushToast auto-dismisses. */
+.composer-dock {
+  position: relative;
+}
+.toast-stack {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 0 auto var(--s-8);
+  width: min(var(--reading-col), calc(100% - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-8);
+  /* P3 — on a very short viewport a tall/stacked toast column would grow off the
+     top; cap it and scroll instead of clipping the top toast out of reach. */
+  max-block-size: 60vh;
+  overflow: auto;
+}
+/* landing: match the full hero-column width the composer uses there. */
+.chat-hero .toast-stack {
+  width: 100%;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--s-8);
+  padding: var(--s-8) var(--s-12);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+  animation: ks-reveal 0.15s ease;
+}
+
+.toast__text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  /* wrap long / unbreakable messages inside the card instead of overflowing. */
+  overflow-wrap: anywhere;
+}
+
+.toast--info,
+.toast--loading {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+.toast--info .toast__text,
+.toast--loading .toast__text {
+  color: var(--accent);
+}
+.toast--success {
+  border-color: color-mix(in srgb, var(--success) 35%, var(--border));
+}
+.toast--error {
+  border-color: color-mix(in srgb, var(--error) 40%, var(--border));
+}
+.toast--error .toast__text {
+  color: var(--error);
+}
+
+.toast__spinner {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-top-color: var(--accent);
+  border-radius: var(--r-pill);
+  animation: ks-spin 0.7s linear infinite;
+}
+
+.toast__action,
+.toast__close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+.toast__action {
+  padding: var(--s-2) var(--s-8);
+  color: var(--accent);
+  font-weight: 600;
+}
+.toast__action:hover {
+  background: var(--accent-soft);
+}
+.toast__close {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--muted);
+}
+.toast__close:hover {
+  color: var(--text);
+  background: var(--panel-raised);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast,
+  .toast__spinner {
+    animation: none;
+  }
+}
+
+/* The trace page still surfaces its transient notice as an inline banner (chat
+   migrated to toasts, U12). Kept here as a plain in-flow banner — the old
+   chat-only `.chat-main > .banner.loading { position:absolute; top:58px }` rule
+   (the overlap bug) is gone. */
+.banner {
+  margin: var(--s-12) auto 0;
+  width: min(var(--reading-col), calc(100% - 32px));
+  padding: var(--s-8) var(--s-12);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  color: var(--muted);
+}
+.banner.loading,
+.banner.info {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent);
+}
+.banner.error {
+  background: var(--error-soft);
+  border-color: transparent;
+  color: var(--error);
+}
+
+.ai-conversation,
+.chat-conversation {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+}
+
+.ai-conversation-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-14);
+  padding: 24px max(16px, calc((100% - var(--reading-col)) / 2));
+}
+
+.ai-conversation-empty {
+  align-self: center;
+  display: grid;
+  justify-items: center;
+  gap: var(--s-8);
+  width: min(100%, 360px);
+  margin: auto;
+  color: var(--muted);
+  text-align: center;
+}
+
+.ai-conversation-empty h2,
+.ai-conversation-empty p {
+  margin: 0;
+}
+
+.chat-header {
+  display: flex;
+  align-items: center;
+  gap: var(--s-10);
+  padding: var(--s-8) var(--s-16);
+  min-height: 46px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--panel) 45%, var(--bg));
+}
+
+.chat-header__title {
+  font-family: var(--mono);
+  font-weight: 650;
+}
+
+.chat-header__status-dot {
+  width: 9px;
+  height: 9px;
+  margin-left: var(--s-2);
+}
+
+.chat-header__model {
+  padding: var(--s-2) var(--s-8);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat-header__spacer {
+  flex: 1;
+}
+
+.trace-link {
+  padding: var(--s-4) var(--s-8);
+  border-radius: var(--r-pill);
+}
+
+.trace-link:hover {
+  background: var(--panel-raised);
+}
+
+.connection-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-6);
+  min-height: 22px;
+  padding: var(--s-2) var(--s-8);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.connection-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: currentColor;
+}
+
+/* Brand-row connection indicator: drop the pill chrome and label text so only
+   the ::before dot shows, tucked between the Noeta title and the theme toggle. */
+.connection-status--compact {
+  padding: 0;
+  border: none;
+  min-height: 0;
+  gap: 0;
+  margin-left: auto;
+}
+
+.state-live { color: var(--success); }
+.state-connecting,
+.state-reconnecting { color: var(--warning); }
+.state-offline { color: var(--error); }
+.state-idle { color: var(--faint); }
+
+.ai-message {
+  position: relative;
+  display: flex;
+  width: 100%;
+  gap: var(--s-10);
+  align-items: flex-start;
+}
+
+.ai-message.is-user {
+  justify-content: flex-end;
+}
+

@@ -1,0 +1,200 @@
+{
+  "preset": "explore",
+  "provider_tool_schemas": [
+    {
+      "function": {
+        "description": "Reads a file's contents from the workspace, optionally sliced by line.\n\n- `path` is workspace-relative. An absolute path is rejected unless it sits under a skill's `Base directory for this skill:` (shown when a skill activates) — use that base + the skill body's relative reference to read a skill's bundled files. Symlink escapes are always rejected.\n- Reads the whole file by default. `offset` (1-based line) and `limit` (line count) take a slice — use them for large files.\n- The full body is always offloaded as an artifact (`content_ref`); when inline output would exceed the byte budget you get a bounded excerpt plus the ref, never a silently truncated middle.\n- A text target must be valid UTF-8; non-image binary files are rejected (use the right tool for those).\n- Reads image files too (png, jpg, gif, webp): the image is presented to you visually, so you can read screenshots, diagrams, and photos directly.\n- Don't guess a path — locate it first with `grep` (by content) or `glob` (by name).",
+        "name": "read",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "limit": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "offset": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Matches a workspace-relative glob pattern and returns the matching file paths.\n\n- Standard glob semantics — `**` matches recursively (e.g. \"**/*.py\", \"src/**/test_*\"). Results are workspace-relative POSIX paths, sorted, and capped — narrow the pattern if truncated.\n- `pattern` must be workspace-relative: no leading `/` and no `..`. Matches whose real path escapes the workspace via symlink are dropped.\n- To search by file content rather than name use `grep`; to read a known file use `read`.",
+        "name": "glob",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "pattern": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pattern"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Searches file contents across the workspace with a regular expression (Python `re` syntax).\n\n- Returns each match as file path + line number + the matching line. Locate files-with-matches first, then `read` the surrounding lines to keep search noise low.\n- Scope with `path` (a file or sub-directory) and filter with `glob` (e.g. \"**/*.py\").\n- `pattern` is a Python `re` regular expression. Binary files are skipped automatically.\n- `path` is workspace-relative; absolute paths and symlink escapes are rejected.\n- To match by filename rather than content use `glob`; to read a known file use `read`.",
+        "name": "grep",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "glob": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "pattern": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pattern"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Executes a shell command in the workspace and returns its output.\n\n- Runs with `cwd` at the workspace root, a scrubbed (secret-free) environment, and capped output — the full stdout/stderr are offloaded as artifacts and you get the tail inline plus the return code.\n- `timeout` is in milliseconds: default 120000, max 600000.\n- `run_in_background: true` launches the command detached (a server, a long build or test run): the call returns a `job_id` and an output ref immediately and you keep working. Read its output with `shell_poll`, stop it with `shell_kill`. A background job's lifetime follows the session, not this task.\n- On a strict host the command must match an allowlist (git status/diff, pytest, npm/pnpm test, and read-only grep/rg/find/ls) and shell metacharacters are rejected; otherwise the full command runs through bash (pipes, redirection, chaining) and anything not on the allowlist needs a one-time approval.\n- The process is not sandboxed — it runs real workspace code, so use only in a trusted workspace.\n- To only read a file, search content, or list files, prefer `read` / `grep` / `glob` — they are cheaper and need no approval.",
+        "name": "shell_run",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "run_in_background": {
+              "type": "boolean"
+            },
+            "timeout": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Checks the status and latest output of a background shell job.\n\n- Give the `job_id` returned by `shell_run` with `run_in_background: true`. Returns the status (`running` or `exited`), an `exit_code` once finished, and a ref to a fresh snapshot of the output so far — dereference the ref to read the bytes.\n- `truncated: true` means the output overflowed the cap and the snapshot is the most-recent tail (oldest output dropped). Safe and cheap to call repeatedly.\n- To stop the job use `shell_kill`; to start a new command use `shell_run`.",
+        "name": "shell_poll",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "job_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "job_id"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Stops a background shell job you started.\n\n- Give the `job_id` from a `shell_run` call with `run_in_background: true`. Sends SIGTERM, then SIGKILL after a short grace. The call returns immediately; the job's final output snapshot stays readable via its ref.\n- Use it to stop a server, build, or test run you launched and no longer need (e.g. started on the wrong port and want to restart).\n- To only check status or read output, use `shell_poll` instead.\n- Privileged: an operator policy may require approval or deny it.",
+        "name": "shell_kill",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "job_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "job_id"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Fetches a public web page over HTTP(S) and returns its content rendered to Markdown.\n\n- Performs a GET on `url`, converts the HTML to compact Markdown (headings, links, list items; scripts, styles, and `<head>` stripped), and returns `{url, title, content, content_ref, truncated}`. The full rendering is offloaded as an artifact; when inline content would exceed the byte budget you get an excerpt plus the ref and `truncated: true`.\n- `url` must be a well-formed `http://` or `https://` URL.\n- The page must be publicly reachable: webfetch sends no credentials, so authenticated / logged-in / intranet URLs fail (e.g. 401/403). Use an authenticated tool for those.\n- It fetches a URL you already have; it does not search. To read a workspace file, use `read`.",
+        "name": "webfetch",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "url"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    }
+  ],
+  "segments": [
+    {
+      "content": [
+        {
+          "__canonical_tag__": "message",
+          "content": [
+            {
+              "__canonical_tag__": "text_block",
+              "text": "You are a read-only scout fanned out to investigate the workspace. You excel at navigating and exploring a codebase quickly.\n\nREAD-ONLY MODE — you do NOT have edit/write tools, and attempting to change files will fail. You must not create, modify, delete, move, or copy files (including under /tmp), and must not use shell redirects (>, >>, |) or heredocs to write files.\n\nRules:\n  1. Gather the facts the caller asked for and report them — do not try to solve the task, only surface what you found.\n  2. Use `read` for a known path, `glob` to find files, `grep` to search content. Use `shell_run` ONLY for read-only commands (ls, git status, git log, git diff, find, cat, head, tail) — NEVER for mkdir/touch/rm/cp/mv, git add/commit, installs, or anything that changes state.\n  3. Fan your searches out in parallel when they are independent.\n  4. Be concise; cite the files and lines you found.\n"
+            }
+          ],
+          "role": "system"
+        }
+      ],
+      "name": "stable_prefix",
+      "segment_hash": "f501ecdbe5a601a2fb492050a37a99920529e71c80e093149b70aeb101dd8bd0"
+    },
+    {
+      "content": [],
+      "name": "semi_stable",
+      "segment_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "content": [
+        {
+          "__canonical_tag__": "message",
+          "content": [
+            {
+              "__canonical_tag__": "text_block",
+              "text": "Fixed goal: say hi"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "name": "dynamic_suffix",
+      "segment_hash": "971eced7c1a951e57218e3ab2a6e884a5ce7a2120dee25d6fdd1d7a65f72bb53"
+    }
+  ]
+}

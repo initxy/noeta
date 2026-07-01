@@ -1,0 +1,268 @@
+[
+  {
+    "description": "Applies a batch of up to 16 file edits atomically — all succeed or none do.\n\n- Each edit is `replace` (swap a unique substring in an existing file) or `create` (write a brand-new file). All are validated in memory first; an apply-phase failure rolls the whole batch back.\n- Paths are workspace-relative; absolute paths and symlink escapes are rejected. A `replace` target's `old` must occur exactly once — include enough surrounding context to make it unique, and copy it verbatim (indentation, trailing spaces, and newlines must match). A `create` target must not exist yet under an existing parent.\n- Several `replace` edits may target the **same file** to change multiple places in one call; they apply in array order, and each `old` is matched against the file *as left by the earlier edits in this same call* (so don't include text a previous edit already removed). A `create` cannot be combined with any other edit on the same path — a create writes the whole file, so put its final content in one create. Two different spellings of one path that differ only in case or unicode form are rejected.\n- `old`/`new` and `content` each cap at 64 KB (the same safety ceiling as `write`); an absurdly large whole call is rejected — split it into separate calls.\n- Leave `before_sha256` unset. It is an optional staleness guard; if set it must be the SHA-256 of the **entire current file** from a recent read — an empty value is ignored, a wrong one fails the edit.\n- For a single change to one file, prefer `edit`.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "edits": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "before_sha256": {
+                "maxLength": 64,
+                "type": "string"
+              },
+              "content": {
+                "maxLength": 65536,
+                "type": "string"
+              },
+              "new": {
+                "maxLength": 65536,
+                "type": "string"
+              },
+              "old": {
+                "maxLength": 65536,
+                "type": "string"
+              },
+              "op": {
+                "enum": [
+                  "replace",
+                  "create"
+                ],
+                "type": "string"
+              },
+              "path": {
+                "maxLength": 120,
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "path"
+            ],
+            "type": "object"
+          },
+          "maxItems": 16,
+          "type": "array"
+        }
+      },
+      "required": [
+        "edits"
+      ],
+      "type": "object"
+    },
+    "name": "apply_patch",
+    "risk_level": "high"
+  },
+  {
+    "description": "Replaces an exact, unique `old` string in an existing file with `new`.\n\n- `old` must match exactly once — zero matches or more than one fails and writes nothing. Include enough surrounding context to make it unique, or target a region that already is.\n- Set `replace_all` to true to replace every occurrence of `old` instead — use this for renames or repeated edits where the same string recurs and you want them all changed.\n- `path` is workspace-relative and must be an existing UTF-8 text file; absolute paths and symlink escapes are rejected.\n- `new` may be empty to delete the matched region. The change is offloaded as a unified diff with before/after hashes.\n- Creating a new file or replacing a whole file body is `write`'s job, not this one's.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "new": {
+          "type": "string"
+        },
+        "old": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "replace_all": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "old",
+        "new"
+      ],
+      "type": "object"
+    },
+    "name": "edit",
+    "risk_level": "high"
+  },
+  {
+    "description": "Matches a workspace-relative glob pattern and returns the matching file paths.\n\n- Standard glob semantics — `**` matches recursively (e.g. \"**/*.py\", \"src/**/test_*\"). Results are workspace-relative POSIX paths, sorted, and capped — narrow the pattern if truncated.\n- `pattern` must be workspace-relative: no leading `/` and no `..`. Matches whose real path escapes the workspace via symlink are dropped.\n- To search by file content rather than name use `grep`; to read a known file use `read`.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "pattern": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "type": "object"
+    },
+    "name": "glob",
+    "risk_level": "low"
+  },
+  {
+    "description": "Searches file contents across the workspace with a regular expression (Python `re` syntax).\n\n- Returns each match as file path + line number + the matching line. Locate files-with-matches first, then `read` the surrounding lines to keep search noise low.\n- Scope with `path` (a file or sub-directory) and filter with `glob` (e.g. \"**/*.py\").\n- `pattern` is a Python `re` regular expression. Binary files are skipped automatically.\n- `path` is workspace-relative; absolute paths and symlink escapes are rejected.\n- To match by filename rather than content use `glob`; to read a known file use `read`.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "glob": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "pattern": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "type": "object"
+    },
+    "name": "grep",
+    "risk_level": "low"
+  },
+  {
+    "description": "Reads a file's contents from the workspace, optionally sliced by line.\n\n- `path` is workspace-relative. An absolute path is rejected unless it sits under a skill's `Base directory for this skill:` (shown when a skill activates) — use that base + the skill body's relative reference to read a skill's bundled files. Symlink escapes are always rejected.\n- Reads the whole file by default. `offset` (1-based line) and `limit` (line count) take a slice — use them for large files.\n- The full body is always offloaded as an artifact (`content_ref`); when inline output would exceed the byte budget you get a bounded excerpt plus the ref, never a silently truncated middle.\n- A text target must be valid UTF-8; non-image binary files are rejected (use the right tool for those).\n- Reads image files too (png, jpg, gif, webp): the image is presented to you visually, so you can read screenshots, diagrams, and photos directly.\n- Don't guess a path — locate it first with `grep` (by content) or `glob` (by name).",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "offset": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "name": "read",
+    "risk_level": "low"
+  },
+  {
+    "description": "Stops a background shell job you started.\n\n- Give the `job_id` from a `shell_run` call with `run_in_background: true`. Sends SIGTERM, then SIGKILL after a short grace. The call returns immediately; the job's final output snapshot stays readable via its ref.\n- Use it to stop a server, build, or test run you launched and no longer need (e.g. started on the wrong port and want to restart).\n- To only check status or read output, use `shell_poll` instead.\n- Privileged: an operator policy may require approval or deny it.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "type": "object"
+    },
+    "name": "shell_kill",
+    "risk_level": "high"
+  },
+  {
+    "description": "Checks the status and latest output of a background shell job.\n\n- Give the `job_id` returned by `shell_run` with `run_in_background: true`. Returns the status (`running` or `exited`), an `exit_code` once finished, and a ref to a fresh snapshot of the output so far — dereference the ref to read the bytes.\n- `truncated: true` means the output overflowed the cap and the snapshot is the most-recent tail (oldest output dropped). Safe and cheap to call repeatedly.\n- To stop the job use `shell_kill`; to start a new command use `shell_run`.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "type": "object"
+    },
+    "name": "shell_poll",
+    "risk_level": "low"
+  },
+  {
+    "description": "Executes a shell command in the workspace and returns its output.\n\n- Runs with `cwd` at the workspace root, a scrubbed (secret-free) environment, and capped output — the full stdout/stderr are offloaded as artifacts and you get the tail inline plus the return code.\n- `timeout` is in milliseconds: default 120000, max 600000.\n- `run_in_background: true` launches the command detached (a server, a long build or test run): the call returns a `job_id` and an output ref immediately and you keep working. Read its output with `shell_poll`, stop it with `shell_kill`. A background job's lifetime follows the session, not this task.\n- On a strict host the command must match an allowlist (git status/diff, pytest, npm/pnpm test, and read-only grep/rg/find/ls) and shell metacharacters are rejected; otherwise the full command runs through bash (pipes, redirection, chaining) and anything not on the allowlist needs a one-time approval.\n- The process is not sandboxed — it runs real workspace code, so use only in a trusted workspace.\n- To only read a file, search content, or list files, prefer `read` / `grep` / `glob` — they are cheaper and need no approval.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "run_in_background": {
+          "type": "boolean"
+        },
+        "timeout": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    "name": "shell_run",
+    "risk_level": "high"
+  },
+  {
+    "description": "Runs a web search and returns the top ranked hits rendered to Markdown.\n\n- Issues `query` against a web search backend and returns `{query, count, content, content_ref, truncated}`, where `content` is a numbered Markdown list of hits (each a `[title](url)` line plus a short snippet). The full rendering is offloaded as an artifact; when inline content would exceed the byte budget you get an excerpt plus the ref and `truncated: true`. Optional `count` (default 5, max 20) caps how many hits to return.\n- Use it to discover URLs and current information you do not already have — finding pages, checking recent facts, locating documentation or sources on the open web.\n- It does not read a specific page you already have: to fetch a known URL's content use `webfetch`; to read a workspace file use `read`. It searches the public web, not the workspace.\n- `query` must be a non-empty string. The tool is only available when a search backend key is configured; if it is absent here, the capability is not enabled for this session.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "type": "integer"
+        },
+        "query": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "name": "web_search",
+    "risk_level": "low"
+  },
+  {
+    "description": "Fetches a public web page over HTTP(S) and returns its content rendered to Markdown.\n\n- Performs a GET on `url`, converts the HTML to compact Markdown (headings, links, list items; scripts, styles, and `<head>` stripped), and returns `{url, title, content, content_ref, truncated}`. The full rendering is offloaded as an artifact; when inline content would exceed the byte budget you get an excerpt plus the ref and `truncated: true`.\n- `url` must be a well-formed `http://` or `https://` URL.\n- The page must be publicly reachable: webfetch sends no credentials, so authenticated / logged-in / intranet URLs fail (e.g. 401/403). Use an authenticated tool for those.\n- It fetches a URL you already have; it does not search. To read a workspace file, use `read`.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "name": "webfetch",
+    "risk_level": "low"
+  },
+  {
+    "description": "Writes a file to the workspace, creating it or overwriting one you've already read.\n\n- `path` is workspace-relative and its parent directory must already exist. Absolute paths and symlink escapes are rejected.\n- Creating a new file always works. Overwriting an existing file requires you to have `read` it earlier in this session, so you never blindly clobber a file you haven't seen.\n- `content` is UTF-8 text, max 64 KB. The change is offloaded as a unified diff with before/after hashes.\n- For a small change to an existing file, prefer `edit` — it sends a surgical diff instead of replacing the whole body.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "type": "object"
+    },
+    "name": "write",
+    "risk_level": "high"
+  }
+]

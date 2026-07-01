@@ -1,0 +1,154 @@
+// Unit tests for the single-task reducer's detail fold (T7). Node's runner:
+//   node --test src/domain/reducer.test.js
+//
+// Covers the wake-kind + closed folding the new-protocol send gate reads
+// the equivalents of the old /tasks/{id}
+// detail's `wake_kind` / `closed`, now folded from the raw envelope stream.
+
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import { classifyWakeOn, reduceEvents } from "./reducer.js";
+
+// Canonical-tagged wake_on shapes (noeta.protocols.canonical.to_canonical puts
+// the tag on `__canonical_tag__`).
+const humanWake = (handle) => ({ __canonical_tag__: "human_response", handle });
+const suspended = (seq, wakeOn) => ({
+  task_id: "t1",
+  seq,
+  type: "TaskSuspended",
+  payload: { reason: "waiting_human", wake_on: wakeOn },
+});
+const woken = (seq) => ({ task_id: "t1", seq, type: "TaskWoken", payload: {} });
+const closed = (seq) => ({
+  task_id: "t1",
+  seq,
+  type: "ConversationClosed",
+  payload: { closed_by: "user", reason: "done" },
+});
+const reopened = (seq) => ({
+  task_id: "t1",
+  seq,
+  type: "ConversationReopened",
+  payload: { reopened_by: "user" },
+});
+
+test("classifyWakeOn: human-response handles map to their kind", () => {
+  assert.equal(classifyWakeOn(humanWake("noeta-code-next-goal")), "next-goal");
+  assert.equal(classifyWakeOn(humanWake("approval-abc")), "approval");
+  assert.equal(classifyWakeOn(humanWake("question-q1")), "question");
+  assert.equal(classifyWakeOn(humanWake("something-else")), "human");
+});
+
+test("classifyWakeOn: subtask + timer + unknown conditions", () => {
+  assert.equal(
+    classifyWakeOn({ __canonical_tag__: "subtask_completed", subtask_id: "s" }),
+    "subtask",
+  );
+  assert.equal(
+    classifyWakeOn({
+      __canonical_tag__: "subtask_group_completed",
+      group_id: "g",
+    }),
+    "subtask",
+  );
+  assert.equal(
+    classifyWakeOn({ __canonical_tag__: "timer_fired", fire_at: 1 }),
+    "timer",
+  );
+  assert.equal(classifyWakeOn(null), null);
+  assert.equal(classifyWakeOn({ __canonical_tag__: "mystery" }), null);
+});
+
+test("reduceEvents: suspend sets wakeKind, woken clears it", () => {
+  const vmSuspended = reduceEvents([
+    { task_id: "t1", seq: 0, type: "TaskCreated", payload: {} },
+    { task_id: "t1", seq: 1, type: "TaskStarted", payload: {} },
+    suspended(2, humanWake("noeta-code-next-goal")),
+  ]);
+  assert.equal(vmSuspended.wakeKind, "next-goal");
+
+  // A re-lease clears the stale wake-kind.
+  const vmWoken = reduceEvents([
+    suspended(2, humanWake("noeta-code-next-goal")),
+    woken(3),
+  ]);
+  assert.equal(vmWoken.wakeKind, null);
+});
+
+test("reduceEvents: approval suspend then resolved-then-suspend tracks latest", () => {
+  // Park on approval, then (after the human approves) re-suspend on next-goal:
+  // the latest suspend wins.
+  const vm = reduceEvents([
+    suspended(1, humanWake("approval-call-7")),
+    woken(2),
+    suspended(3, humanWake("noeta-code-next-goal")),
+  ]);
+  assert.equal(vm.wakeKind, "next-goal");
+});
+
+test("reduceEvents: terminal clears wakeKind", () => {
+  const vm = reduceEvents([
+    suspended(1, humanWake("noeta-code-next-goal")),
+    { task_id: "t1", seq: 2, type: "TaskCompleted", payload: { answer: "hi" } },
+  ]);
+  assert.equal(vm.wakeKind, null);
+  assert.equal(vm.status, "completed");
+});
+
+test("reduceEvents: closed flag folds from ConversationClosed/Reopened", () => {
+  const vmClosed = reduceEvents([
+    suspended(1, humanWake("noeta-code-next-goal")),
+    closed(2),
+  ]);
+  assert.equal(vmClosed.closed, true);
+  // Close is orthogonal to status — still waiting, still next-goal.
+  assert.equal(vmClosed.status, "waiting");
+  assert.equal(vmClosed.wakeKind, "next-goal");
+
+  const vmReopened = reduceEvents([closed(2), reopened(3)]);
+  assert.equal(vmReopened.closed, false);
+});
+
+test("reduceEvents: TaskCompleted answer does not double-render the final message", () => {
+  // A completed subtask: its final answer arrives BOTH as a trailing
+  // MessagesAppended (the bubble) and as TaskCompleted.answer. The reducer must
+  // not also push an assistant_text turn, or the subtask drawer shows the same
+  // prose twice (the root chat never hits TaskCompleted, which is why only the
+  // drawer doubled).
+  const vm = reduceEvents([
+    { task_id: "s1", seq: 0, type: "TaskCreated", payload: {} },
+    { task_id: "s1", seq: 1, type: "TaskStarted", payload: {} },
+    {
+      task_id: "s1",
+      seq: 2,
+      type: "MessagesAppended",
+      payload: { count: 1, messages_ref: { hash: "abc" } },
+    },
+    { task_id: "s1", seq: 3, type: "TaskCompleted", payload: { answer: "done" } },
+  ]);
+  assert.equal(vm.status, "completed");
+  assert.equal(vm.turns.filter((t) => t.kind === "assistant_text").length, 0);
+  assert.equal(vm.turns.filter((t) => t.kind === "message").length, 1);
+});
+
+test("reduceEvents: TaskCompleted keeps inline answer when no message carried it", () => {
+  // Degenerate fallback: a stream that completes with an answer but never
+  // appended a final assistant message still surfaces the answer inline, so it
+  // is never silently dropped.
+  const vm = reduceEvents([
+    { task_id: "s1", seq: 0, type: "TaskCreated", payload: {} },
+    { task_id: "s1", seq: 1, type: "TaskCompleted", payload: { answer: "hi" } },
+  ]);
+  const inline = vm.turns.filter((t) => t.kind === "assistant_text");
+  assert.equal(inline.length, 1);
+  assert.equal(inline[0].text, "hi");
+});
+
+test("reduceEvents: defaults are running-ready (no suspend, not closed)", () => {
+  const vm = reduceEvents([
+    { task_id: "t1", seq: 0, type: "TaskCreated", payload: {} },
+  ]);
+  assert.equal(vm.wakeKind, null);
+  assert.equal(vm.closed, false);
+});

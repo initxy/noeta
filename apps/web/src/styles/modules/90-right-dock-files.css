@@ -1,0 +1,512 @@
+/* Lightweight `File | App` tab bar at the top of the right dock + a shared close button. */
+.right-dock__tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-6) var(--s-8);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.right-dock__tab {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  padding: var(--s-4) var(--s-12);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.right-dock__tab:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--border) 35%, transparent);
+}
+
+.right-dock__tab.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  font-weight: 600;
+}
+
+.right-dock__tabs-spacer {
+  flex: 1;
+}
+
+/* U9 — the shared close × sits at the tab-bar's right edge; keep it clear of the
+   tabs (the spacer pushes it right; this guarantees a gap even without the spacer). */
+.right-dock__tabs .icon-button {
+  margin-left: var(--s-12);
+}
+
+/* Both panes stay mounted (switching tabs never reloads the iframe / loses the
+   file tree state); the inactive one is `hidden`. The active pane fills the
+   dock below the tab bar. */
+.right-dock__pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.right-dock__pane[hidden] {
+  display: none;
+}
+
+/* The "App" tab's live preview iframe. Fills the whole pane; the
+   border-0 + block keeps it flush with the dock edges. */
+.app-iframe {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  display: block;
+  background: var(--bg);
+}
+
+.app-iframe__empty {
+  margin: auto;
+  padding: var(--s-24);
+  font-size: 13px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.file-panel {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.file-panel__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-8);
+  padding: var(--s-10) var(--s-12);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.file-panel__title {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Panel internals: left tree + right preview side by side (horizontal). The tree is a fixed-width left
+   column (adjustable between 140px and 55%), the preview takes the remaining space; the two are separated by
+   the tree's right border. In the narrow-screen drawer it falls back to vertical stacking (see media query). */
+.file-panel__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+}
+
+/* U8 — the tree column width is driven by the second-level splitter via the
+   `--file-tree-w` custom property set inline on `.file-panel__body` (px). The
+   drag is clamped to 120px..55% in JS; min/max here are just belt-and-braces
+   for a stale/absent value. `flex: none` so the explicit width wins and the
+   preview column takes the remaining space. */
+.file-panel__tree {
+  flex: none;
+  width: var(--file-tree-w, 26%);
+  min-width: 120px;
+  max-width: 55%;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--s-8) var(--s-4);
+  border-right: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+/* The file tree can be hidden: once hidden the preview takes over the whole panel (toggled by the small switch in the header). */
+.file-panel--tree-hidden .file-panel__tree {
+  display: none;
+}
+
+/* U8 second-level splitter — the vertical drag handle between tree and preview.
+   Transparent by default with a slightly wider hit area; highlights accent on
+   hover / while dragging. Hidden when the tree is collapsed. */
+.file-panel__splitter {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 6px;
+  margin: 0 -2px;
+  cursor: col-resize;
+  background: transparent;
+  touch-action: none;
+  transition: background 0.12s ease;
+}
+
+.file-panel__splitter:hover,
+.file-panel__splitter:active {
+  background: var(--accent);
+}
+
+.file-panel--tree-hidden .file-panel__splitter {
+  display: none;
+}
+
+.file-panel__preview {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--s-10) var(--s-12);
+}
+
+.file-panel__preview-head {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  word-break: break-all;
+  margin-bottom: var(--s-8);
+}
+
+.file-panel__loading,
+.file-panel__preview-truncated,
+.file-panel__truncated {
+  margin: var(--s-8) var(--s-6);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* P7 — perf-gate notice bar: shown when a big file dropped to a plain <pre>.
+   One line, muted, with an inline accent "force highlight" button so the user
+   knows WHY highlighting is off and can opt back in. */
+.file-panel__perf-notice {
+  display: flex;
+  align-items: center;
+  gap: var(--s-8);
+  margin: 0 0 var(--s-8);
+  padding: var(--s-6) var(--s-8);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--panel-raised);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.file-panel__perf-notice > span {
+  min-width: 0;
+}
+
+.file-panel__perf-force {
+  flex: none;
+  margin-left: auto;
+  padding: var(--s-2) var(--s-8);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.file-panel__perf-force:hover {
+  border-color: var(--accent);
+}
+
+/* Read-only preview (issue 02). Mono, wraps long lines, scrolls
+   inside the preview pane. issue 03 adds prism syntax highlighting on top. */
+.file-panel__preview-pre {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  tab-size: 4;
+}
+
+/* Real image preview in the file panel. The <img> is wrapped in a transparent button (clicking it opens the
+   shared lightbox); the image is width-capped so it does not blow out the panel and keeps its aspect ratio,
+   and the checkerboard background makes the transparent areas of transparent PNG / SVG visible. */
+.file-panel__preview-image-btn {
+  display: block;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+  max-width: 100%;
+}
+
+.file-panel__preview-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background-color: #fff;
+  background-image:
+    linear-gradient(45deg, rgba(128, 128, 128, 0.12) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(128, 128, 128, 0.12) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(128, 128, 128, 0.12) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(128, 128, 128, 0.12) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+/* issue 03 — prism-highlighted preview. Each line is a block-level .token-line (FilePanel renders it as a
+   <div>), so wrapping here no longer relies on white-space:pre, but soft-wrapping is kept to avoid horizontal
+   scrolling. Colors all use the existing theme CSS variables (dark/light follow automatically), with no
+   third-party prism theme resources pulled in. */
+.code-hl .token-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* U8 — sticky line-number gutter, FILE PREVIEW ONLY (chat markdown code blocks
+   also carry `.code-hl` but must NOT get numbered). Prism emits one `.token-line`
+   div per line, so a CSS counter numbers them with zero extra DOM and no new deps.
+   The number lives in the line's left padding (`sticky left:0`) so it stays put
+   at the pane's left edge; wrapped continuation lines indent under the code, not
+   under the number. */
+.file-panel__preview-pre.code-hl {
+  counter-reset: code-line;
+}
+
+.file-panel__preview-pre.code-hl .token-line {
+  counter-increment: code-line;
+  padding-left: 3.5ch;
+}
+
+.file-panel__preview-pre.code-hl .token-line::before {
+  content: counter(code-line);
+  position: sticky;
+  left: 0;
+  display: inline-block;
+  width: 2.5ch;
+  margin-left: -3.5ch;
+  margin-right: 1ch;
+  color: var(--faint);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: none;
+}
+
+/* prism token → theme-color mapping. Reuses the existing trace/code palette; both dark and light sets are
+   already in the variables. Plain text (plain/text) falls back to --text; comments use --faint; punctuation
+   is muted with --muted. */
+.code-hl .token.comment,
+.code-hl .token.prolog,
+.code-hl .token.doctype,
+.code-hl .token.cdata {
+  color: var(--faint);
+  font-style: italic;
+}
+.code-hl .token.punctuation {
+  color: var(--muted);
+}
+.code-hl .token.keyword,
+.code-hl .token.boolean,
+.code-hl .token.rule,
+.code-hl .token.atrule,
+.code-hl .token.important {
+  color: var(--trace-message);
+  font-weight: 600;
+}
+.code-hl .token.string,
+.code-hl .token.char,
+.code-hl .token.attr-value,
+.code-hl .token.regex,
+.code-hl .token.inserted {
+  color: var(--code-add);
+}
+.code-hl .token.number,
+.code-hl .token.constant,
+.code-hl .token.symbol,
+.code-hl .token.deleted {
+  color: var(--code-hunk);
+}
+.code-hl .token.function,
+.code-hl .token.class-name,
+.code-hl .token.builtin {
+  color: var(--code-file);
+}
+.code-hl .token.tag,
+.code-hl .token.selector,
+.code-hl .token.property,
+.code-hl .token.attr-name {
+  color: var(--accent);
+}
+.code-hl .token.operator,
+.code-hl .token.entity,
+.code-hl .token.url,
+.code-hl .token.variable {
+  color: var(--trace-llm);
+}
+
+.file-tree,
+.file-tree__children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.file-tree__row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  width: 100%;
+  padding: var(--s-2) var(--s-8);
+  border: 0;
+  background: none;
+  color: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+
+.file-tree__row:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.file-tree__row--file.is-selected {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+}
+
+.file-tree__chevron,
+.file-tree__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  color: var(--muted);
+}
+
+.file-tree__chevron {
+  width: 13px;
+}
+
+.file-tree__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes ks-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes ks-pop {
+  from { opacity: 0; transform: translateY(6px) scale(0.99); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .preview-overlay,
+  .preview-dialog {
+    animation: none;
+  }
+}
+
+@media (max-width: 920px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  /* Narrow screens: the panel can't push (no horizontal room),
+     so it degrades to a cover-style overlay drawer pinned to the right edge.
+     The single-column grid stays as-is; the panel floats above .chat-main. */
+  .app-shell.has-panel {
+    grid-template-columns: 1fr;
+  }
+
+  /* Narrow-screen single column: the collapsed state should not become a 44px left rail (it would break the
+     top-bar layout), so fall back to a single column uniformly; when collapsed the session top bar keeps
+     only the expand button (via the generic :not(.sidebar-collapse-btn) hide rule). */
+  .app-shell.sidebar-collapsed,
+  .app-shell.sidebar-collapsed.has-panel {
+    grid-template-columns: 1fr;
+  }
+
+  /* Side-by-side is too cramped in the narrow drawer, so the file panel falls back to vertical stacking. */
+  .file-panel__body {
+    flex-direction: column;
+  }
+  .file-panel__tree {
+    flex: 1 1 55%;
+    width: auto;
+    max-width: none;
+    border-right: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  }
+  .file-panel__preview {
+    flex: 1 1 45%;
+  }
+
+  /* The tree stacks above the preview in the drawer, so the horizontal splitter
+     is meaningless — hide it (alongside the first-level chat/panel resizer). */
+  .file-panel__splitter,
+  .panel-resizer {
+    display: none;
+  }
+
+  .right-dock {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(var(--panel-w, 320px), 86vw);
+    z-index: 40;
+    box-shadow: -8px 0 24px color-mix(in srgb, var(--bg) 60%, transparent);
+  }
+
+  .session-sidebar {
+    max-height: 38vh;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .trace-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .timeline-pane,
+  .detail-pane,
+  .inspector-pane {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .trace-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .summary-stat--compact,
+  .summary-stat--wide {
+    min-width: 0;
+    max-width: none;
+  }
+
+  .composer-bar__left,
+  .composer-bar__right {
+    gap: var(--s-2);
+  }
+
+  .composer-chip {
+    max-width: 140px;
+  }
+
+  .add-menu--wide {
+    width: min(360px, calc(100vw - 48px));
+  }
+}
+
+/* ── Subtask / workflow delegation (follow-on) ─────────────────── */
+

@@ -1,0 +1,77 @@
+/* Trace task tree — the subtask hierarchy (main → Workflow → workers). */
+.trace-tree {
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-raised);
+}
+
+.trace-tree__rows {
+  display: flex;
+  flex-direction: column;
+  max-height: 240px;
+  overflow-y: auto;
+  padding-bottom: var(--s-6);
+}
+
+.trace-tree__row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-6);
+  padding: var(--s-4) var(--s-12);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 12px;
+  border-left: 2px solid transparent;
+}
+
+.trace-tree__row:hover {
+  background: var(--panel);
+}
+
+.trace-tree__row.current {
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+}
+
+.trace-tree__row svg {
+  flex: none;
+  color: var(--accent);
+}
+
+.trace-tree__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.trace-tree__dot.running {
+  background: var(--warning);
+  animation: ks-pulse 1.1s ease-in-out infinite;
+}
+
+.trace-tree__dot.completed {
+  background: var(--success);
+}
+
+.trace-tree__dot.failed {
+  background: var(--error);
+}
+
+.trace-tree__dot.waiting {
+  background: var(--tool-accent);
+}
+
+.trace-tree__name {
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.trace-tree__meta {
+  margin-left: auto;
+  flex: none;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: nowrap;
+}

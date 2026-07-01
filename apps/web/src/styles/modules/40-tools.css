@@ -1,0 +1,365 @@
+/* ----------------------------------------------------------------------- */
+/* Coalesced tool run: same quiet chrome as a single tool call.             */
+/* ----------------------------------------------------------------------- */
+.ai-tool-group {
+  border-radius: var(--r-sm);
+  background: transparent;
+}
+
+.ai-tool-group-header {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-6);
+  padding: var(--s-2) var(--s-6);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.ai-tool-group-header::-webkit-details-marker { display: none; }
+
+.ai-tool-group-header:hover {
+  background: color-mix(in srgb, var(--tool-soft) 42%, var(--panel-raised));
+  color: var(--tool-accent);
+}
+
+.ai-tool-group-title {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-6);
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ai-tool-group-names {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.ai-tool-group-error {
+  flex: none;
+  padding: var(--s-1) var(--s-6);
+  border-radius: var(--r-pill);
+  background: var(--error-soft);
+  color: var(--error);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.ai-tool-group-body {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-6) 0 var(--s-6) var(--s-8);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+/* inside the group the per-tool chevron is redundant with the group's own */
+.ai-tool-group-body .ai-tool > summary .ai-disclosure-icon {
+  opacity: 0.6;
+}
+
+.ai-tool-section {
+  display: grid;
+  gap: var(--s-6);
+  margin-top: var(--s-10);
+}
+
+.ai-tool-section h4,
+.tool-section-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.ai-tool-section pre,
+.approval-args,
+.trace-payload,
+.msg-tool-args,
+.diff-body {
+  overflow: auto;
+  margin: 0;
+  padding: var(--s-10) var(--s-12);
+  border-radius: var(--r-md);
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  color: var(--code-text);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.diff-body {
+  display: block;
+  border-top: 0;
+  border-radius: 0 0 var(--r-md) var(--r-md);
+}
+
+.diff-add { color: var(--code-add); }
+.diff-del { color: var(--code-del); }
+.diff-file { color: var(--code-file); font-weight: 600; }
+.diff-hunk { color: var(--code-hunk); }
+.diff-ctx { color: var(--code-ctx); }
+
+.turn-marker {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.ks-typing {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-8);
+  padding: var(--s-2) 0;
+  color: var(--muted);
+}
+
+.ks-typing__avatar {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+  animation: ks-pulse 1.5s ease-in-out infinite;
+}
+
+.ks-typing__dots {
+  display: inline-flex;
+  gap: var(--s-4);
+}
+
+.ks-typing__dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--faint);
+  animation: ks-bounce 1.2s ease-in-out infinite;
+}
+
+.ks-typing__dots i:nth-child(2) { animation-delay: 0.16s; }
+.ks-typing__dots i:nth-child(3) { animation-delay: 0.32s; }
+
+.ks-typing__label {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+@keyframes ks-bounce {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.45; }
+  40% { transform: translateY(-4px); opacity: 1; }
+}
+
+@keyframes ks-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ks-typing__avatar,
+  .ks-typing__dots i {
+    animation: none;
+  }
+}
+
+.approval-prompt,
+.question-prompt {
+  display: grid;
+  gap: var(--s-10);
+  padding: var(--s-14);
+  border: 1px solid color-mix(in srgb, var(--warning) 34%, var(--border));
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--warning-soft) 30%, var(--panel));
+}
+
+.approval-head,
+.question-title,
+.approval-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-8);
+}
+
+.approval-head {
+  color: var(--warning);
+  font-weight: 650;
+}
+
+.approval-prompt p {
+  margin: 0;
+}
+
+.approval-actions {
+  justify-content: flex-end;
+}
+
+.approve-btn,
+.deny-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-6);
+  min-height: 32px;
+  padding: 0 var(--s-12);
+  border: 0;
+  border-radius: var(--r-md);
+}
+
+.approve-btn { background: var(--success); color: var(--on-success); }
+.deny-btn { background: var(--error); color: var(--on-error); }
+
+/* U5 — approval group: several pending cards + a batch action bar. */
+.approval-group {
+  display: grid;
+  gap: var(--s-8);
+}
+
+.approval-summary {
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* the raw args collapse into a closed disclosure so a big payload never pushes
+   the buttons off-screen (U5 ②). */
+.approval-args-details > summary {
+  list-style: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+.approval-args-details > summary::-webkit-details-marker {
+  display: none;
+}
+.approval-args-details[open] > summary {
+  margin-block-end: var(--s-6);
+}
+
+.approval-batch {
+  display: flex;
+  align-items: center;
+  gap: var(--s-8);
+  padding: var(--s-8) var(--s-12);
+  border: 1px solid color-mix(in srgb, var(--warning) 34%, var(--border));
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--warning-soft) 22%, var(--panel));
+}
+.approval-batch__label {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.question-field {
+  display: grid;
+  gap: var(--s-8);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.question-field legend {
+  font-weight: 650;
+}
+
+.question-text {
+  margin: 0;
+  color: var(--muted);
+}
+
+.question-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--s-8);
+}
+
+/* B17 / U6 — choice and freeform coexist; tell the user they can do both. */
+.question-hint {
+  margin: var(--s-2) 0 0;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.question-field textarea,
+.ai-prompt-textarea,
+.composer-field input,
+.composer-field select,
+.timeline-search input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+.question-field textarea {
+  min-height: 80px;
+  padding: var(--s-10);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+  resize: vertical;
+}
+
+/* codex composer block: the rounded input box plus the working-folder chip
+   below it, sharing one width-bounded, centred column. */
+.composer-block {
+  width: min(var(--reading-col), calc(100% - 32px));
+  margin: 0 auto var(--s-16);
+  display: grid;
+  gap: var(--s-8);
+}
+
+.composer {
+  position: relative;
+  width: 100%;
+  margin: 0;
+  display: grid;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  box-shadow: var(--shadow-md);
+}
+
+.ai-prompt-textarea {
+  min-height: 56px;
+  max-height: 220px;
+  padding: var(--s-14) var(--s-16) var(--s-8);
+  resize: none;
+}
+
+.ai-prompt-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-10);
+  padding: var(--s-8);
+  border-top: 1px solid var(--border);
+  overflow: visible;
+}
+
+.ai-prompt-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--s-8);
+  min-width: 0;
+}
+

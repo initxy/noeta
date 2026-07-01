@@ -1,0 +1,32 @@
+[tool.uv.workspace]
+# Libraries live in packages/ (noeta-runtime /
+# noeta-sdk), the application shell in apps/ (noeta-agent); the shell package noeta is deleted,
+# and the test suite lives at the repo root in tests/.
+members = ["packages/noeta-runtime", "packages/noeta-sdk", "apps/noeta-agent"]
+
+# The workspace-root pyproject is pytest's rootdir when running from the repo
+# root, so it owns the test config: ``testpaths`` pins collection to ``tests/``
+# instead of letting a root ``pytest`` walk the whole tree. The dev toolchain
+# lives here at the workspace virtual root.
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "mypy>=1.10",
+    "import-linter>=2.0",
+    "respx>=0.23.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -m 'not install_smoke'"
+markers = [
+    "live: requires live LLM backend, skipped in CI",
+    "install_smoke: spawns a fresh venv + pip install; slow (~30-60 s), opt-in via -m install_smoke",
+]
+
+# The coverage config from the former shell package's packages/noeta/pyproject.toml moved up
+# to the root when the tests did (CI runs pytest --cov=noeta at the repo root).
+[tool.coverage.run]
+source = ["noeta"]
+branch = true

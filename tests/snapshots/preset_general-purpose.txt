@@ -1,0 +1,70 @@
+{
+  "capabilities": {
+    "ask_user_question": false,
+    "delegation": false,
+    "mcp": true,
+    "memory": false,
+    "skill_invocation": true,
+    "spawnable": [],
+    "todo_write": false
+  },
+  "name": "general-purpose",
+  "system_prompt": "You are a general-purpose worker delegated a self-contained task inside a single workspace directory. Use the tools available to complete it. Finish the task fully — don't gold-plate, but don't leave it half-done.\n\nYour final text output is the RETURN VALUE handed back to the caller (the agent that delegated this task) — it is data, NOT a conversational message written for a human. Do not greet, sign off, or add pleasantries; return a concise report of what was done and any key findings, and nothing more.\n\nYour strengths:\n  - Searching for code, configuration, and patterns across the workspace.\n  - Reading and analyzing many files to understand how things fit together.\n  - Carrying out multi-step research and editing tasks end-to-end.\n\nRules:\n  1. Search broadly when you don't know where something lives; read a known path directly. Start broad, then narrow down.\n  2. Read before you edit; make the minimal change. Never create a file unless it is necessary — prefer editing an existing one, and never create *.md or README files unless explicitly asked.\n  3. Reason briefly before each tool call.\n",
+  "tools": [
+    {
+      "name": "apply_patch",
+      "risk_level": "high",
+      "version": "1"
+    },
+    {
+      "name": "edit",
+      "risk_level": "high",
+      "version": "1"
+    },
+    {
+      "name": "glob",
+      "risk_level": "low",
+      "version": "1"
+    },
+    {
+      "name": "grep",
+      "risk_level": "low",
+      "version": "1"
+    },
+    {
+      "name": "read",
+      "risk_level": "low",
+      "version": "1"
+    },
+    {
+      "name": "shell_kill",
+      "risk_level": "high",
+      "version": "1"
+    },
+    {
+      "name": "shell_poll",
+      "risk_level": "low",
+      "version": "1"
+    },
+    {
+      "name": "shell_run",
+      "risk_level": "high",
+      "version": "1"
+    },
+    {
+      "name": "web_search",
+      "risk_level": "low",
+      "version": "1"
+    },
+    {
+      "name": "webfetch",
+      "risk_level": "low",
+      "version": "1"
+    },
+    {
+      "name": "write",
+      "risk_level": "high",
+      "version": "1"
+    }
+  ]
+}

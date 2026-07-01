@@ -1,0 +1,54 @@
+[project]
+name = "noeta-agent"
+version = "0.1.0"
+description = "Noeta official coding agent product (the noeta.agent namespace's product modules): code agents, tools, skills, code-owned host assembly. ``python -m noeta.agent`` is the entry."
+license = "Apache-2.0"
+authors = [{ name = "The Noeta Authors" }]
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+dependencies = [
+    "noeta-runtime",
+    "noeta-sdk",
+]
+
+[project.urls]
+Homepage = "https://github.com/initxy/noeta"
+Repository = "https://github.com/initxy/noeta"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["noeta"]
+
+# Bundle the coding web app into the wheel at noeta/agent/static so an installed
+# ``python -m noeta.agent`` serves the frontend out-of-the-box.
+# The source lives in standalone apps/web. Vite ``dist/`` is the runtime artifact
+# the Python host serves; build apps/web before packaging. Include the source
+# for static contract tests/debuggability, but do not include node_modules.
+[tool.hatch.build.targets.wheel.force-include]
+"../web/dist" = "noeta/agent/static/dist"
+"../web/src" = "noeta/agent/static/src"
+"../web/chat.html" = "noeta/agent/static/chat.html"
+"../web/trace.html" = "noeta/agent/static/trace.html"
+"../web/package.json" = "noeta/agent/static/package.json"
+"../web/package-lock.json" = "noeta/agent/static/package-lock.json"
+"../web/README.md" = "noeta/agent/static/README.md"
+"../web/vite.config.js" = "noeta/agent/static/vite.config.js"
+
+[tool.uv.sources]
+noeta-runtime = { workspace = true }
+noeta-sdk = { workspace = true }
