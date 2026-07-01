@@ -19,10 +19,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
-    # Pinned exact: the three noeta distributions share the PEP 420 ``noeta``
-    # namespace and are released in lockstep, so an SDK build must run against
-    # the matching runtime, not any newer one. Bump all three together.
-    "noeta-runtime==0.1.0",
+    "noeta-runtime",
 ]
 
 [project.urls]
