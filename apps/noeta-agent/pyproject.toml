@@ -19,9 +19,18 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
 dependencies = [
-    "noeta-runtime",
-    "noeta-sdk",
+    # Pinned exact: runtime / sdk / agent share the PEP 420 ``noeta`` namespace
+    # and ship in lockstep, so the agent must pull the exact matching versions
+    # off PyPI, never a drifting newer runtime. Bump all three together.
+    "noeta-runtime==0.1.0",
+    "noeta-sdk==0.1.0",
 ]
+
+# ``noeta`` console command == ``python -m noeta.agent`` (both call
+# ``noeta.agent.__main__:main``). Lets users run ``noeta`` after install, or
+# ``uvx noeta-agent`` with no install at all.
+[project.scripts]
+noeta = "noeta.agent.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/initxy/noeta"
