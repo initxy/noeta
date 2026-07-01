@@ -1,0 +1,1259 @@
+/* Hidden <input type=file> for the image picker. Visually removed entirely,
+   triggered from the "+" add-menu (AddMenu → onPickImage). */
+.composer-file-input {
+  display: none;
+}
+
+/* codex bottom bar: the left cluster (add + access) takes the slack, the right
+   cluster (model·effort + submit) hugs the edge. */
+.composer-bar__left,
+.composer-bar__right {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  min-width: 0;
+}
+.composer-bar__left {
+  flex: 1 1 auto;
+  overflow: visible;
+}
+.composer-bar__right {
+  /* U2 — submit is pinned to the composer's bottom-right corner (absolute vs the
+     position:relative .composer frame), detached from the footer's chip flow, so
+     no amount of left-chip wrapping can push it to a second row or off-screen. */
+  position: absolute;
+  right: var(--s-8);
+  bottom: var(--s-8);
+  z-index: 2;
+  flex: none;
+  gap: var(--s-6);
+}
+
+/* U2 — keep long typed lines clear of the pinned submit corner. */
+.ai-prompt-textarea {
+  padding-right: 56px;
+}
+
+/* U2 — "attachments & MCP" bar above the textarea: one horizontally-scrolling
+   row (image chips + MCP enable chips), never wrapping into extra height. */
+.composer-attach-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-8);
+  overflow-x: auto;
+  padding: var(--s-2) var(--s-2) 0;
+}
+.composer-attach-bar:empty {
+  display: none;
+}
+.composer-attach-bar > .image-chips,
+.composer-attach-bar > .mcp-bar {
+  flex: none;
+  flex-wrap: nowrap;
+  padding: 0;
+}
+
+/* U4 — the per-chip gear opens this server's tool-subset picker directly. */
+.mcp-chip__gear {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+}
+.mcp-chip__gear:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* MCP server enable bar + add-form (above the composer textarea). U2 — single
+   row, no wrap; the enclosing .composer-attach-bar scrolls when it overflows. */
+.mcp-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: var(--s-6);
+  padding: var(--s-4) var(--s-2);
+}
+.mcp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-4);
+  font-size: 12px;
+  padding: var(--s-2) var(--s-6);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.mcp-add-btn {
+  font-size: 12px;
+  padding: var(--s-2) var(--s-8);
+  border: 1px dashed var(--border);
+  border-radius: var(--r-sm);
+  background: transparent;
+  cursor: pointer;
+}
+.mcp-add-form {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+}
+.mcp-add-form input,
+.mcp-add-form select {
+  font-size: 12px;
+  padding: var(--s-2) var(--s-6);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.mcp-tools-btn {
+  font-size: 11px;
+  padding: var(--s-1) var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: transparent;
+  cursor: pointer;
+}
+.mcp-tools-form {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-6);
+  flex-wrap: wrap;
+  font-size: 12px;
+  padding: var(--s-2) var(--s-6);
+  border: 1px dashed var(--border);
+  border-radius: var(--r-sm);
+}
+.mcp-tool-tick {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+/* The global MCP server management panel (settings gear). */
+.mcp-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-8);
+  min-width: 260px;
+  padding: var(--s-4) var(--s-2);
+}
+.mcp-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+.mcp-panel__empty {
+  font-size: 12px;
+  color: var(--muted);
+}
+.mcp-panel__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-8);
+  font-size: 12px;
+  padding: var(--s-2) var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.mcp-panel__alias {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-6);
+  font-weight: 600;
+}
+.mcp-panel__type {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 11px;
+}
+.mcp-panel__row-actions {
+  display: inline-flex;
+  gap: var(--s-4);
+}
+.mcp-panel__row-actions button,
+.mcp-panel__form-actions button {
+  font-size: 11px;
+  padding: var(--s-1) var(--s-6);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: transparent;
+  cursor: pointer;
+}
+.mcp-panel__delete {
+  color: var(--error);
+}
+.mcp-panel__form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-6);
+  width: 100%;
+}
+
+/* The unified @ mention selector + queued attachment chips. */
+.at-mention-menu {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  max-height: 220px;
+  overflow-y: auto;
+  padding: var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg, #fff);
+}
+.at-mention-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-8);
+  font-size: 12px;
+  padding: var(--s-2) var(--s-6);
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.at-mention-option:hover {
+  background: var(--hover, rgba(0, 0, 0, 0.05));
+}
+.at-mention-token {
+  font-family: var(--mono, monospace);
+}
+.at-mention-kind {
+  color: var(--muted);
+  font-size: 11px;
+}
+.attachment-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-4);
+  padding: var(--s-2);
+}
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-4);
+  font-size: 11px;
+  font-family: var(--mono, monospace);
+  padding: var(--s-2) var(--s-6);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.attachment-chip button {
+  display: inline-grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 0;
+}
+.attachment-chip button:hover {
+  color: var(--fg);
+}
+
+/* Pasted-image thumbnail chips above the composer. Same chip
+   idiom as the @ attachment chips, but each carries an <img> thumbnail and an
+   ✕ to remove it. */
+.image-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-6);
+  padding: var(--s-2);
+}
+.image-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: var(--s-2);
+}
+.image-chip__thumb {
+  display: block;
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: var(--r-sm);
+}
+.image-chip button {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg, #fff);
+  cursor: pointer;
+  color: var(--muted);
+  padding: 0;
+}
+.image-chip button:hover {
+  color: var(--fg);
+}
+
+/* Image thumbnail strip in the user bubble. Click any thumbnail to open it enlarged in the lightbox. */
+.bubble-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-6);
+  margin-top: var(--s-6);
+}
+.bubble-image-thumb {
+  display: block;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: none;
+  cursor: pointer;
+  overflow: hidden;
+  line-height: 0;
+}
+.bubble-image-thumb img {
+  display: block;
+  max-width: 220px;
+  max-height: 180px;
+  object-fit: contain;
+}
+.bubble-image-thumb:hover {
+  border-color: var(--border-strong);
+}
+
+/* Shared lightbox: full-screen overlay + centered enlarged original image. Source-agnostic (shared by chat bubbles + the file panel). */
+.lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: var(--s-32);
+  background: var(--overlay);
+  backdrop-filter: blur(3px);
+  animation: ks-fade 120ms ease;
+}
+.lightbox-img {
+  max-width: 92vw;
+  max-height: 88vh;
+  object-fit: contain;
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  animation: ks-pop 150ms ease;
+  cursor: default;
+}
+.lightbox-close {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--fg);
+  cursor: pointer;
+  padding: 0;
+}
+.lightbox-close:hover {
+  background: var(--panel-raised);
+}
+/* U17 — friendly placeholder shown when the enlarged image fails to load
+   (offline / bad hash / CORS), replacing the browser's broken-image glyph. */
+.lightbox-failed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-12);
+  width: 240px;
+  height: 200px;
+  border-radius: var(--r-md);
+  background: var(--panel-raised);
+  color: var(--muted);
+  cursor: default;
+  animation: ks-pop 150ms ease;
+}
+.lightbox-failed__text {
+  font-size: 13px;
+}
+.lightbox-failed__retry {
+  padding: var(--s-4) var(--s-16);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.lightbox-failed__retry:hover {
+  background: var(--panel-raised);
+  border-color: var(--accent);
+}
+
+/* codex bottom-bar inline chips: borderless text+icon pills with a hover
+   surface; each opens a popover ABOVE it (the composer sits near the viewport
+   bottom). The "+" add button is the same family, just icon-only. */
+.composer-chip-root,
+.composer-add {
+  position: relative;
+  display: inline-flex;
+}
+
+.composer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-4);
+  max-width: 220px;
+  height: 30px;
+  padding: 0 var(--s-8);
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+.composer-chip:hover:not(:disabled),
+.composer-chip.is-open {
+  background: var(--panel-raised);
+  color: var(--text);
+}
+.composer-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.composer-chip__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.composer-chip__caret {
+  flex: none;
+  color: var(--faint);
+}
+/* the risky permission mode (bypassPermissions) → amber danger styling, the
+   "Full access" slot in codex. */
+.composer-chip--danger {
+  color: var(--warning);
+}
+.composer-chip--danger:hover:not(:disabled),
+.composer-chip--danger.is-open {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+/* the "+" add button: icon-only, same hover surface as a chip. */
+.composer-add__btn {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.composer-add__btn:hover:not(:disabled),
+.composer-add__btn.is-open {
+  background: var(--panel-raised);
+  color: var(--text);
+}
+.composer-add__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* shared popover surface for every composer chip; floats ABOVE the trigger. */
+.composer-pop__menu {
+  position: absolute;
+  z-index: 30;
+  bottom: calc(100% + 8px);
+  min-width: 180px;
+  max-height: 60vh;
+  overflow: auto;
+  padding: var(--s-6);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  box-shadow: var(--shadow-md);
+}
+.composer-pop__menu--left {
+  left: 0;
+}
+.composer-pop__menu--right {
+  right: 0;
+}
+
+/* the model·effort popover stacks the two pickers. */
+.model-effort-menu {
+  display: grid;
+  gap: var(--s-10);
+  min-width: 200px;
+}
+
+/* the "+" add-menu: a short option list; one level in it widens for the MCP
+   management panel. */
+.add-menu {
+  min-width: 230px;
+}
+.add-menu--wide {
+  width: 360px;
+}
+.menu-option__lead {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-8);
+  min-width: 0;
+}
+.menu-option__lead svg {
+  flex: none;
+  color: var(--muted);
+}
+.add-menu__mcp {
+  display: grid;
+  gap: var(--s-8);
+}
+.add-menu__back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-4);
+  align-self: start;
+  padding: var(--s-2) var(--s-6);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.add-menu__back:hover {
+  background: var(--panel-raised);
+  color: var(--text);
+}
+.add-menu__back-icon {
+  rotate: 180deg;
+}
+
+/* the read-only workspace badge (existing session): a chip with no popover, so
+   no hover surface / pointer — it just states the durable binding. */
+.composer-chip--static {
+  cursor: default;
+}
+.composer-chip--static:hover {
+  background: transparent;
+  color: var(--muted);
+}
+.composer-chip > svg {
+  flex: none;
+}
+
+.menu-options {
+  display: grid;
+  gap: var(--s-4);
+}
+
+.menu-section-label {
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.workspace-menu input {
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  padding: var(--s-4) var(--s-8);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--panel-raised);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.workspace-menu input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.menu-option-list {
+  display: grid;
+  gap: var(--s-2);
+}
+
+.menu-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-8);
+  min-height: 28px;
+  padding: var(--s-4) var(--s-8);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  text-align: left;
+  font-size: 12px;
+}
+
+.menu-option:hover:not(:disabled),
+.menu-option.is-selected {
+  background: var(--panel-raised);
+}
+
+/* U3 — an option can carry a hint line under its label (permission modes spell
+   out what each mode actually does). */
+.menu-option__body {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+.menu-option__hint {
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.3;
+  white-space: normal;
+}
+
+.menu-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* The workspace menu is a registry picker (name → id), a "Bare
+   session" option, and a "New workspace" creation form. */
+.workspace-menu {
+  display: grid;
+  gap: var(--s-6);
+  min-width: 200px;
+}
+
+.workspace-options {
+  max-height: 170px;
+  overflow: auto;
+  display: grid;
+  gap: var(--s-4);
+}
+
+.workspace-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-8);
+  width: 100%;
+  min-height: 28px;
+  padding: var(--s-4) var(--s-8);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  text-align: left;
+  font-size: 12px;
+}
+
+.workspace-option:hover,
+.workspace-option.is-selected {
+  background: var(--panel-raised);
+}
+
+.workspace-create__open {
+  display: flex;
+  align-items: center;
+  gap: var(--s-6);
+  min-height: 28px;
+  padding: var(--s-4) var(--s-8);
+  border-radius: var(--r-sm);
+  color: var(--accent);
+  font-size: 12px;
+  text-align: left;
+}
+
+.workspace-create__open:hover {
+  background: var(--panel-raised);
+}
+
+.workspace-create {
+  display: grid;
+  gap: var(--s-6);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--border);
+}
+
+.workspace-create__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-6);
+}
+
+.workspace-create__cancel,
+.workspace-create__save {
+  min-height: 28px;
+  padding: var(--s-4) var(--s-10);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+}
+
+.workspace-create__save {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.workspace-create__save:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.workspace-create__cancel:hover {
+  background: var(--panel-raised);
+}
+
+.ai-prompt-submit {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.slash-menu {
+  position: absolute;
+  z-index: 10;
+  width: min(420px, calc(100% - 32px));
+  display: grid;
+  gap: var(--s-4);
+  padding: var(--s-6);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  box-shadow: var(--shadow-md);
+}
+
+.slash-option {
+  display: flex;
+  gap: var(--s-10);
+  align-items: center;
+  padding: var(--s-8);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.slash-option:hover,
+.slash-option.is-selected {
+  background: var(--panel-raised);
+}
+
+.slash-command {
+  font-family: var(--mono);
+  color: var(--accent);
+}
+
+.slash-label {
+  display: grid;
+  min-width: 0;
+}
+
+.slash-title {
+  font-weight: 650;
+}
+
+.slash-desc {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* MCP prompt param form (rendered from the prompt arg schema). */
+.mcp-prompt-form {
+  display: grid;
+  gap: var(--s-8);
+  margin: 0 var(--s-10) var(--s-8);
+  padding: var(--s-10);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel);
+}
+
+.mcp-prompt-form__head {
+  display: grid;
+  gap: var(--s-2);
+}
+
+.mcp-prompt-form__title {
+  font-family: var(--mono);
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.mcp-prompt-form__desc,
+.mcp-prompt-form__empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.mcp-prompt-arg {
+  display: grid;
+  gap: var(--s-2);
+}
+
+.mcp-prompt-arg__name {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.mcp-prompt-arg input {
+  padding: var(--s-6) var(--s-8);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--panel-raised);
+  color: var(--text);
+}
+
+.mcp-prompt-form__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-8);
+}
+
+.trace-page {
+  display: flex;
+  flex-direction: column;
+}
+
+.trace-header {
+  display: grid;
+  gap: var(--s-12);
+  padding: var(--s-12) var(--s-16);
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.trace-titlebar {
+  justify-content: space-between;
+}
+
+.trace-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-10);
+}
+
+.ks-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-4);
+  min-height: 22px;
+  padding: var(--s-2) var(--s-8);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.trace-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(86px, max-content));
+  gap: var(--s-8);
+  align-items: stretch;
+}
+
+.summary-stat {
+  display: grid;
+  align-content: center;
+  gap: var(--s-2);
+  min-width: 0;
+  min-height: 54px;
+  padding: var(--s-8) var(--s-10);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  box-shadow: var(--shadow-sm);
+}
+
+.summary-stat--compact {
+  min-width: 86px;
+}
+
+.summary-stat--wide {
+  min-width: min(260px, 100%);
+  max-width: min(360px, 100%);
+}
+
+.summary-stat__label {
+  color: var(--faint);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  line-height: 1.15;
+  text-transform: uppercase;
+}
+
+.summary-stat__value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.28;
+}
+
+.trace-workspace {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(360px, 1.35fr) minmax(280px, 1fr);
+}
+
+.timeline-pane,
+.detail-pane,
+.inspector-pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--s-14);
+  border-right: 1px solid var(--border);
+}
+
+.inspector-pane {
+  border-right: 0;
+}
+
+.pane-head {
+  justify-content: space-between;
+  margin-bottom: var(--s-10);
+}
+
+.timeline-search {
+  display: flex;
+  align-items: center;
+  gap: var(--s-8);
+  min-height: 34px;
+  padding: 0 var(--s-10);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.category-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-6);
+  margin: var(--s-10) 0;
+}
+
+.cat-chip {
+  --cat-color: var(--trace-lifecycle);
+  --cat-soft: var(--trace-lifecycle-soft);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-6);
+  min-height: 26px;
+  padding: 0 var(--s-8);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cat-lifecycle { --cat-color: var(--trace-lifecycle); --cat-soft: var(--trace-lifecycle-soft); }
+.cat-tool { --cat-color: var(--trace-tool); --cat-soft: var(--trace-tool-soft); }
+.cat-llm { --cat-color: var(--trace-llm); --cat-soft: var(--trace-llm-soft); }
+.cat-context { --cat-color: var(--trace-context); --cat-soft: var(--trace-context-soft); }
+.cat-governance { --cat-color: var(--trace-governance); --cat-soft: var(--trace-governance-soft); }
+.cat-message { --cat-color: var(--trace-message); --cat-soft: var(--trace-message-soft); }
+
+.cat-chip .ks-cat-dot {
+  background: var(--cat-color);
+}
+
+.cat-chip[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--cat-color) 48%, var(--border));
+  background: var(--cat-soft);
+  color: var(--cat-color);
+}
+
+.timeline-list {
+  list-style: none;
+  display: grid;
+  gap: var(--s-6);
+  margin: 0;
+  padding: 0;
+}
+
+.timeline-row {
+  --cat-color: var(--trace-lifecycle);
+  --cat-soft: var(--trace-lifecycle-soft);
+  width: 100%;
+  display: grid;
+  gap: var(--s-4);
+  padding: var(--s-10);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  color: var(--text);
+  text-align: left;
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--cat-color) 62%, transparent);
+}
+
+.timeline-row:hover {
+  border-color: color-mix(in srgb, var(--cat-color) 54%, var(--border));
+  background: color-mix(in srgb, var(--cat-soft) 36%, var(--panel));
+}
+
+.timeline-row.active {
+  border-color: var(--cat-color);
+  background: color-mix(in srgb, var(--cat-soft) 52%, var(--panel));
+}
+
+.trace-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-8);
+  min-width: 0;
+}
+
+.trace-type {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.trace-time,
+.trace-seq,
+.trace-meta,
+.artifact-meta,
+.context-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.trace-seq {
+  margin-left: auto;
+  font-family: var(--mono);
+}
+
+.event-detail {
+  display: grid;
+  gap: var(--s-12);
+}
+
+.event-head {
+  --cat-color: var(--trace-lifecycle);
+  --cat-soft: var(--trace-lifecycle-soft);
+  display: flex;
+  align-items: center;
+  gap: var(--s-10);
+  padding: var(--s-10) var(--s-12);
+  border: 1px solid color-mix(in srgb, var(--cat-color) 38%, var(--border));
+  border-radius: var(--r-md);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--cat-soft) 58%, var(--panel)), var(--panel));
+  box-shadow: inset 3px 0 0 var(--cat-color), var(--shadow-sm);
+}
+
+.event-head .trace-type {
+  font-size: 13px;
+}
+
+.detail-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-6);
+}
+
+.req-summary,
+.plan-section {
+  padding: var(--s-10) var(--s-12);
+  border-radius: var(--r-md);
+  background: var(--panel-raised);
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.plan-section {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* informational guidance reads as an admonition, not another boxy card */
+.ref-note {
+  padding: var(--s-8) var(--s-12);
+  border-radius: var(--r-md);
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.deref-body {
+  display: grid;
+  gap: var(--s-12);
+}
+
+.copy-wrap {
+  position: relative;
+}
+
+.copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: color-mix(in srgb, var(--code-bg) 78%, transparent);
+  border-color: var(--code-border);
+  color: var(--muted);
+  backdrop-filter: blur(4px);
+}
+
+.copy-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--code-bg) 92%, transparent);
+}
+
+.inspector-section {
+  display: grid;
+  gap: var(--s-10);
+  padding-bottom: var(--s-16);
+  margin-bottom: var(--s-16);
+  border-bottom: 1px solid var(--border);
+}
+
+.detail-table {
+  display: grid;
+  gap: var(--s-8);
+  margin: 0;
+}
+
+.detail-table > div {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: var(--s-10);
+}
+
+.detail-table dt {
+  color: var(--muted);
+}
+
+.detail-table dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.artifact-list {
+  list-style: none;
+  display: grid;
+  gap: var(--s-10);
+  margin: 0;
+  padding: 0;
+}
+
+.artifact-link {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.context-view {
+  display: grid;
+  gap: var(--s-8);
+}
+
+.context-turn,
+.context-plan {
+  display: grid;
+  gap: var(--s-4);
+  width: 100%;
+  padding: var(--s-10);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  color: var(--text);
+  text-align: left;
+}
+
+.context-turn.active,
+.context-plan.active {
+  border-color: var(--accent);
+}
+
+.context-turn small,
+.context-plan small {
+  color: var(--muted);
+}
+
+.msg {
+  display: grid;
+  gap: var(--s-8);
+  padding: var(--s-10);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel);
+}
+
+.msg-role {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.msg-system {
+  border-color: var(--system-accent);
+  background: color-mix(in srgb, var(--system-soft) 36%, var(--panel));
+}
+
+.msg-user {
+  border-color: var(--user-accent);
+  background: color-mix(in srgb, var(--user-soft) 34%, var(--panel));
+}
+
+.msg-assistant {
+  border-color: var(--assistant-accent);
+}
+
+.msg-tool {
+  border-color: var(--tool-accent);
+}
+
+.msg-text {
+  white-space: pre-wrap;
+}
+
+.msg-tool {
+  display: grid;
+  gap: var(--s-6);
+  padding: var(--s-8);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--tool-soft) 44%, var(--panel-raised));
+}
+
+.msg-tool-head {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.msg-tool-err {
+  border: 1px solid var(--error);
+}
+

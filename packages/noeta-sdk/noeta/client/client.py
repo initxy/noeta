@@ -1,0 +1,753 @@
+"""High-level ``Client`` + one-shot ``query`` (slice 4b).
+
+``Client`` wires an :class:`~noeta.client.options.Options` recipe into a
+live :class:`SdkHost` + :class:`~noeta.execution.driver.InteractionDriver`
+pair and exposes the full conversation command surface
+(``start`` / ``send_goal`` / ``approve`` / ``deny`` / ``answer`` /
+``cancel`` / ``close`` / ``reopen``) as 1:1 pass-throughs.
+
+``query`` is the sugar surface for library users who just want the
+event-envelope stream for a single goal: it creates a temporary
+``Client`` with ``multi_turn=False``, drives a single turn to the
+terminal TaskCompleted, returns the envelopes, and tears everything
+down.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+from noeta.agent.registry import AgentRegistry
+from noeta.core.wiring import wire_default_observers
+from noeta.execution import (
+    InteractionDriver,
+    multi_turn_policy_wrapper,
+)
+from noeta.client.messages import ViewItem, as_messages
+from noeta.execution.driver import DriveOutcome, STUB_MODEL_ALLOWLIST
+from noeta.protocols.content_store import ContentStore
+from noeta.protocols.dispatcher import Dispatcher
+from noeta.protocols.event_log import EventEnvelope, EventLogFull
+from noeta.protocols.events import (
+    ToolCallApprovalRequestedPayload,
+    ToolCallApprovalResolvedPayload,
+)
+from noeta.protocols.messages import ImageBlock, LLMProvider
+from noeta.protocols.tool import Tool
+from noeta.protocols.tool_args import resolve_tool_call_arguments
+from noeta.protocols.values import ContentRef
+from noeta.storage.memory import (
+    InMemoryContentStore,
+    InMemoryDispatcher,
+    InMemoryEventLog,
+)
+from noeta.tools.decorator import DecoratedTool
+from noeta.tools.fs.edit import FsWriteMode
+
+from noeta.client.host import SdkHost
+from noeta.client.host_config import HostConfig
+from noeta.client.options import (
+    AgentDefinition,
+    Options,
+    compile_options,
+)
+
+
+__all__ = ["Client", "query"]
+
+
+# ---------------------------------------------------------------------------
+# Custom-tool gatherer
+# ---------------------------------------------------------------------------
+
+
+def _scan_entries(
+    entries: tuple[Any, ...], gathered: dict[str, Tool]
+) -> None:
+    """Append every :class:`DecoratedTool` in ``entries`` to ``gathered``.
+
+    Shared helper for ``_collect_custom_tools`` — entries come from
+    ``allowed_tools`` or an ``AgentDefinition.tools`` tuple.
+    Raises ``ValueError`` on distinct-closure name collision.
+    """
+    for entry in entries:
+        if isinstance(entry, DecoratedTool):
+            existing = gathered.get(entry.name)
+            if existing is not None and existing is not entry:
+                raise ValueError(
+                    f"custom tool name collision: {entry.name!r} is "
+                    "registered twice with distinct closures"
+                )
+            gathered[entry.name] = entry
+
+
+def _collect_custom_tools(root: Options) -> dict[str, Tool]:
+    """Gather every ``DecoratedTool`` closure referenced from ``root``.
+
+    Scans (in order):
+
+    * Every ``root.allowed_tools`` entry (when not ``None``).
+    * Every ``AgentDefinition.tools`` entry in ``root.agents`` (when not
+      ``None``).
+
+    The agents tree is flat — there is no recursive nesting, so no tree
+    walk is needed.
+    """
+    gathered: dict[str, Tool] = {}
+    if root.allowed_tools is not None:
+        _scan_entries(root.allowed_tools, gathered)
+    for defn in root.agents.values():
+        if isinstance(defn, AgentDefinition) and defn.tools is not None:
+            _scan_entries(defn.tools, gathered)
+    # In-process MCP servers (Options.mcp_servers): their bundled @tool
+    # closures are custom tools too. Duck-typed by ``.tools`` (the SdkMcpServer
+    # value object) so noeta.client takes no upward import on noeta.sdk.
+    for server in root.mcp_servers:
+        _scan_entries(tuple(getattr(server, "tools", ())), gathered)
+    return gathered
+
+
+# ---------------------------------------------------------------------------
+# Client
+# ---------------------------------------------------------------------------
+
+
+class Client:
+    """High-level conversation driver over an ``Options`` recipe.
+
+    Typical use::
+
+        client = Client(my_options, provider=my_provider,
+                        workspace_dir=Path("."))
+        try:
+            outcome = client.start(goal="fix my tests", agent="main")
+            # read events, or follow up with send_goal / approve / deny / answer / …
+        finally:
+            client.shutdown()
+
+    Or the one-shot sugar::
+
+        envelopes = query(my_options, goal="fix my tests",
+                          provider=my_provider, workspace_dir=Path("."))
+
+    Storage defaults to in-memory, but a :class:`HostConfig` (the D3 host-level
+    wiring surface) can inject an external durable triple plus the host runtime
+    injections (HTML-app preview gateway, live-MCP alias resolver) without
+    touching the agent identity. ``shutdown`` is idempotent: it unsubscribes the
+    default observers wired at construction.
+    """
+
+    def __init__(
+        self,
+        options: Options,
+        *,
+        provider: Optional[LLMProvider] = None,
+        workspace_dir: Optional[Path] = None,
+        model: Optional[str] = None,
+        multi_turn: bool = True,
+        host_config: Optional[HostConfig] = None,
+        allowed_models: Optional[Sequence[str]] = None,
+    ) -> None:
+        # 0. Resolve provider: explicit kwarg first, then Options.provider
+        #    (D5: wiring is NOT identity — the AgentSpec identity never sees it).
+        effective_provider: LLMProvider
+        if provider is not None:
+            effective_provider = provider
+        elif options.provider is not None:
+            effective_provider = options.provider
+        else:
+            raise ValueError(
+                "a provider is required — pass one via the Client(provider=...)"
+                " kwarg or set Options.provider"
+            )
+
+        # 0b. Resolve workspace_dir: explicit kwarg > Options.cwd
+        #     (both treated as wiring-only, never inspected by compile_options).
+        effective_workspace_dir: Path
+        if workspace_dir is not None:
+            effective_workspace_dir = Path(workspace_dir)
+        elif options.cwd is not None:
+            assert isinstance(options.cwd, (str, Path))
+            effective_workspace_dir = Path(options.cwd)
+        else:
+            raise ValueError(
+                "a workspace directory is required — pass one via the "
+                "Client(workspace_dir=...) kwarg or set Options.cwd"
+            )
+
+        # 1. Compile + register (including child agents)
+        main_spec, descendant_specs = compile_options(options)
+        registry: AgentRegistry = AgentRegistry()
+        registry.add(main_spec)
+        for d in descendant_specs:
+            registry.add(d)
+
+        # 2. Collect custom tools (all nodes, including descendants)
+        custom_tools = _collect_custom_tools(options)
+
+        # 3. Open stores (dispatcher first — the event log needs it as
+        #    lease_validator). The durable-storage host config may inject an
+        #    external triple (sqlite +
+        #    multi-session); absent it, build the in-memory triple (the historical
+        #    default, byte-identical for every existing caller).
+        hc = host_config if host_config is not None else HostConfig()
+        injected = hc.storage_triple()
+        dispatcher: Dispatcher
+        event_log: EventLogFull
+        content_store: ContentStore
+        if injected is not None:
+            event_log, content_store, dispatcher = injected
+        else:
+            dispatcher = InMemoryDispatcher()
+            event_log = InMemoryEventLog(lease_validator=dispatcher)
+            content_store = InMemoryContentStore()
+        self._unsubscribe_default: Callable[[], None] = wire_default_observers(
+            event_log, dispatcher
+        )
+        # (T3) — custom Observer
+        # extension point: subscribe each user-supplied post-commit callback
+        # alongside the defaults and collect their unsubscribes for shutdown.
+        self._unsubscribe_observers: list[Callable[[], None]] = [
+            event_log.subscribe(obs) for obs in options.observers
+        ]
+        self._shutdown = False
+
+        # 4. Assemble host
+        host_model = (
+            model
+            if model is not None
+            else main_spec.default_model
+            if main_spec.default_model is not None
+            else options.model
+            if options.model is not None
+            else "sonnet"
+        )
+        self._host = SdkHost(
+            event_log=event_log,
+            content_store=content_store,
+            dispatcher=dispatcher,
+            provider=effective_provider,
+            model=host_model,
+            workspace_dir=effective_workspace_dir,
+            registry=registry,
+            custom_tools=custom_tools,
+            policy_wrapper=(
+                multi_turn_policy_wrapper if multi_turn else None
+            ),
+            permission_mode=options.permission_mode,
+            # Wiring-only LLM controls: live in Options, excluded from
+            # the AgentSpec identity (compile_options never reads them), forwarded
+            # through the host to ReActPolicy so every in-session
+            # LLMRequest inherits the same override.
+            output_schema=(
+                dict(options.output_schema)
+                if options.output_schema is not None
+                else None
+            ),
+            thinking=options.thinking,
+            effort=options.effort,
+            # (T3) — extension points.
+            # policy: the custom Options.policy IS the ``(llm) -> Policy``
+            # factory (it also carries the .ref compile_options put in the
+            # spec); guards / content_channels pass through verbatim.
+            policy_override=options.policy,
+            extra_guards=tuple(options.guards),
+            extra_content_kinds=tuple(options.content_channels),
+            # (D3) — host-level runtime
+            # injections (NOT agent identity): the HTML-app preview gateway
+            # (open_app) and the live-MCP alias resolver + transport. All default
+            # to absent, so a bare HostConfig() leaves the tool list / wire
+            # byte-identical to today.
+            app_gateway=hc.app_gateway,
+            mcp_server_resolver=hc.mcp_server_resolver,
+            mcp_http_post=hc.mcp_http_post,
+            workflow_allowed=hc.workflow_allowed,
+            # Process fs write policy (D3 host config): "apply" performs real
+            # writes, anything else stages a dry-run diff (the safe default).
+            write_mode=(
+                FsWriteMode.APPLY
+                if hc.write_mode == "apply"
+                else FsWriteMode.DRY_RUN
+            ),
+        )
+
+        # 5. Interaction driver
+        # A local deployment widens the per-turn model-selector allowlist to its
+        # configured model list. noeta-agent runs as the ⊤ LOCAL_PRINCIPAL, so the
+        # deployment allowlist IS the authorized set (``allowed_models`` =
+        # BackendConfig.models) — this lets real model ids (e.g. ``gpt-5.5``) pass
+        # the driver's per-turn ``_authorize_selector`` without per-principal
+        # config. Absent it, keep the driver's STUB_MODEL_ALLOWLIST default →
+        # byte-identical to every pre-widening caller (oneshot / tests / CLI).
+        self._driver: InteractionDriver = InteractionDriver(
+            self._host,
+            # Note: do not pass model_selector — let host.model become the
+            # default naturally, avoiding allowlist friction.
+            # default_model=None makes driver.__init__ fall back to host.model.
+            default_model=None,
+            model_allowlist=(
+                frozenset(allowed_models)
+                if allowed_models
+                else STUB_MODEL_ALLOWLIST
+            ),
+        )
+        # Wire the driver back into the host as the background-completion
+        # notifier (Mechanism C). The driver wraps the host, so the host cannot
+        # construct it — we set it here, after construction. This activates the
+        # turn-boundary completion push for BOTH a ``shell_run(background=true)``
+        # job and a ``spawn_subagent(background=True)`` sub-agent: when one
+        # finishes while the session is idle, the host's drive thread wakes the
+        # session and injects an ``origin="system"`` notice. ``getattr`` so a host
+        # without the seam (a test double) is a clean no-op.
+        set_notifier = getattr(self._host, "set_background_notifier", None)
+        if callable(set_notifier):
+            set_notifier(self._driver)
+        # Crash recovery (docs/adr/background-subagent.md): now that the notifier
+        # is wired, re-activate background sub-agents orphaned by a prior host
+        # crash — re-drive any ``spawn_subagent(background=True)`` child with a
+        # ``BackgroundSubagentStarted`` but no ``BackgroundSubagentDelivered``
+        # (it resumes from its own EventLog), or re-deliver a terminal one whose
+        # turn-boundary notice was lost. A one-shot startup side effect (never
+        # resumed); a no-op for an in-memory ``query()`` Client (no prior
+        # streams) and for a host without the seam (test double / no policy
+        # wrapper → registry unbuilt). ``getattr`` keeps both cases clean.
+        recover = getattr(self._host, "recover_background_subagents", None)
+        if callable(recover):
+            recover()
+        self._main_agent_name = main_spec.name
+        self._registry = registry
+        # can_use_tool callback (wiring-only, not part of the AgentSpec identity)
+        self._can_use_tool: Optional[Callable[[str, dict[str, Any]], bool]] = (
+            options.can_use_tool  # type: ignore[assignment]
+        )
+
+    # -- 1:1 pass-throughs to driver ----------------------------------------
+
+    # -- can_use_tool auto-resolver ------------------------------------------
+
+    def _drain_approvals(self, task_id: str, outcome: DriveOutcome) -> DriveOutcome:
+        """Loop-resolve pending tool-call approvals via ``can_use_tool``.
+
+        When the callback is configured and the outcome is a suspend on an
+        ``approval-*`` handle (i.e. a gated tool is waiting), scan the
+        event log for the newest ``ToolCallApprovalRequested`` that has no
+        matching ``ToolCallApprovalResolved``, invoke the user's callback,
+        and resume with driver approve/deny. Repeat until the task is no
+        longer suspended on an approval handle, then return the final
+        outcome.
+        """
+        callback = self._can_use_tool
+        if callback is None:
+            return outcome
+        while True:
+            handle = outcome.wake_handle
+            if outcome.status != "suspended" or not isinstance(handle, str) \
+                    or not handle.startswith("approval-"):
+                return outcome
+            # Find the latest unreplied ToolCallApprovalRequested.
+            events = self._host.event_log.read(task_id)
+            pending: Optional[ToolCallApprovalRequestedPayload] = None
+            resolved_call_ids: set[str] = set()
+            for e in events:
+                if e.type == "ToolCallApprovalResolved":
+                    p = e.payload
+                    if isinstance(p, ToolCallApprovalResolvedPayload):
+                        resolved_call_ids.add(p.call_id)
+            for e in reversed(events):
+                if e.type == "ToolCallApprovalRequested":
+                    p = e.payload
+                    if isinstance(p, ToolCallApprovalRequestedPayload) \
+                            and p.call_id not in resolved_call_ids:
+                        pending = p
+                        break
+            if pending is None:
+                # No pending request — leave outcome alone.
+                return outcome
+            args = resolve_tool_call_arguments(
+                pending, self._host.content_store)
+            approved = bool(callback(pending.tool_name, args))
+            if approved:
+                outcome = self._driver.approve(
+                    task_id,
+                    call_id=pending.call_id,
+                    reason=None,
+                    resolver="can_use_tool",
+                )
+            else:
+                outcome = self._driver.deny(
+                    task_id,
+                    call_id=pending.call_id,
+                    reason=None,
+                    resolver="can_use_tool",
+                )
+
+    def start(
+        self,
+        *,
+        goal: str,
+        agent: Optional[str] = None,
+        model_selector: Optional[str] = None,
+        images: Sequence[ImageBlock] = (),
+        permission_mode: Optional[str] = None,
+        enabled_mcp: tuple[str, ...] = (),
+        workspace_dir: Optional[str] = None,
+        effort: Optional[str] = None,
+    ) -> Any:
+        """Create a Task and drive the first turn (driver ``start``).
+
+        ``agent`` defaults to the Options-compiled main spec's name
+        (``"main"`` unless the recipe changed it). Passing a specific
+        ``model_selector`` is subject to the deployment
+        :data:`~noeta.execution.driver.STUB_MODEL_ALLOWLIST`; to set a
+        per-Client default without the allowlist check, use the
+        constructor ``model`` argument instead.
+
+        ``images`` rides the opening user turn alongside the goal text
+        (additive — empty keeps the seed byte-identical to the text-only path).
+
+        ``permission_mode`` / ``enabled_mcp`` are per-turn, NON-durable host
+        knobs the product backend forwards from the request (the turn's approval
+        mode and the MCP aliases enabled for this conversation); both default to
+        inert values (the historical no-MCP, host-default-mode path).
+
+        ``workspace_dir`` is the
+        per-session workspace **absolute path** the driver welds into the durable
+        ``TaskHostBound`` — pass it once here at session creation and every later
+        turn fold-resolves it (zero mapping). ``effort`` is the per-turn,
+        NON-durable reasoning-effort selector. Both default to ``None`` ⇒ the
+        host-fixed workspace / effort, byte-identical to the pre-widening path.
+        """
+        outcome = self._driver.start(
+            goal=goal,
+            agent=agent if agent is not None else self._main_agent_name,
+            model_selector=model_selector,
+            images=images,
+            permission_mode=permission_mode,
+            enabled_mcp=enabled_mcp,
+            workspace_dir=workspace_dir,
+            effort=effort,
+        )
+        return self._drain_approvals(outcome.task_id, outcome)
+
+    def send_goal(
+        self,
+        task_id: str,
+        *,
+        goal: str,
+        model_selector: Optional[str] = None,
+        images: Sequence[ImageBlock] = (),
+        permission_mode: Optional[str] = None,
+        enabled_mcp: tuple[str, ...] = (),
+        effort: Optional[str] = None,
+    ) -> Any:
+        """Append a new user turn (driver ``send_goal``).
+
+        ``images`` rides the appended user turn alongside the goal text
+        (additive — empty keeps the append byte-identical to the text-only path).
+
+        ``permission_mode`` / ``enabled_mcp`` are per-turn host knobs (see
+        :meth:`start`); inert defaults keep this byte-identical to the bare path.
+
+        ``effort`` is the per-turn, NON-durable reasoning-effort selector. No
+        ``workspace_dir`` here: a follow-up turn fold-resolves the workspace the
+        session was created with, so the workspace is bound once at
+        :meth:`start` and never re-passed.
+        """
+        outcome = self._driver.send_goal(
+            task_id=task_id,
+            goal=goal,
+            model_selector=model_selector,
+            images=images,
+            permission_mode=permission_mode,
+            enabled_mcp=enabled_mcp,
+            effort=effort,
+        )
+        return self._drain_approvals(task_id, outcome)
+
+    def approve(
+        self,
+        task_id: str,
+        *,
+        call_id: str,
+        reason: Optional[str] = None,
+        resolver: str = "client",
+    ) -> Any:
+        """Approve a pending gated tool call (driver ``approve``)."""
+        return self._driver.approve(
+            task_id=task_id, call_id=call_id, reason=reason, resolver=resolver
+        )
+
+    def deny(
+        self,
+        task_id: str,
+        *,
+        call_id: str,
+        reason: Optional[str] = None,
+        resolver: str = "client",
+    ) -> Any:
+        """Deny a pending gated tool call (driver ``deny``)."""
+        return self._driver.deny(
+            task_id=task_id, call_id=call_id, reason=reason, resolver=resolver
+        )
+
+    def answer(
+        self,
+        task_id: str,
+        *,
+        question_id: str,
+        answers: dict[str, Any],
+        answered_by: str = "client",
+    ) -> Any:
+        """Answer a pending structured user question (driver ``answer``)."""
+        return self._driver.answer(
+            task_id=task_id,
+            question_id=question_id,
+            answers=answers,
+            answered_by=answered_by,
+        )
+
+    def cancel(
+        self,
+        task_id: str,
+        *,
+        reason: str = "cancelled",
+        cascade: bool = False,
+    ) -> Any:
+        """Cancel a conversation (driver ``cancel``)."""
+        return self._driver.cancel(
+            task_id=task_id, reason=reason, cascade=cascade
+        )
+
+    def close(
+        self,
+        task_id: str,
+        *,
+        closed_by: str = "user",
+        reason: Optional[str] = None,
+    ) -> Any:
+        """Close / archive a conversation (driver ``close``)."""
+        return self._driver.close(
+            task_id=task_id, closed_by=closed_by, reason=reason
+        )
+
+    def reopen(
+        self,
+        task_id: str,
+        *,
+        reopened_by: str = "user",
+        reason: Optional[str] = None,
+    ) -> Any:
+        """Explicitly reopen a closed conversation (driver ``reopen``)."""
+        return self._driver.reopen(
+            task_id=task_id, reopened_by=reopened_by, reason=reason
+        )
+
+    # -- extras ------------------------------------------------------------
+
+    @property
+    def registry(self) -> AgentRegistry:
+        """The compiled :class:`AgentRegistry` (main + descendants)."""
+        return self._registry
+
+    @property
+    def main_agent_name(self) -> str:
+        """Convenience: the compiled main spec's name."""
+        return self._main_agent_name
+
+    def events(self, task_id: str) -> list[EventEnvelope]:
+        """Return the full event-envelope stream for ``task_id``."""
+        return list(self._host.event_log.read(task_id))
+
+    def messages(self, task_id: str) -> list[ViewItem]:
+        """Fold ``task_id``'s envelope stream into the human-readable view.
+
+        Thin-client convenience: ``as_messages(self.events(task_id), <store>)``
+        without the caller having to reach for the content store used to
+        deref large blocks. The canonical output is still the envelope stream
+        (:meth:`events`); this is the user-facing projection.
+        """
+        return as_messages(self.events(task_id), self._host.content_store)
+
+    def events_after(
+        self, task_id: str, after_seq: Optional[int] = None
+    ) -> list[EventEnvelope]:
+        """The envelope stream for ``task_id`` strictly past ``after_seq``.
+
+        ``None`` ⇒ the full stream. Used by a streaming bridge (an app's SSE
+        layer) to resume one task's sub-stream from a per-task cursor.
+        """
+        return list(self._host.event_log.read(task_id, after_seq=after_seq))
+
+    def task_streams(self) -> list[Any]:
+        """Enumerate every task stream this client has driven.
+
+        Each row carries ``task_id`` + ``last_seq`` (a ``TaskStreamSummary``) —
+        enough for a streaming bridge to discover the root's subtask tree and
+        catch each sub-stream up from its per-task cursor.
+        """
+        return list(self._host.event_log.list_task_streams())
+
+    def delete_task(self, task_id: str) -> dict[str, Any]:
+        """Hard-delete a task and its subtask tree from storage.
+
+        The conversation *is* the task (D6), so "delete the session" purges each
+        task's event stream + dispatcher state, cascaded across the whole subtask
+        tree (a subtask rides its root). Refuses with ``reason="running"`` when a
+        worker is actively running any task in the tree (the purge never races an
+        in-flight turn) and ``reason="not_found"`` when the root is unknown.
+        Hash-addressed content blobs are shared across tasks and left for offline
+        GC — never touched here. Returns a typed result the caller maps onto a
+        status: ``{"ok", "reason"?, "task_id", "deleted": [...]}``.
+        """
+        event_log = self._host.event_log
+        dispatcher = self._host.dispatcher
+        # Genesis parent per known task → the subtask tree to cascade across.
+        parent_of: dict[str, Optional[str]] = {}
+        for summary in event_log.list_task_streams():
+            tid = getattr(summary, "task_id", None)
+            if isinstance(tid, str):
+                parent_of[tid] = self._genesis_parent(tid)
+        if task_id not in parent_of:
+            return {"ok": False, "reason": "not_found", "task_id": task_id, "deleted": []}
+        children: dict[str, list[str]] = {}
+        for tid, parent in parent_of.items():
+            if parent:
+                children.setdefault(parent, []).append(tid)
+        targets: list[str] = []
+        seen: set[str] = set()
+        queue = [task_id]
+        while queue:
+            tid = queue.pop()
+            if tid in seen:
+                continue
+            seen.add(tid)
+            targets.append(tid)
+            queue.extend(children.get(tid, []))
+        # Active guard — never purge a task a worker is actively running. Prefer
+        # the expiry-aware lease check so a zombie lease (TTL lapsed after its
+        # worker died) never makes a task permanently undeletable.
+        active_fn = getattr(dispatcher, "has_active_lease", None)
+        status_fn = getattr(dispatcher, "task_status", None)
+        for tid in targets:
+            if callable(active_fn):
+                running = bool(active_fn(tid))
+            elif callable(status_fn):
+                running = status_fn(tid) == "leased"
+            else:
+                running = False
+            if running:
+                return {"ok": False, "reason": "running", "task_id": tid, "deleted": []}
+        purge_events = getattr(event_log, "purge_task", None)
+        purge_disp = getattr(dispatcher, "purge_task", None)
+        for tid in targets:
+            if callable(purge_events):
+                purge_events(tid)
+            if callable(purge_disp):
+                purge_disp(tid)
+        return {"ok": True, "task_id": task_id, "deleted": targets}
+
+    def _genesis_parent(self, task_id: str) -> Optional[str]:
+        """``parent_task_id`` from a task's genesis ``TaskCreated`` (``None`` if root)."""
+        for env in self._host.event_log.read(task_id):
+            if env.type == "TaskCreated":
+                return getattr(env.payload, "parent_task_id", None)
+        return None
+
+    def get_content(self, content_hash: str) -> Optional[bytes]:
+        """Fetch a stored blob by content hash (``None`` if absent).
+
+        ``ContentStore.get`` is hash-only, so a streaming bridge can deref a
+        ``ContentRef`` carried in the envelope stream without re-deriving the
+        full ref. The media type is the caller's concern (sniff or default).
+        """
+        ref = ContentRef(
+            hash=content_hash, size=0, media_type="application/octet-stream"
+        )
+        try:
+            return self._host.content_store.get(ref)
+        except Exception:
+            return None
+
+    def put_content(self, body: bytes, *, media_type: str) -> ContentRef:
+        """Store ``body`` and return its stable :class:`ContentRef`.
+
+        The write-side mirror of :meth:`get_content`: a product backend that
+        receives raw bytes (e.g. a base64 image attachment) puts them through
+        noeta.sdk and gets back a ``ContentRef`` to wrap in an ``ImageBlock`` for
+        a user turn — without importing ``noeta.protocols`` (the D2 weld).
+        Content-addressed: identical bytes → identical hash.
+        """
+        return self._host.content_store.put(body, media_type=media_type)
+
+    def subscribe(self, callback: Callable[[EventEnvelope], None]) -> Callable[[], None]:
+        """Subscribe to the live, post-commit envelope stream (ALL tasks).
+
+        Returns an unsubscribe callable. The callback fires once per committed
+        envelope across every task on this client (root + subtasks) — a
+        streaming bridge filters to the tree it serves and assigns its own
+        stream-level cursor.
+        """
+        return self._host.event_log.subscribe(callback)
+
+    def shutdown(self) -> None:
+        """Unsubscribe default observers (idempotent).
+
+        No-op on already-shutdown instances. Does **not** explicitly
+        close in-memory stores (they are process-owned).
+        """
+        if self._shutdown:
+            return
+        self._shutdown = True
+        try:
+            self._unsubscribe_default()
+        except Exception:
+            # Observer unsubscribe must never raise; swallow defensively.
+            pass
+        for unsub in self._unsubscribe_observers:
+            try:
+                unsub()
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# one-shot query
+# ---------------------------------------------------------------------------
+
+
+def query(
+    options: Options,
+    goal: str,
+    *,
+    provider: Optional[LLMProvider] = None,
+    workspace_dir: Optional[Path] = None,
+    model: Optional[str] = None,
+    images: Sequence[ImageBlock] = (),
+) -> list[EventEnvelope]:
+    """One-shot SDK query: single turn, all envelopes returned.
+
+    Creates a temporary ``Client(multi_turn=False)`` so the policy
+    reaches a genuine ``TaskCompleted`` terminal instead of suspending
+    on the next-goal handle. The canonical return shape is the full
+    Noeta event-envelope list (not a human-readable message view); use
+    ``as_messages`` (slice 4c) for the user-facing projection.
+
+    Parameters match the ``Client`` constructor + a ``goal`` string.
+    Callers who need multi-turn interactions (``send_goal`` /
+    ``approve`` / …) or access to the compiled registry should
+    instantiate ``Client`` directly instead of going through ``query``.
+    """
+    client = Client(
+        options,
+        provider=provider,
+        workspace_dir=workspace_dir,
+        model=model,
+        multi_turn=False,
+    )
+    try:
+        outcome = client.start(goal=goal, images=images)
+        return client.events(outcome.task_id)
+    finally:
+        client.shutdown()

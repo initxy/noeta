@@ -1,0 +1,50 @@
+# Claude Code local private config (skills travel with the project; not ignored)
+.claude/settings.local.json
+.claude/*.local.*
+.claude/worktrees/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.import_linter_cache/
+.tox/
+htmlcov/
+.coverage
+.coverage.*
+dist/
+build/
+*.egg
+node_modules/
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local demo / scratch artifacts
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.tmp.xml
+*.tmp
+
+# Local runtime config (contains api_key); only the noeta.config.example.json template is committed
+/noeta.config.json
+
+# Local artifacts from Playwright MCP test runs (console logs / page snapshots)
+/.playwright-mcp/

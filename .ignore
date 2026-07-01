@@ -1,0 +1,25 @@
+# Tests
+tests/
+**/tests/
+test_*.py
+*_test.py
+*.test.ts
+*.test.tsx
+*.test.js
+*_test.go
+
+# Generated / artifacts
+architecture-review-*.html
+uv.lock
+*.lock
+
+# Caches & build (rg reads .gitignore by default, but listing them explicitly is more robust)
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+dist/
+build/
+htmlcov/
+node_modules/

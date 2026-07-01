@@ -1,0 +1,297 @@
+; Noeta import-linter contracts.
+;
+; Enforces the layering across the three-package topology
+; (noeta-runtime / noeta-sdk / noeta-agent product dist).
+; noeta-server folded into noeta-sdk (TL3), its HTTP stack was deleted in the
+; runtime-sdk-app-restructure T8, and noeta-cli was removed (TL6 —
+; ``python -m noeta.agent`` is the only entry, no ``noeta`` console script). All
+; distributions contribute subpackages to the shared PEP 420 ``noeta`` namespace,
+; so the contracts run on import *paths*, which stay invariant while the
+; physical distribution boundary moves. ``protocols`` is the typed boundary
+; (L0) and must not depend on any other in-project module; ``core`` (L1) may
+; depend on ``protocols`` only. The library-SDK layering splits the old L2 band by mechanism
+; vs material: the kernel-services band (runtime / storage / guards / observers
+; / read_models — noeta-runtime) sits below the SDK **materials** band (context
+; / policies / tools / providers — noeta-sdk), so a kernel service can never
+; import a material. The ``noeta.code`` namespace was deleted: the
+; product now lives entirely in ``noeta.agent.*`` (a PEP 420 namespace whose
+; identity layer ``spec``/``registry`` ships in noeta-sdk and whose product
+; modules — backend / host / commands / observe / read_models / skills — ship in
+; the product dist). The backend assembles engines through ``noeta.sdk`` (Client /
+; SdkHost); T8 deleted the standalone
+; ``noeta.server`` HTTP stack (A) and the legacy ``noeta.agent.api`` facade +
+; ``noeta.agent.host.session`` runner (B), migrating the engine-behaviour suite
+; onto ``noeta.sdk.Client`` (tests/_sdk_session).
+
+[importlinter]
+root_package = noeta
+; Engine lazily imports ToolRuntime as a wiring convenience when callers
+; do not pass one explicitly; the edge is intentional and documented in
+; core/engine.py. The library-SDK refactor removed the old composer default, so the
+; kernel no longer reaches into noeta.context at all.
+include_external_packages = False
+
+[importlinter:contract:layers]
+name = Noeta layering (materials band split from kernel-services)
+type = layers
+layers =
+    noeta.agent.host
+    noeta.agent.commands | noeta.agent.observe
+    noeta.agent.read_models
+    noeta.agent.skills
+    noeta.sdk
+    noeta.presets
+    noeta.client
+    noeta.execution
+    noeta.context | noeta.policies | noeta.tools | noeta.providers
+    noeta.runtime | noeta.storage | noeta.guards | noeta.observers | noeta.read_models
+    noeta.agent.registry
+    noeta.agent.spec
+    noeta.core
+    noeta.protocols
+exhaustive = false
+ignore_imports =
+    noeta.core.engine -> noeta.runtime.tool
+
+[importlinter:contract:protocols-isolation]
+name = noeta.protocols must not import any other in-project module
+type = forbidden
+source_modules =
+    noeta.protocols
+forbidden_modules =
+    noeta.core
+    noeta.runtime
+    noeta.context
+    noeta.storage
+    noeta.policies
+    noeta.tools
+    noeta.guards
+    noeta.observers
+    noeta.agent
+
+[importlinter:contract:core-uses-only-protocols]
+name = noeta.core may only import noeta.protocols (no L2 deps)
+type = forbidden
+source_modules =
+    noeta.core
+forbidden_modules =
+    noeta.runtime
+    noeta.context
+    noeta.storage
+    noeta.policies
+    noeta.tools
+    noeta.guards
+    noeta.observers
+    noeta.agent
+ignore_imports =
+    ; The Engine lazily imports ``noeta.runtime.tool.ToolRuntime`` only when
+    ; the caller did not wire one explicitly. A runtime convenience, not a
+    ; module-load-order dependency, but import-linter sees the string so we
+    ; mark it as the intentional exception. The library-SDK refactor removed
+    ; the old ``noeta.context.composer`` default — the kernel no longer reaches there.
+    noeta.core.engine -> noeta.runtime.tool
+
+[importlinter:contract:sdk-not-agent]
+name = SDK layers must not import the noeta-agent product (supersedes execution-not-code / client-not-code / server-core-not-code; the sdk-owned identity layer noeta.agent.spec/registry stays importable)
+type = forbidden
+source_modules =
+    noeta.client
+    noeta.execution
+    noeta.context
+    noeta.policies
+    noeta.tools
+    noeta.providers
+forbidden_modules =
+    noeta.agent.host
+    noeta.agent.commands
+    noeta.agent.observe
+    noeta.agent.read_models
+    noeta.agent.skills
+
+[importlinter:contract:runtime-no-providers]
+name = noeta.runtime must not import noeta.providers (issue 11)
+type = forbidden
+source_modules =
+    noeta.runtime
+forbidden_modules =
+    noeta.providers
+
+[importlinter:contract:sdk-core-not-presets]
+name = SDK core must not import noeta.presets (presets is top-of-stack factory content, only consumers import it)
+type = forbidden
+source_modules =
+    noeta.client
+    noeta.execution
+    noeta.context
+    noeta.policies
+    noeta.tools
+    noeta.providers
+    noeta.agent.spec
+    noeta.agent.registry
+forbidden_modules =
+    noeta.presets
+
+[importlinter:contract:providers-only-protocols]
+name = noeta.providers may only import noeta.protocols (issue 11)
+type = forbidden
+source_modules =
+    noeta.providers
+forbidden_modules =
+    noeta.core
+    noeta.runtime
+    noeta.context
+    noeta.storage
+    noeta.policies
+    noeta.tools
+    noeta.guards
+    noeta.observers
+
+[importlinter:contract:agent-only-protocols]
+name = noeta.agent identity layer (spec/registry) may only import noeta.protocols (narrowed to the identity submodules — the rest of the noeta.agent namespace is product content)
+type = forbidden
+source_modules =
+    noeta.agent.spec
+    noeta.agent.registry
+forbidden_modules =
+    noeta.core
+    noeta.runtime
+    noeta.context
+    noeta.storage
+    noeta.policies
+    noeta.tools
+    noeta.providers
+    noeta.guards
+    noeta.observers
+    noeta.read_models
+    noeta.agent.host
+    noeta.agent.commands
+    noeta.agent.observe
+    noeta.agent.read_models
+    noeta.agent.skills
+
+[importlinter:contract:guards-only-protocols]
+name = noeta.guards may only import noeta.protocols (issue 18)
+type = forbidden
+source_modules =
+    noeta.guards
+forbidden_modules =
+    noeta.core
+    noeta.runtime
+    noeta.context
+    noeta.storage
+    noeta.policies
+    noeta.tools
+    noeta.providers
+
+[importlinter:contract:observers-only-protocols]
+name = noeta.observers may only import noeta.protocols (issue 19)
+type = forbidden
+source_modules =
+    noeta.observers
+forbidden_modules =
+    noeta.core
+    noeta.runtime
+    noeta.context
+    noeta.storage
+    noeta.policies
+    noeta.tools
+    noeta.providers
+    noeta.guards
+
+[importlinter:contract:read-models-isolated]
+name = noeta.read_models may only import noeta.protocols + noeta.core.fold (CW5a)
+type = forbidden
+source_modules =
+    noeta.read_models
+forbidden_modules =
+    noeta.agent.host
+    noeta.agent.commands
+    noeta.agent.observe
+    noeta.agent.read_models
+    noeta.agent.skills
+    noeta.runtime
+    noeta.context
+    noeta.policies
+    noeta.tools
+    noeta.providers
+    noeta.guards
+    noeta.observers
+    noeta.storage
+    noeta.core
+; ``noeta.core`` is forbidden wholesale so read_models cannot reach
+; engine/wiring/observers; the ONE allowed core edge — the fold projection —
+; is whitelisted precisely (CW5a P1: lock the boundary, don't leave core open).
+ignore_imports =
+    noeta.read_models.sessions -> noeta.core.fold
+
+[importlinter:contract:storage-adapters-isolated]
+name = production code talks to storage Protocols, never to InMemory adapters
+type = forbidden
+source_modules =
+    noeta.core
+    noeta.runtime
+    noeta.context
+    noeta.policies
+    noeta.tools
+    noeta.providers
+    noeta.protocols
+forbidden_modules =
+    noeta.storage
+
+[importlinter:contract:code-stub-provider-code-only]
+name = noeta.agent.observe._stub_provider must only be imported from the noeta-agent product (Phase 4 I4; cli removed in TL6; moved to observe/ in S1; namespace flipped in the library-SDK refactor)
+type = forbidden
+source_modules =
+    noeta.protocols
+    noeta.core
+    noeta.runtime
+    noeta.context
+    noeta.storage
+    noeta.policies
+    noeta.tools
+    noeta.providers
+    noeta.guards
+    noeta.observers
+forbidden_modules =
+    noeta.agent.observe._stub_provider
+
+[importlinter:contract:backend-only-sdk]
+name = noeta.agent.backend (the product backend) must reach the engine only through noeta.sdk — never a runtime internal (D2/D5/T4; the encapsulation weld. T8 deleted both the legacy noeta.server HTTP stack (A) and the noeta.agent.host.session runner + noeta.agent.api facade (B); the engine-behaviour suite now assembles via noeta.sdk.Client through tests/_sdk_session)
+type = forbidden
+; Only DIRECT imports are forbidden: the backend reaches runtime internals
+; legitimately *through* noeta.sdk (backend → noeta.sdk → noeta.tools.decorator …),
+; which is the encapsulation working as intended.
+allow_indirect_imports = True
+source_modules =
+    noeta.agent.backend
+forbidden_modules =
+    noeta.core
+    noeta.runtime
+    noeta.execution
+    noeta.policies
+    noeta.tools
+    noeta.providers
+    noeta.context
+    noeta.protocols
+    noeta.storage
+    noeta.guards
+    noeta.observers
+    noeta.read_models
+    noeta.agent.spec
+    noeta.agent.registry
+
+[importlinter:contract:mcp-tools-boundary]
+name = noeta.tools.mcp may import only noeta.protocols + noeta.tools helpers + stdlib (Phase 4.5 F2)
+type = forbidden
+source_modules =
+    noeta.tools.mcp
+forbidden_modules =
+    noeta.core
+    noeta.runtime
+    noeta.context
+    noeta.storage
+    noeta.policies
+    noeta.providers
+    noeta.guards
+    noeta.observers
+    noeta.agent

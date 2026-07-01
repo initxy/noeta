@@ -1,0 +1,80 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  phase0-kernel:
+    name: Phase 0 kernel — tests + lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Sync workspace (kernel + dev group)
+        run: uv sync --frozen
+
+      - name: Build web frontend
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Web e2e smoke (Playwright)
+        working-directory: apps/web
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:e2e
+
+      - name: Smoke import
+        run: uv run python -c "from noeta.core.engine import Engine; print('import OK')"
+
+      - name: Run pytest with coverage
+        # The four PRD-priority modules are gated to >= 90% via per-module
+        # coverage thresholds asserted in tests/test_phase0_coverage_gaps.py
+        # plus the integration suite. Repo-wide we require >= 85% so a
+        # broad regression cannot sneak in.
+        run: uv run pytest --cov=noeta --cov-report=term --cov-fail-under=85
+
+      - name: mypy strict on protocols
+        run: |
+          MYPYPATH=packages/noeta-runtime uv run mypy --strict \
+            --namespace-packages --explicit-package-bases \
+            packages/noeta-runtime/noeta/protocols
+
+      - name: Forbidden naming lint
+        run: uv run python scripts/lint-naming.py
+
+      - name: Import topology lint (L0..L3)
+        run: uv run lint-imports --config .importlinter
+
+  install-smoke:
+    name: Fresh-venv install smoke (Phase 2 I3)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Build web frontend
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Run install_smoke pytest (fresh venv install paths + help/smoke)
+        run: uv run pytest -v -m install_smoke tests/test_install_smoke.py tests/test_dist_install_smoke.py
