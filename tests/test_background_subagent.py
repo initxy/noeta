@@ -342,11 +342,29 @@ def test_background_subagent_end_to_end_delivers_result(tmp_path: Path) -> None:
     assert out.status == "suspended"  # parent idle after its spawning turn
 
     # The background child + Mechanism-C delivery happen asynchronously on the
-    # executor / a daemon drive thread. Wait for the delivery anchor.
-    delivered = _wait_for(
-        lambda: "BackgroundSubagentDelivered" in _events(host, out.task_id)
+    # executor / a daemon drive thread. The delivery anchor
+    # (``BackgroundSubagentDelivered``) is written BEFORE the notice turn that
+    # appends the parent-visible notice message (driver.seed_notify_background_
+    # subagent_exit: anchor first, THEN the seeded turn's MessagesAppended), so
+    # waiting on the anchor alone races that later write. Wait for the notice
+    # itself — the real post-condition, which implies the anchor landed too.
+    def _parent_notice() -> list:
+        parent = fold(host.event_log, host.content_store, out.task_id)
+        return [
+            m
+            for m in parent.runtime.messages
+            if any(
+                isinstance(b, TextBlock) and NOTICE_TAG in b.text
+                for b in m.content
+            )
+        ]
+
+    assert _wait_for(lambda: bool(_parent_notice())), (
+        "no background-subagent completion notice in the parent view"
     )
-    assert delivered, "background sub-agent result was never delivered"
+    assert "BackgroundSubagentDelivered" in _events(host, out.task_id), (
+        "background sub-agent result was never delivered"
+    )
 
     parent = fold(host.event_log, host.content_store, out.task_id)
     audit = parent.governance.background_subagents

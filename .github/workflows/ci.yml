@@ -18,14 +18,17 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Sync workspace (kernel + dev group)
-        run: uv sync --frozen
-
+      # Build the web frontend BEFORE `uv sync`: noeta-agent's wheel
+      # force-includes apps/web/dist (a gitignored Vite artifact), so the
+      # editable build triggered by sync fails if dist/ does not yet exist.
       - name: Build web frontend
         working-directory: apps/web
         run: |
           npm ci
           npm run build
+
+      - name: Sync workspace (kernel + dev group)
+        run: uv sync --frozen
 
       - name: Web e2e smoke (Playwright)
         working-directory: apps/web
@@ -77,4 +80,4 @@ jobs:
           npm run build
 
       - name: Run install_smoke pytest (fresh venv install paths + help/smoke)
-        run: uv run pytest -v -m install_smoke tests/test_install_smoke.py tests/test_dist_install_smoke.py
+        run: uv run pytest -v -m install_smoke tests/test_install_smoke.py

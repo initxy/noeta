@@ -149,7 +149,7 @@ def test_sigterm_during_step_finishes_step_then_exits_clean(tmp_path: Any) -> No
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        cwd=str(_REPO_ROOT / "packages" / "noeta"),
+        cwd=str(_REPO_ROOT),
     )
     try:
         assert proc.stdout is not None

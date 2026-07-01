@@ -107,10 +107,10 @@ test.describe("chat composer", () => {
     await page.goto("/chat.html");
 
     // The working-folder chip lists registered workspaces by NAME; pick "beta".
-    await page.locator(".composer-workspace").click();
+    await page.locator(".composer-chip--workspace").click();
     await expect(page.locator(".workspace-menu .menu-option")).toHaveCount(2);
     await page.locator(".workspace-menu .menu-option", { hasText: "beta" }).click();
-    await expect(page.locator(".composer-workspace__name")).toContainText("beta");
+    await expect(page.locator(".composer-chip--workspace .composer-chip__label")).toContainText("beta");
 
     await page.locator("textarea.ai-prompt-textarea").fill("work in beta");
     await page.locator('button[aria-label="Send"]').click();
