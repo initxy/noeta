@@ -1,0 +1,95 @@
+# Publish the three noeta distributions (noeta-runtime / noeta-sdk /
+# noeta-agent) to PyPI when a ``v*`` tag is pushed.
+#
+# Auth is PyPI Trusted Publishing (OIDC) — NO API token is stored anywhere.
+#
+# WHY THREE PUBLISH JOBS: PyPI refuses to register the same
+# repo+workflow+environment combo as a *pending* publisher for more than one
+# not-yet-created project. So each package gets its own GitHub Actions
+# ``environment``, which makes its trusted-publisher config unique. The build
+# runs once; the three jobs only upload their own files.
+#
+# One-time PyPI setup — pypi.org -> Publishing -> "Add a pending publisher",
+# once per package, all with Owner=initxy, Repository=noeta, Workflow=release.yml:
+#   Project noeta-runtime : Environment = (leave blank)
+#   Project noeta-sdk     : Environment = pypi-sdk
+#   Project noeta-agent   : Environment = pypi-agent
+# (The environment name here must match the ``environment:`` key below exactly.)
+#
+# Release: bump the version + ==pins in all three member pyproject.toml files,
+# commit, then `git tag vX.Y.Z && git push --tags`.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}   # manual re-run from the Actions tab
+
+jobs:
+  # Build once. The noeta-agent wheel force-includes apps/web/dist, so the
+  # frontend must be built before packaging. Wheels for all three (built
+  # straight from source — the noeta-agent sdist can't reach ../web); sdists
+  # only for the two pure libraries.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Build frontend
+        run: make web
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Build distributions
+        run: |
+          rm -f dist/*.whl dist/*.tar.gz
+          uv build --all-packages --wheel
+          uv build --package noeta-runtime --sdist
+          uv build --package noeta-sdk --sdist
+          ls -l dist/
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-runtime:
+    needs: build
+    runs-on: ubuntu-latest
+    # No environment: matches the pending publisher registered with a blank one.
+    permissions:
+      id-token: write   # required: mint the short-lived PyPI OIDC token
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: dist, path: dist/ }
+      - uses: astral-sh/setup-uv@v6
+      - run: uv publish --trusted-publishing always dist/noeta_runtime-*
+
+  publish-sdk:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi-sdk
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: dist, path: dist/ }
+      - uses: astral-sh/setup-uv@v6
+      - run: uv publish --trusted-publishing always dist/noeta_sdk-*
+
+  publish-agent:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi-agent
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: dist, path: dist/ }
+      - uses: astral-sh/setup-uv@v6
+      - run: uv publish --trusted-publishing always dist/noeta_agent-*
