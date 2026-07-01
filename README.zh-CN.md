@@ -101,6 +101,33 @@ Noeta 以"两个库 + 一个应用外壳"的形式发布。装你需要的最上
 没有 `noeta` 命令行脚本——coding agent 及其 web UI 用 `python -m noeta.agent`
 启动。
 
+## Noeta 对比 Claude Agent SDK —— 从服务端视角看
+
+两者都提供 agent loop、tools、MCP 和 sub-agent。差别在**底下那根脊梁**,而这根脊
+梁在 agent 跑在服务端时最要紧——长时运行、能扛重启、可审计。Claude Agent SDK 是一
+个轻量的 in-process 客户端,驱动一个"托管得很好的" agent;Noeta 则是一套你自己拥
+有的、持久的、可自托管的执行底座。(Anthropic *完全托管* 的服务端选项是另一个产品
+——Managed Agents,由 Anthropic 跑 loop 和 sandbox;那是用"放弃对底座的所有权"换
+"零运维"。)
+
+| 服务端关注点 | Claude Agent SDK | Noeta |
+| --- | --- | --- |
+| 谁拥有执行底座 | 你托管 loop,状态活在客户端进程里 | 你托管它;loop、日志、调度器都跑在**你自己的**基础设施上 |
+| 状态 / 恢复 | session JSONL(一段对话录音);resume 靠回放对话 | `state = fold(events)`;崩溃恢复就是一次重折叠,没有单独的加载路径 |
+| 挂起 / 恢复 / exactly-once wake | 用 session id 做 resume / fork | 一等公民:durable wake 能扛住 worker 崩溃(目前单机) |
+| 上下文压缩 | 自动摘要,不可逆(要存档得自己用 PreCompact hook 抓一份) | 是一条被记录、可回放的事件;原始历史从不被抹掉 |
+| provider | 可配多个后端,但形状是 Anthropic 为中心的 | 厂商中立的内部 protocol;内核不允许依赖任何厂商 |
+| 调度 / 分布式 | 单个 in-process query / client | lease + 持久日志的队列底座(当前单机 / 单 worker) |
+
+**各自何时更合适。** 想要**开箱即用、紧跟官方 Claude 能力**——运维负担和生态都归
+Anthropic——选 **Claude Agent SDK**。想让 agent 的执行变成一份**你自己拥有、可回放
+的、可审计的、厂商中立的账本**——代价是这套底座得你自己跑、自己运维——选 **Noeta**。
+
+**服务端的诚实警告(Noeta)。** 它还是 pre-1.0,而且只交付了**单机 / 单 worker**
+——生产集群需要多机,目前意味着换掉 storage adapter 并搭起一个 worker pool(引擎不
+变,但这部分工作还没交付)。生态更小、内置集成更少、也没上 PyPI——你要自己维护的东
+西更多,也没有托管服务或厂商 SLA。
+
 ## 文档
 
 - [`docs/quickstart.md`](docs/quickstart.md) —— 离线冒烟 + 真实 provider 走一遍

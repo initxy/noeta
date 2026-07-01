@@ -111,6 +111,39 @@ each pulls the layers below it.
 There is no `noeta` console script — the coding agent and its web UI launch with
 `python -m noeta.agent`.
 
+## Noeta vs the Claude Agent SDK — a server-side view
+
+Both give you an agent loop, tools, MCP, and sub-agents. They differ in the
+**spine underneath**, and that difference matters most when the agent runs
+server-side — long-lived, restart-surviving, audited. The Claude Agent SDK is a
+light in-process client that drives a well-hosted agent; Noeta is a durable,
+self-hosted execution substrate you own. (Anthropic's *fully hosted* server-side
+option is a different product — Managed Agents — where Anthropic runs the loop
+and the sandbox; that trades ownership of the substrate for zero ops.)
+
+| Server-side concern | Claude Agent SDK | Noeta |
+| --- | --- | --- |
+| Who owns the execution substrate | You host the loop; state lives in the client process | You host it; the loop, log, and scheduler run in **your** infrastructure |
+| State / recovery | Session JSONL (a conversation recording); resume replays the conversation | `state = fold(events)`; crash recovery is a refold — no separate load path |
+| Suspend / resume / exactly-once wake | Resume / fork by session id | First-class: durable wake survives a worker crash (single-host today) |
+| Compaction | Auto-summary, irreversible (archive it yourself via a PreCompact hook) | A recorded, replayable event; original history is never scrubbed |
+| Provider | Configures multiple backends, but the shape is Anthropic-centric | Vendor-neutral internal protocol; the kernel can't depend on any vendor |
+| Scheduling / distribution | A single in-process query / client | A lease + durable-log queue substrate (ships single-host / single-worker) |
+
+**When each wins.** Reach for the **Claude Agent SDK** when you want it working
+out of the box and tracking official Claude capabilities closely — the ops
+burden and the ecosystem are Anthropic's. Reach for **Noeta** when you want the
+agent's execution to be a reproducible, auditable, vendor-neutral **ledger you
+own and can replay** — the price is that you run and operate the substrate
+yourself.
+
+**Honest server-side caveats (Noeta).** It is pre-1.0 and ships **single-host /
+single-worker** — a production fleet needs multi-host, which today means
+swapping the storage adapter and standing up a worker pool (the engine doesn't
+change, but that work isn't shipped). The ecosystem is smaller, there are fewer
+built-in integrations, and it isn't on PyPI — you maintain more yourself, and
+there is no managed hosting or vendor SLA.
+
 ## Documentation
 
 - [`docs/quickstart.md`](docs/quickstart.md) — the offline smoke plus a real-provider walkthrough
