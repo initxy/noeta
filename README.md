@@ -45,7 +45,7 @@ Use it to prove install + storage + engine wiring end-to-end.
 
 ```bash
 # Installs the coding agent, which pulls the SDK + runtime transitively.
-uv pip install -e apps/noeta-agent
+pip install noeta-agent
 python -m noeta.agent   # boots the offline stub coding agent + bundled web
 ```
 
@@ -111,6 +111,59 @@ each pulls the layers below it.
 There is no `noeta` console script — the coding agent and its web UI launch with
 `python -m noeta.agent`.
 
+## Build your own agent (the SDK)
+
+Don't want the bundled coding agent? Import `noeta.sdk` and drive your own —
+define tools, point it at a workspace, run a model, and read back the durable
+event stream. No app shell, no HTTP. Like claude-agent-sdk / LangChain, except
+every turn lands in the same foldable EventLog the runtime is built on.
+
+```python
+from pathlib import Path
+
+from noeta.sdk import query, Options, tool, ToolContext, ToolResult
+from noeta.sdk.providers import AnthropicProvider
+
+# A tool is a function returning a ToolResult. `version` is part of the tool's
+# identity, so it is mandatory.
+@tool(name="word_count", version="1", risk_level="low", input_schema={
+    "type": "object",
+    "properties": {"text": {"type": "string"}},
+    "required": ["text"],
+})
+def word_count(arguments: dict, ctx: ToolContext) -> ToolResult:
+    n = len(str(arguments["text"]).split())
+    return ToolResult(success=True, output=f"{n} words")
+
+options = Options(
+    system_prompt="You are a concise assistant.",
+    name="main",
+    allowed_tools=("read", word_count),   # built-ins by name, custom tools by value
+    permission_mode="bypassPermissions",
+)
+
+# query() drives one turn and returns the full event-envelope stream — the
+# machine-readable record of everything the agent did.
+for env in query(
+    options,
+    goal="How many words are in 'the quick brown fox'?",
+    provider=AnthropicProvider(api_key="sk-ant-...", default_max_tokens=1024),
+    workspace_dir=Path("."),
+    model="claude-sonnet-4-5",   # any model id your provider serves
+):
+    print(env.type)
+```
+
+For a multi-turn session reach for `Client` instead of `query` (`client.start(...)`,
+then `client.messages(task_id)` for a human-readable projection). It all runs
+**offline with no API key** too — swap the provider for the scripted
+`FakeLLMProvider` from `noeta.testing`. Runnable end-to-end examples:
+
+- [`examples/sdk_minimal.py`](examples/sdk_minimal.py) — the pure-SDK path, offline
+- [`examples/custom_tool.py`](examples/custom_tool.py) — a custom `@tool`
+- [`examples/swap_provider.py`](examples/swap_provider.py) — Anthropic ↔ OpenAI-compatible
+- [`examples/spawn_subtask.py`](examples/spawn_subtask.py) — delegate to a sub-agent
+
 ## Noeta vs the Claude Agent SDK — a server-side view
 
 Both give you an agent loop, tools, MCP, and sub-agents. They differ in the
@@ -140,9 +193,9 @@ yourself.
 **Honest server-side caveats (Noeta).** It is pre-1.0 and ships **single-host /
 single-worker** — a production fleet needs multi-host, which today means
 swapping the storage adapter and standing up a worker pool (the engine doesn't
-change, but that work isn't shipped). The ecosystem is smaller, there are fewer
-built-in integrations, and it isn't on PyPI — you maintain more yourself, and
-there is no managed hosting or vendor SLA.
+change, but that work isn't shipped). The ecosystem is smaller and there are
+fewer built-in integrations, so you maintain more yourself, and there is no
+managed hosting or vendor SLA.
 
 ## Documentation
 
@@ -158,22 +211,28 @@ sub-agent — see [`examples/`](examples/).
 
 ## Installation
 
-Noeta is not on PyPI yet, so install from a local checkout or a git URL. The
-distributions chain by dependency (`noeta-agent` → `noeta-sdk` →
-`noeta-runtime`), so installing the top package pulls the rest. Requires Python
-3.11 or newer.
+Noeta is on PyPI. The distributions chain by dependency (`noeta-agent` →
+`noeta-sdk` → `noeta-runtime`), so installing the top package pulls the rest.
+Requires Python 3.11 or newer.
 
 ```bash
 # Default coding-agent experience (pulls noeta-sdk + noeta-runtime)
-uv pip install -e apps/noeta-agent
+pip install noeta-agent
 
 # SDK only — author + host your own agent (pulls noeta-runtime)
-pip install -e packages/noeta-sdk
+pip install noeta-sdk
 
 # Kernel only — embed the runtime
-pip install -e packages/noeta-runtime
+pip install noeta-runtime
+```
 
-# Direct from git (noeta-agent subdirectory)
+For development, install editable from a checkout instead — each `-e` package
+pulls its workspace siblings:
+
+```bash
+uv pip install -e apps/noeta-agent   # or packages/noeta-sdk, packages/noeta-runtime
+
+# Direct from git, no checkout
 pip install "noeta-agent @ git+https://github.com/initxy/noeta.git#subdirectory=apps/noeta-agent"
 ```
 
@@ -245,7 +304,6 @@ stable, but some capabilities are intentionally out of scope for now:
   [`docs/failure-modes.md`](docs/failure-modes.md).
 - **Human-in-the-loop / timer wake** — the engine carries the shape; the full
   UX is still landing.
-- **Not published to PyPI** — install via local checkout or git URL (above).
 - **Frontend** — the shipped web app is a small Vite MPA with vanilla ES
   modules; no framework migration is planned for the preview.
 
