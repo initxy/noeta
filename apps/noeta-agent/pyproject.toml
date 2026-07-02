@@ -1,6 +1,6 @@
 [project]
 name = "noeta-agent"
-version = "0.1.0"
+version = "0.2.0"
 description = "Noeta official coding agent product (the noeta.agent namespace's product modules): code agents, tools, skills, code-owned host assembly. ``python -m noeta.agent`` is the entry."
 license = "Apache-2.0"
 authors = [{ name = "The Noeta Authors" }]
