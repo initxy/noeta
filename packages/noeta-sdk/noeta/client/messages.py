@@ -121,7 +121,13 @@ class ToolResultView:
 
 @dataclass(frozen=True, slots=True)
 class Result:
-    """The terminal-state fold of a Task (completed / failed)."""
+    """The terminal-state fold of a Task (completed / failed).
+
+    Check ``status`` before trusting ``answer``: on ``status == "failed"``,
+    ``answer`` holds the **failure reason**, not a successful answer. Callers
+    who want the exception path instead use ``QueryResult.answer()``, which
+    raises a coded ``QueryFailedError`` on a non-completed terminal.
+    """
 
     answer: str
     status: str
@@ -149,6 +155,13 @@ def as_messages(
 
     Pure function: same input (envelopes, content_store) → same output list.
     Writes no state, enters no durable record, records no events.
+
+    ``content_store`` must be the store **paired with** the envelope stream:
+    the envelopes carry ``ContentRef``\\ s (every ``messages_ref``, tool
+    ``output_ref``, a spilled ``answer_ref``) that only the originating host's
+    store can resolve — a fresh store deterministically loses those bodies.
+    With a ``Client``, use ``client.messages(task_id)``; with one-shot
+    ``query``, use the pre-folded ``QueryResult.messages()``.
     """
     out: list[ViewItem] = []
     seen_tool_use: set[str] = set()

@@ -22,7 +22,7 @@ Future slices (4b/4c):
 * ``as_messages`` — event-envelope → human-readable message view.
 """
 
-from noeta.client.client import Client, query
+from noeta.client.client import Client, QueryFailedError, QueryResult, query
 from noeta.client.host import SdkHost
 from noeta.client.messages import (
     AssistantMessage,
@@ -47,6 +47,8 @@ __all__ = [
     "AssistantMessage",
     "Client",
     "Options",
+    "QueryFailedError",
+    "QueryResult",
     "Result",
     "SdkHost",
     "SystemPromptPreset",

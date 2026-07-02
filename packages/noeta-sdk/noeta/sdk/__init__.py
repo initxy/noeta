@@ -29,7 +29,7 @@ from noeta.client.capabilities import (
     model_capabilities,
     permission_modes,
 )
-from noeta.client.client import Client, query
+from noeta.client.client import Client, QueryFailedError, QueryResult, query
 from noeta.client.host_config import HostConfig
 from noeta.client.messages import (
     AssistantMessage,
@@ -115,6 +115,7 @@ __all__ = [
     # client verbs
     "Client",
     "query",
+    "QueryResult",
     # host-level wiring (D3)
     "HostConfig",
     "AppPreviewGateway",
@@ -127,6 +128,7 @@ __all__ = [
     "HttpPostFn",
     # public error surface (typed / coded)
     "CodedError",
+    "QueryFailedError",
     "ModelSelectorError",
     "ProviderSelectorError",
     "NotResumableError",

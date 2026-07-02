@@ -6,11 +6,12 @@ pair and exposes the full conversation command surface
 (``start`` / ``send_goal`` / ``approve`` / ``deny`` / ``answer`` /
 ``cancel`` / ``close`` / ``reopen``) as 1:1 pass-throughs.
 
-``query`` is the sugar surface for library users who just want the
-event-envelope stream for a single goal: it creates a temporary
-``Client`` with ``multi_turn=False``, drives a single turn to the
-terminal TaskCompleted, returns the envelopes, and tears everything
-down.
+``query`` is the sugar surface for library users who just want a single
+goal driven to its terminal: it creates a temporary ``Client`` with
+``multi_turn=False``, drives a single turn to the terminal TaskCompleted,
+returns a :class:`QueryResult` (the envelope list + the message view and
+terminal answer, folded against the live ContentStore *before* teardown),
+and tears everything down.
 """
 
 from __future__ import annotations
@@ -29,10 +30,14 @@ from noeta.client.messages import ViewItem, as_messages
 from noeta.execution.driver import DriveOutcome, STUB_MODEL_ALLOWLIST
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
+from noeta.protocols.errors import CodedError
 from noeta.protocols.event_log import EventEnvelope, EventLogFull
 from noeta.protocols.events import (
+    TaskCompletedPayload,
+    TaskFailedPayload,
     ToolCallApprovalRequestedPayload,
     ToolCallApprovalResolvedPayload,
+    answer_from_payload,
 )
 from noeta.protocols.messages import ImageBlock, LLMProvider
 from noeta.protocols.tool import Tool
@@ -55,7 +60,7 @@ from noeta.client.options import (
 )
 
 
-__all__ = ["Client", "query"]
+__all__ = ["Client", "QueryFailedError", "QueryResult", "query"]
 
 
 # ---------------------------------------------------------------------------
@@ -840,6 +845,142 @@ class Client:
 # ---------------------------------------------------------------------------
 
 
+class QueryFailedError(CodedError):
+    """``QueryResult.answer()`` was called but the one-shot task did not
+    complete.
+
+    Raised for a ``TaskFailed`` terminal (``status == "failed"``, ``reason`` /
+    ``retryable`` from the payload) and for a stream with no terminal at all
+    (``status`` is the folded task status, e.g. suspended on an
+    ``approval-{call_id}`` handle no one is around to resolve). Keeping the
+    failure on the exception path — instead of folding the reason into a
+    ``Result.answer`` string — is what stops a caller from mistaking a failure
+    reason for a successful answer (issue #5's second footgun).
+    """
+
+    code = "query_failed"
+
+    def __init__(
+        self,
+        *,
+        task_id: str,
+        status: str,
+        reason: str,
+        retryable: bool = False,
+    ) -> None:
+        self.task_id = task_id
+        self.status = status
+        self.reason = reason
+        self.retryable = retryable
+        super().__init__(
+            f"query task {task_id!r} did not complete "
+            f"(status={status!r}): {reason}"
+        )
+
+
+class QueryResult(list[EventEnvelope]):
+    """The return value of :func:`query`: the envelope list + materialized
+    projections.
+
+    Still a ``list[EventEnvelope]`` (iteration / indexing / ``isinstance(x,
+    list)`` all behave as before), so the canonical record of what the agent
+    did remains the envelope stream. On top of that it carries the projections
+    a one-shot caller actually wants, **materialized against the temporary
+    Client's live ContentStore before shutdown** — raw envelopes reference
+    their large bodies by ``ContentRef`` (``answer_ref`` / ``messages_ref`` /
+    ``output_ref``), which only the originating host's store can resolve, and
+    that store is gone by the time ``query`` returns (issue #5).
+    """
+
+    __slots__ = ("task_id", "_view", "_answer", "_failure")
+
+    def __init__(
+        self,
+        envelopes: Sequence[EventEnvelope],
+        *,
+        task_id: str,
+        view: list[ViewItem],
+        answer: Any,
+        failure: Optional[QueryFailedError],
+    ) -> None:
+        super().__init__(envelopes)
+        self.task_id = task_id
+        self._view = view
+        self._answer = answer
+        self._failure = failure
+
+    def messages(self) -> list[ViewItem]:
+        """The human-readable view of the stream (``as_messages`` output).
+
+        Pre-folded with every ``ContentRef`` already dereferenced, so it stays
+        valid for the lifetime of this object — no ContentStore needed.
+        """
+        return list(self._view)
+
+    def answer(self) -> Any:
+        """The full terminal answer (inline or spilled — the spill is
+        transparent).
+
+        Strict: raises :class:`QueryFailedError` when the task failed or never
+        reached a terminal, so a failure reason can't be mistaken for a
+        successful answer. For the lenient view, read the terminal
+        ``Result`` item from :meth:`messages` and branch on ``status``.
+        """
+        if self._failure is not None:
+            raise self._failure
+        return self._answer
+
+
+def _materialize_query_result(client: Client, outcome: Any) -> QueryResult:
+    """Fold everything ref-carrying against the live host store.
+
+    Runs inside ``query``'s Client lifetime — the last moment the paired
+    ContentStore is reachable. After this, the returned ``QueryResult`` is
+    self-contained.
+    """
+    task_id = outcome.task_id
+    envelopes = client.events(task_id)
+    store = client._host.content_store
+    view = as_messages(envelopes, store)
+
+    terminal = next(
+        (
+            env
+            for env in reversed(envelopes)
+            if env.type in ("TaskCompleted", "TaskFailed")
+        ),
+        None,
+    )
+    answer: Any = None
+    failure: Optional[QueryFailedError] = None
+    if terminal is not None and isinstance(terminal.payload, TaskCompletedPayload):
+        answer = answer_from_payload(terminal.payload, store)
+    elif terminal is not None:
+        payload = terminal.payload
+        assert isinstance(payload, TaskFailedPayload)
+        failure = QueryFailedError(
+            task_id=task_id,
+            status="failed",
+            reason=payload.reason,
+            retryable=payload.retryable,
+        )
+    else:
+        wake = getattr(outcome, "wake_handle", None)
+        detail = f"; waiting on {wake!r}" if wake else ""
+        failure = QueryFailedError(
+            task_id=task_id,
+            status=str(outcome.status),
+            reason=f"no terminal event in the stream{detail}",
+        )
+    return QueryResult(
+        envelopes,
+        task_id=task_id,
+        view=view,
+        answer=answer,
+        failure=failure,
+    )
+
+
 def query(
     options: Options,
     goal: str,
@@ -848,14 +989,19 @@ def query(
     workspace_dir: Optional[Path] = None,
     model: Optional[str] = None,
     images: Sequence[ImageBlock] = (),
-) -> list[EventEnvelope]:
-    """One-shot SDK query: single turn, all envelopes returned.
+) -> QueryResult:
+    """One-shot SDK query: single turn, all envelopes + folded projections.
 
     Creates a temporary ``Client(multi_turn=False)`` so the policy
     reaches a genuine ``TaskCompleted`` terminal instead of suspending
-    on the next-goal handle. The canonical return shape is the full
-    Noeta event-envelope list (not a human-readable message view); use
-    ``as_messages`` (slice 4c) for the user-facing projection.
+    on the next-goal handle. The canonical return shape is still the full
+    Noeta event-envelope list (:class:`QueryResult` *is* one), but the
+    human-facing projections are folded eagerly, **before** the temporary
+    Client is torn down: ``result.messages()`` for the message view and
+    ``result.answer()`` for the terminal answer. Raw envelopes carry
+    ``ContentRef``\\ s (a spilled ``answer_ref``, every ``messages_ref`` /
+    ``output_ref``) that only the temporary Client's ContentStore could
+    resolve — never hand them to ``as_messages`` with a fresh store.
 
     Parameters match the ``Client`` constructor + a ``goal`` string.
     Callers who need multi-turn interactions (``send_goal`` /
@@ -871,6 +1017,6 @@ def query(
     )
     try:
         outcome = client.start(goal=goal, images=images)
-        return client.events(outcome.task_id)
+        return _materialize_query_result(client, outcome)
     finally:
         client.shutdown()

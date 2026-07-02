@@ -112,41 +112,13 @@ def test_as_messages_happy_path_contains_four_view_types(
         allowed_tools=("read", "edit"),
         permission_mode="bypassPermissions",
     )
-    envelopes = list(
-        query(
-            options,
-            goal="change foo to bar in x.py",
-            provider=provider,
-            workspace_dir=ws,
-            model="stub-model",
-        )
-    )
-
-    # We need a ContentStore. query does not expose one, so the simplest
-    # path is to re-run via Client and reuse its content_store.
-    from noeta.client import Client
-
-    client = Client(
+    view = query(
         options,
-        provider=FakeLLMProvider(
-            responses=_scripted_tooluse_then_finish(
-                tool_name="edit",
-                arguments={"path": "x.py", "old": "foo", "new": "bar"},
-                answer="replacement done",
-            )
-        ),
+        goal="change foo to bar in x.py",
+        provider=provider,
         workspace_dir=ws,
         model="stub-model",
-        multi_turn=False,
-    )
-    try:
-        outcome = client.start(goal="change foo to bar in x.py")
-        task_id = outcome.task_id
-        stream_envelopes = list(client.events(task_id))
-        cs = client._host.content_store
-        view = as_messages(stream_envelopes, cs)
-    finally:
-        client.shutdown()
+    ).messages()
 
     # 1. Each target type appears at least once.
     type_set = {type(v).__name__ for v in view}
