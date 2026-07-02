@@ -117,7 +117,18 @@ class AnthropicProvider:
     Construct once with the API key and reuse across calls — the
     underlying :class:`httpx.Client` is shared, and ``LLMRequest.model``
     selects the model per call. ``extra_headers`` is the escape hatch
-    for ``anthropic-beta`` flags / org IDs / proxy auth.
+    for ``anthropic-beta`` flags / org IDs / proxy auth. Prompt caching is
+    GA and needs NO ``anthropic-beta`` header — the ephemeral
+    ``cache_control`` breakpoints ``_apply_cache_control`` stamps on the wire
+    body are honoured on their own (adding a ``prompt-caching-*`` beta flag is
+    unnecessary).
+
+    Implements the optional
+    :class:`~noeta.protocols.messages.HeaderAwareProvider` capability
+    (:meth:`complete_with_headers`): the runtime can attach request-scoped
+    headers per call over the shared client. Those headers are transport-only
+    and never affect prompt-cache hits (the cache key is the rendered wire
+    body, not the HTTP headers).
 
     ``image_resolver`` is a narrowly injected ``ContentRef → bytes`` deref
     callback (same nature as the httpx client it already holds): when a request
@@ -154,10 +165,28 @@ class AnthropicProvider:
         )
 
     # ------------------------------------------------------------------
-    # LLMProvider Protocol
+    # LLMProvider / HeaderAwareProvider Protocol
     # ------------------------------------------------------------------
 
     def complete(self, request: LLMRequest) -> LLMResponse:
+        return self.complete_with_headers(request, None)
+
+    def complete_with_headers(
+        self,
+        request: LLMRequest,
+        request_headers: Optional[dict[str, str]],
+    ) -> LLMResponse:
+        # HeaderAwareProvider capability: the runtime attaches request-scoped
+        # headers (e.g. a per-task tracing/log id from a gateway) per call
+        # WITHOUT rebuilding the shared client — the httpx client is a
+        # server-level singleton constructed before any ``task_id`` exists.
+        # ``request_headers`` merges over the client's constructor headers
+        # (``x-api-key`` / ``anthropic-version`` stay unless overridden). These
+        # are transport-only: they never enter ``LLMRequest`` / ``request_ref``,
+        # and — because the Anthropic cache key is the rendered wire body
+        # (tools → system → messages), NOT the HTTP headers — they do not affect
+        # prompt-cache hits.
+        #
         # Vision guard: a top-level ``ImageBlock`` (user/assistant content)
         # bound for a non-vision model is a loud misroute — refuse before wire
         # assembly (same stance as the Responses adapter). Tool-result images
@@ -170,8 +199,11 @@ class AnthropicProvider:
         # to the neutral Noeta error taxonomy here so the runtime never sees
         # an httpx type. Connection / timeout → transient; HTTP status →
         # bucketed by ``_translate_http_error``.
+        post_kwargs: dict[str, Any] = {"json": body}
+        if request_headers is not None:
+            post_kwargs["headers"] = request_headers
         try:
-            http_response = self._client.post(_MESSAGES_ENDPOINT, json=body)
+            http_response = self._client.post(_MESSAGES_ENDPOINT, **post_kwargs)
             http_response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise _translate_http_error(exc) from exc

@@ -177,6 +177,53 @@ def test_extra_headers_are_forwarded() -> None:
 
 
 # ---------------------------------------------------------------------------
+# HeaderAwareProvider capability (per-request header injection)
+# ---------------------------------------------------------------------------
+
+
+def test_provider_satisfies_header_aware_protocol() -> None:
+    from noeta.protocols.messages import HeaderAwareProvider
+
+    assert isinstance(_make_provider(), HeaderAwareProvider)
+
+
+@respx.mock
+def test_complete_with_headers_merges_over_client_headers() -> None:
+    route = respx.post(MESSAGES_ENDPOINT).mock(
+        return_value=httpx.Response(200, json=_anthropic_response())
+    )
+
+    provider = _make_provider(anthropic_version="2026-01-01")
+    provider.complete_with_headers(
+        _basic_request(), {"x-noeta-task": "task-abc", "x-request-id": "req-1"}
+    )
+
+    request = route.calls.last.request
+    # Per-request headers are attached...
+    assert request.headers["x-noeta-task"] == "task-abc"
+    assert request.headers["x-request-id"] == "req-1"
+    # ...and the shared client's constructor headers survive alongside them.
+    assert request.headers["x-api-key"] == "sk-ant-test"
+    assert request.headers["anthropic-version"] == "2026-01-01"
+
+
+@respx.mock
+def test_complete_with_headers_none_matches_plain_complete() -> None:
+    route = respx.post(MESSAGES_ENDPOINT).mock(
+        return_value=httpx.Response(200, json=_anthropic_response())
+    )
+
+    provider = _make_provider()
+    # ``complete`` delegates to ``complete_with_headers(request, None)``; the
+    # None path adds no extra headers over the shared client.
+    response = provider.complete_with_headers(_basic_request(), None)
+
+    request = route.calls.last.request
+    assert request.headers["x-api-key"] == "sk-ant-test"
+    assert isinstance(response, LLMResponse)
+
+
+# ---------------------------------------------------------------------------
 # max_tokens fail-fast (B4)
 # ---------------------------------------------------------------------------
 
