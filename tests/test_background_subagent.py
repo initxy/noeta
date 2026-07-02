@@ -339,7 +339,17 @@ def test_background_subagent_end_to_end_delivers_result(tmp_path: Path) -> None:
     host, driver = _host(_make_ws(tmp_path), provider)
 
     out = driver.start(goal=PARENT_GOAL, agent="main")
-    assert out.status == "suspended"  # parent idle after its spawning turn
+    # Parent did NOT suspend on a foreground subtask barrier — background spawn
+    # keeps the parent's turn. The status may be "suspended" (parent idle) or
+    # "running" (Mechanism-C delivery already seeded the notice turn on the
+    # parent stream before _outcome folded) — both are valid; the real
+    # post-condition is the notice arriving below.
+    parent = fold(host.event_log, host.content_store, out.task_id)
+    assert not isinstance(parent.wake_on, SubtaskCompleted), (
+        "parent must not block on a foreground subtask barrier "
+        "(background spawn keeps the parent's turn)"
+    )
+    assert out.status in ("suspended", "running")
 
     # The background child + Mechanism-C delivery happen asynchronously on the
     # executor / a daemon drive thread. The delivery anchor
