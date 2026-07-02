@@ -9,9 +9,11 @@ lazily import ``noeta.context.ThreeSegmentComposer`` as a default) by making
 the documented zero-opinion fallback.
 
 :class:`PassthroughComposer` composes every ``Task`` to the empty ``View()``:
-no system prompt, no skills, no tool schema, and crucially ``plan_ref=None`` so
-the Engine skips the ``ContextPlanComposed`` emission
-(:func:`noeta.core.engine._emit_context_plan`). It is deterministic — no LLM,
+no system prompt, no skills, no tool schema, and ``plan_ref=None`` — the
+Engine still emits its per-step ``ContextPlanComposed`` (with a ``None``
+``plan_ref``) so ``governance.iterations`` / ``max_iterations`` keep
+counting (:func:`noeta.core.engine._emit_context_plan`, core #2). It is
+deterministic — no LLM,
 clock, randomness, network, or ContentStore write — and depends only on
 ``noeta.protocols``. Production hosts wire a real Composer
 (e.g. ``noeta.context.ThreeSegmentComposer``) explicitly; this in-kernel
@@ -28,10 +30,10 @@ class PassthroughComposer:
     """Zero-opinion Composer: every Task composes to the empty ``View``.
 
     Satisfies the :class:`noeta.protocols.composer.ContextComposer` protocol
-    while expressing no view-assembly policy. Because ``View()`` carries
-    ``plan_ref=None`` the Engine emits no ``ContextPlanComposed`` event for
-    a step — identical to the retired ``MinimalComposer`` migration-window
-    behaviour and to a Task that never entered a real compose path.
+    while expressing no view-assembly policy. ``View()`` carries
+    ``plan_ref=None``; the Engine still records the step boundary as a
+    ``ContextPlanComposed`` with a ``None`` ``plan_ref`` (core #2 — the
+    iteration counter must not depend on a composer storing a plan).
     """
 
     def compose(self, task: Task) -> View:  # noqa: ARG002 - protocol shape

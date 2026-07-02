@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from typing import Optional
 
+from noeta.protocols.canonical import from_canonical_bytes
+from noeta.protocols.wake import TimerFired
 from noeta.storage.sqlite._transaction import _begin_immediate_with_retry
 
 
@@ -26,6 +29,26 @@ __all__ = [
     "SCHEMA_VERSION",
     "apply_migrations",
 ]
+
+
+def _timer_fire_at(blob: object) -> Optional[float]:
+    """Decode a ``wake_on_canonical`` blob and return the ``TimerFired``
+    deadline, or ``None`` for a NULL / non-timer / undecodable blob.
+
+    Registered on each connection as the SQL function
+    ``_noeta_timer_fire_at`` so migration 7's backfill can seed the new
+    ``fire_at`` column out of the opaque canonical blob (plain SQL cannot
+    decode it). A poison row yields ``None`` (left un-swept, exactly as the
+    live sweep's per-row guard treats it) rather than aborting the whole
+    migration.
+    """
+    if blob is None:
+        return None
+    try:
+        wake = from_canonical_bytes(bytes(blob))  # type: ignore[arg-type]
+    except Exception:  # noqa: BLE001 — a poison row must not abort the migration
+        return None
+    return float(wake.fire_at) if isinstance(wake, TimerFired) else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,6 +246,60 @@ _MIGRATION_5_BASELINE_INDEX = (
 )
 
 
+# Migration 6: stale-reclaim attempt counter (kernel #3).
+#
+# ``requeue_stale`` used to move an expired lease back to ready
+# unconditionally, so a poison task that silently kills its worker
+# loops lease → expire → reclaim forever. The counter tracks
+# CONSECUTIVE no-progress reclaims; it is reset by any progress signal
+# (successful heartbeat / clean release / controlled fail-requeue /
+# force-enqueue) and at ``reclaim_max`` the task drops to ``terminal``
+# with ``suspend_reason = 'stale_reclaim_exceeded'`` — the reclaim-path
+# analogue of ``max_fail_attempts``. ``NOT NULL DEFAULT 0`` backfills
+# pre-migration rows to the correct "no reclaims observed" state
+# (sqlite requires a DEFAULT for a NOT NULL ADD COLUMN).
+_MIGRATION_6_RECLAIM_COUNT = (
+    "ALTER TABLE dispatcher_tasks "
+    "ADD COLUMN reclaim_count INTEGER NOT NULL DEFAULT 0"
+)
+
+
+# Migration 7: indexed timer deadline (``fire_at``) for O(due) timer sweeps.
+#
+# ``fire_due_timers`` used to full-scan every suspended row and canonical-
+# decode its ``wake_on`` blob on each ~1s poll to find due ``TimerFired``
+# waits — O(all suspends) work plus a ``BEGIN IMMEDIATE`` write transaction
+# even when nothing was due. This adds a nullable ``fire_at`` column that
+# mirrors the deadline of a suspended timer wait (NULL for every non-timer
+# suspend and every non-suspended state), a partial index over it, and a
+# one-time backfill seeding the deadline out of existing suspended timer
+# rows. The sweep then selects the due set straight off the index
+# (``fire_at <= now``) and, when the set is empty, skips the write
+# transaction entirely.
+#
+# The adapter maintains one invariant: ``fire_at`` is written in lockstep
+# with ``wake_on_canonical`` — set to the ``TimerFired`` deadline whenever a
+# suspend installs a timer wait, cleared to NULL on every other write of
+# ``wake_on_canonical`` (leave-suspended, non-timer suspend, terminal,
+# ready). The backfill uses the registered ``_noeta_timer_fire_at`` SQL
+# function (plain SQL cannot decode the canonical blob) so an in-place
+# upgrade never strands an in-flight ``wait_timer`` suspend at NULL.
+_MIGRATION_7_FIRE_AT_COLUMN = (
+    "ALTER TABLE dispatcher_tasks ADD COLUMN fire_at REAL NULL"
+)
+
+_MIGRATION_7_FIRE_AT_BACKFILL = (
+    "UPDATE dispatcher_tasks "
+    "SET fire_at = _noeta_timer_fire_at(wake_on_canonical) "
+    "WHERE status = 'suspended' AND wake_on_canonical IS NOT NULL"
+)
+
+_MIGRATION_7_FIRE_AT_INDEX = (
+    "CREATE INDEX ix_dispatcher_fire_at "
+    "ON dispatcher_tasks (fire_at) WHERE fire_at IS NOT NULL"
+)
+
+
 MIGRATIONS: list[Migration] = [
     Migration(
         version=1,
@@ -262,6 +339,20 @@ MIGRATIONS: list[Migration] = [
             _MIGRATION_5_BASELINE_INDEX,
         ),
     ),
+    Migration(
+        version=6,
+        description="stale-reclaim attempt counter (kernel #3)",
+        statements=(_MIGRATION_6_RECLAIM_COUNT,),
+    ),
+    Migration(
+        version=7,
+        description="indexed timer deadline fire_at (O(due) timer sweep)",
+        statements=(
+            _MIGRATION_7_FIRE_AT_COLUMN,
+            _MIGRATION_7_FIRE_AT_BACKFILL,
+            _MIGRATION_7_FIRE_AT_INDEX,
+        ),
+    ),
 ]
 
 
@@ -293,6 +384,11 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
     half-applied schema. Idempotent: re-running after success is a
     no-op.
     """
+    # Migration 7's backfill decodes each suspended timer's canonical
+    # ``wake_on`` blob to seed ``fire_at``; plain SQL cannot, so expose the
+    # decode as a per-connection SQL function. Registering it on every call
+    # is cheap and harmless — unused once the file is already at head.
+    conn.create_function("_noeta_timer_fire_at", 1, _timer_fire_at)
     while True:
         _begin_immediate_with_retry(conn)
         try:

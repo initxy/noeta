@@ -183,6 +183,40 @@ def test_kill_already_exited_is_clean(tmp_path: Path) -> None:
     assert _terminal_events(log, "t-late") == ["BackgroundShellExited"]
 
 
+def test_terminate_skips_signal_when_process_already_reaped(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """``_terminate`` must NOT ``getpgid``/``killpg`` a process whose returncode
+    is already set: the pid may have been recycled onto an unrelated process
+    group, and group-signalling it would hit a stranger. Mirrors
+    ``Popen.send_signal``'s own returncode guard."""
+    import os
+
+    reg, _, _ = _registry()
+
+    class _FakePopen:
+        pid = 999999
+        returncode = 0  # already reaped by the watcher
+
+        def send_signal(self, sig: int) -> None:  # pragma: no cover
+            raise AssertionError("send_signal called on a reaped process")
+
+    class _FakeHandle:
+        popen = _FakePopen()
+
+    called = {"killpg": False, "getpgid": False}
+    monkeypatch.setattr(
+        os, "killpg", lambda *a: called.__setitem__("killpg", True)
+    )
+    monkeypatch.setattr(
+        os, "getpgid", lambda *a: (called.__setitem__("getpgid", True), 1)[1]
+    )
+
+    reg._terminate(_FakeHandle(), 15)  # SIGTERM
+
+    assert called == {"killpg": False, "getpgid": False}
+
+
 def test_kill_vs_natural_exit_race_one_terminal_one_push(tmp_path: Path) -> None:
     """A job about to exit on its own is killed at nearly the same moment.
     Whoever wins the per-job reap lock records EXACTLY ONE terminal event and

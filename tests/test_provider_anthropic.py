@@ -539,6 +539,77 @@ def test_thinking_block_inbound_translation() -> None:
 
 
 @respx.mock
+def test_redacted_thinking_block_inbound_translation() -> None:
+    """A ``redacted_thinking`` block (encrypted reasoning) is preserved as a
+    ``ThinkingBlock`` carrying the opaque ``data`` blob — NOT silently dropped
+    (dropping it strands a tool-use turn whose reasoning the API expects back)."""
+    respx.post(MESSAGES_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            json=_anthropic_response(
+                content=[
+                    {"type": "redacted_thinking", "data": "ENCRYPTED=="},
+                    {"type": "text", "text": "answer"},
+                ],
+            ),
+        )
+    )
+    provider = _make_provider()
+    response = provider.complete(_basic_request())
+    assert response.content == [
+        ThinkingBlock(text="", signature=None, data="ENCRYPTED=="),
+        TextBlock(text="answer"),
+    ]
+
+
+@respx.mock
+def test_redacted_thinking_block_without_data_is_dropped() -> None:
+    """A ``redacted_thinking`` entry whose ``data`` is missing/non-str is
+    DROPPED, not kept as ``ThinkingBlock(text="", data=None)`` — keeping it
+    would re-emit an empty ``{"type":"thinking","thinking":""}`` block outbound,
+    which the API 400s. Only the real text block survives."""
+    respx.post(MESSAGES_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            json=_anthropic_response(
+                content=[
+                    {"type": "redacted_thinking"},            # no 'data'
+                    {"type": "redacted_thinking", "data": 123},  # non-str
+                    {"type": "text", "text": "answer"},
+                ],
+            ),
+        )
+    )
+    provider = _make_provider()
+    response = provider.complete(_basic_request())
+    assert response.content == [TextBlock(text="answer")]
+
+
+@respx.mock
+def test_redacted_thinking_block_outbound_translation() -> None:
+    """A ``ThinkingBlock`` carrying ``data`` re-emits the opaque blob under the
+    ``redacted_thinking`` wire type verbatim — never as an (invalid) empty
+    ``thinking`` block."""
+    route = respx.post(MESSAGES_ENDPOINT).mock(
+        return_value=httpx.Response(200, json=_anthropic_response())
+    )
+    provider = _make_provider()
+    assistant = Message(
+        role="assistant",
+        content=[ThinkingBlock(text="", data="ENCRYPTED==")],
+    )
+    provider.complete(_basic_request(messages=[_user("q"), assistant]))
+
+    body = json.loads(route.calls.last.request.content.decode("utf-8"))
+    assistant_block = body["messages"][1]["content"][0]
+    assert assistant_block == {
+        "type": "redacted_thinking",
+        "data": "ENCRYPTED==",
+        "cache_control": {"type": "ephemeral"},
+    }
+
+
+@respx.mock
 def test_thinking_block_outbound_translation_with_signature() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
         return_value=httpx.Response(200, json=_anthropic_response())
@@ -777,6 +848,27 @@ def test_stop_sequence_maps_to_end_turn() -> None:
     provider = _make_provider()
     response = provider.complete(_basic_request())
     assert response.stop_reason == "end_turn"
+
+
+@respx.mock
+def test_stop_reason_refusal_maps_to_end_turn() -> None:
+    """A safety-classifier ``refusal`` is a completed HTTP-200 turn; it must
+    map to ``end_turn`` (the refusal text surfaces as the assistant's finished
+    answer) rather than ``error`` (which would fail the task non-retryably and
+    discard the refusal). ``claude-opus-4-8`` can return this."""
+    respx.post(MESSAGES_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            json=_anthropic_response(
+                content=[{"type": "text", "text": "I can't help with that."}],
+                stop_reason="refusal",
+            ),
+        )
+    )
+    provider = _make_provider()
+    response = provider.complete(_basic_request())
+    assert response.stop_reason == "end_turn"
+    assert response.content == [TextBlock(text="I can't help with that.")]
 
 
 @respx.mock

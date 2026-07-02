@@ -22,13 +22,15 @@ from __future__ import annotations
 from typing import Any
 
 from noeta.context.composer import ThreeSegmentComposer, RenderedSkills
-from noeta.policies.react import ReActPolicy
+from noeta.policies.react import ReActPolicy, _carries_tool_result
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.decisions import CompactionRequestedDecision
 from noeta.protocols.messages import (
     LLMResponse,
     Message,
     TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
 )
 from noeta.protocols.step_context import StepContext
 from noeta.protocols.task import Task
@@ -185,3 +187,90 @@ def test_boundary_protects_the_tail_window() -> None:
     assert isinstance(decision, CompactionRequestedDecision)
     # Some tail messages are protected → boundary strictly less than total.
     assert 0 < decision.boundary_count < len(raw)
+
+
+# ---------------------------------------------------------------------------
+# Tool-pair alignment: the summary boundary must never split an
+# ``assistant(tool_use)`` from its ``role="tool"`` result. Slicing there yields
+# a summarize request that ends on a dangling ``tool_use`` (provider 400) AND a
+# kept tail that starts on an orphan ``tool_result`` (next request 400). The
+# raw all-``user`` histories above never exercise this — these do.
+# ---------------------------------------------------------------------------
+
+
+def _bare_policy(tail_token_budget: int) -> ReActPolicy:
+    """A policy usable for calling ``_summary_boundary`` directly. The
+    summarize LLM is never invoked, so a keyless fake provider is fine."""
+    store = InMemoryContentStore()
+    log = InMemoryEventLog()
+    client = RuntimeLLMClient(
+        provider=FakeLLMProvider(responses=[]),
+        event_log=log,
+        content_store=store,
+    )
+    return ReActPolicy(
+        llm=client,
+        tools={},
+        system_prompt="sys",
+        model="gpt-4o",
+        context_window=600,
+        max_output_tokens=50,
+        compaction_buffer=50,
+        tail_token_budget=tail_token_budget,
+        composer_version="three_segment.v3",
+    )
+
+
+def _paired_history() -> list[Message]:
+    """A realistic tool-using history: two ``assistant(tool_use) → tool``
+    exchanges bracketed by plain turns."""
+    return [
+        Message(role="user", content=[TextBlock(text="g" * 400)]),          # 0
+        Message(                                                             # 1
+            role="assistant",
+            content=[ToolUseBlock(
+                call_id="c1", tool_name="read", arguments={"path": "x" * 400}
+            )],
+        ),
+        Message(                                                             # 2
+            role="tool",
+            content=[ToolResultBlock(call_id="c1", output="ok", success=True)],
+        ),
+        Message(role="assistant", content=[TextBlock(text="hi there")]),     # 3
+        Message(role="user", content=[TextBlock(text="next now")]),          # 4
+    ]
+
+
+def test_boundary_snaps_forward_off_a_tool_result_message() -> None:
+    """A tail budget tuned so the raw token cutoff lands on the ``role="tool"``
+    result at index 2. The fix must snap the boundary FORWARD to 3 so the
+    ``tool_use``/``tool_result`` pair travels together into the collapsed
+    prefix — never left straddling the boundary."""
+    history = _paired_history()
+    policy = _bare_policy(tail_token_budget=20)
+
+    boundary = policy._summary_boundary(history)
+
+    # Without the fix this is 2 (points at the tool-result message); with it,
+    # forward-snapped to 3.
+    assert boundary == 3
+    # The kept tail begins on a self-contained turn, not an orphan result.
+    assert not _carries_tool_result(history[boundary])
+    # The collapsed prefix ends on the tool result, so its matching tool_use
+    # (index 1) is paired inside what gets summarized — the summarize request
+    # is well-formed.
+    assert _carries_tool_result(history[boundary - 1])
+
+
+def test_boundary_never_points_at_a_tool_result_across_budgets() -> None:
+    """Property: for a paired history and any tail budget, the returned
+    boundary is 0, len(history), or an index whose message is NOT a tool
+    result — i.e. the boundary never orphans a ``tool_result``."""
+    history = _paired_history()
+    for budget in range(0, 60):
+        boundary = _bare_policy(tail_token_budget=budget)._summary_boundary(history)
+        assert 0 <= boundary <= len(history)
+        if 0 < boundary < len(history):
+            assert not _carries_tool_result(history[boundary]), (
+                f"budget={budget} produced orphan boundary {boundary}"
+            )

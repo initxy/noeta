@@ -213,6 +213,32 @@ def test_http_fetch_transport_raises_on_401() -> None:
         transport.fetch("https://private.example.com/secret")
 
 
+def test_http_fetch_transport_aborts_oversize_body() -> None:
+    # A body larger than ``max_bytes`` is refused mid-stream rather than
+    # buffered whole (unbounded memory + regex CPU DoS otherwise).
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"x" * 4096)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    transport = HttpFetchTransport(client=client, max_bytes=1024)
+    with pytest.raises(ValueError, match="exceeds 1024 byte limit"):
+        transport.fetch("https://example.com/huge")
+
+
+def test_http_fetch_transport_oversize_degrades_to_failed_result() -> None:
+    # End-to-end: the WebFetchTool catches the cap error and degrades to a
+    # failed ToolResult instead of crashing the step.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"x" * 4096)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    tool = WebFetchTool(transport=HttpFetchTransport(client=client, max_bytes=1024))
+    ctx, _ = _ctx()
+    result = tool.invoke({"url": "https://example.com/huge"}, ctx)
+    assert result.success is False
+    assert "byte limit" in result.summary
+
+
 # ---------------------------------------------------------------------------
 # html_to_markdown helper — deterministic, structure-aware
 # ---------------------------------------------------------------------------

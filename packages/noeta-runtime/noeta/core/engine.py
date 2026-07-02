@@ -1111,13 +1111,16 @@ def _emit_context_plan(
 ) -> None:
     """Issue 14 / PRD §C: emit ContextPlanComposed in front of every LLM
     round-trip, then converge live state through fold so a mid-step
-    snapshot captures the freshly-set plan_ref. Legacy MinimalComposer
-    leaves ``plan_ref`` None during the migration window — skip then.
+    snapshot captures the freshly-set plan_ref.
+
+    Emitted **unconditionally** — even when the composer produced no
+    stored plan (``view.plan_ref is None``, the PassthroughComposer
+    fallback). This event is the per-step boundary fold counts
+    ``governance.iterations`` from; skipping it for plan-less views made
+    ``BudgetGuard.max_iterations`` inert under Passthrough (core #2).
     Module-level helper so the Engine body stays under its
     500-line budget.
     """
-    if view.plan_ref is None:
-        return
     env = emit(
         task_id=task.task_id,
         type_="ContextPlanComposed",

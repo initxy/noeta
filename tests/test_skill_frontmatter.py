@@ -140,10 +140,17 @@ def test_parse_malformed_line_raises() -> None:
         parse(text)
 
 
-def test_parse_uppercase_key_raises() -> None:
+def test_parse_uppercase_key_is_tolerated_as_metadata() -> None:
+    """A capitalized key (``Name:`` / ``Description:``) no longer fails the
+    whole SKILL.md. The key regex accepts an uppercase start, so it parses and
+    is returned verbatim in ``fields``; since ``KNOWN_KEYS`` is lowercase,
+    ``Name`` ≠ the semantic ``name`` and the Indexer routes it to metadata —
+    matching the "unknown/typo key → metadata, never fatal" contract."""
     text = _wrap("Name: x\ndescription: y\n")
-    with pytest.raises(FrontmatterError):
-        parse(text)
+    fields, _, _ = parse(text)
+    assert fields == {"Name": "x", "description": "y"}
+    # The capitalized variant does NOT populate the semantic lowercase key.
+    assert "name" not in fields
 
 
 # ---------------------------------------------------------------------------

@@ -60,10 +60,11 @@ from noeta.execution.multi_turn import (
 from noeta.execution.environment import record_environment
 from noeta.execution.host import ResidentHost
 from noeta.execution.instructions import record_instructions
+from noeta.execution.subtask_drain import UnsupportedSubtaskSuspend
 from noeta.providers.catalog import resolve_alias
 from noeta.core.fold import fold
 from noeta.core.snapshot import serialize_task_state, snapshot_media_type
-from noeta.protocols.errors import InvalidLease
+from noeta.protocols.errors import CodedError, InvalidLease
 from noeta.protocols.event_log import EventLogReader
 from noeta.protocols.events import (
     BackgroundSubagentDeliveredPayload,
@@ -105,6 +106,7 @@ __all__ = [
     "ProviderSelectorError",
     "SeededTurn",
     "STUB_MODEL_ALLOWLIST",
+    "TaskAlreadyTerminalError",
     "multi_turn_policy_wrapper",
 ]
 
@@ -118,7 +120,7 @@ __all__ = [
 STUB_MODEL_ALLOWLIST: frozenset[str] = frozenset({"opus", "sonnet", "haiku"})
 
 
-class ModelSelectorError(Exception):
+class ModelSelectorError(CodedError):
     """The model *selector* is not in ``principal.allowed_models ∩ allowlist``.
 
     Issue 06 (D2 / D3): the selector is rejected when the
@@ -129,6 +131,8 @@ class ModelSelectorError(Exception):
     selector failed (what the caller *could* have picked).
     """
 
+    code = "model_selector_rejected"
+
     def __init__(self, *, selector: str, allowed: list[str]) -> None:
         self.selector = selector
         self.allowed = allowed
@@ -137,7 +141,7 @@ class ModelSelectorError(Exception):
         )
 
 
-class ProviderSelectorError(Exception):
+class ProviderSelectorError(CodedError):
     """The ``(provider, model)`` selector is not a legal pair (I4).
 
     Rejected when the provider name is **not configured** on the host's
@@ -149,6 +153,8 @@ class ProviderSelectorError(Exception):
     provider itself was unknown) or that provider's model list (when the model
     was the offending half), echoing what the caller *could* have picked.
     """
+
+    code = "provider_selector_rejected"
 
     def __init__(
         self, *, provider: str, model: str, available: list[str]
@@ -162,8 +168,15 @@ class ProviderSelectorError(Exception):
         )
 
 
-class NotResumableError(RuntimeError):
-    """A command tried to resume a task that is not on the expected wake."""
+class NotResumableError(CodedError, RuntimeError):
+    """A command tried to resume a task that is not on the expected wake.
+
+    Also a :class:`RuntimeError` so any historical ``except RuntimeError``
+    contract keeps matching; the new :class:`CodedError` base is what the
+    product backend switches on (``code``).
+    """
+
+    code = "not_resumable"
 
     def __init__(
         self,
@@ -186,6 +199,26 @@ class NotResumableError(RuntimeError):
         if dispatcher_status is not None:
             message += f"; dispatcher status is {dispatcher_status!r}"
         super().__init__(message)
+
+
+class TaskAlreadyTerminalError(CodedError, RuntimeError):
+    """A lifecycle verb (``cancel`` / ``close`` / ``reopen``) targeted a task
+    that is already terminal — a terminal conversation is not cancellable,
+    closable, or reopenable.
+
+    Replaces the bare ``RuntimeError(f"...: already terminal")`` these verbs
+    used to raise: the product backend matched it by the ``"already terminal"``
+    message substring, which this ``code`` makes structural. Kept a
+    :class:`RuntimeError` too so any ``except RuntimeError`` contract is
+    unaffected. Carries the offending ``task_id`` and the ``verb``.
+    """
+
+    code = "task_already_terminal"
+
+    def __init__(self, *, task_id: str, verb: str) -> None:
+        self.task_id = task_id
+        self.verb = verb
+        super().__init__(f"cannot {verb} task {task_id!r}: already terminal")
 
 
 @dataclass(frozen=True, slots=True)
@@ -742,6 +775,22 @@ class InteractionDriver:
         except InvalidLease as exc:
             self._force_terminal_on_lost_lease(seeded.task_id, exc)
             raise
+        except UnsupportedSubtaskSuspend:
+            # A delegated descendant suspended for approval / human input
+            # (the drain released every lease in its true suspended state
+            # before raising, so the whole tree is durably consistent). This
+            # is a legitimate suspend, NOT a transport error: the child's
+            # ToolCallApprovalRequested is on its own stream (the SSE tree
+            # surfaces it), and the later approve / deny / answer on the
+            # child re-enters the tree via _resume_woken_ancestors below.
+            # Raising here used to 409 the command AND strand the parent
+            # forever — no code path ever re-entered the drain.
+            pass
+        # Out-of-band parent resume: if THIS driven task settled a child
+        # whose parent tree was stranded on an approval suspend, the
+        # ChildLifecycleObserver has already delivered the parent's wake —
+        # walk up and drive the woken ancestors.
+        self._resume_woken_ancestors(seeded.task_id)
         return self._outcome(seeded.task_id)
 
     def _force_terminal_on_lost_lease(
@@ -1231,9 +1280,7 @@ class InteractionDriver:
         host = self._host
         task = fold(host.event_log, host.content_store, task_id)
         if task.status == "terminal":
-            raise RuntimeError(
-                f"cannot cancel task {task_id!r}: already terminal"
-            )
+            raise TaskAlreadyTerminalError(task_id=task_id, verb="cancel")
         trace_id = self._trace_id(task_id)
         host.event_log.system_emit(
             task_id=task_id,
@@ -1270,6 +1317,12 @@ class InteractionDriver:
         forget_bg = getattr(host, "forget_background_subagents", None)
         if callable(forget_bg):
             forget_bg(task_id)
+        # Free the per-turn carrier entries (permission_mode / effort / mcp
+        # aliases) so they don't outlive the conversation — otherwise a
+        # long-lived server leaks one entry per carrier per task forever.
+        forget_carriers = getattr(host, "forget_turn_carriers", None)
+        if callable(forget_carriers):
+            forget_carriers(task_id)
         return self._outcome(task_id)
 
     def close(
@@ -1302,9 +1355,7 @@ class InteractionDriver:
         host = self._host
         task = fold(host.event_log, host.content_store, task_id)
         if task.status == "terminal":
-            raise RuntimeError(
-                f"cannot close task {task_id!r}: already terminal"
-            )
+            raise TaskAlreadyTerminalError(task_id=task_id, verb="close")
         engine = host.resolve_engine(task)
         engine.note_conversation_closed(
             task, closed_by=closed_by, reason=reason
@@ -1336,6 +1387,11 @@ class InteractionDriver:
         forget_bg = getattr(host, "forget_background_subagents", None)
         if callable(forget_bg):
             forget_bg(task_id)
+        # Mirror ``cancel``: free the per-turn carriers. A later ``reopen`` +
+        # ``send_goal`` re-notes them for its new turn, so this is safe.
+        forget_carriers = getattr(host, "forget_turn_carriers", None)
+        if callable(forget_carriers):
+            forget_carriers(task_id)
         return self._outcome(task_id)
 
     def reopen(
@@ -1362,9 +1418,7 @@ class InteractionDriver:
         host = self._host
         task = fold(host.event_log, host.content_store, task_id)
         if task.status == "terminal":
-            raise RuntimeError(
-                f"cannot reopen task {task_id!r}: already terminal"
-            )
+            raise TaskAlreadyTerminalError(task_id=task_id, verb="reopen")
         if not task.governance.closed:
             # Already open — nothing to reopen, write no audit event.
             return self._outcome(task_id)
@@ -1852,6 +1906,52 @@ class InteractionDriver:
         drain = getattr(self._host, "drive_pending_subtasks", None)
         if drain is not None:
             drain(task)
+
+    def _resume_woken_ancestors(self, task_id: str) -> None:
+        """Walk up the parent chain and resume any delegation-suspended
+        ancestor whose wake the :class:`ChildLifecycleObserver` delivered
+        out-of-band.
+
+        The stranded-parent case: a delegated child suspended for approval
+        mid-drain (``UnsupportedSubtaskSuspend``), the user later approved /
+        denied / answered the CHILD (its own command turn — ``task_id`` here
+        is the child), the child reached terminal, and the observer woke the
+        parent — but no drain was in flight to consume that wake. Each
+        ancestor that resumes all the way to terminal wakes ITS parent, so
+        the walk continues until an ancestor stays suspended (its own next
+        turn / another pending member) or the chain tops out.
+
+        Host-tolerant: a host without ``resume_woken_parent`` (the
+        single-agent / lifecycle resolver, test doubles) is a no-op. A
+        deeper descendant hitting its own approval suspend mid-resume
+        (``UnsupportedSubtaskSuspend``) leaves the tree durably consistent —
+        the next resolution re-enters here.
+        """
+        host = self._host
+        resume = getattr(host, "resume_woken_parent", None)
+        if resume is None:
+            return
+        current = task_id
+        while True:
+            parent_id = self._parent_task_id(current)
+            if not parent_id:
+                return
+            parent = fold(host.event_log, host.content_store, parent_id)
+            try:
+                settled = resume(parent)
+            except UnsupportedSubtaskSuspend:
+                return
+            if settled is None or getattr(settled, "status", None) != "terminal":
+                return
+            current = parent_id
+
+    def _parent_task_id(self, task_id: str) -> Optional[str]:
+        """``parent_task_id`` off the genesis ``TaskCreated``, or ``None``
+        for a root task / an empty stream."""
+        events = self._host.event_log.read(task_id)
+        if not events:
+            return None
+        return getattr(events[0].payload, "parent_task_id", None)
 
     def _outcome(self, task_id: str) -> DriveOutcome:
         host = self._host

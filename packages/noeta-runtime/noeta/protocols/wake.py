@@ -4,10 +4,11 @@ A ``WakeCondition`` describes what a suspended Task is waiting on. A
 matching ``WakeEvent`` (same dataclass shape) delivered through
 ``Dispatcher.wake`` flips the Task back to ``ready``.
 
-Phase 0 ships three variants: ``SubtaskCompleted`` (issue 03),
+Phase 0 shipped three variants: ``SubtaskCompleted`` (issue 03),
 ``HumanResponseReceived`` (issue 05 — also used by ``yield_for_human``
 and ``require_approval``), and ``TimerFired`` (the
-``wait_timer`` Decision branch). ``ExternalEvent`` is Phase 2.
+``wait_timer`` Decision branch). ``ExternalEvent`` (the
+``wait_external`` Decision branch) landed with the timer poller.
 
 ``SubtaskResult`` is the typed payload carried by a ``SubtaskCompleted``
 wake event and folded into the parent's ``GovernanceState`` so the
@@ -108,6 +109,24 @@ class TimerFired:
 
 
 @dataclass(frozen=True, slots=True)
+class ExternalEvent:
+    """Wake condition: Task suspended waiting on an external event source
+    (webhook, bus, operator signal, ...).
+
+    Produced by the ``wait_external`` Decision branch. ``event_kind`` is
+    the opaque identifier the external ingress presents through
+    ``Dispatcher.wake`` to wake the Task — the projection-matching key
+    (see :func:`matches_wake`). The kernel never interprets it; any
+    payload the external source carries belongs on the caller's own
+    channel (e.g. a recorded message), not on the wake event.
+    """
+
+    event_kind: str
+
+    __canonical_tag__ = "external_event"
+
+
+@dataclass(frozen=True, slots=True)
 class SubtaskGroupCompleted:
     """SR2 — N-way fan-out join (all-of barrier). A parent that spawns a
     **group** of N sub-agents in one turn suspends on this condition and is
@@ -185,13 +204,18 @@ def _restore_subtask_completed(fields: dict[str, Any]) -> "SubtaskCompleted":
 register("subtask_completed", _restore_subtask_completed)
 register("human_response", lambda f: HumanResponseReceived(**f))
 register("timer_fired", lambda f: TimerFired(**f))
+register("external_event", lambda f: ExternalEvent(**f))
 
 
-# WakeCondition is open to growth; Phase 0 ships three variants. Typed as
+# WakeCondition is open to growth; Phase 0 shipped three variants. Typed as
 # a Union so callers can write ``isinstance(wc, SubtaskCompleted)``
-# today without breaking when Phase 1 adds more.
+# today without breaking when a later phase adds more.
 WakeCondition = Union[
-    SubtaskCompleted, SubtaskGroupCompleted, HumanResponseReceived, TimerFired
+    SubtaskCompleted,
+    SubtaskGroupCompleted,
+    HumanResponseReceived,
+    TimerFired,
+    ExternalEvent,
 ]
 WakeEvent = WakeCondition
 
@@ -211,6 +235,7 @@ def matches_wake(condition: WakeCondition, event: WakeEvent) -> bool:
     * :class:`SubtaskGroupCompleted` — projects to ``group_id``;
       ``subtask_ids`` is informational and does not affect matching (SR2).
     * :class:`HumanResponseReceived` — projects to ``handle``.
+    * :class:`ExternalEvent` — projects to ``event_kind``.
     * :class:`TimerFired` — temporal threshold:
       ``event.fire_at >= condition.fire_at``. An event observed at
       wall-clock T satisfies any timer whose deadline was ``T'`` with
@@ -226,6 +251,8 @@ def matches_wake(condition: WakeCondition, event: WakeEvent) -> bool:
         return condition.group_id == event.group_id
     if isinstance(condition, HumanResponseReceived) and isinstance(event, HumanResponseReceived):
         return condition.handle == event.handle
+    if isinstance(condition, ExternalEvent) and isinstance(event, ExternalEvent):
+        return condition.event_kind == event.event_kind
     if isinstance(condition, TimerFired) and isinstance(event, TimerFired):
         return event.fire_at >= condition.fire_at
     return False

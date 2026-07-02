@@ -97,6 +97,13 @@ class BackendConfig:
     write_mode: str = "dry_run"
     #: Host kill-switch for the ``run_workflow`` control tool (off by default).
     workflow_enabled: bool = False
+    #: T5 async contract: the turn-driving command endpoints (start /
+    #: send_goal / approve / deny / answer) seed synchronously (typed 4xx
+    #: unchanged) and drive the turn on a background thread, acking 202
+    #: immediately — progress rides the SSE stream. On by default for the
+    #: served product; ``NOETA_AGENT_BACKGROUND_DRIVE=0`` (or the config
+    #: file key) restores the fully synchronous commands.
+    background_drive: bool = True
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "BackendConfig":
@@ -139,6 +146,12 @@ class BackendConfig:
             if isinstance(workflow_raw, bool)
             else str(workflow_raw).strip().lower() in ("1", "true", "yes", "on")
         )
+        background_raw = pick("BACKGROUND_DRIVE", "background_drive", True)
+        background_drive = (
+            background_raw
+            if isinstance(background_raw, bool)
+            else str(background_raw).strip().lower() in ("1", "true", "yes", "on")
+        )
         return cls(
             host=pick("HOST", "host", "127.0.0.1"),
             port=int(pick("PORT", "port", 8765)),
@@ -160,6 +173,7 @@ class BackendConfig:
             default_headers=dict(headers),
             write_mode=pick("WRITE_MODE", "write_mode", "dry_run"),
             workflow_enabled=workflow_enabled,
+            background_drive=background_drive,
         )
 
 
@@ -365,6 +379,7 @@ def serve_backend(
             model=config.model,
             host_config=host_config,
             models=config.models,
+            background_drive=config.background_drive,
         )
         # Now the content store exists (inside the noeta.sdk host): a vision
         # provider can deref ``ImageBlock(ContentRef)`` bytes at request time.

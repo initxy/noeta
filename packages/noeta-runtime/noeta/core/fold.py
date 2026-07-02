@@ -276,8 +276,16 @@ def _on_context_plan_composed(
     # but never mutates ``task.context`` directly — that would break
     # the Composer's pure-function contract.
     task.context.plan_ref = env.payload.plan_ref
-    # Issue 18: ``ContextPlanComposed`` is emitted exactly once per
-    # Engine step, so it doubles as the iteration counter source.
+    # Issue 18 / core #2: ``ContextPlanComposed`` is emitted
+    # **unconditionally once per Engine step** — with ``plan_ref=None``
+    # when the composer produced no stored plan (the protocols-only
+    # ``PassthroughComposer`` fallback) — so it is the step-boundary
+    # event this counter folds from regardless of which composer is
+    # wired, and ``BudgetGuard.max_iterations`` is never inert.
+    # Byte-safety: the shipped ``ThreeSegmentComposer`` always set
+    # ``plan_ref``, so historical recordings are unchanged; only
+    # Passthrough steps (which previously emitted nothing and never
+    # counted) gained the event.
     task.governance.iterations += 1
 
 

@@ -8,7 +8,8 @@ a depth-cap deny landing *before*
 child creation with a deterministic event sequence; B1 child delegation
 inheritance (the child actually spawns a grandchild); B2 targeted child
 lease (a decoy ready task is never driven); and B3 unsupported child
-suspend releasing the lease then raising a typed error.
+suspend releasing the lease and settling the command as a clean suspend
+(item 3 — plus the approve-the-child-resumes-the-parent loop).
 """
 
 from __future__ import annotations
@@ -20,7 +21,6 @@ import pytest
 
 from noeta.core.fold import fold
 from noeta.core.snapshot import rehydrate_task
-from noeta.execution.subtask_drain import UnsupportedSubtaskSuspend
 from noeta.guards.budget import Budget, BudgetGuard
 from noeta.policies.react import SPAWN_SUBAGENT_TOOL
 from noeta.protocols.decisions import SpawnSubtaskDecision
@@ -315,11 +315,12 @@ def test_targeted_child_lease_ignores_decoy_ready_task(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 7. B3 — unsupported child suspend releases the lease, then raises (gate 11)
+# 7. B3 — unsupported child suspend releases the lease; the command settles
+#    as a legitimate suspend (item 3: no more 409 + stranded parent)
 # ---------------------------------------------------------------------------
 
 
-def test_unsupported_child_suspend_releases_lease_then_raises(
+def test_unsupported_child_suspend_settles_as_clean_suspend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ws = _ws(tmp_path)
@@ -347,7 +348,7 @@ def test_unsupported_child_suspend_releases_lease_then_raises(
         engine = real_build_engine(agent, model, **kw)
         # Wrap ONLY the delegated child engine; the root ``main`` engine (already
         # cached by the seed) drives the spawn normally. Forcing the child to a
-        # human suspend is exactly what the drain rejects.
+        # human suspend is exactly what the drain used to reject with a raise.
         if agent.name != "main":
             return _SuspendingEngine(engine)
         return engine
@@ -355,18 +356,93 @@ def test_unsupported_child_suspend_releases_lease_then_raises(
     monkeypatch.setattr(host, "_build_engine", _suspending_build)
 
     seeded = driver.seed_start(goal="root goal", agent="main")
-    with pytest.raises(UnsupportedSubtaskSuspend) as exc:
-        driver.drive_seeded(seeded)
-    assert isinstance(exc.value.wake_on, HumanResponseReceived)
+    # item 3: drive_seeded no longer propagates UnsupportedSubtaskSuspend —
+    # the command settles as a legitimate suspend (the SSE tree surfaces the
+    # child's own wait; approve/deny/answer on the child resumes the tree).
+    out = driver.drive_seeded(seeded)
+    assert out.status == "suspended"
+    assert out.wake_handle is None  # a subtask wake, not a human handle
+
+    # (The wrapper forces only the IN-MEMORY task to a human suspend — the
+    # fixture's durable child log is unaffected; the real durable
+    # approval-suspend flow is covered by
+    # test_child_approval_resolution_resumes_stranded_parent below.)
     child_id = _spawned_child(host, seeded.task_id)
-    assert exc.value.task_id == child_id
-    # B3: the child lease was RELEASED (suspended state) before the
-    # raise — NOT leaked/held. Proof: a freshly-leased ``task_id`` for a
-    # still-held lease would fail; here, waking the released-suspended
-    # child makes it ready and it leases cleanly.
+    root = fold(host.event_log, host.content_store, seeded.task_id)
+    assert root.status == "suspended"
+    assert isinstance(root.wake_on, SubtaskCompleted)
+
+    # B3 (unchanged): the child lease was RELEASED (suspended state) before
+    # the drain unwound — NOT leaked/held. Proof: a freshly-leased
+    # ``task_id`` for a still-held lease would fail; here, waking the
+    # released-suspended child makes it ready and it leases cleanly.
     host.dispatcher.wake(child_id, HumanResponseReceived(handle="needs-human"))
     relead = host.dispatcher.lease(worker_id="probe", task_id=child_id)
     assert relead is not None and relead.task_id == child_id
+
+
+def test_child_approval_resolution_resumes_stranded_parent(
+    tmp_path: Path,
+) -> None:
+    """The full item-3 loop: parent delegates → child's gated tool suspends
+    the child for approval (parent left suspended on its subtask wake) →
+    the user approves the CHILD (its own command turn) → the child finishes,
+    the ChildLifecycleObserver wakes the parent, and the driver's
+    out-of-band ancestor resume drives the parent to terminal."""
+    ws = _ws(tmp_path)
+    provider = FakeLLMProvider(responses=[
+        _spawn("general-purpose", "fix the file", "c1"),
+        # child's first step: a gated write → approval suspend
+        LLMResponse(
+            stop_reason="tool_use",
+            content=[ToolUseBlock(
+                call_id="w1", tool_name="write",
+                arguments={"path": "new.py", "content": "print('hi')\n"},
+            )],
+            usage=Usage(uncached=1, output=1),
+            raw={"id": "w1"},
+        ),
+        _end("child done"),
+        _end("parent done"),
+    ])
+    main = runner_main_spec(
+        "main", delegation=True, spawnable=("general-purpose",)
+    )
+    host = make_host(
+        make_registry(main, preset_spec("general-purpose")),
+        workspace_dir=ws,
+        provider=provider,
+        model="gpt-test",
+        multi_turn=False,
+        write_mode=FsWriteMode.APPLY,
+        shell_mode=ShellMode.OFF,
+        budget=coding_replay_budget(3),
+        require_approval_tools=("write",),
+    )
+    driver = make_driver(host)
+
+    out = driver.start(goal="root goal", agent="main")
+    # The command settled as a clean suspend, not a 409.
+    assert out.status == "suspended"
+    assert out.wake_handle is None
+    root_id = out.task_id
+    child_id = _spawned_child(host, root_id)
+    child = fold(host.event_log, host.content_store, child_id)
+    assert child.status == "suspended"
+    assert child.wake_on == HumanResponseReceived(handle="approval-w1")
+    assert not (ws / "new.py").exists()
+
+    # The user approves the CHILD's gated call.
+    child_out = driver.approve(child_id, call_id="w1")
+    assert child_out.status == "terminal"
+    assert (ws / "new.py").read_text() == "print('hi')\n"
+
+    # …and the previously-stranded parent resumed out-of-band to terminal.
+    root = fold(host.event_log, host.content_store, root_id)
+    assert root.status == "terminal"
+    assert root.governance.subtask_results[-1].status == "completed"
+    root_types = [e.type for e in host.event_log.read(root_id)]
+    assert "TaskCompleted" in root_types
 
 
 # ---------------------------------------------------------------------------

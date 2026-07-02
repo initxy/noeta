@@ -326,7 +326,12 @@ class WaitTimerDecision:
 
 @dataclass(frozen=True, slots=True)
 class WaitExternalDecision:
-    """Phase 2 — wait for an external event source (e.g. webhook, bus)."""
+    """Wait for an external event source (e.g. webhook, bus).
+
+    Suspends on ``ExternalEvent(event_kind=...)``; the host's external
+    ingress wakes the Task by delivering the same ``event_kind`` through
+    ``Dispatcher.wake``.
+    """
 
     event_kind: str
     state_patch: Optional[TaskStatePatch] = None

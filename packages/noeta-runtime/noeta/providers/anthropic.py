@@ -98,6 +98,16 @@ _STOP_REASON_MAP: dict[str, Literal["tool_use", "end_turn", "max_tokens", "error
     "tool_use": "tool_use",
     "max_tokens": "max_tokens",
     "stop_sequence": "end_turn",
+    # A safety-classifier ``refusal`` is a *completed* HTTP-200 turn (the
+    # assistant declined; its content carries the refusal text). The Noeta
+    # neutral vocabulary has no ``refusal`` value, so map it to ``end_turn`` —
+    # the refusal surfaces as the assistant's finished answer, NOT a fatal
+    # ``error`` task failure (which would discard the refusal and terminate the
+    # task non-retryably). ``pause_turn`` (Anthropic server-side tools mid-turn)
+    # is deliberately absent: Noeta wires no server-side tools, so it is
+    # unreachable, and mapping it to ``end_turn`` would silently truncate a turn
+    # the API expects to be resumed — an absent key falls through to ``error``.
+    "refusal": "end_turn",
 }
 
 
@@ -577,6 +587,14 @@ def _assistant_message_to_anthropic(
         # ToolResultBlock silently skipped
     content: list[dict[str, Any]] = []
     for thinking in thinking_blocks:
+        if thinking.data is not None:
+            # A redacted (encrypted) reasoning block: re-emit the opaque blob
+            # verbatim under its own wire type, never as a ``thinking`` block
+            # (an empty-text thinking block would be rejected).
+            content.append(
+                {"type": "redacted_thinking", "data": thinking.data}
+            )
+            continue
         entry: dict[str, Any] = {
             "type": "thinking",
             "thinking": thinking.text,
@@ -776,6 +794,19 @@ def _parse_response_content(content_raw: list[Any]) -> list[Block]:
                     signature=signature if isinstance(signature, str) else None,
                 )
             )
+        elif entry_type == "redacted_thinking":
+            # Encrypted reasoning the safety system redacted. There is nothing
+            # human-readable to keep, but the opaque ``data`` blob MUST round-
+            # trip verbatim on the next request (a tool-use turn that carried
+            # thinking is rejected if its reasoning blocks are missing). Carry
+            # it on ``ThinkingBlock.data`` rather than dropping the block. If the
+            # blob is missing / non-str there is nothing to round-trip: keeping a
+            # ``ThinkingBlock(text="", data=None)`` would be re-emitted outbound
+            # as an empty ``thinking`` block (the API rejects it), so drop it —
+            # the same skip the pre-``data`` parser did for redacted blocks.
+            data = entry.get("data")
+            if isinstance(data, str):
+                blocks.append(ThinkingBlock(text="", signature=None, data=data))
         elif entry_type == "tool_use":
             call_id = entry.get("id", "")
             tool_name = entry.get("name", "")

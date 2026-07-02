@@ -19,6 +19,8 @@ import logging
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Optional
 
+from noeta.sdk import CodedError
+
 from noeta.agent.backend.engine_room import EngineRoom
 
 
@@ -124,9 +126,15 @@ class BackendHandler(BaseHTTPRequestHandler):
         """The bundled SPA assets root (T7), or ``None`` if no build present."""
         return getattr(self.server, "web_assets", None)
 
+    #: Set once any response writer has emitted its status line + headers, so
+    #: ``_handle_handler_error`` never writes a SECOND response into a stream
+    #: (e.g. an SSE handler that raises mid-body) and corrupts the wire.
+    _response_started = False
+
     def send_json(self, payload: Any, status: int = 200) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
+        self._response_started = True
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -136,6 +144,7 @@ class BackendHandler(BaseHTTPRequestHandler):
         self, body: bytes, content_type: str, status: int = 200
     ) -> None:
         self.send_response(status)
+        self._response_started = True
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -167,6 +176,7 @@ class BackendHandler(BaseHTTPRequestHandler):
         disconnects (a write error breaks the loop and the generator's
         ``finally`` unsubscribes)."""
         self.send_response(200)
+        self._response_started = True
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
@@ -194,6 +204,7 @@ class BackendHandler(BaseHTTPRequestHandler):
         app-specific ones pass.
         """
         self.send_response(resp.status)
+        self._response_started = True
         if resp.content_type:
             self.send_header("Content-Type", resp.content_type)
         if resp.cors:
@@ -297,7 +308,51 @@ class BackendHandler(BaseHTTPRequestHandler):
             self.send_json({"error": "not found", "path": path}, status=404)
             return
         handler, params = match
-        handler(self, params)
+        try:
+            handler(self, params)
+        except Exception as exc:  # noqa: BLE001 — see below
+            self._handle_handler_error(exc)
+
+    #: Stable engine error ``code`` → HTTP status. The engine verbs raise
+    #: ``noeta.sdk.CodedError`` subclasses carrying a byte-stable ``code``; the
+    #: backend switches on that STRUCTURALLY (``isinstance`` + ``exc.code``)
+    #: rather than the class-name string / ``"already terminal"`` message
+    #: substring it matched before — HTTP status is an app concern, so the map
+    #: lives here keyed by the public code. Any unlisted error is an
+    #: unexpected 500.
+    _ERROR_CODE_STATUS = {
+        "model_selector_rejected": 400,
+        "provider_selector_rejected": 400,
+        "not_resumable": 409,
+        "unsupported_subtask_suspend": 409,
+        "task_already_terminal": 409,
+    }
+
+    def _handle_handler_error(self, exc: Exception) -> None:
+        """Turn a handler raise into an HTTP response instead of a dropped
+        socket. ``BaseHTTPRequestHandler`` does NOT convert an exception into a
+        response — an unhandled raise just closes the connection after a stderr
+        traceback, so a typed engine error (bad model, non-resumable task, …)
+        reached the client as a reset connection rather than a 4xx."""
+        if self._response_started:
+            # A streaming handler (or any writer) already committed a status
+            # line + headers; a second ``send_json`` here would write a bogus
+            # second response into the same socket. Log and bail — the partial
+            # response is the client's to reconcile (the stream just ends).
+            _log.exception("backend handler error after response started")
+            return
+        status = (
+            self._ERROR_CODE_STATUS.get(exc.code)
+            if isinstance(exc, CodedError)
+            else None
+        )
+        if status is None:
+            # Unexpected — log the full traceback server-side, return an opaque
+            # 500 (never leak internals / a stack trace to the client).
+            _log.exception("backend handler error")
+            self.send_json({"error": "internal error"}, status=500)
+            return
+        self.send_json({"error": str(exc), "code": exc.code}, status=status)
 
     def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler convention
         self._dispatch("GET")

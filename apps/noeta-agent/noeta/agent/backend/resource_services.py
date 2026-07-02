@@ -132,7 +132,11 @@ def _handle_content(handler: BackendHandler, params: dict[str, str]) -> None:
 
 
 def _handle_files(handler: BackendHandler, params: dict[str, str]) -> None:
-    root = handler.engine_room.workspace_dir
+    # Serve the tree of the requested session's workspace (``?task=<id>``), not
+    # the host-fixed default — a session bound to a non-default project must not
+    # show the wrong file tree.
+    task = handler.query_params().get("task")
+    root = handler.engine_room.workspace_dir_for(task)
     handler.send_json({"root": str(root), "tree": _build_tree(root)})
 
 
@@ -141,7 +145,8 @@ def _handle_file(handler: BackendHandler, params: dict[str, str]) -> None:
     if not rel:
         handler.send_json({"error": "query param 'path' is required"}, status=400)
         return
-    target = _safe_target(handler.engine_room.workspace_dir, rel)
+    task = handler.query_params().get("task")
+    target = _safe_target(handler.engine_room.workspace_dir_for(task), rel)
     if target is None or not target.is_file():
         handler.send_json({"error": "file not found", "path": rel}, status=404)
         return

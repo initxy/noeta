@@ -24,7 +24,11 @@ from collections.abc import Sequence
 from typing import Union
 
 from noeta.protocols.tool import ToolContext, ToolResult
-from noeta.tools._limits import INLINE_CONTENT_MAX_BYTES, fit_output_fields
+from noeta.tools._limits import (
+    INLINE_CONTENT_MAX_BYTES,
+    fit_output_fields,
+    truncate_bytes,
+)
 from noeta.tools._refs import ref_json
 from noeta.tools.mcp._client import McpError, McpStdioClient, SpawnFn
 from noeta.tools.mcp._http_client import HttpPostFn, McpHttpClient
@@ -39,10 +43,31 @@ __all__ = [
     "McpTool",
     "McpToolSpec",
     "build_mcp_tools",
+    "cap_injected",
     "is_mcp_tool_name",
     "make_mcp_tool_name",
     "parse_mcp_tool_specs",
 ]
+
+
+def cap_injected(text: str, *, kind: str) -> str:
+    """Bound server-controlled injected text at the inline-content ceiling.
+
+    An MCP prompt / resource body is injected as an ``origin="system"``
+    message, so an unbounded one is BOTH a prompt-injection surface and a
+    context/token bomb (the transport only caps at ~8 MB). 64 KiB is ample for a
+    real prompt / resource snapshot; past it we truncate with a visible marker
+    naming ``kind`` ("prompt" / "resource") so the model knows it was cut.
+
+    Single shared implementation for :func:`~noeta.tools.mcp.prompts.
+    flatten_prompt_messages` and :func:`~noeta.tools.mcp.resources.
+    flatten_resource_contents` so the cap wording / ceiling never drift."""
+    if len(text.encode("utf-8")) <= INLINE_CONTENT_MAX_BYTES:
+        return text
+    return (
+        truncate_bytes(text, INLINE_CONTENT_MAX_BYTES)
+        + f"\n\n[truncated: MCP {kind} exceeded {INLINE_CONTENT_MAX_BYTES} bytes]"
+    )
 
 
 MCP_PREFIX = "mcp__"

@@ -53,6 +53,7 @@ from noeta.protocols.events import (
     BackgroundShellStartedPayload,
 )
 from noeta.protocols.values import ContentRef
+from noeta.runtime._proc_group import send_group_signal
 
 
 #: The host completion-push callback. The watcher calls it
@@ -302,6 +303,9 @@ class ProcessRegistry:
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,  # merge so one buffer = the model's view
+            # tools m4: the job leads its own process group so kill reaps
+            # backgrounded grandchildren too (see ``_terminate``'s group kill).
+            start_new_session=True,
         )
         handle = _JobHandle(
             job_id=job_id,
@@ -471,6 +475,23 @@ class ProcessRegistry:
             job_ids = list(self._jobs.get(session_root_task_id, {}).keys())
         return [self.kill(job_id) for job_id in job_ids]
 
+    def purge_session(self, session_root_task_id: str) -> None:
+        """Drop all retained job handles for a session — the memory-reclaim
+        seam for a *permanently deleted* conversation.
+
+        A ``_JobHandle`` (with its tail buffer, up to ``output_cap``) is kept
+        resident after a job exits so a late ``poll`` can still report the job's
+        terminal status + final output — that is why ``kill_session`` / close
+        deliberately do NOT drop handles (a closed conversation is reopenable
+        and inspectable). But once a conversation is *deleted*, its jobs are
+        gone for good and never polled again, so retaining their handles is a
+        pure leak: over a long server uptime the map grew one entry per job
+        forever. The delete path calls this to reclaim them. Idempotent; kills
+        nothing (delete follows close/cancel, which already reaped the OS
+        processes)."""
+        with self._lock:
+            self._jobs.pop(session_root_task_id, None)
+
     # -- crash recovery / orphan reaping (issue 06) ------------------------
 
     def recover_orphans(
@@ -583,16 +604,27 @@ class ProcessRegistry:
             self._kill_pid(orphan.pid)
 
     def _terminate(self, handle: _JobHandle, sig: int) -> None:
-        """Send ``sig`` to the job's process, swallowing a dead-process race.
+        """Send ``sig`` to the job's whole process GROUP, swallowing a
+        dead-process race.
 
-        The process may have exited between the watcher's reap and this call
-        (``ProcessLookupError``) or never started cleanly — either way the
-        terminal event is the watcher's job, so a failed signal is benign."""
-        try:
-            handle.popen.send_signal(sig)
-        except (ProcessLookupError, OSError, ValueError):
-            # Already reaped / invalid — the watcher records the terminal event.
-            pass
+        The job was spawned with ``start_new_session=True`` (it leads its own
+        group), so signalling the group reaps backgrounded grandchildren
+        (``bash -c "server & wait"``) a single-PID signal would orphan
+        (tools m4). Falls back to the single PID if the group is already
+        gone. The process may have exited between the watcher's reap and
+        this call (``ProcessLookupError``) or never started cleanly — either
+        way the terminal event is the watcher's job, so a failed signal is
+        benign."""
+        # Pid-reuse guard: once the watcher has reaped the child (returncode
+        # set) its pid may be recycled onto an unrelated process, and
+        # ``os.getpgid(pid)`` would then resolve a stranger's group for us to
+        # ``killpg``. ``Popen.send_signal`` skips a signal on a set returncode
+        # for exactly this reason; mirror it before the raw-pid group kill.
+        if handle.popen.returncode is not None:
+            return
+        # Group-first, single-PID fallback, swallowing the exit race — the
+        # shared primitive every kill path routes through.
+        send_group_signal(handle.popen.pid, sig)
 
     def _escalate_after_grace(self, handle: _JobHandle, grace_s: float) -> None:
         """Daemon thread: wait ``grace_s``, then SIGKILL if still alive.
@@ -876,18 +908,19 @@ def _posix_kill_pid(pid: int) -> None:
     matters because ``recover_orphans`` runs this serially per orphan on the host
     STARTUP thread (``build_code_server``): a synchronous ``time.sleep(grace)``
     here would stall boot by ``grace × N`` before the server accepts requests.
-    Mirrors the live ``kill`` path's daemon-timer offload."""
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError, OSError):
-        return
+    Mirrors the live ``kill`` path's daemon-timer offload.
+
+    tools m4: when the orphan LEADS its own process group (``pgid == pid`` —
+    every job spawned with ``start_new_session=True``), signal the GROUP so
+    its backgrounded grandchildren are reaped too. An orphan recorded by a
+    pre-group-spawn version shares the old host's group — group-killing it
+    would nuke unrelated processes, so those fall back to the single PID
+    (``require_leader=True`` on the shared primitive)."""
+    send_group_signal(pid, signal.SIGTERM, require_leader=True)
 
     def _escalate() -> None:
         time.sleep(DEFAULT_KILL_GRACE_S)
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError, OSError):
-            pass
+        send_group_signal(pid, signal.SIGKILL, require_leader=True)
 
     threading.Thread(
         target=_escalate, name=f"bg-orphan-kill-{pid}", daemon=True

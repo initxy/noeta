@@ -347,7 +347,7 @@ def test_per_turn_last_shell_is_not_cumulative(
             args=argv, returncode=rc, stdout=b"pytest output\n", stderr=b""
         )
 
-    monkeypatch.setattr("noeta.tools.fs.shell.subprocess.run", fake_run)
+    monkeypatch.setattr("noeta.tools.fs._subprocess._default_run", fake_run)
 
     responses = [
         # Turn 1: pytest (rc=0) then end_turn → suspend.

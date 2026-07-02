@@ -222,9 +222,20 @@ class ContextPlanComposedPayload:
     :class:`noeta.protocols.context_plan.ContextPlan` body in
     ContentStore. ``fold`` writes ``task.context.plan_ref`` from this
     event (single-writer: Engine, not Composer).
+
+    ``plan_ref`` is ``None`` when the composer produced no stored plan
+    (the protocols-only ``PassthroughComposer`` fallback). The event is
+    emitted **unconditionally once per Engine step** either way — it is
+    the step-boundary event ``fold`` counts ``governance.iterations``
+    from, so the ``BudgetGuard.max_iterations`` cap must not depend on
+    which composer is wired (core #2). Byte-safety: the shipped
+    ``ThreeSegmentComposer`` always sets ``plan_ref``, so every
+    historical recording carries a non-``None`` value and refolds
+    byte-identically; only Passthrough-composed steps (which previously
+    emitted nothing) write the new ``null`` shape.
     """
 
-    plan_ref: ContentRef
+    plan_ref: Optional[ContentRef] = None
 
 
 @dataclass(frozen=True, slots=True)

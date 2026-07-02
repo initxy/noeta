@@ -82,6 +82,9 @@ _BACKTRACKING_REPEATS = frozenset(
     {_re_parser.MAX_REPEAT, _re_parser.MIN_REPEAT}
 )
 
+#: The parser's "unbounded" upper-bound sentinel (``*`` / ``+`` / ``{n,}``).
+_MAXREPEAT = getattr(_re_parser, "MAXREPEAT", 4294967295)
+
 
 # ---------------------------------------------------------------------------
 # Image / PDF detection
@@ -197,22 +200,104 @@ def _has_nested_repeat(node: Any) -> bool:
     return False
 
 
-def _pattern_is_redos_prone(pattern: str) -> bool:
-    """Reject nested unbounded quantifiers — the necessary condition for
-    exponential backtracking (``(a+)+``, ``(.*)*``, ``(\\d+\\.)+`` …).
+def _find_branches(node: Any) -> list[list]:
+    """Collect every ``BRANCH``'s alternative-list reachable within ``node``."""
+    found: list[list] = []
+    if isinstance(node, _re_parser.SubPattern):
+        for op, args in node:
+            if op == _re_parser.BRANCH and isinstance(args, tuple) and len(args) == 2:
+                found.append(args[1])
+            found.extend(_find_branches(args))
+    elif isinstance(node, (tuple, list)):
+        for x in node:
+            found.extend(_find_branches(x))
+    return found
 
-    grep runs in-process on the engine worker thread and CPython's ``re``
-    holds the GIL for the whole match, so a pathological pattern would freeze
-    the entire process with no possible timeout (a separate thread can't
-    preempt a GIL-holding C match). Refusing the pattern up front is the only
-    GIL-safe guard. Conservative by design: it also rejects some safe nestings
-    like ``(a+b)+`` — the model is told to flatten the pattern.
+
+def _leading_literal_and_nullable(alt: Any) -> tuple[Optional[int], bool]:
+    """``(fixed leading literal or None, nullable)`` for one alternation branch.
+
+    Walks past zero-width anchors and optional (min-zero) leading elements. A
+    fixed leading ``LITERAL`` yields its charcode; anything wilder (char class /
+    any / group / a repeat with a positive minimum) yields ``None``. Running out
+    of tokens means the branch matches the empty string (``nullable``)."""
+    if not isinstance(alt, (list, _re_parser.SubPattern)):
+        return (None, False)
+    for op, args in alt:
+        if op == _re_parser.AT:            # zero-width anchor: keep scanning
+            continue
+        if op == _re_parser.LITERAL:
+            return (args, False)
+        if op in _BACKTRACKING_REPEATS:
+            mn = args[0] if isinstance(args, tuple) else 0
+            if mn == 0:                    # optional leading element: skip past
+                continue
+            return (None, False)
+        return (None, False)               # class / any / group / branch → wild
+    return (None, True)                    # nothing left → matches the empty string
+
+
+def _alternation_is_overlap_prone(alternatives: list) -> bool:
+    """A ``BRANCH``'s alternatives can overlap-match (→ exponential backtracking
+    once that branch sits under an unbounded repeat) when a branch is nullable
+    (matches empty) or two branches share a fixed leading literal.
+
+    CPython's parser factors a shared prefix out of an alternation, so the
+    classic "one alternative is a prefix of another" case (``a|ab``, ``aa|a``)
+    surfaces here as a branch with an EMPTY (nullable) alternative."""
+    leading: list[int] = []
+    for alt in alternatives:
+        lit, nullable = _leading_literal_and_nullable(alt)
+        if nullable:
+            return True
+        if lit is not None:
+            leading.append(lit)
+    return len(leading) != len(set(leading))
+
+
+def _has_overlapping_alternation_repeat(node: Any) -> bool:
+    """True if an UNBOUNDED backtracking repeat wraps an overlap-prone
+    alternation — the alternation-ambiguity class of ReDoS the nested-quantifier
+    check misses (``(a|a)*``, ``(a|ab)*``, ``(a?|b)+``)."""
+    if isinstance(node, _re_parser.SubPattern):
+        for op, args in node:
+            if (
+                op in _BACKTRACKING_REPEATS
+                and isinstance(args, tuple)
+                and len(args) >= 3
+                and args[1] == _MAXREPEAT
+            ):
+                for alts in _find_branches(args[2]):
+                    if _alternation_is_overlap_prone(alts):
+                        return True
+            if _has_overlapping_alternation_repeat(args):
+                return True
+        return False
+    if isinstance(node, (tuple, list)):
+        return any(_has_overlapping_alternation_repeat(x) for x in node)
+    return False
+
+
+def _pattern_is_redos_prone(pattern: str) -> bool:
+    """Reject the two structural necessary conditions for exponential
+    backtracking:
+
+    * **nested unbounded quantifiers** — ``(a+)+``, ``(.*)*``, ``(\\d+\\.)+`` …;
+    * **an unbounded repeat over an overlapping alternation** — ``(a|a)*``,
+      ``(a|ab)*``, ``(a?|b)+`` (the ambiguity class the nested check misses).
+
+    grep runs in-process on the engine worker thread and CPython's ``re`` holds
+    the GIL for the whole match, so a pathological pattern would freeze the
+    entire process with no possible timeout (a separate thread can't preempt a
+    GIL-holding C match). Refusing the pattern up front is the only GIL-safe
+    guard. Conservative by design: it also rejects some safe shapes like
+    ``(a+b)+`` / ``(foo|bar|)*`` — the model is told to flatten the pattern.
     """
     try:
         parsed = _re_parser.parse(pattern)
     except re.error:  # pragma: no cover - compile guard already reported it
         return False
-    return _has_nested_repeat(parsed)
+    return _has_nested_repeat(parsed) or _has_overlapping_alternation_repeat(parsed)
 
 
 def _clip_line(line: str) -> tuple[str, bool]:
@@ -528,8 +613,9 @@ class GrepTool:
         if _pattern_is_redos_prone(pattern):
             return tool_error(
                 self.name,
-                "pattern has nested quantifiers (e.g. '(a+)+') that risk "
-                "catastrophic backtracking; flatten it to a linear pattern",
+                "pattern risks catastrophic backtracking — nested quantifiers "
+                "(e.g. '(a+)+') or an unbounded repeat over an overlapping "
+                "alternation (e.g. '(a|a)*'); flatten it to a linear pattern",
             )
 
         path_arg = arguments.get("path")

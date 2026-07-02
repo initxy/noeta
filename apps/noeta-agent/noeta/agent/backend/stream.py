@@ -28,10 +28,6 @@ from noeta.sdk import envelope_to_dict
 from noeta.agent.backend.engine_room import EngineRoom
 
 
-# Sentinel pushed to wake a blocked consumer for shutdown.
-_STOP = object()
-
-
 # ---------------------------------------------------------------------------
 # Stream cursor: {task_id: last_seq} <-> compact url-safe token
 # ---------------------------------------------------------------------------
@@ -161,10 +157,12 @@ def stream_frames(
             try:
                 env = pending.get(timeout=heartbeat_secs)
             except queue.Empty:
+                # No event within the heartbeat window: emit a comment frame.
+                # This also bounds how long a consumer blocks — on server
+                # shutdown the next write fails and the generator terminates,
+                # so no explicit stop sentinel is needed.
                 yield _HEARTBEAT
                 continue
-            if env is _STOP:
-                return
             if env.seq <= marks.get(env.task_id, -1):
                 continue
             marks[env.task_id] = env.seq

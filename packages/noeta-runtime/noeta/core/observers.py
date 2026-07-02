@@ -118,6 +118,22 @@ class ChildLifecycleObserver:
                     error=getattr(env.payload, "reason", None),
                 ),
             )
+            return
+        if env.type == "TaskCancelled":
+            # A child that reaches terminal via cancellation (not a full-tree
+            # cascade that also cancels the parent) must STILL notify its
+            # parent — otherwise a parent suspended on ``SubtaskCompleted`` /
+            # ``SubtaskGroupCompleted`` waits forever on a wake that never
+            # fires. ``SubtaskResult`` has no ``cancelled`` status, so surface
+            # it as a ``failed`` outcome carrying the cancel reason.
+            reason = getattr(env.payload, "reason", None)
+            self._on_terminal(
+                env,
+                SubtaskResult(
+                    status="failed",
+                    error=f"cancelled: {reason}" if reason else "cancelled",
+                ),
+            )
 
     def _on_task_created(self, env: EventEnvelope) -> None:
         parent_id = getattr(env.payload, "parent_task_id", None)

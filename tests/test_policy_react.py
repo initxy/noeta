@@ -110,6 +110,23 @@ def test_end_turn_response_becomes_finish_decision_with_text_joined() -> None:
     assert decision.assistant_message.content == resp.content
 
 
+def test_empty_end_turn_fails_instead_of_recording_empty_message() -> None:
+    """An ``end_turn`` with no renderable content (e.g. a safety-classifier
+    ``refusal`` now mapped to ``end_turn`` that came back with an empty content
+    array) must NOT record a ``Message(content=[])`` — Anthropic 400s on
+    ``{"role":"assistant","content":[]}`` on the next request. It fails cleanly
+    instead, leaving history unpolluted."""
+    resp = LLMResponse(stop_reason="end_turn", content=[])
+    policy, _ = _make_policy([resp])
+
+    decision = policy.decide(_ctx(), _empty_view())
+
+    assert isinstance(decision, FailDecision)
+    assert decision.reason == "llm_empty_response"
+    assert decision.retryable is False
+    assert decision.assistant_message is None
+
+
 def test_tool_use_response_becomes_tool_calls_decision_one_call() -> None:
     """Single ToolUseBlock → ToolCallsDecision with one ToolCall preserving
     call_id / tool_name / arguments verbatim."""
