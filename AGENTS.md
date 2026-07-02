@@ -34,7 +34,5 @@
 
 ## Release
 
-- `noeta-runtime` / `noeta-sdk` / `noeta-agent` share one version and always release together. After merging a behavior change to `packages/noeta-runtime`, `packages/noeta-sdk`, or `apps/noeta-agent`, cut a release — published packages must not lag `main`.
-- Version bump: **patch by default** (bug fixes, small additive API, packaging fixes). Minor/major is the maintainer's explicit call (feature-level or breaking release) — ask instead of deriving it from semver.
-- Procedure: bump `version` in all three member pyprojects **and** the lockstep `>=` cross-package lower bounds to the same value, update the version assertion in `tests/test_install_smoke.py`, run `uv sync`, merge via PR, then `git tag vX.Y.Z && git push origin vX.Y.Z` — `release.yml` publishes to PyPI via trusted publishing.
-- Verify the release with `uv pip install --no-cache` from PyPI; the JSON API and simple index lag the publish by a minute or two.
+- A merged behavior change to runtime / sdk / agent should be followed by a release; bumps are patch by default — minor/major is the maintainer's explicit call.
+- Read `docs/releasing.md` before cutting a release; it holds the full procedure.
