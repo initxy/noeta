@@ -142,16 +142,20 @@ options = Options(
     permission_mode="bypassPermissions",
 )
 
-# query() drives one turn and returns the full event-envelope stream — the
-# machine-readable record of everything the agent did.
-for env in query(
+# query() drives one turn and returns a QueryResult: still the full
+# event-envelope stream (a list — the machine-readable record of everything
+# the agent did), plus the projections folded before teardown.
+result = query(
     options,
     goal="How many words are in 'the quick brown fox'?",
     provider=AnthropicProvider(api_key="sk-ant-...", default_max_tokens=1024),
     workspace_dir=Path("."),
     model="claude-sonnet-4-5",   # any model id your provider serves
-):
+)
+for env in result:
     print(env.type)
+print(result.answer())      # the terminal answer; raises QueryFailedError on failure
+print(result.messages())    # the human-readable message view
 ```
 
 For a multi-turn session reach for `Client` instead of `query` (`client.start(...)`,

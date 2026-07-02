@@ -30,14 +30,24 @@ from noeta.agent.spec import (
     ComponentRef,
     ToolRef,
 )
-from noeta.client import Client, Options, compile_options, query
+from noeta.client import (
+    Client,
+    Options,
+    QueryFailedError,
+    QueryResult,
+    Result,
+    compile_options,
+    query,
+)
 from noeta.client.parts import COMPOSER_REF, POLICY_REF, builtin_tool_ref
 from noeta.core.fold import fold
 from noeta.execution.multi_turn import NEXT_GOAL_WAKE_HANDLE
 from noeta.protocols.events import (
     AgentBoundPayload,
     MessagesAppendedPayload,
+    TaskCompletedPayload,
     TaskCreatedPayload,
+    TaskFailedPayload,
     ToolCallStartedPayload,
 )
 from noeta.protocols.messages import (
@@ -346,3 +356,141 @@ def test_options_vs_handwritten_spec_identity() -> None:
     # Sanity: name doesn't match → specs shouldn't be equal
     wrong = dataclasses.replace(hand, name="renamed")
     assert compiled != wrong
+
+
+# ---------------------------------------------------------------------------
+# Case 5 — issue #5: QueryResult materializes projections before shutdown
+# ---------------------------------------------------------------------------
+
+
+def _finish_only_options() -> Options:
+    return Options(
+        system_prompt="Return the requested text exactly.",
+        name="main",
+        allowed_tools=(),
+        permission_mode="bypassPermissions",
+    )
+
+
+def _end_turn(text: str) -> LLMResponse:
+    return LLMResponse(
+        stop_reason="end_turn",
+        content=[TextBlock(text=text)],
+        usage=Usage(uncached=1, output=1),
+        raw={"id": "resp-finish"},
+    )
+
+
+def test_query_large_answer_survives_shutdown(tmp_path: Path) -> None:
+    """A spilled answer (answer_ref) is fully readable from the QueryResult
+    after query() has torn the temporary Client + ContentStore down."""
+    ws = _make_workspace(tmp_path)
+    large_answer = "x" * 8000  # > _ANSWER_INLINE_LIMIT → spilled to the store
+    provider = FakeLLMProvider(responses=[_end_turn(large_answer)])
+
+    result = query(
+        _finish_only_options(),
+        goal="return the large answer",
+        provider=provider,
+        workspace_dir=ws,
+        model="stub-model",
+    )
+
+    # Precondition of the bug: the terminal event really did spill the answer.
+    completed = _envelopes_of_type(result, "TaskCompleted")
+    assert len(completed) == 1
+    payload = completed[0].payload
+    assert isinstance(payload, TaskCompletedPayload)
+    assert payload.answer is None
+    assert payload.answer_ref is not None
+
+    # The materialized accessors resolve the full answer byte-for-byte —
+    # no Client, no ContentStore in sight.
+    assert result.answer() == large_answer
+    terminal_views = [v for v in result.messages() if isinstance(v, Result)]
+    assert terminal_views == [Result(answer=large_answer, status="completed")]
+
+
+def test_query_small_answer_inline_unchanged(tmp_path: Path) -> None:
+    """An inline (small) answer takes the same accessors; the envelope keeps
+    the pre-spill shape (answer inline, no ref)."""
+    ws = _make_workspace(tmp_path)
+    provider = FakeLLMProvider(responses=[_end_turn("done")])
+
+    result = query(
+        _finish_only_options(),
+        goal="return done",
+        provider=provider,
+        workspace_dir=ws,
+        model="stub-model",
+    )
+
+    completed = _envelopes_of_type(result, "TaskCompleted")
+    assert len(completed) == 1
+    payload = completed[0].payload
+    assert isinstance(payload, TaskCompletedPayload)
+    assert payload.answer == "done"
+    assert payload.answer_ref is None
+    assert result.answer() == "done"
+
+
+def test_query_result_is_still_the_envelope_list(tmp_path: Path) -> None:
+    """Compatibility: QueryResult behaves as the plain envelope list every
+    pre-existing caller iterates / indexes / isinstance-checks."""
+    ws = _make_workspace(tmp_path)
+    provider = FakeLLMProvider(responses=[_end_turn("done")])
+
+    result = query(
+        _finish_only_options(),
+        goal="return done",
+        provider=provider,
+        workspace_dir=ws,
+        model="stub-model",
+    )
+
+    assert isinstance(result, list)
+    assert isinstance(result, QueryResult)
+    assert len(result) > 0
+    assert result[0].type == "TaskCreated"
+    assert [e.type for e in result].count("TaskCompleted") == 1
+
+
+def test_query_failed_task_answer_raises_coded_error(tmp_path: Path) -> None:
+    """answer() is strict: a TaskFailed terminal raises QueryFailedError
+    (code='query_failed') instead of handing back the failure reason as if it
+    were an answer; the lenient view still exposes Result(status='failed')."""
+    ws = _make_workspace(tmp_path)
+    # A fatal error response → ReAct maps it to FailDecision → TaskFailed.
+    provider = FakeLLMProvider(
+        responses=[
+            LLMResponse(
+                stop_reason="error",
+                content=[],
+                usage=Usage(uncached=1, output=0),
+                raw={"category": "fatal"},
+            )
+        ]
+    )
+
+    result = query(
+        _finish_only_options(),
+        goal="this will fail",
+        provider=provider,
+        workspace_dir=ws,
+        model="stub-model",
+    )
+
+    failed = _envelopes_of_type(result, "TaskFailed")
+    assert len(failed) == 1
+    assert isinstance(failed[0].payload, TaskFailedPayload)
+
+    with pytest.raises(QueryFailedError) as excinfo:
+        result.answer()
+    err = excinfo.value
+    assert err.code == "query_failed"
+    assert err.status == "failed"
+    assert err.reason == failed[0].payload.reason
+    assert err.task_id == result.task_id
+
+    terminal_views = [v for v in result.messages() if isinstance(v, Result)]
+    assert terminal_views and terminal_views[0].status == "failed"
