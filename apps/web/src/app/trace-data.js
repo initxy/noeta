@@ -29,6 +29,14 @@ function currentTaskId() {
 
 function useTraceData() {
   const [taskId, setTaskId] = useState(() => currentTaskId());
+  // The task the SSE stream is rooted at. `/stream?task=<root>` already carries
+  // the root's WHOLE subtree (backend stream.discover_tree + stream_frames), so
+  // switching the inspected `taskId` to another node already in that subtree is
+  // a pure filter change — the stream (and `streamEnvelopes`) must NOT be
+  // re-rooted, or the parent/sibling tasks drop out of the folded TaskTree.
+  // streamRoot only changes when navigating to a task OUTSIDE the current
+  // subtree (a direct URL open, or Back/Forward to a different conversation).
+  const [streamRoot, setStreamRoot] = useState(() => currentTaskId());
   const [streamEnvelopes, setStreamEnvelopes] = useState([]);
   const [planBodyCache, setPlanBodyCache] = useState(new Map());
   const [selectedSeq, setSelectedSeq] = useState(null);
@@ -37,6 +45,10 @@ function useTraceData() {
   const sseRef = useRef(null);
   const tokenRef = useRef(0);
   const seenKeysRef = useRef(new Set());
+  // Every task_id the current stream has delivered an envelope for — lets a
+  // navigation tell an in-subtree filter switch (keep the connection) from an
+  // out-of-subtree jump (re-root + reconnect). Reset with the stream.
+  const streamTaskIdsRef = useRef(new Set());
   const planInFlight = useRef(new Set());
 
   // The inspected task's own timeline (the stream carries the whole subtree).
@@ -118,38 +130,60 @@ function useTraceData() {
     };
   }, [planMetas, planBodyCache]);
 
+  // Switch the inspected task. If the target already belongs to the current
+  // stream's subtree (an envelope with its task_id has arrived), keep the live
+  // connection and only move the filter; otherwise re-root the stream at it —
+  // which resets the stream state + reconnects via the streamRoot effects below.
+  const selectTask = useCallback((nextTaskId) => {
+    if (!nextTaskId) return;
+    setTaskId(nextTaskId);
+    if (!streamTaskIdsRef.current.has(nextTaskId)) {
+      setStreamRoot(nextTaskId);
+    }
+  }, []);
+
   const navigateToTask = useCallback(
     (nextTaskId) => {
       if (!nextTaskId || nextTaskId === taskId) return;
       const url = new URL(window.location.href);
       url.searchParams.set("task", nextTaskId);
       window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
-      setTaskId(nextTaskId);
+      selectTask(nextTaskId);
     },
-    [taskId],
+    [taskId, selectTask],
   );
 
   useEffect(() => {
-    const onPopState = () => setTaskId(currentTaskId());
+    const onPopState = () => selectTask(currentTaskId());
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, []);
+  }, [selectTask]);
 
-  // Reset all per-task state on a task switch.
+  // Reset the per-inspected-task view state on ANY task switch (both an
+  // in-stream filter change and a full re-root): the old selection points at an
+  // event on the previously inspected task's timeline.
+  useEffect(() => {
+    setSelectedSeq(null);
+  }, [taskId]);
+
+  // Reset the stream-scoped state ONLY when the stream is actually re-rooted.
+  // An in-subtree navigation keeps streamEnvelopes (and the folded TaskTree)
+  // intact; a re-root clears them so the new subtree starts from a clean slate.
+  // startLiveTail (keyed off streamRoot) reconnects right after.
   useEffect(() => {
     tokenRef.current += 1;
     seenKeysRef.current = new Set();
+    streamTaskIdsRef.current = new Set();
     setStreamEnvelopes([]);
     setPlanBodyCache(new Map());
     planInFlight.current = new Set();
-    setSelectedSeq(null);
     setConnectionState("idle");
     setNotice(null);
-  }, [taskId]);
+  }, [streamRoot]);
 
   const startLiveTail = useCallback(
     (manual = false) => {
-      if (!taskId) {
+      if (!streamRoot) {
         setNotice({ kind: "error", text: "No task id in the URL." });
         return;
       }
@@ -160,7 +194,7 @@ function useTraceData() {
       setNotice({ kind: "loading", text: "Loading trace..." });
       let es;
       try {
-        es = new EventSource(`/stream?task=${encodeURIComponent(taskId)}`);
+        es = new EventSource(`/stream?task=${encodeURIComponent(streamRoot)}`);
       } catch (error) {
         setConnectionState("offline");
         return;
@@ -187,6 +221,9 @@ function useTraceData() {
           if (seenKeysRef.current.has(key)) return;
           seenKeysRef.current.add(key);
         }
+        // Record every task_id the subtree stream delivers so navigateToTask
+        // can keep the connection when switching to a node already in it.
+        streamTaskIdsRef.current.add(env.task_id);
         setStreamEnvelopes((current) => current.concat([env]));
       };
       es.onerror = () => {
@@ -194,7 +231,7 @@ function useTraceData() {
         setConnectionState("reconnecting");
       };
     },
-    [closeSse, taskId],
+    [closeSse, streamRoot],
   );
 
   useEffect(() => {
