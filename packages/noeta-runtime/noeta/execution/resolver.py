@@ -21,7 +21,11 @@ from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.execution.environment import record_environment
 from noeta.execution.instructions import record_instructions
-from noeta.execution.subtask_drain import DrainHost, drive_pending_subtasks
+from noeta.execution.subtask_drain import (
+    DrainHost,
+    drive_pending_subtasks,
+    resume_woken_parent,
+)
 from noeta.policies.control_tools import WORKFLOW_AGENT_NAME
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
@@ -96,6 +100,13 @@ class GenericEngineResolver:
         Engine,
     ]
     _engines_lock: threading.Lock
+    #: item 3 — per-key Engine-build locks. ``_engines_lock`` used to be
+    #: held for the FULL ``_build_engine`` (including a live MCP connect),
+    #: serialising every session's Engine build behind one slow/hanging
+    #: connector. Builds now run outside the global lock, one-per-key via
+    #: these locks (storage supplied by the @dataclass subclass; lazily
+    #: created in ``_engine_for_agent`` for older test doubles).
+    _engine_builds: dict[Any, threading.Lock]
     # per-turn, NON-durable permission_mode carrier
     # keyed by task_id (storage supplied by the @dataclass subclass — see
     # ``SdkHost._turn_permission_mode``). Set via :meth:`note_turn_permission`
@@ -264,6 +275,26 @@ class GenericEngineResolver:
         carrier = getattr(self, "_turn_mcp_aliases", None)
         if carrier is not None:
             carrier[str(task_id)] = tuple(aliases)
+
+    def forget_turn_carriers(self, task_id: str) -> None:
+        """Drop a task's per-turn carrier entries (permission_mode / effort /
+        mcp aliases). Called from the conversation-end control verbs
+        (``cancel`` / ``close``) — mirrors :meth:`forget_background_subagents`.
+
+        The carriers are written every turn and were otherwise **never evicted**
+        (one entry per task, forever), so a long-lived server serving many
+        conversations over a long uptime leaked one entry per carrier per task.
+        Evicting at conversation end bounds them to live-conversation lifetime.
+        Safe against reopen: a subsequent ``send_goal`` re-notes the carriers for
+        its new turn before the Engine resolves, so nothing a resume needs is
+        lost (the carriers are non-durable runtime selectors, never resumed from
+        the event log)."""
+        key = str(task_id)
+        self._turn_permission_mode.pop(key, None)
+        for name in ("_turn_effort", "_turn_mcp_aliases"):
+            carrier = getattr(self, name, None)
+            if carrier is not None:
+                carrier.pop(key, None)
 
     def request_cancellation(self, task_id: str) -> None:
         """cancel-cascade — mark ``task_id`` cancelled in the process-local
@@ -488,6 +519,17 @@ class GenericEngineResolver:
         """
         host = self._build_drain_host(parent_task)
         return drive_pending_subtasks(host, parent_task)
+
+    def resume_woken_parent(self, parent_task: Any) -> Any:
+        """Out-of-band resume of a delegation-suspended parent whose child
+        settled through its OWN command turn (approve / deny / answer after
+        an :class:`UnsupportedSubtaskSuspend`), so the
+        :class:`ChildLifecycleObserver` wake reached the dispatcher with no
+        drain descent to consume it. Same :class:`DrainHost` as
+        :meth:`drive_pending_subtasks`; returns the settled parent task or
+        ``None`` when the parent is not resumable (wake not fired yet)."""
+        host = self._build_drain_host(parent_task)
+        return resume_woken_parent(host, parent_task)
 
     def _build_drain_host(self, parent_task: Any) -> DrainHost:
         """Build the :class:`DrainHost` for a parent's delegation tree.
@@ -741,32 +783,58 @@ class GenericEngineResolver:
             agent.name, resolved_model, effective_ask, workspace, provider,
             permission_mode, mcp_aliases, effort,
         )
-        # #13: lock the get-or-build-put window so concurrent threads under
-        # ThreadingHTTPServer never build duplicate Engines for the same key.
-        # _build_engine can be slow (tool setup, MCP init), so we hold the lock
-        # for the full build — acceptable because Engines are built once and
-        # then cached; steady-state traffic only hits the fast path inside the lock.
+        # #13 / item 3: the global lock guards only the cache map. The build
+        # itself runs OUTSIDE it, guarded by a PER-KEY build lock — one build
+        # per key (so the live MCP connect + its McpServerSkipped/observer
+        # events still fire exactly once), while builds for DIFFERENT keys run
+        # concurrently. Holding the global lock across ``_build_engine`` used
+        # to serialise every session behind one slow/hanging MCP connector —
+        # a delegated child could not even build its Engine until an
+        # unrelated session's connect finished.
         with self._engines_lock:
             cached = self._engines.get(key)
             if cached is not None:
                 self._engines.move_to_end(key)
                 return cached
-            engine = self._build_engine(
-                agent,
-                resolved_model,
-                delegation_enabled=eff_delegation,
-                allowed_subtask_agents=eff_subtask_agents,
-                ask_user_question_enabled=effective_ask,
-                policy_wrapper=self.policy_wrapper,
-                workspace=workspace,
-                provider=provider,
-                permission_mode=permission_mode,
-                mcp_aliases=mcp_aliases,
-                effort=effort,
-                task_id=task_id,
-            )
-            self._engines[key] = engine
-            # LRU eviction: drop the oldest entry when over the cap.
-            if len(self._engines) > _MAX_CACHED_ENGINES:
-                self._engines.popitem(last=False)
-            return engine
+            builds = getattr(self, "_engine_builds", None)
+            if builds is None:
+                # Older @dataclass subclasses / test doubles supply no
+                # storage — create it lazily under the global lock.
+                builds = {}
+                self._engine_builds = builds
+            build_lock = builds.setdefault(key, threading.Lock())
+        with build_lock:
+            try:
+                # Double-check: a concurrent thread may have finished this key's
+                # build while we waited on its lock.
+                with self._engines_lock:
+                    cached = self._engines.get(key)
+                    if cached is not None:
+                        self._engines.move_to_end(key)
+                        return cached
+                engine = self._build_engine(
+                    agent,
+                    resolved_model,
+                    delegation_enabled=eff_delegation,
+                    allowed_subtask_agents=eff_subtask_agents,
+                    ask_user_question_enabled=effective_ask,
+                    policy_wrapper=self.policy_wrapper,
+                    workspace=workspace,
+                    provider=provider,
+                    permission_mode=permission_mode,
+                    mcp_aliases=mcp_aliases,
+                    effort=effort,
+                    task_id=task_id,
+                )
+                with self._engines_lock:
+                    self._engines[key] = engine
+                    # LRU eviction: drop the oldest entry when over the cap.
+                    if len(self._engines) > _MAX_CACHED_ENGINES:
+                        self._engines.popitem(last=False)
+                return engine
+            finally:
+                # Always drop the per-key build-lock entry, even if
+                # ``_build_engine`` raised — otherwise the Lock leaks in
+                # ``_engine_builds`` forever (one per distinct failing key).
+                with self._engines_lock:
+                    builds.pop(key, None)

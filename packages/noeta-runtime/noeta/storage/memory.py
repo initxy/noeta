@@ -43,6 +43,8 @@ from noeta.protocols.errors import (
 from noeta.protocols.event_log import Subscriber, TaskStreamSummary, Unsubscribe
 from noeta.protocols.events import EventEnvelope, EventOrigin
 from noeta.protocols.values import EVENT_PAYLOAD_MAX_BYTES, ContentRef
+from noeta.protocols.wake import TimerFired
+from noeta.storage._reclaim import reclaim_hits_cap
 from noeta.storage._wake_match import _matches
 
 
@@ -408,6 +410,13 @@ class _DispatcherTask:
     lease_expires_at: float | None = None
     heartbeat_count: int = 0
     fail_attempts: int = 0
+    # Consecutive stale-lease reclaims with no observed progress in
+    # between (kernel #3). Incremented by ``requeue_stale``; reset by any
+    # progress signal — a successful heartbeat, a clean release, a
+    # controlled fail-requeue, or a force-enqueue. At ``reclaim_max`` the
+    # task drops to terminal (``stale_reclaim_exceeded``) instead of
+    # looping lease → expire → requeue forever.
+    reclaim_count: int = 0
     wake_on: Any = None
     suspend_reason: str | None = None
     pending_wake_events: list[Any] = field(default_factory=list)
@@ -425,9 +434,9 @@ class _DispatcherTask:
 class InMemoryDispatcher:
     """In-memory adapter for ``Dispatcher`` + ``LeaseRegistry``.
 
-    Seven lifecycle methods (``enqueue / lease / heartbeat / release /
-    fail / wake / requeue_stale``) plus the ``is_lease_valid`` registry
-    surface used by EventLog backends. The four debug helpers
+    Eight lifecycle methods (``enqueue / lease / heartbeat / release /
+    fail / wake / requeue_stale / fire_due_timers``) plus the
+    ``is_lease_valid`` registry surface used by EventLog backends. The four debug helpers
     (``task_status / wake_on / suspend_reason``) are NOT on either
     Protocol — they are introspection points used only in tests.
 
@@ -439,6 +448,11 @@ class InMemoryDispatcher:
       task to ``suspended`` with reason ``lease_quota_exceeded``.
     * ``max_fail_attempts`` (default 3): retryable failures past this
       number drop the task into ``terminal``.
+    * ``reclaim_max`` (default 3): consecutive no-progress stale-lease
+      reclaims past this number drop the task into ``terminal`` with
+      reason ``stale_reclaim_exceeded`` (kernel #3 — a poison task that
+      silently kills its worker must not requeue forever). Reset on any
+      progress signal (heartbeat / release / fail-requeue / enqueue).
     """
 
     def __init__(
@@ -447,12 +461,14 @@ class InMemoryDispatcher:
         now: Callable[[], float] | None = None,
         heartbeat_max: int = 360,
         max_fail_attempts: int = 3,
+        reclaim_max: int = 3,
     ) -> None:
         self._now = now or time.monotonic
         self._tasks: dict[str, _DispatcherTask] = {}
         self._ready: list[str] = []
         self._heartbeat_max = heartbeat_max
         self._max_fail_attempts = max_fail_attempts
+        self._reclaim_max = reclaim_max
         self._lock = threading.Lock()
 
     # -- LeaseRegistry ---------------------------------------------------
@@ -533,6 +549,7 @@ class InMemoryDispatcher:
             task.lease_id = None
             task.lease_expires_at = None
             task.heartbeat_count = 0
+            task.reclaim_count = 0
             task.matched_wake_event = None
             task.pending_wake_events.clear()
             task.wake_on = None
@@ -578,6 +595,7 @@ class InMemoryDispatcher:
                     task.lease_id = None
                     task.lease_expires_at = None
                     task.heartbeat_count = 0
+                    task.reclaim_count = 0
                     task.wake_on = None
                     task.suspend_reason = None
                     task.matched_wake_event = None
@@ -673,6 +691,9 @@ class InMemoryDispatcher:
                 )
                 raise InvalidLease(lease_id)
             task.heartbeat_count += 1
+            # A successful heartbeat is the leased-task progress signal:
+            # the worker is alive, so prior stale reclaims are history.
+            task.reclaim_count = 0
             task.lease_expires_at = self._now() + lease_seconds
             return task.lease_expires_at
 
@@ -716,17 +737,25 @@ class InMemoryDispatcher:
             task.lease_id = None
             task.lease_expires_at = None
             task.heartbeat_count = 0
+            # A controlled fail is a progress signal for the RECLAIM
+            # counter (the worker reported back; bounding is
+            # ``fail_attempts``' own job).
+            task.reclaim_count = 0
             if retryable:
                 task.fail_attempts += 1
                 if task.fail_attempts >= self._max_fail_attempts:
                     task.status = "terminal"
                     task.suspend_reason = reason or "max_attempts_exceeded"
+                    # Kernel #8: terminal is forever — buffered wakes
+                    # that never matched can never drain; GC them.
+                    task.pending_wake_events.clear()
                 else:
                     task.status = "ready"
                     self._ready.append(task.task_id)
             else:
                 task.status = "terminal"
                 task.suspend_reason = reason
+                task.pending_wake_events.clear()
 
     def wake(self, task_id: str, wake_event: Any) -> bool:
         """Deliver a wake event. Returns True iff the task is requeued
@@ -761,6 +790,12 @@ class InMemoryDispatcher:
         Returns the list of task_ids that were requeued. The previously
         held lease_id is invalidated; the original worker's writes will
         fail :class:`InvalidLease` on the EventLog.
+
+        Kernel #3: each reclaim increments the task's ``reclaim_count``;
+        at ``reclaim_max`` consecutive no-progress reclaims the task
+        drops to ``terminal`` (``stale_reclaim_exceeded``) instead of
+        requeueing — the poison-task analogue of ``max_fail_attempts``.
+        Terminal-by-cap tasks are NOT in the returned list.
         """
         now = self._now()
         requeued: list[str] = []
@@ -774,10 +809,48 @@ class InMemoryDispatcher:
                     task.lease_id = None
                     task.lease_expires_at = None
                     task.heartbeat_count = 0
+                    # Kernel #3: bound the silent lease-expiry loop. The
+                    # counter only resets on a progress signal, so a
+                    # poison task that keeps killing its worker without
+                    # a heartbeat/fail/release lands terminal here.
+                    task.reclaim_count += 1
+                    if reclaim_hits_cap(task.reclaim_count, self._reclaim_max):
+                        task.status = "terminal"
+                        task.suspend_reason = "stale_reclaim_exceeded"
+                        task.wake_on = None
+                        task.pending_wake_events.clear()
+                        continue
                     task.status = "ready"
                     self._ready.append(task.task_id)
                     requeued.append(task.task_id)
         return requeued
+
+    def fire_due_timers(self, *, now: float) -> list[str]:
+        """Wake every suspended task whose ``TimerFired`` deadline passed.
+
+        ``now`` is a wall-clock epoch timestamp supplied by the caller —
+        deliberately NOT ``self._now`` (which defaults to
+        ``time.monotonic``): ``fire_at`` was computed with the Engine's
+        wall clock and the two bases must match. The delivered wake is
+        the **recorded deadline** (byte-stable across H2 re-delivery),
+        not ``TimerFired(fire_at=now)``; matching is the same inclusive
+        ``>=`` threshold :func:`matches_wake` pins.
+        """
+        fired: list[str] = []
+        with self._lock:
+            for task in self._tasks.values():
+                if (
+                    task.status == "suspended"
+                    and isinstance(task.wake_on, TimerFired)
+                    and task.wake_on.fire_at <= now
+                ):
+                    task.matched_wake_event = task.wake_on
+                    task.status = "ready"
+                    task.wake_on = None
+                    task.suspend_reason = None
+                    self._ready.append(task.task_id)
+                    fired.append(task.task_id)
+        return fired
 
     # -- maintenance -----------------------------------------------------
 
@@ -827,6 +900,9 @@ class InMemoryDispatcher:
         task.lease_id = None
         task.lease_expires_at = None
         task.heartbeat_count = 0
+        # A clean release is a progress signal — the reclaim counter
+        # tracks only consecutive silent lease expiries (kernel #3).
+        task.reclaim_count = 0
         task.status = next_state
         if clear_matched:
             task.matched_wake_event = None  # OLD matched consumed (D2)
@@ -857,3 +933,7 @@ class InMemoryDispatcher:
         else:
             task.wake_on = None
             task.suspend_reason = suspend_reason
+            # Kernel #8: terminal is forever — buffered wake events that
+            # never matched can never drain now; GC them. The matched
+            # wake (H2 exactly-once handoff) is deliberately untouched.
+            task.pending_wake_events.clear()

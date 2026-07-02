@@ -65,9 +65,20 @@ def load_environment(workspace_dir: Path) -> EnvironmentSnapshot:
     read the branch / short status, plus reads the host clock) but called
     ONCE pre-loop — before anything enters the ledger — so the composer's
     renderer and the pre-loop :func:`record_environment` share one
-    snapshot, and record time equals compose time by construction. Resume
-    passes the same ``workspace_dir`` the recording was made under, so the
-    rendered bytes reproduce.
+    snapshot, and record time equals compose time by construction.
+
+    Reproducibility scope: the snapshot is memoized for the whole session,
+    so the rendered bytes are identical *across steps within one session*
+    (the semi-stable segment stays KV-cache-stable). They are NOT guaranteed
+    to reproduce *across sessions*: ``captured_date`` is a wall clock and
+    ``git_branch`` / ``git_status`` reflect live repo state, so a resume in a
+    fresh process legitimately re-renders different bytes for those lines.
+    That is why the environment resident carries the ``evolving`` drift policy
+    (``content_hash`` recorded as advisory provenance, free to move) and lives
+    in ``semi_stable``, NOT the stable prefix — only the stable prefix (system
+    + tools) is under the hard cross-step byte-reproducibility constraint.
+    ``workspace_display`` / ``platform`` do reproduce given the same
+    ``workspace_dir``.
 
     ``.git`` is probed by mere existence (``.git`` is a directory in a
     normal clone, a gitlink *file* in a worktree / submodule — both count

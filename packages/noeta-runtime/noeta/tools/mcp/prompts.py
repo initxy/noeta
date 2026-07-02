@@ -35,6 +35,7 @@ from noeta.tools.mcp._http_client import HttpPostFn
 from noeta.tools.mcp.tool import (
     McpAnyServerSpec,
     _connect_client,
+    cap_injected,
     make_mcp_tool_name,
 )
 
@@ -87,7 +88,9 @@ def flatten_prompt_messages(result: dict[str, Any]) -> str:
                     and isinstance(block.get("text"), str)
                 ):
                     parts.append(block["text"])
-    return "\n\n".join(p for p in parts if p)
+    return cap_injected(
+        "\n\n".join(p for p in parts if p), kind="prompt"
+    )
 
 
 def _iter_blocks(content: Any) -> list[Any]:

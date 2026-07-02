@@ -127,8 +127,9 @@ def test_engine_requires_composer_but_lazily_wires_tool_runtime() -> None:
     when ``composer`` was omitted — is gone: omitting ``composer`` now
     raises ``TypeError``. The zero-opinion fallback is
     ``noeta.core.composer.PassthroughComposer``, which composes every Task
-    to the empty ``View()`` (no segments, ``plan_ref`` is None, so the
-    Engine emits no ``ContextPlanComposed`` event for that step).
+    to the empty ``View()`` (no segments, ``plan_ref`` is None; the Engine
+    still emits its per-step ``ContextPlanComposed`` with a ``None``
+    ``plan_ref`` — core #2).
     """
     from noeta.core.composer import PassthroughComposer
     from noeta.protocols.task import Task

@@ -39,7 +39,7 @@ from typing import Any, Optional
 
 from noeta.tools.mcp._client import McpError, SpawnFn
 from noeta.tools.mcp._http_client import HttpPostFn
-from noeta.tools.mcp.tool import McpAnyServerSpec, _connect_client
+from noeta.tools.mcp.tool import McpAnyServerSpec, _connect_client, cap_injected
 
 
 __all__ = [
@@ -85,7 +85,7 @@ def flatten_resource_contents(result: dict[str, Any]) -> str:
             text = item.get("text")
             if isinstance(text, str) and text:
                 parts.append(text)
-    return "\n\n".join(parts)
+    return cap_injected("\n\n".join(parts), kind="resource")
 
 
 def discover_resources(

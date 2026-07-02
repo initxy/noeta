@@ -119,11 +119,15 @@ class _McpReapingEngineCache(OrderedDict):  # type: ignore[type-arg]
         self._clients_by_key: dict[Any, list[Any]] = {}
         # Set by the host right before ``__setitem__`` runs (the base resolver
         # assigns ``self._engines[key] = engine`` straight after ``_build_engine``
-        # returns). Consumed-and-cleared on adoption.
-        self._pending_clients: list[Any] = []
+        # returns). Consumed-and-cleared on adoption. THREAD-LOCAL (item 3):
+        # with the per-key build locks, Engine builds for different keys run
+        # concurrently; stage → adopt pairs on the build thread (the build and
+        # its put always run on the same thread), so concurrent builds can no
+        # longer adopt each other's clients.
+        self._staging = threading.local()
 
     def stage(self, clients: list[Any]) -> None:
-        self._pending_clients = list(clients)
+        self._staging.pending = list(clients)
 
     def _reap(self, clients: list[Any]) -> None:
         for client in clients:
@@ -133,8 +137,8 @@ class _McpReapingEngineCache(OrderedDict):  # type: ignore[type-arg]
                 _log.warning("MCP client shutdown failed on eviction", exc_info=True)
 
     def __setitem__(self, key: Any, value: Any) -> None:
-        pending = self._pending_clients
-        self._pending_clients = []
+        pending = getattr(self._staging, "pending", [])
+        self._staging.pending = []
         # Replacing an existing key (rare — only an identical key rebuild): reap
         # the old key's clients first so they aren't orphaned by the overwrite.
         if key in self._clients_by_key:
@@ -588,6 +592,13 @@ class SdkHost(GenericEngineResolver):
     _engines_lock: threading.Lock = field(
         default_factory=threading.Lock, init=False, repr=False, compare=False
     )
+    # item 3 — per-key Engine-build locks (see
+    # ``GenericEngineResolver._engine_for_agent``): builds run outside the
+    # global ``_engines_lock`` so one session's slow/hanging MCP connect no
+    # longer serialises every other Engine build.
+    _engine_builds: dict[Any, threading.Lock] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
     # Per-session permission_mode is a NON-durable,
     # per-turn knob — the frontend sends it each turn; it is never written to the
     # event log. The async HTTP transport seeds a turn on the request thread but
@@ -770,6 +781,18 @@ class SdkHost(GenericEngineResolver):
         if registry is None:
             return []
         return registry.kill_session(session_root_task_id)
+
+    def purge_background_session(self, session_root_task_id: str) -> None:
+        """Drop a *deleted* session's retained job handles (memory reclaim).
+
+        Called by ``Client.delete_task`` when a conversation is hard-deleted.
+        Unlike ``kill_background_session`` (which reaps the OS processes but
+        keeps handles pollable for a still-inspectable closed conversation),
+        this reclaims the handles that would otherwise leak for the process
+        lifetime. Safe no-op when the registry is unbuilt."""
+        registry = self._process_registry
+        if registry is not None:
+            registry.purge_session(session_root_task_id)
 
     # -- background-shell crash recovery ---------------
 

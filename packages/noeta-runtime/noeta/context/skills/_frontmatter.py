@@ -10,10 +10,14 @@ Format (strict subset):
 * File must begin with ``---\\n`` or ``---\\r\\n``.
 * Terminator is a line containing exactly ``---``.
 * Inside frontmatter every top-level non-blank line is ``key: value``.
-* ``key`` matches ``^[a-z][a-z0-9_-]*$`` (lowercase + digits +
-  underscore + hyphen). The hyphen was added in 4.5-I5 so real public
-  skills carrying keys like ``argument-hint`` / ``allowed-tools`` /
-  ``disable-model-invocation`` parse instead of being skipped.
+* ``key`` matches ``^[A-Za-z][A-Za-z0-9_-]*$`` (a letter, then letters +
+  digits + underscore + hyphen). The hyphen was added in 4.5-I5 so real
+  public skills carrying keys like ``argument-hint`` / ``allowed-tools`` /
+  ``disable-model-invocation`` parse instead of being skipped. Uppercase
+  starts are accepted too so a capitalized key (``Name:`` / ``Description:``)
+  no longer fails the whole file — it is a non-semantic key (``KNOWN_KEYS``
+  is lowercase, so ``Name`` ≠ ``name``) and routes to ``metadata``, matching
+  the "unknown/typo key → metadata, never fatal" contract below.
 * ``value`` is the trimmed remainder of the line, captured **verbatim
   as an opaque string**; **no** quoting, escaping, list, or
   nested-structure interpretation. An inline ``allowed-tools: [Read,
@@ -55,7 +59,7 @@ KNOWN_KEYS: frozenset[str] = frozenset(
     {"name", "description", "version", "priority"}
 )
 
-_LINE_PATTERN = re.compile(r"^([a-z][a-z0-9_-]*)[ \t]*:[ \t]*(.*?)[ \t]*$")
+_LINE_PATTERN = re.compile(r"^([A-Za-z][A-Za-z0-9_-]*)[ \t]*:[ \t]*(.*?)[ \t]*$")
 
 
 class FrontmatterError(ValueError):

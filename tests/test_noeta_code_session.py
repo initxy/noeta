@@ -409,7 +409,7 @@ def test_runner_summary_captures_last_shell(
         )
 
     monkeypatch.setattr(
-        "noeta.tools.fs.shell.subprocess.run", fake_subprocess_run
+        "noeta.tools.fs._subprocess._default_run", fake_subprocess_run
     )
 
     workspace_path = _make_workspace(tmp_path)

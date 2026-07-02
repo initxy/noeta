@@ -28,6 +28,8 @@ from typing import Any, Callable, Optional, Union
 from noeta.protocols.canonical import from_canonical_bytes, to_canonical_bytes
 from noeta.protocols.dispatcher import Lease
 from noeta.protocols.errors import InvalidLease, WakeConsumeMismatch
+from noeta.protocols.wake import TimerFired
+from noeta.storage._reclaim import reclaim_hits_cap
 from noeta.storage._wake_match import _matches
 from noeta.storage.sqlite._connection import _open_connection
 from noeta.storage.sqlite._transaction import _begin_immediate_with_retry
@@ -44,6 +46,19 @@ def _serialize_wake(value: Any) -> Optional[bytes]:
     if value is None:
         return None
     return to_canonical_bytes(value)
+
+
+def _timer_deadline(wake_on: Any) -> Optional[float]:
+    """The ``fire_at`` value mirrored onto the row for a timer suspend, or
+    ``None`` for every non-timer wake.
+
+    Kept in lockstep with ``wake_on_canonical`` at every write site so the
+    indexed timer sweep (migration 7) selects the due set off ``fire_at``
+    without decoding each suspended row. The invariant: ``fire_at`` is
+    non-NULL iff the row is a suspended ``TimerFired`` wait carrying this
+    deadline.
+    """
+    return wake_on.fire_at if isinstance(wake_on, TimerFired) else None
 
 
 def _deserialize_wake(blob: Optional[bytes]) -> Any:
@@ -75,6 +90,7 @@ class SqliteDispatcher:
         now: Optional[Callable[[], float]] = None,
         heartbeat_max: int = 360,
         max_fail_attempts: int = 3,
+        reclaim_max: int = 3,
     ) -> None:
         target = str(path)
         self._conn = _open_connection(path)
@@ -82,6 +98,7 @@ class SqliteDispatcher:
         self._now = now or time.time
         self._heartbeat_max = heartbeat_max
         self._max_fail_attempts = max_fail_attempts
+        self._reclaim_max = reclaim_max
         self._lock = threading.Lock()
         # ``is_lease_valid`` is on the EventLog write path: every
         # ``emit(... lease_id=...)`` calls it from **inside** the
@@ -212,9 +229,11 @@ class SqliteDispatcher:
                         " lease_id = NULL,"
                         " lease_expires_at = NULL,"
                         " heartbeat_count = 0,"
+                        " reclaim_count = 0,"
                         " wake_on_canonical = NULL,"
                         " suspend_reason = NULL,"
                         " matched_wake_event_canonical = NULL,"
+                        " fire_at = NULL,"
                         " ready_order = ? "
                         "WHERE task_id = ?",
                         (order, task_id),
@@ -326,8 +345,10 @@ class SqliteDispatcher:
                             " lease_id = NULL,"
                             " lease_expires_at = NULL,"
                             " heartbeat_count = 0,"
+                            " reclaim_count = 0,"
                             " wake_on_canonical = NULL,"
                             " suspend_reason = NULL,"
+                            " fire_at = NULL,"
                             " ready_order = ? "
                             "WHERE task_id = ?",
                             (self._next_ready_order(), row["task_id"]),
@@ -339,6 +360,7 @@ class SqliteDispatcher:
                             " lease_id = NULL,"
                             " lease_expires_at = NULL,"
                             " heartbeat_count = 0,"
+                            " reclaim_count = 0,"
                             " suspend_reason = 'lease_quota_exceeded' "
                             "WHERE task_id = ?",
                             (row["task_id"],),
@@ -346,9 +368,12 @@ class SqliteDispatcher:
                     self._conn.execute("COMMIT")
                     raise InvalidLease(lease_id)
                 expires_at = self._now() + lease_seconds
+                # A successful heartbeat is the leased-task progress
+                # signal: reset the stale-reclaim counter (kernel #3).
                 self._conn.execute(
                     "UPDATE dispatcher_tasks SET "
                     " heartbeat_count = heartbeat_count + 1,"
+                    " reclaim_count = 0,"
                     " lease_expires_at = ? "
                     "WHERE lease_id = ?",
                     (expires_at, lease_id),
@@ -411,11 +436,21 @@ class SqliteDispatcher:
                         " lease_id = NULL,"
                         " lease_expires_at = NULL,"
                         " heartbeat_count = 0,"
+                        " reclaim_count = 0,"
                         " wake_on_canonical = NULL,"
                         " suspend_reason = ?,"
+                        " fire_at = NULL,"
                         " ready_order = NULL "
                         "WHERE task_id = ?",
                         (suspend_reason, task_id),
+                    )
+                    # Kernel #8: terminal is forever — buffered wakes
+                    # that never matched can never drain; GC them. The
+                    # matched wake (H2 handoff) is deliberately kept.
+                    self._conn.execute(
+                        "DELETE FROM dispatcher_pending_wakes "
+                        "WHERE task_id = ?",
+                        (task_id,),
                     )
                 else:  # next_state == "suspended"
                     wake_blob = _serialize_wake(wake_on)
@@ -425,11 +460,13 @@ class SqliteDispatcher:
                         " lease_id = NULL,"
                         " lease_expires_at = NULL,"
                         " heartbeat_count = 0,"
+                        " reclaim_count = 0,"
                         " wake_on_canonical = ?,"
                         " suspend_reason = ?,"
+                        " fire_at = ?,"
                         " ready_order = NULL "
                         "WHERE task_id = ?",
-                        (wake_blob, suspend_reason, task_id),
+                        (wake_blob, suspend_reason, _timer_deadline(wake_on), task_id),
                     )
                     # H2: the OLD matched was cleared above iff consuming.
                     matched_present = (
@@ -446,6 +483,7 @@ class SqliteDispatcher:
                             " status = 'ready',"
                             " wake_on_canonical = NULL,"
                             " suspend_reason = NULL,"
+                            " fire_at = NULL,"
                             " ready_order = ? "
                             "WHERE task_id = ?",
                             (order, task_id),
@@ -465,6 +503,7 @@ class SqliteDispatcher:
                                 " wake_on_canonical = NULL,"
                                 " suspend_reason = NULL,"
                                 " matched_wake_event_canonical = ?,"
+                                " fire_at = NULL,"
                                 " ready_order = ? "
                                 "WHERE task_id = ?",
                                 (drained, order, task_id),
@@ -493,6 +532,8 @@ class SqliteDispatcher:
                 task_id = row["task_id"]
                 attempts = int(row["fail_attempts"])
                 if retryable and attempts + 1 < self._max_fail_attempts:
+                    # A controlled fail is a progress signal for the
+                    # RECLAIM counter (bounding is fail_attempts' job).
                     order = self._next_ready_order()
                     self._conn.execute(
                         "UPDATE dispatcher_tasks SET "
@@ -500,9 +541,11 @@ class SqliteDispatcher:
                         " lease_id = NULL,"
                         " lease_expires_at = NULL,"
                         " heartbeat_count = 0,"
+                        " reclaim_count = 0,"
                         " fail_attempts = fail_attempts + 1,"
                         " wake_on_canonical = NULL,"
                         " suspend_reason = NULL,"
+                        " fire_at = NULL,"
                         " ready_order = ? "
                         "WHERE task_id = ?",
                         (order, task_id),
@@ -517,12 +560,21 @@ class SqliteDispatcher:
                         " lease_id = NULL,"
                         " lease_expires_at = NULL,"
                         " heartbeat_count = 0,"
+                        " reclaim_count = 0,"
                         " fail_attempts = fail_attempts + ?,"
                         " wake_on_canonical = NULL,"
                         " suspend_reason = ?,"
+                        " fire_at = NULL,"
                         " ready_order = NULL "
                         "WHERE task_id = ?",
                         (1 if retryable else 0, final_reason, task_id),
+                    )
+                    # Kernel #8: GC never-matching buffered wakes on the
+                    # terminal transition (same as release-terminal).
+                    self._conn.execute(
+                        "DELETE FROM dispatcher_pending_wakes "
+                        "WHERE task_id = ?",
+                        (task_id,),
                     )
                 self._conn.execute("COMMIT")
             except InvalidLease:
@@ -567,6 +619,7 @@ class SqliteDispatcher:
                             " wake_on_canonical = NULL,"
                             " suspend_reason = NULL,"
                             " matched_wake_event_canonical = ?,"
+                            " fire_at = NULL,"
                             " ready_order = ? "
                             "WHERE task_id = ?",
                             (matched_blob, order, task_id),
@@ -588,19 +641,50 @@ class SqliteDispatcher:
                 raise
 
     def requeue_stale(self) -> list[str]:
+        """Sweep expired leases back to ready; return the requeued ids.
+
+        Kernel #3: each reclaim increments ``reclaim_count``; at
+        ``reclaim_max`` consecutive no-progress reclaims the task drops
+        to ``terminal`` (``stale_reclaim_exceeded``) instead of
+        requeueing. Terminal-by-cap tasks are NOT in the returned list.
+        """
         now = self._now()
         requeued: list[str] = []
         with self._lock:
             _begin_immediate_with_retry(self._conn)
             try:
                 stale = self._conn.execute(
-                    "SELECT task_id FROM dispatcher_tasks "
+                    "SELECT task_id, reclaim_count FROM dispatcher_tasks "
                     "WHERE status = 'leased' AND lease_expires_at <= ? "
                     "ORDER BY lease_expires_at",
                     (now,),
                 ).fetchall()
                 for row in stale:
                     task_id = row["task_id"]
+                    if reclaim_hits_cap(
+                        int(row["reclaim_count"]) + 1, self._reclaim_max
+                    ):
+                        self._conn.execute(
+                            "UPDATE dispatcher_tasks SET "
+                            " status = 'terminal',"
+                            " lease_id = NULL,"
+                            " lease_expires_at = NULL,"
+                            " heartbeat_count = 0,"
+                            " reclaim_count = reclaim_count + 1,"
+                            " wake_on_canonical = NULL,"
+                            " suspend_reason = 'stale_reclaim_exceeded',"
+                            " fire_at = NULL,"
+                            " ready_order = NULL "
+                            "WHERE task_id = ?",
+                            (task_id,),
+                        )
+                        # Kernel #8: terminal transition GCs buffered wakes.
+                        self._conn.execute(
+                            "DELETE FROM dispatcher_pending_wakes "
+                            "WHERE task_id = ?",
+                            (task_id,),
+                        )
+                        continue
                     order = self._next_ready_order()
                     self._conn.execute(
                         "UPDATE dispatcher_tasks SET "
@@ -608,6 +692,7 @@ class SqliteDispatcher:
                         " lease_id = NULL,"
                         " lease_expires_at = NULL,"
                         " heartbeat_count = 0,"
+                        " reclaim_count = reclaim_count + 1,"
                         " ready_order = ? "
                         "WHERE task_id = ?",
                         (order, task_id),
@@ -618,6 +703,76 @@ class SqliteDispatcher:
                 self._conn.execute("ROLLBACK")
                 raise
         return requeued
+
+    def fire_due_timers(self, *, now: float) -> list[str]:
+        """Wake every suspended task whose ``TimerFired`` deadline passed.
+
+        ``now`` is a wall-clock epoch timestamp supplied by the caller
+        (the same base the Engine used to compute ``fire_at``); the
+        delivered wake is the **recorded deadline** blob so H2 re-delivery
+        stays byte-identical.
+
+        The due set is selected straight off the indexed ``fire_at`` column
+        (migration 7) — ``fire_at`` mirrors each suspended timer's deadline
+        and is NULL for every non-timer / non-suspended row, so the partial
+        index turns the old O(all-suspends) full scan into an O(due) range
+        hit. A read-only probe on the concurrent-reader connection runs
+        FIRST: when nothing is due (the common ~1s poll) it returns without
+        opening ``BEGIN IMMEDIATE`` at all, so an idle poll never takes the
+        write lock. The probe/commit race is benign — a timer that comes due
+        in the gap is caught by the next poll.
+        """
+        with self._read_lock:
+            due = self._read_conn.execute(
+                "SELECT 1 FROM dispatcher_tasks WHERE fire_at <= ? LIMIT 1",
+                (now,),
+            ).fetchone()
+        if due is None:
+            return []
+        fired: list[str] = []
+        with self._lock:
+            _begin_immediate_with_retry(self._conn)
+            try:
+                rows = self._conn.execute(
+                    "SELECT task_id, wake_on_canonical FROM dispatcher_tasks "
+                    "WHERE fire_at <= ? ORDER BY fire_at",
+                    (now,),
+                ).fetchall()
+                for row in rows:
+                    # ``fire_at`` is written only for TimerFired suspends, so
+                    # this set is already the due timers. Still decode-guard:
+                    # a blob corrupted AFTER suspend keeps its ``fire_at``, so
+                    # skip an undecodable / non-timer row rather than deliver
+                    # garbage as its matched wake. The guard now runs over the
+                    # DUE rows only (usually none), not every suspend.
+                    try:
+                        wake_on = _deserialize_wake(row["wake_on_canonical"])
+                    except Exception:  # noqa: BLE001 — one bad row must not stall timers
+                        continue
+                    if not isinstance(wake_on, TimerFired):
+                        continue
+                    order = self._next_ready_order()
+                    self._conn.execute(
+                        "UPDATE dispatcher_tasks SET "
+                        " status = 'ready',"
+                        " wake_on_canonical = NULL,"
+                        " suspend_reason = NULL,"
+                        " matched_wake_event_canonical = ?,"
+                        " fire_at = NULL,"
+                        " ready_order = ? "
+                        "WHERE task_id = ?",
+                        (
+                            bytes(row["wake_on_canonical"]),
+                            order,
+                            row["task_id"],
+                        ),
+                    )
+                    fired.append(row["task_id"])
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        return fired
 
     # ------------------------------------------------------------------
     # LeaseRegistry Protocol
@@ -726,9 +881,11 @@ class SqliteDispatcher:
                         " lease_id = NULL,"
                         " lease_expires_at = NULL,"
                         " heartbeat_count = 0,"
+                        " reclaim_count = 0,"
                         " wake_on_canonical = NULL,"
                         " suspend_reason = NULL,"
                         " matched_wake_event_canonical = NULL,"
+                        " fire_at = NULL,"
                         " ready_order = excluded.ready_order",
                         (task_id, order),
                     )
@@ -742,9 +899,11 @@ class SqliteDispatcher:
                         " lease_id = NULL,"
                         " lease_expires_at = NULL,"
                         " heartbeat_count = 0,"
+                        " reclaim_count = 0,"
                         " wake_on_canonical = NULL,"
                         " suspend_reason = excluded.suspend_reason,"
                         " matched_wake_event_canonical = NULL,"
+                        " fire_at = NULL,"
                         " ready_order = NULL",
                         (task_id, suspend_reason),
                     )
@@ -752,18 +911,21 @@ class SqliteDispatcher:
                     wake_blob = _serialize_wake(wake_on)
                     self._conn.execute(
                         "INSERT INTO dispatcher_tasks ("
-                        " task_id, status, wake_on_canonical, suspend_reason"
-                        ") VALUES (?, 'suspended', ?, ?) "
+                        " task_id, status, wake_on_canonical, suspend_reason,"
+                        " fire_at"
+                        ") VALUES (?, 'suspended', ?, ?, ?) "
                         "ON CONFLICT(task_id) DO UPDATE SET "
                         " status = 'suspended',"
                         " lease_id = NULL,"
                         " lease_expires_at = NULL,"
                         " heartbeat_count = 0,"
+                        " reclaim_count = 0,"
                         " wake_on_canonical = excluded.wake_on_canonical,"
                         " suspend_reason = excluded.suspend_reason,"
                         " matched_wake_event_canonical = NULL,"
+                        " fire_at = excluded.fire_at,"
                         " ready_order = NULL",
-                        (task_id, wake_blob, suspend_reason),
+                        (task_id, wake_blob, suspend_reason, _timer_deadline(wake_on)),
                     )
                     # No buffered-wake redelivery here: line 688 above already
                     # cleared every pending wake for this task, so any drain

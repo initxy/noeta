@@ -452,7 +452,8 @@ def test_bug_fixer_fake_llm_full_loop_fixes_failing_test(
     assert "return a - b" in target.read_text()
 
     monkeypatch.setattr(
-        "noeta.tools.fs.shell.subprocess.run", _make_subprocess_runner(workspace)
+        "noeta.tools.fs._subprocess._default_run",
+        _make_subprocess_runner(workspace),
     )
     host = make_host(
         make_registry(runner_main_spec("general-purpose")),

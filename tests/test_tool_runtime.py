@@ -52,6 +52,38 @@ def _runtime() -> tuple[ToolRuntime, InMemoryEventLog, InMemoryContentStore]:
     return rt, log, store
 
 
+class _RaisingTool:
+    name = "boom"
+    risk_level = "low"
+    input_schema: dict[str, Any] = {"type": "object", "additionalProperties": True}
+
+    def invoke(self, arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:  # noqa: ARG002
+        raise RuntimeError("kaboom")
+
+
+def test_raising_tool_still_records_the_full_trio_as_a_failed_result() -> None:
+    """A tool that RAISES must not strand the assistant ``tool_use`` (already
+    committed) without a matching ``tool_result`` — that dangles the function
+    call and the provider 400s on the next compose→decide. The runtime catches
+    the raise and records a failed ToolResultRecorded so the trio still closes.
+    """
+    rt, log, store = _runtime()
+    call = ToolCall(tool_name="boom", arguments={}, call_id="c-boom")
+
+    result = rt.invoke(
+        _RaisingTool(), call, task_id="t1", lease_id="lease-1", trace_id="trace-1"
+    )
+
+    # The trio is intact and the recorded result is a failure.
+    types = [e.type for e in log.read("t1")]
+    assert types == ["ToolCallStarted", "ToolResultRecorded", "ToolCallFinished"]
+    recorded = log.read("t1")[1]
+    assert recorded.payload.success is False
+    assert recorded.payload.call_id == "c-boom"
+    assert result.success is False
+    assert "raised" in result.summary and "kaboom" in result.summary
+
+
 def test_invoke_writes_three_events_in_order_for_a_single_call() -> None:
     rt, log, _store = _runtime()
     tool = _RecordingTool(output="hi")

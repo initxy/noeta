@@ -62,6 +62,25 @@ def test_delete_task_purges_and_unknown_not_found(tmp_path: Path) -> None:
         client.shutdown()
 
 
+def test_delete_task_reclaims_in_memory_carriers(tmp_path: Path) -> None:
+    """Delete reclaims the host's in-memory per-turn carriers too, not just
+    storage — otherwise they leak one entry per task for the process lifetime."""
+    client = _client(tmp_path)
+    try:
+        t1 = client.start(goal="alpha").task_id
+        host = client._host
+        # A turn ran, so the non-durable per-turn permission-mode carrier holds
+        # an entry for this task.
+        assert t1 in host._turn_permission_mode
+        result = client.delete_task(t1)
+        assert result["ok"] is True
+        # The storage purge AND the in-memory carrier are both reclaimed.
+        assert client.events(t1) == []
+        assert t1 not in host._turn_permission_mode
+    finally:
+        client.shutdown()
+
+
 def test_delete_task_cascades_subtree(tmp_path: Path) -> None:
     client = _client(tmp_path)
     try:

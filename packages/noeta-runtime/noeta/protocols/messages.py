@@ -52,12 +52,25 @@ class ThinkingBlock:
     thinking blocks whose signature is missing or mutated.
 
     Non-reasoning models never produce this block.
+
+    ``data`` carries a provider's *redacted* reasoning: an opaque, encrypted
+    blob the safety system substituted for the visible reasoning (Anthropic's
+    ``redacted_thinking`` block). When set, ``text`` is empty and the block must
+    round-trip by re-emitting the blob verbatim (there is nothing human-readable
+    to show). Omitted from the canonical form when ``None`` so pre-``data``
+    recordings resume byte-identical.
     """
 
     text: str
     signature: Optional[str] = None
+    data: Optional[str] = None
 
+    # Only ``data`` is omit-none: ``signature`` predates the mechanism and was
+    # always serialized (as ``null`` when absent), so omitting it now would
+    # change existing recordings' canonical bytes. ``data`` is new, so omitting
+    # it when ``None`` keeps every pre-``data`` recording byte-identical.
     __canonical_tag__ = "thinking_block"
+    __canonical_omit_none__ = frozenset({"data"})
 
 
 @dataclass(frozen=True, slots=True)

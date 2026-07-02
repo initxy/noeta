@@ -89,6 +89,21 @@ from noeta.tools.mcp import (
     McpServerSpec,
 )
 
+# --- Public error surface (typed / coded) -------------------------------------
+# Boundary code (the product's HTTP backend, which reaches the engine only
+# through noeta.sdk) matches these STRUCTURALLY — ``isinstance(exc, CodedError)``
+# + ``exc.code`` — instead of the class-name / message-substring matching it
+# used before. ``CodedError`` is the stable base carrying the ``code`` token;
+# each concrete client-facing engine error sets its own ``code``.
+from noeta.execution import (
+    ModelSelectorError,
+    NotResumableError,
+    ProviderSelectorError,
+    TaskAlreadyTerminalError,
+    UnsupportedSubtaskSuspend,
+)
+from noeta.protocols.errors import CodedError
+
 
 __all__ = [
     # recipe
@@ -110,6 +125,13 @@ __all__ = [
     "McpConfigError",
     "McpError",
     "HttpPostFn",
+    # public error surface (typed / coded)
+    "CodedError",
+    "ModelSelectorError",
+    "ProviderSelectorError",
+    "NotResumableError",
+    "UnsupportedSubtaskSuspend",
+    "TaskAlreadyTerminalError",
     # capability projections (composer enums + per-model vision gate)
     "permission_modes",
     "effort_modes",

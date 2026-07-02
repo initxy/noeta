@@ -106,7 +106,26 @@ class ToolRuntime:
             metadata={"task_id": task_id, "trace_id": trace_id},
             background_runner=self._background_runner,
         )
-        result = tool.invoke(call.arguments, ctx)
+        try:
+            result = tool.invoke(call.arguments, ctx)
+        except Exception as exc:  # noqa: BLE001 — see below
+            # A tool that RAISES must not strand the conversation: the assistant
+            # ``tool_use`` and this call's ``ToolCallStarted`` are already
+            # committed, so bailing here would leave the ``tool_use`` with no
+            # matching ``tool_result`` — on the next compose→decide the provider
+            # rejects the dangling function call with a fatal 400 (and a resume
+            # replays the same stranded state). Builtin tools are internally
+            # defensive (they return ``success=False``); this closes the same
+            # gap for any raising tool (notably user-authored ``@tool``s). We
+            # synthesise a failed result so the normal trio still records and
+            # the model sees a paired, informative ``tool_result``.
+            message = f"{type(exc).__name__}: {exc}"
+            if len(message) > 2000:
+                message = message[:2000] + "…"
+            result = ToolResult(
+                success=False,
+                summary=f"tool {call.tool_name!r} raised — {message}",
+            )
 
         # stash this turn's rewind baseline for each file this
         # call edited for the FIRST time this turn. The per-turn gate dedups

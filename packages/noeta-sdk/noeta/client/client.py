@@ -508,6 +508,113 @@ class Client:
             answered_by=answered_by,
         )
 
+    # -- seed / drive split (async transports) -------------------------------
+    #
+    # The one-call verbs above run the whole turn on the caller's thread. An
+    # async transport (the product backend's HTTP command endpoints) instead
+    # seeds on the request thread — every durable, validated step, so a typed
+    # rejection (selector / NotResumableError) still surfaces as the same
+    # synchronous 4xx — and hands the returned seeded turn to
+    # :meth:`drive_seeded` on a background thread, acking immediately while
+    # progress rides the committed event stream.
+
+    def seed_start(
+        self,
+        *,
+        goal: str,
+        agent: Optional[str] = None,
+        model_selector: Optional[str] = None,
+        images: Sequence[ImageBlock] = (),
+        permission_mode: Optional[str] = None,
+        enabled_mcp: tuple[str, ...] = (),
+        workspace_dir: Optional[str] = None,
+        effort: Optional[str] = None,
+    ) -> Any:
+        """Create + validate + lease a first turn WITHOUT driving it
+        (driver ``seed_start``); pass the result to :meth:`drive_seeded`."""
+        return self._driver.seed_start(
+            goal=goal,
+            agent=agent if agent is not None else self._main_agent_name,
+            model_selector=model_selector,
+            images=images,
+            permission_mode=permission_mode,
+            enabled_mcp=enabled_mcp,
+            workspace_dir=workspace_dir,
+            effort=effort,
+        )
+
+    def seed_send_goal(
+        self,
+        task_id: str,
+        *,
+        goal: str,
+        model_selector: Optional[str] = None,
+        images: Sequence[ImageBlock] = (),
+        permission_mode: Optional[str] = None,
+        enabled_mcp: tuple[str, ...] = (),
+        effort: Optional[str] = None,
+    ) -> Any:
+        """Validate + seed a follow-up user turn WITHOUT driving it
+        (driver ``seed_send_goal``)."""
+        return self._driver.seed_send_goal(
+            task_id=task_id,
+            goal=goal,
+            model_selector=model_selector,
+            images=images,
+            permission_mode=permission_mode,
+            enabled_mcp=enabled_mcp,
+            effort=effort,
+        )
+
+    def seed_approve(
+        self,
+        task_id: str,
+        *,
+        call_id: str,
+        reason: Optional[str] = None,
+        resolver: str = "client",
+    ) -> Any:
+        """Validate + seed an approve-and-resume turn (driver ``seed_approve``)."""
+        return self._driver.seed_approve(
+            task_id, call_id=call_id, reason=reason, resolver=resolver
+        )
+
+    def seed_deny(
+        self,
+        task_id: str,
+        *,
+        call_id: str,
+        reason: Optional[str] = None,
+        resolver: str = "client",
+    ) -> Any:
+        """Validate + seed a deny-and-resume turn (driver ``seed_deny``)."""
+        return self._driver.seed_deny(
+            task_id, call_id=call_id, reason=reason, resolver=resolver
+        )
+
+    def seed_answer(
+        self,
+        task_id: str,
+        *,
+        question_id: str,
+        answers: dict[str, Any],
+        answered_by: str = "client",
+    ) -> Any:
+        """Validate + seed an answer-and-resume turn (driver ``seed_answer``)."""
+        return self._driver.seed_answer(
+            task_id,
+            question_id=question_id,
+            answers=answers,
+            answered_by=answered_by,
+        )
+
+    def drive_seeded(self, seeded: Any) -> Any:
+        """Drive a seeded turn to its trailing suspend / terminal (driver
+        ``drive_seeded``), then loop-resolve ``can_use_tool`` approvals —
+        the same tail the one-call verbs run."""
+        outcome = self._driver.drive_seeded(seeded)
+        return self._drain_approvals(seeded.task_id, outcome)
+
     def cancel(
         self,
         task_id: str,
@@ -641,11 +748,27 @@ class Client:
                 return {"ok": False, "reason": "running", "task_id": tid, "deleted": []}
         purge_events = getattr(event_log, "purge_task", None)
         purge_disp = getattr(dispatcher, "purge_task", None)
+        # In-memory host accelerators keyed by task/session id (per-turn
+        # carriers, retained background-shell job handles, background sub-agent
+        # tracking) are NOT storage, so the storage purge above leaves them
+        # resident — a leak for the lifetime of the process across many deleted
+        # conversations. Reclaim them here too, per subtree target (the seams
+        # no-op for a tid they hold nothing for). getattr keeps the purge working
+        # against a host/backend that lacks a given accelerator.
+        forget_carriers = getattr(self._host, "forget_turn_carriers", None)
+        purge_bg_jobs = getattr(self._host, "purge_background_session", None)
+        forget_bg_agents = getattr(self._host, "forget_background_subagents", None)
         for tid in targets:
             if callable(purge_events):
                 purge_events(tid)
             if callable(purge_disp):
                 purge_disp(tid)
+            if callable(forget_carriers):
+                forget_carriers(tid)
+            if callable(purge_bg_jobs):
+                purge_bg_jobs(tid)
+            if callable(forget_bg_agents):
+                forget_bg_agents(tid)
         return {"ok": True, "task_id": task_id, "deleted": targets}
 
     def _genesis_parent(self, task_id: str) -> Optional[str]:

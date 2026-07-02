@@ -218,17 +218,34 @@ class HttpFetchTransport:
     timeout: float = 10.0
     user_agent: str = "noeta-webfetch/0.1 (+https://github.com/noeta)"
     client: Optional[httpx.Client] = None
+    #: Hard ceiling on the fetched body. ``resp.text`` reads the WHOLE response
+    #: into memory, then ``html_to_markdown`` runs several DOTALL regexes over
+    #: it — an unbounded / malicious response drives unbounded memory + regex
+    #: CPU. Stream and abort past this cap (5 MiB is ample for any real page;
+    #: the tool already offloads the rendered body to an artifact + inline cap).
+    max_bytes: int = 5 * 1024 * 1024
 
     def fetch(self, url: str) -> str:
         client = self.client or httpx.Client(timeout=self.timeout)
         try:
-            resp = client.get(
+            with client.stream(
+                "GET",
                 url,
                 headers={"User-Agent": self.user_agent},
                 follow_redirects=True,
-            )
-            resp.raise_for_status()
-            return resp.text
+            ) as resp:
+                resp.raise_for_status()
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in resp.iter_bytes():
+                    total += len(chunk)
+                    if total > self.max_bytes:
+                        raise ValueError(
+                            f"response exceeds {self.max_bytes} byte limit"
+                        )
+                    chunks.append(chunk)
+                encoding = resp.encoding or "utf-8"
+                return b"".join(chunks).decode(encoding, errors="replace")
         finally:
             if self.client is None:
                 client.close()

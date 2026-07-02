@@ -24,13 +24,14 @@ Design contract:
 * No ``# type: ignore`` — every callable in ``HandlerContext`` is a
   typed Protocol with the exact signature its Engine-bound
   implementation uses.
-* WaitExternalDecision is deliberately absent from ``dispatch_exit``
-  — Engine's pre-refactor ``NotImplementedError("Unknown decision
-  type: <name>")`` behaviour is byte-equal preserved.
+* Any genuinely unmapped Decision still raises Engine's pre-refactor
+  ``NotImplementedError("Unknown decision type: <name>")`` byte-equal
+  (``WaitExternalDecision`` is now routed like every other exit).
 """
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass
 from dataclasses import replace as dc_replace
@@ -51,6 +52,7 @@ from noeta.protocols.decisions import (
     TaskStatePatch,
     ToolCall,
     ToolCallsDecision,
+    WaitExternalDecision,
     WaitTimerDecision,
     YieldForHumanDecision,
 )
@@ -95,6 +97,7 @@ from noeta.protocols.tool_args import (
     build_tool_call_approval_requested_payload,
 )
 from noeta.protocols.wake import (
+    ExternalEvent,
     HumanResponseReceived,
     SubtaskCompleted,
     SubtaskGroupCompleted,
@@ -128,6 +131,7 @@ __all__ = [
     "handle_spawn_subtasks",
     "handle_state_patch",
     "handle_tool_calls",
+    "handle_wait_external",
     "handle_wait_timer",
     "handle_yield_for_human",
     "invoke_approved_tool_call",
@@ -1080,6 +1084,51 @@ def handle_wait_timer(
     )
 
 
+def handle_wait_external(
+    ctx: HandlerContext,
+    task: Task,
+    decision: WaitExternalDecision,
+    *,
+    lease_id: str,
+    trace_id: str,
+) -> Task:
+    """Snapshot + TaskSuspended with an ``ExternalEvent`` wake.
+
+    Mirrors :func:`handle_wait_timer`: any ``state_patch`` /
+    ``assistant_message`` on the Decision was already applied by the
+    Engine's generic pre-apply, so the handler only suspends. The wake
+    producer is whatever external ingress the host wires — it delivers
+    ``dispatcher.wake(task_id, ExternalEvent(event_kind=...))`` with the
+    same ``event_kind`` the Decision declared.
+    """
+    return _suspend(
+        ctx,
+        task,
+        wake_on=ExternalEvent(event_kind=decision.event_kind),
+        reason="waiting_external",
+        lease_id=lease_id,
+        trace_id=trace_id,
+    )
+
+
+def _render_answer_text(answer: object) -> str:
+    """Render a ``FinishDecision.answer`` into the fallback assistant-message
+    text (only used when the Policy attached no ``assistant_message``).
+
+    A ``str`` answer renders verbatim. A structured answer (``dict`` / ``list``
+    from an ``output_schema`` run) renders as pretty JSON rather than a Python
+    ``repr`` (``str({'k': 'v'})`` → ``{'k': 'v'}`` with single quotes is neither
+    valid JSON nor what the caller sent). ``sort_keys`` keeps it deterministic
+    so a resumed run rebuilds identical bytes. Anything JSON cannot encode falls
+    back to ``str()``."""
+    if isinstance(answer, str):
+        return answer
+    try:
+        return json.dumps(answer, ensure_ascii=False, sort_keys=True, indent=2)
+    except (TypeError, ValueError):
+        return str(answer)
+
+
 def handle_finish(
     ctx: HandlerContext,
     task: Task,
@@ -1116,7 +1165,7 @@ def handle_finish(
     if decision.assistant_message is None:
         msg = Message(
             role="assistant",
-            content=[TextBlock(text=str(decision.answer))],
+            content=[TextBlock(text=_render_answer_text(decision.answer))],
         )
         task.runtime.messages.append(msg)
         ctx.emit(
@@ -2000,8 +2049,7 @@ def dispatch_exit(
     Exit decisions produce a final ``Task`` (terminal or suspended)
     and exit the compose → decide loop. ``ToolCallsDecision`` is NOT
     routed here (it loops back; see ``Engine.run_one_step``'s special
-    case). ``WaitExternalDecision`` is also NOT routed (no handler
-    exists; preserves pre-refactor ``NotImplementedError`` shape).
+    case).
     """
     if isinstance(decision, SpawnSubtaskDecision):
         return handle_spawn_subtask(
@@ -2023,12 +2071,16 @@ def dispatch_exit(
         return handle_wait_timer(
             ctx, task, decision, lease_id=lease_id, trace_id=trace_id
         )
+    if isinstance(decision, WaitExternalDecision):
+        return handle_wait_external(
+            ctx, task, decision, lease_id=lease_id, trace_id=trace_id
+        )
     if isinstance(decision, YieldForHumanDecision):
         return handle_yield_for_human(
             ctx, task, decision, lease_id=lease_id, trace_id=trace_id
         )
     # Byte-equal preservation: Engine.py:405-406 raised this exact
-    # message for any unmapped Decision (including WaitExternalDecision).
+    # message for any unmapped Decision.
     # Do NOT rephrase — acceptance test pins the full string.
     raise NotImplementedError(
         f"Unknown decision type: {type(decision).__name__}"

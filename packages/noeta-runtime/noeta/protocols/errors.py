@@ -15,6 +15,27 @@ class NoetaError(Exception):
     """Base class for all Noeta-defined errors."""
 
 
+class CodedError(NoetaError):
+    """A :class:`NoetaError` carrying a stable, machine-matchable ``code``.
+
+    ``code`` is a byte-stable public token — never a class name, never a
+    message substring — that boundary code matches **structurally** to
+    decide client-facing handling. The product's HTTP backend reaches the
+    engine only through ``noeta.sdk`` (import-linter ``backend-only-sdk``),
+    so it cannot ``isinstance`` runtime-internal exception types; it catches
+    this one re-exported base and switches on ``exc.code`` instead of the
+    fragile ``type(exc).__name__`` / ``"...substring..." in str(exc)`` it
+    used before. The ``code`` vocabulary is part of the public surface and
+    must stay stable across releases — same discipline as the ``category``
+    constants below. Subclasses set a concrete ``code``; a subclass may also
+    inherit a stdlib exception (e.g. ``RuntimeError``) alongside this so an
+    ``except RuntimeError`` contract keeps matching.
+    """
+
+    #: Stable public error code. Subclasses override with a concrete token.
+    code: str = "error"
+
+
 class ContentNotFound(NoetaError):
     """ContentStore lookup with an unknown ContentRef."""
 

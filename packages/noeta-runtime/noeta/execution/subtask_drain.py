@@ -33,7 +33,7 @@ from noeta.policies.react import SPAWN_SUBAGENT_TOOL
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
 from noeta.protocols.engine import EngineProtocol
-from noeta.protocols.errors import TaskCancellationRequested
+from noeta.protocols.errors import CodedError, TaskCancellationRequested
 from noeta.protocols.event_log import EventLogFull
 from noeta.protocols.events import TaskCancelledPayload
 from noeta.protocols.messages import TextBlock, ToolResultBlock, ToolUseBlock
@@ -46,6 +46,7 @@ __all__ = [
     "UnsupportedSubtaskSuspend",
     "_DelegationFrame",
     "drive_pending_subtasks",
+    "resume_woken_parent",
 ]
 
 
@@ -106,7 +107,7 @@ def _frame_is_concurrent(frame: "_DelegationFrame") -> bool:
     return isinstance(gw, SubtaskGroupCompleted) and bool(gw.concurrent)
 
 
-class UnsupportedSubtaskSuspend(Exception):
+class UnsupportedSubtaskSuspend(CodedError):
     """SR1 — a driven sub-agent child suspended on a wake condition the
     recursive delegation driver does not support (anything other than a
     ``SubtaskCompleted`` — i.e. approval / human / timer). Recursive
@@ -114,6 +115,8 @@ class UnsupportedSubtaskSuspend(Exception):
     documented later slice. The driver releases the child's lease (in its
     true ``suspended`` state) **before** raising, so the lease is never
     leaked."""
+
+    code = "unsupported_subtask_suspend"
 
     def __init__(self, *, task_id: str, wake_on: Any, reason: str) -> None:
         self.task_id = task_id
@@ -251,6 +254,73 @@ def drive_pending_subtasks(host: DrainHost, parent: Any) -> Any:
         return _abort_cancelled_drain(host, root_id, waiters)
 
 
+def resume_woken_parent(host: DrainHost, parent: Any) -> Optional[Any]:
+    """Resume a delegation-suspended parent whose member wake was
+    delivered OUT-OF-BAND — i.e. not during a drain's own descent but by
+    the :class:`ChildLifecycleObserver`, after a child that had suspended
+    for approval/human input (:class:`UnsupportedSubtaskSuspend`) was
+    later resolved (approved / denied / answered) and driven to terminal.
+
+    Probes the parent's dispatcher state with a targeted lease:
+
+    * lease refused → the parent's wake has not fired (a fan-out group
+      with members still pending, or no wake at all) — return ``None``;
+      a later member's resolution re-triggers this seam.
+    * lease granted with **no** matched wake — the parent is ready for
+      some other reason (e.g. an operator force-enqueue); it is not this
+      seam's to drive, so put it back exactly as found and return ``None``.
+    * lease granted **with** the matched (single or group) wake — resume
+      the parent through :func:`_resume_parent_leased` (note_woken +
+      paired ``tool_result`` rendering + one engine pass on the parent's
+      OWN engine) and continue the standard delegation state machine, so
+      a parent that immediately delegates again keeps draining.
+
+    Returns the settled parent task (terminal, or its own suspend), or
+    ``None`` when the parent was not resumable.
+    """
+    if not (
+        parent.status == "suspended"
+        and isinstance(
+            parent.wake_on, (SubtaskCompleted, SubtaskGroupCompleted)
+        )
+    ):
+        return None
+    parent_lease = host.dispatcher.lease(
+        worker_id="noeta-code", lease_seconds=600.0, task_id=parent.task_id
+    )
+    if parent_lease is None:
+        return None
+    if parent_lease.wake_event is None:
+        # Put the row back re-leasable exactly as found (ready, no matched).
+        host.dispatcher.release(
+            parent_lease.lease_id,
+            next_state="suspended",
+            wake_on=parent.wake_on,
+        )
+        host.dispatcher.enqueue(parent.task_id)
+        return None
+    frame = _frame_for(parent)
+    # The wake already fired — every member is settled; nothing to descend
+    # into. (For a group wake the observer only fires after the LAST
+    # distinct member terminated, so an out-of-band group resume can never
+    # have unfinished members.)
+    frame.remaining.clear()
+    engine = host.parent_engine(parent.task_id, is_root=True)
+    waiters: list[_DelegationFrame] = []
+    try:
+        active, active_lease, active_consumed = _resume_parent_leased(
+            host, frame, engine, parent_lease
+        )
+        host.on_root_release(active_lease.lease_id)
+        return _drive_loop(
+            host, parent.task_id, waiters,
+            active, active_lease, active_consumed,
+            is_top_level=True, allow_concurrent=True,
+        )
+    except TaskCancellationRequested:
+        return _abort_cancelled_drain(host, parent.task_id, waiters)
+
+
 def _run_delegation_loop(
     host: DrainHost,
     root_id: str,
@@ -291,7 +361,28 @@ def _run_delegation_loop(
         host, waiters, root_id,
         is_top_level=is_top_level, allow_concurrent=allow_concurrent,
     )
+    return _drive_loop(
+        host, root_id, waiters, active, active_lease, active_consumed,
+        is_top_level=is_top_level, allow_concurrent=allow_concurrent,
+    )
 
+
+def _drive_loop(
+    host: DrainHost,
+    root_id: str,
+    waiters: list["_DelegationFrame"],
+    active: Any,
+    active_lease: Any,
+    active_consumed: Any,
+    *,
+    is_top_level: bool,
+    allow_concurrent: bool,
+) -> Any:
+    """The delegation state machine proper, entered with an ``active``
+    task whose lease is held. Extracted from :func:`_run_delegation_loop`
+    so :func:`resume_woken_parent` can enter it at the resumed-parent
+    point (waiters empty, active = the just-resumed parent) instead of at
+    the descend-into-first-member point."""
     while True:
         # cancel-cascade: a cancel landed between children. The just-returned
         # child's lease is still held — release it (terminal) before tearing
@@ -697,6 +788,15 @@ def _resume_parent(
             "delegation: dispatcher did not hand back the woken parent "
             f"{frame.parent_id!r} after member completion"
         )
+    return _resume_parent_leased(host, frame, engine, parent_lease)
+
+
+def _resume_parent_leased(
+    host: DrainHost, frame: "_DelegationFrame", engine: Any, parent_lease: Any
+) -> tuple[Any, Any, Any]:
+    """The body of :func:`_resume_parent` for a parent whose woken lease
+    the caller already holds (the out-of-band :func:`resume_woken_parent`
+    seam probes the lease itself before committing to a resume)."""
     # Re-fold from the durable log to pick up the observer-written
     # SubtaskCompleted(s) (governance.subtask_results) + folded messages.
     parent = fold(host.event_log, host.content_store, frame.parent_id)

@@ -22,7 +22,9 @@ from noeta.execution.driver import (
     ModelBindPrelude,
     ModelSelectorError,
     NotResumableError,
+    ProviderSelectorError,
     STUB_MODEL_ALLOWLIST,
+    TaskAlreadyTerminalError,
     multi_turn_policy_wrapper,
 )
 from noeta.execution.host import (
@@ -113,6 +115,8 @@ __all__ = [
     "ModelBindPrelude",
     "ModelSelectorError",
     "NotResumableError",
+    "ProviderSelectorError",
+    "TaskAlreadyTerminalError",
     "merge_skill_registries",
     "multi_turn_policy_wrapper",
     "MultiTurnReActPolicy",

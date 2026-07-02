@@ -69,7 +69,7 @@ from noeta.protocols.decisions import (
     ToolCall,
     ToolCallsDecision,
 )
-from noeta.protocols.errors import CATEGORY_FATAL, CATEGORY_OVERFLOW
+from noeta.protocols.errors import CATEGORY_OVERFLOW
 from noeta.protocols.events import MessageSelection
 from noeta.protocols.token_estimate import estimate_messages_tokens
 from noeta.protocols.messages import (
@@ -79,6 +79,7 @@ from noeta.protocols.messages import (
     Message,
     TextBlock,
     ThinkingBlock,
+    ToolResultBlock,
     ToolUseBlock,
 )
 from noeta.protocols.step_context import StepContext
@@ -106,6 +107,17 @@ __all__ = [
 #: seam, B3) and re-exported here so existing
 #: ``from noeta.policies.react import SPAWN_SUBAGENT_TOOL`` call sites and the
 #: runner's ``spawn_subagent_tool_schema()`` keep working unchanged.
+
+
+def _carries_tool_result(message: Message) -> bool:
+    """True when ``message`` is a tool-result turn (a ``role="tool"`` message,
+    which the Engine batches one-per-assistant-turn, or any message carrying a
+    :class:`ToolResultBlock`). Such a turn's matching ``tool_use`` lives on the
+    preceding ``assistant`` message, so a summary boundary must never split the
+    two — see :meth:`ReActPolicy._summary_boundary`."""
+    if message.role == "tool":
+        return True
+    return any(isinstance(b, ToolResultBlock) for b in message.content)
 
 
 class _LLMClientP(Protocol):
@@ -485,6 +497,22 @@ class ReActPolicy:
             for b in summary_resp.content
             if isinstance(b, TextBlock)
         )
+        # The summarize round-trip can come back failed — an ``error``
+        # stop_reason (the LLM client's transient retries already exhausted, or
+        # a fatal/overflow error) — or empty (a model that emitted only a
+        # thinking block / whitespace). Recording EITHER as a ``Compacted``
+        # would set ``summary_ref`` to an empty note and then let the Composer's
+        # ``_apply_summary`` REPLACE the whole collapsed prefix with it: the
+        # early intent and accumulated context are destroyed, AND the empty
+        # ``user`` text block the provider is then handed is itself rejected
+        # with a 400 on the very next request. Fail the step cleanly instead,
+        # leaving the durable history untouched — a bad summary is strictly
+        # worse than no compaction. Deterministic on resume: the recorded
+        # summarize response replays identically, so the same branch is taken.
+        if summary_resp.stop_reason == "error" or not summary.strip():
+            return FailDecision(
+                reason="compaction_summary_failed", retryable=False
+            )
         # the model is *asked* (via the summarize prompt) to keep
         # safety/permission directives verbatim, but cannot be trusted to. Run
         # the deterministic post-check over the SAME prefix we collapsed: any
@@ -514,6 +542,19 @@ class ReActPolicy:
         estimate; once it exceeds the tail budget, every older message is
         summarized. Deterministic + provider-neutral (D-3d). Mirrors the
         Composer's ``_prune_tail`` cutoff so the two stay consistent.
+
+        **Tool-pair alignment**: the raw token cutoff can fall between an
+        ``assistant`` turn carrying a ``ToolUseBlock`` and the ``role="tool"``
+        message carrying its result. Slicing there would (a) leave
+        ``history[:boundary]`` ending on an unmatched ``tool_use`` — the
+        summarize request itself is then a dangling function call the provider
+        rejects with a 400 — and (b) make ``history[boundary:]`` (the kept tail)
+        begin with an orphan ``tool_result``, which the next compose→decide
+        request also 400s on. We snap the cutoff FORWARD past any leading
+        ``tool``-result messages so the whole exchange lands in the collapsed
+        prefix and the kept tail starts on a self-contained turn. Forward-only
+        keeps the boundary monotonic, so the anti-spiral progress guarantee
+        (``boundary > view.summary_boundary``) is preserved.
         """
         if self._tail_token_budget <= 0:
             return 0
@@ -525,6 +566,10 @@ class ReActPolicy:
                 cutoff = i + 1
                 break
             cutoff = i
+        # Snap forward off any tool-result message: its matching ``tool_use``
+        # sits in the collapsed prefix, so the result must travel with it.
+        while cutoff < len(history) and _carries_tool_result(history[cutoff]):
+            cutoff += 1
         return cutoff
 
     # ------------------------------------------------------------------
@@ -652,6 +697,18 @@ class ReActPolicy:
                 assistant_thinking=thinking,
             )
         if response.stop_reason == "end_turn":
+            # An ``end_turn`` with no renderable content (e.g. a safety-classifier
+            # ``refusal`` whose content array came back empty, now mapped to
+            # ``end_turn``) would record an empty-content assistant Message.
+            # Anthropic rejects ``{"role":"assistant","content":[]}`` with a 400
+            # on the next request (deterministic on resume), so fail cleanly here
+            # instead of polluting history with an unsendable turn.
+            if not history_content:
+                return FailDecision(
+                    reason="llm_empty_response",
+                    retryable=False,
+                    assistant_message=None,
+                )
             answer = "\n".join(
                 block.text
                 for block in response.content
@@ -708,13 +765,13 @@ class ReActPolicy:
         We do not attach an assistant_message so the rolling history is not
         polluted by a failed turn.
         """
-        category = (response.raw or {}).get("category")
-        if category == CATEGORY_FATAL:
-            return FailDecision(
-                reason="llm_error",
-                retryable=False,
-                assistant_message=None,
-            )
+        # ``fatal`` and an absent/unrecognised category both map to the same
+        # non-retryable ``llm_error`` (the ``overflow`` category never reaches
+        # here — the passive trigger in ``decide`` intercepts it before
+        # ``_response_to_decision``). Kept as one arm so the identity is
+        # explicit rather than a duplicated branch. We attach no
+        # assistant_message so a failed turn does not pollute the rolling
+        # history.
         return FailDecision(
             reason="llm_error",
             retryable=False,

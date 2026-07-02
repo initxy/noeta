@@ -426,12 +426,25 @@ def test_grep_rejects_catastrophic_backtracking_pattern(tmp_path: Path) -> None:
     assert "nested quantifiers" in result.summary
 
 
+def test_grep_rejects_overlapping_alternation_backtracking(tmp_path: Path) -> None:
+    # The alternation-ambiguity ReDoS class the nested-quantifier check misses:
+    # an unbounded repeat over an overlapping alternation ((a|a)*, (a|ab)*,
+    # (a?|b)+) backtracks exponentially on a long run of the shared char with no
+    # trailing match. Refused up front for the same GIL/no-timeout reason.
+    ctx, workspace = _ctx_and_workspace(tmp_path)
+    (workspace.root / "a.txt").write_text("a" * 40 + "!\n")
+    for pat in (r"(a|a)*$", r"(a|ab)*$", r"(a?|b)+$"):
+        result = GrepTool(workspace=workspace).invoke({"pattern": pat}, ctx)
+        assert result.success is False, pat
+        assert "catastrophic backtracking" in result.summary, pat
+
+
 def test_grep_allows_ordinary_quantifiers(tmp_path: Path) -> None:
-    # Sibling / single quantifiers and alternations are not nested repeats and
-    # must keep working after the ReDoS guard.
+    # Sibling / single quantifiers and DISJOINT alternations are not overlap-
+    # prone and must keep working after the ReDoS guard.
     ctx, workspace = _ctx_and_workspace(tmp_path)
     (workspace.root / "a.txt").write_text("hello   world\n")
-    for pat in (r"\s+world", r"(foo|hello)\s*world", r".*world"):
+    for pat in (r"\s+world", r"(foo|hello)\s*world", r".*world", r"(cat|dog)*world"):
         result = GrepTool(workspace=workspace).invoke({"pattern": pat}, ctx)
         assert result.success is True, pat
         assert result.output["total"] == 1, pat

@@ -105,12 +105,15 @@ DEFAULT_SHUTDOWN_GRACE_S = 30.0
 # * ``shutdown_abandoned``      — the shutdown grace elapsed with a step still
 #                                 in flight (process-shutdown only — see
 #                                 ``WorkerLoop`` docstring).
+# * ``timers_fired``            — the timer poll delivered ``TimerFired``
+#                                 wakes to due ``wait_timer`` suspends.
 ReliabilityKind = Literal[
     "stale_requeued",
     "suspended_without_wake",
     "step_failed_retryable",
     "heartbeat_invalid_lease",
     "shutdown_abandoned",
+    "timers_fired",
 ]
 
 
@@ -763,8 +766,9 @@ class WorkerLoop:
     * The loop always proceeds to the next task.
 
     The loop also runs a per-step heartbeat side-thread (keeps a slow
-    step's lease alive) and a periodic stale-sweep, and supports
-    best-effort signal-driven graceful shutdown via
+    step's lease alive), a periodic stale-sweep, and a periodic timer
+    poll (the ``TimerFired`` producer for ``wait_timer`` suspends), and
+    supports best-effort signal-driven graceful shutdown via
     :func:`install_stop_signals` / ``run_forever(install_signals=True)``.
     """
 
@@ -777,9 +781,11 @@ class WorkerLoop:
         poll_interval: float = 0.5,
         heartbeat_interval: float = 30.0,
         stale_sweep_interval: float = 10.0,
+        timer_poll_interval: float = 1.0,
         shutdown_grace_s: Optional[float] = DEFAULT_SHUTDOWN_GRACE_S,
         sleep: Optional[Callable[[float], None]] = None,
         clock: Optional[Callable[[], float]] = None,
+        now_fn: Optional[Callable[[], float]] = None,
         heartbeat_wait: Optional[Callable[[float], bool]] = None,
         reliability_sink: Optional[ReliabilitySink] = None,
         step_poll_s: float = 0.05,
@@ -790,6 +796,7 @@ class WorkerLoop:
         self._poll_interval = poll_interval
         self._heartbeat_interval = heartbeat_interval
         self._stale_sweep_interval = stale_sweep_interval
+        self._timer_poll_interval = timer_poll_interval
         # H1: bounded process-shutdown. After stop(), an in-flight step is
         # waited for up to this many seconds, then ABANDONED (the step runs
         # on a daemon thread we stop waiting on) and the loop returns. A
@@ -804,8 +811,17 @@ class WorkerLoop:
             import time
 
             clock = time.monotonic
+        # The timer poll compares against ``TimerFired.fire_at``, which the
+        # Engine computed with a WALL clock (``time.time``, epoch seconds).
+        # Keep it separate from the loop's monotonic cadence ``clock`` —
+        # mixing the two bases would fire timers at the wrong moment.
+        if now_fn is None:
+            import time
+
+            now_fn = time.time
         self._sleep = sleep
         self._clock = clock
+        self._now_fn = now_fn
         # Optional injected heartbeat wait (tests drive exact heartbeat
         # counts); None → each runner uses its own Event.wait.
         self._heartbeat_wait = heartbeat_wait
@@ -820,6 +836,7 @@ class WorkerLoop:
         # the abandoned step thread may still be running.
         self._abandoned = False
         self._last_sweep = clock()
+        self._last_timer_poll = clock()
 
     def stop(self) -> None:
         """Signal the loop to stop after the current iteration. (I3 wires
@@ -884,6 +901,40 @@ class WorkerLoop:
         except Exception:  # noqa: BLE001 — sweep failure must not crash the loop
             _log.exception("worker: requeue_stale failed; continuing")
         self._last_sweep = self._clock()
+        return True
+
+    def maybe_poll_timers(self) -> bool:
+        """Run ``fire_due_timers`` if ``timer_poll_interval`` has elapsed.
+
+        Returns True if a poll ran. Cadence is measured with the
+        injected monotonic ``clock`` (like :meth:`maybe_sweep`); the
+        due-check itself uses the injected wall-clock ``now_fn`` — the
+        same time base the Engine used to compute ``TimerFired.fire_at``.
+        A dispatcher without ``fire_due_timers`` (a pre-timer external
+        adapter) is skipped: the poll then degrades to a no-op instead
+        of crashing the loop.
+        """
+        if self._timer_poll_interval <= 0:
+            return False
+        if self._clock() - self._last_timer_poll < self._timer_poll_interval:
+            return False
+        fire = getattr(self._rt.dispatcher, "fire_due_timers", None)
+        if fire is not None:
+            try:
+                fired = fire(now=self._now_fn())
+                if fired:
+                    self._emit(
+                        ReliabilityEvent(
+                            kind="timers_fired",
+                            detail={
+                                "count": len(fired),
+                                "task_ids": list(fired),
+                            },
+                        )
+                    )
+            except Exception:  # noqa: BLE001 — poll failure must not crash the loop
+                _log.exception("worker: fire_due_timers failed; continuing")
+        self._last_timer_poll = self._clock()
         return True
 
     def _run_one(self, lease: Any) -> None:
@@ -1041,8 +1092,8 @@ class WorkerLoop:
 
     def run_forever(self, *, install_signals: bool = False) -> None:
         """Drive tasks until :meth:`stop` is called. Runs the periodic
-        stale-sweep each iteration; sleeps ``poll_interval`` whenever the
-        ready queue is empty.
+        stale-sweep and timer poll each iteration; sleeps
+        ``poll_interval`` whenever the ready queue is empty.
 
         When ``install_signals`` is True, SIGTERM / SIGINT are wired to
         :meth:`stop` for the duration of the loop (best-effort graceful
@@ -1056,6 +1107,7 @@ class WorkerLoop:
         try:
             while self._running:
                 self.maybe_sweep()
+                self.maybe_poll_timers()
                 if not self.tick():
                     self._sleep(self._poll_interval)
         finally:

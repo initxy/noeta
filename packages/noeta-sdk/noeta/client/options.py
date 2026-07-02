@@ -24,8 +24,8 @@ Design notes:
   effects, deterministic identity for equal inputs. Registration is
   left to ``Client`` (slice 4b).
 * Bare ``Options`` (no explicit tool fields) defaults to the full
-  built-in tool set (``BUILTIN_TOOL_CLASSES`` — read/glob/grep, edit/write/
-  apply_patch, shell_run/shell_poll/shell_kill),
+  built-in tool set (``BUILTIN_TOOL_CLASSES`` — the 11 tools read/glob/grep,
+  edit/write/apply_patch, shell_run/shell_poll/shell_kill, webfetch/web_search),
   matching Claude Agent SDK's "agent gets every tool" default. To opt out, set
   ``allowed_tools=()``.
 * Child agents are declared via the flat ``agents: dict[str, AgentDefinition]``
@@ -234,8 +234,8 @@ class Options:
     allowed_tools:
         Explicit tool allow-list. Entries may be built-in tool name
         strings or ``DecoratedTool`` instances (anything with a ``.ref``
-        returning :class:`ToolRef`). ``None`` ⇒ **all 13 built-in tools**
-        (D2 default). Empty tuple ⇒ no tools.
+        returning :class:`ToolRef`). ``None`` ⇒ **all 11 built-in tools**
+        (D2 default; ``BUILTIN_TOOL_CLASSES``). Empty tuple ⇒ no tools.
     disallowed_tools:
         Tool names (by :class:`ToolRef.name`) to subtract from the parsed
         allow-list. Names that are not present are silently ignored.

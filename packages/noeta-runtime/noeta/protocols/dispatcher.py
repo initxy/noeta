@@ -5,7 +5,8 @@ Dispatcher handles Task enqueue / lease grant / wake dispatch / stale reclaim.
 The typed boundary splits into two Protocols:
 
 * :class:`Dispatcher`    — scheduling lifecycle (enqueue / lease / heartbeat /
-                            release / fail / wake / requeue_stale)
+                            release / fail / wake / requeue_stale /
+                            fire_due_timers)
 * :class:`LeaseRegistry` — lease validation (is_lease_valid), for the EventLog
                             backend's reverse lookup
 
@@ -79,8 +80,9 @@ class Dispatcher(Protocol):
     Worker calls follow ``enqueue → lease → (heartbeat*) → release / fail``;
     the wake half is asynchronous (``wake`` requeues a suspended Task).
     ``requeue_stale`` is the recovery sweep that moves leased Tasks
-    whose lease expired back to ready (Phase 1's Worker daemon will
-    run this on a timer).
+    whose lease expired back to ready, and ``fire_due_timers`` is the
+    timer sweep that wakes ``wait_timer`` suspends whose deadline
+    passed; the Worker daemon runs both on an interval.
 
     Debug-helper methods (``task_status`` / ``wake_on`` /
     ``suspend_reason``) are deliberately NOT on this Protocol — those
@@ -217,5 +219,31 @@ class Dispatcher(Protocol):
         leases reclaimed by this call. EventLog writes against the
         old ``lease_id`` then raise ``InvalidLease`` against the
         registry.
+        """
+        ...
+
+    def fire_due_timers(self, *, now: float) -> list[str]:
+        """Deliver ``TimerFired`` wakes to every suspended Task whose
+        timer deadline has passed; return the woken ids.
+
+        This is the timer producer half of the ``wait_timer`` Decision
+        branch: the suspend records ``wake_on=TimerFired(fire_at=...)``
+        (an absolute wall-clock epoch deadline computed by the Engine's
+        clock), and a periodic sweep — the Worker daemon's timer poll,
+        alongside :meth:`requeue_stale` — calls this to flip due Tasks
+        back to ready.
+
+        ``now`` is a wall-clock epoch timestamp supplied by the caller.
+        It is deliberately a parameter, NOT the backend's internal
+        clock: it must share the time base the Engine used to compute
+        ``fire_at`` (``time.time``), whereas e.g. the in-memory
+        backend's internal ``now`` defaults to ``time.monotonic``.
+
+        The delivered wake event is the **recorded deadline**
+        (``TimerFired(fire_at=<stored deadline>)``, satisfying the
+        inclusive ``>=`` threshold at the equality boundary), not
+        ``TimerFired(fire_at=now)`` — so H2 re-delivery after a crash
+        hands the worker a byte-identical wake event and the durable
+        ``TaskWoken`` reconciliation matches by equality.
         """
         ...

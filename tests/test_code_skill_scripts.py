@@ -6,7 +6,8 @@ PermissionGuard E precheck + human approval (Issue A) and only then
 executes via an allowlisted interpreter. Default off ⇒ the tool does not
 exist.
 
-Live recording uses a **fake `subprocess.run`** (so the test does not
+Live recording uses a **fake runner** patched onto the
+``noeta.tools.fs._subprocess._default_run`` seam (so the test does not
 depend on a real `bash`).
 """
 
@@ -184,7 +185,9 @@ def test_approve_runs_script(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ws = _make_ws(tmp_path)
-    monkeypatch.setattr(subprocess, "run", _fake_run)
+    monkeypatch.setattr(
+        "noeta.tools.fs._subprocess._default_run", _fake_run
+    )
     host, driver, _provider = _session(ws, [_run_script_call(), _end("done")], enabled=True)
     out = driver.start(goal="run the script", agent="main", activations=("scripted",))
     assert out.status == "suspended"  # gated for approval, not run yet
@@ -203,7 +206,9 @@ def test_deny_does_not_run_script(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ws = _make_ws(tmp_path)
-    monkeypatch.setattr(subprocess, "run", _boom)  # nothing should spawn
+    monkeypatch.setattr(
+        "noeta.tools.fs._subprocess._default_run", _boom
+    )  # nothing should spawn
     host, driver, _provider = _session(ws, [_run_script_call(), _end("done")], enabled=True)
     out = driver.start(goal="run the script", agent="main", activations=("scripted",))
     result = driver.deny(out.task_id, call_id=RUN_CALL_ID, reason="no")
@@ -216,7 +221,9 @@ def test_undiscovered_relpath_denied_no_spawn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ws = _make_ws(tmp_path)
-    monkeypatch.setattr(subprocess, "run", _boom)
+    monkeypatch.setattr(
+        "noeta.tools.fs._subprocess._default_run", _boom
+    )
     host, driver, _provider = _session(
         ws, [_run_script_call(relpath="ghost.sh"), _end("done")], enabled=True
     )
