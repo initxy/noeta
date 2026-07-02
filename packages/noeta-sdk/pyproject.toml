@@ -1,6 +1,6 @@
 [project]
 name = "noeta-sdk"
-version = "0.2.0"
+version = "0.1.1"
 description = "Noeta SDK: the thin in-process client surface (noeta.sdk facade — query / Client / Options / tool / extension interfaces) over the noeta-runtime engine. Like claude-agent-sdk / LangChain: import noeta.sdk, run an agent in-process; no engine internals, no HTTP."
 license = "Apache-2.0"
 authors = [{ name = "The Noeta Authors" }]
