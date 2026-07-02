@@ -59,10 +59,10 @@ test.describe("chat composer", () => {
     await expect(page.locator(".composer-chip--access")).toContainText("Accept edits");
     await expect(page.locator(".composer-chip--access.composer-chip--danger")).toHaveCount(0);
 
-    // bypassPermissions ("Skip all approvals") flips the chip to the amber danger styling.
+    // bypassPermissions ("Bypass") flips the chip to the amber danger styling.
     await page.locator(".composer-chip--access").click();
-    await page.locator(".permission-options .menu-option", { hasText: "Skip all approvals" }).click();
-    await expect(page.locator(".composer-chip--access.composer-chip--danger")).toContainText("Skip all approvals");
+    await page.locator(".permission-options .menu-option", { hasText: "Bypass" }).click();
+    await expect(page.locator(".composer-chip--access.composer-chip--danger")).toContainText("Bypass");
 
     // Model · effort chip → one open sets both; the chip label tracks the pick.
     await page.locator(".composer-chip--model").click();

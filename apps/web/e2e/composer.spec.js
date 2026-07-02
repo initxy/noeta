@@ -41,7 +41,7 @@ test("U3: the permission chip shows a readable label + tooltip", async ({ page }
   const menu = page.locator(".permission-options");
   await expect(menu.locator(".menu-section-label")).toHaveText("Access");
   await expect(menu).toContainText("Accept edits");
-  await expect(menu).toContainText("Skip all approvals");
+  await expect(menu).toContainText("Bypass");
   await expect(menu.locator(".menu-option__hint").first()).toBeVisible();
 
   expect(errors).toEqual([]);
