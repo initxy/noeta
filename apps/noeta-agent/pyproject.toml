@@ -1,6 +1,6 @@
 [project]
 name = "noeta-agent"
-version = "0.1.1"
+version = "0.1.2"
 description = "Noeta official coding agent product (the noeta.agent namespace's product modules): code agents, tools, skills, code-owned host assembly. ``python -m noeta.agent`` is the entry."
 license = "Apache-2.0"
 authors = [{ name = "The Noeta Authors" }]
@@ -19,8 +19,8 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
 dependencies = [
-    "noeta-runtime",
-    "noeta-sdk",
+    "noeta-runtime>=0.1.2",
+    "noeta-sdk>=0.1.2",
 ]
 
 [project.urls]
