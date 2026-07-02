@@ -18,8 +18,8 @@ const PERMISSION_META = {
     hint: "File writes no longer ask; running commands / deleting still ask",
   },
   bypassPermissions: {
-    label: "Skip all approvals",
-    hint: "⚠️ Edits / deletes / commands never ask — only when you fully trust the task",
+    label: "Bypass",
+    hint: "Edits, deletes, and commands run without asking — use only for trusted tasks",
   },
 };
 const permissionLabel = (value) => PERMISSION_META[value]?.label || value;

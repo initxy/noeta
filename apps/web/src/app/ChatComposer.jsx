@@ -862,7 +862,7 @@ function AccessChip({ disabled, permission, items, onChange }) {
       >
         {danger ? <AlertTriangle size={ICON_SM} /> : <ShieldCheck size={ICON_SM} />}
         <span className="composer-chip__label">
-          {danger ? `⚠️ ${permissionLabel(permission)}` : permissionLabel(permission)}
+          {permissionLabel(permission)}
         </span>
         <ChevronDown size={ICON_SM} className="composer-chip__caret" />
       </button>
