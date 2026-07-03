@@ -2,12 +2,12 @@
 
 Noeta is built around a small set of primitives. This page introduces
 each one and how they fit together. The single source of truth for
-vocabulary is [`CONTEXT.md`](../CONTEXT.md); architectural decisions
-live under [`docs/adr/`](adr/).
+vocabulary is the [Glossary](reference/glossary.md); architectural decisions
+live under [Architecture Decisions](adr/index.md).
 
 ## Task
 
-A `Task` is the only primitive (docs/adr/task-as-only-primitive.md). It is an addressable unit
+A `Task` is the only primitive ([ADR: Task as the only primitive](adr/task-as-only-primitive.md)). It is an addressable unit
 of agent work — it has a `task_id`, a `status` (`pending` / `running`
 / `suspended` / `terminal`), and a `parent_task_id` if it was spawned
 by another task. State is reconstructed by folding the EventLog;
@@ -15,7 +15,7 @@ the Engine never holds task state in memory across Engine runs.
 
 ## EventLog
 
-Per-task append-only stream of `EventEnvelope` records (docs/adr/event-sourced-truth.md).
+Per-task append-only stream of `EventEnvelope` records ([ADR: Event-sourced truth](adr/event-sourced-truth.md)).
 Every state change emits an envelope: `TaskCreated`, `MessagesAppended`,
 `LLMRequestStarted`, `ToolCallStarted`, `TaskSuspended`, `TaskWoken`,
 `TaskCompleted`, and so on. The EventLog is the single source of
@@ -23,25 +23,26 @@ truth — there is no separate "task table" the Engine reads.
 
 Implementations:
 
-* `InMemoryEventLog` — for tests and `NOETA_AGENT_SQLITE_PATH=:memory:`
+* `InMemoryEventLog` — for tests and the in-memory default (no
+  `NOETA_AGENT_SQLITE` set)
 * `SqliteEventLog` — durable, WAL-mode sqlite3 file
 
-Both implement the same `EventLog` Protocol (docs/adr/storage-protocols-l0.md).
+Both implement the same `EventLog` Protocol ([ADR: Storage protocols L0](adr/storage-protocols-l0.md)).
 
 ## ContentStore
 
-Content-addressed, dedup-by-hash blob store (docs/adr/event-sourced-truth.md). Bodies larger
+Content-addressed, dedup-by-hash blob store ([ADR: Event-sourced truth](adr/event-sourced-truth.md)). Bodies larger
 than the 4 KB event-payload cap are uploaded here; the envelope only
 carries a `ContentRef(hash, size, media_type)`. Examples: full LLM
 request/response bodies, large tool outputs.
 
 ## Dispatcher
 
-Owns the lease-per-segment Worker model (docs/adr/worker-lease-model.md). Workers call
+Owns the lease-per-segment Worker model ([ADR: Worker lease model](adr/worker-lease-model.md)). Workers call
 `enqueue → lease → (heartbeat*) → release / fail` to drive ready
 tasks; `wake` requeues suspended tasks. The Dispatcher also acts as
 the `LeaseRegistry` the EventLog consults on every `emit(lease_id=…)`
-to enforce docs/adr/single-writer-invariant.md single-writer.
+to enforce the [single-writer invariant](adr/single-writer-invariant.md).
 
 ## Engine
 
@@ -49,7 +50,7 @@ Stateless step driver. `run_one_step(task, lease_id=…)` advances a
 task by one Policy decision: it composes a context, runs Guards, asks
 the Policy for a `Decision`, applies the Decision's effects (tool
 calls, LLM round-trips, subtask spawn, suspend, terminate), and emits
-envelopes. docs/adr/guard-observer-hooks.md caps the Engine class body at 500 lines so it
+envelopes. [ADR: Guard-observer hooks](adr/guard-observer-hooks.md) caps the Engine class body at 500 lines so it
 stays readable.
 
 ## Policy
@@ -69,7 +70,7 @@ envelope recording exactly what context the step was built from.
 
 ## Guard / Observer
 
-docs/adr/guard-observer-hooks.md's two hook surfaces.
+[ADR: Guard-observer hooks](adr/guard-observer-hooks.md) defines the two hook surfaces.
 
 * **Guards** sit on the Engine's hot path. `BudgetGuard` and
   `PermissionGuard` ship in-tree. Guards can deny a tool call, deny
@@ -90,11 +91,10 @@ never re-calls a provider.
 
 ## Wake-resume
 
-<p align="center">
-  <img src="assets/task-lifecycle.svg" alt="Task lifecycle — unified suspension, wake events, and terminal exits" width="820">
-  <br>
-  <em>The task lifecycle: all waiting is one <code>Suspended</code> state plus a typed wake condition; a wake event re-enqueues the task for the next lease.</em>
-</p>
+<figure markdown="span">
+  ![Task lifecycle — unified suspension, wake events, and terminal exits](assets/task-lifecycle.svg){ width="820" }
+  <figcaption>The task lifecycle: all waiting is one <code>Suspended</code> state plus a typed wake condition; a wake event re-enqueues the task for the next lease.</figcaption>
+</figure>
 
 When a task suspends with a typed `WakeCondition`
 (`SubtaskCompleted` / `HumanResponseReceived` / `TimerFired`), the
@@ -106,7 +106,7 @@ threshold semantics `event.fire_at >= condition.fire_at`).
 The matched event is handed to the worker on the next `lease()` via
 `Lease.wake_event` and threaded into `Engine.note_woken` to write a durable
 `TaskWoken(wake_event=…)` envelope before continuing. Delivery is
-**single-worker durable exactly-once** (H2 / docs/adr/subtask-fanout-and-durable-wake.md): the matched wake
+**single-worker durable exactly-once** (H2 / [ADR: Subtask fan-out and durable wake](adr/subtask-fanout-and-durable-wake.md)): the matched wake
 **survives the lease** and is cleared only by a consuming
 `release(consumed_wake_event=…)`, so a worker crash between lease and the
 `TaskWoken` write no longer loses it — `requeue_stale()` brings the task back
@@ -114,21 +114,20 @@ to ready with the wake preserved and the next lease re-delivers it.
 Consumption is idempotent: the worker's woken branch is a recovery state
 machine keyed on the latest matching `TaskWoken`, so a re-delivery whose
 `TaskWoken` already landed is reconciled without emitting a second one. No
-operator re-issue is needed. A targeted resume (HTTP `POST /tasks/{id}/resume`)
-on a task with no queued wake returns a typed `suspended_without_wake_event`
-(it is simply
-waiting for a wake that has not occurred yet — a diagnostic, not a loss).
+operator re-issue is needed. When the worker leases a suspended task that has
+no queued wake event, it records a `suspended_without_wake` reliability event
+(the task is simply waiting for a wake that has not occurred yet — a
+diagnostic, not a loss).
 Scope is single-host / single-worker; the partial-step-orphan edge (a crash
 mid-step) and multi-worker / multi-host concurrency remain limitations. See
 [`docs/failure-modes.md`](failure-modes.md).
 
 ## How a step flows
 
-<p align="center">
-  <img src="assets/turn-sequence.svg" alt="One turn of task execution — goal submission, lease, step loop, finish, streamed over SSE" width="820">
-  <br>
-  <em>One full turn through the bundled agent: submit → lease → step loop → finish. The SSE stream on the left is the product surface; steps 1–6 below are the runtime-level slice of the same picture.</em>
-</p>
+<figure markdown="span">
+  ![One turn of task execution — goal submission, lease, step loop, finish, streamed over SSE](assets/turn-sequence.svg){ width="820" }
+  <figcaption>One full turn through the bundled agent: submit → lease → step loop → finish. The SSE stream on the left is the product surface; steps 1–6 below are the runtime-level slice of the same picture.</figcaption>
+</figure>
 
 1. A Worker calls `dispatcher.lease(...)` and gets
    back a `Lease(lease_id, task_id, expires_at, wake_event?)`. The drain

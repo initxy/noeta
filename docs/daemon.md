@@ -2,7 +2,7 @@
 
 > **Single-host preview.** The resident worker loop is for local and
 > single-host use. It is honest about its limits: wake delivery is now
-> **durable exactly-once** (single-worker; H2 / docs/adr/subtask-fanout-and-durable-wake.md), but it still
+> **durable exactly-once** (single-worker; H2 / [ADR: Subtask fan-out and durable wake](adr/subtask-fanout-and-durable-wake.md)), but it still
 > has a **bounded process-shutdown** that abandons (does not interrupt) a
 > step stuck past its shutdown grace, a bounded per-step lease-keepalive
 > window, and a **single worker** with no concurrency (multi-worker is a
@@ -22,14 +22,13 @@
 ## What it is
 
 A run started through the chat server (HTTP `POST /tasks`, see [The chat
-server](#the-chat-server)) and a targeted resume (HTTP
-`POST /tasks/{id}/resume`) are **one-shot**: they drive a task — or
-re-drive one leased task — once and return. `WorkerLoop` is the
-**resident** equivalent. It runs a continuous loop that:
+server](#the-chat-server)) is **one-shot**: it drives a task once and
+returns. `WorkerLoop` is the **resident** equivalent. It runs a continuous
+loop that:
 
 1. leases the next ready Task from the dispatcher,
-2. drives it one step (the same 3-state machine the one-shot resume uses
-   — woken / drained / suspended-skip, implemented by
+2. drives it one step (the 3-state machine
+   — woken / drained / suspended-skip — implemented by
    `noeta.runtime.worker.run_leased_task`),
 3. releases the lease, and
 4. periodically reclaims stale leases left behind by crashed workers.
@@ -73,7 +72,7 @@ flag. To stop from another thread, call `loop.stop()`.
 **One loop = one profile.** A `WorkerLoop` drives whatever single
 `WorkerRuntime` it was constructed with, so it binds exactly one provider
 / model / tool set / policy (unless the runtime supplies a per-task
-`resolve_engine(task)` seam — docs/adr/agent-identity-and-provenance.md — in which case it drives each
+`resolve_engine(task)` seam — [ADR: Agent identity and provenance](adr/agent-identity-and-provenance.md) — in which case it drives each
 task with its own Agent's Engine). With the single-Engine runtime there
 is no per-task provider or model resolution: every task the loop picks up
 is driven with the profile the runtime was built with.
@@ -124,10 +123,10 @@ this preview (see [Limitations](#limitations)).
 
 The UI use-case that `noeta serve --ui` used to cover is now the separate
 launcher **`python -m noeta.agent`** (sources:
-`apps/noeta-agent/noeta/agent/__main__.py` and `host/runner_cli.py`). It is **not
+`apps/noeta-agent/noeta/agent/__main__.py` and `backend/lifecycle.py`). It is **not
 an argparse CLI** and takes **zero positional args**: it reads config
 from env (or a `NOETA_AGENT_CONFIG` JSON file via
-`noeta.agent.host.runner_cli.RunnerConfig.from_env`), boots an HTTP/SSE chat server
+`noeta.agent.backend.lifecycle.BackendConfig.from_env`), boots an HTTP/SSE chat server
 plus the bundled web SPA, prints the served URL, and blocks until SIGINT
 / SIGTERM. It always serves the UI — there are **no `--ui` / `--serve`
 flags** (those were `noeta serve` flags and are gone).
@@ -135,12 +134,12 @@ flags** (those were `noeta serve` flags and are gone).
 ```bash
 # the env-configured launcher — equivalent of the old "noeta serve --ui"
 NOETA_AGENT_PROVIDER=stub \
-NOETA_AGENT_SQLITE_PATH=./state.sqlite \
+NOETA_AGENT_SQLITE=./state.sqlite \
 python -m noeta.agent
 ```
 
 Config is read entirely from env (defaults in parens): `NOETA_AGENT_PROVIDER`
-(`stub`), `NOETA_AGENT_SQLITE_PATH` (`:memory:`), `NOETA_AGENT_PORT` (`0` =
+(`stub`), `NOETA_AGENT_SQLITE` (unset = in-memory), `NOETA_AGENT_PORT` (`0` =
 ephemeral), `NOETA_AGENT_HOST` (`127.0.0.1`), `NOETA_AGENT_MODEL`
 (`stub-model`), `NOETA_AGENT_WORKSPACE` (cwd), optional
 `NOETA_AGENT_API_KEY` / `NOETA_AGENT_BASE_URL`, or `NOETA_AGENT_CONFIG` pointing
@@ -205,7 +204,7 @@ These are deliberate boundaries of the single-host preview, not bugs.
 ### Durable exactly-once wake (H2)
 
 A suspended task's wake is delivered and consumed **exactly once, even
-across a crash** (docs/adr/subtask-fanout-and-durable-wake.md). The matched wake **survives the `lease()`**
+across a crash** ([ADR: Subtask fan-out and durable wake](adr/subtask-fanout-and-durable-wake.md)). The matched wake **survives the `lease()`**
 (it is no longer destroyed at lease time); it is cleared only by a
 **consuming release** that presents the wake it consumed (after the
 durable `TaskWoken` is written), and is otherwise **re-delivered** by
@@ -291,5 +290,5 @@ multi-host coordination is out of scope for this preview.
 > `noeta.testing.profile.build_runtime(trace_file=...)`). There is no
 > verify/replay command, HTTP endpoint, or `noeta.verify` API: re-deriving
 > a task's state is just `fold` over its EventLog (no provider re-call),
-> and re-driving one is the targeted resume above (`POST /tasks/{id}/resume`
-> over `noeta.runtime.worker.run_leased_task`).
+> and re-driving one is `noeta.runtime.worker.run_leased_task` (the library
+> primitive the chat server's one-shot drive also uses).

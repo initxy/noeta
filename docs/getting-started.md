@@ -45,7 +45,7 @@ Or drive the backend in-process — build it, prove it serves, shut it down:
 ```python
 from noeta.agent.backend.lifecycle import BackendConfig, serve_backend
 
-# Defaults are fully offline: stub provider, :memory: storage. port=0 binds
+# Defaults are fully offline: stub provider, in-memory storage. port=0 binds
 # an OS-assigned port.
 config = BackendConfig(port=0)
 server, url, shutdown = serve_backend(config)
@@ -67,7 +67,7 @@ OpenAI-compatible or Anthropic endpoint.
 
 ```bash
 # OpenAI-compatible
-NOETA_OPENAI_BASE_URL=<https://api.openai.com/v1> \
+NOETA_OPENAI_BASE_URL=https://api.openai.com/v1 \
 NOETA_OPENAI_API_KEY=sk-… \
 NOETA_OPENAI_MODEL=gpt-4o-mini \
 python examples/_internal/real_provider_subtask_demo.py
@@ -109,8 +109,7 @@ The runner binds `NOETA_AGENT_HOST` (default `127.0.0.1`) and
 `NOETA_AGENT_PORT` (`0` ⇒ an OS-assigned ephemeral port), then serves the
 web app; visit `<url>/chat` to compose a goal and open
 `<url>/trace?task={id}` from a session to inspect its event stream and context.
-The pages subscribe to the SSE endpoint `GET /events`; you can also re-drive a
-task directly over HTTP (`POST /tasks/{id}/resume`). The server blocks until `Ctrl-C` (SIGINT/SIGTERM)
+The pages subscribe to the SSE endpoint `GET /stream?task=<id>`. The server blocks until `Ctrl-C` (SIGINT/SIGTERM)
 — there is no grace-window flag. (The old `noeta run --serve --ui` console flags
 were removed in TL6.)
 
@@ -127,7 +126,7 @@ NOETA_AGENT_PROVIDER=openai \
 NOETA_AGENT_MODEL=gpt-4o-mini \
 NOETA_AGENT_BASE_URL=https://api.openai.com/v1 \
 NOETA_AGENT_API_KEY=sk-… \
-NOETA_AGENT_SQLITE_PATH=./session.sqlite \
+NOETA_AGENT_SQLITE=./session.sqlite \
 python -m noeta.agent
 ```
 
@@ -139,19 +138,19 @@ host config is authoritative). The `agent` field picks a named agent
 than a per-call flag. Shell still goes through a narrow argv-only
 allowlist (pytest / git status&diff / npm-pnpm test).
 
-Once a session is recorded (set `NOETA_AGENT_SQLITE_PATH` to a file rather
-than the default `:memory:`), you can manage it without re-running the
+Once a session is recorded (set `NOETA_AGENT_SQLITE` to a file rather
+than the in-memory default), you can manage it without re-running the
 agent over the HTTP surface (the `noeta code list/inspect/tail/resume/…`
 sub-actions were removed in TL6):
 
-* `GET /tasks` — list, `GET /tasks/{id}` — folded detail,
-  `GET /tasks/{id}/events` — envelope history, `GET /events` — live SSE
-  (the read-only views)
-* `POST /tasks/{id}/resume` — targeted resume, or `POST /tasks/{id}/goals`
-  to send a follow-up goal (continue it)
-* `POST /tasks/{id}/approvals` — approve / deny a gated tool call
-* `POST /tasks/{id}/close` — close, `POST /tasks/{id}/cancel` — cancel
-  (lifecycle)
+* `GET /tasks` — session list; `GET /stream?task=<id>` — live SSE event
+  stream (the read-only views)
+* `POST /tasks` — create a task (`goal` + `agent`); `POST /tasks/{id}/messages`
+  — append a follow-up goal to an existing task
+* `POST /tasks/{id}/approve` / `POST /tasks/{id}/deny` — approve or deny a
+  gated tool call; `POST /tasks/{id}/answer` — answer a model-asked question
+* `POST /tasks/{id}/close` / `POST /tasks/{id}/reopen` / `POST /tasks/{id}/cancel`
+  — close, reopen, or cancel (lifecycle); `DELETE /tasks/{id}` — hard-delete
 
 For read-only inspection without the server you can also call
 `noeta.core.fold.fold(event_log, content_store, task_id)` in-process. See
@@ -160,12 +159,12 @@ presets, skills, write/shell policy, HTTP surface).
 
 ## What's next
 
-* [`docs/concepts.md`](concepts.md) — the model behind Task /
+* [Concepts](concepts.md) — the model behind Task /
   EventLog / Engine
-* [`docs/noeta-agent.md`](noeta-agent.md) — the `python -m noeta.agent`
+* [Noeta Agent](noeta-agent.md) — the `python -m noeta.agent`
   workspace-scoped coding agent (tools, presets, skills, HTTP surface)
-* [`docs/failure-modes.md`](failure-modes.md) — common failures and
+* [Failure Modes](failure-modes.md) — common failures and
   how to recover
-* [`docs/daemon.md`](daemon.md) — the resident drain loop, now the
+* [Daemon / Worker Loop](daemon.md) — the resident drain loop, now the
   library primitive `noeta.runtime.worker.WorkerLoop` (the `noeta serve`
   daemon was removed in TL6)
