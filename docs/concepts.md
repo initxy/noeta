@@ -91,11 +91,10 @@ never re-calls a provider.
 
 ## Wake-resume
 
-<p align="center">
-  <img src="assets/task-lifecycle.svg" alt="Task lifecycle — unified suspension, wake events, and terminal exits" width="820">
-  <br>
-  <em>The task lifecycle: all waiting is one <code>Suspended</code> state plus a typed wake condition; a wake event re-enqueues the task for the next lease.</em>
-</p>
+<figure markdown="span">
+  ![Task lifecycle — unified suspension, wake events, and terminal exits](assets/task-lifecycle.svg){ width="820" }
+  <figcaption>The task lifecycle: all waiting is one <code>Suspended</code> state plus a typed wake condition; a wake event re-enqueues the task for the next lease.</figcaption>
+</figure>
 
 When a task suspends with a typed `WakeCondition`
 (`SubtaskCompleted` / `HumanResponseReceived` / `TimerFired`), the
@@ -125,11 +124,10 @@ mid-step) and multi-worker / multi-host concurrency remain limitations. See
 
 ## How a step flows
 
-<p align="center">
-  <img src="assets/turn-sequence.svg" alt="One turn of task execution — goal submission, lease, step loop, finish, streamed over SSE" width="820">
-  <br>
-  <em>One full turn through the bundled agent: submit → lease → step loop → finish. The SSE stream on the left is the product surface; steps 1–6 below are the runtime-level slice of the same picture.</em>
-</p>
+<figure markdown="span">
+  ![One turn of task execution — goal submission, lease, step loop, finish, streamed over SSE](assets/turn-sequence.svg){ width="820" }
+  <figcaption>One full turn through the bundled agent: submit → lease → step loop → finish. The SSE stream on the left is the product surface; steps 1–6 below are the runtime-level slice of the same picture.</figcaption>
+</figure>
 
 1. A Worker calls `dispatcher.lease(...)` and gets
    back a `Lease(lease_id, task_id, expires_at, wake_event?)`. The drain
