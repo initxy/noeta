@@ -1,0 +1,225 @@
+<svg viewBox="0 0 890 1088" role="img" aria-label="Noeta Architecture — runtime / sdk / product layering and module relationships (architecture diagram)" width="890" height="1088" xmlns="http://www.w3.org/2000/svg"><style>@font-face { font-family: 'JetBrains Mono'; font-weight: 400; src: local('JetBrains Mono'), local('JetBrainsMono-Regular'); }
+@font-face { font-family: 'JetBrains Mono'; font-weight: 500; src: local('JetBrains Mono'), local('JetBrainsMono-Regular'); }
+@font-face { font-family: 'JetBrains Mono'; font-weight: 600; src: local('JetBrains Mono'), local('JetBrainsMono-Regular'); }
+@font-face { font-family: 'JetBrains Mono'; font-weight: 700; src: local('JetBrains Mono'), local('JetBrainsMono-Regular'); }
+svg { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace; }
+:root, [data-theme="dark"] { --bg: #020617; --grid: #1e293b; --text: #ffffff; --text-muted: #94a3b8; --text-dim: #475569; --text-faint: #7d8da1; --panel: rgba(15, 23, 42, 0.5); --panel-border: #1e293b; --lane-fill: rgba(15, 23, 42, 0.22); --lane-stroke: #334155; --arrow: #64748b; --arrow-emphasis: #34d399; --mask: #0f172a; --frontend-fill: rgba(8, 51, 68, 0.4); --frontend-stroke: #22d3ee; --backend-fill: rgba(6, 78, 59, 0.4); --backend-stroke: #34d399; --database-fill: rgba(76, 29, 149, 0.4); --database-stroke: #a78bfa; --cloud-fill: rgba(120, 53, 15, 0.3); --cloud-stroke: #fbbf24; --security-fill: rgba(136, 19, 55, 0.4); --security-stroke: #fb7185; --messagebus-fill: rgba(251, 146, 60, 0.3); --messagebus-stroke: #fb923c; --external-fill: rgba(30, 41, 59, 0.5); --external-stroke: #94a3b8; --toolbar-bg: rgba(15, 23, 42, 0.8); --toolbar-border: #334155; --toolbar-text: #e2e8f0; --toolbar-hover: rgba(15, 23, 42, 0.95); --toolbar-menu-bg: #0f172a; }
+[data-theme="light"] { --bg: #f8fafc; --grid: #e2e8f0; --text: #0f172a; --text-muted: #64748b; --text-dim: #94a3b8; --text-faint: #64748b; --panel: #ffffff; --panel-border: #e2e8f0; --lane-fill: rgba(248, 250, 252, 0.65); --lane-stroke: #cbd5e1; --arrow: #94a3b8; --arrow-emphasis: #059669; --mask: #ffffff; --frontend-fill: rgba(34, 211, 238, 0.15); --frontend-stroke: #0891b2; --backend-fill: rgba(52, 211, 153, 0.18); --backend-stroke: #059669; --database-fill: rgba(167, 139, 250, 0.2); --database-stroke: #7c3aed; --cloud-fill: rgba(251, 191, 36, 0.18); --cloud-stroke: #d97706; --security-fill: rgba(251, 113, 133, 0.15); --security-stroke: #e11d48; --messagebus-fill: rgba(251, 146, 60, 0.15); --messagebus-stroke: #ea580c; --external-fill: rgba(148, 163, 184, 0.18); --external-stroke: #64748b; --toolbar-bg: rgba(255, 255, 255, 0.92); --toolbar-border: #cbd5e1; --toolbar-text: #334155; --toolbar-hover: #ffffff; --toolbar-menu-bg: #ffffff; }
+svg { width: 100%; min-width: min(900px, 100%); display: block; }
+.c-grid { stroke: var(--grid); fill: none; }
+.c-mask { fill: var(--mask); stroke: none; }
+.c-frontend { fill: var(--frontend-fill); stroke: var(--frontend-stroke); }
+.c-backend { fill: var(--backend-fill); stroke: var(--backend-stroke); }
+.c-database { fill: var(--database-fill); stroke: var(--database-stroke); }
+.c-cloud { fill: var(--cloud-fill); stroke: var(--cloud-stroke); }
+.c-security { fill: var(--security-fill); stroke: var(--security-stroke); }
+.c-messagebus { fill: var(--messagebus-fill); stroke: var(--messagebus-stroke); }
+.c-external { fill: var(--external-fill); stroke: var(--external-stroke); }
+.t-primary { fill: var(--text); }
+.t-muted { fill: var(--text-muted); }
+.t-dim { fill: var(--text-dim); }
+.t-frontend { fill: var(--frontend-stroke); }
+.t-backend { fill: var(--backend-stroke); }
+.t-database { fill: var(--database-stroke); }
+.t-cloud { fill: var(--cloud-stroke); }
+.t-security { fill: var(--security-stroke); }
+.t-messagebus { fill: var(--messagebus-stroke); }
+.t-external { fill: var(--external-stroke); }
+.a-default { stroke: var(--arrow); fill: none; }
+.a-emphasis { stroke: var(--arrow-emphasis); fill: none; }
+.a-security { stroke: var(--security-stroke); fill: none; stroke-dasharray: 5, 5; }
+.a-dashed { stroke: var(--database-stroke); fill: none; stroke-dasharray: 4, 4; }
+.m-default { fill: var(--arrow); }
+.m-emphasis { fill: var(--arrow-emphasis); }
+.m-security { fill: var(--security-stroke); }
+.m-dashed { fill: var(--database-stroke); }
+.c-security-group { fill: transparent; stroke: var(--security-stroke); stroke-dasharray: 4, 4; }
+.c-region { fill: rgba(251, 191, 36, 0.05); stroke: var(--cloud-stroke); stroke-dasharray: 8, 4; }
+.c-lane { fill: var(--lane-fill); stroke: var(--lane-stroke); stroke-dasharray: 6, 6; }
+:root, svg { --bg: #020617; --grid: #1e293b; --text: #ffffff; --text-muted: #94a3b8; --text-dim: #475569; --text-faint: #7d8da1; --panel: rgba(15, 23, 42, 0.5); --panel-border: #1e293b; --lane-fill: rgba(15, 23, 42, 0.22); --lane-stroke: #334155; --arrow: #64748b; --arrow-emphasis: #34d399; --mask: #0f172a; --frontend-fill: rgba(8, 51, 68, 0.4); --frontend-stroke: #22d3ee; --backend-fill: rgba(6, 78, 59, 0.4); --backend-stroke: #34d399; --database-fill: rgba(76, 29, 149, 0.4); --database-stroke: #a78bfa; --cloud-fill: rgba(120, 53, 15, 0.3); --cloud-stroke: #fbbf24; --security-fill: rgba(136, 19, 55, 0.4); --security-stroke: #fb7185; --messagebus-fill: rgba(251, 146, 60, 0.3); --messagebus-stroke: #fb923c; --external-fill: rgba(30, 41, 59, 0.5); --external-stroke: #94a3b8; --toolbar-bg: rgba(15, 23, 42, 0.8); --toolbar-border: #334155; --toolbar-text: #e2e8f0; --toolbar-hover: rgba(15, 23, 42, 0.95); --toolbar-menu-bg: #0f172a; }
+@media (prefers-color-scheme: light) { :root, svg { --bg: #f8fafc; --grid: #e2e8f0; --text: #0f172a; --text-muted: #64748b; --text-dim: #94a3b8; --text-faint: #64748b; --panel: #ffffff; --panel-border: #e2e8f0; --lane-fill: rgba(248, 250, 252, 0.65); --lane-stroke: #cbd5e1; --arrow: #94a3b8; --arrow-emphasis: #059669; --mask: #ffffff; --frontend-fill: rgba(34, 211, 238, 0.15); --frontend-stroke: #0891b2; --backend-fill: rgba(52, 211, 153, 0.18); --backend-stroke: #059669; --database-fill: rgba(167, 139, 250, 0.2); --database-stroke: #7c3aed; --cloud-fill: rgba(251, 191, 36, 0.18); --cloud-stroke: #d97706; --security-fill: rgba(251, 113, 133, 0.15); --security-stroke: #e11d48; --messagebus-fill: rgba(251, 146, 60, 0.15); --messagebus-stroke: #ea580c; --external-fill: rgba(148, 163, 184, 0.18); --external-stroke: #64748b; --toolbar-bg: rgba(255, 255, 255, 0.92); --toolbar-border: #cbd5e1; --toolbar-text: #334155; --toolbar-hover: #ffffff; --toolbar-menu-bg: #ffffff; } }
+svg[data-theme="light"] { --bg: #f8fafc; --grid: #e2e8f0; --text: #0f172a; --text-muted: #64748b; --text-dim: #94a3b8; --text-faint: #64748b; --panel: #ffffff; --panel-border: #e2e8f0; --lane-fill: rgba(248, 250, 252, 0.65); --lane-stroke: #cbd5e1; --arrow: #94a3b8; --arrow-emphasis: #059669; --mask: #ffffff; --frontend-fill: rgba(34, 211, 238, 0.15); --frontend-stroke: #0891b2; --backend-fill: rgba(52, 211, 153, 0.18); --backend-stroke: #059669; --database-fill: rgba(167, 139, 250, 0.2); --database-stroke: #7c3aed; --cloud-fill: rgba(251, 191, 36, 0.18); --cloud-stroke: #d97706; --security-fill: rgba(251, 113, 133, 0.15); --security-stroke: #e11d48; --messagebus-fill: rgba(251, 146, 60, 0.15); --messagebus-stroke: #ea580c; --external-fill: rgba(148, 163, 184, 0.18); --external-stroke: #64748b; --toolbar-bg: rgba(255, 255, 255, 0.92); --toolbar-border: #cbd5e1; --toolbar-text: #334155; --toolbar-hover: #ffffff; --toolbar-menu-bg: #ffffff; }
+svg[data-theme="dark"] { --bg: #020617; --grid: #1e293b; --text: #ffffff; --text-muted: #94a3b8; --text-dim: #475569; --text-faint: #7d8da1; --panel: rgba(15, 23, 42, 0.5); --panel-border: #1e293b; --lane-fill: rgba(15, 23, 42, 0.22); --lane-stroke: #334155; --arrow: #64748b; --arrow-emphasis: #34d399; --mask: #0f172a; --frontend-fill: rgba(8, 51, 68, 0.4); --frontend-stroke: #22d3ee; --backend-fill: rgba(6, 78, 59, 0.4); --backend-stroke: #34d399; --database-fill: rgba(76, 29, 149, 0.4); --database-stroke: #a78bfa; --cloud-fill: rgba(120, 53, 15, 0.3); --cloud-stroke: #fbbf24; --security-fill: rgba(136, 19, 55, 0.4); --security-stroke: #fb7185; --messagebus-fill: rgba(251, 146, 60, 0.3); --messagebus-stroke: #fb923c; --external-fill: rgba(30, 41, 59, 0.5); --external-stroke: #94a3b8; --toolbar-bg: rgba(15, 23, 42, 0.8); --toolbar-border: #334155; --toolbar-text: #e2e8f0; --toolbar-hover: rgba(15, 23, 42, 0.95); --toolbar-menu-bg: #0f172a; }
+rect.c-bg-rect { fill: var(--bg); }
+</style><rect width="100%" height="100%" class="c-bg-rect"/>
+        <!-- Definitions -->
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-default"/>
+          </marker>
+          <marker id="arrowhead-emphasis" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-emphasis"/>
+          </marker>
+          <marker id="arrowhead-security" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-security"/>
+          </marker>
+          <marker id="arrowhead-dashed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-dashed"/>
+          </marker>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" class="c-grid" stroke-width="0.5"/>
+          </pattern>
+        </defs>
+
+        <!-- Background Grid -->
+        <rect width="100%" height="100%" fill="url(#grid)"/>
+
+        <!-- Boundaries (behind everything) -->
+        <rect x="220" y="30" width="420" height="110" rx="12" class="c-region" stroke-width="1"/>
+        <text x="228" y="48" class="t-cloud" font-size="9" font-weight="600">noeta-agent — product application</text>
+
+        <rect x="430" y="180" width="420" height="110" rx="12" class="c-region" stroke-width="1"/>
+        <text x="438" y="198" class="t-cloud" font-size="9" font-weight="600">noeta-sdk</text>
+
+        <rect x="10" y="330" width="840" height="580" rx="8" class="c-security-group" stroke-width="1"/>
+        <text x="18" y="348" class="t-security" font-size="9" font-weight="600">noeta-runtime — pure engine + materials (import-linter layered)</text>
+
+        <!-- Connection paths (before components for correct z-order) -->
+        <path d="M 160 90 L 250 90" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 400 90 L 460 90" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 535 120 L 535 210" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 535 270 L 535 360" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 460 390 L 400 390" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path d="M 610 390 L 670 390" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path d="M 535 420 L 535 520" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 535 580 L 535 680" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 460 550 L 295.5 550 Q 287.5 550 287.5 558 L 287.5 672 Q 287.5 680 279.5 680 L 115 680" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path d="M 610 550 L 670 550" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 535 580 L 535 617 Q 535 625 543 625 L 737 625 Q 745 625 745 633 L 745 680" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path d="M 460 710 L 400 710" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path d="M 325 740 L 325 960" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+        <!-- Components -->
+        <rect x="40" y="60" width="120" height="60" rx="6" class="c-mask"/>
+        <rect x="40" y="60" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
+        <text x="100" y="88" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">User</text>
+        <text x="100" y="104" class="t-muted" font-size="9" text-anchor="middle">browser</text>
+
+        <rect x="250" y="60" width="150" height="60" rx="6" class="c-mask"/>
+        <rect x="250" y="60" width="150" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
+        <text x="325" y="88" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Web UI</text>
+        <text x="325" y="104" class="t-muted" font-size="9" text-anchor="middle">apps/web · React</text>
+
+        <rect x="460" y="60" width="150" height="60" rx="6" class="c-mask"/>
+        <rect x="460" y="60" width="150" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="535" y="88" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Backend Host</text>
+        <text x="535" y="104" class="t-muted" font-size="9" text-anchor="middle">HTTP + SSE server</text>
+        <text x="535" y="112" class="t-backend" font-size="7" text-anchor="middle">python -m noeta.agent</text>
+
+        <rect x="460" y="210" width="150" height="60" rx="6" class="c-mask"/>
+        <rect x="460" y="210" width="150" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="535" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Client / query</text>
+        <text x="535" y="254" class="t-muted" font-size="9" text-anchor="middle">Options → AgentSpec</text>
+
+        <rect x="670" y="210" width="150" height="60" rx="6" class="c-mask"/>
+        <rect x="670" y="210" width="150" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="745" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">@tool / MCP server</text>
+        <text x="745" y="254" class="t-muted" font-size="9" text-anchor="middle">authoring API</text>
+
+        <rect x="40" y="360" width="150" height="60" rx="6" class="c-mask"/>
+        <rect x="40" y="360" width="150" height="60" rx="6" class="c-security" stroke-width="1.5"/>
+        <text x="115" y="388" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">guards · observers</text>
+        <text x="115" y="404" class="t-muted" font-size="9" text-anchor="middle">sync / async hooks</text>
+
+        <rect x="250" y="360" width="150" height="60" rx="6" class="c-mask"/>
+        <rect x="250" y="360" width="150" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="325" y="388" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">runtime</text>
+        <text x="325" y="404" class="t-muted" font-size="9" text-anchor="middle">Worker · Dispatcher</text>
+        <text x="325" y="412" class="t-backend" font-size="7" text-anchor="middle">lease</text>
+
+        <rect x="460" y="360" width="150" height="60" rx="6" class="c-mask"/>
+        <rect x="460" y="360" width="150" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="535" y="388" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">execution</text>
+        <text x="535" y="404" class="t-muted" font-size="9" text-anchor="middle">driver · runner · builder</text>
+
+        <rect x="670" y="360" width="150" height="60" rx="6" class="c-mask"/>
+        <rect x="670" y="360" width="150" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="745" y="388" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">agent + presets</text>
+        <text x="745" y="404" class="t-muted" font-size="9" text-anchor="middle">AgentSpec · registry</text>
+        <text x="745" y="412" class="t-backend" font-size="7" text-anchor="middle">4 official agents</text>
+
+        <rect x="460" y="520" width="150" height="60" rx="6" class="c-mask"/>
+        <rect x="460" y="520" width="150" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="535" y="548" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">core — Engine</text>
+        <text x="535" y="564" class="t-muted" font-size="9" text-anchor="middle">fold · snapshot · step</text>
+
+        <rect x="670" y="520" width="150" height="60" rx="6" class="c-mask"/>
+        <rect x="670" y="520" width="150" height="60" rx="6" class="c-database" stroke-width="1.5"/>
+        <text x="745" y="548" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">storage</text>
+        <text x="745" y="564" class="t-muted" font-size="9" text-anchor="middle">EventLog · ContentStore</text>
+        <text x="745" y="572" class="t-database" font-size="7" text-anchor="middle">sqlite</text>
+
+        <rect x="40" y="680" width="150" height="60" rx="6" class="c-mask"/>
+        <rect x="40" y="680" width="150" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="115" y="708" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">context</text>
+        <text x="115" y="724" class="t-muted" font-size="9" text-anchor="middle">ThreeSegmentComposer</text>
+
+        <rect x="250" y="680" width="150" height="60" rx="6" class="c-mask"/>
+        <rect x="250" y="680" width="150" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="325" y="708" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">providers</text>
+        <text x="325" y="724" class="t-muted" font-size="9" text-anchor="middle">anthropic · openai_compat</text>
+
+        <rect x="460" y="680" width="150" height="60" rx="6" class="c-mask"/>
+        <rect x="460" y="680" width="150" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="535" y="708" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">policies</text>
+        <text x="535" y="724" class="t-muted" font-size="9" text-anchor="middle">ReActPolicy</text>
+
+        <rect x="670" y="680" width="150" height="60" rx="6" class="c-mask"/>
+        <rect x="670" y="680" width="150" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="745" y="708" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">tools</text>
+        <text x="745" y="724" class="t-muted" font-size="9" text-anchor="middle">fs · shell · web · MCP</text>
+
+        <rect x="460" y="830" width="150" height="60" rx="6" class="c-mask"/>
+        <rect x="460" y="830" width="150" height="60" rx="6" class="c-cloud" stroke-width="1.5"/>
+        <text x="535" y="858" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">protocols</text>
+        <text x="535" y="874" class="t-muted" font-size="9" text-anchor="middle">L0 typed boundary</text>
+        <text x="535" y="882" class="t-cloud" font-size="7" text-anchor="middle">imports nothing</text>
+
+        <rect x="250" y="960" width="150" height="60" rx="6" class="c-mask"/>
+        <rect x="250" y="960" width="150" height="60" rx="6" class="c-external" stroke-width="1.5"/>
+        <text x="325" y="988" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">LLM vendors</text>
+        <text x="325" y="1004" class="t-muted" font-size="9" text-anchor="middle">Anthropic · OpenAI API</text>
+
+        <!-- Connection labels -->
+        <rect x="188" y="70" width="34" height="14" rx="3" class="c-mask"/>
+        <text x="205" y="80" class="t-backend" font-size="8" text-anchor="middle">HTTPS</text>
+        <rect x="391.4" y="125" width="77.2" height="14" rx="3" class="c-mask"/>
+        <text x="430" y="135" class="t-backend" font-size="8" text-anchor="middle">commands + SSE</text>
+        <rect x="496.4" y="160" width="77.2" height="14" rx="3" class="c-mask"/>
+        <text x="535" y="170" class="t-backend" font-size="8" text-anchor="middle">in-process SDK</text>
+        <rect x="489.2" y="308" width="91.6" height="14" rx="3" class="c-mask"/>
+        <text x="535" y="318" class="t-backend" font-size="8" text-anchor="middle">start · send_goal</text>
+        <rect x="391.4" y="338" width="77.2" height="14" rx="3" class="c-mask"/>
+        <text x="430" y="348" class="t-muted" font-size="8" text-anchor="middle">enqueue · wake</text>
+        <rect x="613.4" y="338" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
+        <text x="640" y="348" class="t-muted" font-size="8" text-anchor="middle">AgentSpec</text>
+        <rect x="501.2" y="465" width="67.6" height="14" rx="3" class="c-mask"/>
+        <text x="535" y="475" class="t-backend" font-size="8" text-anchor="middle">advance Step</text>
+        <rect x="498.8" y="650" width="72.4" height="14" rx="3" class="c-mask"/>
+        <text x="535" y="660" class="t-backend" font-size="8" text-anchor="middle">Policy.decide</text>
+        <rect x="253.7" y="595" width="67.6" height="14" rx="3" class="c-mask"/>
+        <text x="287.5" y="605" class="t-muted" font-size="8" text-anchor="middle">compose View</text>
+        <rect x="620.6" y="516" width="38.8" height="14" rx="3" class="c-mask"/>
+        <text x="640" y="526" class="t-backend" font-size="8" text-anchor="middle">append</text>
+        <rect x="591.8" y="605" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
+        <text x="640" y="615" class="t-muted" font-size="8" text-anchor="middle">execute tool_calls</text>
+        <rect x="401" y="676" width="58" height="14" rx="3" class="c-mask"/>
+        <text x="430" y="686" class="t-muted" font-size="8" text-anchor="middle">complete()</text>
+        <rect x="284" y="842" width="82" height="14" rx="3" class="c-mask"/>
+        <text x="325" y="852" class="t-muted" font-size="8" text-anchor="middle">vendor wire API</text>
+
+        <!-- Legend -->
+        <text x="40" y="1059" class="t-primary" font-size="9" font-weight="600">Legend</text>
+        <rect x="40" y="1064" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
+        <text x="60" y="1072" class="t-muted" font-size="8">External</text>
+        <rect x="138" y="1064" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
+        <text x="158" y="1072" class="t-muted" font-size="8">Frontend</text>
+        <rect x="236" y="1064" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
+        <text x="256" y="1072" class="t-muted" font-size="8">Backend</text>
+        <rect x="329" y="1064" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
+        <text x="349" y="1072" class="t-muted" font-size="8">Security</text>
+        <rect x="427" y="1064" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
+        <text x="447" y="1072" class="t-muted" font-size="8">Database</text>
+        <rect x="525" y="1064" width="14" height="9" rx="2" class="c-cloud" stroke-width="1"/>
+        <text x="545" y="1072" class="t-muted" font-size="8">Cloud</text>
+      </svg>
