@@ -2,18 +2,21 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-> A single-host, durable, event-sourced runtime for AI agents.
+> Open-source, self-hostable runtime for AI agents. Provider-neutral, event-sourced, built for durability.
 
-Noeta hosts, records, and schedules agent execution — without prescribing how
-the agent is written. Every step an agent takes lands in an append-only
-**EventLog**, and a task's entire state is *folded* back from that log. Suspend
-and resume, crash recovery, replay, and exactly-once wake are not features
-bolted on top; they fall out of treating the log as the single source of truth.
+Noeta is what you get when you take the agent loop from Claude Code or the
+Claude Agent SDK and put it on a durable, inspectable, event-sourced spine —
+without locking you to a single vendor or telling you how to write your agent.
 
-Where an in-process agent library (claude-agent-sdk, LangChain) gives you the
-loop, Noeta adds the durable substrate underneath it — so an agent's history is
-a log you can fold, inspect, and re-enter, not ephemeral memory that dies with
-the process.
+Every step an agent takes lands in an append-only **EventLog**, and a task's
+entire state is *folded* back from that log. Suspend and resume, crash
+recovery, replay, and exactly-once wake are not features bolted on top; they
+fall out of treating the log as the single source of truth.
+
+Where an in-process agent library (Claude Agent SDK, LangChain) gives you the
+loop, Noeta adds the durable substrate underneath it — so an agent's history
+is a log you can fold, inspect, and re-enter, not ephemeral memory that dies
+with the process.
 
 <p align="center">
   <img src="docs/assets/web-app.png" alt="Noeta coding-agent web app" width="820">
