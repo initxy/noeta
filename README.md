@@ -209,7 +209,7 @@ managed hosting or vendor SLA.
 
 ## Documentation
 
-- [`docs/quickstart.md`](docs/quickstart.md) — the offline smoke plus a real-provider walkthrough
+- [`docs/getting-started.md`](docs/getting-started.md) — the offline smoke plus a real-provider walkthrough
 - [`docs/concepts.md`](docs/concepts.md) — the core model: Task / EventLog / Dispatcher / Engine / Guard / Observer / Policy / Composer
 - [`docs/noeta-agent.md`](docs/noeta-agent.md) — the `python -m noeta.agent` coding agent: tools, presets, skills, write/shell policy, HTTP surface, MCP / hooks
 - [`docs/noeta-architecture-deep-dive.md`](docs/noeta-architecture-deep-dive.md) — top-down architecture, with Claude Agent SDK comparisons

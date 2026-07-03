@@ -44,11 +44,11 @@ Recover by:
 * inspecting the recording (the EventLog read models / the code
   session's inspect projection) to read the exact denial reason in
   the relevant denial / `TaskFailed` envelope
-* raising the budget — the code runner's default lives in
-  `noeta.agent.host.session.default_coding_budget()` (the budget
-  `python -m noeta.agent` sessions use when no explicit one is
-  passed); programmatic callers pass a `Budget(...)` via
-  `CodeSessionConfig(budget=...)`. (The
+* raising the budget — the budget is part of an agent's `Options`
+  (identity); programmatic SDK callers pass a `Budget(...)` (or
+  `BudgetSpec` fields) via `Options`, with unset caps delegating to
+  `Budget()` defaults, and `python -m noeta.agent` wires it from the
+  host config / `main` preset. (The
   `noeta.testing.profile.default_budget()` helper is the
   test/demo default only — production never imports
   `noeta.testing`.)
@@ -68,7 +68,7 @@ changing the task's goal to avoid the denied action.
 ## Durable exactly-once wake (H2)
 
 When a suspended task is woken via `dispatcher.wake(...)`, the matched
-event lives on the dispatcher row. **H2 (docs/adr/subtask-fanout-and-durable-wake.md) makes wake delivery
+event lives on the dispatcher row. **H2 ([ADR: Subtask fan-out and durable wake](adr/subtask-fanout-and-durable-wake.md)) makes wake delivery
 and consumption exactly-once across a crash** (single-host /
 single-worker): the matched wake **survives `lease()`** (it is no longer
 destroyed at lease time), is cleared only by a **consuming release** that
@@ -154,14 +154,14 @@ and continues. This cap-hit is an **operational-failure signal, not a
 recovery path**: the loop cannot distinguish a cap-hit from a normal
 lease expiry, so 3A makes **no promise** about the task returning to
 ready or being picked up by a future lease. Inspect it — HTTP
-`GET /tasks/{id}` (folded detail) and `GET /tasks/{id}/events` (envelope
-history) against a running `python -m noeta.agent` server, or Python
+`GET /tasks` (session list) and `GET /stream?task=<id>` (envelope replay)
+against a running `python -m noeta.agent` server, or Python
 `noeta.core.fold.fold(event_log, content_store, task_id)` — and decide
 what to do by hand.
 
 ## Engine class body over budget
 
-The Engine class body is capped at 500 lines (docs/adr/guard-observer-hooks.md). A PR that
+The Engine class body is capped at 500 lines ([ADR: Guard-observer hooks](adr/guard-observer-hooks.md)). A PR that
 crosses the line will fail the `test_real_engine_under_500_budget`
 gate. Re-factor by moving handlers into `noeta/core/_decision_handlers.py`
 following the C3 pattern.
