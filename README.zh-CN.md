@@ -2,6 +2,8 @@
 
 [English](README.md) · **简体中文**
 
+**[文档站](https://initxy.github.io/noeta/zh/)** · [快速开始](https://initxy.github.io/noeta/zh/tutorials/quickstart/) · [SDK 参考](https://initxy.github.io/noeta/zh/reference/sdk/) · [配置 provider](https://initxy.github.io/noeta/zh/how-to/configure-provider/)
+
 > 面向 AI agent 的开源可自托管运行时。Provider 中立、事件溯源、为持久化而生。
 
 Noeta 把 Claude Code 或 Claude Agent SDK 里的 agent 执行循环，架设在一条持久化、可审查、事件溯源的脊柱上——不绑定任何单一厂商，也不规定 agent 该怎么写。
@@ -54,28 +56,28 @@ finally:
     shutdown()
 ```
 
-引导式路径——安装、运行、打开 web UI、查看 trace——请看[快速开始教程](docs/tutorials/quickstart.md)。要接入真实的 Anthropic 或 OpenAI 兼容模型，请看[配置 provider](docs/how-to/configure-provider.md)。要在 SDK 上构建自己的 agent——定义 `@tool`、组装 `Options`、调用 `query()`——从[你的第一个 agent](docs/tutorials/first-agent.md)和可运行的 [`examples/`](examples/)开始。
+引导式路径——安装、运行、打开 web UI、查看 trace——请看[快速开始教程](https://initxy.github.io/noeta/zh/tutorials/quickstart/)。要接入真实的 Anthropic 或 OpenAI 兼容模型，请看[配置 provider](https://initxy.github.io/noeta/zh/how-to/configure-provider/)。要在 SDK 上构建自己的 agent——定义 `@tool`、组装 `Options`、调用 `query()`——从[你的第一个 agent](https://initxy.github.io/noeta/zh/tutorials/first-agent/)和可运行的 [`examples/`](examples/)开始。
 
-它和 Claude Agent SDK 比怎么样？两者都给你 agent 循环、工具、MCP 和 sub-agent；区别在底下的脊梁——请看[服务端对比](docs/reference/comparison.md)。
+它和 Claude Agent SDK 比怎么样？两者都给你 agent 循环、工具、MCP 和 sub-agent；区别在底下的脊梁——请看[服务端对比](https://initxy.github.io/noeta/zh/reference/comparison/)。
 
 ## 文档
 
-完整导航在[文档门户](docs/README.md)。
+完整文档渲染在 **[initxy.github.io/noeta](https://initxy.github.io/noeta/zh/)**（中文路径）。同样的文件以 `*.zh.md` 与英文一起位于仓库的 [`docs/`](docs/) 下，可直接在源码中浏览。
 
 | 层 | 从这里开始 | 什么时候读 |
 | --- | --- | --- |
-| 教程（Tutorials） | [`docs/tutorials/quickstart.md`](docs/tutorials/quickstart.md) | 你是新手，想让它跑起来。 |
-| 操作指南（How-to） | [`docs/how-to/configure-provider.md`](docs/how-to/configure-provider.md) | 你有具体任务要完成。 |
-| 概念（Concepts） | [`docs/concepts/event-sourcing.md`](docs/concepts/event-sourcing.md) | 你想理解设计。 |
-| 参考（Reference） | [`docs/reference/sdk.md`](docs/reference/sdk.md) | 你需要精确的 API 事实。 |
+| 教程（Tutorials） | [快速开始](https://initxy.github.io/noeta/zh/tutorials/quickstart/) | 你是新手，想让它跑起来。 |
+| 操作指南（How-to） | [配置 provider](https://initxy.github.io/noeta/zh/how-to/configure-provider/) | 你有具体任务要完成。 |
+| 概念（Concepts） | [事件溯源](https://initxy.github.io/noeta/zh/concepts/event-sourcing/) | 你想理解设计。 |
+| 参考（Reference） | [SDK 参考](https://initxy.github.io/noeta/zh/reference/sdk/) | 你需要精确的 API 事实。 |
 
-更深的内容：[架构概览](docs/architecture/overview.md)、[故障排查](docs/operations/troubleshooting.md)，以及记录每个跨模块决策的 [ADR](docs/adr/)（术语表在 [`CONTEXT.md`](CONTEXT.md)）。
+更深的内容：[架构概览](https://initxy.github.io/noeta/zh/architecture/overview/)、[故障排查](https://initxy.github.io/noeta/zh/operations/troubleshooting/)，以及记录每个跨模块决策的 [ADR](https://initxy.github.io/noeta/zh/adr/)（术语表在 [`CONTEXT.md`](CONTEXT.md)）。
 
 ## 状态与范围
 
 Noeta 处于早期 pre-1.0 预览阶段。它能跑、有测试、核心稳定，但部分能力目前有意不在范围内：
 
-- **单机 / 单 worker。** 随附的 worker 在进程内排空 dispatcher，它是预览，不是生产守护进程。单 worker 持久 exactly-once wake 已交付；多主机协调、多 worker  fencing 和 partial-step-orphan 边界（步骤中途崩溃）仍未解决——见[已知限制](docs/operations/limitations.md)。
+- **单机 / 单 worker。** 随附的 worker 在进程内排空 dispatcher，它是预览，不是生产守护进程。单 worker 持久 exactly-once wake 已交付；多主机协调、多 worker  fencing 和 partial-step-orphan 边界（步骤中途崩溃）仍未解决——见[已知限制](https://initxy.github.io/noeta/zh/operations/limitations/)。
 - **Human-in-the-loop / 定时器 wake** —— 引擎已具备形态，完整 UX 仍在落地中。
 - **前端** —— 随附的 web 应用是一个小型 Vite MPA，使用原生 ES 模块；预览阶段不计划迁移到任何框架。
 

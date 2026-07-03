@@ -15,12 +15,6 @@ dev = [
     "mypy>=1.10",
     "import-linter>=2.0",
     "respx>=0.23.1",
-]
-docs = [
-    "mkdocs>=1.6",
-    "mkdocs-material>=9.5",
-    "mkdocstrings[python]>=0.27",
-    "mkdocs-static-i18n>=1.2",
     "ruff>=0.6",
 ]
 
