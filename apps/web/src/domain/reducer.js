@@ -69,6 +69,13 @@ function emptyViewModel() {
     // ConversationReopened ("No synthesized terminal"). ORTHOGONAL to `status` — a closed conversation stays
     // "waiting"; this is the new-protocol equivalent of the detail's `closed`.
     closed: false,
+    // The LIVE transient-retry state of the in-flight LLM call, folded from
+    // LLMRetryScheduled: {callId, attempt, maxRetries, delaySeconds, category,
+    // error, seq}. Set on each scheduled backoff, cleared by the call's
+    // LLMResponseRecorded (the trio always completes, success or error), so a
+    // truthy value means "the agent is stalled in a retry backoff right now"
+    // — the composer indicator / status text key off it.
+    llmRetry: null,
     lastSeq: -1,
   };
 }
@@ -472,8 +479,57 @@ function applyEnvelope(vm, env) {
       for (const [subId, sub] of Object.entries(vm.subtasks)) {
         if (!keep(sub.seq)) delete vm.subtasks[subId];
       }
+      if (vm.llmRetry && !keep(vm.llmRetry.seq)) vm.llmRetry = null;
       break;
     }
+
+    // The runtime scheduled a live backoff for a transient LLM failure
+    // (rate limit / flaky transport). Fold the latest attempt into vm.llmRetry
+    // (the live "stalled, retrying" badge) and keep ONE warning turn per
+    // call_id in the timeline, updated in place as attempts accumulate — the
+    // durable record reads "this call was retried N times", not N rows.
+    case "LLMRetryScheduled": {
+      const retry = {
+        callId: typeof p.call_id === "string" ? p.call_id : null,
+        attempt: typeof p.attempt === "number" ? p.attempt : 0,
+        maxRetries: typeof p.max_retries === "number" ? p.max_retries : 0,
+        delaySeconds: typeof p.delay_seconds === "number" ? p.delay_seconds : 0,
+        category: typeof p.category === "string" ? p.category : null,
+        error: typeof p.error === "string" ? p.error : null,
+        seq,
+      };
+      vm.llmRetry = retry;
+      const existing = vm.turns.find(
+        (turn) =>
+          turn.kind === "warning" &&
+          turn.label === "llm-retry" &&
+          turn.callId === retry.callId
+      );
+      if (existing) {
+        existing.attempt = retry.attempt;
+        existing.maxRetries = retry.maxRetries;
+        existing.delaySeconds = retry.delaySeconds;
+        existing.error = retry.error;
+      } else {
+        vm.turns.push({
+          kind: "warning",
+          seq,
+          label: "llm-retry",
+          callId: retry.callId,
+          attempt: retry.attempt,
+          maxRetries: retry.maxRetries,
+          delaySeconds: retry.delaySeconds,
+          error: retry.error,
+        });
+      }
+      break;
+    }
+
+    // The retry loop always ends by recording the call's response (recovered
+    // or budget-exhausted error) — either way the backoff stall is over.
+    case "LLMResponseRecorded":
+      vm.llmRetry = null;
+      break;
 
     // an enabled MCP server could not be connected and was
     // skipped at task start; the task ran with the remaining servers' tools.

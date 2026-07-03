@@ -357,8 +357,16 @@ function ChatApp() {
   // show the bare typing animation; lifecycle ops (Approving/Closing/…) keep
   // their verb so the brief round-trip stays legible.
   const responding = working || !!chat.busyLabel;
+  // A live transient-retry backoff (rate limit / flaky transport) labels the
+  // composing indicator so a multi-second stall reads as "retrying", not as
+  // the agent silently hanging. Lifecycle busy verbs still take precedence.
+  const llmRetry = chat.vm?.llmRetry || null;
   const indicatorLabel =
-    chat.busyLabel && chat.busyLabel !== "Sending..." ? chat.busyLabel : null;
+    chat.busyLabel && chat.busyLabel !== "Sending..."
+      ? chat.busyLabel
+      : llmRetry
+        ? `Provider error — retrying (${llmRetry.attempt}/${llmRetry.maxRetries})`
+        : null;
 
   // The landing screen: a fresh, unsent session. The moment a goal is sent the
   // session is "opening" (task_id pending) or has a pendingGoalText, which flips

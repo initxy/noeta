@@ -247,6 +247,98 @@ def test_subagent_without_default_model_gets_no_extra_binding(
         client.shutdown()
 
 
+def test_subagent_inherits_parent_session_model_binding(tmp_path: Path) -> None:
+    """A session opened on a NON-default model selector propagates its
+    binding down the delegation tree: a child with no declared default gets
+    its own opening ModelBound (identity ``"inherited"``) and its LLM traffic
+    runs on the session model, not the host default."""
+    ws = _make_ws(tmp_path)
+    main = Options(
+        system_prompt="delegate",
+        agents={
+            "helper": AgentDefinition(description="test helper", prompt="helper"),
+        },
+        provider=FakeLLMProvider(
+            responses=[
+                _spawn("helper"),
+                *_end_script("child"),
+                *_end_script("parent"),
+            ]
+        ),
+    )
+    client = Client(
+        main,
+        workspace_dir=ws,
+        multi_turn=False,
+        allowed_models=["session-model"],
+    )
+    try:
+        outcome = client.start(goal="go", model_selector="session-model")
+        parent_events = client.events(outcome.task_id)
+        child_id = next(
+            e.payload.subtask_id
+            for e in parent_events
+            if e.type == "SubtaskSpawned"
+        )
+        child_events = client.events(child_id)
+        child_bound = [e for e in child_events if e.type == "ModelBound"]
+        assert [b.payload.model for b in child_bound] == ["session-model"]
+        assert child_bound[0].payload.principal_identity == "inherited"
+        # The child's LLM traffic actually runs on the inherited model.
+        child_reqs = [e for e in child_events if e.type == "LLMRequestStarted"]
+        assert child_reqs and all(
+            getattr(e.payload, "model", None) == "session-model"
+            for e in child_reqs
+        )
+    finally:
+        client.shutdown()
+
+
+def test_subagent_declared_default_beats_inherited_binding(
+    tmp_path: Path,
+) -> None:
+    """A child agent's own declared default model wins over the parent's
+    session binding."""
+    ws = _make_ws(tmp_path)
+    main = Options(
+        system_prompt="delegate",
+        agents={
+            "helper": AgentDefinition(
+                description="test helper",
+                prompt="helper",
+                model="haiku-test",
+            ),
+        },
+        provider=FakeLLMProvider(
+            responses=[
+                _spawn("helper"),
+                *_end_script("child"),
+                *_end_script("parent"),
+            ]
+        ),
+    )
+    client = Client(
+        main,
+        workspace_dir=ws,
+        multi_turn=False,
+        allowed_models=["session-model"],
+    )
+    try:
+        outcome = client.start(goal="go", model_selector="session-model")
+        parent_events = client.events(outcome.task_id)
+        child_id = next(
+            e.payload.subtask_id
+            for e in parent_events
+            if e.type == "SubtaskSpawned"
+        )
+        child_events = client.events(child_id)
+        child_bound = [e for e in child_events if e.type == "ModelBound"]
+        assert [b.payload.model for b in child_bound] == ["haiku-test"]
+        assert child_bound[0].payload.principal_identity == "agent-default"
+    finally:
+        client.shutdown()
+
+
 # ---------------------------------------------------------------------------
 # Case 6 — output_schema / thinking / effort injection chain + structured-answer parsing
 # ---------------------------------------------------------------------------

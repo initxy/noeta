@@ -1525,6 +1525,33 @@ def _spec_as_single(spec: SpawnSubtaskSpec) -> SpawnSubtaskDecision:
     )
 
 
+def _valid_fanout_call_layout(specs: tuple[SpawnSubtaskSpec, ...]) -> bool:
+    """SR2 batch admission — is the specs' (call_id, member_index) layout the
+    one the resume pairing can reproduce from the assistant message?
+
+    Valid layout: specs group into contiguous same-``call_id`` runs, each run
+    numbered ``member_index`` 0..k-1 (one run per originating tool_use — a
+    batch call's ``spawns`` array yields k>1), and no ``call_id`` appears in
+    two runs. A duplicated tool_use id (the pre-batch failure mode) shows up
+    as two runs with the same id — or one run whose indices restart at 0 —
+    and is rejected exactly as before."""
+    seen_runs: set[str] = set()
+    current_id: Optional[str] = None
+    expected_index = 0
+    for spec in specs:
+        if spec.call_id != current_id:
+            if spec.call_id in seen_runs or spec.member_index != 0:
+                return False
+            seen_runs.add(spec.call_id)
+            current_id = spec.call_id
+            expected_index = 1
+        else:
+            if spec.member_index != expected_index:
+                return False
+            expected_index += 1
+    return True
+
+
 def _deny_fanout_batch(
     ctx: HandlerContext,
     task: Task,
@@ -1579,14 +1606,21 @@ def handle_spawn_subtasks(
     n = len(specs)
     call_ids = [s.call_id for s in specs]
 
-    # --- global preflight (all-or-none): size + duplicate call_id ---
+    # --- global preflight (all-or-none): size + call_id layout ---
     if not (1 <= n <= MAX_FANOUT):
         return _deny_fanout_batch(
             ctx, task, specs[0],
             reason=f"fanout_batch_size:{n}>{MAX_FANOUT}",
             lease_id=lease_id, trace_id=trace_id,
         )
-    if len(set(call_ids)) != n:
+    # Batch-form layout check (replaces bare call_id uniqueness): members of
+    # ONE batch call legitimately share its call_id — they must be contiguous
+    # and numbered 0..k-1, and a call_id must not reappear in a later run.
+    # This still catches what the old check caught (two distinct tool_uses
+    # with a duplicated id → both members carry member_index 0) while
+    # admitting the one-call ``spawns`` array, and it is exactly the layout
+    # the resume pairing reproduces positionally from the assistant message.
+    if not _valid_fanout_call_layout(specs):
         return _deny_fanout_batch(
             ctx, task, specs[0], reason="fanout_batch_duplicate_call_id",
             lease_id=lease_id, trace_id=trace_id,

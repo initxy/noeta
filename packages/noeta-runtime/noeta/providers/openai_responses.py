@@ -289,14 +289,24 @@ class OpenAIResponsesProvider:
                 }
             }
         # Reasoning chain (D3): derive a mapped effort from effort/thinking.
-        # Non-None means
-        # "reasoning present" — attach reasoning{effort,summary:auto} and
-        # include:[reasoning.encrypted_content] (to retrieve the continuation
-        # ciphertext). summary:"auto" makes the gateway emit readable summary
-        # segments; store:false is already always set above.
+        # Non-None means "an explicit effort was requested" — attach
+        # reasoning{effort,summary:auto}. summary:"auto" makes the gateway emit
+        # readable summary segments; store:false is already always set above.
         effort = _map_effort(request)
         if effort is not None:
             body["reasoning"] = {"effort": effort, "summary": "auto"}
+        # include:[reasoning.encrypted_content] is DECOUPLED from the effort
+        # gate: a reasoning model reasons at its server-side default effort even
+        # when the request carries no reasoning{} block, and without the
+        # ciphertext the next turn can only echo an empty reasoning item — the
+        # gateway then cannot restore the prior turn's reasoning tokens, which
+        # breaks both continuation and the prompt-cache prefix at the first
+        # assistant turn (observed: subagents spawned without an effort override
+        # never got a cache hit past the static head). ``reasoning_continuation
+        # = "off"`` remains the escape hatch for gateways that reject the
+        # include param — with the echo off the ciphertext is never sent back,
+        # so requesting it would be pointless.
+        if self._reasoning_continuation != "off":
             body["include"] = ["reasoning.encrypted_content"]
         return body
 
@@ -745,8 +755,13 @@ def _assistant_message_to_responses(
             # The echo is gated: the composer re-attaches the reasoning chain
             # neutrally for every provider, but only a gateway that echoes
             # (Responses relies on it for continuation) actually puts it on the
-            # wire. Dropped when off.
-            if echo_reasoning:
+            # wire. Dropped when off. Also dropped when the block carries no
+            # ciphertext (signature None — the prior turn was made without
+            # include:[reasoning.encrypted_content]): an item without
+            # encrypted_content cannot restore any reasoning tokens, and
+            # echoing the empty shell breaks the gateway's prompt-cache prefix
+            # at this position.
+            if echo_reasoning and block.signature is not None:
                 reasoning_items.append(_thinking_block_to_reasoning(block))
         elif isinstance(block, ToolUseBlock):
             tool_calls.append(

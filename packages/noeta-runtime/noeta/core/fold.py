@@ -854,6 +854,10 @@ _HANDLERS = {
     "LLMRequestStarted": _on_noop,
     "LLMRequestFinished": _on_llm_request_finished,
     "LLMResponseRecorded": _on_noop,
+    # A live transient-retry marker (rate limit / flaky transport): purely
+    # observational — the frontend paints "retrying", fold derives no state.
+    # Additive event type: absent from old recordings → byte-equal.
+    "LLMRetryScheduled": _on_noop,
     # Slice B: the assistant turn's extended-thinking, keyed by its first
     # tool_use call_id; the Composer re-attaches it on the next compose.
     "AssistantThinkingRecorded": _on_assistant_thinking_recorded,

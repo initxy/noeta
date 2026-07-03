@@ -59,13 +59,33 @@ _REFERENCE_SCHEMA: dict[str, Any] = {
         "parameters": {
             "type": "object",
             "properties": {
-                "agent": {
-                    "type": "string",
-                    "description": "Named sub-agent to delegate to.",
-                },
-                "goal": {
-                    "type": "string",
-                    "description": "The focused goal for the sub-agent.",
+                "spawns": {
+                    "type": "array",
+                    "minItems": 1,
+                    "description": (
+                        "The sub-agents to spawn. ONE entry delegates and "
+                        "waits for that single result. SEVERAL entries fan "
+                        "out and run CONCURRENTLY; their results return "
+                        "together, in entry order. Always batch independent "
+                        "goals into one call — spawning one entry per turn "
+                        "is strictly sequential, never parallel."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "agent": {
+                                "type": "string",
+                                "description": "Named sub-agent to delegate to.",
+                            },
+                            "goal": {
+                                "type": "string",
+                                "description": (
+                                    "The focused goal for this sub-agent."
+                                ),
+                            },
+                        },
+                        "required": ["agent", "goal"],
+                    },
                 },
                 "background": {
                     "type": "boolean",
@@ -78,12 +98,13 @@ _REFERENCE_SCHEMA: dict[str, Any] = {
                         "never poll or wait. Use it for independent, "
                         "longer-running work (research, a broad scan) you want "
                         "off the critical path. Omit it (the default) to "
-                        "delegate and wait for the result inline. Only a "
-                        "single background spawn is supported per call."
+                        "delegate and wait for the result inline. Only valid "
+                        "with exactly ONE spawns entry (a fan-out batch is "
+                        "always foreground)."
                     ),
                 },
             },
-            "required": ["agent", "goal"],
+            "required": ["spawns"],
         },
     },
 }
@@ -91,6 +112,13 @@ _REFERENCE_SCHEMA: dict[str, Any] = {
 
 def _canonical(obj: Any) -> str:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"))
+
+
+def _agent_prop_of(schema: dict[str, Any]) -> dict[str, Any]:
+    """The roster-annotated ``agent`` property — nested per spawn entry under
+    ``spawns.items`` in the batch-form schema."""
+    parameters = schema["function"]["parameters"]
+    return parameters["properties"]["spawns"]["items"]["properties"]["agent"]
 
 
 def test_empty_dir_matches_reference_no_arg() -> None:
@@ -119,7 +147,7 @@ def test_nonempty_dir_enum_and_description_full() -> None:
         ("reviewer", "Finds bugs in code"),
     )
     schema = spawn_subagent_tool_schema(directory)
-    agent_prop = schema["function"]["parameters"]["properties"]["agent"]
+    agent_prop = _agent_prop_of(schema)
     # enum order == input order (sorted by caller before passing in)
     assert agent_prop["enum"] == ["coder", "reviewer"]
     desc = agent_prop["description"]
@@ -140,7 +168,7 @@ def test_nonempty_dir_mixed_descriptions_bare_name_entries() -> None:
         ("tagged", "Also has one"),
     )
     schema = spawn_subagent_tool_schema(directory)
-    agent_prop = schema["function"]["parameters"]["properties"]["agent"]
+    agent_prop = _agent_prop_of(schema)
     assert agent_prop["enum"] == ["named", "anonymous", "tagged"]
     desc = agent_prop["description"]
     roster = desc.split("Available: ", 1)[1]
@@ -159,7 +187,7 @@ def test_nonempty_dir_all_empty_descriptions_still_renders_enum() -> None:
     """
     directory = (("a", ""), ("b", ""))
     schema = spawn_subagent_tool_schema(directory)
-    agent_prop = schema["function"]["parameters"]["properties"]["agent"]
+    agent_prop = _agent_prop_of(schema)
     assert agent_prop.get("enum") == ["a", "b"]
     desc = agent_prop["description"]
     roster = desc.split("Available: ", 1)[1]
@@ -257,7 +285,7 @@ def test_sdkhost_description_flows_to_schema(tmp_path: Path) -> None:
 
     schema = _spawn_schema_from_engine_composer(engine)
     assert schema is not None, "spawn_subagent schema missing from composer"
-    agent_prop = schema["function"]["parameters"]["properties"]["agent"]
+    agent_prop = _agent_prop_of(schema)
     assert agent_prop.get("enum") == ["helper"]
     desc = agent_prop["description"]
     assert "Available: " in desc
@@ -368,7 +396,7 @@ def test_sdkhost_some_descriptions_mixed(tmp_path: Path) -> None:
 
     schema = _spawn_schema_from_engine_composer(engine)
     assert schema is not None
-    agent_prop = schema["function"]["parameters"]["properties"]["agent"]
+    agent_prop = _agent_prop_of(schema)
     # allowed_subtask_agents frozenset → sorted iteration in SdkHost
     assert agent_prop["enum"] == ["alpha", "beta"]
     desc = agent_prop["description"]
@@ -459,7 +487,7 @@ def test_sdkhost_unknown_agent_in_roster_is_skipped(tmp_path: Path) -> None:
 
     schema = _spawn_schema_from_engine_composer(engine)
     assert schema is not None
-    agent_prop = schema["function"]["parameters"]["properties"]["agent"]
+    agent_prop = _agent_prop_of(schema)
     # ghost excluded (not in registry), ok included
     assert agent_prop["enum"] == ["ok"]
     assert "ghost" not in agent_prop["description"]

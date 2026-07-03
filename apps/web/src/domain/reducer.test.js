@@ -152,3 +152,80 @@ test("reduceEvents: defaults are running-ready (no suspend, not closed)", () => 
   assert.equal(vm.wakeKind, null);
   assert.equal(vm.closed, false);
 });
+
+// --- LLMRetryScheduled: the live transient-retry fold ----------------------
+
+const retryEvent = (seq, attempt, extra = {}) => ({
+  task_id: "t1",
+  seq,
+  type: "LLMRetryScheduled",
+  payload: {
+    call_id: "llm-1",
+    attempt,
+    max_retries: 8,
+    delay_seconds: 2.5,
+    category: "transient",
+    error: "429 Too Many Requests",
+    ...extra,
+  },
+});
+
+test("reduceEvents: LLMRetryScheduled folds the live retry badge", () => {
+  const vm = reduceEvents([
+    { task_id: "t1", seq: 0, type: "TaskCreated", payload: {} },
+    retryEvent(1, 1),
+  ]);
+  assert.deepEqual(vm.llmRetry, {
+    callId: "llm-1",
+    attempt: 1,
+    maxRetries: 8,
+    delaySeconds: 2.5,
+    category: "transient",
+    error: "429 Too Many Requests",
+    seq: 1,
+  });
+});
+
+test("reduceEvents: repeated retries update ONE warning turn in place", () => {
+  const vm = reduceEvents([
+    { task_id: "t1", seq: 0, type: "TaskCreated", payload: {} },
+    retryEvent(1, 1),
+    retryEvent(2, 2, { delay_seconds: 5.0 }),
+  ]);
+  const warnings = vm.turns.filter(
+    (t) => t.kind === "warning" && t.label === "llm-retry",
+  );
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].attempt, 2);
+  assert.equal(warnings[0].delaySeconds, 5.0);
+  assert.equal(vm.llmRetry.attempt, 2);
+});
+
+test("reduceEvents: LLMResponseRecorded clears the live retry badge", () => {
+  const vm = reduceEvents([
+    { task_id: "t1", seq: 0, type: "TaskCreated", payload: {} },
+    retryEvent(1, 1),
+    {
+      task_id: "t1",
+      seq: 2,
+      type: "LLMResponseRecorded",
+      payload: { call_id: "llm-1", stop_reason: "end_turn" },
+    },
+  ]);
+  assert.equal(vm.llmRetry, null);
+  // The timeline keeps the episode's summary marker.
+  assert.equal(
+    vm.turns.filter((t) => t.kind === "warning" && t.label === "llm-retry")
+      .length,
+    1,
+  );
+});
+
+test("reduceEvents: TaskRewound prunes a stale retry badge", () => {
+  const vm = reduceEvents([
+    { task_id: "t1", seq: 0, type: "TaskCreated", payload: {} },
+    retryEvent(1, 1),
+    { task_id: "t1", seq: 2, type: "TaskRewound", payload: { target_seq: 0 } },
+  ]);
+  assert.equal(vm.llmRetry, null);
+});

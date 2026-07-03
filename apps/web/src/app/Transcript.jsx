@@ -376,6 +376,16 @@ function EventMarker({ ctx, turn }) {
   if (turn.kind === "subtask") {
     return <SubtaskChip ctx={ctx} turn={turn} />;
   }
+  if (turn.kind === "warning" && turn.label === "llm-retry") {
+    // One marker per retried LLM call, updated in place by the reducer as
+    // attempts accumulate — reads as the episode's summary once it's over.
+    const detail = turn.error ? ` — ${clip(turn.error, 80)}` : "";
+    return (
+      <div className="turn-marker">
+        {`Provider error, retried ${turn.attempt}/${turn.maxRetries}${detail}`}
+      </div>
+    );
+  }
   if (turn.kind === "skill_loaded") {
     const skills = Array.isArray(turn.skills) ? turn.skills.filter(Boolean) : [];
     const label = skills.length === 1

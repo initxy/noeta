@@ -488,11 +488,20 @@ class Engine:
         ``wake_event`` is the consumed ``SubtaskGroupCompleted`` (gives the
         ordered ``subtask_ids``); ``call_ids`` is the positional pairing of
         originating ``spawn_subagent`` call ids (member order, supplied by
-        the caller from the assistant message). The per-child results are
-        read from the parent stream's keyed ``SubtaskCompleted`` events —
-        NOT the unkeyed ``governance.subtask_results``. Per-block
-        normalization matches the single-child seam (``output`` never
-        ``null``). Engine stays the single writer.
+        the caller from the assistant message — a batch call carrying a
+        ``spawns`` array contributes its id once per entry, contiguously).
+        The per-child results are read from the parent stream's keyed
+        ``SubtaskCompleted`` events — NOT the unkeyed
+        ``governance.subtask_results``. Per-block normalization matches the
+        single-child seam (``output`` never ``null``). Engine stays the
+        single writer.
+
+        Wire correctness pins the block shape: exactly ONE ``ToolResultBlock``
+        per originating call. A one-member run renders exactly as before
+        (byte-equal for every pre-batch recording); a k>1 run (one batch call)
+        renders one block whose ``output`` lists the k member results in entry
+        order (``{"spawn": i, "success": …, "output": …[, "error": …]}``),
+        ``success`` = all members succeeded.
         """
         subtask_ids = tuple(wake_event.subtask_ids)
         if len(call_ids) != len(subtask_ids):
@@ -505,18 +514,52 @@ class Engine:
         for env in self._event_log.read(task.task_id):
             if env.type == "SubtaskCompleted":
                 results[env.payload.subtask_id] = env.payload.result
+        pairs = list(zip(subtask_ids, call_ids))
         blocks: list[Block] = []
-        for sid, call_id in zip(subtask_ids, call_ids):
-            r = results[sid]
-            success = r.status == "completed"
-            blocks.append(
-                ToolResultBlock(
-                    call_id=call_id,
-                    output=self._deref_subagent_output(r.output),
-                    success=success,
-                    error=None if success else (r.error or "sub-agent failed"),
+        start = 0
+        while start < len(pairs):
+            end = start
+            while end < len(pairs) and pairs[end][1] == pairs[start][1]:
+                end += 1
+            call_id = pairs[start][1]
+            if end - start == 1:
+                r = results[pairs[start][0]]
+                success = r.status == "completed"
+                blocks.append(
+                    ToolResultBlock(
+                        call_id=call_id,
+                        output=self._deref_subagent_output(r.output),
+                        success=success,
+                        error=None if success else (r.error or "sub-agent failed"),
+                    )
                 )
-            )
+            else:
+                members: list[dict[str, Any]] = []
+                failed = 0
+                for index, (sid, _) in enumerate(pairs[start:end]):
+                    r = results[sid]
+                    ok = r.status == "completed"
+                    entry: dict[str, Any] = {
+                        "spawn": index,
+                        "success": ok,
+                        "output": self._deref_subagent_output(r.output),
+                    }
+                    if not ok:
+                        failed += 1
+                        entry["error"] = r.error or "sub-agent failed"
+                    members.append(entry)
+                blocks.append(
+                    ToolResultBlock(
+                        call_id=call_id,
+                        output=members,
+                        success=failed == 0,
+                        error=(
+                            None if failed == 0
+                            else f"{failed} of {end - start} spawns failed"
+                        ),
+                    )
+                )
+            start = end
         msg = Message(role="tool", content=blocks)
         return self._append_message(task, msg, lease_id=lease_id, trace_id=trace_id)
 

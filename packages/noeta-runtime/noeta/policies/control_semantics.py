@@ -997,9 +997,19 @@ def spawn_subagent_tool_schema(
     ``policies/descriptions/spawn_subagent.md``).
 
     A non-empty ``agent_directory`` — a sorted tuple of ``(name, description)``
-    pairs — annotates the ``agent`` property with an ``enum`` (the list of
-    allowed names, in order) and appends the human-readable roster to its
-    description.
+    pairs — annotates each spawn entry's ``agent`` property with an ``enum``
+    (the list of allowed names, in order) and appends the human-readable roster
+    to its description.
+
+    The parameters advertise the **batch form**: a required ``spawns`` array of
+    ``{agent, goal}`` entries. One entry = the classic single delegate-and-wait;
+    several entries = a one-call concurrent fan-out. The array IS the schema
+    because a single call carrying N entries is the only shape gpt-5.x models
+    reliably batch — the same models essentially never emit two spawn tool
+    calls in one turn, no matter what the description or the user demands
+    (probed live, 17/17 single). The translate seam still accepts the legacy
+    top-level ``{agent, goal}`` single form (old recordings replay byte-equal,
+    and the workflow orchestration fabricates that form).
     """
     agent_prop = _enum_roster_prop(
         "Named sub-agent to delegate to.", agent_directory
@@ -1012,10 +1022,30 @@ def spawn_subagent_tool_schema(
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "agent": agent_prop,
-                    "goal": {
-                        "type": "string",
-                        "description": "The focused goal for the sub-agent.",
+                    "spawns": {
+                        "type": "array",
+                        "minItems": 1,
+                        "description": (
+                            "The sub-agents to spawn. ONE entry delegates and "
+                            "waits for that single result. SEVERAL entries fan "
+                            "out and run CONCURRENTLY; their results return "
+                            "together, in entry order. Always batch independent "
+                            "goals into one call — spawning one entry per turn "
+                            "is strictly sequential, never parallel."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "agent": agent_prop,
+                                "goal": {
+                                    "type": "string",
+                                    "description": (
+                                        "The focused goal for this sub-agent."
+                                    ),
+                                },
+                            },
+                            "required": ["agent", "goal"],
+                        },
                     },
                     # background sub-agent (docs/adr/background-subagent.md): a
                     # single spawn with background=true does NOT block this turn —
@@ -1032,12 +1062,13 @@ def spawn_subagent_tool_schema(
                             "never poll or wait. Use it for independent, "
                             "longer-running work (research, a broad scan) you want "
                             "off the critical path. Omit it (the default) to "
-                            "delegate and wait for the result inline. Only a "
-                            "single background spawn is supported per call."
+                            "delegate and wait for the result inline. Only valid "
+                            "with exactly ONE spawns entry (a fan-out batch is "
+                            "always foreground)."
                         ),
                     },
                 },
-                "required": ["agent", "goal"],
+                "required": ["spawns"],
             },
         },
     }
@@ -1072,6 +1103,31 @@ def _concurrent_fanout_enabled() -> bool:
     }
 
 
+def _spawn_call_members(args: dict[str, Any]) -> list[tuple[str, str]] | None:
+    """The ``(agent, goal)`` members of ONE ``spawn_subagent`` call.
+
+    Batch form: the ``spawns`` array (each entry ``{agent, goal}``) — the
+    shape the advertised schema carries. Legacy single form: top-level
+    ``{agent, goal}`` when ``spawns`` is absent — every pre-batch recording
+    replays through this branch byte-equal, and the workflow orchestration
+    fabricates it. Returns ``None`` when ``spawns`` is present but malformed
+    (not a non-empty array of ``{agent, goal}`` objects) — the caller acks a
+    recoverable error instead of letting empty names fail the task at the
+    permission guard.
+    """
+    if "spawns" not in args:
+        return [(str(args.get("agent", "")), str(args.get("goal", "")))]
+    raw = args.get("spawns")
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return None
+    members: list[tuple[str, str]] = []
+    for entry in raw:
+        if not isinstance(entry, dict) or "agent" not in entry or "goal" not in entry:
+            return None
+        members.append((str(entry.get("agent", "")), str(entry.get("goal", ""))))
+    return members
+
+
 def _maybe_spawn_decision(
     response: LLMResponse,
     assistant_message: Message,
@@ -1082,19 +1138,24 @@ def _maybe_spawn_decision(
     spawn decision, or fail closed on a mixed batch.
 
     Returns ``None`` when no `spawn_subagent` is present (normal
-    tool-call path). Routing:
+    tool-call path). Each call expands to its member list via
+    :func:`_spawn_call_members` (the batch ``spawns`` array, or the legacy
+    single ``{agent, goal}`` form). Routing on the flattened member total:
 
     * `spawn_subagent` **mixed with any non-spawn** tool call →
       recoverable error ack (``StatePatchDecision`` with ``patch=None``,
       one ``ToolResultBlock(success=False)`` per call_id). The task is
       NOT terminated — the model can retry in a later turn. This matches
       the sibling control tools' sole-call philosophy (D4).
-    * exactly **one** `spawn_subagent` (no other tool) →
-      `SpawnSubtaskDecision` (SR1 single-child path, unchanged).
-    * **≥2** `spawn_subagent` (and no other tool) →
-      `SpawnSubtasksDecision` (SR2 fan-out; member order = tool_use
-      order). The `spawn_subagent` tool is never invoked through the
-      ToolRuntime.
+    * a malformed ``spawns`` argument → the same recoverable error ack.
+    * exactly **one** member in total →
+      `SpawnSubtaskDecision` (SR1 single-child path, unchanged —
+      ``spawns`` with one entry behaves exactly like the legacy form).
+    * **≥2** members (one call carrying an array, several calls, or a mix)
+      → `SpawnSubtasksDecision` (SR2 fan-out; member order = call order,
+      then entry order within a call; members of one call share its
+      ``call_id`` and are numbered by ``member_index``). The
+      `spawn_subagent` tool is never invoked through the ToolRuntime.
     """
     tool_uses = [
         b for b in response.content if isinstance(b, ToolUseBlock)
@@ -1114,33 +1175,56 @@ def _maybe_spawn_decision(
             text="spawn_subagent cannot be mixed with other tool calls in the same turn",
             valid=False,
         )
-    if len(spawn_blocks) == 1:
-        args = dict(spawn_blocks[0].arguments)
+    members_per_call: list[tuple[ToolUseBlock, list[tuple[str, str]]]] = []
+    for block in spawn_blocks:
+        members = _spawn_call_members(dict(block.arguments))
+        if members is None:
+            return _ack_patch_decision(
+                tool_uses,
+                assistant_message,
+                assistant_thinking,
+                patch=None,
+                text=(
+                    "spawn_subagent: 'spawns' must be a non-empty array of "
+                    "{agent, goal} objects"
+                ),
+                valid=False,
+            )
+        members_per_call.append((block, members))
+    if sum(len(m) for _, m in members_per_call) == 1:
+        block, members = members_per_call[0]
+        agent_name, goal = members[0]
         return SpawnSubtaskDecision(
-            agent_name=str(args.get("agent", "")),
-            goal=str(args.get("goal", "")),
+            agent_name=agent_name,
+            goal=goal,
             assistant_message=assistant_message,
             assistant_thinking=assistant_thinking,
             # docs/adr/background-subagent.md: a lone spawn with background=True
             # does NOT suspend the parent on a barrier — the Engine launches it on
             # the background-subagent driver and the parent keeps its turn. Only
-            # the single-spawn path reads it; the fan-out below stays foreground.
-            background=bool(args.get("background", False)),
+            # the single-spawn path reads it; the fan-out below stays foreground
+            # (background is documented as single-entry-only and ignored there).
+            background=bool(dict(block.arguments).get("background", False)),
         )
-    # SR2: ≥2 spawn_subagent, all-spawn turn → fan-out batch.
+    # SR2: ≥2 members, all-spawn turn → fan-out batch. Members of one batch
+    # call share its call_id, contiguously, numbered 0..k-1 — the resume
+    # pairing expands each assistant tool_use by its member count and the
+    # Engine renders one aggregated tool_result per call.
     specs = tuple(
         SpawnSubtaskSpec(
-            agent_name=str(dict(b.arguments).get("agent", "")),
-            goal=str(dict(b.arguments).get("goal", "")),
-            call_id=b.call_id,
+            agent_name=agent_name,
+            goal=goal,
+            call_id=block.call_id,
+            member_index=index,
         )
-        for b in spawn_blocks
+        for block, members in members_per_call
+        for index, (agent_name, goal) in enumerate(members)
     )
     return SpawnSubtasksDecision(
         specs=specs,
         assistant_message=assistant_message,
         assistant_thinking=assistant_thinking,
-        # a one-turn fan-out of ≥2 ``spawn_subagent`` IS an explicit "run these
+        # a one-turn fan-out of ≥2 spawn members IS an explicit "run these
         # in parallel" intent, so it drives wall-clock concurrently by default
         # (same escape valve as the workflow ``parallel()``). The Engine folds
         # this transient opt-in onto the persisted ``SubtaskGroupCompleted``

@@ -1227,8 +1227,12 @@ def test_reasoning_request_block_present_when_effort_in_play() -> None:
 
 
 @respx.mock
-def test_no_reasoning_block_when_effort_is_none() -> None:
-    """Neither effort nor thinking yields an effort → no reasoning / include."""
+def test_no_reasoning_block_when_effort_is_none_but_include_stays() -> None:
+    """Neither effort nor thinking yields an effort → no reasoning block, but
+    include:[reasoning.encrypted_content] is still requested: a reasoning model
+    reasons at its server-side default effort even without a reasoning{} block,
+    and without the ciphertext the next turn's echo is an empty shell that
+    breaks continuation and the prompt-cache prefix."""
     route = respx.post(ENDPOINT).mock(
         return_value=httpx.Response(200, json=_responses_payload(texts=["ok"]))
     )
@@ -1236,9 +1240,28 @@ def test_no_reasoning_block_when_effort_is_none() -> None:
 
     body = json.loads(route.calls[0].request.content)
     assert "reasoning" not in body
-    assert "include" not in body
+    assert body["include"] == ["reasoning.encrypted_content"]
     # store:false is still always present (independent of reasoning).
     assert body["store"] is False
+
+
+@respx.mock
+def test_no_include_when_continuation_off() -> None:
+    """reasoning_continuation="off" → the ciphertext is never echoed back, so
+    include:[reasoning.encrypted_content] is not requested either (the escape
+    hatch for gateways that reject the include param)."""
+    route = respx.post(ENDPOINT).mock(
+        return_value=httpx.Response(200, json=_responses_payload(texts=["ok"]))
+    )
+    _make_provider(reasoning_continuation="off").complete(
+        _reasoning_request(effort="high")
+    )
+
+    body = json.loads(route.calls[0].request.content)
+    # The explicit effort still maps into the reasoning block; only the
+    # continuation include is dropped.
+    assert body["reasoning"] == {"effort": "high", "summary": "auto"}
+    assert "include" not in body
 
 
 # --- effort mapping: low/medium/high pass through, xhigh/max→high, None unset ---
@@ -1559,9 +1582,12 @@ def test_outbound_thinking_block_dropped_when_continuation_off() -> None:
 
 
 @respx.mock
-def test_outbound_thinking_block_without_signature_omits_encrypted_content() -> None:
-    """signature is None (no ciphertext) → reasoning item carries no encrypted_content key,
-    but still carries summary (no ciphertext to stuff for continuation, but the summary is kept)."""
+def test_outbound_thinking_block_without_signature_not_echoed() -> None:
+    """signature is None (no ciphertext) → the ThinkingBlock is NOT echoed as a
+    reasoning input item at all: without encrypted_content the item cannot
+    restore any reasoning tokens, and sending the empty shell breaks the
+    gateway's prompt-cache prefix at that position (observed on subagent
+    conversations whose turns never got a cache hit past the static head)."""
     route = respx.post(ENDPOINT).mock(
         return_value=httpx.Response(200, json=_responses_payload(texts=["ok"]))
     )
@@ -1569,21 +1595,24 @@ def test_outbound_thinking_block_without_signature_omits_encrypted_content() -> 
         messages=[
             Message(
                 role="assistant",
-                content=[ThinkingBlock(text="reasoning without ciphertext", signature=None)],
+                content=[
+                    ThinkingBlock(text="reasoning without ciphertext", signature=None),
+                    TextBlock(text="answer"),
+                ],
             ),
         ]
     )
     _make_provider().complete(request)
 
     body = json.loads(route.calls[0].request.content)
-    reasoning_items = [
-        item for item in body["input"] if item["type"] == "reasoning"
-    ]
-    assert len(reasoning_items) == 1
-    assert "encrypted_content" not in reasoning_items[0]
-    assert reasoning_items[0]["summary"] == [
-        {"type": "summary_text", "text": "reasoning without ciphertext"}
-    ]
+    types = [item["type"] for item in body["input"]]
+    assert "reasoning" not in types
+    # The rest of the assistant turn is unaffected.
+    assert {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "answer"}],
+    } in body["input"]
 
 
 # ---------------------------------------------------------------------------

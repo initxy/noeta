@@ -183,6 +183,57 @@ def test_send_goal_threads_effort_per_turn(tmp_path: Path) -> None:
     assert [r.effort for r in provider.received_requests] == ["low", "high"]
 
 
+def test_spawned_child_inherits_turn_effort(tmp_path: Path) -> None:
+    """A delegated child runs on the spawning turn's reasoning effort — the
+    whole delegation tree shares the root session's per-turn override, same as
+    permission_mode / provider. Without inheritance the child fell back to
+    effort None, which on the Responses provider used to also drop the
+    reasoning-ciphertext include and broke the child's prompt-cache prefix."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    # Wired by hand (not via _host): without the ChildLifecycleObserver the
+    # spawned child is never enqueued and the parent's SubtaskCompleted wake
+    # never fires.
+    from noeta.core.wiring import wire_default_observers
+
+    dispatcher = InMemoryDispatcher()
+    event_log = InMemoryEventLog(lease_validator=dispatcher)
+    wire_default_observers(event_log, dispatcher)
+    host = SdkHost(
+        event_log=event_log,
+        content_store=InMemoryContentStore(),
+        dispatcher=dispatcher,
+        provider=FakeLLMProvider(
+            responses=[
+                _tool_call(
+                    "s1", "spawn_subagent", {"agent": "explore", "goal": "scout"}
+                ),
+                _end_turn("scouted"),
+                _end_turn("done"),
+            ]
+        ),
+        model="gpt-test",
+        workspace_dir=ws,
+        write_mode=FsWriteMode.APPLY,
+        shell_mode=ShellMode.ALLOWLIST,
+        require_approval_tools=(),
+        policy_wrapper=multi_turn_policy_wrapper,
+        registry=official_agent_registry(),
+        aliases={"default": "main"},
+    )
+    driver = InteractionDriver(host)
+
+    out = driver.start(goal="delegate then finish", agent="main", effort="xhigh")
+
+    assert out.status == "suspended"
+    provider = host.default_provider_instance
+    assert isinstance(provider, FakeLLMProvider)
+    # [0] parent spawn turn; [1] the child's turn; [2] the resumed parent.
+    assert [r.effort for r in provider.received_requests] == [
+        "xhigh", "xhigh", "xhigh",
+    ]
+
+
 # ---------------------------------------------------------------------------
 # send_goal — append-message prelude, shared primitive
 # ---------------------------------------------------------------------------
