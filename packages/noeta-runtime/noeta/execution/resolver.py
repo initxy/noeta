@@ -580,6 +580,16 @@ class GenericEngineResolver:
         inherited_mcp = getattr(self, "_turn_mcp_aliases", {}).get(
             str(parent_task.task_id), ()
         )
+        # the whole delegation tree shares the root session's per-turn
+        # reasoning-effort override — read from the parent's NON-durable carrier
+        # (set by the driver for the spawning turn), same pattern as
+        # permission_mode. Without it a child falls back to effort None, which
+        # on the Responses provider used to also drop the reasoning-ciphertext
+        # include and broke the child's prompt-cache prefix. ``None`` ⇒ host
+        # default, byte-identical to the pre-inheritance path.
+        inherited_effort = getattr(self, "_turn_effort", {}).get(
+            str(parent_task.task_id)
+        )
 
         def _child_mcp_aliases(child_agent: Any) -> tuple[str, ...]:
             # D8 gate: inherit the parent's enabled aliases only when the child
@@ -631,6 +641,7 @@ class GenericEngineResolver:
                 # connects its own server sessions; ``task_id`` so a connect
                 # skip records ``McpServerSkipped`` on the CHILD's stream.
                 mcp_aliases=_child_mcp_aliases(child_agent),
+                effort=inherited_effort,
                 task_id=task_id,
             )
 
