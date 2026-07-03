@@ -245,12 +245,20 @@ class SpawnSubtaskSpec:
     """SR2 — one member of a fan-out batch. ``call_id`` is the originating
     ``spawn_subagent`` tool_use id (used at resume to pair the member's
     result back to the model's call, **positionally** from the assistant
-    message — it is NOT persisted on any event payload)."""
+    message — it is NOT persisted on any event payload).
+
+    ``member_index`` is the member's position within its originating call
+    (batch form: one call carries a ``spawns`` array, so several contiguous
+    specs share a ``call_id``, numbered 0..k-1). The one-call-one-member
+    forms (legacy single, workflow orchestration) leave the default 0. The
+    handler's batch admission checks the (call_id, member_index) layout
+    instead of bare call_id uniqueness."""
 
     agent_name: str
     goal: str
     call_id: str
     inputs: dict[str, Any] = field(default_factory=dict)
+    member_index: int = 0
 
 
 @dataclass(frozen=True, slots=True)

@@ -871,13 +871,29 @@ def _pending_spawn_call_id(parent: Any) -> str:
     )
 
 
+def _spawn_member_count(block: Any) -> int:
+    """How many fan-out members one spawn tool_use carries: the length of a
+    well-formed batch ``spawns`` array, else 1 (the legacy single form, every
+    pre-batch recording, and ``run_workflow``). Mirrors the translate seam's
+    member expansion so the positional pairing below stays aligned with the
+    specs the handler admitted."""
+    arguments = getattr(block, "arguments", None)
+    if isinstance(arguments, dict):
+        raw = arguments.get("spawns")
+        if isinstance(raw, (list, tuple)) and raw:
+            return len(raw)
+    return 1
+
+
 def _pending_spawn_call_ids(parent: Any, n: int) -> list[str]:
-    """SR2 — the ``n`` unpaired ``spawn_subagent`` call_ids on the
-    parent, in **member (assistant tool_use) order**, for positional
-    pairing with a group's ``subtask_ids``. Raises if the count != n.
+    """SR2 — the ``n`` unpaired spawn member call_ids on the parent, in
+    **member order** (assistant tool_use order, then entry order within a
+    batch call — a tool_use carrying a ``spawns`` array contributes its
+    call_id once per entry), for positional pairing with a group's
+    ``subtask_ids``. Raises if the count != n.
 
     This is unambiguous: ``wake_on`` is scalar so a parent has at most
-    ONE pending delegation group, and that group's N ``spawn_subagent``
+    ONE pending delegation group, and that group's ``spawn_subagent``
     tool_uses are contiguous in a single assistant turn; any earlier
     spawn is already paired (has a ``tool_result``) and excluded.
     """
@@ -897,7 +913,7 @@ def _pending_spawn_call_ids(parent: Any, n: int) -> list[str]:
                 and block.tool_name in _SPAWN_TOOL_NAMES
                 and block.call_id not in resolved
             ):
-                unpaired.append(block.call_id)
+                unpaired.extend([block.call_id] * _spawn_member_count(block))
     if len(unpaired) != n:
         raise RuntimeError(
             f"delegation: expected {n} unpaired spawn_subagent call_ids "
