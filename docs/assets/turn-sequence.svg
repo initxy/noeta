@@ -1,0 +1,243 @@
+<svg viewBox="0 0 1040 920" role="img" aria-label="Noeta Task Execution — one turn — goal submission → lease → step loop → finish, streamed over SSE (sequence diagram)" width="1040" height="920" xmlns="http://www.w3.org/2000/svg"><style>@font-face { font-family: 'JetBrains Mono'; font-weight: 400; src: local('JetBrains Mono'), local('JetBrainsMono-Regular'); }
+@font-face { font-family: 'JetBrains Mono'; font-weight: 500; src: local('JetBrains Mono'), local('JetBrainsMono-Regular'); }
+@font-face { font-family: 'JetBrains Mono'; font-weight: 600; src: local('JetBrains Mono'), local('JetBrainsMono-Regular'); }
+@font-face { font-family: 'JetBrains Mono'; font-weight: 700; src: local('JetBrains Mono'), local('JetBrainsMono-Regular'); }
+svg { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace; }
+:root, [data-theme="dark"] { --bg: #020617; --grid: #1e293b; --text: #ffffff; --text-muted: #94a3b8; --text-dim: #475569; --text-faint: #7d8da1; --panel: rgba(15, 23, 42, 0.5); --panel-border: #1e293b; --lane-fill: rgba(15, 23, 42, 0.22); --lane-stroke: #334155; --arrow: #64748b; --arrow-emphasis: #34d399; --mask: #0f172a; --frontend-fill: rgba(8, 51, 68, 0.4); --frontend-stroke: #22d3ee; --backend-fill: rgba(6, 78, 59, 0.4); --backend-stroke: #34d399; --database-fill: rgba(76, 29, 149, 0.4); --database-stroke: #a78bfa; --cloud-fill: rgba(120, 53, 15, 0.3); --cloud-stroke: #fbbf24; --security-fill: rgba(136, 19, 55, 0.4); --security-stroke: #fb7185; --messagebus-fill: rgba(251, 146, 60, 0.3); --messagebus-stroke: #fb923c; --external-fill: rgba(30, 41, 59, 0.5); --external-stroke: #94a3b8; --toolbar-bg: rgba(15, 23, 42, 0.8); --toolbar-border: #334155; --toolbar-text: #e2e8f0; --toolbar-hover: rgba(15, 23, 42, 0.95); --toolbar-menu-bg: #0f172a; }
+[data-theme="light"] { --bg: #f8fafc; --grid: #e2e8f0; --text: #0f172a; --text-muted: #64748b; --text-dim: #94a3b8; --text-faint: #64748b; --panel: #ffffff; --panel-border: #e2e8f0; --lane-fill: rgba(248, 250, 252, 0.65); --lane-stroke: #cbd5e1; --arrow: #94a3b8; --arrow-emphasis: #059669; --mask: #ffffff; --frontend-fill: rgba(34, 211, 238, 0.15); --frontend-stroke: #0891b2; --backend-fill: rgba(52, 211, 153, 0.18); --backend-stroke: #059669; --database-fill: rgba(167, 139, 250, 0.2); --database-stroke: #7c3aed; --cloud-fill: rgba(251, 191, 36, 0.18); --cloud-stroke: #d97706; --security-fill: rgba(251, 113, 133, 0.15); --security-stroke: #e11d48; --messagebus-fill: rgba(251, 146, 60, 0.15); --messagebus-stroke: #ea580c; --external-fill: rgba(148, 163, 184, 0.18); --external-stroke: #64748b; --toolbar-bg: rgba(255, 255, 255, 0.92); --toolbar-border: #cbd5e1; --toolbar-text: #334155; --toolbar-hover: #ffffff; --toolbar-menu-bg: #ffffff; }
+svg { width: 100%; min-width: min(900px, 100%); display: block; }
+.c-grid { stroke: var(--grid); fill: none; }
+.c-mask { fill: var(--mask); stroke: none; }
+.c-frontend { fill: var(--frontend-fill); stroke: var(--frontend-stroke); }
+.c-backend { fill: var(--backend-fill); stroke: var(--backend-stroke); }
+.c-database { fill: var(--database-fill); stroke: var(--database-stroke); }
+.c-cloud { fill: var(--cloud-fill); stroke: var(--cloud-stroke); }
+.c-security { fill: var(--security-fill); stroke: var(--security-stroke); }
+.c-messagebus { fill: var(--messagebus-fill); stroke: var(--messagebus-stroke); }
+.c-external { fill: var(--external-fill); stroke: var(--external-stroke); }
+.t-primary { fill: var(--text); }
+.t-muted { fill: var(--text-muted); }
+.t-dim { fill: var(--text-dim); }
+.t-frontend { fill: var(--frontend-stroke); }
+.t-backend { fill: var(--backend-stroke); }
+.t-database { fill: var(--database-stroke); }
+.t-cloud { fill: var(--cloud-stroke); }
+.t-security { fill: var(--security-stroke); }
+.t-messagebus { fill: var(--messagebus-stroke); }
+.t-external { fill: var(--external-stroke); }
+.a-default { stroke: var(--arrow); fill: none; }
+.a-emphasis { stroke: var(--arrow-emphasis); fill: none; }
+.a-security { stroke: var(--security-stroke); fill: none; stroke-dasharray: 5, 5; }
+.a-dashed { stroke: var(--database-stroke); fill: none; stroke-dasharray: 4, 4; }
+.m-default { fill: var(--arrow); }
+.m-emphasis { fill: var(--arrow-emphasis); }
+.m-security { fill: var(--security-stroke); }
+.m-dashed { fill: var(--database-stroke); }
+.c-security-group { fill: transparent; stroke: var(--security-stroke); stroke-dasharray: 4, 4; }
+.c-region { fill: rgba(251, 191, 36, 0.05); stroke: var(--cloud-stroke); stroke-dasharray: 8, 4; }
+.c-lane { fill: var(--lane-fill); stroke: var(--lane-stroke); stroke-dasharray: 6, 6; }
+:root, svg { --bg: #020617; --grid: #1e293b; --text: #ffffff; --text-muted: #94a3b8; --text-dim: #475569; --text-faint: #7d8da1; --panel: rgba(15, 23, 42, 0.5); --panel-border: #1e293b; --lane-fill: rgba(15, 23, 42, 0.22); --lane-stroke: #334155; --arrow: #64748b; --arrow-emphasis: #34d399; --mask: #0f172a; --frontend-fill: rgba(8, 51, 68, 0.4); --frontend-stroke: #22d3ee; --backend-fill: rgba(6, 78, 59, 0.4); --backend-stroke: #34d399; --database-fill: rgba(76, 29, 149, 0.4); --database-stroke: #a78bfa; --cloud-fill: rgba(120, 53, 15, 0.3); --cloud-stroke: #fbbf24; --security-fill: rgba(136, 19, 55, 0.4); --security-stroke: #fb7185; --messagebus-fill: rgba(251, 146, 60, 0.3); --messagebus-stroke: #fb923c; --external-fill: rgba(30, 41, 59, 0.5); --external-stroke: #94a3b8; --toolbar-bg: rgba(15, 23, 42, 0.8); --toolbar-border: #334155; --toolbar-text: #e2e8f0; --toolbar-hover: rgba(15, 23, 42, 0.95); --toolbar-menu-bg: #0f172a; }
+@media (prefers-color-scheme: light) { :root, svg { --bg: #f8fafc; --grid: #e2e8f0; --text: #0f172a; --text-muted: #64748b; --text-dim: #94a3b8; --text-faint: #64748b; --panel: #ffffff; --panel-border: #e2e8f0; --lane-fill: rgba(248, 250, 252, 0.65); --lane-stroke: #cbd5e1; --arrow: #94a3b8; --arrow-emphasis: #059669; --mask: #ffffff; --frontend-fill: rgba(34, 211, 238, 0.15); --frontend-stroke: #0891b2; --backend-fill: rgba(52, 211, 153, 0.18); --backend-stroke: #059669; --database-fill: rgba(167, 139, 250, 0.2); --database-stroke: #7c3aed; --cloud-fill: rgba(251, 191, 36, 0.18); --cloud-stroke: #d97706; --security-fill: rgba(251, 113, 133, 0.15); --security-stroke: #e11d48; --messagebus-fill: rgba(251, 146, 60, 0.15); --messagebus-stroke: #ea580c; --external-fill: rgba(148, 163, 184, 0.18); --external-stroke: #64748b; --toolbar-bg: rgba(255, 255, 255, 0.92); --toolbar-border: #cbd5e1; --toolbar-text: #334155; --toolbar-hover: #ffffff; --toolbar-menu-bg: #ffffff; } }
+svg[data-theme="light"] { --bg: #f8fafc; --grid: #e2e8f0; --text: #0f172a; --text-muted: #64748b; --text-dim: #94a3b8; --text-faint: #64748b; --panel: #ffffff; --panel-border: #e2e8f0; --lane-fill: rgba(248, 250, 252, 0.65); --lane-stroke: #cbd5e1; --arrow: #94a3b8; --arrow-emphasis: #059669; --mask: #ffffff; --frontend-fill: rgba(34, 211, 238, 0.15); --frontend-stroke: #0891b2; --backend-fill: rgba(52, 211, 153, 0.18); --backend-stroke: #059669; --database-fill: rgba(167, 139, 250, 0.2); --database-stroke: #7c3aed; --cloud-fill: rgba(251, 191, 36, 0.18); --cloud-stroke: #d97706; --security-fill: rgba(251, 113, 133, 0.15); --security-stroke: #e11d48; --messagebus-fill: rgba(251, 146, 60, 0.15); --messagebus-stroke: #ea580c; --external-fill: rgba(148, 163, 184, 0.18); --external-stroke: #64748b; --toolbar-bg: rgba(255, 255, 255, 0.92); --toolbar-border: #cbd5e1; --toolbar-text: #334155; --toolbar-hover: #ffffff; --toolbar-menu-bg: #ffffff; }
+svg[data-theme="dark"] { --bg: #020617; --grid: #1e293b; --text: #ffffff; --text-muted: #94a3b8; --text-dim: #475569; --text-faint: #7d8da1; --panel: rgba(15, 23, 42, 0.5); --panel-border: #1e293b; --lane-fill: rgba(15, 23, 42, 0.22); --lane-stroke: #334155; --arrow: #64748b; --arrow-emphasis: #34d399; --mask: #0f172a; --frontend-fill: rgba(8, 51, 68, 0.4); --frontend-stroke: #22d3ee; --backend-fill: rgba(6, 78, 59, 0.4); --backend-stroke: #34d399; --database-fill: rgba(76, 29, 149, 0.4); --database-stroke: #a78bfa; --cloud-fill: rgba(120, 53, 15, 0.3); --cloud-stroke: #fbbf24; --security-fill: rgba(136, 19, 55, 0.4); --security-stroke: #fb7185; --messagebus-fill: rgba(251, 146, 60, 0.3); --messagebus-stroke: #fb923c; --external-fill: rgba(30, 41, 59, 0.5); --external-stroke: #94a3b8; --toolbar-bg: rgba(15, 23, 42, 0.8); --toolbar-border: #334155; --toolbar-text: #e2e8f0; --toolbar-hover: rgba(15, 23, 42, 0.95); --toolbar-menu-bg: #0f172a; }
+rect.c-bg-rect { fill: var(--bg); }
+</style><rect width="100%" height="100%" class="c-bg-rect"/>
+        <!-- Definitions -->
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-default"/>
+          </marker>
+          <marker id="arrowhead-emphasis" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-emphasis"/>
+          </marker>
+          <marker id="arrowhead-security" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-security"/>
+          </marker>
+          <marker id="arrowhead-dashed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-dashed"/>
+          </marker>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" class="c-grid" stroke-width="0.5"/>
+          </pattern>
+        </defs>
+
+        <!-- Background Grid -->
+        <rect width="100%" height="100%" fill="url(#grid)"/>
+
+        <!-- Time Segments -->
+        <rect x="48" y="160" width="944" height="135" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="62" y="178" class="t-dim" font-size="9" font-weight="600">01 / SUBMIT</text>
+
+        <rect x="48" y="295" width="944" height="115" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="62" y="313" class="t-dim" font-size="9" font-weight="600">02 / LEASE</text>
+
+        <rect x="48" y="410" width="944" height="240" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="62" y="428" class="t-dim" font-size="9" font-weight="600">03 / STEP LOOP × N</text>
+
+        <rect x="48" y="650" width="944" height="160" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="62" y="668" class="t-dim" font-size="9" font-weight="600">04 / FINISH + STREAM</text>
+
+        <!-- Lifelines -->
+        <path d="M 62 142 L 62 855" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 170 142 L 170 855" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 278 142 L 278 855" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 386 142 L 386 855" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 494 142 L 494 855" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 602 142 L 602 855" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 710 142 L 710 855" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 818 142 L 818 855" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 926 142 L 926 855" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+
+        <!-- Messages -->
+        <path d="M 69 170 L 163 170" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <rect x="81.4" y="150" width="69.2" height="16" rx="3" class="c-mask"/>
+        <text x="116" y="160" class="t-backend" font-size="9" text-anchor="middle">type a goal</text>
+
+        <path d="M 177 200 L 271 200" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <rect x="181.6" y="180" width="84.8" height="16" rx="3" class="c-mask"/>
+        <text x="224" y="190" class="t-backend" font-size="9" text-anchor="middle">POST send_goal</text>
+
+        <path d="M 285 230 L 379 230" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <rect x="276.6" y="210" width="110.8" height="16" rx="3" class="c-mask"/>
+        <text x="332" y="220" class="t-backend" font-size="9" text-anchor="middle">append event + wake</text>
+        <text x="297" y="248" class="t-dim" font-size="7">UserMessage recorded</text>
+
+        <path d="M 271 260 L 177 260" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <rect x="199.8" y="240" width="48.4" height="16" rx="3" class="c-mask"/>
+        <text x="224" y="250" class="t-muted" font-size="9" text-anchor="middle">202 ack</text>
+
+        <path d="M 487 315 L 393 315" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <rect x="408" y="295" width="64" height="16" rx="3" class="c-mask"/>
+        <text x="440" y="305" class="t-backend" font-size="9" text-anchor="middle">poll ready</text>
+
+        <path d="M 393 345 L 487 345" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <rect x="389.8" y="325" width="100.4" height="16" rx="3" class="c-mask"/>
+        <text x="440" y="335" class="t-muted" font-size="9" text-anchor="middle">Lease + WakeEvent</text>
+
+        <path d="M 501 375 L 595 375" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <rect x="505.6" y="355" width="84.8" height="16" rx="3" class="c-mask"/>
+        <text x="548" y="365" class="t-backend" font-size="9" text-anchor="middle">fold → advance</text>
+        <text x="513" y="393" class="t-dim" font-size="7">state = fold(EventLog)</text>
+
+        <path d="M 609 435 L 703 435" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <rect x="616.2" y="415" width="79.60000000000001" height="16" rx="3" class="c-mask"/>
+        <text x="656" y="425" class="t-backend" font-size="9" text-anchor="middle">View → decide</text>
+        <text x="621" y="453" class="t-dim" font-size="7">3-segment compose</text>
+
+        <path d="M 717 465 L 811 465" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <rect x="719" y="445" width="90" height="16" rx="3" class="c-mask"/>
+        <text x="764" y="455" class="t-backend" font-size="9" text-anchor="middle">neutral request</text>
+
+        <path d="M 811 495 L 717 495" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <rect x="719" y="475" width="90" height="16" rx="3" class="c-mask"/>
+        <text x="764" y="485" class="t-muted" font-size="9" text-anchor="middle">text + tool_use</text>
+
+        <path d="M 703 525 L 609 525" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <rect x="598" y="505" width="116" height="16" rx="3" class="c-mask"/>
+        <text x="656" y="515" class="t-muted" font-size="9" text-anchor="middle">Decision: tool_calls</text>
+
+        <path d="M 609 555 L 919 555" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <rect x="716.4" y="535" width="95.2" height="16" rx="3" class="c-mask"/>
+        <text x="764" y="545" class="t-security" font-size="9" text-anchor="middle">guards → execute</text>
+
+        <path d="M 919 585 L 609 585" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <rect x="698.2" y="565" width="131.60000000000002" height="16" rx="3" class="c-mask"/>
+        <text x="764" y="575" class="t-muted" font-size="9" text-anchor="middle">ToolResult (ContentRef)</text>
+
+        <path d="M 609 615 L 703 615" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <rect x="608.4" y="595" width="95.2" height="16" rx="3" class="c-mask"/>
+        <text x="656" y="605" class="t-messagebus" font-size="9" text-anchor="middle">next Step (loop)</text>
+        <text x="621" y="633" class="t-dim" font-size="7">events appended each step</text>
+
+        <path d="M 703 665 L 609 665" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <rect x="608.4" y="645" width="95.2" height="16" rx="3" class="c-mask"/>
+        <text x="656" y="655" class="t-backend" font-size="9" text-anchor="middle">Decision: finish</text>
+
+        <path d="M 595 695 L 501 695" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <rect x="492.6" y="675" width="110.8" height="16" rx="3" class="c-mask"/>
+        <text x="548" y="685" class="t-muted" font-size="9" text-anchor="middle">snapshot + terminal</text>
+
+        <path d="M 487 725 L 393 725" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <rect x="400.2" y="705" width="79.60000000000001" height="16" rx="3" class="c-mask"/>
+        <text x="440" y="715" class="t-backend" font-size="9" text-anchor="middle">release lease</text>
+
+        <path d="M 271 755 L 177 755" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <rect x="168.6" y="735" width="110.8" height="16" rx="3" class="c-mask"/>
+        <text x="224" y="745" class="t-messagebus" font-size="9" text-anchor="middle">SSE envelope stream</text>
+        <text x="189" y="773" class="t-dim" font-size="7">live during the whole turn</text>
+
+        <path d="M 163 785 L 69 785" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <rect x="60.6" y="765" width="110.8" height="16" rx="3" class="c-mask"/>
+        <text x="116" y="775" class="t-muted" font-size="9" text-anchor="middle">render folded state</text>
+
+        <!-- Activations -->
+        <rect x="273" y="195" width="10" height="70" rx="3" class="c-mask"/>
+        <rect x="273" y="195" width="10" height="70" rx="3" class="c-backend" stroke-width="1"/>
+        <rect x="489" y="340" width="10" height="390" rx="3" class="c-mask"/>
+        <rect x="489" y="340" width="10" height="390" rx="3" class="c-backend" stroke-width="1"/>
+        <rect x="597" y="370" width="10" height="330" rx="3" class="c-mask"/>
+        <rect x="597" y="370" width="10" height="330" rx="3" class="c-backend" stroke-width="1"/>
+        <rect x="705" y="430" width="10" height="240" rx="3" class="c-mask"/>
+        <rect x="705" y="430" width="10" height="240" rx="3" class="c-backend" stroke-width="1"/>
+        <rect x="813" y="460" width="10" height="40" rx="3" class="c-mask"/>
+        <rect x="813" y="460" width="10" height="40" rx="3" class="c-external" stroke-width="1"/>
+        <rect x="921" y="550" width="10" height="40" rx="3" class="c-mask"/>
+        <rect x="921" y="550" width="10" height="40" rx="3" class="c-backend" stroke-width="1"/>
+
+        <!-- Participants -->
+        <rect x="19" y="72" width="86" height="54" rx="6" class="c-mask"/>
+        <rect x="19" y="72" width="86" height="54" rx="6" class="c-external" stroke-width="1.5"/>
+        <text x="62" y="94" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">User</text>
+        <text x="62" y="111" class="t-muted" font-size="7" text-anchor="middle"/>
+
+        <rect x="127" y="72" width="86" height="54" rx="6" class="c-mask"/>
+        <rect x="127" y="72" width="86" height="54" rx="6" class="c-frontend" stroke-width="1.5"/>
+        <text x="170" y="94" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Web UI</text>
+        <text x="170" y="111" class="t-muted" font-size="7" text-anchor="middle">SSE stream</text>
+
+        <rect x="235" y="72" width="86" height="54" rx="6" class="c-mask"/>
+        <rect x="235" y="72" width="86" height="54" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="278" y="94" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Backend</text>
+        <text x="278" y="111" class="t-muted" font-size="7" text-anchor="middle">commands</text>
+
+        <rect x="343" y="72" width="86" height="54" rx="6" class="c-mask"/>
+        <rect x="343" y="72" width="86" height="54" rx="6" class="c-messagebus" stroke-width="1.5"/>
+        <text x="386" y="94" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Dispatcher</text>
+        <text x="386" y="111" class="t-muted" font-size="7" text-anchor="middle">queue · wake</text>
+
+        <rect x="451" y="72" width="86" height="54" rx="6" class="c-mask"/>
+        <rect x="451" y="72" width="86" height="54" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="494" y="94" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Worker</text>
+        <text x="494" y="111" class="t-muted" font-size="7" text-anchor="middle">lease loop</text>
+
+        <rect x="559" y="72" width="86" height="54" rx="6" class="c-mask"/>
+        <rect x="559" y="72" width="86" height="54" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="602" y="94" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Engine</text>
+        <text x="602" y="111" class="t-muted" font-size="7" text-anchor="middle">step loop</text>
+
+        <rect x="667" y="72" width="86" height="54" rx="6" class="c-mask"/>
+        <rect x="667" y="72" width="86" height="54" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="710" y="94" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Policy</text>
+        <text x="710" y="111" class="t-muted" font-size="7" text-anchor="middle">ReAct</text>
+
+        <rect x="775" y="72" width="86" height="54" rx="6" class="c-mask"/>
+        <rect x="775" y="72" width="86" height="54" rx="6" class="c-external" stroke-width="1.5"/>
+        <text x="818" y="94" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">LLM</text>
+        <text x="818" y="111" class="t-muted" font-size="7" text-anchor="middle">via adapter</text>
+
+        <rect x="883" y="72" width="86" height="54" rx="6" class="c-mask"/>
+        <rect x="883" y="72" width="86" height="54" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="926" y="94" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Tools</text>
+        <text x="926" y="111" class="t-muted" font-size="7" text-anchor="middle">ToolRuntime</text>
+
+        <!-- Legend -->
+        <text x="150" y="846" class="t-primary" font-size="10" font-weight="600">Legend</text>
+        <path d="M 150 866 L 184 866" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <text x="193" y="869" class="t-muted" font-size="8">request</text>
+        <path d="M 270 866 L 304 866" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <text x="313" y="869" class="t-muted" font-size="8">return</text>
+        <path d="M 385 866 L 419 866" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <text x="428" y="869" class="t-muted" font-size="8">security</text>
+        <path d="M 530 866 L 564 866" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <text x="573" y="869" class="t-muted" font-size="8">async trace</text>
+      </svg>

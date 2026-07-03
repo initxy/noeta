@@ -114,6 +114,12 @@ each pulls the layers below it.
 | **`noeta-sdk`** | `packages/noeta-sdk` | A thin in-process client surface over the engine: `import noeta.sdk`, then `query` / `Client` / `Options` / `tool`. No engine internals, no HTTP. Comparable to claude-agent-sdk / LangChain. |
 | **`noeta-agent`** | `apps/noeta-agent` | The official workspace-scoped **coding-agent app**, built on the SDK: an HTTP/SSE backend, the bundled web app (`apps/web`), slash commands, and built-in skills. `python -m noeta.agent` is the only entry point. |
 
+<p align="center">
+  <img src="docs/assets/architecture.svg" alt="Noeta architecture — the three distributions and module relationships" width="820">
+  <br>
+  <em>How the three distributions fit together — the app drives the SDK in-process, and the SDK forwards into the runtime's engine, materials, and storage. Arrows are call paths.</em>
+</p>
+
 There is no `noeta` console script — the coding agent and its web UI launch with
 `python -m noeta.agent`.
 

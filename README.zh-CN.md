@@ -104,6 +104,12 @@ Noeta 以"两个库 + 一个应用外壳"的形式发布。装你需要的最上
 | **`noeta-sdk`** | `packages/noeta-sdk` | engine 之上一层很薄的 in-process 客户端表面：`import noeta.sdk`，然后 `query` / `Client` / `Options` / `tool`。不暴露 engine 内部，不涉及 HTTP。对标 claude-agent-sdk / LangChain。 |
 | **`noeta-agent`** | `apps/noeta-agent` | 官方的、以工作区为作用域的 **coding-agent 应用**，构建在 SDK 之上：一个 HTTP/SSE backend、内置 web 应用（`apps/web`）、slash 命令与内置 skills。`python -m noeta.agent` 是唯一入口。 |
 
+<p align="center">
+  <img src="docs/assets/architecture.svg" alt="Noeta 架构 —— 三个发行物与模块关系" width="820">
+  <br>
+  <em>三个发行物如何拼在一起——应用在进程内驱动 SDK，SDK 转发进 runtime 的引擎、素材与存储。箭头为调用路径。</em>
+</p>
+
 没有 `noeta` 命令行脚本——coding agent 及其 web UI 用 `python -m noeta.agent`
 启动。
 
