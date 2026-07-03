@@ -1,7 +1,7 @@
 [project]
 name = "noeta-runtime"
 version = "0.1.3"
-description = "Noeta runtime engine: the kernel (protocols / core / runtime / storage / guards / observers / read_models) plus the agent materials (policies / tools / providers / context), the execution machinery, the agent identity layer (spec / registry) and the official presets — everything needed to run an agent in-process."
+description = "Noeta runtime engine: the event-sourced kernel that hosts, records, and schedules agent execution in-process. The durable substrate underneath the SDK and the coding agent app."
 license = "Apache-2.0"
 authors = [{ name = "The Noeta Authors" }]
 readme = "README.md"

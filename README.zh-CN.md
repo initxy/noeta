@@ -2,11 +2,13 @@
 
 [English](README.md) · **简体中文**
 
-> 面向 AI agent 的单机持久化事件溯源（event-sourced）运行时。
+> 面向 AI agent 的开源可自托管运行时。Provider 中立、事件溯源、为持久化而生。
 
-Noeta 负责托管、记录并调度 agent 的执行——但不规定 agent 该怎么写。agent 走的每一步都会落入一份只追加的 **EventLog**，而一个任务的完整状态由这份日志 *fold（折叠）* 回来。挂起与恢复、崩溃恢复、replay、exactly-once wake 都不是额外加上去的功能；它们是"把日志当作唯一事实来源"这一前提的自然结果。
+Noeta 把 Claude Code 或 Claude Agent SDK 里的 agent 执行循环，架设在一条持久化、可审查、事件溯源的脊柱上——不绑定任何单一厂商，也不规定 agent 该怎么写。
 
-如果说进程内 agent 库（claude-agent-sdk、LangChain）给你的是那个执行循环，那么 Noeta 在它下面补上了持久化底座——agent 的历史是一份你可以 fold、检查、重新进入的日志，而不是随进程消失的临时内存。
+agent 走的每一步都会落入一份只追加的 **EventLog**，而一个任务的完整状态由这份日志 *fold（折叠）* 回来。挂起与恢复、崩溃恢复、replay、exactly-once wake 都不是额外加上去的功能；它们是"把日志当作唯一事实来源"这一前提的自然结果。
+
+如果说进程内 agent 库（Claude Agent SDK、LangChain）给你的是那个执行循环，那么 Noeta 在它下面补上了持久化底座——agent 的历史是一份你可以 fold、检查、重新进入的日志，而不是随进程消失的临时内存。
 
 <p align="center">
   <img src="docs/assets/web-app.png" alt="Noeta coding-agent web 应用" width="820">
