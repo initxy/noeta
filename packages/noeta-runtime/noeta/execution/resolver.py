@@ -561,6 +561,21 @@ class GenericEngineResolver:
         # parent's binding), not each child's host default. ``None`` ⇒ host
         # default, byte-identical to the pre-I4 single-provider path.
         inherited_provider = self._bound_provider_for(parent_task)
+        # the whole delegation tree also shares the root session's bound
+        # MODEL: a child without its own declared default_model inherits the
+        # root parent's ``ModelBound`` binding instead of silently dropping
+        # to the host default. Gated to a binding that DIFFERS from the host
+        # default — the driver binds every session at open, so a root on the
+        # default model keeps children unbound, byte-identical to the
+        # pre-inheritance path.
+        bound = getattr(
+            getattr(parent_task, "governance", None), "model_binding", None
+        )
+        inherited_model = (
+            bound
+            if isinstance(bound, str) and bound and bound != self.model
+            else None
+        )
         # the whole delegation tree shares the root
         # session's per-turn permission_mode — read from the parent's NON-durable
         # carrier (set by the driver for the spawning turn). ``None`` ⇒ host
@@ -617,15 +632,20 @@ class GenericEngineResolver:
             # ``CodeSessionRunner._build_child_engine``. ``ask_user_question``
             # is OFF for children (depth>0), mirroring the resolve_engine mask.
             # the child runs on its agent's declared
-            # default model when one exists (recorded as the child's opening
-            # ModelBound by the drain), else the host default. CodingAgent
-            # carries no ``default_model`` attribute → getattr None → host
-            # model, byte-identical to the pre-issue-04 behaviour.
+            # default model when one exists, else the root session's inherited
+            # bound model, else the host default (each non-default choice is
+            # recorded as the child's opening ModelBound by the drain, so a
+            # cold resume rebuilds the same binding). CodingAgent carries no
+            # ``default_model`` attribute → getattr None; an unbound /
+            # default-bound root leaves ``inherited_model`` None → host model,
+            # byte-identical to the pre-inheritance behaviour.
             child_agent = self._lookup_agent(
                 agent_name_of(self.event_log, task_id), task_id=task_id
             )
             child_model = (
-                getattr(child_agent, "default_model", None) or self.model
+                getattr(child_agent, "default_model", None)
+                or inherited_model
+                or self.model
             )
             return self._build_engine(
                 child_agent,
@@ -645,14 +665,21 @@ class GenericEngineResolver:
                 task_id=task_id,
             )
 
-        def _child_default_model(task_id: str) -> Optional[str]:
-            # __workflow__ has no roster spec / declared model → host default.
+        def _child_model_binding(task_id: str) -> Optional[tuple[str, str]]:
+            # __workflow__ has no roster spec / declared model → no binding
+            # (the orchestration interpreter makes no LLM calls of its own;
+            # the workers it spawns inherit through this same callback).
             if agent_name_of(self.event_log, task_id) == WORKFLOW_AGENT_NAME:
                 return None
             child_agent = self._lookup_agent(
                 agent_name_of(self.event_log, task_id), task_id=task_id
             )
-            return getattr(child_agent, "default_model", None)
+            declared = getattr(child_agent, "default_model", None)
+            if declared:
+                return (declared, "agent-default")
+            if inherited_model:
+                return (inherited_model, "inherited")
+            return None
 
         # Pre-loop activation of a child's instructions + environment content
         # channels — the same parity ``InteractionDriver.seed_start`` gives a
@@ -700,7 +727,7 @@ class GenericEngineResolver:
                 else _build_subtask_engine(pid)
             ),
             on_root_release=lambda _lease_id: None,
-            child_default_model=_child_default_model,
+            child_model_binding=_child_model_binding,
             child_provider=inherited_provider,
             cancel_check=cancel_check,
             record_session_content=record_child,
