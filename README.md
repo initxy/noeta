@@ -21,6 +21,12 @@ the process.
   <em>The bundled coding-agent web app, served by <code>python -m noeta.agent</code>.</em>
 </p>
 
+<p align="center">
+  <img src="docs/assets/trace.png" alt="Noeta per-task trace view" width="820">
+  <br>
+  <em>The per-task trace view — every event, LLM turn, and token/cache stat, straight from the EventLog.</em>
+</p>
+
 ## Why Noeta
 
 - **Durable by construction** — every state change is an appended event; task
