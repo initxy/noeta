@@ -84,9 +84,45 @@ plugins:
           build: true
           nav:
             - Home: index.md
-            - Getting Started: getting-started.md
-            - Concepts: concepts.md
-            - Guides:
+            - Tutorials:
+                - Quickstart: tutorials/quickstart.md
+                - Your first agent: tutorials/first-agent.md
+                - Build a research agent: tutorials/build-a-research-agent.md
+                - CI integration: tutorials/ci-integration.md
+            - How-to guides:
+                - Configure a provider: how-to/configure-provider.md
+                - Use the coding agent: how-to/use-the-coding-agent.md
+                - Build custom tools: how-to/build-custom-tools.md
+                - Spawn sub-agents: how-to/spawn-subagents.md
+                - Connect MCP: how-to/connect-mcp.md
+                - Deploy a worker: how-to/deploy-worker.md
+                - Swap providers: how-to/swap-providers.md
+            - Concepts:
+                - Event sourcing: concepts/event-sourcing.md
+                - Task model: concepts/task-model.md
+                - Engine & execution: concepts/engine-execution.md
+                - Fold & snapshot: concepts/fold-and-snapshot.md
+                - Wake & resume: concepts/wake-resume.md
+                - Guard vs Observer: concepts/guard-observer.md
+                - Composer & cache: concepts/composer-and-cache.md
+                - Provider neutrality: concepts/provider-neutrality.md
+            - Reference:
+                - SDK API: reference/sdk.md
+                - Coding agent: reference/noeta-agent.md
+                - HTTP API: reference/http-api.md
+                - WorkerLoop: reference/worker-loop.md
+                - Comparison: reference/comparison.md
+                - Configuration: reference/configuration.md
+                - Tools: reference/tools.md
+                - Presets: reference/presets.md
+                - Glossary: reference/glossary.md
+                - API: reference/api/index.md
+            - Architecture:
+                - Overview: architecture/overview.md
+            - Operations:
+                - Troubleshooting: operations/troubleshooting.md
+                - Known limitations: operations/limitations.md
+            - Guides (legacy):
                 - Your first agent: guides/first-agent.md
                 - Custom tools: guides/custom-tool.md
                 - Provider swap: guides/provider-swap.md
@@ -96,21 +132,7 @@ plugins:
                 - Durable storage: guides/durable-storage.md
                 - Writing a custom skill: guides/skills.md
                 - Embedding the engine: guides/embed-engine.md
-                - Noeta Agent: noeta-agent.md
-                - Architecture Deep Dive: noeta-architecture-deep-dive.md
-                - Failure Modes: failure-modes.md
-                - Daemon / Worker Loop: daemon.md
-                - Releasing: releasing.md
-            - Tutorials:
-                - Build a research agent: tutorials/build-a-research-agent.md
-                - CI integration: tutorials/ci-integration.md
-            - Reference:
-                - API: reference/api/index.md
-                - Configuration: reference/configuration.md
-                - Tools: reference/tools.md
-                - Presets: reference/presets.md
-                - HTTP API: reference/http-api.md
-                - Glossary: reference/glossary.md
+            - Releasing: releasing.md
             - Architecture Decisions:
                 - Overview: adr/index.md
                 - Core model:
@@ -161,10 +183,44 @@ plugins:
           build: true
           nav_translations:
             Home: 首页
-            Getting Started: 快速开始
+            Tutorials: 教程
+            Quickstart: 快速开始
+            "Your first agent": 你的第一个 agent
+            "Build a research agent": 构建研究代理
+            "CI integration": CI 集成
+            "How-to guides": 操作指南
+            "Configure a provider": 配置 provider
+            "Use the coding agent": 使用 coding agent
+            "Build custom tools": 构建自定义工具
+            "Spawn sub-agents": 生成子代理
+            "Connect MCP": 连接 MCP
+            "Deploy a worker": 部署 worker
+            "Swap providers": 切换 provider
             Concepts: 核心概念
-            Guides: 指南
-            "Your first agent": 第一个代理
+            "Event sourcing": 事件溯源
+            "Task model": 任务模型
+            "Engine & execution": 引擎与执行
+            "Fold & snapshot": Fold 与快照
+            "Wake & resume": 唤醒与恢复
+            "Guard vs Observer": Guard 与 Observer
+            "Composer & cache": 上下文组装与缓存
+            "Provider neutrality": Provider 中立
+            Reference: 参考
+            "SDK API": SDK API
+            "Coding agent": Coding agent
+            "HTTP API": HTTP 接口
+            WorkerLoop: WorkerLoop
+            Comparison: 对比
+            Configuration: 配置
+            Tools: 工具
+            Presets: 预设代理
+            Glossary: 术语表
+            API: API
+            Architecture: 架构
+            Operations: 运维
+            Troubleshooting: 故障排查
+            "Known limitations": 已知限制
+            "Guides (legacy)": 指南（旧版）
             "Custom tools": 自定义工具
             "Provider swap": 切换提供者
             "Permission gating": 权限门控
@@ -173,21 +229,7 @@ plugins:
             "Durable storage": 持久化存储
             "Writing a custom skill": 编写自定义技能
             "Embedding the engine": 嵌入引擎
-            "Noeta Agent": Noeta 代理
-            "Architecture Deep Dive": 架构深入
-            "Failure Modes": 故障模式
-            "Daemon / Worker Loop": 守护进程 / Worker 循环
             Releasing: 发布
-            Tutorials: 教程
-            "Build a research agent": 构建研究代理
-            "CI integration": CI 集成
-            Reference: 参考
-            API: API
-            Configuration: 配置
-            Tools: 工具
-            Presets: 预设代理
-            "HTTP API": HTTP 接口
-            Glossary: 术语表
             "Architecture Decisions": 架构决策
             Overview: 概览
             "Core model": 核心模型
