@@ -6,18 +6,11 @@ default `stub` provider is a deterministic LLM double.
 
 ## 1. Install
 
-Noeta is not on PyPI yet (the names are taken by unrelated projects).
-Install from a local checkout or git URL:
-
 ```bash
-# From a local checkout (recommended for evaluation)
-uv pip install -e apps/noeta-agent
-
-# Or direct from git
-pip install "noeta-agent @ git+https://github.com/initxy/noeta.git#subdirectory=apps/noeta-agent"
+pip install noeta-agent
 ```
 
-You need Python 3.11+.
+This pulls in the SDK and runtime. You need Python 3.11+.
 
 ## 2. Boot the agent
 

@@ -53,9 +53,8 @@ with the process.
 ## Quickstart
 
 ```bash
-# Not on PyPI yet — install the coding agent (pulls the SDK + runtime) from git:
-pip install "noeta-agent @ git+https://github.com/initxy/noeta.git#subdirectory=apps/noeta-agent"
-python -m noeta.agent   # boots the offline stub coding agent + bundled web UI
+pip install noeta-agent        # pulls the SDK + runtime
+python -m noeta.agent          # boots the offline stub coding agent + bundled web UI
 ```
 
 No API key needed — the default `stub` provider is a deterministic LLM double.

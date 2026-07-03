@@ -8,8 +8,7 @@ Everything runs in-process — no server, no API key. We use the
 ## Prerequisites
 
 - Python 3.11+
-- `noeta-sdk` installed (`uv pip install -e packages/noeta-sdk` from a
-  local checkout, or via the git URL subdirectory)
+- `noeta-sdk` installed (`pip install noeta-sdk`)
 
 ## 1. Define a tool
 

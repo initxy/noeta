@@ -173,14 +173,6 @@ def test_custom_tool_called():
         with:
           enable-cache: true
 
-      # Build the web frontend BEFORE uv sync — noeta-agent's editable
-      # build force-includes apps/web/dist, so sync fails without it.
-      - name: Build web frontend
-        working-directory: apps/web
-        run: |
-          npm ci
-          npm run build
-
       - name: Sync workspace
         run: uv sync --frozen
 
@@ -188,7 +180,7 @@ def test_custom_tool_called():
         run: uv run pytest tests/test_agent_smoke.py -v
 ```
 
-> **为什么先构建前端？** `noeta-agent` 的 editable 构建强制包含 `apps/web/dist`（一个被 git 忽略的 Vite 产物）。如果 `dist/` 不存在，`uv sync` 会失败。这与仓库自己的 CI 工作流一致。
+> **无需构建前端。** PyPI 上的 `noeta-agent` wheel 已内置构建好的 web UI，`uv sync` 拉取的是即装即用的包——不需要 `npm` 步骤。
 
 ## 步骤 4：在 CI 中运行完整测试套件 { #step-4-run-the-full-test-suite-in-ci }
 
@@ -227,9 +219,6 @@ MYPYPATH=packages/noeta-runtime \
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
-      - name: Build web
-        working-directory: apps/web
-        run: npm ci && npm run build
       - name: Sync
         run: uv sync --frozen
       - name: Run integration tests
@@ -254,7 +243,6 @@ def test_agent_with_real_llm():
 ## 要点 { #key-points }
 
 - **冒烟测试使用 stub provider。** `FakeLLMProvider` 位于 `noeta.testing`——离线替身的公开归宿。无密钥，无网络。
-- **先构建 web 再 sync。** `apps/web/dist` 被 editable 构建强制包含。这是仓库的 CI 模式。
 - **`uv run pytest`** 是测试入口点。工作区根目录的 `pyproject.toml` 配置了 `testpaths = ["tests"]`。
 - **`@pytest.mark.live`** 门控真实 LLM 测试，以便它们不在默认 CI 中运行。使用 `-m "not live"` 跳过它们（已经是 `pyproject.toml` 中的默认值）。
 
