@@ -63,37 +63,37 @@ make run        # build web + boot backend (offline stub, port 8765)
 
 <div class="grid cards" markdown>
 
--   :material-rocket-launch:{ .lg .middle } **Getting Started**
+-   :material-rocket-launch:{ .lg .middle } **Quickstart**
 
     ---
 
-    90-second smoke test, then a real-provider walkthrough.
+    5-minute offline smoke test — install, boot the stub agent, view the trace.
 
-    [:octicons-arrow-right-24: Start here](getting-started.md)
+    [:octicons-arrow-right-24: Start here](tutorials/quickstart.md)
 
 -   :material-lightbulb-on-outline:{ .lg .middle } **Core Concepts**
 
     ---
 
-    Task, EventLog, Engine, Dispatcher, Guard, Observer — the model behind Noeta.
+    Event sourcing, Task model, Engine & execution, Fold & snapshot, Wake & resume, and more.
 
-    [:octicons-arrow-right-24: Learn the model](concepts.md)
+    [:octicons-arrow-right-24: Learn the model](concepts/event-sourcing.md)
 
 -   :material-console:{ .lg .middle } **Noeta Agent**
 
     ---
 
-    The bundled coding agent: tools, presets, skills, permission model, HTTP surface.
+    The bundled coding agent: tools, presets, skills, permission model, env config.
 
-    [:octicons-arrow-right-24: Use the agent](noeta-agent.md)
+    [:octicons-arrow-right-24: Use the agent](reference/noeta-agent.md)
 
 -   :material-api:{ .lg .middle } **API Reference**
 
     ---
 
-    Auto-generated from Python docstrings via mkdocstrings.
+    SDK API, HTTP routes, WorkerLoop, presets, tools, glossary.
 
-    [:octicons-arrow-right-24: Browse the API](reference/api/index.md)
+    [:octicons-arrow-right-24: Browse the API](reference/sdk.md)
 
 </div>
 
@@ -101,7 +101,7 @@ make run        # build web + boot backend (offline stub, port 8765)
 
 For the top-down architecture walkthrough — event-sourced engine, three-package
 layout, provider adapters, context composition — see the
-[Architecture Deep Dive](noeta-architecture-deep-dive.md).
+[architecture overview](architecture/overview.md).
 
 For the why behind cross-module decisions, browse the
 [Architecture Decision Records](adr/index.md).

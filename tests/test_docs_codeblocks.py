@@ -51,8 +51,24 @@ def _extract_runnable_blocks(md_path: Path) -> list[tuple[str, str, str]]:
 
 _RUNNABLE_MD_FILES = (
     _REPO_ROOT / "README.md",
-    _REPO_ROOT / "docs" / "quickstart.md",
+    _REPO_ROOT / "docs" / "tutorials" / "quickstart.md",
 )
+
+# Subtrees under docs/ that the user-doc scan gates skip: ADR decision
+# records describe before-states by design, and implementation-specs /
+# _research are internal working artifacts, not user-facing docs.
+_NON_USER_DOC_SUBTREES = ("adr", "implementation-specs", "_research")
+
+
+def _user_facing_doc_pages() -> list[Path]:
+    """All user-facing ``docs/**/*.md`` pages, recursive, minus the
+    excluded subtrees above."""
+    docs_root = _REPO_ROOT / "docs"
+    return [
+        p
+        for p in sorted(docs_root.glob("**/*.md"))
+        if p.relative_to(docs_root).parts[0] not in _NON_USER_DOC_SUBTREES
+    ]
 
 
 def _collect_runnables() -> list[tuple[Path, str, str, str]]:
@@ -123,11 +139,13 @@ def test_docs_dont_promise_pypi_install_paths() -> None:
     The install paths Phase 2 actually ships are local checkout and
     git+url with a subdirectory.
 
-    Scans the repo-root README in addition to ``docs/*.md`` (per
-    architect NB2 in I2 rev1 review). The README's "Out of scope"
-    section is the one allowed mention — it explicitly lists
-    PyPI / ``uv add noeta`` as NOT shipping in Phase 2 — so we only
-    flag the forbidden phrases when they appear OUTSIDE that section.
+    Scans the repo-root README in addition to the recursive user-facing
+    ``docs/**/*.md`` pages (per architect NB2 in I2 rev1 review; the
+    ADR / internal subtrees are excluded — see
+    ``_NON_USER_DOC_SUBTREES``). The README's "Out of scope" section is
+    the one allowed mention — it explicitly lists PyPI / ``uv add
+    noeta`` as NOT shipping in Phase 2 — so we only flag the forbidden
+    phrases when they appear OUTSIDE that section.
     """
     forbidden_phrases = (
         "uv add noeta",
@@ -135,7 +153,7 @@ def test_docs_dont_promise_pypi_install_paths() -> None:
         "pypi.org/project/noeta",
     )
 
-    md_paths = list(_REPO_ROOT.glob("docs/*.md"))
+    md_paths = _user_facing_doc_pages()
     md_paths.append(_REPO_ROOT / "README.md")
 
     for md in md_paths:
@@ -173,12 +191,12 @@ def test_no_pre_h2_wake_residue_in_user_docs() -> None:
     """CW4 residue gate — H2 shipped **single-worker durable
     exactly-once wake**, so user-facing docs must not carry the pre-H2
     'at-most-once / lost wake / operator re-issue' framing. ADR decision
-    records (a separate subtree — excluded by the non-recursive ``docs/*.md``
-    glob) and ``.scratch`` design history describe the before-state by design
+    records (a separate subtree — excluded via ``_NON_USER_DOC_SUBTREES``)
+    and ``.scratch`` design history describe the before-state by design
     and are intentionally NOT scanned. (The ``noeta serve --help`` source the
     gate used to also scan went away with the operator CLI in TL6.)
     Lightweight (regex over a handful of files; no new dependency)."""
-    scanned = list(_REPO_ROOT.glob("docs/*.md"))
+    scanned = _user_facing_doc_pages()
     scanned.append(_REPO_ROOT / "README.md")
     offenders: list[str] = []
     for path in scanned:
