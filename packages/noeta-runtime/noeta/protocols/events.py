@@ -682,6 +682,33 @@ class LLMRequestFinishedPayload:
 
 
 @dataclass(frozen=True, slots=True)
+class LLMRetryScheduledPayload:
+    """A transient LLM failure was scheduled for a live retry.
+
+    Emitted by ``RuntimeLLMClient`` between attempts of one logical request —
+    BEFORE the backoff sleep — so a live consumer (the web chat via the SSE
+    envelope stream) can show "rate-limited, retrying" instead of a silent
+    multi-second stall. Observational only: fold registers it as a no-op
+    (no state slice changes), the Started/Recorded/Finished trio still fires
+    exactly once per logical request, and the type is simply absent from old
+    recordings (the additive-event pattern → no ``schema_version`` bump).
+
+    ``attempt`` is the 1-based index of the retry being scheduled, out of
+    ``max_retries``; ``delay_seconds`` is the backoff actually chosen
+    (``Retry-After`` verbatim when the provider sent one, else the jittered
+    exponential); ``error`` is the transient failure's message, truncated at
+    the emit site so the inline payload stays far under the 4 KB cap.
+    """
+
+    call_id: str
+    attempt: int
+    max_retries: int
+    delay_seconds: float
+    category: str
+    error: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class StepTransitionMarkedPayload:
     """Foundation B — tags *why* a step had a next step (README D-B1).
 

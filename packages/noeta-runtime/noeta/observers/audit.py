@@ -154,6 +154,11 @@ _SUMMARY_FIELDS_BY_EVENT: dict[str, tuple[str, ...]] = {
     # ref the blocks live behind (never inlined), and the block count.
     "AssistantThinkingRecorded": ("call_id", "thinking_ref", "block_count"),
     "LLMRequestFinished":  ("call_id", "success", "cost_usd"),
+    # a live transient-retry backoff — the retried call_id, attempt
+    # counters, chosen delay, error category, and the provider's (truncated)
+    # error string are all transport/governance metadata (no user content),
+    # safe to project so the audit trail records each rate-limit stall.
+    "LLMRetryScheduled":   ("call_id", "attempt", "max_retries", "delay_seconds", "category", "error"),
     # background-shell lifecycle — the job id, launched command,
     # launching task, pid, exit code, byte offset, summary, and the output
     # CONTENT REFS (bytes stay behind the refs, never inlined here) are all

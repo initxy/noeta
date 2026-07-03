@@ -98,6 +98,13 @@ const STATUS_TEXT = {
 
 function deriveStatusText(vm) {
   if (!vm) return "";
+  // A live retry backoff outranks the plain "Running": the agent is stalled
+  // on a transient provider failure (usually a rate limit) and would
+  // otherwise look silently stuck for up to ~2 minutes.
+  if (vm.llmRetry) {
+    const r = vm.llmRetry;
+    return `Retrying (${r.attempt}/${r.maxRetries})`;
+  }
   switch (vm.wakeKind) {
     case "next-goal":
       return "Ready";

@@ -8,6 +8,27 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- New observational `LLMRetryScheduled` event: the runtime records each
+  scheduled transient-retry backoff (call_id, attempt, delay, category,
+  truncated error) so the web chat shows "Provider error — retrying (n/m)"
+  in the composing indicator, status text, and a per-call timeline marker
+  instead of stalling silently. Fold-inert (no state slice changes); the
+  request/response event trio still fires exactly once per logical request.
+
+### Changed
+
+- Transient LLM retry budget raised from 5 to 8 attempts (max backoff wait
+  ~31s → ~2min), so a sustained 429 rate limit gets a real recovery window.
+
+### Fixed
+
+- Subtasks now inherit the parent session's model binding: a child agent
+  without its own declared default model runs on the root parent's bound
+  model (recorded as the child's opening `ModelBound`, identity
+  `"inherited"`) instead of silently dropping to the host default model.
+
 ## [0.1.0] - YYYY-MM-DD
 
 Initial preview release.
