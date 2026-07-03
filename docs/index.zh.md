@@ -52,38 +52,38 @@ make run        # 构建 Web + 启动后端（离线 stub，端口 8765）
 
     ---
 
-    90 秒冒烟测试，然后是真实 provider 演练。
+    5 分钟离线冒烟测试——安装、启动 stub agent、查看 trace。
 
-    [:octicons-arrow-right-24: 从这里开始](getting-started.md)
+    [:octicons-arrow-right-24: 从这里开始](tutorials/quickstart.md)
 
 -   :material-lightbulb-on-outline:{ .lg .middle } **核心概念**
 
     ---
 
-    Task、EventLog、Engine、Dispatcher、Guard、Observer——Noeta 背后的模型。
+    事件溯源、任务模型、引擎与执行、Fold 与快照、唤醒与恢复等。
 
-    [:octicons-arrow-right-24: 了解模型](concepts.md)
+    [:octicons-arrow-right-24: 了解模型](concepts/event-sourcing.md)
 
 -   :material-console:{ .lg .middle } **Noeta 代理**
 
     ---
 
-    附带的编码代理：工具、预设、技能、权限模型、HTTP 接口。
+    附带的 coding agent：工具、预设、技能、权限模型、环境配置。
 
-    [:octicons-arrow-right-24: 使用代理](noeta-agent.md)
+    [:octicons-arrow-right-24: 使用代理](reference/noeta-agent.md)
 
 -   :material-api:{ .lg .middle } **API 参考**
 
     ---
 
-    通过 mkdocstrings 从 Python docstring 自动生成。
+    SDK API、HTTP 路由、WorkerLoop、预设、工具、术语表。
 
-    [:octicons-arrow-right-24: 浏览 API](reference/api/index.md)
+    [:octicons-arrow-right-24: 浏览 API](reference/sdk.md)
 
 </div>
 
 ## 架构
 
-关于自上而下的架构演练——事件溯源 Engine、三包布局、provider adapter、上下文组合——请参阅[架构深入](noeta-architecture-deep-dive.md)。
+关于自上而下的架构演练——事件溯源 Engine、三包布局、provider adapter、上下文组合——请参阅[架构概览](architecture/overview.md)。
 
 关于跨模块决策的原因，请浏览[架构决策记录](adr/index.md)。
