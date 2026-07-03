@@ -23,19 +23,19 @@ python -m noeta.agent
 ```
 
 * Launcher + env parsing: `apps/noeta-agent/noeta/agent/__main__.py` and
-  `RunnerConfig.from_env` in `apps/noeta-agent/noeta/agent/host/runner_cli.py`
+  `BackendConfig.from_env` in `apps/noeta-agent/noeta/agent/backend/lifecycle.py`
   (the authoritative list of `NOETA_AGENT_*` knobs — workspace, port, host,
   provider/model/key/base_url, write mode, shell mode, MCP/workspace/session
   registries, etc.). `NOETA_AGENT_PROVIDER` defaults to the offline `stub`
   double; `openai` / `anthropic` / `openai-responses` are the real adapters.
-* Library use (no server): `noeta.client` exports `Options`, `query`,
-  `Client`, `compile_options` (`packages/noeta-sdk/noeta/client/__init__.py`);
+* Library use (no server): `noeta.sdk` exports `Options`, `query`,
+  `Client`, `compile_options` (`packages/noeta-sdk/noeta/sdk/__init__.py`);
   the official four-agent recipe is `noeta.presets.main_options()` /
-  `official_specs()` (`packages/noeta-sdk/noeta/presets/__init__.py`).
+  `official_specs()` (`packages/noeta-runtime/noeta/presets/__init__.py`).
 
 ## Tool surface
 
-Built-in tools are assembled in `packages/noeta-sdk/noeta/tools/`. Names are
+Built-in tools are assembled in `packages/noeta-runtime/noeta/tools/`. Names are
 provider-safe snake_case and are the strings the model calls. Source of
 truth: `noeta/tools/fs/__init__.py` (`build_fs_tools`) plus the `app/` and
 `web/` packs.
@@ -65,7 +65,7 @@ dynamically as `mcp__<alias>__<tool>` (`noeta/tools/mcp/tool.py`).
 ## Agent presets
 
 `noeta.presets` ships the official quartet aligned with Claude Code's roster
-(`packages/noeta-sdk/noeta/presets/__init__.py`). The agent is chosen **per
+(`packages/noeta-runtime/noeta/presets/__init__.py`). The agent is chosen **per
 task** in the `POST /tasks` body (`{"goal": …, "agent": …}`), not at process
 launch; custom agents go through the flat `Options.agents` dict.
 
@@ -79,8 +79,8 @@ launch; custom agents go through the flat `Options.agents` dict.
 The runner filters the tool pack by the agent's `allowed_tools` **before**
 the Engine sees it, and the `PermissionGuard` uses the same allow-list, so a
 forbidden tool is provably unreachable. See
-`docs/adr/library-sdk-architecture.md` (Options creation surface) and
-`docs/adr/tool-and-agent-catalog.md`.
+[ADR: Library-SDK architecture](adr/library-sdk-architecture.md) (Options
+creation surface) and [ADR: Tool and agent catalog](adr/tool-and-agent-catalog.md).
 
 ## Skills
 
@@ -100,9 +100,9 @@ skill: pdf-extract
 # → next turn carries SKILL.md body + "Base directory: <abs path>"; model reads resources via `read`.
 ```
 
-Authoritative: `docs/adr/model-driven-skill-invocation.md` and
-`docs/adr/skill-resource-on-demand.md`; indexer code in
-`packages/noeta-sdk/noeta/context/skills/`.
+Authoritative: [ADR: Model-driven skill invocation](adr/model-driven-skill-invocation.md)
+and [ADR: Skill resource on-demand](adr/skill-resource-on-demand.md); indexer
+code in `packages/noeta-runtime/noeta/context/skills/`.
 
 ## Write & shell safety
 
@@ -124,61 +124,44 @@ Every path goes through `WorkspaceRoot` (realpath + containment, symlink-
 safe; checked before any IO), so absolute / `..` / out-of-tree-symlink
 escapes fail before reading or writing. Approval and write/shell gating are
 expressed as neutral control mechanisms — see
-`docs/adr/control-tools-neutral-mechanism.md` and
-`docs/adr/shell-permission-and-background.md`.
+[ADR: Control tools neutral mechanism](adr/control-tools-neutral-mechanism.md)
+and [ADR: Shell permission and background](adr/shell-permission-and-background.md).
 
 ## HTTP surface
 
-`python -m noeta.agent` serves these routes (registered in
-`apps/noeta-agent/noeta/agent/host/http_router.py`, handlers in `http.py`).
-This is an acceptance surface for the bundled local UI, **not** a stable
-versioned public API: bodies never accept provider / base_url / credentials
+`python -m noeta.agent` serves an HTTP/SSE backend for the bundled web UI.
+This is an **acceptance surface for the local UI, not a stable versioned
+public API**: request bodies never accept provider / base_url / credentials
 (the host-side `NOETA_AGENT_*` config is authoritative).
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/` | redirect to `/chat` |
-| `GET` | `/chat` `/trace` `/assets/*` `/src/*` | bundled web assets |
-| `GET` | `/capabilities` | agents / models / providers / MCP / workspace probe |
-| `GET` | `/skills` | list available skills (`?workspace_id=`) |
-| `GET` | `/tasks` | task list |
-| `GET` | `/tasks/{id}` | folded task detail |
-| `GET` | `/tasks/{id}/events` | envelope history (`?after_seq=N`) |
-| `GET` | `/tasks/{id}/context` | recorded context view |
-| `GET` | `/tasks/{id}/files` · `/tasks/{id}/file` | workspace file tree · single-file preview (`?path=&mode=raw`) |
-| `GET` | `/tasks/{id}/artifacts/{hash}` | task-scoped artifact body |
-| `GET` | `/tasks/{id}/images/{hash}` | uploaded image blob |
-| `GET` | `/tasks/{id}/messages/{hash}` | prose projection for `MessagesAppended` |
-| `GET` | `/tasks/{id}/content/{hash}` | decoded content-ref body |
-| `GET` | `/workspaces` · `/workspaces/{id}/files` | workspace registry · its file tree |
-| `GET` | `/mcp-servers` (+ `/{alias}/tools`·`/prompts`·`/resources`) | MCP server registry + menus |
-| `GET` | `/events` | global SSE live stream (pages filter by task client-side) |
-| `GET` | `/preview/*` | single-port HTML app preview gateway |
-| `POST` | `/tasks` | create a task: `goal` + `agent` + optional model selector |
-| `POST` | `/tasks/{id}/goals` | append a follow-up goal |
-| `POST` | `/tasks/{id}/approvals` · `/answers` | approve/deny a tool call · answer a question |
-| `POST` | `/tasks/{id}/cancel` · `/close` · `/reopen` · `/rewind` | lifecycle: cancel · close · reopen · rewind |
-| `POST` | `/tasks/{id}/resume` | test/diagnostic targeted resume |
-| `POST` `PUT` `DELETE` | `/workspaces[...]` · `/mcp-servers[...]` | manage workspace + MCP server registries |
-| `DELETE` | `/tasks/{id}` | hard-delete a session + its data |
+For the full route table see [Reference › HTTP API](reference/http-api.md).
+Routes are registered in these modules under
+`apps/noeta-agent/noeta/agent/backend/`:
 
-Task-creation contract: `docs/adr/web-task-creation.md`. File panel +
-app preview: `docs/adr/web-file-panel-and-app-preview.md`. Image
-attach: `docs/adr/web-image-attach.md`.
+- `task_protocol.py` — SSE stream (`GET /stream?task=<id>`) + task commands
+- `resource_services.py` — content / files / file (data plane)
+- `read_views.py` — capabilities + session list
+- `mcp_service.py` — MCP connector management (`/mcp/servers/*`)
+- `workspace_service.py` — workspace (project) management
+- `app.py` — routing root, static assets, preview gateway, `/health`
+
+Config parsing: `backend/lifecycle.py` → `BackendConfig.from_env`.
+See also: [Configuration](reference/configuration.md).
 
 ## MCP & hooks
 
 * **MCP** — remote/stdio connectors are registered in
   `~/.noeta/mcp_servers.json` (alias → transport/url/credentials; credentials
   never travel in request bodies) and enabled per session; their tools show
-  up as `mcp__<alias>__<tool>`. See `docs/adr/mcp-connectors.md`.
-* **Hooks** — the only extension roles are **Guard** (veto/mutate at
+  up as `mcp__<alias>__<tool>`. Override the registry path with
+  `NOETA_AGENT_MCP_FILE`. See [ADR: MCP connectors](adr/mcp-connectors.md).
+* **Hooks** — the only extension roles are **Guard** (veto at
   `before_tool_call` / `before_spawn_subtask` / `before_finish`) and
   **Observer** (read-only). There is no Mutator role. See
-  `docs/adr/guard-observer-hooks.md`.
+  [ADR: Guard-observer hooks](adr/guard-observer-hooks.md).
 
 ## Sub-agent fan-out
 
 `main` can spawn the subagents in parallel; the result is the subagent's
 return value, recorded into the EventLog so the whole tree folds back into
-state — see `docs/adr/subtask-fanout-and-durable-wake.md`.
+state — see [ADR: Subtask fan-out and durable wake](adr/subtask-fanout-and-durable-wake.md).

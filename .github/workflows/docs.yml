@@ -1,0 +1,71 @@
+# Build the MkDocs documentation site and deploy to GitHub Pages.
+#
+# Triggered on push to main (docs changes) or manual dispatch.
+# Uses actions/deploy-pages — Pages source must be set to "GitHub Actions"
+# in the repository settings (Settings → Pages → Build and deployment → Source).
+
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mkdocs.yml"
+      - "docs/**"
+      - "packages/**/*.py"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      # noeta-agent's editable build force-includes apps/web/dist;
+      # the dist/ must exist before uv sync resolves the workspace.
+      - name: Build web frontend
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Sync workspace (docs group)
+        run: uv sync --group docs
+
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Build MkDocs site
+        run: uv run mkdocs build
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

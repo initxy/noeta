@@ -231,7 +231,7 @@ What is opened for you to customize is five explicit extension seams, plus a too
 
 Plus the @tool decorator: stamp a function with a name, version, risk level, input schema, and description, and it becomes a first-class tool the model can call directly.
 
-There is a trade-off on this side of the default too. An agent gets the full builtin tool set by default (read, write, edit, glob, grep, shell, web search, and so on), and you narrow it with an allowlist / denylist; the permission mode (default / auto-accept edits / fully automatic) decides whether a high-risk tool must ask first before running.
+There is a trade-off on this side of the default too. An agent gets the full builtin tool set by default (read, write, edit, glob, grep, shell_run, web_search, and so on), and you narrow it with an allowlist / denylist; the permission mode (default / auto-accept edits / fully automatic) decides whether a high-risk tool must ask first before running.
 
 The restraint of this layer: all five seams are real interfaces, but noeta does not carve a seam out of thin air just because "maybe someone will want to swap it later." The engine itself is not a place you reach into and change; you change behavior by composing Options, not by inheriting internal classes. This Options surface is also deliberately shaped against the claude-agent-sdk parameter table (system prompt, tool allowlist, MCP, permission mode, subagents all line up); the specifics of the differences are left to section ten.
 

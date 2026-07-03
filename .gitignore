@@ -22,6 +22,7 @@ htmlcov/
 .coverage.*
 dist/
 build/
+site/
 *.egg
 node_modules/
 
