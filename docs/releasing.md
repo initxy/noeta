@@ -13,14 +13,21 @@ published packages must not lag `main`.
 
 ## Procedure
 
-1. Bump `version` in all three member pyprojects **and** the lockstep `>=`
+1. Update `CHANGELOG.md`: rename `## [Unreleased]` to `## [X.Y.Z] - <date>`
+   (keep a fresh empty `Unreleased` above it) and complete its entries from
+   `git log vPREV..HEAD` — curated, user-visible changes only, not commit
+   subjects. Update the compare links at the bottom. A behavior-changing PR
+   *may* add its entry to `Unreleased` directly; the release PR is the
+   backstop that fills whatever is missing. `release.yml` refuses to publish
+   a tag whose version has no dated changelog section.
+2. Bump `version` in all three member pyprojects **and** the lockstep `>=`
    cross-package lower bounds to the same value (`noeta-sdk` →
    `noeta-runtime>=X.Y.Z`; `noeta-agent` → both).
-2. Update the version assertion in `tests/test_install_smoke.py`
+3. Update the version assertion in `tests/test_install_smoke.py`
    (`test_pyproject_metadata_is_present`).
-3. Run `uv sync` to refresh `uv.lock`.
-4. Merge to `main` via PR with CI green.
-5. `git tag vX.Y.Z && git push origin vX.Y.Z` — `release.yml` builds the
+4. Run `uv sync` to refresh `uv.lock`.
+5. Merge to `main` via PR with CI green.
+6. `git tag vX.Y.Z && git push origin vX.Y.Z` — `release.yml` builds the
    frontend + all wheels and publishes via PyPI trusted publishing (no stored
    token).
 

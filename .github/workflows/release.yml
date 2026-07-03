@@ -16,8 +16,8 @@
 #   Project noeta-agent   : Environment = pypi-agent
 # (The environment name here must match the ``environment:`` key below exactly.)
 #
-# Release: bump the version + ==pins in all three member pyproject.toml files,
-# commit, then `git tag vX.Y.Z && git push --tags`.
+# Release procedure: docs/releasing.md (changelog, lockstep versions +
+# lower bounds, tag). The build job gates on a dated CHANGELOG section.
 
 name: Release
 
@@ -35,6 +35,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Changelog gate — the tagged version must have a dated section
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! grep -Eq "^## \[${VERSION}\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no dated '## [${VERSION}] - YYYY-MM-DD' section; see docs/releasing.md"
+            exit 1
+          fi
       - name: Set up Node
         uses: actions/setup-node@v4
         with:

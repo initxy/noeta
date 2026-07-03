@@ -269,31 +269,44 @@
     },
     {
       "function": {
-        "description": "Delegate a focused goal to a named sub-agent and get its result back.\n\n## What it does\n\nSpawns ONE sub-agent — picked by `agent`, constrained to the roster of allowed\nnames — to work on `goal`, an independent sub-task. The sub-agent runs to\ncompletion and its final text is returned to you as the result; that text is NOT\nshown to the user, so relay what matters.\n\n## When to use\n\n- The goal fits a sub-agent type: a read-only scout for broad searches, a\n  general-purpose worker for a self-contained coding task, an architect for a\n  plan.\n- Delegating independent work keeps your own context clean, or the answer means\n  sweeping many files and you only need the conclusion, not the file dumps.\n- You want SEVERAL independent sub-agents at once: emit multiple `spawn_subagent`\n  calls in the SAME turn and they fan out and run concurrently, with results\n  returned in call order. This is the direct way to parallelize — plain\n  parallelism does NOT need a workflow. **If the user asks to run sub-agents \"in\n  parallel\", you MUST emit all the `spawn_subagent` calls in a single\n  turn.** A single `spawn_subagent` suspends you until that one child returns, so\n  spawning one per turn is strictly sequential — never parallel. Spawning one at a\n  time, then \"the next after it finishes\", does NOT fan out; batch them.\n\n## When NOT to use\n\n- A single-fact lookup where you already know the file or symbol — just look it up\n  yourself.\n- Orchestrating sub-agents programmatically — loop over a list, branch the next\n  spawn on a prior result, or chain a dependency where each step feeds the next —\n  use `run_workflow` instead. (Plain parallelism is not this: just spawn several\n  at once, see above.)\n- Work already delegated — do not re-spawn for the same thing.\n\n## Preconditions\n\n- Delegation must be enabled for this agent, otherwise the tool is not offered.\n- Pick `agent` only from the roster names shown on the parameter; authorization is\n  enforced by the permission guard, not by this schema.",
+        "description": "Delegate focused goals to named sub-agents and get their results back.\n\n## What it does\n\nSpawns the sub-agents listed in `spawns` — each entry picks an `agent` from\nthe roster and gives it a `goal`, an independent sub-task. ONE entry delegates\nand waits for that single result. SEVERAL entries fan out and run\nCONCURRENTLY; you suspend once and all results come back together, in entry\norder. A sub-agent's final text is returned to you as the result; that text is\nNOT shown to the user, so relay what matters.\n\n## When to use\n\n- The goal fits a sub-agent type: a read-only scout for broad searches, a\n  general-purpose worker for a self-contained coding task, an architect for a\n  plan.\n- Delegating independent work keeps your own context clean, or the answer means\n  sweeping many files and you only need the conclusion, not the file dumps.\n- You have SEVERAL independent goals: put them ALL in the `spawns` array of a\n  single call — that is what makes them run in parallel. **If the user asks to\n  run sub-agents \"in parallel\", you MUST batch the goals into one call's\n  `spawns` array.** A call with a single entry suspends you until that one\n  child returns, so one-entry-per-turn is strictly sequential — never parallel.\n  Spawning one, then \"the next after it finishes\", does NOT fan out; batch\n  them.\n\n## When NOT to use\n\n- A single-fact lookup where you already know the file or symbol — just look it\n  up yourself.\n- Orchestrating sub-agents programmatically — loop over a list, branch the next\n  spawn on a prior result, or chain a dependency where each step feeds the next —\n  use `run_workflow` instead. (Plain parallelism is not this: just batch the\n  entries in one call, see above.)\n- Work already delegated — do not re-spawn for the same thing.\n\n## Preconditions\n\n- Delegation must be enabled for this agent, otherwise the tool is not offered.\n- Pick each entry's `agent` only from the roster names shown on the parameter;\n  authorization is enforced by the permission guard, not by this schema.\n- `background=true` is only valid with exactly ONE `spawns` entry (a fan-out\n  batch always runs in the foreground).",
         "name": "spawn_subagent",
         "parameters": {
           "properties": {
-            "agent": {
-              "description": "Named sub-agent to delegate to. Available: explore; general-purpose; plan",
-              "enum": [
-                "explore",
-                "general-purpose",
-                "plan"
-              ],
-              "type": "string"
-            },
             "background": {
-              "description": "Run the sub-agent in the background instead of waiting for it. With background=true you immediately get a 'started' acknowledgement and keep working; the sub-agent runs concurrently and its result is delivered to you automatically when it finishes — you never poll or wait. Use it for independent, longer-running work (research, a broad scan) you want off the critical path. Omit it (the default) to delegate and wait for the result inline. Only a single background spawn is supported per call.",
+              "description": "Run the sub-agent in the background instead of waiting for it. With background=true you immediately get a 'started' acknowledgement and keep working; the sub-agent runs concurrently and its result is delivered to you automatically when it finishes — you never poll or wait. Use it for independent, longer-running work (research, a broad scan) you want off the critical path. Omit it (the default) to delegate and wait for the result inline. Only valid with exactly ONE spawns entry (a fan-out batch is always foreground).",
               "type": "boolean"
             },
-            "goal": {
-              "description": "The focused goal for the sub-agent.",
-              "type": "string"
+            "spawns": {
+              "description": "The sub-agents to spawn. ONE entry delegates and waits for that single result. SEVERAL entries fan out and run CONCURRENTLY; their results return together, in entry order. Always batch independent goals into one call — spawning one entry per turn is strictly sequential, never parallel.",
+              "items": {
+                "properties": {
+                  "agent": {
+                    "description": "Named sub-agent to delegate to. Available: explore; general-purpose; plan",
+                    "enum": [
+                      "explore",
+                      "general-purpose",
+                      "plan"
+                    ],
+                    "type": "string"
+                  },
+                  "goal": {
+                    "description": "The focused goal for this sub-agent.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "agent",
+                  "goal"
+                ],
+                "type": "object"
+              },
+              "minItems": 1,
+              "type": "array"
             }
           },
           "required": [
-            "agent",
-            "goal"
+            "spawns"
           ],
           "type": "object"
         }
@@ -424,7 +437,7 @@
         }
       ],
       "name": "stable_prefix",
-      "segment_hash": "ec6ae61cc9a89aeaf2dfeaf890111eae3c30c9bd6d0325eda01bc24dd7ec84c1"
+      "segment_hash": "9506d51b93dab10e50641b267a3a277f5f425cfc6a5a7511bcc41861f0712c9f"
     },
     {
       "content": [],
@@ -448,7 +461,7 @@
           "content": [
             {
               "__canonical_tag__": "text_block",
-              "text": "When you delegate independent work to sub-agents, send them in a single message with multiple spawn_subagent tool calls so they run concurrently. Spawning one per turn is sequential, not parallel."
+              "text": "When you delegate independent work to sub-agents, batch ALL the goals into ONE spawn_subagent call's spawns array so they run concurrently and the results return together. Spawning one per turn is sequential, not parallel."
             }
           ],
           "origin": "system",
@@ -456,7 +469,7 @@
         }
       ],
       "name": "dynamic_suffix",
-      "segment_hash": "bfebaefd62829805cf16e8b541eccae4209a917d4b64a0a3cf1054dffc26f37f"
+      "segment_hash": "eafc73a560e834c8cd30fdb32c2e02275784f8307e79508e47504e8a114b6367"
     }
   ]
 }

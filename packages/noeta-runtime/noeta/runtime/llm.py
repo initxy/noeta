@@ -45,6 +45,7 @@ from noeta.protocols.events import (
     LLMRequestFinishedPayload,
     LLMRequestStartedPayload,
     LLMResponseRecordedPayload,
+    LLMRetryScheduledPayload,
     MessageSelection,
 )
 from noeta.protocols.messages import (
@@ -166,14 +167,17 @@ def _default_sleep(seconds: float) -> None:
 
 
 #: Default transient-retry budget for ``RuntimeLLMClient`` (README D-2d).
-#: A provider-neutral budget: the retry loop is LIVE-only and writes no events,
-#: so the cost of these retries is invisible to the EventLog. Sized so a 429
-#: rate-limit gets several exponential-backoff attempts (~1+2+4+8+16s, the last
-#: capped at 30s ⇒ ~31s of waiting across 5 retries) rather than giving up after
-#: ~3s — comfortably inside the driver's 600s lease, so the lease never expires
+#: A provider-neutral budget: the retry loop is LIVE-only — intermediate
+#: attempts record no request/response trio, only an observational
+#: ``LLMRetryScheduled`` marker per backoff (so the frontend can show
+#: "retrying" instead of a silent stall). Sized so a persistent 429
+#: rate-limit gets a real recovery window (~1+2+4+8+16+30+30+30s ⇒ ~2min of
+#: waiting across 8 retries; a gateway that stays saturated past the 16s
+#: rung usually needs tens of seconds, not another doubling) — still
+#: comfortably inside the driver's 600s lease, so the lease never expires
 #: mid-backoff. A provider-supplied ``Retry-After`` overrides the backoff per
 #: attempt (see ``retry_policy``).
-_DEFAULT_MAX_RETRIES = 5
+_DEFAULT_MAX_RETRIES = 8
 
 
 def _error_response(exc: Exception) -> LLMResponse:
@@ -288,13 +292,15 @@ class RuntimeLLMClient:
         )
 
         # 2. Invoke provider, wrapped in the LIVE-only transient-retry loop
-        # (README D-2d). The loop records NOTHING for intermediate failed
-        # attempts — one logical request emits exactly one trio — so a resume
-        # that folds the EventLog rebuilds the same state. Non-transient
+        # (README D-2d). Intermediate failed attempts record no
+        # request/response trio — one logical request emits exactly one trio,
+        # so a resume that folds the EventLog rebuilds the same state — but
+        # each scheduled backoff emits an observational ``LLMRetryScheduled``
+        # (a fold no-op) so a live consumer sees the stall. Non-transient
         # categories (overflow / fatal) and a budget-exhausted transient are
         # translated into a single error response carrying ``raw['category']``.
         t0 = self._clock()
-        resp = self._invoke_with_retry(req, ctx)
+        resp = self._invoke_with_retry(req, ctx, call_id=call_id)
         t1 = self._clock()
         latency_ms = max(0, int((t1 - t0) * 1000))
 
@@ -342,15 +348,20 @@ class RuntimeLLMClient:
 
         return resp
 
-    def _invoke_with_retry(self, req: LLMRequest, ctx: StepContext) -> LLMResponse:
+    def _invoke_with_retry(
+        self, req: LLMRequest, ctx: StepContext, *, call_id: str
+    ) -> LLMResponse:
         """Call the provider with LIVE-only transient backoff (README D-2d).
 
         Returns a normal :class:`LLMResponse` on success, or a typed error
         response (``stop_reason="error"`` + ``raw['category']``) when the
         failure is non-transient or the transient budget is exhausted.
-        Intermediate transient retries write **no** events and emit **no**
-        ``StepTransitionMarked`` — they are invisible to the EventLog, so a
-        resume that folds the log rebuilds the same state.
+        Intermediate transient retries write **no** request/response trio and
+        emit **no** ``StepTransitionMarked`` — fold rebuilds the same state on
+        resume. Each scheduled backoff DOES record an observational
+        ``LLMRetryScheduled`` (a fold no-op keyed to this trio's ``call_id``)
+        so the SSE stream carries "rate-limited, retrying" to the frontend
+        instead of a silent multi-second stall.
         """
         attempt = 0
         while True:
@@ -370,8 +381,23 @@ class RuntimeLLMClient:
                 delay = retry_policy(exc, attempt=attempt)
                 if delay is None or attempt >= self._max_retries:
                     return _error_response(exc)
-                self._sleep(delay)
                 attempt += 1
+                self._event_log.emit(
+                    task_id=ctx.task_id,
+                    type="LLMRetryScheduled",
+                    payload=LLMRetryScheduledPayload(
+                        call_id=call_id,
+                        attempt=attempt,
+                        max_retries=self._max_retries,
+                        delay_seconds=delay,
+                        category=getattr(exc, "category", CATEGORY_FATAL),
+                        error=str(exc)[:500],
+                    ),
+                    trace_id=ctx.trace_id,
+                    actor="llm",
+                    origin="llm",
+                )
+                self._sleep(delay)
             except Exception as exc:  # noqa: BLE001 — protocol contract
                 # A provider that did not translate cleanly: bucket fatal
                 # (conservative, non-retryable) to preserve the historical

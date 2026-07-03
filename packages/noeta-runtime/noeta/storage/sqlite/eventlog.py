@@ -69,6 +69,7 @@ from noeta.protocols.events import (
     AgentBoundPayload,
     EventOrigin,
     LLMRequestFinishedPayload,
+    LLMRetryScheduledPayload,
     TaskHostBoundPayload,
     LLMRequestStartedPayload,
     LLMResponseRecordedPayload,
@@ -255,6 +256,7 @@ _PAYLOAD_RESTORERS: dict[str, Callable[[Any], Any]] = {
     "LLMResponseRecorded": lambda d: LLMResponseRecordedPayload(**d),
     "AssistantThinkingRecorded": lambda d: AssistantThinkingRecordedPayload(**d),
     "LLMRequestFinished":  lambda d: _restore_llm_request_finished_payload(d),
+    "LLMRetryScheduled":   lambda d: LLMRetryScheduledPayload(**d),
     "TaskCancelled":       lambda d: TaskCancelledPayload(**d),
     "ModelBound":          lambda d: ModelBoundPayload(**d),
     # ``restore_dataclass`` (not ``**d``) so an old recording that still

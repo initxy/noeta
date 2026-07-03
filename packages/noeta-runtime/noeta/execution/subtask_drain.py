@@ -166,14 +166,18 @@ class DrainHost:
     #: root is re-leased + resumed, so the in-process host can keep its own
     #: ``p.lease_id`` in sync (the one mutation of host state inside the loop).
     on_root_release: Callable[[str], None]
-    #: ``(child_id) -> Optional[default model id]``.
-    #: When set and the child's agent declares a per-agent default model,
-    #: :func:`_descend_to_child` writes the child's opening ``ModelBound``
-    #: before seeding its goal (mirroring ``InteractionDriver.start``'s
-    #: bind-then-seed order). ``None`` (the default, and the code-product
-    #: path whose ``CodingAgent`` carries no default model) ⇒ no event,
+    #: ``(child_id) -> Optional[(model id, principal_identity)]``.
+    #: When set and it returns a binding, :func:`_descend_to_child` writes the
+    #: child's opening ``ModelBound`` before seeding its goal (mirroring
+    #: ``InteractionDriver.start``'s bind-then-seed order). The resolver owns
+    #: the choice: the child agent's declared default model (identity
+    #: ``"agent-default"``) wins, else the root session's non-default bound
+    #: model (identity ``"inherited"``). ``None`` return (host-default model)
+    #: or ``None`` field (the default, and the base-runner path) ⇒ no event,
     #: existing recordings byte-identical.
-    child_default_model: Optional[Callable[[str], Optional[str]]] = None
+    child_model_binding: Optional[
+        Callable[[str], Optional[tuple[str, str]]]
+    ] = None
     #: The root session's bound provider name, inherited by
     #: all child sub-agents so the whole delegation tree runs on ONE provider.
     #: ``None`` ⇒ host default provider, byte-identical to pre-I4 recordings.
@@ -704,21 +708,24 @@ def _descend_to_child(host: DrainHost, expected_child_id: str) -> tuple[Any, Any
     )
     child_engine = host.build_child_engine(child_lease.task_id)
     child_task = fold(host.event_log, host.content_store, child_lease.task_id)
-    # A child agent's declared default model lands
-    # as the child task's own opening ModelBound — written BEFORE the goal
-    # seed, mirroring InteractionDriver.start's bind-then-seed order, so
-    # fold/_bound_model_for resolve the child on its declared model and a
-    # later cold resume rebuilds the same binding. Skipped when the host
-    # wires no callback (code product), the agent declares no default, or
-    # the child is already bound (re-entrant descent after a suspend).
-    if host.child_default_model is not None:
-        default_model = host.child_default_model(child_lease.task_id)
-        if default_model and not child_task.governance.model_binding:
+    # A child's opening model binding (its agent's declared default model,
+    # else the root session's inherited non-default binding — the resolver's
+    # ``child_model_binding`` callback owns the choice) lands as the child
+    # task's own opening ModelBound — written BEFORE the goal seed, mirroring
+    # InteractionDriver.start's bind-then-seed order, so fold/_bound_model_for
+    # resolve the child on that model and a later cold resume rebuilds the
+    # same binding. Skipped when the host wires no callback (test doubles),
+    # the callback returns no binding (host-default model), or the child is
+    # already bound (re-entrant descent after a suspend).
+    if host.child_model_binding is not None:
+        binding = host.child_model_binding(child_lease.task_id)
+        if binding and not child_task.governance.model_binding:
+            bind_model, bind_identity = binding
             child_task = child_engine.note_model_bound(
                 child_task,
                 lease_id=child_lease.lease_id,
-                model=default_model,
-                principal_identity="agent-default",
+                model=bind_model,
+                principal_identity=bind_identity,
                 provider=host.child_provider,
             )
     # Seed ONLY the child goal (isolated context — never the parent's
@@ -871,13 +878,29 @@ def _pending_spawn_call_id(parent: Any) -> str:
     )
 
 
+def _spawn_member_count(block: Any) -> int:
+    """How many fan-out members one spawn tool_use carries: the length of a
+    well-formed batch ``spawns`` array, else 1 (the legacy single form, every
+    pre-batch recording, and ``run_workflow``). Mirrors the translate seam's
+    member expansion so the positional pairing below stays aligned with the
+    specs the handler admitted."""
+    arguments = getattr(block, "arguments", None)
+    if isinstance(arguments, dict):
+        raw = arguments.get("spawns")
+        if isinstance(raw, (list, tuple)) and raw:
+            return len(raw)
+    return 1
+
+
 def _pending_spawn_call_ids(parent: Any, n: int) -> list[str]:
-    """SR2 — the ``n`` unpaired ``spawn_subagent`` call_ids on the
-    parent, in **member (assistant tool_use) order**, for positional
-    pairing with a group's ``subtask_ids``. Raises if the count != n.
+    """SR2 — the ``n`` unpaired spawn member call_ids on the parent, in
+    **member order** (assistant tool_use order, then entry order within a
+    batch call — a tool_use carrying a ``spawns`` array contributes its
+    call_id once per entry), for positional pairing with a group's
+    ``subtask_ids``. Raises if the count != n.
 
     This is unambiguous: ``wake_on`` is scalar so a parent has at most
-    ONE pending delegation group, and that group's N ``spawn_subagent``
+    ONE pending delegation group, and that group's ``spawn_subagent``
     tool_uses are contiguous in a single assistant turn; any earlier
     spawn is already paired (has a ``tool_result``) and excluded.
     """
@@ -897,7 +920,7 @@ def _pending_spawn_call_ids(parent: Any, n: int) -> list[str]:
                 and block.tool_name in _SPAWN_TOOL_NAMES
                 and block.call_id not in resolved
             ):
-                unpaired.append(block.call_id)
+                unpaired.extend([block.call_id] * _spawn_member_count(block))
     if len(unpaired) != n:
         raise RuntimeError(
             f"delegation: expected {n} unpaired spawn_subagent call_ids "

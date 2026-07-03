@@ -629,9 +629,10 @@ class ThreeSegmentComposer:
         # (see ``_append_todo_reminder``). A hardcoded tag here double-wraps on
         # Anthropic and leaks into OpenAI's system message.
         reminder = (
-            "When you delegate independent work to sub-agents, send them in a "
-            "single message with multiple spawn_subagent tool calls so they run "
-            "concurrently. Spawning one per turn is sequential, not parallel."
+            "When you delegate independent work to sub-agents, batch ALL the "
+            "goals into ONE spawn_subagent call's spawns array so they run "
+            "concurrently and the results return together. Spawning one per "
+            "turn is sequential, not parallel."
         )
         return [
             *dynamic_content,

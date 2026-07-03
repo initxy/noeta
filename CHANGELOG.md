@@ -8,7 +8,82 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
-## [0.1.0] - YYYY-MM-DD
+## [0.1.3] - 2026-07-02
+
+### Added
+
+- New observational `LLMRetryScheduled` event: the runtime records each
+  scheduled transient-retry backoff (call_id, attempt, delay, category,
+  truncated error) so the web chat shows "Provider error — retrying (n/m)"
+  in the composing indicator, status text, and a per-call timeline marker
+  instead of stalling silently. Fold-inert (no state slice changes); the
+  request/response event trio still fires exactly once per logical request.
+- `spawn_subagent` batch form: `spawns: [{agent, goal}, ...]` fans out N
+  subtasks from ONE tool call (SR2 parallel execution). Models that never
+  emit two spawn calls in a single turn can now actually run delegations
+  in parallel; a single-entry batch stays on the sequential SR1 path.
+- `AnthropicProvider` implements `complete_with_headers`, so the runtime
+  can attach request-scoped HTTP headers (e.g. a per-task trace id)
+  without rebuilding the shared client. Transport-only — headers do not
+  affect prompt-cache hits.
+
+### Changed
+
+- Transient LLM retry budget raised from 5 to 8 attempts (max backoff wait
+  ~31s → ~2min), so a sustained 429 rate limit gets a real recovery window.
+
+### Fixed
+
+- Subtasks now inherit the parent session's model binding: a child agent
+  without its own declared default model runs on the root parent's bound
+  model (recorded as the child's opening `ModelBound`, identity
+  `"inherited"`) instead of silently dropping to the host default model.
+- OpenAI Responses subagents no longer lose the provider prompt cache:
+  `include: [reasoning.encrypted_content]` is requested independent of the
+  reasoning-effort gate, an empty reasoning echo is skipped, and children
+  inherit the parent's per-turn effort.
+- Web trace page: clicking a subagent in the TaskTree switches the
+  inspected task without reconnecting the SSE stream; only navigating
+  outside the current subtree re-roots it.
+
+## [0.1.2] - 2026-07-02
+
+### Fixed
+
+- Cross-package dependencies now carry lockstep `>=` lower bounds
+  (`noeta-sdk` → `noeta-runtime>=X.Y.Z`; `noeta-agent` → both), so a
+  resolver can no longer pair a new `noeta-sdk` with an older
+  `noeta-runtime` that lacks the symbols it imports (previously
+  `noeta-sdk` 0.1.1 + `noeta-runtime` 0.1.0 → `ImportError` at
+  `import noeta.sdk`).
+
+## [0.1.1] - 2026-07-02
+
+### Added
+
+- `query()` now returns a `QueryResult`: still the full event-envelope
+  list, plus projections materialized before the temporary client shuts
+  down — `messages()` (the pre-dereferenced human-readable view) and the
+  strict `answer()` accessor, which raises the new coded
+  `QueryFailedError` on a failed (or missing) terminal instead of handing
+  back the failure reason as an answer.
+- Typed/coded public error surface: `CodedError` base plus coded engine
+  errors, re-exported through `noeta.sdk` for structural matching on
+  `exc.code`.
+
+### Changed
+
+- Runtime architecture/contract optimizations: absolute timer `fire_at`
+  (EventLog migration 7), wake-reclaim dedup, and merged kill paths.
+
+### Fixed
+
+- Large answers from one-shot `query()` are no longer lost: previously
+  the terminal answer spilled to the ContentStore (`answer_ref`) became
+  unresolvable once `query()` tore the temporary client down (#5).
+- Web: bypass-permissions chip simplified — single icon, concise label.
+
+## [0.1.0] - 2026-07-01
 
 Initial preview release.
 
@@ -24,5 +99,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/initxy/noeta/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/initxy/noeta/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/initxy/noeta/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/initxy/noeta/releases/tag/v0.1.0

@@ -387,3 +387,133 @@ def test_pairing_unaffected_by_prior_paired_single_spawn(tmp_path: Path) -> None
     assert ("single", "single done") in blocks
     assert ("a", "A done") in blocks
     assert ("b", "B done") in blocks
+
+
+# ---------------------------------------------------------------------------
+# 7. batch form — ONE call carrying a `spawns` array (the shape gpt-5.x
+#    actually batches; multiple spawn calls per turn stay supported)
+# ---------------------------------------------------------------------------
+
+
+def _batch_spawn(call_id: str, *pairs: tuple[str, str]) -> LLMResponse:
+    """One assistant turn with ONE spawn_subagent tool_use carrying a
+    ``spawns`` array. Each pair = (agent, goal)."""
+    return LLMResponse(
+        stop_reason="tool_use",
+        content=[
+            ToolUseBlock(
+                call_id=call_id, tool_name=SPAWN_SUBAGENT_TOOL,
+                arguments={"spawns": [{"agent": a, "goal": g} for (a, g) in pairs]},
+            )
+        ],
+        usage=Usage(uncached=1, output=1),
+        raw={"id": "bsp"},
+    )
+
+
+def test_batch_call_routes_to_batch_decision_shared_call_id() -> None:
+    d = _decide(_batch_spawn("c", ("explore", "ga"), ("general-purpose", "gb")))
+    assert isinstance(d, SpawnSubtasksDecision)
+    assert [s.call_id for s in d.specs] == ["c", "c"]
+    assert [s.member_index for s in d.specs] == [0, 1]
+    assert [s.agent_name for s in d.specs] == ["explore", "general-purpose"]
+    assert [s.goal for s in d.specs] == ["ga", "gb"]
+
+
+def test_batch_call_single_entry_stays_sr1() -> None:
+    d = _decide(_batch_spawn("c", ("explore", "g")))
+    assert isinstance(d, SpawnSubtaskDecision)
+    assert d.agent_name == "explore" and d.goal == "g"
+
+
+def test_batch_call_mixed_with_legacy_call_flattens_in_order() -> None:
+    resp = LLMResponse(
+        stop_reason="tool_use",
+        content=[
+            ToolUseBlock(call_id="b1", tool_name=SPAWN_SUBAGENT_TOOL,
+                         arguments={"spawns": [
+                             {"agent": "explore", "goal": "g0"},
+                             {"agent": "explore", "goal": "g1"},
+                         ]}),
+            ToolUseBlock(call_id="b2", tool_name=SPAWN_SUBAGENT_TOOL,
+                         arguments={"agent": "general-purpose", "goal": "g2"}),
+        ],
+        usage=Usage(uncached=1, output=1), raw={"id": "mx"},
+    )
+    d = _decide(resp)
+    assert isinstance(d, SpawnSubtasksDecision)
+    assert [(s.call_id, s.member_index, s.goal) for s in d.specs] == [
+        ("b1", 0, "g0"), ("b1", 1, "g1"), ("b2", 0, "g2"),
+    ]
+
+
+def test_malformed_spawns_returns_recoverable_ack() -> None:
+    for bad in ([], "not-an-array", [{"agent": "explore"}], [42]):
+        resp = LLMResponse(
+            stop_reason="tool_use",
+            content=[ToolUseBlock(call_id="c", tool_name=SPAWN_SUBAGENT_TOOL,
+                                  arguments={"spawns": bad})],
+            usage=Usage(uncached=1, output=1), raw={"id": "bad"},
+        )
+        d = _decide(resp)
+        assert isinstance(d, StatePatchDecision), bad
+        assert d.patch is None
+        block = d.messages_after[0].content[0]
+        assert isinstance(block, ToolResultBlock) and block.success is False
+        assert "non-empty array" in block.output
+
+
+def test_batch_fanout_e2e_one_aggregated_tool_result(tmp_path: Path) -> None:
+    """E2E: one call with 2 spawns → 2 real children, a group suspend, and on
+    resume exactly ONE ToolResultBlock (wire correctness: one result per
+    call_id) whose output lists both member results in entry order."""
+    ws = _ws(tmp_path)
+    host, driver = _session(ws, [
+        _batch_spawn("batch", ("explore", "review A"), ("general-purpose", "fix B")),
+        _end("A done"), _end("B done"), _end("parent done"),
+    ])
+    out = driver.start(goal="root", agent="main")
+    assert out.status == "terminal"
+    root = out.task_id
+    assert len(_spawned(host, root)) == 2
+    susp = [e for e in host.event_log.read(root) if e.type == "TaskSuspended"]
+    assert any(isinstance(e.payload.wake_on, SubtaskGroupCompleted) for e in susp)
+    parent = fold(host.event_log, host.content_store, root)
+    blocks = [
+        b for m in parent.runtime.messages if m.role == "tool"
+        for b in m.content if isinstance(b, ToolResultBlock)
+    ]
+    assert len(blocks) == 1
+    block = blocks[0]
+    assert block.call_id == "batch" and block.success is True
+    assert block.output == [
+        {"spawn": 0, "success": True, "output": "A done"},
+        {"spawn": 1, "success": True, "output": "B done"},
+    ]
+
+
+def test_noncontiguous_duplicate_call_id_still_denied(tmp_path: Path) -> None:
+    """The layout guard still rejects a call_id reappearing in a later run
+    ([dup, other, dup]) — only contiguous same-call batch members may share."""
+    ws = _ws(tmp_path)
+    host, driver = _session(ws, [
+        _spawn_pair(("dup", "explore", "A"), ("other", "general-purpose", "B"),
+                    ("dup", "explore", "C")),
+    ])
+    out = driver.start(goal="root", agent="main")
+    _assert_zero_child(host, out.task_id)
+    denied = [e for e in host.event_log.read(out.task_id)
+              if e.type == "SubtaskDenied"][0]
+    assert denied.payload.reason == "fanout_batch_duplicate_call_id"
+
+
+def test_spawn_schema_advertises_batch_form() -> None:
+    from noeta.policies.control_semantics import spawn_subagent_tool_schema
+
+    schema = spawn_subagent_tool_schema((("explore", "read-only scout"),))
+    params = schema["function"]["parameters"]
+    assert params["required"] == ["spawns"]
+    items = params["properties"]["spawns"]["items"]
+    assert items["required"] == ["agent", "goal"]
+    # the roster enum threads into each entry's agent property
+    assert items["properties"]["agent"]["enum"] == ["explore"]

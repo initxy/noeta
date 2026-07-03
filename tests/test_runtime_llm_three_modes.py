@@ -267,7 +267,9 @@ def test_normal_client_emits_three_events_on_provider_exception() -> None:
 # The transient backoff loop is a LIVE-only loop *around the provider call*
 # inside ``complete``. One logical request records exactly one trio (Started
 # once / Recorded + Finished once); intermediate failed provider calls write
-# **no** events.
+# no request/response trio — each scheduled backoff records only an
+# observational ``LLMRetryScheduled`` marker (a fold no-op) so a live
+# consumer can see the stall.
 
 
 class _ScriptedProvider:
@@ -301,7 +303,8 @@ def _fake_sleep_recorder() -> tuple[Any, list[float]]:
 def test_transient_retried_until_success_records_one_trio() -> None:
     """Provider throws TransientError once, then succeeds → RuntimeLLMClient
     sleeps once (delay from retry_policy) and returns the success response;
-    the EventLog carries exactly one Started/Recorded/Finished trio."""
+    the EventLog carries exactly one Started/Recorded/Finished trio plus one
+    observational ``LLMRetryScheduled`` marker for the scheduled backoff."""
     from noeta.protocols.errors import TransientError
     from noeta.runtime.llm import RuntimeLLMClient
 
@@ -328,12 +331,22 @@ def test_transient_retried_until_success_records_one_trio() -> None:
     # it in the band [0.5, 1.0] (temp/2 floor .. temp ceil for base 1.0).
     assert len(slept) == 1
     assert 0.5 <= slept[0] <= 1.0
-    # Exactly one trio — the failed attempt left no trace.
-    assert [e.type for e in log.read("task-1")] == [
+    # Exactly one trio; the failed attempt left only its retry marker.
+    events = log.read("task-1")
+    assert [e.type for e in events] == [
         "LLMRequestStarted",
+        "LLMRetryScheduled",
         "LLMResponseRecorded",
         "LLMRequestFinished",
     ]
+    started = events[0].payload
+    marker = events[1].payload
+    assert marker.call_id == started.call_id
+    assert marker.attempt == 1
+    assert marker.max_retries == 2
+    assert marker.delay_seconds == slept[0]
+    assert marker.category == "transient"
+    assert "rate limited" in marker.error
 
 
 def test_malformed_tool_arguments_is_retried_then_succeeds() -> None:
@@ -372,6 +385,7 @@ def test_malformed_tool_arguments_is_retried_then_succeeds() -> None:
     assert len(slept) == 1
     assert [e.type for e in log.read("task-1")] == [
         "LLMRequestStarted",
+        "LLMRetryScheduled",
         "LLMResponseRecorded",
         "LLMRequestFinished",
     ]
@@ -461,10 +475,18 @@ def test_transient_budget_exhausted_becomes_error_response() -> None:
     # Equal-jitter bands per attempt: [0.5, 1.0] (attempt 0), [1.0, 2.0]
     # (attempt 1). The floor keeps each wait real; the band decorrelates.
     assert len(slept) == 2
+    # One retry marker per scheduled backoff (attempt 1, 2); still one trio.
+    markers = [e.payload for e in log.read("task-1") if e.type == "LLMRetryScheduled"]
+    assert [m.attempt for m in markers] == [1, 2]
+    assert [
+        e.type for e in log.read("task-1") if e.type != "LLMRetryScheduled"
+    ] == ["LLMRequestStarted", "LLMResponseRecorded", "LLMRequestFinished"]
     assert 0.5 <= slept[0] <= 1.0
     assert 1.0 <= slept[1] <= 2.0
     assert [e.type for e in log.read("task-1")] == [
         "LLMRequestStarted",
+        "LLMRetryScheduled",
+        "LLMRetryScheduled",
         "LLMResponseRecorded",
         "LLMRequestFinished",
     ]
