@@ -26,6 +26,10 @@ site/
 *.egg
 node_modules/
 
+# VitePress
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+
 # IDE / Editor
 .idea/
 .vscode/

@@ -2,6 +2,8 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
+**[Documentation](https://initxy.github.io/noeta/)** · [Quickstart](https://initxy.github.io/noeta/tutorials/quickstart/) · [SDK reference](https://initxy.github.io/noeta/reference/sdk/) · [Configure a provider](https://initxy.github.io/noeta/how-to/configure-provider/)
+
 > Open-source, self-hostable runtime for AI agents. Provider-neutral, event-sourced, built for durability.
 
 Noeta is what you get when you take the agent loop from Claude Code or the
@@ -74,31 +76,31 @@ finally:
 ```
 
 For the guided path — install, run, open the web UI, read a trace — see the
-[quickstart tutorial](docs/tutorials/quickstart.md). To wire a real Anthropic
+[quickstart tutorial](https://initxy.github.io/noeta/tutorials/quickstart/). To wire a real Anthropic
 or OpenAI-compatible model, see
-[configure a provider](docs/how-to/configure-provider.md). To build your own
+[configure a provider](https://initxy.github.io/noeta/how-to/configure-provider/). To build your own
 agent on the SDK — define a `@tool`, assemble `Options`, call `query()` — start
-with [your first agent](docs/tutorials/first-agent.md) and the runnable
+with [your first agent](https://initxy.github.io/noeta/tutorials/first-agent/) and the runnable
 [`examples/`](examples/).
 
 How does it compare to the Claude Agent SDK? Both give you an agent loop,
 tools, MCP, and sub-agents; they differ in the spine underneath — see the
-[server-side comparison](docs/reference/comparison.md).
+[server-side comparison](https://initxy.github.io/noeta/reference/comparison/).
 
 ## Documentation
 
-The full map lives at the [documentation portal](docs/README.md).
+Full documentation is rendered at **[initxy.github.io/noeta](https://initxy.github.io/noeta/)**. The same files live under [`docs/`](docs/) in this repo for source browsing.
 
 | Layer | Start at | Read it when |
 | --- | --- | --- |
-| Tutorials | [`docs/tutorials/quickstart.md`](docs/tutorials/quickstart.md) | You're new and want it running. |
-| How-to guides | [`docs/how-to/configure-provider.md`](docs/how-to/configure-provider.md) | You have a specific task to get done. |
-| Concepts | [`docs/concepts/event-sourcing.md`](docs/concepts/event-sourcing.md) | You want to understand the design. |
-| Reference | [`docs/reference/sdk.md`](docs/reference/sdk.md) | You need exact API facts. |
+| Tutorials | [Quickstart](https://initxy.github.io/noeta/tutorials/quickstart/) | You're new and want it running. |
+| How-to guides | [Configure a provider](https://initxy.github.io/noeta/how-to/configure-provider/) | You have a specific task to get done. |
+| Concepts | [Event sourcing](https://initxy.github.io/noeta/concepts/event-sourcing/) | You want to understand the design. |
+| Reference | [SDK reference](https://initxy.github.io/noeta/reference/sdk/) | You need exact API facts. |
 
-Deeper cuts: the [architecture overview](docs/architecture/overview.md),
-[troubleshooting](docs/operations/troubleshooting.md), and the
-[ADRs](docs/adr/) recording why each cross-module decision is the way it is
+Deeper cuts: the [architecture overview](https://initxy.github.io/noeta/architecture/overview/),
+[troubleshooting](https://initxy.github.io/noeta/operations/troubleshooting/), and the
+[ADRs](https://initxy.github.io/noeta/adr/) recording why each cross-module decision is the way it is
 (vocabulary lives in [`CONTEXT.md`](CONTEXT.md)).
 
 ## Status & scope
@@ -110,7 +112,7 @@ stable, but some capabilities are intentionally out of scope for now:
   in-process and is a preview, not a production daemon. Single-worker durable
   exactly-once wake is shipped; multi-host coordination, multi-worker fencing,
   and the partial-step-orphan edge (a crash mid-step) remain open — see
-  [known limitations](docs/operations/limitations.md).
+  [known limitations](https://initxy.github.io/noeta/operations/limitations/).
 - **Human-in-the-loop / timer wake** — the engine carries the shape; the full
   UX is still landing.
 - **Frontend** — the shipped web app is a small Vite MPA with vanilla ES

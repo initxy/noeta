@@ -1,110 +1,66 @@
-# Noeta
+---
+layout: home
 
-**Open-source, self-hostable runtime for AI agents. Provider-neutral, event-sourced, built for durability.**
+hero:
+  name: "Noeta"
+  text: "Durable runtime for AI agents"
+  tagline: |
+    Open-source, self-hostable, provider-neutral, event-sourced.
+    Built for long-horizon, task-oriented agents.
+  actions:
+    - theme: brand
+      text: Quickstart
+      link: /tutorials/quickstart
+    - theme: alt
+      text: View on GitHub
+      link: https://github.com/initxy/noeta
 
-Noeta is what you get when you take the agent loop from Claude Code or the
-Claude Agent SDK and put it on a durable, inspectable, event-sourced spine —
-without locking you to a single vendor or telling you how to write your agent.
+features:
+  - icon: 🛡️
+    title: Durable by construction
+    details: Every state change is an appended event. Task state is deterministically folded from the log, never held across runs. Kill the process mid-task and fold brings it right back.
+    link: /concepts/event-sourcing
+    linkText: Learn the model
 
-Every step an agent takes lands in an append-only **EventLog**, and a task's
-entire state is *folded* back from that log. Suspend and resume, crash
-recovery, replay, and exactly-once wake are not features bolted on top; they
-fall out of treating the log as the single source of truth.
+  - icon: 🔌
+    title: Provider-neutral
+    details: Anthropic and OpenAI-compatible endpoints are adapters behind one internal protocol. Swapping providers is wiring, not a rewrite.
+    link: /concepts/provider-neutrality
+    linkText: See how it works
 
-Where an in-process agent library (Claude Agent SDK, LangChain) gives you the
-loop, Noeta adds the durable substrate underneath it — so an agent's history
-is a log you can fold, inspect, and re-enter, not ephemeral memory that dies
-with the process.
+  - icon: 🤖
+    title: Bring your own agent
+    details: The runtime hosts and schedules; you supply the policy, tools, and context. A ReAct policy and a coding agent ship in-tree, but nothing forces you to use them.
+    link: /how-to/use-the-coding-agent
+    linkText: Use the agent
 
-## Why Noeta
+  - icon: 🧪
+    title: Offline-first
+    details: A deterministic stub provider runs the whole stack with no API key and no network, so install, storage, and wiring are provable on a fresh checkout and in CI.
+    link: /tutorials/quickstart
+    linkText: Try it in 5 minutes
 
-- **Durable by construction** — every state change is an appended event; task
-  state is deterministically folded from the log, never held across runs. Kill
-  the process mid-task and fold brings it right back.
-- **Provider-neutral** — Anthropic and OpenAI-compatible endpoints are adapters
-  behind one internal protocol. Swapping providers is wiring, not a rewrite.
-- **Bring your own agent** — the runtime hosts and schedules; you supply the
-  policy, tools, and context. A ReAct policy and a coding agent ship in-tree,
-  but nothing forces you to use them.
-- **Offline-first** — a deterministic `stub` provider runs the whole stack with
-  no API key and no network, so install, storage, and wiring are provable on a
-  fresh checkout (and in CI).
-- **Use the layer you need** — embed the kernel, import the SDK, or run the
-  batteries-included coding agent with its bundled web UI.
+  - icon: 🧩
+    title: Use the layer you need
+    details: Embed the kernel, import the SDK, or run the batteries-included coding agent with its bundled web UI.
+    link: /reference/sdk
+    linkText: Browse the API
 
-## Quickstart (no API key)
+  - icon: 📜
+    title: Event-sourced truth
+    details: Every step an agent takes lands in an append-only EventLog. Suspend/resume, crash recovery, replay, and exactly-once wake are not bolted on — they fall out of treating the log as truth.
+    link: /concepts/task-model
+    linkText: Understand tasks
+---
 
-The `stub` provider is a deterministic two-turn LLM double — no key, no network.
+## Screenshots
 
-```bash
-# Install the coding agent (pulls SDK + runtime transitively).
-uv pip install -e apps/noeta-agent
-python -m noeta.agent   # boots the offline stub coding agent + bundled web
-```
-
-Or from the repo root:
-
-```bash
-make install   # first time: editable install + web deps
-make run        # build web + boot backend (offline stub, port 8765)
-#  → open http://127.0.0.1:8765/chat
-```
-
-## Take a look
-
-<figure markdown>
-  ![The bundled web app — chat composer with a running task](assets/web-app.png){ width="840" }
-  <figcaption>The bundled web app — chat composer with a running task.</figcaption>
+<figure>
+  <img src="./assets/web-app.png" alt="The bundled web app — chat composer with a running task" style="max-width: 840px; border-radius: 8px;">
+  <figcaption style="text-align: center; color: var(--vp-c-text-2); margin-top: 8px;">The bundled web app — chat composer with a running task.</figcaption>
 </figure>
 
-<figure markdown>
-  ![The per-task trace view — the folded event stream](assets/trace.png){ width="840" }
-  <figcaption>The per-task trace view — the folded event stream.</figcaption>
+<figure>
+  <img src="./assets/trace.png" alt="The per-task trace view — the folded event stream" style="max-width: 840px; border-radius: 8px;">
+  <figcaption style="text-align: center; color: var(--vp-c-text-2); margin-top: 8px;">The per-task trace view — the folded event stream.</figcaption>
 </figure>
-
-## Where to go next
-
-<div class="grid cards" markdown>
-
--   :material-rocket-launch:{ .lg .middle } **Quickstart**
-
-    ---
-
-    5-minute offline smoke test — install, boot the stub agent, view the trace.
-
-    [:octicons-arrow-right-24: Start here](tutorials/quickstart.md)
-
--   :material-lightbulb-on-outline:{ .lg .middle } **Core Concepts**
-
-    ---
-
-    Event sourcing, Task model, Engine & execution, Fold & snapshot, Wake & resume, and more.
-
-    [:octicons-arrow-right-24: Learn the model](concepts/event-sourcing.md)
-
--   :material-console:{ .lg .middle } **Noeta Agent**
-
-    ---
-
-    The bundled coding agent: tools, presets, skills, permission model, env config.
-
-    [:octicons-arrow-right-24: Use the agent](reference/noeta-agent.md)
-
--   :material-api:{ .lg .middle } **API Reference**
-
-    ---
-
-    SDK API, HTTP routes, WorkerLoop, presets, tools, glossary.
-
-    [:octicons-arrow-right-24: Browse the API](reference/sdk.md)
-
-</div>
-
-## Architecture
-
-For the top-down architecture walkthrough — event-sourced engine, three-package
-layout, provider adapters, context composition — see the
-[architecture overview](architecture/overview.md).
-
-For the why behind cross-module decisions, browse the
-[Architecture Decision Records](adr/index.md).
