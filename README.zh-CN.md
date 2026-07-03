@@ -19,6 +19,12 @@ Noeta 负责托管、记录并调度 agent 的执行——但不规定 agent 该
   <em>由 <code>python -m noeta.agent</code> 启动的内置 coding-agent web 应用。</em>
 </p>
 
+<p align="center">
+  <img src="docs/assets/trace.png" alt="Noeta 任务级 trace 视图" width="820">
+  <br>
+  <em>任务级 trace 视图——每个事件、每轮 LLM 调用、token/cache 统计，全部直接来自 EventLog。</em>
+</p>
+
 ## 为什么用 Noeta
 
 - **天生持久** —— 每一次状态变化都是一条追加事件；任务状态始终由日志确定性地
