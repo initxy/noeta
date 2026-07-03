@@ -6,27 +6,16 @@ that can search the web and write reports, then inspect what it did.
 ## Prerequisites
 
 - Python 3.11+
-- `uv` package manager ([install](https://docs.astral.sh/uv/))
 - An API key for an OpenAI-compatible provider (or use the offline stub
   to follow along without one)
 
-## Step 1: Clone and install
+## Step 1: Install
 
 ```bash
-git clone https://github.com/initxy/noeta.git
-cd noeta
-
-# Install the editable package + build the web frontend
-make install
+pip install noeta-agent
 ```
 
-Or manually:
-
-```bash
-uv sync --group docs
-cd apps/web && npm ci && npm run build && cd ../..
-uv pip install -e apps/noeta-agent
-```
+This pulls in the SDK and runtime, with the web frontend already built into the wheel.
 
 ## Step 2: Configure your provider
 

@@ -178,14 +178,6 @@ Add a job to `.github/workflows/ci.yml`:
         with:
           enable-cache: true
 
-      # Build the web frontend BEFORE uv sync — noeta-agent's editable
-      # build force-includes apps/web/dist, so sync fails without it.
-      - name: Build web frontend
-        working-directory: apps/web
-        run: |
-          npm ci
-          npm run build
-
       - name: Sync workspace
         run: uv sync --frozen
 
@@ -193,10 +185,9 @@ Add a job to `.github/workflows/ci.yml`:
         run: uv run pytest tests/test_agent_smoke.py -v
 ```
 
-> **Why build the frontend first?** `noeta-agent`'s editable build
-> force-includes `apps/web/dist` (a gitignored Vite artifact). If
-> `dist/` doesn't exist, `uv sync` fails. This matches the repo's
-> own CI workflow.
+> **No frontend build needed.** The `noeta-agent` wheel on PyPI already
+> bundles the built web UI, so `uv sync` pulls a ready-to-run package —
+> no `npm` step required.
 
 ## Step 4: Run the full test suite in CI
 
@@ -236,9 +227,6 @@ actual LLM behaviour):
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
-      - name: Build web
-        working-directory: apps/web
-        run: npm ci && npm run build
       - name: Sync
         run: uv sync --frozen
       - name: Run integration tests
@@ -266,8 +254,6 @@ def test_agent_with_real_llm():
 - **Stub provider for smoke tests.** `FakeLLMProvider` is in
   `noeta.testing` — the public home for offline doubles. No secrets,
   no network.
-- **Build web before sync.** `apps/web/dist` is force-included by
-  the editable build. This is the repo's CI pattern.
 - **`uv run pytest`** is the test entry point. The workspace-root
   `pyproject.toml` configures `testpaths = ["tests"]`.
 - **`@pytest.mark.live`** gates real-LLM tests so they don't run in

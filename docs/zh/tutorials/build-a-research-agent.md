@@ -5,26 +5,15 @@
 ## 前置条件 { #prerequisites }
 
 - Python 3.11+
-- `uv` 包管理器（[安装](https://docs.astral.sh/uv/)）
 - OpenAI 兼容 provider 的 API key（或使用离线 stub 跟随操作而无需 key）
 
-## 步骤 1：克隆并安装 { #step-1-clone-and-install }
+## 步骤 1：安装 { #step-1-install }
 
 ```bash
-git clone https://github.com/initxy/noeta.git
-cd noeta
-
-# Install the editable package + build the web frontend
-make install
+pip install noeta-agent
 ```
 
-或手动：
-
-```bash
-uv sync --group docs
-cd apps/web && npm ci && npm run build && cd ../..
-uv pip install -e apps/noeta-agent
-```
+这会装上 SDK 和 runtime，web 前端已预构建进 wheel。
 
 ## 步骤 2：配置 provider { #step-2-configure-your-provider }
 
