@@ -223,21 +223,21 @@ def test_live_memory_write_tool(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-# (T8/③-B): auto-recall (origin=memory
-# injected message + kind=memory index event) was the deleted noeta-agent runner's
-# prepare-time wiring (``append_user_message_with_recall`` + ``record_memory_index``).
-# The SDK ``driver.seed_start`` path does a plain ``append_user_message`` with no
-# recall and records no index event, so this loop asserts a behaviour the shipping
-# backend lacks. Skipped (not deleted) until recall is ported into the SDK seed path.
-@pytest.mark.skip(
-    reason="memory auto-recall (origin=memory) + index-event are not on the SDK "
-    "seed path; deleted with the noeta-agent runner — port pending."
-)
+# (T8/③-B resolved): auto-recall (origin=memory injected message + kind=memory
+# index event) is the ``driver.seed_start`` recall seam
+# (``append_user_message_with_recall`` + ``record_memory_index``, resolved via
+# ``SdkHost.memory_recall_context``) — the SDK port of the deleted noeta-agent
+# runner's prepare-time wiring.
 @requires_live_llm
 def test_live_memory_recall_origin(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
-    mem = ws / ".noeta" / "memories"
-    mem.mkdir(parents=True)
+    ws.mkdir()
+    # Memory is pinned to the global directory (conftest pins it to a
+    # per-test tmp), not the runner-era ``ws/.noeta/memories``.
+    from noeta.execution.memory import DEFAULT_GLOBAL_MEMORY_DIR
+
+    mem = Path(DEFAULT_GLOBAL_MEMORY_DIR)
+    mem.mkdir(parents=True, exist_ok=True)
     memory_file = mem / "deploy-runbook.md"
     memory_file.write_text(
         "# Deploy runbook\nThe magic deploy word is zanzibar.\n",

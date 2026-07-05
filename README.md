@@ -21,6 +21,12 @@ is a log you can fold, inspect, and re-enter, not ephemeral memory that dies
 with the process.
 
 <p align="center">
+  <img src="docs/assets/crash-resume.gif" alt="kill -9 a live worker mid-task; a second process folds the task back and finishes it" width="820">
+  <br>
+  <em><code>kill -9</code> a worker mid-task; a second process folds the task back from the log and finishes it — <a href="examples/crash_resume.py">examples/crash_resume.py</a>, fully offline.</em>
+</p>
+
+<p align="center">
   <img src="docs/assets/web-app.png" alt="Noeta coding-agent web app" width="820">
   <br>
   <em>The bundled coding-agent web app, served by <code>python -m noeta.agent</code>.</em>
@@ -112,8 +118,9 @@ stable, but some capabilities are intentionally out of scope for now:
   exactly-once wake is shipped; multi-host coordination, multi-worker fencing,
   and the partial-step-orphan edge (a crash mid-step) remain open — see
   [known limitations](https://initxy.github.io/noeta/operations/limitations/).
-- **Human-in-the-loop / timer wake** — the engine carries the shape; the full
-  UX is still landing.
+- **Human-in-the-loop / timer wake** — approvals, structured questions, and
+  timer wake are shipped end-to-end; what's missing is out-of-band
+  notification (webhook / inbox) when a task starts waiting on a human.
 - **Frontend** — the shipped web app is a small Vite MPA with vanilla ES
   modules; no framework migration is planned for the preview.
 

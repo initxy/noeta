@@ -11,11 +11,14 @@ Switch surface follows the flag precedent (431bccd + f0f39c1 review round):
   channel registry (after skill), and ``SessionInputs`` exposes the store and
   the entries snapshot (record and compose share one snapshot, one source of
   truth). Off (default) → unchanged, zero byte change.
-* The noeta-agent product enables memory by default
-  (``CodeSessionConfig.memory_enabled=True``); prepare() runs the D5/D6 set:
-  the index is recorded as resident, and the goal is recorded through the
-  recall seam. ``resume_with_goal`` goes through the ``_goal_prelude`` seam,
-  the same recall seam.
+* The SDK seed path runs the D5/D6 set for a memory-enabled agent (the port
+  of the deleted noeta-agent runner's prepare() / ``_goal_prelude`` wiring):
+  ``driver.seed_start`` records the index as resident
+  (``ContextContentRecorded`` kind=memory, policy=evolving) and the goal
+  enters through the recall seam (``append_user_message_with_recall``);
+  ``driver.send_goal`` routes a follow-up goal through ``RecallGoalPrelude``,
+  the same recall seam. The host seam (``SdkHost.memory_recall_context``)
+  returns ``None`` for a memory-off spec, keeping that stream byte-identical.
 """
 
 from __future__ import annotations
@@ -154,13 +157,21 @@ def test_memory_dir_override_wins(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. noeta-agent product prepare() — D5/D6 set wiring (full FakeLLM chain)
+# 4. SDK seed path — D5/D6 set wiring (full FakeLLM chain)
 # ---------------------------------------------------------------------------
 
 
-def _memory_session(workspace: Path, responses, *, memory: bool = True, mem_dir=None):
+def _memory_session(
+    workspace: Path,
+    responses,
+    *,
+    memory: bool = True,
+    mem_dir=None,
+    multi_turn: bool = False,
+):
     """An SDK session with memory wired off ``spec.capabilities.memory`` — the
-    same memory machinery (tools + resident index) the shipping backend builds."""
+    same memory machinery (tools + resident index + seed-path recall) the
+    shipping backend builds."""
     from noeta.testing.fake_llm import FakeLLMProvider
     from noeta.tools.fs import FsWriteMode, ShellMode
 
@@ -176,28 +187,13 @@ def _memory_session(workspace: Path, responses, *, memory: bool = True, mem_dir=
         workspace_dir=workspace,
         provider=FakeLLMProvider(responses=list(responses)),
         model="stub-model",
-        multi_turn=False,
+        multi_turn=multi_turn,
         write_mode=FsWriteMode.DRY_RUN,
         shell_mode=ShellMode.OFF,
         require_approval_tools=(),
         global_memory_dir=mem_dir,
     )
     return host, make_driver(host)
-
-
-def _product_runner(workspace: Path, responses, **cfg_overrides):
-    """The runner's memory **prepare** wiring (index-recording event + per-goal
-    recall, ``_goal_prelude`` recall on resume) lived in the deleted noeta-agent
-    runner; the SDK ``driver.seed_start`` path does a plain ``append_user_message``
-    with no recall and records no ``ContextContentRecorded(kind=memory)`` index
-    event. Tests that assert that wiring skip until it is ported into the SDK
-    seed path (T8/③-B)."""
-    import pytest
-
-    pytest.skip(
-        "memory index-event recording + per-goal recall (prepare "
-        "wiring) is not on the SDK seed path; deleted with the noeta-agent runner"
-    )
 
 
 def _end_response(text: str = "done"):
@@ -221,45 +217,49 @@ def _seed_memory(mem_dir: Path) -> None:
 
 
 def test_product_prepare_records_index_and_recalls(tmp_path: Path) -> None:
-    """Product enables memory by default: prepare() records the index
-    (kind=memory, evolving), and a goal matching a memory name → a recall
+    """A memory-enabled session's seed (the prepare() counterpart) records the
+    index (kind=memory, evolving), and a goal matching a memory name → a recall
     message recorded with origin=memory, right after the human turn."""
     ws = tmp_path / "ws"
     ws.mkdir()
     mem = tmp_path / "global-memories"
     _seed_memory(mem)
-    runner = _product_runner(ws, [_end_response()], global_memory_dir=mem)
-    runner.prepare()
-    try:
-        result = runner.execute()
-        assert result.status == "terminal"
-        events = list(runner.event_log.read(runner.task_id))
-        generic = [
-            e for e in events
-            if e.type == "ContextContentRecorded"
-            and getattr(e.payload, "kind", "") == MEMORY_KIND
-        ]
-        assert len(generic) == 1
-        assert generic[0].payload.policy == "evolving"
+    host, driver = _memory_session(
+        ws, [_end_response()], memory=True, mem_dir=mem
+    )
+    out = driver.start(goal="please remember the deploy-notes", agent="main")
+    assert out.status == "terminal"
+    events = list(host.event_log.read(out.task_id))
+    generic = [
+        e for e in events
+        if e.type == "ContextContentRecorded"
+        and getattr(e.payload, "kind", "") == MEMORY_KIND
+    ]
+    assert len(generic) == 1
+    assert generic[0].payload.policy == "evolving"
 
-        from noeta.core.fold import fold
+    from noeta.core.fold import fold
 
-        folded = fold(runner.event_log, runner.content_store, runner.task_id)
-        origins = [m.origin for m in folded.runtime.messages]
-        assert "memory" in origins
-        # The recall message carries the full memory text.
-        recall_msg = next(
-            m for m in folded.runtime.messages if m.origin == "memory"
-        )
-        joined = "".join(
-            b.text for b in recall_msg.content if hasattr(b, "text")
-        )
-        assert "deploy-notes" in joined
-        assert "Always run smoke tests." in joined
-        # The index is resident as semi_stable.
-        assert folded.state.active_content.get(MEMORY_KIND) == ("index",)
-    finally:
-        runner.shutdown()
+    folded = fold(host.event_log, host.content_store, out.task_id)
+    origins = [m.origin for m in folded.runtime.messages]
+    assert "memory" in origins
+    # The recall message carries the full memory text.
+    recall_msg = next(
+        m for m in folded.runtime.messages if m.origin == "memory"
+    )
+    joined = "".join(
+        b.text for b in recall_msg.content if hasattr(b, "text")
+    )
+    assert "deploy-notes" in joined
+    assert "Always run smoke tests." in joined
+    # The recall turn lands right after the human goal turn.
+    goal_index = next(
+        i for i, m in enumerate(folded.runtime.messages)
+        if m.origin is None and m.role == "user"
+    )
+    assert folded.runtime.messages[goal_index + 1].origin == "memory"
+    # The index is resident as semi_stable.
+    assert folded.state.active_content.get(MEMORY_KIND) == ("index",)
 
 
 def test_product_memory_disabled_zero_events(tmp_path: Path) -> None:
@@ -292,19 +292,21 @@ def test_product_empty_store_no_events_no_recall(tmp_path: Path) -> None:
     ws.mkdir()
     # Global memory directory points at an empty tmp (don't touch the real ~/.noeta/memories).
     mem = tmp_path / "global-memories"
-    runner = _product_runner(ws, [_end_response()], global_memory_dir=mem)
-    runner.prepare()
-    try:
-        result = runner.execute()
-        assert result.status == "terminal"
-        events = list(runner.event_log.read(runner.task_id))
-        assert not [
-            e for e in events
-            if e.type == "ContextContentRecorded"
-            and getattr(e.payload, "kind", "") == MEMORY_KIND
-        ]
-    finally:
-        runner.shutdown()
+    host, driver = _memory_session(
+        ws, [_end_response()], memory=True, mem_dir=mem
+    )
+    out = driver.start(goal="please remember the deploy-notes", agent="main")
+    assert out.status == "terminal"
+    events = list(host.event_log.read(out.task_id))
+    assert not [
+        e for e in events
+        if e.type == "ContextContentRecorded"
+        and getattr(e.payload, "kind", "") == MEMORY_KIND
+    ]
+    from noeta.core.fold import fold
+
+    folded = fold(host.event_log, host.content_store, out.task_id)
+    assert all(m.origin != "memory" for m in folded.runtime.messages)
 
 
 def test_product_model_writes_memory_via_tool(tmp_path: Path) -> None:
@@ -342,9 +344,9 @@ def test_product_model_writes_memory_via_tool(tmp_path: Path) -> None:
 
 
 def test_product_resume_recalls_memory_written_earlier(tmp_path: Path) -> None:
-    """Multi-turn loop: first turn the model writes memory, and resume's new
+    """Multi-turn loop: first turn the model writes memory, and the follow-up
     goal matches its name → second turn's recall recorded with origin=memory
-    (_goal_prelude seam)."""
+    (RecallGoalPrelude, the ``_goal_prelude`` seam's SDK port)."""
     from noeta.protocols.messages import LLMResponse, ToolUseBlock, Usage
 
     ws = tmp_path / "ws"
@@ -365,30 +367,28 @@ def test_product_resume_recalls_memory_written_earlier(tmp_path: Path) -> None:
         raw={"id": "w"},
     )
     mem = tmp_path / "global-memories"
-    runner = _product_runner(
+    host, driver = _memory_session(
         ws,
         [write_call, _end_response("saved"), _end_response("done")],
-        goal="save the release steps",
+        memory=True,
+        mem_dir=mem,
         multi_turn=True,
-        global_memory_dir=mem,
     )
-    runner.prepare()
-    try:
-        first = runner.execute()
-        assert first.status == "suspended"
-        second = runner.resume_with_goal("walk me through release-steps")
-        assert second.status in ("suspended", "terminal")
+    first = driver.start(goal="save the release steps", agent="main")
+    assert first.status == "suspended"
+    second = driver.send_goal(
+        first.task_id, goal="walk me through release-steps"
+    )
+    assert second.status in ("suspended", "terminal")
 
-        from noeta.core.fold import fold
+    from noeta.core.fold import fold
 
-        folded = fold(runner.event_log, runner.content_store, runner.task_id)
-        recall_msgs = [
-            m for m in folded.runtime.messages if m.origin == "memory"
-        ]
-        assert recall_msgs, "a resume goal matching a memory name must inject a recall"
-        joined = "".join(
-            b.text for b in recall_msgs[-1].content if hasattr(b, "text")
-        )
-        assert "Tag, build, publish." in joined
-    finally:
-        runner.shutdown()
+    folded = fold(host.event_log, host.content_store, first.task_id)
+    recall_msgs = [
+        m for m in folded.runtime.messages if m.origin == "memory"
+    ]
+    assert recall_msgs, "a resume goal matching a memory name must inject a recall"
+    joined = "".join(
+        b.text for b in recall_msgs[-1].content if hasattr(b, "text")
+    )
+    assert "Tag, build, publish." in joined

@@ -280,6 +280,75 @@ forbidden_modules =
     noeta.agent.spec
     noeta.agent.registry
 
+[importlinter:contract:app-uses-only-sdk]
+name = the rest of the noeta-agent product (host / observe / commands / read_models / skills) may reach the engine only through noeta.sdk — a RATCHET: every legacy direct import is pinned below in ignore_imports; that list may only shrink (burn-down), never grow. Deliberate CONTEXT.md exemptions stay open: noeta.storage (host wires a concrete backend) and noeta.read_models (the peripheral projection). This activates the full public seal the runtime-sdk-app-restructure ADR left interim as backend-only-sdk.
+type = forbidden
+; Only DIRECT imports are forbidden — reaching runtime internals *through*
+; noeta.sdk is the encapsulation working as intended (same stance as
+; backend-only-sdk above).
+allow_indirect_imports = True
+source_modules =
+    noeta.agent.host
+    noeta.agent.observe
+    noeta.agent.commands
+    noeta.agent.read_models
+    noeta.agent.skills
+    noeta.agent.__main__
+forbidden_modules =
+    noeta.core
+    noeta.runtime
+    noeta.execution
+    noeta.policies
+    noeta.tools
+    noeta.providers
+    noeta.context
+    noeta.protocols
+    noeta.guards
+    noeta.observers
+    noeta.agent.spec
+    noeta.agent.registry
+ignore_imports =
+    noeta.agent.commands.registry -> noeta.execution.commands
+    noeta.agent.commands.resolve -> noeta.execution.commands
+    noeta.agent.host.mcp_registry -> noeta.tools.mcp
+    noeta.agent.host.mcp_registry -> noeta.tools.mcp._client
+    noeta.agent.host.mcp_registry -> noeta.tools.mcp._http_client
+    noeta.agent.host.preview_gateway -> noeta.tools.app
+    noeta.agent.host.preview_gateway -> noeta.tools.fs._workspace
+    noeta.agent.host.storage -> noeta.protocols.content_store
+    noeta.agent.host.storage -> noeta.protocols.dispatcher
+    noeta.agent.host.storage -> noeta.protocols.event_log
+    noeta.agent.observe._stub_provider -> noeta.protocols.messages
+    noeta.agent.observe.hooks_config -> noeta.guards.hook
+    noeta.agent.observe.hooks_config -> noeta.observers.hook
+    noeta.agent.observe.live_timeline -> noeta.core.fold
+    noeta.agent.observe.live_timeline -> noeta.protocols.content_store
+    noeta.agent.observe.live_timeline -> noeta.protocols.event_log
+    noeta.agent.observe.live_timeline -> noeta.protocols.events
+    noeta.agent.observe.live_timeline -> noeta.protocols.messages
+    noeta.agent.observe.live_timeline -> noeta.protocols.tool_args
+    noeta.agent.read_models.catalog -> noeta.core.fold
+    noeta.agent.read_models.catalog -> noeta.execution.multi_turn
+    noeta.agent.read_models.catalog -> noeta.policies.control_tools
+    noeta.agent.read_models.catalog -> noeta.protocols.content_store
+    noeta.agent.read_models.catalog -> noeta.protocols.event_log
+    noeta.agent.read_models.catalog -> noeta.protocols.wake
+    noeta.agent.read_models.context_view -> noeta.protocols.canonical
+    noeta.agent.read_models.context_view -> noeta.protocols.content_store
+    noeta.agent.read_models.context_view -> noeta.protocols.context_plan
+    noeta.agent.read_models.context_view -> noeta.protocols.event_log
+    noeta.agent.read_models.detail -> noeta.core.fold
+    noeta.agent.read_models.detail -> noeta.execution.multi_turn
+    noeta.agent.read_models.detail -> noeta.policies.control_tools
+    noeta.agent.read_models.detail -> noeta.protocols.content_store
+    noeta.agent.read_models.detail -> noeta.protocols.event_log
+    noeta.agent.read_models.detail -> noeta.protocols.wake
+    noeta.agent.read_models.result -> noeta.protocols.content_store
+    noeta.agent.read_models.result -> noeta.protocols.events
+    noeta.agent.read_models.result -> noeta.protocols.tool_args
+    noeta.agent.read_models.tail -> noeta.protocols.event_log
+    noeta.agent.skills -> noeta.context.skills
+
 [importlinter:contract:mcp-tools-boundary]
 name = noeta.tools.mcp may import only noeta.protocols + noeta.tools helpers + stdlib (Phase 4.5 F2)
 type = forbidden

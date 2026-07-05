@@ -111,3 +111,26 @@ def test_main_entrypoints_exit_zero() -> None:
     for name in _SMOKE_EXAMPLES:
         mod = _load_example(name)
         assert mod.main() == 0, f"{name}.main() did not return 0"
+
+
+def test_crash_resume_survives_sigkill(tmp_path: Path) -> None:
+    """The crash-resume demo is orchestration (two processes + SIGKILL),
+    so it runs as a subprocess rather than through ``_SMOKE_EXAMPLES``.
+    Slowest smoke here (~8s: a real wait_timer must come due)."""
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(_EXAMPLES_DIR / "crash_resume.py"),
+            "--db",
+            str(tmp_path / "demo.sqlite"),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "kill -9" in proc.stdout
+    assert "task completed: 'Weekly report ready.'" in proc.stdout
