@@ -17,7 +17,7 @@ Precedence (low → high):
 | Variable | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `NOETA_AGENT_CONFIG` | path | *(none)* | Path to a JSON config file. See [JSON config file fields](#json-config-file-fields). |
-| `NOETA_AGENT_HOST` | string | `127.0.0.1` | Interface the HTTP server binds to. |
+| `NOETA_AGENT_HOST` | string | `127.0.0.1` | Interface the HTTP server binds to. **The server is unauthenticated — keep it on localhost.** Binding `0.0.0.0` exposes full engine control (and the preview gateway's proxy) to the network; put a reverse proxy with auth in front if you must. |
 | `NOETA_AGENT_PORT` | int | `8765` | Port the HTTP server listens on. `0` = OS-assigned. |
 | `NOETA_AGENT_WORKSPACE` | path | `$PWD` | Default workspace directory (the agent's file root). |
 | `NOETA_AGENT_WORKSPACES_FILE` | path | `~/.noeta/workspaces.json` | Workspace (project) registry JSON store. |

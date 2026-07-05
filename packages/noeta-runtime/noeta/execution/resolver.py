@@ -57,6 +57,28 @@ def agent_name_of(event_log: EventLogFull, task_id: str) -> str:
     raise UnknownAgentError(task_id=task_id, agent_name="<no TaskCreated>", available=[])
 
 
+def _subtask_output_schema(
+    event_log: EventLogFull, task_id: str
+) -> Optional[dict[str, Any]]:
+    """Read a subtask's per-helper ``output_schema`` off its durable
+    ``TaskCreated.inputs``.
+
+    Written by the orchestration interpreter's ``agent(goal, schema=...)``
+    spawn (see ``noeta.policies.orchestration``); read here so the drain's
+    child-engine build mounts the ``structured_output`` control schema + the
+    ``StructuredOutputPolicy`` receipt for exactly that helper. ``None``
+    (missing / non-dict — every plain child) keeps the build byte-identical
+    to the schema-free path. Durable + resume-safe: a cold re-drive re-reads
+    the same recorded inputs and rebuilds the same engine shape.
+    """
+    for env in event_log.read(task_id):
+        if env.type == "TaskCreated":
+            inputs = getattr(env.payload, "inputs", None) or {}
+            schema = inputs.get("output_schema")
+            return dict(schema) if isinstance(schema, dict) else None
+    return None
+
+
 class GenericEngineResolver:
     """Hoisted per-task agent→Engine resolver skeleton.
 
@@ -176,6 +198,7 @@ class GenericEngineResolver:
         mcp_aliases: tuple[str, ...] = (),
         effort: Optional[str] = None,
         task_id: Optional[str] = None,
+        structured_output_schema: Optional[dict[str, Any]] = None,
     ) -> Engine:
         """Build a real ``Engine`` for ``agent`` on ``model``.
 
@@ -203,6 +226,16 @@ class GenericEngineResolver:
         (``None`` ⇒ the host default provider). An implementation resolves it
         to a configured LLM adapter instance for this Engine's round-trips; the
         generic skeleton only threads the name through the cache key.
+
+        ``structured_output_schema`` is a workflow helper's per-helper JSON
+        Schema (read off its durable ``TaskCreated.inputs.output_schema`` by
+        :meth:`drive_pending_subtasks`' child-engine builder — the only
+        caller that ever passes it). An implementation mounts the
+        ``structured_output`` control schema (its ``parameters`` = this
+        schema) AND wraps the built policy in ``StructuredOutputPolicy`` so
+        the helper's call becomes its final answer. ``None`` (every other
+        build, including every cached :meth:`_engine_for_agent` path) must be
+        byte-identical to before the parameter existed.
         """
         raise NotImplementedError
 
@@ -663,6 +696,19 @@ class GenericEngineResolver:
                 mcp_aliases=_child_mcp_aliases(child_agent),
                 effort=inherited_effort,
                 task_id=task_id,
+                # Per-helper structured output (port of the deleted runner's
+                # ``_build_child_engine``): a workflow helper spawned via
+                # ``agent(goal, schema=...)`` carries the declared JSON Schema
+                # in its durable ``TaskCreated.inputs.output_schema`` — thread
+                # it so the child mounts the ``structured_output`` control
+                # schema + the ``StructuredOutputPolicy`` receipt wrapper.
+                # ``None`` (every plain child) is byte-identical to before.
+                # Built uncached (this direct ``_build_engine`` call never
+                # goes through ``_engine_for_agent``), so the schema-shaped
+                # engine can never leak to a sibling via the cache key.
+                structured_output_schema=_subtask_output_schema(
+                    self.event_log, task_id
+                ),
             )
 
         def _child_model_binding(task_id: str) -> Optional[tuple[str, str]]:

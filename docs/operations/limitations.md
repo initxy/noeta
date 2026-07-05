@@ -98,20 +98,26 @@ to your monitoring system. Each event is named for what the worker can
 prove from the dispatcher seam (e.g. `heartbeat_invalid_lease` is a
 symptom — the cause may be cap / expired / requeued).
 
-## No durable human-in-the-loop UX yet
+## No out-of-band notification for human-in-the-loop waits
 
-**What it means:** The engine carries the full shape for human
-intervention (`HumanResponseReceived` wake events, the `answer` /
-`approve` / `deny` client verbs), but the end-to-end UX for a human
-responding to an agent's question is still landing.
+**What it means:** Human-in-the-loop is fully wired in-band: the engine
+suspends on `HumanResponseReceived` wake events, the `answer` /
+`approve` / `deny` client verbs deliver the response, and the bundled
+web UI renders structured question forms (choices plus freeform) and
+approval prompts. What does not exist is an out-of-band channel — no
+webhook, email, or cross-session inbox fires when a task starts waiting
+on a human.
 
-**When you hit it:** You want to build an agent that asks the user a
-question mid-task and waits for a response.
+**When you hit it:** An agent asks a question or requests approval
+while nobody has the chat open. The task waits durably (that is the
+point), but nothing notifies anyone that it is waiting.
 
-**Workaround:** Use the programmatic API: `client.answer(task_id,
-question_id=..., answers=...)` to inject a human response into a
-waiting task. The web UI does not yet surface a structured question /
-answer flow.
+**Workaround:** Keep the web UI open for interactive sessions, or in
+headless deployments poll `GET /tasks` for suspended tasks (and answer
+programmatically via `client.answer(task_id, question_id=...,
+answers=...)`). A custom `Observer` subscribed to the EventLog can
+forward `UserQuestionRequested` / `ToolCallApprovalRequested` events to
+your own notification channel.
 
 ## Frontend is a small Vite MPA, not a framework app
 

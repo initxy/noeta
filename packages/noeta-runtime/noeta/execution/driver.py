@@ -49,6 +49,7 @@ keep their native semantics (a failed turn still terminates).
 from __future__ import annotations
 
 import dataclasses
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -60,6 +61,12 @@ from noeta.execution.multi_turn import (
 from noeta.execution.environment import record_environment
 from noeta.execution.host import ResidentHost
 from noeta.execution.instructions import record_instructions
+from noeta.execution.memory import (
+    RecallGoalPrelude,
+    append_user_message_with_recall,
+    record_memory_index,
+)
+from noeta.execution.resolver import agent_name_of
 from noeta.execution.subtask_drain import UnsupportedSubtaskSuspend
 from noeta.providers.catalog import resolve_alias
 from noeta.core.fold import fold
@@ -85,9 +92,11 @@ from noeta.policies.control_tools import (
 )
 from noeta.protocols.values import LOCAL_PRINCIPAL, ContentRef, Principal
 from noeta.protocols.wake import (
+    ExternalEvent,
     HumanResponseReceived,
     SubtaskCompleted,
     SubtaskGroupCompleted,
+    WakeCondition,
 )
 from noeta.runtime.worker import (
     AppendMessagePrelude,
@@ -186,16 +195,19 @@ class NotResumableError(CodedError, RuntimeError):
         status: str,
         wake_on: Any,
         dispatcher_status: Optional[str] = None,
+        expected: Optional[str] = None,
     ) -> None:
         self.task_id = task_id
         self.handle = handle
         self.status = status
         self.wake_on = wake_on
         self.dispatcher_status = dispatcher_status
-        message = (
-            f"task {task_id!r} is {status!r}, not waiting for "
-            f"HumanResponseReceived(handle={handle!r})"
-        )
+        # ``expected`` names the wake the command required when it is NOT the
+        # human-handle default (e.g. ``deliver_event`` expecting an
+        # ``ExternalEvent``); ``None`` keeps the historical message.
+        if expected is None:
+            expected = f"HumanResponseReceived(handle={handle!r})"
+        message = f"task {task_id!r} is {status!r}, not waiting for {expected}"
         if dispatcher_status is not None:
             message += f"; dispatcher status is {dispatcher_status!r}"
         super().__init__(message)
@@ -302,6 +314,24 @@ def _background_subagent_notice(
         f"{summary}\n"
         f'<background-subagent id="{subtask_id}" status="{status}" '
         f'ref="{ref.hash}" size="{ref.size}"/>'
+    )
+
+
+def _external_event_notice(event_kind: str, payload: Any) -> str:
+    """Render the external-event payload notice body (``deliver_event``).
+
+    Mirrors :func:`_background_exit_notice`: one human-readable line + a
+    machine-greppable tag carrying the payload as deterministic JSON
+    (``sort_keys`` keeps a resumed fold reading identical bytes). The payload
+    rides the message channel, never the wake event — the wake domain rule on
+    :class:`noeta.protocols.wake.ExternalEvent`."""
+    try:
+        body = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    except (TypeError, ValueError):
+        body = json.dumps(str(payload), ensure_ascii=False)
+    return (
+        f"External event received: {event_kind}\n"
+        f'<external-event kind="{event_kind}">{body}</external-event>'
     )
 
 
@@ -651,6 +681,28 @@ class InteractionDriver:
         # Seed the goal as the first user turn (durable, resume-safe) BEFORE
         # the step — same shape the in-process CodeSessionRunner uses.
         engine = host.resolve_engine(task)
+        # Memory auto-recall (the deleted runner's prepare-time D5/D6 wiring,
+        # ported onto the seed path). The host seam resolves the (store,
+        # entries) pair ONLY for an agent whose spec enables
+        # ``Capabilities.memory`` (``None`` otherwise) — a memory-off agent's
+        # stream stays byte-identical, and the ``getattr`` guard keeps hosts
+        # without the seam (test doubles / control-plane-only hosts) a clean
+        # no-op. Runner-prepare order: the index resident is recorded FIRST
+        # (one ``ContextContentRecorded`` kind=memory, policy=evolving; empty
+        # entries no-op), then the goal enters through the recall seam below.
+        # Retrieval runs on the WRITE side (now, at recording time), never at
+        # compose time — hits land as ONE ``origin="memory"`` turn right after
+        # the human goal, and resume folds them back without re-retrieving.
+        memory_store = None
+        recall_context = getattr(host, "memory_recall_context", None)
+        if callable(recall_context):
+            memory = recall_context(agent)
+            if memory is not None:
+                memory_store, memory_entries = memory
+                record_memory_index(
+                    host.event_log, host.content_store, task,
+                    entries=memory_entries, lease_id=lease.lease_id,
+                )
         # Unified ``@`` mention snapshots (workspace files + MCP
         # static resources, read host-side at send time) seed FIRST, each as its
         # own ``origin="system"`` user message — so the transcript attributes the
@@ -668,12 +720,25 @@ class InteractionDriver:
         # an MCP-prompt-expanded opening goal arrives ``origin="system"`` so the
         # transcript shows host-injected content riding the user channel — and,
         # being a recorded message, resume reads it back and never re-expands.
-        task = engine.append_user_message(
-            task,
-            content=[TextBlock(text=goal), *images],
-            lease_id=lease.lease_id,
-            origin=goal_origin,
-        )
+        # A memory-enabled session routes the goal through the recall seam
+        # (the SDK port of the runner's ``append_user_message_with_recall``
+        # intake): identical goal bytes, plus one ``origin="memory"`` follow-up
+        # turn when the store has hits — no hits ⇒ exactly the plain bytes.
+        if memory_store is not None:
+            task = append_user_message_with_recall(
+                engine, task,
+                content=[TextBlock(text=goal), *images],
+                lease_id=lease.lease_id,
+                store=memory_store,
+                origin=goal_origin,
+            )
+        else:
+            task = engine.append_user_message(
+                task,
+                content=[TextBlock(text=goal), *images],
+                lease_id=lease.lease_id,
+                origin=goal_origin,
+            )
         # Web-path parity: a slash command (``/review``-style) the host
         # resolved to built-in skill(s) deterministically pins their bodies for
         # this turn onward — the same pre-loop activation the resident CLI runner
@@ -689,9 +754,9 @@ class InteractionDriver:
             )
         # Pre-loop activation of the session-level instructions + environment
         # content channels — the SAME activation the resident
-        # ``AgentSessionRunner.prepare()`` does (skills → instructions →
-        # environment order; memory index is handled by prepare()'s recall seam,
-        # not this path). Without this the server seed path emitted NO
+        # ``AgentSessionRunner.prepare()`` did (skills → instructions →
+        # environment order; the memory index is recorded above, at the recall
+        # seam). Without this the server seed path emitted NO
         # ``ContextContentRecorded(kind=environment|instructions)``, so a
         # server-created task's request never carried the workspace dir / git /
         # platform block nor the project AGENTS.md/NOETA.md. ``seed_start`` is the
@@ -958,12 +1023,32 @@ class InteractionDriver:
         # re-expanding).
         # The unified ``@`` mention snapshots seed ahead of the goal
         # as their own ``origin="system"`` messages (see AppendMessagePrelude).
-        append = AppendMessagePrelude(
+        # A memory-enabled agent (host seam, ``None`` for a memory-off spec —
+        # byte-identical stream) swaps in ``RecallGoalPrelude``: the SDK port of
+        # the runner's ``_goal_prelude`` seam, so a resume goal gets the same
+        # recall intake the opening turn got. The recall reads the store live
+        # inside the woken window, so a memory written by an EARLIER turn's
+        # ``memory_write`` is immediately recallable.
+        append: WokenPrelude = AppendMessagePrelude(
             content=[TextBlock(text=goal), *images],
             origin=goal_origin,
             attachment_texts=tuple(attachment_texts),
             activate_skills=tuple(activations),
         )
+        recall_context = getattr(self._host, "memory_recall_context", None)
+        if callable(recall_context):
+            memory = recall_context(
+                agent_name_of(self._host.event_log, task_id)
+            )
+            if memory is not None:
+                memory_store, _memory_entries = memory
+                append = RecallGoalPrelude(
+                    content=[TextBlock(text=goal), *images],
+                    store=memory_store,
+                    origin=goal_origin,
+                    attachment_texts=tuple(attachment_texts),
+                    activate_skills=tuple(activations),
+                )
         prelude: WokenPrelude
         if model_selector is None and provider_selector is None:
             # No per-turn switch — the conversation keeps both bindings; no
@@ -1259,6 +1344,63 @@ class InteractionDriver:
                 answers=normalized,
                 answered_by=answered_by,
             ),
+        )
+
+    def deliver_event(
+        self,
+        task_id: str,
+        *,
+        event_kind: str,
+        payload: Any = None,
+    ) -> DriveOutcome:
+        """Deliver an external event and resume a ``wait_external`` suspend."""
+        return self.drive_seeded(
+            self.seed_deliver_event(
+                task_id, event_kind=event_kind, payload=payload
+            )
+        )
+
+    def seed_deliver_event(
+        self,
+        task_id: str,
+        *,
+        event_kind: str,
+        payload: Any = None,
+    ) -> SeededTurn:
+        """Validate + seed an external-event resume turn (async transport half).
+
+        The external-ingress counterpart of :meth:`seed_answer`: refuse a task
+        that is not suspended on ``ExternalEvent(event_kind)`` — a mismatched
+        ``event_kind``, a task not waiting at all, a terminal task, and a
+        repeated delivery after the wake was consumed all raise the same typed
+        :class:`NotResumableError` a repeat answer does — then wake + lease
+        through the SAME dispatcher contract the internal delivery path (a
+        daemon ingress calling ``dispatcher.wake``) walks. Matching projects
+        on ``event_kind`` exactly as :func:`noeta.protocols.wake.matches_wake`
+        defines.
+
+        ``payload`` is the optional JSON value the external source carries.
+        Per the wake domain rule (any payload belongs on the caller's own
+        channel — a recorded message — never on the wake event), it does NOT
+        ride the wake: when given, it is appended as an ``origin="system"``
+        user message in the H2 first-consume window (the background-notice
+        idiom, via :class:`AppendMessagePrelude`). ``None`` seeds no prelude,
+        keeping the resumed turn byte-identical to an internal wake delivery.
+        """
+        self._require_external_suspend(task_id, event_kind)
+        prelude: Optional[WokenPrelude] = None
+        if payload is not None:
+            prelude = AppendMessagePrelude(
+                content=[
+                    TextBlock(text=_external_event_notice(event_kind, payload))
+                ],
+                origin="system",
+            )
+        return self._seed_woken(
+            task_id,
+            handle=event_kind,
+            prelude=prelude,
+            condition=ExternalEvent(event_kind=event_kind),
         )
 
     def cancel(
@@ -1694,16 +1836,31 @@ class InteractionDriver:
         )
 
     def _seed_woken(
-        self, task_id: str, *, handle: str, prelude: WokenPrelude
+        self,
+        task_id: str,
+        *,
+        handle: str,
+        prelude: Optional[WokenPrelude],
+        condition: Optional[WakeCondition] = None,
     ) -> SeededTurn:
         """Wake the task on ``handle`` and take the matched lease — no drive.
 
         The synchronous half of the woken seam: consumes the matched wake into
         a targeted lease (H2 ``consumed_wake_event`` discipline) and packages
         it with the per-command prelude for :meth:`drive_seeded` to run.
+
+        ``condition`` is the wake event to deliver; ``None`` (every human
+        command) means ``HumanResponseReceived(handle)``. ``deliver_event``
+        passes an :class:`ExternalEvent` instead — the machine is otherwise
+        identical, so the H2 consume discipline is never re-inlined per wake
+        variant.
         """
         host = self._host
-        condition = HumanResponseReceived(handle=handle)
+        expected: Optional[str] = None
+        if condition is None:
+            condition = HumanResponseReceived(handle=handle)
+        else:
+            expected = repr(condition)
         host.dispatcher.wake(task_id, condition)
         lease = host.dispatcher.lease(
             worker_id=self._worker_id,
@@ -1733,6 +1890,7 @@ class InteractionDriver:
                 status=task.status,
                 wake_on=getattr(task, "wake_on", None),
                 dispatcher_status=dispatcher_status,
+                expected=expected,
             )
         return SeededTurn(task_id=task_id, lease=lease, prelude=prelude)
 
@@ -1764,6 +1922,38 @@ class InteractionDriver:
                 status=task.status,
                 wake_on=wake_on,
                 dispatcher_status=dispatcher_status,
+            )
+        return task
+
+    def _require_external_suspend(self, task_id: str, event_kind: str) -> Task:
+        """Refuse a delivery whose task is not suspended on
+        ``ExternalEvent(event_kind)``; return the folded task on success.
+
+        The :meth:`_require_human_suspend` mirror for the ``deliver_event``
+        verb: a delivery must not consume an unrelated wake condition, so a
+        mismatched ``event_kind`` / a task not waiting / a terminal task all
+        raise the same typed :class:`NotResumableError` (code
+        ``not_resumable``) the human commands do.
+        """
+        host = self._host
+        task = fold(host.event_log, host.content_store, task_id)
+        wake_on = getattr(task, "wake_on", None)
+        if (
+            task.status != "suspended"
+            or not isinstance(wake_on, ExternalEvent)
+            or wake_on.event_kind != event_kind
+        ):
+            task_status = getattr(host.dispatcher, "task_status", None)
+            dispatcher_status = (
+                task_status(task_id) if callable(task_status) else None
+            )
+            raise NotResumableError(
+                task_id=task_id,
+                handle=event_kind,
+                status=task.status,
+                wake_on=wake_on,
+                dispatcher_status=dispatcher_status,
+                expected=f"ExternalEvent(event_kind={event_kind!r})",
             )
         return task
 

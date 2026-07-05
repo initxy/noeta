@@ -27,6 +27,7 @@ export default defineConfig({
     '**/implementation-specs/**',
     '**/guides/**',
     '**/reference/api/**',
+    '**/_drafts/**',
     'releasing.md',
     'releasing.zh.md',
   ],
