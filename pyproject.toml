@@ -16,9 +16,6 @@ dev = [
     "import-linter>=2.0",
     "respx>=0.23.1",
     "ruff>=0.6",
-    # [binary] ships libpq so the Postgres contract tests run without a
-    # system PostgreSQL client installation.
-    "psycopg[binary]>=3.2",
 ]
 
 [tool.pytest.ini_options]

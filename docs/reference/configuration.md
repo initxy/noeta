@@ -22,7 +22,7 @@ Precedence (low → high):
 | `NOETA_AGENT_WORKSPACE` | path | `$PWD` | Default workspace directory (the agent's file root). |
 | `NOETA_AGENT_WORKSPACES_FILE` | path | `~/.noeta/workspaces.json` | Workspace (project) registry JSON store. |
 | `NOETA_AGENT_MCP_FILE` | path | `~/.noeta/mcp_servers.json` | MCP server connector registry JSON. |
-| `NOETA_AGENT_STORAGE` | URL | *(none)* | Durable storage for EventLog + ContentStore + Dispatcher: a SQLite file path or a `postgresql://` DSN (needs `noeta-runtime[postgres]`). Unset = in-memory (no persistence). Legacy `NOETA_AGENT_SQLITE` still accepted. |
+| `NOETA_AGENT_STORAGE` | URL | *(none)* | Durable storage for EventLog + ContentStore + Dispatcher: a SQLite file path or a `postgresql://` DSN. Unset = in-memory (no persistence). Legacy `NOETA_AGENT_SQLITE` still accepted. |
 | `NOETA_AGENT_PROVIDER` | string | `stub` | Provider adapter: `stub` (offline), `openai`, `openai-responses`, `anthropic`. |
 | `NOETA_AGENT_MODEL` | string | *(none)* | Model identifier served by the configured provider. |
 | `NOETA_AGENT_MODELS` | string | *(none)* | Comma-separated list of selectable models (enables per-turn model switching in the UI). |

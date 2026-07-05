@@ -83,9 +83,9 @@ def open_sqlite_storage(sqlite_path: str) -> tuple[StorageTriple, Callable[[], N
 def open_postgres_storage(dsn: str) -> tuple[StorageTriple, Callable[[], None]]:
     """Build the durable triple over a Postgres DSN, plus a ``close`` callable.
 
-    Same wiring invariant as the sqlite builder. psycopg is an optional
-    dependency (``noeta-runtime[postgres]``); the local import surfaces a
-    clear ImportError only when a Postgres URL was actually configured.
+    Same wiring invariant as the sqlite builder; the local import keeps a
+    bare ``import noeta.agent`` cheap (psycopg loads only when a Postgres
+    URL was actually configured).
     """
     from noeta.storage.postgres import (
         PostgresContentStore,
