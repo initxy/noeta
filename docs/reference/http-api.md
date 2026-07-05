@@ -12,9 +12,9 @@ All bodies are JSON.
 
 ## Task protocol
 
-Source: `apps/noeta-agent/noeta/agent/backend/task_protocol.py:188-197`.
+Source: `apps/noeta-agent/noeta/agent/backend/task_protocol.py:208-218`.
 
-### `GET /stream` — the SSE event stream (`task_protocol.py:188`)
+### `GET /stream` — the SSE event stream (`task_protocol.py:208`)
 
 Query: `task=<root_task_id>` (**required**; 400 without it). One multiplexed
 stream per root conversation: canonical `EventEnvelope`s (the
@@ -22,7 +22,7 @@ stream per root conversation: canonical `EventEnvelope`s (the
 envelope `seq` doubling as the SSE id — send `Last-Event-ID` to resume from a
 cursor.
 
-### `POST /tasks` — create a conversation (`task_protocol.py:189`)
+### `POST /tasks` — create a conversation (`task_protocol.py:209`)
 
 Body: `goal` (string), `agent` (optional preset/agent name), `images`
 (optional attachments; bad MIME / base64 / >5 MB ⇒ 400), `workspace`
@@ -30,21 +30,29 @@ Body: `goal` (string), `agent` (optional preset/agent name), `images`
 `enabled_mcp` (list of MCP aliases), `model`, `effort` (all optional,
 per-turn). Response: `202` `{"task_id": "..."}`.
 
-### Command verbs (`task_protocol.py:190-196`)
+### Command verbs (`task_protocol.py:210-217`)
 
 All respond `202` `{"task_id": "<id>"}`; progress rides the stream.
 
 | Method & path | Body | Purpose |
 | --- | --- | --- |
-| `POST /tasks/{id}/messages` (`:190`) | `goal` + optional `images` / `permission_mode` / `enabled_mcp` / `model` / `effort` | append a follow-up user turn |
-| `POST /tasks/{id}/approve` (`:191`) | `call_id`, optional `reason` | approve a gated tool call |
-| `POST /tasks/{id}/deny` (`:192`) | `call_id`, optional `reason` | deny a gated tool call |
-| `POST /tasks/{id}/answer` (`:193`) | `question_id`, `answers` (object) | answer a structured question |
-| `POST /tasks/{id}/cancel` (`:194`) | optional `reason` (default `"cancelled"`), `cascade` (default `false`) | cancel; `cascade` also cancels subtasks |
-| `POST /tasks/{id}/close` (`:195`) | optional `reason` | close / archive |
-| `POST /tasks/{id}/reopen` (`:196`) | optional `reason` | reopen a closed conversation |
+| `POST /tasks/{id}/messages` (`:210`) | `goal` + optional `images` / `permission_mode` / `enabled_mcp` / `model` / `effort` | append a follow-up user turn |
+| `POST /tasks/{id}/approve` (`:211`) | `call_id`, optional `reason` | approve a gated tool call |
+| `POST /tasks/{id}/deny` (`:212`) | `call_id`, optional `reason` | deny a gated tool call |
+| `POST /tasks/{id}/answer` (`:213`) | `question_id`, `answers` (object) | answer a structured question |
+| `POST /tasks/{id}/events` (`:214`) | `event_kind` (string), optional `payload` (any JSON value) | deliver an external event to a `wait_external` suspend |
+| `POST /tasks/{id}/cancel` (`:215`) | optional `reason` (default `"cancelled"`), `cascade` (default `false`) | cancel; `cascade` also cancels subtasks |
+| `POST /tasks/{id}/close` (`:216`) | optional `reason` | close / archive |
+| `POST /tasks/{id}/reopen` (`:217`) | optional `reason` | reopen a closed conversation |
 
-### `DELETE /tasks/{id}` — hard-delete (`task_protocol.py:197`)
+`POST /tasks/{id}/events` wakes a task suspended by the `wait_external`
+Decision branch; matching is exact on `event_kind`. The optional `payload`
+is recorded on the resumed turn as an `origin="system"` message (it never
+rides the wake event). A task not waiting on that `event_kind` — including a
+repeat delivery after the wake was consumed — answers `409` with code
+`not_resumable`, the same contract as a repeat `answer`.
+
+### `DELETE /tasks/{id}` — hard-delete (`task_protocol.py:218`)
 
 Purges the task and its subtask tree from storage (content blobs are shared
 and left for offline GC). Synchronous, unlike the command verbs: `200` with

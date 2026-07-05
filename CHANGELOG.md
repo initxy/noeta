@@ -8,6 +8,51 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- External-event delivery, end to end: `POST /tasks/{id}/events` and
+  `Client.deliver_event(task_id, event_kind=..., payload=...)` (plus
+  `seed_deliver_event`) wake a task suspended on the `wait_external`
+  Decision branch. Matching is exact on `event_kind`; an optional JSON
+  `payload` is recorded on the resumed turn as an `origin="system"`
+  message (never on the wake event); a task not waiting on that
+  `event_kind` answers the typed `not_resumable` error (409), same
+  contract as a repeat `answer`.
+- Workflow per-helper structured output on the SDK/backend path: a
+  helper spawned via `agent(goal, schema=...)` now mounts the
+  `structured_output` control schema and returns validated JSON (the
+  feature previously existed only on the deleted runner path).
+- Memory auto-recall on the SDK seed path: for memory-enabled agents,
+  `start` / `send_goal` record the resident memory index
+  (`ContextContentRecorded` kind=`memory`) and route the goal through
+  the recall seam, so matching memories land as one `origin="memory"`
+  turn. Memory-off agents' streams are byte-identical to before.
+- `examples/crash_resume.py`: kill -9 a live worker mid-task, restart,
+  fold the task back, and let the durable timer wake finish it — fully
+  offline. Recorded as the README GIF (`scripts/demo/crash-resume.tape`).
+- Docs: LangGraph section in the server-side comparison; `reclaim_max`
+  poison-task backstop documented in the worker-lease-model ADR.
+
+### Changed
+
+- import-linter: the full `app-uses-only-sdk` seal is now in effect as a
+  ratchet contract over the whole noeta-agent product namespace (legacy
+  direct imports pinned in a shrink-only `ignore_imports` list);
+  `backend-only-sdk` stays in force unchanged.
+- Model catalog: all public pricing rows verified against the vendors'
+  official pages (2026-07-05) with per-row source citations; the two
+  internal-gateway models are plainly marked as unpriced ($0 cost
+  accounting) instead of carrying pending-sign-off TODOs.
+
+### Fixed
+
+- `claude-sonnet-4-6` `max_output_tokens` corrected from 64k to 128k
+  (raises the compaction output reservation for sonnet sessions).
+- Docs said the web UI had no structured question/answer flow — it does;
+  the real (and now documented) gap is out-of-band notification when a
+  task starts waiting on a human. The zh README also claimed the
+  packages were not yet on PyPI; they have been since 0.1.0.
+
 ## [0.1.5] - 2026-07-05
 
 ### Changed

@@ -20,6 +20,7 @@ minimal path), so they cannot silently rot as the SDK evolves.
 | Gate tool calls with a permission callback | [`permission_gate.py`](./permission_gate.py) | `Options.permission_mode` + `Options.can_use_tool` |
 | Swap the provider (provider neutrality) | [`swap_provider.py`](./swap_provider.py) | provider is wiring, not identity |
 | Delegate to a sub-agent | [`spawn_subtask.py`](./spawn_subtask.py) | `Options.agents` + `spawn_subagent` |
+| Survive `kill -9` mid-task (crash recovery + timer wake) | [`crash_resume.py`](./crash_resume.py) | durable SQLite store + `fold` + dispatcher wake |
 
 Run any of them directly:
 

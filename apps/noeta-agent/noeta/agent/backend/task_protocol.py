@@ -145,6 +145,26 @@ def _handle_answer(handler: BackendHandler, params: dict[str, str]) -> None:
     handler.send_json({"task_id": params["id"]}, status=202)
 
 
+def _handle_deliver_event(handler: BackendHandler, params: dict[str, str]) -> None:
+    """``POST /tasks/{id}/events`` — deliver an external event to a
+    ``wait_external`` suspend.
+
+    Body: ``event_kind`` (string, the projection-matching key the suspended
+    Decision declared) + optional ``payload`` (any JSON value; recorded on the
+    resumed turn's message channel, never on the wake event). Same 202/ack
+    contract as the sibling verbs; a task not waiting on this ``event_kind``
+    (including a repeat delivery after the wake was consumed) raises the typed
+    ``not_resumable`` error the app maps to 409.
+    """
+    body = handler.read_json_body()
+    handler.engine_room.deliver_event(
+        params["id"],
+        event_kind=str(body.get("event_kind", "")),
+        payload=body.get("payload"),
+    )
+    handler.send_json({"task_id": params["id"]}, status=202)
+
+
 def _handle_cancel(handler: BackendHandler, params: dict[str, str]) -> None:
     body = handler.read_json_body()
     handler.engine_room.cancel(
@@ -191,6 +211,7 @@ def register_task_routes(router: Router) -> None:
     router.add("POST", "/tasks/{id}/approve", _handle_approve)
     router.add("POST", "/tasks/{id}/deny", _handle_deny)
     router.add("POST", "/tasks/{id}/answer", _handle_answer)
+    router.add("POST", "/tasks/{id}/events", _handle_deliver_event)
     router.add("POST", "/tasks/{id}/cancel", _handle_cancel)
     router.add("POST", "/tasks/{id}/close", _handle_close)
     router.add("POST", "/tasks/{id}/reopen", _handle_reopen)

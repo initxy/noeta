@@ -46,21 +46,22 @@ inject a durable triple.
 
 | Method | Signature (keyword-only after `task_id`) | Source |
 | --- | --- | --- |
-| `start` | `(*, goal, agent=None, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), workspace_dir=None, effort=None)` → outcome | `client.py:391` |
-| `send_goal` | `(task_id, *, goal, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), effort=None)` → outcome | `client.py:439` |
-| `approve` | `(task_id, *, call_id, reason=None, resolver="client")` | `client.py:474` |
-| `deny` | `(task_id, *, call_id, reason=None, resolver="client")` | `client.py:487` |
-| `answer` | `(task_id, *, question_id, answers, answered_by="client")` | `client.py:500` |
-| `cancel` | `(task_id, *, reason="cancelled", cascade=False)` | `client.py:623` |
-| `close` | `(task_id, *, closed_by="user", reason=None)` | `client.py:635` |
-| `reopen` | `(task_id, *, reopened_by="user", reason=None)` | `client.py:647` |
-| `events` | `(task_id)` → `list[EventEnvelope]` | `client.py:671` |
-| `messages` | `(task_id)` → `list[ViewItem]` | `client.py:675` |
-| `events_after` | `(task_id, after_seq=None)` → `list[EventEnvelope]` — the stream strictly past a cursor | `client.py:685` |
-| `task_streams` | `()` → per-task `(task_id, last_seq)` summaries | `client.py:695` |
-| `delete_task` | `(task_id)` → `{"ok", "reason"?, "task_id", "deleted": [...]}`; refuses with `reason="running"` / `"not_found"` | `client.py:704` |
-| `subscribe` | `(callback)` → unsubscribe callable; post-commit envelopes, all tasks | `client.py:812` |
-| `shutdown` | `()` — idempotent observer teardown | `client.py:822` |
+| `start` | `(*, goal, agent=None, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), workspace_dir=None, effort=None)` → outcome | `client.py:392` |
+| `send_goal` | `(task_id, *, goal, model_selector=None, images=(), permission_mode=None, enabled_mcp=(), effort=None)` → outcome | `client.py:440` |
+| `approve` | `(task_id, *, call_id, reason=None, resolver="client")` | `client.py:475` |
+| `deny` | `(task_id, *, call_id, reason=None, resolver="client")` | `client.py:488` |
+| `answer` | `(task_id, *, question_id, answers, answered_by="client")` | `client.py:501` |
+| `deliver_event` | `(task_id, *, event_kind, payload=None)` — wake a `wait_external` suspend; matching is exact on `event_kind`, an optional `payload` is recorded as an `origin="system"` message on the resumed turn | `client.py:517` |
+| `cancel` | `(task_id, *, reason="cancelled", cascade=False)` | `client.py:657` |
+| `close` | `(task_id, *, closed_by="user", reason=None)` | `client.py:669` |
+| `reopen` | `(task_id, *, reopened_by="user", reason=None)` | `client.py:681` |
+| `events` | `(task_id)` → `list[EventEnvelope]` | `client.py:705` |
+| `messages` | `(task_id)` → `list[ViewItem]` | `client.py:709` |
+| `events_after` | `(task_id, after_seq=None)` → `list[EventEnvelope]` — the stream strictly past a cursor | `client.py:719` |
+| `task_streams` | `()` → per-task `(task_id, last_seq)` summaries | `client.py:729` |
+| `delete_task` | `(task_id)` → `{"ok", "reason"?, "task_id", "deleted": [...]}`; refuses with `reason="running"` / `"not_found"` | `client.py:738` |
+| `subscribe` | `(callback)` → unsubscribe callable; post-commit envelopes, all tasks | `client.py:846` |
+| `shutdown` | `()` — idempotent observer teardown | `client.py:856` |
 
 Properties: `registry` (the compiled `AgentRegistry`, `client.py:661`) and
 `main_agent_name` (`client.py:666`). `workspace_dir` at `start` is welded into

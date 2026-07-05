@@ -1,6 +1,6 @@
 # Implementation Spec: Documentation Restructure (Diataxis)
 
-> **Status**: Draft for maintainer approval.
+> **Status**: Implemented (landed in `18c0897`; the site later migrated from MkDocs Material to VitePress in `aa8171e`, which supersedes this spec's MkDocs-specific sections — the portal file is now `docs/index.md`, not `docs/README.md`).
 > **Scope**: User-facing docs only. 37 ADRs in `docs/adr/` stay put. `README.zh-CN.md` is out of scope (regenerated later from final English README via translate-zh).
 > **Goal**: Restructure the flat 7-doc set into a Diataxis-aligned 4-layer architecture (Tutorials / How-to / Concepts / Reference) with clear audience per page.
 

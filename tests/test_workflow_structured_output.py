@@ -7,13 +7,19 @@
 twice; if still no call after two nudges → that helper fails. ``agent()``
 without a schema is unchanged; the tool is visible only to that helper, never
 leaking to the parent or other helpers.
+
+T8/③-B port: these tests originally drove the deleted noeta-agent runner
+(``AgentSessionRunner._build_child_engine`` read the helper's ``output_schema``
+off its ``TaskCreated.inputs``). They now drive the production SDK drain —
+``GenericEngineResolver._build_subtask_engine`` reads the same durable inputs
+and ``SdkHost._build_engine`` mounts the ``structured_output`` control schema +
+``StructuredOutputPolicy`` — the same path the shipping backend uses via
+``noeta.sdk.Client``.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-
-import pytest
 
 from noeta.policies.control_tools import RUN_WORKFLOW_TOOL, STRUCTURED_OUTPUT_TOOL
 from noeta.policies.orchestration import MAX_STRUCTURED_OUTPUT_NUDGES
@@ -27,27 +33,14 @@ from noeta.protocols.messages import (
 from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.tools.fs import FsWriteMode, ShellMode
 
-
-# T8/③-B: the old noeta-agent runner's
-# ``_build_child_engine`` read a workflow helper's ``output_schema`` off its
-# ``TaskCreated.inputs`` and built it with the ``structured_output`` tool +
-# ``StructuredOutputPolicy``. The SDK subtask drain (``GenericEngineResolver.
-# _build_subtask_engine``) never threads that schema, so per-helper structured
-# output is NOT wired on the production SDK/backend path — these tests assert a
-# feature the shipping backend lacks. Skipped (not deleted) so the gap stays
-# visible until the feature is ported into resolver.py + noeta/client/host.py.
-pytestmark = pytest.mark.skip(
-    reason="workflow per-helper structured_output not wired on the SDK drain "
-    "path (resolver._build_subtask_engine drops the child output_schema); "
-    "deleted with the noeta-agent runner — port pending."
+from tests._sdk_session import (
+    coding_replay_budget,
+    make_driver,
+    make_host,
+    make_registry,
+    preset_spec,
+    runner_main_spec,
 )
-
-
-SCHEMA = {
-    "type": "object",
-    "properties": {"title": {"type": "string"}, "count": {"type": "integer"}},
-    "required": ["title", "count"],
-}
 
 
 def _run_workflow(script: str) -> LLMResponse:
@@ -95,35 +88,36 @@ def _ws(tmp_path: Path, name: str = "ws") -> Path:
     return ws
 
 
-def _runner(ws: Path, provider: FakeLLMProvider) -> AgentSessionRunner:
-    runner = AgentSessionRunner(
-        CodeSessionConfig(
-            workspace_dir=ws,
-            goal="structured workflow",
-            agent="main",
-            provider=provider,
-            model="gpt-test",
-            write_mode=FsWriteMode.APPLY,
-            shell_mode=ShellMode.OFF,
-            max_steps=20,
-            delegate_to=("explore",),
-            workflow_enabled=True,
-        )
+def _session(ws: Path, provider: FakeLLMProvider):
+    """A one-shot SDK host with workflow enabled (host ``workflow_allowed=True``
+    + delegation on the main spec) that may delegate to ``explore`` — the same
+    assembly the shipping backend drives via ``noeta.sdk.Client``. Returns
+    ``(host, driver)``."""
+    main = runner_main_spec("main", delegation=True, spawnable=("explore",))
+    host = make_host(
+        make_registry(main, preset_spec("explore")),
+        workspace_dir=ws,
+        provider=provider,
+        model="gpt-test",
+        multi_turn=False,
+        write_mode=FsWriteMode.APPLY,
+        shell_mode=ShellMode.OFF,
+        workflow_allowed=True,
+        budget=coding_replay_budget(3),
     )
-    runner.prepare()
-    return runner
+    return host, make_driver(host)
 
 
-def _child_ids(runner: AgentSessionRunner, parent_id: str) -> list[str]:
+def _child_ids(host, parent_id: str) -> list[str]:
     return [
         str(e.payload.subtask_id)
-        for e in runner.event_log.read(parent_id)
+        for e in host.event_log.read(parent_id)
         if e.type == "SubtaskSpawned"
     ]
 
 
-def _answer(runner: AgentSessionRunner, task_id: str):
-    done = [e for e in runner.event_log.read(task_id) if e.type == "TaskCompleted"]
+def _answer(host, task_id: str):
+    done = [e for e in host.event_log.read(task_id) if e.type == "TaskCompleted"]
     return done[-1].payload.answer if done else None
 
 
@@ -134,9 +128,6 @@ def _has_structured_output(req: LLMRequest) -> bool:
     )
 
 
-SCHEMA_SCRIPT = 'return agent("extract fields", agent="explore", schema=args["schema"])\n'
-
-
 def test_agent_schema_returns_structured_object(tmp_path: Path) -> None:
     provider = FakeLLMProvider(
         responses=[
@@ -145,15 +136,12 @@ def test_agent_schema_returns_structured_object(tmp_path: Path) -> None:
             _end("fin"),
         ]
     )
-    runner = _runner(_ws(tmp_path), provider)
-    try:
-        result = runner.execute()
-        assert result.status == "terminal"
-        orch_id = _child_ids(runner, runner.task_id)[0]
-        # agent(schema=...) returned the structured_output call's arguments.
-        assert _answer(runner, orch_id) == {"title": "Report", "count": 3}
-    finally:
-        runner.shutdown()
+    host, driver = _session(_ws(tmp_path), provider)
+    out = driver.start(goal="structured workflow", agent="main")
+    assert out.status == "terminal"
+    orch_id = _child_ids(host, out.task_id)[0]
+    # agent(schema=...) returned the structured_output call's arguments.
+    assert _answer(host, orch_id) == {"title": "Report", "count": 3}
 
 
 def test_nudge_then_success(tmp_path: Path) -> None:
@@ -167,18 +155,15 @@ def test_nudge_then_success(tmp_path: Path) -> None:
             _end("fin"),
         ]
     )
-    runner = _runner(_ws(tmp_path), provider)
-    try:
-        result = runner.execute()
-        assert result.status == "terminal"
-        orch_id = _child_ids(runner, runner.task_id)[0]
-        worker_id = _child_ids(runner, orch_id)[0]
-        assert _answer(runner, orch_id) == {"ok": True}
-        # The helper completed (not failed) after the nudges.
-        wtypes = [e.type for e in runner.event_log.read(worker_id)]
-        assert "TaskCompleted" in wtypes and "TaskFailed" not in wtypes
-    finally:
-        runner.shutdown()
+    host, driver = _session(_ws(tmp_path), provider)
+    out = driver.start(goal="structured workflow", agent="main")
+    assert out.status == "terminal"
+    orch_id = _child_ids(host, out.task_id)[0]
+    worker_id = _child_ids(host, orch_id)[0]
+    assert _answer(host, orch_id) == {"ok": True}
+    # The helper completed (not failed) after the nudges.
+    wtypes = [e.type for e in host.event_log.read(worker_id)]
+    assert "TaskCompleted" in wtypes and "TaskFailed" not in wtypes
 
 
 def test_two_nudges_then_helper_fails(tmp_path: Path) -> None:
@@ -199,27 +184,24 @@ def test_two_nudges_then_helper_fails(tmp_path: Path) -> None:
             _end("fin"),
         ]
     )
-    runner = _runner(_ws(tmp_path), provider)
-    try:
-        result = runner.execute()
-        assert result.status == "terminal"
-        orch_id = _child_ids(runner, runner.task_id)[0]
-        worker_id = _child_ids(runner, orch_id)[0]
-        wfailed = [
-            e for e in runner.event_log.read(worker_id) if e.type == "TaskFailed"
-        ]
-        assert wfailed, "helper should have failed after exhausting nudges"
-        assert "structured_output" in wfailed[-1].payload.reason
-        assert str(MAX_STRUCTURED_OUTPUT_NUDGES) in wfailed[-1].payload.reason
-        # The failed helper halts the workflow, with the child's reason surfaced.
-        ofailed = [
-            e for e in runner.event_log.read(orch_id) if e.type == "TaskFailed"
-        ]
-        assert ofailed, "a failed helper must halt the workflow"
-        assert "workflow halted" in ofailed[-1].payload.reason
-        assert "structured_output" in ofailed[-1].payload.reason
-    finally:
-        runner.shutdown()
+    host, driver = _session(_ws(tmp_path), provider)
+    out = driver.start(goal="structured workflow", agent="main")
+    assert out.status == "terminal"
+    orch_id = _child_ids(host, out.task_id)[0]
+    worker_id = _child_ids(host, orch_id)[0]
+    wfailed = [
+        e for e in host.event_log.read(worker_id) if e.type == "TaskFailed"
+    ]
+    assert wfailed, "helper should have failed after exhausting nudges"
+    assert "structured_output" in wfailed[-1].payload.reason
+    assert str(MAX_STRUCTURED_OUTPUT_NUDGES) in wfailed[-1].payload.reason
+    # The failed helper halts the workflow, with the child's reason surfaced.
+    ofailed = [
+        e for e in host.event_log.read(orch_id) if e.type == "TaskFailed"
+    ]
+    assert ofailed, "a failed helper must halt the workflow"
+    assert "workflow halted" in ofailed[-1].payload.reason
+    assert "structured_output" in ofailed[-1].payload.reason
 
 
 def test_no_schema_helper_unchanged(tmp_path: Path) -> None:
@@ -230,16 +212,13 @@ def test_no_schema_helper_unchanged(tmp_path: Path) -> None:
             _end("fin"),
         ]
     )
-    runner = _runner(_ws(tmp_path), provider)
-    try:
-        result = runner.execute()
-        assert result.status == "terminal"
-        orch_id = _child_ids(runner, runner.task_id)[0]
-        # Plain agent() returns the end_turn text; no structured_output anywhere.
-        assert _answer(runner, orch_id) == "plain text answer"
-        assert not any(_has_structured_output(r) for r in provider.received_requests)
-    finally:
-        runner.shutdown()
+    host, driver = _session(_ws(tmp_path), provider)
+    out = driver.start(goal="structured workflow", agent="main")
+    assert out.status == "terminal"
+    orch_id = _child_ids(host, out.task_id)[0]
+    # Plain agent() returns the end_turn text; no structured_output anywhere.
+    assert _answer(host, orch_id) == "plain text answer"
+    assert not any(_has_structured_output(r) for r in provider.received_requests)
 
 
 def test_structured_output_only_visible_to_that_helper(tmp_path: Path) -> None:
@@ -256,12 +235,10 @@ def test_structured_output_only_visible_to_that_helper(tmp_path: Path) -> None:
             _end("fin"),
         ]
     )
-    runner = _runner(_ws(tmp_path), provider)
-    try:
-        runner.execute()
-        # Exactly ONE request (the schema helper's) carried structured_output;
-        # the parent's and the plain helper's requests did not.
-        carried = [r for r in provider.received_requests if _has_structured_output(r)]
-        assert len(carried) == 1
-    finally:
-        runner.shutdown()
+    host, driver = _session(_ws(tmp_path), provider)
+    out = driver.start(goal="structured workflow", agent="main")
+    assert out.status == "terminal"
+    # Exactly ONE request (the schema helper's) carried structured_output;
+    # the parent's and the plain helper's requests did not.
+    carried = [r for r in provider.received_requests if _has_structured_output(r)]
+    assert len(carried) == 1

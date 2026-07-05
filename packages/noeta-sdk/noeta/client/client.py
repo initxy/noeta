@@ -4,7 +4,8 @@
 live :class:`SdkHost` + :class:`~noeta.execution.driver.InteractionDriver`
 pair and exposes the full conversation command surface
 (``start`` / ``send_goal`` / ``approve`` / ``deny`` / ``answer`` /
-``cancel`` / ``close`` / ``reopen``) as 1:1 pass-throughs.
+``deliver_event`` / ``cancel`` / ``close`` / ``reopen``) as 1:1
+pass-throughs.
 
 ``query`` is the sugar surface for library users who just want a single
 goal driven to its terminal: it creates a temporary ``Client`` with
@@ -513,6 +514,26 @@ class Client:
             answered_by=answered_by,
         )
 
+    def deliver_event(
+        self,
+        task_id: str,
+        *,
+        event_kind: str,
+        payload: Any = None,
+    ) -> Any:
+        """Deliver an external event to a ``wait_external``-suspended task
+        (driver ``deliver_event``).
+
+        Wakes a task suspended on ``ExternalEvent(event_kind)`` and drives the
+        resumed turn. ``payload`` (an optional JSON value) rides the resumed
+        turn as an ``origin="system"`` message — never the wake event itself.
+        A task not waiting on this ``event_kind`` (including a repeat delivery
+        after the wake was consumed) raises the typed ``NotResumableError``.
+        """
+        return self._driver.deliver_event(
+            task_id=task_id, event_kind=event_kind, payload=payload
+        )
+
     # -- seed / drive split (async transports) -------------------------------
     #
     # The one-call verbs above run the whole turn on the caller's thread. An
@@ -611,6 +632,19 @@ class Client:
             question_id=question_id,
             answers=answers,
             answered_by=answered_by,
+        )
+
+    def seed_deliver_event(
+        self,
+        task_id: str,
+        *,
+        event_kind: str,
+        payload: Any = None,
+    ) -> Any:
+        """Validate + seed an external-event resume turn (driver
+        ``seed_deliver_event``)."""
+        return self._driver.seed_deliver_event(
+            task_id, event_kind=event_kind, payload=payload
         )
 
     def drive_seeded(self, seeded: Any) -> Any:
