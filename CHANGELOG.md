@@ -8,6 +8,15 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-07-05
+
+### Changed
+
+- `psycopg[binary]` is now a regular dependency of `noeta-runtime` (the
+  `postgres` extra is gone): the Postgres storage backend works out of the
+  box, with no system libpq required. Installs that used
+  `noeta-runtime[postgres]` keep working — the extra name is simply ignored.
+
 ## [0.1.4] - 2026-07-05
 
 ### Added
@@ -119,7 +128,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/initxy/noeta/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/initxy/noeta/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/initxy/noeta/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/initxy/noeta/compare/v0.1.1...v0.1.2

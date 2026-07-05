@@ -14,10 +14,10 @@ lock for the Dispatcher state machine) so the read-modify-write blocks
 (``MAX(seq)+1`` allocation, FIFO ``ready_order`` assignment, wake
 matching) keep the exact serial semantics the contract pins.
 
-``psycopg`` is imported lazily (module import time here, but this
-sub-package itself is only imported by wiring that chose Postgres), so
-the core wheel carries no hard psycopg dependency — install
-``noeta-runtime[postgres]``.
+``psycopg`` ships as a regular noeta-runtime dependency (the
+``[binary]`` flavor, bundling libpq, so Postgres works out of the box);
+this sub-package is still only imported by wiring that chose Postgres,
+keeping cold imports cheap.
 
 Production code must depend on the L0 Protocols only; the
 ``storage-adapters-isolated`` import-linter contract blocks kernel
