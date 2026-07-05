@@ -2,19 +2,27 @@
 
 By default Noeta runs with in-memory storage — conversations and the
 session list disappear when the process exits. To persist sessions across
-restarts, point the backend at a SQLite file.
+restarts, point the backend at a storage URL: a SQLite file path or a
+PostgreSQL DSN.
 
-## Enabling SQLite persistence
+## Enabling persistence
 
 ### Via env var
 
 ```bash
-NOETA_AGENT_SQLITE=./sessions.sqlite python -m noeta.agent
+# SQLite file
+NOETA_AGENT_STORAGE=./sessions.sqlite python -m noeta.agent
+
+# PostgreSQL (requires `pip install noeta-runtime[postgres]`)
+NOETA_AGENT_STORAGE=postgresql://user:pass@localhost:5432/noeta python -m noeta.agent
 ```
+
+The legacy spelling `NOETA_AGENT_SQLITE` still works for file paths.
 
 ### Via config file
 
-Add `sqlite_path` to your `NOETA_AGENT_CONFIG` JSON:
+Add `storage_url` to your `NOETA_AGENT_CONFIG` JSON (the legacy key
+`sqlite_path` is still accepted):
 
 ```json
 {
@@ -23,7 +31,7 @@ Add `sqlite_path` to your `NOETA_AGENT_CONFIG` JSON:
   "base_url": "https://api.openai.com/v1",
   "api_key": "<your-key>",
   "workspace_dir": ".",
-  "sqlite_path": "./sessions.sqlite"
+  "storage_url": "./sessions.sqlite"
 }
 ```
 
@@ -38,7 +46,7 @@ yourself and pass it through `HostConfig`:
 
 ```python
 from pathlib import Path
-from noeta.agent.host.storage import open_sqlite_storage
+from noeta.agent.host.storage import open_durable_storage
 from noeta.sdk import Client, HostConfig, Options
 
 options = Options(
@@ -48,7 +56,8 @@ options = Options(
     permission_mode="bypassPermissions",
 )
 
-(event_log, content_store, dispatcher), storage_close = open_sqlite_storage(
+# A sqlite path or a postgresql:// DSN — same call either way.
+(event_log, content_store, dispatcher), storage_close = open_durable_storage(
     "./sessions.sqlite"
 )
 
@@ -76,22 +85,34 @@ finally:
 
 ## What gets stored
 
-A single SQLite file backs all three storage adapters:
+One SQLite file — or one PostgreSQL database — backs all three storage
+adapters (`Sqlite*` / `Postgres*` prefixes, same behavioural contract):
 
 | Adapter | What it stores |
 | --- | --- |
-| `SqliteEventLog` | Per-task `EventEnvelope` records — the full history of every step (messages, tool calls, decisions, state changes). |
-| `SqliteContentStore` | Content-addressed blobs larger than the 4 KB event-payload cap: full LLM request/response bodies, large tool outputs, uploaded images. |
-| `SqliteDispatcher` | Worker lease state + wake event queue. Lets a restarted process reclaim stale leases and deliver pending wake events. |
+| `SqliteEventLog` / `PostgresEventLog` | Per-task `EventEnvelope` records — the full history of every step (messages, tool calls, decisions, state changes). |
+| `SqliteContentStore` / `PostgresContentStore` | Content-addressed blobs larger than the 4 KB event-payload cap: full LLM request/response bodies, large tool outputs, uploaded images. |
+| `SqliteDispatcher` / `PostgresDispatcher` | Worker lease state + wake event queue. Lets a restarted process reclaim stale leases and deliver pending wake events. |
 
-The file is created automatically on first write. Use `:memory:` to get an
-in-memory SQLite instance — useful for tests.
+The SQLite file is created automatically on first write; the PostgreSQL
+schema is created automatically on first connect (the DSN's database must
+already exist). Use `:memory:` to get an in-memory SQLite instance —
+useful for tests.
+
+## Choosing a backend
+
+- **SQLite** is the zero-setup default for a single machine: one file,
+  no server, full durability (`synchronous=FULL`, WAL).
+- **PostgreSQL** puts the same three adapters on a database server —
+  choose it when the storage should live off-box (managed database,
+  backups, operational tooling). Install the extra:
+  `pip install noeta-runtime[postgres]`.
 
 ## How fold recovery works
 
-When the backend starts with `sqlite_path` set, it:
+When the backend starts with `storage_url` set, it:
 
-1. Opens the three adapters over the same file.
+1. Opens the three adapters over the same file/database.
 2. The `GET /tasks` read view folds each task's envelope stream into a
    status/title/closed summary — the sidebar session list appears
    immediately.
@@ -106,10 +127,11 @@ fold functions used during live execution.
 
 ## Key points
 
-- **`NOETA_AGENT_SQLITE`** is the env var; `sqlite_path` is the config
-  file key. The SDK default is in-memory (no file).
-- **One file, three adapters.** `open_sqlite_storage()` constructs all
-  three together so the event log already holds the dispatcher as its
+- **`NOETA_AGENT_STORAGE`** is the env var; `storage_url` is the config
+  file key (legacy `NOETA_AGENT_SQLITE` / `sqlite_path` still accepted).
+  The SDK default is in-memory (no file).
+- **One database, three adapters.** `open_durable_storage()` constructs
+  all three together so the event log already holds the dispatcher as its
   `lease_validator`.
 - **Fold is deterministic.** Replaying the same envelopes always
   produces the same state — no separate "state table" to drift.
@@ -118,9 +140,10 @@ fold functions used during live execution.
 
 ## Source
 
-- `apps/noeta-agent/noeta/agent/host/storage.py` — `open_sqlite_storage()`
-- `apps/noeta-agent/noeta/agent/backend/lifecycle.py` — `BackendConfig.from_env()` (`NOETA_AGENT_SQLITE` → `sqlite_path`)
+- `apps/noeta-agent/noeta/agent/host/storage.py` — `open_durable_storage()`
+- `apps/noeta-agent/noeta/agent/backend/lifecycle.py` — `BackendConfig.from_env()` (`NOETA_AGENT_STORAGE` → `storage_url`)
 - SQLite adapters: `packages/noeta-runtime/noeta/storage/sqlite/`
+- PostgreSQL adapters: `packages/noeta-runtime/noeta/storage/postgres/`
 - `HostConfig`: `packages/noeta-sdk/noeta/client/host_config.py`
 - See also: [Concepts](../concepts.md#eventlog),
   [Configuration](../reference/configuration.md),

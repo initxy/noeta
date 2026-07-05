@@ -22,7 +22,7 @@ Precedence (low → high):
 | `NOETA_AGENT_WORKSPACE` | path | `$PWD` | Default workspace directory (the agent's file root). |
 | `NOETA_AGENT_WORKSPACES_FILE` | path | `~/.noeta/workspaces.json` | Workspace (project) registry JSON store. |
 | `NOETA_AGENT_MCP_FILE` | path | `~/.noeta/mcp_servers.json` | MCP server connector registry JSON. |
-| `NOETA_AGENT_SQLITE` | path | *(none)* | SQLite file for durable EventLog + ContentStore + Dispatcher. Unset = in-memory (no persistence). |
+| `NOETA_AGENT_STORAGE` | URL | *(none)* | Durable storage for EventLog + ContentStore + Dispatcher: a SQLite file path or a `postgresql://` DSN (needs `noeta-runtime[postgres]`). Unset = in-memory (no persistence). Legacy `NOETA_AGENT_SQLITE` still accepted. |
 | `NOETA_AGENT_PROVIDER` | string | `stub` | Provider adapter: `stub` (offline), `openai`, `openai-responses`, `anthropic`. |
 | `NOETA_AGENT_MODEL` | string | *(none)* | Model identifier served by the configured provider. |
 | `NOETA_AGENT_MODELS` | string | *(none)* | Comma-separated list of selectable models (enables per-turn model switching in the UI). |
@@ -51,7 +51,7 @@ hold a single JSON object. All keys are optional.
 | `workspace_dir` | string | `$PWD` | Default workspace directory. |
 | `workspaces_registry_path` | string | `~/.noeta/workspaces.json` | Workspace registry store. |
 | `mcp_servers_registry_path` | string | `~/.noeta/mcp_servers.json` | MCP connector registry. |
-| `sqlite_path` | string | *(none)* | Durable storage path (see env var above). |
+| `storage_url` | string | *(none)* | Durable storage URL (see env var above). Legacy key `sqlite_path` still accepted. |
 | `provider_id` | string | `stub` | Provider adapter id. |
 | `model` | string | *(none)* | Model id. |
 | `models` | list[string] | `[]` | Selectable model list. |
@@ -73,7 +73,7 @@ hold a single JSON object. All keys are optional.
   "base_url": "https://api.openai.com/v1",
   "api_key": "sk-…",
   "workspace_dir": ".",
-  "sqlite_path": ":memory:",
+  "storage_url": ":memory:",
   "host": "127.0.0.1",
   "port": 8765
 }

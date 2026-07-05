@@ -137,7 +137,7 @@ Edit `examples/openai-compatible/config.json`:
   "base_url": "https://api.openai.com/v1",
   "api_key": "<your-api-key>",
   "workspace_dir": ".",
-  "sqlite_path": ":memory:",
+  "storage_url": ":memory:",
   "host": "127.0.0.1",
   "port": 8765
 }
