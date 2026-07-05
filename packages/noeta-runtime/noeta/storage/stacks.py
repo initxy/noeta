@@ -89,9 +89,8 @@ def build_sqlite_stack(path: str) -> tuple[EventLogFull, ContentStore, Dispatche
 
 
 def build_postgres_stack(dsn: str) -> tuple[EventLogFull, ContentStore, Dispatcher]:
-    # Local import: psycopg is an optional dependency
-    # (``noeta-runtime[postgres]``); only a caller that actually chose a
-    # Postgres DSN pays for it — or hits the ImportError explaining it.
+    # Local import keeps cold ``import noeta.storage.stacks`` cheap;
+    # only a caller that actually chose a Postgres DSN pays for psycopg.
     from noeta.storage.postgres import (
         PostgresContentStore,
         PostgresDispatcher,

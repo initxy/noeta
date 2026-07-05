@@ -13,7 +13,7 @@ PostgreSQL DSN.
 # SQLite file
 NOETA_AGENT_STORAGE=./sessions.sqlite python -m noeta.agent
 
-# PostgreSQL (requires `pip install noeta-runtime[postgres]`)
+# PostgreSQL (the psycopg driver ships with noeta-runtime)
 NOETA_AGENT_STORAGE=postgresql://user:pass@localhost:5432/noeta python -m noeta.agent
 ```
 
@@ -105,8 +105,8 @@ useful for tests.
   no server, full durability (`synchronous=FULL`, WAL).
 - **PostgreSQL** puts the same three adapters on a database server —
   choose it when the storage should live off-box (managed database,
-  backups, operational tooling). Install the extra:
-  `pip install noeta-runtime[postgres]`.
+  backups, operational tooling). The driver (`psycopg[binary]`, bundled
+  libpq) ships with noeta-runtime — nothing extra to install.
 
 ## How fold recovery works
 

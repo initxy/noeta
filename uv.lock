@@ -17,7 +17,6 @@ members = [
 dev = [
     { name = "import-linter", specifier = ">=2.0" },
     { name = "mypy", specifier = ">=1.10" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-cov", specifier = ">=5.0" },
     { name = "respx", specifier = ">=0.23.1" },
@@ -530,7 +529,7 @@ wheels = [
 
 [[package]]
 name = "noeta-agent"
-version = "0.1.4"
+version = "0.1.5"
 source = { editable = "apps/noeta-agent" }
 dependencies = [
     { name = "noeta-runtime" },
@@ -545,27 +544,22 @@ requires-dist = [
 
 [[package]]
 name = "noeta-runtime"
-version = "0.1.4"
+version = "0.1.5"
 source = { editable = "packages/noeta-runtime" }
 dependencies = [
     { name = "httpx" },
-]
-
-[package.optional-dependencies]
-postgres = [
-    { name = "psycopg" },
+    { name = "psycopg", extra = ["binary"] },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "psycopg", marker = "extra == 'postgres'", specifier = ">=3.2" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
 ]
-provides-extras = ["postgres"]
 
 [[package]]
 name = "noeta-sdk"
-version = "0.1.4"
+version = "0.1.5"
 source = { editable = "packages/noeta-sdk" }
 dependencies = [
     { name = "noeta-runtime" },
