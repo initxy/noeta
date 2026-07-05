@@ -13,7 +13,7 @@ NOETA_AGENT_WORKSPACE=./my-project \
 NOETA_AGENT_PROVIDER=anthropic \
 NOETA_AGENT_MODEL=claude-sonnet-4-5-20250929 \
 NOETA_AGENT_API_KEY=sk-ant-… \
-NOETA_AGENT_SQLITE_PATH=./my-project/session.sqlite \
+NOETA_AGENT_STORAGE=./my-project/session.sqlite \
 NOETA_AGENT_WRITE_MODE=apply \
 python -m noeta.agent
 ```
@@ -23,7 +23,7 @@ Key variables:
 | Variable | Why set it |
 | --- | --- |
 | `NOETA_AGENT_WORKSPACE` | The directory the agent reads and edits. Defaults to `.`. |
-| `NOETA_AGENT_SQLITE_PATH` | Durable storage for the EventLog. Without this, sessions die with the process. |
+| `NOETA_AGENT_STORAGE` | Durable storage for the EventLog. Without this, sessions die with the process. |
 | `NOETA_AGENT_WRITE_MODE` | `apply` lets the agent actually write files. Default `dry_run` proposes diffs only. |
 
 Open the printed URL in your browser and navigate to `/chat`.
