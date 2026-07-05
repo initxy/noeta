@@ -8,6 +8,8 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-07-05
+
 ### Added
 
 - External-event delivery, end to end: `POST /tasks/{id}/events` and
@@ -173,7 +175,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/initxy/noeta/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/initxy/noeta/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/initxy/noeta/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/initxy/noeta/compare/v0.1.2...v0.1.3
