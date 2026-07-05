@@ -26,6 +26,7 @@ from noeta.protocols.wake import (
 )
 from noeta.storage.memory import InMemoryDispatcher
 from noeta.storage.sqlite.dispatcher import SqliteDispatcher
+from tests._pg import isolated_schema_dsn, postgres_param
 
 
 # ---------------------------------------------------------------------------
@@ -33,8 +34,15 @@ from noeta.storage.sqlite.dispatcher import SqliteDispatcher
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(params=["memory", "sqlite"])
+@pytest.fixture(params=["memory", "sqlite", postgres_param()])
 def make_dispatcher(request):
+    # Postgres: every factory call gets its own fresh schema on the
+    # configured server so it is as isolated and empty as a fresh
+    # InMemory / sqlite ``:memory:`` instance.
+    from contextlib import ExitStack
+
+    stack = ExitStack()
+
     def _make_in_memory(
         *,
         now: Callable[[], float] | None = None,
@@ -58,7 +66,28 @@ def make_dispatcher(request):
             max_fail_attempts=max_fail_attempts,
         )
 
-    builder = _make_in_memory if request.param == "memory" else _make_sqlite
+    def _make_postgres(
+        *,
+        now: Callable[[], float] | None = None,
+        heartbeat_max: int = 360,
+        max_fail_attempts: int = 3,
+    ) -> Any:
+        from noeta.storage.postgres.dispatcher import PostgresDispatcher
+
+        dsn = stack.enter_context(isolated_schema_dsn())
+        return PostgresDispatcher(
+            dsn,
+            now=now,
+            heartbeat_max=heartbeat_max,
+            max_fail_attempts=max_fail_attempts,
+        )
+
+    if request.param == "memory":
+        builder = _make_in_memory
+    elif request.param == "sqlite":
+        builder = _make_sqlite
+    else:
+        builder = _make_postgres
     instances: list[Any] = []
 
     def _factory(**kwargs: Any) -> Any:
@@ -72,6 +101,7 @@ def make_dispatcher(request):
         close = getattr(disp, "close", None)
         if callable(close):
             close()
+    stack.close()
 
 
 # ---------------------------------------------------------------------------

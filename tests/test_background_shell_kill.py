@@ -117,7 +117,10 @@ def test_kill_terminates_a_long_running_process(tmp_path: Path) -> None:
     start = time.monotonic()
     result = reg.kill(job_id)
     # kill returns promptly (does NOT block on the grace period / wait()).
-    assert time.monotonic() - start < 0.5
+    # The discriminating threshold is DEFAULT_KILL_GRACE_S (5s) / the 30s
+    # sleep; 2s keeps that discrimination sharp while tolerating a loaded
+    # CI box (thread spawn under load occasionally blew a 0.5s bound).
+    assert time.monotonic() - start < 2.0
     assert result["job_id"] == job_id
     assert result["status"] in ("killing", "killed")
     state = _await_terminal(reg, job_id)

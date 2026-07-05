@@ -10,6 +10,22 @@ jobs:
   phase0-kernel:
     name: Phase 0 kernel — tests + lint
     runs-on: ubuntu-latest
+    services:
+      # Live server for the Postgres storage adapters: the storage
+      # contract suites run their "postgres" param when
+      # NOETA_TEST_POSTGRES_DSN is set (skipped otherwise, e.g. locally
+      # without a server).
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -44,6 +60,8 @@ jobs:
         # coverage thresholds asserted in tests/test_phase0_coverage_gaps.py
         # plus the integration suite. Repo-wide we require >= 85% so a
         # broad regression cannot sneak in.
+        env:
+          NOETA_TEST_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/postgres
         run: uv run pytest --cov=noeta --cov-report=term --cov-fail-under=85
 
       - name: mypy strict on protocols

@@ -71,12 +71,15 @@ class BackendConfig:
         default_factory=lambda: Path("~/.noeta/workspaces.json").expanduser()
     )
     mcp_servers_path: Path = _DEFAULT_MCP_FILE
-    #: A sqlite file path enabling durable
+    #: A storage URL enabling durable
     #: storage (the ``HostConfig`` triple) so conversations + the session list
-    #: survive restarts. ``None`` ⇒ the SDK's in-memory default (single-run,
+    #: survive restarts: a sqlite file path or a ``postgresql://`` DSN.
+    #: ``None`` ⇒ the SDK's in-memory default (single-run,
     #: which is enough for the single-port preview / MCP — no cross-process
     #: need; history retention is the only thing that needs durability).
-    sqlite_path: Optional[str] = None
+    #: Env ``NOETA_AGENT_STORAGE`` / config key ``storage_url``; the legacy
+    #: ``NOETA_AGENT_SQLITE`` / ``sqlite_path`` spellings stay accepted.
+    storage_url: Optional[str] = None
     #: Provider wiring (mirrors the legacy ``RunnerConfig`` single-provider
     #: path). ``"stub"`` ⇒ the offline two-turn provider; ``openai`` /
     #: ``openai-responses`` / ``anthropic`` reach a real ``noeta.sdk.providers``
@@ -136,7 +139,9 @@ class BackendConfig:
         workspace = pick("WORKSPACE", "workspace_dir")
         workspaces_file = pick("WORKSPACES_FILE", "workspaces_registry_path")
         mcp_file = pick("MCP_FILE", "mcp_servers_registry_path")
-        sqlite = pick("SQLITE", "sqlite_path")
+        # New spelling wins; the legacy sqlite-only spelling keeps old
+        # configs working (same value semantics — a file path is sqlite).
+        storage = pick("STORAGE", "storage_url") or pick("SQLITE", "sqlite_path")
         models = _normalize_models(pick("MODELS", "models"))
         headers = file_vals.get("default_headers") or {}
         max_tokens = pick("MAX_TOKENS", "max_tokens")
@@ -164,7 +169,7 @@ class BackendConfig:
             mcp_servers_path=Path(mcp_file).expanduser()
             if mcp_file
             else _DEFAULT_MCP_FILE,
-            sqlite_path=(str(Path(sqlite).expanduser()) if sqlite else None),
+            storage_url=_normalize_storage_url(storage),
             provider_id=pick("PROVIDER", "provider_id", "stub"),
             api_key=pick("API_KEY", "api_key"),
             base_url=pick("BASE_URL", "base_url"),
@@ -175,6 +180,21 @@ class BackendConfig:
             workflow_enabled=workflow_enabled,
             background_drive=background_drive,
         )
+
+
+def _normalize_storage_url(raw: Any) -> Optional[str]:
+    """Normalize the configured storage URL.
+
+    A ``postgresql://`` DSN and the ``:memory:`` sentinel pass through
+    untouched; anything else is a sqlite file path and gets ``~`` expanded
+    (the historical behavior of ``sqlite_path``).
+    """
+    if not raw:
+        return None
+    value = str(raw)
+    if value == ":memory:" or value.startswith(("postgresql://", "postgres://")):
+        return value
+    return str(Path(value).expanduser())
 
 
 def _normalize_models(raw: Any) -> tuple[str, ...]:
@@ -353,15 +373,16 @@ def serve_backend(
                 config.workspaces_path, default_dir=config.workspace_dir
             )
             workspace_registry.load()
-        # Durable storage (D3): a configured sqlite path supplies the HostConfig
-        # triple so conversations + the session list survive restarts; otherwise
-        # the SDK builds its in-memory default (single-run).
+        # Durable storage (D3): a configured storage URL (sqlite file path or
+        # postgresql:// DSN) supplies the HostConfig triple so conversations +
+        # the session list survive restarts; otherwise the SDK builds its
+        # in-memory default (single-run).
         event_log = content_store = dispatcher = None
-        if config.sqlite_path:
-            from noeta.agent.host.storage import open_sqlite_storage
+        if config.storage_url:
+            from noeta.agent.host.storage import open_durable_storage
 
             (event_log, content_store, dispatcher), storage_close = (
-                open_sqlite_storage(config.sqlite_path)
+                open_durable_storage(config.storage_url)
             )
         host_config = HostConfig(
             app_gateway=app_gateway,
