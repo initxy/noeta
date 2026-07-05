@@ -35,6 +35,8 @@ from noeta.protocols.canonical import to_canonical_bytes
 from noeta.context.content_channel import ContentKindSpec
 from noeta.context.environment import EnvironmentSnapshot
 from noeta.context.instructions import InstructionsSnapshot
+from noeta.context.memory import MemoryEntries
+from noeta.execution import memory as execution_memory
 from noeta.execution.builder import build_session_inputs, derive_compaction_config
 from noeta.execution.environment import load_environment
 from noeta.execution.host import AgentRegistryProtocol
@@ -42,6 +44,7 @@ from noeta.execution.instructions import load_instructions
 from noeta.execution.resolver import GenericEngineResolver
 from noeta.policies.orchestration import (
     OrchestrationPolicy,
+    StructuredOutputPolicy,
     WORKFLOW_SYSTEM_PROMPT,
 )
 from noeta.guards.budget import Budget
@@ -75,6 +78,7 @@ from noeta.runtime.file_checkpoint import FileCheckpointRegistry
 from noeta.tools.app import AppPreviewGateway
 from noeta.runtime.llm import RuntimeLLMClient
 from noeta.tools.fs import FsWriteMode, ShellMode
+from noeta.tools.memory import MemoryStore
 from noeta.tools.fs.shell import (
     build_allowlist,
     command_in_allowlist,
@@ -1246,6 +1250,7 @@ class SdkHost(GenericEngineResolver):
         mcp_aliases: tuple[str, ...] = (),
         effort: Optional[str] = None,
         task_id: Optional[str] = None,
+        structured_output_schema: Optional[dict[str, Any]] = None,
     ) -> Engine:
         spec = agent
         # ``workspace`` is now the per-session workspace **absolute
@@ -1382,6 +1387,13 @@ class SdkHost(GenericEngineResolver):
             # child is intercepted in _build_orchestration_engine, so it never
             # reaches this builder.
             workflow_enabled=self.workflow_allowed and delegation_enabled,
+            # Per-helper structured output (port of the deleted runner's
+            # ``_build_child_engine`` wiring): a workflow helper spawned via
+            # ``agent(goal, schema=...)`` mounts the ``structured_output``
+            # control schema (its ``parameters`` = the declared JSON Schema).
+            # ``None`` (every non-helper build) keeps the tool set + View
+            # stable hash byte-identical.
+            structured_output_schema=structured_output_schema,
             memory_enabled=spec.capabilities.memory,
             memory_dir=self.memory_dir,
             global_memory_dir=self.global_memory_dir,
@@ -1430,6 +1442,16 @@ class SdkHost(GenericEngineResolver):
         policy: Policy = inputs.policy_factory(llm)
         if policy_wrapper is not None:
             policy = policy_wrapper(policy)
+        # Per-helper structured output: the "structured receipt"
+        # wrapper intercepts the helper's decisions — a ``structured_output``
+        # call becomes the helper's final answer; an end_turn without one is
+        # nudged (at most twice), then failed. Wrapped OUTERMOST; only the
+        # subtask drain ever passes a schema, and a child engine never carries
+        # the multi-turn ``policy_wrapper``, so the two wrappers never stack.
+        if structured_output_schema is not None:
+            policy = StructuredOutputPolicy(
+                inner=policy, schema=structured_output_schema
+            )
         return Engine(
             event_log=self.event_log,
             content_store=self.content_store,
@@ -1597,6 +1619,51 @@ class SdkHost(GenericEngineResolver):
                 workspace_dir, override_path=self.instructions_file
             )
         return environment, instructions
+
+    def memory_recall_context(
+        self, agent: str
+    ) -> Optional[tuple[MemoryStore, MemoryEntries]]:
+        """The (store, entries-snapshot) pair for ``agent``'s memory recall.
+
+        The seam the :class:`~noeta.execution.driver.InteractionDriver`'s seed
+        path (``seed_start`` / ``seed_send_goal``) reads to run the deleted
+        runner's prepare-time memory wiring: record the index resident
+        (``ContextContentRecorded`` kind=memory, policy=evolving) and route the
+        incoming goal through ``append_user_message_with_recall`` so hits land
+        as one ``origin="memory"`` turn. Retrieval therefore happens on the
+        WRITE side (at recording time), never at compose time — the composer
+        stays a pure function of folded state.
+
+        Returns ``None`` when the agent's spec lacks ``Capabilities.memory``
+        (only the ``main`` preset enables it), so a memory-off agent's stream
+        stays byte-identical to the pre-seam path. The store root resolution is
+        the SAME precedence :func:`~noeta.execution.builder.build_session_inputs`
+        uses for the tools + resident index (``memory_dir`` override >
+        ``global_memory_dir`` > the SDK global default), so recall reads exactly
+        the store the session's ``memory_write`` / ``memory_read`` tools use.
+        The global default is read late off the module (not from-imported) so a
+        test pinning ``noeta.execution.memory.DEFAULT_GLOBAL_MEMORY_DIR`` stays
+        hermetic. An empty / missing directory is a valid empty store
+        (``entries == ()``): the index record no-ops and recall never hits, so
+        the default flow pays zero bytes.
+        """
+        if agent == "unnamed" and self.unnamed_fallback is not None:
+            spec = self.unnamed_fallback
+        else:
+            spec = self._lookup_agent(agent, task_id="<unbound>")
+        if not spec.capabilities.memory:
+            return None
+        memory_root = (
+            self.memory_dir
+            if self.memory_dir is not None
+            else (
+                self.global_memory_dir
+                if self.global_memory_dir is not None
+                else execution_memory.DEFAULT_GLOBAL_MEMORY_DIR
+            )
+        )
+        store = execution_memory.load_memory_store(root=memory_root)
+        return store, store.entries()
 
     @staticmethod
     def _budget_for(spec_budget: BudgetSpec) -> Budget:

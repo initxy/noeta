@@ -42,9 +42,10 @@ from noeta.context.memory import (
 from noeta.core.engine import Engine
 from noeta.core.fold import apply_event
 from noeta.protocols.content_store import ContentStore
+from noeta.protocols.decisions import TaskStatePatch
 from noeta.protocols.event_log import EventLogWriter
 from noeta.protocols.events import ContextContentRecordedPayload
-from noeta.protocols.messages import Block, TextBlock
+from noeta.protocols.messages import Block, MessageOrigin, TextBlock
 from noeta.protocols.task import Task
 from noeta.tools.memory import MemoryStore
 
@@ -164,6 +165,7 @@ def append_user_message_with_recall(
     lease_id: str,
     store: MemoryStore,
     trace_id: Optional[str] = None,
+    origin: Optional[MessageOrigin] = None,
 ) -> Task:
     """The D6 v1 user-message intake seam: retrieve, then ledger both turns.
 
@@ -182,10 +184,17 @@ def append_user_message_with_recall(
     appends ``content`` as-is; the memory-hit turn still appends the
     single ``[TextBlock(format_recall_text(hits))]`` with
     ``origin="memory"``.
+
+    ``origin`` is forwarded to the incoming turn's append (the
+    driver's ``goal_origin`` passthrough — e.g. an MCP-prompt-expanded goal
+    arrives ``origin="system"``); the recall turn's ``origin="memory"`` tag
+    is this seam's own and never varies. ``None`` (a human-typed goal)
+    keeps the human turn's bytes identical to the plain append.
     """
     hits = recall_memories(store, _recall_key(content))
     task = engine.append_user_message(
-        task, content=content, lease_id=lease_id, trace_id=trace_id
+        task, content=content, lease_id=lease_id, trace_id=trace_id,
+        origin=origin,
     )
     if hits:
         task = engine.append_user_message(
@@ -205,14 +214,40 @@ class RecallGoalPrelude:
     Drop-in sibling of :class:`noeta.runtime.worker.AppendMessagePrelude`
     for memory-enabled sessions: a follow-up goal enters the ledger
     through :func:`append_user_message_with_recall`, so resume turns get
-    the same D6 intake the opening turn got. A goal with no hits ledgers
-    exactly the plain-prelude bytes.
+    the same D6 intake the opening turn got (the SDK port of the deleted
+    runner's ``_goal_prelude`` seam). A goal with no hits ledgers exactly
+    the plain-prelude bytes.
+
+    ``origin`` / ``attachment_texts`` / ``activate_skills`` mirror
+    :class:`~noeta.runtime.worker.AppendMessagePrelude` field-for-field
+    (attachments seed BEFORE the goal as their own ``origin="system"``
+    messages and never feed the recall key; the skill-activation patch
+    lands AFTER, goal-then-patch order) — only the goal append itself is
+    routed through the recall seam, so a memory-enabled session's
+    ``send_goal`` differs from the plain prelude solely by the optional
+    ``origin="memory"`` follow-up turn.
     """
 
     content: list[Block]
     store: MemoryStore
+    origin: Optional[MessageOrigin] = None
+    attachment_texts: tuple[str, ...] = ()
+    activate_skills: tuple[str, ...] = ()
 
     def __call__(self, engine: Any, task: Any, *, lease_id: str) -> Any:
-        return append_user_message_with_recall(
-            engine, task, content=self.content, lease_id=lease_id, store=self.store
+        for text in self.attachment_texts:
+            engine.append_user_message(
+                task, content=[TextBlock(text=text)], lease_id=lease_id,
+                origin="system",
+            )
+        task = append_user_message_with_recall(
+            engine, task, content=self.content, lease_id=lease_id,
+            store=self.store, origin=self.origin,
         )
+        if self.activate_skills:
+            task = engine.apply_state_patch(
+                task,
+                patch=TaskStatePatch(activate_skills=list(self.activate_skills)),
+                lease_id=lease_id,
+            )
+        return task

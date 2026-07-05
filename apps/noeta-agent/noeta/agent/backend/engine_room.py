@@ -10,8 +10,9 @@ dependency the backend never names.
 :class:`EngineRoom` wraps one noeta.sdk :class:`~noeta.sdk.Client` over a compiled
 agent registry (the official presets by default) and exposes:
 
-* the eight conversation **verbs** (start / send_goal / approve / deny / answer
-  / cancel / close / reopen) the HTTP command endpoints (T5) translate into; and
+* the conversation **verbs** (start / send_goal / approve / deny / answer /
+  deliver_event / cancel / close / reopen) the HTTP command endpoints (T5)
+  translate into; and
 * the canonical **EventEnvelope stream** (:meth:`events`) plus the human view
   (:meth:`messages`) the SSE layer (T5) multiplexes and the resource services
   (T6) reference.
@@ -333,6 +334,21 @@ class EngineRoom:
             )
             return
         self._client.answer(task_id, question_id=question_id, answers=answers)
+
+    def deliver_event(
+        self, task_id: str, *, event_kind: str, payload: Any = None
+    ) -> None:
+        """Deliver an external event to a ``wait_external``-suspended task."""
+        if self._background_drive:
+            self._spawn_drive(
+                self._client.seed_deliver_event(
+                    task_id, event_kind=event_kind, payload=payload
+                )
+            )
+            return
+        self._client.deliver_event(
+            task_id, event_kind=event_kind, payload=payload
+        )
 
     # -- background drive machinery -----------------------------------------
 
