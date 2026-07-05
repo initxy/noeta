@@ -1,6 +1,6 @@
 [project]
 name = "noeta-runtime"
-version = "0.1.3"
+version = "0.1.5"
 description = "Noeta runtime engine: the event-sourced kernel that hosts, records, and schedules agent execution in-process. The durable substrate underneath the SDK and the coding agent app."
 license = "Apache-2.0"
 authors = [{ name = "The Noeta Authors" }]
@@ -20,6 +20,10 @@ classifiers = [
 ]
 dependencies = [
     "httpx>=0.28.1",
+    # [binary] bundles libpq so the Postgres storage adapters work out of
+    # the box (the langchain-postgres / dbt pattern; the maintainer chose
+    # zero-setup over the psycopg "libraries depend on bare psycopg" advice).
+    "psycopg[binary]>=3.2",
 ]
 
 [project.urls]

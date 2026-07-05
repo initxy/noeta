@@ -24,32 +24,47 @@ from noeta.storage.memory import (
 
 __all__ = [
     "is_memory_path",
+    "is_postgres_url",
     "build_memory_stack",
+    "build_postgres_stack",
     "build_sqlite_stack",
     "open_storage_stack",
 ]
 
 
-def is_memory_path(sqlite_path: Optional[str]) -> bool:
+def is_memory_path(storage_path: Optional[str]) -> bool:
     """Treat ``None`` / ``":memory:"`` as the InMemory adapter stack."""
-    return sqlite_path is None or sqlite_path == ":memory:"
+    return storage_path is None or storage_path == ":memory:"
+
+
+def is_postgres_url(storage_path: str) -> bool:
+    """Treat a ``postgresql://`` / ``postgres://`` URL as the Postgres stack.
+
+    Anything else is a sqlite file path (the historical shape of the
+    parameter, kept as the fallback so existing configs stay valid).
+    """
+    return storage_path.startswith(("postgresql://", "postgres://"))
 
 
 def open_storage_stack(
-    sqlite_path: Optional[str],
+    storage_path: Optional[str],
 ) -> tuple[EventLogFull, ContentStore, Dispatcher]:
-    """Single helper that picks InMemory vs Sqlite based on ``sqlite_path``.
+    """Single helper that picks InMemory vs Postgres vs Sqlite by value.
 
-    Collapses the ``if is_memory_path(...): ... else: ...`` branch its callers
-    (the ``python -m noeta.agent`` runner and the test suite) would otherwise
-    repeat. Return type uses the existing L0 Protocols
-    (``EventLogFull / ContentStore / Dispatcher``) — no new "storage bundle"
-    dataclass is introduced.
+    ``storage_path`` is ``None`` / ``":memory:"`` for the InMemory stack,
+    a ``postgresql://`` DSN for the Postgres stack, and a file path for
+    the sqlite stack (the parameter's historical meaning). Collapses the
+    branch its callers (the ``python -m noeta.agent`` runner and the
+    test suite) would otherwise repeat. Return type uses the existing L0
+    Protocols (``EventLogFull / ContentStore / Dispatcher``) — no new
+    "storage bundle" dataclass is introduced.
     """
-    if is_memory_path(sqlite_path):
+    if is_memory_path(storage_path):
         return build_memory_stack()
-    assert sqlite_path is not None  # narrowed by is_memory_path
-    return build_sqlite_stack(sqlite_path)
+    assert storage_path is not None  # narrowed by is_memory_path
+    if is_postgres_url(storage_path):
+        return build_postgres_stack(storage_path)
+    return build_sqlite_stack(storage_path)
 
 
 def build_memory_stack() -> tuple[EventLogFull, ContentStore, Dispatcher]:
@@ -70,4 +85,19 @@ def build_sqlite_stack(path: str) -> tuple[EventLogFull, ContentStore, Dispatche
     dispatcher = SqliteDispatcher(path)
     event_log = SqliteEventLog(path, lease_validator=dispatcher)
     content_store = SqliteContentStore(path)
+    return event_log, content_store, dispatcher
+
+
+def build_postgres_stack(dsn: str) -> tuple[EventLogFull, ContentStore, Dispatcher]:
+    # Local import keeps cold ``import noeta.storage.stacks`` cheap;
+    # only a caller that actually chose a Postgres DSN pays for psycopg.
+    from noeta.storage.postgres import (
+        PostgresContentStore,
+        PostgresDispatcher,
+        PostgresEventLog,
+    )
+
+    dispatcher = PostgresDispatcher(dsn)
+    event_log = PostgresEventLog(dsn, lease_validator=dispatcher)
+    content_store = PostgresContentStore(dsn)
     return event_log, content_store, dispatcher
