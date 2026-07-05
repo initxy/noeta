@@ -52,6 +52,7 @@ from noeta.runtime.llm import RuntimeLLMClient
 from noeta.storage.stacks import (
     is_memory_path,
     build_memory_stack,
+    build_postgres_stack,
     build_sqlite_stack,
     open_storage_stack,
 )
@@ -69,6 +70,7 @@ __all__ = [
     "build_runtime",
     "build_tools",
     "build_memory_stack",
+    "build_postgres_stack",
     "build_sqlite_stack",
     "default_budget",
     "default_permission_policy",

@@ -20,7 +20,7 @@ NOETA_AGENT_PROVIDER=openai \
 NOETA_AGENT_MODEL=gpt-5.5 \
 NOETA_AGENT_BASE_URL=https://api.openai.com/v1 \
 NOETA_AGENT_API_KEY=sk-… \
-NOETA_AGENT_SQLITE_PATH=./session.sqlite \
+NOETA_AGENT_STORAGE=./session.sqlite \
 python -m noeta.agent
 # → noeta.agent serving at http://127.0.0.1:<port>/ ; chat at <url>/chat
 ```
@@ -45,7 +45,7 @@ recipe is `noeta.presets.main_options()` / `official_specs()`
 | `NOETA_AGENT_MODEL` | provider default | Model name passed to the provider |
 | `NOETA_AGENT_API_KEY` | — | Provider API key |
 | `NOETA_AGENT_BASE_URL` | provider default | Override base URL (e.g. for OpenAI-compatible endpoints) |
-| `NOETA_AGENT_SQLITE_PATH` | `:memory:` | Path to durable SQLite file; `:memory:` is dev/test only |
+| `NOETA_AGENT_STORAGE` | `:memory:` | Path to durable SQLite file; `:memory:` is dev/test only |
 | `NOETA_AGENT_WRITE_MODE` | `dry_run` | `dry_run` (propose diffs only) or `apply` (perform real writes) |
 | `NOETA_AGENT_SHELL_MODE` | `allowlist` | `allowlist` (argv-structural allowlist) or `off` |
 | `NOETA_AGENT_HOST` | `127.0.0.1` | Bind address |

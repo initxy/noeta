@@ -15,7 +15,6 @@ behavioural contract guarantees that every adapter has to honour.
 from __future__ import annotations
 
 import inspect
-import sqlite3
 from typing import Any, Callable
 
 import pytest
@@ -54,6 +53,7 @@ from noeta.protocols.wake import (
 )
 from noeta.storage.memory import MAX_PAYLOAD_BYTES, InMemoryDispatcher, InMemoryEventLog
 from noeta.storage.sqlite.eventlog import _PAYLOAD_RESTORERS, SqliteEventLog
+from tests._pg import isolated_schema_dsn, postgres_param
 
 
 # ---------------------------------------------------------------------------
@@ -83,12 +83,26 @@ def _make_sqlite(
     return SqliteEventLog(":memory:", **kwargs)
 
 
-@pytest.fixture(params=["memory", "sqlite"])
+@pytest.fixture(params=["memory", "sqlite", postgres_param()])
 def make_log(request):
+    # Postgres: every factory call gets its own fresh schema on the
+    # configured server so it is as isolated and empty as a fresh
+    # InMemory / sqlite ``:memory:`` instance.
+    from contextlib import ExitStack
+
+    stack = ExitStack()
+
     if request.param == "memory":
         builder = _make_in_memory
-    else:
+    elif request.param == "sqlite":
         builder = _make_sqlite
+    else:
+
+        def builder(**kwargs):
+            from noeta.storage.postgres.eventlog import PostgresEventLog
+
+            dsn = stack.enter_context(isolated_schema_dsn())
+            return PostgresEventLog(dsn, **kwargs)
 
     instances: list[Any] = []
 
@@ -103,6 +117,7 @@ def make_log(request):
         close = getattr(log, "close", None)
         if callable(close):
             close()
+    stack.close()
 
 
 # ---------------------------------------------------------------------------

@@ -94,7 +94,7 @@ def test_serve_backend_sqlite_session_list_survives_restart(tmp_path: Path) -> N
     db = str(tmp_path / "noeta.db")
     ws = tmp_path / "ws"
     ws.mkdir()
-    config = BackendConfig(host="127.0.0.1", port=0, workspace_dir=ws, sqlite_path=db)
+    config = BackendConfig(host="127.0.0.1", port=0, workspace_dir=ws, storage_url=db)
 
     # First boot: drive a conversation over HTTP, confirm it lists.
     server, _url, shutdown = serve_backend(config, provider=_fake())
@@ -129,8 +129,8 @@ def test_serve_backend_sqlite_session_list_survives_restart(tmp_path: Path) -> N
         shutdown2()
 
 
-def test_no_sqlite_path_is_in_memory_default(tmp_path: Path) -> None:
-    # No sqlite_path ⇒ the SDK's in-memory default; a fresh boot starts empty.
+def test_no_storage_url_is_in_memory_default(tmp_path: Path) -> None:
+    # No storage_url ⇒ the SDK's in-memory default; a fresh boot starts empty.
     ws = tmp_path / "ws"
     ws.mkdir()
     server, _url, shutdown = serve_backend(

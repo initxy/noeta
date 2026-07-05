@@ -22,6 +22,7 @@ from noeta.protocols.errors import ContentNotFound
 from noeta.protocols.values import ContentRef
 from noeta.storage.memory import InMemoryContentStore
 from noeta.storage.sqlite.contentstore import SqliteContentStore
+from tests._pg import isolated_schema_dsn, postgres_param
 
 
 def _make_in_memory():
@@ -32,12 +33,26 @@ def _make_sqlite():
     return SqliteContentStore(":memory:")
 
 
-@pytest.fixture(params=["memory", "sqlite"])
+@pytest.fixture(params=["memory", "sqlite", postgres_param()])
 def make_store(request):
+    # Postgres: every factory call gets its own fresh schema on the
+    # configured server so it is as isolated and empty as a fresh
+    # InMemory / sqlite ``:memory:`` instance.
+    from contextlib import ExitStack
+
+    stack = ExitStack()
+
     if request.param == "memory":
         builder = _make_in_memory
-    else:
+    elif request.param == "sqlite":
         builder = _make_sqlite
+    else:
+
+        def builder():
+            from noeta.storage.postgres.contentstore import PostgresContentStore
+
+            dsn = stack.enter_context(isolated_schema_dsn())
+            return PostgresContentStore(dsn)
 
     instances: list[object] = []
 
@@ -52,6 +67,7 @@ def make_store(request):
         close = getattr(store, "close", None)
         if callable(close):
             close()
+    stack.close()
 
 
 # ---------------------------------------------------------------------------
