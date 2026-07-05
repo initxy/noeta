@@ -18,11 +18,12 @@ import-linter: this module sits in ``noeta.providers`` and so may import
 ``noeta.runtime`` must NOT import this — pricing reaches ``RuntimeLLMClient``
 as an injected callback (see ``noeta.agent.wiring.engine``).
 
-!!! PRICING IS FACTUAL DATA — NEEDS HUMAN SIGN-OFF (D-C2) !!!
-Every price below is the current best-known public list price; each row
-carries a ``# TODO(verify-pricing)`` marker. Do not trust these blindly:
-the implementer surfaces every number in ``flags_for_human`` for review.
-Prices are USD per 1,000,000 tokens.
+Pricing provenance (D-C2): all public-model rows (Anthropic + OpenAI) were
+verified against the vendors' official pricing/model pages on 2026-07-05;
+each row cites its source. The two internal-gateway models (``gpt-5.4-*`` /
+``gpt-5.5-*``) have NO published pricing — their rates are 0.0 and cost
+accounting reports $0 for them; treat those two rows as unverified until the
+gateway publishes numbers. Prices are USD per 1,000,000 tokens.
 """
 
 from __future__ import annotations
@@ -71,20 +72,25 @@ class ModelSpec:
 
 
 # ---------------------------------------------------------------------------
-# Catalog data — FACTUAL, see the verify-pricing TODOs and flags_for_human.
+# Catalog data — FACTUAL; public rows verified 2026-07-05 (sources per row).
 # ---------------------------------------------------------------------------
 #
-# Anthropic prices/IDs: claude-api skill model table (cached 2026-05-26).
-# Cache economics (prompt-caching.md): cache write ≈ 1.25× input (5-min TTL),
-# cache read ≈ 0.1× input. We encode that as derived numbers so the buckets
-# price distinctly while staying tied to the published input rate.
+# Anthropic prices/IDs: platform.claude.com/docs/en/about-claude/pricing
+# (docs.claude.com redirects there), verified 2026-07-05. Cache write =
+# 1.25x input (5-min TTL), cache read = 0.1x input — the derived numbers
+# below match the published per-model cache columns exactly.
 #
-# OpenAI prices/IDs: current best-known public list price (gpt-4o / gpt-4o-mini).
-# OpenAI has no separate cache-write tier; cache read ≈ 0.5× input on gpt-4o.
+# OpenAI prices/IDs: developers.openai.com/api/docs/models/gpt-4o and
+# /gpt-4o-mini (platform.openai.com/docs/pricing redirects to
+# developers.openai.com, whose main table no longer lists 4o-generation
+# models — the per-model pages carry the prices), verified 2026-07-05.
+# OpenAI has no separate cache-write tier; cached input = 0.5x input.
 
 CATALOG: dict[str, ModelSpec] = {
     # --- Anthropic ---------------------------------------------------------
-    # TODO(verify-pricing): verify against the official pricing page (claude-opus-4-8: $5 in / $25 out)
+    # verified 2026-07-05 against platform.claude.com/docs/en/about-claude/pricing
+    # ($5 in / $25 out / $0.50 cache read / $6.25 5m cache write) and
+    # /models/overview (1M context, 128k max output)
     "claude-opus-4-8": ModelSpec(
         real_model_id="claude-opus-4-8",
         context_window=1_000_000,
@@ -96,11 +102,13 @@ CATALOG: dict[str, ModelSpec] = {
         is_reasoning=True,
         supports_vision=True,
     ),
-    # TODO(verify-pricing): verify against the official pricing page (claude-sonnet-4-6: $3 in / $15 out)
+    # verified 2026-07-05 against platform.claude.com/docs/en/about-claude/pricing
+    # ($3 in / $15 out / $0.30 cache read / $3.75 5m cache write) and
+    # /models/overview (1M context, 128k max output — was wrongly 64k here)
     "claude-sonnet-4-6": ModelSpec(
         real_model_id="claude-sonnet-4-6",
         context_window=1_000_000,
-        max_output_tokens=64_000,
+        max_output_tokens=128_000,
         input_price_per_mtok=3.00,
         output_price_per_mtok=15.00,
         cache_read_price_per_mtok=0.30,  # ≈ 0.1× input
@@ -108,7 +116,9 @@ CATALOG: dict[str, ModelSpec] = {
         is_reasoning=True,
         supports_vision=True,
     ),
-    # TODO(verify-pricing): verify against the official pricing page (claude-haiku-4-5: $1 in / $5 out)
+    # verified 2026-07-05 against platform.claude.com/docs/en/about-claude/pricing
+    # ($1 in / $5 out / $0.10 cache read / $1.25 5m cache write) and
+    # /models/overview (200k context, 64k max output)
     "claude-haiku-4-5": ModelSpec(
         real_model_id="claude-haiku-4-5",
         context_window=200_000,
@@ -121,7 +131,8 @@ CATALOG: dict[str, ModelSpec] = {
         supports_vision=True,
     ),
     # --- OpenAI (proves the dataclass is provider-neutral) -----------------
-    # TODO(verify-pricing): verify against the official pricing page (gpt-4o: $2.50 in / $10 out, cache read $1.25)
+    # verified 2026-07-05 against developers.openai.com/api/docs/models/gpt-4o
+    # ($2.50 in / $10 out / $1.25 cached input; 128k context, 16,384 max output)
     "gpt-4o": ModelSpec(
         real_model_id="gpt-4o",
         context_window=128_000,
@@ -132,7 +143,8 @@ CATALOG: dict[str, ModelSpec] = {
         cache_write_price_per_mtok=2.50,  # OpenAI has no write tier → = input
         is_reasoning=False,
     ),
-    # TODO(verify-pricing): verify against the official pricing page (gpt-4o-mini: $0.15 in / $0.60 out, cache read $0.075)
+    # verified 2026-07-05 against developers.openai.com/api/docs/models/gpt-4o-mini
+    # ($0.15 in / $0.60 out / $0.075 cached input; 128k context, 16,384 max output)
     "gpt-4o-mini": ModelSpec(
         real_model_id="gpt-4o-mini",
         context_window=128_000,
@@ -150,33 +162,36 @@ CATALOG: dict[str, ModelSpec] = {
     # model actually seeing the image (probe evidence).
     "gpt-5.4-2026-03-05": ModelSpec(
         real_model_id="gpt-5.4-2026-03-05",
-        # TODO confirm (per gateway): exact context_window / max_output_tokens
-        # are unknown; using placeholders (128k / 16k) until the gateway gives
-        # firm numbers.
-        context_window=128_000,  # TODO confirm (per gateway)
-        max_output_tokens=16_384,  # TODO confirm (per gateway)
-        input_price_per_mtok=0.0,  # TODO pending sign-off
-        output_price_per_mtok=0.0,  # TODO pending sign-off
-        cache_read_price_per_mtok=0.0,  # TODO pending sign-off
-        cache_write_price_per_mtok=0.0,  # TODO pending sign-off
+        # Internal-gateway model: pricing unpublished — all rates are 0.0, so
+        # cost accounting reports $0 for this model (ModelSpec has no
+        # unknown-price representation; price() multiplies the rates as-is).
+        # context_window / max_output_tokens are gateway placeholders
+        # (128k / 16k) — unconfirmed; the gateway has not published limits.
+        context_window=128_000,  # placeholder — unconfirmed by gateway
+        max_output_tokens=16_384,  # placeholder — unconfirmed by gateway
+        input_price_per_mtok=0.0,  # unpublished — reports $0
+        output_price_per_mtok=0.0,  # unpublished — reports $0
+        cache_read_price_per_mtok=0.0,  # unpublished — reports $0
+        cache_write_price_per_mtok=0.0,  # unpublished — reports $0
         is_reasoning=True,
         supports_vision=True,
     ),
-    # The next-gen GPT (gpt-5.5) on the same aidp Responses gateway. Entry
-    # mirrors gpt-5.4: prices 0.0 pending sign-off. Registering it in the
-    # catalog is what keeps price() from raising KeyError and lets the vision
-    # guard recognise it can read images (otherwise text-only would run but
-    # image chains would be blocked). ``context_window`` confirmed 200k per the
-    # gateway — drives the compaction window + tail budget (a placeholder that
-    # is too small starves the verbatim window and forces tool re-reads).
+    # The next-gen GPT (gpt-5.5) on the same aidp Responses gateway. Like
+    # gpt-5.4, pricing is unpublished — all rates are 0.0 and cost accounting
+    # reports $0 for this model. Registering it in the catalog is what keeps
+    # price() from raising KeyError and lets the vision guard recognise it can
+    # read images (otherwise text-only would run but image chains would be
+    # blocked). ``context_window`` confirmed 200k per the gateway — drives the
+    # compaction window + tail budget (a placeholder that is too small starves
+    # the verbatim window and forces tool re-reads).
     "gpt-5.5-2026-04-24": ModelSpec(
         real_model_id="gpt-5.5-2026-04-24",
         context_window=200_000,
-        max_output_tokens=16_384,  # TODO confirm (per gateway)
-        input_price_per_mtok=0.0,  # TODO pending sign-off
-        output_price_per_mtok=0.0,  # TODO pending sign-off
-        cache_read_price_per_mtok=0.0,  # TODO pending sign-off
-        cache_write_price_per_mtok=0.0,  # TODO pending sign-off
+        max_output_tokens=16_384,  # placeholder — unconfirmed by gateway
+        input_price_per_mtok=0.0,  # unpublished — reports $0
+        output_price_per_mtok=0.0,  # unpublished — reports $0
+        cache_read_price_per_mtok=0.0,  # unpublished — reports $0
+        cache_write_price_per_mtok=0.0,  # unpublished — reports $0
         is_reasoning=True,
         supports_vision=True,
     ),
