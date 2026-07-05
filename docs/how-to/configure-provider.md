@@ -53,7 +53,7 @@ Where `noeta-config.json` contains:
   "model": "claude-sonnet-4-5-20250929",
   "api_key": "sk-ant-…",
   "workspace": "./my-project",
-  "sqlite_path": "./session.sqlite",
+  "storage_url": "./session.sqlite",
   "write_mode": "dry_run"
 }
 ```
@@ -112,7 +112,7 @@ Boot the agent with your real provider and send a simple message:
 NOETA_AGENT_PROVIDER=anthropic \
 NOETA_AGENT_MODEL=claude-sonnet-4-5-20250929 \
 NOETA_AGENT_API_KEY=sk-ant-… \
-NOETA_AGENT_SQLITE_PATH=./test.sqlite \
+NOETA_AGENT_STORAGE=./test.sqlite \
 python -m noeta.agent
 ```
 

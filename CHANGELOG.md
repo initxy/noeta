@@ -53,6 +53,35 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
   task starts waiting on a human. The zh README also claimed the
   packages were not yet on PyPI; they have been since 0.1.0.
 
+## [0.1.5] - 2026-07-05
+
+### Changed
+
+- `psycopg[binary]` is now a regular dependency of `noeta-runtime` (the
+  `postgres` extra is gone): the Postgres storage backend works out of the
+  box, with no system libpq required. Installs that used
+  `noeta-runtime[postgres]` keep working — the extra name is simply ignored.
+
+## [0.1.4] - 2026-07-05
+
+### Added
+
+- PostgreSQL storage backend: `noeta.storage.postgres` ships psycopg-backed
+  `PostgresEventLog` / `PostgresContentStore` / `PostgresDispatcher` (plus the
+  inspect-only `PostgresReadOnlyStore`), behaviour-pinned by the same
+  storage-backend-neutral contract suites as the sqlite adapters. Install the
+  optional extra `noeta-runtime[postgres]`; the core wheel stays psycopg-free.
+- Durable storage is now configured by a **storage URL**: a sqlite file path
+  or a `postgresql://` DSN, via `NOETA_AGENT_STORAGE` / config key
+  `storage_url` (`noeta.agent.host.storage.open_durable_storage` dispatches;
+  `noeta.storage.stacks.open_storage_stack` accepts the same shapes in-process).
+
+### Changed
+
+- Config spelling: `storage_url` / `NOETA_AGENT_STORAGE` replaces
+  `sqlite_path` / `NOETA_AGENT_SQLITE` as the documented storage setting; the
+  legacy spellings remain accepted with unchanged semantics.
+
 ## [0.1.3] - 2026-07-02
 
 ### Added
@@ -144,7 +173,9 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/initxy/noeta/compare/v0.1.4...v0.1.5
+[0.1.4]: https://github.com/initxy/noeta/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/initxy/noeta/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/initxy/noeta/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/initxy/noeta/compare/v0.1.0...v0.1.1
