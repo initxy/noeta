@@ -8,6 +8,26 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-07-06
+
+### Added
+
+- Token streaming, end to end: all three provider adapters (Anthropic
+  Messages, OpenAI Responses, OpenAI Chat) can stream text/thinking
+  deltas while the LLM call is in flight, and the web UI renders a live
+  assistant bubble that hands over to the durable message when it
+  lands. Deltas are an ephemeral projection — named `event: delta` SSE
+  frames without an id, never persisted and never replayed on
+  reconnect; the EventLog and the recorded LLM round-trip stay
+  identical to the non-streaming path, and the compaction summarize
+  call never streams. Recorded in the `token-streaming-projection` ADR.
+- `noeta.sdk` re-exports `StreamingProvider` / `StreamDelta`: a custom
+  `Options.provider` opts into streaming by implementing the optional
+  capability (`complete_streaming` keeps the blocking `complete`
+  contract and still returns the complete response). Hosts wire the
+  delta consumer through `HostConfig.delta_sink`; headless SDK use
+  without a sink is byte-identical to before.
+
 ## [0.1.6] - 2026-07-05
 
 ### Added
@@ -175,7 +195,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/initxy/noeta/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/initxy/noeta/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/initxy/noeta/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/initxy/noeta/compare/v0.1.3...v0.1.4
