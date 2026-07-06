@@ -269,6 +269,7 @@ class Client:
             app_gateway=hc.app_gateway,
             mcp_server_resolver=hc.mcp_server_resolver,
             mcp_http_post=hc.mcp_http_post,
+            delta_sink=hc.delta_sink,
             workflow_allowed=hc.workflow_allowed,
             # Process fs write policy (D3 host config): "apply" performs real
             # writes, anything else stages a dry-run diff (the safe default).

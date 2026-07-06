@@ -16,7 +16,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from noeta.protocols.messages import LLMRequest, LLMResponse
+from noeta.protocols.messages import LLMRequest, LLMResponse, StreamDelta
 
 
 @dataclass
@@ -69,3 +69,71 @@ class FakeLLMProvider:
         # Content-routed mode: call outside the lock so a blocking responder
         # (barrier / event) does not serialise concurrent callers.
         return responder(request)
+
+
+@dataclass
+class FakeStreamingLLMProvider:
+    """Scripted reference implementation of ``StreamingProvider``.
+
+    Like :class:`FakeLLMProvider`, but each scripted response may carry a
+    parallel script of :class:`StreamDelta` fragments: ``complete_streaming``
+    fires them through ``on_delta`` in order, then returns the full response —
+    the push-shaped contract real streaming adapters implement. ``complete``
+    serves the same script *without* deltas, so a single instance can prove
+    both the streamed and the fallback path of the runtime probe.
+
+    ``streamed_headers`` records the ``request_headers`` each streaming call
+    received (``None`` when the runtime attached none); ``streamed_calls`` /
+    ``batch_calls`` count which path the probe actually took.
+    """
+
+    responses: list[LLMResponse] = field(default_factory=list)
+    deltas: list[list[StreamDelta]] = field(default_factory=list)
+    received_requests: list[LLMRequest] = field(default_factory=list)
+    streamed_headers: list[Optional[dict[str, str]]] = field(
+        default_factory=list
+    )
+    streamed_calls: int = 0
+    batch_calls: int = 0
+    _cursor: int = 0
+    _lock: threading.Lock = field(
+        default_factory=threading.Lock, repr=False, compare=False
+    )
+
+    def _next_scripted(self, request: LLMRequest) -> tuple[LLMResponse, list[StreamDelta]]:
+        with self._lock:
+            self.received_requests.append(request)
+            if self._cursor >= len(self.responses):
+                raise IndexError(
+                    "FakeStreamingLLMProvider responses exhausted: scripted "
+                    f"{len(self.responses)} response(s) but received "
+                    f"{len(self.received_requests)} request(s)"
+                )
+            response = self.responses[self._cursor]
+            scripted = (
+                self.deltas[self._cursor]
+                if self._cursor < len(self.deltas)
+                else []
+            )
+            self._cursor += 1
+            return response, scripted
+
+    def complete(self, request: LLMRequest) -> LLMResponse:
+        response, _ = self._next_scripted(request)
+        with self._lock:
+            self.batch_calls += 1
+        return response
+
+    def complete_streaming(
+        self,
+        request: LLMRequest,
+        on_delta: Callable[[StreamDelta], None],
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> LLMResponse:
+        response, scripted = self._next_scripted(request)
+        with self._lock:
+            self.streamed_calls += 1
+            self.streamed_headers.append(request_headers)
+        for delta in scripted:
+            on_delta(delta)
+        return response
