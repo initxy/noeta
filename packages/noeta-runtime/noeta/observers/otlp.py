@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from hashlib import sha256
@@ -197,6 +198,17 @@ class _SpanAssembler:
     def _task_span_id(self, task_id: str) -> str:
         return _hex_id(f"span:task:{task_id}", 8)
 
+    def _open_task_span_id(self, task_id: str) -> Optional[str]:
+        """The span id of the task's currently-open span, if any.
+
+        Callers parent to the OPEN span object, never to a recomputed
+        ``_task_span_id`` — a resumed/rewound task's segment span carries a
+        seq-suffixed id (see :meth:`_reopen_task_segment`), so recomputing
+        would parent to an id that was already exported (or never will be).
+        """
+        span = self._open_tasks.get(task_id)
+        return span.span_id if span is not None else None
+
     # -- feed --------------------------------------------------------------
 
     def feed(self, record: AuditRecord) -> list[dict[str, Any]]:  # noqa: C901
@@ -231,6 +243,11 @@ class _SpanAssembler:
     ) -> list[dict[str, Any]]:
         span = self._open_tasks.pop(record.task_id, None)
         self._task_trace.pop(record.task_id, None)
+        # Sweep call spans the terminal event orphaned (a step that died
+        # between Started and Finished) — they will never complete, and
+        # keeping them would leak per (task_id, call_id) forever.
+        for key in [k for k in self._open_calls if k[0] == record.task_id]:
+            del self._open_calls[key]
         if span is None:
             return []
         span.status_code = status
@@ -243,9 +260,46 @@ class _SpanAssembler:
         return self._open_task(record)
 
     def _on_task_started(self, record: AuditRecord) -> list[dict[str, Any]]:
-        # Normally a no-op (TaskCreated already opened the span); covers a
-        # process that attached to an existing stream mid-task.
+        # Normally a no-op — TaskCreated already opened the span.
         return self._open_task(record)
+
+    def _reopen_task_segment(self, record: AuditRecord) -> None:
+        """Open a **segment** span for a task whose primary span is gone.
+
+        Two reachable cases: a task resumed after a host restart (this
+        process never saw its ``TaskCreated``), and a task continued after
+        cancel → rewind (the primary span was already exported at cancel).
+        The segment gets a seq-suffixed span id so it can never collide
+        with the (possibly already exported) primary span, and it covers
+        the task from here to its terminal.
+        """
+        if record.task_id in self._open_tasks:
+            return
+        trace_id, parent = self._linkage(record)
+        self._open_tasks[record.task_id] = _OpenSpan(
+            name="task",
+            trace_id=trace_id,
+            span_id=_hex_id(f"span:task:{record.task_id}:{record.seq}", 8),
+            parent_span_id=parent,
+            start_ns=_ns(record.occurred_at),
+            attributes={"noeta.task_id": record.task_id, "noeta.resumed": True},
+        )
+
+    def _on_task_woken(self, record: AuditRecord) -> list[dict[str, Any]]:
+        if record.task_id not in self._open_tasks:
+            self._reopen_task_segment(record)
+            return []
+        return self._on_task_mark(record)
+
+    def _on_task_rewound(self, record: AuditRecord) -> list[dict[str, Any]]:
+        # A rewind that first cancelled the in-flight turn closed (and
+        # exported) the primary span; the conversation continues, so open a
+        # segment span for the rest of the task. A rewind of a still-open
+        # task just marks the span.
+        if record.task_id not in self._open_tasks:
+            self._reopen_task_segment(record)
+            return []
+        return self._on_task_mark(record)
 
     def _on_agent_bound(self, record: AuditRecord) -> list[dict[str, Any]]:
         span = self._open_tasks.get(record.task_id)
@@ -288,7 +342,10 @@ class _SpanAssembler:
         if not subtask_id:
             return []
         trace_id, _ = self._linkage(record)
-        parent_span = self._task_span_id(record.task_id)
+        parent_span = (
+            self._open_task_span_id(record.task_id)
+            or self._task_span_id(record.task_id)
+        )
         child = self._open_tasks.get(str(subtask_id))
         if child is not None:
             # Child stream got recorded first: fix the linkage retroactively
@@ -309,11 +366,7 @@ class _SpanAssembler:
         if not call_id:
             return []
         trace_id, _ = self._linkage(record)
-        parent = (
-            self._task_span_id(record.task_id)
-            if record.task_id in self._open_tasks
-            else None
-        )
+        parent = self._open_task_span_id(record.task_id)
         attributes = {"noeta.task_id": record.task_id, **attributes}
         self._open_calls[(record.task_id, str(call_id))] = _OpenSpan(
             name=name,
@@ -391,8 +444,13 @@ _HANDLERS: dict[str, Callable[[_SpanAssembler, AuditRecord], list[dict[str, Any]
     "TaskFailed": _SpanAssembler._on_task_failed,
     "TaskCancelled": _SpanAssembler._on_task_cancelled,
     "TaskSuspended": _SpanAssembler._on_task_mark,
-    "TaskWoken": _SpanAssembler._on_task_mark,
+    "TaskWoken": _SpanAssembler._on_task_woken,
+    "TaskRewound": _SpanAssembler._on_task_rewound,
     "SubtaskSpawned": _SpanAssembler._on_subtask_spawned,
+    # Background sub-agents spawn without a SubtaskSpawned (ADR
+    # background-subagent); their start record carries the same
+    # ``subtask_id`` key, so the parent-linkage handler applies as-is.
+    "BackgroundSubagentStarted": _SpanAssembler._on_subtask_spawned,
     "ToolCallStarted": _SpanAssembler._on_tool_started,
     "ToolResultRecorded": _SpanAssembler._on_tool_result,
     "ToolCallFinished": _SpanAssembler._close_call,
@@ -456,16 +514,26 @@ class OtlpSpanSink:
             "Content-Type": "application/json",
             **dict(config.headers),
         }
+        # Normally single-threaded (the AsyncTraceSink worker), but on a
+        # stuck-collector shutdown the abandoned worker can race close()
+        # running on the stopping thread — the lock + closed flag make that
+        # edge safe (the JsonlTraceSink ``_fh is None`` guard, generalized).
+        self._lock = threading.Lock()
+        self._closed = False
 
     def __call__(self, record: AuditRecord) -> None:
-        self._buffer.extend(self._assembler.feed(record))
-        if len(self._buffer) >= self._batch_max or (
-            self._buffer
-            and time.monotonic() - self._last_flush >= self._flush_interval_s
-        ):
-            self._flush()
+        with self._lock:
+            if self._closed:
+                return
+            self._buffer.extend(self._assembler.feed(record))
+            if len(self._buffer) >= self._batch_max or (
+                self._buffer
+                and time.monotonic() - self._last_flush >= self._flush_interval_s
+            ):
+                self._flush()
 
     def _flush(self) -> None:
+        # Callers hold self._lock.
         spans, self._buffer = self._buffer, []
         self._last_flush = time.monotonic()
         if not spans:
@@ -482,7 +550,11 @@ class OtlpSpanSink:
             )
 
     def close(self) -> None:
-        self._flush()
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._flush()
 
 
 def make_otlp_trace_observer(

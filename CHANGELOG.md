@@ -23,9 +23,13 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
   already a runtime dependency). Wired via
   `HostConfig(otlp_traces=OtlpTraceConfig(...))` (re-exported through
   `noeta.sdk`); the app enables it with `NOETA_AGENT_OTLP_ENDPOINT` /
-  the `otlp_endpoint` config key, honoring the OTel-standard
-  `OTEL_EXPORTER_OTLP_*` env vars as fallbacks. Export failures are
-  logged and dropped — an unreachable collector never breaks a run.
+  the `otlp_endpoint` config key (opt-in only — an ambient
+  `OTEL_EXPORTER_OTLP_ENDPOINT` never silently enables export; the
+  standard `OTEL_EXPORTER_OTLP_HEADERS` rides along once enabled).
+  Resumed and rewound conversations keep tracing via segment spans;
+  background sub-agents parent into the spawning task's trace. Export
+  failures are logged and dropped — an unreachable collector never
+  breaks a run.
 
 ## [0.1.7] - 2026-07-06
 

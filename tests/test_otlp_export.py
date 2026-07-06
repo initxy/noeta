@@ -289,23 +289,112 @@ def test_backend_config_otlp_from_config_file(tmp_path: Any) -> None:
     assert dict(c.otlp_headers) == {"authorization": "Bearer k"}
 
 
-def test_backend_config_otlp_standard_env_fallbacks() -> None:
-    # Signal-specific endpoint used as-is.
-    c = BackendConfig.from_env(
-        {"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://c:4318/custom"})
-    assert c.otlp_endpoint == "http://c:4318/custom"
-    # Base endpoint gets /v1/traces appended; standard headers parsed.
+def test_backend_config_otlp_is_opt_in_only() -> None:
+    # Ambient OTel-standard endpoint env must NOT silently enable export
+    # (k8s operators inject it process-wide for other apps).
     c = BackendConfig.from_env({
-        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://c:4318/",
-        "OTEL_EXPORTER_OTLP_HEADERS": "authorization=Bearer k,x-org=acme",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://ambient:4318",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://ambient:4318/v1/traces",
     })
-    assert c.otlp_endpoint == "http://c:4318/v1/traces"
-    assert dict(c.otlp_headers) == {"authorization": "Bearer k", "x-org": "acme"}
-    # The noeta-specific env var wins over the standard ones.
+    assert c.otlp_endpoint is None
+    # Only the Noeta-specific env var / config key enable it; the standard
+    # HEADERS var then rides along, percent-decoded per the spec.
     c = BackendConfig.from_env({
         "NOETA_AGENT_OTLP_ENDPOINT": "http://mine/v1/traces",
-        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://other:4318",
+        "OTEL_EXPORTER_OTLP_HEADERS": "authorization=Basic%20dXNlcg==,x-org=acme",
     })
     assert c.otlp_endpoint == "http://mine/v1/traces"
+    assert dict(c.otlp_headers) == {
+        "authorization": "Basic dXNlcg==", "x-org": "acme",
+    }
     # Default: off.
     assert BackendConfig.from_env({}).otlp_endpoint is None
+
+
+def test_backend_config_otlp_headers_coerced_to_str(tmp_path: Any) -> None:
+    cfg = tmp_path / "noeta.config.json"
+    cfg.write_text(json.dumps({
+        "otlp_endpoint": "http://c/v1/traces",
+        "otlp_headers": {"x-timeout": 30},
+    }))
+    c = BackendConfig.from_env({"NOETA_AGENT_CONFIG": str(cfg)})
+    assert dict(c.otlp_headers) == {"x-timeout": "30"}
+
+
+# -- review fixes: segment reopen / background linkage / sink close -----------
+
+
+def test_task_woken_without_open_span_reopens_segment() -> None:
+    # A host restart resumes a suspended task: this process never saw its
+    # TaskCreated, only a TaskWoken. The task still gets a (segment) span.
+    a = _SpanAssembler()
+    a.feed(_record(type="TaskWoken", seq=40, occurred_at=5.0))
+    a.feed(_record(type="ToolCallStarted",
+                   payload_summary={"call_id": "c1", "tool_name": "read"}))
+    tool = a.feed(_record(type="ToolCallFinished", payload_summary={"call_id": "c1"}))[0]
+    seg = a.feed(_record(type="TaskCompleted", occurred_at=9.0))[0]
+    assert seg["startTimeUnixNano"] == str(int(5.0 * 1e9))
+    assert tool["parentSpanId"] == seg["spanId"]
+    attrs = {kv["key"]: kv["value"] for kv in seg["attributes"]}
+    assert attrs["noeta.resumed"] == {"boolValue": True}
+    # The segment id must differ from the primary task span id (which a
+    # previous process may already have exported).
+    fresh = _SpanAssembler()
+    fresh.feed(_record(type="TaskCreated"))
+    primary = fresh.feed(_record(type="TaskCompleted"))[0]
+    assert seg["spanId"] != primary["spanId"]
+
+
+def test_cancel_rewind_continue_reopens_segment() -> None:
+    a = _SpanAssembler()
+    a.feed(_record(type="TaskCreated", occurred_at=1.0))
+    cancelled = a.feed(_record(type="TaskCancelled", occurred_at=2.0,
+                               payload_summary={"reason": "user"}))
+    assert len(cancelled) == 1  # primary span exported at cancel
+    a.feed(_record(type="TaskRewound", seq=50, occurred_at=3.0,
+                   payload_summary={"target_seq": 10}))
+    a.feed(_record(type="ToolCallStarted",
+                   payload_summary={"call_id": "c9", "tool_name": "edit"}))
+    tool = a.feed(_record(type="ToolCallFinished", payload_summary={"call_id": "c9"}))[0]
+    seg = a.feed(_record(type="TaskCompleted", occurred_at=6.0))[0]
+    assert seg["status"] == {"code": 1}  # the continuation completes OK
+    assert seg["spanId"] != cancelled[0]["spanId"]
+    assert seg["traceId"] == cancelled[0]["traceId"]
+    assert tool["parentSpanId"] == seg["spanId"]
+
+
+def test_background_subagent_links_to_parent() -> None:
+    a = _SpanAssembler()
+    a.feed(_record(type="TaskCreated", task_id="parent"))
+    a.feed(_record(type="BackgroundSubagentStarted", task_id="parent",
+                   payload_summary={"subtask_id": "bg-child", "agent_name": "explore"}))
+    a.feed(_record(type="TaskCreated", task_id="bg-child", trace_id="trace-unknown",
+                   correlation_id="bg-child"))
+    child = a.feed(_record(type="TaskCompleted", task_id="bg-child"))[0]
+    parent = a.feed(_record(type="TaskCompleted", task_id="parent"))[0]
+    assert child["traceId"] == parent["traceId"]
+    assert child["parentSpanId"] == parent["spanId"]
+
+
+def test_task_close_sweeps_orphaned_call_spans() -> None:
+    a = _SpanAssembler()
+    a.feed(_record(type="TaskCreated"))
+    a.feed(_record(type="ToolCallStarted",
+                   payload_summary={"call_id": "orphan", "tool_name": "x"}))
+    a.feed(_record(type="TaskFailed", payload_summary={"reason": "died mid-step"}))
+    assert a._open_calls == {}  # no leak
+    # A late Finished for the swept call emits nothing.
+    assert a.feed(_record(type="ToolCallFinished",
+                          payload_summary={"call_id": "orphan"})) == []
+
+
+def test_sink_call_after_close_is_noop() -> None:
+    post = _FakePost()
+    sink = OtlpSpanSink(
+        OtlpTraceConfig(endpoint="http://c/v1/traces"),
+        http_post=post, batch_max=1,
+    )
+    sink.close()
+    _llm_pair(sink, "c1")  # dropped: sink is closed
+    sink.close()  # idempotent
+    assert post.calls == []
