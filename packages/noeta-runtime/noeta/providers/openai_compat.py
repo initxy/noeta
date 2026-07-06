@@ -33,15 +33,17 @@ Key contracts (cross-referenced to PRD §"OpenAICompatProvider translation rules
   ``RuntimeLLMClient`` (issue 12) is what translates exceptions into
   ``LLMResponse(stop_reason="error", ...)``.
 
-This module does **not** implement async, streaming, retry, prompt
-caching, or the Anthropic protocol — those are explicitly Out of
-Scope for issue 11.
+This module does **not** implement async, retry, prompt caching, or
+the Anthropic protocol — those are explicitly Out of Scope for issue
+11. Token streaming is supported through the optional
+:class:`noeta.protocols.messages.StreamingProvider` capability
+(``complete_streaming``); the batch ``complete`` path is unchanged.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any, Literal, Optional
+from typing import Any, Callable, Literal, Optional
 
 import httpx
 
@@ -56,12 +58,14 @@ from noeta.protocols.messages import (
     LLMRequest,
     LLMResponse,
     Message,
+    StreamDelta,
     TextBlock,
     ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
     Usage,
 )
+from noeta.providers._sse import iter_sse_events
 from noeta.providers.codecs import (
     decode_tool_arguments,
     encode_tool_arguments,
@@ -156,6 +160,72 @@ class OpenAICompatProvider:
                 f"OpenAI response root was not a JSON object: type={type(payload).__name__}"
             )
         return self._parse_response(payload)
+
+    # ------------------------------------------------------------------
+    # StreamingProvider capability
+    # ------------------------------------------------------------------
+
+    def complete_streaming(
+        self,
+        request: LLMRequest,
+        on_delta: Callable[[StreamDelta], None],
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> LLMResponse:
+        """Stream a Chat Completions request, firing ``on_delta`` per fragment.
+
+        Implements :class:`noeta.protocols.messages.StreamingProvider`: same
+        blocking one-shot contract as :meth:`complete` — the complete
+        :class:`LLMResponse` is still returned, rebuilt from the accumulated
+        fragments and fed through the same ``_parse_response`` path so
+        streamed and batch results are shape-identical. ``content`` fragments
+        emit ``kind="text"`` deltas; reasoning fragments
+        (``reasoning_content`` / ``reasoning`` — the same keys
+        ``_extract_thinking`` sniffs) emit ``kind="thinking"``; tool-call
+        fragments accumulate silently (argument JSON is undecodable while
+        partial). ``request_headers`` are transport-only: merged into this
+        POST on top of the client-level headers, never recorded.
+        """
+        body = self._build_request_body(request)
+        body["stream"] = True
+        # ``include_usage`` requests the terminal usage-only chunk. Some
+        # OpenAI-compatible gateways never send it — a missing usage object
+        # degrades to an empty ``Usage`` exactly like batch, no error.
+        body["stream_options"] = {"include_usage": True}
+        accumulator = _ChatStreamAccumulator(on_delta)
+        try:
+            with self._client.stream(
+                "POST",
+                "/chat/completions",
+                json=body,
+                headers=request_headers,
+            ) as http_response:
+                if http_response.status_code >= 400:
+                    # Error bodies are small; read them so the overflow
+                    # sniff (``_is_context_overflow``) can see the JSON.
+                    http_response.read()
+                    try:
+                        http_response.raise_for_status()
+                    except httpx.HTTPStatusError as exc:
+                        raise _translate_http_error(exc) from exc
+                for _event, data in iter_sse_events(http_response.iter_lines()):
+                    if data.strip() == "[DONE]":
+                        accumulator.saw_done = True
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        # Tolerant: skip a malformed chunk, mirroring the
+                        # batch parsers' unknown-shape stance.
+                        continue
+                    if isinstance(chunk, dict):
+                        accumulator.feed(chunk)
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise TransientError(str(exc)) from exc
+        if not accumulator.saw_done and not accumulator.has_usable_content:
+            raise TransientError(
+                "OpenAI stream ended without [DONE] and produced no content"
+            )
+        return self._parse_response(accumulator.terminal_payload())
 
     # ------------------------------------------------------------------
     # Outbound translation (Noeta → OpenAI)
@@ -267,6 +337,170 @@ class OpenAICompatProvider:
             usage=usage,
             raw=payload,
         )
+
+
+# ---------------------------------------------------------------------------
+# Streaming accumulation (Chat Completions chunks → batch wire shape)
+# ---------------------------------------------------------------------------
+
+
+class _ChatStreamAccumulator:
+    """Folds Chat Completions stream chunks back into the batch wire shape.
+
+    Fires :class:`StreamDelta` side effects for text / reasoning fragments as
+    they arrive; tool-call fragments accumulate silently. ``terminal_payload``
+    rebuilds the completed ``{"choices": [{"message": ..., "finish_reason":
+    ...}], "usage": ...}`` dict so the existing ``_parse_response`` produces a
+    response shape-identical to batch (same consistency checks, same tool-call
+    codec, same usage degrade).
+
+    Delta block indexes are assigned in arrival order (first kind seen takes
+    0, the other takes 1). Reasoning models emit all reasoning fragments
+    before ``content``, so the indexes match the final response's block
+    positions (:class:`ThinkingBlock` before :class:`TextBlock`, as
+    ``_parse_response`` assembles them); either way the two kinds always get
+    distinct, ordered indexes.
+    """
+
+    def __init__(self, on_delta: Callable[[StreamDelta], None]) -> None:
+        self._on_delta = on_delta
+        self._text_parts: list[str] = []
+        self._reasoning_parts: dict[str, list[str]] = {}
+        self._signature_parts: list[str] = []
+        self._tool_calls: dict[int, dict[str, Any]] = {}
+        self._finish_reason: Optional[str] = None
+        self._usage: Optional[dict[str, Any]] = None
+        self._meta: dict[str, Any] = {}
+        self._text_index: Optional[int] = None
+        self._thinking_index: Optional[int] = None
+        self._next_index = 0
+        self.saw_done = False
+
+    @property
+    def has_usable_content(self) -> bool:
+        return bool(
+            self._finish_reason is not None
+            or self._text_parts
+            or self._reasoning_parts
+            or self._signature_parts
+            or self._tool_calls
+        )
+
+    def feed(self, chunk: dict[str, Any]) -> None:
+        usage = chunk.get("usage")
+        if isinstance(usage, dict):
+            self._usage = usage
+        # Keep the first-seen response metadata so the diagnostic ``raw``
+        # payload stays vendor-shaped.
+        for key in ("id", "model"):
+            value = chunk.get(key)
+            if isinstance(value, str) and value and key not in self._meta:
+                self._meta[key] = value
+        choices = chunk.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return  # usage-only terminal chunk (or unknown shape): no delta
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            return
+        finish_reason = choice.get("finish_reason")
+        if isinstance(finish_reason, str) and finish_reason:
+            self._finish_reason = finish_reason
+        delta = choice.get("delta")
+        if not isinstance(delta, dict):
+            return
+        text = delta.get("content")
+        if isinstance(text, str) and text:
+            self._text_parts.append(text)
+            self._on_delta(
+                StreamDelta(kind="text", text=text, index=self._block_index("text"))
+            )
+        for field_name in ("reasoning_content", "reasoning"):
+            fragment = delta.get(field_name)
+            if isinstance(fragment, str) and fragment:
+                self._reasoning_parts.setdefault(field_name, []).append(fragment)
+                self._on_delta(
+                    StreamDelta(
+                        kind="thinking",
+                        text=fragment,
+                        index=self._block_index("thinking"),
+                    )
+                )
+        # Opaque continuation token: accumulated silently (it is a signature,
+        # not visible reasoning text — never surfaced as a delta).
+        signature = delta.get("encrypted_reasoning")
+        if isinstance(signature, str) and signature:
+            self._signature_parts.append(signature)
+        for fragment in delta.get("tool_calls") or []:
+            if isinstance(fragment, dict):
+                self._feed_tool_call(fragment)
+
+    def _block_index(self, kind: Literal["text", "thinking"]) -> int:
+        if kind == "text":
+            if self._text_index is None:
+                self._text_index = self._next_index
+                self._next_index += 1
+            return self._text_index
+        if self._thinking_index is None:
+            self._thinking_index = self._next_index
+            self._next_index += 1
+        return self._thinking_index
+
+    def _feed_tool_call(self, fragment: dict[str, Any]) -> None:
+        index = fragment.get("index")
+        if not isinstance(index, int):
+            index = 0
+        entry = self._tool_calls.setdefault(
+            index, {"id": "", "name": "", "arguments": []}
+        )
+        call_id = fragment.get("id")
+        if isinstance(call_id, str) and call_id:
+            entry["id"] = call_id
+        function = fragment.get("function")
+        if not isinstance(function, dict):
+            return
+        name = function.get("name")
+        if isinstance(name, str) and name:
+            entry["name"] = name
+        arguments = function.get("arguments")
+        if isinstance(arguments, str) and arguments:
+            entry["arguments"].append(arguments)
+
+    def terminal_payload(self) -> dict[str, Any]:
+        """Rebuild the vendor-shaped completed response dict."""
+        message: dict[str, Any] = {
+            "role": "assistant",
+            # Batch tool-call responses carry ``content: null``; mirror that
+            # when no text arrived so ``_parse_response`` sees the same shape.
+            "content": "".join(self._text_parts) if self._text_parts else None,
+        }
+        for field_name, parts in self._reasoning_parts.items():
+            message[field_name] = "".join(parts)
+        if self._signature_parts:
+            message["encrypted_reasoning"] = "".join(self._signature_parts)
+        tool_calls = [
+            {
+                "id": entry["id"],
+                "type": "function",
+                "function": {
+                    "name": entry["name"],
+                    "arguments": "".join(entry["arguments"]),
+                },
+            }
+            for _, entry in sorted(self._tool_calls.items())
+        ]
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+        payload: dict[str, Any] = dict(self._meta)
+        payload["choices"] = [
+            {
+                "index": 0,
+                "message": message,
+                "finish_reason": self._finish_reason,
+            }
+        ]
+        if self._usage is not None:
+            payload["usage"] = self._usage
+        return payload
 
 
 # ---------------------------------------------------------------------------

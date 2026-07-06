@@ -564,6 +564,7 @@ function ChatApp() {
                   onOpenSubtask={chat.openSubtask}
                   pendingGoalText={chat.pendingGoalText}
                   responseThinkingCache={chat.responseThinkingCache}
+                  streamingTurn={chat.streamingTurn}
                   vm={chat.vm}
                 />
                 {chat.vm.pendingApprovals.length ? (
@@ -581,7 +582,15 @@ function ChatApp() {
                     onSubmit={chat.submitQuestionAnswer}
                   />
                 ))}
-                {responding ? <ResponseIndicator label={indicatorLabel} /> : null}
+                {/* Token streaming: while the live preview bubble has visible
+                    content (chat.streamingTurn non-null) it IS the composing
+                    affordance — suppress the typing dots so the two don't
+                    stack. The indicator returns the moment the buffer clears
+                    (retry via LLMRetryScheduled, or the gap before the next
+                    call streams), keeping the retry / lifecycle labels. */}
+                {responding && !chat.streamingTurn ? (
+                  <ResponseIndicator label={indicatorLabel} />
+                ) : null}
               </ConversationContent>
             </Conversation>
 

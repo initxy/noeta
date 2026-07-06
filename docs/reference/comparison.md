@@ -86,11 +86,12 @@ what machinery ships around it.
 | **Control flow** | You define a graph of nodes and edges; the model routes within it | No graph. The Policy decides each step; task structure emerges from decisions |
 | **Resume / wake** | Caller re-invokes the thread with a resume command; queues and crons live in the hosted Platform | Dispatcher + lease + worker with durable, exactly-once wake ships in the open-source core |
 | **Compaction** | Left to the application (or bolt-on memory libraries) | A recorded, reversible event — the summary overlays at compose time, originals stay in the log |
-| **Ecosystem** | Mature, large integration catalog, token streaming, big community | Young, smaller toolset, no token streaming yet |
+| **Ecosystem** | Mature, large integration catalog, big community | Young, smaller toolset |
+| **Token streaming** | Streamed through the graph's event API | Streamed as ephemeral SSE deltas; the event ledger stays the only durable record |
 
 **Reach for LangGraph when** you want to express your agent as a graph,
-lean on the LangChain integration catalog, and need streaming and
-ecosystem maturity today.
+lean on the LangChain integration catalog, and need ecosystem
+maturity today.
 
 **Reach for Noeta when** the question is auditability and substrate
 ownership: a snapshot tells you what the state *was*; a ledger tells you

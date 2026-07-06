@@ -59,7 +59,7 @@ from noeta.protocols.events import (
     McpServerSkippedPayload,
 )
 from noeta.protocols.hooks import Guard
-from noeta.protocols.messages import LLMProvider, Usage
+from noeta.protocols.messages import LLMProvider, StreamDelta, Usage
 from noeta.protocols.policy import Policy
 from noeta.protocols.step_context import StepContext
 from noeta.protocols.tool import Tool
@@ -571,6 +571,13 @@ class SdkHost(GenericEngineResolver):
     # default is None, so generic callers and resume fixtures keep plain provider
     # calls.
     provider_headers: Optional[Callable[[StepContext], Mapping[str, str]]] = None
+    # Token-streaming sink (host wiring, like ``provider_headers`` — never part
+    # of agent identity): forwarded into every session's RuntimeLLMClient so a
+    # streaming-capable provider's in-flight deltas reach the product's delta
+    # hub. ``None`` ⇒ providers are called exactly as before.
+    delta_sink: Optional[
+        Callable[[StepContext, str, StreamDelta], None]
+    ] = None
     # The host's live HTML-app preview gateway. A runtime injection
     # (like ``provider_headers`` / ``_process_registry``), NOT part of the host
     # identity. When set, ``_build_engine`` threads it into
@@ -1438,6 +1445,7 @@ class SdkHost(GenericEngineResolver):
             content_store=self.content_store,
             pricing=_catalog_pricing,
             provider_headers=self.provider_headers,
+            delta_sink=self.delta_sink,
         )
         policy: Policy = inputs.policy_factory(llm)
         if policy_wrapper is not None:

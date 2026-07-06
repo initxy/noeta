@@ -20,7 +20,15 @@ matching ToolCall share the same vocabulary; provider neutrality pins this.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Optional, Protocol, Union, runtime_checkable
+from typing import (
+    Any,
+    Callable,
+    Literal,
+    Optional,
+    Protocol,
+    Union,
+    runtime_checkable,
+)
 
 from noeta.protocols.canonical import register
 from noeta.protocols.values import ContentRef
@@ -279,6 +287,32 @@ class LLMResponse:
 
 
 # ---------------------------------------------------------------------------
+# Streaming deltas (ephemeral — never persisted)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class StreamDelta:
+    """One incremental fragment of an in-flight LLM response.
+
+    Deltas are **ephemeral**: they never enter EventLog / ContentStore, so
+    this class deliberately carries no ``__canonical_tag__`` and no canonical
+    registration. The durable record of the same bytes is the final
+    :class:`LLMResponse` (and downstream ``MessagesAppended``); a delta is a
+    live preview only, and any consumer must tolerate losing them.
+
+    ``index`` is the content-block index within the response, so a consumer
+    can keep interleaved text/thinking blocks apart. Tool-call arguments are
+    never surfaced as deltas — adapters accumulate them silently until the
+    block completes (argument JSON is undecodable while partial).
+    """
+
+    kind: Literal["text", "thinking"]
+    text: str
+    index: int
+
+
+# ---------------------------------------------------------------------------
 # Provider Protocol
 # ---------------------------------------------------------------------------
 
@@ -318,6 +352,39 @@ class HeaderAwareProvider(Protocol):
         self,
         request: LLMRequest,
         request_headers: Optional[dict[str, str]],
+    ) -> LLMResponse: ...
+
+
+@runtime_checkable
+class StreamingProvider(Protocol):
+    """Optional capability: a provider that can stream response deltas.
+
+    Push-shaped on purpose: the call keeps the blocking one-shot contract of
+    :meth:`LLMProvider.complete` — it still returns the **complete**
+    :class:`LLMResponse`, and ``on_delta`` fires as a side effect while the
+    response is in flight. That shape is what keeps the Engine / Policy /
+    recording / retry paths byte-identical whether or not anyone streams
+    (see the token-streaming decision): an iterator-shaped API would invert
+    control through every layer above.
+
+    ``request_headers`` is folded into this signature (instead of composing
+    with :class:`HeaderAwareProvider`) so the two optional capabilities never
+    form a probe matrix; a provider that ignores headers accepts and drops
+    them. The runtime probes with ``isinstance`` and falls back to the
+    non-streaming paths when absent — see
+    :func:`noeta.runtime.llm._call_provider`.
+
+    Adapters must guarantee: the returned ``LLMResponse`` is shape-identical
+    to what the batch path would produce for the same content, and a
+    mid-stream transport failure raises through the same neutral error
+    taxonomy as ``complete`` (so the runtime retry loop applies unchanged).
+    """
+
+    def complete_streaming(
+        self,
+        request: LLMRequest,
+        on_delta: Callable[[StreamDelta], None],
+        request_headers: Optional[dict[str, str]] = None,
     ) -> LLMResponse: ...
 
 
