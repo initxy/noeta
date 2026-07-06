@@ -12,6 +12,8 @@
 
 流以 JSON 形式携带规范的 `EventEnvelope` 记录，由 `taskId` 寻址。Envelope 的 `seq` 兼作 SSE id，因此 `Last-Event-ID` 可以在流中途恢复。
 
+在流式 LLM 调用进行期间，同一条流还会携带**短暂的 token 增量帧**：具名的 `event: delta` 帧，数据为 `{"task_id", "call_id", "kind": "text"|"thinking", "text", "index"}`。delta 帧**不带 SSE id**——恢复游标不会因它移动，断线重连只补发 envelope，消费过慢时 delta 可能被丢弃。它只是实时预览：持久的真相始终是随后到达的 `MessagesAppended` envelope。通过 `EventSource.addEventListener("delta", …)` 消费；`onmessage` 只会收到 envelope。
+
 ## 任务命令
 
 所有命令端点返回 `202 {"task_id": "<id>"}`（仅确认）；可见变化通过 SSE 流到达（唯一真相来源）。

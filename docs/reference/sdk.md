@@ -188,7 +188,11 @@ identity. Fields: the durable storage triple `event_log` / `content_store` /
 raises `ValueError` on a partial set; all `None` ⇒ in-memory), `app_gateway`
 (`AppPreviewGateway` — `None` ⇒ no `open_app` tool), `mcp_server_resolver`
 (`(alias) → McpAnyServerSpec | None`), `mcp_http_post` (injectable HTTP
-transport, `HttpPostFn`), `workflow_allowed: bool = False`, and
+transport, `HttpPostFn`), `delta_sink`
+(`(StepContext, call_id, StreamDelta) → None` — receives ephemeral token
+deltas while a streaming-capable provider call is in flight; `None` ⇒ no
+streaming, providers are called exactly as before; deltas are never
+persisted), `workflow_allowed: bool = False`, and
 `write_mode: str = "dry_run"` (`"apply"` performs real writes).
 
 Related re-exports from `noeta.tools.app` / `noeta.tools.mcp`:
@@ -231,6 +235,7 @@ Implement one of these and mount it through the matching `Options` field:
 | `Tool` (protocol: metadata + `invoke(arguments, ctx) → ToolResult`) | `allowed_tools` | `noeta/protocols/tool.py:132` |
 | `ToolContext` / `ToolResult` (`success`, `output`, `artifacts`, `output_ref`) | tool call inputs/outputs | `tool.py:108` / `tool.py:19` |
 | `LLMProvider` | `provider` | `noeta/protocols/messages.py:286` |
+| `StreamingProvider` / `StreamDelta` (optional capability: `complete_streaming(request, on_delta, request_headers=None)` still returns the complete `LLMResponse`; deltas are ephemeral side effects) | implement alongside `LLMProvider` on `provider`; consumed via `HostConfig.delta_sink` | `messages.py` |
 | `Policy` | `policy` | `noeta/protocols/policy.py:21` |
 | `Guard` / `GuardContext` / `ProposedAction` / `VerdictResult` | `guards` | `noeta/protocols/hooks.py:159` / `111` / (payload types) / `45` |
 | `Observer` (= `Subscriber`, a `Callable[[EventEnvelope], None]`) | `observers` | `noeta/protocols/event_log.py:47` |

@@ -252,14 +252,18 @@ current stance is: refuse to guess, never corrupt silently. (Normal SIGTERM
 shutdown doesn't hit this — the grace window and heartbeat handle it. This is
 the `kill -KILL` / power-loss case.)
 
-**The stack is synchronous, and there is no token streaming.** The provider
-protocol is one pure call: `complete(request) -> LLMResponse`. The web UI
-receives whole events over SSE — a finished assistant message, a finished tool
-result — not a token stream. For a coding agent that mostly runs tools this is
-tolerable; for a chat-first UX it's a visible gap. Recording a token stream
-into an event-sourced log without either fragmenting the log or hiding
-mutation behind an "in-progress" event is a genuinely interesting design
-problem, and I'd rather ship it right than fast.
+**The stack is synchronous — and token streaming didn't change that.** The
+provider protocol is still one pure blocking call: `complete(request) ->
+LLMResponse`. When I first wrote this section, "record a token stream into an
+event-sourced log without fragmenting the log or hiding mutation behind an
+'in-progress' event" was an open design problem I refused to rush. The answer
+that shipped (0.1.7) turned out to be: *don't record it at all*. A
+streaming-capable provider fires deltas as side effects while the call is in
+flight and still returns the complete response; the deltas ride to the UI as
+named SSE frames with no event id — never persisted, never replayed on
+reconnect — and the finished assistant message remains the only durable
+record. Streamed or not, the log is byte-identical. Tokens are a preview;
+the event is the truth.
 
 ## Where this sits
 
@@ -319,8 +323,9 @@ stable — and the boundaries are real:
 - **The ecosystem is small.** Fewer built-in tools than the incumbents, no
   plugin marketplace, a young community.
 
-What's next, in rough order: token streaming, the attempt-journal ADR for
-mid-step crashes, and then the multi-worker slice.
+What's next, in rough order: the attempt-journal ADR for mid-step crashes,
+and then the multi-worker slice. (Token streaming, which used to head this
+list, shipped in 0.1.7.)
 
 The part I'd defend most strongly is the shape of the bet itself. Agents are
 becoming long-lived processes that do consequential work, and the industry's
