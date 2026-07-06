@@ -432,6 +432,16 @@ def serve_backend(
             dispatcher=dispatcher,
             write_mode=config.write_mode,
             workflow_allowed=config.workflow_enabled,
+            # Per-task prompt-cache stickiness for the ModelHub responses gateway:
+            # a stable ``extra.session_id`` (the task id) pins every turn of a
+            # task to one backend account, so its KV cache is actually reused
+            # (and avoids the long-session ``invalid_encrypted_content`` error).
+            # Other gateways get no extra header.
+            provider_headers=(
+                (lambda ctx: {"extra": json.dumps({"session_id": ctx.task_id})})
+                if (config.provider_id or "").strip().lower() == "openai-responses"
+                else None
+            ),
             otlp_traces=(
                 OtlpTraceConfig(
                     endpoint=config.otlp_endpoint,
