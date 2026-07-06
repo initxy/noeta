@@ -23,6 +23,8 @@ from typing import Any, Callable, Optional
 
 from noeta.agent.registry import AgentRegistry
 from noeta.core.wiring import wire_default_observers
+from noeta.observers.otlp import make_otlp_trace_observer
+from noeta.observers.trace_export import TraceExportObserver
 from noeta.execution import (
     InteractionDriver,
     multi_turn_policy_wrapper,
@@ -279,6 +281,19 @@ class Client:
                 else FsWriteMode.DRY_RUN
             ),
         )
+
+        # OTLP trace export (host config): a lifecycle-owning observer the
+        # Client stops on shutdown. Default off. Constructed only after the
+        # host assembled successfully — its async worker thread must not
+        # outlive a failed __init__ (nothing is emitted before this point,
+        # so no event is missed).
+        self._trace_export: Optional[TraceExportObserver] = None
+        if hc.otlp_traces is not None:
+            self._trace_export = make_otlp_trace_observer(
+                event_log=event_log,
+                config=hc.otlp_traces,
+                http_post=hc.otlp_http_post,
+            )
 
         # 5. Interaction driver
         # A local deployment widens the per-turn model-selector allowlist to its
@@ -873,6 +888,9 @@ class Client:
                 unsub()
             except Exception:
                 pass
+        if self._trace_export is not None:
+            # Unsubscribes, drains the async worker, flushes the sink.
+            self._trace_export.stop()
 
 
 # ---------------------------------------------------------------------------

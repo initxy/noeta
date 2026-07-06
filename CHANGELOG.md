@@ -8,6 +8,29 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- OTLP trace export: task / tool / LLM execution can now be shipped as
+  real spans to any OTLP/HTTP collector (Jaeger, the OpenTelemetry
+  Collector, …). A new `noeta.observers.otlp` module plugs an
+  `OtlpSpanSink` behind the existing `TraceExportObserver` seam,
+  pairing start/finish events by `call_id` into spans (deterministic
+  sha256 ids; subtask spans join their parent's trace so a delegation
+  tree renders as one waterfall). The export consumes the audit
+  allowlist projection only — no goals, tool arguments, or message
+  bodies leave the process — and hand-encodes the OTLP JSON wire
+  format, so no OpenTelemetry SDK dependency is added (`httpx` was
+  already a runtime dependency). Wired via
+  `HostConfig(otlp_traces=OtlpTraceConfig(...))` (re-exported through
+  `noeta.sdk`); the app enables it with `NOETA_AGENT_OTLP_ENDPOINT` /
+  the `otlp_endpoint` config key (opt-in only — an ambient
+  `OTEL_EXPORTER_OTLP_ENDPOINT` never silently enables export; the
+  standard `OTEL_EXPORTER_OTLP_HEADERS` rides along once enabled).
+  Resumed and rewound conversations keep tracing via segment spans;
+  background sub-agents parent into the spawning task's trace. Export
+  failures are logged and dropped — an unreachable collector never
+  breaks a run.
+
 ## [0.1.7] - 2026-07-06
 
 ### Added
