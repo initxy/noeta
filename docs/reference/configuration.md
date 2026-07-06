@@ -33,7 +33,7 @@ Precedence (low → high):
 | `NOETA_AGENT_WRITE_MODE` | string | `dry_run` | Filesystem write policy: `dry_run` (stages a diff, safe default) or `apply` (performs real writes). |
 | `NOETA_AGENT_WORKFLOW_ENABLED` | bool | `false` | Host kill-switch for the `run_workflow` control tool. |
 | `NOETA_AGENT_BACKGROUND_DRIVE` | bool | `true` | Drive turns asynchronously on a background thread (command endpoints return `202`). |
-| `NOETA_AGENT_OTLP_ENDPOINT` | URL | *(none)* | OTLP trace export: the **full** OTLP/HTTP traces URL (e.g. `http://localhost:4318/v1/traces`). Task / tool / LLM execution is exported as spans to any OTLP collector (Jaeger, OpenTelemetry Collector, …). Unset = export off. The OTel-standard `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (used as-is) and `OTEL_EXPORTER_OTLP_ENDPOINT` (`/v1/traces` appended) are honored as fallbacks; `OTEL_EXPORTER_OTLP_HEADERS` (`k=v,k2=v2`) supplies headers. |
+| `NOETA_AGENT_OTLP_ENDPOINT` | URL | *(none)* | OTLP trace export: the **full** OTLP/HTTP traces URL (e.g. `http://localhost:4318/v1/traces`). Task / tool / LLM execution is exported as spans to any OTLP collector (Jaeger, OpenTelemetry Collector, …). Unset = export off. Export is **opt-in via this variable or the `otlp_endpoint` config key only** — an ambient `OTEL_EXPORTER_OTLP_ENDPOINT` never enables it. Once enabled, the OTel-standard `OTEL_EXPORTER_OTLP_HEADERS` (`k=v,k2=v2`, values percent-encoded) supplies request headers. |
 | `NOETA_WEB_SEARCH_API_KEY` | string | *(none)* | Enables the `web_search` built-in tool. Without this key, the tool is not mounted. |
 
 ### Boolean parsing

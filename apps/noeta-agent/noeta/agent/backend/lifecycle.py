@@ -22,6 +22,7 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
+from urllib.parse import unquote
 
 from noeta.sdk import HostConfig, OtlpTraceConfig
 
@@ -109,15 +110,18 @@ class BackendConfig:
     background_drive: bool = True
     #: OTLP trace export: the **full** OTLP/HTTP traces URL (e.g.
     #: ``http://localhost:4318/v1/traces``), threaded to the SDK via
-    #: ``HostConfig.otlp_traces``. Env ``NOETA_AGENT_OTLP_ENDPOINT`` / config
-    #: key ``otlp_endpoint``; absent both, the OTel-standard
-    #: ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` is used as-is, then
-    #: ``OTEL_EXPORTER_OTLP_ENDPOINT`` with ``/v1/traces`` appended (the
-    #: spec's base-vs-signal endpoint semantics). ``None`` ⇒ export off.
+    #: ``HostConfig.otlp_traces``. Export is **opt-in through Noeta config
+    #: only** — env ``NOETA_AGENT_OTLP_ENDPOINT`` / config key
+    #: ``otlp_endpoint``; the ambient OTel-standard
+    #: ``OTEL_EXPORTER_OTLP_ENDPOINT`` is deliberately NOT honored as an
+    #: enable switch (a k8s operator / shared shell injecting it for other
+    #: apps must not silently start Noeta exporting). ``None`` ⇒ off.
     otlp_endpoint: Optional[str] = None
     #: Extra headers on every OTLP export request (hosted-collector auth).
     #: Config key ``otlp_headers`` (dict shape); absent it, the OTel-standard
-    #: ``OTEL_EXPORTER_OTLP_HEADERS`` (``k=v,k2=v2``) is parsed.
+    #: ``OTEL_EXPORTER_OTLP_HEADERS`` (``k=v,k2=v2``, values
+    #: percent-encoded per the spec) is parsed. Headers only ride along when
+    #: ``otlp_endpoint`` is set — they never enable anything by themselves.
     otlp_headers: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
@@ -169,10 +173,11 @@ class BackendConfig:
             if isinstance(background_raw, bool)
             else str(background_raw).strip().lower() in ("1", "true", "yes", "on")
         )
-        otlp_endpoint = pick("OTLP_ENDPOINT", "otlp_endpoint") or _standard_otlp_endpoint(e)
-        otlp_headers = dict(file_vals.get("otlp_headers") or {}) or _parse_otlp_headers(
-            e.get("OTEL_EXPORTER_OTLP_HEADERS")
-        )
+        otlp_endpoint = pick("OTLP_ENDPOINT", "otlp_endpoint")
+        file_headers = file_vals.get("otlp_headers") or {}
+        otlp_headers = {
+            str(k): str(v) for k, v in file_headers.items()
+        } or _parse_otlp_headers(e.get("OTEL_EXPORTER_OTLP_HEADERS"))
         return cls(
             host=pick("HOST", "host", "127.0.0.1"),
             port=int(pick("PORT", "port", 8765)),
@@ -200,31 +205,19 @@ class BackendConfig:
         )
 
 
-def _standard_otlp_endpoint(env: Mapping[str, str]) -> Optional[str]:
-    """Resolve the OTel-standard exporter env vars to a full traces URL.
-
-    Per the OTel spec: the signal-specific ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT``
-    is used **as-is**; the base ``OTEL_EXPORTER_OTLP_ENDPOINT`` gets
-    ``/v1/traces`` appended.
-    """
-    traces = env.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
-    if traces:
-        return traces
-    base = env.get("OTEL_EXPORTER_OTLP_ENDPOINT")
-    if base:
-        return base.rstrip("/") + "/v1/traces"
-    return None
-
-
 def _parse_otlp_headers(raw: Optional[str]) -> dict[str, str]:
-    """Parse the OTel-standard ``OTEL_EXPORTER_OTLP_HEADERS`` (``k=v,k2=v2``)."""
+    """Parse the OTel-standard ``OTEL_EXPORTER_OTLP_HEADERS`` (``k=v,k2=v2``).
+
+    Values are percent-decoded (the spec defines them as W3C-baggage
+    percent-encoded, e.g. ``Authorization=Basic%20dXNlcg==``).
+    """
     if not raw:
         return {}
     out: dict[str, str] = {}
     for pair in raw.split(","):
         key, sep, value = pair.partition("=")
         if sep and key.strip():
-            out[key.strip()] = value.strip()
+            out[key.strip()] = unquote(value.strip())
     return out
 
 

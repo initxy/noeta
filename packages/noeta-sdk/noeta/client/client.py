@@ -220,15 +220,6 @@ class Client:
         self._unsubscribe_observers: list[Callable[[], None]] = [
             event_log.subscribe(obs) for obs in options.observers
         ]
-        # OTLP trace export (host config): a lifecycle-owning observer the
-        # Client stops on shutdown. Default off.
-        self._trace_export: Optional[TraceExportObserver] = None
-        if hc.otlp_traces is not None:
-            self._trace_export = make_otlp_trace_observer(
-                event_log=event_log,
-                config=hc.otlp_traces,
-                http_post=hc.otlp_http_post,
-            )
         self._shutdown = False
 
         # 4. Assemble host
@@ -290,6 +281,19 @@ class Client:
                 else FsWriteMode.DRY_RUN
             ),
         )
+
+        # OTLP trace export (host config): a lifecycle-owning observer the
+        # Client stops on shutdown. Default off. Constructed only after the
+        # host assembled successfully — its async worker thread must not
+        # outlive a failed __init__ (nothing is emitted before this point,
+        # so no event is missed).
+        self._trace_export: Optional[TraceExportObserver] = None
+        if hc.otlp_traces is not None:
+            self._trace_export = make_otlp_trace_observer(
+                event_log=event_log,
+                config=hc.otlp_traces,
+                http_post=hc.otlp_http_post,
+            )
 
         # 5. Interaction driver
         # A local deployment widens the per-turn model-selector allowlist to its
