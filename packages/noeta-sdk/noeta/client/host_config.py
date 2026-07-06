@@ -22,7 +22,7 @@ into durable storage / preview / MCP while still driving the engine only through
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional, Tuple
+from typing import Callable, Mapping, Optional, Tuple
 
 from noeta.observers.otlp import OtlpHttpPost, OtlpTraceConfig
 from noeta.protocols.content_store import ContentStore
@@ -95,6 +95,14 @@ class HostConfig:
     #: production leaves it ``None`` to use httpx) — the ``mcp_http_post``
     #: pattern.
     otlp_http_post: Optional[OtlpHttpPost] = None
+    #: Per-request provider header factory: ``(ctx) -> {header: value}`` called
+    #: once per LLM round-trip, merged over the provider client's static
+    #: headers. The product wires a stable per-task ``session_id`` here so a
+    #: gateway that pins prompt-cache to a single backend account (ModelHub's
+    #: ``extra.session_id`` account-stickiness) keeps a long task on one
+    #: account and actually reuses its KV cache. ``None`` (default) ⇒ no
+    #: per-request headers — a host runtime injection, never agent identity.
+    provider_headers: Optional[Callable[[StepContext], Mapping[str, str]]] = None
 
     # -- host kill-switches ------------------------------------------------
     workflow_allowed: bool = False

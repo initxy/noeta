@@ -93,6 +93,9 @@ def test_host_injections_reach_the_host(tmp_path: Path) -> None:
     def resolver(alias: str):  # noqa: ANN202 — test stub
         return None
 
+    def headers(ctx):  # noqa: ANN001, ANN202 — test stub
+        return {"extra": ctx.task_id}
+
     client = Client(
         _options(),
         provider=_finishing_provider(),
@@ -100,12 +103,14 @@ def test_host_injections_reach_the_host(tmp_path: Path) -> None:
         host_config=HostConfig(
             app_gateway=sentinel_gateway,  # type: ignore[arg-type]
             mcp_server_resolver=resolver,
+            provider_headers=headers,
             workflow_allowed=True,
         ),
     )
     try:
         assert client._host.app_gateway is sentinel_gateway
         assert client._host.mcp_server_resolver is resolver
+        assert client._host.provider_headers is headers
         assert client._host.workflow_allowed is True
     finally:
         client.shutdown()
