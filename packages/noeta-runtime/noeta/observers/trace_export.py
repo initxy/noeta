@@ -9,10 +9,11 @@ tool_name, model, content-hash refs, summary/reason, possibly paths — so
 a trace file is sensitive operational data, not a scrubbed artifact).
 
 Three pieces, all `noeta.protocols` + stdlib only (``observers-only-
-protocols`` holds; no ``httpx`` / OTel — OTLP/Langfuse are a documented
-follow-on ``inner`` adapter, not built here):
+protocols`` holds; this module itself stays free of ``httpx`` / OTel —
+the OTLP ``inner`` adapter lives in :mod:`noeta.observers.otlp`):
 
-* :class:`JsonlTraceSink` — the inner exporter: one canonical-JSON line
+* :class:`JsonlTraceSink` — an inner exporter (the :class:`TraceSink`
+  shape: ``__call__(record)`` + ``close()``): one canonical-JSON line
   per record appended to a real file. IO failure is logged + dropped.
 * :class:`AsyncTraceSink` — wraps an inner ``AuditSink`` so the EventLog
   emit path never blocks: the hot-path ``__call__`` only ``put_nowait``s
@@ -39,7 +40,7 @@ import logging
 import queue
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Protocol
 
 from noeta.observers.audit import AuditObserver, AuditRecord, AuditSink
 from noeta.protocols.event_log import EventLogSubscriber
@@ -49,7 +50,19 @@ __all__ = [
     "AsyncTraceSink",
     "JsonlTraceSink",
     "TraceExportObserver",
+    "TraceSink",
 ]
+
+
+class TraceSink(Protocol):
+    """The inner-exporter shape: a serially-invoked :data:`AuditSink`
+    plus a ``close()`` that releases its transport (file handle, final
+    HTTP flush). Implementations: :class:`JsonlTraceSink`,
+    :class:`noeta.observers.otlp.OtlpSpanSink`."""
+
+    def __call__(self, record: AuditRecord) -> None: ...
+
+    def close(self) -> None: ...
 
 
 _log = logging.getLogger(__name__)
@@ -178,7 +191,7 @@ class TraceExportObserver:
         self,
         *,
         event_log: EventLogSubscriber,
-        inner_sink: JsonlTraceSink,
+        inner_sink: TraceSink,
         max_queue: int = _DEFAULT_QUEUE_MAX,
     ) -> None:
         self._inner = inner_sink
