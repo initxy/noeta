@@ -8,6 +8,17 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-07-06
+
+### Fixed
+
+- OpenAI Responses prompt-cache account stickiness: `HostConfig` accepts a
+  per-request `provider_headers` factory that the agent lifecycle wires to
+  emit `extra.session_id` (the task id) on the `openai-responses` provider.
+  This pins every turn of a long task to one backend account on the ModelHub
+  responses gateway, so its KV cache is actually reused and the long-session
+  `invalid_encrypted_content` error is avoided.
+
 ## [0.1.8] - 2026-07-06
 
 ### Added
@@ -220,7 +231,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.9...HEAD
+[0.1.9]: https://github.com/initxy/noeta/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/initxy/noeta/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/initxy/noeta/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/initxy/noeta/compare/v0.1.5...v0.1.6
