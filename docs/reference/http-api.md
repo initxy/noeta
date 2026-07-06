@@ -22,6 +22,16 @@ stream per root conversation: canonical `EventEnvelope`s (the
 envelope `seq` doubling as the SSE id — send `Last-Event-ID` to resume from a
 cursor.
 
+The same stream carries **ephemeral token-delta frames** while a streaming
+LLM call is in flight: named `event: delta` frames whose data is
+`{"task_id", "call_id", "kind": "text"|"thinking", "text", "index"}`. Delta
+frames carry **no SSE id** — the resume cursor never moves for them, a
+reconnect replays envelopes only, and a slow consumer may have deltas
+dropped. They are a live preview: the durable truth is always the
+`MessagesAppended` envelope that follows (`stream.py:79`, ADR
+`token-streaming-projection`). Consume them via
+`EventSource.addEventListener("delta", …)`; `onmessage` sees only envelopes.
+
 ### `POST /tasks` — create a conversation (`task_protocol.py:209`)
 
 Body: `goal` (string), `agent` (optional preset/agent name), `images`
