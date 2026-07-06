@@ -41,11 +41,15 @@ crash-recovery machinery behind this guarantee is described in the
 The guarantee above is scoped to the shipped deployment shape: one durable
 store (SQLite) and one resident Worker process draining it. Within that
 scope, a Worker crash at any point between match and consumption resolves to
-exactly one durable `TaskWoken`. Outside it, two boundaries remain open:
-multi-worker / multi-host concurrency (fencing between competing Workers is
-not shipped), and the partial-step-orphan edge — a crash mid-step, after
-`TaskWoken` but before the step's remaining events land. Both are catalogued
-in [known limitations](../operations/limitations.md).
+exactly one durable `TaskWoken`. A crash **mid-step** — after `TaskWoken`,
+before the step's remaining events land — recovers on the next lease: the
+interrupted attempt is sealed with a durable `StepAttemptAbandoned` marker
+and re-driven automatically when it recorded no side-effectful activity;
+otherwise the Task is parked as a stopped conversation with a system notice
+for a human to verify. One boundary remains open: multi-worker / multi-host
+concurrency (fencing between competing Workers is not shipped). Both the
+recovery scope and that boundary are catalogued in
+[known limitations](../operations/limitations.md).
 
 Related: [Task model](task-model.md) ·
 [Engine & execution](engine-execution.md) ·

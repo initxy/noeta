@@ -331,9 +331,17 @@ class _SpanAssembler:
             "timeUnixNano": str(_ns(record.occurred_at)),
             "name": record.type,
         }
+        attributes: list[dict[str, Any]] = []
         reason = record.payload_summary.get("reason")
         if reason:
-            event["attributes"] = [_kv("noeta.reason", reason)]
+            attributes.append(_kv("noeta.reason", reason))
+        # StepAttemptAbandoned only: the interrupted attempt's start seq, so
+        # a collector can line the sealed-over dead segment up with the log.
+        abandoned_from = record.payload_summary.get("abandoned_from_seq")
+        if abandoned_from is not None:
+            attributes.append(_kv("noeta.abandoned_from_seq", abandoned_from))
+        if attributes:
+            event["attributes"] = attributes
         span.events.append(event)
         return []
 
@@ -446,6 +454,12 @@ _HANDLERS: dict[str, Callable[[_SpanAssembler, AuditRecord], list[dict[str, Any]
     "TaskSuspended": _SpanAssembler._on_task_mark,
     "TaskWoken": _SpanAssembler._on_task_woken,
     "TaskRewound": _SpanAssembler._on_task_rewound,
+    # A crash-recovery seal re-bases the stream exactly like a rewind (fold
+    # reuses the same snapshot-shaped baseline path) and the re-driven
+    # attempt continues after it, so the rewind handler applies as-is: a
+    # segment span when the primary span is gone, otherwise a span event
+    # carrying ``noeta.reason`` + ``noeta.abandoned_from_seq``.
+    "StepAttemptAbandoned": _SpanAssembler._on_task_rewound,
     "SubtaskSpawned": _SpanAssembler._on_subtask_spawned,
     # Background sub-agents spawn without a SubtaskSpawned (ADR
     # background-subagent); their start record carries the same

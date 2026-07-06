@@ -327,14 +327,15 @@ class PostgresEventLog:
 
     def find_latest_snapshot(self, task_id: str) -> Optional[EventEnvelope]:
         with self._lock:
-            # TaskRewound is a snapshot-shaped fold baseline
-            # (``state_ref`` too) — take whichever of {TaskSnapshot,
-            # TaskRewound} has the higher seq so a rewind re-bases fold
+            # TaskRewound / StepAttemptAbandoned are snapshot-shaped fold
+            # baselines (``state_ref`` too) — take whichever of the three
+            # has the higher seq so a rewind / attempt seal re-bases fold
             # from the same lookup. ``ix_events_snapshot`` is partial on
-            # exactly this predicate.
+            # exactly this predicate (migration 2).
             row = self._conn.execute(
                 "SELECT * FROM events "
-                "WHERE task_id = %s AND type IN ('TaskSnapshot', 'TaskRewound') "
+                "WHERE task_id = %s AND type IN "
+                "('TaskSnapshot', 'TaskRewound', 'StepAttemptAbandoned') "
                 "ORDER BY seq DESC LIMIT 1",
                 (task_id,),
             ).fetchone()

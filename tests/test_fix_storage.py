@@ -137,9 +137,11 @@ def test_no_snapshot_returns_none(log) -> None:
 def test_sqlite_snapshot_lookup_uses_index() -> None:
     # #38: the old partial index (WHERE type = 'TaskSnapshot') was dead —
     # the live IN-list query could never use it and fell back to the PK.
-    # After migration 5 widens the index to the IN predicate, the planner
-    # must choose it. Seed rows + ANALYZE so the optimizer has stats; on an
-    # empty table SQLite trivially prefers the clustered PK.
+    # A partial index is only chosen when its WHERE matches the live query
+    # predicate exactly (migration 5 learned this; migration 8 re-widened
+    # both to include StepAttemptAbandoned), so the planner must choose it
+    # for the live 3-type lookup. Seed rows + ANALYZE so the optimizer has
+    # stats; on an empty table SQLite trivially prefers the clustered PK.
     elog = SqliteEventLog(":memory:")
     try:
         elog.emit(
@@ -157,7 +159,8 @@ def test_sqlite_snapshot_lookup_uses_index() -> None:
         plan = elog._conn.execute(
             "EXPLAIN QUERY PLAN "
             "SELECT * FROM events "
-            "WHERE task_id = ? AND type IN ('TaskSnapshot', 'TaskRewound') "
+            "WHERE task_id = ? AND type IN "
+            "('TaskSnapshot', 'TaskRewound', 'StepAttemptAbandoned') "
             "ORDER BY seq DESC LIMIT 1",
             ("t1",),
         ).fetchall()

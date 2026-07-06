@@ -120,11 +120,11 @@ class PostgresReadOnlyStore:
         return [_row_to_envelope(row) for row in rows]
 
     def find_latest_snapshot(self, task_id: str) -> Optional[EventEnvelope]:
-        # TaskRewound is a snapshot-shaped fold baseline too — take
-        # whichever of {TaskSnapshot, TaskRewound} has the higher seq.
+        # TaskRewound / StepAttemptAbandoned are snapshot-shaped fold
+        # baselines too — take whichever of the three has the higher seq.
         row = self._conn.execute(
             "SELECT * FROM events WHERE task_id = %s "
-            "AND type IN ('TaskSnapshot', 'TaskRewound') "
+            "AND type IN ('TaskSnapshot', 'TaskRewound', 'StepAttemptAbandoned') "
             "ORDER BY seq DESC LIMIT 1",
             (task_id,),
         ).fetchone()

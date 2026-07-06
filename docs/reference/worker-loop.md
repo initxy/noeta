@@ -77,11 +77,12 @@ There is **no `workers` knob** — the loop is single-worker by design.
 | `running: bool` | loop still running | `worker.py:846` |
 | `abandoned: bool` | set when the shutdown grace elapsed with a step still in flight. The host **must exit the process** — the abandoned step thread may still write the EventLog; in-process reuse is unsupported | `worker.py:850` |
 
-Helpers: `install_stop_signals(loop) → restore()` (`worker.py:1118`);
-`run_leased_task(rt, lease, *, prelude=None, next_goal_handle=None) →
-WorkerOutcome` — the canonical 3-state resume machine shared with the
-in-process runner (`worker.py:390`); `keep_lease_alive(...)` — the per-step
-heartbeat context manager (`worker.py:708`).
+Helpers: `install_stop_signals(loop) → restore()`;
+`run_leased_task(rt, lease, *, prelude=None, next_goal_handle=None,
+reliability_sink=None, engine=None) → WorkerOutcome` — the canonical
+3-state resume machine (including crash-recovery seal / re-drive / park)
+shared with the in-process runner (`worker.py:421`);
+`keep_lease_alive(...)` — the per-step heartbeat context manager.
 
 ## Exception policy — `worker.py:755-767`
 
@@ -96,20 +97,28 @@ A resident loop must not crash on a poisoned task:
 
 ## Outcome and reliability types
 
-`WorkerOutcome` (`worker.py:148`):
+`WorkerOutcome` (`worker.py:162`):
 `"woken" | "drained" | "skipped" | "cancelled" | "stopped"` — `"skipped"`
 means a suspended task with no wake yet (a diagnostic, not an error);
 `"cancelled"` / `"stopped"` mean a human cancel/close landed mid-turn.
+`"stopped"` also covers a crash-recovery **park**: the task rests
+suspended with a system notice, and typing a message resumes it.
 
-`ReliabilityEvent` (`worker.py:120`) — process-local signals (**not**
-EventLog events), sent to `reliability_sink`. Kinds (`worker.py:110`):
+`ReliabilityEvent` (`worker.py:134`) — process-local signals (**not**
+EventLog events), sent to `reliability_sink`. Kinds (`worker.py:122`):
 `stale_requeued`, `suspended_without_wake`, `step_failed_retryable`,
-`heartbeat_invalid_lease`, `shutdown_abandoned`, `timers_fired`.
+`heartbeat_invalid_lease`, `shutdown_abandoned`, `timers_fired`,
+`attempt_abandoned`, `attempt_parked` (the last two are the
+crash-recovery moments: an interrupted attempt sealed and re-driven
+automatically, or sealed and parked for a human).
 
-Exceptions: `WakeRecoveryError` (`worker.py:153`) — a woken lease's wake
-cannot be reconciled against folded state; the worker fails loud.
-`PartialStepOrphan` (`worker.py:160`) — after a durable `TaskWoken`, a step
-crashed mid-flight; the worker does not silently re-run the partial step.
+Exceptions: `WakeRecoveryError` (`worker.py:167`) — a woken lease's wake
+cannot be reconciled against folded state; the worker fails loud. A crash
+mid-step is **not** an error path: on the next lease the interrupted
+attempt is sealed with `StepAttemptAbandoned` and re-driven automatically
+when it is side-effect-free per the approval surface, or the task is
+parked for a human (see
+[known limitations](../operations/limitations.md)).
 
 ## Shutdown semantics
 
@@ -123,8 +132,8 @@ is only safe because the process exits; the lease then expires and
 The heartbeat cannot extend a lease forever: the dispatcher caps extensions,
 so `heartbeat_interval × heartbeat_max` bounds one step's hold; past the cap
 the lease is force-released and the step's next write fails with
-`InvalidLease`. Boundary conditions — single worker, the partial-step-orphan
-edge, crash-recovery scope — are catalogued in
+`InvalidLease`. Boundary conditions — single worker, crash-recovery
+scope — are catalogued in
 [known limitations](../operations/limitations.md).
 
 ## See also

@@ -300,6 +300,24 @@ _MIGRATION_7_FIRE_AT_INDEX = (
 )
 
 
+# Migration 8: widen the fold-baseline index to include the
+# crash-recovery seal.
+#
+# ``StepAttemptAbandoned`` is a third snapshot-shaped fold baseline
+# (``state_ref``, like TaskRewound). ``find_latest_snapshot`` now looks up
+# ``type IN ('TaskSnapshot', 'TaskRewound', 'StepAttemptAbandoned')``, and
+# a partial index is only chosen when its WHERE matches the query
+# predicate exactly (the migration-5 lesson), so the index is re-created
+# with the widened IN-list.
+_MIGRATION_8_DROP_SNAPSHOT_INDEX = "DROP INDEX IF EXISTS ix_events_snapshot"
+
+_MIGRATION_8_BASELINE_INDEX = (
+    "CREATE INDEX ix_events_snapshot "
+    "ON events (task_id, seq DESC) "
+    "WHERE type IN ('TaskSnapshot', 'TaskRewound', 'StepAttemptAbandoned')"
+)
+
+
 MIGRATIONS: list[Migration] = [
     Migration(
         version=1,
@@ -351,6 +369,14 @@ MIGRATIONS: list[Migration] = [
             _MIGRATION_7_FIRE_AT_COLUMN,
             _MIGRATION_7_FIRE_AT_BACKFILL,
             _MIGRATION_7_FIRE_AT_INDEX,
+        ),
+    ),
+    Migration(
+        version=8,
+        description="widen snapshot index to include StepAttemptAbandoned",
+        statements=(
+            _MIGRATION_8_DROP_SNAPSHOT_INDEX,
+            _MIGRATION_8_BASELINE_INDEX,
         ),
     ),
 ]

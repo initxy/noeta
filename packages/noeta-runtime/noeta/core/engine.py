@@ -93,6 +93,7 @@ from noeta.protocols.events import (
     ConversationReopenedPayload,
     EventEnvelope,
     ModelBoundPayload,
+    StepAttemptAbandonedPayload,
     TaskCreatedPayload,
     TaskSnapshotPayload,
     TaskStartedPayload,
@@ -104,6 +105,7 @@ from noeta.protocols.events import (
 from noeta.protocols.hooks import (
     GuardContext,
     ProposedAction,
+    ProposedToolCall,
     VerdictResult,
 )
 from noeta.protocols.messages import (
@@ -1436,3 +1438,61 @@ def emit_context_content_recorded(
     )
     apply_event(task, env, engine._content_store)
     return task
+
+
+def abandon_step_attempt(
+    engine: Engine,
+    task_id: str,
+    *,
+    baseline: Task,
+    abandoned_from_seq: int,
+    reason: str,
+    lease_id: str,
+) -> EventEnvelope:
+    """Seal an interrupted decide→act attempt (crash recovery).
+
+    Serialises ``baseline`` (the state as it stood just before the
+    interrupted attempt's ``ContextPlanComposed``) into the ContentStore —
+    the same 4-slice body ``TaskSnapshot`` / ``TaskRewound`` point at — and
+    appends the snapshot-shaped ``StepAttemptAbandoned`` marker, making the
+    partial attempt folded-over dead history. Written **under the recovery
+    lease** (unlike the control-plane ``TaskRewound``) so a zombie step
+    thread from the crashed process can never race the seal.
+
+    A MODULE-LEVEL free function (like :func:`suspend_on_human_handle`): it
+    reaches into ``engine`` internals yet must stay OUT of the ``class
+    Engine`` body so it does not count against the line budget.
+    """
+    state_ref = engine._content_store.put(
+        serialize_task_state(baseline), media_type=snapshot_media_type()
+    )
+    return engine._emit(
+        task_id=task_id,
+        type_="StepAttemptAbandoned",
+        payload=StepAttemptAbandonedPayload(
+            abandoned_from_seq=abandoned_from_seq,
+            state_ref=state_ref,
+            reason=reason,
+        ),
+        lease_id=lease_id,
+        trace_id=engine._latest_trace_id(task_id),
+    )
+
+
+def guard_allows_tool_call(engine: Engine, task: Task, call: ToolCall) -> bool:
+    """Would ``call`` run with no human approval gate right now?
+
+    The crash-recovery classifier's single question: an interrupted attempt
+    may be re-driven automatically only when every tool call recorded in it
+    would execute unattended (the same surface ``handle_tool_calls`` gates
+    live execution on — permission mode, risk ceiling, ``can_use_tool``,
+    skill grants). Any non-ALLOW verdict — approval *or* deny — classifies
+    the attempt as needing a human, conservatively: a deny would not re-run
+    the call, but its original side effects already happened once and only
+    an operator can judge them. A guard crash also returns ``False``
+    (fail-closed), matching ``PermissionGuard``'s own conventions.
+    """
+    try:
+        return engine._guard(ProposedToolCall(call=call), task).is_allow
+    except Exception:  # noqa: BLE001 — classification must fail closed
+        return False

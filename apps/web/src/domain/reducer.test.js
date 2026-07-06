@@ -229,3 +229,30 @@ test("reduceEvents: TaskRewound prunes a stale retry badge", () => {
   ]);
   assert.equal(vm.llmRetry, null);
 });
+
+test("reduceEvents: StepAttemptAbandoned prunes the dead attempt (exclusive boundary)", () => {
+  // The seal re-bases to just BEFORE abandoned_from_seq: the interrupted
+  // attempt's ghost tool call (started, never finished) must go; everything
+  // strictly before the boundary stays. No tombstone turn is added.
+  const vm = reduceEvents([
+    { task_id: "t1", seq: 0, type: "TaskCreated", payload: {} },
+    { task_id: "t1", seq: 1, type: "ContextPlanComposed", payload: {} },
+    {
+      task_id: "t1",
+      seq: 2,
+      type: "ToolCallStarted",
+      payload: { call_id: "ghost", tool_name: "shell_run", arguments: {} },
+    },
+    {
+      task_id: "t1",
+      seq: 3,
+      type: "StepAttemptAbandoned",
+      payload: { abandoned_from_seq: 1, reason: "crash_recovery" },
+    },
+  ]);
+  assert.equal(vm.toolCalls["ghost"], undefined);
+  assert.equal(
+    vm.turns.some((t) => typeof t.seq === "number" && t.seq >= 1),
+    false,
+  );
+});

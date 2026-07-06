@@ -24,28 +24,39 @@ between competing workers (so two workers do not lease the same task),
 distributed timer due-checks, and completion-ordering guarantees. That
 is a significant architectural slice, not yet shipped.
 
-## Partial-step-orphan crash edge
+## Mid-step crash recovery does not undo side effects
 
-**What it means:** If a worker crashes **mid-step** — after writing
-`TaskWoken` and some partial step events (e.g. `ToolCallStarted` but
-not `ToolCallCompleted`) — the task is left in a state with orphan
-events. The fold can rebuild state, but a from-scratch replay does not
-reproduce the partial attempt.
+**What it means:** A worker crash **mid-step** (`kill -KILL`, power
+loss) is recovered automatically on the next lease: the interrupted
+attempt is sealed with a durable `StepAttemptAbandoned` marker and the
+step is re-driven when everything the attempt recorded would have run
+without a human approval gate. When the attempt had unprovable side
+effects — or after 3 consecutive seals in one turn — the task is
+instead **parked**: suspended as a stopped conversation with an
+`origin="system"` notice naming each interrupted call and whether it
+completed. A crash during a human-approved tool execution always parks,
+re-suspended on the same approval. Recovery never silently terminates
+the task and never silently re-runs a side-effectful call — but it
+also does **not** undo anything the crashed attempt already did.
 
-**When you hit it:** The process is killed (`kill -KILL`) or the host
-loses power during a step that has already written some events. Normal
-shutdown (SIGTERM) does not trigger this — the grace window and
-heartbeat handle that.
+**When you hit it:** A hard kill or power loss lands during an attempt
+that had already run side-effectful tools (an interrupted `shell_run`,
+a completed `edit`, an approved call mid-execution). Normal shutdown
+(SIGTERM) does not trigger this, and a crash during reads or planning
+recovers with no human involved.
 
-**Workaround:** Inspect the task manually (`GET /tasks/{id}/events`)
-and decide whether to re-drive it or close it. The worker raises a
-typed `PartialStepOrphan` error when it detects this on resume; it does
-not silently re-run the partial step.
+**Workaround:** Open the parked conversation — the notice lists what
+was interrupted. Verify whether those operations applied fully,
+partially, or not at all, then just type to continue (the turn resumes
+from the clean pre-attempt baseline) or re-approve the pending call;
+`close` / `cancel` work as usual.
 
-**Why it is this way:** Closing this cleanly needs an attempt-journal /
-replay-semantics mechanism — its own ADR. The current design prioritizes
-not silently corrupting state over automatic recovery from mid-step
-crashes.
+**Why it is this way:** Classification reuses the same permission
+surface that gates live execution, so recovery is never more permissive
+than the agent's own approval rules. But whether a half-run `shell_run`
+actually changed the world cannot be proven from the log — the design
+prevents silent duplicates and leaves the judgment of half-applied
+effects to a human.
 
 ## Bounded shutdown, but no in-process thread interrupt
 
@@ -86,7 +97,8 @@ viable or if it should be closed.
 
 **What it means:** The worker emits `ReliabilityEvent`s —
 `stale_requeued`, `suspended_without_wake`, `step_failed_retryable`,
-`heartbeat_invalid_lease`, `shutdown_abandoned` — to an injectable sink
+`heartbeat_invalid_lease`, `shutdown_abandoned`, `timers_fired`,
+`attempt_abandoned`, `attempt_parked` — to an injectable sink
 (default: structured logs). These are **not** EventLog events, are not
 persisted, and do not survive a process restart.
 

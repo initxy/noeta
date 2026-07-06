@@ -336,11 +336,13 @@ class InMemoryEventLog:
         with self._lock:
             events = self._streams[task_id].events
             for envelope in reversed(events):
-                # a TaskRewound is a snapshot-shaped fold baseline
-                # (carries ``state_ref`` too), so the rewind re-bases fold from
-                # the same accelerated lookup. Reverse scan returns whichever of
-                # {TaskSnapshot, TaskRewound} has the higher seq.
-                if envelope.type in ("TaskSnapshot", "TaskRewound"):
+                # TaskRewound / StepAttemptAbandoned are snapshot-shaped fold
+                # baselines (carry ``state_ref`` too), so a rewind / attempt
+                # seal re-bases fold from the same accelerated lookup. Reverse
+                # scan returns whichever baseline has the higher seq.
+                if envelope.type in (
+                    "TaskSnapshot", "TaskRewound", "StepAttemptAbandoned"
+                ):
                     return envelope
         return None
 
