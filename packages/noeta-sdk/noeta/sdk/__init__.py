@@ -31,6 +31,7 @@ from noeta.client.capabilities import (
 )
 from noeta.client.client import Client, QueryFailedError, QueryResult, query
 from noeta.client.host_config import HostConfig
+from noeta.observers.otlp import OtlpTraceConfig
 from noeta.client.messages import (
     AssistantMessage,
     Result,
@@ -123,6 +124,7 @@ __all__ = [
     "QueryResult",
     # host-level wiring (D3)
     "HostConfig",
+    "OtlpTraceConfig",
     "AppPreviewGateway",
     "AppMount",
     "McpAnyServerSpec",
