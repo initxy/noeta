@@ -24,6 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Optional, Tuple
 
+from noeta.observers.otlp import OtlpHttpPost, OtlpTraceConfig
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
 from noeta.protocols.event_log import EventLogFull
@@ -84,6 +85,16 @@ class HostConfig:
     delta_sink: Optional[
         Callable[[StepContext, str, StreamDelta], None]
     ] = None
+    #: OTLP trace export: when set, the Client wires a
+    #: :class:`noeta.observers.trace_export.TraceExportObserver` with an
+    #: OTLP/HTTP JSON sink at the configured endpoint and stops it on
+    #: ``shutdown``. ``None`` (default) ⇒ no trace export. A host runtime
+    #: injection like the preview gateway — never part of agent identity.
+    otlp_traces: Optional[OtlpTraceConfig] = None
+    #: Injectable HTTP transport for the OTLP exporter (tests pass a fake;
+    #: production leaves it ``None`` to use httpx) — the ``mcp_http_post``
+    #: pattern.
+    otlp_http_post: Optional[OtlpHttpPost] = None
 
     # -- host kill-switches ------------------------------------------------
     workflow_allowed: bool = False
