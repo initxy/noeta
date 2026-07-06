@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, Optional
@@ -69,6 +70,7 @@ from noeta.execution.memory import (
 from noeta.execution.resolver import agent_name_of
 from noeta.execution.subtask_drain import UnsupportedSubtaskSuspend
 from noeta.providers.catalog import resolve_alias
+from noeta.core.engine import suspend_on_human_handle
 from noeta.core.fold import BoundedEventLog, fold
 from noeta.core.snapshot import serialize_task_state, snapshot_media_type
 from noeta.protocols.errors import CodedError, InvalidLease
@@ -105,6 +107,8 @@ from noeta.runtime.worker import (
     keep_lease_alive,
     run_leased_task,
 )
+
+_log = logging.getLogger(__name__)
 
 __all__ = [
     "InteractionDriver",
@@ -1589,7 +1593,7 @@ class InteractionDriver:
         # Fold the state as it stood THROUGH ``keep_through`` by folding a view of
         # the stream truncated at that seq (fold's own snapshot/rewound
         # acceleration still applies within the truncated window).
-        bounded = _BoundedEventLog(host.event_log, events, keep_through)
+        bounded = _BoundedEventLog(events, keep_through)
         baseline = fold(bounded, host.content_store, task_id)
         state_ref = host.content_store.put(
             serialize_task_state(baseline), media_type=snapshot_media_type()
@@ -1862,6 +1866,11 @@ class InteractionDriver:
             task_id=task_id,
         )
         if lease is None or lease.wake_event is None:
+            # Dispatcher out of sync with the folded truth (e.g. a fresh
+            # dispatcher over an existing log): restore its rows from the
+            # fold and retry ONCE. The retried lease then falls through to
+            # the same seed tail below — the D6 durable-prelude application
+            # must not depend on which acquisition path produced the lease.
             task = fold(host.event_log, host.content_store, task_id)
             if self._restore_dispatcher_to_baseline(task_id, task):
                 host.dispatcher.wake(task_id, condition)
@@ -1870,22 +1879,19 @@ class InteractionDriver:
                     lease_seconds=self._lease_seconds,
                     task_id=task_id,
                 )
-                if lease is not None and lease.wake_event is not None:
-                    return SeededTurn(
-                        task_id=task_id, lease=lease, prelude=prelude
-                    )
-            task_status = getattr(host.dispatcher, "task_status", None)
-            dispatcher_status = (
-                task_status(task_id) if callable(task_status) else None
-            )
-            raise NotResumableError(
-                task_id=task_id,
-                handle=handle,
-                status=task.status,
-                wake_on=getattr(task, "wake_on", None),
-                dispatcher_status=dispatcher_status,
-                expected=expected,
-            )
+            if lease is None or lease.wake_event is None:
+                task_status = getattr(host.dispatcher, "task_status", None)
+                dispatcher_status = (
+                    task_status(task_id) if callable(task_status) else None
+                )
+                raise NotResumableError(
+                    task_id=task_id,
+                    handle=handle,
+                    status=task.status,
+                    wake_on=getattr(task, "wake_on", None),
+                    dispatcher_status=dispatcher_status,
+                    expected=expected,
+                )
         if prelude is not None and getattr(prelude, "durable_at_seed", False):
             engine = self._apply_seed_prelude(task_id, lease, prelude)
             return SeededTurn(
@@ -1911,7 +1917,36 @@ class InteractionDriver:
         task = engine.note_woken(
             task, lease_id=lease.lease_id, wake_event=lease.wake_event
         )
-        prelude(engine, task, lease_id=lease.lease_id)
+        try:
+            prelude(engine, task, lease_id=lease.lease_id)
+        except Exception:
+            # ``TaskWoken`` is already durable; propagating with the turn
+            # half-seeded would strand a ``running`` window the worker later
+            # re-drives WITHOUT the command's input (a bare case 2′), and the
+            # client's retry would find the task not suspended. Compensate:
+            # re-suspend on the wake's own handle and release the lease, so
+            # the stream reads woken→suspended and retrying the SAME command
+            # (e.g. after a ``PayloadTooLarge``) works. Best-effort — if the
+            # log itself is down these writes fail too and the original
+            # error is still the one to surface.
+            try:
+                wake = lease.wake_event
+                if isinstance(wake, HumanResponseReceived):
+                    task = suspend_on_human_handle(
+                        engine, task,
+                        handle=wake.handle, lease_id=lease.lease_id,
+                    )
+                    host.dispatcher.release(
+                        lease.lease_id,
+                        next_state="suspended",
+                        wake_on=task.wake_on,
+                        consumed_wake_event=wake,
+                    )
+            except Exception:  # noqa: BLE001 — surface the original failure
+                _log.exception(
+                    "seed-prelude compensation failed for task %s", task_id
+                )
+            raise
         return engine
 
     def _require_human_suspend(self, task_id: str, handle: str) -> Task:

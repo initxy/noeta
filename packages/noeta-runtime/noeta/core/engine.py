@@ -1004,6 +1004,7 @@ class Engine:
         task: Task,
         *,
         spawned_subtasks_override: Optional[int] = None,
+        event_log: Optional[Any] = None,
     ) -> VerdictResult:
         """Issue 18: refold the EventLog right before each guard check
         so Guards see counters from emit-sites outside this Engine
@@ -1016,13 +1017,21 @@ class Engine:
         spec sees ``current + i``); ``subtask_depth`` / ``active_skills`` /
         everything else still come from the fresh fold, so non-budget
         guards are unaffected.
+
+        ``event_log`` substitutes the reader the fresh fold (and the
+        repetition window) is taken from — the crash-recovery classifier
+        passes a ``BoundedEventLog`` capped at the pre-attempt baseline so
+        Guards judge the state a re-drive would actually run on, not the
+        interrupted attempt's dirty in-window counters. ``None`` (every
+        live-execution call) keeps the Engine's own log.
         """
-        fresh = fold(self._event_log, self._content_store, task.task_id)
+        log = event_log if event_log is not None else self._event_log
+        fresh = fold(log, self._content_store, task.task_id)
         governance = copy.deepcopy(fresh.governance)
         if spawned_subtasks_override is not None:
             governance.spawned_subtasks = spawned_subtasks_override
         recent = _recent_tool_calls(
-            self._event_log.read(task.task_id),
+            log.read(task.task_id),
             self._content_store,
             window=_RECENT_TOOL_CALLS_WINDOW,
         )
@@ -1479,7 +1488,9 @@ def abandon_step_attempt(
     )
 
 
-def guard_allows_tool_call(engine: Engine, task: Task, call: ToolCall) -> bool:
+def guard_allows_tool_call(
+    engine: Engine, task: Task, call: ToolCall, *, event_log: Any = None
+) -> bool:
     """Would ``call`` run with no human approval gate right now?
 
     The crash-recovery classifier's single question: an interrupted attempt
@@ -1491,8 +1502,15 @@ def guard_allows_tool_call(engine: Engine, task: Task, call: ToolCall) -> bool:
     the call, but its original side effects already happened once and only
     an operator can judge them. A guard crash also returns ``False``
     (fail-closed), matching ``PermissionGuard``'s own conventions.
+
+    ``event_log`` (a ``BoundedEventLog`` capped at the pre-attempt
+    baseline) makes the verdict about the state the re-drive would run on:
+    counting the dirty interrupted window into Budget / Repetition guards
+    would park attempts the re-drive itself would allow.
     """
     try:
-        return engine._guard(ProposedToolCall(call=call), task).is_allow
+        return engine._guard(
+            ProposedToolCall(call=call), task, event_log=event_log
+        ).is_allow
     except Exception:  # noqa: BLE001 — classification must fail closed
         return False

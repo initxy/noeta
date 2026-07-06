@@ -60,8 +60,10 @@ from noeta.protocols.wake import (
 from noeta.runtime.attempt import (
     ABANDON_CAP,
     InterruptedAttempt,
+    PendingPark,
     classify_attempt,
     scan_interrupted_attempt,
+    scan_pending_park,
 )
 
 
@@ -502,12 +504,21 @@ def run_leased_task(
             # An opening-turn crash (no ``TaskWoken`` exists yet) leaves an
             # interrupted attempt on a wake-less lease. Scan before
             # stepping — running the step directly on the dirty window
-            # would silently re-drive it.
+            # would silently re-drive it. A trailing park-reason seal is a
+            # crashed park: its "do not re-drive" decision is durable, so
+            # complete the park instead of stepping over it.
             events = rt.event_log.read(lease.task_id)
+            pending = scan_pending_park(events)
+            if pending is not None:
+                return _complete_pending_park(
+                    rt, lease, engine, events, pending,
+                    consumed=None,
+                    reliability_sink=reliability_sink,
+                )
             attempt = scan_interrupted_attempt(events)
             if attempt is not None:
                 return _recover_interrupted_attempt(
-                    rt, lease, task, engine, events, attempt,
+                    rt, lease, engine, events, attempt,
                     cancelled=cancelled,
                     consumed=None,
                     outcome="drained",
@@ -669,6 +680,16 @@ def _run_woken(
         )
         return "woken"
     if task.status == "running":
+        pending = scan_pending_park(events)
+        if pending is not None:
+            # a crash hit the ORIGINAL park between its seal and its
+            # suspend: the seal's park reason is a durable "do not
+            # re-drive" decision — finish the park, never the bare step.
+            return _complete_pending_park(
+                rt, lease, engine, events, pending,
+                consumed=lease.wake_event,
+                reliability_sink=reliability_sink,
+            )
         attempt = scan_interrupted_attempt(events)
         if attempt is None:
             # case 2′ — the wake is durably consumed but no attempt started
@@ -677,13 +698,15 @@ def _run_woken(
             # subtask re-deliveries (nothing to re-derive), seeded command
             # wakes whose prelude events were written durably at seed time
             # (D6 — they precede the first attempt and fold into ``task``),
-            # and a crash between a recovery seal and its re-drive (the
-            # seal already re-based the state). The one remaining loss mode
-            # is an approval resolution whose prelude stays drive-side (it
-            # executes the approved tool, so it cannot ride the request
-            # thread): a crash before it lands re-suspends on the same
-            # approval and the operator simply approves again — benign,
-            # documented in docs/adr/step-attempt-recovery.md.
+            # and a crash between an ``auto_redrive`` seal and its re-drive
+            # (the seal already re-based the state; park-reason seals never
+            # reach here — ``scan_pending_park`` above completes the park
+            # instead). The one remaining loss mode is an approval
+            # resolution whose prelude stays drive-side (it executes the
+            # approved tool, so it cannot ride the request thread): a crash
+            # before it lands re-suspends on the same approval and the
+            # operator simply approves again — benign, documented in
+            # docs/adr/step-attempt-recovery.md.
             task = engine.run_one_step(
                 task, lease_id=lease.lease_id, cancelled=cancelled
             )
@@ -695,7 +718,7 @@ def _run_woken(
         # case 5′ — an interrupted attempt after the wake (the H1
         # partial-step orphan): seal + re-drive or park.
         return _recover_interrupted_attempt(
-            rt, lease, task, engine, events, attempt,
+            rt, lease, engine, events, attempt,
             cancelled=cancelled,
             consumed=lease.wake_event,
             outcome="woken",
@@ -710,7 +733,6 @@ def _run_woken(
 def _recover_interrupted_attempt(
     rt: WorkerRuntime,
     lease: Any,
-    task: Any,
     engine: Any,
     events: list[Any],
     attempt: InterruptedAttempt,
@@ -731,42 +753,48 @@ def _recover_interrupted_attempt(
     it, ``close``/``cancel`` end it, zero new verbs). ``consumed`` is the
     wake to clear on release (``None`` on the drained path). The seal is
     durable before either continuation, so a crash *during* recovery
-    re-enters as a bare case-2′ re-drive (after the seal) or as a fresh
-    case 5′ (before it) — recovery recurses naturally, and
-    :data:`~noeta.runtime.attempt.ABANDON_CAP` consecutive seals in one
+    re-enters as a bare case-2′ re-drive (after an ``auto_redrive`` seal),
+    as a park completion (after a park-reason seal — ``scan_pending_park``),
+    or as a fresh case 5′ (before the seal) — recovery recurses naturally,
+    and :data:`~noeta.runtime.attempt.ABANDON_CAP` consecutive seals in one
     window force a park (D8).
     """
+    # Baseline = the state as it stood just BEFORE the interrupted
+    # attempt's ``ContextPlanComposed`` (D4: completed attempts and the
+    # turn's prelude events stay live history; only the interrupted
+    # attempt dies). Same bounded-fold machinery as the conversation
+    # rewind. Classification runs against this SAME baseline, not the
+    # dirty full stream: the D2 question is whether the re-drive — which
+    # runs on the sealed state — could proceed unattended, and folding the
+    # interrupted window into the Budget / Repetition counters could park
+    # an attempt the re-drive itself would allow.
+    bounded = BoundedEventLog(events, attempt.attempt_start_seq - 1)
+    baseline = fold(bounded, rt.content_store, lease.task_id)
     classification = classify_attempt(
         attempt.tail,
         engine=engine,
-        task=task,
+        task=baseline,
         content_store=rt.content_store,
+        event_log=bounded,
     )
     capped = attempt.abandon_count >= ABANDON_CAP
     # A plan-less anchor is an interrupted approval execution: a human is
     # in that loop by definition, so recovery never re-drives it — the seal
     # restores the pending-approval state and the park below re-suspends on
     # the approval's own handle, so the ordinary approve verb re-runs it.
+    # Its reason wins over the cap: the park notice must tell the operator
+    # a human-approved call was interrupted, whatever the seal count.
     redrive = (
         classification.safe and not capped and attempt.anchored_on_plan
     )
-    if capped:
+    if not attempt.anchored_on_plan:
+        reason = "interrupted_approval"
+    elif capped:
         reason = "abandon_cap"
     elif redrive:
         reason = "auto_redrive"
-    elif not attempt.anchored_on_plan:
-        reason = "interrupted_approval"
     else:
         reason = "unsafe_tool_activity"
-    # Baseline = the state as it stood just BEFORE the interrupted
-    # attempt's ``ContextPlanComposed`` (D4: completed attempts and the
-    # turn's prelude events stay live history; only the interrupted
-    # attempt dies). Same bounded-fold machinery as the conversation
-    # rewind.
-    bounded = BoundedEventLog(
-        rt.event_log, events, attempt.attempt_start_seq - 1
-    )
-    baseline = fold(bounded, rt.content_store, lease.task_id)
     abandon_step_attempt(
         engine,
         lease.task_id,
@@ -821,19 +849,10 @@ def _recover_interrupted_attempt(
         lease_id=lease.lease_id,
         origin="system",
     )
-    # Park handle: an interrupted approval execution re-suspends on the
-    # window's OWN wake handle (the seal restored the pending-approval
-    # state, so the ordinary approve/deny verbs work again); everything
-    # else rests as a stopped conversation on the next-goal handle
-    # (typing resumes it).
-    handle = NEXT_GOAL_WAKE_HANDLE
-    if (
-        not attempt.anchored_on_plan
-        and isinstance(consumed, HumanResponseReceived)
-    ):
-        handle = consumed.handle
     task = suspend_on_human_handle(
-        engine, task, handle=handle, lease_id=lease.lease_id
+        engine, task,
+        handle=_park_handle(events, reason=reason, consumed=consumed),
+        lease_id=lease.lease_id,
     )
     rt.dispatcher.release(
         lease.lease_id,
@@ -842,6 +861,123 @@ def _recover_interrupted_attempt(
         consumed_wake_event=consumed,
     )
     return "stopped"
+
+
+def _park_handle(events: list[Any], *, reason: str, consumed: Any) -> str:
+    """The handle a park suspends on (D7).
+
+    An interrupted approval execution re-suspends on the approval's OWN
+    handle — the seal restored the pending-approval state, so the ordinary
+    approve/deny verbs re-run it; everything else rests as a stopped
+    conversation on the next-goal handle (typing resumes it). The approval
+    handle comes from the wake this lease consumed when it is a human
+    response; on a wake-less re-entry (the drained path, or completing a
+    crashed park) it falls back to the suspension the live window consumed
+    — the stream's last ``TaskSuspended`` on a human handle.
+    """
+    if reason != "interrupted_approval":
+        return NEXT_GOAL_WAKE_HANDLE
+    if isinstance(consumed, HumanResponseReceived):
+        return consumed.handle
+    for env in reversed(events):
+        if env.type == "TaskSuspended":
+            wake_on = getattr(env.payload, "wake_on", None)
+            if isinstance(wake_on, HumanResponseReceived):
+                return wake_on.handle
+            break
+    return NEXT_GOAL_WAKE_HANDLE
+
+
+def _complete_pending_park(
+    rt: WorkerRuntime,
+    lease: Any,
+    engine: Any,
+    events: list[Any],
+    pending: PendingPark,
+    *,
+    consumed: Any,
+    reliability_sink: Optional[ReliabilitySink],
+) -> WorkerOutcome:
+    """Finish a park whose seal is durable but whose completion is not.
+
+    A crash hit the original park between its seal and its suspend
+    (:func:`~noeta.runtime.attempt.scan_pending_park`). The seal's park
+    ``reason`` is the durable decision; re-entering as a bare re-drive
+    would override it, so this path only completes the remaining writes:
+    the system notice (skipped when it already landed) and the suspend +
+    release. Blockers for a re-appended notice are re-derived from the
+    sealed dead tail — the seal payload records only the reason.
+    """
+    reason = pending.seal.payload.reason
+    task = fold(rt.event_log, rt.content_store, lease.task_id)
+    blockers: tuple[str, ...] = ()
+    if not pending.notice_appended:
+        if reason == "unsafe_tool_activity":
+            blockers = _sealed_tail_blockers(
+                rt, engine, events, pending.seal, task
+            )
+        task = engine.append_user_message(
+            task,
+            content=[TextBlock(text=_park_notice(reason, blockers))],
+            lease_id=lease.lease_id,
+            origin="system",
+        )
+    _log.warning(
+        "worker: completing interrupted park for task %s (%s; a crash hit "
+        "the original park before its suspend)",
+        lease.task_id,
+        reason,
+    )
+    task = suspend_on_human_handle(
+        engine, task,
+        handle=_park_handle(events, reason=reason, consumed=consumed),
+        lease_id=lease.lease_id,
+    )
+    rt.dispatcher.release(
+        lease.lease_id,
+        next_state="suspended",
+        wake_on=task.wake_on,
+        consumed_wake_event=consumed,
+    )
+    if reliability_sink is not None:
+        reliability_sink(
+            ReliabilityEvent(
+                kind="attempt_parked",
+                task_id=lease.task_id,
+                lease_id=lease.lease_id,
+                detail={
+                    "reason": reason,
+                    "resumed_park": True,
+                    "abandoned_from_seq": (
+                        pending.seal.payload.abandoned_from_seq
+                    ),
+                    "blockers": list(blockers),
+                },
+            )
+        )
+    return "stopped"
+
+
+def _sealed_tail_blockers(
+    rt: WorkerRuntime,
+    engine: Any,
+    events: list[Any],
+    seal: Any,
+    task: Any,
+) -> tuple[str, ...]:
+    """Re-derive an already-sealed attempt's blockers for its park notice,
+    from the dead tail ``[abandoned_from_seq, seal)`` — classified against
+    the same pre-attempt baseline the original classification used."""
+    from_seq = seal.payload.abandoned_from_seq
+    tail = tuple(e for e in events if from_seq <= e.seq < seal.seq)
+    bounded = BoundedEventLog(events, from_seq - 1)
+    return classify_attempt(
+        tail,
+        engine=engine,
+        task=task,
+        content_store=rt.content_store,
+        event_log=bounded,
+    ).blockers
 
 
 def _park_notice(reason: str, blockers: tuple[str, ...]) -> str:

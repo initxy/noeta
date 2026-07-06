@@ -308,7 +308,11 @@ _MIGRATION_7_FIRE_AT_INDEX = (
 # ``type IN ('TaskSnapshot', 'TaskRewound', 'StepAttemptAbandoned')``, and
 # a partial index is only chosen when its WHERE matches the query
 # predicate exactly (the migration-5 lesson), so the index is re-created
-# with the widened IN-list.
+# with the widened IN-list. The list is deliberately a frozen literal
+# (applied migrations are immutable); the live queries render theirs from
+# ``noeta.protocols.event_log.SNAPSHOT_BASELINE_EVENT_TYPES``, so growing
+# that constant requires a NEW migration re-widening this index —
+# ``tests/test_fix_storage.py`` pins the two in sync via the query plan.
 _MIGRATION_8_DROP_SNAPSHOT_INDEX = "DROP INDEX IF EXISTS ix_events_snapshot"
 
 _MIGRATION_8_BASELINE_INDEX = (

@@ -40,7 +40,12 @@ from noeta.protocols.errors import (
     StaleSequence,
     WakeConsumeMismatch,
 )
-from noeta.protocols.event_log import Subscriber, TaskStreamSummary, Unsubscribe
+from noeta.protocols.event_log import (
+    SNAPSHOT_BASELINE_EVENT_TYPES,
+    Subscriber,
+    TaskStreamSummary,
+    Unsubscribe,
+)
 from noeta.protocols.events import EventEnvelope, EventOrigin
 from noeta.protocols.values import EVENT_PAYLOAD_MAX_BYTES, ContentRef
 from noeta.protocols.wake import TimerFired
@@ -340,9 +345,7 @@ class InMemoryEventLog:
                 # baselines (carry ``state_ref`` too), so a rewind / attempt
                 # seal re-bases fold from the same accelerated lookup. Reverse
                 # scan returns whichever baseline has the higher seq.
-                if envelope.type in (
-                    "TaskSnapshot", "TaskRewound", "StepAttemptAbandoned"
-                ):
+                if envelope.type in SNAPSHOT_BASELINE_EVENT_TYPES:
                     return envelope
         return None
 
