@@ -54,6 +54,8 @@ from noeta.protocols.messages import (
     LLMProvider,
     LLMRequest,
     LLMResponse,
+    StreamDelta,
+    StreamingProvider,
     TextBlock,
     ThinkingBlock,
     ToolResultBlock,
@@ -209,7 +211,16 @@ def _call_provider(
     req: LLMRequest,
     ctx: StepContext,
     provider_headers: Optional[Callable[[StepContext], Mapping[str, str]]] = None,
+    on_delta: Optional[Callable[[StreamDelta], None]] = None,
 ) -> LLMResponse:
+    # Probe order: streaming → header-aware → plain. Streaming subsumes the
+    # header capability (its signature carries request_headers) so the two
+    # optional Protocols never form a probe matrix.
+    if on_delta is not None and isinstance(provider, StreamingProvider):
+        headers = (
+            dict(provider_headers(ctx)) if provider_headers is not None else None
+        )
+        return provider.complete_streaming(req, on_delta, headers)
     if provider_headers is not None and isinstance(provider, HeaderAwareProvider):
         return provider.complete_with_headers(req, dict(provider_headers(ctx)))
     return provider.complete(req)
@@ -242,6 +253,9 @@ class RuntimeLLMClient:
         clock: Optional[Callable[[], float]] = None,
         pricing: Optional[Callable[[str, Usage], float]] = None,
         provider_headers: Optional[Callable[[StepContext], Mapping[str, str]]] = None,
+        delta_sink: Optional[
+            Callable[[StepContext, str, StreamDelta], None]
+        ] = None,
         max_retries: int = _DEFAULT_MAX_RETRIES,
         sleep: Optional[Callable[[float], None]] = None,
     ) -> None:
@@ -256,6 +270,13 @@ class RuntimeLLMClient:
         # the stub / no-pricing path at cost_usd=0.0.
         self._pricing = pricing
         self._provider_headers = provider_headers
+        # Token-streaming seam: ``delta_sink(ctx, call_id, delta)`` receives
+        # ephemeral StreamDeltas while a streaming-capable provider's call is
+        # in flight. Host wiring only (the product's delta hub); ``None`` (the
+        # default, and every headless SDK caller) keeps the non-streaming
+        # provider paths byte-identical to today. Deltas are never recorded —
+        # the trio + MessagesAppended stay the only durable record.
+        self._delta_sink = delta_sink
         # ② error recovery: provider-neutral transient-retry budget + an
         # injectable sleep (so tests never wall-clock-sleep). The
         # retry loop is LIVE-only and writes no events (README D-2d).
@@ -268,9 +289,25 @@ class RuntimeLLMClient:
         ctx: StepContext,  # noqa: ARG002
         *,
         selection: Optional[MessageSelection] = None,
+        allow_stream: bool = True,
     ) -> LLMResponse:
         call_id = self._id_factory()
         request_ref = _put_request(self._content_store, req)
+
+        # Token streaming: bind the injected sink to this trio's identity.
+        # ``allow_stream=False`` is the per-call opt-out for round-trips that
+        # are not user-facing output (the compaction summarize call). Sink
+        # exceptions are swallowed — deltas are observational and must never
+        # fail or retry an LLM call.
+        on_delta: Optional[Callable[[StreamDelta], None]] = None
+        if allow_stream and self._delta_sink is not None:
+            sink = self._delta_sink
+
+            def on_delta(delta: StreamDelta) -> None:
+                try:
+                    sink(ctx, call_id, delta)
+                except Exception:  # noqa: BLE001 — observational channel
+                    pass
 
         # 1. LLMRequestStarted — MS1: persist the policy's message-selection
         # provenance (counts + strategy). It is event-only metadata: it is
@@ -300,7 +337,9 @@ class RuntimeLLMClient:
         # categories (overflow / fatal) and a budget-exhausted transient are
         # translated into a single error response carrying ``raw['category']``.
         t0 = self._clock()
-        resp = self._invoke_with_retry(req, ctx, call_id=call_id)
+        resp = self._invoke_with_retry(
+            req, ctx, call_id=call_id, on_delta=on_delta
+        )
         t1 = self._clock()
         latency_ms = max(0, int((t1 - t0) * 1000))
 
@@ -349,7 +388,12 @@ class RuntimeLLMClient:
         return resp
 
     def _invoke_with_retry(
-        self, req: LLMRequest, ctx: StepContext, *, call_id: str
+        self,
+        req: LLMRequest,
+        ctx: StepContext,
+        *,
+        call_id: str,
+        on_delta: Optional[Callable[[StreamDelta], None]] = None,
     ) -> LLMResponse:
         """Call the provider with LIVE-only transient backoff (README D-2d).
 
@@ -371,6 +415,7 @@ class RuntimeLLMClient:
                     req,
                     ctx,
                     self._provider_headers,
+                    on_delta,
                 )
             except (
                 TransientError,

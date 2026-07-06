@@ -67,7 +67,12 @@ from noeta.protocols.hooks import (
     VerdictResult,
 )
 from noeta.protocols.decisions import Decision
-from noeta.protocols.messages import ImageBlock, LLMProvider
+from noeta.protocols.messages import (
+    ImageBlock,
+    LLMProvider,
+    StreamDelta,
+    StreamingProvider,
+)
 from noeta.protocols.policy import Policy
 from noeta.protocols.values import ContentRef
 from noeta.protocols.step_context import StepContext
@@ -159,6 +164,8 @@ __all__ = [
     "ToolContext",
     "ToolResult",
     "LLMProvider",
+    "StreamingProvider",
+    "StreamDelta",
     "Policy",
     "View",
     "Decision",

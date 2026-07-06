@@ -13,6 +13,13 @@ still folds by ``taskId`` then ``seq``, so cross-task merge order is irrelevant)
 The payload is the canonical envelope, wired **raw** (``noeta.sdk.envelope_to_dict``);
 the backend does not pre-project (D7). Large objects ride a ``ContentRef`` only —
 their bytes come from the T6 ``/content/{hash}`` service, never this stream.
+
+Besides envelopes, the stream carries **ephemeral token-delta frames**
+(``event: delta``, ADR ``token-streaming-projection.md``): named SSE events
+with NO ``id:`` line, so the resume cursor never moves for a delta and a
+reconnect replays none of them — the final ``MessagesAppended`` envelope
+repaints the truth. Delta frames may be dropped under backpressure; envelope
+frames are never dropped.
 """
 
 from __future__ import annotations
@@ -69,7 +76,33 @@ def format_frame(envelope_obj: dict[str, Any], cursor: str) -> bytes:
     return f"id: {cursor}\ndata: {body}\n\n".encode("utf-8")
 
 
+def format_delta_frame(task_id: str, call_id: str, delta: Any) -> bytes:
+    """One ephemeral token-delta frame: named ``event: delta``, **no** ``id:``.
+
+    Omitting the ``id:`` line is load-bearing: the SSE cursor must never
+    advance for a delta, so ``Last-Event-ID`` resume replays envelopes only
+    and a reconnect loses deltas by construction (the final event repaints).
+    Named, so ``EventSource.onmessage`` (the envelope path) never sees it.
+    """
+    body = json.dumps(
+        {
+            "task_id": task_id,
+            "call_id": call_id,
+            "kind": delta.kind,
+            "text": delta.text,
+            "index": delta.index,
+        },
+        separators=(",", ":"),
+    )
+    return f"event: delta\ndata: {body}\n\n".encode("utf-8")
+
+
 _HEARTBEAT = b": keep-alive\n\n"
+
+#: Backpressure guard for delta frames: when a connection's pending queue is
+#: deeper than this, new DELTA frames are dropped (never envelope frames — the
+#: durable stream stays lossless; a lost delta is repainted by the final event).
+_DELTA_QUEUE_LIMIT = 500
 
 
 # ---------------------------------------------------------------------------
@@ -119,8 +152,16 @@ def stream_frames(
     Subscribes BEFORE catch-up so no envelope committed mid-catch-up is lost;
     the live loop skips any envelope whose ``seq`` the catch-up already
     delivered (``seq <= mark``), so there is no duplicate either.
+
+    Also subscribes to the delta hub: ephemeral token-delta frames for the
+    same subtree interleave with the envelopes on the SAME pending queue
+    (already pre-formatted — see :func:`format_delta_frame`), bypassing the
+    cursor, the seq dedup, and ``marks`` entirely.
     """
     marks = decode_cursor(last_event_id)
+    # Queue entries are either envelope objects (the durable path — formatted
+    # at drain time so ``marks`` sees them) or pre-formatted ``bytes`` (the
+    # ephemeral delta path). ``isinstance(item, bytes)`` is the discriminator.
     pending: "queue.Queue[Any]" = queue.Queue()
     tree: set[str] = set()
     lock = threading.Lock()
@@ -138,7 +179,25 @@ def stream_frames(
         if in_tree:
             pending.put(env)
 
+    def on_delta(task_id: str, call_id: str, delta: Any) -> None:
+        # Fires on the LLM drive thread while a streaming call is in flight.
+        # ``tree`` mutates concurrently (catch-up seeding on the drain thread,
+        # subtask joins in on_env on worker threads), so membership is read
+        # under the SAME lock those writers hold — the pattern on_env already
+        # uses. A delta for a subtask that has not joined yet is dropped:
+        # deltas are ephemeral previews, the final envelope carries the truth.
+        with lock:
+            in_tree = task_id in tree
+        if not in_tree:
+            return
+        # Backpressure: a slow consumer must never make deltas pile up behind
+        # the lossless envelope stream — drop the delta, never an envelope.
+        if pending.qsize() > _DELTA_QUEUE_LIMIT:
+            return
+        pending.put(format_delta_frame(task_id, call_id, delta))
+
     unsub = engine_room.subscribe(on_env)
+    unsub_deltas = engine_room.subscribe_deltas(on_delta)
     try:
         with lock:
             tree |= discover_tree(engine_room, root)
@@ -155,7 +214,7 @@ def stream_frames(
         # Live: drain the queue, deduping against catch-up by per-task seq.
         while True:
             try:
-                env = pending.get(timeout=heartbeat_secs)
+                item = pending.get(timeout=heartbeat_secs)
             except queue.Empty:
                 # No event within the heartbeat window: emit a comment frame.
                 # This also bounds how long a consumer blocks — on server
@@ -163,9 +222,16 @@ def stream_frames(
                 # so no explicit stop sentinel is needed.
                 yield _HEARTBEAT
                 continue
+            if isinstance(item, bytes):
+                # Pre-formatted delta frame: ephemeral, no seq — bypasses the
+                # dedup and never touches ``marks`` (the cursor stands still).
+                yield item
+                continue
+            env = item
             if env.seq <= marks.get(env.task_id, -1):
                 continue
             marks[env.task_id] = env.seq
             yield format_frame(envelope_to_dict(env), encode_cursor(marks))
     finally:
+        unsub_deltas()
         unsub()

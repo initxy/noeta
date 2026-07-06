@@ -48,6 +48,7 @@ function Transcript({
   onOpenSubtask,
   pendingGoalText,
   responseThinkingCache,
+  streamingTurn,
   vm,
 }) {
   // Self-manage lazy body/thinking derefs scoped to THIS transcript's task, so
@@ -149,6 +150,18 @@ function Transcript({
           />
         ),
       )}
+      {/* Token streaming: the ephemeral preview of the assistant turn in
+          flight, painted AFTER the last durable group. streamingTurn is null
+          until the delta buffer has visible content, and clears in the same
+          update as the MessagesAppended that supersedes it — the seq-keyed
+          final bubble takes over in one repaint. Only the ROOT task's turn is
+          passed in (subtask previews are a v1 non-goal). */}
+      {streamingTurn ? (
+        <StreamingAssistantTurn
+          blocks={streamingTurn.blocks}
+          key={`stream-${streamingTurn.callId}`}
+        />
+      ) : null}
     </>
   );
 }
@@ -324,6 +337,32 @@ const AssistantTurn = memo(function AssistantTurn({ ctx, items, ts }) {
   );
 });
 
+// The live assistant bubble for an in-flight LLM call, painted from the delta
+// buffer (ADR token-streaming-projection.md). Blocks arrive ordered by
+// content-block index: text through the same Markdown renderer as final prose,
+// thinking through the same Reasoning disclosure held open while tokens flow.
+// The caller keys it `stream-${callId}`, so the next call in a tool loop (or a
+// retried call) remounts a fresh bubble. No BubbleTime: a preview has no
+// durable envelope to take a timestamp from. React.memo holds across
+// re-renders that are unrelated to the stream because chat-data memoizes the
+// streaming turn (blocks identity changes only when a delta actually lands).
+const StreamingAssistantTurn = memo(function StreamingAssistantTurn({ blocks }) {
+  return (
+    <Message from="assistant">
+      <MessageContent>
+        <BubbleRole role="assistant" />
+        {blocks.map((block) =>
+          block.kind === "thinking" ? (
+            <ThinkingDisclosure key={`sb-${block.index}`} streaming text={block.text} />
+          ) : (
+            <Markdown key={`sb-${block.index}`} text={block.text} />
+          ),
+        )}
+      </MessageContent>
+    </Message>
+  );
+});
+
 function renderTurnItem(turn, ctx, key) {
   const { messageFullCache, messageTextCache, responseRefIndex, responseThinkingCache } = ctx;
 
@@ -358,14 +397,18 @@ function renderTurnItem(turn, ctx, key) {
   return <EventMarker key={`e-${turn.seq ?? key}`} ctx={ctx} turn={turn} />;
 }
 
-function ThinkingDisclosure({ text }) {
-  // U11 — the thinking block is already complete when it renders (no token-delta
-  // stream), so there is no "in progress" state here; the composing/breathing
-  // affordance is the ResponseIndicator's job. What helps is a char-count hint
-  // + the quieter reasoning styling (rail / wash / fade-in) in CSS.
+function ThinkingDisclosure({ text, streaming = false }) {
+  // U11 — a durable thinking block is already complete when it renders, so it
+  // keeps the collapsed default; the char-count hint + the quieter reasoning
+  // styling (rail / wash / fade-in) live in CSS. A STREAMING block (the live
+  // preview bubble) is still receiving tokens: hold the disclosure open so the
+  // reasoning is visible as it flows — the `open` prop rides Reasoning's prop
+  // spread onto the underlying <details>, overriding its internal state, and
+  // the whole preview bubble unmounts on handover to the final content.
   const chars = (text || "").length;
+  const streamingProps = streaming ? { isStreaming: true, open: true } : {};
   return (
-    <Reasoning>
+    <Reasoning {...streamingProps}>
       <ReasoningTrigger meta={`${chars.toLocaleString()} chars`} />
       <ReasoningContent>{text}</ReasoningContent>
     </Reasoning>

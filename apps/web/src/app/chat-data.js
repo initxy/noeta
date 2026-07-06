@@ -4,6 +4,14 @@ import {
   createMultiplexStore,
 } from "../domain/multiplex.js";
 import { emptyViewModel } from "../domain/reducer.js";
+import {
+  applyDelta,
+  clearAll,
+  clearTask,
+  createStreamingState,
+  resetCall,
+  streamingTurnFor,
+} from "../domain/streaming.js";
 
 // Stable singletons for the "no active task / task not in the stream yet" case,
 // so an empty conversation never hands consumers a fresh identity each render.
@@ -164,6 +172,17 @@ function useChatData() {
   const initialTaskLoadedRef = useRef(false);
   const taskListRefreshTimerRef = useRef(null);
 
+  // Token-streaming preview buffer (ephemeral; ADR token-streaming-projection).
+  // Named `delta` SSE frames accumulate in this ref BESIDE the reducer — they
+  // never enter reduceEvents / the multiplex fold. Consumers repaint off the
+  // cheap version counter: the delta path bumps it rAF-coalesced (at most one
+  // React update per frame under a fast token stream); the clear path bumps it
+  // synchronously so a clear lands in the SAME update as the envelope that
+  // superseded the preview (single-repaint handover, no double bubble).
+  const streamingRef = useRef(createStreamingState());
+  const [streamingVersion, setStreamingVersion] = useState(0);
+  const streamingRafRef = useRef(0);
+
   useEffect(() => {
     activeTaskRef.current = activeTaskId;
   }, [activeTaskId]);
@@ -194,6 +213,37 @@ function useChatData() {
     [mux, activeTaskId],
   );
   const backgroundJobs = useMemo(() => foldBackgroundJobs(events), [events]);
+
+  // --- Token-streaming preview -----------------------------------------------
+  // Coalesced repaint for the delta path: one version bump per animation frame
+  // no matter how many token frames arrived (mirrors the rAF pattern used for
+  // the panel resize drag).
+  const scheduleStreamingRepaint = useCallback(() => {
+    if (streamingRafRef.current) return;
+    streamingRafRef.current = window.requestAnimationFrame(() => {
+      streamingRafRef.current = 0;
+      setStreamingVersion((v) => v + 1);
+    });
+  }, []);
+
+  // Replace the streaming state NOW (same tick, no rAF) — used by the clears
+  // (MessagesAppended / LLMRetryScheduled / reconnect / session switch) so the
+  // preview never outlives the truth that superseded it. A no-op (same state
+  // reference back from the pure helpers) skips the repaint entirely.
+  const commitStreamingState = useCallback((next) => {
+    if (next === streamingRef.current) return;
+    streamingRef.current = next;
+    setStreamingVersion((v) => v + 1);
+  }, []);
+
+  // The active root task's streaming turn ({callId, blocks} or null). Subtask
+  // deltas are buffered too, but v1 renders only the root task's preview (spec
+  // non-goal); the version counter is the ref's change signal.
+  const streamingTurn = useMemo(
+    () => (activeTaskId ? streamingTurnFor(streamingRef.current, activeTaskId) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTaskId, streamingVersion],
+  );
 
   const popupTaskId = popupStack.length
     ? popupStack[popupStack.length - 1].taskId
@@ -266,6 +316,7 @@ function useChatData() {
   const resetSessionState = useCallback(() => {
     setStreamEnvelopes([]);
     seenKeysRef.current = new Set();
+    commitStreamingState(clearAll(streamingRef.current));
     setMessageFullCache(new Map());
     setMessageTextCache(new Map());
     setResponseThinkingCache(new Map());
@@ -280,7 +331,7 @@ function useChatData() {
     messageRetryAttempts.current = new Map();
     setOpeningSession(false);
     setPendingGoalText(null);
-  }, []);
+  }, [commitStreamingState]);
 
   const loadTaskList = useCallback(
     async ({ silent = false } = {}) => {
@@ -319,6 +370,10 @@ function useChatData() {
     (taskId = activeTaskRef.current) => {
       const token = ++connectionTokenRef.current;
       closeSse();
+      // Deltas are not replayed on reconnect (no SSE id on delta frames), so a
+      // NEW EventSource must never inherit a half-streamed preview — the final
+      // MessagesAppended will repaint the truth through the envelope path.
+      commitStreamingState(clearAll(streamingRef.current));
       if (!taskId) {
         setConnectionState("idle");
         return;
@@ -359,13 +414,55 @@ function useChatData() {
         }
         setStreamEnvelopes((current) => current.concat([env]));
         if (SESSION_LIST_REFRESH_TYPES.has(env.type)) scheduleTaskListRefresh();
+        // Token streaming: the durable envelope supersedes the ephemeral
+        // preview. MessagesAppended = the turn's real content landed (drop the
+        // task's buffer — per tool-loop round: stream → clear → stream again);
+        // LLMRetryScheduled = the in-flight attempt failed and the retry will
+        // re-stream from scratch (drop that call's accumulated text).
+        // Committed synchronously so the clear renders in the same React
+        // update as the envelope append (streaming bubble out, final bubble in).
+        if (env.type === "MessagesAppended") {
+          commitStreamingState(clearTask(streamingRef.current, env.task_id));
+        } else if (env.type === "LLMRetryScheduled") {
+          const callId =
+            typeof env.payload?.call_id === "string" ? env.payload.call_id : null;
+          commitStreamingState(resetCall(streamingRef.current, env.task_id, callId));
+        }
       };
+      // Named `delta` frames — ephemeral token previews of the assistant turn
+      // in flight ({task_id, call_id, kind, text, index}). They carry no SSE
+      // id (the resume cursor never moves; onmessage never sees them) and are
+      // dropped wholesale on reconnect. Accumulate into the ref and repaint at
+      // most once per animation frame; a malformed frame is a no-op inside
+      // applyDelta (same state reference back).
+      es.addEventListener("delta", (message) => {
+        if (!isCurrent()) return;
+        let delta = null;
+        try {
+          delta = JSON.parse(message.data);
+        } catch (error) {
+          return;
+        }
+        const next = applyDelta(streamingRef.current, delta);
+        if (next === streamingRef.current) return;
+        streamingRef.current = next;
+        scheduleStreamingRepaint();
+      });
       es.onerror = () => {
         if (!isCurrent()) return;
         setConnectionState("connecting");
+        // The browser is about to auto-reconnect; deltas in flight were lost
+        // and will not be replayed — drop any half-streamed preview now.
+        commitStreamingState(clearAll(streamingRef.current));
       };
     },
-    [clearNotice, closeSse, scheduleTaskListRefresh],
+    [
+      clearNotice,
+      closeSse,
+      commitStreamingState,
+      scheduleStreamingRepaint,
+      scheduleTaskListRefresh,
+    ],
   );
 
   useEffect(
@@ -387,6 +484,10 @@ function useChatData() {
       if (taskListRefreshTimerRef.current != null) {
         window.clearTimeout(taskListRefreshTimerRef.current);
         taskListRefreshTimerRef.current = null;
+      }
+      if (streamingRafRef.current) {
+        window.cancelAnimationFrame(streamingRafRef.current);
+        streamingRafRef.current = 0;
       }
     },
     [closeSse],
@@ -1442,6 +1543,7 @@ function useChatData() {
     setPendingGoalText,
     showNotice,
     status,
+    streamingTurn,
     submitGoal,
     submitQuestionAnswer,
     syncActiveSession,

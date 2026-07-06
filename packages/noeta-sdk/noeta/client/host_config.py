@@ -27,6 +27,8 @@ from typing import Callable, Optional, Tuple
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
 from noeta.protocols.event_log import EventLogFull
+from noeta.protocols.messages import StreamDelta
+from noeta.protocols.step_context import StepContext
 from noeta.tools.app import AppPreviewGateway
 from noeta.tools.mcp import HttpPostFn, McpAnyServerSpec
 
@@ -75,6 +77,13 @@ class HostConfig:
         Callable[[str], Optional[McpAnyServerSpec]]
     ] = None
     mcp_http_post: Optional[HttpPostFn] = None
+    #: Token-streaming sink: ``(ctx, call_id, delta)`` receives ephemeral
+    #: ``StreamDelta``s while a streaming-capable provider call is in flight
+    #: (the product backend wires its delta hub here). ``None`` (default) ⇒
+    #: providers are called exactly as today; deltas are never persisted.
+    delta_sink: Optional[
+        Callable[[StepContext, str, StreamDelta], None]
+    ] = None
 
     # -- host kill-switches ------------------------------------------------
     workflow_allowed: bool = False
