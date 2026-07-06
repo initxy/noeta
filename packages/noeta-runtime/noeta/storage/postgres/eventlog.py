@@ -43,12 +43,14 @@ from noeta.protocols.errors import (
     StaleSequence,
 )
 from noeta.protocols.event_log import (
+    SNAPSHOT_BASELINE_EVENT_TYPES,
     Subscriber,
     TaskStreamSummary,
     Unsubscribe,
 )
 from noeta.protocols.events import EventEnvelope, EventOrigin
 from noeta.protocols.values import EVENT_PAYLOAD_MAX_BYTES
+
 from noeta.storage._payload_restore import (
     _enforce_payload_cap,
     _restore_payload,
@@ -58,6 +60,14 @@ from noeta.storage.postgres._connection import (
     _open_connection,
 )
 from noeta.storage.postgres.migrations import apply_migrations
+
+# The ``find_latest_snapshot`` predicate, rendered once from the protocol
+# constant so the query can never drift from the contract set (the
+# ``ix_events_snapshot`` partial index must keep matching it textually —
+# see the migration notes).
+_BASELINE_TYPES_SQL = "(" + ", ".join(
+    f"'{t}'" for t in SNAPSHOT_BASELINE_EVENT_TYPES
+) + ")"
 
 
 __all__ = ["MAX_PAYLOAD_BYTES", "PostgresEventLog"]
@@ -334,8 +344,7 @@ class PostgresEventLog:
             # exactly this predicate (migration 2).
             row = self._conn.execute(
                 "SELECT * FROM events "
-                "WHERE task_id = %s AND type IN "
-                "('TaskSnapshot', 'TaskRewound', 'StepAttemptAbandoned') "
+                f"WHERE task_id = %s AND type IN {_BASELINE_TYPES_SQL} "
                 "ORDER BY seq DESC LIMIT 1",
                 (task_id,),
             ).fetchone()

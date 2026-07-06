@@ -39,8 +39,10 @@ __all__ = [
     "ABANDON_CAP",
     "AttemptClassification",
     "InterruptedAttempt",
+    "PendingPark",
     "classify_attempt",
     "scan_interrupted_attempt",
+    "scan_pending_park",
 ]
 
 
@@ -143,6 +145,59 @@ def scan_interrupted_attempt(events: list[Any]) -> Optional[InterruptedAttempt]:
 
 
 @dataclass(frozen=True, slots=True)
+class PendingPark:
+    """A park whose seal landed but whose completion did not."""
+
+    #: the trailing park-reason ``StepAttemptAbandoned`` envelope.
+    seal: Any
+    #: True ⇒ the park's system notice is already on the stream (the crash
+    #: hit between the notice and the suspend), so completing the park must
+    #: not append it a second time.
+    notice_appended: bool
+
+
+def scan_pending_park(events: list[Any]) -> Optional[PendingPark]:
+    """Detect a park whose seal is durable but whose completion is not.
+
+    The recovery park is three writes — seal → system notice →
+    ``TaskSuspended`` — and only the first is fenced by re-entry: a crash
+    after the seal leaves folded status ``running`` with a clean
+    :func:`scan_interrupted_attempt` (the seal reset the window), which
+    reads exactly like the benign crash-between-seal-and-re-drive shape.
+    The seal's ``reason`` disambiguates: a park reason (anything but
+    ``auto_redrive``) is a durable "do not re-drive" decision, so the
+    worker must finish the park — never run the bare step over it.
+
+    Returns the live window's trailing park-reason seal, or ``None`` when
+    the window does not end on one (no seal, an ``auto_redrive`` seal, or
+    step activity after the seal — a re-drive already ran).
+    ``notice_appended`` keys on a ``MessagesAppended`` after the seal:
+    the park itself is the only writer in that window, so any message
+    there is its notice.
+    """
+    boundary = -1
+    for i, env in enumerate(events):
+        if env.type in _WINDOW_OPENERS:
+            boundary = i
+    seal: Optional[Any] = None
+    notice = False
+    for env in events[boundary + 1:]:
+        if env.type == "StepAttemptAbandoned":
+            seal, notice = env, False
+        elif seal is not None:
+            if (
+                env.type == "ContextPlanComposed"
+                or env.type in _ACTIVITY_EVENTS
+            ):
+                seal = None   # a re-drive ran after the seal
+            elif env.type == "MessagesAppended":
+                notice = True
+    if seal is not None and seal.payload.reason != "auto_redrive":
+        return PendingPark(seal=seal, notice_appended=notice)
+    return None
+
+
+@dataclass(frozen=True, slots=True)
 class AttemptClassification:
     """Verdict over one interrupted attempt's tail."""
 
@@ -160,6 +215,7 @@ def classify_attempt(
     engine: Any,
     task: Any,
     content_store: Any,
+    event_log: Any = None,
 ) -> AttemptClassification:
     """Classify an interrupted attempt's tail per the D2 rule.
 
@@ -168,6 +224,13 @@ def classify_attempt(
     ``can_use_tool``, skill grants); ``content_store`` dereferences
     offloaded tool arguments. Unknown tools and guard failures classify
     as blockers (fail closed).
+
+    ``event_log`` should be the ``BoundedEventLog`` capped at the
+    pre-attempt baseline (the same one the seal folds): the verdict is
+    about the state a re-drive would run on, so the interrupted window's
+    own events must not dirty the Budget / Repetition counters the guards
+    read. ``None`` falls back to the engine's full log (unit tests over a
+    hand-built tail).
     """
     finished: set[str] = set()
     for env in tail:
@@ -186,7 +249,7 @@ def classify_attempt(
             arguments=resolve_tool_call_arguments(payload, content_store),
             call_id=payload.call_id,
         )
-        if not guard_allows_tool_call(engine, task, call):
+        if not guard_allows_tool_call(engine, task, call, event_log=event_log):
             state = (
                 "completed" if payload.call_id in finished else "interrupted"
             )

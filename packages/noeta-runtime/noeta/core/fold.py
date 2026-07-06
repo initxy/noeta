@@ -15,7 +15,10 @@ from noeta.core.snapshot import deserialize_task_state, rehydrate_task
 from noeta.protocols.canonical import from_canonical_bytes
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.decisions import TaskStatePatch
-from noeta.protocols.event_log import EventLogReader
+from noeta.protocols.event_log import (
+    SNAPSHOT_BASELINE_EVENT_TYPES,
+    EventLogReader,
+)
 from noeta.protocols.events import EventEnvelope
 from noeta.protocols.messages import Message
 from noeta.protocols.task import Task, TaskState
@@ -72,17 +75,17 @@ class BoundedEventLog:
     a seq cap, callers hand it this thin reader over the already-read prefix:
     ``read`` filters to ``seq <= max_seq`` and ``find_latest_snapshot`` to a
     baseline at or below the cap, so fold's own snapshot/rewound acceleration
-    still works inside the bounded window. Pure projection — no clock / IO of
-    its own. Used by the conversation rewind (``InteractionDriver.rewind``)
-    and by the crash-recovery attempt seal (``noeta.runtime.attempt``)."""
+    still works inside the bounded window. Serves ONLY from the events it
+    was constructed with — never from the underlying store — so it is a pure
+    projection: no clock / IO of its own. Used by the conversation rewind
+    (``InteractionDriver.rewind``) and by the crash-recovery attempt seal
+    (``noeta.runtime.attempt``)."""
 
     def __init__(
         self,
-        underlying: EventLogReader,
         events: list[EventEnvelope],
         max_seq: int,
     ) -> None:
-        self._underlying = underlying
         self._prefix = [e for e in events if e.seq <= max_seq]
         self._max_seq = max_seq
 
@@ -97,9 +100,7 @@ class BoundedEventLog:
         self, task_id: str  # noqa: ARG002
     ) -> EventEnvelope | None:
         for env in reversed(self._prefix):
-            if env.type in (
-                "TaskSnapshot", "TaskRewound", "StepAttemptAbandoned"
-            ):
+            if env.type in SNAPSHOT_BASELINE_EVENT_TYPES:
                 return env
         return None
 

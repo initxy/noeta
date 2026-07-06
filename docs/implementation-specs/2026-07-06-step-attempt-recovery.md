@@ -325,3 +325,57 @@ in parallel after their deps.
   `noeta/guards/`, `compile_options` permission_mode mapping.
 - Tests: `tests/` — the D4 case tests, the pinned case-2 test, storage
   contract tests, `test_otlp_export.py`.
+
+## Post-review hardening (2026-07-06, adversarial review round)
+
+A 15-finding external review ran against the landed implementation; the
+confirmed items and their resolutions:
+
+- **Park completion (was: park decision not crash-durable).** The park is
+  three writes (seal → notice → suspend) and only the seal was fenced by
+  re-entry; a second crash after a park-reason seal re-entered as a bare
+  case-2′ re-drive, overriding the durable "do not re-drive" decision.
+  `scan_pending_park` (`noeta.runtime.attempt`) now detects a live window
+  ending on a park-reason seal and `_complete_pending_park`
+  (`noeta.runtime.worker`) finishes the notice (skipped when already
+  durable; blockers re-derived from the sealed dead tail) and the suspend.
+- **Classification against the pre-attempt baseline.** `classify_attempt`
+  / `guard_allows_tool_call` / `Engine._guard` accept an `event_log`
+  override; recovery passes the same `BoundedEventLog` the seal folds, so
+  the dirty window's own `ToolCallStarted` no longer consumes the Budget /
+  Repetition counters it is judged by (a spurious-park source), and the
+  2K-full-reads-per-classification cost drops to in-memory prefix reads.
+- **Seed retry path durability.** `_seed_woken`'s dispatcher-restore retry
+  branch returned early and skipped the `durable_at_seed` application;
+  both acquisition paths now share one seed tail.
+- **Seed prelude compensation.** A prelude failure after `note_woken`
+  (e.g. `PayloadTooLarge`) stranded a half-seeded `running` window (later
+  bare-re-driven without the input, retry blocked by `NotResumableError`);
+  `_apply_seed_prelude` now compensates by re-suspending on the wake's own
+  handle and releasing the lease, so the client's retry works.
+- **Reason precedence.** A plan-less approval window that also trips the
+  abandon cap now seals as `interrupted_approval` (was `abandon_cap`), so
+  the notice names the human-approved call.
+- **Wake-less park handle.** `_park_handle` falls back to the stream's
+  last human suspension when `consumed` is not a `HumanResponseReceived`
+  (drained path / park completion), instead of silently landing an
+  interrupted approval on the next-goal handle.
+- **Baseline-set single source of truth.** `SNAPSHOT_BASELINE_EVENT_TYPES`
+  in `noeta.protocols.event_log`; all five adapter lookups +
+  `BoundedEventLog` render from it; migrations stay frozen literals, and
+  the query-plan test renders its probe from the constant so growing it
+  without a new index migration fails loudly.
+- **Web reducer todos.** `pruneDeadTail` now restores the todo checklist
+  to the last `set_todos` snapshot surviving the re-base boundary (seal
+  and rewind both), via a `todoLog` history.
+- **`BoundedEventLog` dead field.** The unused `underlying` constructor
+  param is removed — the class serves only from the events it was built
+  with.
+
+Confirmed-but-accepted (documented, not changed): the post-crash re-drive
+of a model-switch turn resolves the new binding one turn early (ADR D6
+accepted divergence); the post-seal refold instead of reusing the
+in-memory baseline is deliberate (byte-identity with any later resume);
+`run_leased_task`'s `next_goal_handle` is not threaded into the park
+(every caller passes the same constant); `_find_matching_woken_index`
+deliberately does not treat the seal as a window boundary (D8).

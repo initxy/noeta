@@ -10,6 +10,7 @@ tests/test_durable_wake.py (raise mid-step, drop the in-flight lease,
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 
 import pytest
@@ -19,6 +20,7 @@ from noeta.core.fold import fold
 from noeta.core.hooks import HookManager
 from noeta.core.snapshot import serialize_task_state
 from noeta.core.wiring import wire_default_observers
+from noeta.guards.budget import Budget, BudgetGuard
 from noeta.guards.permission import PermissionGuard, PermissionPolicy
 from noeta.policies.stub import StubScriptedPolicy
 from noeta.protocols.decisions import (
@@ -37,7 +39,9 @@ from noeta.runtime.attempt import (
     ABANDON_CAP,
     classify_attempt,
     scan_interrupted_attempt,
+    scan_pending_park,
 )
+from noeta.runtime import worker as worker_mod
 from noeta.runtime.worker import ReliabilityEvent, WorkerLoop, run_leased_task
 from noeta.storage.memory import (
     InMemoryContentStore,
@@ -463,7 +467,6 @@ def test_spawn_in_window_parks_as_stopped_conversation(stack: Any) -> None:
     lease = _reclaim(stack, tid)
     outcome = run_leased_task(_RT(engine, log, cs, dispatcher), lease)
     assert outcome == "stopped"
-    events = log.read(tid)
     seals = _seals(log, tid)
     assert len(seals) == 1
     assert seals[0].payload.reason == "unsafe_tool_activity"
@@ -708,6 +711,363 @@ def test_seed_send_goal_is_durable_before_drive(tmp_path: Any) -> None:
     ]
     assert len(goal_appends) >= 1
     assert not any(e.type == "StepAttemptAbandoned" for e in events)
+
+
+# ---------------------------------------------------------------------------
+# Pending-park completion — the park decision is durable with the seal;
+# a crash between the seal and the suspend must finish the park, never
+# bare-re-drive over it.
+# ---------------------------------------------------------------------------
+
+
+class _SealPayload:
+    def __init__(self, reason: str, abandoned_from_seq: int = 1) -> None:
+        self.reason = reason
+        self.abandoned_from_seq = abandoned_from_seq
+
+
+def test_scan_pending_park_variants() -> None:
+    parked = [
+        _Env("TaskWoken", 0),
+        _Env("ContextPlanComposed", 1),
+        _Env("SubtaskSpawned", 2),
+        _Env("StepAttemptAbandoned", 3, _SealPayload("unsafe_tool_activity")),
+    ]
+    pending = scan_pending_park(parked)
+    assert pending is not None and pending.notice_appended is False
+    # notice already on the stream (crash hit between notice and suspend)
+    pending = scan_pending_park(parked + [_Env("MessagesAppended", 4)])
+    assert pending is not None and pending.notice_appended is True
+    # an auto_redrive seal: the bare case-2′ re-drive IS the design
+    redrive = [
+        _Env("TaskWoken", 0),
+        _Env("ContextPlanComposed", 1),
+        _Env("StepAttemptAbandoned", 2, _SealPayload("auto_redrive")),
+    ]
+    assert scan_pending_park(redrive) is None
+    # step activity after the seal: a re-drive already ran, nothing pending
+    assert scan_pending_park(parked + [_Env("ContextPlanComposed", 4)]) is None
+
+
+class _SuspendedPayload:
+    def __init__(self, wake_on: Any) -> None:
+        self.wake_on = wake_on
+
+
+def test_park_handle_prefers_wake_then_stream() -> None:
+    events = [
+        _Env(
+            "TaskSuspended", 0,
+            _SuspendedPayload(HumanResponseReceived(handle="approval-c9")),
+        ),
+        _Env("TaskWoken", 1),
+        _Env("ToolCallApprovalResolved", 2),
+    ]
+    # the consumed wake wins when present…
+    assert worker_mod._park_handle(
+        events, reason="interrupted_approval",
+        consumed=HumanResponseReceived(handle="approval-c1"),
+    ) == "approval-c1"
+    # …a wake-less re-entry falls back to the suspension the window consumed
+    assert worker_mod._park_handle(
+        events, reason="interrupted_approval", consumed=None
+    ) == "approval-c9"
+    # non-approval parks always rest on the next-goal handle
+    assert worker_mod._park_handle(
+        events, reason="unsafe_tool_activity", consumed=None
+    ) == NEXT_GOAL_WAKE_HANDLE
+
+
+def _hand_built_spawn_window(stack: Any, engine: Any, tid: str) -> None:
+    """Wake + note_woken + plan + SubtaskSpawned with no closing suspend —
+    the crash-between-spawn-and-suspend shape the park tests recover."""
+    from noeta.protocols.events import (
+        ContextPlanComposedPayload,
+        SubtaskSpawnedPayload,
+    )
+
+    log, cs, dispatcher, _ = stack
+    assert dispatcher.wake(
+        tid, HumanResponseReceived(handle=NEXT_GOAL_WAKE_HANDLE)
+    ) is True
+    lease = dispatcher.lease(worker_id="w", task_id=tid)
+    task = fold(log, cs, tid)
+    engine.note_woken(
+        task, lease_id=lease.lease_id, wake_event=lease.wake_event
+    )
+    engine._emit(  # noqa: SLF001 — hand-simulated crash window
+        task_id=tid, type_="ContextPlanComposed",
+        payload=ContextPlanComposedPayload(plan_ref=None),
+        lease_id=lease.lease_id,
+    )
+    engine._emit(  # noqa: SLF001
+        task_id=tid, type_="SubtaskSpawned",
+        payload=SubtaskSpawnedPayload(
+            subtask_id="t-child", goal="child g", agent_name="main",
+        ),
+        lease_id=lease.lease_id,
+    )
+
+
+def test_crash_during_park_before_notice_completes_park(
+    stack: Any, monkeypatch: Any
+) -> None:
+    """A second crash right after the seal (before the park's notice): the
+    park decision is already durable in the seal's reason, so the next
+    entry completes the park — notice (blockers re-derived from the dead
+    tail) + suspend — instead of bare-re-driving over it."""
+    log, cs, dispatcher, _ = stack
+    policy = _CrashOncePolicy([
+        YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),
+        FinishDecision(answer="never reached"),
+    ])
+    engine, tid = _suspended_session(stack, policy)
+    _hand_built_spawn_window(stack, engine, tid)
+    real_append = Engine.append_user_message
+    state = {"raised": False}
+
+    def kill_once(self: Any, *args: Any, **kwargs: Any) -> Any:
+        if not state["raised"]:
+            state["raised"] = True
+            raise KeyboardInterrupt("simulated crash mid-park")
+        return real_append(self, *args, **kwargs)
+
+    monkeypatch.setattr(Engine, "append_user_message", kill_once)
+    lease = _reclaim(stack, tid)
+    with pytest.raises(KeyboardInterrupt):
+        run_leased_task(_RT(engine, log, cs, dispatcher), lease)
+    assert len(_seals(log, tid)) == 1        # the decision IS durable
+    seen: list[ReliabilityEvent] = []
+    lease = _reclaim(stack, tid)
+    outcome = run_leased_task(
+        _RT(engine, log, cs, dispatcher), lease, reliability_sink=seen.append
+    )
+    assert outcome == "stopped"
+    assert len(_seals(log, tid)) == 1        # completed, not re-sealed
+    task = fold(log, cs, tid)
+    assert task.status == "suspended"
+    assert task.wake_on.handle == NEXT_GOAL_WAKE_HANDLE
+    notices = [m for m in task.runtime.messages if m.origin == "system"]
+    assert len(notices) == 1
+    assert "spawned a subtask" in notices[0].content[0].text
+    # the bare step never ran over the parked window.
+    assert not any(e.type == "TaskCompleted" for e in log.read(tid))
+    assert [e.kind for e in seen] == ["attempt_parked"]
+    assert seen[0].detail["resumed_park"] is True
+
+
+def test_crash_during_park_after_notice_does_not_duplicate_it(
+    stack: Any, monkeypatch: Any
+) -> None:
+    """A second crash between the park's notice and its suspend: the next
+    entry finishes with the suspend only — the operator warning is not
+    appended twice."""
+    log, cs, dispatcher, _ = stack
+    policy = _CrashOncePolicy([
+        YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),
+        FinishDecision(answer="never reached"),
+    ])
+    engine, tid = _suspended_session(stack, policy)
+    _hand_built_spawn_window(stack, engine, tid)
+    real_suspend = worker_mod.suspend_on_human_handle
+    state = {"raised": False}
+
+    def kill_once(*args: Any, **kwargs: Any) -> Any:
+        if not state["raised"]:
+            state["raised"] = True
+            raise KeyboardInterrupt("simulated crash mid-park")
+        return real_suspend(*args, **kwargs)
+
+    monkeypatch.setattr(worker_mod, "suspend_on_human_handle", kill_once)
+    lease = _reclaim(stack, tid)
+    with pytest.raises(KeyboardInterrupt):
+        run_leased_task(_RT(engine, log, cs, dispatcher), lease)
+    lease = _reclaim(stack, tid)
+    outcome = run_leased_task(_RT(engine, log, cs, dispatcher), lease)
+    assert outcome == "stopped"
+    assert len(_seals(log, tid)) == 1
+    task = fold(log, cs, tid)
+    assert task.status == "suspended"
+    notices = [m for m in task.runtime.messages if m.origin == "system"]
+    assert len(notices) == 1                 # written once, before the crash
+
+
+# ---------------------------------------------------------------------------
+# Classification baseline — the guard verdict is about the state the
+# re-drive runs on, not the dirty interrupted window.
+# ---------------------------------------------------------------------------
+
+
+def test_dirty_window_budget_does_not_mispark(stack: Any) -> None:
+    """The interrupted attempt's own ``ToolCallStarted`` must not consume
+    the budget it is judged by: with ``max_tool_calls=1`` and one dirty
+    started call, the re-drive would run the call fine (the seal reverts
+    the counter), so classification must say safe — not park."""
+    log, cs, dispatcher, _ = stack
+    tool = _KillOnceTool(name="reader", script={("x",): "body"})
+    hooks = HookManager()
+    hooks.register(BudgetGuard(Budget(max_tool_calls=1)))
+    policy = _CrashOncePolicy([
+        YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),
+        ToolCallsDecision(calls=[
+            ToolCall(tool_name="reader", arguments={"p": "x"}, call_id="c1")
+        ]),
+        # the re-driven decide re-issues the call, then ends
+        ToolCallsDecision(calls=[
+            ToolCall(tool_name="reader", arguments={"p": "x"}, call_id="c2")
+        ]),
+        FinishDecision(answer="done"),
+    ])
+    engine, tid = _suspended_session(
+        stack, policy, tools={"reader": tool}, hooks=hooks
+    )
+    _crash_mid_turn(stack, engine, tid, NEXT_GOAL_WAKE_HANDLE)
+    lease = _reclaim(stack, tid)
+    outcome = run_leased_task(_RT(engine, log, cs, dispatcher), lease)
+    assert outcome == "woken"
+    seals = _seals(log, tid)
+    assert len(seals) == 1 and seals[0].payload.reason == "auto_redrive"
+    assert any(e.type == "TaskCompleted" for e in log.read(tid))
+
+
+def test_capped_planless_window_parks_as_interrupted_approval(
+    stack: Any,
+) -> None:
+    """Reason precedence: a plan-less (approval-execution) window parks as
+    ``interrupted_approval`` even when the abandon cap is also tripped —
+    the notice must say a human-approved call was interrupted, and the
+    suspend must land on the approval's own handle."""
+    log, cs, dispatcher, _ = stack
+    tool = _KillOnceTool(name="danger", script={(): "did it"})
+    hooks = HookManager()
+    hooks.register(
+        PermissionGuard(
+            PermissionPolicy(require_approval_tools=frozenset({"danger"})),
+            {"danger": tool},
+        )
+    )
+    policy = _CrashOncePolicy([
+        ToolCallsDecision(calls=[
+            ToolCall(tool_name="danger", arguments={}, call_id="c1")
+        ]),
+        FinishDecision(answer="done"),
+    ])
+    engine = _engine_on(stack, policy, tools={"danger": tool}, hooks=hooks)
+    task = engine.create_task(goal="g", policy_name="scripted")
+    tid = task.task_id
+    dispatcher.enqueue(tid)
+    lease = dispatcher.lease(worker_id="w")
+    engine.append_user_message(
+        task, content=[TextBlock(text="g")], lease_id=lease.lease_id
+    )
+    task = engine.run_one_step(task, lease_id=lease.lease_id)
+    approval_handle = task.wake_on.handle
+    dispatcher.release(
+        lease.lease_id, next_state="suspended", wake_on=task.wake_on
+    )
+    assert dispatcher.wake(
+        tid, HumanResponseReceived(handle=approval_handle)
+    ) is True
+    lease = dispatcher.lease(worker_id="w", task_id=tid)
+    task = fold(log, cs, tid)
+    task = engine.note_woken(
+        task, lease_id=lease.lease_id, wake_event=lease.wake_event
+    )
+    with pytest.raises(KeyboardInterrupt):
+        engine.resolve_tool_approval(
+            task, call_id="c1", approved=True, lease_id=lease.lease_id
+        )
+    lease = _reclaim(stack, tid)
+    events = log.read(tid)
+    attempt = scan_interrupted_attempt(events)
+    assert attempt is not None and attempt.anchored_on_plan is False
+    # force the cap alongside the plan-less anchor to pin the precedence.
+    attempt = dataclasses.replace(attempt, abandon_count=ABANDON_CAP)
+    outcome = worker_mod._recover_interrupted_attempt(
+        _RT(engine, log, cs, dispatcher), lease, engine, events, attempt,
+        cancelled=None,
+        consumed=lease.wake_event,
+        outcome="woken",
+        reliability_sink=None,
+    )
+    assert outcome == "stopped"
+    seals = _seals(log, tid)
+    assert seals[-1].payload.reason == "interrupted_approval"
+    task = fold(log, cs, tid)
+    assert task.status == "suspended"
+    assert task.wake_on.handle == approval_handle
+    assert "human-approved" in task.runtime.messages[-1].content[0].text
+
+
+# ---------------------------------------------------------------------------
+# D6 hardening — seed-time failure paths stay resumable
+# ---------------------------------------------------------------------------
+
+
+def test_seed_prelude_failure_compensates_to_resumable(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    """If the seed-time prelude fails AFTER ``note_woken`` (e.g. a payload
+    cap), the driver re-suspends on the same handle and releases the lease:
+    the conversation stays resumable and the retried command works —
+    nothing is left half-seeded for the worker to re-drive without input."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    host, driver = _coding_session(ws, [_end_turn("t1"), _end_turn("t2")])
+    out = driver.start(goal="g", agent="main")
+    tid = out.task_id
+    real_append = Engine.append_user_message
+    state = {"raised": False}
+
+    def fail_once(self: Any, *args: Any, **kwargs: Any) -> Any:
+        if not state["raised"]:
+            state["raised"] = True
+            raise RuntimeError("simulated append failure")
+        return real_append(self, *args, **kwargs)
+
+    monkeypatch.setattr(Engine, "append_user_message", fail_once)
+    with pytest.raises(RuntimeError):
+        driver.seed_send_goal(tid, goal="boom")
+    task = fold(host.event_log, host.content_store, tid)
+    assert task.status == "suspended"        # compensated, not stranded
+    assert task.wake_on.handle == NEXT_GOAL_WAKE_HANDLE
+    seeded = driver.seed_send_goal(tid, goal="turn two")
+    outcome = driver.drive_seeded(seeded)
+    assert outcome.status == "suspended"
+    events = host.event_log.read(tid)
+    assert not any(e.type == "StepAttemptAbandoned" for e in events)
+
+
+def test_seed_retry_path_applies_durable_prelude(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    """The dispatcher-restore retry inside ``_seed_woken`` must land in the
+    same D6 tail as the first-try path: the durable prelude is applied at
+    seed (ack ⇒ input durable) and the drive runs prelude-less."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    host, driver = _coding_session(ws, [_end_turn("t1"), _end_turn("t2")])
+    out = driver.start(goal="g", agent="main")
+    tid = out.task_id
+    real_lease = host.dispatcher.lease
+    state = {"n": 0}
+
+    def flaky_lease(**kwargs: Any) -> Any:
+        state["n"] += 1
+        if state["n"] == 1:
+            return None
+        return real_lease(**kwargs)
+
+    monkeypatch.setattr(host.dispatcher, "lease", flaky_lease)
+    before = len(host.event_log.read(tid))
+    seeded = driver.seed_send_goal(tid, goal="turn two")
+    assert state["n"] >= 2                   # the retry branch actually ran
+    assert seeded.prelude is None            # D6: applied at seed
+    tail_types = [e.type for e in host.event_log.read(tid)[before:]]
+    assert tail_types[0] == "TaskWoken"
+    assert "MessagesAppended" in tail_types
+    outcome = driver.drive_seeded(seeded)
+    assert outcome.status == "suspended"
 
 
 def test_worker_loop_emits_reliability_and_never_silent_terminal(

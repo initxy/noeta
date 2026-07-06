@@ -56,6 +56,13 @@ function emptyViewModel() {
     // Folded from the latest TaskStatePatched(set_todos) so the composer's todo
     // strip reflects the model's current plan.
     todos: [],
+    // Every set_todos snapshot seen, as [{seq, todos}]. `todos` above is
+    // always the last entry's list; the history exists ONLY so the re-base
+    // markers (TaskRewound / StepAttemptAbandoned) can restore the checklist
+    // as it stood at the kept boundary — without it a pruned dead tail would
+    // leave the dead attempt's todos on screen while the runtime fold has
+    // already reverted them.
+    todoLog: [],
     // What a SUSPENDED task is waiting on, classified from the latest
     // TaskSuspended's typed `wake_on` (T7 detail
     // fold): "next-goal" | "approval" | "question" | "human" | "subtask" |
@@ -345,6 +352,7 @@ function applyEnvelope(vm, env) {
             content: typeof todo.content === "string" ? todo.content : "",
             status: typeof todo.status === "string" ? todo.status : "pending",
           }));
+        vm.todoLog.push({ seq, todos: vm.todos });
       }
       break;
     }
@@ -586,6 +594,13 @@ function pruneDeadTail(vm, keep) {
     if (!keep(sub.seq)) delete vm.subtasks[subId];
   }
   if (vm.llmRetry && !keep(vm.llmRetry.seq)) vm.llmRetry = null;
+  // The checklist is replace-all state, not an append log: restore the last
+  // set_todos snapshot that survives the boundary (the runtime fold reverts
+  // to exactly that state), else the dead attempt's todos would linger.
+  vm.todoLog = vm.todoLog.filter((entry) => keep(entry.seq));
+  vm.todos = vm.todoLog.length
+    ? vm.todoLog[vm.todoLog.length - 1].todos
+    : [];
 }
 
 // Render a TaskCompleted answer (string or canonical-tagged object) as

@@ -26,6 +26,7 @@ from noeta.protocols.events import (
     TaskSnapshotPayload,
     TaskStartedPayload,
 )
+from noeta.protocols.event_log import SNAPSHOT_BASELINE_EVENT_TYPES
 from noeta.protocols.values import ContentRef
 from noeta.protocols.wake import HumanResponseReceived
 from noeta.storage.memory import InMemoryDispatcher, InMemoryEventLog
@@ -140,8 +141,12 @@ def test_sqlite_snapshot_lookup_uses_index() -> None:
     # A partial index is only chosen when its WHERE matches the live query
     # predicate exactly (migration 5 learned this; migration 8 re-widened
     # both to include StepAttemptAbandoned), so the planner must choose it
-    # for the live 3-type lookup. Seed rows + ANALYZE so the optimizer has
-    # stats; on an empty table SQLite trivially prefers the clustered PK.
+    # for the live lookup. The probe query renders its IN-list from
+    # SNAPSHOT_BASELINE_EVENT_TYPES — exactly like the adapters — so
+    # growing that constant WITHOUT a new index-widening migration fails
+    # HERE (the frozen index predicate stops matching and the plan falls
+    # back to the PK). Seed rows + ANALYZE so the optimizer has stats; on
+    # an empty table SQLite trivially prefers the clustered PK.
     elog = SqliteEventLog(":memory:")
     try:
         elog.emit(
@@ -156,11 +161,13 @@ def test_sqlite_snapshot_lookup_uses_index() -> None:
                 payload=TaskStartedPayload(lease_id="L"),
             )
         elog._conn.execute("ANALYZE")
+        in_list = ", ".join(
+            f"'{t}'" for t in SNAPSHOT_BASELINE_EVENT_TYPES
+        )
         plan = elog._conn.execute(
             "EXPLAIN QUERY PLAN "
             "SELECT * FROM events "
-            "WHERE task_id = ? AND type IN "
-            "('TaskSnapshot', 'TaskRewound', 'StepAttemptAbandoned') "
+            f"WHERE task_id = ? AND type IN ({in_list}) "
             "ORDER BY seq DESC LIMIT 1",
             ("t1",),
         ).fetchall()

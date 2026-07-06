@@ -42,12 +42,14 @@ from noeta.protocols.errors import (
     StaleSequence,
 )
 from noeta.protocols.event_log import (
+    SNAPSHOT_BASELINE_EVENT_TYPES,
     Subscriber,
     TaskStreamSummary,
     Unsubscribe,
 )
 from noeta.protocols.events import EventEnvelope, EventOrigin
 from noeta.protocols.values import EVENT_PAYLOAD_MAX_BYTES
+
 from noeta.storage._payload_restore import (
     _PAYLOAD_RESTORERS as _PAYLOAD_RESTORERS,
     _enforce_payload_cap as _enforce_payload_cap,
@@ -57,6 +59,15 @@ from noeta.storage._payload_restore import (
 )
 from noeta.storage.sqlite._connection import _open_connection
 from noeta.storage.sqlite.migrations import apply_migrations
+
+# The ``find_latest_snapshot`` predicate, rendered once from the protocol
+# constant so the query can never drift from the contract set (the
+# ``ix_events_snapshot`` partial index must keep matching it textually —
+# see the migration notes).
+_BASELINE_TYPES_SQL = "(" + ", ".join(
+    f"'{t}'" for t in SNAPSHOT_BASELINE_EVENT_TYPES
+) + ")"
+
 
 
 __all__ = ["MAX_PAYLOAD_BYTES", "SqliteEventLog"]
@@ -338,8 +349,7 @@ class SqliteEventLog:
             # since the last baseline.
             row = self._conn.execute(
                 "SELECT * FROM events "
-                "WHERE task_id = ? AND type IN "
-                "('TaskSnapshot', 'TaskRewound', 'StepAttemptAbandoned') "
+                f"WHERE task_id = ? AND type IN {_BASELINE_TYPES_SQL} "
                 "ORDER BY seq DESC LIMIT 1",
                 (task_id,),
             ).fetchone()
