@@ -72,7 +72,17 @@ async function installFakeSse(page) {
         this.onmessage = null;
         this.onerror = null;
         this.readyState = 0;
+        this._listeners = {};
         window.__sse.last = this;
+      }
+      // The app registers named-frame listeners (e.g. the token-streaming
+      // "delta" channel) via addEventListener; the stub must carry the real
+      // EventSource surface or stream setup throws.
+      addEventListener(type, listener) {
+        this._listeners[type] = listener;
+      }
+      removeEventListener(type) {
+        delete this._listeners[type];
       }
       close() {
         this.readyState = 2;
@@ -82,6 +92,9 @@ async function installFakeSse(page) {
     window.__sseOpen = () => window.__sse.last && window.__sse.last.onopen?.({});
     window.__sseSend = (env) =>
       window.__sse.last && window.__sse.last.onmessage?.({ data: JSON.stringify(env) });
+    window.__sseDelta = (frame) =>
+      window.__sse.last &&
+      window.__sse.last._listeners.delta?.({ data: JSON.stringify(frame) });
   });
 }
 
