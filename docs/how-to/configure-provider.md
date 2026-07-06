@@ -128,6 +128,11 @@ change. See [Swap providers](swap-providers.md) for a before/after
 example. The internal protocol is vendor-neutral, so your agent code,
 tools, and recorded history are portable across providers.
 
+All three built-in providers stream tokens to the web UI while a response
+is being generated — no configuration needed. The stub provider does not
+stream (it answers instantly), so don't expect a typing effect on a bare
+boot.
+
 ## Troubleshooting
 
 - **"No provider configured"** — `NOETA_AGENT_PROVIDER` is unset (defaults

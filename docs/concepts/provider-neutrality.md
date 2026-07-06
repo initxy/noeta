@@ -19,6 +19,13 @@ Instead, the internal shape is neutral and the quirks stay in the adapters:
   breakpoints stay wire-only and never reach the ledger; extended-thinking
   round-trips, per-model vision gates, and reasoning-effort tiers all live
   inside their adapter.
+- **Token streaming is an optional capability, not a second contract** — an
+  adapter that can stream implements `StreamingProvider`:
+  `complete_streaming` still returns the complete response, and the tokens it
+  emits along the way are ephemeral side effects that never touch the ledger.
+  The runtime probes for the capability and falls back to plain `complete`,
+  so a provider without it (or any custom `Options.provider`) works
+  unchanged, and the recorded exchange is identical either way.
 
 ## Enforced by architecture, not discipline
 
