@@ -5,10 +5,12 @@ consuming release clears it; D6 mismatch/no-matched raises + rolls back;
 D5 non-consuming release preserves matched), parametrized over
 InMemory + SQLite; the P1.2 suspend-window boundary helper
 (`_find_matching_woken_index`, incl. the recurring-handle gate 5b); and
-the worker D4 6-case recovery state machine end-to-end (first-consume /
-terminal-reconcile / re-suspend-reconcile / skip-and-run / H1
-partial-step / fail-loud) — each crash window simulated by dropping the
-in-flight lease + `requeue_stale` + a fresh lease, asserting exactly-once.
+the worker D4 recovery state machine end-to-end (first-consume /
+terminal-reconcile / re-suspend-reconcile / bare re-drive) — each crash
+window simulated by dropping the in-flight lease + `requeue_stale` + a
+fresh lease, asserting exactly-once. The old case 5 (H1 partial-step
+orphan → typed error) is replaced by the attempt-recovery machine —
+covered in tests/test_attempt_recovery.py.
 """
 
 from __future__ import annotations
@@ -34,7 +36,6 @@ from noeta.protocols.wake import (
 )
 from noeta.policies.stub import StubScriptedPolicy
 from noeta.runtime.worker import (
-    PartialStepOrphan,
     _find_matching_woken_index,
     run_leased_task,
 )
@@ -359,20 +360,27 @@ def test_d4_case4_resuspend_reconcile_after_crash(stack: Any) -> None:
     assert dispatcher.wake(tid, HumanResponseReceived(handle="second")) is True
 
 
-def test_d4_case5_partial_step_orphan(stack: Any) -> None:
-    """TaskWoken + a partial step event, still running → PartialStepOrphan
-    (H1), no silent re-run."""
+def test_d4_case2prime_prelude_only_tail_runs_bare_step(stack: Any) -> None:
+    """Case 2′ — TaskWoken + durable prelude appends (a seed-written user
+    message), no ``ContextPlanComposed``, still running → the bare step runs
+    on top of the durable prelude (D6: nothing is lost, nothing re-runs; the
+    old case 5 typed error no longer exists for this window)."""
     engine, tid, handle = _human_engine(
         stack, decisions=[YieldForHumanDecision(prompt="a"), FinishDecision(answer="done")]
     )
     log, cs, dispatcher, _ = stack
     lease = _wake_and_lease(stack, tid, handle)
     task = engine.note_woken(fold(log, cs, tid), lease_id=lease.lease_id, wake_event=lease.wake_event)
-    # a partial step event after TaskWoken, still running (no terminal/suspend).
-    engine.append_user_message(task, content=[TextBlock(text="partial")], lease_id=lease.lease_id)
+    # the seed-durable prelude append after TaskWoken; crash before the step.
+    engine.append_user_message(task, content=[TextBlock(text="the goal")], lease_id=lease.lease_id)
     release = _crash_then_release(stack, tid)
-    with pytest.raises(PartialStepOrphan):
-        run_leased_task(_RT(engine, log, cs, dispatcher), release)
+    outcome = run_leased_task(_RT(engine, log, cs, dispatcher), release)
+    assert outcome == "woken"
+    assert _woken_count(log, tid) == 1               # NO second TaskWoken
+    events = log.read(tid)
+    # the durable prelude message survived, the step ran once, no seal.
+    assert any(e.type == "TaskCompleted" for e in events)
+    assert not any(e.type == "StepAttemptAbandoned" for e in events)
 
 
 # ---------------------------------------------------------------------------

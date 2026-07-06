@@ -363,6 +363,33 @@ def test_cancel_rewind_continue_reopens_segment() -> None:
     assert tool["parentSpanId"] == seg["spanId"]
 
 
+def test_step_attempt_abandoned_mirrors_rewound_treatment() -> None:
+    # On an open task the crash-recovery seal becomes a span event carrying
+    # the reason + the interrupted attempt's start seq.
+    a = _SpanAssembler()
+    a.feed(_record(type="TaskCreated", occurred_at=1.0))
+    a.feed(_record(type="StepAttemptAbandoned", seq=30, occurred_at=2.0,
+                   payload_summary={"abandoned_from_seq": 12,
+                                    "reason": "crash_recovery"}))
+    span = a.feed(_record(type="TaskCompleted", occurred_at=3.0))[0]
+    (event,) = span["events"]
+    assert event["name"] == "StepAttemptAbandoned"
+    attrs = {kv["key"]: kv["value"] for kv in event["attributes"]}
+    assert attrs["noeta.reason"] == {"stringValue": "crash_recovery"}
+    assert attrs["noeta.abandoned_from_seq"] == {"intValue": "12"}
+    # With no open span (a fresh process recovers a crashed worker's task:
+    # the seal is the first record it sees) the marker reopens a segment
+    # span, exactly the TaskRewound / TaskWoken convention.
+    b = _SpanAssembler()
+    b.feed(_record(type="StepAttemptAbandoned", seq=50, occurred_at=5.0,
+                   payload_summary={"abandoned_from_seq": 40,
+                                    "reason": "abandon_cap"}))
+    seg = b.feed(_record(type="TaskCompleted", occurred_at=9.0))[0]
+    assert seg["startTimeUnixNano"] == str(int(5.0 * 1e9))
+    seg_attrs = {kv["key"]: kv["value"] for kv in seg["attributes"]}
+    assert seg_attrs["noeta.resumed"] == {"boolValue": True}
+
+
 def test_background_subagent_links_to_parent() -> None:
     a = _SpanAssembler()
     a.feed(_record(type="TaskCreated", task_id="parent"))

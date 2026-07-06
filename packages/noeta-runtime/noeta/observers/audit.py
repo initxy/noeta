@@ -195,6 +195,9 @@ _SUMMARY_FIELDS_BY_EVENT: dict[str, tuple[str, ...]] = {
     # conversation rewind baseline: the kept-through seq + the
     # snapshot-shaped state ref are both safe to audit (no user content).
     "TaskRewound":         ("target_seq", "state_ref"),
+    # crash-recovery seal: the interrupted attempt's start seq, the
+    # snapshot-shaped baseline ref and the machine reason — no user content.
+    "StepAttemptAbandoned": ("abandoned_from_seq", "state_ref", "reason"),
 }
 
 

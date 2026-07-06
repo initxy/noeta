@@ -25,6 +25,17 @@ from typing import Any, Literal, Optional, Union
 from noeta.protocols.canonical import register
 
 
+#: The ``handle`` that distinguishes a "waiting for next goal"
+#: suspension from any other ``YieldForHumanDecision`` use. Read models
+#: key on it to recognise a chat turn boundary in the EventLog history,
+#: and the crash-recovery park suspends on it so a later ``send_goal``
+#: resumes the parked conversation. Home is the protocols layer (the
+#: typed wake boundary) so L2 hosting code can use it without importing
+#: the execution machine; ``noeta.execution.multi_turn`` re-exports it
+#: for its established importers.
+NEXT_GOAL_WAKE_HANDLE = "noeta-code-next-goal"
+
+
 @dataclass(frozen=True, slots=True)
 class SubtaskResult:
     """Outcome of a subtask, as seen by its parent.

@@ -148,4 +148,4 @@ The loop always proceeds to the next task.
 - [Wake & resume](../concepts/wake-resume.md) — the delivery guarantee
   the worker implements
 - [Known limitations](../operations/limitations.md) — single-worker
-  boundaries and the partial-step-orphan edge
+  boundaries and crash-recovery scope

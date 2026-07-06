@@ -64,6 +64,46 @@ def fold(
     return task
 
 
+class BoundedEventLog:
+    """A read-only EventLog view truncated at ``max_seq``.
+
+    Point-in-time state ("as it stood THROUGH ``max_seq``") is a fold over
+    only the events up to and including that seq. Rather than teach ``fold``
+    a seq cap, callers hand it this thin reader over the already-read prefix:
+    ``read`` filters to ``seq <= max_seq`` and ``find_latest_snapshot`` to a
+    baseline at or below the cap, so fold's own snapshot/rewound acceleration
+    still works inside the bounded window. Pure projection — no clock / IO of
+    its own. Used by the conversation rewind (``InteractionDriver.rewind``)
+    and by the crash-recovery attempt seal (``noeta.runtime.attempt``)."""
+
+    def __init__(
+        self,
+        underlying: EventLogReader,
+        events: list[EventEnvelope],
+        max_seq: int,
+    ) -> None:
+        self._underlying = underlying
+        self._prefix = [e for e in events if e.seq <= max_seq]
+        self._max_seq = max_seq
+
+    def read(
+        self, task_id: str, *, after_seq: int | None = None  # noqa: ARG002
+    ) -> list[EventEnvelope]:
+        if after_seq is None:
+            return list(self._prefix)
+        return [e for e in self._prefix if e.seq > after_seq]
+
+    def find_latest_snapshot(
+        self, task_id: str  # noqa: ARG002
+    ) -> EventEnvelope | None:
+        for env in reversed(self._prefix):
+            if env.type in (
+                "TaskSnapshot", "TaskRewound", "StepAttemptAbandoned"
+            ):
+                return env
+        return None
+
+
 # ---------------------------------------------------------------------------
 # internal helpers
 # ---------------------------------------------------------------------------
@@ -839,6 +879,11 @@ _HANDLERS = {
     "TaskSnapshot": _on_task_snapshot,
     # Conversation rewind baseline (snapshot-shaped marker).
     "TaskRewound": _on_task_rewound,
+    # Crash-recovery seal over an interrupted attempt: the same
+    # snapshot-shaped re-base semantics as TaskRewound (its payload
+    # carries the identical ``state_ref`` baseline), scoped to one
+    # decide→act attempt — so the two share one handler.
+    "StepAttemptAbandoned": _on_task_rewound,
     "TaskCompleted": _on_task_completed,
     "TaskFailed": _on_task_failed,
     "TaskSuspended": _on_task_suspended,

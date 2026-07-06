@@ -328,17 +328,18 @@ class SqliteEventLog:
 
     def find_latest_snapshot(self, task_id: str) -> Optional[EventEnvelope]:
         with self._lock:
-            # TaskRewound is a snapshot-shaped fold baseline
-            # (``state_ref`` too) — take whichever of {TaskSnapshot, TaskRewound}
-            # has the higher seq so a rewind re-bases fold from the same lookup.
-            # The ``ix_events_snapshot`` partial index (migration 5) is keyed
-            # on exactly this ``type IN ('TaskSnapshot', 'TaskRewound')``
+            # TaskRewound and StepAttemptAbandoned are snapshot-shaped fold
+            # baselines (``state_ref`` too) — take whichever of the three
+            # has the higher seq so a rewind / attempt seal re-bases fold
+            # from the same lookup. The ``ix_events_snapshot`` partial index
+            # (migration 8) is keyed on exactly this ``type IN (...)``
             # predicate, so this lookup is an indexed single-row hit rather
             # than a reverse PRIMARY KEY walk whose cost grew with the tail
             # since the last baseline.
             row = self._conn.execute(
                 "SELECT * FROM events "
-                "WHERE task_id = ? AND type IN ('TaskSnapshot', 'TaskRewound') "
+                "WHERE task_id = ? AND type IN "
+                "('TaskSnapshot', 'TaskRewound', 'StepAttemptAbandoned') "
                 "ORDER BY seq DESC LIMIT 1",
                 (task_id,),
             ).fetchone()

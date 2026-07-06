@@ -1604,7 +1604,6 @@ def handle_spawn_subtasks(
         # malformed SubtaskDenied).
         raise ValueError("SpawnSubtasksDecision.specs is empty")
     n = len(specs)
-    call_ids = [s.call_id for s in specs]
 
     # --- global preflight (all-or-none): size + call_id layout ---
     if not (1 <= n <= MAX_FANOUT):

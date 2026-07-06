@@ -52,7 +52,7 @@ import dataclasses
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
 from noeta.execution.multi_turn import (
     NEXT_GOAL_WAKE_HANDLE,
@@ -69,10 +69,9 @@ from noeta.execution.memory import (
 from noeta.execution.resolver import agent_name_of
 from noeta.execution.subtask_drain import UnsupportedSubtaskSuspend
 from noeta.providers.catalog import resolve_alias
-from noeta.core.fold import fold
+from noeta.core.fold import BoundedEventLog, fold
 from noeta.core.snapshot import serialize_task_state, snapshot_media_type
 from noeta.protocols.errors import CodedError, InvalidLease
-from noeta.protocols.event_log import EventLogReader
 from noeta.protocols.events import (
     BackgroundSubagentDeliveredPayload,
     EventEnvelope,
@@ -262,6 +261,10 @@ class ModelBindPrelude:
     #: switched only the model: fold leaves the current provider binding intact.
     provider: Optional[str] = None
 
+    #: ``ModelBound`` + the chained append prelude are pure event appends —
+    #: seed-time safe (D6). Only ever constructed over append-type inners.
+    durable_at_seed: ClassVar[bool] = True
+
     def __call__(self, engine: Any, task: Any, *, lease_id: str) -> Any:
         task = engine.note_model_bound(
             task,
@@ -363,9 +366,12 @@ class SeededTurn:
     * :meth:`InteractionDriver.seed_start` / ``seed_send_goal`` / ``seed_*``
       do every **durable, validated** step synchronously — create / wake,
       authorize the selector, write the opening ``ModelBound`` / goal /
-      reopen, take the lease. A rejected selector or a not-suspended task
-      still fails *here*, before any ``SeededTurn`` exists, so the transport
-      keeps returning the same typed 4xx.
+      reopen, take the lease, and (D6) apply any append-type prelude —
+      ``TaskWoken`` + the user's message are durable before the ack, so an
+      acked command can never lose its input to a crash. A rejected
+      selector or a not-suspended task still fails *here*, before any
+      ``SeededTurn`` exists, so the transport keeps returning the same
+      typed 4xx.
     * :meth:`InteractionDriver.drive_seeded` runs the actual turn
       (``run_leased_task`` + the S3b subtask drain) and folds the outcome.
 
@@ -381,42 +387,18 @@ class SeededTurn:
     task_id: str
     lease: Any
     prelude: Optional[WokenPrelude] = None
+    #: The Engine resolved at seed time, BEFORE a seed-applied prelude's
+    #: events landed (D6). Pinning it preserves the ``/model`` per-turn
+    #: semantics: a seed-written ``ModelBound`` must drive the NEXT turn,
+    #: but the drive's own fold would already see it. ``None`` (no
+    #: seed-applied prelude) ⇒ the drive resolves as before.
+    engine: Optional[Any] = None
 
 
-class _BoundedEventLog:
-    """A read-only EventLog view truncated at ``max_seq``.
-
-    ``rewind`` needs the state as it stood THROUGH ``target_seq`` — i.e. a fold
-    over only the events up to and including that seq. Rather than teach ``fold``
-    a seq cap, we hand it this thin reader over the already-read prefix: ``read``
-    filters to ``seq <= max_seq`` and ``find_latest_snapshot`` to a baseline at
-    or below the cap, so fold's own snapshot/rewound acceleration still works
-    inside the bounded window. Pure projection — no clock / IO of its own."""
-
-    def __init__(
-        self,
-        underlying: EventLogReader,
-        events: list[EventEnvelope],
-        max_seq: int,
-    ) -> None:
-        self._underlying = underlying
-        self._prefix = [e for e in events if e.seq <= max_seq]
-        self._max_seq = max_seq
-
-    def read(
-        self, task_id: str, *, after_seq: Optional[int] = None  # noqa: ARG002
-    ) -> list[EventEnvelope]:
-        if after_seq is None:
-            return list(self._prefix)
-        return [e for e in self._prefix if e.seq > after_seq]
-
-    def find_latest_snapshot(
-        self, task_id: str  # noqa: ARG002
-    ) -> Optional[EventEnvelope]:
-        for env in reversed(self._prefix):
-            if env.type in ("TaskSnapshot", "TaskRewound"):
-                return env
-        return None
+# Hoisted to ``noeta.core.fold`` (the crash-recovery attempt seal in L2
+# needs the same point-in-time bounded fold); aliased so the established
+# in-module name keeps working.
+_BoundedEventLog = BoundedEventLog
 
 
 class InteractionDriver:
@@ -803,11 +785,13 @@ class InteractionDriver:
                     run_leased_task(
                         self._host, seeded.lease,
                         next_goal_handle=NEXT_GOAL_WAKE_HANDLE,
+                        engine=seeded.engine,
                     )
                 else:
                     run_leased_task(
                         self._host, seeded.lease, prelude=seeded.prelude,
                         next_goal_handle=NEXT_GOAL_WAKE_HANDLE,
+                        engine=seeded.engine,
                     )
         except InvalidLease as exc:
             # The lease lapsed mid-step despite the heartbeat (cap hit, or an
@@ -932,10 +916,11 @@ class InteractionDriver:
         post-``TaskWoken`` window as the appended goal (a
         :class:`ModelBindPrelude` chaining the append). Mirroring Claude
         Code's ``/model``, the new binding takes effect **going forward**:
-        ``run_leased_task`` folds + resolves the driving Engine *before* the
-        prelude runs, so this turn runs on the binding in force when it
-        started and the switch drives the **next** turn (whose fold now sees
-        the new ``ModelBound``). With no selector the conversation keeps its
+        the seed resolves the driving Engine *before* applying the prelude
+        (D6 seed-time durability) and the drive reuses that pinned Engine,
+        so this turn runs on the binding in force when it started and the
+        switch drives the **next** turn (whose fold now sees the new
+        ``ModelBound``). With no selector the conversation keeps its
         current binding (no ``ModelBound`` written).
 
         ``provider_selector`` is the per-turn provider switch
@@ -1854,6 +1839,15 @@ class InteractionDriver:
         passes an :class:`ExternalEvent` instead — the machine is otherwise
         identical, so the H2 consume discipline is never re-inlined per wake
         variant.
+
+        D6 (docs/adr/step-attempt-recovery.md): an append-type prelude
+        (``durable_at_seed``) is applied HERE, synchronously, right after
+        the lease — ``note_woken`` + the prelude's events are durable before
+        the command is acked, so an acked ``send_goal`` / ``answer`` can
+        never lose the user's input to a crash. The returned
+        :class:`SeededTurn` then carries ``prelude=None`` and the drive runs
+        the bare step (worker case 2′). The approval prelude (executes the
+        approved tool) keeps the old drive-side path.
         """
         host = self._host
         expected: Optional[str] = None
@@ -1892,7 +1886,33 @@ class InteractionDriver:
                 dispatcher_status=dispatcher_status,
                 expected=expected,
             )
+        if prelude is not None and getattr(prelude, "durable_at_seed", False):
+            engine = self._apply_seed_prelude(task_id, lease, prelude)
+            return SeededTurn(
+                task_id=task_id, lease=lease, prelude=None, engine=engine
+            )
         return SeededTurn(task_id=task_id, lease=lease, prelude=prelude)
+
+    def _apply_seed_prelude(
+        self, task_id: str, lease: Any, prelude: WokenPrelude
+    ) -> Any:
+        """Apply an append-type prelude synchronously under the seed's lease
+        (D6): ``note_woken`` + the prelude's durable events land before the
+        202 ack, in exactly the order (and bytes) the drive-side path
+        recorded them. Returns the Engine resolved from the PRE-prelude fold
+        so the drive runs this turn on the binding in force when it started
+        (a prelude-written ``ModelBound`` drives the next turn, as before);
+        the drive itself is then prelude-less — its woken machine reconciles
+        the already-durable ``TaskWoken`` and runs the bare step (case 2′).
+        """
+        host = self._host
+        task = fold(host.event_log, host.content_store, task_id)
+        engine = host.resolve_engine(task)
+        task = engine.note_woken(
+            task, lease_id=lease.lease_id, wake_event=lease.wake_event
+        )
+        prelude(engine, task, lease_id=lease.lease_id)
+        return engine
 
     def _require_human_suspend(self, task_id: str, handle: str) -> Task:
         """Refuse a command whose task is not suspended on ``handle``; return
