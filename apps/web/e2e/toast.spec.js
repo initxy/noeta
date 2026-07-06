@@ -22,6 +22,15 @@ async function stubEventSource(page) {
         this.onopen = null;
         this.onmessage = null;
         this.onerror = null;
+        this._listeners = {};
+      }
+      // Real-EventSource surface: the app registers named-frame listeners
+      // (token-streaming "delta") during stream setup.
+      addEventListener(type, listener) {
+        this._listeners[type] = listener;
+      }
+      removeEventListener(type) {
+        delete this._listeners[type];
       }
       close() {}
     }
