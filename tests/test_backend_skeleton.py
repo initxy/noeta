@@ -71,22 +71,38 @@ def test_engine_room_official_registry_builds(tmp_path: Path) -> None:
 def test_engine_room_imports_only_noeta_sdk() -> None:
     """The backend's engine room must not name any runtime internal — it drives
     agents through the public ``noeta.sdk`` surface only (D5/T4; T8 welds this
-    with an import-linter contract)."""
-    source = Path(engine_room_mod.__file__).read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    noeta_imports: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("noeta"):
-            noeta_imports.append(node.module or "")
-        elif isinstance(node, ast.Import):
-            noeta_imports.extend(
-                a.name for a in node.names if a.name.startswith("noeta")
+    with an import-linter contract). Sibling ``noeta.agent.backend`` modules are
+    permitted: they are the same application, not runtime internals (the delta
+    hub the room owns is itself sealed to ``noeta.sdk`` by the same walk below).
+    """
+    allowed_prefixes = ("noeta.sdk", "noeta.agent.backend")
+
+    def _noeta_imports(path: Path) -> list[str]:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        found: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
+                "noeta"
+            ):
+                found.append(node.module or "")
+            elif isinstance(node, ast.Import):
+                found.extend(
+                    a.name for a in node.names if a.name.startswith("noeta")
+                )
+        return found
+
+    from noeta.agent.backend import delta_hub as delta_hub_mod
+
+    for module in (engine_room_mod, delta_hub_mod):
+        imports = _noeta_imports(Path(module.__file__))
+        assert imports, f"expected at least the noeta.sdk import in {module.__name__}"
+        for mod in imports:
+            assert any(
+                mod == p or mod.startswith(p + ".") for p in allowed_prefixes
+            ), (
+                f"{module.__name__} imports {mod!r}; only noeta.sdk and "
+                "noeta.agent.backend siblings are allowed"
             )
-    assert noeta_imports, "expected at least the noeta.sdk import"
-    for mod in noeta_imports:
-        assert mod == "noeta.sdk" or mod.startswith("noeta.sdk."), (
-            f"engine_room imports {mod!r}; only noeta.sdk is allowed"
-        )
 
 
 def test_handler_error_after_response_started_does_not_double_send() -> None:

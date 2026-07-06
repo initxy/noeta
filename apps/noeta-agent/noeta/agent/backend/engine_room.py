@@ -24,12 +24,15 @@ verbs (the hard rule from D6 / T4).
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import threading
 from pathlib import Path
-from typing import Any, List, Optional, Sequence
+from typing import Any, Callable, List, Optional, Sequence
 
 from noeta.sdk import Client, ContentRef, HostConfig, LLMProvider, Options, presets
+
+from noeta.agent.backend.delta_hub import DeltaHub
 
 
 _log = logging.getLogger("noeta.agent.backend")
@@ -85,6 +88,20 @@ class EngineRoom:
         allowed = list(self._models)
         if model and model not in allowed:
             allowed.append(model)
+        # Token streaming (delta hub): the room owns one DeltaHub and injects
+        # its sink into the host config (host wiring, never AgentSpec identity —
+        # the same column as storage / preview / MCP). A caller that already
+        # supplied a ``delta_sink`` keeps it (the hub then simply never fires);
+        # otherwise the hub becomes the sink so the SSE layer can subscribe via
+        # :meth:`subscribe_deltas`. Deltas stay ephemeral — this changes no
+        # durable behaviour.
+        self._delta_hub = DeltaHub()
+        if host_config is None:
+            host_config = HostConfig(delta_sink=self._delta_hub.sink)
+        elif host_config.delta_sink is None:
+            host_config = dataclasses.replace(
+                host_config, delta_sink=self._delta_hub.sink
+            )
         self._client = Client(
             options,
             provider=provider,
@@ -191,6 +208,18 @@ class EngineRoom:
     def subscribe(self, callback: Any) -> Any:
         """Subscribe to the live, post-commit envelope stream (all tasks)."""
         return self._client.subscribe(callback)
+
+    def subscribe_deltas(
+        self, callback: Callable[[str, str, Any], None]
+    ) -> Callable[[], None]:
+        """Subscribe to the ephemeral token-delta stream (all tasks).
+
+        ``callback(task_id, call_id, delta)`` fires on the LLM drive thread
+        while a streaming provider call is in flight; returns an unsubscribe.
+        Deltas are never persisted or replayed — the SSE layer projects them
+        as ``event: delta`` frames without an ``id:`` (cursor untouched).
+        """
+        return self._delta_hub.subscribe(callback)
 
     def get_content(self, content_hash: str) -> Optional[bytes]:
         """Deref a ContentRef's bytes by hash (T6 ``/content/{hash}``)."""

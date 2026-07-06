@@ -38,8 +38,13 @@ Key contracts (issue 22 design doc §"Anthropic Messages API translation rules")
   ``stop_reason='tool_use'`` with no ``tool_use`` block in
   ``content``) raises ``ValueError``.
 
-This module does not implement async, streaming, retry, or Bedrock /
-Vertex auth. Image input IS supported on vision-capable models: an
+This module does not implement async, retry, or Bedrock / Vertex auth.
+Token streaming IS supported via the optional ``StreamingProvider``
+capability (:meth:`AnthropicProvider.complete_streaming`): the SSE stream
+is accumulated back into the vendor-shaped ``message`` payload and fed
+through the same parse path as the batch call, so a streamed response is
+shape-identical to a batch response of the same content. Image input IS
+supported on vision-capable models: an
 ``ImageBlock`` (user/assistant content, or a ``ToolResultBlock``'s
 ``images``) is deref'd via the injected ``image_resolver`` and base64-inlined
 onto the wire (an ``image`` content block / a ``tool_result.content`` array);
@@ -69,6 +74,7 @@ from noeta.protocols.messages import (
     LLMRequest,
     LLMResponse,
     Message,
+    StreamDelta,
     TextBlock,
     ThinkingBlock,
     ToolResultBlock,
@@ -77,6 +83,7 @@ from noeta.protocols.messages import (
 )
 from noeta.protocols.values import ContentRef
 from noeta.providers import catalog
+from noeta.providers._sse import iter_sse_events
 from noeta.providers.codecs import parse_retry_after
 
 
@@ -130,6 +137,14 @@ class AnthropicProvider:
     and never affect prompt-cache hits (the cache key is the rendered wire
     body, not the HTTP headers).
 
+    Also implements the optional
+    :class:`~noeta.protocols.messages.StreamingProvider` capability
+    (:meth:`complete_streaming`): the same blocking one-shot contract, with
+    text / thinking deltas fired as side effects while the response is in
+    flight. The streamed final ``LLMResponse`` is shape-identical to the
+    batch path's (same request body plus ``stream: true``, same parse
+    helpers, same neutral error taxonomy).
+
     ``image_resolver`` is a narrowly injected ``ContentRef → bytes`` deref
     callback (same nature as the httpx client it already holds): when a request
     carries an ``ImageBlock`` (user/assistant content or a ``ToolResultBlock``'s
@@ -165,7 +180,7 @@ class AnthropicProvider:
         )
 
     # ------------------------------------------------------------------
-    # LLMProvider / HeaderAwareProvider Protocol
+    # LLMProvider / HeaderAwareProvider / StreamingProvider Protocol
     # ------------------------------------------------------------------
 
     def complete(self, request: LLMRequest) -> LLMResponse:
@@ -221,6 +236,58 @@ class AnthropicProvider:
                 f"type={type(payload).__name__}"
             )
         return self._parse_response(payload)
+
+    def complete_streaming(
+        self,
+        request: LLMRequest,
+        on_delta: Callable[[StreamDelta], None],
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> LLMResponse:
+        # StreamingProvider capability: the same blocking one-shot contract as
+        # ``complete`` — the full ``LLMResponse`` is still the return value;
+        # ``on_delta`` fires as a side effect while the response is in flight.
+        # The request body is built by the exact same path as the batch call
+        # (vision guard included) plus ``stream: true``, and ``request_headers``
+        # merges over the client's constructor headers exactly like
+        # ``complete_with_headers`` — so streamed and batch requests are
+        # byte-identical on the wire apart from the stream flag.
+        _guard_vision_capability(request)
+        body = self._build_request_body(request)
+        body["stream"] = True
+        stream_kwargs: dict[str, Any] = {"json": body}
+        if request_headers is not None:
+            stream_kwargs["headers"] = request_headers
+        accumulator = _StreamAccumulator(on_delta)
+        # ② error recovery: identical taxonomy to the batch path. HTTP status
+        # errors bucket through ``_translate_http_error`` — the streamed body
+        # must be ``read()`` first (an unread streaming response raises on
+        # ``.json()`` access inside the overflow check). Timeout / transport
+        # failures — including a MID-stream disconnect while iterating —
+        # map to ``TransientError`` so the runtime retry loop applies
+        # unchanged. An in-band ``error`` SSE event raises out of
+        # ``accumulator.feed`` via ``_translate_stream_error_event``.
+        try:
+            with self._client.stream(
+                "POST", _MESSAGES_ENDPOINT, **stream_kwargs
+            ) as http_response:
+                if http_response.is_error:
+                    http_response.read()
+                try:
+                    http_response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    raise _translate_http_error(exc) from exc
+                for event_name, data in iter_sse_events(
+                    http_response.iter_lines()
+                ):
+                    accumulator.feed(event_name, data)
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise TransientError(str(exc)) from exc
+        # Rebuild the vendor-shaped ``message`` payload and feed it through
+        # the same parse path as batch — the streamed ``LLMResponse`` is
+        # shape-identical to a batch response of the same content. ``raw``
+        # ends up carrying the reconstructed dict: diagnostics only, never
+        # part of the recording.
+        return self._parse_response(accumulator.message_payload())
 
     # ------------------------------------------------------------------
     # Outbound translation (Noeta → Anthropic)
@@ -418,6 +485,44 @@ def _is_context_overflow(response: httpx.Response) -> bool:
         return False
     message = str(error.get("message") or "").lower()
     return any(marker in message for marker in _OVERFLOW_MESSAGE_MARKERS)
+
+
+#: In-band SSE ``error`` event types that bucket as :class:`TransientError` —
+#: the same buckets their HTTP-status counterparts land in
+#: (``rate_limit_error`` 429 / ``api_error`` 500 / ``overloaded_error`` 529).
+_TRANSIENT_STREAM_ERROR_TYPES: frozenset = frozenset(
+    {"rate_limit_error", "api_error", "overloaded_error"}
+)
+
+
+def _translate_stream_error_event(payload: dict[str, Any]) -> Exception:
+    """Map an in-band SSE ``error`` event into the neutral taxonomy.
+
+    Mid-stream, Anthropic reports failures as ``event: error`` frames instead
+    of HTTP statuses (the 200 header is already on the wire), so the bucketing
+    of :func:`_translate_http_error` is keyed on the error *type* rather than
+    a status code:
+
+    * ``rate_limit_error`` / ``api_error`` / ``overloaded_error`` →
+      :class:`TransientError` (no ``retry_after`` — an SSE frame carries no
+      headers, so the runtime falls back to exponential backoff).
+    * ``invalid_request_error`` mentioning the context window / prompt-too-long
+      → :class:`ContextOverflowError`.
+    * anything else → :class:`FatalError`.
+    """
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        error = {}
+    error_type = str(error.get("type") or "")
+    message = str(error.get("message") or "")
+    described = f"Anthropic stream error event: {error_type}: {message}"
+    if error_type in _TRANSIENT_STREAM_ERROR_TYPES:
+        return TransientError(described)
+    if error_type == "invalid_request_error" and any(
+        marker in message.lower() for marker in _OVERFLOW_MESSAGE_MARKERS
+    ):
+        return ContextOverflowError(described)
+    return FatalError(described)
 
 
 # ---------------------------------------------------------------------------
@@ -856,3 +961,179 @@ def _parse_response_content(content_raw: list[Any]) -> list[Block]:
             )
         # Unknown block types: silently skipped for forward compatibility
     return blocks
+
+
+# ---------------------------------------------------------------------------
+# Streaming accumulation (StreamingProvider capability)
+# ---------------------------------------------------------------------------
+
+
+class _StreamAccumulator:
+    """Rebuilds the vendor-shaped ``message`` payload from Messages-API stream
+    events, firing :class:`StreamDelta` side effects along the way.
+
+    Only ``text_delta`` / ``thinking_delta`` fragments surface as deltas.
+    ``input_json_delta`` (tool arguments) and ``signature_delta`` accumulate
+    **silently** — argument JSON is undecodable while partial and the
+    signature is an opaque continuation token, so neither is previewable.
+    ``redacted_thinking`` blocks arrive whole on ``content_block_start`` (the
+    opaque ``data`` blob rides the block; no deltas follow). Unknown event /
+    delta types are skipped silently, mirroring the batch parser's
+    forward-compatibility stance. The finished payload feeds
+    ``AnthropicProvider._parse_response`` unchanged — that reuse is what pins
+    streamed and batch responses shape-identical.
+    """
+
+    def __init__(self, on_delta: Callable[[StreamDelta], None]) -> None:
+        self._on_delta = on_delta
+        self._message: Optional[dict[str, Any]] = None
+        self._blocks: dict[int, dict[str, Any]] = {}
+        self._json_fragments: dict[int, list[str]] = {}
+
+    def feed(self, event_name: Optional[str], data: str) -> None:
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Anthropic stream event was not valid JSON: {exc}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ValueError(
+                f"Anthropic stream event root was not a JSON object: "
+                f"type={type(payload).__name__}"
+            )
+        if event_name == "message_start":
+            # The message envelope: id / type / role / model plus the
+            # input-side usage (uncached + cache read/write tokens).
+            message = payload.get("message")
+            self._message = dict(message) if isinstance(message, dict) else {}
+        elif event_name == "content_block_start":
+            self._start_block(payload)
+        elif event_name == "content_block_delta":
+            self._apply_delta(payload)
+        elif event_name == "content_block_stop":
+            index = payload.get("index")
+            if isinstance(index, int):
+                self._finalize_block(index)
+        elif event_name == "message_delta":
+            self._apply_message_delta(payload)
+        elif event_name == "error":
+            raise _translate_stream_error_event(payload)
+        # message_stop / ping / unknown event types: nothing to accumulate.
+
+    def _start_block(self, payload: dict[str, Any]) -> None:
+        index = payload.get("index")
+        block = payload.get("content_block")
+        if not isinstance(index, int) or not isinstance(block, dict):
+            return
+        # Copied because the dict is mutated as deltas accumulate. A
+        # ``tool_use`` start carries id / name (its ``input`` grows from
+        # ``input_json_delta`` fragments); a ``redacted_thinking`` start is
+        # already complete.
+        self._blocks[index] = dict(block)
+        if block.get("type") == "tool_use":
+            self._json_fragments[index] = []
+
+    def _apply_delta(self, payload: dict[str, Any]) -> None:
+        index = payload.get("index")
+        delta = payload.get("delta")
+        if not isinstance(index, int) or not isinstance(delta, dict):
+            return
+        block = self._blocks.get(index)
+        if block is None:
+            # A delta for a block that never started: skip the accumulation
+            # AND the preview together, so the emitted deltas never disagree
+            # with the final content.
+            return
+        delta_type = delta.get("type")
+        if delta_type == "text_delta":
+            fragment = delta.get("text")
+            if isinstance(fragment, str):
+                block["text"] = str(block.get("text") or "") + fragment
+                self._on_delta(
+                    StreamDelta(kind="text", text=fragment, index=index)
+                )
+        elif delta_type == "thinking_delta":
+            fragment = delta.get("thinking")
+            if isinstance(fragment, str):
+                block["thinking"] = str(block.get("thinking") or "") + fragment
+                self._on_delta(
+                    StreamDelta(kind="thinking", text=fragment, index=index)
+                )
+        elif delta_type == "input_json_delta":
+            fragment = delta.get("partial_json")
+            if isinstance(fragment, str):
+                self._json_fragments.setdefault(index, []).append(fragment)
+        elif delta_type == "signature_delta":
+            fragment = delta.get("signature")
+            if isinstance(fragment, str):
+                block["signature"] = (
+                    str(block.get("signature") or "") + fragment
+                )
+        # Unknown delta types: silently skipped for forward compatibility.
+
+    def _finalize_block(self, index: int) -> None:
+        """Decode a ``tool_use`` block's accumulated argument fragments.
+
+        The joined string is the same wire shape the batch path receives
+        inside the response body JSON, so the same decode applies
+        (``json.loads``, then ``_parse_response_content`` enforces the
+        JSON-object check). An empty accumulation keeps the ``input`` the
+        block started with (``{}`` on the wire — a no-argument tool call).
+        Idempotent: fragments are popped, so the defensive re-finalize at
+        assembly time is a no-op for already-stopped blocks.
+        """
+        fragments = self._json_fragments.pop(index, None)
+        if not fragments:
+            return
+        joined = "".join(fragments)
+        if not joined.strip():
+            return
+        block = self._blocks.get(index)
+        if block is None:
+            return
+        try:
+            block["input"] = json.loads(joined)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Anthropic streamed tool_use input was not valid JSON: {exc}"
+            ) from exc
+
+    def _apply_message_delta(self, payload: dict[str, Any]) -> None:
+        """``message_delta``: the terminal stop signal + output-side usage.
+
+        Usage keys merge over the ``message_start`` snapshot — Anthropic
+        reports the input side up front and the (cumulative) output side
+        here, so the merged dict is exactly the batch response's ``usage``.
+        """
+        if self._message is None:
+            return
+        delta = payload.get("delta")
+        if isinstance(delta, dict):
+            if "stop_reason" in delta:
+                self._message["stop_reason"] = delta.get("stop_reason")
+            if "stop_sequence" in delta:
+                self._message["stop_sequence"] = delta.get("stop_sequence")
+        usage = payload.get("usage")
+        if isinstance(usage, dict):
+            merged = self._message.get("usage")
+            merged = dict(merged) if isinstance(merged, dict) else {}
+            merged.update(usage)
+            self._message["usage"] = merged
+
+    def message_payload(self) -> dict[str, Any]:
+        """The reconstructed vendor-shaped ``message`` dict, ready for
+        ``AnthropicProvider._parse_response``."""
+        if self._message is None:
+            raise ValueError(
+                "Anthropic stream ended without a message_start event"
+            )
+        # Defensive: decode any tool_use block whose content_block_stop never
+        # arrived (clean-but-unterminated close). Already-stopped blocks were
+        # finalized in feed(); the pop makes this a no-op for them.
+        for index in list(self._json_fragments):
+            self._finalize_block(index)
+        self._message["content"] = [
+            self._blocks[index] for index in sorted(self._blocks)
+        ]
+        return self._message

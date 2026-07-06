@@ -41,6 +41,11 @@ shape into the Responses flat shape; inbound ``output[]`` ``function_call``
 items→``ToolUseBlock`` (**paired by ``call_id``**, not the internal ``id``).
 Reasoning and images came in later. ``stop_reason`` was written fully from the
 start (``tool_use`` priority per implementation).
+
+Token streaming came last: :meth:`OpenAIResponsesProvider.complete_streaming`
+POSTs the same body plus ``stream:true`` and feeds the terminal
+``response.completed`` payload through the same ``_parse_response``, so the
+streamed and batch results are shape-identical (token-streaming ADR).
 """
 
 from __future__ import annotations
@@ -62,6 +67,7 @@ from noeta.protocols.messages import (
     LLMRequest,
     LLMResponse,
     Message,
+    StreamDelta,
     TextBlock,
     ThinkingBlock,
     ToolResultBlock,
@@ -70,6 +76,7 @@ from noeta.protocols.messages import (
 )
 from noeta.protocols.values import ContentRef
 from noeta.providers import catalog
+from noeta.providers._sse import iter_sse_events
 from noeta.providers.codecs import (
     decode_tool_arguments,
     encode_tool_arguments,
@@ -95,8 +102,9 @@ class OpenAIResponsesProvider:
     The provider stays clean (red line):
     ``image_resolver`` is a narrowly injected constructor parameter (same
     nature as the httpx client it already holds); it does **not** hold a
-    ContentStore / StepContext, and its only protocol method is
-    :meth:`complete`.
+    ContentStore / StepContext, and its only protocol methods are
+    :meth:`complete` (plus the optional-capability variants
+    :meth:`complete_with_headers` / :meth:`complete_streaming`).
     """
 
     def __init__(
@@ -207,6 +215,175 @@ class OpenAIResponsesProvider:
                 f"type={type(payload).__name__}"
             )
         return self._parse_response(payload)
+
+    # ------------------------------------------------------------------
+    # StreamingProvider Protocol
+    # ------------------------------------------------------------------
+
+    def complete_streaming(
+        self,
+        request: LLMRequest,
+        on_delta: Callable[[StreamDelta], None],
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> LLMResponse:
+        """Streamed variant of :meth:`complete_with_headers`.
+
+        Same wire body as the batch path plus ``stream:true``, same endpoint /
+        ``api-version`` query / merged ``request_headers``. Text and
+        reasoning-summary fragments fire ``on_delta`` while the response is in
+        flight; the terminal ``response.completed`` event carries the complete
+        response object, which is fed through the **same** ``_parse_response``
+        as the batch path — so the returned :class:`LLMResponse` is
+        shape-identical whether or not anyone streamed (token-streaming ADR).
+
+        Errors keep the batch taxonomy: an HTTP error status on stream open is
+        read and translated by ``_translate_http_error``; a transport/timeout
+        failure mid-stream is a :class:`TransientError` (the runtime retry
+        loop reissues the whole call); the stale-ciphertext 400
+        (``invalid_encrypted_content``) self-heals with the same one-shot
+        strip-and-retry as the batch path — that 400 always surfaces before
+        any stream starts, and the retried request streams as well.
+        """
+        _guard_vision_capability(request)
+        body = self._build_request_body(request)
+        body["stream"] = True
+        params = (
+            {"api-version": self._api_version}
+            if self._api_version is not None
+            else None
+        )
+
+        def _stream(json_body: dict[str, Any]) -> LLMResponse:
+            kwargs: dict[str, Any] = {"params": params, "json": json_body}
+            if request_headers is not None:
+                kwargs["headers"] = request_headers
+            with self._client.stream(
+                "POST", self._endpoint, **kwargs
+            ) as http_response:
+                if http_response.status_code >= 400:
+                    # Load the error body while the stream is still open so
+                    # the taxonomy helpers (_is_context_overflow /
+                    # _is_invalid_encrypted_content) can read the JSON after
+                    # the context closes.
+                    http_response.read()
+                http_response.raise_for_status()
+                return self._consume_stream(http_response, on_delta)
+
+        try:
+            try:
+                return _stream(body)
+            except httpx.HTTPStatusError as exc:
+                # Stale cross-turn reasoning ciphertext self-heals exactly as
+                # in complete_with_headers: drop the echoed reasoning input
+                # items and retry ONCE (see the batch path for the full
+                # rationale). Any error the retried stream raises falls
+                # through to the outer translation below.
+                if (
+                    exc.response.status_code == 400
+                    and _is_invalid_encrypted_content(exc.response)
+                    and _has_reasoning_input(body)
+                ):
+                    return _stream(_strip_reasoning_input(body))
+                raise
+        except httpx.HTTPStatusError as exc:
+            raise _translate_http_error(exc) from exc
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            # Covers both a failed stream open and a mid-stream disconnect:
+            # transient, so the runtime retry loop reissues the whole call.
+            raise TransientError(str(exc)) from exc
+
+    def _consume_stream(
+        self,
+        http_response: httpx.Response,
+        on_delta: Callable[[StreamDelta], None],
+    ) -> LLMResponse:
+        """Drain one Responses SSE stream: emit deltas, parse the terminal
+        response object with the batch parser.
+
+        Event handling (the SSE ``event:`` name is authoritative; the JSON
+        ``type`` field is the fallback for nameless frames):
+
+        * ``response.output_text.delta`` → ``StreamDelta(kind="text")``;
+          ``response.reasoning_summary_text.delta`` →
+          ``StreamDelta(kind="thinking")``. ``index`` is the event's
+          ``output_index`` (the item's position in ``output[]``, monotonic
+          across the response).
+        * ``response.function_call_arguments.delta`` → swallowed: tool-call
+          arguments are never surfaced as deltas (partial JSON is
+          undecodable), and no client-side accumulator is needed — the
+          terminal response object carries every ``function_call`` item with
+          its complete ``arguments`` string for ``_parse_response``.
+        * ``response.completed`` / ``response.incomplete`` / a
+          ``response.failed`` without an error payload → the carried
+          ``response`` object goes through :meth:`_parse_response`, keeping
+          the batch inferences (``incomplete`` + ``max_output_tokens`` →
+          ``max_tokens``; ``failed`` → ``error``).
+        * A ``response.failed`` **with** an error payload, and top-level
+          ``error`` events → raised through :func:`_translate_stream_error`
+          (same buckets as ``_translate_http_error``).
+        * Everything else (``response.created`` / ``*.added`` / ``*.done`` /
+          unknown types / non-JSON data frames) is skipped silently —
+          mirroring the batch parser's unknown-item stance; vendor stream
+          vocabularies drift.
+
+        A stream that ends without a terminal response event is a truncated
+        stream → :class:`TransientError` (retryable, like any mid-stream
+        disconnect).
+        """
+        final_payload: Optional[dict[str, Any]] = None
+        for event_name, data in iter_sse_events(http_response.iter_lines()):
+            try:
+                payload = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            event_type = event_name or payload.get("type")
+            if event_type == "response.output_text.delta":
+                fragment = payload.get("delta")
+                if isinstance(fragment, str) and fragment:
+                    on_delta(
+                        StreamDelta(
+                            kind="text",
+                            text=fragment,
+                            index=_output_index(payload),
+                        )
+                    )
+            elif event_type == "response.reasoning_summary_text.delta":
+                fragment = payload.get("delta")
+                if isinstance(fragment, str) and fragment:
+                    on_delta(
+                        StreamDelta(
+                            kind="thinking",
+                            text=fragment,
+                            index=_output_index(payload),
+                        )
+                    )
+            elif event_type in (
+                "response.completed",
+                "response.failed",
+                "response.incomplete",
+            ):
+                response_obj = payload.get("response")
+                if event_type == "response.failed":
+                    error = (
+                        response_obj.get("error")
+                        if isinstance(response_obj, dict)
+                        else None
+                    )
+                    if isinstance(error, dict):
+                        raise _translate_stream_error(error)
+                if isinstance(response_obj, dict):
+                    final_payload = response_obj
+            elif event_type == "error":
+                raise _translate_stream_error(payload)
+            # Every other event type: skipped silently.
+        if final_payload is None:
+            raise TransientError(
+                "Responses stream ended without a terminal response event "
+                "(response.completed / response.failed / response.incomplete)"
+            )
+        return self._parse_response(final_payload)
 
     # ------------------------------------------------------------------
     # Outbound translation (Noeta → Responses)
@@ -451,6 +628,13 @@ def _is_context_overflow(response: httpx.Response) -> bool:
     error = body.get("error") if isinstance(body, dict) else None
     if not isinstance(error, dict):
         return False
+    return _error_indicates_context_overflow(error)
+
+
+def _error_indicates_context_overflow(error: dict[str, Any]) -> bool:
+    """The dict-level half of the context-overflow match, shared between the
+    HTTP-status path (``_is_context_overflow``) and the in-stream error path
+    (``_translate_stream_error``) so both classify identically."""
     code = str(error.get("code") or "")
     err_type = str(error.get("type") or "")
     message = str(error.get("message") or "").lower()
@@ -459,6 +643,47 @@ def _is_context_overflow(response: httpx.Response) -> bool:
         or err_type == "context_length_exceeded"
         or "maximum context length" in message
     )
+
+
+#: In-stream error codes bucketed :class:`TransientError` — the same failure
+#: classes ``_translate_http_error`` buckets transient by HTTP status
+#: (429 rate limiting / 5xx server side), which an in-flight stream reports
+#: as an error payload instead of a status code.
+_TRANSIENT_STREAM_ERROR_CODES = frozenset(
+    {"rate_limit_exceeded", "server_error", "service_unavailable"}
+)
+
+
+def _translate_stream_error(error: dict[str, Any]) -> Exception:
+    """Map an in-stream error payload to the neutral taxonomy.
+
+    Covers both a top-level SSE ``error`` event and a ``response.failed``
+    object's ``error``. Mirrors ``_translate_http_error``'s classification,
+    keyed off the error code/message instead of an HTTP status (mid-stream
+    there is none): rate limits and server-side failures → Transient;
+    context overflow keeps its dedicated bucket; everything else → Fatal.
+    """
+    code = str(error.get("code") or "")
+    message = str(error.get("message") or "")
+    detail = f"Responses stream error: code={code or 'unknown'}; {message}"
+    if _error_indicates_context_overflow(error):
+        return ContextOverflowError(detail)
+    if code in _TRANSIENT_STREAM_ERROR_CODES:
+        return TransientError(detail)
+    return FatalError(detail)
+
+
+def _output_index(payload: dict[str, Any]) -> int:
+    """A delta event's ``output_index`` → ``StreamDelta.index``.
+
+    ``output_index`` is the emitting item's position in the response's
+    ``output[]`` (monotonic across items), which is exactly the block index a
+    delta consumer keys interleaved text/thinking on. A missing / malformed
+    value degrades to 0 rather than dropping the delta."""
+    value = payload.get("output_index")
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return 0
 
 
 def _is_invalid_encrypted_content(response: httpx.Response) -> bool:

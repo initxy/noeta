@@ -131,6 +131,7 @@ class _LLMClientP(Protocol):
         ctx: StepContext,
         *,
         selection: Optional[MessageSelection] = None,
+        allow_stream: bool = True,
     ) -> LLMResponse: ...
 
 
@@ -491,7 +492,9 @@ class ReActPolicy:
             )
         to_summarize = history[:boundary]
         summary_req = self._summary_prompt_request(to_summarize)
-        summary_resp = self._llm.complete(summary_req, ctx)
+        # The summarize round-trip is not user-facing output: opt out of
+        # token streaming so a live UI never previews compaction internals.
+        summary_resp = self._llm.complete(summary_req, ctx, allow_stream=False)
         summary = "\n".join(
             b.text
             for b in summary_resp.content
