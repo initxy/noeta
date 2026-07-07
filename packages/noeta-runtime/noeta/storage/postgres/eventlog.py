@@ -43,12 +43,14 @@ from noeta.protocols.errors import (
     StaleSequence,
 )
 from noeta.protocols.event_log import (
+    SNAPSHOT_BASELINE_EVENT_TYPES,
     Subscriber,
     TaskStreamSummary,
     Unsubscribe,
 )
 from noeta.protocols.events import EventEnvelope, EventOrigin
 from noeta.protocols.values import EVENT_PAYLOAD_MAX_BYTES
+
 from noeta.storage._payload_restore import (
     _enforce_payload_cap,
     _restore_payload,
@@ -58,6 +60,14 @@ from noeta.storage.postgres._connection import (
     _open_connection,
 )
 from noeta.storage.postgres.migrations import apply_migrations
+
+# The ``find_latest_snapshot`` predicate, rendered once from the protocol
+# constant so the query can never drift from the contract set (the
+# ``ix_events_snapshot`` partial index must keep matching it textually —
+# see the migration notes).
+_BASELINE_TYPES_SQL = "(" + ", ".join(
+    f"'{t}'" for t in SNAPSHOT_BASELINE_EVENT_TYPES
+) + ")"
 
 
 __all__ = ["MAX_PAYLOAD_BYTES", "PostgresEventLog"]
@@ -327,14 +337,14 @@ class PostgresEventLog:
 
     def find_latest_snapshot(self, task_id: str) -> Optional[EventEnvelope]:
         with self._lock:
-            # TaskRewound is a snapshot-shaped fold baseline
-            # (``state_ref`` too) — take whichever of {TaskSnapshot,
-            # TaskRewound} has the higher seq so a rewind re-bases fold
+            # TaskRewound / StepAttemptAbandoned are snapshot-shaped fold
+            # baselines (``state_ref`` too) — take whichever of the three
+            # has the higher seq so a rewind / attempt seal re-bases fold
             # from the same lookup. ``ix_events_snapshot`` is partial on
-            # exactly this predicate.
+            # exactly this predicate (migration 2).
             row = self._conn.execute(
                 "SELECT * FROM events "
-                "WHERE task_id = %s AND type IN ('TaskSnapshot', 'TaskRewound') "
+                f"WHERE task_id = %s AND type IN {_BASELINE_TYPES_SQL} "
                 "ORDER BY seq DESC LIMIT 1",
                 (task_id,),
             ).fetchone()

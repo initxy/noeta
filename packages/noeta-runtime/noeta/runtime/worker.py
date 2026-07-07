@@ -45,14 +45,26 @@ import logging
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterator, Literal, Optional, Protocol
+from typing import Any, Callable, ClassVar, Iterator, Literal, Optional, Protocol
 
-from noeta.core.engine import suspend_on_human_handle
-from noeta.core.fold import fold
+from noeta.core.engine import abandon_step_attempt, suspend_on_human_handle
+from noeta.core.fold import BoundedEventLog, fold
 from noeta.protocols.decisions import TaskStatePatch
 from noeta.protocols.errors import InvalidLease, TaskCancellationRequested
 from noeta.protocols.messages import Block, MessageOrigin, TextBlock
-from noeta.protocols.wake import matches_wake
+from noeta.protocols.wake import (
+    NEXT_GOAL_WAKE_HANDLE,
+    HumanResponseReceived,
+    matches_wake,
+)
+from noeta.runtime.attempt import (
+    ABANDON_CAP,
+    InterruptedAttempt,
+    PendingPark,
+    classify_attempt,
+    scan_interrupted_attempt,
+    scan_pending_park,
+)
 
 
 __all__ = [
@@ -107,6 +119,12 @@ DEFAULT_SHUTDOWN_GRACE_S = 30.0
 #                                 ``WorkerLoop`` docstring).
 # * ``timers_fired``            — the timer poll delivered ``TimerFired``
 #                                 wakes to due ``wait_timer`` suspends.
+# * ``attempt_abandoned``       — crash recovery sealed an interrupted
+#                                 attempt and re-drove the step automatically
+#                                 (classified side-effect-safe).
+# * ``attempt_parked``          — crash recovery sealed an interrupted
+#                                 attempt and parked the task for a human
+#                                 (unsafe tool activity, or the abandon cap).
 ReliabilityKind = Literal[
     "stale_requeued",
     "suspended_without_wake",
@@ -114,6 +132,8 @@ ReliabilityKind = Literal[
     "heartbeat_invalid_lease",
     "shutdown_abandoned",
     "timers_fired",
+    "attempt_abandoned",
+    "attempt_parked",
 ]
 
 
@@ -155,13 +175,6 @@ class WakeRecoveryError(Exception):
     against the task's folded state (no matching suspension, or an
     unexpected status). The worker fails loud rather than silently
     continue."""
-
-
-class PartialStepOrphan(Exception):
-    """H2 (D4 case 5) — after a durable ``TaskWoken`` a step
-    crashed mid-flight (partial step events, still ``running``). This is the
-    documented **H1 partial-step-orphan** limitation, NOT solved by H2: the
-    worker does not silently re-run the partial step."""
 
 
 def _find_matching_woken_index(events: list[Any], wake_event: Any) -> Optional[int]:
@@ -274,6 +287,16 @@ def resolve_engine(rt: WorkerRuntime, task: Any) -> Any:
 # Three states: append-message / resolve-approval / ``None`` (the daemon
 # worker-loop's plain woken branch). The prelude is the ONLY per-command
 # variation; every surface shares this one machine.
+#
+# ``durable_at_seed`` (D6, docs/adr/step-attempt-recovery.md) marks the
+# preludes that only APPEND durable events (message / answer / ModelBound):
+# the driver's seed applies these synchronously on the request thread —
+# ``note_woken`` + prelude land BEFORE the command is acked, so an acked
+# ``send_goal`` / ``answer`` can never lose the user's input to a crash. The
+# drive then enters the woken machine prelude-less and runs the bare step
+# (case 2′). ``ResolveApprovalPrelude`` stays drive-side (it EXECUTES the
+# approved tool and must not block the request thread); its narrower loss
+# mode is benign — the task re-suspends on the same approval.
 
 
 class WokenPrelude(Protocol):
@@ -285,6 +308,10 @@ class WokenPrelude(Protocol):
     over the given engine + lease — they ride the H2 first-consume window,
     so their bytes land between ``TaskWoken`` and the step, exactly as the
     old inline CLI path recorded them.
+
+    ``durable_at_seed`` (a class attribute, read via ``getattr`` with a
+    ``False`` default) opts an append-only prelude into seed-time
+    application — see the D6 note above.
     """
 
     def __call__(self, engine: Any, task: Any, *, lease_id: str) -> Any: ...
@@ -328,6 +355,9 @@ class AppendMessagePrelude:
     attachment_texts: tuple[str, ...] = ()
     activate_skills: tuple[str, ...] = ()
 
+    #: Pure appends — safe (and required, D6) to run at seed time.
+    durable_at_seed: ClassVar[bool] = True
+
     def __call__(self, engine: Any, task: Any, *, lease_id: str) -> Any:
         for text in self.attachment_texts:
             engine.append_user_message(
@@ -351,12 +381,16 @@ class ResolveApprovalPrelude:
     """Approval prelude — run the approved tool call or append the denial.
 
     Mirrors ``engine.resolve_tool_approval(...)`` (the step formerly inlined
-    in ``CodeSessionRunner.resolve_tool_approval``)."""
+    in ``CodeSessionRunner.resolve_tool_approval``). NOT ``durable_at_seed``:
+    it executes the approved tool, which must not block the command's
+    request thread."""
 
     call_id: str
     approved: bool
     reason: Optional[str] = None
     resolver: str = "host"
+
+    durable_at_seed: ClassVar[bool] = False
 
     def __call__(self, engine: Any, task: Any, *, lease_id: str) -> Any:
         return engine.resolve_tool_approval(
@@ -377,6 +411,9 @@ class AnswerUserQuestionPrelude:
     answers: dict[str, dict[str, Any]]
     answered_by: str = "host"
 
+    #: Pure appends (answer audit + paired tool result) — seed-time safe.
+    durable_at_seed: ClassVar[bool] = True
+
     def __call__(self, engine: Any, task: Any, *, lease_id: str) -> Any:
         return engine.answer_user_question(
             task,
@@ -393,6 +430,8 @@ def run_leased_task(
     *,
     prelude: Optional[WokenPrelude] = None,
     next_goal_handle: Optional[str] = None,
+    reliability_sink: Optional[ReliabilitySink] = None,
+    engine: Optional[Any] = None,
 ) -> WorkerOutcome:
     """Advance one already-leased task by one step (the 3-state machine).
 
@@ -404,6 +443,22 @@ def run_leased_task(
       makes wake delivery exactly-once, so this is no longer a loss path)
       → re-release ``suspended`` preserving ``wake_on``.
     * ``"drained"`` — pending / running → ``run_one_step``, then release.
+      A ``running`` drain first scans for an interrupted attempt (an
+      opening-turn crash leaves one with no ``TaskWoken`` at all) and
+      routes it through the same seal + re-drive-or-park recovery as the
+      woken path — never a silent re-drive on a dirty window.
+    * ``"stopped"`` also covers a recovery **park**: the interrupted
+      attempt was sealed and the task rests suspended on the next-goal
+      handle with an ``origin="system"`` notice — typing resumes it.
+
+    ``reliability_sink`` (the WorkerLoop threads its own) observes the
+    recovery moments (``attempt_abandoned`` / ``attempt_parked``); ``None``
+    (driver / test callers) degrades to logs.
+
+    ``engine`` overrides the per-task resolve: the driver's seed passes the
+    Engine it resolved BEFORE applying a seed-time prelude (D6), so a
+    seed-written ``ModelBound`` keeps its drive-the-next-turn semantics.
+    ``None`` (every other caller) resolves as before.
 
     ``prelude`` (D4) is the typed woken-command-prelude seam: a
     step run **after** ``note_woken`` and **before** ``run_one_step`` (the
@@ -422,8 +477,9 @@ def run_leased_task(
     # D1: drive ``task`` with ITS OWN Agent's Engine, not a fixed
     # ``rt.engine``. The resolver folds ``TaskCreated.agent_name`` (hard
     # error on an unknown agent at lease time); a single-Agent host returns
-    # its one Engine.
-    engine = resolve_engine(rt, task)
+    # its one Engine. A seed-pinned ``engine`` (see above) wins.
+    if engine is None:
+        engine = resolve_engine(rt, task)
     # Human stop, top-level turn: poll the host's process-local cancel
     # registry at every turn boundary so a cancel/close that lands while THIS
     # session's ReAct loop is mid-flight abandons the in-flight result (the
@@ -437,12 +493,37 @@ def run_leased_task(
             return _run_woken(
                 rt, lease, task, engine,
                 prelude=prelude, cancelled=cancelled,
+                reliability_sink=reliability_sink,
             )
         if task.status == "suspended":
             rt.dispatcher.release(
                 lease.lease_id, next_state="suspended", wake_on=task.wake_on
             )
             return "skipped"
+        if task.status == "running":
+            # An opening-turn crash (no ``TaskWoken`` exists yet) leaves an
+            # interrupted attempt on a wake-less lease. Scan before
+            # stepping — running the step directly on the dirty window
+            # would silently re-drive it. A trailing park-reason seal is a
+            # crashed park: its "do not re-drive" decision is durable, so
+            # complete the park instead of stepping over it.
+            events = rt.event_log.read(lease.task_id)
+            pending = scan_pending_park(events)
+            if pending is not None:
+                return _complete_pending_park(
+                    rt, lease, engine, events, pending,
+                    consumed=None,
+                    reliability_sink=reliability_sink,
+                )
+            attempt = scan_interrupted_attempt(events)
+            if attempt is not None:
+                return _recover_interrupted_attempt(
+                    rt, lease, engine, events, attempt,
+                    cancelled=cancelled,
+                    consumed=None,
+                    outcome="drained",
+                    reliability_sink=reliability_sink,
+                )
         task = engine.run_one_step(
             task, lease_id=lease.lease_id, cancelled=cancelled
         )
@@ -537,14 +618,20 @@ def _run_woken(
     *,
     prelude: Optional[WokenPrelude] = None,
     cancelled: Optional[Callable[[], bool]] = None,
+    reliability_sink: Optional[ReliabilitySink] = None,
 ) -> WorkerOutcome:
     """H2 (D4) — the latest-matching-`TaskWoken` recovery state
     machine. ``task`` is the freshly folded task; ``lease.wake_event`` is the
     matched wake (re-)delivered by the dispatcher. Exactly-once: the wake is
     consumed once (case 1) or its already-durable consumption is reconciled
-    without a second ``TaskWoken`` (cases 2–4) — each consuming release
+    without a second ``TaskWoken`` (cases 2′–4) — each consuming release
     passes ``consumed_wake_event`` so the dispatcher clears the matched
-    event (D2/D6). Case 5 = H1 partial-step orphan; case 6 = fail loud.
+    event (D2/D6). The ``running`` reconciliation keys on the attempt
+    sentinel (a ``ContextPlanComposed`` in the live window — see
+    ``noeta.runtime.attempt``): none ⇒ bare re-drive (case 2′), present ⇒
+    the H1 partial-step orphan goes through seal + re-drive-or-park
+    recovery (case 5′, docs/adr/step-attempt-recovery.md). Case 6 = fail
+    loud.
     """
     events = rt.event_log.read(lease.task_id)
     matching = _find_matching_woken_index(events, lease.wake_event)
@@ -593,20 +680,33 @@ def _run_woken(
         )
         return "woken"
     if task.status == "running":
-        post_wake_step = matching < len(events) - 1
-        if not post_wake_step:  # case 2 — crash right after TaskWoken
-            # CONTRACT LIMITATION (D4): TaskWoken is the last event,
-            # so any woken-command ``prelude`` (send_goal append / approval)
-            # did not reach durability before the crash. Re-delivery here is
-            # prelude-less (the daemon passes prelude=None) and
-            # this branch CANNOT re-derive it — case 2 is also the legitimate
-            # bare-step recovery for non-command wakes (timer / subtask), and
-            # without durable command intent the two are indistinguishable. So
-            # the bare step runs and a not-yet-durable prelude command is lost.
-            # The prelude seam is therefore durable-safe only inside the
-            # synchronous first-consume call; crash-safe commands need durable
-            # intent (tracked follow-up). Pinned by
-            # test_case2_crash_after_taskwoken_runs_bare_step_dropping_prelude.
+        pending = scan_pending_park(events)
+        if pending is not None:
+            # a crash hit the ORIGINAL park between its seal and its
+            # suspend: the seal's park reason is a durable "do not
+            # re-drive" decision — finish the park, never the bare step.
+            return _complete_pending_park(
+                rt, lease, engine, events, pending,
+                consumed=lease.wake_event,
+                reliability_sink=reliability_sink,
+            )
+        attempt = scan_interrupted_attempt(events)
+        if attempt is None:
+            # case 2′ — the wake is durably consumed but no attempt started
+            # (no ``ContextPlanComposed`` in the live window): run the bare
+            # step. Correct by construction for every caller: timer /
+            # subtask re-deliveries (nothing to re-derive), seeded command
+            # wakes whose prelude events were written durably at seed time
+            # (D6 — they precede the first attempt and fold into ``task``),
+            # and a crash between an ``auto_redrive`` seal and its re-drive
+            # (the seal already re-based the state; park-reason seals never
+            # reach here — ``scan_pending_park`` above completes the park
+            # instead). The one remaining loss mode is an approval
+            # resolution whose prelude stays drive-side (it executes the
+            # approved tool, so it cannot ride the request thread): a crash
+            # before it lands re-suspends on the same approval and the
+            # operator simply approves again — benign, documented in
+            # docs/adr/step-attempt-recovery.md.
             task = engine.run_one_step(
                 task, lease_id=lease.lease_id, cancelled=cancelled
             )
@@ -615,14 +715,299 @@ def _run_woken(
                 consumed_wake_event=lease.wake_event,
             )
             return "woken"
-        # case 5 — partial step events after TaskWoken → H1 orphan
-        raise PartialStepOrphan(
-            f"task {lease.task_id!r}: a step crashed mid-flight after "
-            "TaskWoken (H1 partial-step-orphan; not re-run by H2)"
+        # case 5′ — an interrupted attempt after the wake (the H1
+        # partial-step orphan): seal + re-drive or park.
+        return _recover_interrupted_attempt(
+            rt, lease, engine, events, attempt,
+            cancelled=cancelled,
+            consumed=lease.wake_event,
+            outcome="woken",
+            reliability_sink=reliability_sink,
         )
     raise WakeRecoveryError(  # case 6 — unexpected status
         f"task {lease.task_id!r}: woken lease in unexpected status "
         f"{task.status!r}"
+    )
+
+
+def _recover_interrupted_attempt(
+    rt: WorkerRuntime,
+    lease: Any,
+    engine: Any,
+    events: list[Any],
+    attempt: InterruptedAttempt,
+    *,
+    cancelled: Optional[Callable[[], bool]],
+    consumed: Any,
+    outcome: WorkerOutcome,
+    reliability_sink: Optional[ReliabilitySink],
+) -> WorkerOutcome:
+    """Seal an interrupted attempt, then re-drive or park
+    (docs/adr/step-attempt-recovery.md).
+
+    Classify (D2: "whatever could run without a human approval gate may be
+    re-driven without a human") → seal (D3/D4: ``StepAttemptAbandoned``
+    with the pre-attempt baseline, written under THIS lease) → either
+    re-drive the step in the same lease, or park the task as a stopped
+    conversation (D7: system notice + next-goal suspend — typing resumes
+    it, ``close``/``cancel`` end it, zero new verbs). ``consumed`` is the
+    wake to clear on release (``None`` on the drained path). The seal is
+    durable before either continuation, so a crash *during* recovery
+    re-enters as a bare case-2′ re-drive (after an ``auto_redrive`` seal),
+    as a park completion (after a park-reason seal — ``scan_pending_park``),
+    or as a fresh case 5′ (before the seal) — recovery recurses naturally,
+    and :data:`~noeta.runtime.attempt.ABANDON_CAP` consecutive seals in one
+    window force a park (D8).
+    """
+    # Baseline = the state as it stood just BEFORE the interrupted
+    # attempt's ``ContextPlanComposed`` (D4: completed attempts and the
+    # turn's prelude events stay live history; only the interrupted
+    # attempt dies). Same bounded-fold machinery as the conversation
+    # rewind. Classification runs against this SAME baseline, not the
+    # dirty full stream: the D2 question is whether the re-drive — which
+    # runs on the sealed state — could proceed unattended, and folding the
+    # interrupted window into the Budget / Repetition counters could park
+    # an attempt the re-drive itself would allow.
+    bounded = BoundedEventLog(events, attempt.attempt_start_seq - 1)
+    baseline = fold(bounded, rt.content_store, lease.task_id)
+    classification = classify_attempt(
+        attempt.tail,
+        engine=engine,
+        task=baseline,
+        content_store=rt.content_store,
+        event_log=bounded,
+    )
+    capped = attempt.abandon_count >= ABANDON_CAP
+    # A plan-less anchor is an interrupted approval execution: a human is
+    # in that loop by definition, so recovery never re-drives it — the seal
+    # restores the pending-approval state and the park below re-suspends on
+    # the approval's own handle, so the ordinary approve verb re-runs it.
+    # Its reason wins over the cap: the park notice must tell the operator
+    # a human-approved call was interrupted, whatever the seal count.
+    redrive = (
+        classification.safe and not capped and attempt.anchored_on_plan
+    )
+    if not attempt.anchored_on_plan:
+        reason = "interrupted_approval"
+    elif capped:
+        reason = "abandon_cap"
+    elif redrive:
+        reason = "auto_redrive"
+    else:
+        reason = "unsafe_tool_activity"
+    abandon_step_attempt(
+        engine,
+        lease.task_id,
+        baseline=baseline,
+        abandoned_from_seq=attempt.attempt_start_seq,
+        reason=reason,
+        lease_id=lease.lease_id,
+    )
+    # Re-fold: the seal is a snapshot-shaped baseline, so this is a cheap
+    # rehydrate — and the ONE way to rebuild the working Task that is
+    # byte-identical to what any later resume folds.
+    task = fold(rt.event_log, rt.content_store, lease.task_id)
+    if reliability_sink is not None:
+        reliability_sink(
+            ReliabilityEvent(
+                kind="attempt_abandoned" if redrive else "attempt_parked",
+                task_id=lease.task_id,
+                lease_id=lease.lease_id,
+                detail={
+                    "reason": reason,
+                    "abandoned_from_seq": attempt.attempt_start_seq,
+                    "blockers": list(classification.blockers),
+                },
+            )
+        )
+    if redrive:
+        _log.warning(
+            "worker: sealed interrupted attempt at seq %s for task %s; "
+            "re-driving (crash recovery)",
+            attempt.attempt_start_seq,
+            lease.task_id,
+        )
+        task = engine.run_one_step(
+            task, lease_id=lease.lease_id, cancelled=cancelled
+        )
+        rt.dispatcher.release(
+            lease.lease_id, next_state=task.status, wake_on=task.wake_on,
+            consumed_wake_event=consumed,
+        )
+        return outcome
+    _log.warning(
+        "worker: sealed interrupted attempt at seq %s for task %s; "
+        "PARKING for a human (%s: %s)",
+        attempt.attempt_start_seq,
+        lease.task_id,
+        reason,
+        ", ".join(classification.blockers) or "n/a",
+    )
+    task = engine.append_user_message(
+        task,
+        content=[TextBlock(text=_park_notice(reason, classification.blockers))],
+        lease_id=lease.lease_id,
+        origin="system",
+    )
+    task = suspend_on_human_handle(
+        engine, task,
+        handle=_park_handle(events, reason=reason, consumed=consumed),
+        lease_id=lease.lease_id,
+    )
+    rt.dispatcher.release(
+        lease.lease_id,
+        next_state="suspended",
+        wake_on=task.wake_on,
+        consumed_wake_event=consumed,
+    )
+    return "stopped"
+
+
+def _park_handle(events: list[Any], *, reason: str, consumed: Any) -> str:
+    """The handle a park suspends on (D7).
+
+    An interrupted approval execution re-suspends on the approval's OWN
+    handle — the seal restored the pending-approval state, so the ordinary
+    approve/deny verbs re-run it; everything else rests as a stopped
+    conversation on the next-goal handle (typing resumes it). The approval
+    handle comes from the wake this lease consumed when it is a human
+    response; on a wake-less re-entry (the drained path, or completing a
+    crashed park) it falls back to the suspension the live window consumed
+    — the stream's last ``TaskSuspended`` on a human handle.
+    """
+    if reason != "interrupted_approval":
+        return NEXT_GOAL_WAKE_HANDLE
+    if isinstance(consumed, HumanResponseReceived):
+        return consumed.handle
+    for env in reversed(events):
+        if env.type == "TaskSuspended":
+            wake_on = getattr(env.payload, "wake_on", None)
+            if isinstance(wake_on, HumanResponseReceived):
+                return wake_on.handle
+            break
+    return NEXT_GOAL_WAKE_HANDLE
+
+
+def _complete_pending_park(
+    rt: WorkerRuntime,
+    lease: Any,
+    engine: Any,
+    events: list[Any],
+    pending: PendingPark,
+    *,
+    consumed: Any,
+    reliability_sink: Optional[ReliabilitySink],
+) -> WorkerOutcome:
+    """Finish a park whose seal is durable but whose completion is not.
+
+    A crash hit the original park between its seal and its suspend
+    (:func:`~noeta.runtime.attempt.scan_pending_park`). The seal's park
+    ``reason`` is the durable decision; re-entering as a bare re-drive
+    would override it, so this path only completes the remaining writes:
+    the system notice (skipped when it already landed) and the suspend +
+    release. Blockers for a re-appended notice are re-derived from the
+    sealed dead tail — the seal payload records only the reason.
+    """
+    reason = pending.seal.payload.reason
+    task = fold(rt.event_log, rt.content_store, lease.task_id)
+    blockers: tuple[str, ...] = ()
+    if not pending.notice_appended:
+        if reason == "unsafe_tool_activity":
+            blockers = _sealed_tail_blockers(
+                rt, engine, events, pending.seal, task
+            )
+        task = engine.append_user_message(
+            task,
+            content=[TextBlock(text=_park_notice(reason, blockers))],
+            lease_id=lease.lease_id,
+            origin="system",
+        )
+    _log.warning(
+        "worker: completing interrupted park for task %s (%s; a crash hit "
+        "the original park before its suspend)",
+        lease.task_id,
+        reason,
+    )
+    task = suspend_on_human_handle(
+        engine, task,
+        handle=_park_handle(events, reason=reason, consumed=consumed),
+        lease_id=lease.lease_id,
+    )
+    rt.dispatcher.release(
+        lease.lease_id,
+        next_state="suspended",
+        wake_on=task.wake_on,
+        consumed_wake_event=consumed,
+    )
+    if reliability_sink is not None:
+        reliability_sink(
+            ReliabilityEvent(
+                kind="attempt_parked",
+                task_id=lease.task_id,
+                lease_id=lease.lease_id,
+                detail={
+                    "reason": reason,
+                    "resumed_park": True,
+                    "abandoned_from_seq": (
+                        pending.seal.payload.abandoned_from_seq
+                    ),
+                    "blockers": list(blockers),
+                },
+            )
+        )
+    return "stopped"
+
+
+def _sealed_tail_blockers(
+    rt: WorkerRuntime,
+    engine: Any,
+    events: list[Any],
+    seal: Any,
+    task: Any,
+) -> tuple[str, ...]:
+    """Re-derive an already-sealed attempt's blockers for its park notice,
+    from the dead tail ``[abandoned_from_seq, seal)`` — classified against
+    the same pre-attempt baseline the original classification used."""
+    from_seq = seal.payload.abandoned_from_seq
+    tail = tuple(e for e in events if from_seq <= e.seq < seal.seq)
+    bounded = BoundedEventLog(events, from_seq - 1)
+    return classify_attempt(
+        tail,
+        engine=engine,
+        task=task,
+        content_store=rt.content_store,
+        event_log=bounded,
+    ).blockers
+
+
+def _park_notice(reason: str, blockers: tuple[str, ...]) -> str:
+    """The ``origin="system"`` notice a park appends — read by the human in
+    the web UI while the task rests, and by the model when the conversation
+    resumes, so both can verify what may have partially applied."""
+    if reason == "abandon_cap":
+        cause = (
+            "automatic recovery was already retried "
+            f"{ABANDON_CAP} times in this turn"
+        )
+    elif reason == "interrupted_approval":
+        return (
+            "A worker crash interrupted this task while it was executing a "
+            "human-approved tool call"
+            + (f" ({', '.join(blockers)})" if blockers else "")
+            + ". The interrupted execution was set aside and the task is "
+            "waiting on the same approval again. Verify whether the call "
+            "partially applied before approving it a second time."
+        )
+    else:
+        cause = (
+            "it had already run operations with side effects: "
+            + ", ".join(blockers)
+        )
+    return (
+        "A worker crash interrupted this task mid-step. The interrupted "
+        f"attempt was set aside without re-running because {cause}. "
+        "Before continuing, verify whether the listed operations applied "
+        "fully, partially, or not at all — they must not be blindly redone."
     )
 
 
@@ -1023,7 +1408,9 @@ class WorkerLoop:
         the main thread (``_run_one``) after the wait, on both the normal
         and abandon paths."""
         try:
-            outcome = run_leased_task(self._rt, lease)
+            outcome = run_leased_task(
+                self._rt, lease, reliability_sink=self._emit
+            )
             if outcome == "skipped":
                 _log.warning(
                     "worker: task %s suspended with no wake_event; "

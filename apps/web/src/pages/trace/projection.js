@@ -80,6 +80,14 @@ function traceSummary(type, payload) {
         (payload.boundary_count != null ? payload.boundary_count : "?") +
         " msgs → summary"
       );
+    case "StepAttemptAbandoned":
+      return (
+        "attempt abandoned (crash recovery)" +
+        (payload.reason ? " · " + payload.reason : "") +
+        (payload.abandoned_from_seq != null
+          ? " · from seq " + payload.abandoned_from_seq
+          : "")
+      );
     default:
       return "";
   }

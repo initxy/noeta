@@ -171,6 +171,23 @@ CREATE TABLE dispatcher_pending_wakes (
 """.strip()
 
 
+# Migration 2 (= sqlite migration 8): widen the fold-baseline index to
+# include the crash-recovery seal ``StepAttemptAbandoned`` — a partial
+# index is only chosen when its WHERE matches the query predicate
+# exactly, so it is re-created with the widened IN-list. The list is a
+# frozen literal (applied migrations are immutable); the live queries
+# render theirs from
+# ``noeta.protocols.event_log.SNAPSHOT_BASELINE_EVENT_TYPES``, so growing
+# that constant requires a NEW migration re-widening this index.
+_MIGRATION_2_DROP_SNAPSHOT_INDEX = "DROP INDEX IF EXISTS ix_events_snapshot"
+
+_MIGRATION_2_BASELINE_INDEX = (
+    "CREATE INDEX ix_events_snapshot "
+    "ON events (task_id, seq DESC) "
+    "WHERE type IN ('TaskSnapshot', 'TaskRewound', 'StepAttemptAbandoned')"
+)
+
+
 MIGRATIONS: list[Migration] = [
     Migration(
         version=1,
@@ -186,6 +203,14 @@ MIGRATIONS: list[Migration] = [
             _MIGRATION_1_LEASE_ID_INDEX,
             _MIGRATION_1_FIRE_AT_INDEX,
             _MIGRATION_1_PENDING_WAKES,
+        ),
+    ),
+    Migration(
+        version=2,
+        description="widen snapshot index to include StepAttemptAbandoned",
+        statements=(
+            _MIGRATION_2_DROP_SNAPSHOT_INDEX,
+            _MIGRATION_2_BASELINE_INDEX,
         ),
     ),
 ]

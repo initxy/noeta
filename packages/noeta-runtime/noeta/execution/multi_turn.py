@@ -28,18 +28,13 @@ from noeta.protocols.decisions import (
 from noeta.protocols.policy import Policy
 from noeta.protocols.step_context import StepContext
 from noeta.protocols.view import View
+from noeta.protocols.wake import NEXT_GOAL_WAKE_HANDLE
 
 
 __all__ = [
     "MultiTurnReActPolicy",
     "NEXT_GOAL_WAKE_HANDLE",
 ]
-
-
-#: The ``handle`` that distinguishes a "waiting for next goal"
-#: suspension from any other ``YieldForHumanDecision`` use. Read models
-#: key on it to recognise a chat turn boundary in the EventLog history.
-NEXT_GOAL_WAKE_HANDLE = "noeta-code-next-goal"
 
 
 class MultiTurnReActPolicy:

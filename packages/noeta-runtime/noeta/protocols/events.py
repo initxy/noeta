@@ -215,6 +215,40 @@ class TaskRewoundPayload:
 
 
 @dataclass(frozen=True, slots=True)
+class StepAttemptAbandonedPayload:
+    """Crash-recovery seal over an interrupted decide→act attempt.
+
+    A worker crash mid-step leaves the attempt's partial events on the
+    stream (a ``ContextPlanComposed`` with no reachable suspend/terminal
+    behind it). Recovery folds the state to just before that attempt's
+    ``ContextPlanComposed``, serialises it (the same 4-slice body
+    :class:`TaskSnapshotPayload` points at), stores it in the
+    ContentStore, and **appends** this marker — the snapshot-shaped
+    re-base pattern of :class:`TaskRewoundPayload`, scoped to one
+    attempt. fold treats it as a rebuild baseline (same
+    ``find_latest_snapshot`` path), so the partial attempt becomes
+    folded-over dead history (still on the stream, still auditable) and
+    the re-driven attempt's events continue from a clean state.
+
+    ``abandoned_from_seq`` is the seq of the interrupted attempt's anchor
+    — its ``ContextPlanComposed`` (the implicit attempt-start record) or,
+    for an interrupted approval execution, the first activity event of
+    the plan-less window — for the read model / trace timeline.
+    ``reason`` says why the seal was written: ``"auto_redrive"`` (a
+    provably safe attempt, re-driven with no human),
+    ``"unsafe_tool_activity"`` (parked — unattended-unsafe activity in
+    the tail), ``"interrupted_approval"`` (parked — the crash hit a
+    human-approved tool execution; the seal restores the pending
+    approval) or ``"abandon_cap"`` (the consecutive-abandon cap forced a
+    park). Absent from any historical recording → byte-safe (same
+    additive-event rule as ``TaskRewound``)."""
+
+    abandoned_from_seq: int
+    state_ref: ContentRef
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class ContextPlanComposedPayload:
     """Issue 14: Engine emits this per step in front of the LLM round-trip.
 

@@ -23,11 +23,24 @@ import sqlite3
 from typing import Optional
 
 from noeta.protocols.errors import ContentNotFound, NoetaError
-from noeta.protocols.event_log import TaskStreamSummary
+from noeta.protocols.event_log import (
+    SNAPSHOT_BASELINE_EVENT_TYPES,
+    TaskStreamSummary,
+)
 from noeta.protocols.events import EventEnvelope
 from noeta.protocols.values import ContentRef
+
 from noeta.storage.sqlite.eventlog import _row_to_envelope
 from noeta.storage.sqlite.migrations import SCHEMA_VERSION
+
+# The ``find_latest_snapshot`` predicate, rendered once from the protocol
+# constant so the query can never drift from the contract set (the
+# ``ix_events_snapshot`` partial index must keep matching it textually —
+# see the migration notes).
+_BASELINE_TYPES_SQL = "(" + ", ".join(
+    f"'{t}'" for t in SNAPSHOT_BASELINE_EVENT_TYPES
+) + ")"
+
 
 
 __all__ = [
@@ -98,11 +111,11 @@ class SqliteReadOnlyStore:
         return [_row_to_envelope(row) for row in rows]
 
     def find_latest_snapshot(self, task_id: str) -> Optional[EventEnvelope]:
-        # TaskRewound is a snapshot-shaped fold baseline too — take
-        # whichever of {TaskSnapshot, TaskRewound} has the higher seq.
+        # TaskRewound / StepAttemptAbandoned are snapshot-shaped fold
+        # baselines too — take whichever of the three has the higher seq.
         row = self._conn.execute(
             "SELECT * FROM events WHERE task_id = ? "
-            "AND type IN ('TaskSnapshot', 'TaskRewound') "
+            f"AND type IN {_BASELINE_TYPES_SQL} "
             "ORDER BY seq DESC LIMIT 1",
             (task_id,),
         ).fetchone()

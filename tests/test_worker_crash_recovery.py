@@ -80,8 +80,14 @@ class _FakeEngine:
 
 
 def _rt(engine: Any, dispatcher: Any) -> Any:
+    # ``event_log.read`` returns an empty stream so the drained path's
+    # interrupted-attempt scan (step-attempt-recovery) finds nothing and
+    # runs the bare step — the pre-recovery Part-1 control flow.
     return SimpleNamespace(
-        engine=engine, event_log=None, content_store=None, dispatcher=dispatcher
+        engine=engine,
+        event_log=SimpleNamespace(read=lambda task_id, **kw: []),
+        content_store=None,
+        dispatcher=dispatcher,
     )
 
 

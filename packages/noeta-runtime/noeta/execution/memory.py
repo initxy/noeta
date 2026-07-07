@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
 from noeta.context.memory import (
     MEMORY_DRIFT_POLICY,
@@ -233,6 +233,9 @@ class RecallGoalPrelude:
     origin: Optional[MessageOrigin] = None
     attachment_texts: tuple[str, ...] = ()
     activate_skills: tuple[str, ...] = ()
+
+    #: Recall reads the local store then appends — seed-time safe (D6).
+    durable_at_seed: ClassVar[bool] = True
 
     def __call__(self, engine: Any, task: Any, *, lease_id: str) -> Any:
         for text in self.attachment_texts:

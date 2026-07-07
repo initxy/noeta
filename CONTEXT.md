@@ -66,6 +66,10 @@ _Avoid_: Config, Settings, AgentConfig
 The slice by which a task advances within one Engine main-loop pass: `compose_view → decide → dispatch`.
 _Avoid_: Iteration, Turn, Cycle
 
+**Attempt**:
+One decide→act iteration within a Step. Its first durable record is `ContextPlanComposed` (the implicit attempt-start record), and it is the unit of crash recovery: a `StepAttemptAbandoned` marker seals an interrupted attempt as folded-over dead history.
+_Avoid_: Iteration, Retry
+
 **Decision**:
 The return value of Policy.decide, and the input to Engine dispatch. A set of **neutral mechanism variants** (open-ended in number): 7 canonical ones — `tool_calls / spawn_subtask / yield_for_human / wait_timer / wait_external / finish / fail`; plus `spawn_subtasks` (fan out N sub-agents in one turn, an N-way join) and `state_patch` (a durable state write that continues the loop: emit one caller-constructed message + an optional `TaskStatePatch`, then keep looping; the Engine does not understand the payload at all). Product control tools do not get their own kernel variant: `todo_write` / `skill` are expressed by the runtime as `state_patch` (the `plan_mode` control tool has been removed), and `ask_user_question` is expressed by the runtime as `yield_for_human` (the kernel retains only neutral HITL auditing).
 _Avoid_: Action, Command, Intent
