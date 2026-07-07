@@ -17,6 +17,7 @@ and tears everything down.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -46,6 +47,7 @@ from noeta.protocols.messages import ImageBlock, LLMProvider
 from noeta.protocols.tool import Tool
 from noeta.protocols.tool_args import resolve_tool_call_arguments
 from noeta.protocols.values import ContentRef
+from noeta.runtime.worker import WorkerLoop
 from noeta.storage.memory import (
     InMemoryContentStore,
     InMemoryDispatcher,
@@ -71,9 +73,7 @@ __all__ = ["Client", "QueryFailedError", "QueryResult", "query"]
 # ---------------------------------------------------------------------------
 
 
-def _scan_entries(
-    entries: tuple[Any, ...], gathered: dict[str, Tool]
-) -> None:
+def _scan_entries(entries: tuple[Any, ...], gathered: dict[str, Tool]) -> None:
     """Append every :class:`DecoratedTool` in ``entries`` to ``gathered``.
 
     Shared helper for ``_collect_custom_tools`` — entries come from
@@ -221,6 +221,12 @@ class Client:
             event_log.subscribe(obs) for obs in options.observers
         ]
         self._shutdown = False
+        # Resident worker pool (lazily started by start_workers). Each loop
+        # runs on its own daemon thread; ``_worker_loops`` holds the loop
+        # objects so stop_workers / shutdown can signal and join them.
+        self._worker_loops: list[WorkerLoop] = []
+        self._worker_threads: list[threading.Thread] = []
+        self._workers_started = False
 
         # 4. Assemble host
         host_model = (
@@ -241,9 +247,7 @@ class Client:
             workspace_dir=effective_workspace_dir,
             registry=registry,
             custom_tools=custom_tools,
-            policy_wrapper=(
-                multi_turn_policy_wrapper if multi_turn else None
-            ),
+            policy_wrapper=(multi_turn_policy_wrapper if multi_turn else None),
             permission_mode=options.permission_mode,
             # Wiring-only LLM controls: live in Options, excluded from
             # the AgentSpec identity (compile_options never reads them), forwarded
@@ -277,9 +281,7 @@ class Client:
             # Process fs write policy (D3 host config): "apply" performs real
             # writes, anything else stages a dry-run diff (the safe default).
             write_mode=(
-                FsWriteMode.APPLY
-                if hc.write_mode == "apply"
-                else FsWriteMode.DRY_RUN
+                FsWriteMode.APPLY if hc.write_mode == "apply" else FsWriteMode.DRY_RUN
             ),
         )
 
@@ -311,9 +313,7 @@ class Client:
             # default_model=None makes driver.__init__ fall back to host.model.
             default_model=None,
             model_allowlist=(
-                frozenset(allowed_models)
-                if allowed_models
-                else STUB_MODEL_ALLOWLIST
+                frozenset(allowed_models) if allowed_models else STUB_MODEL_ALLOWLIST
             ),
         )
         # Wire the driver back into the host as the background-completion
@@ -366,8 +366,11 @@ class Client:
             return outcome
         while True:
             handle = outcome.wake_handle
-            if outcome.status != "suspended" or not isinstance(handle, str) \
-                    or not handle.startswith("approval-"):
+            if (
+                outcome.status != "suspended"
+                or not isinstance(handle, str)
+                or not handle.startswith("approval-")
+            ):
                 return outcome
             # Find the latest unreplied ToolCallApprovalRequested.
             events = self._host.event_log.read(task_id)
@@ -381,15 +384,16 @@ class Client:
             for e in reversed(events):
                 if e.type == "ToolCallApprovalRequested":
                     p = e.payload
-                    if isinstance(p, ToolCallApprovalRequestedPayload) \
-                            and p.call_id not in resolved_call_ids:
+                    if (
+                        isinstance(p, ToolCallApprovalRequestedPayload)
+                        and p.call_id not in resolved_call_ids
+                    ):
                         pending = p
                         break
             if pending is None:
                 # No pending request — leave outcome alone.
                 return outcome
-            args = resolve_tool_call_arguments(
-                pending, self._host.content_store)
+            args = resolve_tool_call_arguments(pending, self._host.content_store)
             approved = bool(callback(pending.tool_name, args))
             if approved:
                 outcome = self._driver.approve(
@@ -679,9 +683,7 @@ class Client:
         cascade: bool = False,
     ) -> Any:
         """Cancel a conversation (driver ``cancel``)."""
-        return self._driver.cancel(
-            task_id=task_id, reason=reason, cascade=cascade
-        )
+        return self._driver.cancel(task_id=task_id, reason=reason, cascade=cascade)
 
     def close(
         self,
@@ -691,9 +693,7 @@ class Client:
         reason: Optional[str] = None,
     ) -> Any:
         """Close / archive a conversation (driver ``close``)."""
-        return self._driver.close(
-            task_id=task_id, closed_by=closed_by, reason=reason
-        )
+        return self._driver.close(task_id=task_id, closed_by=closed_by, reason=reason)
 
     def reopen(
         self,
@@ -773,7 +773,12 @@ class Client:
             if isinstance(tid, str):
                 parent_of[tid] = self._genesis_parent(tid)
         if task_id not in parent_of:
-            return {"ok": False, "reason": "not_found", "task_id": task_id, "deleted": []}
+            return {
+                "ok": False,
+                "reason": "not_found",
+                "task_id": task_id,
+                "deleted": [],
+            }
         children: dict[str, list[str]] = {}
         for tid, parent in parent_of.items():
             if parent:
@@ -860,7 +865,9 @@ class Client:
         """
         return self._host.content_store.put(body, media_type=media_type)
 
-    def subscribe(self, callback: Callable[[EventEnvelope], None]) -> Callable[[], None]:
+    def subscribe(
+        self, callback: Callable[[EventEnvelope], None]
+    ) -> Callable[[], None]:
         """Subscribe to the live, post-commit envelope stream (ALL tasks).
 
         Returns an unsubscribe callable. The callback fires once per committed
@@ -870,15 +877,123 @@ class Client:
         """
         return self._host.event_log.subscribe(callback)
 
-    def shutdown(self) -> None:
-        """Unsubscribe default observers (idempotent).
+    # -- resident worker pool ---------------------------------------------
 
-        No-op on already-shutdown instances. Does **not** explicitly
-        close in-memory stores (they are process-owned).
+    def start_workers(
+        self,
+        num_workers: int = 1,
+        *,
+        poll_interval: float = 0.1,
+        heartbeat_interval: float = 30.0,
+        stale_sweep_interval: float = 10.0,
+        timer_poll_interval: float = 1.0,
+        lease_seconds: float = 600.0,
+        shutdown_grace_s: Optional[float] = 10.0,
+    ) -> None:
+        """Start ``num_workers`` resident WorkerLoop daemon threads.
+
+        When workers are running, the ``background_drive`` verbs (start /
+        send_goal / approve / deny / answer / deliver_event) seed
+        durably on the caller thread — same typed 4xx contract — then
+        yield the seed's lease back to the ready queue via
+        ``dispatcher.release_yield``. A resident worker picks the task
+        up and drives it through ``run_leased_task``; progress rides the
+        committed event stream (SSE), exactly like the per-command
+        ``_spawn_drive`` daemon-thread model but with true concurrency.
+
+        Safe to call once. Subsequent calls raise ``RuntimeError``.
+        """
+        if self._workers_started:
+            raise RuntimeError("start_workers() called more than once")
+        if num_workers < 1:
+            raise ValueError(f"num_workers must be >= 1, got {num_workers}")
+        self._workers_started = True
+        # Import NEXT_GOAL_WAKE_HANDLE locally so a runtime-only host
+        # never resolving it is fine (start_workers is only called by
+        # multi-turn interactive hosts).
+        from noeta.protocols.wake import NEXT_GOAL_WAKE_HANDLE
+
+        for i in range(num_workers):
+            loop = WorkerLoop(
+                self._host,
+                worker_id=f"noeta-agent-worker-{i}",
+                lease_seconds=lease_seconds,
+                poll_interval=poll_interval,
+                heartbeat_interval=heartbeat_interval,
+                stale_sweep_interval=stale_sweep_interval,
+                timer_poll_interval=timer_poll_interval,
+                shutdown_grace_s=shutdown_grace_s,
+                next_goal_handle=NEXT_GOAL_WAKE_HANDLE,
+            )
+            self._worker_loops.append(loop)
+            th = threading.Thread(
+                target=loop.run_forever,
+                name=f"noeta-worker-{i}",
+                daemon=True,
+            )
+            th.start()
+            self._worker_threads.append(th)
+
+    @property
+    def workers_running(self) -> bool:
+        return self._workers_started
+
+    def stop_workers(self, timeout: Optional[float] = None) -> bool:
+        """Stop every resident worker and wait for them to exit.
+
+        Returns True if all workers exited within ``timeout`` (``None``
+        = wait up to each loop's ``shutdown_grace_s`` which is enforced
+        inside ``run_forever``'s shutdown path).
+        """
+        if not self._workers_started:
+            return True
+        for loop in self._worker_loops:
+            loop.stop()
+        deadline = (
+            None if timeout is None else (__import__("time").monotonic() + timeout)
+        )
+        for th in self._worker_threads:
+            remaining = None
+            if deadline is not None:
+                remaining = max(0.0, deadline - __import__("time").monotonic())
+            th.join(timeout=remaining)
+        all_joined = all(not t.is_alive() for t in self._worker_threads)
+        self._worker_loops.clear()
+        self._worker_threads.clear()
+        self._workers_started = False
+        return all_joined
+
+    def _yield_seeded_lease(self, seeded: Any) -> None:
+        """Hand a seeded lease back to the ready queue for a worker to pick up.
+
+        Used by the background-drive verbs after seed() when a resident
+        worker pool is running, in place of spawning a one-off drive
+        thread. If the seed produced a non-durable prelude (e.g.
+        ResolveApprovalPrelude — executes the approved tool, cannot ride
+        the request thread), stash it on the host so the worker that
+        picks up the task can apply it between note_woken and
+        run_one_step.
+        """
+        if getattr(seeded, "prelude", None) is not None:
+            self._host.put_pending_prelude(seeded.task_id, seeded.prelude)
+        self._host.dispatcher.release_yield(seeded.lease.lease_id)
+
+    def shutdown(self) -> None:
+        """Stop resident workers (if any), then unsubscribe observers.
+
+        Idempotent. Does **not** explicitly close in-memory stores
+        (they are process-owned).
         """
         if self._shutdown:
             return
         self._shutdown = True
+        # Stop the worker pool first so no worker is mid-step when we
+        # tear down observers / the trace sink below.
+        if self._workers_started:
+            try:
+                self.stop_workers(timeout=10.0)
+            except Exception:
+                pass
         try:
             self._unsubscribe_default()
         except Exception:
@@ -927,8 +1042,7 @@ class QueryFailedError(CodedError):
         self.reason = reason
         self.retryable = retryable
         super().__init__(
-            f"query task {task_id!r} did not complete "
-            f"(status={status!r}): {reason}"
+            f"query task {task_id!r} did not complete (status={status!r}): {reason}"
         )
 
 

@@ -131,9 +131,7 @@ class Dispatcher(Protocol):
         """
         ...
 
-    def heartbeat(
-        self, lease_id: str, *, lease_seconds: float = 30.0
-    ) -> float:
+    def heartbeat(self, lease_id: str, *, lease_seconds: float = 30.0) -> float:
         """Extend ``lease_id``'s deadline; return the new expires_at.
 
         Raises:
@@ -184,6 +182,22 @@ class Dispatcher(Protocol):
                 is set but does not equal the stored matched event.
             ValueError — ``next_state`` is not one of the two valid
                 values.
+        """
+        ...
+
+    def release_yield(self, lease_id: str) -> None:
+        """Yield a freshly-seeded lease back to the ready queue.
+
+        Used by transports that seed a task durably (create task, append
+        seed events) under a targeted lease and then hand the task off to
+        a resident worker pool. Transitions ``leased → ready`` with a
+        fresh ``ready_order``, clearing lease fields but preserving any
+        ``matched_wake_event_canonical`` (so a wake delivered before the
+        yield is not lost). Does NOT increment ``fail_attempts`` — this
+        is a voluntary yield, not a failure.
+
+        Raises:
+            noeta.protocols.errors.InvalidLease — lease is unknown.
         """
         ...
 

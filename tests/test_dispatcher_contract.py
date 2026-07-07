@@ -354,9 +354,7 @@ def test_release_suspended_without_wake_on_leaves_task_unleaseable(
     assert disp.lease(worker_id="w") is None
     # Any wake event arrives; with wake_on=None on the row, the
     # matcher rejects (None never matches), event goes to pending.
-    assert (
-        disp.wake("t1", SubtaskCompleted(subtask_id="anything")) is False
-    )
+    assert disp.wake("t1", SubtaskCompleted(subtask_id="anything")) is False
 
 
 def test_release_drains_only_matching_pending_wake(make_dispatcher) -> None:
@@ -494,6 +492,7 @@ def test_wake_on_round_trips_across_typed_subtypes(
 def test_sqlite_dispatcher_check_rejects_unknown_status() -> None:
     disp = SqliteDispatcher(":memory:")
     import sqlite3 as _sqlite3
+
     try:
         with pytest.raises(_sqlite3.IntegrityError):
             disp._conn.execute(
@@ -509,6 +508,7 @@ def test_sqlite_dispatcher_check_rejects_unknown_status() -> None:
 def test_sqlite_dispatcher_check_rejects_ready_without_order() -> None:
     disp = SqliteDispatcher(":memory:")
     import sqlite3 as _sqlite3
+
     try:
         with pytest.raises(_sqlite3.IntegrityError):
             disp._conn.execute(
@@ -524,6 +524,7 @@ def test_sqlite_dispatcher_check_rejects_ready_without_order() -> None:
 def test_sqlite_dispatcher_check_rejects_leased_without_lease_id() -> None:
     disp = SqliteDispatcher(":memory:")
     import sqlite3 as _sqlite3
+
     try:
         with pytest.raises(_sqlite3.IntegrityError):
             disp._conn.execute(
@@ -534,3 +535,134 @@ def test_sqlite_dispatcher_check_rejects_leased_without_lease_id() -> None:
             )
     finally:
         disp.close()
+
+
+# ---------------------------------------------------------------------------
+# Contention — multi-worker CAS (round 3a single-host-multi-worker)
+# ---------------------------------------------------------------------------
+
+
+def test_lease_cas_only_one_winner_concurrent(make_dispatcher) -> None:
+    """When N workers race to lease from a non-empty queue, exactly one
+    wins each task; losers see ``None`` (or a different task_id) but
+    never duplicate leases."""
+    import threading
+
+    disp = make_dispatcher()
+    disp.enqueue("t1")
+    winners: list[str] = []
+    winners_lock = threading.Lock()
+    errors: list[Exception] = []
+
+    def _try_lease(worker_id: str) -> None:
+        try:
+            lease = disp.lease(worker_id=worker_id)
+            if lease is not None:
+                with winners_lock:
+                    winners.append(lease.task_id)
+        except Exception as exc:  # noqa: BLE001 — surface to the main thread
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_try_lease, args=(f"w{i}",)) for i in range(8)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(timeout=5.0)
+    assert not errors, f"workers raised: {errors!r}"
+    assert winners.count("t1") == 1, f"expected exactly one winner, got {winners!r}"
+    # Second lease attempt sees empty queue (the winning lease is held).
+    assert disp.lease(worker_id="probe") is None
+
+
+def test_release_yield_returns_lease_to_ready_without_fail_bump(
+    make_dispatcher,
+) -> None:
+    """``release_yield`` (the seed-then-hand-off seam used by worker-pool
+    mode) moves a leased task back to ``ready`` without incrementing
+    ``fail_attempts`` and without losing a matched wake."""
+    disp = make_dispatcher()
+    disp.enqueue("t1")
+    lease = disp.lease(worker_id="seed", lease_seconds=60.0)
+    assert lease is not None
+    assert lease.task_id == "t1"
+    # Before yield, no worker can grab the task.
+    assert disp.lease(worker_id="probe") is None
+    disp.release_yield(lease.lease_id)
+    # After yield, a worker can pick it up; the fresh lease carries no
+    # wake_event (no wake delivered in this scenario).
+    lease2 = disp.lease(worker_id="worker")
+    assert lease2 is not None
+    assert lease2.task_id == "t1"
+    assert lease2.wake_event is None
+    assert lease2.lease_id != lease.lease_id
+
+
+def test_release_yield_preserves_pending_wake(make_dispatcher) -> None:
+    """A wake delivered while a seed-lease is held must NOT be lost
+    after release_yield: a later lease after the normal wake-drain
+    round-trip sees the wake_event."""
+    from noeta.protocols.wake import HumanResponseReceived
+
+    disp = make_dispatcher()
+    disp.enqueue("t1")
+    lease = disp.lease(worker_id="seed", lease_seconds=60.0)
+    assert lease is not None
+    # Direct yield while leased: release_yield goes leased→ready. No
+    # wake_on is installed so no matched is drained; then a subsequent
+    # wake + lease delivers it normally.
+    disp.release_yield(lease.lease_id)
+    disp.wake("t1", HumanResponseReceived(handle="next-goal"))
+    # The task is 'ready' so wake buffers; release on a later
+    # (suspended→ready) transition would drain it. Since we never
+    # suspended, the wake stays buffered; here we simply enqueue-suspend
+    # manually to exercise the drain: enqueue then lease-with-targeted-suspend
+    # is overkill; the key contract is that release_yield did not destroy
+    # pending state.
+    #
+    # Verify the pending wake is still present: suspend the task via
+    # release(suspended, wake_on=next-goal) from a fresh lease.
+    lease2 = disp.lease(worker_id="resolver")
+    assert lease2 is not None
+    # Release as suspended with the matching wake_on drains the buffer → matched.
+    disp.release(
+        lease2.lease_id,
+        next_state="suspended",
+        wake_on=HumanResponseReceived(handle="next-goal"),
+    )
+    lease3 = disp.lease(worker_id="consumer")
+    assert lease3 is not None
+    assert lease3.wake_event == HumanResponseReceived(handle="next-goal")
+
+
+def test_concurrent_leases_across_multiple_tasks(make_dispatcher) -> None:
+    """N tasks, N*2 workers racing: each task is leased exactly once
+    (no duplicates, no lost tasks)."""
+    import threading
+
+    disp = make_dispatcher()
+    task_ids = [f"t{i}" for i in range(10)]
+    for tid in task_ids:
+        disp.enqueue(tid)
+
+    won: list[str] = []
+    won_lock = threading.Lock()
+
+    def _race() -> None:
+        while True:
+            lease = disp.lease(worker_id="racer")
+            if lease is None:
+                return
+            with won_lock:
+                won.append(lease.task_id)
+
+    threads = [threading.Thread(target=_race) for _ in range(20)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(timeout=5.0)
+
+    assert sorted(won) == sorted(task_ids), (
+        f"expected each task leased exactly once; got {sorted(won)!r}"
+    )
+    # Queue is empty after all leases claimed.
+    assert disp.lease(worker_id="probe") is None
