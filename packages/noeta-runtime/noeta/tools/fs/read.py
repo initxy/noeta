@@ -375,7 +375,8 @@ class ReadFileTool:
         if isinstance(path, ToolResult):
             return path
         resolved = resolve_readable_file(
-            self.workspace, self.skill_roots, self.name, path
+            self.workspace, self.skill_roots, self.name, path,
+            exec_env=self.exec_env,
         )
         if isinstance(resolved, ToolResult):
             return resolved

@@ -180,7 +180,9 @@ class ReplaceTextTool:
         if not isinstance(new, str):
             return tool_error(self.name, "requires string 'new'")
         replace_all = bool(arguments.get("replace_all"))
-        resolved = resolve_existing_file(self.workspace, self.name, path)
+        resolved = resolve_existing_file(
+            self.workspace, self.name, path, exec_env=self.exec_env
+        )
         if isinstance(resolved, ToolResult):
             return resolved
         try:

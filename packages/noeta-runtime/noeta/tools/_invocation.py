@@ -31,7 +31,7 @@ in the tool; only the generic three-step is hoisted here.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 from noeta.protocols.tool import ToolResult
 from noeta.tools._limits import (
@@ -44,6 +44,12 @@ from noeta.tools.fs._workspace import (
     resolve_readable,
     tool_error,
 )
+from noeta.tools.fs.exec_env import ExecEnv, LocalExecEnv
+
+
+#: Shared stateless host backend for the existing-file check when a caller does
+#: not inject one — keeps every non-sandbox caller byte-identical.
+_DEFAULT_EXEC_ENV: ExecEnv = LocalExecEnv()
 
 
 __all__ = [
@@ -92,6 +98,8 @@ def resolve_existing_file(
     workspace: WorkspaceRoot,
     tool_name: str,
     path: str,
+    *,
+    exec_env: Optional[ExecEnv] = None,
 ) -> "Path | ToolResult":
     """Fence ``path`` to the workspace, then confirm it names an existing file.
 
@@ -100,11 +108,15 @@ def resolve_existing_file(
     {path!r}")``. Both byte forms are preserved — the escape message comes from
     ``resolve_or_error`` unchanged, the not-a-file message matches what
     ``read``/``edit`` emitted verbatim.
+
+    ``exec_env`` routes the existence check through the same backend the tool
+    reads through — so under a sandbox the ``is_file`` stat hits the *container*,
+    not the host. ``None`` ⇒ the host (byte-identical to the pre-seam check).
     """
     resolved = resolve_or_error(workspace, tool_name, path)
     if isinstance(resolved, ToolResult):
         return resolved
-    if not resolved.is_file():
+    if not (exec_env or _DEFAULT_EXEC_ENV).is_file(resolved):
         return tool_error(tool_name, f"not a file: {path!r}")
     return resolved
 
@@ -114,13 +126,19 @@ def resolve_readable_file(
     extra_roots: Sequence[Path],
     tool_name: str,
     path: str,
+    *,
+    exec_env: Optional[ExecEnv] = None,
 ) -> "Path | ToolResult":
     """``read``'s fence: ``resolve_readable`` (workspace OR a skill root)
-    then the existing-file check, both byte forms unchanged."""
+    then the existing-file check, both byte forms unchanged.
+
+    ``exec_env`` routes the existence check through the tool's backend (the
+    container under a sandbox); ``None`` ⇒ the host, byte-identical.
+    """
     resolved = resolve_readable(workspace, extra_roots, tool_name, path)
     if isinstance(resolved, ToolResult):
         return resolved
-    if not resolved.is_file():
+    if not (exec_env or _DEFAULT_EXEC_ENV).is_file(resolved):
         return tool_error(tool_name, f"not a file: {path!r}")
     return resolved
 
