@@ -187,6 +187,17 @@ class ExecEnv(Protocol):
         ...
 
     # -- process -----------------------------------------------------------
+    @property
+    def supports_background(self) -> bool:
+        """Whether ``shell_run(run_in_background=True)`` is valid on this backend.
+
+        The host background runner (``ProcessRegistry``) spawns detached HOST
+        subprocesses — it cannot reach into a container, and AIO exposes no
+        durable job handle (a v2 concern). So a container backend returns
+        ``False`` and ``shell_run`` refuses a background launch cleanly; the
+        local host returns ``True``."""
+        ...
+
     def run_argv(
         self,
         argv: list[str],
@@ -257,6 +268,11 @@ class LocalExecEnv:
 
     def mkdir(self, path: Path) -> None:
         path.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def supports_background(self) -> bool:
+        # The host runner spawns host subprocesses — valid for the local host.
+        return True
 
     def exists(self, path: Path) -> bool:
         return path.exists()
@@ -504,6 +520,13 @@ class AioSandboxExecEnv:
         outcome = self._shell(f"mkdir -p -- {shlex.quote(str(path))}")
         if int(outcome.get("exit_code", 1)) != 0:
             raise AioSandboxError(f"mkdir {path}: {outcome.get('output', '')!r}")
+
+    @property
+    def supports_background(self) -> bool:
+        # v1: no container-side durable job handle; the host runner would spawn
+        # on the HOST, not the container — so shell_run refuses a background
+        # launch cleanly (D5). v2 owns container background as separate work.
+        return False
 
     # -- stat ------------------------------------------------------------- #
 

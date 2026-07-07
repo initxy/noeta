@@ -196,6 +196,14 @@ T7 让 rewind 在 sandbox 下把 baseline 写回**容器**而非宿主（全量 
 3. **`ExecEnv` 加 `mkdir(path)`**（parents=True/exist_ok=True 语义）：restore 里「被 rewound span 删掉的目录要重建」这一步需要，兑现 T1→T2 note #3 的「mkdir 待需要时再加」。`LocalExecEnv.mkdir`=`Path.mkdir(parents,exist_ok)`；`AioSandboxExecEnv.mkdir`=`mkdir -p`（同 `unlink` 走 `_shell` 判 exit_code）。`ExecEnv` 是 tools 层 Protocol（非 `noeta.protocols`），isinstance 检查都是对具体类、不对 Protocol，故加方法不破坏既有 fake。
 4. **补测**：`test_sandbox_rewind.py`（6）——`exec_env_for_ref`（sandbox+ref → (backend, 容器根)；local / ref=None / 无 sandbox → None）；`_restore_files` 直调：content_ref baseline → 容器 `write_bytes`+`mkdir(parent)`、宿主不碰；content_ref=None → 容器 `unlink`；**local（ref=None）rewind 仍写宿主 FS、容器 backend 零触**（回归护栏）。真容器写回仍 gated。
 
+## Implementation notes (2026-07-07 — T8 landed: boundaries — background refuse + teardown)
+
+T8 收边界（全量 3079 passed / 0 fail、import-linter 16 kept 0 broken、ruff/naming clean、background-shell 回归绿）。
+
+1. **sandbox 下 `run_in_background=True` 清晰报错（D5）**：background 走宿主 `ProcessRegistry`（spawn 宿主 detached 子进程）——够不到容器，且 AIO 无 durable job handle（v2）。`ExecEnv` 加 `supports_background` 属性（`LocalExecEnv`=True、`AioSandboxExecEnv`=False）；`shell.py` 在 background 分支前判 `getattr(self.exec_env,"supports_background",True)`（默认 True → 本地/旧 backend 路径不变），非则回 `_err("run_in_background is not supported in sandbox mode (v1)…")`，**不 spawn**。`background_status`/`background_kill` 无需改（sandbox 下根本没 job 被建，查/杀都落「unknown job」）。
+2. **teardown（D6）= host 级，per-conversation 故意不做**：v1 每 host 单容器共享，某个会话关闭时 teardown 会**误伤同 host 其它在跑会话**。故 teardown 只挂在 `Client.shutdown → SdkHost.teardown_exec_env`（T5 已接，进程退出收所有容器连接）；`ConversationClosed`/root-task terminal 处**不** teardown。per-container teardown 随 v2 per-root 容器到来。这与 background-shell 的「session-lifetime teardown」在**语义上**对齐（都在会话/进程收尾收资源），只是 v1 的资源边界是 host 而非 conversation。
+3. **补测**：`test_sandbox_background_shell.py`（3）——具体类 capability（Local True / AIO False）；sandbox backend `shell_run(run_in_background=True)` → 清晰失败、含「not supported in sandbox mode」；**前台 shell 仍正常**（只拦 background）。
+
 ## Files / areas to inspect
 
 - `packages/noeta-runtime/noeta/tools/fs/` — `read.py` / `edit.py` / `write.py` / `patch.py` / `shell.py` / `_subprocess.py` / `_workspace.py`（改道 `ctx.exec_env`）。

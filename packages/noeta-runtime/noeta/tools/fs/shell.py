@@ -512,6 +512,17 @@ class ShellRunTool:
         # to the host's runner and return immediately. The sync timeout does NOT
         # apply to a backgrounded process.
         if bool(arguments.get("run_in_background")):
+            # A sandbox backend cannot run host-side background jobs (the runner
+            # spawns HOST subprocesses; AIO has no durable job handle, v1) — so
+            # refuse cleanly instead of silently running on the wrong machine.
+            # ``getattr`` default True keeps every local / pre-seam backend on
+            # the existing path. (D5)
+            if not getattr(self.exec_env, "supports_background", True):
+                return _err(
+                    self.name,
+                    "run_in_background is not supported in sandbox mode (v1); "
+                    "run the command in the foreground instead",
+                )
             return self._spawn_background(exec_argv, command, ctx)
         outcome = self.exec_env.run_argv(
             exec_argv,
