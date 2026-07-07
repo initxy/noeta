@@ -136,6 +136,62 @@ answers=...)`). A custom `Observer` subscribed to the EventLog can
 forward `UserQuestionRequested` / `ToolCallApprovalRequested` events to
 your own notification channel.
 
+## Sandbox side effects are not fenced across worker generations
+
+**What it means:** When a session runs in a sandbox container (the
+`ExecEnv` seam bound to an AIO Sandbox backend), its file and shell
+side effects hit the container over HTTP — outside the shared Postgres
+transaction that fences EventLog writes. A worker that was fenced out of
+the log (a GC pause, a `SIGSTOP` then revive) can still `POST` to the
+container. The sandbox side effect is therefore **at-least-once and
+unfenced**, the same class as a half-run `shell_run` on the host: a
+reclaiming worker reconnects to the same container and re-drives the
+step, but a slow zombie can pollute the container in the meantime.
+
+**When you hit it:** A worker holding a sandbox session stalls long
+enough for its lease to expire and another worker to reclaim the task,
+while the stalled worker later wakes and issues one more container call.
+
+**Workaround:** None automatic in v1 — it is bounded by the same
+step-attempt re-drive and human review that cover crashed-step side
+effects (see "Mid-step crash recovery does not undo side effects"). A
+future generation-token fence (the seam already reserves the slot) will
+close the window.
+
+**Why it is this way:** The lease-fencing design assumes no load-bearing
+write lands outside the shared database; a container write is exactly
+such a write. Fencing it properly needs an orchestration-layer token and
+a validating proxy in front of the container — real work deferred to the
+per-container future. The trade-off is recorded in the execution
+environment seam ADR, which links back to the multi-host lease fencing ADR.
+
+## One sandbox container per host; idle containers stay billed
+
+**What it means:** v1 does not orchestrate containers — a sandbox config
+names one external container by `base_url`, and every session on that
+host shares it. So there is **no per-session isolation** between two
+concurrent conversations on one host (they share one container working
+directory), and the durable `exec_env_ref` records the container
+`base_url` only, not a distinct per-container id. The container also has
+no pause/snapshot: it stays alive (and billed) for as long as a session
+that uses it is active, including long suspends waiting on a human or a
+timer. Teardown happens on host shutdown, not when a single conversation
+closes (reaping a shared container would break the others).
+
+**When you hit it:** Running multiple concurrent conversations against
+one sandboxed host, or leaving a sandboxed session suspended for a long
+time.
+
+**Workaround:** Give workloads that must not share a filesystem their
+own host + container. For idle cost, close sessions you are done with so
+the host can be shut down and the container reclaimed by whatever
+provisioned it.
+
+**Why it is this way:** Cluster orchestration and container pause/snapshot
+are out of scope for the preview; the seam is built so per-container
+provisioning (and a real per-container `sandbox_id`) can arrive later
+without reshaping the durable record. See the execution environment seam ADR.
+
 ## Frontend is a small Vite MPA, not a framework app
 
 **What it means:** The shipped web app (`/chat`, `/trace`) is a small

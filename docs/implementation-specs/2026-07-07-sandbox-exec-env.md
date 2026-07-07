@@ -204,6 +204,16 @@ T8 收边界（全量 3079 passed / 0 fail、import-linter 16 kept 0 broken、ru
 2. **teardown（D6）= host 级，per-conversation 故意不做**：v1 每 host 单容器共享，某个会话关闭时 teardown 会**误伤同 host 其它在跑会话**。故 teardown 只挂在 `Client.shutdown → SdkHost.teardown_exec_env`（T5 已接，进程退出收所有容器连接）；`ConversationClosed`/root-task terminal 处**不** teardown。per-container teardown 随 v2 per-root 容器到来。这与 background-shell 的「session-lifetime teardown」在**语义上**对齐（都在会话/进程收尾收资源），只是 v1 的资源边界是 host 而非 conversation。
 3. **补测**：`test_sandbox_background_shell.py`（3）——具体类 capability（Local True / AIO False）；sandbox backend `shell_run(run_in_background=True)` → 清晰失败、含「not supported in sandbox mode」；**前台 shell 仍正常**（只拦 background）。
 
+## Implementation notes (2026-07-07 — T9 landed: docs + ADR + CONTEXT + known-limitations) — **initiative complete**
+
+T9 收尾文档（全量 3079 passed、`test_docs_codeblocks` 绿、lint-naming clean）。**至此 T1→T9 全部落地**，`feat/exec-env-sandbox` 分支就绪、未合并。
+
+1. **新 ADR `docs/adr/execution-environment-seam.md`**：按 ADR 纪律写（present tense、无 T1–T9 过程编号、why-not-how），固化 D1（跨代不 fence，显式链回 `multi-host-lease-fencing.md` 的 alternative #1）/D2（seam 形状 + config addressing / secret-in-env）/D3（分层落点）+ v1 单容器/host + `exec_env_ref` reconnect + background 拒绝。ADR 被 VitePress `srcExclude`（`**/adr/**`），不进站点、按 prose 引用其它 ADR（同既有风格），无 dead-link 风险。
+2. **CONTEXT.md 加 `ExecEnv` 术语**（Execution model 段）：deep seam、Local/AIO 两 backend、per-tool 构造字段不入 schema（stable prefix）、`exec_env_ref` 重连、密钥不落 log；`_Avoid_` 钉「Sandbox（是 backend 不是 seam）/ Workspace 已被占 / Executor（Engine 义）」。
+3. **`docs/operations/limitations.md` 加两条**（站点发布页，仅 prose 引 ADR、无新 markdown link → 无 dead-link）：(a)「Sandbox side effects are not fenced across worker generations」（D1/R1）；(b)「One sandbox container per host; idle containers stay billed」（合并 v1 单容器无 per-session 隔离 + idle 成本 + exec_env_ref 只记 base_url + teardown 是 host 级）。
+
+**验收对照 spec Acceptance criteria**：1 零回归 ✅（`default_host_byte_equal` + 全量绿）；2 stable prefix 不变 ✅（schema snapshot 绿）；3 sandbox 跑通 ✅（fake-transport，真容器 gated）；4 多机重连 ✅（`test_sandbox_exec_env_ref.py` 跨 host 用例）；5 rewind under sandbox ✅（`test_sandbox_rewind.py`）；6 边界明确 ✅（background 拒绝 + host-shutdown teardown）；7 known-limitations + ADR + CONTEXT ✅。**唯一 gated**：真 AIO 容器 e2e（`NOETA_TEST_AIO_SANDBOX_URL`）——上真容器前 adapter 契约（R2）不当「已验证」宣称。
+
 ## Files / areas to inspect
 
 - `packages/noeta-runtime/noeta/tools/fs/` — `read.py` / `edit.py` / `write.py` / `patch.py` / `shell.py` / `_subprocess.py` / `_workspace.py`（改道 `ctx.exec_env`）。
