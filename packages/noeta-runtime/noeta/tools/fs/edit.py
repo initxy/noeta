@@ -65,6 +65,7 @@ from noeta.tools.fs._workspace import (
     resolve_or_error,
     tool_error,
 )
+from noeta.tools.fs.exec_env import ExecEnv, LocalExecEnv
 
 
 __all__ = [
@@ -146,6 +147,7 @@ class ReplaceTextTool:
 
     workspace: WorkspaceRoot
     mode: FsWriteMode = FsWriteMode.DRY_RUN
+    exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "edit"
     description: str = field(default=load_tool_description("edit"))
     # PRD D2: write-side fs tools are high-risk so PermissionGuard treats
@@ -182,7 +184,7 @@ class ReplaceTextTool:
         if isinstance(resolved, ToolResult):
             return resolved
         try:
-            raw = resolved.read_bytes()
+            raw = self.exec_env.read_bytes(resolved)
         except OSError as exc:
             return tool_error(self.name, f"read failed: {exc}")
         try:
@@ -213,7 +215,7 @@ class ReplaceTextTool:
         file_changes: list[dict[str, Any]] | None = None
         if self.mode is FsWriteMode.APPLY:
             try:
-                resolved.write_bytes(after.encode("utf-8"))
+                self.exec_env.write_bytes(resolved, after.encode("utf-8"))
             except OSError as exc:
                 return tool_error(self.name, f"write failed: {exc}")
             applied = True
@@ -276,6 +278,7 @@ class WriteFileTool:
 
     workspace: WorkspaceRoot
     mode: FsWriteMode = FsWriteMode.DRY_RUN
+    exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "write"
     description: str = field(default=load_tool_description("write"))
     # PRD D2: write-side fs tools are high-risk so PermissionGuard treats
@@ -345,17 +348,17 @@ class WriteFileTool:
         # ``exists()`` follows symlinks, but ``resolve`` has already
         # canonicalised, so an existing symlink resolves to the target's
         # path which is checked here.
-        overwrite = resolved.exists()
+        overwrite = self.exec_env.exists(resolved)
         before_text = ""
         # the PRE-write bytes for the rewind baseline: the existing
         # content when overwriting, ``None`` when creating a brand-new file (the
         # "did not exist" marker → a rewind past this turn DELETES the file).
         before_bytes: bytes | None = None
         if overwrite:
-            if not resolved.is_file():
+            if not self.exec_env.is_file(resolved):
                 return tool_error(self.name, f"not a file: {path!r}")
             try:
-                existing_raw = resolved.read_bytes()
+                existing_raw = self.exec_env.read_bytes(resolved)
             except OSError as exc:
                 return tool_error(self.name, f"read failed: {exc}")
             before_bytes = existing_raw
@@ -375,7 +378,7 @@ class WriteFileTool:
                 return tool_error(self.name, f"{path!r} is not utf-8 text")
         else:
             parent = resolved.parent
-            if not parent.is_dir():
+            if not self.exec_env.is_dir(parent):
                 return tool_error(
                     self.name, f"parent directory not found for {path!r}"
                 )
@@ -391,7 +394,7 @@ class WriteFileTool:
         file_changes: list[dict[str, Any]] | None = None
         if self.mode is FsWriteMode.APPLY:
             try:
-                resolved.write_bytes(body)
+                self.exec_env.write_bytes(resolved, body)
             except OSError as exc:
                 return tool_error(self.name, f"write failed: {exc}")
             applied = True
