@@ -596,26 +596,41 @@ class InteractionDriver:
         # exists — that lets the connect's skip-on-failure record its
         # ``McpServerSkipped`` events on the task's own stream (the front-end
         # surface), and avoids a redundant pre-connect under a now-stale key.
+        # T6: the host's sandbox container address for this session. Welded
+        # into TaskHostBound (below) so a resumed / reclaimed session reconnects
+        # to the SAME container, and passed to the seed resolve so the seed
+        # Engine targets it too (matching the ref it is about to record).
+        # ``getattr`` guards a host / test double without the sandbox seam →
+        # ``None`` (the local path, byte-identical). Addressing only (D5).
+        _exec_env_ref_of = getattr(host, "exec_env_ref", None)
+        session_exec_env_ref = (
+            _exec_env_ref_of() if callable(_exec_env_ref_of) else None
+        )
         seed_engine = host.resolve_engine_for_agent(
             agent, model=bound_model, workspace=workspace_dir, provider=bound_provider,
             permission_mode=permission_mode, effort=effort,
+            exec_env_ref=session_exec_env_ref,
         )
-        # Record the per-session workspace absolute path on the
-        # durable ``TaskHostBound`` so a resumed session reproduces the same root
-        # dir. When a host binding was injected (CodeServer path) merge the path
-        # in; when none was (the bare CLI / web ConsoleBackend path passes no
-        # binding) mint a workspace-only binding so the workspace dir is
-        # preserved. ``None`` workspace_dir keeps the no-binding path untouched.
+        # Record the per-session workspace absolute path AND the sandbox
+        # container address on the durable ``TaskHostBound`` so a resumed /
+        # reclaimed session reproduces the same root dir and reconnects to the
+        # same container. When a host binding was injected (CodeServer path)
+        # merge them in; when none was (the bare CLI / web ConsoleBackend path
+        # passes no binding) mint a binding carrying whichever is set. Both
+        # ``None`` keeps the no-binding path untouched (byte-identical).
         bound_host_binding = host_binding
-        if workspace_dir:
+        if workspace_dir or session_exec_env_ref:
             if bound_host_binding is None:
                 bound_host_binding = TaskHostBoundPayload(
                     host_id="",
                     workspace_dir=workspace_dir,
+                    exec_env_ref=session_exec_env_ref,
                 )
             else:
                 bound_host_binding = dataclasses.replace(
-                    bound_host_binding, workspace_dir=workspace_dir
+                    bound_host_binding,
+                    workspace_dir=workspace_dir,
+                    exec_env_ref=session_exec_env_ref,
                 )
         task = seed_engine.create_task(
             goal=goal,

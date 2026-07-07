@@ -15,24 +15,26 @@ hold it directly (like ``_process_registry``) instead of threading yet another
 injected callable down from the product. It stays import-linter-clean because
 ``noeta.client`` sits above ``noeta.tools``.
 
-**v1 scope — one shared container per host (see the spec's D4 / non-goals).**
+**v1 scope — one container per host, addressed by ``base_url`` (D4 / non-goals).**
 The spec's ideal is one sandbox per root-task *tree* (``key = session-root task
-id``), provisioned *eagerly at host-bind* and addressed by a per-root
-``exec_env_ref`` welded into ``TaskHostBoundPayload``. That per-root ref — and
-the reconnect it enables — is **T6**; it is also the only point at which a
-per-root key exists (the seed Engine that writes ``TaskCreated`` has no task id
-yet, and it shares the Engine cache with the first driving turn, so a per-root
-switch made only in ``_build_engine`` would be silently bypassed). Until then,
-v1 addresses a single AIO container by its one ``base_url`` and routes that same
-backend into *every* sandbox Engine — seed and drive alike — which trivially
-satisfies "subtasks share the parent's container" (everything shares it) and
-sidesteps the seed/drive cache collision. The cost, recorded as a v1
-known-limitation, is that two concurrent sessions on one host share one container
-working directory; per-root isolation arrives with T6's per-root provisioning.
+id``), each a distinct container. v1 does not orchestrate containers (a
+non-goal): a ``SandboxExecEnvConfig`` names ONE external container by its
+``base_url``, so a host addresses its container by that URL and every session on
+the host shares it (which trivially satisfies "subtasks share the parent's
+container"). The **T6** durable ``exec_env_ref`` welded into ``TaskHostBound``
+records that base_url per session so a resumed / reclaimed session — possibly on
+another host whose config default differs — reconnects to the SAME container by
+its recorded address. The manager therefore keys backends by resolved base_url:
+normally just the host default; a reconnect may add the recorded ref's address.
+The v1 simplification (a known-limitation) is that two concurrent sessions on
+one host share one container working directory, and the ``exec_env_ref`` carries
+only the base_url, not the spec's ``{base_url, sandbox_id}`` — a distinct
+``sandbox_id`` and per-root isolation arrive with v2 per-container orchestration.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import threading
 from typing import Callable, Optional
 
@@ -65,20 +67,25 @@ def _default_factory(config: SandboxExecEnvConfig) -> ExecEnv:
 
 
 class SandboxExecEnvManager:
-    """Owns a sandbox backend's lifetime for one host.
+    """Owns a host's sandbox backends, keyed by container ``base_url``.
 
-    Lazily builds a single shared :class:`ExecEnv` (v1: one container per host,
-    keyed by nothing — see the module docstring) on first use and hands the same
-    instance to every sandbox Engine build. Thread-safe: the SDK host resolves
-    Engines under ``ThreadingHTTPServer`` concurrency, so the build is guarded by
-    a double-checked lock (the adapter is otherwise a stateless HTTP client).
+    v1 is one container per host (the config's ``base_url``), but T6's reconnect
+    means the manager may also be asked for a container at a DIFFERENT address:
+    a task reclaimed on this host records its own ``exec_env_ref`` (the base_url
+    it was originally bound to), which may not equal this host's config default
+    if the deployment moved. So backends are cached per resolved base_url; every
+    one is built with THIS host's API key (from config env, D5), never a key off
+    the ref. Thread-safe: the SDK host resolves Engines under
+    ``ThreadingHTTPServer`` concurrency, so builds are guarded by a lock (each
+    adapter is otherwise a stateless HTTP client).
 
-    ``teardown`` is the reap seam: on host shutdown the Client calls it so an
-    idle container connection does not outlive the process. For a ``"eager"``
-    host — the one that owns the container's lifetime — this is where a future
-    container stop hooks in; for ``"attach"`` (a reconnect to a container someone
-    else owns) it only drops the local handle and must never stop the container.
-    Root-task-terminal teardown (D6) is T8; this method is what T8 wires to it.
+    ``current_ref`` is what a NEW session welds into ``TaskHostBound`` — the
+    host's configured container address, made durable so a later reconnect (T6)
+    reaches the same container. ``teardown`` is the reap seam: on host shutdown
+    the Client calls it so idle container connections do not outlive the process.
+    An ``"eager"`` host owns the container lifetime (a future container stop
+    hooks in here); an ``"attach"`` host only drops local handles and must never
+    stop a container someone else owns. Root-task-terminal teardown (D6) is T8.
     """
 
     def __init__(
@@ -90,42 +97,63 @@ class SandboxExecEnvManager:
         self._config = config
         self._factory: ExecEnvFactory = factory or _default_factory
         self._lock = threading.Lock()
-        self._exec_env: Optional[ExecEnv] = None
+        self._by_url: dict[str, ExecEnv] = {}
 
     @property
     def workdir(self) -> str:
         """The container working directory — the fs-tools' workspace root (D7)."""
         return self._config.workdir
 
-    def exec_env(self) -> ExecEnv:
-        """The host's shared sandbox backend, built on first use.
+    def current_ref(self) -> str:
+        """The ``exec_env_ref`` a new session welds — the host's container URL.
 
-        Double-checked under the lock so a concurrent burst of Engine builds
-        (delegated children, resident workers) provisions exactly once.
+        Made durable on ``TaskHostBound`` so a resumed / reclaimed session (T6),
+        possibly on another host, reconnects to THIS container by address rather
+        than the folding host's own config. Addressing only — never the key (D5).
         """
-        env = self._exec_env
+        return self._config.base_url
+
+    def exec_env(self, *, base_url: Optional[str] = None) -> ExecEnv:
+        """A sandbox backend for ``base_url`` (the host default when ``None``).
+
+        Built on first request per resolved address and cached; a concurrent
+        burst of Engine builds (delegated children, resident workers) provisions
+        each address exactly once. ``base_url`` is a recorded ``exec_env_ref``
+        the reconnect path passes; the API key always comes from this host's
+        config env (D5), so the built adapter targets the ref's address with the
+        host's credentials.
+        """
+        target = base_url or self._config.base_url
+        env = self._by_url.get(target)
         if env is not None:
             return env
         with self._lock:
-            if self._exec_env is None:
-                self._exec_env = self._factory(self._config)
-            return self._exec_env
+            env = self._by_url.get(target)
+            if env is None:
+                cfg = (
+                    self._config
+                    if target == self._config.base_url
+                    else dataclasses.replace(self._config, base_url=target)
+                )
+                env = self._factory(cfg)
+                self._by_url[target] = env
+            return env
 
     def teardown(self) -> None:
-        """Drop the shared backend, best-effort closing it first.
+        """Drop every cached backend, best-effort closing each first.
 
-        Idempotent. ``"attach"`` never closes (the container belongs to whoever
+        Idempotent. ``"attach"`` never closes (a container belongs to whoever
         provisioned it — a stop here would break a still-running peer that
         reconnected to the same ``base_url``); ``"eager"`` best-effort closes if
         the adapter grows a ``close`` (v1's HTTP adapter holds no persistent
         resource, so this is a no-op today — the seam is for T8 / v2).
         """
         with self._lock:
-            env = self._exec_env
-            self._exec_env = None
-        if env is None:
+            envs = list(self._by_url.values())
+            self._by_url.clear()
+        if self._config.provision != "eager":
             return
-        if self._config.provision == "eager":
+        for env in envs:
             close = getattr(env, "close", None)
             if callable(close):
                 try:
