@@ -12,27 +12,27 @@ in the repository root.
 One execution instance of an agent; it can spawn sub-tasks and can suspend and resume. The only first-class citizen in the system.
 _Avoid:_ Run, Job, Execution, Workflow Instance.
 
-See also: [Concepts](../concepts.md#task), [ADR: Task as the only primitive](../adr/task-as-only-primitive.md)
+See also: [Concepts](/concepts/task-model), [ADR: Task as the only primitive](https://github.com/initxy/noeta/blob/main/docs/adr/task-as-only-primitive.md)
 
 ### Subtask
 
 A task spawned from a parent task via `spawn_subtask`. Structurally identical to a parent task, related only through `parent_task_id`.
 _Avoid:_ Child Run, Sub-agent.
 
-See also: [Concepts](../concepts.md#wake-resume), [ADR: Subtask fan-out and durable wake](../adr/subtask-fanout-and-durable-wake.md)
+See also: [Concepts](/concepts/wake-resume), [ADR: Subtask fan-out and durable wake](https://github.com/initxy/noeta/blob/main/docs/adr/subtask-fanout-and-durable-wake.md)
 
 ### Agent
 
 A named, spawnable configuration (policy + tools + context spec + budget). **Not a runtime entity** — just the "class" of a task. Every Agent carries a `description` used to render the subagent dispatch control tool schema.
 _Avoid:_ Bot, Assistant, AI.
 
-See also: [Presets](presets.md), [ADR: Tool and agent catalog](../adr/tool-and-agent-catalog.md)
+See also: [Presets](presets.md), [ADR: Tool and agent catalog](https://github.com/initxy/noeta/blob/main/docs/adr/tool-and-agent-catalog.md)
 
 ### Options
 
 The declarative agent configuration (public surface `noeta.sdk.Options`). Compiled by `compile_options` into an `AgentSpec`. **The sole way to express both the official agent set and custom agents.**
 
-See also: [API Reference](api/index.md), [Configuration](configuration.md)
+See also: [API Reference](/reference/sdk), [Configuration](configuration.md)
 
 ### Step
 
@@ -44,35 +44,35 @@ _Avoid:_ Iteration, Turn, Cycle.
 The return value of `Policy.decide`, input to Engine dispatch. A set of neutral mechanism variants: `tool_calls`, `spawn_subtask`, `yield_for_human`, `wait_timer`, `wait_external`, `finish`, `fail`, `spawn_subtasks`, `state_patch`.
 _Avoid:_ Action, Command, Intent.
 
-See also: [Concepts](../concepts.md#policy)
+See also: [Concepts](/concepts/engine-execution)
 
 ### Policy
 
 The function that "decides the next step given the current View." Can be a pure LLM (ReActPolicy), a pure FSM, or a hybrid.
 _Avoid:_ Pattern, Strategy, Brain.
 
-See also: [Concepts](../concepts.md#policy), [ADR: Engine-policy-dataflow](../adr/engine-policy-dataflow.md)
+See also: [Concepts](/concepts/engine-execution), [ADR: Engine-policy-dataflow](https://github.com/initxy/noeta/blob/main/docs/adr/engine-policy-dataflow.md)
 
 ### Tool
 
 An external action the agent can invoke. The structured-contract trio `name` / `input_schema` / `description` is hand-written and LLM-facing. Also carries `risk_level`. An **open** extension surface via `Options`.
 _Avoid:_ Function, Action, Skill.
 
-See also: [Tools Reference](tools.md), [ADR: Tool description canonical](../adr/tool-description-canonical.md)
+See also: [Tools Reference](tools.md), [ADR: Tool description canonical](https://github.com/initxy/noeta/blob/main/docs/adr/tool-description-canonical.md)
 
 ### Provider
 
 A Noeta-shape adapter for an external service (LLM / storage / vector store). `LLMProvider` is open via `Options.provider` and re-exported through `noeta.sdk`. Storage backends are configured through **host config**, not Options. **Not a context content source.**
 _Avoid:_ Vendor, Backend, Connector.
 
-See also: [Configuration](configuration.md#provider-adapters), [ADR: Provider adapters and multimodal](../adr/provider-adapters-and-multimodal.md), [ADR: Provider-neutral](../adr/provider-neutral.md)
+See also: [Configuration](configuration.md#provider-adapters), [ADR: Provider adapters and multimodal](https://github.com/initxy/noeta/blob/main/docs/adr/provider-adapters-and-multimodal.md), [ADR: Provider-neutral](https://github.com/initxy/noeta/blob/main/docs/adr/provider-neutral.md)
 
 ### Skill
 
 A local, static LLM-workflow template at `.noeta/skills/<name>/SKILL.md`, optionally with resource files. Three-layer merge (builtin < global `~/.noeta/skills` < workspace). Two-stage on-demand loading: menu rendered into the `skill` control tool schema; body rendered into semi-stable context once selected. **Not the same thing as a Tool.**
 _Avoid:_ Plugin, Module, Macro.
 
-See also: [ADR: Model-driven skill invocation](../adr/model-driven-skill-invocation.md), [ADR: Skill resource on-demand](../adr/skill-resource-on-demand.md)
+See also: [ADR: Model-driven skill invocation](https://github.com/initxy/noeta/blob/main/docs/adr/model-driven-skill-invocation.md), [ADR: Skill resource on-demand](https://github.com/initxy/noeta/blob/main/docs/adr/skill-resource-on-demand.md)
 
 ## State and events
 
@@ -81,7 +81,7 @@ See also: [ADR: Model-driven skill invocation](../adr/model-driven-skill-invocat
 Per-task append-only stream of `EventEnvelope` records. **The source of truth for causality and decisions.**
 _Avoid:_ Journal, Log, Audit Trail.
 
-See also: [Concepts](../concepts.md#eventlog), [ADR: Event-sourced truth](../adr/event-sourced-truth.md)
+See also: [Concepts](/concepts/event-sourcing), [ADR: Event-sourced truth](https://github.com/initxy/noeta/blob/main/docs/adr/event-sourced-truth.md)
 
 ### Event / EventEnvelope
 
@@ -93,7 +93,7 @@ _Avoid:_ Message, Record.
 Content-addressed, immutable large-object storage. **The source of truth for large objects.** Bodies larger than the 4 KB event-payload cap go here; the envelope only carries a `ContentRef`.
 _Avoid:_ BLOB Store, Asset Store, Object Store.
 
-See also: [Concepts](../concepts.md#contentstore), [ADR: Storage protocols L0](../adr/storage-protocols-l0.md)
+See also: [Concepts](/concepts/event-sourcing), [ADR: Storage protocols L0](https://github.com/initxy/noeta/blob/main/docs/adr/storage-protocols-l0.md)
 
 ### ContentRef
 
@@ -126,28 +126,28 @@ Four typed slices, each with exactly one writer:
 Advances a single Task by one step. ≤ 500 lines. Knows nothing of worker / dispatcher / workflow. **Locked**: not an extension point.
 _Avoid:_ Runtime, Executor.
 
-See also: [Concepts](../concepts.md#engine), [ADR: Engine-policy-dataflow](../adr/engine-policy-dataflow.md)
+See also: [Concepts](/concepts/engine-execution), [ADR: Engine-policy-dataflow](https://github.com/initxy/noeta/blob/main/docs/adr/engine-policy-dataflow.md)
 
 ### Worker
 
 The process that leases a Task from the Dispatcher and calls the Engine to advance it. **One lease runs until the next suspend or terminal state, then releases.**
 _Avoid:_ Runner, Daemon.
 
-See also: [Concepts](../concepts.md#how-a-step-flows), [ADR: Worker lease model](../adr/worker-lease-model.md)
+See also: [Concepts](/concepts/engine-execution), [ADR: Worker lease model](https://github.com/initxy/noeta/blob/main/docs/adr/worker-lease-model.md)
 
 ### Lease
 
 A Worker's short-term exclusive hold on a Task, with `lease_id / expires_at`.
 _Avoid:_ Lock, Claim.
 
-See also: [ADR: Worker lease model](../adr/worker-lease-model.md), [ADR: Single-writer invariant](../adr/single-writer-invariant.md)
+See also: [ADR: Worker lease model](https://github.com/initxy/noeta/blob/main/docs/adr/worker-lease-model.md), [ADR: Single-writer invariant](https://github.com/initxy/noeta/blob/main/docs/adr/single-writer-invariant.md)
 
 ### Dispatcher
 
 Manages Task enqueue, Lease granting, Wake-event delivery, and Stale reclamation.
 _Avoid:_ Scheduler, Queue Manager.
 
-See also: [Concepts](../concepts.md#dispatcher), [ADR: Worker lease model](../adr/worker-lease-model.md)
+See also: [Concepts](/concepts/wake-resume), [ADR: Worker lease model](https://github.com/initxy/noeta/blob/main/docs/adr/worker-lease-model.md)
 
 ### Suspended
 
@@ -158,7 +158,7 @@ _Avoid:_ Yielded, Paused, Blocked, Waiting.
 
 Describes what a Task is waiting on. `SubtaskCompleted` / `HumanResponseReceived` / `TimerFired` / `ExternalEvent`.
 
-See also: [Concepts](../concepts.md#wake-resume), [ADR: Subtask fan-out and durable wake](../adr/subtask-fanout-and-durable-wake.md)
+See also: [Concepts](/concepts/wake-resume), [ADR: Subtask fan-out and durable wake](https://github.com/initxy/noeta/blob/main/docs/adr/subtask-fanout-and-durable-wake.md)
 
 ## Context
 
@@ -172,7 +172,7 @@ _Avoid:_ Prompt (View is the structured form of a Prompt), Frame.
 Assembles a Task into a View. The main path calls no LLM. The concrete `ThreeSegmentComposer` is a **closed** extension point on the user surface (stable-prefix KV-cache reproducibility is a hard constraint). The only open hook is registering a `ContentKindSpec`.
 _Avoid:_ PromptBuilder, ContextAssembler.
 
-See also: [ADR: Unified context supply](../adr/unified-context-supply.md), [ADR: Context compaction](../adr/context-compaction.md)
+See also: [ADR: Unified context supply](https://github.com/initxy/noeta/blob/main/docs/adr/unified-context-supply.md), [ADR: Context compaction](https://github.com/initxy/noeta/blob/main/docs/adr/context-compaction.md)
 
 ### ContextPlan
 
@@ -188,14 +188,14 @@ The fixed segment names in the View's three-part assembly. The cache-friendlines
 The generic mechanism by which resident content (skills, memory index) enters context. Two parts: **event recording** (`ContextContentRecorded`) + **assembly rendering** (`ContentChannelRegistry` renders each kind into the semi-stable segment). Registering a `ContentKindSpec` is the open extension hook.
 _Avoid:_ Provider, ContentSource, Middleware.
 
-See also: [ADR: Model-driven skill invocation](../adr/model-driven-skill-invocation.md)
+See also: [ADR: Model-driven skill invocation](https://github.com/initxy/noeta/blob/main/docs/adr/model-driven-skill-invocation.md)
 
 ### origin
 
 An optional author marker on a `Message`, one of `human / system / memory`, defaulting to `None` = the role's natural author. **Single-writer guard**: only the engine's recording path may write it.
 _Avoid:_ Author, Sender, Role.
 
-See also: [ADR: Event origin marker](../adr/event-origin-marker.md)
+See also: [ADR: Event origin marker](https://github.com/initxy/noeta/blob/main/docs/adr/event-origin-marker.md)
 
 ### Memory
 
@@ -224,14 +224,14 @@ _Avoid:_ Quota, Limit.
 A synchronous hook that runs at three points — `before_tool_call` / `before_spawn_subtask` / `before_finish` — returning `allow / deny / require_approval`.
 _Avoid:_ Middleware, Interceptor, Filter.
 
-See also: [Concepts](../concepts.md#guard-observer), [ADR: Guard-observer hooks](../adr/guard-observer-hooks.md)
+See also: [Concepts](/concepts/guard-observer), [ADR: Guard-observer hooks](https://github.com/initxy/noeta/blob/main/docs/adr/guard-observer-hooks.md)
 
 ### Observer
 
 An asynchronous hook subscribed to the EventLog; its failure does not affect the Task.
 _Avoid:_ Listener, Subscriber.
 
-See also: [Concepts](../concepts.md#guard-observer), [ADR: Guard-observer hooks](../adr/guard-observer-hooks.md)
+See also: [Concepts](/concepts/guard-observer), [ADR: Guard-observer hooks](https://github.com/initxy/noeta/blob/main/docs/adr/guard-observer-hooks.md)
 
 ### Mutator
 
@@ -249,7 +249,7 @@ _Avoid:_ View Log, Dump.
 Continues actual execution from a suspended state. An operational emergency-stop lever; the normal path is triggered by a wake event.
 _Avoid:_ Restart, Continue.
 
-See also: [Failure Modes](../failure-modes.md)
+See also: [Failure Modes](/operations/troubleshooting)
 
 ## Flagged ambiguities
 

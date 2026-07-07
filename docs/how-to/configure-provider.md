@@ -4,7 +4,7 @@
 or OpenAI Responses API.
 
 **Before you start:** you have installed Noeta and run the stub provider
-from the [quickstart](quickstart.md). You have an API key for your chosen
+from the [quickstart](../tutorials/quickstart.md). You have an API key for your chosen
 provider.
 
 ## Option A: environment variables (coding agent)

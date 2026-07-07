@@ -62,7 +62,7 @@ opens it).
 
 Remote MCP tools appear dynamically as `mcp__<alias>__<tool>` when MCP
 servers are registered and enabled per session. See
-[ADR: MCP connectors](../adr/mcp-connectors.md).
+[ADR: MCP connectors](https://github.com/initxy/noeta/blob/main/docs/adr/mcp-connectors.md).
 
 ## Tool risk levels
 

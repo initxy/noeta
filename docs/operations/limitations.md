@@ -4,25 +4,30 @@ These are deliberate boundaries of the current preview, not bugs. Each
 entry describes what it means, when you hit it, and the workaround if
 any.
 
-## Single-host / single-worker only
+## Multi-host coordination requires Postgres
 
-**What it means:** The shipped deployment shape is one durable store
-(SQLite) and one resident `WorkerLoop` process draining it. There is no
-`workers` knob on `WorkerLoop` — throughput is one step at a time.
+**What it means:** Single-host multi-worker is shipped — the agent runs a
+resident `WorkerLoop` pool (`NOETA_AGENT_NUM_WORKERS`, default 1), so
+several tasks progress at once on one host. Multiple *hosts* sharing one
+database is supported only on **Postgres**: emit appends are fenced
+in-transaction against the live lease, lease expiry runs on the database
+clock (so per-host clock skew cannot split-brain), and a `worker_id`
+column records the holder. The **SQLite** and **in-memory** backends stay
+single-host — they have no cross-host fencing, so pointing two host
+processes at one SQLite file is unsafe.
 
-**When you hit it:** You need to scale task throughput beyond what a
-single worker can handle, or you want to run workers on multiple hosts
-against a shared database.
+**When you hit it:** You want worker processes on more than one machine
+draining a shared store.
 
-**Workaround:** Give different workload profiles their own SQLite files
-and run separate worker processes. There is no cross-process routing in
-the ready queue — tasks in one store are not visible to workers
-draining another.
+**Workaround:** Use the Postgres backend for multi-host deployments. On
+SQLite, keep to a single host (a multi-worker pool on that host is fine),
+or give separate workload profiles their own SQLite files — there is no
+cross-store routing in the ready queue, so tasks in one store are not
+visible to workers draining another.
 
-**Why it is this way:** Multi-worker coordination requires fencing
-between competing workers (so two workers do not lease the same task),
-distributed timer due-checks, and completion-ordering guarantees. That
-is a significant architectural slice, not yet shipped.
+**Why it is this way:** Cross-host fencing needs a shared transactional
+clock and lease arbitration the embedded stores do not provide; Postgres
+supplies both. The design is recorded in the multi-host lease fencing ADR.
 
 ## Mid-step crash recovery does not undo side effects
 

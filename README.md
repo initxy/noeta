@@ -113,10 +113,14 @@ Deeper cuts: the [architecture overview](https://initxy.github.io/noeta/architec
 Noeta is an early, pre-1.0 preview. It runs, it is tested, and the core is
 stable, but some capabilities are intentionally out of scope for now:
 
-- **Single-host / single-worker.** The shipped worker drains the dispatcher
-  in-process and is a preview, not a production daemon. Single-worker durable
-  exactly-once wake is shipped; multi-host coordination, multi-worker fencing,
-  and the partial-step-orphan edge (a crash mid-step) remain open — see
+- **Concurrency & recovery.** Single-host multi-worker (a resident
+  `WorkerLoop` pool), multi-host coordination on shared Postgres
+  (in-transaction lease fencing, database-clock expiry, `worker_id` audit),
+  durable exactly-once wake, and mid-step crash recovery (an interrupted
+  step is sealed and re-driven, or parked for a human when it had unprovable
+  side effects) are all shipped. Still bounded: multi-host fencing is
+  Postgres-only (SQLite / in-memory stay single-host), and a crashed step's
+  side effects are surfaced for review, not automatically undone — see
   [known limitations](https://initxy.github.io/noeta/operations/limitations/).
 - **Human-in-the-loop / timer wake** — approvals, structured questions, and
   timer wake are shipped end-to-end; what's missing is out-of-band
