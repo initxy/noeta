@@ -36,6 +36,7 @@ from noeta.storage._reclaim import reclaim_hits_cap
 from noeta.storage._wake_match import _matches
 from noeta.storage.postgres._connection import (
     _ADVISORY_CLASS_DISPATCHER,
+    _DB_NOW_SQL,
     _open_connection,
 )
 from noeta.storage.postgres.migrations import apply_migrations
@@ -101,13 +102,31 @@ class PostgresDispatcher:
         heartbeat_max: int = 360,
         max_fail_attempts: int = 3,
         reclaim_max: int = 3,
+        row_lock_timeout_ms: int = 5_000,
     ) -> None:
         self._conn = _open_connection(dsn)
         apply_migrations(self._conn)
+        # No injected ``now`` (production) → expiry math runs on the
+        # database clock (``_DB_NOW_SQL``), the one clock every host
+        # shares. An injected ``now`` keeps the deterministic
+        # client-side comparisons the contract tests drive.
+        self._db_clock = now is None
         self._now = now or time.time
         self._heartbeat_max = heartbeat_max
         self._max_fail_attempts = max_fail_attempts
         self._reclaim_max = reclaim_max
+        # Upper bound on a lifecycle transaction's wait for a
+        # dispatcher-row lock. The EventLog's in-tx fence probe
+        # (``SELECT ... FOR SHARE``, ADR multi-host-lease-fencing.md D1)
+        # can hold a row lock for the duration of an emit transaction;
+        # a wedged emit (GC pause, SIGSTOP, dead client) must not pin
+        # the global dispatcher advisory lock fleet-wide through e.g. a
+        # blocked ``requeue_stale`` UPDATE. On timeout the transaction
+        # aborts (``psycopg.errors.LockNotAvailable``), the caller's
+        # sweep retries next poll, and every other lifecycle op
+        # proceeds. Normal emits commit in milliseconds — hitting this
+        # bound means the emitter is already pathological.
+        self._row_lock_timeout_ms = row_lock_timeout_ms
         self._lock = threading.Lock()
         # ``is_lease_valid`` is on the EventLog write path: every
         # ``emit(... lease_id=...)`` calls it from **inside** the
@@ -129,6 +148,13 @@ class PostgresDispatcher:
         The sqlite adapter's ``BEGIN IMMEDIATE`` analogue: every
         lifecycle read-modify-write runs serialised behind this one
         transaction-scoped lock (auto-released at COMMIT / ROLLBACK).
+
+        The advisory acquisition itself waits unboundedly (host-to-host
+        serialisation is normal); the ``SET LOCAL lock_timeout`` issued
+        AFTER it only bounds subsequent row-lock waits — i.e. an UPDATE
+        queued behind an emit's ``FOR SHARE`` fence probe — so a wedged
+        emitter cannot pin the global lock indefinitely (see
+        ``_row_lock_timeout_ms``).
         """
         self._conn.execute("BEGIN")
         try:
@@ -136,16 +162,52 @@ class PostgresDispatcher:
                 "SELECT pg_advisory_xact_lock(%s, 0)",
                 (_ADVISORY_CLASS_DISPATCHER,),
             )
+            self._conn.execute(
+                f"SET LOCAL lock_timeout = '{int(self._row_lock_timeout_ms)}ms'"
+            )
         except Exception:
             self._conn.execute("ROLLBACK")
             raise
+
+    def _expiry_sql_and_param(
+        self, lease_seconds: float
+    ) -> tuple[str, float]:
+        """Return ``(sql_fragment, param)`` for a lease-expiry computation.
+
+        DB-clock mode (production, no injected ``now``): the server
+        computes ``clock_timestamp() + lease_seconds``, so every host
+        agrees on the expiry instant regardless of per-host skew (ADR
+        multi-host-lease-fencing.md D2). The returned fragment is an
+        expression, not a placeholder — the caller embeds it directly
+        into its SQL.
+
+        Injected-clock mode (tests): the caller's ``self._now()`` is
+        used, keeping the deterministic client-side comparisons the
+        contract suite drives.
+        """
+        if self._db_clock:
+            return f"{_DB_NOW_SQL} + %s", lease_seconds
+        return "%s", self._now() + lease_seconds
+
+    def _now_clause(self) -> tuple[str, tuple]:
+        """Return ``(sql_expression, params)`` for "now".
+
+        DB-clock mode: the expression is ``_DB_NOW_SQL`` with no
+        parameters — the server evaluates it per-statement.
+        Injected-clock mode: the expression is ``%s`` with
+        ``self._now()`` as the parameter.
+        """
+        if self._db_clock:
+            return _DB_NOW_SQL, ()
+        return "%s", (self._now(),)
 
     def _next_ready_order(self) -> int:
         row = self._conn.execute(
             "SELECT COALESCE(MAX(ready_order), 0) + 1 AS next_order "
             "FROM dispatcher_tasks"
         ).fetchone()
-        assert row is not None
+        if row is None:
+            raise RuntimeError("_next_ready_order: COALESCE(MAX()) returned no row")
         return int(row["next_order"])
 
     def _next_arrival_seq(self, task_id: str) -> int:
@@ -154,7 +216,10 @@ class PostgresDispatcher:
             "FROM dispatcher_pending_wakes WHERE task_id = %s",
             (task_id,),
         ).fetchone()
-        assert row is not None
+        if row is None:
+            raise RuntimeError(
+                f"_next_arrival_seq({task_id}): COALESCE(MAX()) returned no row"
+            )
         return int(row["next_seq"])
 
     def _fetch_task(self, task_id: str) -> Optional[Mapping[str, Any]]:
@@ -242,6 +307,7 @@ class PostgresDispatcher:
                         "UPDATE dispatcher_tasks SET "
                         " status = 'ready',"
                         " lease_id = NULL,"
+                        " worker_id = NULL,"
                         " lease_expires_at = NULL,"
                         " heartbeat_count = 0,"
                         " reclaim_count = 0,"
@@ -280,7 +346,6 @@ class PostgresDispatcher:
         :meth:`requeue_stale` (at-least-once delivery + idempotent
         consumption = exactly-once).
         """
-        del worker_id  # not recorded on the row; reserved for future audit
         with self._lock:
             self._begin_locked()
             try:
@@ -304,18 +369,43 @@ class PostgresDispatcher:
                 leased_task_id = row["task_id"]
                 matched_blob = _as_bytes(row["matched_wake_event_canonical"])
                 lease_id = f"lease-{uuid.uuid4().hex}"
-                expires_at = self._now() + lease_seconds
-                self._conn.execute(
-                    "UPDATE dispatcher_tasks SET "
-                    " status = 'leased',"
-                    " lease_id = %s,"
-                    " lease_expires_at = %s,"
-                    " heartbeat_count = 0,"
-                    " suspend_reason = NULL,"
-                    " ready_order = NULL "
-                    "WHERE task_id = %s",
-                    (lease_id, expires_at, leased_task_id),
+                expiry_sql, expiry_param = self._expiry_sql_and_param(
+                    lease_seconds
                 )
+                if self._db_clock:
+                    updated = self._conn.execute(
+                        "UPDATE dispatcher_tasks SET "
+                        " status = 'leased',"
+                        " lease_id = %s,"
+                        f" lease_expires_at = {expiry_sql},"
+                        " heartbeat_count = 0,"
+                        " suspend_reason = NULL,"
+                        " worker_id = %s,"
+                        " ready_order = NULL "
+                        "WHERE task_id = %s "
+                        "RETURNING lease_expires_at",
+                        (lease_id, expiry_param, worker_id, leased_task_id),
+                    ).fetchone()
+                    if updated is None:
+                        raise RuntimeError(
+                            f"lease(): UPDATE RETURNING returned no row "
+                            f"for task {leased_task_id}"
+                        )
+                    expires_at = float(updated["lease_expires_at"])
+                else:
+                    expires_at = expiry_param
+                    self._conn.execute(
+                        "UPDATE dispatcher_tasks SET "
+                        " status = 'leased',"
+                        " lease_id = %s,"
+                        f" lease_expires_at = {expiry_sql},"
+                        " heartbeat_count = 0,"
+                        " suspend_reason = NULL,"
+                        " worker_id = %s,"
+                        " ready_order = NULL "
+                        "WHERE task_id = %s",
+                        (lease_id, expiry_param, worker_id, leased_task_id),
+                    )
                 self._conn.execute("COMMIT")
             except Exception:
                 self._conn.execute("ROLLBACK")
@@ -349,6 +439,7 @@ class PostgresDispatcher:
                             "UPDATE dispatcher_tasks SET "
                             " status = 'ready',"
                             " lease_id = NULL,"
+                            " worker_id = NULL,"
                             " lease_expires_at = NULL,"
                             " heartbeat_count = 0,"
                             " reclaim_count = 0,"
@@ -364,6 +455,7 @@ class PostgresDispatcher:
                             "UPDATE dispatcher_tasks SET "
                             " status = 'suspended',"
                             " lease_id = NULL,"
+                            " worker_id = NULL,"
                             " lease_expires_at = NULL,"
                             " heartbeat_count = 0,"
                             " reclaim_count = 0,"
@@ -373,17 +465,37 @@ class PostgresDispatcher:
                         )
                     self._conn.execute("COMMIT")
                     raise InvalidLease(lease_id)
-                expires_at = self._now() + lease_seconds
+                expiry_sql, expiry_param = self._expiry_sql_and_param(
+                    lease_seconds
+                )
                 # A successful heartbeat is the leased-task progress
                 # signal: reset the stale-reclaim counter.
-                self._conn.execute(
-                    "UPDATE dispatcher_tasks SET "
-                    " heartbeat_count = heartbeat_count + 1,"
-                    " reclaim_count = 0,"
-                    " lease_expires_at = %s "
-                    "WHERE lease_id = %s",
-                    (expires_at, lease_id),
-                )
+                if self._db_clock:
+                    updated = self._conn.execute(
+                        "UPDATE dispatcher_tasks SET "
+                        " heartbeat_count = heartbeat_count + 1,"
+                        " reclaim_count = 0,"
+                        f" lease_expires_at = {expiry_sql} "
+                        "WHERE lease_id = %s "
+                        "RETURNING lease_expires_at",
+                        (expiry_param, lease_id),
+                    ).fetchone()
+                    if updated is None:
+                        raise RuntimeError(
+                            f"heartbeat({lease_id}): UPDATE RETURNING "
+                            f"returned no row"
+                        )
+                    expires_at = float(updated["lease_expires_at"])
+                else:
+                    expires_at = expiry_param
+                    self._conn.execute(
+                        "UPDATE dispatcher_tasks SET "
+                        " heartbeat_count = heartbeat_count + 1,"
+                        " reclaim_count = 0,"
+                        f" lease_expires_at = {expiry_sql} "
+                        "WHERE lease_id = %s",
+                        (expiry_param, lease_id),
+                    )
                 self._conn.execute("COMMIT")
             except InvalidLease:
                 raise
@@ -440,6 +552,7 @@ class PostgresDispatcher:
                         "UPDATE dispatcher_tasks SET "
                         " status = 'terminal',"
                         " lease_id = NULL,"
+                        " worker_id = NULL,"
                         " lease_expires_at = NULL,"
                         " heartbeat_count = 0,"
                         " reclaim_count = 0,"
@@ -463,6 +576,7 @@ class PostgresDispatcher:
                         "UPDATE dispatcher_tasks SET "
                         " status = 'suspended',"
                         " lease_id = NULL,"
+                        " worker_id = NULL,"
                         " lease_expires_at = NULL,"
                         " heartbeat_count = 0,"
                         " reclaim_count = 0,"
@@ -539,6 +653,7 @@ class PostgresDispatcher:
                     "UPDATE dispatcher_tasks SET "
                     " status = 'ready',"
                     " lease_id = NULL,"
+                    " worker_id = NULL,"
                     " lease_expires_at = NULL,"
                     " heartbeat_count = 0,"
                     " reclaim_count = 0,"
@@ -580,6 +695,7 @@ class PostgresDispatcher:
                         "UPDATE dispatcher_tasks SET "
                         " status = 'ready',"
                         " lease_id = NULL,"
+                        " worker_id = NULL,"
                         " lease_expires_at = NULL,"
                         " heartbeat_count = 0,"
                         " reclaim_count = 0,"
@@ -599,6 +715,7 @@ class PostgresDispatcher:
                         "UPDATE dispatcher_tasks SET "
                         " status = 'terminal',"
                         " lease_id = NULL,"
+                        " worker_id = NULL,"
                         " lease_expires_at = NULL,"
                         " heartbeat_count = 0,"
                         " reclaim_count = 0,"
@@ -688,16 +805,17 @@ class PostgresDispatcher:
         (``stale_reclaim_exceeded``) instead of requeueing.
         Terminal-by-cap tasks are NOT in the returned list.
         """
-        now = self._now()
         requeued: list[str] = []
         with self._lock:
             self._begin_locked()
             try:
+                now_expr, now_params = self._now_clause()
                 stale = self._conn.execute(
                     "SELECT task_id, reclaim_count FROM dispatcher_tasks "
-                    "WHERE status = 'leased' AND lease_expires_at <= %s "
+                    "WHERE status = 'leased' "
+                    f"AND lease_expires_at <= {now_expr} "
                     "ORDER BY lease_expires_at",
-                    (now,),
+                    now_params,
                 ).fetchall()
                 for row in stale:
                     task_id = row["task_id"]
@@ -708,6 +826,7 @@ class PostgresDispatcher:
                             "UPDATE dispatcher_tasks SET "
                             " status = 'terminal',"
                             " lease_id = NULL,"
+                            " worker_id = NULL,"
                             " lease_expires_at = NULL,"
                             " heartbeat_count = 0,"
                             " reclaim_count = reclaim_count + 1,"
@@ -729,6 +848,7 @@ class PostgresDispatcher:
                         "UPDATE dispatcher_tasks SET "
                         " status = 'ready',"
                         " lease_id = NULL,"
+                        " worker_id = NULL,"
                         " lease_expires_at = NULL,"
                         " heartbeat_count = 0,"
                         " reclaim_count = reclaim_count + 1,"
@@ -751,6 +871,13 @@ class PostgresDispatcher:
         delivered wake is the **recorded deadline** blob so re-delivery
         stays byte-identical.
 
+        In DB-clock mode (production, no injected ``now``) the ``now``
+        parameter is **ignored** — the due-check and sweep both use the
+        database server's ``clock_timestamp()`` so every host answers
+        "is it due?" identically regardless of per-host skew (ADR
+        multi-host-lease-fencing.md D2). ``now`` only matters in the
+        injected-clock test seam.
+
         The due set is selected straight off the partial ``fire_at``
         index. A read-only probe on the separate read connection runs
         FIRST: when nothing is due (the common ~1s poll) it returns
@@ -759,22 +886,40 @@ class PostgresDispatcher:
         is benign — a timer that comes due in the gap is caught by the
         next poll.
         """
+        # DB-clock mode drives the due-check off the database clock so
+        # every host answers "is it due?" identically regardless of
+        # per-host skew; the caller's ``now`` then only matters for the
+        # injected-clock test seam (ADR multi-host-lease-fencing.md D2).
         with self._read_lock:
-            due = self._read_conn.execute(
-                "SELECT 1 FROM dispatcher_tasks WHERE fire_at <= %s LIMIT 1",
-                (now,),
-            ).fetchone()
+            if self._db_clock:
+                due = self._read_conn.execute(
+                    "SELECT 1 FROM dispatcher_tasks "
+                    f"WHERE fire_at <= {_DB_NOW_SQL} LIMIT 1"
+                ).fetchone()
+            else:
+                due = self._read_conn.execute(
+                    "SELECT 1 FROM dispatcher_tasks WHERE fire_at <= %s LIMIT 1",
+                    (now,),
+                ).fetchone()
         if due is None:
             return []
         fired: list[str] = []
         with self._lock:
             self._begin_locked()
             try:
-                rows = self._conn.execute(
-                    "SELECT task_id, wake_on_canonical FROM dispatcher_tasks "
-                    "WHERE fire_at <= %s ORDER BY fire_at",
-                    (now,),
-                ).fetchall()
+                if self._db_clock:
+                    rows = self._conn.execute(
+                        "SELECT task_id, wake_on_canonical "
+                        "FROM dispatcher_tasks "
+                        f"WHERE fire_at <= {_DB_NOW_SQL} ORDER BY fire_at"
+                    ).fetchall()
+                else:
+                    rows = self._conn.execute(
+                        "SELECT task_id, wake_on_canonical "
+                        "FROM dispatcher_tasks "
+                        "WHERE fire_at <= %s ORDER BY fire_at",
+                        (now,),
+                    ).fetchall()
                 for row in rows:
                     # ``fire_at`` is written only for TimerFired suspends,
                     # so this set is already the due timers. Still
@@ -824,18 +969,36 @@ class PostgresDispatcher:
         connection so a validation read never queues behind a lifecycle
         write held by another thread (see ``__init__``).
         """
+        return self._lease_is_active(task_id, lease_id=lease_id)
+
+    def _lease_is_active(
+        self, task_id: str, *, lease_id: Optional[str] = None
+    ) -> bool:
+        """Shared expiry check backing :meth:`is_lease_valid` and
+        :meth:`has_active_lease`.
+
+        Single SELECT on the read connection. The "now" reference is
+        ``_DB_NOW_SQL`` in production (server clock) or ``self._now()``
+        in injected-clock test mode, both rendered through
+        :meth:`_now_clause` so the predicate never drifts between
+        callers.
+        """
         with self._read_lock:
+            now_expr, now_params = self._now_clause()
+            if lease_id is not None:
+                lease_clause = "AND lease_id = %s"
+                params: tuple = (task_id, lease_id, *now_params)
+            else:
+                lease_clause = ""
+                params = (task_id, *now_params)
             row = self._read_conn.execute(
-                "SELECT lease_expires_at FROM dispatcher_tasks "
-                "WHERE task_id = %s AND lease_id = %s AND status = 'leased'",
-                (task_id, lease_id),
+                "SELECT 1 FROM dispatcher_tasks "
+                "WHERE task_id = %s " + lease_clause + " "
+                "AND status = 'leased' "
+                f"AND lease_expires_at > {now_expr}",
+                params,
             ).fetchone()
-        if row is None:
-            return False
-        expires_at = row["lease_expires_at"]
-        if expires_at is None:
-            return False
-        return float(expires_at) > self._now()
+            return row is not None
 
     # ------------------------------------------------------------------
     # Introspection / maintenance (adapter-only, not on Protocols)
@@ -864,18 +1027,7 @@ class PostgresDispatcher:
         (zombie) lease reads as *not running*. Callers asking "is a worker
         actively running this task right now?" (e.g. the DELETE active
         guard) must use this, not ``task_status() == 'leased'``."""
-        with self._read_lock:
-            row = self._read_conn.execute(
-                "SELECT lease_expires_at FROM dispatcher_tasks "
-                "WHERE task_id = %s AND status = 'leased'",
-                (task_id,),
-            ).fetchone()
-        if row is None:
-            return False
-        expires_at = row["lease_expires_at"]
-        if expires_at is None:
-            return False
-        return float(expires_at) > self._now()
+        return self._lease_is_active(task_id)
 
     def restore_task(
         self,
@@ -912,6 +1064,7 @@ class PostgresDispatcher:
                         "ON CONFLICT (task_id) DO UPDATE SET "
                         " status = 'ready',"
                         " lease_id = NULL,"
+                        " worker_id = NULL,"
                         " lease_expires_at = NULL,"
                         " heartbeat_count = 0,"
                         " reclaim_count = 0,"
@@ -930,6 +1083,7 @@ class PostgresDispatcher:
                         "ON CONFLICT (task_id) DO UPDATE SET "
                         " status = 'terminal',"
                         " lease_id = NULL,"
+                        " worker_id = NULL,"
                         " lease_expires_at = NULL,"
                         " heartbeat_count = 0,"
                         " reclaim_count = 0,"
@@ -950,6 +1104,7 @@ class PostgresDispatcher:
                         "ON CONFLICT (task_id) DO UPDATE SET "
                         " status = 'suspended',"
                         " lease_id = NULL,"
+                        " worker_id = NULL,"
                         " lease_expires_at = NULL,"
                         " heartbeat_count = 0,"
                         " reclaim_count = 0,"

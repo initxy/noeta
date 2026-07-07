@@ -8,7 +8,39 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
-## [0.1.9] - 2026-07-06
+## [0.1.10] - 2026-07-07
+
+Supersedes the never-published 0.1.9 (its prompt-cache fix ships here).
+
+### Added
+
+- Step-attempt crash recovery: a step interrupted mid-flight (process death
+  during a decide/tool round) is detected on the next lease, sealed with a
+  `StepAttemptAbandoned` fold baseline, and either auto-re-driven or parked
+  for re-approval — no double-executed tool calls and no lost turn. Bounded
+  by an abandon cap so a crash loop parks instead of spinning. Recorded in
+  the `step-attempt-recovery` ADR.
+- Single-host multi-worker concurrency: the agent runs a resident
+  `WorkerLoop` pool (size via `NOETA_AGENT_NUM_WORKERS`, default 1) instead
+  of per-command daemon threads, so several tasks progress at once on one
+  host. Adds the `release_yield` dispatcher verb (all three storage
+  backends) for handing a seeded lease to the pool.
+- Multi-host Postgres lease fencing: several host processes can now share one
+  Postgres database safely. Emit appends are fenced in-transaction against
+  the live lease (`SELECT ... FOR SHARE`), lease expiry runs on the database
+  clock so per-host skew can't split-brain, and a `worker_id` audit column
+  records the holder. Postgres-only; sqlite / in-memory stay single-host.
+- `spawn_subagent` batch form: one tool call may carry `spawns: [{agent,
+  goal}, …]` to fan out to several children at once — the fan-out path that
+  was unreachable on models which never emit two spawn calls in a turn. The
+  legacy single `{agent, goal}` form still works and old recordings replay
+  unchanged.
+- SDK `query()` returns a `QueryResult`: still the full event-envelope list
+  (iteration / indexing unchanged), plus `messages()` and `answer()`
+  projections folded against the live store **before** the temporary client
+  tears down — so answers and message bodies carried by `ContentRef` no
+  longer become unresolvable. `answer()` raises `QueryFailedError` on a
+  failed or unterminated task instead of returning the failure reason.
 
 ### Fixed
 
@@ -18,6 +50,12 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
   This pins every turn of a long task to one backend account on the ModelHub
   responses gateway, so its KV cache is actually reused and the long-session
   `invalid_encrypted_content` error is avoided.
+- OpenAI Responses subagent prompt caching: `include:[reasoning.encrypted_content]`
+  is now requested independent of the effort setting, a signature-less
+  thinking block is never echoed back (it would break the cached prefix at
+  its position), and a spawned subtask inherits the parent's per-turn effort.
+  Subagent conversations now cache past the static head instead of stalling
+  at the first assistant turn.
 
 ## [0.1.8] - 2026-07-06
 
@@ -231,8 +269,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.9...HEAD
-[0.1.9]: https://github.com/initxy/noeta/compare/v0.1.8...v0.1.9
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.10...HEAD
+[0.1.10]: https://github.com/initxy/noeta/compare/v0.1.8...v0.1.10
 [0.1.8]: https://github.com/initxy/noeta/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/initxy/noeta/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/initxy/noeta/compare/v0.1.5...v0.1.6
