@@ -273,6 +273,10 @@ class Client:
             # to absent, so a bare HostConfig() leaves the tool list / wire
             # byte-identical to today.
             app_gateway=hc.app_gateway,
+            # Sandbox execution backend (D2 host config). ``None`` (default) ⇒
+            # the local host; when set, the SdkHost builds a sandbox manager and
+            # routes every session's fs / shell IO into the container.
+            exec_env=hc.exec_env,
             mcp_server_resolver=hc.mcp_server_resolver,
             mcp_http_post=hc.mcp_http_post,
             delta_sink=hc.delta_sink,
@@ -1007,6 +1011,13 @@ class Client:
         if self._trace_export is not None:
             # Unsubscribes, drains the async worker, flushes the sink.
             self._trace_export.stop()
+        # Reap the host's sandbox backend (if any) so an idle container
+        # connection does not outlive the process. No-op on the local path.
+        try:
+            self._host.teardown_exec_env()
+        except Exception:
+            # Shutdown must never raise from teardown; swallow defensively.
+            pass
 
 
 # ---------------------------------------------------------------------------

@@ -56,11 +56,16 @@ class SandboxExecEnvConfig:
     * ``provision`` — ``"eager"`` provisions a fresh container when a root task
       starts; ``"attach"`` connects to an already-running ``base_url`` (the
       default — the reconnect path a resumed / reclaimed task also takes).
+    * ``workdir`` — the container's working directory. In sandbox mode this
+      *is* the fs-tools' workspace root (a lexical containment fence, D7): the
+      host path a local session would use is meaningless inside the container,
+      so the host substitutes this container path. Must be absolute.
     """
 
     base_url: str
     api_key_env: str = "SANDBOX_API_KEY"
     provision: str = "attach"
+    workdir: str = "/workspace"
 
     def resolve_api_key(self) -> Optional[str]:
         """Read the container key from ``api_key_env`` (``None`` if unset).
