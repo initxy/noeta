@@ -183,11 +183,11 @@ options = presets.main_options()  # full main agent
 
 ## Next steps
 
-- [Permission gating](../guides/permission-gating.md) — control which
+- [Guard vs Observer](../concepts/guard-observer.md) — control which
   tool calls actually execute
-- [Sub-agent delegation](../guides/subagent-delegation.md) — spawn
+- [Spawn sub-agents](../how-to/spawn-subagents.md) — spawn
   specialized child agents
-- [Durable storage](../guides/durable-storage.md) — persist sessions
-  across restarts
-- [MCP connectors](../guides/mcp-connectors.md) — connect external
+- [Deploy a worker](../how-to/deploy-worker.md) — persist sessions
+  across restarts on a durable store
+- [Connect MCP](../how-to/connect-mcp.md) — connect external
   MCP tool servers
