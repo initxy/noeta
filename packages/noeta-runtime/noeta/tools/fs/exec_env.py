@@ -161,6 +161,13 @@ class ExecEnv(Protocol):
 
     def unlink(self, path: Path) -> None: ...
 
+    def mkdir(self, path: Path) -> None:
+        """Create ``path`` and any missing parents (``parents=True,
+        exist_ok=True``). Used by the rewind restore (T7) to re-create a
+        directory an edited-then-restored file lived in when the rewound span
+        had removed it. An existing directory is not an error."""
+        ...
+
     # -- stat --------------------------------------------------------------
     def exists(self, path: Path) -> bool: ...
 
@@ -247,6 +254,9 @@ class LocalExecEnv:
 
     def unlink(self, path: Path) -> None:
         path.unlink()
+
+    def mkdir(self, path: Path) -> None:
+        path.mkdir(parents=True, exist_ok=True)
 
     def exists(self, path: Path) -> bool:
         return path.exists()
@@ -487,6 +497,13 @@ class AioSandboxExecEnv:
         outcome = self._shell(f"rm -- {shlex.quote(str(path))}")
         if int(outcome.get("exit_code", 1)) != 0:
             raise AioSandboxError(f"unlink {path}: {outcome.get('output', '')!r}")
+
+    def mkdir(self, path: Path) -> None:
+        # ``mkdir -p`` = parents=True, exist_ok=True — the exact restore
+        # semantics ``LocalExecEnv.mkdir`` gives on the host.
+        outcome = self._shell(f"mkdir -p -- {shlex.quote(str(path))}")
+        if int(outcome.get("exit_code", 1)) != 0:
+            raise AioSandboxError(f"mkdir {path}: {outcome.get('output', '')!r}")
 
     # -- stat ------------------------------------------------------------- #
 

@@ -827,6 +827,24 @@ class SdkHost(GenericEngineResolver):
             return None
         return self._sandbox.current_ref()
 
+    def exec_env_for_ref(
+        self, exec_env_ref: Optional[str]
+    ) -> Optional[tuple[ExecEnv, Path]]:
+        """The ``(backend, container root)`` for a rewind restore, or ``None``.
+
+        ``None`` (a local session, or no host sandbox) means "restore against the
+        host filesystem as before" — the driver keeps its byte-identical pathlib
+        path. When a sandbox session recorded an ``exec_env_ref`` (T6) and this
+        host has a sandbox, returns the container backend + its lexical root so
+        the rewind writes baselines back INSIDE the container (T7), reconnecting
+        to the recorded container by address (creds from this host's env, D5)."""
+        if self._sandbox is None or not exec_env_ref:
+            return None
+        return (
+            self._sandbox.exec_env(base_url=exec_env_ref),
+            Path(self._sandbox.workdir),
+        )
+
     def teardown_exec_env(self) -> None:
         """Reap the host's sandbox backend (if any). Idempotent; safe on the
         local path (no manager ⇒ no-op). The Client calls this on shutdown so
