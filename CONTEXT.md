@@ -152,6 +152,10 @@ _Avoid_: Yielded, Paused, Blocked, Waiting
 **WakeCondition** / **WakeEvent**:
 Describes what a Task is waiting on. `SubtaskCompleted / HumanResponseReceived / TimerFired / ExternalEvent`.
 
+**ExecEnv**:
+The pluggable **execution backend** the fs/shell tools act through — a deep seam between the tools and their real IO (file read/write/create/unlink/mkdir/stat/glob + `run_argv`), operating on already-resolved absolute paths (the tool still owns containment via `WorkspaceRoot`). `LocalExecEnv` (default) is the host filesystem + subprocess, byte-identical to pre-seam behavior; `AioSandboxExecEnv` routes every side effect to an AIO Sandbox **container** over HTTP, so an untrusted agent's tools land in the container, not on the host. Injected as a per-tool construction field at wiring time — **never** part of a tool's schema, so the stable prefix is byte-identical whichever backend is bound. A session's container `base_url` is welded durably (`TaskHostBound.exec_env_ref`) so a resumed/reclaimed session reconnects to the same container; the API key rides only on the wire, never in the log. See the execution-environment-seam ADR.
+_Avoid_: Sandbox (that's one *backend* of this seam, not the seam — and "Workspace" is already the session path model + the `WorkspaceRoot` fence; don't overload it), Executor (that's the Engine's sense).
+
 ### Context
 
 **View**:
