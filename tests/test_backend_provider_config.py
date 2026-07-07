@@ -17,7 +17,6 @@ import http.client
 import json
 import time
 from pathlib import Path
-from typing import Any, Optional
 
 import pytest
 
@@ -80,6 +79,42 @@ def test_defaults_are_offline_and_safe() -> None:
     assert c.provider_id == "stub"
     assert c.write_mode == "dry_run"
     assert c.workflow_enabled is False
+    # Single-worker serial default; background_drive on by default for the
+    # served product.
+    assert c.background_drive is True
+    assert c.num_workers == 1
+
+
+def test_num_workers_defaults_to_one() -> None:
+    c = BackendConfig.from_env({})
+    assert c.num_workers == 1
+
+
+def test_num_workers_from_env() -> None:
+    c = BackendConfig.from_env({"NOETA_AGENT_NUM_WORKERS": "4"})
+    assert c.num_workers == 4
+
+
+def test_num_workers_from_config_file(tmp_path: Path) -> None:
+    cfg = tmp_path / "noeta.config.json"
+    cfg.write_text(json.dumps({"num_workers": 3}))
+    c = BackendConfig.from_env({"NOETA_AGENT_CONFIG": str(cfg)})
+    assert c.num_workers == 3
+
+
+def test_num_workers_env_overrides_config_file(tmp_path: Path) -> None:
+    cfg = tmp_path / "c.json"
+    cfg.write_text(json.dumps({"num_workers": 3}))
+    c = BackendConfig.from_env(
+        {"NOETA_AGENT_CONFIG": str(cfg), "NOETA_AGENT_NUM_WORKERS": "7"}
+    )
+    assert c.num_workers == 7
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "abc", ""])
+def test_num_workers_rejects_invalid(bad: str) -> None:
+    with pytest.raises(ValueError):
+        BackendConfig.from_env({"NOETA_AGENT_NUM_WORKERS": bad})
 
 
 # ---------------------------------------------------------------------------
