@@ -37,8 +37,6 @@ Boundaries (architect-pinned, M1 rev3):
 
 from __future__ import annotations
 
-import contextlib
-import os
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,7 +54,7 @@ from noeta.tools.fs._diff import (
     file_hash,
 )
 from noeta.tools.fs._workspace import WorkspaceEscape, WorkspaceRoot
-from noeta.tools.fs.exec_env import ExecEnv, LocalExecEnv
+from noeta.tools.fs.exec_env import ExclusiveCreateError, ExecEnv, LocalExecEnv
 from noeta.tools.fs.edit import (
     FsWriteMode,
     WRITE_FILE_MAX_BYTES,
@@ -102,19 +100,6 @@ def _collision_key(resolved: Path) -> str:
     file on a case-insensitive / normalizing filesystem are rejected and
     behaviour does not silently diverge across platforms."""
     return unicodedata.normalize("NFC", str(resolved)).casefold()
-
-
-def _write_all(fd: int, data: bytes) -> None:
-    """Write every byte to ``fd`` (``os.write`` may short-write). A
-    zero-length write or an OSError is a failure — a partial write is
-    NEVER treated as success."""
-    mv = memoryview(data)
-    total = 0
-    while total < len(data):
-        n = os.write(fd, mv[total:])
-        if n <= 0:
-            raise OSError("short write (os.write returned 0)")
-        total += n
 
 
 @dataclass
@@ -439,33 +424,17 @@ class ApplyPatchTool:
                     return self._fail(done, failed=p, recover="restore",
                                       reason=f"write failed: {exc}")
             else:  # create — exclusive, never overwrite
+                # The atomic exclusive-create + its granular recovery verbs now
+                # live behind the ExecEnv seam (LocalExecEnv keeps the exact
+                # os.open/write/close dance; a sandbox emulates exclusivity);
+                # the typed error carries the recover verb + reason this branch
+                # used to build inline.
                 try:
-                    fd = os.open(
-                        str(p.resolved), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644
+                    self.exec_env.create_exclusive(p.resolved, p.after_bytes)
+                except ExclusiveCreateError as exc:
+                    return self._fail(
+                        done, failed=p, recover=exc.recover, reason=exc.reason
                     )
-                except FileExistsError:
-                    # open failed → current file NOT created → recover="none".
-                    return self._fail(done, failed=p, recover="none",
-                                      reason="path created by another process (exclusive create)")
-                except OSError as exc:
-                    return self._fail(done, failed=p, recover="none",
-                                      reason=f"create failed: {exc}")
-                # The file now EXISTS — any failure (write OR close) must
-                # delete it; a close OSError must NOT escape and bypass
-                # rollback (close can report a deferred write-back error).
-                try:
-                    _write_all(fd, p.after_bytes)
-                except OSError as exc:
-                    # best-effort close so it cannot itself bypass _fail.
-                    with contextlib.suppress(OSError):
-                        os.close(fd)
-                    return self._fail(done, failed=p, recover="delete",
-                                      reason=f"write failed: {exc}")
-                try:
-                    os.close(fd)
-                except OSError as exc:
-                    return self._fail(done, failed=p, recover="delete",
-                                      reason=f"close failed: {exc}")
             done.append(p)
         return None
 
