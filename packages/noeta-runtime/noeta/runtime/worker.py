@@ -51,10 +51,18 @@ from noeta.core.engine import abandon_step_attempt, suspend_on_human_handle
 from noeta.core.fold import BoundedEventLog, fold
 from noeta.protocols.decisions import TaskStatePatch
 from noeta.protocols.errors import InvalidLease, TaskCancellationRequested
-from noeta.protocols.messages import Block, MessageOrigin, TextBlock
+from noeta.protocols.messages import (
+    Block,
+    MessageOrigin,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+)
 from noeta.protocols.wake import (
     NEXT_GOAL_WAKE_HANDLE,
     HumanResponseReceived,
+    SubtaskCompleted,
+    SubtaskGroupCompleted,
     matches_wake,
 )
 from noeta.runtime.attempt import (
@@ -165,9 +173,7 @@ def _default_reliability_sink(event: ReliabilityEvent) -> None:
 #   ``"cancelled"`` / ``"stopped"`` — a human cancel/close landed mid-turn and
 #   the in-flight result was abandoned (see :func:`_settle_stopped_turn`):
 #   ``"cancelled"`` left the task terminal, ``"stopped"`` left it reopenable.
-WorkerOutcome = Literal[
-    "woken", "drained", "skipped", "cancelled", "stopped"
-]
+WorkerOutcome = Literal["woken", "drained", "skipped", "cancelled", "stopped"]
 
 
 class WakeRecoveryError(Exception):
@@ -210,7 +216,10 @@ def _find_matching_woken_index(events: list[Any], wake_event: Any) -> Optional[i
     matching: Optional[int] = None
     for i in range(boundary + 1, len(events)):
         e = events[i]
-        if e.type == "TaskWoken" and getattr(e.payload, "wake_event", None) == wake_event:
+        if (
+            e.type == "TaskWoken"
+            and getattr(e.payload, "wake_event", None) == wake_event
+        ):
             matching = i
     return matching
 
@@ -361,7 +370,9 @@ class AppendMessagePrelude:
     def __call__(self, engine: Any, task: Any, *, lease_id: str) -> Any:
         for text in self.attachment_texts:
             engine.append_user_message(
-                task, content=[TextBlock(text=text)], lease_id=lease_id,
+                task,
+                content=[TextBlock(text=text)],
+                lease_id=lease_id,
                 origin="system",
             )
         task = engine.append_user_message(
@@ -422,6 +433,256 @@ class AnswerUserQuestionPrelude:
             answered_by=self.answered_by,
             lease_id=lease_id,
         )
+
+
+# ---------------------------------------------------------------------------
+# Subtask wake rendering — mirror of subtask_drain._resume_parent_leased.
+#
+# When a parent task is woken by a SubtaskCompleted / SubtaskGroupCompleted
+# (delivered by the ChildLifecycleObserver), the child result(s) must be
+# rendered as paired tool_result messages between note_woken and
+# run_one_step, exactly as the in-request subtask_drain does. The composer
+# does NOT project these from SubtaskCompleted events — they are
+# governance-side state that only becomes a Message via the Engine's
+# append_subagent_result_* seams. Without this prelude a worker-loop-driven
+# parent would compose with a dangling spawn_subagent tool_use and providers
+# would reject the request.
+# ---------------------------------------------------------------------------
+
+_SPAWN_TOOL_NAMES = frozenset({"spawn_subagent", "run_workflow"})
+
+
+def _render_subtask_wake(
+    engine: Any, task: Any, wake_event: Any, *, lease_id: str
+) -> Any:
+    """Render paired tool_result(s) for a subtask-completion wake, if needed.
+
+    Returns the (possibly-advanced) task. A non-subtask wake is a no-op so
+    callers can invoke this unconditionally at the top of the first-consume
+    window. Idempotent: if the tool_result for this spawn is already
+    present on the transcript, nothing is appended — safe to call on the
+    bare re-drive (case 2′) after a crash between note_woken and the step.
+
+    Pairing correctness (reviewer finding 1): both the single-child and
+    the fan-out-group branches match tool_result to its originating
+    ``spawn_subagent`` tool_use positionally, reading unpaired spawn
+    tool_uses forward across assistant messages and pending
+    ``SubtaskSpawned`` events in event-log order. The result for a
+    single-child wake comes from ``wake_event.result`` (carried on the
+    wake by :class:`ChildLifecycleObserver`), NOT from
+    ``governance.subtask_results[-1]`` — using ``[-1]`` mis-pairs when a
+    parent has multiple children and they complete out of spawn order
+    (the last-completed result gets attached to whichever spawn the
+    reversed scan hits first).
+    """
+    if isinstance(wake_event, SubtaskCompleted):
+        call_id = _call_id_for_subtask(engine, task, wake_event.subtask_id)
+        if call_id is None:
+            return task  # already paired (idempotent)
+        result = wake_event.result
+        if result is None:
+            # Defensive: wake event arrived without a result attached.
+            # Fall back to looking up the result keyed by subtask_id on
+            # the parent stream (same map the group branch builds),
+            # instead of blindly taking subtask_results[-1].
+            result = _lookup_result(engine, task, wake_event.subtask_id)
+        return engine.append_subagent_result_message(
+            task,
+            call_id=call_id,
+            output=result.output,
+            success=result.status == "completed",
+            error=result.error,
+            lease_id=lease_id,
+        )
+    if isinstance(wake_event, SubtaskGroupCompleted):
+        call_ids = _pending_spawn_call_ids(task, len(wake_event.subtask_ids))
+        if not call_ids:
+            return task  # already paired
+        return engine.append_subagent_group_result_messages(
+            task, wake_event, call_ids, lease_id=lease_id
+        )
+    return task
+
+
+def _call_id_for_subtask(
+    engine: Any, task: Any, subtask_id: str
+) -> Optional[str]:
+    """Return the unpaired spawn ``call_id`` that corresponds to
+    ``subtask_id``, or ``None`` when every pending spawn is already
+    paired (idempotent re-entry).
+
+    Pairs forward-ordered unpaired spawn tool_uses with forward-ordered
+    pending ``SubtaskSpawned`` events (foreground spawns only — background
+    sub-agents emit ``BackgroundSubagentStarted`` and never reach this
+    wake path). The target subtask's index into the spawned-ids list
+    selects the call_id; this matches the positional pairing the group
+    branch and the in-request :func:`subtask_drain._resume_parent_leased`
+    already rely on, but keyed on the specific ``subtask_id`` so result
+    delivery out of spawn order cannot mis-pair.
+    """
+    unpaired = _all_unpaired_spawn_call_ids(task)
+    if not unpaired:
+        return None
+    # If there's exactly one unpaired spawn, that's it (the common case).
+    if len(unpaired) == 1:
+        return unpaired[0]
+    # Multiple unpaired spawns (defensive: e.g. a parent recovering after
+    # a crash between note_woken and append, or a future policy that fans
+    # out single-spawn decisions without going through
+    # SpawnSubtasksDecision): order pending foreground SubtaskSpawned
+    # events by sequence and pick the call_id at the same index as
+    # subtask_id.
+    spawned_ids = _pending_subtask_spawn_ids(engine, task, len(unpaired))
+    try:
+        idx = spawned_ids.index(subtask_id)
+    except ValueError:
+        return None
+    if idx >= len(unpaired):
+        return None
+    return unpaired[idx]
+
+
+def _all_unpaired_spawn_call_ids(task: Any) -> list[str]:
+    """All unpaired spawn-subagent/run_workflow call_ids on ``task`` in
+    forward (member/spawn) order — no length check. Used by the single-
+    subtask wake path so we can detect the number of pending spawns
+    without raising when counts don't match exactly."""
+    resolved: set[str] = set()
+    for msg in task.runtime.messages:
+        if msg.role == "tool":
+            for block in msg.content:
+                if isinstance(block, ToolResultBlock):
+                    resolved.add(block.call_id)
+    unpaired: list[str] = []
+    for msg in task.runtime.messages:
+        if msg.role != "assistant":
+            continue
+        for block in msg.content:
+            if (
+                isinstance(block, ToolUseBlock)
+                and block.tool_name in _SPAWN_TOOL_NAMES
+                and block.call_id not in resolved
+            ):
+                unpaired.extend([block.call_id] * _spawn_member_count(block))
+    return unpaired
+
+
+def _pending_subtask_spawn_ids(
+    engine: Any, task: Any, n_pending: int
+) -> list[str]:
+    """The last ``n_pending`` foreground ``SubtaskSpawned`` subtask_ids
+    for ``task``, in forward event order.
+
+    We reconstruct this from the event log because
+    ``GovernanceState`` only tracks a ``spawned_subtasks`` counter + flat
+    ``subtask_results`` list — neither is keyed by subtask_id in a way
+    that survives out-of-order completion. We deliberately do NOT add a
+    new persistent mapping to GovernanceState; the event log is the
+    source of truth and this helper reads it the same way
+    :meth:`Engine.append_subagent_group_result_messages` does.
+    """
+    event_log = getattr(engine, "_event_log", None)
+    if event_log is None:
+        return []
+    spawned: list[str] = []
+    for env in event_log.read(task.task_id):
+        if env.type == "SubtaskSpawned":
+            spawned.append(env.payload.subtask_id)
+    if n_pending >= len(spawned):
+        return spawned
+    return spawned[-n_pending:]
+
+
+def _lookup_result(engine: Any, task: Any, subtask_id: str) -> Any:
+    """Find a SubtaskResult by subtask_id on the parent stream.
+
+    Used only as a defensive fallback when ``wake_event.result`` is None;
+    the ChildLifecycleObserver always attaches the result, so this path
+    is exercised only by tests that synthesise wake events or by future
+    wake producers that omit it. Mirrors the result map
+    :meth:`Engine.append_subagent_group_result_messages` builds.
+    """
+    event_log = getattr(engine, "_event_log", None)
+    if event_log is not None:
+        for env in event_log.read(task.task_id):
+            if (
+                env.type == "SubtaskCompleted"
+                and env.payload.subtask_id == subtask_id
+            ):
+                return env.payload.result
+    # Fallback: scan governance.subtask_results. Must NOT use [-1]
+    # blindly. SubtaskResult does not carry the child's subtask_id
+    # (protocol limitation), so we cannot key-match here; return the
+    # last result as a last resort, but document the risk.
+    results = getattr(task.governance, "subtask_results", [])
+    if results:
+        return results[-1]
+    raise RuntimeError(
+        f"worker: no SubtaskResult found for subtask {subtask_id!r}"
+    )
+
+
+def _pending_spawn_call_id(task: Any) -> Optional[str]:
+    """The ``call_id`` of the most recent unpaired spawn tool_use, or
+    ``None`` if every spawn on the transcript is already paired (idempotent
+    re-entry after a crash between note_woken and append)."""
+    resolved: set[str] = set()
+    for msg in task.runtime.messages:
+        if msg.role == "tool":
+            for block in msg.content:
+                if isinstance(block, ToolResultBlock):
+                    resolved.add(block.call_id)
+    for msg in reversed(task.runtime.messages):
+        if msg.role != "assistant":
+            continue
+        for block in msg.content:
+            if (
+                isinstance(block, ToolUseBlock)
+                and block.tool_name in _SPAWN_TOOL_NAMES
+                and block.call_id not in resolved
+            ):
+                return block.call_id
+    return None
+
+
+def _spawn_member_count(block: Any) -> int:
+    arguments = getattr(block, "arguments", None)
+    if isinstance(arguments, dict):
+        raw = arguments.get("spawns")
+        if isinstance(raw, (list, tuple)) and raw:
+            return len(raw)
+    return 1
+
+
+def _pending_spawn_call_ids(task: Any, n: int) -> list[str]:
+    """The ``n`` unpaired spawn member call_ids, in member order. Returns
+    the empty list when all ``n`` members are already paired (idempotent
+    re-entry)."""
+    resolved: set[str] = set()
+    for msg in task.runtime.messages:
+        if msg.role == "tool":
+            for block in msg.content:
+                if isinstance(block, ToolResultBlock):
+                    resolved.add(block.call_id)
+    unpaired: list[str] = []
+    for msg in task.runtime.messages:
+        if msg.role != "assistant":
+            continue
+        for block in msg.content:
+            if (
+                isinstance(block, ToolUseBlock)
+                and block.tool_name in _SPAWN_TOOL_NAMES
+                and block.call_id not in resolved
+            ):
+                unpaired.extend([block.call_id] * _spawn_member_count(block))
+    if len(unpaired) < n:
+        return []  # already paired
+    if len(unpaired) != n:
+        raise RuntimeError(
+            f"worker: expected {n} unpaired spawn call_ids on parent, "
+            f"found {len(unpaired)}"
+        )
+    return unpaired
 
 
 def run_leased_task(
@@ -491,8 +752,12 @@ def run_leased_task(
     try:
         if lease.wake_event is not None:
             return _run_woken(
-                rt, lease, task, engine,
-                prelude=prelude, cancelled=cancelled,
+                rt,
+                lease,
+                task,
+                engine,
+                prelude=prelude,
+                cancelled=cancelled,
                 reliability_sink=reliability_sink,
             )
         if task.status == "suspended":
@@ -511,22 +776,28 @@ def run_leased_task(
             pending = scan_pending_park(events)
             if pending is not None:
                 return _complete_pending_park(
-                    rt, lease, engine, events, pending,
+                    rt,
+                    lease,
+                    engine,
+                    events,
+                    pending,
                     consumed=None,
                     reliability_sink=reliability_sink,
                 )
             attempt = scan_interrupted_attempt(events)
             if attempt is not None:
                 return _recover_interrupted_attempt(
-                    rt, lease, engine, events, attempt,
+                    rt,
+                    lease,
+                    engine,
+                    events,
+                    attempt,
                     cancelled=cancelled,
                     consumed=None,
                     outcome="drained",
                     reliability_sink=reliability_sink,
                 )
-        task = engine.run_one_step(
-            task, lease_id=lease.lease_id, cancelled=cancelled
-        )
+        task = engine.run_one_step(task, lease_id=lease.lease_id, cancelled=cancelled)
         rt.dispatcher.release(
             lease.lease_id, next_state=task.status, wake_on=task.wake_on
         )
@@ -537,9 +808,7 @@ def run_leased_task(
         )
 
 
-def _cancel_predicate(
-    rt: WorkerRuntime, task_id: str
-) -> Optional[Callable[[], bool]]:
+def _cancel_predicate(rt: WorkerRuntime, task_id: str) -> Optional[Callable[[], bool]]:
     """Bind a cooperative-cancel poll off the host's cancel registry.
 
     Returns ``None`` when the host has no ``is_cancelled`` seam (a bare
@@ -651,17 +920,25 @@ def _run_woken(
         task = engine.note_woken(
             task, lease_id=lease.lease_id, wake_event=lease.wake_event
         )
+        # Subtask-completion prelude: render paired tool_result(s) for
+        # SubtaskCompleted / SubtaskGroupCompleted wakes so the step that
+        # follows sees balanced history. Non-subtask wakes are a no-op.
+        # Rides the first-consume window, same position the in-request
+        # subtask_drain renders them.
+        task = _render_subtask_wake(
+            engine, task, lease.wake_event, lease_id=lease.lease_id
+        )
         # Woken-command-prelude seam (D4): the per-command step
         # between TaskWoken and run_one_step (append-message / resolve-approval
         # / none). Rides this first-consume window so its bytes land exactly
         # where the old inline CLI path recorded them.
         if prelude is not None:
             task = prelude(engine, task, lease_id=lease.lease_id)
-        task = engine.run_one_step(
-            task, lease_id=lease.lease_id, cancelled=cancelled
-        )
+        task = engine.run_one_step(task, lease_id=lease.lease_id, cancelled=cancelled)
         rt.dispatcher.release(
-            lease.lease_id, next_state=task.status, wake_on=task.wake_on,
+            lease.lease_id,
+            next_state=task.status,
+            wake_on=task.wake_on,
             consumed_wake_event=lease.wake_event,
         )
         return "woken"
@@ -669,13 +946,16 @@ def _run_woken(
     # A matching TaskWoken is already durable — reconcile by folded status.
     if task.status == "terminal":  # case 3 — step already finished
         rt.dispatcher.release(
-            lease.lease_id, next_state="terminal",
+            lease.lease_id,
+            next_state="terminal",
             consumed_wake_event=lease.wake_event,
         )
         return "woken"
     if task.status == "suspended":  # case 4 — step re-suspended on new wake_on
         rt.dispatcher.release(
-            lease.lease_id, next_state="suspended", wake_on=task.wake_on,
+            lease.lease_id,
+            next_state="suspended",
+            wake_on=task.wake_on,
             consumed_wake_event=lease.wake_event,
         )
         return "woken"
@@ -686,7 +966,11 @@ def _run_woken(
             # suspend: the seal's park reason is a durable "do not
             # re-drive" decision — finish the park, never the bare step.
             return _complete_pending_park(
-                rt, lease, engine, events, pending,
+                rt,
+                lease,
+                engine,
+                events,
+                pending,
                 consumed=lease.wake_event,
                 reliability_sink=reliability_sink,
             )
@@ -701,32 +985,43 @@ def _run_woken(
             # and a crash between an ``auto_redrive`` seal and its re-drive
             # (the seal already re-based the state; park-reason seals never
             # reach here — ``scan_pending_park`` above completes the park
-            # instead). The one remaining loss mode is an approval
+            # instead). Subtask wakes re-render their paired tool_result
+            # idempotently (a crash between note_woken and the first
+            # compose would otherwise strand the spawn tool_use).
+            # The one remaining loss mode is an approval
             # resolution whose prelude stays drive-side (it executes the
             # approved tool, so it cannot ride the request thread): a crash
             # before it lands re-suspends on the same approval and the
             # operator simply approves again — benign, documented in
             # docs/adr/step-attempt-recovery.md.
+            task = _render_subtask_wake(
+                engine, task, lease.wake_event, lease_id=lease.lease_id
+            )
             task = engine.run_one_step(
                 task, lease_id=lease.lease_id, cancelled=cancelled
             )
             rt.dispatcher.release(
-                lease.lease_id, next_state=task.status, wake_on=task.wake_on,
+                lease.lease_id,
+                next_state=task.status,
+                wake_on=task.wake_on,
                 consumed_wake_event=lease.wake_event,
             )
             return "woken"
         # case 5′ — an interrupted attempt after the wake (the H1
         # partial-step orphan): seal + re-drive or park.
         return _recover_interrupted_attempt(
-            rt, lease, engine, events, attempt,
+            rt,
+            lease,
+            engine,
+            events,
+            attempt,
             cancelled=cancelled,
             consumed=lease.wake_event,
             outcome="woken",
             reliability_sink=reliability_sink,
         )
     raise WakeRecoveryError(  # case 6 — unexpected status
-        f"task {lease.task_id!r}: woken lease in unexpected status "
-        f"{task.status!r}"
+        f"task {lease.task_id!r}: woken lease in unexpected status {task.status!r}"
     )
 
 
@@ -784,9 +1079,7 @@ def _recover_interrupted_attempt(
     # the approval's own handle, so the ordinary approve verb re-runs it.
     # Its reason wins over the cap: the park notice must tell the operator
     # a human-approved call was interrupted, whatever the seal count.
-    redrive = (
-        classification.safe and not capped and attempt.anchored_on_plan
-    )
+    redrive = classification.safe and not capped and attempt.anchored_on_plan
     if not attempt.anchored_on_plan:
         reason = "interrupted_approval"
     elif capped:
@@ -827,11 +1120,11 @@ def _recover_interrupted_attempt(
             attempt.attempt_start_seq,
             lease.task_id,
         )
-        task = engine.run_one_step(
-            task, lease_id=lease.lease_id, cancelled=cancelled
-        )
+        task = engine.run_one_step(task, lease_id=lease.lease_id, cancelled=cancelled)
         rt.dispatcher.release(
-            lease.lease_id, next_state=task.status, wake_on=task.wake_on,
+            lease.lease_id,
+            next_state=task.status,
+            wake_on=task.wake_on,
             consumed_wake_event=consumed,
         )
         return outcome
@@ -850,7 +1143,8 @@ def _recover_interrupted_attempt(
         origin="system",
     )
     task = suspend_on_human_handle(
-        engine, task,
+        engine,
+        task,
         handle=_park_handle(events, reason=reason, consumed=consumed),
         lease_id=lease.lease_id,
     )
@@ -913,9 +1207,7 @@ def _complete_pending_park(
     blockers: tuple[str, ...] = ()
     if not pending.notice_appended:
         if reason == "unsafe_tool_activity":
-            blockers = _sealed_tail_blockers(
-                rt, engine, events, pending.seal, task
-            )
+            blockers = _sealed_tail_blockers(rt, engine, events, pending.seal, task)
         task = engine.append_user_message(
             task,
             content=[TextBlock(text=_park_notice(reason, blockers))],
@@ -929,7 +1221,8 @@ def _complete_pending_park(
         reason,
     )
     task = suspend_on_human_handle(
-        engine, task,
+        engine,
+        task,
         handle=_park_handle(events, reason=reason, consumed=consumed),
         lease_id=lease.lease_id,
     )
@@ -948,9 +1241,7 @@ def _complete_pending_park(
                 detail={
                     "reason": reason,
                     "resumed_park": True,
-                    "abandoned_from_seq": (
-                        pending.seal.payload.abandoned_from_seq
-                    ),
+                    "abandoned_from_seq": (pending.seal.payload.abandoned_from_seq),
                     "blockers": list(blockers),
                 },
             )
@@ -986,8 +1277,7 @@ def _park_notice(reason: str, blockers: tuple[str, ...]) -> str:
     resumes, so both can verify what may have partially applied."""
     if reason == "abandon_cap":
         cause = (
-            "automatic recovery was already retried "
-            f"{ABANDON_CAP} times in this turn"
+            f"automatic recovery was already retried {ABANDON_CAP} times in this turn"
         )
     elif reason == "interrupted_approval":
         return (
@@ -999,9 +1289,8 @@ def _park_notice(reason: str, blockers: tuple[str, ...]) -> str:
             "partially applied before approving it a second time."
         )
     else:
-        cause = (
-            "it had already run operations with side effects: "
-            + ", ".join(blockers)
+        cause = "it had already run operations with side effects: " + ", ".join(
+            blockers
         )
     return (
         "A worker crash interrupted this task mid-step. The interrupted "
@@ -1174,6 +1463,7 @@ class WorkerLoop:
         heartbeat_wait: Optional[Callable[[float], bool]] = None,
         reliability_sink: Optional[ReliabilitySink] = None,
         step_poll_s: float = 0.05,
+        next_goal_handle: Optional[str] = None,
     ) -> None:
         self._rt = rt
         self._worker_id = worker_id
@@ -1182,6 +1472,11 @@ class WorkerLoop:
         self._heartbeat_interval = heartbeat_interval
         self._stale_sweep_interval = stale_sweep_interval
         self._timer_poll_interval = timer_poll_interval
+        #: next_goal_handle — passed to run_leased_task so a human close /
+        #: cancel (non-terminal) suspends the task on the next-goal handle
+        #: (reopenable by typing again). ``None`` selects the daemon-CLI
+        #: behaviour where a human stop releases terminal.
+        self._next_goal_handle = next_goal_handle
         # H1: bounded process-shutdown. After stop(), an in-flight step is
         # waited for up to this many seconds, then ABANDONED (the step runs
         # on a daemon thread we stop waiting on) and the loop returns. A
@@ -1407,9 +1702,21 @@ class WorkerLoop:
         Always sets ``done`` in ``finally``; the heartbeat is stopped by
         the main thread (``_run_one``) after the wait, on both the normal
         and abandon paths."""
+        # Pop any stashed non-durable woken prelude (e.g.
+        # ResolveApprovalPrelude) the host handed off at seed-yield time
+        # (round 3a single-host-multi-worker). One-shot: consumed by this
+        # step, not re-delivered on retry (a retry reads the durable
+        # fold where the prelude's durable events never landed — matches
+        # the benign documented loss mode for approval preludes).
+        take = getattr(self._rt, "take_pending_prelude", None)
+        prelude = take(lease.task_id) if callable(take) else None
         try:
             outcome = run_leased_task(
-                self._rt, lease, reliability_sink=self._emit
+                self._rt,
+                lease,
+                prelude=prelude,
+                reliability_sink=self._emit,
+                next_goal_handle=self._next_goal_handle,
             )
             if outcome == "skipped":
                 _log.warning(
@@ -1430,8 +1737,7 @@ class WorkerLoop:
             # Lease is no longer ours — do NOT release/fail. No claim
             # about task state (cannot distinguish requeue vs cap-hit).
             _log.warning(
-                "worker: lease %s for task %s became invalid mid-step; "
-                "relinquishing",
+                "worker: lease %s for task %s became invalid mid-step; relinquishing",
                 lease.lease_id,
                 lease.task_id,
             )
@@ -1468,8 +1774,7 @@ class WorkerLoop:
                 )
             except Exception:  # noqa: BLE001
                 _log.exception(
-                    "worker: dispatcher.fail also failed for task %s; "
-                    "continuing",
+                    "worker: dispatcher.fail also failed for task %s; continuing",
                     lease.task_id,
                 )
         finally:

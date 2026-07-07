@@ -92,7 +92,6 @@ from noeta.tools.mcp import (
 )
 
 
-
 __all__ = ["SdkHost"]
 
 _log = logging.getLogger(__name__)
@@ -198,13 +197,11 @@ _SINGLE_PROVIDER_NAME = "default"
 #: ``acceptEdits`` exempts from the default non-low risk gate. Kept as a
 #: module-level set so tests and future permission-mode additions can refer to
 #: one canonical list.
-_EDIT_TOOL_NAMES: frozenset[str] = frozenset(
-    {"edit", "write", "apply_patch"}
-)
+_EDIT_TOOL_NAMES: frozenset[str] = frozenset({"edit", "write", "apply_patch"})
 
 
 def _make_shell_approval_predicate(
-    rules: tuple[Any, ...]
+    rules: tuple[Any, ...],
 ) -> Callable[[str, Mapping[str, Any]], bool]:
     """Build the per-call shell gate: ``True`` ⇒ this shell_run needs approval.
 
@@ -224,9 +221,7 @@ def _make_shell_approval_predicate(
     return _needs_approval
 
 
-def _approval_set_for(
-    mode: str, tool_refs: Sequence[ToolRef]
-) -> tuple[str, ...]:
+def _approval_set_for(mode: str, tool_refs: Sequence[ToolRef]) -> tuple[str, ...]:
     """Return a sorted tuple of tool names to gate via ``require_approval_tools``.
 
     Pure function — no runtime access, no side effects — so unit tests can
@@ -271,6 +266,7 @@ def _approval_set_for(
 # _catalog_pricing` directly — no second copy). If catalog.price's KeyError
 # semantics change, edit only this function.
 # ---------------------------------------------------------------------------
+
 
 def _catalog_pricing(model: str, usage: Usage) -> float:
     """Price one LLM round-trip from the sdk catalog; unknown models → 0.0.
@@ -483,9 +479,7 @@ class SdkHost(GenericEngineResolver):
     # aliases into connectable specs, then the SDK's ``build_mcp_tools`` actually
     # connects them. ``None`` (default / no MCP config) ⇒ no enabled alias
     # resolves to a spec ⇒ no live MCP is connected, byte-identical to pre-0042.
-    mcp_server_resolver: Optional[
-        Callable[[str], Optional["McpAnyServerSpec"]]
-    ] = None
+    mcp_server_resolver: Optional[Callable[[str], Optional["McpAnyServerSpec"]]] = None
     # Injectable HTTP POST transport for the remote MCP client. Tests
     # pass a fake (a local stub server) so list/call run without real network;
     # production leaves it ``None`` (the client uses stdlib ``urllib``). Pure
@@ -575,9 +569,7 @@ class SdkHost(GenericEngineResolver):
     # of agent identity): forwarded into every session's RuntimeLLMClient so a
     # streaming-capable provider's in-flight deltas reach the product's delta
     # hub. ``None`` ⇒ providers are called exactly as before.
-    delta_sink: Optional[
-        Callable[[StepContext, str, StreamDelta], None]
-    ] = None
+    delta_sink: Optional[Callable[[StepContext, str, StreamDelta], None]] = None
     # The host's live HTML-app preview gateway. A runtime injection
     # (like ``provider_headers`` / ``_process_registry``), NOT part of the host
     # identity. When set, ``_build_engine`` threads it into
@@ -593,8 +585,14 @@ class SdkHost(GenericEngineResolver):
     # Lock to serialise get-or-build-put under ThreadingHTTPServer concurrency.
     _engines: OrderedDict[
         tuple[
-            str, str, bool, Optional[str], Optional[str], Optional[str],
-            tuple[str, ...], Optional[str],
+            str,
+            str,
+            bool,
+            Optional[str],
+            Optional[str],
+            Optional[str],
+            tuple[str, ...],
+            Optional[str],
         ],
         Engine,
     ] = field(
@@ -674,7 +672,9 @@ class SdkHost(GenericEngineResolver):
     # never written to the event log (the ``file_baselines`` on
     # ``ToolResultRecorded`` are the durable record) → no resume effect.
     _file_checkpoint: FileCheckpointRegistry = field(
-        default_factory=FileCheckpointRegistry, init=False, repr=False,
+        default_factory=FileCheckpointRegistry,
+        init=False,
+        repr=False,
         compare=False,
     )
     # The background-completion notifier (an
@@ -685,6 +685,27 @@ class SdkHost(GenericEngineResolver):
     # but no wake-and-notify turn is driven (oneshot / lifecycle / tests).
     _background_notifier: Optional[Any] = field(
         default=None, init=False, repr=False, compare=False
+    )
+    # Pending woken-prelude inbox for the resident worker pool
+    # (round 3a single-host-multi-worker). When a ``seed_*`` method returns
+    # a SeededTurn with a non-durable prelude (ResolveApprovalPrelude), the
+    # client stashes it here before yielding the seed's lease back to the
+    # ready queue; a worker pops it at the start of its step and threads it
+    # into ``run_leased_task`` so the prelude runs on the worker thread
+    # (not the HTTP request thread). Process-local: a crash between seed
+    # and worker pick-up loses the prelude, which is the same benign loss
+    # mode the per-command drive thread already had (re-approve).
+    _pending_preludes: dict[str, Any] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _pending_preludes_lock: threading.Lock = field(
+        default_factory=threading.Lock,
+        init=False,
+        repr=False,
+        compare=False,
     )
 
     def __post_init__(self) -> None:
@@ -776,6 +797,21 @@ class SdkHost(GenericEngineResolver):
         baseline for any file it touches — which is what lets a rewind restore to
         ANY turn boundary. Idempotent; a never-edited root is a clean no-op."""
         self._file_checkpoint.reset_turn(root_task_id)
+
+    # -- pending woken-prelude inbox (worker-pool handoff) -------------
+
+    def put_pending_prelude(self, task_id: str, prelude: Any) -> None:
+        """Stash a non-durable woken prelude (ResolveApprovalPrelude) for
+        ``task_id`` so a resident worker can apply it between note_woken
+        and run_one_step. One prelude per task (a second stashed prelude
+        for the same task replaces the first)."""
+        with self._pending_preludes_lock:
+            self._pending_preludes[task_id] = prelude
+
+    def take_pending_prelude(self, task_id: str) -> Any:
+        """Pop and return the stashed prelude for ``task_id``, or ``None``."""
+        with self._pending_preludes_lock:
+            return self._pending_preludes.pop(task_id, None)
 
     # -- background-shell emergency-stop ---------------
 
@@ -1001,7 +1037,8 @@ class SdkHost(GenericEngineResolver):
                     _log.debug(
                         "background sub-agent %s notice deferred (parent %s never "
                         "settled to next-goal within %.0fs)",
-                        child_task_id, parent_task_id,
+                        child_task_id,
+                        parent_task_id,
                         self._BG_SUBAGENT_DELIVER_TIMEOUT_S,
                     )
                     return
@@ -1285,9 +1322,7 @@ class SdkHost(GenericEngineResolver):
         elif self.require_approval_tools is not None:
             require_approval_tools = self.require_approval_tools
         else:
-            require_approval_tools = _approval_set_for(
-                self.permission_mode, spec.tools
-            )
+            require_approval_tools = _approval_set_for(self.permission_mode, spec.tools)
         # Shell permission model (allowlist-or-approve). The effective
         # permission_mode drives shell_run's gate; this is independent of the
         # engine/event/resume path (the allowlist is external governance config,
@@ -1302,9 +1337,9 @@ class SdkHost(GenericEngineResolver):
             permission_mode if permission_mode is not None else self.permission_mode
         )
         shell_mode = self.shell_mode
-        shell_approval_predicate: Optional[
-            Callable[[str, Mapping[str, Any]], bool]
-        ] = None
+        shell_approval_predicate: Optional[Callable[[str, Mapping[str, Any]], bool]] = (
+            None
+        )
         if self.shell_mode is not ShellMode.OFF:
             shell_mode = ShellMode.ARBITRARY
             if effective_permission != "bypassPermissions":
@@ -1333,9 +1368,7 @@ class SdkHost(GenericEngineResolver):
                     child = self.registry.resolve(n)
                 except Exception:
                     continue
-                entries.append(
-                    (n, str(child.metadata.get("description", "")))
-                )
+                entries.append((n, str(child.metadata.get("description", ""))))
             if any(d for _, d in entries):
                 directory = tuple(entries)
         # Resolve the turn's enabled MCP aliases → host-side
@@ -1686,8 +1719,6 @@ class SdkHost(GenericEngineResolver):
         guard.
         """
         overrides = {
-            k: v
-            for k, v in dataclasses.asdict(spec_budget).items()
-            if v is not None
+            k: v for k, v in dataclasses.asdict(spec_budget).items() if v is not None
         }
         return dataclasses.replace(Budget(), **overrides)

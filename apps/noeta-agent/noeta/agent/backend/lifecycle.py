@@ -108,6 +108,15 @@ class BackendConfig:
     #: served product; ``NOETA_AGENT_BACKGROUND_DRIVE=0`` (or the config
     #: file key) restores the fully synchronous commands.
     background_drive: bool = True
+    #: Resident worker-pool size when ``background_drive`` is on. Each
+    #: worker is a daemon ``WorkerLoop`` contending on the ready queue;
+    #: tasks are leased via CAS so at most one worker drives a given
+    #: lease. ``1`` (default) reproduces the historical serial-throughput
+    #: behavior; raise to turn on true single-host concurrency.
+    #: Env ``NOETA_AGENT_NUM_WORKERS`` / config key ``num_workers``.
+    #: Values < 1 raise ``ValueError``; non-integer values raise
+    #: ``ValueError`` at ``from_env`` time (same strictness as ``port``).
+    num_workers: int = 1
     #: OTLP trace export: the **full** OTLP/HTTP traces URL (e.g.
     #: ``http://localhost:4318/v1/traces``), threaded to the SDK via
     #: ``HostConfig.otlp_traces``. Export is **opt-in through Noeta config
@@ -178,6 +187,18 @@ class BackendConfig:
         otlp_headers = {
             str(k): str(v) for k, v in file_headers.items()
         } or _parse_otlp_headers(e.get("OTEL_EXPORTER_OTLP_HEADERS"))
+        num_workers_raw = pick("NUM_WORKERS", "num_workers", 1)
+        try:
+            num_workers = int(num_workers_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"NOETA_AGENT_NUM_WORKERS must be an integer >= 1, got "
+                f"{num_workers_raw!r}"
+            ) from exc
+        if num_workers < 1:
+            raise ValueError(
+                f"NOETA_AGENT_NUM_WORKERS must be >= 1, got {num_workers}"
+            )
         return cls(
             host=pick("HOST", "host", "127.0.0.1"),
             port=int(pick("PORT", "port", 8765)),
@@ -200,6 +221,7 @@ class BackendConfig:
             write_mode=pick("WRITE_MODE", "write_mode", "dry_run"),
             workflow_enabled=workflow_enabled,
             background_drive=background_drive,
+            num_workers=num_workers,
             otlp_endpoint=str(otlp_endpoint) if otlp_endpoint else None,
             otlp_headers=otlp_headers,
         )
@@ -458,6 +480,7 @@ def serve_backend(
             host_config=host_config,
             models=config.models,
             background_drive=config.background_drive,
+            num_workers=config.num_workers,
         )
         # Now the content store exists (inside the noeta.sdk host): a vision
         # provider can deref ``ImageBlock(ContentRef)`` bytes at request time.
