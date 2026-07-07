@@ -56,6 +56,7 @@ from noeta.tools.fs._diff import (
     file_hash,
 )
 from noeta.tools.fs._workspace import WorkspaceEscape, WorkspaceRoot
+from noeta.tools.fs.exec_env import ExecEnv, LocalExecEnv
 from noeta.tools.fs.edit import (
     FsWriteMode,
     WRITE_FILE_MAX_BYTES,
@@ -149,6 +150,11 @@ class ApplyPatchTool:
 
     workspace: WorkspaceRoot
     mode: FsWriteMode = FsWriteMode.DRY_RUN
+    #: file-IO backend for read / stat / replace-write / rollback (local
+    #: host by default). The exclusive-``create`` fd path stays inline (its
+    #: granular fd-level recovery is local-only; sandbox create lands in a
+    #: later round). Path resolution stays on ``workspace``.
+    exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "apply_patch"
     # the LLM-facing description is the four-section text resource
     # (descriptions/apply_patch.md), not an inline Python string.
@@ -302,10 +308,10 @@ class ApplyPatchTool:
         edit N's ``old`` is matched against the file as left by edits 0..N-1
         in THIS call, then a single _Planned (original → final) is returned."""
         i0 = members[0].i
-        if not resolved.is_file():
+        if not self.exec_env.is_file(resolved):
             return _err(f"edit #{i0}: not a file: {rel!r}")
         try:
-            before_bytes = resolved.read_bytes()
+            before_bytes = self.exec_env.read_bytes(resolved)
             before = before_bytes.decode("utf-8")
         except OSError as exc:
             return _err(f"edit #{i0}: read failed: {exc}")
@@ -390,9 +396,9 @@ class ApplyPatchTool:
                 f"edit #{i}: content exceeds {_CONTENT_MAX_BYTES}B "
                 "(write safety cap); split or write less"
             )
-        if resolved.exists():
+        if self.exec_env.exists(resolved):
             return _err(f"edit #{i}: path already exists: {rel!r} (use replace)")
-        if not resolved.parent.is_dir():
+        if not self.exec_env.is_dir(resolved.parent):
             return _err(f"edit #{i}: parent directory not found for {rel!r}")
         diff = compute_diff("", content, rel)
         added, removed = diff_stat_counts(diff)
@@ -418,7 +424,7 @@ class ApplyPatchTool:
         for p in planned:
             if p.op == "replace":
                 try:
-                    current = p.resolved.read_bytes()
+                    current = self.exec_env.read_bytes(p.resolved)
                 except OSError as exc:
                     return self._fail(done, failed=p, recover="none",
                                       reason=f"read failed: {exc}")
@@ -427,7 +433,7 @@ class ApplyPatchTool:
                     return self._fail(done, failed=p, recover="none",
                                       reason="file changed since validation (TOCTOU)")
                 try:
-                    p.resolved.write_bytes(p.after_bytes)
+                    self.exec_env.write_bytes(p.resolved, p.after_bytes)
                 except OSError as exc:
                     # The file may now be truncated / partially written.
                     return self._fail(done, failed=p, recover="restore",
@@ -481,9 +487,9 @@ class ApplyPatchTool:
             try:
                 if p.op == "replace":
                     assert p.before_bytes is not None
-                    p.resolved.write_bytes(p.before_bytes)
+                    self.exec_env.write_bytes(p.resolved, p.before_bytes)
                 else:
-                    p.resolved.unlink()
+                    self.exec_env.unlink(p.resolved)
             except OSError:
                 rollback_failed.append(p.rel)
 
@@ -491,12 +497,12 @@ class ApplyPatchTool:
         if recover == "restore":
             try:
                 assert failed.before_bytes is not None
-                failed.resolved.write_bytes(failed.before_bytes)
+                self.exec_env.write_bytes(failed.resolved, failed.before_bytes)
             except OSError:
                 rollback_failed.append(failed.rel)
         elif recover == "delete":
             try:
-                failed.resolved.unlink()
+                self.exec_env.unlink(failed.resolved)
             except OSError:
                 rollback_failed.append(failed.rel)
         # 2) everything already applied, newest first.
