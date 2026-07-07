@@ -16,16 +16,17 @@ export default defineConfig({
   // GitHub Pages subpath.
   base: '/noeta/',
 
-  // Many doc pages cross-reference ADRs and legacy guides; those are
-  // intentionally excluded from the public build.
-  ignoreDeadLinks: true,
+  // Dead-link checking is ON (VitePress default): a broken internal link
+  // fails the build. Pages excluded from the site (see srcExclude — ADRs,
+  // implementation specs, drafts) are referenced only via absolute GitHub
+  // source URLs, so nothing internal points at a non-published page.
+  ignoreDeadLinks: false,
 
   // Ignore internal docs from the build — they stay in the repo for
   // contributors but are not published to the public site.
   srcExclude: [
     '**/adr/**',
     '**/implementation-specs/**',
-    '**/guides/**',
     '**/reference/api/**',
     '**/_drafts/**',
     'releasing.md',

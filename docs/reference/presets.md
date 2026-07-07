@@ -30,8 +30,8 @@ through the flat `Options.agents` dict.
 `main` can spawn the three subagents in parallel; the result is the
 subagent's return value, recorded into the EventLog so the whole tree
 folds back into state. See
-[ADR: Subtask fan-out and durable wake](../adr/subtask-fanout-and-durable-wake.md)
-and [ADR: Subtask parallel execution](../adr/subtask-parallel-execution.md).
+[ADR: Subtask fan-out and durable wake](https://github.com/initxy/noeta/blob/main/docs/adr/subtask-fanout-and-durable-wake.md)
+and [ADR: Subtask parallel execution](https://github.com/initxy/noeta/blob/main/docs/adr/subtask-parallel-execution.md).
 
 ## Using presets programmatically
 
@@ -78,4 +78,4 @@ options = Options(
 - Presets: `packages/noeta-runtime/noeta/presets/__init__.py`
 - Options / AgentDefinition: `packages/noeta-sdk/noeta/client/options.py`
 - Tool catalog: `packages/noeta-runtime/noeta/tools/`
-- See also: [ADR: Tool and agent catalog](../adr/tool-and-agent-catalog.md), [ADR: Library-SDK architecture](../adr/library-sdk-architecture.md)
+- See also: [ADR: Tool and agent catalog](https://github.com/initxy/noeta/blob/main/docs/adr/tool-and-agent-catalog.md), [ADR: Library-SDK architecture](https://github.com/initxy/noeta/blob/main/docs/adr/library-sdk-architecture.md)

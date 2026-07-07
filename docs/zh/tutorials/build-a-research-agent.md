@@ -171,7 +171,7 @@ options = presets.main_options()  # full main agent
 
 ## 接下来 { #next-steps }
 
-- [权限门控](../guides/permission-gating.md) —— 控制哪些工具调用实际执行
-- [子代理委派](../guides/subagent-delegation.md) —— 生成专门的子代理
-- [持久化存储](../guides/durable-storage.md) —— 在重启后持久化会话
-- [MCP 连接器](../guides/mcp-connectors.md) —— 连接外部 MCP 工具服务器
+- [Guard 与 Observer](/concepts/guard-observer) —— 控制哪些工具调用实际执行
+- [生成子代理](/how-to/spawn-subagents) —— 生成专门的子代理
+- [部署 worker](/how-to/deploy-worker) —— 在持久化存储上跨重启持久化会话
+- [连接 MCP](/how-to/connect-mcp) —— 连接外部 MCP 工具服务器
