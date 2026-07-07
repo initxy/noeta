@@ -1702,11 +1702,12 @@ class InteractionDriver:
         edits hit the same disk and must be undone together). For each workspace path take
         its EARLIEST baseline — the first edit that pinned the file's pre-turn
         state. The shared per-turn gate (D8) stashes at most ONE baseline per path
-        across the whole tree, so the union is clean. Write each back to disk; a
-        baseline with no ``content_ref`` means the AI created the file inside the
-        rewound span, so it is DELETED. Only AI ``edit``/``write`` touches are
-        covered (D4): a path the shell mutated never surfaced ``file_changes`` so
-        it has no baseline here.
+        across the whole tree, so the union is clean. Write each back to disk —
+        or, for a sandbox session (T7), back into the CONTAINER through the
+        session's ExecEnv; a baseline with no ``content_ref`` means the AI created
+        the file inside the rewound span, so it is DELETED. Only AI
+        ``edit``/``write`` touches are covered (D4): a path the shell mutated
+        never surfaced ``file_changes`` so it has no baseline here.
 
         Reuses the parent↔child graph (``SubtaskSpawned.subtask_id`` +
         ``TaskCreated.parent_task_id``), NOT cancel-cascade's
@@ -1743,6 +1744,31 @@ class InteractionDriver:
 
         _collect(events, after=keep_through)
         if not earliest:
+            return
+        # T7 — a SANDBOX session's baselines live in the container, so the
+        # write-back must go through the session's ExecEnv (the recorded
+        # ``exec_env_ref``, T6) rooted at the container workdir, NOT the host FS.
+        # ``exec_env_for_ref`` returns ``None`` for a local session (or a host
+        # without a sandbox / a test double), so the local path below stays
+        # byte-identical. This is live-only, exactly like the local path.
+        resolve = getattr(host, "exec_env_for_ref", None)
+        sandbox = (
+            resolve(getattr(baseline_task.governance, "exec_env_ref", None))
+            if callable(resolve)
+            else None
+        )
+        if sandbox is not None:
+            exec_env, root = sandbox
+            for path, baseline in earliest.items():
+                target = root / path
+                if baseline.content_ref is None:
+                    if exec_env.exists(target):
+                        exec_env.unlink(target)
+                else:
+                    exec_env.mkdir(target.parent)
+                    exec_env.write_bytes(
+                        target, host.content_store.get(baseline.content_ref)
+                    )
             return
         root = host.workspace_dir_for(baseline_task.governance.workspace)
         for path, baseline in earliest.items():
