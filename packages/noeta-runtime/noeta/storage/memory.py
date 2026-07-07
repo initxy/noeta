@@ -302,13 +302,9 @@ class InMemoryEventLog:
                 require_lease
                 and lease_id is not None
                 and self._lease_validator is not None
-                and not self._lease_validator.is_lease_valid(
-                    envelope.task_id, lease_id
-                )
+                and not self._lease_validator.is_lease_valid(envelope.task_id, lease_id)
             ):
-                raise InvalidLease(
-                    f"task_id={envelope.task_id}, lease_id={lease_id}"
-                )
+                raise InvalidLease(f"task_id={envelope.task_id}, lease_id={lease_id}")
 
             stamped = envelope.with_seq(next_seq)
             stream.events.append(stamped)
@@ -673,9 +669,7 @@ class InMemoryDispatcher:
                 wake_event=wake_event,
             )
 
-    def heartbeat(
-        self, lease_id: str, *, lease_seconds: float = 30.0
-    ) -> float:
+    def heartbeat(self, lease_id: str, *, lease_seconds: float = 30.0) -> float:
         """Extend a lease window. Enforces ``heartbeat_max`` cap.
 
         After the cap is reached, the task is force-released to
@@ -761,6 +755,28 @@ class InMemoryDispatcher:
                 task.status = "terminal"
                 task.suspend_reason = reason
                 task.pending_wake_events.clear()
+
+    def release_yield(self, lease_id: str) -> None:
+        """Voluntary yield of a seeded lease back to the ready queue.
+
+        Transitions leased→ready WITHOUT incrementing fail_attempts —
+        used by transports that seed a task durably under a targeted
+        lease and then hand it off to a resident worker pool. A matched
+        wake (if any) is preserved.
+        """
+        with self._lock:
+            task = self._find_task_by_lease(lease_id)
+            if task is None:
+                raise InvalidLease(lease_id)
+            task.lease_id = None
+            task.lease_expires_at = None
+            task.heartbeat_count = 0
+            task.reclaim_count = 0
+            task.wake_on = None
+            task.suspend_reason = None
+            task.fire_at = None
+            task.status = "ready"
+            self._ready.append(task.task_id)
 
     def wake(self, task_id: str, wake_event: Any) -> bool:
         """Deliver a wake event. Returns True iff the task is requeued
@@ -869,9 +885,7 @@ class InMemoryDispatcher:
 
     # -- internal helpers ------------------------------------------------
 
-    def _find_task_by_lease(
-        self, lease_id: str
-    ) -> _DispatcherTask | None:
+    def _find_task_by_lease(self, lease_id: str) -> _DispatcherTask | None:
         for task in self._tasks.values():
             if task.lease_id == lease_id:
                 return task

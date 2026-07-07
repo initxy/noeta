@@ -51,20 +51,20 @@ class EngineRoom:
         host_config: Optional[HostConfig] = None,
         models: Sequence[str] = (),
         background_drive: bool = False,
+        num_workers: int = 1,
     ) -> None:
         self._workspace_dir = Path(workspace_dir)
         # T5 async contract ("commands return 202 + an ack only; every visible
         # change is observed through the stream"): when enabled, the turn-driving
         # verbs (start / send_goal / approve / deny / answer) SEED synchronously —
         # every durable, validated step, so typed 4xx rejections still raise on
-        # the request thread — and run the blocking drive on a daemon thread.
+        # the request thread — and hand the seed's lease back to the ready
+        # queue. A resident worker pool (started lazily on first verb) drives
+        # tasks to their trailing suspend / terminal.
         # The served product enables it (``BackendConfig.background_drive``);
         # the default False keeps in-process/embedded use synchronous.
         self._background_drive = background_drive
-        # In-flight background drives (task_id → thread): joined by shutdown so
-        # a durable store is not closed under a mid-flight turn, and by tests.
-        self._drives: dict[str, threading.Thread] = {}
-        self._drives_lock = threading.Lock()
+        self._num_workers = max(1, int(num_workers)) if background_drive else 0
         # Per-session workspace paths (task_id → absolute path), recorded when a
         # task is created with a non-default ``workspace_dir`` so the file
         # resource service (``/files`` / ``/file``) serves the tree the agent
@@ -111,6 +111,12 @@ class EngineRoom:
             host_config=host_config,
             allowed_models=tuple(allowed) or None,
         )
+        # Resident worker pool (background_drive only): started lazily on first
+        # verb so the constructor stays side-effect free and tests that never
+        # drive a verb don't need to shut threads down. ``_workers_started``
+        # guards against double-start.
+        self._workers_started = False
+        self._workers_lock = threading.Lock()
 
     @property
     def workspace_dir(self) -> Path:
@@ -122,8 +128,8 @@ class EngineRoom:
 
         Returns the per-session workspace a non-default task was created under,
         else the host-fixed default (no task given, an unknown task, or a task
-        created without an explicit workspace). Keeps ``/files`` / ``/file`` in
-        step with the project the agent actually edits."""
+        created without an explicit workspace). Keeps ``/files`` / ``/file``
+        in step with the project the agent actually edits."""
         if task_id is None:
             return self._workspace_dir
         return self._task_workspaces.get(task_id, self._workspace_dir)
@@ -169,6 +175,7 @@ class EngineRoom:
         host_config: Optional[HostConfig] = None,
         models: Sequence[str] = (),
         background_drive: bool = False,
+        num_workers: int = 1,
     ) -> "EngineRoom":
         """Build the room over the official preset registry (main + subagents).
 
@@ -185,6 +192,7 @@ class EngineRoom:
             host_config=host_config,
             models=models,
             background_drive=background_drive,
+            num_workers=num_workers,
         )
 
     # -- introspection -----------------------------------------------------
@@ -233,6 +241,23 @@ class EngineRoom:
         """The folded human-readable message view for ``task_id``."""
         return self._client.messages(task_id)
 
+    # -- worker pool (lifecycle) ------------------------------------------
+
+    def _ensure_workers(self) -> None:
+        """Start the resident worker pool on first use (idempotent).
+
+        Only meaningful when ``background_drive=True``; a no-op otherwise.
+        Lazy start keeps the constructor side-effect free and prevents
+        test-only EngineRooms that never drive a verb from leaking threads.
+        """
+        if not self._background_drive:
+            return
+        with self._workers_lock:
+            if self._workers_started:
+                return
+            self._client.start_workers(num_workers=self._num_workers)
+            self._workers_started = True
+
     # -- conversation verbs (T5 maps HTTP commands → these) ----------------
 
     def start(
@@ -250,21 +275,22 @@ class EngineRoom:
         """Create a Task, drive its first turn, return the new ``task_id``.
 
         ``permission_mode`` / ``enabled_mcp`` are the per-turn host knobs the
-        command endpoint forwards from the request body (approval mode + the MCP
-        aliases enabled for this conversation). ``workspace_dir`` is the chosen
-        project's absolute path (welded into durable ``TaskHostBound`` — passed
-        once here, fold-resolved on every later turn); ``model_selector`` /
+        command endpoint forwards from the request body (approval mode + the
+        MCP aliases enabled for this conversation). ``workspace_dir`` is the
+        chosen project's absolute path (welded into durable ``TaskHostBound`` —
+        passed once here, fold-resolved on every later turn); ``model_selector`` /
         ``effort`` are the per-turn model + reasoning-effort selectors. All
         default to ``None`` ⇒ the host-fixed workspace / model / effort,
         byte-identical to the single-workspace path.
 
         With ``background_drive`` the durable seed (task creation, goal
         append, selector validation, lease) still runs on this thread — the
-        typed 4xx contract is unchanged — and the blocking turn drives on a
-        daemon thread; the ``task_id`` returns immediately and progress rides
-        the SSE stream.
+        typed 4xx contract is unchanged — and the seed's lease is yielded
+        back to the ready queue; a resident worker drives the turn. The
+        ``task_id`` returns immediately and progress rides the SSE stream.
         """
         if self._background_drive:
+            self._ensure_workers()
             seeded = self._client.seed_start(
                 goal=goal,
                 agent=agent,
@@ -276,7 +302,7 @@ class EngineRoom:
                 effort=effort,
             )
             task_id = seeded.task_id
-            self._spawn_drive(seeded)
+            self._client._yield_seeded_lease(seeded)  # noqa: SLF001 — SDK surface
         else:
             outcome = self._client.start(
                 goal=goal,
@@ -310,17 +336,17 @@ class EngineRoom:
         """Append a new user turn (no ``workspace_dir``: a follow-up turn
         fold-resolves the workspace the session was created with)."""
         if self._background_drive:
-            self._spawn_drive(
-                self._client.seed_send_goal(
-                    task_id,
-                    goal=goal,
-                    images=images,
-                    permission_mode=permission_mode,
-                    enabled_mcp=enabled_mcp,
-                    model_selector=model_selector,
-                    effort=effort,
-                )
+            self._ensure_workers()
+            seeded = self._client.seed_send_goal(
+                task_id,
+                goal=goal,
+                images=images,
+                permission_mode=permission_mode,
+                enabled_mcp=enabled_mcp,
+                model_selector=model_selector,
+                effort=effort,
             )
+            self._client._yield_seeded_lease(seeded)  # noqa: SLF001
             return
         self._client.send_goal(
             task_id,
@@ -336,19 +362,17 @@ class EngineRoom:
         self, task_id: str, *, call_id: str, reason: Optional[str] = None
     ) -> None:
         if self._background_drive:
-            self._spawn_drive(
-                self._client.seed_approve(task_id, call_id=call_id, reason=reason)
-            )
+            self._ensure_workers()
+            seeded = self._client.seed_approve(task_id, call_id=call_id, reason=reason)
+            self._client._yield_seeded_lease(seeded)  # noqa: SLF001
             return
         self._client.approve(task_id, call_id=call_id, reason=reason)
 
-    def deny(
-        self, task_id: str, *, call_id: str, reason: Optional[str] = None
-    ) -> None:
+    def deny(self, task_id: str, *, call_id: str, reason: Optional[str] = None) -> None:
         if self._background_drive:
-            self._spawn_drive(
-                self._client.seed_deny(task_id, call_id=call_id, reason=reason)
-            )
+            self._ensure_workers()
+            seeded = self._client.seed_deny(task_id, call_id=call_id, reason=reason)
+            self._client._yield_seeded_lease(seeded)  # noqa: SLF001
             return
         self._client.deny(task_id, call_id=call_id, reason=reason)
 
@@ -356,11 +380,11 @@ class EngineRoom:
         self, task_id: str, *, question_id: str, answers: dict[str, Any]
     ) -> None:
         if self._background_drive:
-            self._spawn_drive(
-                self._client.seed_answer(
-                    task_id, question_id=question_id, answers=answers
-                )
+            self._ensure_workers()
+            seeded = self._client.seed_answer(
+                task_id, question_id=question_id, answers=answers
             )
+            self._client._yield_seeded_lease(seeded)  # noqa: SLF001
             return
         self._client.answer(task_id, question_id=question_id, answers=answers)
 
@@ -369,70 +393,62 @@ class EngineRoom:
     ) -> None:
         """Deliver an external event to a ``wait_external``-suspended task."""
         if self._background_drive:
-            self._spawn_drive(
-                self._client.seed_deliver_event(
-                    task_id, event_kind=event_kind, payload=payload
-                )
+            self._ensure_workers()
+            seeded = self._client.seed_deliver_event(
+                task_id, event_kind=event_kind, payload=payload
             )
+            self._client._yield_seeded_lease(seeded)  # noqa: SLF001
             return
-        self._client.deliver_event(
-            task_id, event_kind=event_kind, payload=payload
-        )
+        self._client.deliver_event(task_id, event_kind=event_kind, payload=payload)
 
-    # -- background drive machinery -----------------------------------------
-
-    def _spawn_drive(self, seeded: Any) -> None:
-        """Run ``Client.drive_seeded`` on a daemon thread (the SdkHost
-        background-exit idiom). Faults are self-contained: the driver fails
-        the lease / converges a lost-lease terminal, and the durable fault is
-        visible on the stream — here we only log."""
-
-        def _run() -> None:
-            try:
-                self._client.drive_seeded(seeded)
-            except Exception:  # noqa: BLE001 — the stream carries the fault
-                _log.exception(
-                    "background drive failed for task %s", seeded.task_id
-                )
-            finally:
-                # ``_drives`` is keyed by task_id, so a fast follow-up command
-                # for the SAME task can register its own thread in the tiny
-                # window before this ``finally`` runs. Evict only OUR entry —
-                # a blind ``pop(task_id)`` would drop the successor's thread and
-                # ``join_drives`` (shutdown) would close the store under it.
-                with self._drives_lock:
-                    if self._drives.get(seeded.task_id) is thread:
-                        del self._drives[seeded.task_id]
-
-        thread = threading.Thread(
-            target=_run,
-            name=f"noeta-agent-drive-{seeded.task_id}",
-            daemon=True,
-        )
-        with self._drives_lock:
-            self._drives[seeded.task_id] = thread
-        thread.start()
+    # -- graceful shutdown / idle wait ------------------------------------
 
     def join_drives(self, timeout: Optional[float] = None) -> bool:
-        """Wait for in-flight background drives (tests / graceful shutdown).
+        """Wait until the ready queue is empty and no worker holds a lease.
 
-        Returns True when none remain within ``timeout`` (``None`` = wait
-        indefinitely)."""
+        This is the background_drive equivalent of "wait for in-flight
+        drive threads to finish" used by tests and graceful shutdown.
+        Returns True when the dispatcher reports no ready and no leased
+        tasks within ``timeout`` (``None`` = wait indefinitely).
+
+        Implementation note: we poll the host's dispatcher (a backend-
+        private seam that stays an implementation detail) and count rows
+        whose ``status`` is ``'ready'`` (waiting for a worker) or
+        ``'leased'`` (a worker is actively driving). A suspended task is
+        correctly NOT counted (it is idle, waiting on an external wake);
+        a terminal task is NOT counted. We require **three** consecutive
+        empty polls with a short gap — two was insufficient because a
+        wake delivered between a release(suspended) and the next poll
+        could leave the streak at 2 if both polls fell in the window
+        where the suspended→ready transition hadn't been observed yet.
+        Three polls (two gaps ≈ 100 ms by default) is wide enough to
+        span one full worker poll cycle, ruling out false idle.
+        """
         import time as _time
 
+        if not self._background_drive or not self._workers_started:
+            # Synchronous mode: nothing is in flight by definition.
+            return True
         deadline = None if timeout is None else _time.monotonic() + timeout
+        # Poll dispatcher state through the client's diagnostic seam. We
+        # reach for the host's dispatcher (injected Client) and count rows
+        # that are 'ready' or 'leased'. Three consecutive empty polls ⇒ idle.
+        host = self._client._host  # noqa: SLF001
+        dispatcher = host.dispatcher
+        idle_streak = 0
+        gap = 0.05
+        required_streak = 3
         while True:
-            with self._drives_lock:
-                threads = list(self._drives.values())
-            if not threads:
-                return True
-            for thread in threads:
-                remaining = (
-                    None if deadline is None else deadline - _time.monotonic()
-                )
-                if remaining is not None and remaining <= 0:
-                    return False
-                thread.join(timeout=remaining)
+            busy = _count_busy_tasks(dispatcher)
+            if busy == 0:
+                idle_streak += 1
+                if idle_streak >= required_streak:
+                    return True
+            else:
+                idle_streak = 0
+            if deadline is not None and _time.monotonic() >= deadline:
+                return False
+            _time.sleep(gap)
 
     def cancel(
         self, task_id: str, *, reason: str = "cancelled", cascade: bool = False
@@ -464,11 +480,53 @@ class EngineRoom:
     # -- shutdown ----------------------------------------------------------
 
     def shutdown(self) -> None:
-        # Give in-flight background drives a bounded window to settle before
-        # the client (and any injected durable storage) closes under them.
-        if not self.join_drives(timeout=10.0):
-            _log.warning(
-                "engine_room shutdown: background drives still in flight "
-                "after grace; closing anyway (recovery via requeue_stale)"
-            )
+        # Stop resident workers first (bounded grace) so no step is in flight
+        # when the client (and any injected durable storage) closes under them.
+        if self._workers_started:
+            try:
+                if not self._client.stop_workers(timeout=10.0):
+                    _log.warning(
+                        "engine_room shutdown: workers still in flight "
+                        "after grace; closing anyway (recovery via requeue_stale)"
+                    )
+            except Exception:
+                _log.exception("engine_room shutdown: error stopping workers")
         self._client.shutdown()
+
+
+def _count_busy_tasks(dispatcher: Any) -> int:
+    """Count dispatcher rows in 'ready' or 'leased' status.
+
+    Uses the concrete dispatcher's introspection surface; sqlite/postgres
+    adaptors expose this via their connection, InMemoryDispatcher via its
+    ``_tasks`` dict.
+
+    Error policy: if we cannot introspect (unknown dispatcher shape or a
+    transient SQL error), we re-raise to the caller rather than silently
+    returning 0 — returning 0 would make ``join_drives`` declare idle
+    mid-flight and let ``shutdown`` close durable storage under a worker
+    step, which is exactly the loss mode we built step-attempt recovery
+    for but would still be user-visible. A test double that exposes
+    neither ``_conn`` nor ``_tasks`` causes ``join_drives`` to time out
+    rather than falsely succeed.
+    """
+    # Sqlite / Postgres dispatcher — query through its _conn.
+    conn = getattr(dispatcher, "_conn", None)
+    if conn is not None:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM dispatcher_tasks "
+            "WHERE status IN ('ready','leased')"
+        ).fetchone()
+        return int(row[0] if isinstance(row, (tuple, list)) else row["n"])
+    # InMemoryDispatcher.
+    tasks = getattr(dispatcher, "_tasks", None)
+    if isinstance(tasks, dict):
+        return sum(
+            1
+            for t in tasks.values()
+            if getattr(t, "status", None) in ("ready", "leased")
+        )
+    raise RuntimeError(
+        "_count_busy_tasks: dispatcher %r exposes neither _conn nor _tasks; "
+        "cannot detect idleness" % (type(dispatcher).__name__,)
+    )

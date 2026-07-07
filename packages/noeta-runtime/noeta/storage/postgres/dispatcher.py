@@ -328,9 +328,7 @@ class PostgresDispatcher:
             wake_event=wake_event,
         )
 
-    def heartbeat(
-        self, lease_id: str, *, lease_seconds: float = 30.0
-    ) -> float:
+    def heartbeat(self, lease_id: str, *, lease_seconds: float = 30.0) -> float:
         with self._lock:
             self._begin_locked()
             try:
@@ -456,8 +454,7 @@ class PostgresDispatcher:
                     # matched can never drain; GC them. The matched wake
                     # (handoff) is deliberately kept.
                     self._conn.execute(
-                        "DELETE FROM dispatcher_pending_wakes "
-                        "WHERE task_id = %s",
+                        "DELETE FROM dispatcher_pending_wakes WHERE task_id = %s",
                         (task_id,),
                     )
                 else:  # next_state == "suspended"
@@ -500,9 +497,7 @@ class PostgresDispatcher:
                         # No matched: install the NEW wake_on (already set
                         # above) and drain a single matching pending wake →
                         # a possible NEW matched.
-                        drained = self._drain_first_matching_pending(
-                            task_id, wake_on
-                        )
+                        drained = self._drain_first_matching_pending(task_id, wake_on)
                         if drained is not None:
                             order = self._next_ready_order()
                             self._conn.execute(
@@ -518,6 +513,44 @@ class PostgresDispatcher:
                             )
                 self._conn.execute("COMMIT")
             except (InvalidLease, ValueError, WakeConsumeMismatch):
+                raise
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+
+    def release_yield(self, lease_id: str) -> None:
+        """Voluntary yield of a seeded lease back to the ready queue.
+
+        Transitions leased→ready WITHOUT incrementing fail_attempts —
+        used by transports that seed a task durably under a targeted
+        lease and then hand it off to a resident worker pool. Matched
+        wakes are preserved.
+        """
+        with self._lock:
+            self._begin_locked()
+            try:
+                row = self._fetch_task_by_lease(lease_id)
+                if row is None:
+                    self._conn.execute("ROLLBACK")
+                    raise InvalidLease(lease_id)
+                task_id = row["task_id"]
+                order = self._next_ready_order()
+                self._conn.execute(
+                    "UPDATE dispatcher_tasks SET "
+                    " status = 'ready',"
+                    " lease_id = NULL,"
+                    " lease_expires_at = NULL,"
+                    " heartbeat_count = 0,"
+                    " reclaim_count = 0,"
+                    " wake_on_canonical = NULL,"
+                    " suspend_reason = NULL,"
+                    " fire_at = NULL,"
+                    " ready_order = %s "
+                    "WHERE task_id = %s",
+                    (order, task_id),
+                )
+                self._conn.execute("COMMIT")
+            except InvalidLease:
                 raise
             except Exception:
                 self._conn.execute("ROLLBACK")
@@ -580,8 +613,7 @@ class PostgresDispatcher:
                     # GC never-matching buffered wakes on the terminal
                     # transition (same as release-terminal).
                     self._conn.execute(
-                        "DELETE FROM dispatcher_pending_wakes "
-                        "WHERE task_id = %s",
+                        "DELETE FROM dispatcher_pending_wakes WHERE task_id = %s",
                         (task_id,),
                     )
                 self._conn.execute("COMMIT")
@@ -688,8 +720,7 @@ class PostgresDispatcher:
                         )
                         # Terminal transition GCs buffered wakes.
                         self._conn.execute(
-                            "DELETE FROM dispatcher_pending_wakes "
-                            "WHERE task_id = %s",
+                            "DELETE FROM dispatcher_pending_wakes WHERE task_id = %s",
                             (task_id,),
                         )
                         continue
