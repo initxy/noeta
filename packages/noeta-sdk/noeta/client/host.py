@@ -603,6 +603,7 @@ class SdkHost(GenericEngineResolver):
             Optional[str],
             tuple[str, ...],
             Optional[str],
+            Optional[str],
         ],
         Engine,
     ] = field(
@@ -813,6 +814,18 @@ class SdkHost(GenericEngineResolver):
             )
 
     # -- sandbox backend lifecycle -----------------------------------------
+
+    def exec_env_ref(self) -> Optional[str]:
+        """The ``exec_env_ref`` a NEW session should weld into ``TaskHostBound``.
+
+        The host's configured sandbox container address (``base_url``), or
+        ``None`` on the local path (no sandbox configured). The driver records
+        it durably at session open (T6) so a resumed / reclaimed session — even
+        on another host — reconnects to the same container by this address. Never
+        a secret: the API key rides only on the wire (D5)."""
+        if self._sandbox is None:
+            return None
+        return self._sandbox.current_ref()
 
     def teardown_exec_env(self) -> None:
         """Reap the host's sandbox backend (if any). Idempotent; safe on the
@@ -1329,6 +1342,7 @@ class SdkHost(GenericEngineResolver):
         mcp_aliases: tuple[str, ...] = (),
         effort: Optional[str] = None,
         task_id: Optional[str] = None,
+        exec_env_ref: Optional[str] = None,
         structured_output_schema: Optional[dict[str, Any]] = None,
     ) -> Engine:
         spec = agent
@@ -1351,7 +1365,14 @@ class SdkHost(GenericEngineResolver):
         # a no-op and the local path is byte-identical.
         session_exec_env: Optional[ExecEnv] = None
         if self._sandbox is not None:
-            session_exec_env = self._sandbox.exec_env()
+            # T6: a session bound to a specific container (``exec_env_ref``, the
+            # welded/folded base_url) reconnects to THAT one — the multi-machine
+            # reconnect criterion: a task reclaimed on another host reads its
+            # recorded base_url, not this host's config default. ``None`` (the
+            # seed build, before the ref is welded, and every non-session build)
+            # uses the host's configured default container. Either way the API
+            # key comes from THIS host's config env (D5), never the ref.
+            session_exec_env = self._sandbox.exec_env(base_url=exec_env_ref)
             workspace_dir = Path(self._sandbox.workdir)
         # D3: only a custom tool explicitly named by spec.tools enters the engine.
         spec_tool_names = frozenset(r.name for r in spec.tools)
