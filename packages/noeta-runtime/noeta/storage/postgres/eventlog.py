@@ -15,8 +15,13 @@ The same concurrency layers on :meth:`emit`:
 3. **Optimistic ``expected_seq``** — caller asserts the next slot they
    intend to claim. Mismatch raises :class:`StaleSequence`.
 4. **Lease validity** — when ``lease_id`` is provided and a
-   ``LeaseRegistry`` was injected, the registry must approve the
-   ``(task_id, lease_id)`` pair.
+   ``LeaseRegistry`` was injected, the lease must check out. Unlike
+   the other adapters this one probes ``dispatcher_tasks`` first with
+   an in-tx ``SELECT ... FOR SHARE`` (the multi-host fence: the
+   row-share lock holds off any concurrent lease-clearing UPDATE until
+   this emit commits, closing the zombie-append window — see ADR
+   multi-host-lease-fencing.md D1); only when the probe finds no row
+   is the registry consulted (mixed wirings keep registry semantics).
 
 Where sqlite wraps every write in the file-wide ``BEGIN IMMEDIATE``
 lock, Postgres is MVCC: each write transaction takes a per-task-stream
@@ -57,6 +62,7 @@ from noeta.storage._payload_restore import (
 )
 from noeta.storage.postgres._connection import (
     _ADVISORY_CLASS_EVENTS,
+    _DB_NOW_SQL,
     _open_connection,
 )
 from noeta.storage.postgres.migrations import apply_migrations
@@ -103,11 +109,22 @@ class PostgresEventLog:
         clock: Optional[Callable[[], float]] = None,
         id_factory: Optional[Callable[[], str]] = None,
         schema_version: int = _DEFAULT_SCHEMA_VERSION,
+        _emit_pause: Optional[Callable[[], None]] = None,
     ) -> None:
         self._conn = _open_connection(dsn)
         apply_migrations(self._conn)
         self._lease_validator = lease_validator
+        # No injected ``clock`` (production) → the in-tx fence probe's
+        # expiry predicate runs on the database clock, matching the
+        # dispatcher's D2 clock base; an injected clock keeps the
+        # deterministic client-side comparison for tests.
+        self._db_clock = clock is None
         self._clock = clock or time.time
+        # Test-only seam: invoked between the fence probe and the event
+        # INSERT so multi-host tests can hold an emit transaction open
+        # across a concurrent reclaim deterministically. Never set in
+        # production wiring.
+        self._emit_pause = _emit_pause
         self._id_factory = id_factory or _default_id_factory
         self._schema_version = schema_version
         self._subscribers: list[Subscriber] = []
@@ -246,7 +263,11 @@ class PostgresEventLog:
                     "FROM events WHERE task_id = %s",
                     (envelope.task_id,),
                 ).fetchone()
-                assert next_seq_row is not None
+                if next_seq_row is None:
+                    raise RuntimeError(
+                        f"_append({envelope.task_id}): COALESCE(MAX()) "
+                        f"returned no row"
+                    )
                 next_seq = int(next_seq_row["next_seq"])
 
                 if expected_seq is not None and expected_seq != next_seq:
@@ -259,13 +280,44 @@ class PostgresEventLog:
                     require_lease
                     and lease_id is not None
                     and self._lease_validator is not None
-                    and not self._lease_validator.is_lease_valid(
-                        envelope.task_id, lease_id
-                    )
                 ):
-                    raise InvalidLease(
-                        f"task_id={envelope.task_id}, lease_id={lease_id}"
-                    )
+                    # In-tx fence probe (ADR multi-host-lease-fencing.md
+                    # D1): select the dispatcher row FOR SHARE so a
+                    # concurrent reclaim / release / heartbeat-cap
+                    # UPDATE blocks until this emit commits or rolls
+                    # back — no zombie write can land after a new lease
+                    # generation started. A returned row proves the
+                    # lease current in THIS database; zero rows fall
+                    # back to the bound registry, which keeps mixed
+                    # wirings (e.g. an InMemoryDispatcher validating
+                    # this log) on their exact registry semantics.
+                    if self._db_clock:
+                        held = self._conn.execute(
+                            "SELECT 1 FROM dispatcher_tasks "
+                            "WHERE task_id = %s AND lease_id = %s "
+                            "AND status = 'leased' "
+                            f"AND lease_expires_at > {_DB_NOW_SQL} "
+                            "FOR SHARE",
+                            (envelope.task_id, lease_id),
+                        ).fetchone()
+                    else:
+                        held = self._conn.execute(
+                            "SELECT 1 FROM dispatcher_tasks "
+                            "WHERE task_id = %s AND lease_id = %s "
+                            "AND status = 'leased' "
+                            "AND lease_expires_at > %s "
+                            "FOR SHARE",
+                            (envelope.task_id, lease_id, self._clock()),
+                        ).fetchone()
+                    if held is None and not self._lease_validator.is_lease_valid(
+                        envelope.task_id, lease_id
+                    ):
+                        raise InvalidLease(
+                            f"task_id={envelope.task_id}, lease_id={lease_id}"
+                        )
+
+                if self._emit_pause is not None:
+                    self._emit_pause()
 
                 stamped = envelope.with_seq(next_seq)
                 self._conn.execute(
