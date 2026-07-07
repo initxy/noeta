@@ -144,10 +144,12 @@ single-worker durable exactly-once delivery. The mechanism:
   `suspended_without_wake_event` — a diagnostic meaning "waiting for
   something that has not happened yet," not a fault.
 
-The guarantee is scoped single-host / single-worker. The open edges —
-multi-worker fencing and the partial-step-orphan case (a crash mid-step,
-after `TaskWoken` but before the step's remaining envelopes land) — are
-catalogued in [known limitations](../operations/limitations.md).
+The guarantee is scoped single-host / single-worker. A crash mid-step
+(after `TaskWoken` but before the step's remaining envelopes land) recovers
+on the next lease: the interrupted attempt is sealed and re-driven
+automatically when side-effect-free, or the Task is parked for a human. The
+open edge — multi-worker fencing — and the recovery scope are catalogued in
+[known limitations](../operations/limitations.md).
 
 ## Context assembly
 

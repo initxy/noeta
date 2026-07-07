@@ -300,6 +300,28 @@ _MIGRATION_7_FIRE_AT_INDEX = (
 )
 
 
+# Migration 8: widen the fold-baseline index to include the
+# crash-recovery seal.
+#
+# ``StepAttemptAbandoned`` is a third snapshot-shaped fold baseline
+# (``state_ref``, like TaskRewound). ``find_latest_snapshot`` now looks up
+# ``type IN ('TaskSnapshot', 'TaskRewound', 'StepAttemptAbandoned')``, and
+# a partial index is only chosen when its WHERE matches the query
+# predicate exactly (the migration-5 lesson), so the index is re-created
+# with the widened IN-list. The list is deliberately a frozen literal
+# (applied migrations are immutable); the live queries render theirs from
+# ``noeta.protocols.event_log.SNAPSHOT_BASELINE_EVENT_TYPES``, so growing
+# that constant requires a NEW migration re-widening this index —
+# ``tests/test_fix_storage.py`` pins the two in sync via the query plan.
+_MIGRATION_8_DROP_SNAPSHOT_INDEX = "DROP INDEX IF EXISTS ix_events_snapshot"
+
+_MIGRATION_8_BASELINE_INDEX = (
+    "CREATE INDEX ix_events_snapshot "
+    "ON events (task_id, seq DESC) "
+    "WHERE type IN ('TaskSnapshot', 'TaskRewound', 'StepAttemptAbandoned')"
+)
+
+
 MIGRATIONS: list[Migration] = [
     Migration(
         version=1,
@@ -351,6 +373,14 @@ MIGRATIONS: list[Migration] = [
             _MIGRATION_7_FIRE_AT_COLUMN,
             _MIGRATION_7_FIRE_AT_BACKFILL,
             _MIGRATION_7_FIRE_AT_INDEX,
+        ),
+    ),
+    Migration(
+        version=8,
+        description="widen snapshot index to include StepAttemptAbandoned",
+        statements=(
+            _MIGRATION_8_DROP_SNAPSHOT_INDEX,
+            _MIGRATION_8_BASELINE_INDEX,
         ),
     ),
 ]

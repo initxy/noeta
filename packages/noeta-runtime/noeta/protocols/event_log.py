@@ -30,6 +30,7 @@ from noeta.protocols.events import EventEnvelope, EventOrigin
 
 
 __all__ = [
+    "SNAPSHOT_BASELINE_EVENT_TYPES",
     "EventLog",
     "EventLogFull",
     "EventLogReader",
@@ -42,6 +43,26 @@ __all__ = [
     "Unsubscribe",
     "subscribe_with_stop",
 ]
+
+
+#: The fold-baseline event types — every type whose payload carries a
+#: ``state_ref`` rehydration body and re-bases the fold: ``TaskSnapshot``
+#: (acceleration), ``TaskRewound`` (conversation rewind) and
+#: ``StepAttemptAbandoned`` (crash-recovery seal). This is the single
+#: source of truth for the :meth:`EventLogReader.find_latest_snapshot`
+#: contract; every adapter's lookup filters on exactly this set. The SQL
+#: adapters' partial index (``ix_events_snapshot``) must ALSO list exactly
+#: these types in its ``WHERE`` predicate — a partial index is only chosen
+#: when its predicate matches the live query — so growing this tuple
+#: requires a new migration re-widening the index (see
+#: ``storage/sqlite/migrations.py`` migration 8 /
+#: ``storage/postgres/migrations.py`` migration 2), pinned by
+#: ``tests/test_fix_storage.py``.
+SNAPSHOT_BASELINE_EVENT_TYPES: tuple[str, ...] = (
+    "TaskSnapshot",
+    "TaskRewound",
+    "StepAttemptAbandoned",
+)
 
 
 Subscriber = Callable[[EventEnvelope], None]
@@ -139,11 +160,13 @@ class EventLogReader(Protocol):
         every Engine step. In-memory backends MAY reverse-scan; SQL
         backends SHOULD index the snapshot type.
 
-        Rewind generalises this to "the latest fold baseline": both
-        ``TaskSnapshot`` and ``TaskRewound`` carry a ``state_ref`` rehydration
-        body, so a rewind re-bases fold through the SAME accelerated lookup.
-        Implementations return whichever of ``{TaskSnapshot, TaskRewound}`` has
-        the higher seq (a stream with no rewind keeps the original behaviour).
+        Rewind and the crash-recovery seal generalise this to "the latest
+        fold baseline": every type in
+        :data:`SNAPSHOT_BASELINE_EVENT_TYPES` carries a ``state_ref``
+        rehydration body and re-bases fold through the SAME accelerated
+        lookup. Implementations return whichever member of that set has
+        the highest seq (a stream with neither marker keeps the original
+        behaviour).
         """
         ...
 

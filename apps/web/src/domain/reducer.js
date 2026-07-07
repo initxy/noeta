@@ -56,6 +56,13 @@ function emptyViewModel() {
     // Folded from the latest TaskStatePatched(set_todos) so the composer's todo
     // strip reflects the model's current plan.
     todos: [],
+    // Every set_todos snapshot seen, as [{seq, todos}]. `todos` above is
+    // always the last entry's list; the history exists ONLY so the re-base
+    // markers (TaskRewound / StepAttemptAbandoned) can restore the checklist
+    // as it stood at the kept boundary — without it a pruned dead tail would
+    // leave the dead attempt's todos on screen while the runtime fold has
+    // already reverted them.
+    todoLog: [],
     // What a SUSPENDED task is waiting on, classified from the latest
     // TaskSuspended's typed `wake_on` (T7 detail
     // fold): "next-goal" | "approval" | "question" | "human" | "subtask" |
@@ -345,6 +352,7 @@ function applyEnvelope(vm, env) {
             content: typeof todo.content === "string" ? todo.content : "",
             status: typeof todo.status === "string" ? todo.status : "pending",
           }));
+        vm.todoLog.push({ seq, todos: vm.todos });
       }
       break;
     }
@@ -468,18 +476,23 @@ function applyEnvelope(vm, env) {
     // again from its own ``target_seq``.
     case "TaskRewound": {
       const target = typeof p.target_seq === "number" ? p.target_seq : seq;
-      const keep = (s) => typeof s !== "number" || s <= target;
-      vm.turns = vm.turns.filter((turn) => keep(turn.seq));
-      vm.diffs = vm.diffs.filter((diff) => keep(diff.seq));
-      vm.pendingApprovals = vm.pendingApprovals.filter((a) => keep(a.seq));
-      vm.pendingQuestions = vm.pendingQuestions.filter((q) => keep(q.seq));
-      for (const [callId, call] of Object.entries(vm.toolCalls)) {
-        if (!keep(call.seq)) delete vm.toolCalls[callId];
-      }
-      for (const [subId, sub] of Object.entries(vm.subtasks)) {
-        if (!keep(sub.seq)) delete vm.subtasks[subId];
-      }
-      if (vm.llmRetry && !keep(vm.llmRetry.seq)) vm.llmRetry = null;
+      pruneDeadTail(vm, (s) => typeof s !== "number" || s <= target);
+      break;
+    }
+
+    // Crash-recovery seal (StepAttemptAbandoned): the runtime folded the
+    // state back to just BEFORE the interrupted attempt's
+    // ``ContextPlanComposed`` (its ``abandoned_from_seq``) and re-based the
+    // stream there — the TaskRewound pattern scoped to one attempt, with an
+    // exclusive boundary. Mirror it so the dead partial attempt (e.g. a tool
+    // call started but never finished) doesn't linger as a ghost projection;
+    // the re-driven attempt's events land on the clean baseline. Like
+    // TaskRewound, no tombstone turn (D9): an auto re-drive is silent, and
+    // the park path's operator notice arrives as a normal message turn.
+    case "StepAttemptAbandoned": {
+      const from =
+        typeof p.abandoned_from_seq === "number" ? p.abandoned_from_seq : seq;
+      pruneDeadTail(vm, (s) => typeof s !== "number" || s < from);
       break;
     }
 
@@ -564,6 +577,30 @@ function applyEnvelope(vm, env) {
       // throws on an unrecognised type — forward-compatible by design.
       break;
   }
+}
+
+// Drop every projection whose seq the ``keep`` predicate rejects — the
+// re-base shared by TaskRewound and StepAttemptAbandoned, the two
+// snapshot-shaped markers that fold a dead tail out of the stream.
+function pruneDeadTail(vm, keep) {
+  vm.turns = vm.turns.filter((turn) => keep(turn.seq));
+  vm.diffs = vm.diffs.filter((diff) => keep(diff.seq));
+  vm.pendingApprovals = vm.pendingApprovals.filter((a) => keep(a.seq));
+  vm.pendingQuestions = vm.pendingQuestions.filter((q) => keep(q.seq));
+  for (const [callId, call] of Object.entries(vm.toolCalls)) {
+    if (!keep(call.seq)) delete vm.toolCalls[callId];
+  }
+  for (const [subId, sub] of Object.entries(vm.subtasks)) {
+    if (!keep(sub.seq)) delete vm.subtasks[subId];
+  }
+  if (vm.llmRetry && !keep(vm.llmRetry.seq)) vm.llmRetry = null;
+  // The checklist is replace-all state, not an append log: restore the last
+  // set_todos snapshot that survives the boundary (the runtime fold reverts
+  // to exactly that state), else the dead attempt's todos would linger.
+  vm.todoLog = vm.todoLog.filter((entry) => keep(entry.seq));
+  vm.todos = vm.todoLog.length
+    ? vm.todoLog[vm.todoLog.length - 1].todos
+    : [];
 }
 
 // Render a TaskCompleted answer (string or canonical-tagged object) as

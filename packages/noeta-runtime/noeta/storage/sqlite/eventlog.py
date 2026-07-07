@@ -42,12 +42,14 @@ from noeta.protocols.errors import (
     StaleSequence,
 )
 from noeta.protocols.event_log import (
+    SNAPSHOT_BASELINE_EVENT_TYPES,
     Subscriber,
     TaskStreamSummary,
     Unsubscribe,
 )
 from noeta.protocols.events import EventEnvelope, EventOrigin
 from noeta.protocols.values import EVENT_PAYLOAD_MAX_BYTES
+
 from noeta.storage._payload_restore import (
     _PAYLOAD_RESTORERS as _PAYLOAD_RESTORERS,
     _enforce_payload_cap as _enforce_payload_cap,
@@ -57,6 +59,15 @@ from noeta.storage._payload_restore import (
 )
 from noeta.storage.sqlite._connection import _open_connection
 from noeta.storage.sqlite.migrations import apply_migrations
+
+# The ``find_latest_snapshot`` predicate, rendered once from the protocol
+# constant so the query can never drift from the contract set (the
+# ``ix_events_snapshot`` partial index must keep matching it textually —
+# see the migration notes).
+_BASELINE_TYPES_SQL = "(" + ", ".join(
+    f"'{t}'" for t in SNAPSHOT_BASELINE_EVENT_TYPES
+) + ")"
+
 
 
 __all__ = ["MAX_PAYLOAD_BYTES", "SqliteEventLog"]
@@ -328,17 +339,17 @@ class SqliteEventLog:
 
     def find_latest_snapshot(self, task_id: str) -> Optional[EventEnvelope]:
         with self._lock:
-            # TaskRewound is a snapshot-shaped fold baseline
-            # (``state_ref`` too) — take whichever of {TaskSnapshot, TaskRewound}
-            # has the higher seq so a rewind re-bases fold from the same lookup.
-            # The ``ix_events_snapshot`` partial index (migration 5) is keyed
-            # on exactly this ``type IN ('TaskSnapshot', 'TaskRewound')``
+            # TaskRewound and StepAttemptAbandoned are snapshot-shaped fold
+            # baselines (``state_ref`` too) — take whichever of the three
+            # has the higher seq so a rewind / attempt seal re-bases fold
+            # from the same lookup. The ``ix_events_snapshot`` partial index
+            # (migration 8) is keyed on exactly this ``type IN (...)``
             # predicate, so this lookup is an indexed single-row hit rather
             # than a reverse PRIMARY KEY walk whose cost grew with the tail
             # since the last baseline.
             row = self._conn.execute(
                 "SELECT * FROM events "
-                "WHERE task_id = ? AND type IN ('TaskSnapshot', 'TaskRewound') "
+                f"WHERE task_id = ? AND type IN {_BASELINE_TYPES_SQL} "
                 "ORDER BY seq DESC LIMIT 1",
                 (task_id,),
             ).fetchone()

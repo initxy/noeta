@@ -229,3 +229,63 @@ test("reduceEvents: TaskRewound prunes a stale retry badge", () => {
   ]);
   assert.equal(vm.llmRetry, null);
 });
+
+test("reduceEvents: StepAttemptAbandoned prunes the dead attempt (exclusive boundary)", () => {
+  // The seal re-bases to just BEFORE abandoned_from_seq: the interrupted
+  // attempt's ghost tool call (started, never finished) must go; everything
+  // strictly before the boundary stays. No tombstone turn is added.
+  const vm = reduceEvents([
+    { task_id: "t1", seq: 0, type: "TaskCreated", payload: {} },
+    { task_id: "t1", seq: 1, type: "ContextPlanComposed", payload: {} },
+    {
+      task_id: "t1",
+      seq: 2,
+      type: "ToolCallStarted",
+      payload: { call_id: "ghost", tool_name: "shell_run", arguments: {} },
+    },
+    {
+      task_id: "t1",
+      seq: 3,
+      type: "StepAttemptAbandoned",
+      payload: { abandoned_from_seq: 1, reason: "crash_recovery" },
+    },
+  ]);
+  assert.equal(vm.toolCalls["ghost"], undefined);
+  assert.equal(
+    vm.turns.some((t) => typeof t.seq === "number" && t.seq >= 1),
+    false,
+  );
+});
+
+test("reduceEvents: re-base markers restore the todo checklist at the boundary", () => {
+  // set_todos is replace-all state, not an append log: after a seal the
+  // dead attempt's checklist must not linger — the last snapshot surviving
+  // the boundary is restored (the runtime fold reverts to exactly that).
+  const setTodos = (seq, todos) => ({
+    task_id: "t1",
+    seq,
+    type: "TaskStatePatched",
+    payload: { patch: { set_todos: todos } },
+  });
+  const vm = reduceEvents([
+    { task_id: "t1", seq: 0, type: "TaskCreated", payload: {} },
+    setTodos(1, [{ id: "a", content: "keep me", status: "pending" }]),
+    { task_id: "t1", seq: 2, type: "ContextPlanComposed", payload: {} },
+    setTodos(3, [{ id: "b", content: "dead todo", status: "pending" }]),
+    {
+      task_id: "t1",
+      seq: 4,
+      type: "StepAttemptAbandoned",
+      payload: { abandoned_from_seq: 2, reason: "auto_redrive" },
+    },
+  ]);
+  assert.equal(vm.todos.length, 1);
+  assert.equal(vm.todos[0].id, "a");
+  // A rewind past every snapshot clears the checklist entirely.
+  const vm2 = reduceEvents([
+    { task_id: "t1", seq: 0, type: "TaskCreated", payload: {} },
+    setTodos(1, [{ id: "a", content: "x", status: "pending" }]),
+    { task_id: "t1", seq: 2, type: "TaskRewound", payload: { target_seq: 0 } },
+  ]);
+  assert.equal(vm2.todos.length, 0);
+});
