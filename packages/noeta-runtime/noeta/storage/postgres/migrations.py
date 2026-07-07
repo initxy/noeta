@@ -188,6 +188,15 @@ _MIGRATION_2_BASELINE_INDEX = (
 )
 
 
+# Migration 3: nullable audit column recording which worker holds the
+# lease (ADR multi-host-lease-fencing.md D3). Populated by ``lease()``,
+# cleared by every transition that clears ``lease_id``. Observability
+# only — NOT a fencing token; no index, no CHECK.
+_MIGRATION_3_WORKER_ID = (
+    "ALTER TABLE dispatcher_tasks ADD COLUMN worker_id TEXT NULL"
+)
+
+
 MIGRATIONS: list[Migration] = [
     Migration(
         version=1,
@@ -212,6 +221,11 @@ MIGRATIONS: list[Migration] = [
             _MIGRATION_2_DROP_SNAPSHOT_INDEX,
             _MIGRATION_2_BASELINE_INDEX,
         ),
+    ),
+    Migration(
+        version=3,
+        description="worker_id audit column on dispatcher_tasks",
+        statements=(_MIGRATION_3_WORKER_ID,),
     ),
 ]
 

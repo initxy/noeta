@@ -42,6 +42,7 @@ __all__ = [
     "_ADVISORY_CLASS_DISPATCHER",
     "_ADVISORY_CLASS_EVENTS",
     "_ADVISORY_CLASS_MIGRATIONS",
+    "_DB_NOW_SQL",
     "_open_connection",
 ]
 
@@ -52,6 +53,14 @@ __all__ = [
 _ADVISORY_CLASS_MIGRATIONS = 0x6E5F6D69  # "n_mi"
 _ADVISORY_CLASS_EVENTS = 0x6E5F6576  # "n_ev"
 _ADVISORY_CLASS_DISPATCHER = 0x6E5F6469  # "n_di"
+
+#: SQL expression for the database clock "now". ``clock_timestamp()``
+#: (not ``now()`` / ``current_timestamp``) advances within a transaction,
+#: so a long emit transaction never compares against a stale
+#: statement-start instant. Used by Dispatcher (lease expiry / stale
+#: detection / timer firing) and EventLog (in-tx fence probe) so the
+#: time reference can never drift between the two adapters.
+_DB_NOW_SQL = "EXTRACT(EPOCH FROM clock_timestamp())::double precision"
 
 
 def _open_connection(dsn: str) -> psycopg.Connection[DictRow]:
