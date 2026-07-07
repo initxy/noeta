@@ -3,8 +3,8 @@
 A top-down walkthrough of Noeta's architecture: how the packages stack, how
 the core event-sourcing decision shapes each layer, and where the extension
 surfaces sit. For "what is X" questions this page links to the
-[concept pages](../README.md) rather than re-explaining; for exact API
-signatures see the [reference pages](../README.md).
+[concept pages](../concepts/event-sourcing.md) rather than re-explaining; for
+exact API signatures see the [reference pages](../reference/sdk.md).
 
 ## The three packages
 
@@ -274,5 +274,5 @@ and reaped when their session closes.
 - Reference: [SDK](../reference/sdk.md) ·
   [WorkerLoop](../reference/worker-loop.md) ·
   [comparison with the Claude Agent SDK](../reference/comparison.md)
-- Decision records: [`docs/adr/`](../adr/README.md) — why each cross-module
+- Decision records: [`docs/adr/`](https://github.com/initxy/noeta/tree/main/docs/adr) — why each cross-module
   decision is the way it is.

@@ -53,7 +53,7 @@ Shell 元字符（`|`、`;`、`&&`、`>` 等）在分词之前被拒绝。这是
 
 ## MCP 工具
 
-当 MCP server 被注册并在每个会话中启用时，远程 MCP 工具动态显示为 `mcp__<alias>__<tool>`。见[ADR：MCP 连接器](../adr/mcp-connectors.md)。
+当 MCP server 被注册并在每个会话中启用时，远程 MCP 工具动态显示为 `mcp__<alias>__<tool>`。见[ADR：MCP 连接器](https://github.com/initxy/noeta/blob/main/docs/adr/mcp-connectors.md)。
 
 ## 工具风险等级
 

@@ -22,7 +22,7 @@ Installation splits by authoring vs. product:
 - **To write your own agent**: `uv pip install noeta-sdk`, then `import noeta.sdk` (noeta-runtime comes along as an untouchable transitive dependency).
 - **To run the official product**: `uv pip install -e apps/noeta-agent`.
 
-On PyPI, the names `noeta`/`noeta-sdk`/`noeta-agent` are already taken by unrelated packages; a real release would require renaming.
+On PyPI the project is published under the dist names `noeta-runtime` / `noeta-sdk` / `noeta-agent` (all live at the current release); the bare `noeta` name is held by an unrelated package, so the three-wheel split doubles as the naming workaround.
 
 ## Vocabulary
 

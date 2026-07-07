@@ -266,6 +266,6 @@ def test_agent_with_real_llm():
 - `Makefile` — `make install`, `make run`, `make serve`, `make web`, `make dev`
 - `pyproject.toml` — pytest config (`testpaths`, `markers`)
 - `noeta.testing.fake_llm.FakeLLMProvider` — `packages/noeta-runtime/noeta/testing/fake_llm.py`
-- See also: [Your first agent](../guides/first-agent.md),
-  [Provider swap](../guides/provider-swap.md),
-  [Embedding the engine](../guides/embed-engine.md)
+- See also: [Your first agent](first-agent.md),
+  [Swap providers](../how-to/swap-providers.md),
+  [Engine & execution](../concepts/engine-execution.md)
