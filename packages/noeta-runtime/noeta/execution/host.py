@@ -142,6 +142,7 @@ class ResidentHost(Protocol):
         permission_mode: Optional[str] = None,
         mcp_aliases: tuple[str, ...] = (),
         effort: Optional[str] = None,
+        exec_env_ref: Optional[str] = None,
     ) -> EngineProtocol:
         """Resolve a (cached) Engine **by agent name** — used for Task creation.
 
@@ -153,10 +154,14 @@ class ResidentHost(Protocol):
         the seed Engine runs its fs/skill tools under (``None`` ⇒ host default
         dir). ``provider`` (I4) is the per-session provider
         **name** the seed Engine runs its LLM round-trips on (``None`` ⇒ host
-        default provider). ``permission_mode`` / ``mcp_aliases`` / ``effort``
-        are per-turn, non-durable selectors that must shape the seed Engine
-        before the task exists. These are passed explicitly because the seed
-        Engine writes ``TaskCreated`` *before* the durable binding is folded back.
+        default provider). ``exec_env_ref`` (T6) is the per-session sandbox
+        container ``base_url`` the seed Engine's fs / shell tools target
+        (``None`` ⇒ local host), passed explicitly so the seed matches the ref
+        the driver is about to weld into ``TaskHostBound``. ``permission_mode`` /
+        ``mcp_aliases`` / ``effort`` are per-turn, non-durable selectors that
+        must shape the seed Engine before the task exists. These are passed
+        explicitly because the seed Engine writes ``TaskCreated`` *before* the
+        durable binding is folded back.
         """
         ...
 

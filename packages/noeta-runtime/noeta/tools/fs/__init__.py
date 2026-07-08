@@ -25,10 +25,11 @@ re-negotiation of shell privileges.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from noeta.protocols.tool import Tool
 from noeta.tools.fs._workspace import WorkspaceEscape, WorkspaceRoot
+from noeta.tools.fs.exec_env import ExecEnv, LocalExecEnv
 from noeta.tools.fs.edit import (
     WRITE_FILE_MAX_BYTES,
     FsWriteMode,
@@ -91,6 +92,7 @@ def build_fs_tools(
     shell_mode: ShellMode = ShellMode.ALLOWLIST,
     shell_allowlist: Sequence[Mapping[str, Any]] = (),
     write_path_globs: tuple[str, ...] = (),
+    exec_env: Optional[ExecEnv] = None,
 ) -> dict[str, Tool]:
     """Build the fs tool pack sharing one ``WorkspaceRoot`` + write/shell modes.
 
@@ -107,18 +109,31 @@ def build_fs_tools(
     (e.g. passing ``("plans/*.md",)`` physically confines a writer to that
     directory). It only affects ``write``; ``edit`` / ``apply_patch`` ignore
     the whitelist.
+
+    ``exec_env`` is the execution backend the fs / shell tools route their real
+    IO through. ``None`` (default) ⇒ each tool builds its own ``LocalExecEnv``
+    (byte-identical to the pre-seam host behaviour); a sandbox backend
+    (:class:`~noeta.tools.fs.exec_env.AioSandboxExecEnv`) makes the whole pack
+    act against a container — paired with a container ``workspace``
+    (:meth:`WorkspaceRoot.for_container`). It never changes a tool's
+    name / schema / description, so the stable prefix is unaffected.
     """
+    # One backend shared across the pack — ``LocalExecEnv`` is stateless and
+    # documented as reuse-safe, so the default path is byte-identical to each
+    # tool's own ``default_factory=LocalExecEnv``.
+    env: ExecEnv = LocalExecEnv() if exec_env is None else exec_env
     tools: list[Tool] = [
-        ReadFileTool(workspace=workspace),
-        GlobTool(workspace=workspace),
-        GrepTool(workspace=workspace),
-        ReplaceTextTool(workspace=workspace, mode=mode),
+        ReadFileTool(workspace=workspace, exec_env=env),
+        GlobTool(workspace=workspace, exec_env=env),
+        GrepTool(workspace=workspace, exec_env=env),
+        ReplaceTextTool(workspace=workspace, mode=mode, exec_env=env),
         WriteFileTool(
             workspace=workspace,
             mode=mode,
             allowed_path_globs=write_path_globs,
+            exec_env=env,
         ),
-        ApplyPatchTool(workspace=workspace, mode=mode),
+        ApplyPatchTool(workspace=workspace, mode=mode, exec_env=env),
     ]
     if shell_mode is not ShellMode.OFF:
         tools.append(
@@ -126,6 +141,7 @@ def build_fs_tools(
                 workspace=workspace,
                 mode=shell_mode,
                 rules=build_allowlist(shell_allowlist),
+                exec_env=env,
             )
         )
         # shell_poll rides with shell_run — it pulls the snapshot +

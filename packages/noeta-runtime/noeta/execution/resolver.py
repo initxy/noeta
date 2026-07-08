@@ -117,7 +117,7 @@ class GenericEngineResolver:
     _engines: OrderedDict[
         tuple[
             str, str, bool, Optional[str], Optional[str], Optional[str],
-            tuple[str, ...], Optional[str],
+            tuple[str, ...], Optional[str], Optional[str],
         ],
         Engine,
     ]
@@ -198,6 +198,7 @@ class GenericEngineResolver:
         mcp_aliases: tuple[str, ...] = (),
         effort: Optional[str] = None,
         task_id: Optional[str] = None,
+        exec_env_ref: Optional[str] = None,
         structured_output_schema: Optional[dict[str, Any]] = None,
     ) -> Engine:
         """Build a real ``Engine`` for ``agent`` on ``model``.
@@ -226,6 +227,13 @@ class GenericEngineResolver:
         (``None`` ⇒ the host default provider). An implementation resolves it
         to a configured LLM adapter instance for this Engine's round-trips; the
         generic skeleton only threads the name through the cache key.
+
+        ``exec_env_ref`` is the per-session sandbox container ``base_url``
+        (``None`` ⇒ the local host / the host-default sandbox config). An
+        implementation resolves it to a live sandbox backend the Engine's fs /
+        shell tools run their IO against — a resumed / reclaimed session (T6)
+        reconnects to THIS container by its address; the generic skeleton only
+        threads it through the cache key.
 
         ``structured_output_schema`` is a workflow helper's per-helper JSON
         Schema (read off its durable ``TaskCreated.inputs.output_schema`` by
@@ -385,6 +393,11 @@ class GenericEngineResolver:
         # ``ModelBound`` (``governance.provider_binding``); ``None`` on an old /
         # pre-I4 recording → the host default provider, byte-equal.
         provider = self._bound_provider_for(task)
+        # the per-session sandbox container base_url folded from
+        # ``TaskHostBound`` (``governance.exec_env_ref``); ``None`` on every
+        # local / non-sandbox recording → the local host, byte-equal. When set,
+        # a resumed / reclaimed task reconnects to THIS container.
+        exec_env_ref = self._bound_exec_env_ref_for(task)
         # the per-turn, NON-durable permission_mode the
         # driver stashed for this task. ``None`` (no per-turn selection — resume /
         # daemon / CLI / every pre-#4 path) ⇒ the host-fixed default, byte-equal.
@@ -405,6 +418,7 @@ class GenericEngineResolver:
                 mcp_aliases=mcp_aliases,
                 effort=effort,
                 task_id=task_id,
+                exec_env_ref=exec_env_ref,
             )
         agent = self._lookup_agent(name, task_id=task_id)
         # S1: ask_user_question comes from agent identity, masked to depth-0
@@ -424,6 +438,7 @@ class GenericEngineResolver:
             mcp_aliases=mcp_aliases,
             effort=effort,
             task_id=task_id,
+            exec_env_ref=exec_env_ref,
         )
 
     def _bound_model_for(self, task: Any) -> str:
@@ -464,6 +479,20 @@ class GenericEngineResolver:
         bound = getattr(getattr(task, "governance", None), "provider_binding", None)
         return bound if isinstance(bound, str) and bound else None
 
+    def _bound_exec_env_ref_for(self, task: Any) -> Optional[str]:
+        """The sandbox container ``base_url`` the Task is bound to (T6).
+
+        Read from the ``TaskHostBound`` fold (``governance.exec_env_ref``);
+        ``None`` (every local / non-sandbox recording) means "use the local host
+        / the host-default sandbox config", so a resumed non-sandbox session is
+        byte-equal. When present, a resumed / **reclaimed** session — possibly on
+        another host — reconnects to THIS container address rather than the
+        folding host's own config (the multi-machine reconnect criterion). The
+        API key is not here (D5); the reconnecting host re-reads it from its env.
+        """
+        bound = getattr(getattr(task, "governance", None), "exec_env_ref", None)
+        return bound if isinstance(bound, str) and bound else None
+
     def resolve_engine_for_agent(
         self,
         agent_name: str,
@@ -474,6 +503,7 @@ class GenericEngineResolver:
         permission_mode: Optional[str] = None,
         mcp_aliases: tuple[str, ...] = (),
         effort: Optional[str] = None,
+        exec_env_ref: Optional[str] = None,
     ) -> Engine:
         """Hoisted by-name Engine resolver.
 
@@ -517,6 +547,7 @@ class GenericEngineResolver:
                 permission_mode=permission_mode,
                 mcp_aliases=mcp_aliases,
                 effort=effort,
+                exec_env_ref=exec_env_ref,
             )
         agent = self._lookup_agent(agent_name, task_id="<unbound>")
         # S1: the seed engine is a root resident session — ask_user_question is
@@ -530,6 +561,7 @@ class GenericEngineResolver:
             permission_mode=permission_mode,
             mcp_aliases=mcp_aliases,
             effort=effort,
+            exec_env_ref=exec_env_ref,
         )
 
     def drive_pending_subtasks(self, parent_task: Any) -> Any:
@@ -589,6 +621,13 @@ class GenericEngineResolver:
         # binding), not each child's host default. ``None`` parent workspace ⇒
         # host default, byte-identical to the pre-decision single-workspace path.
         inherited_workspace = self._bound_workspace_for(parent_task)
+        # children likewise run in the root session's SANDBOX container — a
+        # delegation tree shares ONE container (D4: subtasks share the parent's
+        # cwd/disk), so a child inherits the root's bound ``exec_env_ref``
+        # (subtasks carry no ``TaskHostBound`` of their own; the fold leaves
+        # their ``governance.exec_env_ref`` None). ``None`` ⇒ the local host,
+        # byte-identical to the non-sandbox path.
+        inherited_exec_env_ref = self._bound_exec_env_ref_for(parent_task)
         # children likewise run on the root session's bound
         # provider — the whole delegation tree shares ONE provider (the root
         # parent's binding), not each child's host default. ``None`` ⇒ host
@@ -689,6 +728,7 @@ class GenericEngineResolver:
                 policy_wrapper=None,
                 workspace=inherited_workspace,
                 provider=inherited_provider,
+                exec_env_ref=inherited_exec_env_ref,
                 permission_mode=inherited_permission,
                 # per-spec opt-in MCP inheritance. The opt-in child
                 # connects its own server sessions; ``task_id`` so a connect
@@ -792,6 +832,7 @@ class GenericEngineResolver:
         mcp_aliases: tuple[str, ...] = (),
         effort: Optional[str] = None,
         task_id: Optional[str] = None,
+        exec_env_ref: Optional[str] = None,
     ) -> Engine:
         """Hoisted per-agent Engine builder + cache.
 
@@ -863,9 +904,14 @@ class GenericEngineResolver:
         # servers must NOT share a cached Engine (their live tool sets differ), so
         # the alias tuple keys the build. ``()`` (no enabled servers) keeps the key
         # byte-equal with the pre-0042 6-tuple semantics.
+        # ``exec_env_ref`` is the 9th dimension (T6) — the per-session
+        # sandbox container base_url. Two sessions bound to different containers
+        # must NOT share a cached Engine (their fs / shell tools target different
+        # backends). ``None`` (every local / non-sandbox session) keeps the key
+        # byte-equal with the pre-T6 8-tuple semantics.
         key = (
             agent.name, resolved_model, effective_ask, workspace, provider,
-            permission_mode, mcp_aliases, effort,
+            permission_mode, mcp_aliases, effort, exec_env_ref,
         )
         # #13 / item 3: the global lock guards only the cache map. The build
         # itself runs OUTSIDE it, guarded by a PER-KEY build lock — one build
@@ -909,6 +955,7 @@ class GenericEngineResolver:
                     mcp_aliases=mcp_aliases,
                     effort=effort,
                     task_id=task_id,
+                    exec_env_ref=exec_env_ref,
                 )
                 with self._engines_lock:
                     self._engines[key] = engine

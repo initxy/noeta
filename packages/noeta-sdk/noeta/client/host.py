@@ -75,9 +75,12 @@ from noeta.runtime.background_shell import (
 )
 from noeta.runtime.cancellation import CancellationRegistry
 from noeta.runtime.file_checkpoint import FileCheckpointRegistry
+from noeta.client.host_config import SandboxExecEnvConfig
+from noeta.client.sandbox import SandboxExecEnvManager
 from noeta.tools.app import AppPreviewGateway
 from noeta.runtime.llm import RuntimeLLMClient
 from noeta.tools.fs import FsWriteMode, ShellMode
+from noeta.tools.fs.exec_env import ExecEnv
 from noeta.tools.memory import MemoryStore
 from noeta.tools.fs.shell import (
     build_allowlist,
@@ -577,6 +580,13 @@ class SdkHost(GenericEngineResolver):
     # (oneshot / lifecycle / tests / resume) ⇒ no open_app, so the prompt's tool
     # list is unchanged.
     app_gateway: Optional[AppPreviewGateway] = None
+    # Sandbox execution backend addressing (D2 host config). ``None`` (default)
+    # ⇒ the local host (``LocalExecEnv``, today's behaviour, byte-identical).
+    # When set, ``__post_init__`` builds a ``SandboxExecEnvManager`` and
+    # ``_build_engine`` routes every session's fs / shell IO into the container
+    # (the tool schemas — and thus the stable prefix — are unchanged). A host
+    # runtime injection (like ``app_gateway``), never part of any agent identity.
+    exec_env: Optional[SandboxExecEnvConfig] = None
     # The cache key has a ``workspace`` dimension
     # (the bound **absolute path**, or ``None`` for the host default) and a
     # ``provider`` dimension — so two sessions on different directories or
@@ -592,6 +602,7 @@ class SdkHost(GenericEngineResolver):
             Optional[str],
             Optional[str],
             tuple[str, ...],
+            Optional[str],
             Optional[str],
         ],
         Engine,
@@ -676,6 +687,14 @@ class SdkHost(GenericEngineResolver):
         init=False,
         repr=False,
         compare=False,
+    )
+    # Sandbox backend lifecycle (T5): built in ``__post_init__`` ONLY when
+    # ``exec_env`` config is present (``None`` otherwise ⇒ the local host, no
+    # behaviour change). Owns the host's shared ``AioSandboxExecEnv`` and its
+    # teardown seam; ``_build_engine`` pulls the backend from it. A runtime
+    # accelerator like ``_process_registry`` — never written to the event log.
+    _sandbox: Optional[SandboxExecEnvManager] = field(
+        default=None, init=False, repr=False, compare=False
     )
     # The background-completion notifier (an
     # ``InteractionDriver``, duck-typed to avoid a noeta.client → noeta.execution
@@ -786,6 +805,53 @@ class SdkHost(GenericEngineResolver):
                 max_per_session=self.max_background_subagents_per_session,
             ),
         )
+        # Sandbox backend lifecycle (T5): only when the host configured one.
+        # Absent it (every local / oneshot / test / resume path), ``_sandbox``
+        # stays ``None`` and ``_build_engine`` runs the local host unchanged.
+        if self.exec_env is not None:
+            object.__setattr__(
+                self, "_sandbox", SandboxExecEnvManager(self.exec_env)
+            )
+
+    # -- sandbox backend lifecycle -----------------------------------------
+
+    def exec_env_ref(self) -> Optional[str]:
+        """The ``exec_env_ref`` a NEW session should weld into ``TaskHostBound``.
+
+        The host's configured sandbox container address (``base_url``), or
+        ``None`` on the local path (no sandbox configured). The driver records
+        it durably at session open (T6) so a resumed / reclaimed session — even
+        on another host — reconnects to the same container by this address. Never
+        a secret: the API key rides only on the wire (D5)."""
+        if self._sandbox is None:
+            return None
+        return self._sandbox.current_ref()
+
+    def exec_env_for_ref(
+        self, exec_env_ref: Optional[str]
+    ) -> Optional[tuple[ExecEnv, Path]]:
+        """The ``(backend, container root)`` for a rewind restore, or ``None``.
+
+        ``None`` (a local session, or no host sandbox) means "restore against the
+        host filesystem as before" — the driver keeps its byte-identical pathlib
+        path. When a sandbox session recorded an ``exec_env_ref`` (T6) and this
+        host has a sandbox, returns the container backend + its lexical root so
+        the rewind writes baselines back INSIDE the container (T7), reconnecting
+        to the recorded container by address (creds from this host's env, D5)."""
+        if self._sandbox is None or not exec_env_ref:
+            return None
+        return (
+            self._sandbox.exec_env(base_url=exec_env_ref),
+            Path(self._sandbox.workdir),
+        )
+
+    def teardown_exec_env(self) -> None:
+        """Reap the host's sandbox backend (if any). Idempotent; safe on the
+        local path (no manager ⇒ no-op). The Client calls this on shutdown so
+        an idle container connection does not outlive the process; per-root
+        teardown at a root-task terminal (D6) is wired in T8."""
+        if self._sandbox is not None:
+            self._sandbox.teardown()
 
     # -- file-checkpoint per-turn gate reset ----------------
 
@@ -1049,8 +1115,9 @@ class SdkHost(GenericEngineResolver):
     ) -> Optional[Tuple[str, ContentRef, str]]:
         """Project a background child's terminal into ``(status, ref, summary)``.
 
-        ``ref`` is a ContentStore snapshot of the full result (the model derefs
-        it); ``summary`` is the one-line notice body. Returns ``None`` for a
+        ``ref`` is a ContentStore snapshot of the full result (dereferenced and
+        inlined into the delivery notice); ``summary`` is the one-line notice
+        header. Returns ``None`` for a
         cancelled child (session teardown — nothing to push). A child whose drive
         ended without a terminal (it suspended on an unsupported mid-flight
         interaction — background children have no human to answer) is reported as
@@ -1081,7 +1148,7 @@ class SdkHost(GenericEngineResolver):
                 "completed",
                 ref,
                 f'Background sub-agent "{agent_name}" finished. '
-                "Its full result is referenced below — read it and continue.",
+                "Here is its result:",
             )
         # failed, or no terminal (stuck on an unsupported suspend).
         detail = reason or (
@@ -1094,7 +1161,9 @@ class SdkHost(GenericEngineResolver):
         return (
             "failed",
             ref,
-            f'Background sub-agent "{agent_name}" did not complete: {detail[:200]}',
+            # Summary stays a clean one-liner; the full ``detail`` is the ref
+            # body, inlined into the notice below it — don't repeat it here.
+            f'Background sub-agent "{agent_name}" did not complete.',
         )
 
     # -- ResidentHost requirement ------------------------------------------
@@ -1294,6 +1363,7 @@ class SdkHost(GenericEngineResolver):
         mcp_aliases: tuple[str, ...] = (),
         effort: Optional[str] = None,
         task_id: Optional[str] = None,
+        exec_env_ref: Optional[str] = None,
         structured_output_schema: Optional[dict[str, Any]] = None,
     ) -> Engine:
         spec = agent
@@ -1303,6 +1373,28 @@ class SdkHost(GenericEngineResolver):
         # keeps the host-fixed default dir, byte-identical to the
         # single-workspace path.
         workspace_dir = Path(workspace) if workspace else self.workspace_dir
+        # Sandbox backend (T5): when the host configured one, every session's fs
+        # / shell IO routes into the container instead of the host. The backend
+        # is fed to ``build_session_inputs`` (which then builds the pack's tools
+        # against it AND swaps the host ``WorkspaceRoot`` for a lexical container
+        # root, D7); the host ``workspace_dir`` is meaningless inside the
+        # container, so it is replaced by the container's working directory. The
+        # SAME backend is handed to the seed build (``task_id is None``) and every
+        # driving turn — v1 is one container per host (see SandboxExecEnvManager),
+        # so this is both correct and what keeps the seed/drive Engine-cache
+        # entry from silently pinning the local backend. Absent a manager, this is
+        # a no-op and the local path is byte-identical.
+        session_exec_env: Optional[ExecEnv] = None
+        if self._sandbox is not None:
+            # T6: a session bound to a specific container (``exec_env_ref``, the
+            # welded/folded base_url) reconnects to THAT one — the multi-machine
+            # reconnect criterion: a task reclaimed on another host reads its
+            # recorded base_url, not this host's config default. ``None`` (the
+            # seed build, before the ref is welded, and every non-session build)
+            # uses the host's configured default container. Either way the API
+            # key comes from THIS host's config env (D5), never the ref.
+            session_exec_env = self._sandbox.exec_env(base_url=exec_env_ref)
+            workspace_dir = Path(self._sandbox.workdir)
         # D3: only a custom tool explicitly named by spec.tools enters the engine.
         spec_tool_names = frozenset(r.name for r in spec.tools)
         filtered_custom = {
@@ -1449,6 +1541,10 @@ class SdkHost(GenericEngineResolver):
             # tool set gains ``open_app``. ``None`` (oneshot / tests / resume) ⇒
             # no open_app, so the tool set is unchanged.
             app_gateway=self.app_gateway,
+            # The sandbox backend for this session's fs / shell tools (T5).
+            # ``None`` (no host sandbox) ⇒ the builder uses ``LocalExecEnv`` and
+            # the host ``WorkspaceRoot`` — byte-identical to the local path.
+            exec_env=session_exec_env,
             hooks_pre_tool_use=self.hooks_pre_tool_use,
             repetition_threshold=self.repetition_threshold,
             repetition_action=self.repetition_action,

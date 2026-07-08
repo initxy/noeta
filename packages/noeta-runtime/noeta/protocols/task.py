@@ -249,6 +249,13 @@ class GovernanceState:
     # its host-fixed default workspace dir, byte-equal.
     # Legacy "name-style" TaskHostBound records fold to None (D7 break).
     workspace: Optional[str] = None
+    # The sandbox container ``base_url`` this session is bound to, folded
+    # from the single ``TaskHostBound`` event (``exec_env_ref`` field, T6). The
+    # resolver reads it so a resumed / reclaimed session (possibly on another
+    # host) reconnects to the SAME container by this address instead of the
+    # folding host's own config. ``None`` on every local / non-sandbox recording
+    # → the resolver uses the local host, byte-equal.
+    exec_env_ref: Optional[str] = None
     # Issue 08 — the conversation
     # close/archive lifecycle, folded from ``ConversationClosed`` /
     # ``ConversationReopened`` events. ``closed`` is the queryable flag the

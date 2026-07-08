@@ -914,14 +914,27 @@ class TaskHostBoundPayload:
     host_id: str
     workspace_dir: Optional[str] = None
 
-    #: ``workspace_dir`` is OMITTED from the canonical form when
-    #: ``None`` so a TaskHostBound written before this field existed keeps
+    #: The sandbox execution backend this session is bound to — the AIO
+    #: container's ``base_url`` (T6). Welded here so a resumed / **reclaimed**
+    #: session (possibly on another host) reconnects to the SAME container by
+    #: reading this address rather than the folding host's own config, which may
+    #: differ. Addressing only — the API key is NEVER recorded (D5); it is
+    #: re-read from the reconnecting host's env at connect time. ``None`` (every
+    #: local / non-sandbox recording) → the resolver uses the local host.
+    #: **v1 simplification** of the spec's ``{base_url, sandbox_id}`` ref: with
+    #: one container per host (see ``SandboxExecEnvManager``), the ``base_url``
+    #: *is* the reconnect address and the only load-bearing part; a distinct
+    #: ``sandbox_id`` becomes real when v2 orchestration mints per-container ids.
+    exec_env_ref: Optional[str] = None
+
+    #: ``workspace_dir`` / ``exec_env_ref`` are OMITTED from the canonical form
+    #: when ``None`` so a TaskHostBound written before either field existed keeps
     #: byte-equal canonical bytes — the default never enters the stream
     #: (same idiom as ``Message.origin``). The eventlog restorer
     #: tolerates the key being absent; old "name-style" records that had a
     #: ``workspace`` key (now superseded) simply omit
     #: ``workspace_dir`` → fold to ``None`` → host default.
-    __canonical_omit_none__ = frozenset({"workspace_dir"})
+    __canonical_omit_none__ = frozenset({"workspace_dir", "exec_env_ref"})
 
 
 @dataclass(frozen=True, slots=True)

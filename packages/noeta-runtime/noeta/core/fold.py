@@ -536,6 +536,12 @@ def _on_task_host_bound(
     task.governance.workspace = (
         str(getattr(env.payload, "workspace_dir", "") or "") or None
     )
+    # T6: the sandbox container base_url welded per session, so a resumed /
+    # reclaimed task reconnects to the SAME container. ``None`` on every local /
+    # non-sandbox recording → resolver uses the local host, byte-equal.
+    task.governance.exec_env_ref = (
+        str(getattr(env.payload, "exec_env_ref", "") or "") or None
+    )
 
 
 def _on_mcp_provenance_recorded(

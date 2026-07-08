@@ -55,8 +55,9 @@ from noeta.tools._limits import (
     truncate_bytes,
 )
 from noeta.tools._refs import ref_json
-from noeta.tools.fs._subprocess import _RunOutcome, run_argv, tail_bytes
+from noeta.tools.fs._subprocess import _RunOutcome, tail_bytes
 from noeta.tools.fs._workspace import WorkspaceRoot
+from noeta.tools.fs.exec_env import ExecEnv, LocalExecEnv
 
 
 __all__ = [
@@ -444,6 +445,10 @@ class ShellRunTool:
     output_cap: int = DEFAULT_SHELL_OUTPUT_CAP
     rules: tuple[_AllowRule, ...] = field(default_factory=lambda: _DEFAULT_RULES)
     runner: Optional[Callable[..., subprocess.CompletedProcess[bytes]]] = None
+    #: execution backend the foreground command runs through — the local
+    #: host (default) or a sandbox container. Background spawns still go
+    #: through the host ``background_runner`` (sandbox background is v2).
+    exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "shell_run"
     # description lives in an independent text resource
     # (descriptions/shell_run.md, four-section shape), not a Python string.
@@ -507,8 +512,19 @@ class ShellRunTool:
         # to the host's runner and return immediately. The sync timeout does NOT
         # apply to a backgrounded process.
         if bool(arguments.get("run_in_background")):
+            # A sandbox backend cannot run host-side background jobs (the runner
+            # spawns HOST subprocesses; AIO has no durable job handle, v1) — so
+            # refuse cleanly instead of silently running on the wrong machine.
+            # ``getattr`` default True keeps every local / pre-seam backend on
+            # the existing path. (D5)
+            if not getattr(self.exec_env, "supports_background", True):
+                return _err(
+                    self.name,
+                    "run_in_background is not supported in sandbox mode (v1); "
+                    "run the command in the foreground instead",
+                )
             return self._spawn_background(exec_argv, command, ctx)
-        outcome = run_argv(
+        outcome = self.exec_env.run_argv(
             exec_argv,
             cwd=self.workspace.root,
             timeout_s=timeout_s,
