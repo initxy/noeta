@@ -188,8 +188,9 @@ export default defineConfig({
       link: '/zh/',
       themeConfig: {
         nav: [
-          { text: '指南', link: '/zh/tutorials/build-a-research-agent' },
-          { text: 'API', link: '/zh/reference/tools' },
+          { text: '指南', link: '/zh/tutorials/quickstart' },
+          { text: '概念', link: '/zh/concepts/event-sourcing' },
+          { text: 'API', link: '/zh/reference/sdk' },
           { text: 'GitHub', link: 'https://github.com/initxy/noeta' },
         ],
 
@@ -198,8 +199,41 @@ export default defineConfig({
             {
               text: '教程',
               items: [
+                { text: '快速开始', link: '/zh/tutorials/quickstart' },
+                { text: '你的第一个代理', link: '/zh/tutorials/first-agent' },
                 { text: '构建研究代理', link: '/zh/tutorials/build-a-research-agent' },
                 { text: 'CI 集成', link: '/zh/tutorials/ci-integration' },
+              ],
+            },
+          ],
+
+          '/zh/how-to/': [
+            {
+              text: '操作指南',
+              items: [
+                { text: '配置 Provider', link: '/zh/how-to/configure-provider' },
+                { text: '使用编码代理', link: '/zh/how-to/use-the-coding-agent' },
+                { text: '构建自定义工具', link: '/zh/how-to/build-custom-tools' },
+                { text: '生成子代理', link: '/zh/how-to/spawn-subagents' },
+                { text: '连接 MCP', link: '/zh/how-to/connect-mcp' },
+                { text: '部署 Worker', link: '/zh/how-to/deploy-worker' },
+                { text: '切换 Provider', link: '/zh/how-to/swap-providers' },
+              ],
+            },
+          ],
+
+          '/zh/concepts/': [
+            {
+              text: '核心概念',
+              items: [
+                { text: '事件溯源', link: '/zh/concepts/event-sourcing' },
+                { text: '任务模型', link: '/zh/concepts/task-model' },
+                { text: '引擎与执行', link: '/zh/concepts/engine-execution' },
+                { text: 'Fold 与快照', link: '/zh/concepts/fold-and-snapshot' },
+                { text: '唤醒与恢复', link: '/zh/concepts/wake-resume' },
+                { text: 'Guard 与 Observer', link: '/zh/concepts/guard-observer' },
+                { text: 'Composer 与缓存', link: '/zh/concepts/composer-and-cache' },
+                { text: 'Provider 中立', link: '/zh/concepts/provider-neutrality' },
               ],
             },
           ],
@@ -208,11 +242,34 @@ export default defineConfig({
             {
               text: '参考',
               items: [
+                { text: 'SDK API', link: '/zh/reference/sdk' },
+                { text: '编码代理', link: '/zh/reference/noeta-agent' },
+                { text: 'HTTP 接口', link: '/zh/reference/http-api' },
+                { text: 'WorkerLoop', link: '/zh/reference/worker-loop' },
+                { text: '对比', link: '/zh/reference/comparison' },
                 { text: '配置', link: '/zh/reference/configuration' },
                 { text: '工具', link: '/zh/reference/tools' },
                 { text: '预设代理', link: '/zh/reference/presets' },
-                { text: 'HTTP 接口', link: '/zh/reference/http-api' },
                 { text: '术语表', link: '/zh/reference/glossary' },
+              ],
+            },
+          ],
+
+          '/zh/architecture/': [
+            {
+              text: '架构',
+              items: [
+                { text: '概览', link: '/zh/architecture/overview' },
+              ],
+            },
+          ],
+
+          '/zh/operations/': [
+            {
+              text: '运维',
+              items: [
+                { text: '故障排查', link: '/zh/operations/troubleshooting' },
+                { text: '已知限制', link: '/zh/operations/limitations' },
               ],
             },
           ],
