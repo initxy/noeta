@@ -8,6 +8,31 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-07-08
+
+### Added
+
+- **Per-session sandbox (opt-in).** With `NOETA_AGENT_SANDBOX=1` (needs a local
+  Docker daemon + the AIO Sandbox image), each session runs in its own fresh
+  container: file read/write/edit/patch, foreground `shell_run`, skill loading
+  and skill scripts, the workspace config loaders, and `webfetch` /
+  `web_search` all execute inside it, never on the host — `memory` and MCP stay
+  on the host by design. Two concurrent sessions get separate containers, and a
+  reclaimed session reconnects to the same container by its recorded
+  `exec_env_ref` (now carrying the `sandbox_id`). A `SandboxProvider` seam
+  (`LocalDockerSandboxProvider`) owns provisioning + lifecycle; the container
+  key is passed to `docker` by name (never in the argv), and third-party tool
+  keys reach in-container tools out-of-band. Extends the v0.1.11 `ExecEnv` seam
+  from one shared container to per-session; recorded in the
+  `execution-environment-seam` ADR.
+
+### Fixed
+
+- The container `webfetch` / `web_search` transports now run `curl --fail`, so
+  an HTTP 4xx/5xx fails the tool call (parity with the host httpx path) instead
+  of returning a server error page as a successful fetch or degrading a Tavily
+  auth/quota error to a bland "no results".
+
 ## [0.1.12] - 2026-07-08
 
 ### Fixed
@@ -304,7 +329,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.12...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.13...HEAD
+[0.1.13]: https://github.com/initxy/noeta/compare/v0.1.12...v0.1.13
 [0.1.12]: https://github.com/initxy/noeta/compare/v0.1.11...v0.1.12
 [0.1.11]: https://github.com/initxy/noeta/compare/v0.1.10...v0.1.11
 [0.1.10]: https://github.com/initxy/noeta/compare/v0.1.8...v0.1.10
