@@ -87,6 +87,7 @@ from noeta.protocols.tool import Tool
 from noeta.providers.catalog import provider_family, resolve_alias, spec_for
 from noeta.tools.app import AppPreviewGateway, build_app_tools
 from noeta.tools.fs import FsWriteMode, ShellMode, WorkspaceRoot, build_fs_tools
+from noeta.tools.fs.exec_env import ExecEnv
 from noeta.tools.mcp import MCP_PREFIX, McpConfigError
 from noeta.tools.memory import MemoryStore, build_memory_tools
 from noeta.tools.web import build_web_tools
@@ -358,6 +359,12 @@ class _BuildSpec:
     mcp_tools_override: Optional[dict[str, Tool]]
     custom_tools: Optional[dict[str, Tool]]
     app_gateway: Optional[AppPreviewGateway]
+    #: Execution backend for the fs / shell pack. ``None`` ⇒ host
+    #: (``LocalExecEnv``, byte-identical); a sandbox ``ExecEnv`` makes the pack
+    #: act against a container and switches the workspace to lexical
+    #: (container-path) containment. A wiring-only runtime injection, never part
+    #: of session identity — the tool schemas are unchanged either way.
+    exec_env: Optional[ExecEnv]
     hooks_pre_tool_use: tuple[PreToolUseRule, ...]
     #: SDK ``Options`` extension points (T3). Custom Guards registered after
     #: the built-in guard stack; custom ContentKindSpec channels appended
@@ -418,13 +425,20 @@ def _stage_fs_pack(spec: _BuildSpec, asm: _ToolAssembly) -> None:
     passes through ``allowed_tools``; every later stage appends past the filter
     (flag-gated tools are never whitelist-filtered, by design).
     """
-    asm.workspace = WorkspaceRoot.from_path(spec.workspace_dir)
+    # Sandbox mode (``exec_env`` set) makes ``workspace_dir`` a CONTAINER path:
+    # a host ``realpath`` / existence check is wrong (it lives in the container),
+    # so build a lexical containment root and let the ExecEnv do the remote IO.
+    if spec.exec_env is None:
+        asm.workspace = WorkspaceRoot.from_path(spec.workspace_dir)
+    else:
+        asm.workspace = WorkspaceRoot.for_container(spec.workspace_dir)
     full_pack = build_fs_tools(
         asm.workspace,
         mode=spec.write_mode,
         shell_mode=spec.shell_mode,
         shell_allowlist=spec.shell_allowlist,
         write_path_globs=spec.write_path_globs,
+        exec_env=spec.exec_env,
     )
     # The web pack (``webfetch``) is a built-in but not an
     # fs tool (no WorkspaceRoot). Merge it into the full pack HERE, before the
@@ -892,6 +906,14 @@ def build_session_inputs(
     #: identical tool schemas); only noeta-agent's live serving
     #: path wires a real gateway.
     app_gateway: Optional[AppPreviewGateway] = None,
+    #: Execution backend for the fs / shell pack. ``None`` (resume + every
+    #: SDK/test fixture) ⇒ the host ``LocalExecEnv`` and a host ``WorkspaceRoot``
+    #: — byte-identical, and the tool schemas are unchanged so the stable prefix
+    #: is unaffected. A sandbox ``ExecEnv`` (supplied per-task by the product
+    #: host once it has provisioned / attached a container, T5/T6) makes the
+    #: pack act against that container and switches the workspace to lexical
+    #: (container-path) containment. Wiring-only, never session identity.
+    exec_env: Optional[ExecEnv] = None,
     hooks_pre_tool_use: tuple[PreToolUseRule, ...] = (),
     repetition_threshold: int = 0,
     repetition_action: RepetitionAction = "require_approval",
@@ -993,6 +1015,7 @@ def build_session_inputs(
         mcp_tools_override=mcp_tools_override,
         custom_tools=custom_tools,
         app_gateway=app_gateway,
+        exec_env=exec_env,
         hooks_pre_tool_use=hooks_pre_tool_use,
         extra_guards=extra_guards,
         extra_content_kinds=extra_content_kinds,

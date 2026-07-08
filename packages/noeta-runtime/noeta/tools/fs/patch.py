@@ -37,8 +37,6 @@ Boundaries (architect-pinned, M1 rev3):
 
 from __future__ import annotations
 
-import contextlib
-import os
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,6 +54,7 @@ from noeta.tools.fs._diff import (
     file_hash,
 )
 from noeta.tools.fs._workspace import WorkspaceEscape, WorkspaceRoot
+from noeta.tools.fs.exec_env import ExclusiveCreateError, ExecEnv, LocalExecEnv
 from noeta.tools.fs.edit import (
     FsWriteMode,
     WRITE_FILE_MAX_BYTES,
@@ -103,19 +102,6 @@ def _collision_key(resolved: Path) -> str:
     return unicodedata.normalize("NFC", str(resolved)).casefold()
 
 
-def _write_all(fd: int, data: bytes) -> None:
-    """Write every byte to ``fd`` (``os.write`` may short-write). A
-    zero-length write or an OSError is a failure — a partial write is
-    NEVER treated as success."""
-    mv = memoryview(data)
-    total = 0
-    while total < len(data):
-        n = os.write(fd, mv[total:])
-        if n <= 0:
-            raise OSError("short write (os.write returned 0)")
-        total += n
-
-
 @dataclass
 class _Planned:
     op: str
@@ -149,6 +135,11 @@ class ApplyPatchTool:
 
     workspace: WorkspaceRoot
     mode: FsWriteMode = FsWriteMode.DRY_RUN
+    #: file-IO backend for read / stat / replace-write / rollback (local
+    #: host by default). The exclusive-``create`` fd path stays inline (its
+    #: granular fd-level recovery is local-only; sandbox create lands in a
+    #: later round). Path resolution stays on ``workspace``.
+    exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "apply_patch"
     # the LLM-facing description is the four-section text resource
     # (descriptions/apply_patch.md), not an inline Python string.
@@ -302,10 +293,10 @@ class ApplyPatchTool:
         edit N's ``old`` is matched against the file as left by edits 0..N-1
         in THIS call, then a single _Planned (original → final) is returned."""
         i0 = members[0].i
-        if not resolved.is_file():
+        if not self.exec_env.is_file(resolved):
             return _err(f"edit #{i0}: not a file: {rel!r}")
         try:
-            before_bytes = resolved.read_bytes()
+            before_bytes = self.exec_env.read_bytes(resolved)
             before = before_bytes.decode("utf-8")
         except OSError as exc:
             return _err(f"edit #{i0}: read failed: {exc}")
@@ -390,9 +381,9 @@ class ApplyPatchTool:
                 f"edit #{i}: content exceeds {_CONTENT_MAX_BYTES}B "
                 "(write safety cap); split or write less"
             )
-        if resolved.exists():
+        if self.exec_env.exists(resolved):
             return _err(f"edit #{i}: path already exists: {rel!r} (use replace)")
-        if not resolved.parent.is_dir():
+        if not self.exec_env.is_dir(resolved.parent):
             return _err(f"edit #{i}: parent directory not found for {rel!r}")
         diff = compute_diff("", content, rel)
         added, removed = diff_stat_counts(diff)
@@ -418,7 +409,7 @@ class ApplyPatchTool:
         for p in planned:
             if p.op == "replace":
                 try:
-                    current = p.resolved.read_bytes()
+                    current = self.exec_env.read_bytes(p.resolved)
                 except OSError as exc:
                     return self._fail(done, failed=p, recover="none",
                                       reason=f"read failed: {exc}")
@@ -427,39 +418,23 @@ class ApplyPatchTool:
                     return self._fail(done, failed=p, recover="none",
                                       reason="file changed since validation (TOCTOU)")
                 try:
-                    p.resolved.write_bytes(p.after_bytes)
+                    self.exec_env.write_bytes(p.resolved, p.after_bytes)
                 except OSError as exc:
                     # The file may now be truncated / partially written.
                     return self._fail(done, failed=p, recover="restore",
                                       reason=f"write failed: {exc}")
             else:  # create — exclusive, never overwrite
+                # The atomic exclusive-create + its granular recovery verbs now
+                # live behind the ExecEnv seam (LocalExecEnv keeps the exact
+                # os.open/write/close dance; a sandbox emulates exclusivity);
+                # the typed error carries the recover verb + reason this branch
+                # used to build inline.
                 try:
-                    fd = os.open(
-                        str(p.resolved), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644
+                    self.exec_env.create_exclusive(p.resolved, p.after_bytes)
+                except ExclusiveCreateError as exc:
+                    return self._fail(
+                        done, failed=p, recover=exc.recover, reason=exc.reason
                     )
-                except FileExistsError:
-                    # open failed → current file NOT created → recover="none".
-                    return self._fail(done, failed=p, recover="none",
-                                      reason="path created by another process (exclusive create)")
-                except OSError as exc:
-                    return self._fail(done, failed=p, recover="none",
-                                      reason=f"create failed: {exc}")
-                # The file now EXISTS — any failure (write OR close) must
-                # delete it; a close OSError must NOT escape and bypass
-                # rollback (close can report a deferred write-back error).
-                try:
-                    _write_all(fd, p.after_bytes)
-                except OSError as exc:
-                    # best-effort close so it cannot itself bypass _fail.
-                    with contextlib.suppress(OSError):
-                        os.close(fd)
-                    return self._fail(done, failed=p, recover="delete",
-                                      reason=f"write failed: {exc}")
-                try:
-                    os.close(fd)
-                except OSError as exc:
-                    return self._fail(done, failed=p, recover="delete",
-                                      reason=f"close failed: {exc}")
             done.append(p)
         return None
 
@@ -481,9 +456,9 @@ class ApplyPatchTool:
             try:
                 if p.op == "replace":
                     assert p.before_bytes is not None
-                    p.resolved.write_bytes(p.before_bytes)
+                    self.exec_env.write_bytes(p.resolved, p.before_bytes)
                 else:
-                    p.resolved.unlink()
+                    self.exec_env.unlink(p.resolved)
             except OSError:
                 rollback_failed.append(p.rel)
 
@@ -491,12 +466,12 @@ class ApplyPatchTool:
         if recover == "restore":
             try:
                 assert failed.before_bytes is not None
-                failed.resolved.write_bytes(failed.before_bytes)
+                self.exec_env.write_bytes(failed.resolved, failed.before_bytes)
             except OSError:
                 rollback_failed.append(failed.rel)
         elif recover == "delete":
             try:
-                failed.resolved.unlink()
+                self.exec_env.unlink(failed.resolved)
             except OSError:
                 rollback_failed.append(failed.rel)
         # 2) everything already applied, newest first.

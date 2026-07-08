@@ -21,6 +21,7 @@ into durable storage / preview / MCP while still driving the engine only through
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Callable, Mapping, Optional, Tuple
 
@@ -34,7 +35,46 @@ from noeta.tools.app import AppPreviewGateway
 from noeta.tools.mcp import HttpPostFn, McpAnyServerSpec
 
 
-__all__ = ["HostConfig"]
+__all__ = ["HostConfig", "SandboxExecEnvConfig"]
+
+
+@dataclass(frozen=True)
+class SandboxExecEnvConfig:
+    """Config for routing the fs / shell tools to an AIO Sandbox container.
+
+    A pure, serialisable config value — it carries only *addressing*, never a
+    live client or a secret. The product host turns it into a live
+    ``AioSandboxExecEnv`` (reading the key from the environment, provisioning /
+    attaching a container) and threads that into ``build_session_inputs``; the
+    config alone is import-linter-safe for the backend to build (D2: the
+    backend fills config, the runtime instantiates the adapter).
+
+    * ``base_url`` — the container's API root (e.g. ``http://host:8080``).
+    * ``api_key_env`` — the environment variable holding the container's static
+      ``SANDBOX_API_KEY``. The key rides only on the wire, never in a log /
+      event / this config (D5). ``None`` env value ⇒ no auth header.
+    * ``provision`` — ``"eager"`` provisions a fresh container when a root task
+      starts; ``"attach"`` connects to an already-running ``base_url`` (the
+      default — the reconnect path a resumed / reclaimed task also takes).
+    * ``workdir`` — the container's working directory. In sandbox mode this
+      *is* the fs-tools' workspace root (a lexical containment fence, D7): the
+      host path a local session would use is meaningless inside the container,
+      so the host substitutes this container path. Must be absolute.
+    """
+
+    base_url: str
+    api_key_env: str = "SANDBOX_API_KEY"
+    provision: str = "attach"
+    workdir: str = "/workspace"
+
+    def resolve_api_key(self) -> Optional[str]:
+        """Read the container key from ``api_key_env`` (``None`` if unset).
+
+        Kept here so the addressing (this config) and the secret (the env
+        lookup) stay separated: the config is safe to record / pass around; the
+        key is fetched only at connect time.
+        """
+        return os.environ.get(self.api_key_env)
 
 
 @dataclass(frozen=True)
@@ -103,6 +143,14 @@ class HostConfig:
     #: account and actually reuses its KV cache. ``None`` (default) ⇒ no
     #: per-request headers — a host runtime injection, never agent identity.
     provider_headers: Optional[Callable[[StepContext], Mapping[str, str]]] = None
+
+    #: Sandbox execution backend for the fs / shell tools. ``None`` (default) ⇒
+    #: the local host (``LocalExecEnv``, today's behaviour). When set, the
+    #: product host provisions / attaches an AIO Sandbox container per root task
+    #: and routes fs / shell side effects into it (the tool schemas — and thus
+    #: the stable prefix — are unchanged). A host runtime injection, never part
+    #: of any agent identity.
+    exec_env: Optional[SandboxExecEnvConfig] = None
 
     # -- host kill-switches ------------------------------------------------
     workflow_allowed: bool = False

@@ -50,6 +50,7 @@ from noeta.tools.fs._workspace import (
     resolve_or_error,
     tool_error,
 )
+from noeta.tools.fs.exec_env import ExecEnv, LocalExecEnv
 
 
 __all__ = [
@@ -339,6 +340,9 @@ class ReadFileTool:
     #: stable hash is unchanged, so the prompt's tool list is unaffected.
     #: Default empty ⇒ behaves exactly like the single-root wall.
     skill_roots: tuple[Path, ...] = ()
+    #: execution backend for the file read (local host by default, or a
+    #: sandbox container). Path *resolution* stays on ``workspace``.
+    exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "read"
     description: str = field(default=load_tool_description("read"))
     risk_level: str = "low"
@@ -371,7 +375,8 @@ class ReadFileTool:
         if isinstance(path, ToolResult):
             return path
         resolved = resolve_readable_file(
-            self.workspace, self.skill_roots, self.name, path
+            self.workspace, self.skill_roots, self.name, path,
+            exec_env=self.exec_env,
         )
         if isinstance(resolved, ToolResult):
             return resolved
@@ -386,7 +391,7 @@ class ReadFileTool:
         )
 
         try:
-            raw = resolved.read_bytes()
+            raw = self.exec_env.read_bytes(resolved)
         except OSError as exc:
             return tool_error(self.name, f"read failed: {exc}")
 
@@ -512,6 +517,7 @@ class GlobTool:
     """
 
     workspace: WorkspaceRoot
+    exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "glob"
     description: str = field(default=load_tool_description("glob"))
     risk_level: str = "low"
@@ -536,7 +542,7 @@ class GlobTool:
                 self.name, "pattern must be workspace-relative (no leading '/' / '..')"
             )
         try:
-            raw_matches = list(self.workspace.root.glob(pattern))
+            raw_matches = list(self.exec_env.glob(self.workspace.root, pattern))
         except (OSError, ValueError) as exc:
             return tool_error(self.name, f"glob failed: {exc}")
 
@@ -583,6 +589,7 @@ class GrepTool:
     """
 
     workspace: WorkspaceRoot
+    exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "grep"
     description: str = field(default=load_tool_description("grep"))
     risk_level: str = "low"
@@ -636,7 +643,7 @@ class GrepTool:
         total_matches = 0
         for file_path in candidates:
             try:
-                text = file_path.read_text(encoding="utf-8")
+                text = self.exec_env.read_text(file_path, encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
             rel = self.workspace.relative(file_path)
@@ -671,18 +678,18 @@ class GrepTool:
     def _candidate_files(
         self, resolved: Path, glob_filter: Optional[str]
     ) -> list[Path]:
-        if resolved.is_file():
+        if self.exec_env.is_file(resolved):
             return [resolved]
-        if not resolved.is_dir():
+        if not self.exec_env.is_dir(resolved):
             return []
         if glob_filter:
-            it = resolved.glob(glob_filter)
+            it = self.exec_env.glob(resolved, glob_filter)
         else:
-            it = resolved.rglob("*")
+            it = self.exec_env.rglob(resolved, "*")
         files: list[Path] = []
         for entry in it:
             try:
-                if entry.is_file() and not entry.is_symlink():
+                if self.exec_env.is_file(entry) and not self.exec_env.is_symlink(entry):
                     # Containment guard against any glob/rglob result that
                     # is a symlink to outside (skipped) — non-symlinks
                     # under a contained root are already safe.

@@ -91,6 +91,7 @@ from noeta.policies.control_tools import (
     normalize_answer_document,
     question_handle,
 )
+from noeta.protocols.canonical import from_canonical_bytes
 from noeta.protocols.values import LOCAL_PRINCIPAL, ContentRef, Principal
 from noeta.protocols.wake import (
     ExternalEvent,
@@ -309,19 +310,35 @@ def _background_exit_notice(summary: str, ref: ContentRef, job_id: str) -> str:
 
 
 def _background_subagent_notice(
-    summary: str, ref: ContentRef, subtask_id: str, status: str
+    summary: str, result_text: str, subtask_id: str, status: str
 ) -> str:
     """Render the background-sub-agent completion notice body (Mechanism C).
 
     docs/adr/background-subagent.md. Mirrors :func:`_background_exit_notice`: one
-    line of human summary + the content-addressed ``ref`` so the model can deref
-    the child's full result it never sees inline + the child's id and terminal
-    ``status``. Pointer-only — the result bytes live in the ContentStore."""
+    line of human summary + the sub-agent's ACTUAL result text (dereferenced from
+    the ContentRef at delivery time so the model sees the real answer inline, not
+    an opaque hash pointer it cannot read). The ``<background-subagent>`` tag
+    carries the ``subtask_id`` and terminal ``status`` as a machine-greppable
+    provenance marker. Inlining the result matches the foreground spawn path
+    (``Engine.append_subagent_result_message`` dereferences via
+    ``_deref_subagent_output``) and prevents the model from hallucinating a
+    plausible-looking "result" when all it actually saw was an unreadable ref."""
     return (
-        f"{summary}\n"
-        f'<background-subagent id="{subtask_id}" status="{status}" '
-        f'ref="{ref.hash}" size="{ref.size}"/>'
+        f"{summary}\n\n"
+        f"{result_text}\n\n"
+        f'<background-subagent id="{subtask_id}" status="{status}"/>'
     )
+
+
+def _render_subagent_result(body: bytes) -> str:
+    """Deref a sub-agent result body into inline notice text.
+
+    Mirrors the foreground path (:meth:`Engine._deref_subagent_output`): a
+    string answer renders as its raw text; a structured (dict / list) answer as
+    JSON — never a Python ``repr`` — so the background notice shows the model the
+    same shape a foreground ``tool_result`` would carry."""
+    value = from_canonical_bytes(body)
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
 
 
 def _external_event_notice(event_kind: str, payload: Any) -> str:
@@ -596,26 +613,41 @@ class InteractionDriver:
         # exists — that lets the connect's skip-on-failure record its
         # ``McpServerSkipped`` events on the task's own stream (the front-end
         # surface), and avoids a redundant pre-connect under a now-stale key.
+        # T6: the host's sandbox container address for this session. Welded
+        # into TaskHostBound (below) so a resumed / reclaimed session reconnects
+        # to the SAME container, and passed to the seed resolve so the seed
+        # Engine targets it too (matching the ref it is about to record).
+        # ``getattr`` guards a host / test double without the sandbox seam →
+        # ``None`` (the local path, byte-identical). Addressing only (D5).
+        _exec_env_ref_of = getattr(host, "exec_env_ref", None)
+        session_exec_env_ref = (
+            _exec_env_ref_of() if callable(_exec_env_ref_of) else None
+        )
         seed_engine = host.resolve_engine_for_agent(
             agent, model=bound_model, workspace=workspace_dir, provider=bound_provider,
             permission_mode=permission_mode, effort=effort,
+            exec_env_ref=session_exec_env_ref,
         )
-        # Record the per-session workspace absolute path on the
-        # durable ``TaskHostBound`` so a resumed session reproduces the same root
-        # dir. When a host binding was injected (CodeServer path) merge the path
-        # in; when none was (the bare CLI / web ConsoleBackend path passes no
-        # binding) mint a workspace-only binding so the workspace dir is
-        # preserved. ``None`` workspace_dir keeps the no-binding path untouched.
+        # Record the per-session workspace absolute path AND the sandbox
+        # container address on the durable ``TaskHostBound`` so a resumed /
+        # reclaimed session reproduces the same root dir and reconnects to the
+        # same container. When a host binding was injected (CodeServer path)
+        # merge them in; when none was (the bare CLI / web ConsoleBackend path
+        # passes no binding) mint a binding carrying whichever is set. Both
+        # ``None`` keeps the no-binding path untouched (byte-identical).
         bound_host_binding = host_binding
-        if workspace_dir:
+        if workspace_dir or session_exec_env_ref:
             if bound_host_binding is None:
                 bound_host_binding = TaskHostBoundPayload(
                     host_id="",
                     workspace_dir=workspace_dir,
+                    exec_env_ref=session_exec_env_ref,
                 )
             else:
                 bound_host_binding = dataclasses.replace(
-                    bound_host_binding, workspace_dir=workspace_dir
+                    bound_host_binding,
+                    workspace_dir=workspace_dir,
+                    exec_env_ref=session_exec_env_ref,
                 )
         task = seed_engine.create_task(
             goal=goal,
@@ -1195,10 +1227,11 @@ class InteractionDriver:
         session is idle. It is the exact analogue of
         :meth:`notify_background_exit`: it **reuses the next-goal wake handle**
         (no new wake primitive) to wake the session and inject an
-        ``origin="system"`` notice carrying a one-line ``summary`` + the result
-        :class:`ContentRef` (the model derefs the full result itself), so the
-        agent reacts to the completion on its own — **proactive, no user prompt,
-        no poll**.
+        ``origin="system"`` notice carrying a one-line ``summary`` + the
+        sub-agent's inlined result text (dereferenced from the result
+        :class:`ContentRef` at delivery so the model reads the real answer, not an
+        opaque pointer it cannot resolve), so the agent reacts to the completion
+        on its own — **proactive, no user prompt, no poll**.
 
         Distinct from the shell path in ONE way: it first emits a
         ``BackgroundSubagentDelivered`` on the parent stream — the exactly-once
@@ -1226,17 +1259,30 @@ class InteractionDriver:
         ref: ContentRef,
         status: str,
     ) -> SeededTurn:
-        """Validate, write the delivery anchor, and seed the notice turn.
+        """Validate, deref the result, write the delivery anchor, seed the notice.
 
         Mirrors :meth:`seed_notify_background_exit`: refuse a
         non-next-goal-suspended task (so a mid-turn / terminal session raises
-        here, before any anchor / SeededTurn), THEN emit the exactly-once
-        ``BackgroundSubagentDelivered`` anchor on the parent stream
+        here, before any anchor / SeededTurn), THEN deref + render the result body
+        (which can also fault — kept before the anchor so a content fault retries
+        idempotently instead of stranding a duplicate anchor), THEN emit the
+        exactly-once ``BackgroundSubagentDelivered`` anchor on the parent stream
         (``system_emit`` — no lease; the parent is suspended), THEN wake + lease
         with the source-tagged notice prelude. The anchor lands before the notice
         turn's writes so fold sees ``...Started... Delivered... <notice turn>``
         in order."""
         self._require_human_suspend(task_id, NEXT_GOAL_WAKE_HANDLE)
+        # Deref + render the child's result BEFORE writing the delivery anchor.
+        # The anchor is non-idempotent and the driver's caller retries this whole
+        # method on any exception (the host notify loop). A deref fault (content
+        # GC'd / evicted / not on this host's store, or a non-canonical body)
+        # raised here — before the anchor — retries idempotently, exactly like the
+        # _require_human_suspend refusal above, instead of stacking duplicate
+        # BackgroundSubagentDelivered anchors and then dropping the result. The
+        # model sees the ACTUAL text inline (matching the foreground spawn path,
+        # _deref_subagent_output); the ref is still recorded in the anchor below
+        # for provenance / re-delivery.
+        result_text = _render_subagent_result(self._host.content_store.get(ref))
         self._host.event_log.system_emit(
             task_id=task_id,
             type="BackgroundSubagentDelivered",
@@ -1250,7 +1296,7 @@ class InteractionDriver:
             origin="observer",
             trace_id=self._trace_id(task_id),
         )
-        notice = _background_subagent_notice(summary, ref, subtask_id, status)
+        notice = _background_subagent_notice(summary, result_text, subtask_id, status)
         return self._seed_woken(
             task_id,
             handle=NEXT_GOAL_WAKE_HANDLE,
@@ -1687,11 +1733,12 @@ class InteractionDriver:
         edits hit the same disk and must be undone together). For each workspace path take
         its EARLIEST baseline — the first edit that pinned the file's pre-turn
         state. The shared per-turn gate (D8) stashes at most ONE baseline per path
-        across the whole tree, so the union is clean. Write each back to disk; a
-        baseline with no ``content_ref`` means the AI created the file inside the
-        rewound span, so it is DELETED. Only AI ``edit``/``write`` touches are
-        covered (D4): a path the shell mutated never surfaced ``file_changes`` so
-        it has no baseline here.
+        across the whole tree, so the union is clean. Write each back to disk —
+        or, for a sandbox session (T7), back into the CONTAINER through the
+        session's ExecEnv; a baseline with no ``content_ref`` means the AI created
+        the file inside the rewound span, so it is DELETED. Only AI
+        ``edit``/``write`` touches are covered (D4): a path the shell mutated
+        never surfaced ``file_changes`` so it has no baseline here.
 
         Reuses the parent↔child graph (``SubtaskSpawned.subtask_id`` +
         ``TaskCreated.parent_task_id``), NOT cancel-cascade's
@@ -1728,6 +1775,31 @@ class InteractionDriver:
 
         _collect(events, after=keep_through)
         if not earliest:
+            return
+        # T7 — a SANDBOX session's baselines live in the container, so the
+        # write-back must go through the session's ExecEnv (the recorded
+        # ``exec_env_ref``, T6) rooted at the container workdir, NOT the host FS.
+        # ``exec_env_for_ref`` returns ``None`` for a local session (or a host
+        # without a sandbox / a test double), so the local path below stays
+        # byte-identical. This is live-only, exactly like the local path.
+        resolve = getattr(host, "exec_env_for_ref", None)
+        sandbox = (
+            resolve(getattr(baseline_task.governance, "exec_env_ref", None))
+            if callable(resolve)
+            else None
+        )
+        if sandbox is not None:
+            exec_env, root = sandbox
+            for path, baseline in earliest.items():
+                target = root / path
+                if baseline.content_ref is None:
+                    if exec_env.exists(target):
+                        exec_env.unlink(target)
+                else:
+                    exec_env.mkdir(target.parent)
+                    exec_env.write_bytes(
+                        target, host.content_store.get(baseline.content_ref)
+                    )
             return
         root = host.workspace_dir_for(baseline_task.governance.workspace)
         for path, baseline in earliest.items():

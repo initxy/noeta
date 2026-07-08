@@ -56,6 +56,15 @@ class WorkspaceRoot:
 
     root: Path
     display: str
+    #: When ``True``, ``resolve`` normalises *lexically* (``os.path.normpath``)
+    #: instead of ``os.path.realpath`` — the containment fence for a **sandbox**
+    #: workspace, whose ``root`` is a *container* path that does not exist on the
+    #: host (so a host ``realpath`` / symlink-resolve is both wrong and
+    #: impossible). The container itself is the real isolation boundary (D7);
+    #: this stays a tidiness fence (reject ``..`` above root / absolute
+    #: escapes). Default ``False`` ⇒ today's host realpath behaviour, byte-equal
+    #: for every existing construction.
+    lexical: bool = False
 
     @classmethod
     def from_path(cls, path: str | os.PathLike[str]) -> "WorkspaceRoot":
@@ -72,17 +81,42 @@ class WorkspaceRoot:
             )
         return cls(root=real, display=original)
 
+    @classmethod
+    def for_container(cls, container_dir: str | os.PathLike[str]) -> "WorkspaceRoot":
+        """Build a *lexical* root at a **container** working directory (D7).
+
+        The directory lives inside a sandbox container, not on the host, so it
+        is neither ``realpath``-resolved nor checked for existence here —
+        ``resolve`` does purely lexical (``normpath``) containment and the
+        remote ``ExecEnv`` performs the actual IO. The path must be absolute
+        (a container work dir like ``/home/gem/workspace``).
+        """
+        original = os.fspath(container_dir)
+        root = Path(os.path.normpath(original))
+        if not root.is_absolute():
+            raise WorkspaceEscape(
+                f"container workspace path {original!r} must be absolute"
+            )
+        return cls(root=root, display=original, lexical=True)
+
     def resolve(self, target: str) -> Path:
-        """Return the realpath of ``target`` joined under the workspace.
+        """Return ``target`` joined under the workspace, canonicalised.
 
         ``target`` may be relative (joined to the root) or absolute; either
-        way the result must live under ``self.root`` after ``realpath``
-        resolution. Raises ``WorkspaceEscape`` otherwise.
+        way the result must live under ``self.root`` after resolution
+        (``realpath`` for a host root, ``normpath`` for a lexical / container
+        root). Raises ``WorkspaceEscape`` otherwise.
         """
         if not isinstance(target, str) or not target:
             raise WorkspaceEscape("path must be a non-empty string")
         joined = self.root / target if not os.path.isabs(target) else Path(target)
-        resolved = Path(os.path.realpath(os.fspath(joined)))
+        if self.lexical:
+            # Lexical containment for a container root: collapse ``..`` / ``.``
+            # without touching the host FS (no symlink resolution — there is no
+            # host symlink to follow; the container is the isolation boundary).
+            resolved = Path(os.path.normpath(os.fspath(joined)))
+        else:
+            resolved = Path(os.path.realpath(os.fspath(joined)))
         # ``Path.is_relative_to`` is the Python-3.9+ structural form;
         # equivalent to ``str(resolved).startswith(str(root)+sep)`` plus
         # the equality case.

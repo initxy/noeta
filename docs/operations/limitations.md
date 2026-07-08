@@ -136,6 +136,90 @@ answers=...)`). A custom `Observer` subscribed to the EventLog can
 forward `UserQuestionRequested` / `ToolCallApprovalRequested` events to
 your own notification channel.
 
+## Sandbox side effects are not fenced across worker generations
+
+**What it means:** When a session runs in a sandbox container (the
+`ExecEnv` seam bound to an AIO Sandbox backend), its file and shell
+side effects hit the container over HTTP — outside the shared Postgres
+transaction that fences EventLog writes. A worker that was fenced out of
+the log (a GC pause, a `SIGSTOP` then revive) can still `POST` to the
+container. The sandbox side effect is therefore **at-least-once and
+unfenced**, the same class as a half-run `shell_run` on the host: a
+reclaiming worker reconnects to the same container and re-drives the
+step, but a slow zombie can pollute the container in the meantime.
+
+**When you hit it:** A worker holding a sandbox session stalls long
+enough for its lease to expire and another worker to reclaim the task,
+while the stalled worker later wakes and issues one more container call.
+
+**Workaround:** None automatic in v1 — it is bounded by the same
+step-attempt re-drive and human review that cover crashed-step side
+effects (see "Mid-step crash recovery does not undo side effects"). A
+future generation-token fence (the seam already reserves the slot) will
+close the window.
+
+**Why it is this way:** The lease-fencing design assumes no load-bearing
+write lands outside the shared database; a container write is exactly
+such a write. Fencing it properly needs an orchestration-layer token and
+a validating proxy in front of the container — real work deferred to the
+per-container future. The trade-off is recorded in the execution
+environment seam ADR, which links back to the multi-host lease fencing ADR.
+
+## One sandbox container per host; idle containers stay billed
+
+**What it means:** v1 does not orchestrate containers — a sandbox config
+names one external container by `base_url`, and every session on that
+host shares it. So there is **no per-session isolation** between two
+concurrent conversations on one host (they share one container working
+directory), and the durable `exec_env_ref` records the container
+`base_url` only, not a distinct per-container id. The container also has
+no pause/snapshot: it stays alive (and billed) for as long as a session
+that uses it is active, including long suspends waiting on a human or a
+timer. Teardown happens on host shutdown, not when a single conversation
+closes (reaping a shared container would break the others).
+
+**When you hit it:** Running multiple concurrent conversations against
+one sandboxed host, or leaving a sandboxed session suspended for a long
+time.
+
+**Workaround:** Give workloads that must not share a filesystem their
+own host + container. For idle cost, close sessions you are done with so
+the host can be shut down and the container reclaimed by whatever
+provisioned it.
+
+**Why it is this way:** Cluster orchestration and container pause/snapshot
+are out of scope for the preview; the seam is built so per-container
+provisioning (and a real per-container `sandbox_id`) can arrive later
+without reshaping the durable record. See the execution environment seam ADR.
+
+## Sandbox `shell_run` timeout is client-side, not a remote hard-kill
+
+**What it means:** On the host, `shell_run`'s `timeout` maps to a real
+subprocess timeout that kills the process. Under a sandbox the AIO
+container has no remote hard-kill, so the timeout is enforced *client
+side* by the HTTP read timeout of that one call. The `timeout` you pass
+is honoured — a command that runs past it is reported to the model as a
+timed-out run at the requested budget (not a fixed adapter default) — but
+the command itself **keeps running in the container** after the call
+returns, until the AIO lease cap reaps it. Its side effects may still
+land after the tool has reported a timeout.
+
+**When you hit it:** A sandbox `shell_run` whose command exceeds its
+`timeout` (or the default) — for example a build or test run that hangs.
+
+**Workaround:** None automatic in v1. Treat a timed-out sandbox
+`shell_run` as "may still be running"; a follow-up command can observe
+or clean up its partial effects. Give genuinely long commands an explicit
+larger `timeout` so the client does not cut the call off early.
+
+**Why it is this way:** AIO's `/v1/shell/exec` is a synchronous call with
+no cancel verb, so the only bound the client owns is its own read
+timeout. Threading the per-command budget into that timeout makes the
+model-facing `timeout` behave like the local backend within the limits of
+a no-hard-kill backend. A container-durable, cancellable job handle is
+separate future work (the same work that unlocks background shell under a
+sandbox). See the execution environment seam ADR.
+
 ## Frontend is a small Vite MPA, not a framework app
 
 **What it means:** The shipped web app (`/chat`, `/trace`) is a small
