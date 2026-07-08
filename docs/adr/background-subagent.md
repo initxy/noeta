@@ -22,7 +22,7 @@ This is exactly where the deferred invariant is explicitly opened: before this, 
 
 ### Delivery via mechanism C: on termination, wake the parent session and inject the notification at a turn boundary
 
-When the background subtask reaches terminal state, it offloads its return result into the ContentStore, then **reuses mechanism C** (shell-permission-and-background.md): it wakes the parent session through the next-goal wake handle, and a host-side background driver injects, at a turn boundary, a notification tagged `origin="system"` (a one-line summary + the result ContentRef). The parent agent sees it on its next turn and continues accordingly—**active delivery, without the user having to ask again and without the model polling**.
+When the background subtask reaches terminal state, it offloads its return result into the ContentStore, then **reuses mechanism C** (shell-permission-and-background.md): it wakes the parent session through the next-goal wake handle, and a host-side background driver injects, at a turn boundary, a notification tagged `origin="system"` (a one-line summary plus the sub-agent's result text, dereferenced from the ContentStore and inlined so the model reads the real answer directly rather than an opaque pointer; the result ContentRef is retained in the delivery anchor for provenance / re-delivery). The parent agent sees it on its next turn and continues accordingly—**active delivery, without the user having to ask again and without the model polling**.
 
 The `tool_result` slot of `spawn_subagent` is already occupied by the "started" receipt at spawn time, so completion **cannot** reuse that tool_result and must go through mechanism C's separate notification message—exactly isomorphic to how background commands deliver.
 

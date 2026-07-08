@@ -91,6 +91,7 @@ from noeta.policies.control_tools import (
     normalize_answer_document,
     question_handle,
 )
+from noeta.protocols.canonical import from_canonical_bytes
 from noeta.protocols.values import LOCAL_PRINCIPAL, ContentRef, Principal
 from noeta.protocols.wake import (
     ExternalEvent,
@@ -309,19 +310,35 @@ def _background_exit_notice(summary: str, ref: ContentRef, job_id: str) -> str:
 
 
 def _background_subagent_notice(
-    summary: str, ref: ContentRef, subtask_id: str, status: str
+    summary: str, result_text: str, subtask_id: str, status: str
 ) -> str:
     """Render the background-sub-agent completion notice body (Mechanism C).
 
     docs/adr/background-subagent.md. Mirrors :func:`_background_exit_notice`: one
-    line of human summary + the content-addressed ``ref`` so the model can deref
-    the child's full result it never sees inline + the child's id and terminal
-    ``status``. Pointer-only — the result bytes live in the ContentStore."""
+    line of human summary + the sub-agent's ACTUAL result text (dereferenced from
+    the ContentRef at delivery time so the model sees the real answer inline, not
+    an opaque hash pointer it cannot read). The ``<background-subagent>`` tag
+    carries the ``subtask_id`` and terminal ``status`` as a machine-greppable
+    provenance marker. Inlining the result matches the foreground spawn path
+    (``Engine.append_subagent_result_message`` dereferences via
+    ``_deref_subagent_output``) and prevents the model from hallucinating a
+    plausible-looking "result" when all it actually saw was an unreadable ref."""
     return (
-        f"{summary}\n"
-        f'<background-subagent id="{subtask_id}" status="{status}" '
-        f'ref="{ref.hash}" size="{ref.size}"/>'
+        f"{summary}\n\n"
+        f"{result_text}\n\n"
+        f'<background-subagent id="{subtask_id}" status="{status}"/>'
     )
+
+
+def _render_subagent_result(body: bytes) -> str:
+    """Deref a sub-agent result body into inline notice text.
+
+    Mirrors the foreground path (:meth:`Engine._deref_subagent_output`): a
+    string answer renders as its raw text; a structured (dict / list) answer as
+    JSON — never a Python ``repr`` — so the background notice shows the model the
+    same shape a foreground ``tool_result`` would carry."""
+    value = from_canonical_bytes(body)
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
 
 
 def _external_event_notice(event_kind: str, payload: Any) -> str:
@@ -1210,10 +1227,11 @@ class InteractionDriver:
         session is idle. It is the exact analogue of
         :meth:`notify_background_exit`: it **reuses the next-goal wake handle**
         (no new wake primitive) to wake the session and inject an
-        ``origin="system"`` notice carrying a one-line ``summary`` + the result
-        :class:`ContentRef` (the model derefs the full result itself), so the
-        agent reacts to the completion on its own — **proactive, no user prompt,
-        no poll**.
+        ``origin="system"`` notice carrying a one-line ``summary`` + the
+        sub-agent's inlined result text (dereferenced from the result
+        :class:`ContentRef` at delivery so the model reads the real answer, not an
+        opaque pointer it cannot resolve), so the agent reacts to the completion
+        on its own — **proactive, no user prompt, no poll**.
 
         Distinct from the shell path in ONE way: it first emits a
         ``BackgroundSubagentDelivered`` on the parent stream — the exactly-once
@@ -1241,17 +1259,30 @@ class InteractionDriver:
         ref: ContentRef,
         status: str,
     ) -> SeededTurn:
-        """Validate, write the delivery anchor, and seed the notice turn.
+        """Validate, deref the result, write the delivery anchor, seed the notice.
 
         Mirrors :meth:`seed_notify_background_exit`: refuse a
         non-next-goal-suspended task (so a mid-turn / terminal session raises
-        here, before any anchor / SeededTurn), THEN emit the exactly-once
-        ``BackgroundSubagentDelivered`` anchor on the parent stream
+        here, before any anchor / SeededTurn), THEN deref + render the result body
+        (which can also fault — kept before the anchor so a content fault retries
+        idempotently instead of stranding a duplicate anchor), THEN emit the
+        exactly-once ``BackgroundSubagentDelivered`` anchor on the parent stream
         (``system_emit`` — no lease; the parent is suspended), THEN wake + lease
         with the source-tagged notice prelude. The anchor lands before the notice
         turn's writes so fold sees ``...Started... Delivered... <notice turn>``
         in order."""
         self._require_human_suspend(task_id, NEXT_GOAL_WAKE_HANDLE)
+        # Deref + render the child's result BEFORE writing the delivery anchor.
+        # The anchor is non-idempotent and the driver's caller retries this whole
+        # method on any exception (the host notify loop). A deref fault (content
+        # GC'd / evicted / not on this host's store, or a non-canonical body)
+        # raised here — before the anchor — retries idempotently, exactly like the
+        # _require_human_suspend refusal above, instead of stacking duplicate
+        # BackgroundSubagentDelivered anchors and then dropping the result. The
+        # model sees the ACTUAL text inline (matching the foreground spawn path,
+        # _deref_subagent_output); the ref is still recorded in the anchor below
+        # for provenance / re-delivery.
+        result_text = _render_subagent_result(self._host.content_store.get(ref))
         self._host.event_log.system_emit(
             task_id=task_id,
             type="BackgroundSubagentDelivered",
@@ -1265,7 +1296,7 @@ class InteractionDriver:
             origin="observer",
             trace_id=self._trace_id(task_id),
         )
-        notice = _background_subagent_notice(summary, ref, subtask_id, status)
+        notice = _background_subagent_notice(summary, result_text, subtask_id, status)
         return self._seed_woken(
             task_id,
             handle=NEXT_GOAL_WAKE_HANDLE,
