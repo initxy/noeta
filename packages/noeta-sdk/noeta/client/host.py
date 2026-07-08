@@ -21,7 +21,6 @@ from __future__ import annotations
 import dataclasses
 import logging
 import threading
-import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -65,6 +64,7 @@ from noeta.protocols.step_context import StepContext
 from noeta.protocols.tool import Tool
 from noeta.protocols.values import ContentRef
 from noeta.providers.catalog import price as catalog_price
+from noeta.execution.background_delivery import BackgroundDelivery, DeliverFn
 from noeta.execution.background_subagent import (
     DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_SESSION,
     BackgroundSubagentRegistry,
@@ -696,15 +696,16 @@ class SdkHost(GenericEngineResolver):
     _sandbox: Optional[SandboxExecEnvManager] = field(
         default=None, init=False, repr=False, compare=False
     )
-    # The background-completion notifier (an
-    # ``InteractionDriver``, duck-typed to avoid a noeta.client → noeta.execution
-    # import cycle). The product sets it AFTER constructing the driver (the
-    # driver wraps this host, so the host can't construct it). ``None`` ⇒ no
-    # push: a background exit still records ``BackgroundShellExited`` durably,
-    # but no wake-and-notify turn is driven (oneshot / lifecycle / tests).
-    _background_notifier: Optional[Any] = field(
-        default=None, init=False, repr=False, compare=False
-    )
+    # The shared Mechanism-C delivery glue (docs/adr/background-subagent.md):
+    # the daemon-thread hop + parent-fold terminal check + mid-turn-deferral
+    # retry loop that BOTH the background-shell and background-sub-agent exit
+    # paths funnel through. Built in ``__post_init__`` on the host's shared L0
+    # read seams; the completion notifier (an ``InteractionDriver``) is wired
+    # late via :meth:`set_background_notifier` (the driver wraps this host, so
+    # the host can't construct it). ``None`` notifier ⇒ no push: a background
+    # exit still records its durable event, but drives no wake-and-notify turn
+    # (oneshot / lifecycle / tests).
+    _delivery: BackgroundDelivery = field(init=False, repr=False, compare=False)
     # Pending woken-prelude inbox for the resident worker pool
     # (round 3a single-host-multi-worker). When a ``seed_*`` method returns
     # a SeededTurn with a non-durable prelude (ResolveApprovalPrelude), the
@@ -764,6 +765,18 @@ class SdkHost(GenericEngineResolver):
                 f"SdkHost: default_provider {self.default_provider!r} is not a "
                 f"key of the providers registry {sorted(self.providers)!r}"
             )
+        # Build the shared Mechanism-C delivery glue first: both the
+        # background-shell and background-sub-agent exit hooks route their
+        # completion push through it. It stays inert (records the durable exit,
+        # drives no turn) until the product wires a notifier via
+        # :meth:`set_background_notifier`.
+        object.__setattr__(
+            self,
+            "_delivery",
+            BackgroundDelivery(
+                event_log=self.event_log, content_store=self.content_store
+            ),
+        )
         # Build the background-shell registry once on the host's
         # shared L0 triple. Lazily here (not a default_factory) because it
         # needs event_log + content_store. issue 02 (Mechanism C): inject the
@@ -935,84 +948,38 @@ class SdkHost(GenericEngineResolver):
 
         Called by the product AFTER it builds the driver over this host (the
         driver wraps the host, so the host cannot construct it). Until set, a
-        background exit records ``BackgroundShellExited`` durably but drives no
-        wake-and-notify turn (oneshot / lifecycle / tests). Idempotent."""
-        object.__setattr__(self, "_background_notifier", notifier)
+        background exit records its durable event (``BackgroundShellExited`` /
+        the child terminal) but drives no wake-and-notify turn (oneshot /
+        lifecycle / tests). Idempotent. Both background paths share the one
+        :class:`~noeta.execution.background_delivery.BackgroundDelivery`."""
+        self._delivery.set_notifier(notifier)
 
     def _on_background_exit(
         self, session_id: str, job_id: str, summary: str, ref: ContentRef
     ) -> None:
-        """ProcessRegistry watcher hook — hand the completion to a drive thread.
+        """ProcessRegistry watcher hook — project a shell exit, hand it to delivery.
 
-        Mechanism C. Runs on the watcher's daemon thread, so
-        it MUST NOT block: it spawns a short-lived daemon drive thread that runs
-        the three-state push and returns immediately. No-op when no notifier is
-        wired (the push is opt-in; the durable ``BackgroundShellExited`` is the
-        authoritative record regardless)."""
-        notifier = self._background_notifier
-        if notifier is None:
-            return
-        threading.Thread(
-            target=self._drive_background_exit,
-            args=(notifier, session_id, job_id, summary, ref),
-            name=f"noeta-bg-notify-{job_id}",
-            daemon=True,
-        ).start()
+        Mechanism C. Runs on the watcher's daemon thread, so it MUST NOT block:
+        :meth:`BackgroundDelivery.on_exit` spawns the drive thread and returns at
+        once. The shell notice rides a pointer (``summary`` + the final
+        :class:`ContentRef` + the ``job_id`` the model can ``shell_poll``); no
+        stream read is needed, so the projection just closes over them."""
 
-    def _drive_background_exit(
-        self,
-        notifier: Any,
-        session_id: str,
-        job_id: str,
-        summary: str,
-        ref: ContentRef,
-    ) -> None:
-        """Three-state completion push (turn-boundary drain).
+        def _plan() -> DeliverFn:
+            def _deliver(notifier: Any) -> None:
+                notifier.notify_background_exit(
+                    session_id, summary=summary, ref=ref, job_id=job_id
+                )
 
-        Runs on a dedicated daemon thread off the watcher:
+            return _deliver
 
-        * **terminal** — the session reached a terminal state (cancelled /
-          failed); there is no turn to wake. Drop the drive — the
-          ``BackgroundShellExited`` stays for audit / the read model (05).
-        * **idle-suspended on NEXT_GOAL** — wake + drive a fresh turn now via
-          ``notify_background_exit`` (the notice folds into the agent's view).
-        * **mid-turn / any other suspend** — ``notify_background_exit`` raises
-          (``_require_human_suspend`` rejects a non-next-goal-suspended task). We
-          swallow it as a no-op: the notice is NOT injected mid-turn (non-
-          preemptive), and the durable Exited event will be picked up when the
-          model next polls — v1 does not auto-re-arm a deferred push (a follow-up
-          enhancement; tracked in the issue-02 report). Either way the fact is
-          durably recorded, so nothing is lost."""
-        task = fold(self.event_log, self.content_store, session_id)
-        if task.status == "terminal":
-            # No turn to wake — the session is done; leave the event for audit.
-            return
-        try:
-            notifier.notify_background_exit(
-                session_id, summary=summary, ref=ref, job_id=job_id
-            )
-        except Exception:  # noqa: BLE001 — non-preemptive: mid-turn raises here
-            # Not suspended on the next-goal handle (mid-turn, or on an
-            # approval/subtask wake). The notice is deferred — the durable
-            # Exited event already records the completion; the model surfaces it
-            # on its next poll. A background backstop must never crash.
-            _log.debug(
-                "background-exit notice for job %s deferred (session %s not "
-                "idle-suspended on next-goal)",
-                job_id,
-                session_id,
-            )
+        self._delivery.on_exit(
+            session_id=session_id,
+            plan=_plan,
+            thread_name=f"noeta-bg-notify-{job_id}",
+        )
 
     # -- background sub-agent (docs/adr/background-subagent.md) -------------
-
-    #: How long the Mechanism-C delivery thread keeps re-attempting while the
-    #: parent session is still mid-turn (the background child finished before the
-    #: parent's spawning turn settled to its next-goal suspend). Bounded so a
-    #: never-settling parent does not leak a daemon thread; a settled parent
-    #: delivers on the first attempt (no wait). Determinism-safe — retrying only
-    #: changes WHEN the notice turn is injected, never the recorded bytes.
-    _BG_SUBAGENT_DELIVER_TIMEOUT_S = 30.0
-    _BG_SUBAGENT_DELIVER_POLL_S = 0.05
 
     def _drain_host_for_id(self, parent_task_id: str) -> Any:
         """Build the delegation :class:`DrainHost` for a parent id (registry seam).
@@ -1052,44 +1019,24 @@ class SdkHost(GenericEngineResolver):
     def _on_background_subagent_exit(
         self, parent_task_id: str, child_task_id: str
     ) -> None:
-        """Registry deliver hook — hand a finished background child to a thread.
+        """Registry deliver hook — project a finished child, hand it to delivery.
 
         Mechanism C, mirroring :meth:`_on_background_exit`. Runs on the executor
-        worker (the drive's done-callback), so it MUST NOT block: it spawns a
-        short-lived daemon thread that runs the deferred-tolerant delivery and
-        returns at once. No-op until a notifier is wired (the durable child
-        terminal + the parent's ``BackgroundSubagentStarted`` are the record)."""
-        notifier = self._background_notifier
-        if notifier is None:
-            return
-        threading.Thread(
-            target=self._drive_background_subagent_exit,
-            args=(notifier, parent_task_id, child_task_id),
-            name=f"noeta-bg-subagent-notify-{child_task_id}",
-            daemon=True,
-        ).start()
+        worker (the drive's done-callback), so it MUST NOT block:
+        :meth:`BackgroundDelivery.on_exit` spawns the drive thread. The
+        projection reads the child's REAL terminal from its own EventLog and
+        dereferences its result into an inlined notice
+        (:meth:`_background_subagent_result`); it runs ONCE on the delivery
+        thread (not the retry loop) and returns ``None`` for a cancelled child
+        (session teardown — nothing to push)."""
 
-    def _drive_background_subagent_exit(
-        self, notifier: Any, parent_task_id: str, child_task_id: str
-    ) -> None:
-        """Deliver a background sub-agent's result at the parent's turn boundary.
+        def _plan() -> Optional[DeliverFn]:
+            result = self._background_subagent_result(child_task_id)
+            if result is None:
+                return None  # cancelled / nothing to deliver
+            status, ref, summary = result
 
-        Reads the child's REAL terminal disposition from its own EventLog
-        (dropping a cancelled child — the session is being torn down), then waits
-        for the parent to be idle-suspended on the next-goal handle and drives the
-        Mechanism-C notice turn. The wait is bounded: a parent still mid-turn
-        (its spawning turn outran the child) is retried until it settles; a
-        terminal parent (cancelled / failed session) drops the delivery."""
-        result = self._background_subagent_result(child_task_id)
-        if result is None:
-            return  # cancelled / nothing to deliver
-        status, ref, summary = result
-        deadline = time.monotonic() + self._BG_SUBAGENT_DELIVER_TIMEOUT_S
-        while True:
-            task = fold(self.event_log, self.content_store, parent_task_id)
-            if task.status == "terminal":
-                return  # no turn to wake — session is done; child terminal stands
-            try:
+            def _deliver(notifier: Any) -> None:
                 notifier.notify_background_subagent_exit(
                     parent_task_id,
                     subtask_id=child_task_id,
@@ -1097,18 +1044,14 @@ class SdkHost(GenericEngineResolver):
                     ref=ref,
                     status=status,
                 )
-                return
-            except Exception:  # noqa: BLE001 — parent mid-turn: retry until idle
-                if time.monotonic() >= deadline:
-                    _log.debug(
-                        "background sub-agent %s notice deferred (parent %s never "
-                        "settled to next-goal within %.0fs)",
-                        child_task_id,
-                        parent_task_id,
-                        self._BG_SUBAGENT_DELIVER_TIMEOUT_S,
-                    )
-                    return
-                time.sleep(self._BG_SUBAGENT_DELIVER_POLL_S)
+
+            return _deliver
+
+        self._delivery.on_exit(
+            session_id=parent_task_id,
+            plan=_plan,
+            thread_name=f"noeta-bg-subagent-notify-{child_task_id}",
+        )
 
     def _background_subagent_result(
         self, child_task_id: str

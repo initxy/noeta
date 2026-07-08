@@ -8,6 +8,14 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- A background `shell_run(run_in_background=True)` command that finishes while
+  the session is mid-turn now delivers its completion notice at the next turn
+  boundary (bounded retry-until-idle), matching background sub-agents.
+  Previously the notice was dropped and only surfaced when the model next
+  polled. The two background-completion paths now share one delivery seam.
+
 ## [0.1.11] - 2026-07-07
 
 ### Added
