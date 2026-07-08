@@ -40,7 +40,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 
@@ -377,10 +377,13 @@ class AioSandboxExecEnv:
 
     * **``run_argv``** joins the argv with :func:`shlex.join` and prefixes
       ``cd <cwd> && `` — cwd is expressed lexically rather than relying on an
-      unconfirmed request field. AIO returns a single merged ``output``
-      stream, so it lands in ``stdout`` and ``stderr`` is empty (the tool's
-      output shape tolerates this — the local backend already merges nothing,
-      but nothing downstream requires the split).
+      unconfirmed request field. An optional host-supplied ``preamble`` (per
+      session, minted fresh each call — the process twin of ``auth_headers``) is
+      inserted between the ``cd`` and the command so a session can establish
+      per-exec shell state; ``None`` keeps the wire byte-identical. AIO returns a
+      single merged ``output`` stream, so it lands in ``stdout`` and ``stderr``
+      is empty (the tool's output shape tolerates this — the local backend
+      already merges nothing, but nothing downstream requires the split).
     * **byte fidelity** — reads request ``encoding="base64"`` and decode; writes
       send base64. This is the byte-exact path (edit / apply_patch hash the
       bytes for TOCTOU), and it is the single most contract-sensitive field.
@@ -403,6 +406,7 @@ class AioSandboxExecEnv:
         base_url: str,
         api_key: Optional[str] = None,
         auth_headers: Optional[Callable[[], Mapping[str, str]]] = None,
+        preamble: Optional[Callable[[Sequence[str]], str]] = None,
         timeout_s: float = DEFAULT_AIO_TIMEOUT_S,
         total_cap: int = _DEFAULT_AIO_TOTAL_CAP,
         post: Optional[AioHttpPost] = None,
@@ -425,6 +429,19 @@ class AioSandboxExecEnv:
         # (byte-identical to pre-v2 behaviour). Either way auth rides only on the
         # wire — never recorded (D5).
         self._auth_headers = auth_headers
+        # ``preamble`` is a per-call shell-setup factory — the process twin of
+        # ``auth_headers`` (D8): a host-supplied callable invoked FRESH for each
+        # ``run_argv`` and prepended, verbatim, ahead of the command so a session
+        # can establish per-exec shell state (e.g. short-lived credentials that
+        # expire mid-session) that must be refreshed every command. It receives
+        # the argv (so the host can tailor the prefix to the command) and returns
+        # a complete prefix INCLUDING its own separator (``export X=Y && `` /
+        # ``foo; ``); ``""`` is a no-op. Like ``auth_headers`` it is a host
+        # runtime injection, never LLM-controlled and never recorded (D5); it must
+        # be total (return ``""`` on its own failure) — a raise propagates. The
+        # rendered command is otherwise byte-identical, so a ``None`` preamble
+        # (every deployment that does not set one) keeps the pre-existing wire.
+        self._preamble = preamble
         headers = {"Content-Type": "application/json"}
         if api_key:
             # AIO accepts the key via X-AIO-API-Key / Authorization: Bearer /
@@ -627,7 +644,11 @@ class AioSandboxExecEnv:
         # request field; argv is shell-quoted so the remote shell re-runs the
         # exact tokens.
         del runner
-        command = f"cd {shlex.quote(str(cwd))} && {shlex.join(argv)}"
+        # A host-supplied per-call preamble (per-session shell setup, minted
+        # fresh each exec) is prepended verbatim after the ``cd``; ``None`` keeps
+        # the command byte-identical to the pre-existing wire.
+        preamble = self._preamble(argv) if self._preamble is not None else ""
+        command = f"cd {shlex.quote(str(cwd))} && {preamble}{shlex.join(argv)}"
         # v1: no remote hard-kill, so the transport read timeout IS the bound —
         # thread the caller's per-command budget through so ``timeout=`` behaves
         # like the local backend's ``subprocess`` timeout (a wedged command keeps

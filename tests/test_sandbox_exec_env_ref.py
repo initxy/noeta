@@ -127,7 +127,7 @@ class FakeProvider:
 
 
 def _recording_factory(seen: list[str]) -> Any:
-    def factory(handle: SandboxHandle) -> _FakeEnv:
+    def factory(handle: SandboxHandle, preamble: Any = None) -> _FakeEnv:
         seen.append(handle.base_url)
         return _FakeEnv(handle.base_url)
 

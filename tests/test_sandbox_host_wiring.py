@@ -24,6 +24,7 @@ end-to-end tests inject a fake backend factory / fake provider.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -147,7 +148,7 @@ class FakeProvider:
 
 
 def _recording_factory() -> Any:
-    return lambda handle: RecordingExecEnv(base_url=handle.base_url)
+    return lambda handle, preamble=None: RecordingExecEnv(base_url=handle.base_url)
 
 
 # --------------------------------------------------------------------------- #
@@ -162,6 +163,51 @@ def _manager(provider: Any, **kw: Any) -> SandboxExecEnvManager:
         backend_factory=_recording_factory(),
         **kw,
     )
+
+
+def _capturing_factory(captured: list[Any]) -> Any:
+    """A factory that records the ``preamble`` the manager binds onto a backend."""
+    def factory(handle: SandboxHandle, preamble: Any = None) -> RecordingExecEnv:
+        captured.append(preamble)
+        return RecordingExecEnv(base_url=handle.base_url)
+
+    return factory
+
+
+def test_exec_preamble_binds_the_session_ref_onto_the_backend() -> None:
+    # A HostConfig ``sandbox_exec_preamble`` reaches the backend as a per-session
+    # BoundPreamble: the manager curries the durable exec_env_ref, so the host
+    # sees (ref, argv) while the backend gets a plain (argv) -> str minted fresh.
+    seen: list[tuple[str, list[str]]] = []
+
+    def exec_preamble(ref: str, argv: Sequence[str]) -> str:
+        seen.append((ref, list(argv)))
+        return "SETUP && "
+
+    captured: list[Any] = []
+    mgr = SandboxExecEnvManager(
+        FakeProvider(),
+        spec_template=SandboxSpec(image="img"),
+        backend_factory=_capturing_factory(captured),
+        exec_preamble=exec_preamble,
+    )
+    ref = mgr.allocate("task-root")
+    mgr.resolve(ref)
+    bound = captured[0]
+    assert bound is not None
+    assert bound(["lark-cli", "whoami"]) == "SETUP && "
+    assert seen == [(ref, ["lark-cli", "whoami"])]
+
+
+def test_no_exec_preamble_binds_none() -> None:
+    captured: list[Any] = []
+    mgr = SandboxExecEnvManager(
+        FakeProvider(),
+        spec_template=SandboxSpec(image="img"),
+        backend_factory=_capturing_factory(captured),
+    )
+    mgr.resolve(mgr.allocate("task-root"))
+    assert captured == [None]
 
 
 def test_allocate_provisions_and_returns_encoded_ref() -> None:
@@ -432,7 +478,7 @@ def test_read_flows_through_injected_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake = RecordingExecEnv({"/c/ws/note.md": b"in-container"})
-    monkeypatch.setattr(sandbox_mod, "_default_backend_factory", lambda handle: fake)
+    monkeypatch.setattr(sandbox_mod, "_default_backend_factory", lambda handle, preamble=None: fake)
     host = _make_host(
         tmp_path,
         exec_env=SandboxExecEnvConfig(base_url="http://box:8080", workdir="/c/ws"),
@@ -453,7 +499,7 @@ def test_seed_build_shares_the_sandbox_backend(
     # LOCAL backend, the cached Engine would pin it and the drive would bypass the
     # sandbox — so the seed must route to the SAME backend.
     fake = RecordingExecEnv(base_url="http://box:8080")
-    monkeypatch.setattr(sandbox_mod, "_default_backend_factory", lambda handle: fake)
+    monkeypatch.setattr(sandbox_mod, "_default_backend_factory", lambda handle, preamble=None: fake)
     host = _make_host(
         tmp_path,
         aliases={"default": "main"},

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import dataclasses
 import threading
+from collections.abc import Sequence
 from typing import Callable, Optional
 
 from noeta.client.host_config import SandboxExecEnvConfig
@@ -53,30 +54,51 @@ from noeta.tools.fs.exec_env import AioSandboxExecEnv, ExecEnv
 
 __all__ = [
     "BackendFactory",
+    "BoundPreamble",
+    "ExecPreamble",
     "SandboxExecEnvManager",
     "provider_for_config",
 ]
 
 
-#: Builds a live backend from an allocated / attached handle. Injected by tests
-#: (a fake that opens no socket); production uses :func:`_default_backend_factory`.
-#: The auth strategy is passed as a per-call header factory (D8) so a short-lived
-#: credential is minted fresh each request; the addressing came off the handle.
-BackendFactory = Callable[[SandboxHandle], ExecEnv]
+#: The per-session shell preamble bound onto a backend: given the session's
+#: exec argv, return a prefix (with its own trailing separator) prepended to
+#: every container command. ``None`` ⇒ no preamble (byte-identical wire).
+BoundPreamble = Callable[[Sequence[str]], str]
+
+#: The host-supplied preamble source (``HostConfig.sandbox_exec_preamble``):
+#: ``(exec_env_ref, argv) -> prefix``. Keyed by the session's durable
+#: ``exec_env_ref`` (stable across a root and its subtasks, and reconnect-safe)
+#: rather than the per-call task id; the manager curries the ref when it binds a
+#: backend, handing the product a :data:`BoundPreamble`.
+ExecPreamble = Callable[[str, Sequence[str]], str]
+
+#: Builds a live backend from an allocated / attached handle (+ the session's
+#: bound preamble, or ``None``). Injected by tests (a fake that opens no socket);
+#: production uses :func:`_default_backend_factory`. The auth strategy is passed
+#: as a per-call header factory (D8) so a short-lived credential is minted fresh
+#: each request; the addressing came off the handle.
+BackendFactory = Callable[[SandboxHandle, Optional[BoundPreamble]], ExecEnv]
 
 
-def _default_backend_factory(handle: SandboxHandle) -> ExecEnv:
+def _default_backend_factory(
+    handle: SandboxHandle, preamble: Optional[BoundPreamble] = None
+) -> ExecEnv:
     """Build the real AIO adapter for a container handle.
 
     ``auth_headers`` wires the handle's live :class:`SandboxAuth` in as the
     adapter's **per-call** header factory (D8): the secret is fetched on the wire
-    each request, never held on a durable object (D5). ``fence_token`` stays at
-    its v1 placeholder (``None``) — cross-generation fencing is v2 orchestration
-    (D7), and the seam already carries the field.
+    each request, never held on a durable object (D5). ``preamble`` is the
+    process twin — a per-call shell-setup factory bound to this session (see
+    :meth:`SandboxExecEnvManager.resolve`); ``None`` leaves the command wire
+    byte-identical. ``fence_token`` stays at its v1 placeholder (``None``) —
+    cross-generation fencing is v2 orchestration (D7), and the seam already
+    carries the field.
     """
     return AioSandboxExecEnv(
         base_url=handle.base_url,
         auth_headers=handle.auth.connect_headers,
+        preamble=preamble,
     )
 
 
@@ -152,10 +174,16 @@ class SandboxExecEnvManager:
         default_workdir: str = "/workspace",
         default_ref: Optional[str] = None,
         backend_factory: Optional[BackendFactory] = None,
+        exec_preamble: Optional[ExecPreamble] = None,
     ) -> None:
         self._provider = provider
         self._spec_template = spec_template
         self._default_workdir = default_workdir
+        #: Host-supplied ``(exec_env_ref, argv) -> prefix`` (or ``None``). Curried
+        #: with the ref when a backend is built (see :meth:`resolve`) so every
+        #: container exec of that session gets a freshly minted shell preamble
+        #: (e.g. per-user credentials that expire mid-session).
+        self._exec_preamble = exec_preamble
         #: The container a build with NO session-welded ref falls back to — the
         #: attach path's single shared container (v1 back-compat). ``None`` on the
         #: per-session provisioning path, where every real build carries the ref
@@ -223,7 +251,15 @@ class SandboxExecEnvManager:
         handle = self._handles_by_ref.get(exec_env_ref)
         if handle is None:
             handle = self._provider.attach(exec_env_ref)
-        backend = self._factory(handle)
+        # Curry the durable ref into the host preamble source so the backend gets
+        # a :data:`BoundPreamble` over argv; the product maps the ref back to its
+        # session/user. ``None`` ⇒ no preamble (byte-identical wire). Bind through
+        # a local so the not-None narrowing reaches the closure.
+        src = self._exec_preamble
+        preamble: Optional[BoundPreamble] = (
+            (lambda argv: src(exec_env_ref, argv)) if src is not None else None
+        )
+        backend = self._factory(handle, preamble)
         with self._lock:
             self._handles_by_ref[exec_env_ref] = handle
             self._backends_by_ref[exec_env_ref] = backend

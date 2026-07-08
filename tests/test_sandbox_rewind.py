@@ -169,7 +169,7 @@ def test_exec_env_for_ref_resolves_sandbox_session(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = FakeContainerFs("http://A:1111")
-    monkeypatch.setattr(sandbox_mod, "_default_backend_factory", lambda handle: fake)
+    monkeypatch.setattr(sandbox_mod, "_default_backend_factory", lambda handle, preamble=None: fake)
     host = _host(
         tmp_path,
         exec_env=SandboxExecEnvConfig(base_url="http://A:1111", workdir="/c/ws"),
@@ -193,7 +193,8 @@ def test_exec_env_for_ref_none_when_ref_absent(
 ) -> None:
     # sandbox host but a local session (no recorded ref) → host FS restore.
     monkeypatch.setattr(
-        sandbox_mod, "_default_backend_factory", lambda handle: FakeContainerFs("http://A:1111")
+        sandbox_mod, "_default_backend_factory",
+        lambda handle, preamble=None: FakeContainerFs("http://A:1111")
     )
     host = _host(tmp_path, exec_env=SandboxExecEnvConfig(base_url="http://A:1111"))
     assert host.exec_env_for_ref(None) is None
@@ -208,7 +209,7 @@ def test_restore_writes_baseline_into_container(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = FakeContainerFs("http://A:1111")
-    monkeypatch.setattr(sandbox_mod, "_default_backend_factory", lambda handle: fake)
+    monkeypatch.setattr(sandbox_mod, "_default_backend_factory", lambda handle, preamble=None: fake)
     host = _host(
         tmp_path,
         exec_env=SandboxExecEnvConfig(base_url="http://A:1111", workdir="/c/ws"),
@@ -232,7 +233,7 @@ def test_restore_deletes_ai_created_file_in_container(
     # content_ref=None → the AI created the file this turn → rewind DELETES it,
     # in the container.
     fake = FakeContainerFs("http://A:1111", files={"/c/ws/new.txt": b"created"})
-    monkeypatch.setattr(sandbox_mod, "_default_backend_factory", lambda handle: fake)
+    monkeypatch.setattr(sandbox_mod, "_default_backend_factory", lambda handle, preamble=None: fake)
     host = _host(
         tmp_path,
         exec_env=SandboxExecEnvConfig(base_url="http://A:1111", workdir="/c/ws"),
@@ -253,7 +254,7 @@ def test_local_rewind_still_writes_host_fs(
     # exec_env_for_ref → None → the byte-identical host-FS path runs, and the
     # container backend is never touched.
     fake = FakeContainerFs("http://A:1111")
-    monkeypatch.setattr(sandbox_mod, "_default_backend_factory", lambda handle: fake)
+    monkeypatch.setattr(sandbox_mod, "_default_backend_factory", lambda handle, preamble=None: fake)
     host = _host(tmp_path, exec_env=SandboxExecEnvConfig(base_url="http://A:1111"))
     ws = host.workspace_dir  # the host default root
     ref = host.content_store.put(b"host bytes", media_type="text/plain")
