@@ -234,3 +234,36 @@ into `HostConfig`. Off by default (needs a local Docker daemon + the AIO image).
 - **Per-session containers shrink the unfenced blast radius.** A slow fenced-out
   zombie now pollutes only its own session's container (v1: the host-shared one).
   Cross-generation writes stay unfenced (`fence_token` still `None`).
+
+### Per-exec identity preamble (host hook)
+
+`HostConfig.sandbox_exec_preamble` — a host-supplied `(exec_env_ref, argv) ->
+prefix` minted **fresh for every** container `run_argv` and prepended, verbatim,
+between the `cd <cwd> &&` and the command. It is the **process twin of
+`auth_headers`** (D8, the per-request HTTP header factory): the AIO wire carries
+only a `command` string (no env field), so per-session shell state — most
+importantly a credential that expires mid-session — must be re-established on
+each exec, and once fs / shell tools route through the container the SDK / runtime
+own the shell command, leaving the product no per-exec hook otherwise.
+
+Shape and boundaries:
+
+- The runtime `AioSandboxExecEnv` takes a plain `preamble: Callable[[argv], str]`
+  and knows nothing about sessions or products (product-neutral). The SDK
+  `SandboxExecEnvManager` curries the session's durable `exec_env_ref` into the
+  host `sandbox_exec_preamble` when it builds a backend, so the product maps the
+  ref back to its own session / user. Keyed on `exec_env_ref` (stable across a
+  root and its subtasks, reconnect-safe), not the per-call task id.
+- The prefix is returned complete, **including its own separator** (`export X=Y &&
+  `, `foo; `); `""` is a no-op and keeps the command byte-identical — the
+  stable-prefix invariant is preserved for every deployment that sets no preamble.
+- Like `auth_headers` it is a host runtime injection — never LLM-controlled, never
+  recorded (D5) — and must be total (return `""` on its own failure; a raise
+  propagates).
+
+**Why a preamble string, not an env map.** An env map is cleaner and more
+backend-portable, but cannot express a credential a CLI accepts only as a command
+(e.g. `bytedcli auth set-...`, which has no env form); a shell preamble covers
+both env exports and setup commands, stays generic over any shell-based backend
+(every current family), and lets the host use a tool's stable public CLI rather
+than reverse-engineering its on-disk credential format.

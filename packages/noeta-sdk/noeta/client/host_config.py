@@ -22,6 +22,7 @@ into durable storage / preview / MCP while still driving the engine only through
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Callable, Mapping, Optional, Tuple
 
@@ -170,6 +171,17 @@ class HostConfig:
     #: set ⇒ a bare spec (no base mounts); the workspace mount is always added
     #: per session. Ignored on the ``exec_env`` attach path.
     sandbox_spec: Optional[SandboxSpec] = None
+    #: Per-session shell preamble source for the sandbox exec path:
+    #: ``(exec_env_ref, argv) -> prefix``. The manager curries the session's
+    #: durable ``exec_env_ref`` and invokes it FRESH for every container command,
+    #: prepending the returned prefix (which must carry its own separator, e.g.
+    #: ``export X=Y && ``) ahead of the command — the process twin of
+    #: ``SandboxAuth.connect_headers`` for HTTP. Lets a product inject per-user
+    #: credentials that expire mid-session (fetched fresh each exec). ``None``
+    #: (default) ⇒ no preamble, byte-identical wire. A host runtime injection,
+    #: never LLM-controlled and never recorded (D5); the callback must be total
+    #: (return ``""`` on its own failure). Ignored when no sandbox is configured.
+    sandbox_exec_preamble: Optional[Callable[[str, Sequence[str]], str]] = None
 
     # -- host kill-switches ------------------------------------------------
     workflow_allowed: bool = False

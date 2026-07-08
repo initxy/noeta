@@ -8,6 +8,18 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Per-exec sandbox shell preamble (`HostConfig.sandbox_exec_preamble`).** A
+  host-supplied `(exec_env_ref, argv) -> prefix` hook, minted fresh for every
+  container `run_argv` and prepended ahead of the command — the process twin of
+  `SandboxAuth.connect_headers` for HTTP. It lets a product inject per-session
+  shell setup that must stay fresh across a long session (e.g. per-user
+  credentials that expire mid-session, refetched each exec). `None` (default)
+  leaves the command wire byte-identical. A host runtime injection, never
+  LLM-controlled and never recorded. Recorded in the
+  `execution-environment-seam` ADR.
+
 ## [0.1.13] - 2026-07-08
 
 ### Added
