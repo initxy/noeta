@@ -1,35 +1,35 @@
-"""``SandboxExecEnvManager`` — the host-layer lifecycle for a sandbox backend (T5).
+"""``SandboxExecEnvManager`` — the SDK-side lifecycle over a ``SandboxProvider``.
 
-This is the seam that turns ``HostConfig.exec_env`` (pure *addressing* config,
-D2) into a live :class:`~noeta.tools.fs.exec_env.ExecEnv` and owns its lifetime.
-It is the "who provisions the container" layer the config deliberately does NOT
-carry: the config is import-linter-safe for a backend to build, and the live
-adapter is instantiated here — above ``noeta.tools`` (the SDK's ``noeta.client``
-band can import the adapter; the tools band could never reach up to build it).
+This is the seam that turns a :class:`~noeta.client.sandbox_provider.SandboxProvider`
+(the agent layer's "who provisions the container", D1) into live
+:class:`~noeta.tools.fs.exec_env.ExecEnv` backends and owns their lifetime,
+**keyed per session root** (v2, D4). It sits above ``noeta.tools`` (the SDK's
+``noeta.client`` band may import the AIO adapter; the tools band could never
+reach up to build it), so ``SdkHost`` holds it directly (like
+``_process_registry``) instead of threading a callable down from the product.
 
-Placement (D3, revised by the T4 note): the spec first put provisioning in the
-``noeta.agent.backend`` product layer. In practice the one call site that must
-receive the live backend is ``SdkHost._build_engine`` → ``build_session_inputs``,
-and ``SdkHost`` lives in ``noeta.client``; keeping the manager here lets the host
-hold it directly (like ``_process_registry``) instead of threading yet another
-injected callable down from the product. It stays import-linter-clean because
-``noeta.client`` sits above ``noeta.tools``.
+**v1 → v2.** v1 addressed ONE external container by ``base_url`` and cached a
+single backend keyed by that URL — every session on the host shared it. v2 makes
+the container **per root-task tree**:
 
-**v1 scope — one container per host, addressed by ``base_url`` (D4 / non-goals).**
-The spec's ideal is one sandbox per root-task *tree* (``key = session-root task
-id``), each a distinct container. v1 does not orchestrate containers (a
-non-goal): a ``SandboxExecEnvConfig`` names ONE external container by its
-``base_url``, so a host addresses its container by that URL and every session on
-the host shares it (which trivially satisfies "subtasks share the parent's
-container"). The **T6** durable ``exec_env_ref`` welded into ``TaskHostBound``
-records that base_url per session so a resumed / reclaimed session — possibly on
-another host whose config default differs — reconnects to the SAME container by
-its recorded address. The manager therefore keys backends by resolved base_url:
-normally just the host default; a reconnect may add the recorded ref's address.
-The v1 simplification (a known-limitation) is that two concurrent sessions on
-one host share one container working directory, and the ``exec_env_ref`` carries
-only the base_url, not the spec's ``{base_url, sandbox_id}`` — a distinct
-``sandbox_id`` and per-root isolation arrive with v2 per-container orchestration.
+* :meth:`allocate` provisions a fresh container for a ``session_root_id``
+  (eagerly, at ``driver.seed_start``) and returns the durable ``exec_env_ref``
+  (``"{base_url}#{sandbox_id}"``) welded onto ``TaskHostBound``.
+* :meth:`resolve` builds (and caches) the ``ExecEnv`` backend for a recorded
+  ``exec_env_ref`` — the reconnect path: a handle allocated on THIS host is
+  cached; a ref only seen on the durable record (resume / reclaim, possibly
+  another host) is reconnected via ``provider.attach``.
+* :meth:`release` tears one session's container down at its root-task terminal;
+  :meth:`teardown` reaps everything left as a process-shutdown backstop.
+
+**Attach-one-container back-compat.** The v1 ``HostConfig.exec_env``
+(:class:`~noeta.client.host_config.SandboxExecEnvConfig`) deployment — a single
+pre-existing container addressed by ``base_url`` — is preserved by
+:class:`_ConfigAttachProvider`, a degenerate provider that *attaches* the one
+configured container (``allocate`` == attach, ``release`` a no-op) and mints no
+``sandbox_id`` (so the ref stays a bare ``base_url``, byte-identical to v1). The
+manager itself has ONE code path (provider-based); only how the provider is
+supplied differs.
 """
 
 from __future__ import annotations
@@ -39,125 +39,235 @@ import threading
 from typing import Callable, Optional
 
 from noeta.client.host_config import SandboxExecEnvConfig
+from noeta.client.sandbox_provider import (
+    MountSpec,
+    SandboxHandle,
+    SandboxProvider,
+    SandboxSpec,
+    StaticApiKeyAuth,
+    decode_exec_env_ref,
+    encode_exec_env_ref,
+)
 from noeta.tools.fs.exec_env import AioSandboxExecEnv, ExecEnv
 
 
-__all__ = ["SandboxExecEnvManager", "ExecEnvFactory"]
+__all__ = [
+    "BackendFactory",
+    "SandboxExecEnvManager",
+    "provider_for_config",
+]
 
 
-#: A factory that turns the addressing config into a live backend. Injected by
-#: tests (a fake that opens no socket); production uses :func:`_default_factory`,
-#: which reads the key from the environment at connect time (D5 — the secret
-#: never rides in the config, a log, or an event).
-ExecEnvFactory = Callable[[SandboxExecEnvConfig], ExecEnv]
+#: Builds a live backend from an allocated / attached handle. Injected by tests
+#: (a fake that opens no socket); production uses :func:`_default_backend_factory`.
+#: The auth strategy is passed as a per-call header factory (D8) so a short-lived
+#: credential is minted fresh each request; the addressing came off the handle.
+BackendFactory = Callable[[SandboxHandle], ExecEnv]
 
 
-def _default_factory(config: SandboxExecEnvConfig) -> ExecEnv:
-    """Build the real AIO Sandbox adapter from the addressing config.
+def _default_backend_factory(handle: SandboxHandle) -> ExecEnv:
+    """Build the real AIO adapter for a container handle.
 
-    The API key is resolved from the environment **here, at connect time**, so
-    the addressing config stays free of the secret (D5). ``fence_token`` is left
-    at its v1 placeholder (``None``): cross-generation fencing is a v2 concern
-    (D1), and the seam already carries the field so v2 need not reshape it.
+    ``auth_headers`` wires the handle's live :class:`SandboxAuth` in as the
+    adapter's **per-call** header factory (D8): the secret is fetched on the wire
+    each request, never held on a durable object (D5). ``fence_token`` stays at
+    its v1 placeholder (``None``) — cross-generation fencing is v2 orchestration
+    (D7), and the seam already carries the field.
     """
     return AioSandboxExecEnv(
-        base_url=config.base_url,
-        api_key=config.resolve_api_key(),
+        base_url=handle.base_url,
+        auth_headers=handle.auth.connect_headers,
     )
 
 
-class SandboxExecEnvManager:
-    """Owns a host's sandbox backends, keyed by container ``base_url``.
+class _ConfigAttachProvider:
+    """A degenerate :class:`SandboxProvider` that ATTACHES one existing container.
 
-    v1 is one container per host (the config's ``base_url``), but T6's reconnect
-    means the manager may also be asked for a container at a DIFFERENT address:
-    a task reclaimed on this host records its own ``exec_env_ref`` (the base_url
-    it was originally bound to), which may not equal this host's config default
-    if the deployment moved. So backends are cached per resolved base_url; every
-    one is built with THIS host's API key (from config env, D5), never a key off
-    the ref. Thread-safe: the SDK host resolves Engines under
-    ``ThreadingHTTPServer`` concurrency, so builds are guarded by a lock (each
+    Wraps the v1 :class:`SandboxExecEnvConfig`: it never provisions — ``allocate``
+    just returns a handle for the single configured ``base_url`` and ``release``
+    is a no-op (it does not own the container, so a stop here would break a peer
+    that reconnected to the same address). ``sandbox_id`` is empty so the ref
+    encodes to a bare ``base_url`` — byte-identical to a v1 recording. This keeps
+    the "attach one shared container" deployment (and its gated e2e) working
+    through the v2 provider seam with no product change.
+    """
+
+    __slots__ = ("_config",)
+
+    def __init__(self, config: SandboxExecEnvConfig) -> None:
+        self._config = config
+
+    def _handle(self, base_url: str) -> SandboxHandle:
+        return SandboxHandle(
+            base_url=base_url,
+            sandbox_id="",
+            auth=StaticApiKeyAuth(self._config.api_key_env),
+            workdir=self._config.workdir,
+        )
+
+    def allocate(self, session_root_id: str, spec: SandboxSpec) -> SandboxHandle:
+        del session_root_id, spec  # attach ignores per-session provisioning
+        return self._handle(self._config.base_url)
+
+    def release(self, session_root_id: str) -> None:
+        del session_root_id  # never owns the container
+
+    def attach(self, exec_env_ref: str) -> SandboxHandle:
+        # Reconnect to the RECORDED address (multi-machine criterion): a task
+        # reclaimed on another host reads its own base_url off the ref, not this
+        # host's config default. Falls back to the config default for an empty
+        # ref. Credentials come from THIS host's env (D5), never the ref.
+        base_url, _ = decode_exec_env_ref(exec_env_ref)
+        return self._handle(base_url or self._config.base_url)
+
+
+def provider_for_config(config: SandboxExecEnvConfig) -> SandboxProvider:
+    """Adapt a v1 ``SandboxExecEnvConfig`` into the v2 ``SandboxProvider`` seam."""
+    return _ConfigAttachProvider(config)
+
+
+class SandboxExecEnvManager:
+    """Owns a host's per-session sandbox backends over a ``SandboxProvider``.
+
+    Backends are cached per ``exec_env_ref`` (a session's bound container); a
+    handle allocated on this host is remembered so a same-host resolve reuses it,
+    and a ref seen only on the durable record is reconnected via
+    ``provider.attach``. Thread-safe: the SDK host resolves Engines under
+    ``ThreadingHTTPServer`` concurrency, so the cache map is lock-guarded (each
     adapter is otherwise a stateless HTTP client).
 
-    ``current_ref`` is what a NEW session welds into ``TaskHostBound`` — the
-    host's configured container address, made durable so a later reconnect (T6)
-    reaches the same container. ``teardown`` is the reap seam: on host shutdown
-    the Client calls it so idle container connections do not outlive the process.
-    An ``"eager"`` host owns the container lifetime (a future container stop
-    hooks in here); an ``"attach"`` host only drops local handles and must never
-    stop a container someone else owns. Root-task-terminal teardown (D6) is T8.
+    ``spec_template`` carries the deployment-fixed half of a
+    :class:`SandboxSpec` (image, resource caps, the built-in / global skills
+    mounts); :meth:`allocate` combines it with the per-session workspace mount.
+    ``default_workdir`` is the container workspace-mount target (and the fs
+    tools' lexical root) — ``/workspace`` for the provisioning path, the
+    config's ``workdir`` for attach.
     """
 
     def __init__(
         self,
-        config: SandboxExecEnvConfig,
+        provider: SandboxProvider,
         *,
-        factory: Optional[ExecEnvFactory] = None,
+        spec_template: SandboxSpec,
+        default_workdir: str = "/workspace",
+        default_ref: Optional[str] = None,
+        backend_factory: Optional[BackendFactory] = None,
     ) -> None:
-        self._config = config
-        self._factory: ExecEnvFactory = factory or _default_factory
+        self._provider = provider
+        self._spec_template = spec_template
+        self._default_workdir = default_workdir
+        #: The container a build with NO session-welded ref falls back to — the
+        #: attach path's single shared container (v1 back-compat). ``None`` on the
+        #: per-session provisioning path, where every real build carries the ref
+        #: the driver allocated and there is no "default container".
+        self.default_ref = default_ref
+        self._factory: BackendFactory = backend_factory or _default_backend_factory
         self._lock = threading.Lock()
-        self._by_url: dict[str, ExecEnv] = {}
+        self._handles_by_root: dict[str, SandboxHandle] = {}
+        self._handles_by_ref: dict[str, SandboxHandle] = {}
+        self._refs_by_root: dict[str, str] = {}
+        self._backends_by_ref: dict[str, ExecEnv] = {}
 
-    @property
-    def workdir(self) -> str:
-        """The container working directory — the fs-tools' workspace root (D7)."""
-        return self._config.workdir
+    # -- provisioning (D4) ------------------------------------------------- #
 
-    def current_ref(self) -> str:
-        """The ``exec_env_ref`` a new session welds — the host's container URL.
+    def allocate(
+        self, session_root_id: str, *, host_workspace: Optional[str] = None
+    ) -> str:
+        """Provision a fresh container for ``session_root_id`` → its durable ref.
 
-        Made durable on ``TaskHostBound`` so a resumed / reclaimed session (T6),
-        possibly on another host, reconnects to THIS container by address rather
-        than the folding host's own config. Addressing only — never the key (D5).
+        Assembles the per-session :class:`SandboxSpec` (the template's fixed
+        mounts + the session's workspace mount at ``default_workdir``), calls
+        ``provider.allocate``, caches the returned handle by both root id and
+        ref, and returns the ``exec_env_ref`` the driver welds onto
+        ``TaskHostBound`` (``"{base_url}#{sandbox_id}"``, or a bare ``base_url``
+        when the provider mints no id).
         """
-        return self._config.base_url
-
-    def exec_env(self, *, base_url: Optional[str] = None) -> ExecEnv:
-        """A sandbox backend for ``base_url`` (the host default when ``None``).
-
-        Built on first request per resolved address and cached; a concurrent
-        burst of Engine builds (delegated children, resident workers) provisions
-        each address exactly once. ``base_url`` is a recorded ``exec_env_ref``
-        the reconnect path passes; the API key always comes from this host's
-        config env (D5), so the built adapter targets the ref's address with the
-        host's credentials.
-        """
-        target = base_url or self._config.base_url
-        env = self._by_url.get(target)
-        if env is not None:
-            return env
-        with self._lock:
-            env = self._by_url.get(target)
-            if env is None:
-                cfg = (
-                    self._config
-                    if target == self._config.base_url
-                    else dataclasses.replace(self._config, base_url=target)
+        mounts = list(self._spec_template.mounts)
+        if host_workspace:
+            mounts.append(
+                MountSpec(
+                    source=host_workspace,
+                    target=self._default_workdir,
+                    mode="rw",
+                    kind="local-path",
                 )
-                env = self._factory(cfg)
-                self._by_url[target] = env
-            return env
+            )
+        spec = dataclasses.replace(self._spec_template, mounts=tuple(mounts))
+        handle = self._provider.allocate(session_root_id, spec)
+        ref = encode_exec_env_ref(handle.base_url, handle.sandbox_id)
+        with self._lock:
+            self._handles_by_root[session_root_id] = handle
+            self._handles_by_ref[ref] = handle
+            self._refs_by_root[session_root_id] = ref
+        return ref
+
+    # -- backend resolution (build + reconnect) ---------------------------- #
+
+    def resolve(self, exec_env_ref: str) -> tuple[ExecEnv, str]:
+        """The ``(backend, container workdir)`` for a bound ``exec_env_ref``.
+
+        Built on first request per ref and cached. A ref whose handle this host
+        allocated is reused directly; a ref seen only on the durable record
+        (resume / reclaim, possibly another host) is reconnected via
+        ``provider.attach`` — the reconnect path. The API key always comes from
+        this host's env (D5), never the ref.
+        """
+        with self._lock:
+            backend = self._backends_by_ref.get(exec_env_ref)
+            if backend is not None:
+                return backend, self._handles_by_ref[exec_env_ref].workdir
+        # Slow path: obtain the handle (cached from a local allocate, or attach)
+        # and build the backend. Not holding the lock across attach's readiness
+        # probe; a concurrent race just builds twice and the last write wins the
+        # cache (each adapter is a stateless HTTP client).
+        handle = self._handles_by_ref.get(exec_env_ref)
+        if handle is None:
+            handle = self._provider.attach(exec_env_ref)
+        backend = self._factory(handle)
+        with self._lock:
+            self._handles_by_ref[exec_env_ref] = handle
+            self._backends_by_ref[exec_env_ref] = backend
+        return backend, handle.workdir
+
+    # -- lifecycle (D4) ---------------------------------------------------- #
+
+    def release(self, session_root_id: str) -> None:
+        """Tear down one session's container (idempotent — unknown id is a no-op).
+
+        Drops the cached handle / backend for that root and calls
+        ``provider.release``. Called at the session's root-task terminal (and via
+        :meth:`teardown` on shutdown). Releasing a session that never allocated
+        is a clean no-op (the local / non-sandbox path never reaches here)."""
+        with self._lock:
+            ref = self._refs_by_root.pop(session_root_id, None)
+            self._handles_by_root.pop(session_root_id, None)
+            # Evict the cached backend/handle only for a per-session ref this
+            # root uniquely owns. The attach path's shared ``default_ref`` is
+            # referenced by EVERY peer session, so dropping it here would force
+            # each peer to rebuild on its next resolve — harmless (a stateless
+            # HTTP client) but pointless cache churn. ``default_ref`` is None on
+            # the per-session provisioning path, where every ref is unique, so
+            # this guard never withholds an eviction there.
+            if ref is not None and ref != self.default_ref:
+                self._handles_by_ref.pop(ref, None)
+                self._backends_by_ref.pop(ref, None)
+        self._provider.release(session_root_id)
 
     def teardown(self) -> None:
-        """Drop every cached backend, best-effort closing each first.
+        """Release every still-open session container. Idempotent shutdown reap.
 
-        Idempotent. ``"attach"`` never closes (a container belongs to whoever
-        provisioned it — a stop here would break a still-running peer that
-        reconnected to the same ``base_url``); ``"eager"`` best-effort closes if
-        the adapter grows a ``close`` (v1's HTTP adapter holds no persistent
-        resource, so this is a no-op today — the seam is for T8 / v2).
-        """
+        A backstop for sessions that never reached a root terminal (an
+        interactive conversation resting at ``suspended`` when the process exits)
+        so no container outlives the host. Never raises from a shutdown path."""
         with self._lock:
-            envs = list(self._by_url.values())
-            self._by_url.clear()
-        if self._config.provision != "eager":
-            return
-        for env in envs:
-            close = getattr(env, "close", None)
-            if callable(close):
-                try:
-                    close()
-                except Exception:
-                    # Teardown must never raise from a shutdown path.
-                    pass
+            roots = list(self._handles_by_root)
+            self._handles_by_root.clear()
+            self._handles_by_ref.clear()
+            self._refs_by_root.clear()
+            self._backends_by_ref.clear()
+        for root in roots:
+            try:
+                self._provider.release(root)
+            except Exception:
+                # Teardown must never raise from a shutdown path.
+                pass

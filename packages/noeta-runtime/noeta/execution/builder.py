@@ -445,7 +445,9 @@ def _stage_fs_pack(spec: _BuildSpec, asm: _ToolAssembly) -> None:
     # ``allowed_tools`` filter below, so it is gated by the spec whitelist like
     # every other built-in — ``main`` (tools=None full catalog) gets it;
     # explore / plan / general-purpose (explicit whitelists without it) do not.
-    full_pack.update(build_web_tools())
+    # Sandbox mode routes webfetch / web_search egress THROUGH the container
+    # (curl via the ExecEnv, S9); ``None`` keeps the host httpx path.
+    full_pack.update(build_web_tools(exec_env=spec.exec_env))
     # The edit↔apply_patch difference is provider-specific and is
     # absorbed HERE, at the assembly layer — not in any tool field, not in the
     # prompt, not in the AgentSpec whitelist (so fingerprints never drift on a
@@ -507,7 +509,9 @@ def _stage_instructions(spec: _BuildSpec, asm: _ToolAssembly) -> None:
     if not spec.instructions_enabled:
         return
     asm.instructions_snapshot = load_instructions(
-        spec.workspace_dir, override_path=spec.instructions_file
+        spec.workspace_dir,
+        override_path=spec.instructions_file,
+        exec_env=spec.exec_env,
     )
 
 
@@ -521,7 +525,9 @@ def _stage_environment(spec: _BuildSpec, asm: _ToolAssembly) -> None:
     instructions, environment) so the existing semi_stable byte layout is
     unchanged for sessions that never activate it.
     """
-    asm.environment_snapshot = load_environment(spec.workspace_dir)
+    asm.environment_snapshot = load_environment(
+        spec.workspace_dir, exec_env=spec.exec_env
+    )
 
 
 def _stage_skills_registry(spec: _BuildSpec, asm: _ToolAssembly) -> None:
@@ -535,10 +541,16 @@ def _stage_skills_registry(spec: _BuildSpec, asm: _ToolAssembly) -> None:
     lower_skill_dirs: list[Path] = list(spec.builtin_skills_dirs)
     if spec.global_skills_dir is not None:
         lower_skill_dirs.append(spec.global_skills_dir)
+    # Sandbox mode indexes every tier THROUGH the container (``exec_env``): the
+    # dirs are container mount points (built-in / global) or the container
+    # ``<workdir>/.noeta/skills``, and the rendered base directories — which the
+    # model then ``read``s — are container paths (D6-Skills). The product wires
+    # the container skill dirs when it enables the sandbox (S10).
     asm.registry = load_workspace_skills(
         spec.workspace_dir,
         override_skills_dir=spec.skills_dir,
         lower_skill_dirs=lower_skill_dirs,
+        exec_env=spec.exec_env,
     )
 
 
@@ -550,7 +562,10 @@ def _stage_skill_scripts(spec: _BuildSpec, asm: _ToolAssembly) -> None:
     so a script/approval recording resumes byte-equal. Default off.
     """
     script_tool, skill_script_tools, skill_scripts = build_skill_script_wiring(
-        asm.registry, asm.workspace, enabled=spec.allow_skill_scripts
+        asm.registry,
+        asm.workspace,
+        enabled=spec.allow_skill_scripts,
+        exec_env=spec.exec_env,
     )
     asm.skill_script_tools = skill_script_tools
     asm.skill_scripts = skill_scripts
@@ -572,7 +587,7 @@ def _stage_read_fence(spec: _BuildSpec, asm: _ToolAssembly) -> None:
     """
     read_tool = asm.tools.get("read")
     if read_tool is not None:
-        skill_roots = resolve_skill_roots(asm.registry)
+        skill_roots = resolve_skill_roots(asm.registry, exec_env=spec.exec_env)
         if skill_roots:
             read_tool.skill_roots = skill_roots
 
@@ -733,7 +748,9 @@ def _build_content_registry(
     composer's render rules AND the engine's generic content_hashes seam
     so the rendered content and the recorded fingerprint come from one source.
     """
-    content_kinds: list[ContentKindSpec] = [skill_content_kind(asm.registry)]
+    content_kinds: list[ContentKindSpec] = [
+        skill_content_kind(asm.registry, exec_env=spec.exec_env)
+    ]
     if spec.memory_enabled:
         # The second resident: renders the index snapshot
         # into semi_stable when activated; policy "evolving".

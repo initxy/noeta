@@ -76,7 +76,8 @@ from noeta.runtime.background_shell import (
 from noeta.runtime.cancellation import CancellationRegistry
 from noeta.runtime.file_checkpoint import FileCheckpointRegistry
 from noeta.client.host_config import SandboxExecEnvConfig
-from noeta.client.sandbox import SandboxExecEnvManager
+from noeta.client.sandbox import SandboxExecEnvManager, provider_for_config
+from noeta.client.sandbox_provider import SandboxProvider, SandboxSpec
 from noeta.tools.app import AppPreviewGateway
 from noeta.runtime.llm import RuntimeLLMClient
 from noeta.tools.fs import FsWriteMode, ShellMode
@@ -586,7 +587,12 @@ class SdkHost(GenericEngineResolver):
     # ``_build_engine`` routes every session's fs / shell IO into the container
     # (the tool schemas — and thus the stable prefix — are unchanged). A host
     # runtime injection (like ``app_gateway``), never part of any agent identity.
+    # ``exec_env`` attaches one shared container (v1); ``sandbox_provider`` +
+    # ``sandbox_spec`` provision a fresh container per root-task tree (v2, D4) and
+    # take precedence over ``exec_env`` when both are set.
     exec_env: Optional[SandboxExecEnvConfig] = None
+    sandbox_provider: Optional[SandboxProvider] = None
+    sandbox_spec: Optional[SandboxSpec] = None
     # The cache key has a ``workspace`` dimension
     # (the bound **absolute path**, or ``None`` for the host default) and a
     # ``provider`` dimension — so two sessions on different directories or
@@ -818,51 +824,85 @@ class SdkHost(GenericEngineResolver):
                 max_per_session=self.max_background_subagents_per_session,
             ),
         )
-        # Sandbox backend lifecycle (T5): only when the host configured one.
-        # Absent it (every local / oneshot / test / resume path), ``_sandbox``
-        # stays ``None`` and ``_build_engine`` runs the local host unchanged.
-        if self.exec_env is not None:
+        # Sandbox backend lifecycle: only when the host configured one. Absent it
+        # (every local / oneshot / test / resume path), ``_sandbox`` stays
+        # ``None`` and ``_build_engine`` runs the local host unchanged. A v2
+        # ``sandbox_provider`` (per-session provisioning) wins over the v1
+        # ``exec_env`` attach config; the manager drives whichever provider.
+        if self.sandbox_provider is not None:
             object.__setattr__(
-                self, "_sandbox", SandboxExecEnvManager(self.exec_env)
+                self,
+                "_sandbox",
+                SandboxExecEnvManager(
+                    self.sandbox_provider,
+                    spec_template=self.sandbox_spec or SandboxSpec(image=""),
+                ),
+            )
+        elif self.exec_env is not None:
+            object.__setattr__(
+                self,
+                "_sandbox",
+                SandboxExecEnvManager(
+                    provider_for_config(self.exec_env),
+                    spec_template=SandboxSpec(image=""),
+                    default_workdir=self.exec_env.workdir,
+                    # The attach path has ONE shared container: a build that
+                    # carries no session-welded ref still targets it (v1
+                    # behaviour), unlike the per-session provisioning path.
+                    default_ref=self.exec_env.base_url,
+                ),
             )
 
     # -- sandbox backend lifecycle -----------------------------------------
 
-    def exec_env_ref(self) -> Optional[str]:
-        """The ``exec_env_ref`` a NEW session should weld into ``TaskHostBound``.
+    def allocate_exec_env(
+        self, session_root_id: str, workspace: Optional[str] = None
+    ) -> Optional[str]:
+        """Provision this session's container → the ``exec_env_ref`` to weld (D4).
 
-        The host's configured sandbox container address (``base_url``), or
-        ``None`` on the local path (no sandbox configured). The driver records
-        it durably at session open (T6) so a resumed / reclaimed session — even
-        on another host — reconnects to the same container by this address. Never
-        a secret: the API key rides only on the wire (D5)."""
+        Called eagerly at ``driver.seed_start`` (which pre-mints
+        ``session_root_id`` so the container is keyed by the root task id). The
+        provider builds a FRESH container mounting ``workspace`` (the session's
+        host workspace path) and the fixed skills mounts; the returned
+        ``"{base_url}#{sandbox_id}"`` ref is recorded on ``TaskHostBound`` so a
+        resumed / reclaimed session — even on another host — reconnects to the
+        SAME container. ``None`` on the local path (no sandbox configured).
+        Addressing only — the API key rides on the wire (D5)."""
         if self._sandbox is None:
             return None
-        return self._sandbox.current_ref()
+        return self._sandbox.allocate(session_root_id, host_workspace=workspace)
 
     def exec_env_for_ref(
         self, exec_env_ref: Optional[str]
     ) -> Optional[tuple[ExecEnv, Path]]:
-        """The ``(backend, container root)`` for a rewind restore, or ``None``.
+        """The ``(backend, container root)`` for a bound ref, or ``None``.
 
-        ``None`` (a local session, or no host sandbox) means "restore against the
+        ``None`` (a local session, or no host sandbox) means "act against the
         host filesystem as before" — the driver keeps its byte-identical pathlib
-        path. When a sandbox session recorded an ``exec_env_ref`` (T6) and this
-        host has a sandbox, returns the container backend + its lexical root so
-        the rewind writes baselines back INSIDE the container (T7), reconnecting
-        to the recorded container by address (creds from this host's env, D5)."""
+        path (the rewind restore, T7). When a sandbox session recorded an
+        ``exec_env_ref`` and this host has a sandbox, returns the container
+        backend + its lexical root, reconnecting to the recorded container by
+        address (creds from this host's env, D5)."""
         if self._sandbox is None or not exec_env_ref:
             return None
-        return (
-            self._sandbox.exec_env(base_url=exec_env_ref),
-            Path(self._sandbox.workdir),
-        )
+        backend, workdir = self._sandbox.resolve(exec_env_ref)
+        return (backend, Path(workdir))
+
+    def release_exec_env(self, session_root_id: str) -> None:
+        """Tear down a session's container at its root-task terminal (D4).
+
+        Idempotent; a no-op on the local path (no manager) or for a
+        ``session_root_id`` that never allocated (a subtask, or a non-sandbox
+        session). The driver calls this when a ROOT task reaches a terminal; the
+        process-shutdown backstop is :meth:`teardown_exec_env`."""
+        if self._sandbox is not None:
+            self._sandbox.release(session_root_id)
 
     def teardown_exec_env(self) -> None:
-        """Reap the host's sandbox backend (if any). Idempotent; safe on the
-        local path (no manager ⇒ no-op). The Client calls this on shutdown so
-        an idle container connection does not outlive the process; per-root
-        teardown at a root-task terminal (D6) is wired in T8."""
+        """Reap every still-open session container (if any). Idempotent; safe on
+        the local path (no manager ⇒ no-op). The Client calls this on shutdown so
+        no container outlives the process — the backstop for interactive sessions
+        that rest at ``suspended`` and never reach a root terminal (D4)."""
         if self._sandbox is not None:
             self._sandbox.teardown()
 
@@ -1328,16 +1368,23 @@ class SdkHost(GenericEngineResolver):
         # entry from silently pinning the local backend. Absent a manager, this is
         # a no-op and the local path is byte-identical.
         session_exec_env: Optional[ExecEnv] = None
-        if self._sandbox is not None:
-            # T6: a session bound to a specific container (``exec_env_ref``, the
-            # welded/folded base_url) reconnects to THAT one — the multi-machine
-            # reconnect criterion: a task reclaimed on another host reads its
-            # recorded base_url, not this host's config default. ``None`` (the
-            # seed build, before the ref is welded, and every non-session build)
-            # uses the host's configured default container. Either way the API
-            # key comes from THIS host's config env (D5), never the ref.
-            session_exec_env = self._sandbox.exec_env(base_url=exec_env_ref)
-            workspace_dir = Path(self._sandbox.workdir)
+        session_ref = exec_env_ref
+        if self._sandbox is not None and not session_ref:
+            # No session-welded ref: the attach path falls back to its single
+            # shared container (``default_ref``, v1 behaviour); the per-session
+            # provisioning path has no default (``None``) so a ref-less build
+            # keeps the local backend — a real per-session build always carries
+            # the ref the driver allocated.
+            session_ref = self._sandbox.default_ref
+        if self._sandbox is not None and session_ref:
+            # A session bound to a specific container (``exec_env_ref``, the
+            # welded/folded ``"{base_url}#{sandbox_id}"``) resolves THAT one — the
+            # multi-machine reconnect criterion: a task reclaimed on another host
+            # reads its recorded ref, not this host's config default, and the
+            # manager reconnects via ``provider.attach`` when the handle is not
+            # local. The API key comes from THIS host's env (D5), never the ref.
+            session_exec_env, container_workdir = self._sandbox.resolve(session_ref)
+            workspace_dir = Path(container_workdir)
         # D3: only a custom tool explicitly named by spec.tools enters the engine.
         spec_tool_names = frozenset(r.name for r in spec.tools)
         filtered_custom = {
@@ -1380,7 +1427,13 @@ class SdkHost(GenericEngineResolver):
             if effective_permission != "bypassPermissions":
                 effective_rules = build_allowlist(
                     tuple(self.shell_allowlist)
-                    + load_project_shell_allowlist(workspace_dir)
+                    # Sandbox mode reads the project allowlist from INSIDE the
+                    # container (``workspace_dir`` is the container workdir here);
+                    # ``session_exec_env`` is ``None`` on the local path, so the
+                    # host read is byte-identical.
+                    + load_project_shell_allowlist(
+                        workspace_dir, exec_env=session_exec_env
+                    )
                 )
                 shell_approval_predicate = _make_shell_approval_predicate(
                     effective_rules

@@ -39,6 +39,7 @@ from noeta.protocols.content_store import ContentStore
 from noeta.protocols.event_log import EventLogWriter
 from noeta.protocols.events import ContextContentRecordedPayload
 from noeta.protocols.task import Task
+from noeta.tools.fs.exec_env import ExecEnv
 
 
 __all__ = [
@@ -59,6 +60,7 @@ def load_instructions(
     workspace_dir: Path,
     *,
     override_path: Optional[Path] = None,
+    exec_env: Optional[ExecEnv] = None,
 ) -> Optional[InstructionsSnapshot]:
     """Load the workspace instructions file into a snapshot.
 
@@ -70,22 +72,40 @@ def load_instructions(
     * Returns ``None`` for a workspace with no instructions file —
       the caller must short-circuit kind registration and activation
       so the empty state has **zero** byte-footprint on the ledger.
+
+    ``exec_env`` (sandbox mode) reads the candidate THROUGH the container —
+    ``workspace_dir`` is then the container workdir, so the instructions file
+    is the one INSIDE the sandbox (this fixes the v1 bug where the loader read a
+    container path against the host filesystem). ``None`` keeps the host read
+    byte-identical.
     """
     if override_path is not None:
-        return _read_one(override_path)
+        return _read_one(override_path, exec_env)
     for filename in DEFAULT_INSTRUCTIONS_FILENAMES:
         candidate = workspace_dir / filename
-        snapshot = _read_one(candidate)
+        snapshot = _read_one(candidate, exec_env)
         if snapshot is not None:
             return snapshot
     return None
 
 
-def _read_one(path: Path) -> Optional[InstructionsSnapshot]:
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except (FileNotFoundError, IsADirectoryError):
-        return None
+def _read_one(
+    path: Path, exec_env: Optional[ExecEnv] = None
+) -> Optional[InstructionsSnapshot]:
+    if exec_env is not None:
+        try:
+            # A missing / non-file path surfaces as an OSError subclass
+            # (AioSandboxExecEnv maps not_found → FileNotFoundError); any read
+            # fault is treated as "no instructions", the same forgiving state
+            # as a missing host file.
+            raw = exec_env.read_text(path, encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+    else:
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except (FileNotFoundError, IsADirectoryError):
+            return None
     if not raw.strip():
         return None
     return InstructionsSnapshot(name=path.name, text=raw)

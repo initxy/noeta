@@ -83,6 +83,41 @@ def test_defaults_are_offline_and_safe() -> None:
     # served product.
     assert c.background_drive is True
     assert c.num_workers == 1
+    # Per-session sandbox is OFF by default (needs a local Docker daemon).
+    assert c.sandbox_enabled is False
+
+
+def test_sandbox_config_from_env() -> None:
+    c = BackendConfig.from_env(
+        {
+            "NOETA_AGENT_SANDBOX": "1",
+            "NOETA_AGENT_SANDBOX_IMAGE": "ghcr.io/example/sbx:2",
+            "NOETA_AGENT_SANDBOX_MEMORY": "4g",
+            "NOETA_AGENT_SANDBOX_CPUS": "3",
+            "NOETA_AGENT_SANDBOX_API_KEY_ENV": "MY_KEY",
+        }
+    )
+    assert c.sandbox_enabled is True
+    assert c.sandbox_image == "ghcr.io/example/sbx:2"
+    assert c.sandbox_memory == "4g"
+    assert c.sandbox_cpus == "3"
+    assert c.sandbox_api_key_env == "MY_KEY"
+
+
+def test_sandbox_config_from_file(tmp_path: Path) -> None:
+    cfg = tmp_path / "c.json"
+    cfg.write_text(
+        json.dumps({"sandbox_enabled": True, "sandbox_image": "img:file"}),
+        encoding="utf-8",
+    )
+    c = BackendConfig.from_env({"NOETA_AGENT_CONFIG": str(cfg)})
+    assert c.sandbox_enabled is True
+    assert c.sandbox_image == "img:file"
+    # env wins over the file
+    c2 = BackendConfig.from_env(
+        {"NOETA_AGENT_CONFIG": str(cfg), "NOETA_AGENT_SANDBOX": "0"}
+    )
+    assert c2.sandbox_enabled is False
 
 
 def test_num_workers_defaults_to_one() -> None:
