@@ -8,6 +8,20 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-07-08
+
+### Fixed
+
+- **Large sandbox shell output is no longer lost.** A big `shell_run` in a
+  sandboxed session could drop its output entirely — AIO truncates a large
+  command's inline stream, and once the merged output crossed the 32 MB
+  response cap the whole call failed, so the model got nothing back, not even
+  the tail. The container backend now reads the full stream AIO spills to a
+  file (`full_output_file_path`) via a bounded `tail`, so the recovered tail
+  feeds the normal output cap and a big build log lands in the artifact instead
+  of failing the run. Behaviour is unchanged against an AIO image that does not
+  spill.
+
 ## [0.1.14] - 2026-07-08
 
 ### Added
@@ -343,7 +357,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.14...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.15...HEAD
+[0.1.15]: https://github.com/initxy/noeta/compare/v0.1.14...v0.1.15
 [0.1.14]: https://github.com/initxy/noeta/compare/v0.1.13...v0.1.14
 [0.1.13]: https://github.com/initxy/noeta/compare/v0.1.12...v0.1.13
 [0.1.12]: https://github.com/initxy/noeta/compare/v0.1.11...v0.1.12
