@@ -21,12 +21,14 @@ limitations are documented in the tools' description resources.
 from __future__ import annotations
 
 from noeta.tools.web.fetch import (
+    ContainerCurlFetchTransport,
     FetchTransport,
     HttpFetchTransport,
     WebFetchTool,
     build_web_tools,
 )
 from noeta.tools.web.search import (
+    ContainerCurlSearchTransport,
     HttpSearchTransport,
     SearchResult,
     SearchTransport,
@@ -35,6 +37,8 @@ from noeta.tools.web.search import (
 
 
 __all__ = [
+    "ContainerCurlFetchTransport",
+    "ContainerCurlSearchTransport",
     "FetchTransport",
     "HttpFetchTransport",
     "HttpSearchTransport",

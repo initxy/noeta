@@ -132,6 +132,25 @@ class BackendConfig:
     #: percent-encoded per the spec) is parsed. Headers only ride along when
     #: ``otlp_endpoint`` is set — they never enable anything by themselves.
     otlp_headers: Mapping[str, str] = field(default_factory=dict)
+    #: Per-session Docker sandbox (2026-07-08 per-session-sandbox). When on, the
+    #: backend provisions a FRESH AIO Sandbox container per root-task tree via
+    #: ``LocalDockerSandboxProvider`` and routes every session's fs / shell /
+    #: skill / web execution into it (the tool schemas — and the stable prefix —
+    #: are unchanged). **Off by default** (needs a local Docker daemon + the AIO
+    #: image). Env ``NOETA_AGENT_SANDBOX`` (1/true/yes/on) / config key
+    #: ``sandbox_enabled``.
+    sandbox_enabled: bool = False
+    #: The AIO Sandbox image to run. Env ``NOETA_AGENT_SANDBOX_IMAGE`` / config
+    #: key ``sandbox_image``.
+    sandbox_image: str = "ghcr.io/agent-infra/sandbox:latest"
+    #: Per-container memory / cpu caps. Env ``NOETA_AGENT_SANDBOX_MEMORY`` /
+    #: ``NOETA_AGENT_SANDBOX_CPUS`` / config keys ``sandbox_memory`` /
+    #: ``sandbox_cpus``.
+    sandbox_memory: str = "2g"
+    sandbox_cpus: str = "2"
+    #: Env var holding the container's ``SANDBOX_API_KEY`` (read at provision
+    #: time; never recorded). Config key ``sandbox_api_key_env``.
+    sandbox_api_key_env: str = "SANDBOX_API_KEY"
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "BackendConfig":
@@ -182,6 +201,12 @@ class BackendConfig:
             if isinstance(background_raw, bool)
             else str(background_raw).strip().lower() in ("1", "true", "yes", "on")
         )
+        sandbox_raw = pick("SANDBOX", "sandbox_enabled", False)
+        sandbox_enabled = (
+            sandbox_raw
+            if isinstance(sandbox_raw, bool)
+            else str(sandbox_raw).strip().lower() in ("1", "true", "yes", "on")
+        )
         otlp_endpoint = pick("OTLP_ENDPOINT", "otlp_endpoint")
         file_headers = file_vals.get("otlp_headers") or {}
         otlp_headers = {
@@ -224,6 +249,17 @@ class BackendConfig:
             num_workers=num_workers,
             otlp_endpoint=str(otlp_endpoint) if otlp_endpoint else None,
             otlp_headers=otlp_headers,
+            sandbox_enabled=sandbox_enabled,
+            sandbox_image=str(
+                pick("SANDBOX_IMAGE", "sandbox_image", cls.sandbox_image)
+            ),
+            sandbox_memory=str(
+                pick("SANDBOX_MEMORY", "sandbox_memory", cls.sandbox_memory)
+            ),
+            sandbox_cpus=str(pick("SANDBOX_CPUS", "sandbox_cpus", cls.sandbox_cpus)),
+            sandbox_api_key_env=str(
+                pick("SANDBOX_API_KEY_ENV", "sandbox_api_key_env", cls.sandbox_api_key_env)
+            ),
         )
 
 
@@ -445,6 +481,30 @@ def serve_backend(
             (event_log, content_store, dispatcher), storage_close = (
                 open_durable_storage(config.storage_url)
             )
+        # Per-session Docker sandbox (2026-07-08 per-session-sandbox): a fresh
+        # AIO container per root task, with fs / shell / skill / web execution
+        # routed into it. Off by default (needs a local Docker daemon + the AIO
+        # image). The manager adds the per-session workspace mount at allocate
+        # time; the spec here carries the deployment-fixed image + resource caps.
+        # The workspace-local skill tier (``<workspace>/.noeta/skills``) rides
+        # that workspace mount; there is no built-in / global skill tier in the
+        # served product.
+        sandbox_provider = None
+        sandbox_spec = None
+        if config.sandbox_enabled:
+            from noeta.agent.host.docker_sandbox import LocalDockerSandboxProvider
+            from noeta.sdk import SandboxSpec
+
+            sandbox_provider = LocalDockerSandboxProvider(
+                image=config.sandbox_image,
+                api_key_env=config.sandbox_api_key_env,
+                memory=config.sandbox_memory,
+                cpus=config.sandbox_cpus,
+            )
+            sandbox_spec = SandboxSpec(
+                image=config.sandbox_image,
+                resources={"memory": config.sandbox_memory, "cpus": config.sandbox_cpus},
+            )
         host_config = HostConfig(
             app_gateway=app_gateway,
             mcp_server_resolver=mcp_registry.resolve_spec,
@@ -454,6 +514,8 @@ def serve_backend(
             dispatcher=dispatcher,
             write_mode=config.write_mode,
             workflow_allowed=config.workflow_enabled,
+            sandbox_provider=sandbox_provider,
+            sandbox_spec=sandbox_spec,
             # Per-task prompt-cache stickiness for the ModelHub responses gateway:
             # a stable ``extra.session_id`` (the task id) pins every turn of a
             # task to one backend account, so its KV cache is actually reused

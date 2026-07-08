@@ -27,6 +27,7 @@ from __future__ import annotations
 import html as _html
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional, Protocol
 
 import httpx
@@ -40,12 +41,14 @@ from noeta.tools._limits import (
     truncate_bytes,
 )
 from noeta.tools.descriptions import load_tool_description
-from noeta.tools.web.search import build_web_search_tool
+from noeta.tools.fs.exec_env import ExecEnv
+from noeta.tools.web.search import _outcome_error_text, build_web_search_tool
 
 
 __all__ = [
     "FetchTransport",
     "HttpFetchTransport",
+    "ContainerCurlFetchTransport",
     "WebFetchTool",
     "build_web_tools",
 ]
@@ -251,8 +254,68 @@ class HttpFetchTransport:
                 client.close()
 
 
-def build_web_tools() -> dict[str, Tool]:
-    """Build the web tool pack (``webfetch`` always; ``web_search`` if keyed) over real HTTP.
+@dataclass
+class ContainerCurlFetchTransport:
+    """Fetch a URL through the sandbox container via ``curl`` (D6).
+
+    In sandbox mode (D3/D5) a tool's execution must land inside the session's
+    container rather than on the host, so ``webfetch`` egresses by running
+    ``curl`` through the ``ExecEnv`` process seam instead of streaming over
+    httpx. The fetched HTML is handed to the SAME :func:`html_to_markdown` the
+    httpx path uses — only the transport moves into the container.
+
+    ``--fail`` makes ``curl`` exit nonzero on an HTTP >= 400 (a private /
+    authenticated URL answering 401/403) — WITHOUT it ``curl`` returns exit 0
+    and hands back the error page as if it were the body, so the tool would
+    surface a server error page as a "successful" fetch. With ``--fail`` such a
+    response (or a timeout) raises with the cause named and the tool degrades to
+    ``ToolResult(success=False, ...)`` — byte-for-byte the same outcome the httpx
+    path reaches through ``raise_for_status`` (R3: the two egress paths cannot
+    diverge on HTTP error status).
+    """
+
+    exec_env: ExecEnv
+    cwd: Path = Path("/")
+    timeout: float = 10.0
+    user_agent: str = HttpFetchTransport.user_agent
+    #: Ceiling on the fetched body, mirroring ``HttpFetchTransport.max_bytes``:
+    #: the container ``run_argv`` caps captured output at this size.
+    max_bytes: int = 5 * 1024 * 1024
+
+    def fetch(self, url: str) -> str:
+        argv = [
+            "curl",
+            "-sSL",
+            # Parity with httpx ``raise_for_status``: a 4xx/5xx must fail the run,
+            # not return the error page as a "successful" body (see class doc).
+            "--fail",
+            "--max-time",
+            str(int(self.timeout)),
+            "-A",
+            self.user_agent,
+            url,
+        ]
+        outcome = self.exec_env.run_argv(
+            argv,
+            cwd=self.cwd,
+            timeout_s=int(self.timeout) + 5,
+            output_cap=self.max_bytes,
+        )
+        if outcome.timed_out:
+            raise RuntimeError(
+                f"webfetch curl timed out after {self.timeout}s: "
+                f"{_outcome_error_text(outcome)}"
+            )
+        if outcome.returncode != 0:
+            raise RuntimeError(
+                f"webfetch curl failed (exit {outcome.returncode}): "
+                f"{_outcome_error_text(outcome)}"
+            )
+        return outcome.stdout.decode("utf-8", errors="replace")
+
+
+def build_web_tools(exec_env: Optional[ExecEnv] = None) -> dict[str, Tool]:
+    """Build the web tool pack (``webfetch`` always; ``web_search`` if keyed).
 
     The pack is merged into the full built-in pack at the assembly layer
     (``build_session_inputs``) BEFORE the ``allowed_tools`` whitelist filter, so
@@ -264,9 +327,20 @@ def build_web_tools() -> dict[str, Tool]:
     key its backend is unreachable, so it is omitted from the pack entirely and
     the model never sees it (the "skip on no connection" shape used for a failed
     MCP server). ``webfetch`` is always present.
+
+    When ``exec_env`` is supplied (sandbox mode) both tools egress THROUGH the
+    container — ``webfetch`` via :class:`ContainerCurlFetchTransport` and
+    ``web_search`` via :class:`ContainerCurlSearchTransport` — instead of over
+    httpx on the host (D3/D6). ``exec_env is None`` keeps the byte-identical
+    host httpx path.
     """
-    tools: list[Tool] = [WebFetchTool(transport=HttpFetchTransport())]
-    search = build_web_search_tool()
+    fetch_transport: FetchTransport = (
+        ContainerCurlFetchTransport(exec_env=exec_env)
+        if exec_env is not None
+        else HttpFetchTransport()
+    )
+    tools: list[Tool] = [WebFetchTool(transport=fetch_transport)]
+    search = build_web_search_tool(exec_env=exec_env)
     if search is not None:
         tools.append(search)
     return {t.name: t for t in tools}

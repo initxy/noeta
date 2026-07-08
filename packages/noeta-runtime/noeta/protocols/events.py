@@ -914,17 +914,17 @@ class TaskHostBoundPayload:
     host_id: str
     workspace_dir: Optional[str] = None
 
-    #: The sandbox execution backend this session is bound to — the AIO
-    #: container's ``base_url`` (T6). Welded here so a resumed / **reclaimed**
-    #: session (possibly on another host) reconnects to the SAME container by
-    #: reading this address rather than the folding host's own config, which may
-    #: differ. Addressing only — the API key is NEVER recorded (D5); it is
-    #: re-read from the reconnecting host's env at connect time. ``None`` (every
-    #: local / non-sandbox recording) → the resolver uses the local host.
-    #: **v1 simplification** of the spec's ``{base_url, sandbox_id}`` ref: with
-    #: one container per host (see ``SandboxExecEnvManager``), the ``base_url``
-    #: *is* the reconnect address and the only load-bearing part; a distinct
-    #: ``sandbox_id`` becomes real when v2 orchestration mints per-container ids.
+    #: The sandbox execution backend this session is bound to — the per-session
+    #: container's ``"{base_url}#{sandbox_id}"`` ref (D4). Welded here so a
+    #: resumed / **reclaimed** session (possibly on another host) reconnects to
+    #: the SAME container by reading this address rather than the folding host's
+    #: own config, which may differ. Addressing only — the API key is NEVER
+    #: recorded (D5); it is re-read from the reconnecting host's env at connect
+    #: time. ``None`` (every local / non-sandbox recording) → the resolver uses
+    #: the local host. The ref is a **flat string** (packed by
+    #: ``noeta.client.sandbox_provider.encode_exec_env_ref`` and split on the last
+    #: ``#``); an attach-one-container provider mints no ``sandbox_id`` so its ref
+    #: is a bare ``base_url``, byte-identical to a v1 recording.
     exec_env_ref: Optional[str] = None
 
     #: ``workspace_dir`` / ``exec_env_ref`` are OMITTED from the canonical form

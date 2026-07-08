@@ -144,3 +144,93 @@ shared container when one conversation closes would break the others.
   is billed for the whole time a session is suspended (no pause/snapshot). Both are
   bounded by the v1 single-container-per-host model until per-container orchestration
   lands.
+
+## v2 (2026-07-08): per-session containers + Tier 2 + product activation
+
+The v1 "one shared container per host, fs/shell only, product-inactive" shape is
+superseded (its record above stays for history). See the implementation spec
+`docs/implementation-specs/2026-07-08-per-session-sandbox.md` for the full design.
+
+**A `SandboxProvider` seam splits *provisioning* from *mechanism*.** v1 addressed
+one pre-existing container by `base_url`; v2 provisions a **fresh container per
+root-task tree**. The SDK defines a `SandboxProvider` Protocol
+(`allocate(session_root_id, spec)` / `release` / `attach`) plus the value types it
+exchanges (`SandboxHandle` = durable addressing + a live `SandboxAuth` strategy
+never serialized; `SandboxSpec` / `MountSpec` = the configurable image / caps /
+mount list). The agent product implements it — `LocalDockerSandboxProvider`
+`docker run -d`s the AIO image (workspace + skills `-v` mounts, api-key, resource
+caps, `-p 127.0.0.1:<port>:8080`), polls `GET /v1/sandbox` to ready, and
+`docker rm -f`s on release. The three-layer split holds: mechanism → runtime
+(`ExecEnv`), binding + reconnect → SDK (`exec_env_ref`, the `SandboxExecEnvManager`
+that drives the provider), provisioning + lifecycle → agent (the provider impl).
+v1's `HostConfig.exec_env` (attach-one-container) survives as a degenerate provider
+(`_ConfigAttachProvider`), so that deployment + its gated e2e are unchanged.
+
+**`exec_env_ref` now carries the `sandbox_id`.** It is a flat string encoded
+`"{base_url}#{sandbox_id}"` (split on the last `#`), reusing the existing
+`__canonical_omit_none__` omit-when-`None` idiom — no canonical-serialization
+reshaping. An attach provider mints no id, so its ref stays a bare `base_url`,
+byte-identical to a v1 recording; every non-sandbox recording still omits the
+field. The driver pre-mints the root task id at `seed_start` (so the container is
+keyed by it), eagerly `allocate`s, and welds the encoded ref into `TaskHostBound`;
+reconnect on resume/reclaim goes through `provider.attach`.
+
+**Per-session teardown.** A container is `release`d when its ROOT task reaches a
+terminal (the tree is done), with `Client.shutdown` as the backstop for interactive
+sessions that rest at `suspended`. This is only possible because the container is no
+longer shared — v1 could only tear down at host shutdown.
+
+**Scope widened to Tier 2.** Beyond fs + foreground shell, the skill indexer,
+`run_skill_script`, the workspace config loaders (instructions / environment /
+shell-allowlist), and web fetch/search **egress** now all execute through the
+session's `ExecEnv` in sandbox mode. The skill indexer reads `SKILL.md` through the
+container so a skill's rendered *base directory* is a container path the model can
+`read`; `run_skill_script` reads the script bytes + runs the interpreter in the
+container (cwd = container workdir); the loaders read their files in the container
+(fixing a v1 bug where they read container paths against the host FS); web egress
+goes out via `exec_env.run_argv(["curl", ...])`. Deliberately **left on the host**:
+`memory_*` (global cross-session user memory, not workspace-scoped), MCP (Tier 3),
+`shell` background/poll/kill (AIO has no durable job), `open_app` (host preview
+gateway). The seam widened by **constructor field injection** (the same idiom v1
+used), never through `ToolContext`, so tool schemas — and the stable prefix — are
+untouched.
+
+**Product activation.** `apps/noeta-agent` gains `NOETA_AGENT_SANDBOX` (+ image /
+memory / cpus / api-key-env knobs); when on it wires `LocalDockerSandboxProvider`
+into `HostConfig`. Off by default (needs a local Docker daemon + the AIO image).
+
+### v2 alternatives considered
+
+- **A `{base_url, sandbox_id}` structured ref instead of the flat encoding.**
+  Rejected for v1: it forces a canonical-tag/register change to the serialization
+  for a value the flat `"{base_url}#{sandbox_id}"` already expresses, and the
+  adapter splits it in one place. Revisit if a third addressing field appears.
+- **Read skill `SKILL.md` host-side (from the mount source) + translate paths.**
+  Rejected: faster, but it reintroduces a host↔container path translation and a
+  rendered base directory the model cannot `read` inside the container. Reading
+  through the container keeps paths container-native (D6-Skills).
+- **Give the `ExecEnv` seam an `http_fetch` method for web egress.** Deferred:
+  `run_argv(["curl", ...])` reuses the existing process seam with no new interface;
+  a first-class fetch method (or AIO's browser) is a later refinement.
+- **Fully replace the attach-one-container config path.** Rejected: keeping
+  `HostConfig.exec_env` working through a degenerate provider preserves the simple
+  "attach a shared container" deployment and its gated e2e at no cost.
+
+### v2 consequences / known-limitations (updates)
+
+- **Weak FS isolation via mounts.** The container writes the host workspace through
+  a `-v` mount (not a full FS jail); only workspace + skills are mounted (never host
+  root). Real isolation needs a copy-in/sync-out provider (the seam allows it).
+- **Cross-machine Docker reconnect does not work.** A `LocalDockerSandboxProvider`
+  container is bound to the machine that ran it; a cross-host reclaim `attach`
+  raises. A Distributed / NAS-backed provider (TAE) removes this from the storage
+  layer — file state is reachable cross-machine, so a reclaiming host just re-pulls
+  a container against the same NAS. `SandboxHandle.auth` (strategy, not a static
+  key), gateway-path-prefix `base_url`, and `MountSpec.kind=nas` are the three
+  zero-rework seams already in place for it.
+- **Idle container cost + cold-start latency** (unchanged from v1, now per session):
+  a suspended session's container is billed until release; each session pays a
+  seconds-scale AIO cold start. Warm pool / pause / snapshot are future work.
+- **Per-session containers shrink the unfenced blast radius.** A slow fenced-out
+  zombie now pollutes only its own session's container (v1: the host-shared one).
+  Cross-generation writes stay unfenced (`fence_token` still `None`).

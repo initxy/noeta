@@ -25,6 +25,7 @@ import os
 from dataclasses import dataclass
 from typing import Callable, Mapping, Optional, Tuple
 
+from noeta.client.sandbox_provider import SandboxProvider, SandboxSpec
 from noeta.observers.otlp import OtlpHttpPost, OtlpTraceConfig
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
@@ -150,7 +151,25 @@ class HostConfig:
     #: and routes fs / shell side effects into it (the tool schemas — and thus
     #: the stable prefix — are unchanged). A host runtime injection, never part
     #: of any agent identity.
+    #:
+    #: **v1 attach path.** ``exec_env`` names ONE pre-existing container by
+    #: ``base_url``; every session on the host attaches it (byte-identical to the
+    #: shipped v1 behaviour). The Client wraps it into an attach ``SandboxProvider``.
     exec_env: Optional[SandboxExecEnvConfig] = None
+    #: **v2 per-session path (D2/D4).** A ``SandboxProvider`` that provisions a
+    #: FRESH container per root-task tree (``LocalDockerSandboxProvider`` and
+    #: friends). ``None`` (default) ⇒ no provisioning. Takes precedence over
+    #: ``exec_env``. Paired with ``sandbox_spec`` (image / resource caps / the
+    #: built-in + global skills mounts); the manager adds the per-session
+    #: workspace mount at allocate time. A host runtime injection, never part of
+    #: any agent identity.
+    sandbox_provider: Optional[SandboxProvider] = None
+    #: The deployment-fixed half of the per-session :class:`SandboxSpec` passed
+    #: to ``sandbox_provider.allocate`` — image, resource caps, and the base
+    #: mount list (built-in / global skills). ``None`` with a ``sandbox_provider``
+    #: set ⇒ a bare spec (no base mounts); the workspace mount is always added
+    #: per session. Ignored on the ``exec_env`` attach path.
+    sandbox_spec: Optional[SandboxSpec] = None
 
     # -- host kill-switches ------------------------------------------------
     workflow_allowed: bool = False

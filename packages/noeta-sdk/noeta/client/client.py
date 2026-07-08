@@ -275,8 +275,12 @@ class Client:
             app_gateway=hc.app_gateway,
             # Sandbox execution backend (D2 host config). ``None`` (default) ⇒
             # the local host; when set, the SdkHost builds a sandbox manager and
-            # routes every session's fs / shell IO into the container.
+            # routes every session's fs / shell IO into the container. ``exec_env``
+            # attaches one shared container (v1); ``sandbox_provider`` +
+            # ``sandbox_spec`` provision a fresh container per root-task tree (v2).
             exec_env=hc.exec_env,
+            sandbox_provider=hc.sandbox_provider,
+            sandbox_spec=hc.sandbox_spec,
             mcp_server_resolver=hc.mcp_server_resolver,
             mcp_http_post=hc.mcp_http_post,
             delta_sink=hc.delta_sink,

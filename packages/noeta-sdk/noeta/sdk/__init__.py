@@ -30,7 +30,17 @@ from noeta.client.capabilities import (
     permission_modes,
 )
 from noeta.client.client import Client, QueryFailedError, QueryResult, query
-from noeta.client.host_config import HostConfig
+from noeta.client.host_config import HostConfig, SandboxExecEnvConfig
+from noeta.client.sandbox_provider import (
+    MountSpec,
+    SandboxAuth,
+    SandboxHandle,
+    SandboxProvider,
+    SandboxSpec,
+    StaticApiKeyAuth,
+    decode_exec_env_ref,
+    encode_exec_env_ref,
+)
 from noeta.observers.otlp import OtlpTraceConfig
 from noeta.client.messages import (
     AssistantMessage,
@@ -124,6 +134,15 @@ __all__ = [
     "QueryResult",
     # host-level wiring (D3)
     "HostConfig",
+    "SandboxExecEnvConfig",
+    "SandboxProvider",
+    "SandboxSpec",
+    "SandboxHandle",
+    "SandboxAuth",
+    "StaticApiKeyAuth",
+    "MountSpec",
+    "encode_exec_env_ref",
+    "decode_exec_env_ref",
     "OtlpTraceConfig",
     "AppPreviewGateway",
     "AppMount",
