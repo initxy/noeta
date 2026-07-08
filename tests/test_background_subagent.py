@@ -552,18 +552,32 @@ def test_delivery_gives_up_when_parent_never_settles(tmp_path: Path) -> None:
         def notify_background_subagent_exit(self, *args: Any, **kw: Any) -> None:
             raise RuntimeError("parent still mid-turn")
 
-    # Clamp the deadline so the give-up is fast. These are class-level constants
-    # (not frozen dataclass fields), so set them on the type and restore after.
-    cls = type(host)
-    setattr(cls, "_BG_SUBAGENT_DELIVER_TIMEOUT_S", 0.1)
-    setattr(cls, "_BG_SUBAGENT_DELIVER_POLL_S", 0.02)
-    try:
-        started = time.monotonic()
-        host._drive_background_subagent_exit(_AlwaysMidTurn(), parent_id, child_id)
-        elapsed = time.monotonic() - started
-    finally:
-        setattr(cls, "_BG_SUBAGENT_DELIVER_TIMEOUT_S", 30.0)
-        setattr(cls, "_BG_SUBAGENT_DELIVER_POLL_S", 0.05)
+    # Build the delivery plan the way the host's exit hook does: project the
+    # stuck child into a notice, then a notify closure that always raises (a
+    # parent perpetually mid-turn). The bounded retry lives in the shared
+    # BackgroundDelivery seam; pass a clamped deadline directly (no more
+    # class-constant monkeypatching).
+    result = host._background_subagent_result(child_id)  # noqa: SLF001
+    assert result is not None  # a genesis-only child projects to a "stuck" notice
+    status, ref, summary = result
+
+    def _plan() -> Any:
+        def _deliver(notifier: Any) -> None:
+            notifier.notify_background_subagent_exit(
+                parent_id,
+                subtask_id=child_id,
+                summary=summary,
+                ref=ref,
+                status=status,
+            )
+
+        return _deliver
+
+    started = time.monotonic()
+    host._delivery.drive(  # noqa: SLF001 — drive the delivery loop synchronously
+        _AlwaysMidTurn(), parent_id, _plan, retry_timeout_s=0.1, poll_s=0.02
+    )
+    elapsed = time.monotonic() - started
 
     assert elapsed < 5.0  # gave up at the deadline, did not hang
     assert "BackgroundSubagentDelivered" not in _events(host, parent_id)
