@@ -42,7 +42,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from noeta.policies.descriptions import load_control_tool_description
 from noeta.policies._workflow_sandbox import check_workflow_script
@@ -191,6 +191,95 @@ class ControlToggles:
     workflow: bool = False
 
 
+@dataclass(frozen=True)
+class ControlTranslateContext:
+    """The per-turn inputs a control tool's translate step reads.
+
+    Assembled once by :func:`translate_control_tool`: the LLM ``response``, the
+    Policy's assistant :class:`Message`, the out-of-band ``ThinkingBlock`` s
+    extracted once (threaded into every control Decision so a reasoning-model
+    turn keeps its signature), plus the two tool-specific reads — ``content_store``
+    for ``ask_user_question``'s spilled question body, ``skill_menu_names`` for
+    ``skill``'s menu gate. A spec ignores the fields it does not need.
+    """
+
+    response: LLMResponse
+    assistant_message: Message
+    assistant_thinking: tuple[ThinkingBlock, ...]
+    content_store: Optional[ContentStore]
+    skill_menu_names: frozenset[str]
+
+
+@dataclass(frozen=True)
+class ControlToolSpec:
+    """One control tool's routing entry: its enable gate + its translate step.
+
+    The registry :data:`_CONTROL_TOOL_SPECS` is an ORDERED tuple — a spec's
+    position IS the fixed routing priority when several control tools co-occur in
+    one turn (``ask_user_question`` → ``todo_write`` → ``spawn_subagent`` →
+    ``skill`` → ``run_workflow``), byte-identical to the original nested ``if``
+    chain. Adding a control tool = append a spec here (mirrors registering a
+    ``ContentKindSpec`` on the content channel); the dispatcher body stays put.
+    """
+
+    #: Model-visible control-tool name (readability / debug; not routing input).
+    name: str
+    #: Read this tool's default-off enable flag off the turn's toggles.
+    enabled: Callable[[ControlToggles], bool]
+    #: Translate the turn into this tool's neutral Decision, or ``None`` when the
+    #: turn carries no call to it (the dispatcher then tries the next spec).
+    translate: Callable[["ControlTranslateContext"], Optional[Decision]]
+
+
+#: The control-tool routing table, in fixed priority order (see
+#: :class:`ControlToolSpec`). The ``translate`` closures reference the
+#: ``_maybe_*`` helpers defined further down; Python resolves those names at call
+#: time, so declaring the table here (ahead of the helpers) is fine.
+_CONTROL_TOOL_SPECS: tuple[ControlToolSpec, ...] = (
+    ControlToolSpec(
+        name="ask_user_question",
+        enabled=lambda t: t.ask_user_question,
+        translate=lambda c: _maybe_ask_user_question_decision(
+            c.response,
+            c.assistant_message,
+            content_store=c.content_store,
+            assistant_thinking=c.assistant_thinking,
+        ),
+    ),
+    ControlToolSpec(
+        name="todo_write",
+        enabled=lambda t: t.todo_write,
+        translate=lambda c: _maybe_todo_write_decision(
+            c.response, c.assistant_message, assistant_thinking=c.assistant_thinking
+        ),
+    ),
+    ControlToolSpec(
+        name="spawn_subagent",
+        enabled=lambda t: t.delegation,
+        translate=lambda c: _maybe_spawn_decision(
+            c.response, c.assistant_message, assistant_thinking=c.assistant_thinking
+        ),
+    ),
+    ControlToolSpec(
+        name="skill",
+        enabled=lambda t: t.skill_invocation,
+        translate=lambda c: _maybe_skill_decision(
+            c.response,
+            c.assistant_message,
+            menu_names=c.skill_menu_names,
+            assistant_thinking=c.assistant_thinking,
+        ),
+    ),
+    ControlToolSpec(
+        name="run_workflow",
+        enabled=lambda t: t.workflow,
+        translate=lambda c: _maybe_workflow_decision(
+            c.response, c.assistant_message, assistant_thinking=c.assistant_thinking
+        ),
+    ),
+)
+
+
 def translate_control_tool(
     response: LLMResponse,
     assistant_message: Message,
@@ -201,61 +290,36 @@ def translate_control_tool(
 ) -> Decision | None:
     """Translate a control-tool ``tool_use`` turn into a neutral Decision.
 
-    Tries each enabled control tool in the FIXED routing priority order —
-    ``ask_user_question`` → ``todo_write`` → ``spawn_subagent`` → ``skill``
-    — and returns the first non-``None`` Decision. Returns ``None`` when no
-    enabled control tool is present (the caller then falls through to the
-    normal ``tool_calls`` path). Order matters when several control tools
-    co-occur in one turn; it is byte-identical to the original nested
+    Walks :data:`_CONTROL_TOOL_SPECS` in its fixed routing-priority order and
+    returns the first enabled spec whose ``translate`` yields a Decision; ``None``
+    when no enabled control tool is present (the caller then falls through to the
+    normal ``tool_calls`` path). Order matters when several control tools co-occur
+    in one turn; the table order is byte-identical to the original nested
     ``_maybe_*`` dispatch in ``ReActPolicy._response_to_decision``.
 
-    Extended-thinking end-to-end (Slice B): the LLM's ThinkingBlocks are
-    extracted ONCE from ``response.content`` here and threaded into every
-    control Decision the helpers build, matching the parallel
-    ``ToolCallsDecision`` path in ``react.py`` so a reasoning-model turn
-    that emits thinking + a control tool_use still carries its signature.
+    Extended-thinking end-to-end (Slice B): the LLM's ThinkingBlocks are extracted
+    ONCE from ``response.content`` here and threaded (via
+    :class:`ControlTranslateContext`) into every control Decision the helpers
+    build, matching the parallel ``ToolCallsDecision`` path in ``react.py`` so a
+    reasoning-model turn that emits thinking + a control tool_use still carries its
+    signature.
     """
-    # Extract out-of-band thinking once so every helper reuses the same tuple
-    # (non-reasoning models → empty tuple, no-op, byte-safe).
-    assistant_thinking: tuple[ThinkingBlock, ...] = tuple(
-        b for b in response.content if isinstance(b, ThinkingBlock)
+    ctx = ControlTranslateContext(
+        response=response,
+        assistant_message=assistant_message,
+        # Extract out-of-band thinking once so every helper reuses the same tuple
+        # (non-reasoning models → empty tuple, no-op, byte-safe).
+        assistant_thinking=tuple(
+            b for b in response.content if isinstance(b, ThinkingBlock)
+        ),
+        content_store=content_store,
+        skill_menu_names=skill_menu_names,
     )
-    if toggles.ask_user_question:
-        ask = _maybe_ask_user_question_decision(
-            response,
-            assistant_message,
-            content_store=content_store,
-            assistant_thinking=assistant_thinking,
-        )
-        if ask is not None:
-            return ask
-    if toggles.todo_write:
-        todo = _maybe_todo_write_decision(
-            response, assistant_message, assistant_thinking=assistant_thinking
-        )
-        if todo is not None:
-            return todo
-    if toggles.delegation:
-        spawn = _maybe_spawn_decision(
-            response, assistant_message, assistant_thinking=assistant_thinking
-        )
-        if spawn is not None:
-            return spawn
-    if toggles.skill_invocation:
-        skill = _maybe_skill_decision(
-            response,
-            assistant_message,
-            menu_names=skill_menu_names,
-            assistant_thinking=assistant_thinking,
-        )
-        if skill is not None:
-            return skill
-    if toggles.workflow:
-        workflow = _maybe_workflow_decision(
-            response, assistant_message, assistant_thinking=assistant_thinking
-        )
-        if workflow is not None:
-            return workflow
+    for spec in _CONTROL_TOOL_SPECS:
+        if spec.enabled(toggles):
+            decision = spec.translate(ctx)
+            if decision is not None:
+                return decision
     return None
 
 
