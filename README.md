@@ -1,30 +1,38 @@
-# Noeta
+# Noeta — the server-side agent runtime
 
 **English** · [简体中文](README.zh-CN.md)
 
 **[Documentation](https://initxy.github.io/noeta/)** · [Quickstart](https://initxy.github.io/noeta/tutorials/quickstart/) · [SDK reference](https://initxy.github.io/noeta/reference/sdk/) · [Configure a provider](https://initxy.github.io/noeta/how-to/configure-provider/)
 
-> Open-source, self-hostable runtime for running AI agents server-side — durable, inspectable, provider-neutral, and sandbox-isolated per session.
+> **Built to host AI agents on a server — not in a notebook.** Durable event-sourced execution, multi-worker / multi-host scheduling, per-session sandbox containers, full audit & replay, and provider-neutral LLM wiring. Self-hostable, no vendor lock-in.
 
-Noeta runs the agent loop — tools, sub-agents, MCP, human-in-the-loop — on top
-of a **durable event log**. That one design choice buys three things a normal
-in-process agent library can't give you:
+Noeta is a **runtime for running AI agents server-side**. It hosts, records,
+schedules, and replays agent execution on top of a **durable event log** — the
+same spine production systems use for exactly-once delivery and crash safety.
+That one design choice buys you what a normal in-process agent library can't:
 
-- **A task survives a crash** and resumes exactly where it left off.
-- **A task can pause for hours or days** waiting on a human, a timer, or a
-  sub-task, then wake exactly once when the condition is met.
-- **Every step is recorded** — each LLM turn, tool call, and approval — so you
-  can inspect, audit, and replay what the agent actually did.
+- **Crash-safe execution.** A task survives a process kill and resumes exactly
+  where it left off — state is folded from the log, never held in memory.
+- **Long-horizon tasks.** A task can pause for hours or days waiting on a human,
+  a timer, or a sub-task, then wake *exactly once* when the condition fires.
+- **Full audit & replay.** Every LLM turn, tool call, and approval is a recorded
+  event, so you can inspect *why* a step happened, not just *what*.
 
-Because it's built to host agents on a **server**, not just in a notebook, it
-adds what that demands: **multi-worker / multi-host** scheduling on shared
-Postgres, and **per-session sandboxing** — flip one switch and every session
-runs in its own throwaway Docker container, with all fs / shell / skill / web
-tool calls executing *inside* it instead of on the host.
+Because it's engineered for the **server** — multi-tenant, long-running,
+untrusted-code — it adds what that demands:
 
-It talks to Anthropic and any OpenAI-compatible model behind one internal
-protocol, so you're never locked to a vendor. And it runs the whole stack
-**offline with no API key**, so you can try it in thirty seconds.
+- **Multi-worker / multi-host** scheduling on shared Postgres (lease fencing,
+  database-clock expiry) — scale out by adding workers.
+- **Per-session sandboxing** — flip one switch and every session runs in its own
+  throwaway Docker container; all fs / shell / skill / web tool calls execute
+  *inside* it, never on the host.
+- **Human-in-the-loop end-to-end** — approvals, structured questions, timer wake
+  all survive restarts.
+- **Provider-neutral** — Anthropic and any OpenAI-compatible model behind one
+  internal protocol; swap vendors without rewriting history.
+
+And the whole stack runs **offline with no API key** via a deterministic `stub`
+provider, so you can try it in thirty seconds.
 
 <p align="center">
   <img src="docs/assets/web-app.png" alt="Noeta coding-agent web app" width="820">
@@ -38,26 +46,57 @@ protocol, so you're never locked to a vendor. And it runs the whole stack
   <em>Every task has a full trace — each event, LLM turn, and token/cache stat, read straight from the event log.</em>
 </p>
 
-## Why Noeta
+## Why Noeta — server-side strengths
+
+Noeta is built for the realities of hosting agents on a server: crashes
+happen, tasks outlive a single request, you run code you don't fully trust, and
+you need to scale across workers. These aren't afterthoughts — they're the
+foundation.
+
+### Durable, crash-safe execution
 
 - **Survives crashes** — a task's state is never held in memory across runs. It
   is rebuilt (*folded*) from an append-only event log on demand. Kill the
   process mid-task; a fresh one folds the log back to the exact point and
   finishes the work — exactly once.
+- **Long-horizon by design** — a task can suspend to wait on a human approval,
+  a structured question, a timer, or a sub-task, and is woken exactly once when
+  the condition fires. Waiting costs nothing while it sleeps.
+
+### Scale-out scheduling
+
+- **Multi-worker, multi-host** — tasks are leased from a shared Dispatcher
+  backed by Postgres. Add workers to scale out; lease fencing + database-clock
+  expiry keep exactly-once semantics across machines. SQLite and in-memory
+  backends stay single-host for local dev.
+
+### Per-session isolation
+
+- **One container per session** — turn on the sandbox and each session gets its
+  own fresh Docker container; every fs / shell / skill / web tool call runs
+  *inside* it, never on the host, and one session's files and processes are
+  invisible to another. Built for hosting agents — and running code — you don't
+  fully trust.
+- **Reconnect-safe** — the container is recorded in the log by address; a
+  worker that folds the task back after a crash reconnects to the *same*
+  container and keeps its working files.
+- **Credentials off the command line** — the container key is handed to `docker`
+  by name, never as an argv value.
+
+### Full observability
+
 - **Fully inspectable** — every event, LLM turn, tool call, and token/cache
   stat is a recorded event. The trace view (and the raw log) answers *why* a
   step happened — which tool ran on whose authority, what got compacted away —
   not just *what*.
-- **Long-horizon by design** — a task can suspend to wait on a human approval,
-  a structured question, a timer, or a sub-task, and is woken exactly once when
-  the condition fires. Waiting costs nothing while it sleeps.
-- **Isolated per session** — turn on the sandbox and each session gets its own
-  fresh Docker container; every fs / shell / skill / web tool call runs *inside*
-  it, never on the host, and one session's files and processes are invisible to
-  another. Built for hosting agents — and running code — you don't fully trust.
-- **Provider-neutral** — Anthropic and any OpenAI-compatible endpoint sit
-  behind one internal protocol. Swapping vendors is wiring, not a rewrite, and
-  the recorded history isn't bound to any vendor's shape.
+- **Replayable** — compaction is a recorded overlay; the original messages stay
+  in the log, so history is auditable and reproducible.
+
+### Provider-neutral, no lock-in
+
+- **Anthropic or any OpenAI-compatible endpoint** sit behind one internal
+  protocol. Swapping vendors is wiring, not a rewrite, and the recorded history
+  isn't bound to any vendor's shape.
 - **Bring your own agent** — the runtime hosts and schedules; you supply the
   policy, tools, and context. A ReAct policy and a full coding agent ship
   in-tree, but nothing forces you to use them.

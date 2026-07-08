@@ -1,7 +1,7 @@
 [project]
 name = "noeta-sdk"
 version = "0.1.13"
-description = "Noeta SDK: the thin in-process client for building AI agents. Import noeta.sdk, define your tools and policy, and run — provider-neutral, event-sourced, no vendor lock-in. Like the Claude Agent SDK, but open-source and self-hostable."
+description = "Noeta SDK: build AI agents that run on the server. Import noeta.sdk, define your tools and policy — durable event-sourced execution, multi-worker scheduling, provider-neutral, no vendor lock-in."
 license = "Apache-2.0"
 authors = [{ name = "The Noeta Authors" }]
 readme = "README.md"

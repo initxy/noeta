@@ -1,7 +1,7 @@
 [project]
 name = "noeta-agent"
 version = "0.1.13"
-description = "Noeta coding agent: the batteries-included AI coding agent with a web UI. Like Claude Code, but open-source, self-hostable, and provider-neutral. Run with python -m noeta.agent."
+description = "Noeta coding agent: server-side AI coding agent with a web UI. Durable event-sourced execution, multi-worker scheduling, per-session sandbox containers, provider-neutral. Run with python -m noeta.agent."
 license = "Apache-2.0"
 authors = [{ name = "The Noeta Authors" }]
 readme = "README.md"
