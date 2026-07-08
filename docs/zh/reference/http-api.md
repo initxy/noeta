@@ -25,6 +25,7 @@
 | `POST` | `/tasks/{id}/approve` | 批准门控工具调用。Body：`call_id`、`reason`。 |
 | `POST` | `/tasks/{id}/deny` | 拒绝门控工具调用。Body：`call_id`、`reason`。 |
 | `POST` | `/tasks/{id}/answer` | 回答模型提出的问题。Body：`question_id`、`answers`（dict）。 |
+| `POST` | `/tasks/{id}/events` | 向 `wait_external` 挂起的任务交付外部事件。Body：`event_kind`（string）、可选 `payload`（任意 JSON 值）。不等待该 `event_kind` 的任务返回 `409` + `not_resumable`。 |
 | `POST` | `/tasks/{id}/cancel` | 取消任务。Body：`reason`（默认 `"cancelled"`）、`cascade`（bool，取消子任务）。 |
 | `POST` | `/tasks/{id}/close` | 关闭对话。Body：`reason`（可选）。 |
 | `POST` | `/tasks/{id}/reopen` | 重新打开已关闭的对话。Body：`reason`（可选）。 |
@@ -104,4 +105,9 @@ Engine 错误携带一个稳定的 `code` token，映射到 HTTP 状态：
 - `app.py` —— 路由根、静态资源、预览网关、`/health`
 
 配置解析：`lifecycle.py` → `BackendConfig.from_env`。
-另见：[配置](configuration.md)。
+
+## 注意
+
+早期版本文档描述了一些在此后端中不存在的路由（`GET /tasks/{id}`、`GET /events`、`POST /tasks/{id}/goals`、`POST /tasks/{id}/resume`、`/mcp-servers` 等）。上表是根据代码生成的，以其为唯一权威列表。
+
+另见：[配置](configuration.md)、[编码代理](noeta-agent.md)、[SDK 参考](sdk.md)。
