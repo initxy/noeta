@@ -8,6 +8,31 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-07-07
+
+### Added
+
+- **ExecEnv seam + sandboxed tool execution.** File-system and shell tools
+  now run behind an `ExecEnv` interface with two backends: the host process
+  (unchanged default) and an AIO Sandbox container (`exec_env="aio-sandbox"`
+  in config or `HostConfig`). When sandboxed, the agent's `apply_patch` and
+  shell commands execute inside an isolated container with a lexical
+  workspace, so an untrusted agent can't touch the host. The session holds a
+  durable `exec_env_ref` that survives reconnects across machines, and
+  rewind restores file state through the same container. Recorded in the
+  `exec-env` ADR.
+
+### Fixed
+
+- `shell_run` timeout is now honoured under the sandbox backend (previously
+  the container-side exec ignored the host timeout).
+- Background sub-agent completion notices now inline the result and deref
+  content refs before anchoring, so the notice body is self-contained.
+
+### Changed
+
+- Docs: post-0.1.10 status sync and dead-link fixes (strict link-check).
+
 ## [0.1.10] - 2026-07-07
 
 Supersedes the never-published 0.1.9 (its prompt-cache fix ships here).
@@ -269,7 +294,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.10...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.11...HEAD
+[0.1.11]: https://github.com/initxy/noeta/compare/v0.1.10...v0.1.11
 [0.1.10]: https://github.com/initxy/noeta/compare/v0.1.8...v0.1.10
 [0.1.8]: https://github.com/initxy/noeta/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/initxy/noeta/compare/v0.1.6...v0.1.7
