@@ -8,6 +8,8 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-07-08
+
 ### Added
 
 - **Per-exec sandbox shell preamble (`HostConfig.sandbox_exec_preamble`).** A
@@ -341,7 +343,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.13...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.14...HEAD
+[0.1.14]: https://github.com/initxy/noeta/compare/v0.1.13...v0.1.14
 [0.1.13]: https://github.com/initxy/noeta/compare/v0.1.12...v0.1.13
 [0.1.12]: https://github.com/initxy/noeta/compare/v0.1.11...v0.1.12
 [0.1.11]: https://github.com/initxy/noeta/compare/v0.1.10...v0.1.11
