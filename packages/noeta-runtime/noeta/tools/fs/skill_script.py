@@ -21,6 +21,7 @@ malicious rewrite. Trusted-workspace only.
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,6 +37,7 @@ from noeta.tools._limits import (
 )
 from noeta.tools._refs import ref_json
 from noeta.tools.fs._subprocess import run_argv, tail_bytes
+from noeta.tools.fs.exec_env import ExecEnv
 from noeta.tools.fs.shell import (
     DEFAULT_SHELL_OUTPUT_CAP,
     DEFAULT_SHELL_TIMEOUT_S,
@@ -101,6 +103,13 @@ class RunSkillScriptTool:
     timeout_s: int = DEFAULT_SHELL_TIMEOUT_S
     output_cap: int = DEFAULT_SHELL_OUTPUT_CAP
     runner: Optional[Callable[..., subprocess.CompletedProcess[bytes]]] = None
+    #: Sandbox execution backend (D6-Skills / S7). ``None`` (default) reads the
+    #: script bytes + spawns the interpreter on the HOST, byte-identical to
+    #: before. When set, the hash-check read AND the interpreter run go THROUGH
+    #: the container (``exec_env.read_bytes`` / ``exec_env.run_argv``), and the
+    #: script paths (``scripts``) are container paths — the whole execution lands
+    #: inside the session's sandbox, cwd = the container workspace root.
+    exec_env: Optional[ExecEnv] = None
     name: str = SKILL_SCRIPT_TOOL_NAME
     description: str = (
         "Run an active skill's bundled script via an allowlisted interpreter "
@@ -157,29 +166,45 @@ class RunSkillScriptTool:
             return _err(f"no allowlisted interpreter for {relpath!r}")
 
         # Re-resolve + re-confirm containment at invoke (TOCTOU-aware);
-        # use the SAME realpath for hashing + argv.
+        # use the SAME path for hashing + argv. Sandbox mode (``exec_env`` set)
+        # keeps the path a LEXICAL container path: a host ``.resolve()`` /
+        # ``.stat()`` is meaningless inside the container, so containment is a
+        # lexical (``normpath``) check and the size / read go through the ExecEnv
+        # — the container is the isolation boundary.
         candidate = root / relpath
-        try:
-            real = candidate.resolve()
+        if self.exec_env is None:
+            try:
+                real = candidate.resolve()
+                if not real.is_relative_to(root):
+                    return _err(f"{relpath!r} resolves outside its skill root")
+            except OSError:
+                return _err(f"could not resolve {relpath!r}")
+            try:
+                size = real.stat().st_size
+            except OSError:
+                return _err(f"could not stat {relpath!r}")
+            if size > _SCRIPT_MAX_BYTES:
+                return _err(f"{relpath!r} exceeds the {_SCRIPT_MAX_BYTES}-byte cap")
+            try:
+                raw = real.read_bytes()
+            except OSError:
+                return _err(f"could not read {relpath!r}")
+        else:
+            real = Path(os.path.normpath(str(candidate)))
             if not real.is_relative_to(root):
                 return _err(f"{relpath!r} resolves outside its skill root")
-        except OSError:
-            return _err(f"could not resolve {relpath!r}")
-        try:
-            size = real.stat().st_size
-        except OSError:
-            return _err(f"could not stat {relpath!r}")
-        if size > _SCRIPT_MAX_BYTES:
-            return _err(f"{relpath!r} exceeds the {_SCRIPT_MAX_BYTES}-byte cap")
-        try:
-            raw = real.read_bytes()
-        except OSError:
-            return _err(f"could not read {relpath!r}")
+            try:
+                raw = self.exec_env.read_bytes(real)
+            except OSError:
+                return _err(f"could not read {relpath!r}")
+            if len(raw) > _SCRIPT_MAX_BYTES:
+                return _err(f"{relpath!r} exceeds the {_SCRIPT_MAX_BYTES}-byte cap")
         script_hash = hashlib.sha256(raw).hexdigest()
 
         argv = [interpreter, str(real), *raw_args]
+        run = self.exec_env.run_argv if self.exec_env is not None else run_argv
         try:
-            outcome = run_argv(
+            outcome = run(
                 argv,
                 cwd=self.workspace.root,
                 timeout_s=self.timeout_s,

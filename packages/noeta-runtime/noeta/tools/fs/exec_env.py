@@ -402,6 +402,7 @@ class AioSandboxExecEnv:
         *,
         base_url: str,
         api_key: Optional[str] = None,
+        auth_headers: Optional[Callable[[], Mapping[str, str]]] = None,
         timeout_s: float = DEFAULT_AIO_TIMEOUT_S,
         total_cap: int = _DEFAULT_AIO_TOTAL_CAP,
         post: Optional[AioHttpPost] = None,
@@ -416,6 +417,14 @@ class AioSandboxExecEnv:
         # v1: fence_token is a reserved placeholder (D1); always None today, so
         # no fence header is sent. v2 rotates it on stale-reclaim.
         self._fence_token = fence_token
+        # ``auth_headers`` (v2, D8) is a per-call header factory — the SDK's
+        # ``SandboxAuth.connect_headers`` — so a short-lived credential (a TAE
+        # Bearer JWT) is minted fresh EACH request rather than fixed at
+        # construction. When it is supplied the static ``api_key`` path is
+        # bypassed; when it is ``None`` the v1 static header is used verbatim
+        # (byte-identical to pre-v2 behaviour). Either way auth rides only on the
+        # wire — never recorded (D5).
+        self._auth_headers = auth_headers
         headers = {"Content-Type": "application/json"}
         if api_key:
             # AIO accepts the key via X-AIO-API-Key / Authorization: Bearer /
@@ -423,6 +432,18 @@ class AioSandboxExecEnv:
             # never recorded (D5).
             headers["X-AIO-API-Key"] = api_key
         self._headers = headers
+
+    def _request_headers(self) -> Mapping[str, str]:
+        """The headers for one request — static (v1) or freshly minted (v2).
+
+        With an ``auth_headers`` factory (D8) the auth header is computed per
+        call and merged over the constant ``Content-Type``; without it the v1
+        static header dict is returned unchanged, so the pre-v2 wire bytes are
+        identical.
+        """
+        if self._auth_headers is None:
+            return self._headers
+        return {"Content-Type": "application/json", **self._auth_headers()}
 
     # -- wire ------------------------------------------------------------- #
 
@@ -445,7 +466,9 @@ class AioSandboxExecEnv:
         data = json.dumps(body, separators=(",", ":")).encode("utf-8")
         effective_timeout = self._timeout_s if timeout_s is None else timeout_s
         try:
-            raw = self._post(url, data, self._headers, timeout_s=effective_timeout)
+            raw = self._post(
+                url, data, self._request_headers(), timeout_s=effective_timeout
+            )
         except TimeoutError:
             # Propagated raw so run_argv can classify it as a timed-out run;
             # other callers see it as an OSError (a tool_error) all the same.

@@ -44,6 +44,7 @@ from noeta.protocols.content_store import ContentStore
 from noeta.protocols.event_log import EventLogWriter
 from noeta.protocols.events import ContextContentRecordedPayload
 from noeta.protocols.task import Task
+from noeta.tools.fs.exec_env import ExecEnv
 
 
 __all__ = [
@@ -57,7 +58,9 @@ __all__ = [
 _GIT_STATUS_MAX_BYTES = 2048
 
 
-def load_environment(workspace_dir: Path) -> EnvironmentSnapshot:
+def load_environment(
+    workspace_dir: Path, *, exec_env: Optional[ExecEnv] = None
+) -> EnvironmentSnapshot:
     """Capture the session-static workspace facts into a snapshot.
 
     Impure (reads the workspace path string, probes ``.git`` on disk,
@@ -87,14 +90,22 @@ def load_environment(workspace_dir: Path) -> EnvironmentSnapshot:
     fully guarded — any failure (no git binary, detached HEAD edge cases,
     timeout, decode error, …) degrades to the empty string and never
     raises. Never returns ``None`` — a workspace always exists.
+
+    ``exec_env`` (sandbox mode) probes ``.git`` and runs git THROUGH the
+    container — ``workspace_dir`` is then the container workdir, so the facts
+    describe the sandbox's checkout (this fixes the v1 bug where the loader
+    probed a container path on the host filesystem). ``None`` keeps the host
+    reads byte-identical.
     """
     git_marker = workspace_dir / ".git"
-    is_git_repo = git_marker.exists()
+    is_git_repo = (
+        exec_env.exists(git_marker) if exec_env is not None else git_marker.exists()
+    )
     git_branch = ""
     git_status = ""
     if is_git_repo:
-        git_branch = _git_branch(workspace_dir)
-        git_status = _git_status(workspace_dir)
+        git_branch = _git_branch(workspace_dir, exec_env)
+        git_status = _git_status(workspace_dir, exec_env)
     return EnvironmentSnapshot(
         workspace_display=str(workspace_dir),
         is_git_repo=is_git_repo,
@@ -105,12 +116,28 @@ def load_environment(workspace_dir: Path) -> EnvironmentSnapshot:
     )
 
 
-def _run_git(workspace_dir: Path, args: list[str]) -> str:
+def _run_git(
+    workspace_dir: Path, args: list[str], exec_env: Optional[ExecEnv] = None
+) -> str:
     """Run a read-only git command in ``workspace_dir``, "" on any failure.
 
     Captured once pre-loop, so a short timeout is fine; any non-zero exit,
-    missing binary, timeout or decode problem degrades to "".
+    missing binary, timeout or decode problem degrades to "". ``exec_env``
+    (sandbox mode) runs git INSIDE the container (cwd = the container workdir).
     """
+    if exec_env is not None:
+        try:
+            outcome = exec_env.run_argv(
+                ["git", *args],
+                cwd=workspace_dir,
+                timeout_s=5,
+                output_cap=_GIT_STATUS_MAX_BYTES * 8,
+            )
+        except Exception:  # noqa: BLE001 — capture is best-effort, never fatal.
+            return ""
+        if outcome.timed_out or outcome.returncode != 0:
+            return ""
+        return outcome.stdout.decode("utf-8", errors="replace")
     try:
         result = subprocess.run(
             ["git", *args],
@@ -126,12 +153,26 @@ def _run_git(workspace_dir: Path, args: list[str]) -> str:
     return result.stdout.decode("utf-8", errors="replace")
 
 
-def _git_branch(workspace_dir: Path) -> str:
-    return _run_git(workspace_dir, ["rev-parse", "--abbrev-ref", "HEAD"]).strip()
+def _git_branch(workspace_dir: Path, exec_env: Optional[ExecEnv] = None) -> str:
+    args = ["rev-parse", "--abbrev-ref", "HEAD"]
+    # Keep the local path a 2-positional-arg call so it is byte-identical to
+    # before (and existing ``_run_git`` fakes that take (wd, args) still work);
+    # only sandbox mode threads the ExecEnv.
+    out = (
+        _run_git(workspace_dir, args, exec_env)
+        if exec_env is not None
+        else _run_git(workspace_dir, args)
+    )
+    return out.strip()
 
 
-def _git_status(workspace_dir: Path) -> str:
-    status = _run_git(workspace_dir, ["status", "--short"])
+def _git_status(workspace_dir: Path, exec_env: Optional[ExecEnv] = None) -> str:
+    args = ["status", "--short"]
+    status = (
+        _run_git(workspace_dir, args, exec_env)
+        if exec_env is not None
+        else _run_git(workspace_dir, args)
+    )
     if len(status.encode("utf-8")) > _GIT_STATUS_MAX_BYTES:
         clipped = status.encode("utf-8")[:_GIT_STATUS_MAX_BYTES]
         # Drop a trailing partial multibyte char from the byte cut.

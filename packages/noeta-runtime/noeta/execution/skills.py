@@ -59,6 +59,7 @@ from noeta.protocols.decisions import TaskStatePatch
 from noeta.protocols.task import Task
 from noeta.protocols.tool import Tool
 from noeta.tools.fs import WorkspaceRoot
+from noeta.tools.fs.exec_env import ExecEnv
 from noeta.tools.fs.skill_script import (
     SKILL_SCRIPT_TOOL_NAME,
     RunSkillScriptTool,
@@ -115,26 +116,49 @@ def merge_skill_registries(
     return SkillRegistry(merged)
 
 
+def _skill_root(desc: SkillDescription, exec_env: Optional[ExecEnv]) -> Optional[Path]:
+    """A skill's containment root — its ``source_path.parent``.
+
+    Local mode canonicalises with ``.resolve()`` (host realpath, follows
+    symlinks) so a ``read`` of ``<base>/<relpath>`` (whose realpath the tool
+    computes) lands inside it. Sandbox mode (``exec_env`` set) keeps the
+    **container** path verbatim: the source_path is already a container path and
+    a host ``.resolve()`` would (wrongly) resolve it against the host filesystem
+    — the container is the isolation boundary and the ``read`` tool operates on
+    lexical container paths. ``None`` on a synthetic (``source_path``-less)
+    skill or an unresolvable host path."""
+    if desc.source_path is None:
+        return None
+    parent = desc.source_path.parent
+    if exec_env is not None:
+        return parent
+    try:
+        return parent.resolve()
+    except OSError:
+        return None
+
+
 def resolve_skill_scripts(
     registry: SkillRegistry,
+    *,
+    exec_env: Optional[ExecEnv] = None,
 ) -> tuple[tuple[str, str, Path], ...]:
     """Resolve the runnable bundled scripts across a registry (Issue E).
 
     Returns sorted ``(skill, relpath, root_path)`` tuples for every
     I5-discovered resource whose **suffix has an allowlisted interpreter**
     and whose skill has a resolvable root. ``root_path`` is the skill
-    root's **absolute realpath** (watchpoint #1). A ``source_path``-less
-    (synthetic) skill or one whose root cannot be resolved contributes
-    nothing — those scripts never enter the executable set.
+    root's **absolute realpath** (host) or its **container path**
+    (``exec_env`` set, sandbox mode). A ``source_path``-less (synthetic) skill
+    or one whose root cannot be resolved contributes nothing.
     """
     out: list[tuple[str, str, Path]] = []
     for name in registry.names():
         desc = registry.get(name)
-        if desc is None or desc.source_path is None:
+        if desc is None:
             continue
-        try:
-            root = desc.source_path.parent.resolve()
-        except OSError:
+        root = _skill_root(desc, exec_env)
+        if root is None:
             continue
         for rel in desc.resources:
             if is_skill_script_resource(rel):
@@ -143,29 +167,31 @@ def resolve_skill_scripts(
     return tuple(out)
 
 
-def resolve_skill_roots(registry: SkillRegistry) -> tuple[Path, ...]:
-    """The absolute realpath roots of every skill with a resolvable path.
+def resolve_skill_roots(
+    registry: SkillRegistry,
+    *,
+    exec_env: Optional[ExecEnv] = None,
+) -> tuple[Path, ...]:
+    """The roots of every skill with a resolvable path (host realpath or,
+    in sandbox mode, the container path).
 
     These widen the ``read`` tool's containment seam so it can reach a
     skill's bundled resources outside the workspace — the global
     (``~/.noeta/skills``) / built-in tiers ``WorkspaceRoot`` would
     otherwise reject. The renderer hands the model each skill's
     ``source_path.parent`` as the ``Base directory for this skill:`` line;
-    this returns the matching ``.resolve()``-canonicalised roots so a
-    ``read`` of ``<base>/<relpath>`` (whose realpath the tool computes)
-    lands inside one. A synthetic (``source_path``-less) skill, or one
-    whose root cannot be resolved, contributes nothing. Sorted +
-    de-duplicated for determinism.
+    this returns the matching roots so a ``read`` of ``<base>/<relpath>``
+    lands inside one — host-canonicalised locally, the verbatim container path
+    under a sandbox (``exec_env`` set). Sorted + de-duplicated for determinism.
     """
     roots: set[Path] = set()
     for name in registry.names():
         desc = registry.get(name)
-        if desc is None or desc.source_path is None:
+        if desc is None:
             continue
-        try:
-            roots.add(desc.source_path.parent.resolve())
-        except OSError:
-            continue
+        root = _skill_root(desc, exec_env)
+        if root is not None:
+            roots.add(root)
     return tuple(sorted(roots))
 
 
@@ -174,6 +200,7 @@ def build_skill_script_wiring(
     workspace: WorkspaceRoot,
     *,
     enabled: bool,
+    exec_env: Optional[ExecEnv] = None,
 ) -> tuple[Optional[Tool], frozenset[str], frozenset[tuple[str, str]]]:
     """Single source for Issue E wiring — used by BOTH
     :meth:`CodeSessionRunner.prepare` and
@@ -185,11 +212,17 @@ def build_skill_script_wiring(
     ``enabled=False`` (default everywhere, incl. every sub-agent child)
     returns ``(None, frozenset(), frozenset())`` — the tool is never
     constructed, so the tools dict / schema / stable hash are unchanged.
+
+    ``exec_env`` (sandbox mode) resolves the script roots as container paths and
+    is threaded into the tool so the hash check + execution run INSIDE the
+    container (S7); ``None`` keeps the host path byte-identical.
     """
     if not enabled:
         return None, frozenset(), frozenset()
-    scripts = resolve_skill_scripts(registry)
-    tool: Tool = RunSkillScriptTool(workspace=workspace, scripts=scripts)
+    scripts = resolve_skill_scripts(registry, exec_env=exec_env)
+    tool: Tool = RunSkillScriptTool(
+        workspace=workspace, scripts=scripts, exec_env=exec_env
+    )
     skill_scripts = frozenset((s, rel) for s, rel, _ in scripts)
     return tool, frozenset({SKILL_SCRIPT_TOOL_NAME}), skill_scripts
 
@@ -233,6 +266,7 @@ def load_workspace_skills(
     *,
     override_skills_dir: Optional[Path] = None,
     lower_skill_dirs: Sequence[Path] = (),
+    exec_env: Optional[ExecEnv] = None,
 ) -> SkillRegistry:
     """Build a ``SkillRegistry`` by merging the skill tiers.
 
@@ -266,11 +300,18 @@ def load_workspace_skills(
         else workspace / DEFAULT_SKILLS_SUBDIR
     )
     # Fold the lower tiers low→high (built-in < global), then let the
-    # workspace-local pack win as the top overlay.
+    # workspace-local pack win as the top overlay. In sandbox mode each tier's
+    # SKILL.md is indexed THROUGH the container (``exec_env``): the dirs are then
+    # container mount points and the rendered base directories are container
+    # paths (D6-Skills).
     merged = SkillRegistry({})
     for lower in lower_skill_dirs:
-        merged = merge_skill_registries(merged, SkillIndexer(lower).index())
-    return merge_skill_registries(merged, SkillIndexer(skills_dir).index())
+        merged = merge_skill_registries(
+            merged, SkillIndexer(lower, exec_env=exec_env).index()
+        )
+    return merge_skill_registries(
+        merged, SkillIndexer(skills_dir, exec_env=exec_env).index()
+    )
 
 
 def build_skill_composer(
@@ -335,7 +376,11 @@ def build_skill_composer(
     )
 
 
-def skill_content_kind(skill_registry: SkillRegistry) -> ContentKindSpec:
+def skill_content_kind(
+    skill_registry: SkillRegistry,
+    *,
+    exec_env: Optional[ExecEnv] = None,
+) -> ContentKindSpec:
     """The skill kind's content-channel registry item.
 
     Skills are the channel's first resident: render rule = the existing
@@ -346,25 +391,38 @@ def skill_content_kind(skill_registry: SkillRegistry) -> ContentKindSpec:
     so the recorded fingerprint pins the content for resume. New kinds
     register their own spec next to this one; neither the composer nor the
     runtime changes.
+
+    ``exec_env`` (sandbox mode) makes the fingerprints hash the SKILL.md bytes
+    read THROUGH the container, matching where the model actually reads them.
     """
     return ContentKindSpec(
         kind=SKILL_KIND,
         renderer=build_skill_renderer(skill_registry),
-        hashes=build_skill_hashes(skill_registry),
+        hashes=build_skill_hashes(skill_registry, exec_env=exec_env),
         policy=SKILL_DRIFT_POLICY,
     )
 
 
-def skill_content_hash(desc: SkillDescription) -> str:
+def skill_content_hash(
+    desc: SkillDescription, *, exec_env: Optional[ExecEnv] = None
+) -> str:
     """``sha256`` of a skill's ``SKILL.md`` full bytes (issue 08).
 
     Precedence: if ``desc.source_path`` points to an on-disk file, read
     the raw bytes directly (the SKILL.md author's authoritative file on
     disk — matches what a git diff would flag). Otherwise fall back to
     ``desc.body.encode("utf-8")`` for synthetic / memory-only skills.
+
+    ``exec_env`` (sandbox mode) reads the SKILL.md bytes THROUGH the container
+    (the source_path is a container path), so the fingerprint matches the file
+    the model reads; a read failure falls back to the ``body`` bytes.
     """
     if desc.source_path is not None:
         try:
+            if exec_env is not None:
+                return hashlib.sha256(
+                    exec_env.read_bytes(desc.source_path)
+                ).hexdigest()
             if desc.source_path.is_file():
                 return hashlib.sha256(desc.source_path.read_bytes()).hexdigest()
         except OSError:
@@ -374,6 +432,8 @@ def skill_content_hash(desc: SkillDescription) -> str:
 
 def build_skill_hashes(
     skill_registry: Optional[Any],
+    *,
+    exec_env: Optional[ExecEnv] = None,
 ) -> Optional[SkillHashesFn]:
     """Build a ``SkillHashesFn``-compatible lookup from a ``SkillRegistry``.
 
@@ -406,7 +466,7 @@ def build_skill_hashes(
         desc = skill_registry.get(skill_name)
         if desc is None:
             return None
-        resolved = (desc.version, skill_content_hash(desc))
+        resolved = (desc.version, skill_content_hash(desc, exec_env=exec_env))
         cache[skill_name] = resolved
         return resolved
 
@@ -421,6 +481,7 @@ def activate_skills(
     lease_id: str,
     trace_id: Optional[str] = None,
     skill_registry: Optional[SkillRegistry] = None,
+    exec_env: Optional[ExecEnv] = None,
 ) -> Task:
     """Runner-driven pre-loop skill activation.
 
@@ -470,7 +531,7 @@ def activate_skills(
                 kind=SKILL_KIND,
                 name=name,
                 version=desc.version,
-                content_hash=skill_content_hash(desc),
+                content_hash=skill_content_hash(desc, exec_env=exec_env),
                 policy=SKILL_DRIFT_POLICY,
                 lease_id=lease_id,
                 trace_id=trace_id,

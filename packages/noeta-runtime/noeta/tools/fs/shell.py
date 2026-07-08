@@ -331,16 +331,27 @@ def project_shell_allowlist_path(workspace_root: Path) -> Path:
     return Path(workspace_root) / ".noeta" / "shell-allowlist.json"
 
 
-def load_project_shell_allowlist(workspace_root: Path) -> tuple[dict[str, Any], ...]:
+def load_project_shell_allowlist(
+    workspace_root: Path, *, exec_env: Optional[ExecEnv] = None
+) -> tuple[dict[str, Any], ...]:
     """Load the project's remembered allowlist specs (empty if absent/malformed).
 
     Plain external config read - it never enters the LLM context or the event
     log; it just feeds the effective allowlist when the tools are built for a turn.
+
+    ``exec_env`` (sandbox mode) reads the allowlist file THROUGH the container —
+    ``workspace_root`` is then the container workdir, so the rules come from the
+    file INSIDE the sandbox (this fixes the v1 bug where the loader read a
+    container path against the host filesystem). ``None`` keeps the host read
+    byte-identical.
     """
     path = project_shell_allowlist_path(workspace_root)
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        if exec_env is not None:
+            raw = json.loads(exec_env.read_text(path, encoding="utf-8"))
+        else:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
         return ()
     if not isinstance(raw, list):
         return ()

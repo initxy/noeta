@@ -4,7 +4,7 @@
 
 **[Documentation](https://initxy.github.io/noeta/)** · [Quickstart](https://initxy.github.io/noeta/tutorials/quickstart/) · [SDK reference](https://initxy.github.io/noeta/reference/sdk/) · [Configure a provider](https://initxy.github.io/noeta/how-to/configure-provider/)
 
-> Open-source, self-hostable runtime for AI agents — durable, inspectable, and provider-neutral.
+> Open-source, self-hostable runtime for running AI agents server-side — durable, inspectable, provider-neutral, and sandbox-isolated per session.
 
 Noeta runs the agent loop — tools, sub-agents, MCP, human-in-the-loop — on top
 of a **durable event log**. That one design choice buys three things a normal
@@ -15,6 +15,12 @@ in-process agent library can't give you:
   sub-task, then wake exactly once when the condition is met.
 - **Every step is recorded** — each LLM turn, tool call, and approval — so you
   can inspect, audit, and replay what the agent actually did.
+
+Because it's built to host agents on a **server**, not just in a notebook, it
+adds what that demands: **multi-worker / multi-host** scheduling on shared
+Postgres, and **per-session sandboxing** — flip one switch and every session
+runs in its own throwaway Docker container, with all fs / shell / skill / web
+tool calls executing *inside* it instead of on the host.
 
 It talks to Anthropic and any OpenAI-compatible model behind one internal
 protocol, so you're never locked to a vendor. And it runs the whole stack
@@ -45,6 +51,10 @@ protocol, so you're never locked to a vendor. And it runs the whole stack
 - **Long-horizon by design** — a task can suspend to wait on a human approval,
   a structured question, a timer, or a sub-task, and is woken exactly once when
   the condition fires. Waiting costs nothing while it sleeps.
+- **Isolated per session** — turn on the sandbox and each session gets its own
+  fresh Docker container; every fs / shell / skill / web tool call runs *inside*
+  it, never on the host, and one session's files and processes are invisible to
+  another. Built for hosting agents — and running code — you don't fully trust.
 - **Provider-neutral** — Anthropic and any OpenAI-compatible endpoint sit
   behind one internal protocol. Swapping vendors is wiring, not a rewrite, and
   the recorded history isn't bound to any vendor's shape.
@@ -110,9 +120,51 @@ separate features and become the *same* mechanism:
 
 Large objects (tool outputs, files, snapshots) live in a content-addressed
 store the log points into. Tool side effects can run on the host or, when you
-don't trust the agent, inside a sandboxed container — the log looks the same
-either way. See [event sourcing](https://initxy.github.io/noeta/concepts/event-sourcing/)
+don't trust the agent, inside a per-session sandboxed container (below) — the
+log looks the same either way, so crash-recovery and replay are unchanged. See
+[event sourcing](https://initxy.github.io/noeta/concepts/event-sourcing/)
 and [wake & resume](https://initxy.github.io/noeta/concepts/wake-resume/) for the full picture.
+
+## Per-session sandbox
+
+When you host agents on a server — for other people, or just for code you don't
+fully trust — you don't want tool calls touching the host. Flip one switch and
+Noeta provisions a **fresh Docker container per session** and routes *every*
+side-effecting tool into it: file read / write / edit / patch, foreground
+`shell_run`, skill discovery and skill scripts, and `webfetch` / `web_search`
+all execute inside that container, not on the host.
+
+- **One container per session.** Each root task (a conversation) gets its own
+  named container, provisioned when the session starts and torn down when it
+  ends. Two concurrent sessions get two separate containers — one's files and
+  processes are invisible to the other.
+- **Everything runs through the box.** fs, shell, skills, and web egress all go
+  through the container over the same HTTP seam, so the durable event log is
+  byte-identical whether a tool ran on the host or in the container — resume and
+  crash-recovery don't care which.
+- **Reconnect-safe.** The container is recorded in the log by address; a worker
+  that folds the task back after a crash reconnects to the *same* container
+  (same host) and keeps its working files.
+- **Credentials stay off the command line.** The container key is handed to
+  `docker` by name, never as an argv value; third-party keys (e.g. the web-search
+  key) are delivered to in-container tools out-of-band, not on a process command
+  line the container's process table would expose.
+
+Enable it — needs a local Docker daemon and the AIO Sandbox image
+([`agent-infra/sandbox`](https://github.com/agent-infra/sandbox)):
+
+```bash
+export SANDBOX_API_KEY=$(openssl rand -hex 16)   # the container's API key
+NOETA_AGENT_SANDBOX=1 python -m noeta.agent       # per-session containers, on
+```
+
+Tune the image and caps with `NOETA_AGENT_SANDBOX_IMAGE` /
+`NOETA_AGENT_SANDBOX_MEMORY` / `NOETA_AGENT_SANDBOX_CPUS`. Global user **memory**
+and **MCP** servers deliberately stay on the host. The isolation is
+process-plus-mounted-FS, not a full jail; see
+[known limitations](https://initxy.github.io/noeta/operations/limitations/) for
+the mount-isolation level, idle-container cost, and the cross-machine reconnect
+boundary.
 
 ## Use only the layer you need
 
@@ -170,6 +222,11 @@ stable — but some edges are intentionally bounded:
 - **Human-in-the-loop is end-to-end** — approvals, structured questions, and
   timer wake all work; what's missing is out-of-band notification (webhook /
   inbox) when a task starts waiting on a human.
+- **The per-session sandbox is opt-in** — off by default (it needs a local
+  Docker daemon + the AIO image). It provisions one container per session and
+  isolates process + mounted FS, not a full jail; warm pools / pause-resume and
+  cross-machine reconnect are future work (a distributed / NAS-backed provider
+  seam is already carved out for them).
 - **The web app is a small Vite MPA** with vanilla ES modules; no framework
   migration is planned for the preview.
 

@@ -9,6 +9,7 @@ off ``NOETA_WEB_SEARCH_API_KEY`` — present ⇒ the tool appears, absent ⇒ it
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -19,7 +20,9 @@ from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.runtime.tool import _encode_output
 from noeta.storage.memory import InMemoryContentStore
 from noeta.tools._limits import INLINE_CONTENT_MAX_BYTES, encoded_len
+from noeta.tools.fs._subprocess import _RunOutcome
 from noeta.tools.web import (
+    ContainerCurlSearchTransport,
     HttpSearchTransport,
     SearchResult,
     WebSearchTool,
@@ -59,6 +62,61 @@ class FakeSearchTransport:
         if query in self.raise_for:
             raise self.error or RuntimeError(f"transport refused {query}")
         return self.hits_by_query.get(query, [])
+
+
+@dataclass
+class FakeExecEnv:
+    """Minimal ``ExecEnv`` stand-in: only ``run_argv`` behaves (sandbox path).
+
+    Records every argv it is handed and returns a scripted ``_RunOutcome`` so a
+    container-transport test never shells out.
+    """
+
+    stdout: bytes = b""
+    returncode: int = 0
+    stderr: bytes = b""
+    timed_out: bool = False
+    calls: list[list[str]] = field(default_factory=list)
+    #: (path, body) of every ``write_bytes`` and every ``unlink`` path, so a
+    #: test can assert the Tavily key is delivered via a curl --config file and
+    #: cleaned up rather than passed in the argv.
+    writes: list[tuple[str, bytes]] = field(default_factory=list)
+    unlinks: list[str] = field(default_factory=list)
+
+    def run_argv(self, argv, *, cwd, timeout_s, output_cap, runner=None):
+        self.calls.append(list(argv))
+        return _RunOutcome(
+            returncode=self.returncode,
+            duration_ms=1,
+            stdout=self.stdout,
+            stderr=self.stderr,
+            stdout_truncated=False,
+            stderr_truncated=False,
+            timed_out=self.timed_out,
+        )
+
+    def write_bytes(self, path, body) -> None:
+        self.writes.append((str(path), bytes(body)))
+
+    def unlink(self, path) -> None:
+        self.unlinks.append(str(path))
+
+
+#: A Tavily response body shared by the container + httpx parse-parity test.
+_TAVILY_JSON = {
+    "results": [
+        {
+            "title": "About cats",
+            "url": "https://example.com/cats",
+            "content": "Cats are mammals.",
+        },
+        {
+            "title": "Kittens",
+            "url": "https://example.com/kittens",
+            "content": "Baby cats.",
+        },
+    ]
+}
 
 
 def _ctx() -> tuple[ToolContext, InMemoryContentStore]:
@@ -300,3 +358,83 @@ def test_results_to_markdown_falls_back_to_url_when_no_title() -> None:
         [SearchResult(title="", url="https://example.com/x", snippet="")]
     )
     assert "1. [https://example.com/x](https://example.com/x)" in md
+
+
+# ---------------------------------------------------------------------------
+# sandbox path: build_web_tools(exec_env=) egresses through the container
+# ---------------------------------------------------------------------------
+
+
+def test_build_web_tools_sandbox_uses_container_search_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(SEARCH_API_KEY_ENV, "tvly-test-key")
+    fake = FakeExecEnv(stdout=json.dumps(_TAVILY_JSON).encode("utf-8"))
+    tools = build_web_tools(exec_env=fake)
+    assert set(tools) == {"webfetch", "web_search"}
+    assert isinstance(tools["web_search"].transport, ContainerCurlSearchTransport)
+
+
+def test_container_search_runs_curl_post_and_parses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(SEARCH_API_KEY_ENV, "tvly-test-key")
+    fake = FakeExecEnv(stdout=json.dumps(_TAVILY_JSON).encode("utf-8"))
+    tool = build_web_tools(exec_env=fake)["web_search"]
+    ctx, _ = _ctx()
+
+    result = tool.invoke({"query": "cats"}, ctx)
+    assert result.success is True
+    assert result.output["count"] == 2
+    # a curl POST to the Tavily endpoint with the JSON body, HTTP errors failing
+    # the run (--fail), and the bearer key delivered OUT-OF-BAND via --config
+    argv = fake.calls[0]
+    assert argv[0] == "curl"
+    assert "POST" in argv
+    assert "--fail" in argv
+    assert "Content-Type: application/json" in argv
+    assert '{"query": "cats", "max_results": 5}' in argv
+    assert argv[-1] == "https://api.tavily.com/search"
+    # P2b: the key is NEVER in the argv (process table / shell log). It rides in
+    # a curl --config file, referenced by -K, and removed after the request.
+    assert not any("tvly-test-key" in tok for tok in argv)
+    assert "-K" in argv
+    config_path = argv[argv.index("-K") + 1]
+    assert (config_path, b'header = "Authorization: Bearer tvly-test-key"\n') in fake.writes
+    assert config_path in fake.unlinks
+    md = result.output["content"]
+    assert "1. [About cats](https://example.com/cats)" in md
+    assert "2. [Kittens](https://example.com/kittens)" in md
+    _assert_output_json_safe(result)
+
+
+def test_container_and_http_search_parse_identically() -> None:
+    # The SAME Tavily JSON through both transports yields identical hits — the
+    # two egress paths share _parse_tavily_payload so they cannot drift (R3).
+    fake = FakeExecEnv(stdout=json.dumps(_TAVILY_JSON).encode("utf-8"))
+    container_hits = ContainerCurlSearchTransport(
+        exec_env=fake, api_key="k"
+    ).search("cats", 5)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_TAVILY_JSON)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    http_hits = HttpSearchTransport(api_key="k", client=client).search("cats", 5)
+
+    assert container_hits == http_hits
+
+
+def test_container_search_nonzero_exit_degrades(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(SEARCH_API_KEY_ENV, "tvly-test-key")
+    fake = FakeExecEnv(
+        stdout=b"", returncode=22, stderr=b"curl: (22) 401 Unauthorized"
+    )
+    tool = build_web_tools(exec_env=fake)["web_search"]
+    ctx, _ = _ctx()
+    result = tool.invoke({"query": "q"}, ctx)
+    assert result.success is False
+    assert "web_search failed" in result.summary
+    assert "401" in result.summary
