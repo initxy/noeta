@@ -1496,8 +1496,12 @@ def handle_spawn_background_subtask(
         text=(
             f'Background sub-agent "{decision.agent_name}" started '
             f"(id {subtask_id}). It runs concurrently while you keep working; "
-            "its result will be delivered to you when it finishes — you do not "
-            "need to wait or poll for it."
+            "its actual result will be delivered to you automatically when it "
+            "finishes — you do NOT need to wait or poll for it. "
+            "IMPORTANT: Do NOT guess, invent, or fabricate this sub-agent's "
+            "result in any output you produce before you receive the real "
+            "completion notice. If you need its result to answer the user, "
+            "say so explicitly and move on to other work in the meantime."
         ),
         lease_id=lease_id, trace_id=trace_id,
     )

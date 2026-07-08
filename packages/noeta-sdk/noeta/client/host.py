@@ -1115,8 +1115,9 @@ class SdkHost(GenericEngineResolver):
     ) -> Optional[Tuple[str, ContentRef, str]]:
         """Project a background child's terminal into ``(status, ref, summary)``.
 
-        ``ref`` is a ContentStore snapshot of the full result (the model derefs
-        it); ``summary`` is the one-line notice body. Returns ``None`` for a
+        ``ref`` is a ContentStore snapshot of the full result (dereferenced and
+        inlined into the delivery notice); ``summary`` is the one-line notice
+        header. Returns ``None`` for a
         cancelled child (session teardown — nothing to push). A child whose drive
         ended without a terminal (it suspended on an unsupported mid-flight
         interaction — background children have no human to answer) is reported as
@@ -1147,7 +1148,7 @@ class SdkHost(GenericEngineResolver):
                 "completed",
                 ref,
                 f'Background sub-agent "{agent_name}" finished. '
-                "Its full result is referenced below — read it and continue.",
+                "Here is its result:",
             )
         # failed, or no terminal (stuck on an unsupported suspend).
         detail = reason or (
@@ -1160,7 +1161,9 @@ class SdkHost(GenericEngineResolver):
         return (
             "failed",
             ref,
-            f'Background sub-agent "{agent_name}" did not complete: {detail[:200]}',
+            # Summary stays a clean one-liner; the full ``detail`` is the ref
+            # body, inlined into the notice below it — don't repeat it here.
+            f'Background sub-agent "{agent_name}" did not complete.',
         )
 
     # -- ResidentHost requirement ------------------------------------------

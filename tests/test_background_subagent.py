@@ -28,6 +28,8 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+import pytest
+
 from noeta.core.fold import fold
 from noeta.policies.react import SPAWN_SUBAGENT_TOOL
 from noeta.protocols.canonical import to_canonical_bytes
@@ -565,3 +567,45 @@ def test_delivery_gives_up_when_parent_never_settles(tmp_path: Path) -> None:
 
     assert elapsed < 5.0  # gave up at the deadline, did not hang
     assert "BackgroundSubagentDelivered" not in _events(host, parent_id)
+
+
+def test_deref_failure_writes_no_delivery_anchor(tmp_path: Path) -> None:
+    """The result deref runs BEFORE the non-idempotent delivery anchor.
+
+    A missing / evicted result ref makes the deref raise; because it precedes
+    the ``BackgroundSubagentDelivered`` emit, no anchor is written — so the
+    caller's retry loop stays idempotent instead of stacking a duplicate anchor
+    per attempt and then dropping. If the deref were placed after the anchor
+    (the pre-fix order), the anchor below would already be in the log."""
+    from noeta.protocols.values import ContentRef
+
+    provider = FakeLLMProvider(responses=[_end("idle")])
+    host, driver = _host(_make_ws(tmp_path), provider)
+    out = driver.start(goal="just chat", agent="main")
+    assert out.status == "suspended"  # parent settled on next-goal → deref reached
+    parent_id = out.task_id
+
+    bogus = ContentRef(hash="0" * 64, size=7, media_type="application/json")
+    with pytest.raises(Exception):  # noqa: B017,PT011 — any deref fault; type is not the contract
+        driver.seed_notify_background_subagent_exit(
+            parent_id,
+            subtask_id="bg-missing-ref",
+            summary='Background sub-agent "explore" finished. Here is its result:',
+            ref=bogus,
+            status="completed",
+        )
+    assert "BackgroundSubagentDelivered" not in _events(host, parent_id)
+
+
+def test_render_subagent_result_str_passthrough_and_structured_json() -> None:
+    """A string answer renders as raw text; a structured answer renders as JSON,
+    not a Python ``repr`` — matching the foreground deref path."""
+    import json
+
+    from noeta.execution.driver import _render_subagent_result
+
+    assert _render_subagent_result(to_canonical_bytes("plain text")) == "plain text"
+
+    rendered = _render_subagent_result(to_canonical_bytes({"score": 3, "ok": True}))
+    assert json.loads(rendered) == {"score": 3, "ok": True}  # valid JSON, key-order agnostic
+    assert "'" not in rendered and "True" not in rendered  # JSON true, not Python repr
