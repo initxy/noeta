@@ -383,7 +383,12 @@ class AioSandboxExecEnv:
       per-exec shell state; ``None`` keeps the wire byte-identical. AIO returns a
       single merged ``output`` stream, so it lands in ``stdout`` and ``stderr``
       is empty (the tool's output shape tolerates this — the local backend
-      already merges nothing, but nothing downstream requires the split).
+      already merges nothing, but nothing downstream requires the split). A
+      large run's inline ``output`` is truncated by AIO with the full merged
+      stream spilled to a container file named by ``full_output_file_path``;
+      ``run_argv`` reads that file's tail (see ``_read_spill``) so the recovered
+      bytes — not the lossy inline echo — feed the ``output_cap``, and the run
+      never trips the response ``_total_cap`` on a big build log.
     * **byte fidelity** — reads request ``encoding="base64"`` and decode; writes
       send base64. This is the byte-exact path (edit / apply_patch hash the
       bytes for TOCTOU), and it is the single most contract-sensitive field.
@@ -686,8 +691,22 @@ class AioSandboxExecEnv:
                 timed_out=False,
             )
         duration_ms = int((time.monotonic() - start) * 1000)
-        # AIO merges stdout+stderr into one ``output`` stream.
-        output = (data.get("output") or "").encode("utf-8")
+        # AIO merges stdout+stderr into one ``output`` stream (pinned wire
+        # contract — the seam ADR keeps stderr empty). When that stream is
+        # large AIO truncates the inline ``output`` and spills the FULL merged
+        # stream to a container file, handing back ``full_output_file_path``;
+        # read its tail so a big build log lands in the artifact instead of
+        # being lost to inline truncation — or, worse, exceeding the response
+        # ``_total_cap`` and failing the whole run. A spill read that faults
+        # degrades to the truncated inline output; an image without the field
+        # (older AIO) stays byte-identical to the pre-spill path.
+        inline = (data.get("output") or "").encode("utf-8")
+        spill_path = data.get("full_output_file_path")
+        if isinstance(spill_path, str) and spill_path:
+            recovered = self._read_spill(spill_path, output_cap)
+            output = recovered if recovered else inline
+        else:
+            output = inline
         stdout, stdout_truncated = cap_stream(output, output_cap)
         return _RunOutcome(
             returncode=int(data.get("exit_code", 0)),
@@ -698,6 +717,25 @@ class AioSandboxExecEnv:
             stderr_truncated=False,
             timed_out=False,
         )
+
+    def _read_spill(self, path: str, cap: int) -> bytes:
+        """Return the bounded tail of an AIO ``full_output_file_path`` spill.
+
+        Reading the whole file would re-enter ``/v1/file/read`` and hit the
+        very ``_total_cap`` the spill exists to dodge, so pull only the last
+        ``cap + 1`` bytes with ``tail -c`` (the ``+1`` lets ``cap_stream`` still
+        flag truncation). ``tail``'s own output is bounded by ``cap`` and so is
+        always well under the response cap. Any read fault (missing file,
+        transport error, non-zero ``tail`` exit) returns empty so the caller
+        falls back to the truncated inline output rather than crashing the run.
+        """
+        try:
+            outcome = self._shell(f"tail -c {cap + 1} -- {shlex.quote(path)}")
+        except OSError:
+            return b""
+        if int(outcome.get("exit_code", 1)) != 0:
+            return b""
+        return (outcome.get("output") or "").encode("utf-8")
 
     # -- default transport ------------------------------------------------ #
 

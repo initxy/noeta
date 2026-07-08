@@ -70,9 +70,16 @@ def _ok(data: dict[str, Any]) -> dict[str, Any]:
     return {"success": True, "message": "ok", "data": data}
 
 
-def _exec_ok(*, exit_code: int = 0, output: str = "") -> dict[str, Any]:
-    return _ok({"session_id": "s1", "status": "completed",
-                "exit_code": exit_code, "output": output})
+def _exec_ok(
+    *, exit_code: int = 0, output: str = "", full_output_file_path: str = ""
+) -> dict[str, Any]:
+    data: dict[str, Any] = {"session_id": "s1", "status": "completed",
+                            "exit_code": exit_code, "output": output}
+    if full_output_file_path:
+        # AIO sets this only when it truncated the inline ``output`` and
+        # spilled the full merged stream to a container file.
+        data["full_output_file_path"] = full_output_file_path
+    return _ok(data)
 
 
 def _env(fake: FakeAio, **kw: Any) -> AioSandboxExecEnv:
@@ -141,6 +148,63 @@ def test_run_argv_caps_output() -> None:
     outcome = _env(fake).run_argv(["cat"], cwd=Path("/w"), timeout_s=5, output_cap=10)
     assert outcome.stdout == b"X" * 10
     assert outcome.stdout_truncated is True
+
+
+def test_run_argv_reads_spill_tail_when_output_is_spilled() -> None:
+    # Large run: AIO truncated the inline echo and spilled the full merged
+    # stream to a file. run_argv must ``tail -c`` that file (bounded) and feed
+    # the recovered bytes to the cap — never trust the lossy inline echo.
+    fake = FakeAio({
+        "/v1/shell/exec": [
+            _exec_ok(exit_code=0, output="INLINE",
+                     full_output_file_path="/tmp/aio-out.log"),
+            _exec_ok(exit_code=0, output="Y" * 10),  # the tail -c result
+        ]
+    })
+    outcome = _env(fake).run_argv(
+        ["big"], cwd=Path("/w"), timeout_s=5, output_cap=10
+    )
+    # second call is the bounded tail read of the spill file (cap + 1 bytes)
+    tail_path, tail_body, _ = fake.calls[1]
+    assert tail_path == "/v1/shell/exec"
+    assert tail_body["command"] == "tail -c 11 -- /tmp/aio-out.log"
+    assert outcome.stdout == b"Y" * 10  # recovered, not the "INLINE" echo
+    assert outcome.returncode == 0
+
+
+def test_run_argv_spill_tail_flags_truncation_past_cap() -> None:
+    # tail returns cap + 1 bytes ⇒ cap_stream keeps the tail AND flags it.
+    fake = FakeAio({
+        "/v1/shell/exec": [
+            _exec_ok(output="INLINE", full_output_file_path="/tmp/o.log"),
+            _exec_ok(output="Z" * 11),
+        ]
+    })
+    outcome = _env(fake).run_argv(["big"], cwd=Path("/w"), timeout_s=5, output_cap=10)
+    assert outcome.stdout == b"Z" * 10
+    assert outcome.stdout_truncated is True
+
+
+def test_run_argv_spill_read_failure_falls_back_to_inline() -> None:
+    # The spill file vanished (non-zero ``tail`` exit) → degrade to the
+    # truncated inline output rather than returning empty or crashing the run.
+    fake = FakeAio({
+        "/v1/shell/exec": [
+            _exec_ok(output="INLINE", full_output_file_path="/tmp/gone.log"),
+            _exec_ok(exit_code=1, output="tail: cannot open"),
+        ]
+    })
+    outcome = _env(fake).run_argv(["big"], cwd=Path("/w"), timeout_s=5, output_cap=100)
+    assert outcome.stdout == b"INLINE"
+
+
+def test_run_argv_without_spill_field_makes_no_extra_call() -> None:
+    # No ``full_output_file_path`` ⇒ the inline output is complete; the adapter
+    # must stay byte-identical to the pre-spill path (one round-trip, no tail).
+    fake = FakeAio({"/v1/shell/exec": _exec_ok(output="done")})
+    outcome = _env(fake).run_argv(["ok"], cwd=Path("/w"), timeout_s=5, output_cap=100)
+    assert outcome.stdout == b"done"
+    assert len(fake.calls) == 1
 
 
 def test_run_argv_remote_fault_is_a_reported_failed_run_not_a_raise() -> None:
