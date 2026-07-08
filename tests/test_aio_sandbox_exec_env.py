@@ -43,11 +43,21 @@ class FakeAio:
             for path, val in responses.items()
         }
         self.calls: list[tuple[str, dict[str, Any], Mapping[str, str]]] = []
+        #: socket read timeout the adapter resolved for each POST, in order.
+        self.timeouts: list[float] = []
 
-    def __call__(self, url: str, body: bytes, headers: Mapping[str, str]) -> bytes:
+    def __call__(
+        self,
+        url: str,
+        body: bytes,
+        headers: Mapping[str, str],
+        *,
+        timeout_s: float,
+    ) -> bytes:
         path = url[len(BASE):]
         parsed = json.loads(body.decode("utf-8"))
         self.calls.append((path, parsed, headers))
+        self.timeouts.append(timeout_s)
         queue = self._responses.get(path)
         if not queue:
             raise AssertionError(f"unexpected call to {path!r}")
@@ -107,6 +117,25 @@ def test_run_argv_remote_fault_is_a_reported_failed_run_not_a_raise() -> None:
     outcome = _env(fake).run_argv(["x"], cwd=Path("/w"), timeout_s=5, output_cap=99)
     assert outcome.returncode == -1
     assert b"down" in outcome.stderr
+
+
+def test_run_argv_threads_caller_budget_as_socket_timeout() -> None:
+    # v1 has no remote hard-kill, so the transport read timeout IS the bound:
+    # the caller's per-command budget must reach the transport, not a fixed
+    # adapter constant. (P1: previously ``timeout_s`` was dropped.)
+    fake = FakeAio({"/v1/shell/exec": _exec_ok(output="ok")})
+    _env(fake, timeout_s=60.0).run_argv(
+        ["sleep", "1"], cwd=Path("/w"), timeout_s=300, output_cap=99
+    )
+    assert fake.timeouts == [300]
+
+
+def test_non_shell_ops_use_the_adapter_default_timeout() -> None:
+    # File/stat ops carry no per-command budget, so they keep the adapter
+    # default rather than borrowing a shell command's timeout.
+    fake = FakeAio({"/v1/file/read": _ok({"content": ""})})
+    _env(fake, timeout_s=45.0).read_bytes(Path("/w/f"))
+    assert fake.timeouts == [45.0]
 
 
 # -- reads ------------------------------------------------------------------ #
@@ -288,7 +317,9 @@ def test_empty_base_url_rejected() -> None:
 
 
 def test_transport_exception_becomes_sandbox_error() -> None:
-    def boom(url: str, body: bytes, headers: Mapping[str, str]) -> bytes:
+    def boom(
+        url: str, body: bytes, headers: Mapping[str, str], *, timeout_s: float
+    ) -> bytes:
         raise ConnectionError("refused")
 
     with pytest.raises(AioSandboxError):

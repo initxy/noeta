@@ -192,6 +192,34 @@ are out of scope for the preview; the seam is built so per-container
 provisioning (and a real per-container `sandbox_id`) can arrive later
 without reshaping the durable record. See the execution environment seam ADR.
 
+## Sandbox `shell_run` timeout is client-side, not a remote hard-kill
+
+**What it means:** On the host, `shell_run`'s `timeout` maps to a real
+subprocess timeout that kills the process. Under a sandbox the AIO
+container has no remote hard-kill, so the timeout is enforced *client
+side* by the HTTP read timeout of that one call. The `timeout` you pass
+is honoured — a command that runs past it is reported to the model as a
+timed-out run at the requested budget (not a fixed adapter default) — but
+the command itself **keeps running in the container** after the call
+returns, until the AIO lease cap reaps it. Its side effects may still
+land after the tool has reported a timeout.
+
+**When you hit it:** A sandbox `shell_run` whose command exceeds its
+`timeout` (or the default) — for example a build or test run that hangs.
+
+**Workaround:** None automatic in v1. Treat a timed-out sandbox
+`shell_run` as "may still be running"; a follow-up command can observe
+or clean up its partial effects. Give genuinely long commands an explicit
+larger `timeout` so the client does not cut the call off early.
+
+**Why it is this way:** AIO's `/v1/shell/exec` is a synchronous call with
+no cancel verb, so the only bound the client owns is its own read
+timeout. Threading the per-command budget into that timeout makes the
+model-facing `timeout` behave like the local backend within the limits of
+a no-hard-kill backend. A container-durable, cancellable job handle is
+separate future work (the same work that unlocks background shell under a
+sandbox). See the execution environment seam ADR.
+
 ## Frontend is a small Vite MPA, not a framework app
 
 **What it means:** The shipped web app (`/chat`, `/trace`) is a small

@@ -322,11 +322,21 @@ DEFAULT_AIO_TIMEOUT_S = 60.0
 #: HTTP client does.
 _DEFAULT_AIO_TOTAL_CAP = 32 * 1024 * 1024
 
-#: Injectable HTTP transport for the AIO backend: ``(url, json_body, headers)``
-#: → raw response body bytes. Injectable so tests substitute a fake and never
-#: shell out / open a socket (the ``mcp_http_post`` / ``otlp_http_post``
-#: pattern); production leaves it ``None`` to use stdlib ``urllib``.
-AioHttpPost = Callable[[str, bytes, Mapping[str, str]], bytes]
+class AioHttpPost(Protocol):
+    """Injectable HTTP transport for the AIO backend.
+
+    ``(url, json_body, headers, *, timeout_s)`` → raw response body bytes.
+    Injectable so tests substitute a fake and never shell out / open a socket
+    (the ``mcp_http_post`` / ``otlp_http_post`` pattern); production leaves it
+    ``None`` to use stdlib ``urllib``. ``timeout_s`` is the already-resolved
+    socket read timeout for THIS call — the adapter default for file/stat ops,
+    or the caller's per-command budget for a ``run_argv`` shell exec (there is no
+    remote hard-kill in v1, so this transport timeout IS the effective bound).
+    """
+
+    def __call__(
+        self, url: str, body: bytes, headers: Mapping[str, str], *, timeout_s: float
+    ) -> bytes: ...
 
 
 class AioSandboxError(OSError):
@@ -416,19 +426,26 @@ class AioSandboxExecEnv:
 
     # -- wire ------------------------------------------------------------- #
 
-    def _call(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+    def _call(
+        self, path: str, body: dict[str, Any], *, timeout_s: Optional[float] = None
+    ) -> dict[str, Any]:
         """POST ``body`` to ``path`` and return the response ``data`` object.
 
         Raises the mapped :class:`OSError` subclass on ``success=false`` and
-        :class:`AioSandboxError` on any transport / protocol fault. The HTTP
-        read timeout is the adapter-level ``timeout_s`` (there is no per-call
-        override — AIO does not hard-kill a slow ``exec``; the lease heartbeat
-        + 1h cap is the real bound, see D1/limitations).
+        :class:`AioSandboxError` on any transport / protocol fault. ``timeout_s``
+        is the socket read timeout for this one call; ``None`` uses the
+        adapter-level default (file/stat ops), while ``run_argv`` passes the
+        caller's per-command budget so a long ``shell_run`` is bounded by the
+        timeout the model asked for, not a fixed adapter constant. AIO does not
+        hard-kill a slow ``exec``, so this client timeout IS the effective bound
+        — when it fires the command may still be running in the container until
+        the lease cap (see D1/limitations).
         """
         url = self._base + path
         data = json.dumps(body, separators=(",", ":")).encode("utf-8")
+        effective_timeout = self._timeout_s if timeout_s is None else timeout_s
         try:
-            raw = self._post(url, data, self._headers)
+            raw = self._post(url, data, self._headers, timeout_s=effective_timeout)
         except TimeoutError:
             # Propagated raw so run_argv can classify it as a timed-out run;
             # other callers see it as an OSError (a tool_error) all the same.
@@ -459,8 +476,12 @@ class AioSandboxExecEnv:
         cls = _AIO_ERROR_TYPES.get(error_type or "", AioSandboxError)
         return cls(message)
 
-    def _shell(self, command: str) -> dict[str, Any]:
-        return self._call("/v1/shell/exec", {"command": command})
+    def _shell(
+        self, command: str, *, timeout_s: Optional[float] = None
+    ) -> dict[str, Any]:
+        return self._call(
+            "/v1/shell/exec", {"command": command}, timeout_s=timeout_s
+        )
 
     # -- file reads ------------------------------------------------------- #
 
@@ -584,10 +605,14 @@ class AioSandboxExecEnv:
         # exact tokens.
         del runner
         command = f"cd {shlex.quote(str(cwd))} && {shlex.join(argv)}"
-        del timeout_s  # v1: no remote hard-kill; the HTTP timeout bounds the call
+        # v1: no remote hard-kill, so the transport read timeout IS the bound —
+        # thread the caller's per-command budget through so ``timeout=`` behaves
+        # like the local backend's ``subprocess`` timeout (a wedged command keeps
+        # running in the container until the lease cap; we still report it out as
+        # a timed-out run below). File/stat ops keep the adapter default.
         start = time.monotonic()
         try:
-            data = self._shell(command)
+            data = self._shell(command, timeout_s=timeout_s)
         except TimeoutError as exc:
             # socket.timeout is TimeoutError on 3.10+; a URLError-wrapped
             # timeout instead surfaces as AioSandboxError below (still a
@@ -633,12 +658,12 @@ class AioSandboxExecEnv:
     # -- default transport ------------------------------------------------ #
 
     def _default_post(
-        self, url: str, body: bytes, headers: Mapping[str, str]
+        self, url: str, body: bytes, headers: Mapping[str, str], *, timeout_s: float
     ) -> bytes:
         request = urllib.request.Request(  # noqa: S310 — operator-configured URL
             url, data=body, headers=dict(headers), method="POST"
         )
         with urllib.request.urlopen(  # noqa: S310 — operator-configured endpoint
-            request, timeout=self._timeout_s
+            request, timeout=timeout_s
         ) as resp:
             return resp.read(self._total_cap + 1)
