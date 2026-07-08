@@ -32,12 +32,6 @@ protocol, so you're never locked to a vendor. And it runs the whole stack
   <em>Every task has a full trace — each event, LLM turn, and token/cache stat, read straight from the event log.</em>
 </p>
 
-<p align="center">
-  <img src="docs/assets/crash-resume.gif" alt="A running agent is killed mid-task; a fresh process rebuilds it from the log and finishes the work" width="820">
-  <br>
-  <em><strong>Crash safety, demonstrated.</strong> A running agent is killed with <code>kill -9</code> mid-task — no cleanup, no flush. A fresh process reopens the same store, rebuilds the task's exact state from its event log, and runs it to completion, exactly once. Nothing was held in memory to lose. — <a href="examples/crash_resume.py">examples/crash_resume.py</a>, fully offline.</em>
-</p>
-
 ## Why Noeta
 
 - **Survives crashes** — a task's state is never held in memory across runs. It
