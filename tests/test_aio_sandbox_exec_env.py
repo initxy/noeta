@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -95,6 +96,37 @@ def test_run_argv_sends_cd_prefixed_shell_quoted_command() -> None:
     assert outcome.stdout == b"hello\n"
     assert outcome.stderr == b""  # AIO merges streams into stdout
     assert outcome.timed_out is False
+
+
+def test_run_argv_prepends_host_preamble_minted_from_argv() -> None:
+    # The host preamble (per-session shell setup, minted fresh each call) is
+    # inserted verbatim between the ``cd`` and the command, and receives the
+    # argv so the host can tailor the prefix to what is being run.
+    seen: list[list[str]] = []
+
+    def preamble(argv: Sequence[str]) -> str:
+        seen.append(list(argv))
+        return "export TOKEN=abc && " if argv and argv[0] == "lark-cli" else ""
+
+    fake = FakeAio({"/v1/shell/exec": _exec_ok(output="ok")})
+    _env(fake, preamble=preamble).run_argv(
+        ["lark-cli", "whoami"], cwd=Path("/w"), timeout_s=5, output_cap=99
+    )
+    _, body, _ = fake.calls[0]
+    assert body["command"] == "cd /w && export TOKEN=abc && lark-cli whoami"
+    assert seen == [["lark-cli", "whoami"]]  # invoked with the real argv
+
+
+def test_run_argv_preamble_returning_empty_is_byte_identical() -> None:
+    # A preamble that returns "" (its no-op / degraded path) leaves the command
+    # wire byte-identical to the no-preamble path — the freshness hook must never
+    # perturb a stable-prefix recording.
+    fake = FakeAio({"/v1/shell/exec": _exec_ok(output="ok")})
+    _env(fake, preamble=lambda argv: "").run_argv(
+        ["echo", "hi"], cwd=Path("/w"), timeout_s=5, output_cap=99
+    )
+    _, body, _ = fake.calls[0]
+    assert body["command"] == "cd /w && echo hi"
 
 
 def test_run_argv_propagates_nonzero_exit_and_output() -> None:

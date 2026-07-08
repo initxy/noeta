@@ -281,6 +281,7 @@ class Client:
             exec_env=hc.exec_env,
             sandbox_provider=hc.sandbox_provider,
             sandbox_spec=hc.sandbox_spec,
+            sandbox_exec_preamble=hc.sandbox_exec_preamble,
             mcp_server_resolver=hc.mcp_server_resolver,
             mcp_http_post=hc.mcp_http_post,
             delta_sink=hc.delta_sink,
