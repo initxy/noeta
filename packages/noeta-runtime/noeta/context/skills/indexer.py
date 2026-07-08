@@ -41,7 +41,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from noeta.context.composer import RenderedSkills, SkillRenderer
 from noeta.protocols.messages import Message, TextBlock
@@ -128,10 +128,24 @@ class SkillIndexer:
     Phase 1 single-host: one synchronous ``index()`` call. Re-index
     requires constructing a new Indexer; no watcher / hot-reload
     (Phase 2 daemon).
+
+    ``exec_env`` (a duck-typed :class:`~noeta.tools.fs.exec_env.ExecEnv`; kept
+    ``Any`` so this L2 ``noeta.context`` module does not import its L2 sibling
+    ``noeta.tools``) routes every filesystem read through a **container** in
+    sandbox mode (D6-Skills): ``root`` is then a container path
+    (``/opt/noeta/skills/builtin`` …), the SKILL.md bytes are read over the
+    ExecEnv, and ``source_path`` — hence the rendered ``Base directory for this
+    skill:`` line — is the container path the model will ``read`` against.
+    ``None`` (the default, every local session) walks the host filesystem
+    byte-identically to before. Sandbox mode expresses discovery with the
+    ExecEnv's recursive glob rather than the host walk's symlink-cycle recursion
+    (the container is the isolation boundary; ``**`` via the shell's globstar
+    does not chase symlink cycles).
     """
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, exec_env: Optional[Any] = None) -> None:
         self._root = root
+        self._exec_env = exec_env
 
     def index(self) -> "SkillRegistry":
         skills: dict[str, SkillDescription] = {}
@@ -152,6 +166,8 @@ class SkillIndexer:
         return SkillRegistry(skills)
 
     def _candidates(self) -> list[tuple[str, Path]]:
+        if self._exec_env is not None:
+            return self._candidates_via_exec_env()
         if not self._root.is_dir():
             return []
         found: list[tuple[str, Path]] = []
@@ -186,9 +202,34 @@ class SkillIndexer:
         found.sort(key=lambda item: item[0])
         return found
 
+    def _candidates_via_exec_env(self) -> list[tuple[str, Path]]:
+        """Discover ``SKILL.md`` files under ``root`` through the ExecEnv.
+
+        Uses the ExecEnv's recursive glob (a single container round-trip) rather
+        than the host walk; the resulting container paths are sorted by
+        normalised POSIX relative path so the Registry is deterministic exactly
+        as the host path is."""
+        exec_env = self._exec_env
+        if not exec_env.is_dir(self._root):
+            return []
+        found: list[tuple[str, Path]] = []
+        for path in exec_env.rglob(self._root, "SKILL.md"):
+            if not exec_env.is_file(path):
+                continue
+            try:
+                rel = path.relative_to(self._root)
+            except ValueError:
+                continue
+            found.append((rel.as_posix(), path))
+        found.sort(key=lambda item: item[0])
+        return found
+
     def _parse_one(self, path: Path) -> Optional[SkillDescription]:
         try:
-            raw = path.read_text(encoding="utf-8")
+            if self._exec_env is not None:
+                raw = self._exec_env.read_text(path, encoding="utf-8")
+            else:
+                raw = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             _log.warning("skill: %s: failed to read (%s); skipped", path, exc)
             return None
@@ -259,8 +300,7 @@ class SkillIndexer:
             resources=resources,
         )
 
-    @staticmethod
-    def _discover_resources(skill_md: Path) -> tuple[str, ...]:
+    def _discover_resources(self, skill_md: Path) -> tuple[str, ...]:
         """List files bundled beside ``skill_md`` (4.5-I5).
 
         Boundaries (architect P2): **files only**, sorted POSIX-relative
@@ -270,11 +310,22 @@ class SkillIndexer:
         loaded or executed. A nested ``SKILL.md`` (a sibling skill's
         manifest) is likewise excluded so it is not mistaken for a
         resource of this skill.
+
+        Sandbox mode (``exec_env`` set) enumerates the same way through the
+        container's recursive glob + per-entry file test, so a skill's bundled
+        resources are those that exist INSIDE the container.
         """
         root = skill_md.parent
+        exec_env = self._exec_env
+        if exec_env is not None:
+            candidates = list(exec_env.rglob(root, "*"))
+            is_file = exec_env.is_file
+        else:
+            candidates = list(root.rglob("*"))
+            is_file = lambda p: p.is_file()  # noqa: E731
         rels: list[str] = []
-        for candidate in root.rglob("*"):
-            if not candidate.is_file():
+        for candidate in candidates:
+            if not is_file(candidate):
                 continue
             if candidate.name == "SKILL.md":
                 continue

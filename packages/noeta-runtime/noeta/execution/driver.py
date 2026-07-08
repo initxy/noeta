@@ -51,6 +51,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, Optional
@@ -613,16 +614,21 @@ class InteractionDriver:
         # exists — that lets the connect's skip-on-failure record its
         # ``McpServerSkipped`` events on the task's own stream (the front-end
         # surface), and avoids a redundant pre-connect under a now-stale key.
-        # T6: the host's sandbox container address for this session. Welded
-        # into TaskHostBound (below) so a resumed / reclaimed session reconnects
-        # to the SAME container, and passed to the seed resolve so the seed
-        # Engine targets it too (matching the ref it is about to record).
+        # Per-session sandbox (D4): eagerly provision THIS session's container
+        # and weld its ``exec_env_ref`` into TaskHostBound (below) so a resumed /
+        # reclaimed session reconnects to the SAME container, and pass the ref to
+        # the seed resolve so the seed Engine targets it too. The container is
+        # keyed by the ROOT task id, so we pre-mint it here (``create_task``
+        # accepts an explicit ``task_id``) and hand it to ``allocate_exec_env``.
         # ``getattr`` guards a host / test double without the sandbox seam →
-        # ``None`` (the local path, byte-identical). Addressing only (D5).
-        _exec_env_ref_of = getattr(host, "exec_env_ref", None)
-        session_exec_env_ref = (
-            _exec_env_ref_of() if callable(_exec_env_ref_of) else None
-        )
+        # ``None`` (the local path, byte-identical: ``task_id`` stays ``None`` so
+        # ``create_task`` mints it, exactly as before). Addressing only (D5).
+        pre_minted_task_id: Optional[str] = None
+        session_exec_env_ref: Optional[str] = None
+        allocate = getattr(host, "allocate_exec_env", None)
+        if callable(allocate):
+            pre_minted_task_id = f"task-{uuid.uuid4().hex}"
+            session_exec_env_ref = allocate(pre_minted_task_id, workspace_dir)
         seed_engine = host.resolve_engine_for_agent(
             agent, model=bound_model, workspace=workspace_dir, provider=bound_provider,
             permission_mode=permission_mode, effort=effort,
@@ -654,6 +660,9 @@ class InteractionDriver:
             policy_name="react",
             agent_name=agent,
             host_binding=bound_host_binding,
+            # Sandbox path pre-minted the root id so the container is keyed by it
+            # (D4); ``None`` (the local path) lets ``create_task`` mint as before.
+            task_id=pre_minted_task_id,
         )
         # A NEW user goal opens a turn — clear the per-turn
         # file-checkpoint gate so this turn re-stashes fresh baselines (root =
@@ -2273,6 +2282,20 @@ class InteractionDriver:
     def _outcome(self, task_id: str) -> DriveOutcome:
         host = self._host
         task = fold(host.event_log, host.content_store, task_id)
+        # Per-session sandbox teardown (D4): when a ROOT task reaches a terminal,
+        # its whole tree is done, so release the session's container. Guarded to
+        # the root (``parent_task_id is None``) so a completed SUBTASK never reaps
+        # the parent's shared container, and to ``terminal`` so an interactive
+        # root resting at ``suspended`` keeps its container (it is reaped by the
+        # shutdown backstop / a later close). Idempotent + ``getattr``-guarded, so
+        # the local / non-sandbox path and hosts without the seam are no-ops.
+        if (
+            task.status == "terminal"
+            and getattr(task, "parent_task_id", None) is None
+        ):
+            release = getattr(host, "release_exec_env", None)
+            if callable(release):
+                release(task_id)
         wake_on = getattr(task, "wake_on", None)
         handle = (
             wake_on.handle

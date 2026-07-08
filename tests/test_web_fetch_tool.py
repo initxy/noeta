@@ -18,7 +18,9 @@ from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.runtime.tool import _encode_output
 from noeta.storage.memory import InMemoryContentStore
 from noeta.tools._limits import INLINE_CONTENT_MAX_BYTES
+from noeta.tools.fs._subprocess import _RunOutcome
 from noeta.tools.web import (
+    ContainerCurlFetchTransport,
     HttpFetchTransport,
     WebFetchTool,
     build_web_tools,
@@ -49,6 +51,40 @@ class FakeFetchTransport:
         if url in self.raise_for:
             raise self.error or RuntimeError(f"transport refused {url}")
         return self.pages_by_url.get(url, "")
+
+
+@dataclass
+class FakeExecEnv:
+    """Minimal ``ExecEnv`` stand-in: only ``run_argv`` behaves (sandbox path).
+
+    Records every argv it is handed and returns a scripted ``_RunOutcome`` so a
+    container-transport test never shells out. Other ``ExecEnv`` methods are
+    unused by the web transports and left unimplemented.
+    """
+
+    stdout: bytes = b""
+    returncode: int = 0
+    stderr: bytes = b""
+    timed_out: bool = False
+    calls: list[list[str]] = field(default_factory=list)
+    last_cwd: Any = None
+    last_timeout_s: int = 0
+    last_output_cap: int = 0
+
+    def run_argv(self, argv, *, cwd, timeout_s, output_cap, runner=None):
+        self.calls.append(list(argv))
+        self.last_cwd = cwd
+        self.last_timeout_s = timeout_s
+        self.last_output_cap = output_cap
+        return _RunOutcome(
+            returncode=self.returncode,
+            duration_ms=1,
+            stdout=self.stdout,
+            stderr=self.stderr,
+            stdout_truncated=False,
+            stderr_truncated=False,
+            timed_out=self.timed_out,
+        )
 
 
 def _ctx() -> tuple[ToolContext, InMemoryContentStore]:
@@ -250,3 +286,64 @@ def test_html_to_markdown_basic_structure() -> None:
     )
     assert "## Title" in md
     assert "[link](/x)" in md
+
+
+# ---------------------------------------------------------------------------
+# sandbox path: build_web_tools(exec_env=) egresses through the container
+# ---------------------------------------------------------------------------
+
+
+def test_build_web_tools_sandbox_uses_container_fetch_transport() -> None:
+    fake = FakeExecEnv(stdout=_PAGE.encode("utf-8"))
+    tools = build_web_tools(exec_env=fake)
+    assert set(tools) == {"webfetch"}
+    assert isinstance(tools["webfetch"].transport, ContainerCurlFetchTransport)
+
+
+def test_container_fetch_runs_curl_and_renders_markdown() -> None:
+    fake = FakeExecEnv(stdout=_PAGE.encode("utf-8"))
+    tool = build_web_tools(exec_env=fake)["webfetch"]
+    ctx, store = _ctx()
+
+    result = tool.invoke({"url": "https://x"}, ctx)
+    assert result.success is True
+    # the request went out as `curl ... <url>` inside the container
+    assert fake.calls, "run_argv was not invoked"
+    argv = fake.calls[0]
+    assert argv[0] == "curl"
+    assert argv[-1] == "https://x"
+    assert "-A" in argv  # user-agent forwarded
+    # P2a: --fail makes a 4xx/5xx a nonzero exit (parity with httpx
+    # raise_for_status) instead of returning the error page as a success body.
+    assert "--fail" in argv
+    # the scripted HTML is rendered by the SAME html_to_markdown as the httpx path
+    md = result.output["content"]
+    assert "# About cats" in md
+    assert "[cute](https://example.com/cute)" in md
+    assert "- soft" in md
+    assert result.output["title"] == "Cats & Kittens"
+    _assert_output_json_safe(result)
+
+
+def test_container_fetch_nonzero_exit_degrades() -> None:
+    # A private / authenticated URL: curl exits nonzero and the tool degrades to
+    # ToolResult(success=False), exactly like the httpx 401/403 path.
+    fake = FakeExecEnv(
+        stdout=b"", returncode=22, stderr=b"curl: (22) 403 Forbidden"
+    )
+    tool = build_web_tools(exec_env=fake)["webfetch"]
+    ctx, _ = _ctx()
+    result = tool.invoke({"url": "https://private"}, ctx)
+    assert result.success is False
+    assert "webfetch failed" in result.summary
+    assert "403" in result.summary
+    _assert_output_json_safe(result)
+
+
+def test_container_fetch_timeout_degrades() -> None:
+    fake = FakeExecEnv(stdout=b"", returncode=-1, timed_out=True)
+    tool = build_web_tools(exec_env=fake)["webfetch"]
+    ctx, _ = _ctx()
+    result = tool.invoke({"url": "https://slow"}, ctx)
+    assert result.success is False
+    assert "webfetch failed" in result.summary

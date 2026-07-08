@@ -146,7 +146,10 @@ the log (a GC pause, a `SIGSTOP` then revive) can still `POST` to the
 container. The sandbox side effect is therefore **at-least-once and
 unfenced**, the same class as a half-run `shell_run` on the host: a
 reclaiming worker reconnects to the same container and re-drives the
-step, but a slow zombie can pollute the container in the meantime.
+step, but a slow zombie can pollute the container in the meantime. The
+per-session-container model (2026-07-08) shrinks the blast radius — a
+zombie now pollutes only **its own session's** container, not a
+host-shared one — but the write is still unfenced across generations.
 
 **When you hit it:** A worker holding a sandbox session stalls long
 enough for its lease to expire and another worker to reclaim the task,
@@ -165,32 +168,46 @@ a validating proxy in front of the container — real work deferred to the
 per-container future. The trade-off is recorded in the execution
 environment seam ADR, which links back to the multi-host lease fencing ADR.
 
-## One sandbox container per host; idle containers stay billed
+## Per-session sandbox: weak mount isolation, no cross-machine reconnect, idle cost
 
-**What it means:** v1 does not orchestrate containers — a sandbox config
-names one external container by `base_url`, and every session on that
-host shares it. So there is **no per-session isolation** between two
-concurrent conversations on one host (they share one container working
-directory), and the durable `exec_env_ref` records the container
-`base_url` only, not a distinct per-container id. The container also has
-no pause/snapshot: it stays alive (and billed) for as long as a session
-that uses it is active, including long suspends waiting on a human or a
-timer. Teardown happens on host shutdown, not when a single conversation
-closes (reaping a shared container would break the others).
+**What it means:** The per-session sandbox (2026-07-08) provisions a
+**fresh container per root-task tree** (`LocalDockerSandboxProvider`), so
+two concurrent conversations get **separate** containers and the durable
+`exec_env_ref` carries a distinct `sandbox_id`. Three costs remain with
+the local-Docker backend:
 
-**When you hit it:** Running multiple concurrent conversations against
-one sandboxed host, or leaving a sandboxed session suspended for a long
-time.
+- **Weak filesystem isolation.** The container writes the host workspace
+  through a `-v` bind mount, not a full FS jail; only the workspace + skill
+  dirs are mounted (never host root), so a tool cannot reach outside those,
+  but a write to a mounted path lands on the host filesystem directly.
+- **No cross-machine reconnect.** A local-Docker container is bound to the
+  machine that ran it. If a session is reclaimed on a **different** host, the
+  `attach` fails — that host cannot reach a container on the original
+  machine. Same-host resume/reclaim works.
+- **Idle container cost + cold start.** A container has no pause/snapshot: it
+  stays alive (and billed) while its session is active, including long
+  suspends; each new session pays a seconds-scale AIO cold start.
 
-**Workaround:** Give workloads that must not share a filesystem their
-own host + container. For idle cost, close sessions you are done with so
-the host can be shut down and the container reclaimed by whatever
-provisioned it.
+**When you hit it:** Untrusted code that must not touch the host
+filesystem at all; a multi-host deployment where a worker crashes and the
+session is reclaimed on another machine; leaving many sandboxed sessions
+suspended.
 
-**Why it is this way:** Cluster orchestration and container pause/snapshot
-are out of scope for the preview; the seam is built so per-container
-provisioning (and a real per-container `sandbox_id`) can arrive later
-without reshaping the durable record. See the execution environment seam ADR.
+**Workaround:** For hard isolation, run the whole host in a VM/container.
+For cross-machine reclaim, keep a session's reclaim on its original host
+(the same-host path works), or use a distributed / NAS-backed provider
+(below). For idle cost, close sessions you are done with so their
+containers are released.
+
+**Why it is this way:** The seam is built for a **Distributed** provider
+family (TAE / K8s) that removes cross-machine reconnect from the storage
+layer — a NAS mount makes file state reachable from any host, so a
+reclaiming host just re-pulls a container against the same NAS. The three
+zero-rework hooks are already in place: `SandboxHandle.auth` (a strategy,
+not a static key — a short-lived Bearer JWT drops in), a gateway-path-prefix
+`base_url`, and `MountSpec.kind=nas`. Real FS isolation (copy-in/sync-out)
+and warm pool / pause are future provider work. See the execution
+environment seam ADR (v2).
 
 ## Sandbox `shell_run` timeout is client-side, not a remote hard-kill
 
