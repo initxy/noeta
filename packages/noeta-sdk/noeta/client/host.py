@@ -80,6 +80,7 @@ from noeta.client.sandbox import SandboxExecEnvManager, provider_for_config
 from noeta.client.sandbox_provider import SandboxProvider, SandboxSpec
 from noeta.tools.app import AppPreviewGateway
 from noeta.runtime.llm import RuntimeLLMClient
+from noeta.tools.browser import BROWSER_TOOL_NAMES
 from noeta.tools.fs import FsWriteMode, ShellMode
 from noeta.tools.fs.exec_env import ExecEnv
 from noeta.tools.memory import MemoryStore
@@ -1392,6 +1393,16 @@ class SdkHost(GenericEngineResolver):
             # local. The API key comes from THIS host's env (D5), never the ref.
             session_exec_env, container_workdir = self._sandbox.resolve(session_ref)
             workspace_dir = Path(container_workdir)
+        # Browser backend (sandbox-only, B5): when this agent opens the browser
+        # capability AND the session is bound to a container, vend the
+        # per-session browser backend off the SAME sandbox handle ``resolve``
+        # used. Gated on the capability so a non-browser session never builds it
+        # (and its tool set / stable prefix are untouched); ``None`` on every
+        # local / non-browser / no-sandbox path keeps the tool set byte-identical.
+        browser_enabled = bool(spec.capabilities.browser)
+        session_browser_backend = None
+        if browser_enabled and self._sandbox is not None and session_ref:
+            session_browser_backend = self._sandbox.resolve_browser(session_ref)
         # D3: only a custom tool explicitly named by spec.tools enters the engine.
         spec_tool_names = frozenset(r.name for r in spec.tools)
         filtered_custom = {
@@ -1450,6 +1461,16 @@ class SdkHost(GenericEngineResolver):
                 require_approval_tools = tuple(
                     n for n in require_approval_tools if n != "shell_run"
                 )
+        # Browser tools (B7) are flag-gated (never in ``spec.tools``), so
+        # ``_approval_set_for`` never sees them. Force-gate the whole high-risk
+        # browser pack here when the capability is enabled, unless the session
+        # bypasses permissions. ``build_session_inputs`` filters
+        # ``require_approval_tools`` to the tools actually present, so this is a
+        # clean no-op when browser is off (no backend ⇒ no browser tools).
+        if browser_enabled and effective_permission != "bypassPermissions":
+            require_approval_tools = tuple(require_approval_tools) + tuple(
+                n for n in BROWSER_TOOL_NAMES if n not in require_approval_tools
+            )
         # Build a sorted (name, description) directory of
         # the delegation-allowed sub-agents so spawn_subagent's JSON schema
         # surfaces the roster to the model. Keep the schema unchanged from
@@ -1548,6 +1569,11 @@ class SdkHost(GenericEngineResolver):
             # ``None`` (no host sandbox) ⇒ the builder uses ``LocalExecEnv`` and
             # the host ``WorkspaceRoot`` — byte-identical to the local path.
             exec_env=session_exec_env,
+            # The per-session browser backend + this agent's browser capability
+            # (B5). ``None`` backend / ``False`` flag ⇒ no browser tools merged,
+            # tool set + stable prefix byte-identical.
+            browser_backend=session_browser_backend,
+            browser_enabled=browser_enabled,
             hooks_pre_tool_use=self.hooks_pre_tool_use,
             repetition_threshold=self.repetition_threshold,
             repetition_action=self.repetition_action,

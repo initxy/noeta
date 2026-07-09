@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 __all__ = [
     "MAIN_SYSTEM_PROMPT",
     "OFFICIAL_SUBAGENTS",
+    "WEB_SUBAGENT",
     "main_options",
     "official_specs",
 ]
@@ -55,6 +56,7 @@ MAIN_SYSTEM_PROMPT = _load_prompt("main")
 _GENERAL_PURPOSE_PROMPT = _load_prompt("general-purpose")
 _EXPLORE_PROMPT = _load_prompt("explore")
 _PLAN_PROMPT = _load_prompt("plan")
+_WEB_PROMPT = _load_prompt("web")
 
 
 #: The read-mostly tool set shared by explore and plan — aligned with Claude
@@ -94,6 +96,25 @@ _GENERAL_PURPOSE_TOOLS = (
     "shell_poll",
     "shell_run",
     "web_search",
+    "webfetch",
+    "write",
+)
+
+
+#: The ``web`` subagent's whitelist-filtered base tools. The browser pack
+#: (``browser_*``) is NOT listed here — it is flag-gated by
+#: ``Capabilities(browser=True)`` + a live sandbox backend (like memory), not by
+#: this whitelist. These are the supporting tools: read/write to save findings,
+#: read-only shell + ``webfetch`` (a raw-content fetch when no interaction is
+#: needed). No ``edit``/``apply_patch`` — a browser worker writes fresh notes, it
+#: does not batch-edit a codebase.
+_WEB_TOOLS = (
+    "glob",
+    "grep",
+    "read",
+    "shell_kill",
+    "shell_poll",
+    "shell_run",
     "webfetch",
     "write",
 )
@@ -154,6 +175,35 @@ OFFICIAL_SUBAGENTS: dict[str, AgentDefinition] = {
         capabilities=Capabilities(ask_user_question=True),
     ),
 }
+
+
+#: The browser specialist (layer 4). A delegatable subagent whose one job is to
+#: drive the sandbox container's browser: it holds the ``browser`` capability
+#: (so the noeta-owned browser pack is merged when a live sandbox backend is
+#: present) plus a read/write + read-only-shell base, and a browsing-loop prompt
+#: that isolates a web task's token churn in its own context and returns a
+#: distilled answer to the parent.
+#:
+#: **Deliberately NOT in ``OFFICIAL_SUBAGENTS``.** Registering it there would add
+#: ``web`` to ``main``'s spawnable roster, which changes ``main``'s
+#: ``spawn_subagent`` schema — churning ``main``'s stable prefix for EVERY
+#: deployment, including non-sandbox ones where the browser cannot even work.
+#: Browser only makes sense under a sandbox, so wiring ``web`` into the roster
+#: (and flipping ``main``'s ``browser`` capability on) is a **product-activation**
+#: concern, gated on ``NOETA_AGENT_SANDBOX`` (S10) — not baked into the SDK
+#: presets. This definition is exported ready for that gated registration.
+WEB_SUBAGENT: AgentDefinition = AgentDefinition(
+    description=(
+        "Web-browsing specialist: drives the sandbox browser (navigate / "
+        "click / type / extract) to research or operate live web pages, and "
+        "returns a distilled answer."
+    ),
+    prompt=_WEB_PROMPT,
+    tools=_WEB_TOOLS,
+    # browser: the noeta-owned browser pack (flag-gated, sandbox-backed).
+    # skill_invocation on, matching the other workers.
+    capabilities=Capabilities(browser=True, skill_invocation=True),
+)
 
 
 def main_options() -> Options:
