@@ -185,18 +185,23 @@ class SqliteDispatcher:
     # Dispatcher Protocol
     # ------------------------------------------------------------------
 
-    def enqueue(self, task_id: str) -> None:
+    def enqueue(self, task_id: str, *, reserved: bool = False) -> None:
         """Mark ``task_id`` as ready-to-lease.
 
         Three paths matching the Protocol's idempotency promise:
 
         * No row → INSERT with a fresh ``ready_order``.
         * Existing row already in ``ready`` → no-op (preserve original
-          ``ready_order`` so FIFO is not reshuffled, issue 17 B3).
+          ``ready_order`` — and its existing ``reserved`` flag — so FIFO
+          is not reshuffled, issue 17 B3).
         * Existing row in any non-ready status → transition to ready,
           clearing all non-ready columns and assigning a fresh
           ``ready_order``.
+
+        ``reserved`` (see :meth:`Dispatcher.enqueue`) marks the task
+        targeted-lease-only until its first lease claims it.
         """
+        reserved_val = 1 if reserved else 0
         with self._lock:
             _begin_immediate_with_retry(self._conn)
             try:
@@ -207,9 +212,10 @@ class SqliteDispatcher:
                         "INSERT INTO dispatcher_tasks ("
                         " task_id, status, lease_id, lease_expires_at,"
                         " heartbeat_count, fail_attempts,"
-                        " wake_on_canonical, suspend_reason, ready_order"
-                        ") VALUES (?, 'ready', NULL, NULL, 0, 0, NULL, NULL, ?)",
-                        (task_id, order),
+                        " wake_on_canonical, suspend_reason, ready_order,"
+                        " reserved"
+                        ") VALUES (?, 'ready', NULL, NULL, 0, 0, NULL, NULL, ?, ?)",
+                        (task_id, order, reserved_val),
                     )
                 elif row["status"] == "ready":
                     # No-op; FIFO must not be reshuffled (B3).
@@ -234,9 +240,10 @@ class SqliteDispatcher:
                         " suspend_reason = NULL,"
                         " matched_wake_event_canonical = NULL,"
                         " fire_at = NULL,"
-                        " ready_order = ? "
+                        " ready_order = ?,"
+                        " reserved = ? "
                         "WHERE task_id = ?",
-                        (order, task_id),
+                        (order, reserved_val, task_id),
                     )
                 self._conn.execute("COMMIT")
             except Exception:
@@ -272,10 +279,13 @@ class SqliteDispatcher:
             _begin_immediate_with_retry(self._conn)
             try:
                 if task_id is None:
+                    # ``reserved`` tasks are targeted-lease-only (a fresh
+                    # subtask child its drain/executor must claim first) —
+                    # skip them in the untargeted FIFO selection.
                     row = self._conn.execute(
                         "SELECT task_id, matched_wake_event_canonical "
                         "FROM dispatcher_tasks "
-                        "WHERE status = 'ready' "
+                        "WHERE status = 'ready' AND reserved = 0 "
                         "ORDER BY ready_order LIMIT 1"
                     ).fetchone()
                 else:
@@ -304,7 +314,12 @@ class SqliteDispatcher:
                     " lease_expires_at = ?,"
                     " heartbeat_count = 0,"
                     " suspend_reason = NULL,"
-                    " ready_order = NULL "
+                    " ready_order = NULL,"
+                    # One-shot claim: this lease (only a targeted one can
+                    # reach a reserved row) claims the child for its owning
+                    # driver, so clear the guard. A later suspend/resume
+                    # re-enqueue is then an ordinary untargeted-leaseable task.
+                    " reserved = 0 "
                     "WHERE task_id = ?",
                     (lease_id, expires_at, leased_task_id),
                 )
