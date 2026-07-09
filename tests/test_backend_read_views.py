@@ -95,6 +95,9 @@ def test_capabilities_projects_enums_and_agents(tmp_path: Path) -> None:
         assert [s["alias"] for s in body["mcp_servers"]] == ["remote"]
         # Unwired surfaces degrade to empty (thin local backend).
         assert body["workspaces"] == [] and body["providers"] == {}
+        # Sandbox browser not activated → flags absent-false.
+        assert body["sandbox_enabled"] is False
+        assert body["browser_available"] is False
     finally:
         shutdown()
 
@@ -112,6 +115,68 @@ def test_capabilities_no_model_no_mcp(tmp_path: Path) -> None:
         assert body["mcp_servers"] == []
     finally:
         shutdown()
+
+
+def test_capabilities_sandbox_enabled(tmp_path: Path) -> None:
+    """sandbox_enabled=True → /capabilities advertises sandbox + browser flags."""
+    room = EngineRoom.official(
+        provider=_provider(),
+        workspace_dir=tmp_path,
+        sandbox_browser=True,
+    )
+    server, _url, shutdown = serve_backend(
+        BackendConfig(host="127.0.0.1", port=0, workspace_dir=tmp_path),
+        engine_room=room,
+    )
+    host, port = server.server_address[:2]
+    try:
+        status, body = _get(host, port, "/capabilities")
+        assert status == 200
+        assert body["sandbox_enabled"] is True
+        assert body["browser_available"] is True
+        # Direction A: web subagent is registered in the agent list.
+        assert "web" in body["agents"]
+    finally:
+        shutdown()
+
+
+def test_task_preview_no_sandbox_returns_404(tmp_path: Path) -> None:
+    """Without a sandbox gateway, GET /tasks/{id}/preview returns 404."""
+    room = _room(tmp_path)
+    # Create a task so we have an id.
+    tid = room.start(goal="hello")
+    server, _url, shutdown = serve_backend(
+        BackendConfig(host="127.0.0.1", port=0, workspace_dir=tmp_path),
+        engine_room=room,
+    )
+    host, port = server.server_address[:2]
+    try:
+        status, body = _get(host, port, f"/tasks/{tid}/preview")
+        assert status == 404
+    finally:
+        shutdown()
+
+
+def test_preview_info_panels_pin_container_paths() -> None:
+    """W7-pinned panel sub-paths (live-verified against the AIO container).
+
+    * browser — noVNC defaults its WS to ``ws://<host>/websockify``, escaping
+      the token prefix; the ``?path=`` query param must steer it back inside.
+    * terminal — no trailing slash: the page resolves its PTY WS relative to
+      the URL, so ``.../terminal/`` would aim at ``terminal/v1/shell/ws``
+      (404 upstream) while ``.../terminal`` lands on ``<prefix>/v1/shell/ws``.
+    """
+    from noeta.agent.host.sandbox_preview_gateway import SandboxPreviewGateway
+
+    gw = SandboxPreviewGateway()
+    mount = gw.mount_root("task-root", "http://127.0.0.1:9999", {})
+    info = gw.preview_info("task-root")
+    assert info is not None and info["token"] == mount.token
+    panels = info["panels"]
+    assert panels["browser"].startswith("vnc/index.html?")
+    assert f"path=sandbox-preview/{mount.token}/websockify" in panels["browser"]
+    assert panels["terminal"] == "terminal"
+    assert panels["code"] == "code-server/"
 
 
 # ---------------------------------------------------------------------------

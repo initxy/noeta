@@ -52,7 +52,6 @@ from noeta.tools._limits import (
     fit_output_fields,
     truncate_bytes,
 )
-from noeta.tools._refs import ref_json
 from noeta.tools.descriptions import load_tool_description
 from noeta.tools.fs._diff import (
     DIFF_MEDIA_TYPE,
@@ -235,7 +234,6 @@ class ReplaceTextTool:
             "after_sha256": file_hash(after),
             "added": added,
             "removed": removed,
-            "diff_ref": ref_json(diff_ref),
         }
         output = fit_output_fields(
             output, shrink_order=["path"], max_bytes=INLINE_OUTPUT_MAX_BYTES
@@ -413,7 +411,6 @@ class WriteFileTool:
             "bytes": len(body),
             "added": added,
             "removed": removed,
-            "diff_ref": ref_json(diff_ref),
         }
         output = fit_output_fields(
             output, shrink_order=["path"], max_bytes=INLINE_OUTPUT_MAX_BYTES

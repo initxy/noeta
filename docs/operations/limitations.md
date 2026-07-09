@@ -273,6 +273,48 @@ and the coordinate-level `/v1/browser` path are a deliberate increment 2
 with the seam already reserved. See the execution environment seam ADR
 (browser subsystem).
 
+## Sandbox live-preview panels are demo-boundary and unauthenticated
+
+**What it means:** When per-session sandbox is active
+(`NOETA_AGENT_SANDBOX=1`), the right dock gains three live-preview tabs —
+**Browser** (noVNC), **Terminal** (container PTY), **Code** (code-server) —
+all reverse-proxied through noeta's main port
+(`/sandbox-preview/<token>/...`). Four v1 boundaries:
+
+- **No sandbox ⇒ no panels.** Without a live container,
+  `GET /tasks/{id}/preview` returns 404 and the tabs are hidden; non-sandbox
+  deployments are completely unaffected.
+- **Demo security boundary.** The browser→noeta leg is **unauthenticated** —
+  access control is the unguessable token only (`secrets.token_urlsafe(16)`),
+  same red line as the HTML-app `PreviewGateway`. Credentials
+  (`X-AIO-API-Key`) are injected only on the **noeta→container** leg; the
+  browser never sees them. This is acceptable for localhost single-user
+  demos; hardened browser-leg auth / SSRF allowlist / multi-user isolation
+  are future work.
+- **Human-in-the-loop control conflicts are not arbitrated.** A user
+  typing in the noVNC browser panel and the `web` subagent driving the same
+  browser via `browser_*` tools will race for control. This is *intentional
+  manual intervention* in v1 — the agent will observe the page state the
+  human left. No arbitration (pause agent while user types, etc.) is
+  implemented.
+- **Preview is real-time only, not recorded.** The panels show the live
+  container state; nothing is persisted to the event log. Closing the panel
+  or ending the session discards the view (the container itself is released
+  at session terminal).
+
+**When you hit it:** Opening a preview panel from a non-sandbox session
+(404s); needing authenticated access over a network; simultaneous human +
+agent browser control causing confusion.
+
+**Workaround:** Run noeta on `localhost` for preview (the demo boundary);
+close the agent's browser turn before manually driving noVNC; use the file
+panel + `browser_screenshot` artifact for a durable PNG record.
+
+**Why it is this way:** The preview is a host-only transport (no new
+model-facing tools or schema), so stable-prefix is preserved. The token +
+localhost boundary matches the existing `PreviewGateway` posture; hardening
+is explicitly deferred to a later revision (D6 of the preview spec).
+
 ## Frontend is a small Vite MPA, not a framework app
 
 **What it means:** The shipped web app (`/chat`, `/trace`) is a small

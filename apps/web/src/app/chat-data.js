@@ -91,6 +91,10 @@ function useChatData() {
   );
   const [activeTaskId, setActiveTaskId] = useState(null);
   const [commandIn, setCommandIn] = useState(false);
+  const [sandboxEnabled, setSandboxEnabled] = useState(false);
+  // Per-task sandbox live-preview discovery (GET /tasks/{id}/preview).
+  // ``null`` = not fetched / no sandbox; ``{token, panels}`` = preview available.
+  const [previewInfo, setPreviewInfo] = useState(null);
   // The multiplexed envelope buffer for the active conversation's stream — the
   // root Task and all its subtasks interleaved. Everything folds from here.
   const [streamEnvelopes, setStreamEnvelopes] = useState([]);
@@ -518,6 +522,7 @@ function useChatData() {
       if (resp.ok) {
         const caps = await resp.json();
         setCommandIn(!!(caps && caps.command_in));
+        setSandboxEnabled(!!(caps && caps.sandbox_enabled));
         setOptions({
           agents: Array.isArray(caps?.agents) ? caps.agents : [],
           models: Array.isArray(caps?.models) ? caps.models : [],
@@ -807,6 +812,27 @@ function useChatData() {
     applyCapabilities();
     loadTaskList();
   }, [applyCapabilities, loadTaskList]);
+
+  // Sandbox live-preview discovery: fetch GET /tasks/{id}/preview for the
+  // active session when sandbox is enabled. Returns {token, panels} or 404.
+  useEffect(() => {
+    if (!sandboxEnabled || !activeTaskId) {
+      setPreviewInfo(null);
+      return undefined;
+    }
+    let cancelled = false;
+    fetch(`/tasks/${encodeURIComponent(activeTaskId)}/preview`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled) setPreviewInfo(data);
+      })
+      .catch(() => {
+        if (!cancelled) setPreviewInfo(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sandboxEnabled, activeTaskId]);
 
   const selectTask = useCallback(
     (taskId) => {
@@ -1498,6 +1524,7 @@ function useChatData() {
     clearNotice,
     closeSession,
     commandIn,
+    sandboxEnabled,
     createMcpServer,
     updateMcpServer,
     deleteMcpServer,
@@ -1523,6 +1550,7 @@ function useChatData() {
     openingSession,
     options,
     pendingGoalText,
+    previewInfo,
     popupStack,
     popupEvents,
     popupVm,

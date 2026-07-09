@@ -431,6 +431,7 @@ def serve_backend(
     def storage_close() -> None:
         """Close any durable storage opened below (rebound when sqlite is on)."""
 
+    sandbox_preview_gateway = None
     if engine_room is None:
         # Vision adapters need a ``ContentRef → bytes`` resolver at construction,
         # but the content store only exists once the engine room is built below;
@@ -556,6 +557,32 @@ def serve_backend(
         # provider can deref ``ImageBlock(ContentRef)`` bytes at request time.
         image_resolver.bind(engine_room.get_content)
 
+        # Sandbox live-preview gateway (browser/terminal/code panels). Built only
+        # when per-session sandbox is enabled; wired to the container lifecycle
+        # via the engine room's sandbox listeners (W3).
+        sandbox_preview_gateway = None
+        if config.sandbox_enabled:
+            from noeta.agent.host.sandbox_preview_gateway import SandboxPreviewGateway
+            from noeta.client.sandbox_provider import SandboxHandle
+
+            sandbox_preview_gateway = SandboxPreviewGateway()
+
+            def _on_preview_allocate(root_id: str, handle: SandboxHandle) -> None:
+                """Mount a sandbox preview token when a container is allocated."""
+                sandbox_preview_gateway.mount_root(
+                    root_id,
+                    handle.base_url,
+                    handle.auth.connect_headers(),
+                )
+
+            def _on_preview_release(root_id: str) -> None:
+                """Unmount the preview token on container release."""
+                sandbox_preview_gateway.unmount_root(root_id)
+
+            engine_room.add_sandbox_lifecycle_listener(
+                _on_preview_allocate, _on_preview_release
+            )
+
     router = Router()
     register_task_routes(router)  # T5: SSE stream + command endpoints
     register_resource_routes(router)  # T6 core: content / files / file
@@ -570,6 +597,7 @@ def serve_backend(
         port=config.port,
         router=router,
         app_gateway=app_gateway,
+        sandbox_preview_gateway=sandbox_preview_gateway,
         mcp_registry=mcp_registry,
         workspace_registry=workspace_registry,
         web_assets=web_assets if web_assets is not None else locate_web_assets(),

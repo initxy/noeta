@@ -1,11 +1,19 @@
-import { PanelRightClose } from "lucide-react";
+import { Monitor, PanelRightClose, Terminal, Code2 } from "lucide-react";
 import { EmptyState } from "../components/EmptyState.jsx";
-import { ICON_LG } from "../shared/icons.js";
+import { ICON_LG, ICON_SM } from "../shared/icons.js";
 import { FilePanel } from "./FilePanel.jsx";
 
 // The right dock: a thin generic shell (drag handle + third column) with a
-// lightweight `Files | App` tab bar on top. "Files" hosts the self-contained
-// FilePanel; "App" renders the model's HTML artifact live in an <iframe>.
+// lightweight tab bar on top. Built-in tabs:
+//   Files — self-contained FilePanel (workspace tree)
+//   App   — model-opened HTML artifact live in an <iframe>
+// Sandbox preview tabs (only visible when the active session has a live
+// sandbox container, i.e. previewInfo is non-null):
+//   Browser — noVNC iframe (/sandbox-preview/<token>/vnc/index.html?path=...)
+//   Terminal — container PTY page (/sandbox-preview/<token>/terminal)
+//   Code    — code-server iframe (/sandbox-preview/<token>/code-server/)
+// Panel sub-paths come from the backend (previewInfo.panels) — the gateway
+// owns the pinned container paths; the || fallbacks are last-resort only.
 // Push-style on wide screens (the grid 3rd track narrows .chat-main); the
 // .app-shell media query degrades it to an overlay drawer on narrow screens.
 // Presentational only — all panel/app state lives in ChatApp and arrives as
@@ -22,9 +30,15 @@ function RightDock({
   onSelectPanelType,
   panelRefreshKey,
   panelType,
+  previewInfo,
   readTaskFile,
   working,
 }) {
+  const hasPreview = !!(previewInfo && previewInfo.token);
+  const previewBase = hasPreview
+    ? `/sandbox-preview/${encodeURIComponent(previewInfo.token)}/`
+    : "";
+
   return (
     <>
       <div
@@ -58,6 +72,47 @@ function RightDock({
           >
             App
           </button>
+          {hasPreview ? (
+            <>
+              <span className="right-dock__tab-divider" />
+              <button
+                type="button"
+                role="tab"
+                aria-selected={panelType === "browser"}
+                className={`right-dock__tab${
+                  panelType === "browser" ? " is-active" : ""
+                }`}
+                onClick={() => onSelectPanelType("browser")}
+                title="Sandbox browser (noVNC)"
+              >
+                <Monitor size={ICON_SM} />
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={panelType === "terminal"}
+                className={`right-dock__tab${
+                  panelType === "terminal" ? " is-active" : ""
+                }`}
+                onClick={() => onSelectPanelType("terminal")}
+                title="Sandbox terminal"
+              >
+                <Terminal size={ICON_SM} />
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={panelType === "code"}
+                className={`right-dock__tab${
+                  panelType === "code" ? " is-active" : ""
+                }`}
+                onClick={() => onSelectPanelType("code")}
+                title="Sandbox code editor"
+              >
+                <Code2 size={ICON_SM} />
+              </button>
+            </>
+          ) : null}
           <span className="right-dock__tabs-spacer" />
           <button
             type="button"
@@ -69,9 +124,9 @@ function RightDock({
             <PanelRightClose size={ICON_LG} />
           </button>
         </div>
-        {/* Keep BOTH mounted, toggling visibility, so switching tabs never
-            tears down the iframe (which would reload the app) nor the file
-            tree's expand/selection state. */}
+        {/* Keep ALL mounted, toggling visibility, so switching tabs never
+            tears down the iframe (which would reload the app/browser/code
+            session) nor the file tree's expand/selection state. */}
         <div
           className="right-dock__pane"
           hidden={panelType !== "files"}
@@ -95,34 +150,57 @@ function RightDock({
         >
           {appUrl ? (
             <iframe
-              // key bump forces a remount = reload when the
-              // model edits a file under the mounted dir.
               key={appReloadKey}
               className="app-iframe"
               src={appUrl}
               title="App preview"
-              // single-port revision red line — the preview is now served from
-              // noeta's OWN origin (/preview/<token>/), so the iframe is
-              // same-origin with the UI. Isolation therefore rides ONLY on
-              // sandbox: every flag below is safe in an opaque/null origin —
-              // the app can run JS, submit forms, open dialogs/popups, and
-              // download, but still cannot touch the noeta UI, its cookies, or
-              // storage. The ONE flag we must NEVER add is `allow-same-origin`:
-              // since the iframe is same-origin with noeta, that would drop the
-              // null-origin wall and open an XSS hole into the UI. The app's
-              // /api fetch is null-origin → answered with permissive CORS by
-              // the gateway.
               sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"
             />
           ) : (
             <EmptyState kind="app" title="No app open yet" />
           )}
         </div>
+        {hasPreview ? (
+          <>
+            <div
+              className="right-dock__pane"
+              hidden={panelType !== "browser"}
+              aria-hidden={panelType !== "browser"}
+            >
+              <iframe
+                className="sandbox-preview-iframe"
+                src={`${previewBase}${previewInfo.panels?.browser || "vnc/"}`}
+                title="Sandbox browser"
+                sandbox="allow-scripts allow-forms allow-modals allow-popups allow-same-origin"
+              />
+            </div>
+            <div
+              className="right-dock__pane"
+              hidden={panelType !== "terminal"}
+              aria-hidden={panelType !== "terminal"}
+            >
+              <iframe
+                className="sandbox-preview-iframe"
+                src={`${previewBase}${previewInfo.panels?.terminal || "terminal"}`}
+                title="Sandbox terminal"
+                sandbox="allow-scripts allow-forms allow-modals allow-same-origin"
+              />
+            </div>
+            <div
+              className="right-dock__pane"
+              hidden={panelType !== "code"}
+              aria-hidden={panelType !== "code"}
+            >
+              <iframe
+                className="sandbox-preview-iframe"
+                src={`${previewBase}${previewInfo.panels?.code || "code-server/"}`}
+                title="Sandbox code editor"
+                sandbox="allow-scripts allow-forms allow-modals allow-popups allow-same-origin allow-downloads"
+              />
+            </div>
+          </>
+        ) : null}
       </aside>
-      {/* U16 — on narrow screens the dock becomes a fixed overlay drawer; this
-          scrim sits just under it (z-index 39) so tapping the chat behind it
-          closes the dock and signals the modal state. Hidden on wide screens
-          via CSS (display:none), so it never covers the pushed-column layout. */}
       <div className="right-dock-overlay" aria-hidden="true" onClick={onClose} />
     </>
   );

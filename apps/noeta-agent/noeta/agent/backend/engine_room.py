@@ -52,8 +52,12 @@ class EngineRoom:
         models: Sequence[str] = (),
         background_drive: bool = False,
         num_workers: int = 1,
+        sandbox_enabled: bool = False,
     ) -> None:
         self._workspace_dir = Path(workspace_dir)
+        # Whether the sandbox browser subsystem is active (sandbox_browser_options
+        # were used at construction). Drives /capabilities → frontend visibility.
+        self._sandbox_enabled = sandbox_enabled
         # T5 async contract ("commands return 202 + an ack only; every visible
         # change is observed through the stream"): when enabled, the turn-driving
         # verbs (start / send_goal / approve / deny / answer) SEED synchronously —
@@ -122,6 +126,15 @@ class EngineRoom:
     def workspace_dir(self) -> Path:
         """The host-fixed default sandbox root (the single-workspace path)."""
         return self._workspace_dir
+
+    @property
+    def sandbox_enabled(self) -> bool:
+        """True when the sandbox browser subsystem was activated at construction.
+
+        Drives ``GET /capabilities`` → frontend conditionally renders sandbox
+        affordances (indicator dot, browser screenshot inline display).
+        """
+        return self._sandbox_enabled
 
     def workspace_dir_for(self, task_id: Optional[str]) -> Path:
         """The workspace root the file resource service serves for ``task_id``.
@@ -206,6 +219,7 @@ class EngineRoom:
             models=models,
             background_drive=background_drive,
             num_workers=num_workers,
+            sandbox_enabled=sandbox_browser,
         )
 
     # -- introspection -----------------------------------------------------
@@ -249,6 +263,21 @@ class EngineRoom:
     def put_content(self, body: bytes, *, media_type: str) -> ContentRef:
         """Store ``body`` and return its ``ContentRef`` (image-input write side)."""
         return self._client.put_content(body, media_type=media_type)
+
+    # -- sandbox lifecycle wiring (product side) ----------------------------
+
+    def add_sandbox_lifecycle_listener(
+        self, on_allocate: Any, on_release: Any
+    ) -> None:
+        """Register container allocate/release listeners on the SDK host.
+
+        Delegates to :meth:`Client.add_sandbox_lifecycle_listener` →
+        :meth:`SdkHost.add_sandbox_lifecycle_listener` →
+        :meth:`SandboxExecEnvManager.add_lifecycle_listener`. Used by the
+        product backend to wire the sandbox preview gateway to the container
+        lifecycle (mount on allocate, unmount on release).
+        """
+        self._client.add_sandbox_lifecycle_listener(on_allocate, on_release)
 
     def messages(self, task_id: str) -> list[Any]:
         """The folded human-readable message view for ``task_id``."""

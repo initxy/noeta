@@ -38,6 +38,19 @@
   flex: 1;
 }
 
+.right-dock__tab-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: var(--s-4) var(--s-2);
+  background: var(--border);
+}
+
+/* Sandbox preview tab icons (Browser / Terminal / Code) use compact icon-only
+   buttons to fit the tab bar without crowding. */
+.right-dock__tab svg {
+  display: block;
+}
+
 /* U9 — the shared close × sits at the tab-bar's right edge; keep it clear of the
    tabs (the spacer pushes it right; this guarantees a gap even without the spacer). */
 .right-dock__tabs .icon-button {
@@ -76,6 +89,20 @@
   font-size: 13px;
   color: var(--muted);
   text-align: center;
+}
+
+/* Sandbox live-preview iframes (Browser / Terminal / Code panels). Same
+   fill-the-pane pattern as .app-iframe; the sandbox attribute allows
+   JS + same-origin (needed for noVNC/code-server WebSocket connections)
+   but NOT allow-top-navigation or allow-popups-without-user-activation. */
+.sandbox-preview-iframe {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  display: block;
+  background: var(--bg);
 }
 
 .file-panel {

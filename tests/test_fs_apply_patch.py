@@ -70,8 +70,8 @@ def test_happy_apply_replace_and_create(tmp_path: Path) -> None:
     assert res.success is True and res.output["applied"] is True
     assert _read(ws, "a.py") == "bar\n"
     assert _read(ws, "b.py") == "new\n"
-    assert res.output["combined_diff_ref"]["hash"]
     assert len(res.artifacts) == 3  # 2 per-edit diffs + combined
+    assert res.artifacts[-1].media_type == "text/x-diff"  # combined diff
 
 
 def test_dry_run_writes_nothing(tmp_path: Path) -> None:
@@ -83,7 +83,8 @@ def test_dry_run_writes_nothing(tmp_path: Path) -> None:
     )
     assert res.success is True and res.output["applied"] is False
     assert _read(ws, "a.py") == "foo\n"  # unchanged
-    assert res.output["combined_diff_ref"]["hash"]  # diff still produced
+    assert len(res.artifacts) == 2  # per-edit diff + combined diff still produced
+    assert all(a.media_type == "text/x-diff" for a in res.artifacts)
 
 
 # ---------------------------------------------------------------------------

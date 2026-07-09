@@ -547,6 +547,7 @@ function ChatApp() {
               panelOpen={panelOpen}
               onTogglePanel={togglePanel}
               pushToast={chat.pushToast}
+              sandboxEnabled={chat.sandboxEnabled}
               vm={chat.vm}
             />
 
@@ -623,6 +624,7 @@ function ChatApp() {
           onSelectPanelType={selectPanelType}
           panelRefreshKey={panelRefreshKey}
           panelType={panelType}
+          previewInfo={chat.previewInfo}
           readTaskFile={chat.readTaskFile}
           working={working}
         />

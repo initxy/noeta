@@ -257,10 +257,13 @@ class BrowserScreenshotTool(_BrowserTool):
         # unchanged (whether the model sees the image is a runtime behaviour, not
         # a stable-prefix byte).
         ref = ctx.artifact_store.put(png, media_type=_PNG_MEDIA_TYPE)
+        # ``output=None`` → the model sees ``null`` (4 bytes). The ref rides
+        # ``artifacts`` only — the frontend renders it from there; the model has
+        # no ref-deref tool, so a hash in the prompt would be dead token weight.
         return ToolResult(
             success=True,
             artifacts=[ref],
-            output={"screenshot_ref": ref_json(ref)},
+            output=None,
             summary=f"screenshot captured ({len(png)} bytes)",
         )
 

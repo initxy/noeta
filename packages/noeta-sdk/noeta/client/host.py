@@ -914,6 +914,20 @@ class SdkHost(GenericEngineResolver):
         if self._sandbox is not None:
             self._sandbox.teardown()
 
+    def add_sandbox_lifecycle_listener(
+        self,
+        on_allocate: Any,
+        on_release: Any,
+    ) -> None:
+        """Register product-side ``(on_allocate, on_release)`` listeners.
+
+        ``on_allocate(root_id, handle)`` fires after a container is provisioned;
+        ``on_release(root_id)`` fires before teardown. Safe on the local path
+        (no sandbox manager ⇒ no-op). Used by the product backend to wire
+        sandbox preview mounts and similar lifecycle-tracked side effects."""
+        if self._sandbox is not None:
+            self._sandbox.add_lifecycle_listener(on_allocate, on_release)
+
     # -- file-checkpoint per-turn gate reset ----------------
 
     def reset_file_checkpoint_turn(self, root_task_id: str) -> None:

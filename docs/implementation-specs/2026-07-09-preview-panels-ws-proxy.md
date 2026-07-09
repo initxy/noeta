@@ -127,3 +127,24 @@
 - **改**:`apps/noeta-agent/noeta/agent/backend/app.py`(`do_GET` 加 `/sandbox-preview/*` upgrade+透传、`GET /tasks/{id}/preview`;参考 `_maybe_preview`/`send_preview`/SSE 流式写)、`packages/noeta-sdk/noeta/client/sandbox.py` + `.../host.py`(allocate/release 处挂 preview mount 注册/注销,复用 `SandboxHandle`)、`apps/web/src/app/RightDock.jsx` + `ChatApp.jsx` + panel prefs。
 - **参照**:`docs/implementation-specs/2026-07-09-sandbox-browser-subsystem.md`(姊妹活 + Docker-time 钉 wire 的同款做法)、`docs/implementation-specs/2026-07-08-per-session-sandbox.md`(per-session handle 现链)、`docs/adr/execution-environment-seam.md`(sandbox / preview 立场、demo 红线)。
 ```
+
+## W7 — Docker-time e2e findings (2026-07-09, pinned live)
+
+Pinned against a live AIO container (`all-in-one-sandbox:latest`, host port → container 8080):
+
+| Surface | Container path | Notes |
+|---------|----------------|-------|
+| noVNC page | `/vnc/` or `/vnc/index.html` (200) | standard noVNC UI (`initSetting('path', 'websockify')` — honors `?path=`/`autoconnect`/`resize` query params) |
+| websockify WS | `/websockify` (container **root**, not under `/vnc/`) | `Sec-WebSocket-Protocol: binary` negotiated through the proxy; first relayed frame is the `RFB 003.008` banner |
+| terminal page | `/terminal` — **no trailing slash** (200) | xterm.js HTML page exists → **R3 resolved**, iframe works, no in-app xterm.js needed. The page builds its PTY WS as `new URL('v1/shell/ws', '.')`, so `/terminal/` (with slash) would aim at `terminal/v1/shell/ws` = 404 upstream |
+| terminal WS | `/v1/shell/ws` (container root) | 101 through the proxy; first frame is a `{"type": "session_id", ...}` text frame; carries `?session_id=` on reconnect |
+| code-server | `/code-server/` | 302 `./?folder=/home/gem` (relative — followed upstream by `route_http`'s urllib) |
+
+**R2 confirmed live**: noVNC's default WS URL (`ws://<host>/websockify`) escapes the
+token prefix — this was the "VNC cannot connect" failure. Fix shipped in
+`SandboxPreviewGateway.preview_info()`: the browser panel path is now
+`vnc/index.html?autoconnect=true&resize=scale&path=sandbox-preview/<token>/websockify`,
+and the terminal panel path is `terminal` (no trailing slash). `app.py`'s WS branch
+now passes the raw request target (query intact) to `try_handle_ws` so
+`?session_id=` reaches the container. **R4 (subprotocol)** did not materialize —
+`binary` negotiates cleanly on both legs.
