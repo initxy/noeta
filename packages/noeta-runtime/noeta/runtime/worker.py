@@ -797,6 +797,24 @@ def run_leased_task(
                     outcome="drained",
                     reliability_sink=reliability_sink,
                 )
+        # Subtask goal seeding: a foreground child claimed by a worker before
+        # the parent's delegation drain (_descend_to_child) could seed its
+        # goal has an empty runtime.messages. Without this the child sends
+        # an empty ``input`` to the provider and gets a 400. Detect the
+        # condition (has parent, no messages yet, carries a goal) and inject
+        # the goal as the opening user message — mirroring what
+        # _descend_to_child does, so the child is well-formed regardless of
+        # which worker picks it up.
+        if (
+            task.parent_task_id is not None
+            and not task.runtime.messages
+            and task.state.goal
+        ):
+            task = engine.append_user_message(
+                task,
+                content=[TextBlock(text=task.state.goal)],
+                lease_id=lease.lease_id,
+            )
         task = engine.run_one_step(task, lease_id=lease.lease_id, cancelled=cancelled)
         rt.dispatcher.release(
             lease.lease_id, next_state=task.status, wake_on=task.wake_on
