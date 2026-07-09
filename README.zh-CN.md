@@ -135,7 +135,20 @@ Noeta 以三个包发布，每一层都会自动拉入它下面的层：
 
 ## 对比
 
-Noeta 和 Claude Agent SDK 都给你 agent 循环、工具、MCP 和 sub-agent。区别在底下的脊梁：SDK 记录的是一段*对话*；Noeta 记录的是*事件*，状态由它们 fold 出来。正是这本账本，让崩溃恢复、持久唤醒、可逆 compaction 和完整审计落在同一个机制上，而不是四个。
+Pi、**Claude Agent SDK**（即 Claude Code SDK）和 **Codex SDK** 都是*进程内 harness*：它们给你 agent 循环、工具、MCP 和 sub-agent——然后把存储、分布式和沙箱留给你。它们的「持久化」是一份本地对话记录（Claude Agent SDK 自带的内存 session store，官方文档自己标注*不适合生产*；Codex 把 thread 存在 `~/.codex/sessions` 下），恢复只能在单机、绑定路径，跨租户扩展要你自己搭。
+
+**Noeta 就是这层 harness 底下的服务端底座**——那些你本来要自己写的部分：
+
+| | **Noeta** | Claude Agent SDK | Codex SDK | Pi |
+| --- | --- | --- | --- | --- |
+| agent 循环 · 工具 · MCP · sub-agent | ✅ | ✅ | ✅ | ✅ |
+| 持久状态 | **事件溯源日志**，fold 出来即恢复——Postgres / SQLite / 内存 | 本地对话记录；默认 store *不适合生产*——自备数据库 | 本地 thread 文件 | 本地 session 文件 |
+| 崩溃安全、exactly-once 恢复 | ✅ 任意进程重新 fold 日志 | 仅限同机、`cwd` 必须一致——持久化归你 | 本地恢复单个 thread | 重新打开一份对话记录 |
+| 多 worker / 多主机 | ✅ 共享 Postgres 上 lease fencing | ✗ 一个 agent 一个长驻进程 | ✗ 一个 thread 一个进程 | ✗ |
+| 每会话沙箱 | ✅ 每会话一个用完即弃的容器，重连安全 | 要你自己在自己基建上搭（或用厂商托管） | 仅本地 OS 沙箱 | ✗ |
+| 交付形态 | **可自托管的服务端底座** | 你自己 host + deploy 的 harness | 本地 CLI + SDK 封装 | 进程内 harness |
+
+底子是同一个想法：harness 记录的是一段*对话*；Noeta 记录的是*事件*，状态由它们 fold 出来。正是这一本账本，把崩溃恢复、持久的多主机唤醒、每会话沙箱重连、可逆 compaction 和完整审计，收敛成同一个机制，而不是事后再拼上去的五套各行其是的系统。Provider 中立、可自托管——无厂商绑定。
 
 完整对比（对 Claude Agent SDK、LangGraph、Temporal）见[服务端对比](https://initxy.github.io/noeta/zh/reference/comparison/)。
 
