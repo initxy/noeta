@@ -430,6 +430,13 @@ class _DispatcherTask:
     # only by a consuming ``release(consumed_wake_event=…)`` (D2). A crash
     # before that consuming release re-delivers it via ``requeue_stale``.
     matched_wake_event: Any = None
+    # Targeted-lease-only guard (Dispatcher.enqueue ``reserved``). A freshly
+    # enqueued subtask child sets this so an untargeted FIFO poll skips it
+    # (only its delegation drain / background executor may targeted-lease it,
+    # since only that path seeds its goal). A ONE-SHOT claim guard: the first
+    # successful ``lease`` clears it, so a later suspend/resume re-enqueue is an
+    # ordinary untargeted-leaseable task.
+    reserved: bool = False
 
 
 class InMemoryDispatcher:
@@ -572,11 +579,12 @@ class InMemoryDispatcher:
 
     # -- Dispatcher lifecycle --------------------------------------------
 
-    def enqueue(self, task_id: str) -> None:
+    def enqueue(self, task_id: str, *, reserved: bool = False) -> None:
         """Mark ``task_id`` as ready-to-lease.
 
         Idempotent: enqueueing a task that is already ``ready`` is a
-        no-op (FIFO order is preserved). For any non-ready state
+        no-op (FIFO order — and its existing ``reserved`` flag — are
+        preserved). For any non-ready state
         (``leased``/``suspended``/``terminal``) the lifecycle fields
         of the previous state are cleared in lockstep with the
         ``status='ready'`` transition — including
@@ -585,10 +593,15 @@ class InMemoryDispatcher:
         wake_event the caller did not request (B1 invariant: matched
         wake_event is owned by the single wake → lease handoff that
         produced it).
+
+        ``reserved`` (see :meth:`Dispatcher.enqueue`) marks the task
+        targeted-lease-only until its first lease claims it.
         """
         with self._lock:
             if task_id not in self._tasks:
-                self._tasks[task_id] = _DispatcherTask(task_id=task_id)
+                self._tasks[task_id] = _DispatcherTask(
+                    task_id=task_id, reserved=reserved
+                )
             else:
                 task = self._tasks[task_id]
                 if task.status != "ready":
@@ -600,6 +613,7 @@ class InMemoryDispatcher:
                     task.wake_on = None
                     task.suspend_reason = None
                     task.matched_wake_event = None
+                    task.reserved = reserved
             if task_id not in self._ready:
                 self._ready.append(task_id)
 
@@ -635,7 +649,10 @@ class InMemoryDispatcher:
             if task_id is None:
                 for idx, ready_id in enumerate(self._ready):
                     candidate = self._tasks[ready_id]
-                    if candidate.status == "ready":
+                    # ``reserved`` tasks are targeted-lease-only (a fresh
+                    # subtask child its drain/executor must claim first) —
+                    # an untargeted FIFO poll skips them.
+                    if candidate.status == "ready" and not candidate.reserved:
                         target_idx = idx
                         target_task = candidate
                         break
@@ -659,6 +676,11 @@ class InMemoryDispatcher:
             target_task.lease_expires_at = expires_at
             target_task.heartbeat_count = 0
             target_task.suspend_reason = None
+            # One-shot claim: the child has now been claimed by its owning
+            # driver (this can only be a targeted lease — an untargeted poll
+            # skips reserved tasks), so clear the guard. A later suspend/resume
+            # re-enqueue is then an ordinary untargeted-leaseable task.
+            target_task.reserved = False
             # H2 (D1): do NOT clear matched_wake_event here — survives the
             # lease; cleared only by a consuming release (D2).
             wake_event = target_task.matched_wake_event

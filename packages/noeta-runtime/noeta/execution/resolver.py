@@ -23,6 +23,7 @@ from noeta.execution.environment import record_environment
 from noeta.execution.instructions import record_instructions
 from noeta.execution.subtask_drain import (
     DrainHost,
+    UnsupportedSubtaskSuspend,
     drive_pending_subtasks,
     resume_woken_parent,
 )
@@ -31,6 +32,7 @@ from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
 from noeta.protocols.event_log import EventLogFull
 from noeta.protocols.policy import Policy
+from noeta.protocols.wake import SubtaskCompleted, SubtaskGroupCompleted
 from noeta.runtime.cancellation import CancellationRegistry
 
 
@@ -595,6 +597,71 @@ class GenericEngineResolver:
         ``None`` when the parent is not resumable (wake not fired yet)."""
         host = self._build_drain_host(parent_task)
         return resume_woken_parent(host, parent_task)
+
+    def settle_subtasks_after_step(self, task_id: str) -> None:
+        """Resident-worker counterpart to ``InteractionDriver.drive_seeded``'s
+        delegation tail (``_drain_pending_subtasks`` + ``_resume_woken_ancestors``).
+
+        The in-request driver drains a delegation subtree synchronously after
+        every command; the ``background_drive`` resident :class:`WorkerLoop` has
+        no such tail. A parent it drove to a ``SubtaskCompleted`` /
+        ``SubtaskGroupCompleted`` barrier would strand its FOREGROUND children:
+        the :class:`ChildLifecycleObserver` enqueues them, but nothing seeds +
+        drives them — only :func:`subtask_drain._descend_to_child` turns a
+        child's ``state.goal`` into the opening user message, and the bare
+        ``run_leased_task`` step never does (an unseeded child requests the model
+        with no messages and the provider rejects it). Calling this after
+        ``run_leased_task`` settles the subtree through the SAME
+        :meth:`drive_pending_subtasks` state machine (byte-equal child seeding),
+        then walks up to resume any ancestor whose wake was delivered
+        out-of-band.
+
+        ``UnsupportedSubtaskSuspend`` (a descendant paused for approval / human
+        input) is a legitimate suspend, swallowed here; the child's own later
+        command re-enters via :meth:`resume_woken_parent`. This is L2-internal so
+        the WorkerLoop (which cannot import ``noeta.execution``) reaches it as a
+        duck-typed seam on the runtime it drives.
+        """
+        task = fold(self.event_log, self.content_store, task_id)
+        if getattr(task, "status", None) == "suspended" and isinstance(
+            getattr(task, "wake_on", None),
+            (SubtaskCompleted, SubtaskGroupCompleted),
+        ):
+            try:
+                self.drive_pending_subtasks(task)
+            except UnsupportedSubtaskSuspend:
+                pass
+        self._resume_woken_ancestors(task_id)
+
+    def _resume_woken_ancestors(self, task_id: str) -> None:
+        """Walk up the parent chain and resume each delegation-suspended
+        ancestor whose wake the :class:`ChildLifecycleObserver` delivered
+        out-of-band (mirrors ``InteractionDriver._resume_woken_ancestors``).
+
+        Each ancestor that resumes all the way to terminal wakes ITS parent, so
+        the walk continues until an ancestor stays suspended (its own next turn
+        / another pending member) or the chain tops out. A deeper descendant
+        hitting its own approval suspend leaves the tree durably consistent —
+        the next resolution re-enters here.
+        """
+        current = task_id
+        while True:
+            events = self.event_log.read(current)
+            parent_id = (
+                getattr(events[0].payload, "parent_task_id", None)
+                if events
+                else None
+            )
+            if not parent_id:
+                return
+            parent = fold(self.event_log, self.content_store, parent_id)
+            try:
+                settled = self.resume_woken_parent(parent)
+            except UnsupportedSubtaskSuspend:
+                return
+            if settled is None or getattr(settled, "status", None) != "terminal":
+                return
+            current = parent_id
 
     def _build_drain_host(self, parent_task: Any) -> DrainHost:
         """Build the :class:`DrainHost` for a parent's delegation tree.

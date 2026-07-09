@@ -197,6 +197,21 @@ _MIGRATION_3_WORKER_ID = (
 )
 
 
+# Migration 4 (= sqlite migration 9): targeted-lease-only guard
+# (``reserved``) for fresh subtask children. Enqueued so their delegation
+# drain / background executor can targeted-lease them, but a resident-worker
+# pool's untargeted FIFO poll must NOT steal them first (only
+# ``subtask_drain._descend_to_child`` seeds a child's goal — an untargeted
+# worker would drive it with an empty message history and the provider would
+# reject the request). The untargeted ``lease(task_id=None)`` selection filters
+# ``reserved = false`` and the FIRST successful lease clears the flag (a
+# one-shot claim). ``NOT NULL DEFAULT false`` backfills existing rows to the
+# historical "not reserved" behaviour.
+_MIGRATION_4_RESERVED = (
+    "ALTER TABLE dispatcher_tasks ADD COLUMN reserved BOOLEAN NOT NULL DEFAULT false"
+)
+
+
 MIGRATIONS: list[Migration] = [
     Migration(
         version=1,
@@ -226,6 +241,11 @@ MIGRATIONS: list[Migration] = [
         version=3,
         description="worker_id audit column on dispatcher_tasks",
         statements=(_MIGRATION_3_WORKER_ID,),
+    ),
+    Migration(
+        version=4,
+        description="targeted-lease-only guard (reserved) for subtask children",
+        statements=(_MIGRATION_4_RESERVED,),
     ),
 ]
 
