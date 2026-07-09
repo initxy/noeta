@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "MAIN_SYSTEM_PROMPT",
+    "MAIN_WEB_SYSTEM_PROMPT",
     "OFFICIAL_SUBAGENTS",
     "WEB_SUBAGENT",
     "main_options",
@@ -55,6 +56,13 @@ def _load_prompt(name: str) -> str:
 
 
 MAIN_SYSTEM_PROMPT = _load_prompt("main")
+#: The sandbox-browser variant of ``main``'s prompt: identical except the
+#: delegation bullet also names the ``web`` specialist. Loaded from its own
+#: file so ``main.md`` (and thus every non-sandbox deployment's stable prefix)
+#: stays byte-identical to pre-browser-subsystem; a test pins the two files to
+#: differ ONLY in that bullet. Used by :func:`sandbox_browser_options` — the
+#: prompt must not mention ``web`` unless ``web`` is actually in the roster.
+MAIN_WEB_SYSTEM_PROMPT = _load_prompt("main-web")
 _GENERAL_PURPOSE_PROMPT = _load_prompt("general-purpose")
 _EXPLORE_PROMPT = _load_prompt("explore")
 _PLAN_PROMPT = _load_prompt("plan")
@@ -262,8 +270,12 @@ def sandbox_browser_options() -> Options:
     # ``delegation`` as-is (already True on main), so ``web`` becomes
     # delegatable. Main's own identity is left untouched — ``browser`` stays
     # ``False`` (it has no browser tools; every page interaction is delegated
-    # to ``web``), so activation adds ``web`` to the roster and nothing else.
-    return dataclasses.replace(base, agents=agents)
+    # to ``web``). The prompt swaps to the web-aware variant in lockstep with
+    # the roster: a prompt that names ``web`` without ``web`` being spawnable
+    # (or vice versa) makes the model chase a subagent that isn't there.
+    return dataclasses.replace(
+        base, agents=agents, system_prompt=MAIN_WEB_SYSTEM_PROMPT
+    )
 
 
 def official_specs() -> dict[str, AgentSpec]:
@@ -275,5 +287,7 @@ def official_specs() -> dict[str, AgentSpec]:
     return out
 
 
-# Register the main preset prompt so SystemPromptPreset(preset="main") resolves.
+# Register the main preset prompts so SystemPromptPreset(preset="main") /
+# (preset="main-web") resolve.
 register_preset_prompt("main", MAIN_SYSTEM_PROMPT)
+register_preset_prompt("main-web", MAIN_WEB_SYSTEM_PROMPT)

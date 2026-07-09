@@ -19,9 +19,10 @@ from pathlib import Path
 
 import pytest
 
-from noeta.agent.spec import AgentSpec
 from noeta.client.options import compile_options
 from noeta.presets import (
+    MAIN_SYSTEM_PROMPT,
+    MAIN_WEB_SYSTEM_PROMPT,
     WEB_SUBAGENT,
     main_options,
     official_specs,
@@ -69,6 +70,44 @@ class TestSandboxBrowserOptions:
             assert getattr(sb_main.capabilities, field) == getattr(
                 base_main.capabilities, field
             ), f"capabilities.{field} drifted during browser activation"
+
+
+# -- Prompt / roster lockstep ---------------------------------------------- #
+
+
+class TestPromptRosterLockstep:
+    """The prompt names ``web`` iff ``web`` is in the roster. A prompt that
+    tells the model about a subagent it cannot spawn makes it chase a
+    guaranteed-rejected ``spawn_subagent`` call in every non-sandbox
+    deployment; a roster entry the prompt never mentions goes unused."""
+
+    def test_default_prompt_never_mentions_web_subagent(self) -> None:
+        opts = main_options()
+        assert opts.system_prompt == MAIN_SYSTEM_PROMPT
+        assert "`web` specialist" not in MAIN_SYSTEM_PROMPT
+
+    def test_activated_prompt_is_web_variant(self) -> None:
+        opts = sandbox_browser_options()
+        assert opts.system_prompt == MAIN_WEB_SYSTEM_PROMPT
+        assert "`web` specialist" in MAIN_WEB_SYSTEM_PROMPT
+
+    def test_web_prompt_differs_only_in_delegation_bullet(self) -> None:
+        """``main-web.md`` is ``main.md`` with the web wording in exactly ONE
+        line (the delegation bullet); any other drift between the two files
+        is a sync bug — edits to main's prompt must land in both."""
+        base_lines = MAIN_SYSTEM_PROMPT.splitlines()
+        web_lines = MAIN_WEB_SYSTEM_PROMPT.splitlines()
+        assert len(base_lines) == len(web_lines), (
+            "main.md and main-web.md must stay line-for-line in sync "
+            "(apart from the delegation bullet's wording)"
+        )
+        diffs = [(a, b) for a, b in zip(base_lines, web_lines) if a != b]
+        assert len(diffs) == 1, (
+            f"expected exactly one differing line, got {len(diffs)}: {diffs!r}"
+        )
+        base_bullet, web_bullet = diffs[0]
+        assert "Delegating heavy or self-contained work" in base_bullet
+        assert "`web` specialist" in web_bullet
 
 
 # -- Non-activation invariant (stable prefix) ----------------------------- #
