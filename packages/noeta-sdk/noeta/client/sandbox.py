@@ -229,6 +229,34 @@ class SandboxExecEnvManager:
         #: Per-ref browser backends, built lazily on first ``resolve_browser`` and
         #: cached like the ExecEnv backends (each is a stateless HTTP client).
         self._browser_by_ref: dict[str, AioBrowserBackend] = {}
+        #: Lifecycle listeners fired on allocate/release. Each entry is
+        #: ``(on_allocate, on_release)`` — ``on_allocate(root_id, handle)`` and
+        #: ``on_release(root_id)``. Used by the product layer to wire side
+        #: effects (e.g. sandbox preview gateway mount) without modifying the
+        #: provider seam.
+        self._lifecycle_listeners: list[
+            tuple[
+                Callable[[str, SandboxHandle], None],
+                Callable[[str], None],
+            ]
+        ] = []
+
+    # -- lifecycle listeners (product-side hooks) -------------------------- #
+
+    def add_lifecycle_listener(
+        self,
+        on_allocate: Callable[[str, SandboxHandle], None],
+        on_release: Callable[[str], None],
+    ) -> None:
+        """Register ``(on_allocate, on_release)`` listeners.
+
+        ``on_allocate(root_id, handle)`` fires after a container is
+        provisioned and cached; ``on_release(root_id)`` fires before the
+        provider is told to tear it down. Used by the product layer to
+        wire sandbox preview mounts and similar side effects that need to
+        track the container lifecycle without modifying the provider seam.
+        """
+        self._lifecycle_listeners.append((on_allocate, on_release))
 
     # -- provisioning (D4) ------------------------------------------------- #
 
@@ -261,6 +289,13 @@ class SandboxExecEnvManager:
             self._handles_by_root[session_root_id] = handle
             self._handles_by_ref[ref] = handle
             self._refs_by_root[session_root_id] = ref
+        # Fire product-side lifecycle listeners (preview gateway mounts, etc.).
+        for on_alloc, _ in self._lifecycle_listeners:
+            try:
+                on_alloc(session_root_id, handle)
+            except Exception:
+                # Listener failures must not break provisioning.
+                pass
         return ref
 
     # -- backend resolution (build + reconnect) ---------------------------- #
@@ -337,6 +372,13 @@ class SandboxExecEnvManager:
         ``provider.release``. Called at the session's root-task terminal (and via
         :meth:`teardown` on shutdown). Releasing a session that never allocated
         is a clean no-op (the local / non-sandbox path never reaches here)."""
+        # Fire product-side release listeners BEFORE tearing down so they can
+        # clean up while the container is still reachable.
+        for _, on_rel in self._lifecycle_listeners:
+            try:
+                on_rel(session_root_id)
+            except Exception:
+                pass
         with self._lock:
             ref = self._refs_by_root.pop(session_root_id, None)
             self._handles_by_root.pop(session_root_id, None)

@@ -1,4 +1,4 @@
-import { Copy, PanelRight } from "lucide-react";
+import { Copy, Globe, PanelRight } from "lucide-react";
 import { copyText } from "../lib/clipboard.js";
 import { shortId } from "../lib/format.js";
 import { ICON_LG, ICON_SM } from "../shared/icons.js";
@@ -14,6 +14,7 @@ function ChatHeader({
   panelOpen,
   onTogglePanel,
   pushToast,
+  sandboxEnabled,
   vm,
 }) {
   const parts = [];
@@ -65,6 +66,13 @@ function ChatHeader({
         aria-label={statusLabel}
       />
       {model ? <span className="chat-header__model">{model}</span> : null}
+      <span
+        className={`chat-header__sandbox-dot${sandboxEnabled ? " is-active" : ""}`}
+        title={sandboxEnabled ? "Sandbox browser active" : "Sandbox browser unavailable"}
+        aria-label={sandboxEnabled ? "sandbox active" : "sandbox unavailable"}
+      >
+        <Globe size={ICON_SM} />
+      </span>
       <div className="chat-header__spacer" />
       {activeTaskId ? (
         <>

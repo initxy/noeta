@@ -230,7 +230,9 @@ def test_screenshot_puts_png_in_artifacts_not_images() -> None:
     assert result.images == []
     assert store.get(result.artifacts[0]) == b"\x89PNGscreenshot"
     assert result.artifacts[0].media_type == "image/png"
-    assert "screenshot_ref" in result.output
+    # v1: output is None — the ref rides artifacts only. The model has no
+    # ref-deref tool, so a hash in the prompt would be dead token weight.
+    assert result.output is None
 
 
 def test_screenshot_fault_maps_to_failed_result() -> None:

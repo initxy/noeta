@@ -93,6 +93,8 @@ def _handle_capabilities(handler: BackendHandler, params: dict[str, str]) -> Non
             "command_in": True,
             "chat": True,
             "agents": room.agent_names(),
+            "sandbox_enabled": room.sandbox_enabled,
+            "browser_available": room.sandbox_enabled,
             "models": models,
             "model_capabilities": model_capabilities(models),
             "permission_modes": list(permission_modes()),
@@ -207,7 +209,32 @@ def _handle_list_tasks(handler: BackendHandler, params: dict[str, str]) -> None:
     handler.send_json(rows)
 
 
+def _handle_task_preview(handler: BackendHandler, params: dict[str, str]) -> None:
+    """``GET /tasks/{id}/preview`` → sandbox live-preview discovery payload.
+
+    Returns ``200 {token, panels:{browser, terminal, code}}`` for a task
+    whose session has a live sandbox container mounted; ``404`` for a task
+    without a sandbox (non-sandbox deployment, or session not yet allocated).
+    The frontend uses this to decide whether to show the preview panel
+    picker (D4).
+    """
+    task_id = params.get("id", "")
+    gw = handler.sandbox_preview_gateway
+    if gw is None:
+        handler.send_json({"error": "sandbox preview not available"}, status=404)
+        return
+    # The preview mount is keyed by root_task_id. For a subtask, we'd need
+    # to walk up to the root; v1 only supports root-task discovery (the
+    # frontend opens the panel from the active root conversation).
+    info = gw.preview_info(task_id)
+    if info is None:
+        handler.send_json({"error": "no sandbox for this session"}, status=404)
+        return
+    handler.send_json(info)
+
+
 def register_read_view_routes(router: Router) -> None:
     """Register the capabilities + session-list index views onto ``router``."""
     router.add("GET", "/capabilities", _handle_capabilities)
     router.add("GET", "/tasks", _handle_list_tasks)
+    router.add("GET", "/tasks/{id}/preview", _handle_task_preview)

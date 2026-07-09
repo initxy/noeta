@@ -45,7 +45,6 @@ from typing import Any, Optional
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.tools._limits import INLINE_OUTPUT_MAX_BYTES
-from noeta.tools._refs import ref_json
 from noeta.tools.descriptions import load_tool_description
 from noeta.tools.fs._diff import (
     DIFF_MEDIA_TYPE,
@@ -523,7 +522,6 @@ class ApplyPatchTool:
         output: dict[str, Any] = {
             "applied": applied,
             "edits": rows,
-            "combined_diff_ref": ref_json(combined_ref),
         }
         output = _fit_output(output)
         mode_label = "applied" if applied else "proposed"
