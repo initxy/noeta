@@ -5,6 +5,7 @@ only consumers (the product / library users) import it.
 """
 from __future__ import annotations
 
+import dataclasses
 from typing import TYPE_CHECKING
 
 from noeta.agent.spec import Capabilities
@@ -26,6 +27,7 @@ __all__ = [
     "WEB_SUBAGENT",
     "main_options",
     "official_specs",
+    "sandbox_browser_options",
 ]
 
 
@@ -230,6 +232,32 @@ def main_options() -> Options:
             mcp=True,
         ),  # spawnable is filled in to the three sub-names by compile's additive union
     )
+
+
+def sandbox_browser_options() -> Options:
+    """Sandbox-activated variant of :func:`main_options`: ``web`` subagent
+    registered + main's ``browser`` capability on.
+
+    Product-activation helper (the sandbox-browser-subsystem spec, D3 / B6):
+    when a deployment provisions a per-session AIO Sandbox (``NOETA_AGENT_SANDBOX``
+    on), the browser tool pack can actually work, so the ``web`` browsing
+    specialist is wired into main's delegation roster and main opens
+    ``browser=True`` (it can drive the browser directly, though heavy browsing
+    is best delegated to ``web`` to isolate token churn).
+
+    Off by default — non-sandbox deployments keep :func:`main_options` (no
+    ``web`` agent, ``browser=False``) so the roster + stable prefix are
+    byte-identical to pre-browser-subsystem. This function is the *explicit*
+    opt-in a product uses to activate, never a silent default.
+    """
+    base = main_options()
+    agents = dict(base.agents)
+    agents["web"] = WEB_SUBAGENT
+    # ``compile_options`` unions ``spawnable`` with the child names and keeps
+    # ``delegation`` as-is (already True on main), so ``web`` becomes
+    # delegatable without touching the rest of the identity.
+    capabilities = dataclasses.replace(base.capabilities, browser=True)
+    return dataclasses.replace(base, agents=agents, capabilities=capabilities)
 
 
 def official_specs() -> dict[str, AgentSpec]:

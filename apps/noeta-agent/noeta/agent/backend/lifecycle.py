@@ -543,6 +543,12 @@ def serve_backend(
             models=config.models,
             background_drive=config.background_drive,
             num_workers=config.num_workers,
+            # Sandbox browser activation (spec D3 / B6): when this deployment
+            # provisions per-session AIO containers, the browser tool pack can
+            # work, so register the ``web`` subagent + open main's ``browser``
+            # capability. Gated on the sandbox so a non-sandbox deployment keeps
+            # the pre-browser roster + stable prefix byte-identical.
+            sandbox_browser=config.sandbox_enabled,
         )
         # Now the content store exists (inside the noeta.sdk host): a vision
         # provider can deref ``ImageBlock(ContentRef)`` bytes at request time.
