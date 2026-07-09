@@ -176,6 +176,7 @@ class EngineRoom:
         models: Sequence[str] = (),
         background_drive: bool = False,
         num_workers: int = 1,
+        sandbox_browser: bool = False,
     ) -> "EngineRoom":
         """Build the room over the official preset registry (main + subagents).
 
@@ -183,9 +184,20 @@ class EngineRoom:
         (preview gateway, live-MCP resolver) through to the noeta.sdk Client;
         ``None`` ⇒ the in-memory, no-preview, no-MCP default. ``models`` is the
         configured selectable model list (empty ⇒ single-model path).
+
+        ``sandbox_browser`` activates the sandbox browser subsystem (spec layer
+        4): when True, the ``web`` browsing subagent is registered into main's
+        delegation roster and main opens ``browser=True`` so the noeta-owned
+        browser tool pack is merged per-session (gated on a live sandbox
+        backend). Off by default so a non-sandbox deployment keeps the
+        pre-browser roster + stable prefix byte-identical. A product sets this
+        from its ``sandbox_enabled`` config.
         """
+        options = (
+            presets.sandbox_browser_options() if sandbox_browser else presets.main_options()
+        )
         return cls(
-            presets.main_options(),
+            options,
             provider=provider,
             workspace_dir=workspace_dir,
             model=model,
