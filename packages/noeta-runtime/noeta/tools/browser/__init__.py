@@ -85,13 +85,16 @@ def _require_str(
 def _require_int(
     arguments: dict[str, Any], key: str, name: str, *, message: str
 ) -> "int | ToolResult":
-    """Return ``arguments[key]`` as an ``int``, or a failed ``ToolResult``.
+    """Return ``arguments[key]`` as a non-negative ``int``, or a failed ``ToolResult``.
 
     ``bool`` is rejected even though it is an ``int`` subclass — an element index
-    is never a boolean. Same failure shape as :func:`_require_str`.
+    is never a boolean. Negatives are rejected too: element indices come from a
+    prior ``extract`` snapshot's numbered list, so a ``-1`` is always a model
+    guess ("last element") that deserves a clear local error, not a container
+    round-trip. Same failure shape as :func:`_require_str`.
     """
     value = arguments.get(key)
-    if not isinstance(value, int) or isinstance(value, bool):
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         return _fail(name, message)
     return value
 
@@ -174,7 +177,7 @@ class BrowserClickTool(_BrowserTool):
 
     def invoke(self, arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         index = _require_int(
-            arguments, "index", self.name, message="requires integer 'index'"
+            arguments, "index", self.name, message="requires non-negative integer 'index'"
         )
         if isinstance(index, ToolResult):
             return index
@@ -201,7 +204,7 @@ class BrowserTypeTool(_BrowserTool):
 
     def invoke(self, arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         index = _require_int(
-            arguments, "index", self.name, message="requires integer 'index'"
+            arguments, "index", self.name, message="requires non-negative integer 'index'"
         )
         if isinstance(index, ToolResult):
             return index
