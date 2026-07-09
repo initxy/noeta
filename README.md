@@ -221,11 +221,31 @@ Install `noeta-sdk` to build your own agent (`import noeta.sdk`); install
 
 ## How it compares
 
-Both Noeta and the Claude Agent SDK give you an agent loop, tools, MCP, and
-sub-agents. The difference is the spine underneath: the SDK records a
-*conversation*; Noeta records *events*, and state is folded from them. That
-ledger is what makes crash recovery, durable wake, reversible compaction, and
-full audit land on one mechanism instead of four.
+Pi, the **Claude Agent SDK** (a.k.a. the Claude Code SDK), and the **Codex SDK**
+are all *in-process harnesses*: they give you an agent loop, tools, MCP, and
+sub-agents — then leave storage, distribution, and sandboxing to you. Their
+"persistence" is a local transcript file (the Claude Agent SDK ships an
+in-memory session store its own docs mark *not for production*; Codex keeps
+threads under `~/.codex/sessions`), resume is single-host and path-bound, and
+scaling across tenants is your problem to build.
+
+**Noeta is the server-side foundation underneath that harness** — the part you'd
+otherwise write yourself:
+
+| | **Noeta** | Claude Agent SDK | Codex SDK | Pi |
+| --- | --- | --- | --- | --- |
+| Agent loop · tools · MCP · sub-agents | ✅ | ✅ | ✅ | ✅ |
+| Durable state | **Event-sourced log**, folded to resume — Postgres / SQLite / memory | Local transcript; default store *not for production* — bring your own DB | Local thread files | Local session files |
+| Crash-safe, exactly-once resume | ✅ any process re-folds the log | Same host only, `cwd` must match — durability is on you | Resume one thread locally | Reopen a transcript |
+| Multi-worker / multi-host | ✅ lease fencing on shared Postgres | ✗ one long-lived process per agent | ✗ one process per thread | ✗ |
+| Per-session sandbox | ✅ throwaway container per session, reconnect-safe | Your infra to build (or vendor-hosted) | Local OS sandbox only | ✗ |
+| Ships as | **Self-hostable server base** | Harness you host + deploy | Local CLI + SDK wrapper | In-process harness |
+
+Same idea underneath: the harnesses record a *conversation*; Noeta records
+*events*, and state is folded from them. That one ledger is what turns crash
+recovery, durable multi-host wake, per-session sandbox reconnect, reversible
+compaction, and full audit into one mechanism instead of five bespoke systems
+you bolt on later. Provider-neutral and self-hosted — no vendor lock-in.
 
 See the [full comparison](https://initxy.github.io/noeta/reference/comparison/)
 against the Claude Agent SDK, LangGraph, and Temporal.
