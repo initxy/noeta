@@ -267,3 +267,77 @@ backend-portable, but cannot express a credential a CLI accepts only as a comman
 both env exports and setup commands, stays generic over any shell-based backend
 (every current family), and lets the host use a tool's stable public CLI rather
 than reverse-engineering its on-disk credential format.
+
+## Browser subsystem (2026-07-09): noeta-owned browser tools over the container `/mcp`, not an MCP connector
+
+A sandbox session can now drive the container's headless browser. The capability
+lands in two layers, both **sandbox-gated** (no container ⇒ no browser tools) and
+detailed in `docs/implementation-specs/2026-07-09-sandbox-browser-subsystem.md`:
+
+- **Layer 3 — a noeta-owned browser tool pack.** Five tools (`browser_navigate`
+  / `browser_click` / `browser_type` / `browser_extract` / `browser_screenshot`)
+  whose **name / schema / description are noeta's**, injected per session the way
+  the fs pack is (a construction field, never `ToolContext`), gated on a new
+  `Capabilities.browser` bit. Each tool delegates through a narrow `BrowserBackend`
+  seam whose one production impl, `AioBrowserBackend`, pins the container `/mcp`
+  browser wire in a single adapter + fake-transport test.
+- **Layer 4 — a `web` subagent.** An official agent identity (browser pack + a
+  read-only floor) the main agent delegates page work to, so browsing token bloat
+  stays in a child context and the parent gets back a distilled result.
+
+**This threads the needle of alt #5; it does not reopen it.** Alt #5 above
+rejected *mounting AIO's `/mcp` as a live MCP connector* — that injects the
+container's own tool names/schemas, perturbs the stable prefix, and overlaps
+fs/shell. The browser pack does none of these: the model-facing schema is
+**noeta's** (the container's names never reach the model), the `McpHttpClient` is
+reused purely as an **internal transport** (the browser tools never enter
+`mcp_registry` or take an alias), and browser is **net-new** surface with no
+fs/shell overlap. It also does not reopen the MCP-is-Tier-3 deferral (per-session
+spec): the `ExecEnv` seam gains **no** MCP method — the browser backend carries its
+own transport. This delivers the "AIO's browser as a later refinement" the v2
+web-egress alternative pointed at (above).
+
+**Why the container `/mcp`, not the `/v1/browser` HTTP face.** `/v1/browser/*` is
+**coordinate-level** computer-use (pixel `CLICK(x,y)` / `SCROLL` / `HOTKEY`); the
+high-level, element-level, LLM-friendly verbs (navigate, click-by-element, extract
+page markdown) live **only** in the container's `/mcp` browser server. Both paths
+require talking to the container; the only real choice is *who owns the schema*,
+and layer 3 puts that with noeta, so an image upgrade that renames a `browser_*`
+tool breaks one adapter test, never the model.
+
+**The wire is pinned from source, not guessed.** The container's browser server is
+`@agent-infra/mcp-server-browser` (published in `bytedance/UI-TARS-desktop`); its
+real verbs differ from a Playwright-MCP-shaped guess in three places, so
+`AioBrowserBackend` maps: elements are addressed by a numeric **`index`** (from
+`browser_get_clickable_elements`), not a string ref; noeta's `browser_type` fans
+out to `browser_form_input_fill` (+ `browser_press_key` "Enter" on submit); and
+noeta's `browser_extract` composes `browser_get_markdown` with the numbered
+element list. Names and arg keys are source-accurate; a live-container e2e still
+owes runtime-return-shape confirmation.
+
+**Perception is text/element-level in v1.** `browser_extract` returns page text
+plus the numbered interactive-element list; `browser_screenshot` stores the PNG as
+a **workspace artifact** (viewable in the file panel) and does **not** feed it to
+the model as vision. A config-gated vision mode (feed the screenshot back; use the
+`/v1/browser` coordinate path for anti-bot/visual sites) is increment 2 — the tool
+schema is identical in both modes (whether the model sees the image is a runtime
+behaviour, not a stable-prefix byte), so it lands without a prefix change.
+
+**Permission.** Every browser action can egress to any site, so the pack is
+`risk_level="high"` and routes through the same approval predicate as `shell_run`;
+`bypassPermissions` passes, default / acceptEdits gate an unauthorized navigation.
+
+### Browser alternatives considered
+
+1. **Mount `/mcp` as an MCP connector (= alt #5).** Rejected for the same reasons,
+   restated above: it surrenders the model-facing schema to the container.
+2. **Drive the browser over CDP / Playwright directly.** Rejected: async +
+   heavy-dependency, against noeta's stdlib-only synchronous transport discipline;
+   the container already wraps Playwright behind `/mcp`.
+3. **Present the element handle as an opaque string ref (Playwright-MCP "e7"
+   style).** Rejected once the source showed the real server keys elements by a
+   numeric `index` it renders as `[7]` in the extract snapshot — a string ref
+   mis-types what the model literally sees. noeta owns the schema, so it uses
+   `index: integer`.
+4. **Feed screenshots as vision in v1.** Deferred to increment 2 (above); the seam
+   is left in place so it does not perturb the prefix later.
