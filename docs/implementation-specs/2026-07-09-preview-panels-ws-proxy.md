@@ -148,3 +148,34 @@ and the terminal panel path is `terminal` (no trailing slash). `app.py`'s WS bra
 now passes the raw request target (query intact) to `try_handle_ws` so
 `?session_id=` reaches the container. **R4 (subprotocol)** did not materialize —
 `binary` negotiates cleanly on both legs.
+
+## Revision — post-review hardening (2026-07-09)
+
+A code review of the shipped increment surfaced four transport/security fixes,
+all landed on this branch:
+
+1. **Dedicated preview origin (supersedes the "main-port reverse proxy" in the
+   title and D1).** The panel iframes require `allow-same-origin` (noVNC
+   localStorage, code-server's service worker), and that flag makes iframe
+   content same-origin with whatever host serves it. Proxied through the main
+   port, container-controlled JS would therefore run with the noeta origin —
+   cookies, `POST /tasks/{id}/approve`, the whole control plane — defeating the
+   sandbox boundary it is supposed to visualize. `make_preview_server` now
+   binds the gateway to its own port (`NOETA_AGENT_SANDBOX_PREVIEW_PORT`,
+   default ephemeral) that serves `/sandbox-preview/<token>/...` and nothing
+   else; discovery (`GET /tasks/{id}/preview`, still on the main port) gained a
+   `port` field the frontend uses to build absolute iframe URLs. With every
+   panel fetch now same-origin on that port, the `Access-Control-Allow-Origin:
+   *` responses were removed entirely (they also let any site that learned a
+   token read preview content cross-origin).
+2. **WS upgrade order**: `try_handle_ws` dials the container BEFORE sending
+   101, so an unreachable upstream surfaces as a real HTTP 502 instead of a
+   101 followed by an abrupt close that noVNC/xterm.js cannot interpret.
+3. **Frame-size cap**: `read_frame` rejects a declared payload over 64 MiB
+   (`_MAX_FRAME_BYTES`) — the 8-byte extended length field otherwise lets a
+   compromised endpoint grow the per-frame buffer until host memory exhausts.
+4. **Pump socket tuning**: both pump legs get TCP keepalive and an
+   `SO_SNDTIMEO` send bound, so a frozen browser tab (or vanished peer) fails
+   the write and tears the pump down instead of wedging its thread + two FDs
+   forever. Reads stay unbounded — an idle-but-healthy VNC session
+   legitimately goes minutes between frames.

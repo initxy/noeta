@@ -109,7 +109,13 @@ class BackendHandler(BaseHTTPRequestHandler):
 
     @property
     def sandbox_preview_gateway(self) -> Optional[Any]:
-        """The per-session sandbox live-preview gateway, or ``None`` if absent."""
+        """The per-session sandbox live-preview gateway, or ``None`` if absent.
+
+        Backs ONLY the ``GET /tasks/{id}/preview`` discovery route on this
+        server: the preview traffic itself is served on the gateway's own
+        dedicated port (origin isolation — see
+        ``noeta.agent.host.sandbox_preview_gateway``), never the main port.
+        """
         return getattr(self.server, "sandbox_preview_gateway", None)
 
     @property
@@ -256,75 +262,6 @@ class BackendHandler(BaseHTTPRequestHandler):
         self.send_preview(resp)
         return True
 
-    # -- sandbox live-preview (browser/terminal/code panels) ---------------
-
-    def _maybe_sandbox_preview(self, method: str, path: str) -> bool:
-        """Route ``/sandbox-preview/<token>/...`` to the live-preview gateway.
-
-        Handles both HTTP透传 (noVNC/code-server static pages) and WebSocket
-        反代 (noVNC websockify / terminal PTY / code-server WS). For WS upgrades,
-        the gateway performs the accept handshake and starts the bidirectional
-        pump — the connection is "hijacked" and this method returns True; the
-        caller must NOT emit any further HTTP responses on this connection.
-
-        ``True`` if handled (including WS hijack); ``False`` if not a sandbox
-        preview path or the gateway is absent.
-        """
-        gw = self.sandbox_preview_gateway
-        if gw is None:
-            return False
-        if not gw.is_preview_path(path):
-            return False
-
-        # WebSocket upgrade → hijack the connection into the pump. Pass the
-        # RAW request target (query intact): the terminal PTY WS carries
-        # ``?session_id=...``, which must reach the container.
-        upgrade = self.headers.get("Upgrade", "")
-        if "websocket" in upgrade.lower():
-            return gw.try_handle_ws(self, self.path)
-
-        # HTTP透传 (static pages, assets, proxy paths).
-        from urllib.parse import urlsplit
-
-        split = urlsplit(self.path)
-        body = (
-            self.read_raw_body()
-            if method in ("POST", "PUT", "PATCH", "DELETE")
-            else None
-        )
-        result = gw.route_http(
-            method,
-            split.path,
-            split.query,
-            content_type=self.headers.get("Content-Type"),
-            body=body,
-            headers={k: v for k, v in self.headers.items()},
-        )
-        if result is None:
-            return False
-        status, content_type, resp_body, cors = result
-        self._response_started = True
-        self.send_response(status)
-        if content_type:
-            self.send_header("Content-Type", content_type)
-        if cors:
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header(
-                "Access-Control-Allow-Methods",
-                "GET, POST, PUT, DELETE, PATCH, OPTIONS",
-            )
-            requested = self.headers.get("Access-Control-Request-Headers", "*")
-            self.send_header("Access-Control-Allow-Headers", requested)
-            self.send_header("Access-Control-Max-Age", "600")
-        self.send_header("Content-Length", str(len(resp_body)))
-        self.end_headers()
-        if resp_body:
-            try:
-                self.wfile.write(resp_body)
-            except (BrokenPipeError, ConnectionResetError, OSError):
-                pass
-        return True
-
     # -- static SPA (T7, prefix-routed) ------------------------------------
 
     def _redirect(self, location: str) -> None:
@@ -370,8 +307,6 @@ class BackendHandler(BaseHTTPRequestHandler):
     def _dispatch(self, method: str) -> None:
         path = self.path.split("?", 1)[0]
         if self._maybe_preview(method, path):
-            return
-        if self._maybe_sandbox_preview(method, path):
             return
         if self._maybe_static(method, path):
             return

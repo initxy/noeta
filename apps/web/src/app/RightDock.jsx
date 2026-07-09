@@ -9,11 +9,17 @@ import { FilePanel } from "./FilePanel.jsx";
 //   App   — model-opened HTML artifact live in an <iframe>
 // Sandbox preview tabs (only visible when the active session has a live
 // sandbox container, i.e. previewInfo is non-null):
-//   Browser — noVNC iframe (/sandbox-preview/<token>/vnc/index.html?path=...)
-//   Terminal — container PTY page (/sandbox-preview/<token>/terminal)
-//   Code    — code-server iframe (/sandbox-preview/<token>/code-server/)
+//   Browser — noVNC iframe (…/sandbox-preview/<token>/vnc/index.html?path=...)
+//   Terminal — container PTY page (…/sandbox-preview/<token>/terminal)
+//   Code    — code-server iframe (…/sandbox-preview/<token>/code-server/)
 // Panel sub-paths come from the backend (previewInfo.panels) — the gateway
 // owns the pinned container paths; the || fallbacks are last-resort only.
+// The preview iframes are served from a DEDICATED origin (same hostname,
+// previewInfo.port) — they need allow-same-origin (noVNC localStorage,
+// code-server service worker), and that flag makes iframe content
+// same-origin with its server. Serving container-controlled pages from the
+// noeta origin would hand a compromised container the noeta control API,
+// so the preview origin is a separate port that holds no noeta state.
 // Push-style on wide screens (the grid 3rd track narrows .chat-main); the
 // .app-shell media query degrades it to an overlay drawer on narrow screens.
 // Presentational only — all panel/app state lives in ChatApp and arrives as
@@ -34,9 +40,14 @@ function RightDock({
   readTaskFile,
   working,
 }) {
-  const hasPreview = !!(previewInfo && previewInfo.token);
+  // The panels live on the dedicated preview origin, never the main port.
+  // No port in the payload (gateway not fully wired) ⇒ no panels — falling
+  // back to a main-port path would silently reopen the origin-isolation hole.
+  const hasPreview = !!(previewInfo && previewInfo.token && previewInfo.port);
   const previewBase = hasPreview
-    ? `/sandbox-preview/${encodeURIComponent(previewInfo.token)}/`
+    ? `${window.location.protocol}//${window.location.hostname}:${
+        previewInfo.port
+      }/sandbox-preview/${encodeURIComponent(previewInfo.token)}/`
     : "";
 
   return (

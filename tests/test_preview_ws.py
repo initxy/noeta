@@ -13,9 +13,7 @@ import hashlib
 import socket
 import struct
 import threading
-import time
 
-import pytest
 
 from noeta.agent.host.preview_ws import (
     OP_BINARY,
@@ -23,9 +21,9 @@ from noeta.agent.host.preview_ws import (
     OP_PING,
     OP_PONG,
     OP_TEXT,
+    _MAX_FRAME_BYTES,
     _WS_GUID,
     compute_accept,
-    connect_upstream,
     pump_bidirectional,
     read_frame,
     write_frame,
@@ -168,6 +166,26 @@ class TestFrameRoundTrip:
             result = read_frame(b)
             assert result is None
         finally:
+            b.close()
+
+    def test_oversized_declared_length_returns_none(self) -> None:
+        """A frame declaring a payload beyond the cap is rejected BEFORE any
+        payload is buffered — a malicious/corrupt endpoint must not be able
+        to grow host memory by declaring a huge length (up to 2**64-1 on the
+        8-byte extended field)."""
+        a, b = socket.socketpair()
+        try:
+            # Hand-craft the header: FIN+binary, unmasked, 8-byte ext length
+            # declaring one byte over the cap. No payload follows — read_frame
+            # must bail on the declaration alone, without waiting for bytes.
+            header = bytes([0x80 | OP_BINARY, 127]) + struct.pack(
+                "!Q", _MAX_FRAME_BYTES + 1
+            )
+            a.sendall(header)
+            result = read_frame(b)
+            assert result is None
+        finally:
+            a.close()
             b.close()
 
 

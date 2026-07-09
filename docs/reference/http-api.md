@@ -90,6 +90,17 @@ stream), most-recent first. Each row: `task_id`, `status` (`created` /
 `title` (from the genesis goal), `agent_name`, `parent_task_id`,
 `workspace_dir`, `workspace_name`, `last_seq` (`read_views.py:179-207`).
 
+### `GET /tasks/{id}/preview` (`read_views.py`)
+
+Sandbox live-preview discovery for a **root** task. With a live per-session
+container mounted: `200` `{"token", "port", "panels": {"browser", "terminal",
+"code"}}` — the frontend builds
+`http://<same-hostname>:<port>/sandbox-preview/<token>/<panel-sub-path>` for
+each preview iframe. `404` without a sandbox (non-sandbox deployment, no
+container yet, or a subtask id — v1 discovery is root-only). Note the panel
+traffic itself is NOT served by this API's port; see the process-routes note
+below.
+
 ## Resources
 
 Source: `apps/noeta-agent/noeta/agent/backend/resource_services.py:168-170`.
@@ -143,6 +154,16 @@ Source: `apps/noeta-agent/noeta/agent/backend/app.py`.
 | `ANY /preview/<token>/...` | single-port HTML-app preview gateway; falls through when no gateway is mounted (`app.py:224-252`) |
 
 Anything else: `404` `{"error": "not found", "path": ...}`.
+
+> **Sandbox live preview is a separate port.** With `NOETA_AGENT_SANDBOX=1`,
+> a dedicated preview server (ephemeral port by default; pin with
+> `NOETA_AGENT_SANDBOX_PREVIEW_PORT`) serves
+> `ANY /sandbox-preview/<token>/...` — HTTP 透传 plus WebSocket reverse-proxy
+> to the session's container — and nothing else. It is deliberately NOT on
+> the main port: the preview iframes run `allow-same-origin`, so
+> container-served content must land on an origin that holds no noeta state
+> (`noeta.agent.host.sandbox_preview_gateway`). Discover it via
+> `GET /tasks/{id}/preview` above.
 
 > **Note.** Earlier versions of the docs described routes that do not exist
 > in this backend (`GET /tasks/{id}`, `GET /events`, `POST /tasks/{id}/goals`,
