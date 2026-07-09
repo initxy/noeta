@@ -186,12 +186,13 @@ class EngineRoom:
         configured selectable model list (empty ⇒ single-model path).
 
         ``sandbox_browser`` activates the sandbox browser subsystem (spec layer
-        4): when True, the ``web`` browsing subagent is registered into main's
-        delegation roster and main opens ``browser=True`` so the noeta-owned
-        browser tool pack is merged per-session (gated on a live sandbox
-        backend). Off by default so a non-sandbox deployment keeps the
-        pre-browser roster + stable prefix byte-identical. A product sets this
-        from its ``sandbox_enabled`` config.
+        4): when True, the ``web`` browsing subagent — the sole identity that
+        opens ``browser`` — is registered into main's delegation roster. Main
+        itself stays browser-free (no ``browser_*`` tools); every page
+        interaction is delegated to ``web``, whose browser pack is merged
+        per-session (gated on a live sandbox backend). Off by default so a
+        non-sandbox deployment keeps the pre-browser roster + stable prefix
+        byte-identical. A product sets this from its ``sandbox_enabled`` config.
         """
         options = (
             presets.sandbox_browser_options() if sandbox_browser else presets.main_options()

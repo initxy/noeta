@@ -545,9 +545,11 @@ def serve_backend(
             num_workers=config.num_workers,
             # Sandbox browser activation (spec D3 / B6): when this deployment
             # provisions per-session AIO containers, the browser tool pack can
-            # work, so register the ``web`` subagent + open main's ``browser``
-            # capability. Gated on the sandbox so a non-sandbox deployment keeps
-            # the pre-browser roster + stable prefix byte-identical.
+            # work, so register the ``web`` subagent into main's delegation
+            # roster. Main stays browser-free — browsing is delegated to ``web``
+            # (the sole identity that opens ``browser``). Gated on the sandbox so
+            # a non-sandbox deployment keeps the pre-browser roster + stable
+            # prefix byte-identical.
             sandbox_browser=config.sandbox_enabled,
         )
         # Now the content store exists (inside the noeta.sdk host): a vision
