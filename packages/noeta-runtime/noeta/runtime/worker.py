@@ -1733,6 +1733,14 @@ class WorkerLoop:
                         lease_id=getattr(lease, "lease_id", None),
                     )
                 )
+            # Delegation tail: a parent this step drove to a subtask barrier has
+            # its FOREGROUND children enqueued but unseeded — the resident-worker
+            # path (unlike the in-request driver's ``drive_seeded``) has no drain
+            # to seed + drive them. Settle the subtree here through the runtime's
+            # duck-typed seam (the WorkerLoop cannot import ``noeta.execution``).
+            # Self-contained + never raises, so it perturbs neither the settled
+            # lease above nor the non-delegating common path.
+            self._settle_subtasks(lease.task_id)
         except InvalidLease:
             # Lease is no longer ours — do NOT release/fail. No claim
             # about task state (cannot distinguish requeue vs cap-hit).
@@ -1781,6 +1789,33 @@ class WorkerLoop:
             # Best-effort: the abandon path stops the heartbeat from the
             # main thread; this covers the normal/finish path.
             done.set()
+
+    def _settle_subtasks(self, task_id: str) -> None:
+        """Drive a delegation subtree the just-driven task barriered on.
+
+        Calls the runtime's ``settle_subtasks_after_step`` seam (duck-typed —
+        a bare :class:`WorkerRuntime` test double has none ⇒ byte-identical
+        no-op). A NON-delegating task settles to a no-op inside the seam (the
+        ``suspended``-on-``Subtask*`` gate). Best-effort by design: a subtree
+        node that loses its lease is reclaimed by the periodic stale-sweep, and
+        an unexpected fault must not crash the loop nor touch the already-settled
+        parent lease — so both are logged, not raised.
+        """
+        settle = getattr(self._rt, "settle_subtasks_after_step", None)
+        if settle is None:
+            return
+        try:
+            settle(task_id)
+        except InvalidLease:
+            _log.warning(
+                "worker: subtask drain for task %s lost a lease mid-flight; "
+                "a stale-sweep reclaim will re-drive the affected node",
+                task_id,
+            )
+        except Exception:  # noqa: BLE001 — a drain fault must not crash the loop
+            _log.exception(
+                "worker: subtask drain for task %s failed; continuing", task_id
+            )
 
     def run_forever(self, *, install_signals: bool = False) -> None:
         """Drive tasks until :meth:`stop` is called. Runs the periodic

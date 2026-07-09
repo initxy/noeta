@@ -322,6 +322,26 @@ _MIGRATION_8_BASELINE_INDEX = (
 )
 
 
+# Migration 9: targeted-lease-only guard (``reserved``) for fresh subtask
+# children.
+#
+# A freshly-created subtask child is enqueued so its delegation drain /
+# background executor can targeted-lease it, but a resident-worker pool's
+# untargeted FIFO poll must NOT steal it first: only
+# ``subtask_drain._descend_to_child`` seeds a child's goal into its opening
+# user message, so an untargeted worker would drive it with an empty message
+# history and the provider would reject the request. This adds a boolean
+# ``reserved`` column (``0``/``1``); the untargeted ``lease(task_id=None)``
+# selection filters ``reserved = 0`` and the FIRST successful lease clears the
+# flag (a one-shot claim), so a later suspend/resume re-enqueue is an ordinary
+# untargeted-leaseable task. ``NOT NULL DEFAULT 0`` backfills every existing
+# row to the historical "not reserved" behaviour.
+_MIGRATION_9_RESERVED_COLUMN = (
+    "ALTER TABLE dispatcher_tasks "
+    "ADD COLUMN reserved INTEGER NOT NULL DEFAULT 0"
+)
+
+
 MIGRATIONS: list[Migration] = [
     Migration(
         version=1,
@@ -382,6 +402,11 @@ MIGRATIONS: list[Migration] = [
             _MIGRATION_8_DROP_SNAPSHOT_INDEX,
             _MIGRATION_8_BASELINE_INDEX,
         ),
+    ),
+    Migration(
+        version=9,
+        description="targeted-lease-only guard (reserved) for subtask children",
+        statements=(_MIGRATION_9_RESERVED_COLUMN,),
     ),
 ]
 

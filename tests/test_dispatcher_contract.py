@@ -119,6 +119,39 @@ def test_enqueue_then_lease_returns_lease(make_dispatcher) -> None:
     assert lease.expires_at > 0.0
 
 
+def test_reserved_enqueue_is_skipped_by_untargeted_lease(make_dispatcher) -> None:
+    """A ``reserved`` task (a fresh subtask child) is targeted-lease-only: an
+    untargeted FIFO poll never returns it, but a targeted lease does. This is
+    what keeps a resident-worker pool from stealing an unseeded background
+    sub-agent child out from under its executor's targeted ``_descend_to_child``.
+    """
+    disp = make_dispatcher()
+    disp.enqueue("plain")
+    disp.enqueue("child", reserved=True)
+    # Untargeted poll walks past the reserved child to the plain task.
+    assert disp.lease(worker_id="w1").task_id == "plain"
+    # With only the reserved child left, an untargeted poll finds nothing.
+    assert disp.lease(worker_id="w1") is None
+    # But its owning driver can still targeted-lease it.
+    claimed = disp.lease(worker_id="owner", task_id="child")
+    assert claimed is not None and claimed.task_id == "child"
+
+
+def test_reserved_flag_is_cleared_by_first_lease(make_dispatcher) -> None:
+    """``reserved`` is a ONE-SHOT claim guard: once the owning driver has
+    targeted-leased the child, a later re-enqueue (a suspend/resume handed to
+    the worker pool) is an ordinary untargeted-leaseable task."""
+    disp = make_dispatcher()
+    disp.enqueue("child", reserved=True)
+    claimed = disp.lease(worker_id="owner", task_id="child")
+    assert claimed is not None
+    # Child suspended then re-enqueued (default, not reserved) — now the pool
+    # may untargeted-lease it.
+    disp.release(claimed.lease_id, next_state="suspended", wake_on=None)
+    disp.enqueue("child")
+    assert disp.lease(worker_id="w1").task_id == "child"
+
+
 def test_lease_returns_none_when_no_ready_tasks(make_dispatcher) -> None:
     disp = make_dispatcher()
     assert disp.lease(worker_id="w1") is None
