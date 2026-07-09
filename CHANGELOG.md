@@ -8,6 +8,20 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.1.17] - 2026-07-09
+
+### Fixed
+
+- **Foreground sub-agents no longer fail under multi-worker contention.** The
+  0.1.16 fix (`settle_subtasks_after_step`) drives foreground children through
+  the delegation drain after the parent step completes, but with multiple
+  workers a sibling worker can claim the child from the FIFO queue before the
+  drain's targeted lease succeeds. When that happens the child runs with empty
+  `runtime.messages` → provider 400. `run_leased_task` now defensively seeds
+  the child's goal as its opening user message (mirroring `_descend_to_child`),
+  so the child is well-formed regardless of which worker picks it up. Idempotent
+  with the drain path — the drain's own "empty messages" guard skips re-seeding.
+
 ## [0.1.16] - 2026-07-09
 
 ### Fixed
