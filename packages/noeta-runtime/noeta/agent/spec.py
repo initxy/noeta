@@ -93,6 +93,16 @@ class Capabilities:
     #: ``mcp=False`` gets no MCP tools at all. presets default: main /
     #: general-purpose open it, explore / plan keep it closed.
     mcp: bool = False
+    #: browser (sandbox-only): when the session has a provisioned sandbox
+    #: container AND this is ``True``, the noeta-owned browser tool pack
+    #: (``browser_navigate`` / ``click`` / ``type`` / ``extract`` /
+    #: ``screenshot``) is merged into the tool set — flag-gated like ``memory``
+    #: (never whitelist-filtered), backed per-session by the container's MCP
+    #: browser server. ``False`` (default) OR no sandbox ⇒ no browser tools, so
+    #: the tool set + stable prefix are byte-identical. presets default: main /
+    #: the ``web`` subagent open it; explore / plan / general-purpose keep it
+    #: closed (a heavy egress surface, opt-in per identity).
+    browser: bool = False
     spawnable: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:

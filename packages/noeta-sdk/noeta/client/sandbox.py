@@ -49,12 +49,14 @@ from noeta.client.sandbox_provider import (
     decode_exec_env_ref,
     encode_exec_env_ref,
 )
+from noeta.tools.browser import AioBrowserBackend
 from noeta.tools.fs.exec_env import AioSandboxExecEnv, ExecEnv
 
 
 __all__ = [
     "BackendFactory",
     "BoundPreamble",
+    "BrowserBackendFactory",
     "ExecPreamble",
     "SandboxExecEnvManager",
     "provider_for_config",
@@ -79,6 +81,31 @@ ExecPreamble = Callable[[str, Sequence[str]], str]
 #: as a per-call header factory (D8) so a short-lived credential is minted fresh
 #: each request; the addressing came off the handle.
 BackendFactory = Callable[[SandboxHandle, Optional[BoundPreamble]], ExecEnv]
+
+
+#: Builds a live browser backend from a session's sandbox handle. Injected by
+#: tests (a fake that opens no socket); production uses
+#: :func:`_default_browser_factory`. The container's MCP browser server is
+#: addressed off the handle's ``base_url`` (``base_url + "/mcp"``, built inside
+#: the adapter) and authed with the handle's live :class:`SandboxAuth` as a
+#: per-call header factory (D8) — the same secret-on-the-wire discipline the
+#: ExecEnv backend uses.
+BrowserBackendFactory = Callable[[SandboxHandle], AioBrowserBackend]
+
+
+def _default_browser_factory(handle: SandboxHandle) -> AioBrowserBackend:
+    """Build the real AIO browser adapter for a container handle.
+
+    Mirrors :func:`_default_backend_factory`: the handle's live
+    :class:`SandboxAuth` is wired in as the adapter's per-call header factory
+    (D8) so a short-lived credential is minted fresh each request and never held
+    on a durable object (D5). The adapter builds its own ``McpHttpClient`` to
+    ``base_url + "/mcp"`` internally — noeta owns the browser tool schemas, so
+    the AIO browser wire is isolated in the adapter and never reaches the model.
+    """
+    return AioBrowserBackend(
+        base_url=handle.base_url, auth_headers=handle.auth.connect_headers
+    )
 
 
 def _default_backend_factory(
@@ -174,6 +201,7 @@ class SandboxExecEnvManager:
         default_workdir: str = "/workspace",
         default_ref: Optional[str] = None,
         backend_factory: Optional[BackendFactory] = None,
+        browser_factory: Optional[BrowserBackendFactory] = None,
         exec_preamble: Optional[ExecPreamble] = None,
     ) -> None:
         self._provider = provider
@@ -190,11 +218,17 @@ class SandboxExecEnvManager:
         #: the driver allocated and there is no "default container".
         self.default_ref = default_ref
         self._factory: BackendFactory = backend_factory or _default_backend_factory
+        self._browser_factory: BrowserBackendFactory = (
+            browser_factory or _default_browser_factory
+        )
         self._lock = threading.Lock()
         self._handles_by_root: dict[str, SandboxHandle] = {}
         self._handles_by_ref: dict[str, SandboxHandle] = {}
         self._refs_by_root: dict[str, str] = {}
         self._backends_by_ref: dict[str, ExecEnv] = {}
+        #: Per-ref browser backends, built lazily on first ``resolve_browser`` and
+        #: cached like the ExecEnv backends (each is a stateless HTTP client).
+        self._browser_by_ref: dict[str, AioBrowserBackend] = {}
 
     # -- provisioning (D4) ------------------------------------------------- #
 
@@ -265,6 +299,35 @@ class SandboxExecEnvManager:
             self._backends_by_ref[exec_env_ref] = backend
         return backend, handle.workdir
 
+    def resolve_browser(self, exec_env_ref: str) -> AioBrowserBackend:
+        """The browser backend for a bound ``exec_env_ref`` (built + cached).
+
+        The browser twin of :meth:`resolve`: built on first request per ref and
+        cached. Reuses the same handle resolution — a ref this host allocated
+        reuses its cached handle; a ref seen only on the durable record is
+        reconnected via ``provider.attach``. The container's MCP browser server
+        is addressed off the handle's ``base_url``; auth comes from this host's
+        env (D5), never the ref. Called by ``_build_engine`` only when the
+        session has a sandbox AND the agent opens the ``browser`` capability, so
+        a non-browser session never pays the build.
+        """
+        with self._lock:
+            browser = self._browser_by_ref.get(exec_env_ref)
+            if browser is not None:
+                return browser
+        # Slow path: obtain the handle (cached from a local allocate / a prior
+        # ExecEnv resolve, or attach) and build the browser backend. Not holding
+        # the lock across attach; a concurrent race just builds twice and the
+        # last write wins (each adapter is a stateless HTTP client).
+        handle = self._handles_by_ref.get(exec_env_ref)
+        if handle is None:
+            handle = self._provider.attach(exec_env_ref)
+        browser = self._browser_factory(handle)
+        with self._lock:
+            self._handles_by_ref[exec_env_ref] = handle
+            self._browser_by_ref[exec_env_ref] = browser
+        return browser
+
     # -- lifecycle (D4) ---------------------------------------------------- #
 
     def release(self, session_root_id: str) -> None:
@@ -287,6 +350,7 @@ class SandboxExecEnvManager:
             if ref is not None and ref != self.default_ref:
                 self._handles_by_ref.pop(ref, None)
                 self._backends_by_ref.pop(ref, None)
+                self._browser_by_ref.pop(ref, None)
         self._provider.release(session_root_id)
 
     def teardown(self) -> None:
@@ -301,6 +365,7 @@ class SandboxExecEnvManager:
             self._handles_by_ref.clear()
             self._refs_by_root.clear()
             self._backends_by_ref.clear()
+            self._browser_by_ref.clear()
         for root in roots:
             try:
                 self._provider.release(root)

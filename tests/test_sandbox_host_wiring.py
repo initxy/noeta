@@ -272,6 +272,77 @@ def test_release_evicts_per_session_backend_cache() -> None:
     assert mgr.resolve(ref)[0] is not first
 
 
+# --------------------------------------------------------------------------- #
+# resolve_browser — per-session browser backend (browser subsystem, B5)
+# --------------------------------------------------------------------------- #
+
+
+class _RecordingBrowser:
+    """A stand-in browser backend that records the handle base_url it was built
+    from — no socket, so tests assert vend/cache/reconnect without a container."""
+
+    def __init__(self, base_url: str) -> None:
+        self.base_url = base_url
+
+
+def _browser_manager(provider: Any, built: list[Any], **kw: Any) -> SandboxExecEnvManager:
+    def browser_factory(handle: SandboxHandle) -> _RecordingBrowser:
+        obj = _RecordingBrowser(base_url=handle.base_url)
+        built.append(obj)
+        return obj
+
+    return SandboxExecEnvManager(
+        provider,
+        spec_template=SandboxSpec(image="img"),
+        backend_factory=_recording_factory(),
+        browser_factory=browser_factory,
+        **kw,
+    )
+
+
+def test_resolve_browser_builds_once_and_caches() -> None:
+    built: list[Any] = []
+    mgr = _browser_manager(FakeProvider(), built)
+    ref = mgr.allocate("task-root")
+    browser = mgr.resolve_browser(ref)
+    assert mgr.resolve_browser(ref) is browser  # cached — one browser per ref
+    assert len(built) == 1
+    assert browser.base_url == "http://sbx-1:8080"
+
+
+def test_resolve_browser_unknown_ref_reconnects_via_attach() -> None:
+    # A ref never allocated on this host (resume / reclaim) is reconnected via
+    # provider.attach — the browser backend addresses the RECORDED base_url, not
+    # this host's default (mirrors resolve's reconnect path).
+    built: list[Any] = []
+    mgr = _browser_manager(FakeProvider(), built)
+    ref = encode_exec_env_ref("http://sbx-remote:8080", "sid-remote")
+    browser = mgr.resolve_browser(ref)
+    assert browser.base_url == "http://sbx-remote:8080"
+
+
+def test_resolve_browser_reuses_the_handle_a_prior_exec_resolve_cached() -> None:
+    # resolve() caches the handle; a later resolve_browser reuses it (no second
+    # attach) — the ExecEnv and browser backends address the SAME container.
+    built: list[Any] = []
+    provider = FakeProvider()
+    mgr = _browser_manager(provider, built)
+    ref = mgr.allocate("task-root")
+    exec_backend, _ = mgr.resolve(ref)
+    browser = mgr.resolve_browser(ref)
+    assert browser.base_url == exec_backend.base_url == "http://sbx-1:8080"
+
+
+def test_release_evicts_per_session_browser_cache() -> None:
+    built: list[Any] = []
+    mgr = _browser_manager(FakeProvider(), built)
+    ref = mgr.allocate("task-root")
+    first = mgr.resolve_browser(ref)
+    mgr.release("task-root")
+    assert mgr.resolve_browser(ref) is not first  # rebuilt after eviction
+    assert len(built) == 2
+
+
 def test_release_keeps_shared_attach_backend_for_peers() -> None:
     # Attach deployment (P3): every session shares ONE container (ref =
     # base_url). Releasing one session must NOT evict the shared cached backend a
