@@ -278,8 +278,14 @@ with the seam already reserved. See the execution environment seam ADR
 **What it means:** When per-session sandbox is active
 (`NOETA_AGENT_SANDBOX=1`), the right dock gains three live-preview tabs —
 **Browser** (noVNC), **Terminal** (container PTY), **Code** (code-server) —
-all reverse-proxied through noeta's main port
-(`/sandbox-preview/<token>/...`). Four v1 boundaries:
+reverse-proxied through a **dedicated preview port**
+(`http://<host>:<preview-port>/sandbox-preview/<token>/...`). The panels'
+iframes need `allow-same-origin`, so container-served content must live on
+an origin holding no noeta state — the preview port serves the gateway and
+nothing else (no control API, no cookies), and the main port serves only the
+discovery endpoint. The port defaults to ephemeral and is discovered via
+`GET /tasks/{id}/preview`; pin it with `NOETA_AGENT_SANDBOX_PREVIEW_PORT`
+for firewalled setups. Four v1 boundaries:
 
 - **No sandbox ⇒ no panels.** Without a live container,
   `GET /tasks/{id}/preview` returns 404 and the tabs are hidden; non-sandbox
@@ -304,11 +310,14 @@ all reverse-proxied through noeta's main port
 
 **When you hit it:** Opening a preview panel from a non-sandbox session
 (404s); needing authenticated access over a network; simultaneous human +
-agent browser control causing confusion.
+agent browser control causing confusion; reaching noeta through a tunnel /
+reverse proxy that forwards only the main port (the panels need the preview
+port reachable on the same hostname).
 
 **Workaround:** Run noeta on `localhost` for preview (the demo boundary);
 close the agent's browser turn before manually driving noVNC; use the file
-panel + `browser_screenshot` artifact for a durable PNG record.
+panel + `browser_screenshot` artifact for a durable PNG record; behind a
+tunnel, pin `NOETA_AGENT_SANDBOX_PREVIEW_PORT` and forward that port too.
 
 **Why it is this way:** The preview is a host-only transport (no new
 model-facing tools or schema), so stable-prefix is preserved. The token +

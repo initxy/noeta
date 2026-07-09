@@ -21,6 +21,14 @@ The gateway provides:
 * **WS 反代** — ``/sandbox-preview/<token>/<sub>`` with
   ``Upgrade: websocket`` → RFC 6455 frame pump to ``ws://base/<sub>``
   (auth in upstream handshake only).
+* **dedicated origin** — :func:`make_preview_server` serves the gateway on
+  its OWN port, never noeta's main port. The panels need
+  ``allow-same-origin`` (noVNC localStorage, code-server service worker),
+  which makes iframe content same-origin with whatever host serves it —
+  container-controlled JS must therefore land on an origin that holds no
+  noeta state (no cookies, no control API), or a compromised container
+  could drive the agent's own control plane. The preview port is that
+  blank origin; discovery (``preview_info``) advertises it to the frontend.
 
 **v1 DEMO BOUNDARY**: localhost binding, unguessable token only, no
 browser-leg auth, credentials never injected to browser (D6 / ADR
@@ -35,6 +43,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Optional
 
 from noeta.agent.host.preview_ws import (
@@ -46,6 +55,7 @@ from noeta.agent.host.preview_ws import (
 __all__ = [
     "SandboxPreviewGateway",
     "SandboxPreviewMount",
+    "make_preview_server",
 ]
 
 _PREFIX = "/sandbox-preview/"
@@ -98,16 +108,18 @@ class SandboxPreviewGateway:
     * ``unmount_root(root_task_id)`` — called on container release / task
       terminal. Returns count removed.
 
-    Routing (called by backend ``app.py``):
+    Routing (called by the dedicated preview server, ``make_preview_server``):
     * ``is_preview_path(path)`` — quick prefix check.
     * ``route_http(method, path, query, *, content_type, body, headers)``
       — HTTP透传 (noVNC / code-server static assets). Returns
-      ``(status, content_type, body_bytes, cors)`` or ``None`` if not a
+      ``(status, content_type, body_bytes)`` or ``None`` if not a
       preview path.
     * ``try_handle_ws(handler, path)`` — if the request is a WS upgrade to
-      a valid preview token, performs the accept handshake and starts the
-      bidirectional pump. Returns ``True`` if handled (the connection is
-      now a raw WS pipe — caller must NOT send any further HTTP responses).
+      a valid preview token, connects the container leg, then performs the
+      accept handshake and starts the bidirectional pump. Returns ``True``
+      if handled — including an unreachable-upstream 502 sent BEFORE any
+      101 (the connection is otherwise a raw WS pipe; the caller must NOT
+      send further HTTP responses).
     """
 
     def __init__(self, *, mount_limit: int = _DEFAULT_MOUNT_LIMIT) -> None:
@@ -115,6 +127,14 @@ class SandboxPreviewGateway:
         self._lock = threading.Lock()
         self._mounts: dict[str, _MountEntry] = {}  # token -> entry
         self._tokens_by_root: dict[str, str] = {}  # root_task_id -> token
+        # The dedicated preview server's bound port, advertised to the
+        # frontend via ``preview_info`` (set by the product after
+        # :func:`make_preview_server` binds). ``None`` until then.
+        self._advertised_port: Optional[int] = None
+
+    def set_advertised_port(self, port: int) -> None:
+        """Record the dedicated preview server's bound port for discovery."""
+        self._advertised_port = port
 
     # -- registry ------------------------------------------------------------
 
@@ -209,12 +229,13 @@ class SandboxPreviewGateway:
         content_type: Optional[str] = None,
         body: Optional[bytes] = None,
         headers: Optional[dict[str, str]] = None,
-    ) -> Optional[tuple[int, str, bytes, bool]]:
+    ) -> Optional[tuple[int, str, bytes]]:
         """透传 an HTTP request to the sandbox container.
 
-        Returns ``(status, content_type, body, cors)`` or ``None`` if not
-        a preview path / unknown token. ``cors=True`` adds
-        ``Access-Control-Allow-Origin: *`` (sandboxed iframes need it).
+        Returns ``(status, content_type, body)`` or ``None`` if not a
+        preview path. No CORS headers are involved: the preview is served
+        on its own origin (see module docstring), so every fetch a panel
+        page makes is same-origin from the browser's point of view.
         """
         parsed = self.parse_preview_path(path)
         if parsed is None:
@@ -223,7 +244,7 @@ class SandboxPreviewGateway:
 
         entry = self._lookup(token)
         if entry is None:
-            return (404, "text/plain; charset=utf-8", b"unknown preview token", False)
+            return (404, "text/plain; charset=utf-8", b"unknown preview token")
 
         # Build upstream URL.
         upstream_url = entry.base_url
@@ -262,10 +283,8 @@ class SandboxPreviewGateway:
                 502,
                 "application/json; charset=utf-8",
                 b'{"error":"sandbox unreachable"}',
-                True,
             )
-        # Sandboxed iframes need CORS for fetch/XHR to same-origin proxy.
-        return (status, ctype, resp_body, True)
+        return (status, ctype, resp_body)
 
     # -- WS 反代 -------------------------------------------------------------
 
@@ -296,36 +315,51 @@ class SandboxPreviewGateway:
         if entry is None:
             return False
 
-        # Check if this is actually a WS upgrade request.
-        upgrade = handler.headers.get("Upgrade", "")
-        if "websocket" not in upgrade.lower():
+        # Check if this is actually a WS upgrade request. Validate the FULL
+        # upgrade header set here (mirroring accept_handshake's checks) so a
+        # malformed request neither dials the container nor gets a 101.
+        headers = handler.headers
+        if "websocket" not in headers.get("Upgrade", "").lower():
+            return False
+        if "upgrade" not in headers.get("Connection", "").lower():
+            return False
+        if not headers.get("Sec-WebSocket-Key", ""):
             return False
 
-        # Perform the server-side accept handshake.
-        requested_proto = handler.headers.get("Sec-WebSocket-Protocol", "")
+        requested_proto = headers.get("Sec-WebSocket-Protocol", "")
         subprotocols = [p.strip() for p in requested_proto.split(",") if p.strip()] if requested_proto else None
+        # accept_handshake picks the first requested protocol we offer — we
+        # offer them all, so precompute the same choice for the upstream dial.
+        negotiated = subprotocols[0] if subprotocols else None
 
-        negotiated = accept_handshake(handler, subprotocols=subprotocols)
-        if negotiated is None:
-            return False  # handshake failed
-
-        # Mark response as started so the error handler doesn't double-write.
-        handler._response_started = True
-
-        # Connect to upstream container WS.
+        # Connect to the upstream container WS BEFORE sending 101: an
+        # unreachable container must surface as a real HTTP error the client
+        # can handle, not a 101 followed by an abrupt close (noVNC/xterm.js
+        # get no close frame from that and can't tell what happened).
         upstream_sock = connect_upstream(
             entry.base_url,
             sub,
             auth_headers=entry.auth_headers,
-            subprotocol=negotiated if negotiated else None,
+            subprotocol=negotiated,
         )
         if upstream_sock is None:
-            # Upstream refused — close the browser leg.
+            self._send_plain_error(handler, 502, b"sandbox upstream unreachable")
+            return True
+
+        # Perform the server-side accept handshake (sends the 101).
+        accepted = accept_handshake(handler, subprotocols=subprotocols)
+        if accepted is None:
+            # Headers validated above, so only a browser-leg send failure
+            # lands here — nothing more to say to the browser; drop upstream.
             try:
-                handler.connection.close()
+                upstream_sock.close()
             except OSError:
                 pass
+            handler._response_started = True
             return True
+
+        # Mark response as started so the error handler doesn't double-write.
+        handler._response_started = True
 
         # Get the raw browser socket and ensure it's in blocking mode.
         browser_sock = handler.connection
@@ -342,22 +376,40 @@ class SandboxPreviewGateway:
         pump_bidirectional(browser_sock, upstream_sock)
         return True
 
+    @staticmethod
+    def _send_plain_error(handler: Any, status: int, body: bytes) -> None:
+        """Write a plain-text HTTP error on a not-yet-upgraded connection."""
+        try:
+            handler.send_response(status)
+            handler.send_header("Content-Type", "text/plain; charset=utf-8")
+            handler.send_header("Content-Length", str(len(body)))
+            handler.send_header("Connection", "close")
+            handler.end_headers()
+            handler.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        handler._response_started = True
+
     # -- discovery (GET /tasks/{id}/preview) ---------------------------------
 
     def preview_info(self, root_task_id: str) -> Optional[dict[str, Any]]:
         """Return the preview discovery payload for a root task.
 
-        Shape: ``{"token": str, "panels": {"browser": str, "terminal": str, "code": str}}``
-        or ``None`` if no sandbox is mounted for this root.
+        Shape: ``{"token": str, "port": int|None, "panels": {"browser": str,
+        "terminal": str, "code": str}}`` or ``None`` if no sandbox is
+        mounted for this root.
 
-        The panel values are ``<sub>`` paths the frontend appends to
-        ``/sandbox-preview/<token>/`` to open each surface.
+        ``port`` is the dedicated preview server's bound port (see module
+        docstring — the panels live on their own origin); the frontend
+        builds ``http://<same-hostname>:<port>/sandbox-preview/<token>/``
+        and appends the panel ``<sub>`` paths to open each surface.
         """
         token = self.token_for_root(root_task_id)
         if token is None:
             return None
         return {
             "token": token,
+            "port": self._advertised_port,
             "panels": {
                 # noVNC's standard UI connects to ws://<host>/websockify by
                 # default — an absolute path that would escape the token
@@ -376,3 +428,124 @@ class SandboxPreviewGateway:
                 "code": "code-server/",
             },
         }
+
+
+# ---------------------------------------------------------------------------
+# Dedicated preview server (origin isolation)
+# ---------------------------------------------------------------------------
+
+class _SandboxPreviewHandler(BaseHTTPRequestHandler):
+    """Slim handler for the dedicated preview port: gateway traffic ONLY.
+
+    Serves nothing but ``/sandbox-preview/<token>/...`` (HTTP 透传 + WS 反代).
+    There is deliberately no router, no SPA, no control API on this origin —
+    that blankness IS the security property (see the gateway module
+    docstring): the panels' iframes run ``allow-same-origin`` against this
+    origin, so container-controlled JS gains nothing beyond its own preview.
+    """
+
+    protocol_version = "HTTP/1.1"
+    _response_started = False
+
+    @property
+    def gateway(self) -> "SandboxPreviewGateway":
+        return self.server.gateway  # type: ignore[attr-defined]
+
+    def _send_plain(self, status: int, body: bytes) -> None:
+        self.send_response(status)
+        self._response_started = True
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    def _dispatch(self, method: str) -> None:
+        gw = self.gateway
+        split = urllib.parse.urlsplit(self.path)
+        if not gw.is_preview_path(split.path):
+            self._send_plain(404, b"not found")
+            return
+
+        # WS upgrade → hijack the connection into the pump. Pass the RAW
+        # request target (query intact): the terminal PTY WS carries
+        # ``?session_id=...``, which must reach the container.
+        if "websocket" in self.headers.get("Upgrade", "").lower():
+            if gw.try_handle_ws(self, self.path):
+                return
+            self._send_plain(400, b"bad websocket request")
+            return
+
+        body: Optional[bytes] = None
+        if method in ("POST", "PUT", "PATCH", "DELETE"):
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            body = self.rfile.read(length) if length > 0 else b""
+        result = gw.route_http(
+            method,
+            split.path,
+            split.query,
+            content_type=self.headers.get("Content-Type"),
+            body=body,
+            headers={k: v for k, v in self.headers.items()},
+        )
+        if result is None:
+            self._send_plain(404, b"not found")
+            return
+        status, content_type, resp_body = result
+        self.send_response(status)
+        self._response_started = True
+        if content_type:
+            self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(resp_body)))
+        self.end_headers()
+        if resp_body:
+            try:
+                self.wfile.write(resp_body)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+
+    def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler convention
+        self._dispatch("GET")
+
+    def do_POST(self) -> None:  # noqa: N802
+        self._dispatch("POST")
+
+    def do_PUT(self) -> None:  # noqa: N802
+        self._dispatch("PUT")
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        self._dispatch("DELETE")
+
+    def do_PATCH(self) -> None:  # noqa: N802
+        self._dispatch("PATCH")
+
+    def log_message(self, fmt: str, *args: Any) -> None:  # noqa: A002
+        """Silence per-request stderr logging (matches the backend server)."""
+
+
+class _SandboxPreviewServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, addr: tuple[str, int], gateway: SandboxPreviewGateway) -> None:
+        super().__init__(addr, _SandboxPreviewHandler)
+        self.gateway = gateway
+
+
+def make_preview_server(
+    gateway: SandboxPreviewGateway,
+    *,
+    host: str = "127.0.0.1",
+    port: int = 0,
+) -> ThreadingHTTPServer:
+    """Bind the dedicated preview server and advertise its port for discovery.
+
+    ``port=0`` (default) picks an ephemeral port — the frontend never
+    hardcodes it, it reads ``preview_info``'s ``port``. The caller owns the
+    server: start ``serve_forever`` on a daemon thread and ``shutdown()`` /
+    ``server_close()`` it alongside the main backend server.
+    """
+    server = _SandboxPreviewServer((host, port), gateway)
+    gateway.set_advertised_port(server.server_address[1])
+    return server

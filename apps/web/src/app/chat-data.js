@@ -814,7 +814,14 @@ function useChatData() {
   }, [applyCapabilities, loadTaskList]);
 
   // Sandbox live-preview discovery: fetch GET /tasks/{id}/preview for the
-  // active session when sandbox is enabled. Returns {token, panels} or 404.
+  // active session when sandbox is enabled. Returns {token, port, panels} or
+  // 404. `previewFetchSeq` re-runs the fetch on demand (refreshPreviewInfo):
+  // a container re-allocate mints a NEW token, so a panel opened later must
+  // not keep serving the stale one it fetched at session load.
+  const [previewFetchSeq, setPreviewFetchSeq] = useState(0);
+  const refreshPreviewInfo = useCallback(() => {
+    setPreviewFetchSeq((seq) => seq + 1);
+  }, []);
   useEffect(() => {
     if (!sandboxEnabled || !activeTaskId) {
       setPreviewInfo(null);
@@ -832,7 +839,7 @@ function useChatData() {
     return () => {
       cancelled = true;
     };
-  }, [sandboxEnabled, activeTaskId]);
+  }, [sandboxEnabled, activeTaskId, previewFetchSeq]);
 
   const selectTask = useCallback(
     (taskId) => {
@@ -1551,6 +1558,7 @@ function useChatData() {
     options,
     pendingGoalText,
     previewInfo,
+    refreshPreviewInfo,
     popupStack,
     popupEvents,
     popupVm,

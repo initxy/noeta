@@ -130,10 +130,20 @@ function ChatApp() {
   const lastOpenAppSeqRef = useRef(-1);
   const lastAppReloadSeqRef = useRef(-1);
 
-  const selectPanelType = useCallback((next) => {
-    setPanelType(next);
-    mergePanelPref({ panelType: next });
-  }, []);
+  const selectPanelType = useCallback(
+    (next) => {
+      setPanelType(next);
+      mergePanelPref({ panelType: next });
+      // Opening a sandbox preview tab re-validates the discovery payload: a
+      // container re-allocate mints a new token, and an iframe built from
+      // the stale one 404s with no recovery path (mirrors the file tree's
+      // open / switch re-fetch).
+      if (next === "browser" || next === "terminal" || next === "code") {
+        chat.refreshPreviewInfo();
+      }
+    },
+    [chat.refreshPreviewInfo],
+  );
 
   // The left session sidebar's collapsed state, persisted in the panel prefs.
   // When collapsed the first column shrinks to a 44px rail with just an expand
@@ -156,6 +166,16 @@ function ChatApp() {
       // Re-fetch the tree on each open so a panel opened mid-session shows the
       // current files (D6: open / switch re-fetches).
       if (next) setPanelRefreshKey((k) => k + 1);
+      // Same for a preview tab: re-validate the token on open (a container
+      // re-allocate invalidates the one fetched at session load).
+      if (
+        next &&
+        (panelType === "browser" ||
+          panelType === "terminal" ||
+          panelType === "code")
+      ) {
+        chat.refreshPreviewInfo();
+      }
       return next;
     });
   };

@@ -11,9 +11,11 @@ frames to a sandbox container and back:
   ``Sec-WebSocket-Accept``, send 101, echo negotiated subprotocol) and
   ``connect_upstream`` (proxy → container: generate random key, open TCP,
   send client handshake, verify 101).
-* **Pump** — ``pump_bidirectional`` runs two ``select``-driven forward
-  loops in daemon threads; each direction reads frames from socket A and
-  writes them (re-masked for the direction) to socket B.
+* **Pump** — ``pump_bidirectional`` runs two blocking-read forward loops
+  in daemon threads; each direction reads frames from socket A and
+  writes them (re-masked for the direction) to socket B. Both sockets get
+  TCP keepalive and a bounded send timeout so a frozen peer cannot wedge
+  a pump thread (and its two file descriptors) forever.
 
 The proxy is **transparent by design**: it offers no ``permessage-deflate``
 (no compression negotiation), performs no UTF-8 validation on text frames,
@@ -29,9 +31,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
-import select
 import socket
 import struct
+import sys
 import threading
 from typing import Optional, Tuple
 
@@ -54,6 +56,23 @@ _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 # The "magic" line prefix for server handshake verification.
 _WS_ACCEPT_PREFIX = b"HTTP/1.1 101"
 
+# Upper bound on a single frame's declared payload length. The proxy buffers
+# one whole frame at a time, so an endpoint declaring a huge length would
+# otherwise grow the buffer until host memory is exhausted. 64 MiB is far
+# above anything the real panels emit (a full-frame raw VNC update at
+# 1920x1080x4 is ~8 MiB); a larger declaration is treated as a protocol
+# error and closes the pipe.
+_MAX_FRAME_BYTES = 64 * 1024 * 1024
+
+# Pump socket tuning: a send that stalls this long (peer stopped reading —
+# e.g. a frozen browser tab) fails the write and tears the pump down instead
+# of blocking its thread forever. Keepalive reaps peers that vanished without
+# a FIN (sleep/suspend, yanked network).
+_SEND_TIMEOUT_S = 30
+_KEEPALIVE_IDLE_S = 60
+_KEEPALIVE_INTERVAL_S = 10
+_KEEPALIVE_COUNT = 3
+
 
 # ---------------------------------------------------------------------------
 # Frame codec
@@ -70,6 +89,9 @@ def read_frame(sock: socket.socket) -> Optional[Tuple[int, int, bytes]]:
     Control frames (opcode ≥ 0x8) are required to have ``FIN=1`` and
     payload ≤ 125 bytes (RFC 6455 §5.5); the proxy doesn't enforce this
     — it just forwards what arrives, trusting the two real endpoints.
+    The one thing it DOES enforce is :data:`_MAX_FRAME_BYTES`: a frame
+    declaring a larger payload returns ``None`` (connection closed by the
+    caller) instead of buffering unbounded memory.
     """
     try:
         header = _recv_exact(sock, 2)
@@ -95,6 +117,11 @@ def read_frame(sock: socket.socket) -> Optional[Tuple[int, int, bytes]]:
         if ext is None:
             return None
         length = struct.unpack("!Q", ext)[0]
+
+    # Bound the buffer BEFORE allocating: a huge declared length (malicious
+    # or corrupt) must not grow host memory until it falls over.
+    if length > _MAX_FRAME_BYTES:
+        return None
 
     mask_key: Optional[bytes] = None
     if masked:
@@ -360,6 +387,40 @@ def _recv_http_response(sock: socket.socket) -> Optional[str]:
 # Bidirectional pump
 # ---------------------------------------------------------------------------
 
+def _tune_pump_socket(sock: socket.socket) -> None:
+    """Best-effort keepalive + bounded send on a pump socket.
+
+    ``SO_SNDTIMEO`` (rather than ``settimeout``) bounds only the SEND side:
+    the read side must stay fully blocking — an idle-but-healthy panel (a
+    VNC session nobody is touching) legitimately goes minutes between
+    frames. Every option is individually best-effort: test doubles are
+    ``AF_UNIX`` socketpairs where the TCP-level options don't apply.
+    """
+    for level, opt, value in (
+        (socket.SOL_SOCKET, getattr(socket, "SO_KEEPALIVE", None), 1),
+        (socket.IPPROTO_TCP, getattr(socket, "TCP_KEEPIDLE", None), _KEEPALIVE_IDLE_S),
+        (socket.IPPROTO_TCP, getattr(socket, "TCP_KEEPINTVL", None), _KEEPALIVE_INTERVAL_S),
+        (socket.IPPROTO_TCP, getattr(socket, "TCP_KEEPCNT", None), _KEEPALIVE_COUNT),
+    ):
+        if opt is None:
+            continue
+        try:
+            sock.setsockopt(level, opt, value)
+        except OSError:
+            pass
+    # POSIX ``struct timeval``; Windows wants a DWORD of milliseconds instead,
+    # so skip there (the proxy ships on Linux — D2's stdlib-only posture).
+    if sys.platform != "win32" and hasattr(socket, "SO_SNDTIMEO"):
+        try:
+            sock.setsockopt(
+                socket.SOL_SOCKET,
+                socket.SO_SNDTIMEO,
+                struct.pack("@ll", _SEND_TIMEOUT_S, 0),
+            )
+        except OSError:
+            pass
+
+
 def pump_bidirectional(
     browser_sock: socket.socket,
     upstream_sock: socket.socket,
@@ -386,6 +447,8 @@ def pump_bidirectional(
     invoke it in its own thread or after a ``ThreadingHTTPServer``
     handler has hijacked the connection).
     """
+    _tune_pump_socket(browser_sock)
+    _tune_pump_socket(upstream_sock)
     stop_event = threading.Event()
 
     def forward(src: socket.socket, dst: socket.socket, mask_out: bool) -> None:
