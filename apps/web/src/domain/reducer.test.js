@@ -289,3 +289,74 @@ test("reduceEvents: re-base markers restore the todo checklist at the boundary",
   ]);
   assert.equal(vm2.todos.length, 0);
 });
+
+test("reduceEvents: image/* artifacts fold into vm.images keyed by call id", () => {
+  // A browser_screenshot that records an image/png artifact should surface
+  // inline under its tool call — the image analogue of the text/x-diff path.
+  // Non-image artifacts (e.g. a diff) must NOT leak into vm.images.
+  const vm = reduceEvents([
+    { task_id: "t1", seq: 0, type: "TaskCreated", payload: {} },
+    {
+      task_id: "t1",
+      seq: 1,
+      type: "ToolCallStarted",
+      payload: { call_id: "c1", tool_name: "browser_screenshot", arguments: {} },
+    },
+    {
+      task_id: "t1",
+      seq: 2,
+      type: "ToolResultRecorded",
+      payload: {
+        call_id: "c1",
+        success: true,
+        summary: "screenshot captured",
+        artifacts: [
+          { hash: "img-hash", media_type: "image/png", size: 28730 },
+          { hash: "diff-hash", media_type: "text/x-diff", size: 40 },
+        ],
+      },
+    },
+  ]);
+  assert.equal(vm.images.length, 1);
+  assert.equal(vm.images[0].hash, "img-hash");
+  assert.equal(vm.images[0].callId, "c1");
+  assert.equal(vm.images[0].toolName, "browser_screenshot");
+  assert.equal(vm.images[0].mediaType, "image/png");
+  // The diff artifact lands in vm.diffs, not vm.images.
+  assert.equal(vm.diffs.length, 1);
+  assert.equal(vm.diffs[0].hash, "diff-hash");
+});
+
+test("reduceEvents: re-base markers prune images from the dead tail", () => {
+  // An image captured in an abandoned attempt must not linger once the dead
+  // tail is folded out — mirroring how diffs/todos are pruned at the boundary.
+  const vm = reduceEvents([
+    { task_id: "t1", seq: 0, type: "TaskCreated", payload: {} },
+    { task_id: "t1", seq: 1, type: "ContextPlanComposed", payload: {} },
+    {
+      task_id: "t1",
+      seq: 2,
+      type: "ToolCallStarted",
+      payload: { call_id: "ghost", tool_name: "browser_screenshot", arguments: {} },
+    },
+    {
+      task_id: "t1",
+      seq: 3,
+      type: "ToolResultRecorded",
+      payload: {
+        call_id: "ghost",
+        success: true,
+        summary: "screenshot captured",
+        artifacts: [{ hash: "ghost-img", media_type: "image/png" }],
+      },
+    },
+    {
+      task_id: "t1",
+      seq: 4,
+      type: "StepAttemptAbandoned",
+      payload: { abandoned_from_seq: 2, reason: "crash_recovery" },
+    },
+  ]);
+  assert.equal(vm.images.length, 0);
+  assert.equal(vm.toolCalls["ghost"], undefined);
+});
