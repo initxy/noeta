@@ -8,7 +8,23 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
-## [0.1.15] - 2026-07-08
+## [0.1.16] - 2026-07-09
+
+### Fixed
+
+- **Sub-agents no longer fail to start under the resident worker pool.** With
+  `background_drive` on (the served product's default), a spawned sub-agent
+  could error at its first turn with a provider "no user message" rejection: a
+  freshly created child task carries its goal in its genesis event, but only the
+  delegation drain turns that goal into the child's opening message — and the
+  resident worker could pick the child off the ready queue and drive it before
+  the drain seeded it. Foreground sub-agents (the parent waits on the result)
+  hit this every time; background sub-agents (fire-and-forget) hit it
+  intermittently as a race against their executor. The resident worker now
+  settles a delegation subtree through the same seeding drain the in-request
+  path uses, and a background child is reserved for its executor so no worker
+  can claim it first. Adds a dispatcher schema column (`reserved`); existing
+  SQLite / Postgres databases migrate in place on open.
 
 ### Fixed
 
@@ -357,7 +373,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.15...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.16...HEAD
+[0.1.16]: https://github.com/initxy/noeta/compare/v0.1.15...v0.1.16
 [0.1.15]: https://github.com/initxy/noeta/compare/v0.1.14...v0.1.15
 [0.1.14]: https://github.com/initxy/noeta/compare/v0.1.13...v0.1.14
 [0.1.13]: https://github.com/initxy/noeta/compare/v0.1.12...v0.1.13
