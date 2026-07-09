@@ -265,17 +265,21 @@ class PostgresDispatcher:
     # Dispatcher Protocol
     # ------------------------------------------------------------------
 
-    def enqueue(self, task_id: str) -> None:
+    def enqueue(self, task_id: str, *, reserved: bool = False) -> None:
         """Mark ``task_id`` as ready-to-lease.
 
         Three paths matching the Protocol's idempotency promise:
 
         * No row → INSERT with a fresh ``ready_order``.
         * Existing row already in ``ready`` → no-op (preserve original
-          ``ready_order`` so FIFO is not reshuffled).
+          ``ready_order`` — and its existing ``reserved`` flag — so FIFO
+          is not reshuffled).
         * Existing row in any non-ready status → transition to ready,
           clearing all non-ready columns and assigning a fresh
           ``ready_order``.
+
+        ``reserved`` (see :meth:`Dispatcher.enqueue`) marks the task
+        targeted-lease-only until its first lease claims it.
         """
         with self._lock:
             self._begin_locked()
@@ -287,9 +291,10 @@ class PostgresDispatcher:
                         "INSERT INTO dispatcher_tasks ("
                         " task_id, status, lease_id, lease_expires_at,"
                         " heartbeat_count, fail_attempts,"
-                        " wake_on_canonical, suspend_reason, ready_order"
-                        ") VALUES (%s, 'ready', NULL, NULL, 0, 0, NULL, NULL, %s)",
-                        (task_id, order),
+                        " wake_on_canonical, suspend_reason, ready_order,"
+                        " reserved"
+                        ") VALUES (%s, 'ready', NULL, NULL, 0, 0, NULL, NULL, %s, %s)",
+                        (task_id, order, reserved),
                     )
                 elif row["status"] == "ready":
                     # No-op; FIFO must not be reshuffled.
@@ -315,9 +320,10 @@ class PostgresDispatcher:
                         " suspend_reason = NULL,"
                         " matched_wake_event_canonical = NULL,"
                         " fire_at = NULL,"
-                        " ready_order = %s "
+                        " ready_order = %s,"
+                        " reserved = %s "
                         "WHERE task_id = %s",
-                        (order, task_id),
+                        (order, reserved, task_id),
                     )
                 self._conn.execute("COMMIT")
             except Exception:
@@ -350,10 +356,13 @@ class PostgresDispatcher:
             self._begin_locked()
             try:
                 if task_id is None:
+                    # ``reserved`` tasks are targeted-lease-only (a fresh
+                    # subtask child its drain/executor must claim first) —
+                    # skip them in the untargeted FIFO selection.
                     row = self._conn.execute(
                         "SELECT task_id, matched_wake_event_canonical "
                         "FROM dispatcher_tasks "
-                        "WHERE status = 'ready' "
+                        "WHERE status = 'ready' AND reserved = false "
                         "ORDER BY ready_order LIMIT 1"
                     ).fetchone()
                 else:
@@ -381,7 +390,11 @@ class PostgresDispatcher:
                         " heartbeat_count = 0,"
                         " suspend_reason = NULL,"
                         " worker_id = %s,"
-                        " ready_order = NULL "
+                        " ready_order = NULL,"
+                        # One-shot claim: only a targeted lease can reach a
+                        # reserved row, so this lease claims the child for its
+                        # owning driver — clear the guard.
+                        " reserved = false "
                         "WHERE task_id = %s "
                         "RETURNING lease_expires_at",
                         (lease_id, expiry_param, worker_id, leased_task_id),
@@ -402,7 +415,9 @@ class PostgresDispatcher:
                         " heartbeat_count = 0,"
                         " suspend_reason = NULL,"
                         " worker_id = %s,"
-                        " ready_order = NULL "
+                        " ready_order = NULL,"
+                        # One-shot claim (see the db_clock branch above).
+                        " reserved = false "
                         "WHERE task_id = %s",
                         (lease_id, expiry_param, worker_id, leased_task_id),
                     )

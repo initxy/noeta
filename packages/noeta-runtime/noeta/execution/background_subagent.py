@@ -134,8 +134,12 @@ class BackgroundSubagentRegistry:
     def _submit(self, parent_task_id: str, child_task_id: str) -> None:
         # The child was created with background=True, so the observer did NOT
         # enqueue it — the registry must, or the targeted child-lease in
-        # ``_descend_to_child`` would find nothing to lease.
-        self._dispatcher.enqueue(child_task_id)
+        # ``_descend_to_child`` would find nothing to lease. ``reserved=True``
+        # keeps it targeted-lease-only: the executor's ``_descend_to_child``
+        # (which seeds its goal) is the sole claimant, so a resident-worker
+        # pool's untargeted poll cannot steal the unseeded child out from under
+        # it and drive it with an empty message history.
+        self._dispatcher.enqueue(child_task_id, reserved=True)
         host = self._build_host(parent_task_id)
         future = _global_executor().submit(
             _drive_member_to_terminal, host, child_task_id
