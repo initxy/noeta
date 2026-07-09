@@ -35,6 +35,7 @@ supplied differs.
 from __future__ import annotations
 
 import dataclasses
+import logging
 import threading
 from collections.abc import Sequence
 from typing import Callable, Optional
@@ -51,6 +52,8 @@ from noeta.client.sandbox_provider import (
 )
 from noeta.tools.browser import AioBrowserBackend
 from noeta.tools.fs.exec_env import AioSandboxExecEnv, ExecEnv
+
+_log = logging.getLogger(__name__)
 
 
 __all__ = [
@@ -294,8 +297,14 @@ class SandboxExecEnvManager:
             try:
                 on_alloc(session_root_id, handle)
             except Exception:
-                # Listener failures must not break provisioning.
-                pass
+                # Listener failures must not break provisioning — but they
+                # must be visible: a silently-dead listener (e.g. the preview
+                # mount) is otherwise undiagnosable from the frontend's 404s.
+                _log.warning(
+                    "sandbox allocate listener failed for root %s",
+                    session_root_id,
+                    exc_info=True,
+                )
         return ref
 
     # -- backend resolution (build + reconnect) ---------------------------- #
@@ -378,7 +387,11 @@ class SandboxExecEnvManager:
             try:
                 on_rel(session_root_id)
             except Exception:
-                pass
+                _log.warning(
+                    "sandbox release listener failed for root %s",
+                    session_root_id,
+                    exc_info=True,
+                )
         with self._lock:
             ref = self._refs_by_root.pop(session_root_id, None)
             self._handles_by_root.pop(session_root_id, None)
@@ -413,4 +426,8 @@ class SandboxExecEnvManager:
                 self._provider.release(root)
             except Exception:
                 # Teardown must never raise from a shutdown path.
-                pass
+                _log.warning(
+                    "sandbox teardown release failed for root %s",
+                    root,
+                    exc_info=True,
+                )
