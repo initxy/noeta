@@ -1,5 +1,8 @@
-"""Sandbox browser activation — the product-layer opt-in that wires the ``web``
-subagent + main's ``browser`` capability on (spec D3 / B6).
+"""Sandbox browser activation — the product-layer opt-in that registers the
+``web`` subagent into main's delegation roster (spec D3 / B6).
+
+``web`` is the sole identity that opens ``browser``; ``main`` stays browser-free
+and delegates every page interaction to ``web``.
 
 The browser subsystem is inert by default: ``main_options()`` carries no ``web``
 agent and ``browser=False``, so every non-sandbox deployment's roster + stable
@@ -37,9 +40,11 @@ class TestSandboxBrowserOptions:
         assert "web" in opts.agents
         assert opts.agents["web"] is WEB_SUBAGENT
 
-    def test_main_browser_enabled(self) -> None:
+    def test_main_browser_stays_off(self) -> None:
+        # Direction A: main never opens ``browser`` — it has no browser tools
+        # and must delegate to ``web``. Only ``web`` opens the capability.
         opts = sandbox_browser_options()
-        assert opts.capabilities.browser is True
+        assert opts.capabilities.browser is False
 
     def test_compiles_web_into_registry(self) -> None:
         main, descendants = compile_options(sandbox_browser_options())
@@ -52,14 +57,15 @@ class TestSandboxBrowserOptions:
         main, _descendants = compile_options(sandbox_browser_options())
         assert "web" in main.capabilities.spawnable
 
-    def test_otherwise_unchanged_from_main(self) -> None:
-        """Activation flips only browser + adds web; the rest of main's
-        identity is preserved (no accidental drift of the conversational
-        agent's capabilities)."""
+    def test_main_identity_unchanged_from_main(self) -> None:
+        """Activation only adds ``web`` to the roster; main's full capability
+        identity is byte-identical to :func:`main_options` — including
+        ``browser`` (stays ``False``; direction A). No drift of the
+        conversational agent's capabilities."""
         base_main, _ = compile_options(main_options())
         sb_main, _ = compile_options(sandbox_browser_options())
         for field in ("todo_write", "ask_user_question", "delegation",
-                       "skill_invocation", "memory", "mcp"):
+                       "skill_invocation", "memory", "mcp", "browser"):
             assert getattr(sb_main.capabilities, field) == getattr(
                 base_main.capabilities, field
             ), f"capabilities.{field} drifted during browser activation"
@@ -98,7 +104,8 @@ class TestDefaultInvariant:
 
 class TestEngineRoomActivation:
     """The served product threads ``sandbox_browser`` through ``EngineRoom``
-    so the live registry gains ``web`` + main opens ``browser``."""
+    so the live registry gains ``web`` (main stays browser-free; only ``web``
+    opens ``browser``)."""
 
     @pytest.fixture
     def stub_provider(self) -> object:
@@ -129,7 +136,7 @@ class TestEngineRoomActivation:
         try:
             assert "web" in room.agent_names()
             main = room._client.registry.resolve(room._client.main_agent_name)
-            assert main.capabilities.browser is True
+            assert main.capabilities.browser is False
             assert "web" in main.capabilities.spawnable
             web = room._client.registry.resolve("web")
             assert web.capabilities.browser is True

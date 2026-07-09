@@ -191,9 +191,10 @@ OFFICIAL_SUBAGENTS: dict[str, AgentDefinition] = {
 #: ``spawn_subagent`` schema — churning ``main``'s stable prefix for EVERY
 #: deployment, including non-sandbox ones where the browser cannot even work.
 #: Browser only makes sense under a sandbox, so wiring ``web`` into the roster
-#: (and flipping ``main``'s ``browser`` capability on) is a **product-activation**
-#: concern, gated on ``NOETA_AGENT_SANDBOX`` (S10) — not baked into the SDK
-#: presets. This definition is exported ready for that gated registration.
+#: is a **product-activation** concern, gated on ``NOETA_AGENT_SANDBOX`` (S10) —
+#: not baked into the SDK presets. This definition is exported ready for that
+#: gated registration (see :func:`sandbox_browser_options`). ``web`` is the sole
+#: identity that opens ``browser``; ``main`` stays browser-free and delegates.
 WEB_SUBAGENT: AgentDefinition = AgentDefinition(
     description=(
         "Web-browsing specialist: drives the sandbox browser (navigate / "
@@ -235,15 +236,19 @@ def main_options() -> Options:
 
 
 def sandbox_browser_options() -> Options:
-    """Sandbox-activated variant of :func:`main_options`: ``web`` subagent
-    registered + main's ``browser`` capability on.
+    """Sandbox-activated variant of :func:`main_options`: the ``web`` subagent
+    is registered into main's delegation roster. Main itself stays browser-free.
 
     Product-activation helper (the sandbox-browser-subsystem spec, D3 / B6):
     when a deployment provisions a per-session AIO Sandbox (``NOETA_AGENT_SANDBOX``
     on), the browser tool pack can actually work, so the ``web`` browsing
-    specialist is wired into main's delegation roster and main opens
-    ``browser=True`` (it can drive the browser directly, though heavy browsing
-    is best delegated to ``web`` to isolate token churn).
+    specialist — the only identity that opens ``Capabilities.browser=True`` —
+    is wired into main's delegation roster. Main does NOT open ``browser``: it
+    has no ``browser_*`` tools and must delegate every page interaction to
+    ``web`` (which isolates browsing token churn in a child context and returns
+    a distilled result). Giving main the browser pack directly would let it
+    shortcut delegation — a one-line ``browser_navigate`` always beats a
+    ``spawn_subagent`` hop — so the browser capability lives on ``web`` alone.
 
     Off by default — non-sandbox deployments keep :func:`main_options` (no
     ``web`` agent, ``browser=False``) so the roster + stable prefix are
@@ -255,9 +260,10 @@ def sandbox_browser_options() -> Options:
     agents["web"] = WEB_SUBAGENT
     # ``compile_options`` unions ``spawnable`` with the child names and keeps
     # ``delegation`` as-is (already True on main), so ``web`` becomes
-    # delegatable without touching the rest of the identity.
-    capabilities = dataclasses.replace(base.capabilities, browser=True)
-    return dataclasses.replace(base, agents=agents, capabilities=capabilities)
+    # delegatable. Main's own identity is left untouched — ``browser`` stays
+    # ``False`` (it has no browser tools; every page interaction is delegated
+    # to ``web``), so activation adds ``web`` to the roster and nothing else.
+    return dataclasses.replace(base, agents=agents)
 
 
 def official_specs() -> dict[str, AgentSpec]:

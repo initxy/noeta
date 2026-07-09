@@ -98,7 +98,7 @@
 3. **capability 位**：`AgentSpec.Capabilities` 加 `browser: bool = False`（`agent/spec.py`）；`resolver.py` 转发 `browser_enabled`。
 4. **装配接线**：`build_session_inputs` 加 `browser_backend` 参数（`builder.py:862`），当 `browser_backend` 且 `capabilities.browser` → 并入 browser 工具（follow fs→script→MCP→control 的 append 顺序，browser 放在 fs 之后/MCP 之前，定死一个位置保序）。
 5. **SDK 解析**：`SandboxExecEnvManager` vend browser backend（D7）；`_build_engine` 从 session handle 造 backend 下传（`host.py`）。
-6. **层4 子 agent**：`presets/__init__.py` 加 `web` `AgentDefinition` + `presets/prompts/web` prompt；main/general-purpose 的 delegation allow-list 纳入 `web`；`main` 默认 `browser=True`。
+6. **层4 子 agent**：`presets/__init__.py` 加 `web` `AgentDefinition` + `presets/prompts/web` prompt；main 的 delegation roster 纳入 `web`；`web` 持 `browser=True`，`main` 保持 `browser=False`（main 无 browser 工具，所有页面交互委派给 `web`——方向 A，避免 main 直调 `browser_*` 绕过委派）。
 7. **权限**：browser 工具 `risk_level="high"`，接 approval predicate（D5）。
 8. **文档 + ADR + CONTEXT**：ADR 记录「browser 作为 noeta 自持原生工具、MCP client 仅内部传输」立场（补进 `execution-environment-seam.md` 或新 ADR）；CONTEXT 加术语（browser 工具 pack / browser 子 agent）；known-limitations 更新（v1 无视觉、坐标路径未做、浏览器 idle 随容器计费）。
 
@@ -111,7 +111,7 @@
 | B3 | `Capabilities.browser` 位 + `resolver` 转发 | runtime | 与 B1/B2 并行 |
 | B4 | `build_session_inputs(browser_backend=)` 条件并入工具集（保序） | runtime | 依赖 B2/B3 |
 | B5 | `SandboxExecEnvManager` vend browser backend + `_build_engine` 下传 | SDK | 依赖 B1/B4；镜像 exec_env 现链 |
-| B6 | 层4 `web` 子 agent（AgentDefinition + prompt + delegation allow-list + main 默认 browser=True） | runtime/presets | 依赖 B2/B3 |
+| B6 | 层4 `web` 子 agent（AgentDefinition + prompt + delegation allow-list + `web` 持 browser=True，main 保持 browser=False） | runtime/presets | 依赖 B2/B3 |
 | B7 | 权限（high risk + approval 接线） | SDK/runtime | 依赖 B2/B4 |
 | B8 | 真容器 e2e（gated `NOETA_TEST_AIO_SANDBOX_URL` / 本地 Docker）：起容器→`browser_navigate`/`extract`/`click`/`screenshot` 跑通；对 live `tools/list` 钉准确工具名/签名 | — | 依赖 B1–B7 |
 | B9 | 文档 + ADR + CONTEXT + known-limitations | — | 收尾 |
