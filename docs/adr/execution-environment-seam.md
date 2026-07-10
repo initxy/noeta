@@ -341,3 +341,66 @@ behaviour, not a stable-prefix byte), so it lands without a prefix change.
    `index: integer`.
 4. **Feed screenshots as vision in v1.** Deferred to increment 2 (above); the seam
    is left in place so it does not perturb the prefix later.
+
+## SDK-backed adapters + export surface (2026-07-10): official `agent-sandbox` wire behind the factory seams, concrete adapters stay off the public API
+
+The hand-written AIO HTTP adapters are no longer the wire the served product
+runs: `HostConfig.sandbox_backend_factory` / `sandbox_browser_factory` (typed
+`BackendFactory` / `BrowserBackendFactory`, threaded `Client → SdkHost →
+SandboxExecEnvManager`) let a product swap the per-session backends, and the
+official product injects `SdkSandboxExecEnv` / `SdkBrowserBackend`
+(`noeta.agent.host`, dep `agent-sandbox>=0.0.30,<0.1.0` pinned in the app
+layer) — thin adapters over the official Fern-generated client. The seam
+contract is unchanged: same `ExecEnv` / `BrowserBackend` surface, same recorded
+output shapes, tool schemas untouched (stable prefix holds). This also closes
+the file-read defect (the old wire's phantom `encoding=base64` on
+`/v1/file/read`); see
+`docs/implementation-specs/2026-07-10-sandbox-sdk-adapters.md`.
+
+### SDK-adapter export surface (decided)
+
+**Public on `noeta.sdk`: protocols and factory types only** — `ExecEnv`,
+`BrowserBackend`, `BackendFactory`, `BrowserBackendFactory`, `BoundPreamble`.
+The **concrete** AIO adapters (`AioSandboxExecEnv`, `AioBrowserBackend`, their
+error types, `DEFAULT_AIO_TIMEOUT_S`) are **not** re-exported: everything on
+`noeta.sdk` is a semver commitment to external users, and the concrete adapters
+are retirement-slated implementation (the cutover plan keeps them only as the
+inherited base / fallback of the SDK adapters). Publishing them would freeze
+them into the user-facing API and contradict their own retirement.
+
+The product's two adapter modules reach the concrete classes through
+**pinned import-linter exemptions** in the `app-uses-only-sdk` ratchet
+(`noeta.agent.host.sdk_sandbox_exec_env -> noeta.tools.fs.exec_env`,
+`noeta.agent.host.sdk_browser_backend -> noeta.tools.browser`) — the same
+deliberate-exemption mechanism as `noeta.storage` / `noeta.read_models`, scoped
+to exactly two modules so the ratchet keeps its burn-down meaning.
+
+The inheritance carries an implicit base-class contract — the parent's methods
+reach their transport only through `_shell` / `read_bytes` / `write_bytes`, and
+the subclass never runs the parent `__init__` — guarded by the subclass's
+`_call` tripwire (a bypass fails loudly with a diagnosis, not an
+`AttributeError`). A change to `AioSandboxExecEnv`'s internals must keep that
+contract or update the subclass in the same change; the noeta-agent ↔
+noeta-runtime version bound is the release lever if the contract ever has to
+move.
+
+**No config kill-switch (decided).** The SDK adapters are injected
+unconditionally when the sandbox is enabled. Rollback to the hand-written wire
+is a two-line code revert at the injection site (the factory seam is the
+switch); a config flag would be its own maintenance surface, and the old wire's
+file-read is defective — a "rollback" would restore a broken read path, so a
+runtime toggle buys nothing.
+
+### Alternatives considered (export surface)
+
+1. **Re-export the concrete adapters through `noeta.sdk`** (the first-landed
+   form). Rejected: turns retirement-slated internals into permanent public
+   API; external users would subclass a base whose implicit contract noeta
+   cannot guard outside its own repo.
+2. **Reimplement the full `ExecEnv` in the product (no inheritance).**
+   Rejected: duplicates every higher-level mapping (glob / stat /
+   tree_snapshot / run_argv / create_exclusive) whose byte-exact recorded
+   output is the D2 invariant — the duplication is where drift would breed.
+3. **Move the SDK adapters into noeta-sdk.** Rejected: drags `agent-sandbox`
+   (+ `volcengine-python-sdk`) into the library dependency set; D1 keeps the
+   dependency in the app layer.
