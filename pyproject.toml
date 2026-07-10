@@ -12,6 +12,7 @@ members = ["packages/noeta-runtime", "packages/noeta-sdk", "apps/noeta-agent"]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
+    "pytest-xdist>=3.8",
     "mypy>=1.10",
     "import-linter>=2.0",
     "respx>=0.23.1",
