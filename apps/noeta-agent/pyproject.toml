@@ -1,6 +1,6 @@
 [project]
 name = "noeta-agent"
-version = "0.2.0"
+version = "0.2.1"
 description = "Noeta coding agent: server-side AI coding agent with a web UI. Durable event-sourced execution, multi-worker scheduling, per-session sandbox containers, provider-neutral. Run with python -m noeta.agent."
 license = "Apache-2.0"
 authors = [{ name = "The Noeta Authors" }]
@@ -19,8 +19,8 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
 dependencies = [
-    "noeta-runtime>=0.2.0",
-    "noeta-sdk>=0.2.0",
+    "noeta-runtime>=0.2.1",
+    "noeta-sdk>=0.2.1",
 ]
 
 [project.urls]
