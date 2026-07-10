@@ -39,6 +39,13 @@ seconds.
   **real in-container browser** it drives through a `web` specialist (navigate /
   click / type / extract / screenshot), and the web UI streams live **Browser /
   Terminal / Code** panels from that container.
+- **Long-term memory that maintains itself.** The agent keeps a file-based
+  memory store it manages with its own tools (`memory_write` / `memory_read` /
+  `memory_search` / `memory_archive`) under an explicit what-to-save policy,
+  with deterministic auto-recall on every user message. A debounced background
+  consolidation pass curates the store while sessions rest — merging
+  duplicates, archiving superseded facts, backfilling missed ones — and can
+  only archive, never delete.
 - **Full audit & replay.** Every event, LLM turn, tool call, and token/cache stat
   is recorded, and compaction is a reversible overlay — you can inspect *why* a
   step happened, not just *what*.
@@ -153,6 +160,20 @@ foundation.
   container and keeps its working files.
 - **Credentials off the command line** — the container key is handed to `docker`
   by name, never as an argv value.
+
+### Self-maintaining long-term memory
+
+- **Model-managed, file-per-memory** — the agent saves, searches, and retires
+  memories through slug-confined tools, guided by a policy prompt (what earns
+  a memory, what never does, update-before-create). A resident index plus
+  two-tier recall (name tokens, then summary tokens) brings the right memories
+  back on each user message — deterministic, no vector service to run.
+- **Curated in the background** — when a session stops (debounced, default
+  24h), a hidden consolidation agent reads a digest of recent activity and
+  merges duplicates, archives superseded memories, and backfills clearly
+  missed facts. It acts through the same memory tools as the interactive
+  agent, and can archive but never delete — every change stays inspectable
+  and reversible by a human.
 
 ### Full observability
 
