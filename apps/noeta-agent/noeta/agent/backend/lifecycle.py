@@ -24,7 +24,16 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 from urllib.parse import unquote
 
-from noeta.sdk import HostConfig, OtlpTraceConfig
+from noeta.sdk import (
+    BackendFactory,
+    BoundPreamble,
+    BrowserBackend,
+    BrowserBackendFactory,
+    ExecEnv,
+    HostConfig,
+    OtlpTraceConfig,
+    SandboxHandle,
+)
 
 from noeta.agent.backend.app import Router, make_http_server
 from noeta.agent.backend.engine_room import EngineRoom
@@ -549,8 +558,12 @@ def serve_backend(
         # served product.
         sandbox_provider = None
         sandbox_spec = None
+        sandbox_backend_factory: Optional[BackendFactory] = None
+        sandbox_browser_factory: Optional[BrowserBackendFactory] = None
         if config.sandbox_enabled:
             from noeta.agent.host.docker_sandbox import LocalDockerSandboxProvider
+            from noeta.agent.host.sdk_browser_backend import SdkBrowserBackend
+            from noeta.agent.host.sdk_sandbox_exec_env import SdkSandboxExecEnv
             from noeta.sdk import SandboxSpec
 
             sandbox_provider = LocalDockerSandboxProvider(
@@ -563,6 +576,30 @@ def serve_backend(
                 image=config.sandbox_image,
                 resources={"memory": config.sandbox_memory, "cpus": config.sandbox_cpus},
             )
+
+            # Route the session's fs / shell / browser wire through the official
+            # ``agent-sandbox`` SDK (2026-07-10 sandbox-sdk-adapters). The adapters
+            # implement the same ``ExecEnv`` / ``BrowserBackend`` surface as the
+            # hand-written defaults, so the tool schemas — and the stable prefix —
+            # are unchanged; only the transport (and the correct file-read wire)
+            # differs.
+            def _sdk_backend_factory(
+                handle: SandboxHandle, preamble: Optional[BoundPreamble] = None
+            ) -> ExecEnv:
+                return SdkSandboxExecEnv(
+                    base_url=handle.base_url,
+                    auth_headers=handle.auth.connect_headers,
+                    preamble=preamble,
+                )
+
+            def _sdk_browser_factory(handle: SandboxHandle) -> BrowserBackend:
+                return SdkBrowserBackend(
+                    base_url=handle.base_url,
+                    auth_headers=handle.auth.connect_headers,
+                )
+
+            sandbox_backend_factory = _sdk_backend_factory
+            sandbox_browser_factory = _sdk_browser_factory
         host_config = HostConfig(
             app_gateway=app_gateway,
             mcp_server_resolver=mcp_registry.resolve_spec,
@@ -574,6 +611,8 @@ def serve_backend(
             workflow_allowed=config.workflow_enabled,
             sandbox_provider=sandbox_provider,
             sandbox_spec=sandbox_spec,
+            sandbox_backend_factory=sandbox_backend_factory,
+            sandbox_browser_factory=sandbox_browser_factory,
             # Per-task prompt-cache stickiness for the ModelHub responses gateway:
             # a stable ``extra.session_id`` (the task id) pins every turn of a
             # task to one backend account, so its KV cache is actually reused

@@ -50,7 +50,7 @@ from noeta.client.sandbox_provider import (
     decode_exec_env_ref,
     encode_exec_env_ref,
 )
-from noeta.tools.browser import AioBrowserBackend
+from noeta.tools.browser import AioBrowserBackend, BrowserBackend
 from noeta.tools.fs.exec_env import AioSandboxExecEnv, ExecEnv
 
 _log = logging.getLogger(__name__)
@@ -87,13 +87,15 @@ BackendFactory = Callable[[SandboxHandle, Optional[BoundPreamble]], ExecEnv]
 
 
 #: Builds a live browser backend from a session's sandbox handle. Injected by
-#: tests (a fake that opens no socket); production uses
-#: :func:`_default_browser_factory`. The container's MCP browser server is
-#: addressed off the handle's ``base_url`` (``base_url + "/mcp"``, built inside
-#: the adapter) and authed with the handle's live :class:`SandboxAuth` as a
-#: per-call header factory (D8) — the same secret-on-the-wire discipline the
-#: ExecEnv backend uses.
-BrowserBackendFactory = Callable[[SandboxHandle], AioBrowserBackend]
+#: tests (a fake that opens no socket) or by the product (an alternative wire —
+#: e.g. the official-SDK adapter); production defaults to
+#: :func:`_default_browser_factory`. Typed against the ``BrowserBackend``
+#: Protocol — the seam admits any implementation, not just the hand-written AIO
+#: adapter. The container browser is addressed off the handle's ``base_url``
+#: (built inside the adapter) and authed with the handle's live
+#: :class:`SandboxAuth` as a per-call header factory (D8) — the same
+#: secret-on-the-wire discipline the ExecEnv backend uses.
+BrowserBackendFactory = Callable[[SandboxHandle], BrowserBackend]
 
 
 def _default_browser_factory(handle: SandboxHandle) -> AioBrowserBackend:
@@ -231,7 +233,7 @@ class SandboxExecEnvManager:
         self._backends_by_ref: dict[str, ExecEnv] = {}
         #: Per-ref browser backends, built lazily on first ``resolve_browser`` and
         #: cached like the ExecEnv backends (each is a stateless HTTP client).
-        self._browser_by_ref: dict[str, AioBrowserBackend] = {}
+        self._browser_by_ref: dict[str, BrowserBackend] = {}
         #: Lifecycle listeners fired on allocate/release. Each entry is
         #: ``(on_allocate, on_release)`` — ``on_allocate(root_id, handle)`` and
         #: ``on_release(root_id)``. Used by the product layer to wire side
@@ -343,7 +345,7 @@ class SandboxExecEnvManager:
             self._backends_by_ref[exec_env_ref] = backend
         return backend, handle.workdir
 
-    def resolve_browser(self, exec_env_ref: str) -> AioBrowserBackend:
+    def resolve_browser(self, exec_env_ref: str) -> BrowserBackend:
         """The browser backend for a bound ``exec_env_ref`` (built + cached).
 
         The browser twin of :meth:`resolve`: built on first request per ref and
@@ -392,6 +394,7 @@ class SandboxExecEnvManager:
                     session_root_id,
                     exc_info=True,
                 )
+        evicted: list[object] = []
         with self._lock:
             ref = self._refs_by_root.pop(session_root_id, None)
             self._handles_by_root.pop(session_root_id, None)
@@ -404,8 +407,9 @@ class SandboxExecEnvManager:
             # this guard never withholds an eviction there.
             if ref is not None and ref != self.default_ref:
                 self._handles_by_ref.pop(ref, None)
-                self._backends_by_ref.pop(ref, None)
-                self._browser_by_ref.pop(ref, None)
+                evicted.append(self._backends_by_ref.pop(ref, None))
+                evicted.append(self._browser_by_ref.pop(ref, None))
+        self._close_backends(evicted)
         self._provider.release(session_root_id)
 
     def teardown(self) -> None:
@@ -416,11 +420,16 @@ class SandboxExecEnvManager:
         so no container outlives the host. Never raises from a shutdown path."""
         with self._lock:
             roots = list(self._handles_by_root)
+            evicted: list[object] = [
+                *self._backends_by_ref.values(),
+                *self._browser_by_ref.values(),
+            ]
             self._handles_by_root.clear()
             self._handles_by_ref.clear()
             self._refs_by_root.clear()
             self._backends_by_ref.clear()
             self._browser_by_ref.clear()
+        self._close_backends(evicted)
         for root in roots:
             try:
                 self._provider.release(root)
@@ -431,3 +440,21 @@ class SandboxExecEnvManager:
                     root,
                     exc_info=True,
                 )
+
+    @staticmethod
+    def _close_backends(evicted: Sequence[object]) -> None:
+        """Best-effort ``close()`` on evicted backends (release / teardown).
+
+        ``close`` is not part of the ``ExecEnv`` / ``BrowserBackend`` seam — a
+        backend that owns an HTTP connection pool (the SDK adapters) exposes it;
+        the urllib / test backends simply have none. Duck-typed so the seam
+        stays narrow; failures are swallowed (eviction paths must not raise).
+        """
+        for backend in evicted:
+            close = getattr(backend, "close", None)
+            if not callable(close):
+                continue
+            try:
+                close()
+            except Exception:
+                _log.warning("sandbox backend close failed", exc_info=True)

@@ -210,7 +210,7 @@ def test_uv_pip_install_editable_then_noeta_agent_boots(tmp_path: Path) -> None:
 @pytest.mark.install_smoke
 def test_pyproject_metadata_is_present(tmp_path: Path) -> None:
     """Sanity-check that the installed wheel exposes the metadata I3
-    promised: name, version 0.2.1, requires-python ≥3.11, and — post-TL6 —
+    promised: name, version 0.2.2, requires-python ≥3.11, and — post-TL6 —
     that it depends on noeta-agent with NO ``noeta`` console entry point."""
     import importlib.metadata as md
 
@@ -220,7 +220,7 @@ def test_pyproject_metadata_is_present(tmp_path: Path) -> None:
     # gone; what we check is the product distribution noeta-agent.
     dist = md.distribution("noeta-agent")
     assert dist.metadata["Name"] == "noeta-agent"
-    assert dist.metadata["Version"] == "0.2.1"
+    assert dist.metadata["Version"] == "0.2.2"
     requires = dist.metadata["Requires-Python"]
     assert requires is not None
     assert ">=3.11" in requires.replace(" ", "")
