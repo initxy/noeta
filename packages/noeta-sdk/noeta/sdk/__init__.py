@@ -32,6 +32,10 @@ from noeta.client.capabilities import (
 )
 from noeta.client.client import Client, QueryFailedError, QueryResult, query
 from noeta.client.host_config import HostConfig, SandboxExecEnvConfig
+# The factory seam types behind ``HostConfig.sandbox_backend_factory`` /
+# ``sandbox_browser_factory`` — exported so a product can annotate its injected
+# factories without importing ``noeta.client`` internals.
+from noeta.client.sandbox import BackendFactory, BoundPreamble, BrowserBackendFactory
 from noeta.client.sandbox_provider import (
     MountSpec,
     SandboxAuth,
@@ -71,6 +75,16 @@ from noeta.sdk.authoring import (
 # (compile_options + the Client wire them into the runtime). Re-exported from
 # the runtime protocol modules so there is one canonical type per extension.
 from noeta.context.content_channel import ContentKindSpec
+# Sandbox execution extension surface — ONLY the ``ExecEnv`` / ``BrowserBackend``
+# seam protocols (the types ``HostConfig.sandbox_backend_factory`` /
+# ``sandbox_browser_factory`` are written against). The concrete AIO adapters
+# (``AioSandboxExecEnv`` / ``AioBrowserBackend``) are deliberately NOT public:
+# they are runtime implementation detail slated for retirement, and publishing
+# them here would freeze them into the user-facing API. The official product
+# reaches them through a pinned import-linter exemption instead (see the
+# execution-environment-seam ADR, "SDK-adapter export surface").
+from noeta.tools.fs.exec_env import ExecEnv
+from noeta.tools.browser import BrowserBackend
 from noeta.protocols.event_log import Subscriber as Observer
 from noeta.protocols.hooks import (
     Guard,
@@ -147,6 +161,13 @@ __all__ = [
     "MountSpec",
     "encode_exec_env_ref",
     "decode_exec_env_ref",
+    # sandbox execution extension surface (seam protocols + factory types only;
+    # the concrete AIO adapters are runtime-internal — see the seam ADR)
+    "ExecEnv",
+    "BrowserBackend",
+    "BackendFactory",
+    "BrowserBackendFactory",
+    "BoundPreamble",
     "OtlpTraceConfig",
     "AppPreviewGateway",
     "AppMount",

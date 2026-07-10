@@ -282,6 +282,8 @@ class Client:
             sandbox_provider=hc.sandbox_provider,
             sandbox_spec=hc.sandbox_spec,
             sandbox_exec_preamble=hc.sandbox_exec_preamble,
+            sandbox_backend_factory=hc.sandbox_backend_factory,
+            sandbox_browser_factory=hc.sandbox_browser_factory,
             mcp_server_resolver=hc.mcp_server_resolver,
             mcp_http_post=hc.mcp_http_post,
             delta_sink=hc.delta_sink,
