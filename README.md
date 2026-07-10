@@ -4,105 +4,80 @@
 
 **[Documentation](https://initxy.github.io/noeta/)** · [Quickstart](https://initxy.github.io/noeta/tutorials/quickstart/) · [SDK reference](https://initxy.github.io/noeta/reference/sdk/) · [Configure a provider](https://initxy.github.io/noeta/how-to/configure-provider/)
 
-> **Built to host AI agents on a server — not in a notebook.** Durable event-sourced execution, multi-worker / multi-host scheduling, per-session sandbox containers, full audit & replay, and provider-neutral LLM wiring. Self-hostable, no vendor lock-in.
+> **Built to host AI agents on a server — not in a notebook.** Durable event-sourced execution, multi-worker / multi-host scheduling, per-session sandbox containers — with a real browser the agent drives — full audit & replay, and provider-neutral LLM wiring. Self-hostable, no vendor lock-in.
 
 Noeta is a **runtime for running AI agents server-side**. It hosts, records,
 schedules, and replays agent execution on top of a **durable event log** — the
 same spine production systems use for exactly-once delivery and crash safety.
-That one design choice buys you what a normal in-process agent library can't:
-
-- **Crash-safe execution.** A task survives a process kill and resumes exactly
-  where it left off — state is folded from the log, never held in memory.
-- **Long-horizon tasks.** A task can pause for hours or days waiting on a human,
-  a timer, or a sub-task, then wake *exactly once* when the condition fires.
-- **Full audit & replay.** Every LLM turn, tool call, and approval is a recorded
-  event, so you can inspect *why* a step happened, not just *what*.
-
-Because it's engineered for the **server** — multi-tenant, long-running,
-untrusted-code — it adds what that demands:
-
-- **Multi-worker / multi-host** scheduling on shared Postgres (lease fencing,
-  database-clock expiry) — scale out by adding workers.
-- **Per-session sandboxing** — flip one switch and every session runs in its own
-  throwaway Docker container; all fs / shell / skill / web tool calls execute
-  *inside* it, never on the host.
-- **Human-in-the-loop end-to-end** — approvals, structured questions, timer wake
-  all survive restarts.
-- **Provider-neutral** — Anthropic and any OpenAI-compatible model behind one
-  internal protocol; swap vendors without rewriting history.
-
-And the whole stack runs **offline with no API key** via a deterministic `stub`
-provider, so you can try it in thirty seconds.
+That one design choice buys what a normal in-process agent library can't: a task
+survives a process kill and resumes *exactly once*, can sleep for hours or days
+waiting on a human or a timer, and every LLM turn / tool call / approval is a
+recorded event you can audit and replay. And the whole stack runs **offline with
+no API key** via a deterministic `stub` provider, so you can try it in thirty
+seconds.
 
 <p align="center">
-  <img src="docs/assets/web-app.png" alt="Noeta coding-agent web app" width="820">
+  <img src="docs/assets/sandbox-browser.png" alt="Noeta driving a real browser inside its per-session sandbox, with live Browser / Terminal / Code preview panels" width="860">
   <br>
-  <em>The bundled coding-agent web app — one command (<code>python -m noeta.agent</code>) boots the agent and this UI.</em>
+  <em>Sandbox on: the agent delegates to its <code>web</code> specialist, which drives a <strong>real browser inside the session's container</strong> — open Google, search, land on the release page — while the right dock streams live <strong>Browser</strong> / <strong>Terminal</strong> / <strong>Code</strong> panels from that same container. One command (<code>python -m noeta.agent</code>) boots the agent and this UI.</em>
 </p>
 
-<p align="center">
-  <img src="docs/assets/trace.png" alt="Noeta per-task trace view" width="820">
-  <br>
-  <em>Every task has a full trace — each event, LLM turn, and token/cache stat, read straight from the event log.</em>
-</p>
+## Highlights
 
-## Why Noeta — server-side strengths
+- **Crash-safe, exactly-once execution.** State is folded from an append-only
+  event log, never held in memory — kill the process mid-task and a fresh one
+  resumes at the exact point, exactly once.
+- **Long-horizon tasks.** A task can suspend for hours or days waiting on a human
+  approval, a timer, or a sub-task, then wake *exactly once* when the condition
+  fires — waiting costs nothing while it sleeps.
+- **Multi-worker / multi-host scale-out.** Tasks lease from a shared Postgres
+  dispatcher; lease fencing + database-clock expiry keep exactly-once semantics
+  across machines. Add workers to scale out.
+- **Per-session sandbox — now with a browser the agent drives.** Flip one switch
+  and each session runs in its own throwaway Docker container; every fs / shell /
+  skill / web tool call runs *inside* it, never on the host. The agent gets a
+  **real in-container browser** it drives through a `web` specialist (navigate /
+  click / type / extract / screenshot), and the web UI streams live **Browser /
+  Terminal / Code** panels from that container.
+- **Full audit & replay.** Every event, LLM turn, tool call, and token/cache stat
+  is recorded, and compaction is a reversible overlay — you can inspect *why* a
+  step happened, not just *what*.
+- **Provider-neutral, no lock-in.** Anthropic and any OpenAI-compatible model sit
+  behind one internal protocol — swap vendors without rewriting history.
+- **Runs offline, no API key.** A deterministic `stub` provider runs the whole
+  stack with no network, so install, storage, and wiring are provable on a fresh
+  checkout (and in CI).
 
-Noeta is built for the realities of hosting agents on a server: crashes
-happen, tasks outlive a single request, you run code you don't fully trust, and
-you need to scale across workers. These aren't afterthoughts — they're the
-foundation.
+## How it compares
 
-### Durable, crash-safe execution
+Pi, the **Claude Agent SDK** (a.k.a. the Claude Code SDK), and the **Codex SDK**
+are all *in-process harnesses*: they give you an agent loop, tools, MCP, and
+sub-agents — then leave storage, distribution, and sandboxing to you. Their
+"persistence" is a local transcript file (the Claude Agent SDK ships an
+in-memory session store its own docs mark *not for production*; Codex keeps
+threads under `~/.codex/sessions`), resume is single-host and path-bound, and
+scaling across tenants is your problem to build.
 
-- **Survives crashes** — a task's state is never held in memory across runs. It
-  is rebuilt (*folded*) from an append-only event log on demand. Kill the
-  process mid-task; a fresh one folds the log back to the exact point and
-  finishes the work — exactly once.
-- **Long-horizon by design** — a task can suspend to wait on a human approval,
-  a structured question, a timer, or a sub-task, and is woken exactly once when
-  the condition fires. Waiting costs nothing while it sleeps.
+**Noeta is the server-side foundation underneath that harness** — the part you'd
+otherwise write yourself:
 
-### Scale-out scheduling
+| | **Noeta** | Claude Agent SDK | Codex SDK | Pi |
+| --- | --- | --- | --- | --- |
+| Agent loop · tools · MCP · sub-agents | ✅ | ✅ | ✅ | ✅ |
+| Durable state | **Event-sourced log**, folded to resume — Postgres / SQLite / memory | Local transcript; default store *not for production* — bring your own DB | Local thread files | Local session files |
+| Crash-safe, exactly-once resume | ✅ any process re-folds the log | Same host only, `cwd` must match — durability is on you | Resume one thread locally | Reopen a transcript |
+| Multi-worker / multi-host | ✅ lease fencing on shared Postgres | ✗ one long-lived process per agent | ✗ one process per thread | ✗ |
+| Per-session sandbox | ✅ throwaway container per session — agent-driven browser + live preview, reconnect-safe | Your infra to build (or vendor-hosted) | Local OS sandbox only | ✗ |
+| Ships as | **Self-hostable server base** | Harness you host + deploy | Local CLI + SDK wrapper | In-process harness |
 
-- **Multi-worker, multi-host** — tasks are leased from a shared Dispatcher
-  backed by Postgres. Add workers to scale out; lease fencing + database-clock
-  expiry keep exactly-once semantics across machines. SQLite and in-memory
-  backends stay single-host for local dev.
+Same idea underneath: the harnesses record a *conversation*; Noeta records
+*events*, and state is folded from them. That one ledger is what turns crash
+recovery, durable multi-host wake, per-session sandbox reconnect, reversible
+compaction, and full audit into one mechanism instead of five bespoke systems
+you bolt on later. Provider-neutral and self-hosted — no vendor lock-in.
 
-### Per-session isolation
-
-- **One container per session** — turn on the sandbox and each session gets its
-  own fresh Docker container; every fs / shell / skill / web tool call runs
-  *inside* it, never on the host, and one session's files and processes are
-  invisible to another. Built for hosting agents — and running code — you don't
-  fully trust.
-- **Reconnect-safe** — the container is recorded in the log by address; a
-  worker that folds the task back after a crash reconnects to the *same*
-  container and keeps its working files.
-- **Credentials off the command line** — the container key is handed to `docker`
-  by name, never as an argv value.
-
-### Full observability
-
-- **Fully inspectable** — every event, LLM turn, tool call, and token/cache
-  stat is a recorded event. The trace view (and the raw log) answers *why* a
-  step happened — which tool ran on whose authority, what got compacted away —
-  not just *what*.
-- **Replayable** — compaction is a recorded overlay; the original messages stay
-  in the log, so history is auditable and reproducible.
-
-### Provider-neutral, no lock-in
-
-- **Anthropic or any OpenAI-compatible endpoint** sit behind one internal
-  protocol. Swapping vendors is wiring, not a rewrite, and the recorded history
-  isn't bound to any vendor's shape.
-- **Bring your own agent** — the runtime hosts and schedules; you supply the
-  policy, tools, and context. A ReAct policy and a full coding agent ship
-  in-tree, but nothing forces you to use them.
-- **Runs offline out of the box** — a deterministic `stub` provider runs the
-  whole stack with no API key and no network, so install, storage, and wiring
-  are provable on a fresh checkout (and in CI).
+See the [full comparison](https://initxy.github.io/noeta/reference/comparison/)
+against the Claude Agent SDK, LangGraph, and Temporal.
 
 ## Quickstart
 
@@ -136,6 +111,75 @@ To build your own agent on the SDK — define a `@tool`, assemble `Options`, cal
 `query()` — start with
 [your first agent](https://initxy.github.io/noeta/tutorials/first-agent/) and the
 runnable [`examples/`](examples/).
+
+## Why Noeta — server-side strengths
+
+Noeta is built for the realities of hosting agents on a server: crashes
+happen, tasks outlive a single request, you run code you don't fully trust, and
+you need to scale across workers. These aren't afterthoughts — they're the
+foundation.
+
+### Durable, crash-safe execution
+
+- **Survives crashes** — a task's state is never held in memory across runs. It
+  is rebuilt (*folded*) from an append-only event log on demand. Kill the
+  process mid-task; a fresh one folds the log back to the exact point and
+  finishes the work — exactly once.
+- **Long-horizon by design** — a task can suspend to wait on a human approval,
+  a structured question, a timer, or a sub-task, and is woken exactly once when
+  the condition fires. Waiting costs nothing while it sleeps.
+
+### Scale-out scheduling
+
+- **Multi-worker, multi-host** — tasks are leased from a shared Dispatcher
+  backed by Postgres. Add workers to scale out; lease fencing + database-clock
+  expiry keep exactly-once semantics across machines. SQLite and in-memory
+  backends stay single-host for local dev.
+
+### Per-session isolation — with an agent-driven browser
+
+- **One container per session** — turn on the sandbox and each session gets its
+  own fresh Docker container; every fs / shell / skill / web tool call runs
+  *inside* it, never on the host, and one session's files and processes are
+  invisible to another. Built for hosting agents — and running code — you don't
+  fully trust.
+- **A real browser the agent drives** — with the sandbox on, the agent can drive
+  the container's browser through a `web` specialist (navigate / click / type /
+  extract / screenshot), and the web UI's right dock streams live **Browser**
+  (noVNC), **Terminal** (container PTY), and **Code** (code-server) panels from
+  the same box.
+- **Reconnect-safe** — the container is recorded in the log by address; a
+  worker that folds the task back after a crash reconnects to the *same*
+  container and keeps its working files.
+- **Credentials off the command line** — the container key is handed to `docker`
+  by name, never as an argv value.
+
+### Full observability
+
+- **Fully inspectable** — every event, LLM turn, tool call, and token/cache
+  stat is a recorded event. The trace view (and the raw log) answers *why* a
+  step happened — which tool ran on whose authority, what got compacted away —
+  not just *what*.
+- **Replayable** — compaction is a recorded overlay; the original messages stay
+  in the log, so history is auditable and reproducible.
+
+<p align="center">
+  <img src="docs/assets/trace.png" alt="Noeta per-task trace view" width="820">
+  <br>
+  <em>Every task has a full trace — each event, LLM turn, and token/cache stat, read straight from the event log.</em>
+</p>
+
+### Provider-neutral, no lock-in
+
+- **Anthropic or any OpenAI-compatible endpoint** sit behind one internal
+  protocol. Swapping vendors is wiring, not a rewrite, and the recorded history
+  isn't bound to any vendor's shape.
+- **Bring your own agent** — the runtime hosts and schedules; you supply the
+  policy, tools, and context. A ReAct policy and a full coding agent ship
+  in-tree, but nothing forces you to use them.
+- **Runs offline out of the box** — a deterministic `stub` provider runs the
+  whole stack with no API key and no network, so install, storage, and wiring
+  are provable on a fresh checkout (and in CI).
 
 ## How it works
 
@@ -189,6 +233,21 @@ all execute inside that container, not on the host.
   key) are delivered to in-container tools out-of-band, not on a process command
   line the container's process table would expose.
 
+### A browser the agent drives, plus live preview
+
+With the sandbox on, Noeta adds a **noeta-owned browser tool pack** that drives
+the container's own browser — `browser_navigate` / `click` / `type` / `extract`
+/ `screenshot`, with names and schemas pinned by Noeta so they stay stable
+across sandbox-image changes. The main agent stays browser-free: it delegates
+every page interaction to a dedicated **`web` specialist**, so a browsing task's
+token churn is isolated in a child context that returns a distilled result
+(a screenshot lands as a workspace artifact you can open in the file panel).
+
+The web UI's right dock then streams three **live-preview panels** from that
+same container — **Browser** (noVNC), **Terminal** (container PTY), and **Code**
+(code-server) — served from a dedicated preview port (ephemeral by default; pin
+with `NOETA_AGENT_SANDBOX_PREVIEW_PORT` behind a firewall or tunnel).
+
 Enable it — needs a local Docker daemon and the AIO Sandbox image
 ([`agent-infra/sandbox`](https://github.com/agent-infra/sandbox)):
 
@@ -198,11 +257,7 @@ NOETA_AGENT_SANDBOX=1 python -m noeta.agent       # per-session containers, on
 ```
 
 Tune the image and caps with `NOETA_AGENT_SANDBOX_IMAGE` /
-`NOETA_AGENT_SANDBOX_MEMORY` / `NOETA_AGENT_SANDBOX_CPUS`. With the sandbox on,
-the web UI's right dock gains three live-preview tabs — **Browser** (noVNC),
-**Terminal** (container PTY), **Code** (code-server) — served from a dedicated
-preview port (ephemeral by default; pin with
-`NOETA_AGENT_SANDBOX_PREVIEW_PORT` behind a firewall or tunnel). Global user
+`NOETA_AGENT_SANDBOX_MEMORY` / `NOETA_AGENT_SANDBOX_CPUS`. Global user
 **memory** and **MCP** servers deliberately stay on the host. The isolation is
 process-plus-mounted-FS, not a full jail; see
 [known limitations](https://initxy.github.io/noeta/operations/limitations/) for
@@ -222,37 +277,6 @@ Noeta ships as three packages, each pulling in the ones below it:
 Install `noeta-sdk` to build your own agent (`import noeta.sdk`); install
 `noeta-agent` to run the bundled product. The only public surface is
 `noeta.sdk` — the engine underneath is a transitive dependency you never touch.
-
-## How it compares
-
-Pi, the **Claude Agent SDK** (a.k.a. the Claude Code SDK), and the **Codex SDK**
-are all *in-process harnesses*: they give you an agent loop, tools, MCP, and
-sub-agents — then leave storage, distribution, and sandboxing to you. Their
-"persistence" is a local transcript file (the Claude Agent SDK ships an
-in-memory session store its own docs mark *not for production*; Codex keeps
-threads under `~/.codex/sessions`), resume is single-host and path-bound, and
-scaling across tenants is your problem to build.
-
-**Noeta is the server-side foundation underneath that harness** — the part you'd
-otherwise write yourself:
-
-| | **Noeta** | Claude Agent SDK | Codex SDK | Pi |
-| --- | --- | --- | --- | --- |
-| Agent loop · tools · MCP · sub-agents | ✅ | ✅ | ✅ | ✅ |
-| Durable state | **Event-sourced log**, folded to resume — Postgres / SQLite / memory | Local transcript; default store *not for production* — bring your own DB | Local thread files | Local session files |
-| Crash-safe, exactly-once resume | ✅ any process re-folds the log | Same host only, `cwd` must match — durability is on you | Resume one thread locally | Reopen a transcript |
-| Multi-worker / multi-host | ✅ lease fencing on shared Postgres | ✗ one long-lived process per agent | ✗ one process per thread | ✗ |
-| Per-session sandbox | ✅ throwaway container per session, reconnect-safe | Your infra to build (or vendor-hosted) | Local OS sandbox only | ✗ |
-| Ships as | **Self-hostable server base** | Harness you host + deploy | Local CLI + SDK wrapper | In-process harness |
-
-Same idea underneath: the harnesses record a *conversation*; Noeta records
-*events*, and state is folded from them. That one ledger is what turns crash
-recovery, durable multi-host wake, per-session sandbox reconnect, reversible
-compaction, and full audit into one mechanism instead of five bespoke systems
-you bolt on later. Provider-neutral and self-hosted — no vendor lock-in.
-
-See the [full comparison](https://initxy.github.io/noeta/reference/comparison/)
-against the Claude Agent SDK, LangGraph, and Temporal.
 
 ## Documentation
 
@@ -286,8 +310,9 @@ stable — but some edges are intentionally bounded:
   timer wake all work; what's missing is out-of-band notification (webhook /
   inbox) when a task starts waiting on a human.
 - **The per-session sandbox is opt-in** — off by default (it needs a local
-  Docker daemon + the AIO image). It provisions one container per session and
-  isolates process + mounted FS, not a full jail; warm pools / pause-resume and
+  Docker daemon + the AIO image). It provisions one container per session,
+  gives the agent an in-container browser + live preview, and isolates
+  process + mounted FS, not a full jail; warm pools / pause-resume and
   cross-machine reconnect are future work (a distributed / NAS-backed provider
   seam is already carved out for them).
 - **The web app is a small Vite MPA** with vanilla ES modules; no framework
