@@ -662,9 +662,9 @@ class ReActPolicy:
                 role="assistant", content=history_content
             )
             # B3: route any enabled control-tool call (ask_user_question →
-            # plan-mode → todo_write → spawn_subagent → skill, in that fixed
-            # order) through the single translation seam. ``None`` means no
-            # control tool matched — fall through to the normal tool_calls
+            # todo_write → spawn_subagent → skill → run_workflow, in that
+            # fixed order) through the single translation seam. ``None`` means
+            # no control tool matched — fall through to the normal tool_calls
             # path.
             control = translate_control_tool(
                 response,
@@ -738,6 +738,20 @@ class ReActPolicy:
                 ),
             )
         if response.stop_reason == "max_tokens":
+            # Mirror the end_turn guard above: a reasoning model can spend its
+            # entire output budget on ThinkingBlock(s) before any text/tool_use,
+            # leaving history_content == [] here too (thinking is stripped by
+            # ``_strip_thinking``). Anthropic rejects an assistant message with
+            # content:[] with a 400 on the next request, and this branch is
+            # normally retryable — without this guard a retry would resend the
+            # very history a poisoned turn just wrote. Fail exactly like the
+            # end_turn guard instead of recording an unsendable turn.
+            if not history_content:
+                return FailDecision(
+                    reason="llm_empty_response",
+                    retryable=False,
+                    assistant_message=None,
+                )
             return FailDecision(
                 reason="llm_truncated",
                 retryable=True,

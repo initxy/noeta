@@ -607,3 +607,61 @@ def test_output_within_inline_budget(tmp_path: Path) -> None:
     )
     assert res.success is True
     assert len(to_canonical_bytes(res.output)) <= INLINE_OUTPUT_MAX_BYTES
+
+
+# ---------------------------------------------------------------------------
+# file_changes — rewind-checkpoint surface (mirrors edit/write's contract)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_surfaces_file_changes_for_replace_and_create(tmp_path: Path) -> None:
+    ws = _ws(tmp_path, {"a.py": "foo\n"})
+    ctx, _cs = _ctx()
+    res = _tool(ws).invoke(
+        {
+            "edits": [
+                {"op": "replace", "path": "a.py", "old": "foo", "new": "bar"},
+                {"op": "create", "path": "b.py", "content": "new\n"},
+            ]
+        },
+        ctx,
+    )
+    assert res.success is True
+    # deterministic sort by resolved POSIX path — a.py before b.py.
+    assert res.file_changes == [
+        {"path": "a.py", "before": b"foo\n"},
+        {"path": "b.py", "before": None},
+    ]
+
+
+def test_dry_run_surfaces_no_file_changes(tmp_path: Path) -> None:
+    ws = _ws(tmp_path, {"a.py": "foo\n"})
+    ctx, _cs = _ctx()
+    res = _tool(ws, mode=FsWriteMode.DRY_RUN).invoke(
+        {"edits": [{"op": "replace", "path": "a.py", "old": "foo", "new": "bar"}]},
+        ctx,
+    )
+    assert res.success is True and res.output["applied"] is False
+    assert res.file_changes is None
+
+
+def test_failed_apply_surfaces_no_file_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An apply-phase failure never reaches ``_result`` (it returns the typed
+    # failure from ``_fail`` instead), so a rolled-back batch must not surface
+    # ``file_changes`` for the checkpoint gate to (wrongly) stash.
+    ws = _ws(tmp_path, {"a.py": "foo\n"})
+    ctx, _cs = _ctx()
+    from noeta.tools.fs.exec_env import LocalExecEnv
+
+    def _boom(self: LocalExecEnv, path: Path, data: bytes) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(LocalExecEnv, "write_bytes", _boom)
+    res = _tool(ws).invoke(
+        {"edits": [{"op": "replace", "path": "a.py", "old": "foo", "new": "bar"}]},
+        ctx,
+    )
+    assert res.success is False
+    assert res.file_changes is None

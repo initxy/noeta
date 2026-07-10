@@ -16,9 +16,9 @@ The gateway provides:
 
 * **registry** — ``token -> {base_url, auth_headers, root_task_id}``,
   registered on container allocate, unregistered on release.
-* **HTTP 透传** — ``/sandbox-preview/<token>/<sub>`` → ``http://base/<sub>``
+* **HTTP passthrough** — ``/sandbox-preview/<token>/<sub>`` → ``http://base/<sub>``
   with auth injected upstream. Used for noVNC/code-server static pages.
-* **WS 反代** — ``/sandbox-preview/<token>/<sub>`` with
+* **WS reverse proxy** — ``/sandbox-preview/<token>/<sub>`` with
   ``Upgrade: websocket`` → RFC 6455 frame pump to ``ws://base/<sub>``
   (auth in upstream handshake only).
 * **dedicated origin** — :func:`make_preview_server` serves the gateway on
@@ -99,7 +99,7 @@ class SandboxPreviewMount:
 
 
 class SandboxPreviewGateway:
-    """Registry + HTTP透传 + WS反代 for per-session sandbox live preview.
+    """Registry + HTTP passthrough + WS reverse proxy for per-session sandbox live preview.
 
     Lifecycle:
     * ``mount_root(root_task_id, base_url, auth_headers)`` — called when a
@@ -111,7 +111,7 @@ class SandboxPreviewGateway:
     Routing (called by the dedicated preview server, ``make_preview_server``):
     * ``is_preview_path(path)`` — quick prefix check.
     * ``route_http(method, path, query, *, content_type, body, headers)``
-      — HTTP透传 (noVNC / code-server static assets). Returns
+      — HTTP passthrough (noVNC / code-server static assets). Returns
       ``(status, content_type, body_bytes)`` or ``None`` if not a
       preview path.
     * ``try_handle_ws(handler, path)`` — if the request is a WS upgrade to
@@ -218,7 +218,7 @@ class SandboxPreviewGateway:
             return None
         return (token, sub if sep else "")
 
-    # -- HTTP 透传 -----------------------------------------------------------
+    # -- HTTP passthrough -----------------------------------------------------
 
     def route_http(
         self,
@@ -230,7 +230,7 @@ class SandboxPreviewGateway:
         body: Optional[bytes] = None,
         headers: Optional[dict[str, str]] = None,
     ) -> Optional[tuple[int, str, bytes]]:
-        """透传 an HTTP request to the sandbox container.
+        """Pass an HTTP request through to the sandbox container.
 
         Returns ``(status, content_type, body)`` or ``None`` if not a
         preview path. No CORS headers are involved: the preview is served
@@ -286,7 +286,7 @@ class SandboxPreviewGateway:
             )
         return (status, ctype, resp_body)
 
-    # -- WS 反代 -------------------------------------------------------------
+    # -- WS reverse proxy -----------------------------------------------------
 
     def try_handle_ws(
         self,
@@ -437,7 +437,7 @@ class SandboxPreviewGateway:
 class _SandboxPreviewHandler(BaseHTTPRequestHandler):
     """Slim handler for the dedicated preview port: gateway traffic ONLY.
 
-    Serves nothing but ``/sandbox-preview/<token>/...`` (HTTP 透传 + WS 反代).
+    Serves nothing but ``/sandbox-preview/<token>/...`` (HTTP passthrough + WS reverse proxy).
     There is deliberately no router, no SPA, no control API on this origin —
     that blankness IS the security property (see the gateway module
     docstring): the panels' iframes run ``allow-same-origin`` against this

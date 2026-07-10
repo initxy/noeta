@@ -24,7 +24,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 
 from noeta.context.composer import ThreeSegmentComposer
 from noeta.core.engine import Engine
@@ -46,7 +45,6 @@ from noeta.storage.memory import (
     InMemoryDispatcher,
     InMemoryEventLog,
 )
-from noeta.tools.fake import FakeTool
 
 
 class _EchoTool:

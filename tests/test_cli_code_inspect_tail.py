@@ -197,7 +197,8 @@ def _record_approval(db: Path) -> str:
 
 
 def test_inspect_next_goal_summary_fidelity(tmp_path: Path) -> None:
-    ws = tmp_path / "ws"; ws.mkdir()
+    ws = tmp_path / "ws"
+    ws.mkdir()
     db = tmp_path / "s.db"
     task_id = _record_next_goal(db, ws)
     detail = _detail(db, task_id)
@@ -212,7 +213,8 @@ def test_inspect_next_goal_summary_fidelity(tmp_path: Path) -> None:
 
 
 def test_inspect_active_skill_fidelity(tmp_path: Path) -> None:
-    ws = tmp_path / "ws"; ws.mkdir()
+    ws = tmp_path / "ws"
+    ws.mkdir()
     db = tmp_path / "s.db"
     task_id = _record_with_skill(db, ws)
     detail = _detail(db, task_id)

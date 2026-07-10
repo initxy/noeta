@@ -6,12 +6,26 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  foldTraceTasks,
+  createTraceTaskCache,
+  foldTraceTasksFromMux,
   foldTraceDetail,
   foldSelections,
   planRefs,
   planView,
 } from "./trace-fold.js";
+import {
+  advanceMultiplexStore,
+  createMultiplexStore,
+} from "../domain/multiplex.js";
+
+// foldTraceTasksFromMux reads the SAME incremental store the chat app uses
+// (domain/multiplex.js), so these tests drive it through the real
+// `advanceMultiplexStore` — the exact object trace-data.js hands it — rather
+// than hand-rolling a fixture shape that could drift from the real one.
+function foldTraceTasks(streamEnvelopes) {
+  const mux = advanceMultiplexStore(createMultiplexStore(), streamEnvelopes, null);
+  return foldTraceTasksFromMux(createTraceTaskCache(), mux);
+}
 
 const genesis = (taskId, parent, agent, seq, at) => ({
   task_id: taskId,

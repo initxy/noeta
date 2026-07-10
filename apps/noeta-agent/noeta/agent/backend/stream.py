@@ -28,6 +28,7 @@ import base64
 import json
 import queue
 import threading
+import weakref
 from typing import Any, Iterator
 
 from noeta.sdk import envelope_to_dict
@@ -111,19 +112,79 @@ _DELTA_QUEUE_LIMIT = 500
 
 
 def _parent_of(engine_room: EngineRoom, task_id: str) -> str | None:
-    """Read ``task_id``'s genesis ``TaskCreated`` → its ``parent_task_id``."""
-    for env in engine_room.events_after(task_id, None):
+    """Read ``task_id``'s genesis ``TaskCreated`` → its ``parent_task_id``.
+
+    Every task stream's very first envelope (seq 0) is its genesis
+    ``TaskCreated`` — the same invariant the catch-up phase below relies on
+    ("a genesis envelope at ``seq == 0`` is NOT skipped") — so peeking at
+    ``envs[0]`` is enough; there's no need to scan the rest of the stream.
+
+    NOTE (residual cost): ``EventLogReader.read`` has no first-event-only
+    primitive, so this still fetches the WHOLE stream from storage — the
+    underlying I/O is unavoidable without a protocol change. This only saves
+    the (comparatively cheap) per-envelope attribute scan past the first
+    record, not the storage read itself.
+    """
+    envs = engine_room.events_after(task_id, None)
+    if not envs:
+        return None
+    first = envs[0]
+    if first.type == "TaskCreated":
+        return getattr(first.payload, "parent_task_id", None)
+    # Defensive fallback (should not happen — genesis is always seq 0): scan
+    # the rest so a malformed/legacy stream doesn't silently mis-tree.
+    for env in envs[1:]:
         if env.type == "TaskCreated":
             return getattr(env.payload, "parent_task_id", None)
     return None
 
 
+#: Per-``EngineRoom`` cache of resolved ``task_id -> parent_task_id`` links.
+#: ``parent_task_id`` is welded once at ``TaskCreated`` and never changes for
+#: the lifetime of a task, so once a stream's parent is known it never needs
+#: re-reading. Keyed by a ``WeakKeyDictionary`` (not ``id(engine_room)``) so
+#: the cache disappears together with its room — a process that only ever
+#: runs one ``EngineRoom`` keeps one cache forever, while a test that spins
+#: up a fresh room per case never sees stale cross-test state or an
+#: ``id()``-reuse collision after GC.
+_PARENT_CACHE: "weakref.WeakKeyDictionary[Any, dict[str, str | None]]" = (
+    weakref.WeakKeyDictionary()
+)
+_PARENT_CACHE_LOCK = threading.Lock()
+
+
 def discover_tree(engine_room: EngineRoom, root: str) -> set[str]:
-    """Every task in ``root``'s subtree (root + transitive subtasks)."""
-    parent: dict[str, str | None] = {}
-    for summary in engine_room.task_streams():
-        tid = summary.task_id
-        parent[tid] = _parent_of(engine_room, tid)
+    """Every task in ``root``'s subtree (root + transitive subtasks).
+
+    Previously this re-read EVERY task stream the deployment has ever held,
+    from the start, on EVERY connect/reconnect — O(total tasks ever) of I/O
+    per connect, no matter how small the requested root's own subtree is.
+    Since a stream's ``parent_task_id`` is immutable once resolved (see
+    ``_PARENT_CACHE`` above), this now resolves each stream's parent AT MOST
+    ONCE per ``EngineRoom`` lifetime: a connect only pays the ``_parent_of``
+    read for streams NOT YET in the cache (new tasks created since the last
+    discovery), turning steady-state cost into O(new tasks since last
+    connect) rather than O(total tasks ever). ``engine_room.task_streams()``
+    itself stays a cheap metadata-only enumeration (task_id + last_seq +
+    last_event_time, no stream body) and is always re-scanned in full — that
+    part was never the expensive one.
+
+    Correctness: the full parent map (cached + newly resolved this call) is
+    read once under the lock into a local snapshot, then the same
+    fixed-point closure as before walks it to build the tree — behavior is
+    unchanged, only the repeated I/O is eliminated.
+
+    Residual cost: the FIRST time a given stream is seen, ``_parent_of``
+    still reads it from the start (see its docstring) — this cannot shrink
+    further without a storage-side "read only the first event" primitive.
+    """
+    with _PARENT_CACHE_LOCK:
+        cache = _PARENT_CACHE.setdefault(engine_room, {})
+        for summary in engine_room.task_streams():
+            tid = summary.task_id
+            if tid not in cache:
+                cache[tid] = _parent_of(engine_room, tid)
+        parent = dict(cache)
     tree = {root}
     changed = True
     while changed:

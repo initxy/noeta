@@ -19,7 +19,6 @@ composer applies it to exactly those messages.
 
 from __future__ import annotations
 
-from typing import Any
 
 from noeta.context.composer import ThreeSegmentComposer, RenderedSkills
 from noeta.policies.react import ReActPolicy, _carries_tool_result

@@ -12,12 +12,17 @@ import json
 import socket
 from pathlib import Path
 
+from dataclasses import dataclass
+from typing import Optional
+
 from noeta.agent.backend import BackendConfig, EngineRoom, serve_backend
 from noeta.agent.backend.stream import (
     decode_cursor,
+    discover_tree,
     encode_cursor,
     stream_frames,
 )
+from noeta.protocols.events import EventEnvelope, TaskCreatedPayload
 from noeta.protocols.messages import LLMResponse, TextBlock, Usage
 from noeta.sdk import Options
 from noeta.testing.fake_llm import FakeLLMProvider
@@ -204,3 +209,79 @@ def test_command_endpoints_ack_and_stream_over_http(tmp_path: Path) -> None:
         conn.close()
     finally:
         shutdown()
+
+
+# ---------------------------------------------------------------------------
+# discover_tree — subtree scoping + per-room parent cache
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _FakeStreamSummary:
+    task_id: str
+    last_seq: int = 0
+    last_event_time: float = 0.0
+
+
+class _FakeRoom:
+    """Duck-typed ``EngineRoom`` stand-in: ``discover_tree``/``_parent_of``
+    only ever call ``task_streams()`` and ``events_after()``, so a fake
+    exercising just those two lets the tree-walk + cache logic be pinned
+    without driving a real engine through a full ``spawn_subagent`` turn.
+
+    Deliberately a plain class (not a ``@dataclass``, which would default to
+    an ``eq``-based ``__hash__ = None`` and break its use as a
+    ``WeakKeyDictionary`` key in :func:`discover_tree`'s parent cache) — the
+    default identity-based hash/eq is exactly what the real ``EngineRoom``
+    also relies on.
+    """
+
+    def __init__(self, parents: dict[str, Optional[str]]) -> None:
+        self.parents = parents
+        self.reads: list[str] = []
+
+    def task_streams(self) -> list[_FakeStreamSummary]:
+        return [_FakeStreamSummary(task_id=tid) for tid in self.parents]
+
+    def events_after(self, task_id: str, after_seq: Optional[int]) -> list[EventEnvelope]:
+        self.reads.append(task_id)
+        payload = TaskCreatedPayload(
+            goal="g", policy_name="p", parent_task_id=self.parents[task_id]
+        )
+        return [EventEnvelope.build(task_id=task_id, type="TaskCreated", payload=payload)]
+
+
+def test_discover_tree_walks_parent_links_to_the_requested_root_only() -> None:
+    room = _FakeRoom(
+        parents={
+            "root": None,
+            "child-a": "root",
+            "child-b": "root",
+            "grandchild": "child-a",
+            "unrelated-root": None,
+            "unrelated-child": "unrelated-root",
+        }
+    )
+    tree = discover_tree(room, "root")
+    assert tree == {"root", "child-a", "child-b", "grandchild"}
+
+
+def test_discover_tree_caches_resolved_parents_across_calls() -> None:
+    """A stream's ``parent_task_id`` never changes once created, so a second
+    discovery against the same room must not re-read already-resolved
+    streams — this is the fix for the O(total tasks ever) per-connect cost."""
+    room = _FakeRoom(parents={"root": None, "child": "root"})
+
+    discover_tree(room, "root")
+    assert set(room.reads) == {"root", "child"}
+
+    room.reads.clear()
+    discover_tree(room, "root")
+    assert room.reads == []
+
+    # A new stream appearing later is resolved on the next call; the
+    # already-cached ones stay untouched.
+    room.parents["late-child"] = "root"
+    tree = discover_tree(room, "root")
+    assert room.reads == ["late-child"]
+    assert tree == {"root", "child", "late-child"}

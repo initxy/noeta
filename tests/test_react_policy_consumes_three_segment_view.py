@@ -22,7 +22,6 @@ from noeta.policies.react import ReActPolicy
 from noeta.protocols.messages import LLMResponse, Message, TextBlock
 from noeta.protocols.step_context import StepContext
 from noeta.protocols.task import Task, TaskState
-from noeta.protocols.tool import Tool, ToolContext, ToolResult
 from noeta.storage.memory import InMemoryContentStore
 from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.runtime.llm import RuntimeLLMClient

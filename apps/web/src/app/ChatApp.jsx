@@ -60,6 +60,28 @@ function maxPanelWidthForViewport(viewportWidth, sidebarCollapsed) {
   return Math.max(PANEL_WIDTH_MIN, Math.min(PANEL_WIDTH_MAX, available));
 }
 
+// Pure core of the session-switch composer-draft hydration (the fix for the
+// draft/pasted-images bug: switching sessions mid-draft used to leave session
+// A's text/images sitting in the composer, so hitting Enter on session B sent
+// them there). Given the per-session draft map, the outgoing and incoming
+// session ids, and the CURRENT (about-to-be-replaced) draft: stashes the
+// outgoing draft (dropping it instead if it's blank, so the map doesn't grow
+// unbounded with empty entries), then returns the draft to restore for the
+// incoming session (a blank draft when none was ever stashed for it).
+// `previousTid === undefined` means "first run, nothing to stash" (mirrors
+// hydratedTaskRef's initial sentinel). Exported for unit coverage.
+function applySessionDraftSwitch(draftsMap, previousTid, tid, current) {
+  if (previousTid !== undefined) {
+    if (current.text || (current.images && current.images.length)) {
+      draftsMap.set(previousTid, { text: current.text, images: current.images });
+    } else {
+      draftsMap.delete(previousTid);
+    }
+  }
+  const draft = draftsMap.get(tid);
+  return { text: draft?.text || "", images: draft?.images || [] };
+}
+
 function ChatApp() {
   const chat = useChatData();
   const { theme, toggleTheme } = useThemeToggle();
@@ -82,6 +104,11 @@ function ChatApp() {
     () => initialPref.workspace || "",
   );
   const [composerText, setComposerText] = useState("");
+  // T4 / spec D7 images queued for the next turn — lifted out of ChatComposer
+  // (which used to own this as local state) so the session-switch hydration
+  // effect below can save/restore it per session the same way it does
+  // composerText; see sessionDraftsRef.
+  const [pastedImages, setPastedImages] = useState([]);
   // the set of enabled MCP server aliases for the next turn (a
   // Set of alias strings). The request body carries just these aliases — never
   // a url/token (those live host-side). Starts empty (no MCP).
@@ -317,6 +344,14 @@ function ChatApp() {
     mergeComposerPref({ workspace: next });
   };
 
+  // The composer draft (text + queued images) for every session visited this
+  // page-load, keyed by task_id (the landing / new-session slot uses key
+  // `null`) — an in-memory analogue of the localStorage prefs below, since a
+  // draft is per-session ephemeral state with no server echo to hydrate from.
+  // Saved/restored by the session-switch effect right below; never persisted
+  // across a reload (unlike the localStorage-backed prefs).
+  const sessionDraftsRef = useRef(new Map());
+
   // Session-switch hydration: keyed on activeTaskId so it fires once per real
   // switch. Permission + effort are per-turn / non-durable, so every session
   // restores the last-used pref. For a NEW session, model + workspace also
@@ -328,7 +363,19 @@ function ChatApp() {
   useEffect(() => {
     const tid = chat.activeTaskId;
     if (tid === hydratedTaskRef.current) return;
+    const previousTid = hydratedTaskRef.current;
     hydratedTaskRef.current = tid;
+    // Stash the outgoing session's draft (if any) so it's there if the user
+    // switches back, then hydrate the incoming session's draft (or blank it) —
+    // otherwise session A's still-typed text / queued images bleed into
+    // session B on switch (the textarea state is otherwise untouched by a
+    // session switch, since ChatApp itself never unmounts).
+    const draft = applySessionDraftSwitch(sessionDraftsRef.current, previousTid, tid, {
+      text: composerText,
+      images: pastedImages,
+    });
+    setComposerText(draft.text);
+    setPastedImages(draft.images);
     const pref = storedComposerPref();
     setPermission(pref.permission || "default");
     setEffort(pref.effort || "");
@@ -472,6 +519,8 @@ function ChatApp() {
         onNotice={chat.showNotice}
         working={working}
         onStop={chat.cancelSession}
+        pastedImages={pastedImages}
+        onPastedImagesChange={setPastedImages}
       />
       </PromptInputProvider>
     </div>
@@ -709,4 +758,4 @@ function isAgentWorking(detail, vm, activeTaskId) {
   return status.toLowerCase().includes("run");
 }
 
-export { ChatApp };
+export { ChatApp, applySessionDraftSwitch };

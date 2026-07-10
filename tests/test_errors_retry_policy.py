@@ -17,7 +17,6 @@ folded/observed downstream.
 
 from __future__ import annotations
 
-import pytest
 
 from noeta.protocols.errors import (
     CATEGORY_FATAL,

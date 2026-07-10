@@ -544,7 +544,6 @@ class ShellRunTool:
         )
         return _build_shell_result(
             self.name,
-            argv=exec_argv,
             command=command,
             outcome=outcome,
             ctx=ctx,
@@ -592,7 +591,6 @@ class ShellRunTool:
 def _build_shell_result(
     tool_name: str,
     *,
-    argv: list[str],
     command: str,
     outcome: _RunOutcome,
     ctx: ToolContext,

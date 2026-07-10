@@ -27,8 +27,6 @@ from noeta.agent.spec import (
     AgentSpec,
     BudgetSpec,
     Capabilities,
-    ComponentRef,
-    ToolRef,
 )
 from noeta.client import (
     Client,
@@ -44,7 +42,6 @@ from noeta.core.fold import fold
 from noeta.execution.multi_turn import NEXT_GOAL_WAKE_HANDLE
 from noeta.protocols.events import (
     AgentBoundPayload,
-    MessagesAppendedPayload,
     TaskCompletedPayload,
     TaskCreatedPayload,
     TaskFailedPayload,

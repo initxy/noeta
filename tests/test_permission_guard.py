@@ -9,7 +9,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import pytest
 
 from noeta.guards.permission import PermissionGuard, PermissionPolicy
 from noeta.protocols.decisions import SpawnSubtaskDecision, ToolCall

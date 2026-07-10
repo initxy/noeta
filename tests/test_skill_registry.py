@@ -18,7 +18,7 @@ from noeta.context.skills.indexer import (
     SkillRegistry,
     build_skill_renderer,
 )
-from noeta.protocols.messages import Message, TextBlock
+from noeta.protocols.messages import TextBlock
 
 
 def _desc(

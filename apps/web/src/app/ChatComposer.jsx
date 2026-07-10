@@ -415,6 +415,8 @@ function ChatComposer({
   onNotice,
   working,
   onStop,
+  pastedImages,
+  onPastedImagesChange,
 }) {
   // Auto-focus the composer the moment the agent finishes a turn (canSend flips
   // false → true while a session is open), so the user can type the next message
@@ -467,7 +469,11 @@ function ChatComposer({
   // {id, media_type, data_base64, dataUrl}: the first two ride the request body
   // (base64 ONLY on the wire — the ledger stores a ContentRef, not base64), the
   // dataUrl is a local-only handle for the thumbnail chip. Cleared on submit.
-  const [pastedImages, setPastedImages] = useState([]);
+  // Lifted to ChatApp (controlled via props) alongside composerText so the
+  // session-switch hydration effect can save/restore it per session — the
+  // same per-session-draft handling composerText already gets — instead of
+  // bleeding a still-queued image across a session switch.
+  const setPastedImages = onPastedImagesChange;
   const removePastedImage = (id) =>
     setPastedImages((prev) => prev.filter((img) => img.id !== id));
 

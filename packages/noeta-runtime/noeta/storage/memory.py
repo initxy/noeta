@@ -796,7 +796,6 @@ class InMemoryDispatcher:
             task.reclaim_count = 0
             task.wake_on = None
             task.suspend_reason = None
-            task.fire_at = None
             task.status = "ready"
             self._ready.append(task.task_id)
 

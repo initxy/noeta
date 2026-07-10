@@ -5,7 +5,6 @@ or the EventLog through ``ctx.governance``.
 
 from __future__ import annotations
 
-from typing import Any
 
 from noeta.core.engine import Engine
 from noeta.policies.stub import StubScriptedPolicy

@@ -18,7 +18,6 @@ from noeta.storage.memory import InMemoryContentStore
 from noeta.tools.mcp import (
     McpConfigError,
     McpServerSpec,
-    McpTool,
     build_mcp_tools,
     make_mcp_tool_name,
     parse_mcp_tool_specs,

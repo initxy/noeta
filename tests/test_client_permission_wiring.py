@@ -38,7 +38,6 @@ from noeta.client import (
 from noeta.client.host import _approval_set_for
 from noeta.client.parts import builtin_tool_ref
 from noeta.protocols.events import (
-    ToolCallApprovalRequestedPayload,
     ToolCallApprovalResolvedPayload,
 )
 from noeta.protocols.messages import (
@@ -47,9 +46,7 @@ from noeta.protocols.messages import (
     ToolUseBlock,
     Usage,
 )
-from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.tools.decorator import tool
 
 
 # ---------------------------------------------------------------------------

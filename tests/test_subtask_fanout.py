@@ -22,7 +22,6 @@ from noeta.protocols.decisions import (
     SpawnSubtasksDecision,
     StatePatchDecision,
 )
-from noeta.protocols.events import TaskCreatedPayload
 from noeta.protocols.hooks import GuardContext, ProposedSpawnSubtask
 from noeta.protocols.messages import (
     LLMResponse,

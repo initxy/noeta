@@ -1,12 +1,13 @@
 """Shared stale-reclaim cap decision for the dispatcher adapters (kernel #3).
 
-Both Dispatcher adapters (:class:`noeta.storage.memory.InMemoryDispatcher`
-and :class:`noeta.storage.sqlite.dispatcher.SqliteDispatcher`) bound the
+All three Dispatcher adapters (:class:`noeta.storage.memory.InMemoryDispatcher`,
+:class:`noeta.storage.sqlite.dispatcher.SqliteDispatcher`, and
+``noeta.storage.postgres.dispatcher.PostgresDispatcher``) bound the
 poison-task lease → expire → reclaim loop with the same rule: a task that
 accrues ``reclaim_max`` CONSECUTIVE no-progress stale-lease reclaims drops to
 ``terminal`` (``stale_reclaim_exceeded``) instead of requeueing forever — the
 reclaim-path analogue of ``max_fail_attempts``. That threshold decision is a
-domain rule, so it lives here as the single predicate both adapters route
+domain rule, so it lives here as the single predicate all adapters route
 through (the same reason :mod:`noeta.storage._wake_match` centralises the wake
 projection rule); a future adapter cannot silently pick a different cap.
 

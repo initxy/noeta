@@ -22,7 +22,6 @@ a small regex, no new dependency); no external library is introduced.
 from __future__ import annotations
 
 import re
-import sys
 import textwrap
 from pathlib import Path
 

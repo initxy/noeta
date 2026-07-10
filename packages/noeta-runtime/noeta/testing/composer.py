@@ -33,9 +33,9 @@ def trivial_three_segment(content_store: ContentStore) -> "ThreeSegmentComposer"
     valid Composer instance (the full three-segment behaviour is
     exercised in dedicated tests; here it's wiring infrastructure).
 
-    ``noeta.context`` lives in ``noeta-sdk`` while this
-    helper ships in ``noeta-runtime``'s ``noeta.testing``; the import is
-    therefore lazy so ``noeta.testing`` loads in a runtime-only install."""
+    ``noeta.context`` ships in noeta-runtime alongside this module; the
+    import stays lazy so importing ``noeta.testing.composer`` for
+    :func:`fake_view` alone doesn't also pull in ``ThreeSegmentComposer``."""
     from noeta.context.composer import ThreeSegmentComposer
 
     return ThreeSegmentComposer(

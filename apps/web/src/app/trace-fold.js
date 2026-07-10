@@ -12,54 +12,126 @@
 import { reduceEvents } from "../domain/reducer.js";
 import { deriveStatusText } from "./chat-fold.js";
 
-// Bucket the multiplexed stream by task_id (subtree carried on one connection).
-function bucketByTask(streamEnvelopes) {
-  const byTask = new Map();
-  for (const env of Array.isArray(streamEnvelopes) ? streamEnvelopes : []) {
-    if (!env || typeof env.task_id !== "string") continue;
-    if (!byTask.has(env.task_id)) byTask.set(env.task_id, []);
-    byTask.get(env.task_id).push(env);
-  }
-  return byTask;
+// ---------------------------------------------------------------------------
+// The trace task-tree rows, folded off the SHARED incremental multiplex store
+// (domain/multiplex.js's `advanceMultiplexStore`) instead of re-bucketing +
+// re-reducing the WHOLE subtree stream on every SSE message. The store already
+// gives us, per task_id, the reduced view-model (`mux.tasks[tid]`) and the
+// deduped/ordered envelope bucket (`mux.eventsByTask[tid]`), with BOTH
+// references reused across an advance for any task that received no new
+// envelope this round. `foldTraceTasksFromMux` only needs to extend that with
+// the couple of fields the shared vm doesn't carry (agent_name genesis,
+// created/last event-time bounds) — done via a per-task cache keyed on the
+// store's own bucket identity, so a task whose bucket is unchanged this
+// advance is a pure cache hit, never a rescan.
+// ---------------------------------------------------------------------------
+
+// One cache entry per task_id: the last envelope bucket it was scanned
+// against (`envs`/`len`) plus the accumulated agent_name / goal / event-time
+// bounds / last_seq, and the assembled row (invalidated to null whenever the
+// bucket changes so the caller rebuilds it once).
+function createTraceTaskCache() {
+  return { byTask: new Map() };
 }
 
-// The trace task-tree rows. The thin backend's GET /tasks returns ROOTS ONLY, so
-// the tree (root → __workflow__ → workers) is folded from the stream instead;
-// one row per task_id with the fields TaskTree reads (parent link from the
-// genesis TaskCreated, status/closed from the reducer fold, event times for the
-// sibling sort).
-function foldTraceTasks(streamEnvelopes) {
-  const rows = [];
-  for (const [tid, envs] of bucketByTask(streamEnvelopes)) {
-    const vm = reduceEvents(envs);
-    let parent = null;
-    let agent = null;
-    let created = null;
-    let last = null;
-    let lastSeq = -1;
-    for (const env of envs) {
-      const at = typeof env.occurred_at === "number" ? env.occurred_at : null;
-      if (at != null) {
-        if (created == null || at < created) created = at;
-        if (last == null || at > last) last = at;
-      }
-      if (typeof env.seq === "number" && env.seq > lastSeq) lastSeq = env.seq;
-      if (env.type === "TaskCreated") {
-        const p = env.payload || {};
-        parent = typeof p.parent_task_id === "string" ? p.parent_task_id : null;
-        agent = typeof p.agent_name === "string" ? p.agent_name : null;
-      }
+// Scan envelopes [start, end) into the running accumulator (created/last event
+// time bounds, highest seq, genesis agent_name/goal — the genesis event is
+// unique per task but we mirror the old scan-to-the-end semantics so a
+// malformed multi-genesis stream keeps resolving to the LAST TaskCreated seen,
+// exactly like the previous full-stream fold did).
+function scanTraceEnvRange(envs, start, end, acc) {
+  for (let i = start; i < end; i += 1) {
+    const env = envs[i];
+    if (!env) continue;
+    const at = typeof env.occurred_at === "number" ? env.occurred_at : null;
+    if (at != null) {
+      if (acc.created == null || at < acc.created) acc.created = at;
+      if (acc.last == null || at > acc.last) acc.last = at;
     }
-    rows.push({
-      task_id: tid,
-      parent_task_id: parent,
-      agent_name: agent,
-      status: vm.status,
-      closed: vm.closed,
-      last_seq: lastSeq,
-      created_event_time: created,
-      last_event_time: last,
-    });
+    if (typeof env.seq === "number" && env.seq > acc.lastSeq) acc.lastSeq = env.seq;
+    if (env.type === "TaskCreated") {
+      const p = env.payload || {};
+      acc.agent = typeof p.agent_name === "string" ? p.agent_name : null;
+      acc.goal = typeof p.goal === "string" ? p.goal : null;
+    }
+  }
+}
+
+// Refresh one task's cache entry against its CURRENT envelope bucket. The
+// common live-stream case is a plain append (the multiplex store's fast path:
+// `st.envs = st.envs.concat(newEnvs)`), verified cheaply via the boundary
+// element so only the NEW tail is scanned; anything else (dedup / reorder /
+// shrink — the store's slow path, or a stream reset) re-scans from scratch so
+// the result stays byte-identical to a full re-fold.
+function refreshTraceTaskEntry(entry, envs) {
+  if (envs === entry.envs) return entry;
+  const prefixIntact =
+    entry.len > 0 &&
+    entry.len <= envs.length &&
+    envs[entry.len - 1] === entry.envs[entry.len - 1];
+  if (entry.len === 0 || prefixIntact) {
+    scanTraceEnvRange(envs, entry.len, envs.length, entry);
+  } else {
+    entry.created = null;
+    entry.last = null;
+    entry.lastSeq = -1;
+    entry.agent = null;
+    entry.goal = null;
+    scanTraceEnvRange(envs, 0, envs.length, entry);
+  }
+  entry.envs = envs;
+  entry.len = envs.length;
+  entry.row = null;
+  return entry;
+}
+
+function traceTaskEntry(cache, tid, envs) {
+  let entry = cache.byTask.get(tid);
+  if (!entry) {
+    entry = {
+      envs: [],
+      len: 0,
+      agent: null,
+      goal: null,
+      created: null,
+      last: null,
+      lastSeq: -1,
+      row: null,
+    };
+    cache.byTask.set(tid, entry);
+  }
+  return refreshTraceTaskEntry(entry, envs);
+}
+
+// The trace task-tree rows. The thin backend's GET /tasks returns ROOTS ONLY,
+// so the tree (root → __workflow__ → workers) is folded from the stream
+// instead; one row per task_id with the fields TaskTree reads (parent link
+// from the genesis TaskCreated, status/closed from the reducer fold, event
+// times for the sibling sort). `mux` is the object `advanceMultiplexStore`
+// returns; `cache` is a `createTraceTaskCache()` instance the caller keeps
+// across advances (a React ref in trace-data.js).
+function foldTraceTasksFromMux(cache, mux) {
+  const tasksVm = (mux && mux.tasks) || {};
+  const eventsByTask = (mux && mux.eventsByTask) || {};
+  const parents = (mux && mux.parents) || {};
+  const rows = [];
+  for (const tid of Object.keys(tasksVm)) {
+    const envs = eventsByTask[tid] || [];
+    const entry = traceTaskEntry(cache, tid, envs);
+    if (!entry.row) {
+      const vm = tasksVm[tid];
+      entry.row = {
+        task_id: tid,
+        parent_task_id: parents[tid] ?? null,
+        agent_name: entry.agent,
+        status: vm.status,
+        closed: vm.closed,
+        last_seq: entry.lastSeq,
+        created_event_time: entry.created,
+        last_event_time: entry.last,
+      };
+    }
+    rows.push(entry.row);
   }
   return rows;
 }
@@ -68,10 +140,17 @@ function foldTraceTasks(streamEnvelopes) {
 // the reducer (the thin backend has no /tasks/{id} detail); the extra optional
 // fields the old detail carried (wake_on / phase / decisions / context_stats)
 // simply stay absent and DetailTable renders only what is present.
-function foldTraceDetail(taskId, taskEnvelopes) {
+//
+// `vm` is an OPTIONAL already-folded ConversationViewModel (the multiplex
+// store's `mux.tasks[taskId]`, kept identity-stable across SSE messages that
+// don't touch this task) — when the caller already has one there is no need
+// to pay for a second `reduceEvents(envs)` pass over the same envelopes. Callers
+// that only have the raw envelopes (e.g. this file's own tests) omit it and get
+// the previous self-contained behavior.
+function foldTraceDetail(taskId, taskEnvelopes, vm = null) {
   if (!taskId) return null;
   const envs = Array.isArray(taskEnvelopes) ? taskEnvelopes : [];
-  const vm = reduceEvents(envs);
+  const resolved = vm || reduceEvents(envs);
   let agent = null;
   let goal = null;
   for (const env of envs) {
@@ -83,17 +162,17 @@ function foldTraceDetail(taskId, taskEnvelopes) {
   }
   return {
     task_id: taskId,
-    status: vm.status,
-    status_text: deriveStatusText(vm),
-    wake_kind: vm.wakeKind,
-    closed: vm.closed,
-    model: vm.model,
-    model_binding: vm.model,
+    status: resolved.status,
+    status_text: deriveStatusText(resolved),
+    wake_kind: resolved.wakeKind,
+    closed: resolved.closed,
+    model: resolved.model,
+    model_binding: resolved.model,
     agent,
     goal,
     event_count: envs.length,
-    last_seq: vm.lastSeq,
-    todos: vm.todos,
+    last_seq: resolved.lastSeq,
+    todos: resolved.todos,
   };
 }
 
@@ -224,7 +303,8 @@ function planView(planMeta, bodyText) {
 }
 
 export {
-  foldTraceTasks,
+  createTraceTaskCache,
+  foldTraceTasksFromMux,
   foldTraceDetail,
   foldSelections,
   planRefs,

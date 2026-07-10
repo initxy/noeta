@@ -17,7 +17,6 @@ from __future__ import annotations
 
 from typing import Optional
 
-import pytest
 
 from noeta.core.engine import Engine
 from noeta.core.fold import apply_event

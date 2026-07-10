@@ -24,7 +24,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-import pytest
 
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.events import (
@@ -37,7 +36,7 @@ from noeta.runtime.background_shell import (
     ProcessRegistry,
 )
 from noeta.storage.memory import InMemoryContentStore, InMemoryEventLog
-from noeta.tools.fs import ShellMode, ShellPollTool, ShellRunTool, WorkspaceRoot
+from noeta.tools.fs import ShellMode, ShellRunTool, WorkspaceRoot
 
 
 # ---------------------------------------------------------------------------

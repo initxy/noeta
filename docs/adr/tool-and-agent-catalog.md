@@ -62,7 +62,7 @@ The carrying mechanism still follows existing conventions: the AgentSpec from `a
 
 - Where tool implementations and descriptions land: `read/write/edit/grep/glob` are in `noeta.tools.fs`, and the standalone short `.md` description resources are in `noeta.tools.descriptions` / `noeta.policies.descriptions`.
 
-- Where assembly and internal agents land: switching tool variants by model and injecting Capabilities tools is in `noeta.execution.builder`, and the title internal agent is in `noeta.execution.title`; compaction's verbatim-preservation constraint is in `context-compaction.md`.
+- Where assembly and internal agents land: switching tool variants by model and injecting Capabilities tools is in `noeta.execution.builder`; compaction's verbatim-preservation constraint is in `context-compaction.md`. (The former `noeta.execution.title` internal agent has been removed — the product derives session titles with a lightweight heuristic in the app backend's read views.)
 
 - This decision's boundary is "only rebaseline the catalog, don't touch the mechanism": when adding or removing tools or agents, reuse existing protocol fields and do not add tool-object fields or runtime primitives.
 
