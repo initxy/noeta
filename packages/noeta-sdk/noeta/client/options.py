@@ -14,7 +14,9 @@ Design notes:
   overriding user intent. If the caller supplies a ``capabilities`` we keep
   it verbatim; only ``spawnable`` is unioned with the ``agents`` dict's keys
   so a parent that forgot to list a child's name does not silently drop the
-  delegation right.
+  delegation right. Reserved ``__``-prefixed names are the one exception:
+  they compile into the registry but stay out of the auto-union (internal,
+  host-driven identities — see :func:`compile_options`).
 * ``provider`` / ``workspace_dir`` / storage wiring live on
   ``Options`` as **optional fallbacks** (D5: identity vs host binding).
   :func:`compile_options` and the identity path **completely ignore**
@@ -597,7 +599,17 @@ def compile_options(
         )
         descendant_specs.append(child_spec)
 
-    all_child_names = tuple(sorted(agent_defn_names))
+    # Reserved (double-underscore) agent names compile into the registry like
+    # any other child — resolvable by name for HOST-seeded root tasks — but are
+    # kept out of the parent's ``spawnable`` auto-union, so they never enter
+    # the model-facing ``spawn_subagent`` directory (and never churn the
+    # parent's stable prefix). The ``__workflow__`` precedent, now generalized:
+    # ``__consolidation__`` (noeta.presets) rides this rule. A caller that
+    # REALLY wants one delegatable can still list it in an explicit
+    # ``capabilities.spawnable`` — only the implicit union filters.
+    all_child_names = tuple(
+        sorted(n for n in agent_defn_names if not n.startswith("__"))
+    )
 
     # -- 2. Resolve system_prompt -------------------------------------------
     instructions = _resolve_system_prompt(options.system_prompt)

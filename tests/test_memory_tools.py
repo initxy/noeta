@@ -2,10 +2,12 @@
 
 * ``MemoryStore`` — file-per-memory store under one directory: slug-named
   ``<name>.md`` files, traversal-proof name validation, deterministic
-  (sorted) index entries with a first-line summary.
-* ``memory_write`` / ``memory_read`` — plain SDK tools over the store,
-  same dataclass shape as the fs tool pack. Results travel the ordinary
-  tool-result channel (``ToolCallStarted → ToolResultRecorded →
+  (sorted) index entries with a frontmatter-description-or-first-line
+  summary, grep-style ``search()``, reversible ``archive()``.
+* ``memory_write`` / ``memory_read`` / ``memory_search`` /
+  ``memory_archive`` — plain SDK tools over the store, same dataclass
+  shape as the fs tool pack. Results travel the ordinary tool-result
+  channel (``ToolCallStarted → ToolResultRecorded →
   ToolCallFinished`` + batched ``MessagesAppended``) — no new event
   types, no runtime changes.
 """
@@ -31,9 +33,13 @@ from noeta.storage.memory import (
 from noeta.testing.composer import trivial_three_segment
 from noeta.tools._limits import INLINE_CONTENT_MAX_BYTES
 from noeta.tools.memory import (
+    MEMORY_ARCHIVE_TOOL_NAME,
     MEMORY_READ_TOOL_NAME,
+    MEMORY_SEARCH_TOOL_NAME,
     MEMORY_WRITE_TOOL_NAME,
+    MemoryArchiveTool,
     MemoryReadTool,
+    MemorySearchTool,
     MemoryStore,
     MemoryWriteTool,
     build_memory_tools,
@@ -88,8 +94,8 @@ def test_store_entries_sorted_with_first_line_summary(tmp_path: Path) -> None:
     store.write("zeta", "# Zeta heading\nbody")
     store.write("alpha", "\n\nplain first line\nmore")
     assert store.entries() == (
-        ("alpha", "plain first line"),
-        ("zeta", "Zeta heading"),
+        ("alpha", "plain first line", ""),
+        ("zeta", "Zeta heading", ""),
     )
 
 
@@ -102,7 +108,62 @@ def test_store_entries_ignore_foreign_files(tmp_path: Path) -> None:
     store = _store(tmp_path)
     store.write("real", "memory body")
     store.root.joinpath("not-a-memory.txt").write_text("x", encoding="utf-8")
-    assert [name for name, _ in store.entries()] == ["real"]
+    assert [name for name, _, _ in store.entries()] == ["real"]
+
+
+# ---------------------------------------------------------------------------
+# Frontmatter — optional fence, description/type recognized, malformed = body
+# ---------------------------------------------------------------------------
+
+
+def test_entries_frontmatter_description_and_type_win(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.write(
+        "deploy",
+        "---\ndescription: How we deploy safely\ntype: procedural\n---\n"
+        "# Deploy\nsteps...",
+    )
+    assert store.entries() == (
+        ("deploy", "How we deploy safely", "procedural"),
+    )
+
+
+def test_entries_frontmatter_fallback_skips_fence_block(tmp_path: Path) -> None:
+    # No description: the summary falls back to the first non-empty BODY
+    # line — never a line inside the fence.
+    store = _store(tmp_path)
+    store.write("note", "---\ntype: reference\n---\n\n# Real heading\nbody")
+    assert store.entries() == (("note", "Real heading", "reference"),)
+
+
+def test_entries_frontmatter_invalid_type_treated_absent(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.write(
+        "note", "---\ndescription: A note\ntype: banana\n---\nbody"
+    )
+    assert store.entries() == (("note", "A note", ""),)
+
+
+def test_entries_frontmatter_unknown_keys_ignored(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.write(
+        "note",
+        "---\nauthor: someone\ndescription: Known key wins\n---\nbody",
+    )
+    assert store.entries() == (("note", "Known key wins", ""),)
+
+
+def test_entries_malformed_fence_is_plain_body(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    # Unclosed fence: the whole file is body, so the opening fence line
+    # itself is the first non-empty line (v1 fallback semantics).
+    store.write("unclosed", "---\ndescription: never closed\nbody")
+    # Non-``key: value`` line inside the fence: same degradation.
+    store.write("badline", "---\nnot a key value line\n---\nbody")
+    assert store.entries() == (
+        ("badline", "---", ""),
+        ("unclosed", "---", ""),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +198,67 @@ def test_write_tool_rejects_missing_or_invalid_arguments(
     assert not tool.invoke({"name": "n", "text": 7}, _ctx()).success
 
 
+def test_write_tool_params_compose_frontmatter(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    tool = MemoryWriteTool(store=store)
+    result = tool.invoke(
+        {
+            "name": "deploy",
+            "text": "# Deploy\nsteps",
+            "description": "How we deploy",
+            "type": "procedural",
+        },
+        _ctx(),
+    )
+    assert result.success
+    assert store.read("deploy") == (
+        "---\ndescription: How we deploy\ntype: procedural\n---\n"
+        "# Deploy\nsteps"
+    )
+    assert store.entries() == (("deploy", "How we deploy", "procedural"),)
+
+
+def test_write_tool_params_win_over_text_fence(tmp_path: Path) -> None:
+    # The text carries its own fence, but params are given: the tool
+    # strips the text's block and composes a fresh one from the params.
+    store = _store(tmp_path)
+    tool = MemoryWriteTool(store=store)
+    result = tool.invoke(
+        {
+            "name": "note",
+            "text": "---\ndescription: stale\ntype: user\n---\nbody line",
+            "description": "fresh",
+        },
+        _ctx(),
+    )
+    assert result.success
+    assert store.read("note") == "---\ndescription: fresh\n---\nbody line"
+    assert store.entries() == (("note", "fresh", ""),)
+
+
+def test_write_tool_no_params_keeps_text_fence_as_is(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    text = "---\ndescription: self-made\n---\nbody"
+    assert MemoryWriteTool(store=store).invoke(
+        {"name": "note", "text": text}, _ctx()
+    ).success
+    assert store.read("note") == text
+    assert store.entries() == (("note", "self-made", ""),)
+
+
+def test_write_tool_rejects_invalid_type_and_description(
+    tmp_path: Path,
+) -> None:
+    tool = MemoryWriteTool(store=_store(tmp_path))
+    args = {"name": "n", "text": "body"}
+    assert not tool.invoke({**args, "type": "banana"}, _ctx()).success
+    assert not tool.invoke({**args, "type": 7}, _ctx()).success
+    assert not tool.invoke({**args, "description": 7}, _ctx()).success
+    assert not tool.invoke(
+        {**args, "description": "two\nlines"}, _ctx()
+    ).success
+
+
 def test_read_tool_returns_full_text(tmp_path: Path) -> None:
     store = _store(tmp_path)
     store.write("deploy", "line one\nline two")
@@ -165,11 +287,136 @@ def test_read_tool_bounds_oversized_inline_output(tmp_path: Path) -> None:
     assert len(result.output["text"].encode("utf-8")) <= INLINE_CONTENT_MAX_BYTES
 
 
+# ---------------------------------------------------------------------------
+# MemoryStore.search / memory_search — grep semantics, bounded, archive-blind
+# ---------------------------------------------------------------------------
+
+
+def test_store_search_matches_name_and_text_case_insensitive(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.write("deploy-process", "# Deploy\nAlways run SMOKE tests.")
+    store.write("naming-rules", "# Naming\nsnake_case everywhere.")
+    # Text hit, case-insensitive, excerpt line has trailing space stripped.
+    assert store.search("smoke") == (
+        ("deploy-process", ("Always run SMOKE tests.",)),
+    )
+    # Name-only hit: still a hit, with an empty excerpt.
+    assert store.search("naming-RULES") == (("naming-rules", ()),)
+    assert store.search("nowhere-to-be-found") == ()
+
+
+def test_store_search_caps_lines_chars_and_memories(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    long_line = "needle " + "x" * 300
+    store.write("aa-many-lines", "\n".join([long_line] * 5))
+    for i in range(12):
+        store.write(f"hit-{i:02d}", "needle here")
+    results = store.search("needle")
+    assert len(results) == 10  # memory cap, name-sorted
+    by_name = dict(results)
+    assert len(by_name["aa-many-lines"]) == 3  # excerpt line cap
+    assert all(len(line) <= 200 for line in by_name["aa-many-lines"])
+
+
+def test_store_search_never_sees_archived_memories(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.write("old-way", "the obsolete needle")
+    store.write("new-way", "the current needle")
+    store.archive("old-way")
+    assert [name for name, _ in store.search("needle")] == ["new-way"]
+
+
+def test_search_tool_returns_grep_shaped_output(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.write("deploy", "run make deploy\nthen smoke test")
+    tool = MemorySearchTool(store=store)
+    assert tool.name == MEMORY_SEARCH_TOOL_NAME
+    result = tool.invoke({"query": "smoke"}, _ctx())
+    assert result.success
+    assert result.output == {
+        "query": "smoke",
+        "results": [{"name": "deploy", "lines": ["then smoke test"]}],
+    }
+    assert "1 hit(s)" in result.summary
+
+
+def test_search_tool_zero_hits_is_success_empty_query_is_error(
+    tmp_path: Path,
+) -> None:
+    tool = MemorySearchTool(store=_store(tmp_path))
+    result = tool.invoke({"query": "ghost"}, _ctx())
+    assert result.success
+    assert result.output == {"query": "ghost", "results": []}
+    assert not tool.invoke({"query": ""}, _ctx()).success
+    assert not tool.invoke({"query": 7}, _ctx()).success
+
+
+# ---------------------------------------------------------------------------
+# MemoryStore.archive / memory_archive — retire into archive/, never delete
+# ---------------------------------------------------------------------------
+
+
+def test_store_archive_moves_file_out_of_entries(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.write("obsolete", "old body")
+    dest = store.archive("obsolete")
+    assert dest == store.root / "archive" / "obsolete.md"
+    assert dest.read_text(encoding="utf-8") == "old body"
+    assert store.entries() == ()  # gone from the index source
+    assert store.read("obsolete") is None
+
+
+def test_store_archive_collision_gets_numbered_suffix(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    for expected in ("obsolete.md", "obsolete-2.md", "obsolete-3.md"):
+        store.write("obsolete", f"body for {expected}")
+        dest = store.archive("obsolete")
+        assert dest is not None
+        assert dest.name == expected
+    assert (store.root / "archive" / "obsolete-3.md").read_text(
+        encoding="utf-8"
+    ) == "body for obsolete-3.md"
+
+
+def test_store_archive_missing_or_invalid_name_returns_none(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    assert store.archive("ghost") is None
+    assert store.archive("../evil") is None
+
+
+def test_archive_tool_reports_relative_destination(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.write("obsolete", "x")
+    tool = MemoryArchiveTool(store=store)
+    assert tool.name == MEMORY_ARCHIVE_TOOL_NAME
+    result = tool.invoke({"name": "obsolete"}, _ctx())
+    assert result.success
+    assert result.output == {
+        "name": "obsolete",
+        "archived_to": "archive/obsolete.md",
+    }
+
+
+def test_archive_tool_unknown_or_invalid_name_fails(tmp_path: Path) -> None:
+    tool = MemoryArchiveTool(store=_store(tmp_path))
+    assert not tool.invoke({"name": "ghost"}, _ctx()).success
+    assert not tool.invoke({"name": "../up"}, _ctx()).success
+
+
 def test_build_memory_tools_names_match_tool_attribute(
     tmp_path: Path,
 ) -> None:
     tools = build_memory_tools(_store(tmp_path))
-    assert set(tools) == {MEMORY_WRITE_TOOL_NAME, MEMORY_READ_TOOL_NAME}
+    assert set(tools) == {
+        MEMORY_WRITE_TOOL_NAME,
+        MEMORY_READ_TOOL_NAME,
+        MEMORY_SEARCH_TOOL_NAME,
+        MEMORY_ARCHIVE_TOOL_NAME,
+    }
     for key, tool in tools.items():
         assert tool.name == key
 
