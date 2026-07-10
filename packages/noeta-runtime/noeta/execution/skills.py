@@ -39,6 +39,7 @@ both from the stream).
 from __future__ import annotations
 
 import hashlib
+import logging
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
@@ -83,6 +84,9 @@ __all__ = [
     "skill_content_hash",
     "skill_content_kind",
 ]
+
+
+_log = logging.getLogger(__name__)
 
 
 #: The skill kind's content-channel key and drift policy
@@ -261,6 +265,38 @@ def extract_skill_allowed_tools_raw(
 DEFAULT_SKILLS_SUBDIR = ".noeta/skills"
 
 
+def _snapshot_skill_tiers(
+    exec_env: Optional[ExecEnv], tiers: Sequence[Path]
+) -> Optional[Any]:
+    """One-round-trip snapshot of every skill tier, for sandbox indexing.
+
+    Issue 46: indexing skills through the container per-file costs one HTTP
+    round-trip per ``is_file`` / ``rglob`` / ``read_text`` — minutes of
+    ``seed_start`` wall time at a few dozen skills. ``ExecEnv.tree_snapshot``
+    folds the whole walk (every file under every tier + every SKILL.md's
+    bytes) into ONE container exec; the snapshot is handed to each per-tier
+    ``SkillIndexer``, which scopes it to its own root lexically.
+
+    Returns ``None`` — meaning "index per-file as before" — for a local
+    session (no ``exec_env``), an ExecEnv that does not implement
+    ``tree_snapshot`` (duck-typed fakes / older custom backends), or a
+    snapshot that fails outright (logged; correctness over speed).
+    """
+    if exec_env is None:
+        return None
+    snapshot = getattr(exec_env, "tree_snapshot", None)
+    if snapshot is None:
+        return None
+    try:
+        return snapshot(tuple(tiers), content_name="SKILL.md")
+    except OSError as exc:
+        _log.warning(
+            "skill: tier snapshot failed (%s); falling back to per-file indexing",
+            exc,
+        )
+        return None
+
+
 def load_workspace_skills(
     workspace: Path,
     *,
@@ -303,14 +339,21 @@ def load_workspace_skills(
     # workspace-local pack win as the top overlay. In sandbox mode each tier's
     # SKILL.md is indexed THROUGH the container (``exec_env``): the dirs are then
     # container mount points and the rendered base directories are container
-    # paths (D6-Skills).
+    # paths (D6-Skills). All tiers are fetched in ONE container round-trip
+    # (``prefetched``, issue 46) when the backend supports it; each indexer
+    # scopes the shared snapshot to its own root.
+    prefetched = _snapshot_skill_tiers(
+        exec_env, [*lower_skill_dirs, skills_dir]
+    )
     merged = SkillRegistry({})
     for lower in lower_skill_dirs:
         merged = merge_skill_registries(
-            merged, SkillIndexer(lower, exec_env=exec_env).index()
+            merged,
+            SkillIndexer(lower, exec_env=exec_env, prefetched=prefetched).index(),
         )
     return merge_skill_registries(
-        merged, SkillIndexer(skills_dir, exec_env=exec_env).index()
+        merged,
+        SkillIndexer(skills_dir, exec_env=exec_env, prefetched=prefetched).index(),
     )
 
 

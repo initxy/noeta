@@ -141,11 +141,30 @@ class SkillIndexer:
     ExecEnv's recursive glob rather than the host walk's symlink-cycle recursion
     (the container is the isolation boundary; ``**`` via the shell's globstar
     does not chase symlink cycles).
+
+    ``prefetched`` (issue 46) short-circuits ALL of that per-file container IO:
+    it is a pre-fetched tree snapshot (duck-typed
+    :class:`~noeta.tools.fs.exec_env.TreeSnapshot` — ``files``: every regular
+    file under the skill tiers; ``contents``: the raw bytes of each SKILL.md —
+    kept ``Any`` for the same L2-sibling-import reason as ``exec_env``) that
+    the caller obtained in one ``ExecEnv.tree_snapshot`` round-trip spanning
+    every tier. When set, candidates / SKILL.md bytes / resources are all
+    derived from the snapshot in-process — paths outside ``root`` are filtered
+    lexically, exactly like each per-tier walk would scope them — and the
+    per-file ``exec_env`` path is never touched. ``None`` (the default)
+    preserves both existing paths unchanged.
     """
 
-    def __init__(self, root: Path, *, exec_env: Optional[Any] = None) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        exec_env: Optional[Any] = None,
+        prefetched: Optional[Any] = None,
+    ) -> None:
         self._root = root
         self._exec_env = exec_env
+        self._prefetched = prefetched
 
     def index(self) -> "SkillRegistry":
         skills: dict[str, SkillDescription] = {}
@@ -166,6 +185,8 @@ class SkillIndexer:
         return SkillRegistry(skills)
 
     def _candidates(self) -> list[tuple[str, Path]]:
+        if self._prefetched is not None:
+            return self._candidates_via_prefetched()
         if self._exec_env is not None:
             return self._candidates_via_exec_env()
         if not self._root.is_dir():
@@ -202,6 +223,25 @@ class SkillIndexer:
         found.sort(key=lambda item: item[0])
         return found
 
+    def _candidates_via_prefetched(self) -> list[tuple[str, Path]]:
+        """Derive the ``SKILL.md`` candidates from the pre-fetched snapshot.
+
+        Zero IO: the snapshot lists regular files only (no ``is_file`` probe
+        needed) and spans every tier, so scoping to THIS indexer's root is the
+        same lexical ``relative_to`` filter the per-tier walks apply. Sorted by
+        normalised POSIX relative path exactly as the other two paths are."""
+        found: list[tuple[str, Path]] = []
+        for path in self._prefetched.files:
+            if path.name != "SKILL.md":
+                continue
+            try:
+                rel = path.relative_to(self._root)
+            except ValueError:
+                continue
+            found.append((rel.as_posix(), path))
+        found.sort(key=lambda item: item[0])
+        return found
+
     def _candidates_via_exec_env(self) -> list[tuple[str, Path]]:
         """Discover ``SKILL.md`` files under ``root`` through the ExecEnv.
 
@@ -226,7 +266,12 @@ class SkillIndexer:
 
     def _parse_one(self, path: Path) -> Optional[SkillDescription]:
         try:
-            if self._exec_env is not None:
+            if self._prefetched is not None:
+                raw_bytes = self._prefetched.contents.get(path)
+                if raw_bytes is None:
+                    raise OSError("bytes not captured in the tier snapshot")
+                raw = raw_bytes.decode("utf-8")
+            elif self._exec_env is not None:
                 raw = self._exec_env.read_text(path, encoding="utf-8")
             else:
                 raw = path.read_text(encoding="utf-8")
@@ -313,11 +358,18 @@ class SkillIndexer:
 
         Sandbox mode (``exec_env`` set) enumerates the same way through the
         container's recursive glob + per-entry file test, so a skill's bundled
-        resources are those that exist INSIDE the container.
+        resources are those that exist INSIDE the container. With a
+        ``prefetched`` snapshot the same container view comes for free: the
+        snapshot already holds every regular file, and the ``relative_to``
+        filter below scopes it to this skill's root — zero further IO.
         """
         root = skill_md.parent
         exec_env = self._exec_env
-        if exec_env is not None:
+        if self._prefetched is not None:
+            # The snapshot lists regular files only — no per-entry probe.
+            candidates = list(self._prefetched.files)
+            is_file = lambda p: True  # noqa: E731
+        elif exec_env is not None:
             candidates = list(exec_env.rglob(root, "*"))
             is_file = exec_env.is_file
         else:
