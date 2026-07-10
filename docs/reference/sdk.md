@@ -192,8 +192,13 @@ transport, `HttpPostFn`), `delta_sink`
 (`(StepContext, call_id, StreamDelta) → None` — receives ephemeral token
 deltas while a streaming-capable provider call is in flight; `None` ⇒ no
 streaming, providers are called exactly as before; deltas are never
-persisted), `workflow_allowed: bool = False`, and
-`write_mode: str = "dry_run"` (`"apply"` performs real writes).
+persisted), the memory-store addressing `memory_dir` / `global_memory_dir`
+(the host-level roots, precedence `memory_dir` > `global_memory_dir` >
+`~/.noeta/memories`) and `memory_root_resolver`
+(`(task_id) → Path | None` — per-task root for multi-tenant hosts, falling
+back to the chain on `None`; see [Multi-tenant
+memory](../how-to/multi-tenant-memory.md)), `workflow_allowed: bool = False`,
+and `write_mode: str = "dry_run"` (`"apply"` performs real writes).
 
 Related re-exports from `noeta.tools.app` / `noeta.tools.mcp`:
 `AppPreviewGateway`, `AppMount`, `McpServerSpec` (stdio),

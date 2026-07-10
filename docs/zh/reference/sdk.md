@@ -146,7 +146,7 @@ def word_count(arguments: dict, ctx: ToolContext) -> ToolResult: ...
 
 ### `HostConfig` — `client/host_config.py:38`
 
-作为 `Client(..., host_config=…)` 传递的冻结数据类；永远不是代理身份的一部分。字段：持久化存储三元组 `event_log` / `content_store` / `dispatcher`（**全有或全无**——`host_config.py:85` 的 `storage_triple()` 在部分设置时抛出 `ValueError`；全部 `None` ⇒ 内存中）、`app_gateway`（`AppPreviewGateway` —— `None` ⇒ 没有 `open_app` 工具）、`mcp_server_resolver`（`(alias) → McpAnyServerSpec | None`）、`mcp_http_post`（可注入的 HTTP 传输，`HttpPostFn`）、`delta_sink`（`(StepContext, call_id, StreamDelta) → None` ——在支持流式传输的 provider 调用进行中接收临时 token delta；`None` ⇒ 不流式传输，provider 完全按之前的方式调用；delta 从不持久化）、`workflow_allowed: bool = False`，以及 `write_mode: str = "dry_run"`（`"apply"` 执行真实写入）。
+作为 `Client(..., host_config=…)` 传递的冻结数据类；永远不是代理身份的一部分。字段：持久化存储三元组 `event_log` / `content_store` / `dispatcher`（**全有或全无**——`host_config.py:85` 的 `storage_triple()` 在部分设置时抛出 `ValueError`；全部 `None` ⇒ 内存中）、`app_gateway`（`AppPreviewGateway` —— `None` ⇒ 没有 `open_app` 工具）、`mcp_server_resolver`（`(alias) → McpAnyServerSpec | None`）、`mcp_http_post`（可注入的 HTTP 传输，`HttpPostFn`）、`delta_sink`（`(StepContext, call_id, StreamDelta) → None` ——在支持流式传输的 provider 调用进行中接收临时 token delta；`None` ⇒ 不流式传输，provider 完全按之前的方式调用；delta 从不持久化）、记忆存储寻址 `memory_dir` / `global_memory_dir`（宿主级根目录，优先级 `memory_dir` > `global_memory_dir` > `~/.noeta/memories`）与 `memory_root_resolver`（`(task_id) → Path | None` ——多租户宿主的按任务根目录解析，返回 `None` 时回落上述链；见[多租户记忆](../how-to/multi-tenant-memory.md)）、`workflow_allowed: bool = False`，以及 `write_mode: str = "dry_run"`（`"apply"` 执行真实写入）。
 
 来自 `noeta.tools.app` / `noeta.tools.mcp` 的相关重新导出：`AppPreviewGateway`、`AppMount`、`McpServerSpec`（stdio）、`McpHttpServerSpec`、`McpAnyServerSpec`（它们的联合）、`McpError`、`McpConfigError`、`HttpPostFn`。
 
