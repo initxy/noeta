@@ -8,6 +8,36 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-07-10
+
+### Added
+
+- **Memory v2 — the store maintains itself.** Memory v1's file-per-memory
+  base gains the pieces that keep it healthy over time:
+  - **Memory-policy prompt.** Memory-enabled presets (`main` / `main-web`)
+    carry a policy fragment (exported as `MEMORY_POLICY_PROMPT`) telling the
+    model what earns a memory, what never does, and the write hygiene
+    (dedupe before writing, archive the stale).
+  - **Frontmatter + richer recall.** `memory_write` takes optional
+    `description` (one-line index summary) and `type`
+    (`user` / `project` / `procedural` / `reference`), stored as frontmatter
+    the tool composes itself; recall upgrades to two deterministic tiers
+    (name tokens first, then summary tokens). Files without frontmatter keep
+    the v1 behavior byte-for-byte.
+  - **`memory_search` and `memory_archive` tools.** Case-insensitive
+    substring search with grep-style excerpts (a `truncated` flag reports
+    when more matched), and reversible retirement into an `archive/`
+    subdirectory — memories are never deleted.
+  - **Background consolidation.** After a session stops (debounced, default
+    24h, marker file in the memory root), a hidden `__consolidation__` agent
+    reads a digest of recent session activity and merges duplicates, archives
+    superseded memories, and backfills missed facts — through the same memory
+    tools, memory pack only. On by default in the served backend
+    (`NOETA_AGENT_MEMORY_CONSOLIDATION=0` disables;
+    `NOETA_AGENT_MEMORY_CONSOLIDATION_DEBOUNCE_HOURS` tunes); SDK hosts
+    orchestrate their own runs via `noeta.sdk.run_consolidation`. See
+    `docs/adr/memory-consolidation.md`.
+
 ## [0.2.2] - 2026-07-10
 
 ### Added
@@ -467,7 +497,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/initxy/noeta/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/initxy/noeta/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/initxy/noeta/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/initxy/noeta/compare/v0.1.17...v0.2.0
