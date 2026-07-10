@@ -257,6 +257,25 @@ class GenericEngineResolver:
         """
         raise NotImplementedError
 
+    def _engine_cache_scope(
+        self, agent: Any, task_id: Optional[str]
+    ) -> Optional[str]:
+        """Optional host-defined Engine-cache partition for ``(agent, task)``.
+
+        The cache key deliberately omits ``task_id`` — engines are SHARED
+        across tasks with equal bindings. A host whose engine material varies
+        per task beyond the standard key dimensions (e.g. the SdkHost's
+        per-tenant memory root, whose store is baked into the built Engine's
+        tool closures and resident index) returns a stable string scope here;
+        engines then resolve per ``(key, scope)`` so one task's material can
+        never serve another scope's task via the cache. Must be cheap, total,
+        and deterministic for a given ``(agent, task_id)`` — it runs on every
+        engine resolve. ``None`` (this default — every host without
+        task-varying material) keeps the shared slot, byte-equal with the
+        pre-scope key semantics.
+        """
+        return None
+
     def _build_orchestration_engine(
         self, task_id: str, *, allowed_subtask_agents: frozenset[str]
     ) -> Engine:
@@ -1046,10 +1065,18 @@ class GenericEngineResolver:
             if policy_wrapper is _POLICY_WRAPPER_UNSET
             else policy_wrapper
         )
+        # ``_engine_cache_scope`` is the 11th dimension — a host-defined
+        # partition for engine material that varies per TASK beyond the
+        # standard dimensions (e.g. the SdkHost's per-tenant memory root, whose
+        # store is baked into the built Engine's tool closures). ``None`` (the
+        # base default, every single-tenant host) keeps the shared slot,
+        # byte-equal with the pre-scope key semantics; the cache is in-memory
+        # only (never durable), so widening the tuple has no resume effect.
         key = (
             agent.name, resolved_model, effective_ask, workspace, provider,
             permission_mode, mcp_aliases, effort, exec_env_ref,
             effective_wrapper is None,
+            self._engine_cache_scope(agent, task_id),
         )
         # #13 / item 3: the global lock guards only the cache map. The build
         # itself runs OUTSIDE it, guarded by a PER-KEY build lock — one build

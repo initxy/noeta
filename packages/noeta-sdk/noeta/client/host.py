@@ -466,6 +466,15 @@ class SdkHost(GenericEngineResolver):
     # ~/.noeta/memories). An explicit memory_dir override takes priority over this
     # field.
     global_memory_dir: Optional[Path] = None
+    # Per-task memory-root resolution seam (issue #53): given a task id, the
+    # host-injected callable returns that task's memory root, or ``None`` to
+    # fall back to the ``memory_dir`` > ``global_memory_dir`` > default chain.
+    # Lets a multi-tenant product split the store per tenant while the SDK
+    # stays tenancy-agnostic (it hands over task ids, never users). Must be
+    # cheap, total, and deterministic per task id — a resumed task must resolve
+    # the same store. ``None`` (default) ⇒ the host-level chain, byte-identical
+    # for single-tenant hosts.
+    memory_root_resolver: Optional[Callable[[str], Optional[Path]]] = None
     #: Project-instructions-file switch. Like memory, this is workspace
     #: environment material (not agent identity), so Capabilities carries no
     #: flag and SdkHost configures it directly. Default False. When True, looks
@@ -1533,6 +1542,7 @@ class SdkHost(GenericEngineResolver):
         # session's life). R-1 keeps resume reconnect-free: the recorded tool spec
         # is the durable truth, and the resume path passes empty aliases.
         mcp_tools_override = self._resolve_live_mcp_tools(mcp_aliases, task_id=task_id)
+        memory_override = self._memory_root_override(task_id)
         inputs = build_session_inputs(
             workspace_dir=workspace_dir,
             system_prompt=spec.instructions,
@@ -1584,7 +1594,15 @@ class SdkHost(GenericEngineResolver):
             # stable hash byte-identical.
             structured_output_schema=structured_output_schema,
             memory_enabled=spec.capabilities.memory,
-            memory_dir=self.memory_dir,
+            # Per-task memory root (issue #53): when the injected
+            # ``memory_root_resolver`` maps this task to a root, it rides the
+            # top-precedence ``memory_dir`` slot so the builder's tool pack +
+            # resident index target that tenant's store; ``None`` override
+            # (single-tenant / resolver fallback) keeps the host fields —
+            # byte-identical to the pre-resolver chain.
+            memory_dir=(
+                memory_override if memory_override is not None else self.memory_dir
+            ),
             global_memory_dir=self.global_memory_dir,
             instructions_enabled=self.instructions_enabled,
             instructions_file=self.instructions_file,
@@ -1820,7 +1838,7 @@ class SdkHost(GenericEngineResolver):
         return environment, instructions
 
     def memory_recall_context(
-        self, agent: str
+        self, agent: str, task_id: Optional[str] = None
     ) -> Optional[tuple[MemoryStore, MemoryEntries]]:
         """The (store, entries-snapshot) pair for ``agent``'s memory recall.
 
@@ -1837,14 +1855,19 @@ class SdkHost(GenericEngineResolver):
         (only the ``main`` preset enables it), so a memory-off agent's stream
         stays byte-identical to the pre-seam path. The store root resolution is
         the SAME precedence :func:`~noeta.execution.builder.build_session_inputs`
-        uses for the tools + resident index (``memory_dir`` override >
-        ``global_memory_dir`` > the SDK global default), so recall reads exactly
-        the store the session's ``memory_write`` / ``memory_read`` tools use.
-        The global default is read late off the module (not from-imported) so a
-        test pinning ``noeta.execution.memory.DEFAULT_GLOBAL_MEMORY_DIR`` stays
-        hermetic. An empty / missing directory is a valid empty store
-        (``entries == ()``): the index record no-ops and recall never hits, so
-        the default flow pays zero bytes.
+        uses for the tools + resident index (:meth:`memory_root` — the per-task
+        ``memory_root_resolver`` when it resolves, else ``memory_dir`` override
+        > ``global_memory_dir`` > the SDK global default), so recall reads
+        exactly the store the session's ``memory_write`` / ``memory_read``
+        tools use. ``task_id`` is the task the goal is being recorded on; the
+        driver passes it so a multi-tenant host recalls from that tenant's
+        store (``None`` — a caller without a task — keeps the host-level
+        chain). The global default is read late off the module (not
+        from-imported) so a test pinning
+        ``noeta.execution.memory.DEFAULT_GLOBAL_MEMORY_DIR`` stays hermetic.
+        An empty / missing directory is a valid empty store (``entries ==
+        ()``): the index record no-ops and recall never hits, so the default
+        flow pays zero bytes.
         """
         if agent == "unnamed" and self.unnamed_fallback is not None:
             spec = self.unnamed_fallback
@@ -1852,26 +1875,64 @@ class SdkHost(GenericEngineResolver):
             spec = self._lookup_agent(agent, task_id="<unbound>")
         if not spec.capabilities.memory:
             return None
-        store = execution_memory.load_memory_store(root=self.memory_root())
+        store = execution_memory.load_memory_store(root=self.memory_root(task_id))
         return store, store.entries()
 
-    def memory_root(self) -> Path:
+    def memory_root(self, task_id: Optional[str] = None) -> Path:
         """The resolved memory-store root directory (pure wiring, no IO).
 
-        ONE precedence chain for every consumer — the session builder's tool
+        ONE resolution chain for every consumer — the session builder's tool
         pack + resident index, :meth:`memory_recall_context`, and a product's
         host-side memory material (e.g. the consolidation debounce marker,
-        which must sit NEXT TO the store the memory tools mutate):
-        ``memory_dir`` override > ``global_memory_dir`` > the SDK global
-        default (``~/.noeta/memories``). The default is read late off the
-        module (not from-imported) so a test pinning
+        which must sit NEXT TO the store the memory tools mutate): the
+        per-task ``memory_root_resolver`` when set AND ``task_id`` is given AND
+        it returns a root, else ``memory_dir`` override > ``global_memory_dir``
+        > the SDK global default (``~/.noeta/memories``). ``task_id=None`` (or
+        no resolver — every single-tenant host) keeps the host-level chain
+        byte-identical. The default is read late off the module (not
+        from-imported) so a test pinning
         ``noeta.execution.memory.DEFAULT_GLOBAL_MEMORY_DIR`` stays hermetic.
         """
+        override = self._memory_root_override(task_id)
+        if override is not None:
+            return override
         if self.memory_dir is not None:
             return self.memory_dir
         if self.global_memory_dir is not None:
             return self.global_memory_dir
         return execution_memory.DEFAULT_GLOBAL_MEMORY_DIR
+
+    def _memory_root_override(self, task_id: Optional[str]) -> Optional[Path]:
+        """The per-task root the injected resolver maps ``task_id`` to, or ``None``.
+
+        ``None`` — no resolver wired (single-tenant), no task id in hand (the
+        by-name seed path), or the resolver declining this task — means "fall
+        back to the host-level chain". Centralised so :meth:`memory_root`,
+        :meth:`_build_engine`, and :meth:`_engine_cache_scope` can never
+        disagree on which store a task resolves.
+        """
+        if self.memory_root_resolver is None or not task_id:
+            return None
+        return self.memory_root_resolver(task_id)
+
+    def _engine_cache_scope(
+        self, agent: AgentSpec, task_id: Optional[str]
+    ) -> Optional[str]:
+        """Partition the Engine cache by resolved per-task memory root.
+
+        The Engine cache key deliberately omits ``task_id`` (engines are shared
+        across tasks with equal bindings), but a memory-enabled Engine bakes
+        its :class:`MemoryStore` into the tool closures + resident index — so
+        two tasks whose ``memory_root_resolver`` maps to DIFFERENT roots must
+        never share a cached Engine (tenant A's store would serve tenant B).
+        Scope = the resolved override root; ``None`` (memory-off agent, no
+        resolver, no task id, or resolver fallback) keeps the shared slot,
+        byte-equal with the pre-resolver key.
+        """
+        if not agent.capabilities.memory:
+            return None
+        override = self._memory_root_override(task_id)
+        return str(override) if override is not None else None
 
     def declared_skill_activations(self, agent: str) -> tuple[str, ...]:
         """The agent spec's declared ``skills`` (``Options.skills``), as plain names.
