@@ -102,8 +102,19 @@ class TestFrameRoundTrip:
         a, b = socket.socketpair()
         try:
             data = b"y" * 70000  # > 65535 triggers 8-byte ext length
-            assert write_frame(a, True, OP_BINARY, data)
+            # 70 KB exceeds the socketpair kernel buffer on macOS (8 KB), so a
+            # same-thread write-then-read deadlocks inside sendall. Write from
+            # a helper thread and drain concurrently — the shape the real pump
+            # has (reader and writer are always distinct threads).
+            wrote: list[bool] = []
+            writer = threading.Thread(
+                target=lambda: wrote.append(write_frame(a, True, OP_BINARY, data))
+            )
+            writer.start()
             result = read_frame(b)
+            writer.join(timeout=5)
+            assert not writer.is_alive()
+            assert wrote == [True]
             assert result is not None
             fin, opcode, payload = result
             assert fin is True
