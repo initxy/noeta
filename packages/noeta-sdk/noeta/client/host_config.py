@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping, Optional, Tuple
 
 from noeta.client.sandbox_provider import SandboxProvider, SandboxSpec
@@ -198,6 +199,29 @@ class HostConfig:
     #: configured; a host runtime injection, never part of any agent identity.
     sandbox_backend_factory: Optional["BackendFactory"] = None
     sandbox_browser_factory: Optional["BrowserBackendFactory"] = None
+
+    # -- memory store addressing --------------------------------------------
+    #: Explicit memory-dir override forwarded to the SdkHost; ``None`` (default)
+    #: falls through to ``global_memory_dir`` / the SDK global default
+    #: (``~/.noeta/memories``). Same precedence chain as the host fields it
+    #: forwards to (``memory_dir`` > ``global_memory_dir`` > default) — one
+    #: chain for the memory tool pack, the resident index, recall, and the
+    #: consolidation marker.
+    memory_dir: Optional[Path] = None
+    #: Deployment-level global memory root; ``None`` (default) keeps the SDK
+    #: global default. Beaten by an explicit ``memory_dir`` override.
+    global_memory_dir: Optional[Path] = None
+    #: Per-task memory-root resolution seam for multi-tenant hosts: given a
+    #: task id, return that task's memory root, or ``None`` to fall back to the
+    #: precedence chain above. The SDK stays tenancy-agnostic — it knows tasks,
+    #: not users; the embedding product owns the task→tenant mapping. When set,
+    #: every consumer of the chain (memory tool pack + resident index at engine
+    #: build, recall at the goal seam, ``Client.memory_root``) resolves through
+    #: it first. The callable must be cheap and total (it runs on the engine
+    #: build and goal paths) and deterministic for a given task id — a resumed
+    #: task must resolve the same store. ``None`` (default) ⇒ today's
+    #: host-level chain, byte-identical for single-tenant hosts.
+    memory_root_resolver: Optional[Callable[[str], Optional[Path]]] = None
 
     # -- host kill-switches ------------------------------------------------
     workflow_allowed: bool = False

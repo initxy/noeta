@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from noeta.core.fold import messages_from_appended
 from noeta.protocols.messages import TextBlock
@@ -210,6 +210,7 @@ def build_consolidation_digest(
     since: Optional[datetime] = None,
     max_sessions: int = DEFAULT_MAX_SESSIONS,
     max_chars_per_session: int = DEFAULT_MAX_CHARS_PER_SESSION,
+    include_task: Optional[Callable[[str], bool]] = None,
 ) -> Optional[str]:
     """A capped digest of recent root-session activity, or ``None`` when empty.
 
@@ -222,6 +223,16 @@ def build_consolidation_digest(
     role-labeled text (see :func:`_session_transcript`); sessions yielding no
     conversational text are skipped without consuming (or overflowing) the
     cap, so the dropped count is exact.
+
+    ``include_task`` is the host-side digest scope (issue #53): a predicate
+    over ROOT session task ids; sessions it rejects are out of the digest's
+    universe entirely — they neither consume the cap nor count as omitted,
+    exactly like a subtask. A multi-tenant host runs one curation pass per
+    tenant by filtering to that tenant's root sessions (and pointing
+    ``memory_root`` at that tenant's store, whose per-root marker then gives
+    per-tenant debounce). ``None`` (default) ⇒ the whole-ledger digest,
+    byte-identical to today. The header states the scoping so the
+    consolidation agent never mistakes a tenant's slice for the whole ledger.
 
     The header states the window, the session count, how many digestible
     sessions the cap dropped, and the per-session character cap — the spec's
@@ -254,6 +265,8 @@ def build_consolidation_digest(
             continue  # subtask (or malformed stream): its text rides the root
         if str(getattr(genesis, "agent_name", "") or "").startswith("__"):
             continue  # reserved internal agents — never digest a curation run
+        if include_task is not None and not include_task(summary.task_id):
+            continue  # out of the host's digest scope — not counted anywhere
         # Transcript before cap check: the envelopes are already in memory
         # (no extra IO), and it keeps the header's dropped count exact —
         # only sessions with digestible text consume or overflow the cap.
@@ -279,6 +292,8 @@ def build_consolidation_digest(
         if since is not None
         else "all recorded sessions (no previous consolidation run)"
     )
+    if include_task is not None:
+        window += ", restricted to a host-selected subset of sessions"
     dropped = (
         f"; {omitted} more session(s) with digestible activity in the window "
         f"were omitted (session cap {max_sessions})"
@@ -309,6 +324,8 @@ def run_consolidation(
     debounce_hours: float = DEFAULT_DEBOUNCE_HOURS,
     max_sessions: int = DEFAULT_MAX_SESSIONS,
     max_chars_per_session: int = DEFAULT_MAX_CHARS_PER_SESSION,
+    include_task: Optional[Callable[[str], bool]] = None,
+    on_seeded: Optional[Callable[[str], None]] = None,
 ) -> bool:
     """Enqueue one background consolidation run; ``True`` iff one was enqueued.
 
@@ -321,6 +338,23 @@ def run_consolidation(
     use, for a resident worker to drive. An unexpected failure (e.g. the
     consolidation agent missing from the client's registry) still raises —
     that is host mis-wiring, not an expected condition.
+
+    ``include_task`` scopes the digest (see
+    :func:`build_consolidation_digest`) so a multi-tenant host runs one
+    curation pass per tenant: filter to that tenant's root sessions and point
+    ``memory_root`` at that tenant's directory — the per-root marker then
+    debounces each tenant independently. ``None`` (default) ⇒ the
+    whole-ledger digest, byte-identical to today.
+
+    ``on_seeded`` receives the seeded ``__consolidation__`` root task id after
+    the task is durably created (its seed lease still held — no worker can
+    claim it yet) and BEFORE it is handed to the ready queue. A host running
+    one pass per tenant registers the id in its ``memory_root_resolver``
+    mapping here, so the curation run's Engine — and therefore its ``memory_*``
+    tools — resolves the SAME tenant store the digest and marker were scoped
+    to. The callback must not raise: a raise propagates after the marker
+    write and the durable seed, leaving a leased task that is never yielded.
+    ``None`` (default, single-tenant) ⇒ no callback, unchanged behaviour.
 
     ``now`` is injectable for tests; ``None`` ⇒ the wall clock. There is no
     per-seed budget/contract parameter on ``seed_start`` (a task's budget is
@@ -338,6 +372,7 @@ def run_consolidation(
         since=since,
         max_sessions=max_sessions,
         max_chars_per_session=max_chars_per_session,
+        include_task=include_task,
     )
     if digest is None:
         return False
@@ -345,5 +380,10 @@ def run_consolidation(
     seeded = client.seed_start(
         goal=_GOAL_PREAMBLE + "\n\n" + digest, agent=CONSOLIDATION_AGENT_NAME
     )
+    # Multi-tenant hook: the seed lease is still held here, so the host can
+    # bind this task id in its memory_root_resolver before ANY worker can
+    # resolve the curation Engine against it.
+    if on_seeded is not None:
+        on_seeded(seeded.task_id)
     client._yield_seeded_lease(seeded)  # noqa: SLF001 — the background-verb path
     return True

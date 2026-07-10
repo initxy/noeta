@@ -723,7 +723,10 @@ class InteractionDriver:
         memory_store = None
         recall_context = getattr(host, "memory_recall_context", None)
         if callable(recall_context):
-            memory = recall_context(agent)
+            # The task id rides along so a host with a per-task
+            # memory_root_resolver recalls from THIS task's store; a
+            # single-tenant host ignores it (same resolution chain).
+            memory = recall_context(agent, task_id=task.task_id)
             if memory is not None:
                 memory_store, memory_entries = memory
                 record_memory_index(
@@ -1084,8 +1087,10 @@ class InteractionDriver:
         )
         recall_context = getattr(self._host, "memory_recall_context", None)
         if callable(recall_context):
+            # task_id rides along for per-task memory-root resolution
+            # (multi-tenant hosts); the single-tenant chain is unchanged.
             memory = recall_context(
-                agent_name_of(self._host.event_log, task_id)
+                agent_name_of(self._host.event_log, task_id), task_id=task_id
             )
             if memory is not None:
                 memory_store, _memory_entries = memory
