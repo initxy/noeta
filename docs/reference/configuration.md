@@ -33,6 +33,8 @@ Precedence (low → high):
 | `NOETA_AGENT_WRITE_MODE` | string | `dry_run` | Filesystem write policy: `dry_run` (stages a diff, safe default) or `apply` (performs real writes). |
 | `NOETA_AGENT_WORKFLOW_ENABLED` | bool | `false` | Host kill-switch for the `run_workflow` control tool. |
 | `NOETA_AGENT_BACKGROUND_DRIVE` | bool | `true` | Drive turns asynchronously on a background thread (command endpoints return `202`). |
+| `NOETA_AGENT_MEMORY_CONSOLIDATION` | bool | `true` | Background memory consolidation: at session-stop seams (close / turn boundary), debounced, a hidden curation agent merges / archives / backfills long-term memories. See `docs/adr/memory-consolidation.md`. |
+| `NOETA_AGENT_MEMORY_CONSOLIDATION_DEBOUNCE_HOURS` | float | `24.0` | Minimum hours between consolidation runs (tracked in `.consolidation-state.json` under the memory root). |
 | `NOETA_AGENT_OTLP_ENDPOINT` | URL | *(none)* | OTLP trace export: the **full** OTLP/HTTP traces URL (e.g. `http://localhost:4318/v1/traces`). Task / tool / LLM execution is exported as spans to any OTLP collector (Jaeger, OpenTelemetry Collector, …). Unset = export off. Export is **opt-in via this variable or the `otlp_endpoint` config key only** — an ambient `OTEL_EXPORTER_OTLP_ENDPOINT` never enables it. Once enabled, the OTel-standard `OTEL_EXPORTER_OTLP_HEADERS` (`k=v,k2=v2`, values percent-encoded) supplies request headers. |
 | `NOETA_WEB_SEARCH_API_KEY` | string | *(none)* | Enables the `web_search` built-in tool. Without this key, the tool is not mounted. |
 
@@ -64,6 +66,8 @@ hold a single JSON object. All keys are optional.
 | `write_mode` | string | `dry_run` | Write policy. |
 | `workflow_enabled` | bool | `false` | Workflow tool gate. |
 | `background_drive` | bool | `true` | Async turn driving. |
+| `memory_consolidation` | bool | `true` | Background memory consolidation (see env var above). |
+| `memory_consolidation_debounce_hours` | float | `24.0` | Consolidation debounce window. |
 | `otlp_endpoint` | string | *(none)* | OTLP trace export URL (see env var above). |
 | `otlp_headers` | object[string→string] | `{}` | Extra headers on every OTLP export request (hosted-collector auth). The export carries the audit allowlist projection only — no goals, tool arguments, or message bodies. |
 

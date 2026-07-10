@@ -850,6 +850,16 @@ class Client:
                 return getattr(env.payload, "parent_task_id", None)
         return None
 
+    def memory_root(self) -> Path:
+        """The host's resolved memory-store root (see :meth:`SdkHost.memory_root`).
+
+        ``memory_dir`` override > ``global_memory_dir`` > the SDK global
+        default. A product backend reads it to place host-side memory material
+        (e.g. the consolidation debounce marker) next to the store the memory
+        tools use, without re-deriving the precedence chain.
+        """
+        return self._host.memory_root()
+
     def get_content(self, content_hash: str) -> Optional[bytes]:
         """Fetch a stored blob by content hash (``None`` if absent).
 

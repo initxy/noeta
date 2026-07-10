@@ -1,6 +1,6 @@
 # 内置工具
 
-Noeta 提供一组内置工具，由文件系统包、Web 包、App 包以及（条件性的）内存和 MCP 工具组装而成。工具名称是 provider 安全的 `snake_case`，是模型调用的确切字符串。
+Noeta 提供一组内置工具，由文件系统包、Web 包、App 包以及（条件性的）记忆和 MCP 工具组装而成。工具名称是 provider 安全的 `snake_case`，是模型调用的确切字符串。
 
 ## 文件系统工具
 
@@ -42,14 +42,16 @@ Shell 元字符（`|`、`;`、`&&`、`>` 等）在分词之前被拒绝。这是
 | --- | --- | --- | --- |
 | `open_app` | low | 通过单端口预览网关在 Web "App" 面板中渲染工作区 HTML 应用。 | `noeta/tools/app/open_app.py` |
 
-## 内存工具
+## 记忆工具
 
 仅在启用 `Capabilities.memory` 时挂载（只有 `main` 预设开启它）。
 
 | 工具 | 风险 | 用途 | 来源 |
 | --- | --- | --- | --- |
-| `memory_write` | low | 将 markdown 内存文件写入内存存储。 | `noeta/tools/memory.py` |
-| `memory_read` | low | 按需读取已存储内存的完整文本。 | `noeta/tools/memory.py` |
+| `memory_write` | medium | 将 markdown 记忆文件写入记忆存储。可选参数 `description`（一行索引摘要）和 `type`（`user` / `project` / `procedural` / `reference`）由工具自行组装为 frontmatter 块存储。 | `noeta/tools/memory.py` |
+| `memory_read` | low | 按需读取已存储记忆的完整文本。 | `noeta/tools/memory.py` |
+| `memory_search` | low | 按内容查找记忆：对名称与全文做大小写不敏感的子串匹配，返回 grep 风格摘录（每条记忆最多 3 行，最多 10 条记忆；命中更多时以 `truncated` 标志说明）。 | `noeta/tools/memory.py` |
+| `memory_archive` | medium | 将过时的记忆移入存储的 `archive/` 子目录——它从索引、召回和搜索中消失，但绝不删除（人工可恢复）。 | `noeta/tools/memory.py` |
 
 ## MCP 工具
 
@@ -60,6 +62,7 @@ Shell 元字符（`|`、`;`、`&&`、`>` 等）在分词之前被拒绝。这是
 | 等级 | 含义 |
 | --- | --- |
 | `low` | 代理自身状态之外无副作用。始终允许。 |
+| `medium` | 改变持久状态，但仅限于一个受限目录内（例如记忆存储）。 |
 | `high` | 修改文件系统或生成外部进程。须经 `PermissionGuard` 批准。 |
 
 ## 备注

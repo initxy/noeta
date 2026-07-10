@@ -13,9 +13,11 @@ from noeta.client.options import Options, SystemPromptPreset, compile_options
 from noeta.client.parts import BUILTIN_TOOL_CLASSES
 from noeta.presets import (
     MAIN_SYSTEM_PROMPT,
+    MEMORY_POLICY_PROMPT,
     OFFICIAL_SUBAGENTS,
     main_options,
     official_specs,
+    sandbox_browser_options,
 )
 
 
@@ -312,6 +314,27 @@ def test_plan_prompt_is_readonly_and_returns_plan() -> None:
 
 def test_official_subagents_three_keys() -> None:
     assert set(OFFICIAL_SUBAGENTS.keys()) == {"general-purpose", "explore", "plan"}
+
+
+# ---------------------------------------------------------------------------
+# 8. Memory-policy prompt fragment (memory v2): in the prompt iff the preset
+#    opens Capabilities.memory
+# ---------------------------------------------------------------------------
+
+
+def test_memory_policy_fragment_only_in_memory_presets() -> None:
+    # The fragment rides the prompt of memory-enabled presets — main and its
+    # sandbox-browser variant (which inherits main's capabilities) — and of
+    # no memory-free preset.
+    specs = official_specs()
+    assert specs["main"].capabilities.memory is True
+    assert MEMORY_POLICY_PROMPT in specs["main"].instructions
+    web_opts = sandbox_browser_options()
+    assert web_opts.capabilities.memory is True
+    assert MEMORY_POLICY_PROMPT in web_opts.system_prompt
+    for name in ("explore", "plan", "general-purpose"):
+        assert specs[name].capabilities.memory is False
+        assert MEMORY_POLICY_PROMPT not in specs[name].instructions
 
 
 def test_main_options_reproducible_and_compiles() -> None:

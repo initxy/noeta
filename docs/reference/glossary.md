@@ -199,7 +199,7 @@ See also: [ADR: Event origin marker](https://github.com/initxy/noeta/blob/main/d
 
 ### Memory
 
-Cross-task long-term memory v1: **write** = `memory_write` tool, **read** = `memory_read` tool, **resident index** = content channel tenant (`kind="memory"`, policy `evolving`), **auto-recall** = host retrieves at user-message seam. Controlled by `Capabilities.memory`.
+Cross-task long-term memory (v2): **mutate** = `memory_write` (optional frontmatter `description` / `type`) and `memory_archive` (retire into `archive/`, never delete) tools, **read** = `memory_read` (full text) and `memory_search` (substring, excerpts) tools, **resident index** = content channel tenant (`kind="memory"`, policy `evolving`), **auto-recall** = host retrieves at user-message seam (name tokens first, then summary tokens), **policy** = the `MEMORY_POLICY_PROMPT` fragment on memory-enabled preset prompts. Controlled by `Capabilities.memory`. A background **consolidation** pass (a hidden `__consolidation__` agent on the resident worker pool, session-stop triggered, debounced) merges / archives / backfills memories; its toggle is host configuration, not agent identity — see [ADR: Memory consolidation](https://github.com/initxy/noeta/blob/main/docs/adr/memory-consolidation.md).
 _Avoid:_ using "Memory" to mean TaskState (that is in-task state; this is cross-task).
 
 ## Governance

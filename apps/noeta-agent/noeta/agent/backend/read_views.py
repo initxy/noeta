@@ -14,9 +14,11 @@ single conversation's stream:
 * ``GET /tasks`` — the session list: the ROOT conversations this process is
   driving, each with a stream-folded ``status`` / ``closed`` / ``title`` so the
   sidebar can render without opening every stream. Subtasks are filtered out
-  (they ride their root's multiplexed stream — docs/.../07-frontend-fold.md);
-  the frontend keys the active conversation by ``task_id`` and folds the rest
-  from ``GET /stream?task=<root>``.
+  (they ride their root's multiplexed stream — docs/.../07-frontend-fold.md),
+  and so are reserved (``__``-prefixed) internal agents' root tasks (the
+  background memory-consolidation runs — host infrastructure, not user
+  conversations); the frontend keys the active conversation by ``task_id`` and
+  folds the rest from ``GET /stream?task=<root>``.
 
 This is a thin server-side projection (like the file tree in
 :mod:`noeta.agent.backend.resource_services`), explicitly allowed for non-event
@@ -230,6 +232,21 @@ def _genesis_parent_task_id(envelopes: list[Any]) -> Optional[str]:
     return None
 
 
+def _genesis_agent_name(envelopes: list[Any]) -> str:
+    """Peek at a stream's genesis ``TaskCreated`` for its ``agent_name``.
+
+    Same cheap first-envelope peek (and defensive fallback) as
+    :func:`_genesis_parent_task_id`; used to keep reserved (``__``-prefixed)
+    internal agents' root tasks — the background ``__consolidation__`` memory
+    curator — out of the user-facing session list, mirroring how
+    ``agent_names()`` keeps them out of the composer's agent dropdown.
+    """
+    for env in envelopes:
+        if getattr(env, "type", None) == "TaskCreated":
+            return str(getattr(env.payload, "agent_name", "") or "")
+    return ""
+
+
 def _handle_list_tasks(handler: BackendHandler, params: dict[str, str]) -> None:
     """``GET /tasks`` → the root-conversation session list (most-recent first).
 
@@ -259,6 +276,12 @@ def _handle_list_tasks(handler: BackendHandler, params: dict[str, str]) -> None:
         # cheaply BEFORE the full fold so a subtask's (possibly long) history
         # is never folded/serialized just to be thrown away.
         if _genesis_parent_task_id(envelopes):
+            continue
+        # Reserved (``__``-prefixed) agents' root tasks are host
+        # infrastructure (the background ``__consolidation__`` memory
+        # curator), not user conversations — hidden from the sidebar the
+        # same way subtask streams are.
+        if _genesis_agent_name(envelopes).startswith("__"):
             continue
         folded = _fold_summary(envelopes)
         workspace = folded.get("workspace_dir")
