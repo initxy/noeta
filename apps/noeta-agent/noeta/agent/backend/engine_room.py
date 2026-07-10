@@ -159,6 +159,13 @@ class EngineRoom:
         self._memory_consolidation_debounce_hours = float(
             memory_consolidation_debounce_hours
         )
+        # Serializes concurrent passes: the enqueue-time marker only lands
+        # AFTER the digest build, so two near-simultaneous session stops
+        # (parallel workers committing suspends, or close next to a turn
+        # boundary) would both read a stale marker and double-enqueue. The
+        # lock is taken non-blocking — the loser drops its attempt, the
+        # winner's marker debounces every later boundary.
+        self._consolidation_pass_lock = threading.Lock()
         self._consolidation_unsubscribe: Optional[Callable[[], None]] = None
         if self._memory_consolidation:
             self._consolidation_unsubscribe = self._client.subscribe(
@@ -639,14 +646,21 @@ class EngineRoom:
     def _consolidation_pass(self, task_id: Optional[str]) -> None:
         """One debounced consolidation attempt (daemon-thread body).
 
-        Order matters for cost: the marker read (one small file) gates first
-        — on the overwhelmingly common not-due boundary nothing else runs;
-        only then the triggering task's genesis is peeked to skip a reserved
+        At most one pass runs at a time (``_consolidation_pass_lock``,
+        non-blocking): between the debounce read and the enqueue-time marker
+        write sits the whole digest build, and without the lock two
+        near-simultaneous session stops would both find the marker stale and
+        seed two curation runs. Within the winning pass, order matters for
+        cost: the marker read (one small file) gates first — on the
+        overwhelmingly common not-due boundary nothing else runs; only then
+        the triggering task's genesis is peeked to skip a reserved
         (``__consolidation__``) session's own boundary (no self-retrigger; the
         enqueue-time marker already protects when the debounce is nonzero).
         ``run_consolidation`` re-checks the debounce, builds the digest,
         writes the marker at enqueue time, and seeds the curation root task.
         """
+        if not self._consolidation_pass_lock.acquire(blocking=False):
+            return
         try:
             memory_root = self.memory_root()
             now = datetime.now(timezone.utc)
@@ -670,6 +684,8 @@ class EngineRoom:
             )
         except Exception:
             _log.exception("memory-consolidation pass failed")
+        finally:
+            self._consolidation_pass_lock.release()
 
     def _agent_name_of(self, task_id: str) -> str:
         """The task's genesis ``TaskCreated.agent_name`` (``""`` if unknown)."""

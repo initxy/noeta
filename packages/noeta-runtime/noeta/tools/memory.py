@@ -82,11 +82,15 @@ _FENCE = "---"
 #: descend into it, so archiving is invisible to index, recall and search.
 _ARCHIVE_DIR_NAME = "archive"
 
-#: ``search()`` output caps: memories per query / excerpt lines per
-#: memory / chars per excerpt line.
-_SEARCH_MAX_MEMORIES = 10
+#: ``search()`` per-memory excerpt caps: lines per memory / chars per line.
+#: The memory-count cap lives on the TOOL (:data:`_SEARCH_MAX_MEMORIES`) so
+#: it can report the trim (``truncated``) instead of silently dropping hits.
 _SEARCH_MAX_LINES = 3
 _SEARCH_LINE_MAX_CHARS = 200
+
+#: Memories per ``memory_search`` result — applied (and reported) by
+#: :class:`MemorySearchTool`, not by :meth:`MemoryStore.search`.
+_SEARCH_MAX_MEMORIES = 10
 
 
 def _is_valid_name(name: object) -> bool:
@@ -191,12 +195,14 @@ class MemoryStore:
     def search(self, query: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
         """Case-insensitive plain-substring search over names and full text.
 
-        Deterministic grep semantics, no regex: per matching memory up
-        to :data:`_SEARCH_MAX_LINES` matching lines (trailing whitespace
-        stripped, each capped at :data:`_SEARCH_LINE_MAX_CHARS` chars),
-        at most :data:`_SEARCH_MAX_MEMORIES` memories, name-sorted. A
-        name-only hit carries an empty excerpt. Top-level files only —
-        ``archive/`` is naturally out of scope.
+        Deterministic grep semantics, no regex: EVERY matching memory,
+        name-sorted, each with up to :data:`_SEARCH_MAX_LINES` matching
+        lines (trailing whitespace stripped, capped at
+        :data:`_SEARCH_LINE_MAX_CHARS` chars). A name-only hit carries an
+        empty excerpt. The memory-count cap is presentation, so it lives on
+        :class:`MemorySearchTool` — which reports the trim instead of
+        dropping hits silently. Top-level files only — ``archive/`` is
+        naturally out of scope.
         """
         if not query:
             return ()
@@ -211,8 +217,6 @@ class MemoryStore:
                         break
             if lines or needle in name.lower():
                 out.append((name, tuple(lines)))
-                if len(out) >= _SEARCH_MAX_MEMORIES:
-                    break
         return tuple(out)
 
     def archive(self, name: str) -> Optional[Path]:
@@ -435,8 +439,9 @@ class MemorySearchTool:
     description: str = (
         "Find stored memories by content: case-insensitive substring match "
         "(no regex) over memory names and full text. Returns up to 10 "
-        "memories with up to 3 matching lines each; use memory_read for a "
-        "hit's full text. Archived memories are not searched."
+        "memories with up to 3 matching lines each; a true 'truncated' flag "
+        "means more memories matched — refine the query. Use memory_read "
+        "for a hit's full text. Archived memories are not searched."
     )
     risk_level: str = "low"
     input_schema: dict[str, Any] = field(
@@ -459,14 +464,22 @@ class MemorySearchTool:
         query = arguments.get("query")
         if not isinstance(query, str) or not query:
             return _err(self.name, "requires non-empty string 'query'")
+        hits = self.store.search(query)
+        truncated = len(hits) > _SEARCH_MAX_MEMORIES
         results = [
             {"name": name, "lines": list(lines)}
-            for name, lines in self.store.search(query)
+            for name, lines in hits[:_SEARCH_MAX_MEMORIES]
         ]
+        summary = f"{self.name}: {len(results)} hit(s)"
+        if truncated:
+            summary = (
+                f"{self.name}: {len(hits)} hit(s), first "
+                f"{_SEARCH_MAX_MEMORIES} shown"
+            )
         return ToolResult(
             success=True,
-            output={"query": query, "results": results},
-            summary=f"{self.name}: {len(results)} hit(s)",
+            output={"query": query, "results": results, "truncated": truncated},
+            summary=summary,
         )
 
 
