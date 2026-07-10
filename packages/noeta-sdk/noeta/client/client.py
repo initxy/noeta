@@ -284,6 +284,13 @@ class Client:
             sandbox_exec_preamble=hc.sandbox_exec_preamble,
             sandbox_backend_factory=hc.sandbox_backend_factory,
             sandbox_browser_factory=hc.sandbox_browser_factory,
+            # Memory store addressing (issue #53): the host-level roots plus the
+            # per-task resolver seam for multi-tenant hosts. All default to
+            # absent, so a bare HostConfig() keeps the SDK global default root —
+            # byte-identical for every single-tenant caller.
+            memory_dir=hc.memory_dir,
+            global_memory_dir=hc.global_memory_dir,
+            memory_root_resolver=hc.memory_root_resolver,
             mcp_server_resolver=hc.mcp_server_resolver,
             mcp_http_post=hc.mcp_http_post,
             delta_sink=hc.delta_sink,
@@ -850,15 +857,18 @@ class Client:
                 return getattr(env.payload, "parent_task_id", None)
         return None
 
-    def memory_root(self) -> Path:
+    def memory_root(self, task_id: Optional[str] = None) -> Path:
         """The host's resolved memory-store root (see :meth:`SdkHost.memory_root`).
 
-        ``memory_dir`` override > ``global_memory_dir`` > the SDK global
-        default. A product backend reads it to place host-side memory material
-        (e.g. the consolidation debounce marker) next to the store the memory
-        tools use, without re-deriving the precedence chain.
+        The per-task ``memory_root_resolver`` (when configured and ``task_id``
+        is given) first, else ``memory_dir`` override > ``global_memory_dir`` >
+        the SDK global default. A product backend reads it to place host-side
+        memory material (e.g. the consolidation debounce marker) next to the
+        store the memory tools use, without re-deriving the resolution chain —
+        a multi-tenant host passes one of the tenant's task ids to land the
+        marker next to that tenant's store.
         """
-        return self._host.memory_root()
+        return self._host.memory_root(task_id)
 
     def get_content(self, content_hash: str) -> Optional[bytes]:
         """Fetch a stored blob by content hash (``None`` if absent).
