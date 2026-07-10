@@ -8,6 +8,47 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-10
+
+### Added
+
+- **`noeta.sdk` exports `Capabilities` and `BudgetSpec`.** Both were documented
+  as part of the SDK surface but were unreachable imports; they are now
+  importable from `noeta.sdk`.
+- **`Options.skills` is honored.** Skills passed through `Options.skills` are now
+  wired into pre-loop activation — previously a silent no-op.
+- **The slash-command catalog is served from `/capabilities`.** The command menu
+  was permanently empty; it is now populated from the same endpoint.
+
+### Fixed
+
+- **`apply_patch` surfaces its file changes**, so a conversation rewind restores
+  the files it wrote.
+- **Delegated subtask drain no longer leaks its lease on fault.** Child-descent
+  and parent-resume are wrapped so any fault releases the lease instead of
+  leaking it and crashing the drive; a `num_workers>=2` race now degrades
+  gracefully.
+- **`react` guards the empty-content `max_tokens` branch**, avoiding an
+  Anthropic 400 followed by a retried poisoned history.
+- **Workflow orchestration AST-splices subtask scripts** instead of
+  `textwrap.indent`, which could corrupt triple-quoted strings.
+- **`background_subagent.recover()` is guarded** so one bad record can no longer
+  crash startup.
+- **`openai_compat` maps `prompt_tokens_details.cached_tokens`** into
+  `Usage.cache_read`.
+- The right dock falls back to another tab when the live preview disappears, and
+  the composer keeps per-session draft text and images.
+
+### Performance
+
+- **Sandbox skill indexing folds into one container round-trip.** Sandbox-mode
+  indexing previously cost one HTTP round-trip per file (~200 calls for a couple
+  dozen skills), stalling `seed_start` for ~160s; a single
+  `ExecEnv.tree_snapshot` walk now completes it in ~1s. (#46)
+- The trace inspector reuses the incremental multiplex store (removing an O(N²)
+  re-fold); the hot-path `_recent_tool_calls` scan stops at the window; `/tasks`
+  skips subtask folds and `/stream` caches immutable parent links.
+
 ## [0.2.1] - 2026-07-09
 
 ### Fixed
@@ -426,7 +467,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/initxy/noeta/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/initxy/noeta/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/initxy/noeta/compare/v0.1.17...v0.2.0
 [0.1.17]: https://github.com/initxy/noeta/compare/v0.1.16...v0.1.17
