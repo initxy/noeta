@@ -104,7 +104,7 @@ install:
 ## (skipped unless NOETA_TEST_POSTGRES_DSN points at a live server), the Playwright
 ## web e2e smoke, and the fresh-venv install smoke.
 check:
-	uv run pytest --cov=noeta --cov-report=term --cov-fail-under=85
+	uv run pytest -n auto --cov=noeta --cov-report=term --cov-fail-under=85
 	MYPYPATH=packages/noeta-runtime uv run mypy --strict \
 	  --namespace-packages --explicit-package-bases \
 	  packages/noeta-runtime/noeta/protocols
