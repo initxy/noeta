@@ -132,6 +132,24 @@ class BackendConfig:
     #: percent-encoded per the spec) is parsed. Headers only ride along when
     #: ``otlp_endpoint`` is set — they never enable anything by themselves.
     otlp_headers: Mapping[str, str] = field(default_factory=dict)
+    #: Background memory consolidation (memory v2 T7; architecture:
+    #: ``docs/adr/memory-consolidation.md``). When on, the backend registers
+    #: the internal ``__consolidation__`` curation agent and, at the
+    #: session-stop seams (explicit close / the trailing next-goal turn
+    #: boundary), enqueues a debounced background curation run over the memory
+    #: store. **On by default** — the served ``main`` preset has memory on, and
+    #: this is the host behavior that keeps the store from only growing.
+    #: Env ``NOETA_AGENT_MEMORY_CONSOLIDATION`` (0/false/no/off disables) /
+    #: config key ``memory_consolidation``.
+    memory_consolidation: bool = True
+    #: Debounce threshold in hours between consolidation runs (marker file
+    #: ``.consolidation-state.json`` in the memory root; written at enqueue
+    #: time so a slow run never re-triggers). Env
+    #: ``NOETA_AGENT_MEMORY_CONSOLIDATION_DEBOUNCE_HOURS`` / config key
+    #: ``memory_consolidation_debounce_hours``. Must be a number >= 0 (0 ⇒
+    #: every session stop is due); negatives / non-numbers raise ``ValueError``
+    #: at ``from_env`` time (same strictness as ``num_workers``).
+    memory_consolidation_debounce_hours: float = 24.0
     #: Per-session Docker sandbox (2026-07-08 per-session-sandbox). When on, the
     #: backend provisions a FRESH AIO Sandbox container per root-task tree via
     #: ``LocalDockerSandboxProvider`` and routes every session's fs / shell /
@@ -215,6 +233,31 @@ class BackendConfig:
             if isinstance(sandbox_raw, bool)
             else str(sandbox_raw).strip().lower() in ("1", "true", "yes", "on")
         )
+        consolidation_raw = pick(
+            "MEMORY_CONSOLIDATION", "memory_consolidation", True
+        )
+        memory_consolidation = (
+            consolidation_raw
+            if isinstance(consolidation_raw, bool)
+            else str(consolidation_raw).strip().lower() in ("1", "true", "yes", "on")
+        )
+        debounce_raw = pick(
+            "MEMORY_CONSOLIDATION_DEBOUNCE_HOURS",
+            "memory_consolidation_debounce_hours",
+            cls.memory_consolidation_debounce_hours,
+        )
+        try:
+            consolidation_debounce_hours = float(debounce_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "NOETA_AGENT_MEMORY_CONSOLIDATION_DEBOUNCE_HOURS must be a "
+                f"number of hours >= 0, got {debounce_raw!r}"
+            ) from exc
+        if consolidation_debounce_hours < 0:
+            raise ValueError(
+                "NOETA_AGENT_MEMORY_CONSOLIDATION_DEBOUNCE_HOURS must be >= 0, "
+                f"got {consolidation_debounce_hours}"
+            )
         otlp_endpoint = pick("OTLP_ENDPOINT", "otlp_endpoint")
         file_headers = file_vals.get("otlp_headers") or {}
         otlp_headers = {
@@ -257,6 +300,8 @@ class BackendConfig:
             num_workers=num_workers,
             otlp_endpoint=str(otlp_endpoint) if otlp_endpoint else None,
             otlp_headers=otlp_headers,
+            memory_consolidation=memory_consolidation,
+            memory_consolidation_debounce_hours=consolidation_debounce_hours,
             sandbox_enabled=sandbox_enabled,
             sandbox_image=str(
                 pick("SANDBOX_IMAGE", "sandbox_image", cls.sandbox_image)
@@ -564,6 +609,13 @@ def serve_backend(
             # a non-sandbox deployment keeps the pre-browser roster + stable
             # prefix byte-identical.
             sandbox_browser=config.sandbox_enabled,
+            # Background memory consolidation (memory v2 T7): the session-stop
+            # trigger + the internal ``__consolidation__`` curator. On by
+            # default; NOETA_AGENT_MEMORY_CONSOLIDATION=0 disables.
+            memory_consolidation=config.memory_consolidation,
+            memory_consolidation_debounce_hours=(
+                config.memory_consolidation_debounce_hours
+            ),
         )
         # Now the content store exists (inside the noeta.sdk host): a vision
         # provider can deref ``ImageBlock(ContentRef)`` bytes at request time.

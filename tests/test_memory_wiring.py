@@ -32,7 +32,9 @@ from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
 from noeta.guards.budget import Budget
 from noeta.presets import official_specs
 from noeta.tools.memory import (
+    MEMORY_ARCHIVE_TOOL_NAME,
     MEMORY_READ_TOOL_NAME,
+    MEMORY_SEARCH_TOOL_NAME,
     MEMORY_WRITE_TOOL_NAME,
 )
 
@@ -105,11 +107,18 @@ def test_memory_enabled_adds_tools_in_fixed_order(tmp_path: Path) -> None:
     ws.mkdir()
     inputs = _inputs(ws, memory_enabled=True)
     names = list(inputs.tools)
-    assert MEMORY_WRITE_TOOL_NAME in names
-    assert MEMORY_READ_TOOL_NAME in names
-    # Order contract: fs(read) → memory(write→read).
+    pack = [
+        MEMORY_WRITE_TOOL_NAME,
+        MEMORY_READ_TOOL_NAME,
+        MEMORY_SEARCH_TOOL_NAME,
+        MEMORY_ARCHIVE_TOOL_NAME,
+    ]
+    assert all(name in names for name in pack)
+    # Order contract: fs(read) → memory(write→read→search→archive).
     assert names.index("read") < names.index(MEMORY_WRITE_TOOL_NAME)
-    assert names.index(MEMORY_WRITE_TOOL_NAME) < names.index(MEMORY_READ_TOOL_NAME)
+    assert [names.index(n) for n in pack] == sorted(
+        names.index(n) for n in pack
+    )
 
 
 def test_memory_enabled_registers_kind_after_skill(tmp_path: Path) -> None:
@@ -140,7 +149,7 @@ def test_memory_entries_snapshot_shared_with_hashes(tmp_path: Path) -> None:
     )
     inputs = _inputs(ws, memory_enabled=True, memory_dir=mem)
     assert inputs.memory_store is not None
-    assert [n for n, _ in inputs.memory_entries] == ["deploy-notes"]
+    assert [n for n, _, _ in inputs.memory_entries] == ["deploy-notes"]
     resolved = inputs.content_hashes(MEMORY_KIND, MEMORY_INDEX_NAME)
     assert resolved is not None
     assert resolved[1] == memory_index_hash(inputs.memory_entries)
@@ -153,7 +162,7 @@ def test_memory_dir_override_wins(tmp_path: Path) -> None:
     alt.mkdir()
     (alt / "alpha.md").write_text("# A\n", encoding="utf-8")
     inputs = _inputs(ws, memory_enabled=True, memory_dir=alt)
-    assert [n for n, _ in inputs.memory_entries] == ["alpha"]
+    assert [n for n, _, _ in inputs.memory_entries] == ["alpha"]
 
 
 # ---------------------------------------------------------------------------

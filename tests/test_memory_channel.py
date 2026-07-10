@@ -53,8 +53,8 @@ from noeta.tools.memory import MemoryStore
 
 
 _ENTRIES = (
-    ("deploy-process", "How we deploy"),
-    ("naming-rules", "Module naming conventions"),
+    ("deploy-process", "How we deploy", ""),
+    ("naming-rules", "Module naming conventions", ""),
 )
 
 
@@ -73,8 +73,40 @@ def test_index_text_lists_entries_and_mentions_read_tool() -> None:
 
 def test_index_hash_is_stable_and_tracks_content() -> None:
     assert memory_index_hash(_ENTRIES) == memory_index_hash(_ENTRIES)
-    changed = (*_ENTRIES, ("new-memory", "Something new"))
+    changed = (*_ENTRIES, ("new-memory", "Something new", ""))
     assert memory_index_hash(changed) != memory_index_hash(_ENTRIES)
+
+
+def test_index_bytes_unchanged_for_frontmatterless_store() -> None:
+    """v2 compat contract: entries without a type (every pre-frontmatter
+    file) must render — and therefore hash — byte-identically to v1."""
+    import hashlib
+
+    entries = (*_ENTRIES, ("bare-name", "", ""))
+    text = render_memory_index_text(entries)
+    assert text == (
+        "Long-term memory index. Each entry is one stored memory; call\n"
+        "the 'memory_read' tool with a memory's name for its full text.\n"
+        "\n"
+        "- deploy-process: How we deploy\n"
+        "- naming-rules: Module naming conventions\n"
+        "- bare-name"
+    )
+    assert memory_index_hash(entries) == hashlib.sha256(
+        text.encode("utf-8")
+    ).hexdigest()
+
+
+def test_index_text_annotates_typed_entries() -> None:
+    entries = (
+        ("deploy-process", "How we deploy", "procedural"),
+        ("me", "", "user"),
+        ("naming-rules", "Module naming conventions", ""),
+    )
+    text = render_memory_index_text(entries)
+    assert "- deploy-process (procedural): How we deploy" in text
+    assert "- me (user)" in text
+    assert "- naming-rules: Module naming conventions" in text  # untyped = v1 form
 
 
 def test_renderer_renders_one_user_message_when_index_active() -> None:
@@ -107,7 +139,7 @@ def test_memory_kind_is_evolving_and_resolves_through_generic_seam() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Recall matching — naive name-token hits, deterministic
+# Recall matching — two tiers (name ≥1 token, then summary ≥2), deterministic
 # ---------------------------------------------------------------------------
 
 
@@ -122,16 +154,53 @@ def test_match_no_hit_returns_empty() -> None:
 
 
 def test_match_multiple_hits_keep_index_order_and_cap() -> None:
-    entries = tuple((f"topic-{i}", "s") for i in range(8))
+    entries = tuple((f"topic-{i}", "s", "") for i in range(8))
     text = "about " + " ".join(f"topic-{i}" for i in range(8))
     hits = match_memories(entries, text, max_hits=3)
     assert hits == ("topic-0", "topic-1", "topic-2")
 
 
 def test_match_short_name_tokens_still_hit() -> None:
-    assert match_memories((("ci-pipeline", "CI notes"),), "the ci failed") == (
-        "ci-pipeline",
+    assert match_memories(
+        (("ci-pipeline", "CI notes", ""),), "the ci failed"
+    ) == ("ci-pipeline",)
+
+
+def test_match_summary_needs_two_distinct_tokens() -> None:
+    entries = (("mem-a", "release checklist for services", ""),)
+    # Two distinct summary tokens in the text → tier-2 hit.
+    assert match_memories(entries, "walk the release checklist") == ("mem-a",)
+    # A single shared token is too noisy — no hit.
+    assert match_memories(entries, "any release soon?") == ()
+    # The same token twice is still ONE distinct token — no hit.
+    assert match_memories(entries, "release release release") == ()
+
+
+def test_match_name_hits_order_before_summary_hits() -> None:
+    # ``zz-target`` sorts after the summary hit but its NAME matches, so
+    # it must come first: tier 1 wholly precedes tier 2.
+    entries = (
+        ("aa-notes", "postgres connection pooling notes", ""),
+        ("zz-target", "unrelated summary", ""),
     )
+    text = "zz-target plus postgres connection tricks"
+    assert match_memories(entries, text) == ("zz-target", "aa-notes")
+
+
+def test_match_type_never_participates() -> None:
+    entries = (("mem-a", "nothing shared", "procedural"),)
+    assert match_memories(entries, "procedural knowledge please") == ()
+
+
+def test_match_cap_spans_both_tiers() -> None:
+    entries = (
+        ("release-notes", "s", ""),
+        ("release-plan", "s", ""),
+        ("aa-other", "release checklist steps", ""),
+    )
+    hits = match_memories(entries, "release checklist steps", max_hits=2)
+    # Both name hits fill the cap; the tier-2 hit is squeezed out.
+    assert hits == ("release-notes", "release-plan")
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +216,7 @@ def _runtime() -> tuple[InMemoryEventLog, InMemoryContentStore, InMemoryDispatch
 
 
 def _composer(
-    cs: InMemoryContentStore, entries: tuple[tuple[str, str], ...]
+    cs: InMemoryContentStore, entries: tuple[tuple[str, str, str], ...]
 ) -> ThreeSegmentComposer:
     return ThreeSegmentComposer(
         system_prompt="memory test agent",
@@ -254,6 +323,32 @@ def test_recall_memories_reads_store_at_call_time(tmp_path: Path) -> None:
     store.write("rollback-steps", "Rollback\n\nuse make rollback")
     hits = recall_memories(store, "rollback please")
     assert [name for name, _ in hits] == ["rollback-steps"]
+
+
+def test_recall_stops_seeing_archived_memory(tmp_path: Path) -> None:
+    # Archiving moves the file under ``archive/``; the non-recursive
+    # entries glob no longer lists it, so recall goes quiet immediately.
+    store = _store_with_memories(tmp_path)
+    assert recall_memories(store, "how do we deploy?")
+    store.archive("deploy-process")
+    assert recall_memories(store, "how do we deploy?") == ()
+    assert (store.root / "archive" / "deploy-process.md").is_file()
+
+
+def test_recall_hits_on_summary_tokens_after_name_misses(
+    tmp_path: Path,
+) -> None:
+    # Tier 2 end-to-end: no name token in the text, but two summary
+    # tokens hit — the memory body still comes back verbatim.
+    store = MemoryStore(root=tmp_path / "memories")
+    store.write(
+        "df-42",
+        "---\ndescription: postgres connection pooling notes\n---\n"
+        "Use pgbouncer.",
+    )
+    hits = recall_memories(store, "postgres connection keeps dropping")
+    assert [name for name, _ in hits] == ["df-42"]
+    assert "pgbouncer" in hits[0][1]
 
 
 def test_recall_hit_appends_origin_memory_after_user_message(

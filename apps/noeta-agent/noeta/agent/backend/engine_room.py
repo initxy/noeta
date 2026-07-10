@@ -27,10 +27,21 @@ from __future__ import annotations
 import dataclasses
 import logging
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Sequence
 
-from noeta.sdk import Client, ContentRef, HostConfig, LLMProvider, Options, presets
+from noeta.sdk import (
+    NEXT_GOAL_WAKE_HANDLE,
+    Client,
+    ContentRef,
+    HostConfig,
+    LLMProvider,
+    Options,
+    consolidation_due,
+    presets,
+    run_consolidation,
+)
 
 from noeta.agent.backend.delta_hub import DeltaHub
 
@@ -53,7 +64,21 @@ class EngineRoom:
         background_drive: bool = False,
         num_workers: int = 1,
         sandbox_enabled: bool = False,
+        memory_consolidation: bool = False,
+        memory_consolidation_debounce_hours: float = 24.0,
     ) -> None:
+        # Memory consolidation (memory v2 T7): when on, register the internal
+        # ``__consolidation__`` curator into the recipe BEFORE compiling the
+        # Client, so the trigger's ``seed_start(agent=...)`` resolves. The
+        # reserved name never enters main's spawnable roster (compile filters
+        # ``__``-prefixed names from the auto-union), so main's compiled spec
+        # and stable prefix are byte-identical either way; off (the default)
+        # registers nothing — zero behavior, zero registry change.
+        if (
+            memory_consolidation
+            and presets.CONSOLIDATION_AGENT_NAME not in options.agents
+        ):
+            options = presets.with_consolidation_agent(options)
         self._workspace_dir = Path(workspace_dir)
         # Whether the sandbox browser subsystem is active (sandbox_browser_options
         # were used at construction). Drives /capabilities → frontend visibility.
@@ -121,6 +146,24 @@ class EngineRoom:
         # guards against double-start.
         self._workers_started = False
         self._workers_lock = threading.Lock()
+        # Memory consolidation trigger (memory v2 T7 — the session-stop seams
+        # of docs/adr/memory-consolidation.md). Two seams funnel into ONE
+        # guard (:meth:`_maybe_consolidate_memory`): the explicit close verb,
+        # and the turn boundary — observed here as the trailing next-goal
+        # ``TaskSuspended`` on the post-commit envelope stream (a drive
+        # completing back to suspended; approval / subtask / timer suspends
+        # carry other wake shapes and never match). The tap itself only
+        # filters and hands off to a daemon thread — it can never fail, block,
+        # or slow the commit path.
+        self._memory_consolidation = bool(memory_consolidation)
+        self._memory_consolidation_debounce_hours = float(
+            memory_consolidation_debounce_hours
+        )
+        self._consolidation_unsubscribe: Optional[Callable[[], None]] = None
+        if self._memory_consolidation:
+            self._consolidation_unsubscribe = self._client.subscribe(
+                self._observe_consolidation_boundary
+            )
 
     @property
     def workspace_dir(self) -> Path:
@@ -172,9 +215,14 @@ class EngineRoom:
 
         The capabilities projection's ``agents`` dropdown. Read off the public
         ``Client.registry`` so the backend never names the identity layer.
+        Reserved ``__``-prefixed names (the internal ``__consolidation__``
+        curator) are host-driven identities, never user-selectable, so they
+        are filtered here — ``/capabilities`` never advertises them.
         """
         try:
-            return list(self._client.registry.names())
+            return [
+                n for n in self._client.registry.names() if not n.startswith("__")
+            ]
         except Exception:
             return []
 
@@ -190,6 +238,8 @@ class EngineRoom:
         background_drive: bool = False,
         num_workers: int = 1,
         sandbox_browser: bool = False,
+        memory_consolidation: bool = False,
+        memory_consolidation_debounce_hours: float = 24.0,
     ) -> "EngineRoom":
         """Build the room over the official preset registry (main + subagents).
 
@@ -206,6 +256,14 @@ class EngineRoom:
         per-session (gated on a live sandbox backend). Off by default so a
         non-sandbox deployment keeps the pre-browser roster + stable prefix
         byte-identical. A product sets this from its ``sandbox_enabled`` config.
+
+        ``memory_consolidation`` activates the background memory-curation
+        trigger (memory v2 T7): the internal ``__consolidation__`` agent is
+        registered (constructor concern — see ``__init__``) and the
+        session-stop seams (close + turn boundary) start funnelling into the
+        debounced ``run_consolidation`` guard. A product sets this from its
+        ``memory_consolidation`` config; the ``False`` default keeps embedded
+        / test rooms at zero behavior.
         """
         options = (
             presets.sandbox_browser_options() if sandbox_browser else presets.main_options()
@@ -220,6 +278,8 @@ class EngineRoom:
             background_drive=background_drive,
             num_workers=num_workers,
             sandbox_enabled=sandbox_browser,
+            memory_consolidation=memory_consolidation,
+            memory_consolidation_debounce_hours=memory_consolidation_debounce_hours,
         )
 
     # -- introspection -----------------------------------------------------
@@ -499,6 +559,10 @@ class EngineRoom:
 
     def close(self, task_id: str, *, reason: Optional[str] = None) -> None:
         self._client.close(task_id, reason=reason)
+        # Session-stop seam (a): the explicit close cascade. Fire-and-forget —
+        # the guard hands off to a daemon thread, so the HTTP 202 never waits
+        # on (and can never be failed by) the consolidation pass.
+        self._maybe_consolidate_memory(task_id)
 
     def reopen(self, task_id: str, *, reason: Optional[str] = None) -> None:
         self._client.reopen(task_id, reason=reason)
@@ -519,9 +583,115 @@ class EngineRoom:
                 self._task_workspaces.pop(deleted, None)
         return result
 
+    # -- memory consolidation (memory v2 T7) --------------------------------
+
+    def memory_root(self) -> Path:
+        """The SDK host's resolved memory-store root (marker + store home).
+
+        ``Client.memory_root`` → ``SdkHost.memory_root`` — one precedence
+        chain (``memory_dir`` > ``global_memory_dir`` > ``~/.noeta/memories``)
+        shared with the memory tools, so the consolidation marker always sits
+        next to the store the curation run mutates.
+        """
+        return self._client.memory_root()
+
+    def _observe_consolidation_boundary(self, env: Any) -> None:
+        """Session-stop seam (b): the turn boundary, off the envelope tap.
+
+        Fires post-commit for EVERY envelope; matches only the trailing
+        next-goal ``TaskSuspended`` (a drive completing back to suspended —
+        the chat turn boundary). Runs on the committing drive thread, so it
+        must stay cheap and must never raise into the event log.
+        """
+        try:
+            if getattr(env, "type", None) != "TaskSuspended":
+                return
+            wake_on = getattr(getattr(env, "payload", None), "wake_on", None)
+            if getattr(wake_on, "handle", None) != NEXT_GOAL_WAKE_HANDLE:
+                return
+            self._maybe_consolidate_memory(env.task_id)
+        except Exception:
+            _log.exception("memory-consolidation turn-boundary tap failed")
+
+    def _maybe_consolidate_memory(self, task_id: Optional[str]) -> None:
+        """The one consolidation guard both session-stop seams funnel into.
+
+        Config off ⇒ no-op. The actual pass (debounce read, digest build,
+        enqueue) runs on a fire-and-forget daemon thread — it can NEVER fail
+        or block the user path; every failure is logged and swallowed.
+        Requires the resident pool (``background_drive``): the run is seeded
+        onto the ready queue for a worker to drive, so a synchronous embedded
+        room skips the trigger (such hosts call ``noeta.sdk.run_consolidation``
+        themselves — the memory-v2 decision-#11 layering).
+        """
+        try:
+            if not self._memory_consolidation or not self._background_drive:
+                return
+            threading.Thread(
+                target=self._consolidation_pass,
+                args=(task_id,),
+                name="noeta-memory-consolidation",
+                daemon=True,
+            ).start()
+        except Exception:
+            _log.exception("memory-consolidation trigger failed")
+
+    def _consolidation_pass(self, task_id: Optional[str]) -> None:
+        """One debounced consolidation attempt (daemon-thread body).
+
+        Order matters for cost: the marker read (one small file) gates first
+        — on the overwhelmingly common not-due boundary nothing else runs;
+        only then the triggering task's genesis is peeked to skip a reserved
+        (``__consolidation__``) session's own boundary (no self-retrigger; the
+        enqueue-time marker already protects when the debounce is nonzero).
+        ``run_consolidation`` re-checks the debounce, builds the digest,
+        writes the marker at enqueue time, and seeds the curation root task.
+        """
+        try:
+            memory_root = self.memory_root()
+            now = datetime.now(timezone.utc)
+            if not consolidation_due(
+                memory_root,
+                now=now,
+                debounce_hours=self._memory_consolidation_debounce_hours,
+            ):
+                return
+            if task_id is not None and self._agent_name_of(task_id).startswith(
+                "__"
+            ):
+                return
+            self._ensure_workers()
+            run_consolidation(
+                self._client,
+                memory_root=memory_root,
+                now=now,
+                debounce=True,
+                debounce_hours=self._memory_consolidation_debounce_hours,
+            )
+        except Exception:
+            _log.exception("memory-consolidation pass failed")
+
+    def _agent_name_of(self, task_id: str) -> str:
+        """The task's genesis ``TaskCreated.agent_name`` (``""`` if unknown)."""
+        try:
+            for env in self._client.events(task_id):
+                if getattr(env, "type", None) == "TaskCreated":
+                    return str(getattr(env.payload, "agent_name", "") or "")
+        except Exception:
+            pass
+        return ""
+
     # -- shutdown ----------------------------------------------------------
 
     def shutdown(self) -> None:
+        # Unhook the consolidation tap first so a suspend committed during
+        # teardown cannot spawn a new pass against a closing client.
+        if self._consolidation_unsubscribe is not None:
+            try:
+                self._consolidation_unsubscribe()
+            except Exception:
+                pass
+            self._consolidation_unsubscribe = None
         # Stop resident workers first (bounded grace) so no step is in flight
         # when the client (and any injected durable storage) closes under them.
         if self._workers_started:
