@@ -50,7 +50,7 @@ Shell 元字符（`|`、`;`、`&&`、`>` 等）在分词之前被拒绝。这是
 | --- | --- | --- | --- |
 | `memory_write` | medium | 将 markdown 内存文件写入内存存储。可选参数 `description`（一行索引摘要）和 `type`（`user` / `project` / `procedural` / `reference`）由工具自行组装为 frontmatter 块存储。 | `noeta/tools/memory.py` |
 | `memory_read` | low | 按需读取已存储内存的完整文本。 | `noeta/tools/memory.py` |
-| `memory_search` | low | 按内容查找内存：对名称与全文做大小写不敏感的子串匹配，返回 grep 风格摘录（每条内存最多 3 行，最多 10 条内存）。 | `noeta/tools/memory.py` |
+| `memory_search` | low | 按内容查找内存：对名称与全文做大小写不敏感的子串匹配，返回 grep 风格摘录（每条内存最多 3 行，最多 10 条内存；命中更多时以 `truncated` 标志说明）。 | `noeta/tools/memory.py` |
 | `memory_archive` | medium | 将过时的内存移入存储的 `archive/` 子目录——它从索引、召回和搜索中消失，但绝不删除（人工可恢复）。 | `noeta/tools/memory.py` |
 
 ## MCP 工具

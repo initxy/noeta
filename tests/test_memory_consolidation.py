@@ -241,7 +241,10 @@ def test_digest_session_cap_newest_first_and_dropped_stated(tmp_path: Path) -> N
     assert "goal-three newest" in digest
     assert "goal-two middle" in digest
     assert "goal-one oldest" not in digest  # capped — and the cap is stated:
-    assert "1 more active session(s) in the window were omitted" in digest
+    assert (
+        "1 more session(s) with digestible activity in the window were omitted"
+        in digest
+    )
     assert "(session cap 2)" in digest
     # Newest first.
     assert digest.index("goal-three newest") < digest.index("goal-two middle")

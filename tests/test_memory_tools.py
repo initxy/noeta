@@ -307,17 +307,34 @@ def test_store_search_matches_name_and_text_case_insensitive(
     assert store.search("nowhere-to-be-found") == ()
 
 
-def test_store_search_caps_lines_chars_and_memories(tmp_path: Path) -> None:
+def test_store_search_caps_lines_and_chars_but_not_memories(
+    tmp_path: Path,
+) -> None:
     store = _store(tmp_path)
     long_line = "needle " + "x" * 300
     store.write("aa-many-lines", "\n".join([long_line] * 5))
     for i in range(12):
         store.write(f"hit-{i:02d}", "needle here")
     results = store.search("needle")
-    assert len(results) == 10  # memory cap, name-sorted
+    # The store returns EVERY match (the memory-count cap is the tool's,
+    # so it can report the trim); excerpts are capped per memory.
+    assert len(results) == 13
     by_name = dict(results)
     assert len(by_name["aa-many-lines"]) == 3  # excerpt line cap
     assert all(len(line) <= 200 for line in by_name["aa-many-lines"])
+
+
+def test_search_tool_caps_memories_and_reports_truncation(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    for i in range(12):
+        store.write(f"hit-{i:02d}", "needle here")
+    result = MemorySearchTool(store=store).invoke({"query": "needle"}, _ctx())
+    assert result.success
+    assert len(result.output["results"]) == 10  # memory cap, name-sorted
+    assert result.output["truncated"] is True
+    assert "12 hit(s), first 10 shown" in result.summary
 
 
 def test_store_search_never_sees_archived_memories(tmp_path: Path) -> None:
@@ -338,6 +355,7 @@ def test_search_tool_returns_grep_shaped_output(tmp_path: Path) -> None:
     assert result.output == {
         "query": "smoke",
         "results": [{"name": "deploy", "lines": ["then smoke test"]}],
+        "truncated": False,
     }
     assert "1 hit(s)" in result.summary
 
@@ -348,7 +366,7 @@ def test_search_tool_zero_hits_is_success_empty_query_is_error(
     tool = MemorySearchTool(store=_store(tmp_path))
     result = tool.invoke({"query": "ghost"}, _ctx())
     assert result.success
-    assert result.output == {"query": "ghost", "results": []}
+    assert result.output == {"query": "ghost", "results": [], "truncated": False}
     assert not tool.invoke({"query": ""}, _ctx()).success
     assert not tool.invoke({"query": 7}, _ctx()).success
 

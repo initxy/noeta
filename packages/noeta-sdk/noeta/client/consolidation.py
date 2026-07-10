@@ -220,11 +220,12 @@ def build_consolidation_digest(
     agent — the consolidation agent itself — are excluded so a run never
     digests its own predecessors. Each kept session contributes its
     role-labeled text (see :func:`_session_transcript`); sessions yielding no
-    conversational text are skipped without consuming the cap.
+    conversational text are skipped without consuming (or overflowing) the
+    cap, so the dropped count is exact.
 
-    The header states the window, the session count, how many active sessions
-    the cap dropped, and the per-session character cap — the spec's "no silent
-    caps" rule.
+    The header states the window, the session count, how many digestible
+    sessions the cap dropped, and the per-session character cap — the spec's
+    "no silent caps" rule.
 
     Reads the PUBLIC client surface (``task_streams`` for the wall-clock
     activity bound, ``events`` for the per-stream envelopes); the one host
@@ -253,13 +254,16 @@ def build_consolidation_digest(
             continue  # subtask (or malformed stream): its text rides the root
         if str(getattr(genesis, "agent_name", "") or "").startswith("__"):
             continue  # reserved internal agents — never digest a curation run
-        if len(sections) >= max_sessions:
-            omitted += 1
-            continue
+        # Transcript before cap check: the envelopes are already in memory
+        # (no extra IO), and it keeps the header's dropped count exact —
+        # only sessions with digestible text consume or overflow the cap.
         transcript = _session_transcript(
             envelopes, content_store, max_chars=max_chars_per_session
         )
         if not transcript:
+            continue
+        if len(sections) >= max_sessions:
+            omitted += 1
             continue
         last_iso = datetime.fromtimestamp(
             getattr(summary, "last_event_time", 0.0), tz=timezone.utc
@@ -276,8 +280,8 @@ def build_consolidation_digest(
         else "all recorded sessions (no previous consolidation run)"
     )
     dropped = (
-        f"; {omitted} more active session(s) in the window were omitted "
-        f"(session cap {max_sessions})"
+        f"; {omitted} more session(s) with digestible activity in the window "
+        f"were omitted (session cap {max_sessions})"
         if omitted
         else ""
     )

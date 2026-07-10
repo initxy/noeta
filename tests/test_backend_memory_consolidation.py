@@ -25,6 +25,7 @@ from noeta.agent.backend import BackendConfig, EngineRoom
 from noeta.client.consolidation import (
     CONSOLIDATION_AGENT_NAME,
     CONSOLIDATION_MARKER_FILENAME,
+    read_consolidation_marker,
     write_consolidation_marker,
 )
 from noeta.protocols.messages import LLMResponse, TextBlock, Usage
@@ -263,6 +264,52 @@ def test_close_seam_triggers_when_due(tmp_path: Path, memory_root: Path) -> None
         assert curation_id is not None, "close must fire the consolidation seam"
         assert room.join_drives(timeout=10.0)
         assert "talk about the release" in room.events(curation_id)[0].payload.goal
+    finally:
+        room.shutdown()
+
+
+def test_concurrent_session_stops_seed_at_most_one_run(
+    tmp_path: Path, memory_root: Path
+) -> None:
+    """The pass lock serializes the debounce-read → marker-write window.
+
+    Between the debounce read and the enqueue-time marker write sits the
+    whole digest build, so two near-simultaneous session stops (parallel
+    workers committing suspends, or close landing next to a turn boundary)
+    would both find the marker stale and seed two curation runs. The lock is
+    non-blocking: while one pass holds it, a concurrent trigger drops its
+    attempt without seeding and without touching the marker.
+    """
+    write_consolidation_marker(memory_root, now=datetime.now(timezone.utc))
+    room = _room(
+        tmp_path,
+        [_end("turn reply"), _end("curation summary")],
+        memory_consolidation=True,
+    )
+    try:
+        task_id = room.start(goal="remember that we deploy on fridays")
+        assert room.join_drives(timeout=10.0)
+        time.sleep(0.3)  # the boundary tap ran and must have debounced
+        assert _consolidation_task(room) is None
+        # Age the marker past the threshold, then simulate an in-flight pass
+        # holding the lock while a second session-stop trigger arrives.
+        write_consolidation_marker(
+            memory_root, now=datetime.now(timezone.utc) - timedelta(hours=48)
+        )
+        stale = read_consolidation_marker(memory_root)
+        assert room._consolidation_pass_lock.acquire(blocking=False)  # noqa: SLF001
+        try:
+            room._consolidation_pass(task_id)  # noqa: SLF001 — the loser
+        finally:
+            room._consolidation_pass_lock.release()  # noqa: SLF001
+        assert _consolidation_task(room) is None, "concurrent pass must bail"
+        assert read_consolidation_marker(memory_root) == stale
+        # With the lock free again the same trigger seeds exactly one run.
+        room._consolidation_pass(task_id)  # noqa: SLF001 — the winner
+        curation_id = _consolidation_task(room)
+        assert curation_id is not None
+        assert room.join_drives(timeout=10.0)
+        assert read_consolidation_marker(memory_root) != stale
     finally:
         room.shutdown()
 
