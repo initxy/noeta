@@ -86,6 +86,7 @@ from noeta.protocols.policy import Policy
 from noeta.protocols.tool import Tool
 from noeta.providers.catalog import provider_family, resolve_alias, spec_for
 from noeta.tools.app import AppPreviewGateway, build_app_tools
+from noeta.tools.browser import BrowserBackend, build_browser_tools
 from noeta.tools.fs import FsWriteMode, ShellMode, WorkspaceRoot, build_fs_tools
 from noeta.tools.fs.exec_env import ExecEnv
 from noeta.tools.mcp import MCP_PREFIX, McpConfigError
@@ -365,6 +366,17 @@ class _BuildSpec:
     #: (container-path) containment. A wiring-only runtime injection, never part
     #: of session identity — the tool schemas are unchanged either way.
     exec_env: Optional[ExecEnv]
+    #: Per-session browser backend (sandbox-only). ``None`` ⇒ no browser tools
+    #: (byte-identical). A live ``AioBrowserBackend`` (built by the SDK host from
+    #: the session's sandbox handle) + ``browser_enabled`` merges the noeta-owned
+    #: browser tool pack. Wiring-only runtime injection, never session identity;
+    #: the tool schemas are noeta-owned and fixed, so the stable prefix depends
+    #: only on ``browser_enabled`` (a capability), never on the backend.
+    browser_backend: Optional[BrowserBackend]
+    #: Whether this agent's identity opens the browser capability
+    #: (``AgentSpec.capabilities.browser``). The browser pack is merged only when
+    #: this is ``True`` AND ``browser_backend`` is present.
+    browser_enabled: bool
     hooks_pre_tool_use: tuple[PreToolUseRule, ...]
     #: SDK ``Options`` extension points (T3). Custom Guards registered after
     #: the built-in guard stack; custom ContentKindSpec channels appended
@@ -592,6 +604,25 @@ def _stage_read_fence(spec: _BuildSpec, asm: _ToolAssembly) -> None:
             read_tool.skill_roots = skill_roots
 
 
+def _stage_browser(spec: _BuildSpec, asm: _ToolAssembly) -> None:
+    """browser tools — sandbox-only, flag-gated (NOT whitelist-filtered).
+
+    The noeta-owned browser pack (``browser_navigate`` / ``click`` / ``type`` /
+    ``extract`` / ``screenshot``) is merged here — after the fs/skill stages and
+    BEFORE mcp/custom/app — when the session both has a browser backend (the SDK
+    host built one from the sandbox handle) AND this agent opens the ``browser``
+    capability. Like memory / open_app it appends past the ``allowed_tools``
+    filter (a capability, not a whitelist entry, gates it). The tool schemas are
+    noeta-owned and fixed, so a browser session's stable prefix depends only on
+    the capability flag, never on the backend or the AIO image. ``None`` backend
+    OR ``browser_enabled=False`` (resume with no sandbox / every non-browser
+    agent) ⇒ nothing merged, byte-identical tool set.
+    """
+    if spec.browser_backend is not None and spec.browser_enabled:
+        for name, tool in build_browser_tools(spec.browser_backend).items():
+            asm.tools[name] = tool
+
+
 def _stage_mcp(spec: _BuildSpec, asm: _ToolAssembly) -> None:
     """MCP tools — live override (real spawned servers) only.
 
@@ -649,9 +680,12 @@ def _stage_app(spec: _BuildSpec, asm: _ToolAssembly) -> None:
 
 #: The explicit tool-assembly pipeline. Iterating this list top-to-bottom IS
 #: the construction-order contract (fs → memory → instructions-snapshot →
-#: skills-registry → script → read-fence → mcp → custom → app). The order is
-#: load-bearing for byte-equality (tool dict insertion order feeds the Engine's
-#: deterministic ToolSchemaRecorded emission); do not reorder.
+#: skills-registry → script → read-fence → browser → mcp → custom → app). The
+#: order is load-bearing for byte-equality (tool dict insertion order feeds the
+#: Engine's deterministic ToolSchemaRecorded emission); do not reorder. browser
+#: sits just before mcp with the other injected packs; an unset browser backend
+#: (every non-sandbox / non-browser session) adds nothing, so the insertion is
+#: byte-identical for them regardless of position.
 _TOOL_PIPELINE: tuple[Callable[[_BuildSpec, _ToolAssembly], None], ...] = (
     _stage_fs_pack,
     _stage_memory,
@@ -660,6 +694,7 @@ _TOOL_PIPELINE: tuple[Callable[[_BuildSpec, _ToolAssembly], None], ...] = (
     _stage_skills_registry,
     _stage_skill_scripts,
     _stage_read_fence,
+    _stage_browser,
     _stage_mcp,
     _stage_custom,
     _stage_app,
@@ -931,6 +966,14 @@ def build_session_inputs(
     #: pack act against that container and switches the workspace to lexical
     #: (container-path) containment. Wiring-only, never session identity.
     exec_env: Optional[ExecEnv] = None,
+    #: Per-session browser backend + the agent's browser capability flag
+    #: (sandbox-only). ``None`` backend / ``False`` flag (resume + every
+    #: SDK/test fixture + every non-browser agent) ⇒ no browser tools merged, so
+    #: the tool set + stable hash stay byte-identical. The SDK host supplies a
+    #: live ``AioBrowserBackend`` (built from the session's sandbox handle) only
+    #: when it has provisioned a container AND the agent opens ``browser``.
+    browser_backend: Optional[BrowserBackend] = None,
+    browser_enabled: bool = False,
     hooks_pre_tool_use: tuple[PreToolUseRule, ...] = (),
     repetition_threshold: int = 0,
     repetition_action: RepetitionAction = "require_approval",
@@ -1033,6 +1076,8 @@ def build_session_inputs(
         custom_tools=custom_tools,
         app_gateway=app_gateway,
         exec_env=exec_env,
+        browser_backend=browser_backend,
+        browser_enabled=browser_enabled,
         hooks_pre_tool_use=hooks_pre_tool_use,
         extra_guards=extra_guards,
         extra_content_kinds=extra_content_kinds,

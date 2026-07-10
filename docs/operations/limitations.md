@@ -237,6 +237,93 @@ a no-hard-kill backend. A container-durable, cancellable job handle is
 separate future work (the same work that unlocks background shell under a
 sandbox). See the execution environment seam ADR.
 
+## Sandbox browser is text-level and container-scoped in v1
+
+**What it means:** A sandbox session can drive the container's headless
+browser through five noeta-owned tools (`browser_navigate` /
+`browser_click` / `browser_type` / `browser_extract` /
+`browser_screenshot`), exposed to a `web` subagent the main agent
+delegates page work to. Three v1 boundaries:
+
+- **No browser without a container.** The tools appear only in sandbox
+  mode (`NOETA_AGENT_SANDBOX`) for a browser-capable agent; a
+  non-sandbox session has no browser at all.
+- **Perception is text / element-level, not visual.**
+  `browser_extract` returns page text plus a numbered list of
+  interactive elements the model clicks/types by index;
+  `browser_screenshot` is saved as a **workspace artifact** (viewable
+  in the file panel), **not** fed back to the model as vision. Sites
+  that need visual understanding (canvas, heavy anti-bot) are not fully
+  handled — a config-gated vision mode is future work.
+- **The browser lives and is billed with the container.** It shares
+  the per-session container's lifecycle and idle cost (see above);
+  there is no separate pause.
+
+**When you hit it:** A task that must read a chart rendered only as
+pixels, or one that needs to browse without a sandbox container.
+
+**Workaround:** For content, prefer `browser_extract` (and `webfetch`
+for raw pages that need no interaction); for a visual record,
+`browser_screenshot` saves a PNG a human can open. Enable the sandbox to
+get the browser at all.
+
+**Why it is this way:** v1 pins a text/element-level contract that keeps
+the model's context lean and the tool schema stable; visual perception
+and the coordinate-level `/v1/browser` path are a deliberate increment 2
+with the seam already reserved. See the execution environment seam ADR
+(browser subsystem).
+
+## Sandbox live-preview panels are demo-boundary and unauthenticated
+
+**What it means:** When per-session sandbox is active
+(`NOETA_AGENT_SANDBOX=1`), the right dock gains three live-preview tabs —
+**Browser** (noVNC), **Terminal** (container PTY), **Code** (code-server) —
+reverse-proxied through a **dedicated preview port**
+(`http://<host>:<preview-port>/sandbox-preview/<token>/...`). The panels'
+iframes need `allow-same-origin`, so container-served content must live on
+an origin holding no noeta state — the preview port serves the gateway and
+nothing else (no control API, no cookies), and the main port serves only the
+discovery endpoint. The port defaults to ephemeral and is discovered via
+`GET /tasks/{id}/preview`; pin it with `NOETA_AGENT_SANDBOX_PREVIEW_PORT`
+for firewalled setups. Four v1 boundaries:
+
+- **No sandbox ⇒ no panels.** Without a live container,
+  `GET /tasks/{id}/preview` returns 404 and the tabs are hidden; non-sandbox
+  deployments are completely unaffected.
+- **Demo security boundary.** The browser→noeta leg is **unauthenticated** —
+  access control is the unguessable token only (`secrets.token_urlsafe(16)`),
+  same red line as the HTML-app `PreviewGateway`. Credentials
+  (`X-AIO-API-Key`) are injected only on the **noeta→container** leg; the
+  browser never sees them. This is acceptable for localhost single-user
+  demos; hardened browser-leg auth / SSRF allowlist / multi-user isolation
+  are future work.
+- **Human-in-the-loop control conflicts are not arbitrated.** A user
+  typing in the noVNC browser panel and the `web` subagent driving the same
+  browser via `browser_*` tools will race for control. This is *intentional
+  manual intervention* in v1 — the agent will observe the page state the
+  human left. No arbitration (pause agent while user types, etc.) is
+  implemented.
+- **Preview is real-time only, not recorded.** The panels show the live
+  container state; nothing is persisted to the event log. Closing the panel
+  or ending the session discards the view (the container itself is released
+  at session terminal).
+
+**When you hit it:** Opening a preview panel from a non-sandbox session
+(404s); needing authenticated access over a network; simultaneous human +
+agent browser control causing confusion; reaching noeta through a tunnel /
+reverse proxy that forwards only the main port (the panels need the preview
+port reachable on the same hostname).
+
+**Workaround:** Run noeta on `localhost` for preview (the demo boundary);
+close the agent's browser turn before manually driving noVNC; use the file
+panel + `browser_screenshot` artifact for a durable PNG record; behind a
+tunnel, pin `NOETA_AGENT_SANDBOX_PREVIEW_PORT` and forward that port too.
+
+**Why it is this way:** The preview is a host-only transport (no new
+model-facing tools or schema), so stable-prefix is preserved. The token +
+localhost boundary matches the existing `PreviewGateway` posture; hardening
+is explicitly deferred to a later revision (D6 of the preview spec).
+
 ## Frontend is a small Vite MPA, not a framework app
 
 **What it means:** The shipped web app (`/chat`, `/trace`) is a small

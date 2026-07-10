@@ -5,6 +5,7 @@ only consumers (the product / library users) import it.
 """
 from __future__ import annotations
 
+import dataclasses
 from typing import TYPE_CHECKING
 
 from noeta.agent.spec import Capabilities
@@ -22,9 +23,12 @@ if TYPE_CHECKING:
 
 __all__ = [
     "MAIN_SYSTEM_PROMPT",
+    "MAIN_WEB_SYSTEM_PROMPT",
     "OFFICIAL_SUBAGENTS",
+    "WEB_SUBAGENT",
     "main_options",
     "official_specs",
+    "sandbox_browser_options",
 ]
 
 
@@ -52,9 +56,17 @@ def _load_prompt(name: str) -> str:
 
 
 MAIN_SYSTEM_PROMPT = _load_prompt("main")
+#: The sandbox-browser variant of ``main``'s prompt: identical except the
+#: delegation bullet also names the ``web`` specialist. Loaded from its own
+#: file so ``main.md`` (and thus every non-sandbox deployment's stable prefix)
+#: stays byte-identical to pre-browser-subsystem; a test pins the two files to
+#: differ ONLY in that bullet. Used by :func:`sandbox_browser_options` — the
+#: prompt must not mention ``web`` unless ``web`` is actually in the roster.
+MAIN_WEB_SYSTEM_PROMPT = _load_prompt("main-web")
 _GENERAL_PURPOSE_PROMPT = _load_prompt("general-purpose")
 _EXPLORE_PROMPT = _load_prompt("explore")
 _PLAN_PROMPT = _load_prompt("plan")
+_WEB_PROMPT = _load_prompt("web")
 
 
 #: The read-mostly tool set shared by explore and plan — aligned with Claude
@@ -94,6 +106,25 @@ _GENERAL_PURPOSE_TOOLS = (
     "shell_poll",
     "shell_run",
     "web_search",
+    "webfetch",
+    "write",
+)
+
+
+#: The ``web`` subagent's whitelist-filtered base tools. The browser pack
+#: (``browser_*``) is NOT listed here — it is flag-gated by
+#: ``Capabilities(browser=True)`` + a live sandbox backend (like memory), not by
+#: this whitelist. These are the supporting tools: read/write to save findings,
+#: read-only shell + ``webfetch`` (a raw-content fetch when no interaction is
+#: needed). No ``edit``/``apply_patch`` — a browser worker writes fresh notes, it
+#: does not batch-edit a codebase.
+_WEB_TOOLS = (
+    "glob",
+    "grep",
+    "read",
+    "shell_kill",
+    "shell_poll",
+    "shell_run",
     "webfetch",
     "write",
 )
@@ -156,6 +187,36 @@ OFFICIAL_SUBAGENTS: dict[str, AgentDefinition] = {
 }
 
 
+#: The browser specialist (layer 4). A delegatable subagent whose one job is to
+#: drive the sandbox container's browser: it holds the ``browser`` capability
+#: (so the noeta-owned browser pack is merged when a live sandbox backend is
+#: present) plus a read/write + read-only-shell base, and a browsing-loop prompt
+#: that isolates a web task's token churn in its own context and returns a
+#: distilled answer to the parent.
+#:
+#: **Deliberately NOT in ``OFFICIAL_SUBAGENTS``.** Registering it there would add
+#: ``web`` to ``main``'s spawnable roster, which changes ``main``'s
+#: ``spawn_subagent`` schema — churning ``main``'s stable prefix for EVERY
+#: deployment, including non-sandbox ones where the browser cannot even work.
+#: Browser only makes sense under a sandbox, so wiring ``web`` into the roster
+#: is a **product-activation** concern, gated on ``NOETA_AGENT_SANDBOX`` (S10) —
+#: not baked into the SDK presets. This definition is exported ready for that
+#: gated registration (see :func:`sandbox_browser_options`). ``web`` is the sole
+#: identity that opens ``browser``; ``main`` stays browser-free and delegates.
+WEB_SUBAGENT: AgentDefinition = AgentDefinition(
+    description=(
+        "Web-browsing specialist: drives the sandbox browser (navigate / "
+        "click / type / extract) to research or operate live web pages, and "
+        "returns a distilled answer."
+    ),
+    prompt=_WEB_PROMPT,
+    tools=_WEB_TOOLS,
+    # browser: the noeta-owned browser pack (flag-gated, sandbox-backed).
+    # skill_invocation on, matching the other workers.
+    capabilities=Capabilities(browser=True, skill_invocation=True),
+)
+
+
 def main_options() -> Options:
     """The official main recipe: full tool set + three subagents + all control-plane capabilities.
 
@@ -182,6 +243,41 @@ def main_options() -> Options:
     )
 
 
+def sandbox_browser_options() -> Options:
+    """Sandbox-activated variant of :func:`main_options`: the ``web`` subagent
+    is registered into main's delegation roster. Main itself stays browser-free.
+
+    Product-activation helper (the sandbox-browser-subsystem spec, D3 / B6):
+    when a deployment provisions a per-session AIO Sandbox (``NOETA_AGENT_SANDBOX``
+    on), the browser tool pack can actually work, so the ``web`` browsing
+    specialist — the only identity that opens ``Capabilities.browser=True`` —
+    is wired into main's delegation roster. Main does NOT open ``browser``: it
+    has no ``browser_*`` tools and must delegate every page interaction to
+    ``web`` (which isolates browsing token churn in a child context and returns
+    a distilled result). Giving main the browser pack directly would let it
+    shortcut delegation — a one-line ``browser_navigate`` always beats a
+    ``spawn_subagent`` hop — so the browser capability lives on ``web`` alone.
+
+    Off by default — non-sandbox deployments keep :func:`main_options` (no
+    ``web`` agent, ``browser=False``) so the roster + stable prefix are
+    byte-identical to pre-browser-subsystem. This function is the *explicit*
+    opt-in a product uses to activate, never a silent default.
+    """
+    base = main_options()
+    agents = dict(base.agents)
+    agents["web"] = WEB_SUBAGENT
+    # ``compile_options`` unions ``spawnable`` with the child names and keeps
+    # ``delegation`` as-is (already True on main), so ``web`` becomes
+    # delegatable. Main's own identity is left untouched — ``browser`` stays
+    # ``False`` (it has no browser tools; every page interaction is delegated
+    # to ``web``). The prompt swaps to the web-aware variant in lockstep with
+    # the roster: a prompt that names ``web`` without ``web`` being spawnable
+    # (or vice versa) makes the model chase a subagent that isn't there.
+    return dataclasses.replace(
+        base, agents=agents, system_prompt=MAIN_WEB_SYSTEM_PROMPT
+    )
+
+
 def official_specs() -> dict[str, AgentSpec]:
     """Compile the four agents and return them as a dict keyed by name (for the product registration path)."""
     main, descendants = compile_options(main_options())
@@ -191,5 +287,7 @@ def official_specs() -> dict[str, AgentSpec]:
     return out
 
 
-# Register the main preset prompt so SystemPromptPreset(preset="main") resolves.
+# Register the main preset prompts so SystemPromptPreset(preset="main") /
+# (preset="main-web") resolve.
 register_preset_prompt("main", MAIN_SYSTEM_PROMPT)
+register_preset_prompt("main-web", MAIN_WEB_SYSTEM_PROMPT)

@@ -108,6 +108,17 @@ class BackendHandler(BaseHTTPRequestHandler):
         return getattr(self.server, "app_gateway", None)
 
     @property
+    def sandbox_preview_gateway(self) -> Optional[Any]:
+        """The per-session sandbox live-preview gateway, or ``None`` if absent.
+
+        Backs ONLY the ``GET /tasks/{id}/preview`` discovery route on this
+        server: the preview traffic itself is served on the gateway's own
+        dedicated port (origin isolation — see
+        ``noeta.agent.host.sandbox_preview_gateway``), never the main port.
+        """
+        return getattr(self.server, "sandbox_preview_gateway", None)
+
+    @property
     def mcp_registry(self) -> Optional[Any]:
         """The MCP connector config registry (T6), or ``None`` if absent."""
         return getattr(self.server, "mcp_registry", None)
@@ -394,6 +405,7 @@ class _BackendHttpServer(ThreadingHTTPServer):
         engine_room: EngineRoom,
         router: Router,
         app_gateway: Optional[Any] = None,
+        sandbox_preview_gateway: Optional[Any] = None,
         mcp_registry: Optional[Any] = None,
         workspace_registry: Optional[Any] = None,
         web_assets: Optional[Any] = None,
@@ -402,6 +414,7 @@ class _BackendHttpServer(ThreadingHTTPServer):
         self.engine_room = engine_room
         self.router = router
         self.app_gateway = app_gateway
+        self.sandbox_preview_gateway = sandbox_preview_gateway
         self.mcp_registry = mcp_registry
         self.workspace_registry = workspace_registry
         self.web_assets = web_assets
@@ -414,6 +427,7 @@ def make_http_server(
     port: int = 8765,
     router: Optional[Router] = None,
     app_gateway: Optional[Any] = None,
+    sandbox_preview_gateway: Optional[Any] = None,
     mcp_registry: Optional[Any] = None,
     workspace_registry: Optional[Any] = None,
     web_assets: Optional[Any] = None,
@@ -422,15 +436,17 @@ def make_http_server(
 
     ``router`` defaults to an empty table (only ``/health`` works until T5/T6
     register the task protocol + resource routes). ``app_gateway`` /
-    ``mcp_registry`` / ``workspace_registry`` enable the T6 preview + MCP +
-    workspace services (``None`` ⇒ off). ``web_assets`` enables serving the
-    bundled SPA (``None`` ⇒ SPA routes 404).
+    ``sandbox_preview_gateway`` / ``mcp_registry`` / ``workspace_registry``
+    enable the T6 preview + sandbox-live-preview + MCP + workspace services
+    (``None`` ⇒ off). ``web_assets`` enables serving the bundled SPA (``None``
+    ⇒ SPA routes 404).
     """
     return _BackendHttpServer(
         (host, port),
         engine_room=engine_room,
         router=router or Router(),
         app_gateway=app_gateway,
+        sandbox_preview_gateway=sandbox_preview_gateway,
         mcp_registry=mcp_registry,
         workspace_registry=workspace_registry,
         web_assets=web_assets,

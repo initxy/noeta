@@ -489,6 +489,22 @@
   flex: 1;
 }
 
+.chat-header__sandbox-dot {
+  display: inline-flex;
+  align-items: center;
+  margin-left: var(--s-2);
+  padding: var(--s-2);
+  border-radius: var(--r-pill);
+  color: var(--muted);
+  opacity: 0.4;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.chat-header__sandbox-dot.is-active {
+  opacity: 1;
+  color: var(--success, #22c55e);
+}
+
 .trace-link {
   padding: var(--s-4) var(--s-8);
   border-radius: var(--r-pill);

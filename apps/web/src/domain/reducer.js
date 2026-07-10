@@ -21,6 +21,7 @@
 //     pendingApprovals: Approval[],    // unresolved ToolCallApprovalRequested
 //     pendingQuestions: Question[],    // unresolved UserQuestionRequested
 //     diffs:     Diff[],               // text/x-diff artifacts (proposed edits)
+//     images:    ImageRef[],           // image/* artifacts (e.g. browser screenshots)
 //     todos:     Todo[],               // current todo_write checklist (replace-all)
 //     lastSeq:   number,               // highest seq folded (dedup bookmark)
 //   }
@@ -52,6 +53,11 @@ function emptyViewModel() {
     pendingApprovals: [],
     pendingQuestions: [],
     diffs: [],
+    // image/* artifacts (browser screenshots and the like) surfaced inline under
+    // the tool call that produced them — the image analogue of `diffs`, which is
+    // the text/x-diff analogue. Same {callId, toolName, hash, mediaType, seq}
+    // shape so the renderer mirrors the diff disclosure path.
+    images: [],
     // Current todo_write checklist (CW18b replace-all): [{id, content, status}].
     // Folded from the latest TaskStatePatched(set_todos) so the composer's todo
     // strip reflects the model's current plan.
@@ -238,8 +244,19 @@ function applyEnvelope(vm, env) {
       // Surface every text/x-diff artifact as a proposed edit (diff view).
       const arts = Array.isArray(p.artifacts) ? p.artifacts : [];
       for (const art of arts) {
-        if (art && art.media_type === "text/x-diff" && art.hash) {
+        if (!art || !art.hash) continue;
+        if (art.media_type === "text/x-diff") {
           vm.diffs.push({
+            callId: p.call_id,
+            toolName: call.toolName,
+            hash: art.hash,
+            mediaType: art.media_type,
+            seq,
+          });
+        } else if (/^image\//.test(art.media_type || "")) {
+          // An image/* artifact (browser screenshot, etc.) is shown inline under
+          // the tool call — the glanceable counterpart to a diff disclosure.
+          vm.images.push({
             callId: p.call_id,
             toolName: call.toolName,
             hash: art.hash,
@@ -585,6 +602,7 @@ function applyEnvelope(vm, env) {
 function pruneDeadTail(vm, keep) {
   vm.turns = vm.turns.filter((turn) => keep(turn.seq));
   vm.diffs = vm.diffs.filter((diff) => keep(diff.seq));
+  vm.images = vm.images.filter((img) => keep(img.seq));
   vm.pendingApprovals = vm.pendingApprovals.filter((a) => keep(a.seq));
   vm.pendingQuestions = vm.pendingQuestions.filter((q) => keep(q.seq));
   for (const [callId, call] of Object.entries(vm.toolCalls)) {

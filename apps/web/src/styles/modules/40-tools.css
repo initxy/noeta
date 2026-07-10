@@ -114,6 +114,32 @@
 .diff-hunk { color: var(--code-hunk); }
 .diff-ctx { color: var(--code-ctx); }
 
+/* An image/* artifact (e.g. a browser screenshot) shown inline under its tool
+   call. Mirrors the user-bubble thumbnail (.bubble-image-thumb) so a tool's
+   screenshot reads with the same glanceable, click-to-zoom affordance. */
+.tool-image {
+  margin-top: var(--s-6);
+}
+.tool-image-thumb {
+  display: block;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: none;
+  cursor: pointer;
+  overflow: hidden;
+  line-height: 0;
+}
+.tool-image-thumb img {
+  display: block;
+  max-width: 320px;
+  max-height: 220px;
+  object-fit: contain;
+}
+.tool-image-thumb:hover {
+  border-color: var(--border-strong);
+}
+
 .turn-marker {
   color: var(--faint);
   font-size: 12px;

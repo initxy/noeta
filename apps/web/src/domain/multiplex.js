@@ -163,6 +163,7 @@ function cloneViewModel(vm) {
     pendingApprovals: vm.pendingApprovals.slice(),
     pendingQuestions: vm.pendingQuestions.slice(),
     diffs: vm.diffs.slice(),
+    images: vm.images.slice(),
     todos: vm.todos.slice(),
   };
 }
