@@ -488,3 +488,224 @@ def test_session_runner_records_agent_name(tmp_path: Path) -> None:
     )
     out = make_driver(host).start(goal="look around", agent="explore")
     assert agent_name_of(host.event_log, out.task_id) == "explore"
+
+
+# ---------------------------------------------------------------------------
+# Resident multi-worker path: a subtask claimed by a worker's untargeted
+# tick() (rather than the drain's targeted descent) resolves through
+# ``resolve_engine`` and must NOT inherit the top-level multi-turn wrapper.
+# ---------------------------------------------------------------------------
+
+
+def _multi_turn_resolver(
+    event_log: InMemoryEventLog,
+    content_store: InMemoryContentStore,
+    dispatcher: InMemoryDispatcher,
+    tmp_path: Path,
+) -> SdkHost:
+    """A resident host wired with the multi-turn wrapper (the ``Client``
+    interactive shape), so a normally-finishing ROOT turn suspends on the
+    next-goal handle. This is the wiring under which a subtask must NOT be
+    wrapped."""
+    from noeta.execution.driver import multi_turn_policy_wrapper
+
+    return SdkHost(
+        event_log=event_log,
+        content_store=content_store,
+        dispatcher=dispatcher,
+        provider=_EndTurnProvider(),
+        model="test-model",
+        workspace_dir=tmp_path,
+        registry=official_agent_registry(),
+        aliases={"default": "main"},
+        policy_wrapper=multi_turn_policy_wrapper,
+        require_approval_tools=(),
+    )
+
+
+def _is_multi_turn_wrapped(engine: Engine) -> bool:
+    """True iff the Engine's policy is (or is nested under) the multi-turn
+    wrapper that turns ``FinishDecision`` into a next-goal suspend."""
+    from noeta.execution.multi_turn import MultiTurnReActPolicy
+
+    policy = engine._policy
+    return isinstance(policy, MultiTurnReActPolicy)
+
+
+def test_subtask_engine_is_not_multi_turn_wrapped(tmp_path: Path) -> None:
+    """A child task (has a ``parent_task_id``) resolved through the resident
+    per-task ``resolve_engine`` must NOT carry the multi-turn wrapper — it is
+    one-shot and must finish with a real ``TaskCompleted`` so the
+    ``ChildLifecycleObserver`` fires the parent's wake. The root task on the
+    SAME agent + model still IS wrapped, and the two live in DISTINCT cache
+    slots (the wrapper-is-None dimension keys them apart), so the root's
+    wrapper cannot leak to the child via the cache.
+
+    This is the regression guard for the deadlock where a resident worker's
+    untargeted ``tick()`` claimed a spawned explorer child ahead of the
+    drain, drove it through ``resolve_engine`` (which used to wrap it
+    unconditionally), and the child's ``FinishDecision`` became a next-goal
+    suspend → no ``TaskCompleted`` → the parent's
+    ``SubtaskGroupCompleted`` barrier never fired → deadlock."""
+    from noeta.policies.control_tools import WORKFLOW_AGENT_NAME  # noqa: F401
+
+    event_log, content_store, dispatcher = _storage()
+    seed = build_engine_for_agent(
+        official_specs()["main"],
+        "m",
+        event_log=event_log,
+        content_store=content_store,
+        provider=_EndTurnProvider(),
+        workspace_dir=tmp_path,
+    )
+    # Two tasks on the SAME agent + model — the cache-collision case. One is a
+    # root task, the other a delegated child (parent_task_id set).
+    root_task = seed.create_task(
+        goal="root", policy_name="react", agent_name="general-purpose"
+    )
+    child_task = seed.create_task(
+        goal="child",
+        policy_name="react",
+        agent_name="general-purpose",
+        parent_task_id=root_task.task_id,
+    )
+
+    resolver = _multi_turn_resolver(event_log, content_store, dispatcher, tmp_path)
+    root_engine = resolver.resolve_engine(
+        fold(event_log, content_store, root_task.task_id)
+    )
+    child_engine = resolver.resolve_engine(
+        fold(event_log, content_store, child_task.task_id)
+    )
+
+    # The root keeps the wrapper; the child does not.
+    assert _is_multi_turn_wrapped(root_engine), (
+        "root engine lost its multi-turn wrapper"
+    )
+    assert not _is_multi_turn_wrapped(child_engine), (
+        "child engine inherited the multi-turn wrapper — a subtask must be "
+        "one-shot (FinishDecision → TaskCompleted), not a next-goal suspend"
+    )
+    # Same agent + model, but the wrapper-is-None cache dimension keeps them in
+    # SEPARATE slots — so resolving the child never returns the root's wrapped
+    # Engine (the fix is not masked by the cache).
+    assert root_engine is not child_engine, (
+        "root and child shared one cached Engine — the wrapper-is-None cache "
+        "dimension failed to key them apart"
+    )
+    assert len(resolver._engines) == 2, (
+        f"expected 2 cached engines (root wrapped + child unwrapped), "
+        f"got {len(resolver._engines)}: {list(resolver._engines.keys())}"
+    )
+
+
+def test_subtask_engine_cache_isolates_wrapped_from_unwrapped(tmp_path: Path) -> None:
+    """Direct unit guard on ``_engine_for_agent``: the same agent resolved once
+    with the host wrapper and once with ``policy_wrapper=None`` lands in two
+    cache entries (the 10th key dimension). Without this, a child resolved
+    AFTER its same-agent root would reuse the root's wrapped Engine and the
+    subtask fix would be silently masked."""
+    event_log, content_store, dispatcher = _storage()
+    resolver = _multi_turn_resolver(event_log, content_store, dispatcher, tmp_path)
+    agent = resolver._lookup_agent("general-purpose", task_id="<unit>")
+
+    wrapped = resolver._engine_for_agent(agent, policy_wrapper=resolver.policy_wrapper)
+    unwrapped = resolver._engine_for_agent(agent, policy_wrapper=None)
+
+    assert _is_multi_turn_wrapped(wrapped)
+    assert not _is_multi_turn_wrapped(unwrapped)
+    assert wrapped is not unwrapped
+    assert len(resolver._engines) == 2
+
+
+def test_resolve_engine_routes_workflow_child(tmp_path: Path) -> None:
+    """A ``__workflow__`` child (the orchestration interpreter, not a roster
+    agent) resolved through the resident per-task ``resolve_engine`` must route
+    to the orchestration Engine — NOT raise ``UnknownAgentError``. Same root
+    cause as the wrapper bug: a worker's untargeted ``tick()`` can claim the
+    child ahead of the drain's targeted descent, and ``resolve_engine`` (unlike
+    the drain's ``_build_subtask_engine``) used to have no ``__workflow__``
+    branch."""
+    event_log, content_store, dispatcher = _storage()
+    seed = build_engine_for_agent(
+        official_specs()["main"],
+        "m",
+        event_log=event_log,
+        content_store=content_store,
+        provider=_EndTurnProvider(),
+        workspace_dir=tmp_path,
+    )
+    parent = seed.create_task(
+        goal="run a workflow", policy_name="react", agent_name="general-purpose"
+    )
+    wf_child = seed.create_task(
+        goal="orchestrate",
+        policy_name="react",
+        agent_name="__workflow__",
+        parent_task_id=parent.task_id,
+        inputs={"script": "pass", "args": {}},
+    )
+
+    resolver = _multi_turn_resolver(event_log, content_store, dispatcher, tmp_path)
+    # Must NOT raise UnknownAgentError; must return a real Engine.
+    engine = resolver.resolve_engine(
+        fold(event_log, content_store, wf_child.task_id)
+    )
+    assert engine is not None
+    # The orchestration child is one-shot too — never multi-turn wrapped.
+    assert not _is_multi_turn_wrapped(engine)
+
+
+def test_worker_driven_subtask_completes_not_suspends(tmp_path: Path) -> None:
+    """End-to-end guard for the deadlock root cause. Under a multi-turn host
+    (the resident ``Client`` shape, where a ROOT turn's ``FinishDecision``
+    becomes a next-goal suspend), a delegated CHILD driven through the worker
+    primitive ``run_leased_task`` — i.e. claimed by a resident worker's
+    untargeted ``tick()`` ahead of the drain's targeted descent — must reach a
+    genuine ``TaskCompleted``, NOT a ``TaskSuspended`` on the next-goal handle.
+
+    Before the fix, ``resolve_engine`` wrapped the child unconditionally, so the
+    child's ``FinishDecision`` became a next-goal suspend: no ``TaskCompleted``
+    fired, the ``ChildLifecycleObserver`` never woke the parent, and the parent's
+    ``SubtaskGroupCompleted`` barrier deadlocked."""
+    from noeta.protocols.messages import TextBlock
+
+    event_log, content_store, dispatcher = _storage()
+    resolver = _multi_turn_resolver(event_log, content_store, dispatcher, tmp_path)
+
+    # A delegated child: parent_task_id set ⇒ resolve_engine builds it unwrapped.
+    parent = resolver.engine.create_task(
+        goal="parent", policy_name="react", agent_name="general-purpose"
+    )
+    child = resolver.engine.create_task(
+        goal="child",
+        policy_name="react",
+        agent_name="general-purpose",
+        parent_task_id=parent.task_id,
+    )
+    dispatcher.enqueue(child.task_id)
+    lease = dispatcher.lease(
+        worker_id="resident-worker", lease_seconds=60.0, task_id=child.task_id
+    )
+    assert lease is not None
+    # Seed the child's opening user message (the worker's goal-seeding path does
+    # this too; do it explicitly so the test is independent of that ordering).
+    engine = resolver.resolve_engine(fold(event_log, content_store, child.task_id))
+    seeded = fold(event_log, content_store, child.task_id)
+    engine.append_user_message(
+        seeded, content=[TextBlock(text="do it")], lease_id=lease.lease_id
+    )
+
+    outcome = run_leased_task(resolver, lease)
+    assert outcome == "drained"
+
+    types = [e.type for e in event_log.read(child.task_id)]
+    assert "TaskCompleted" in types, (
+        f"child did not complete (the wrapper turned FinishDecision into a "
+        f"next-goal suspend): {types}"
+    )
+    assert "TaskSuspended" not in types, (
+        f"child suspended instead of completing: {types}"
+    )
+    child_folded = fold(event_log, content_store, child.task_id)
+    assert child_folded.status == "terminal"
