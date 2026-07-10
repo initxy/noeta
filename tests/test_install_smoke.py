@@ -21,7 +21,6 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import sys
 import sysconfig
 import venv
 from pathlib import Path

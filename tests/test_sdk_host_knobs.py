@@ -30,9 +30,6 @@ from noeta.execution.builder import (
 )
 from noeta.guards.budget import Budget
 from noeta.guards.permission import PermissionGuard
-from noeta.policies._control_translate import (
-    SPAWN_SUBAGENT_TOOL,
-)
 from noeta.protocols.messages import Usage
 from noeta.storage.memory import (
     InMemoryContentStore,
@@ -302,8 +299,6 @@ def test_default_host_byte_equal_to_direct_builder(tmp_path: Path) -> None:
     )
 
     # Call build_session_inputs directly with the pre-change host parameter set
-    dispatcher = InMemoryDispatcher()
-    event_log = InMemoryEventLog(lease_validator=dispatcher)
     content_store = InMemoryContentStore()
     from noeta.client.host import _approval_set_for
 

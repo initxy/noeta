@@ -107,6 +107,45 @@ def _frame_is_concurrent(frame: "_DelegationFrame") -> bool:
     return isinstance(gw, SubtaskGroupCompleted) and bool(gw.concurrent)
 
 
+class _ChildNotReady(Exception):
+    """Internal signal (never raised past this module) — a targeted lease on
+    ``expected_child_id`` came back empty because another driver already
+    claimed the child first: the num_workers>=2 foreground race where an
+    idle resident worker's untargeted FIFO poll steals a freshly-created
+    child before this in-request drive's own targeted
+    :func:`_descend_to_child` attempt does (``ChildLifecycleObserver``
+    enqueues a foreground child WITHOUT ``reserved=True`` — only background
+    children get that one-shot claim guard; see ``Dispatcher.enqueue``).
+
+    No lease is held at any ``_descend_to_child`` call site when this fires
+    — every caller has already released its prior active lease before
+    descending into the next one (the loop invariant :func:`drive_pending_subtasks`
+    documents) — so there is nothing to clean up. :func:`drive_pending_subtasks`
+    / :func:`resume_woken_parent` catch this and degrade to returning the
+    current durable fold, the same "not resumable right now" shape
+    :func:`resume_woken_parent` already gives its OWN analogous parent-lease
+    race (``parent_lease is None -> return None``). The other driver's
+    in-flight drain (or the ``ChildLifecycleObserver`` once the child
+    terminates) completes the handoff and wakes the ancestor chain normally.
+
+    KNOWN GAP — not closed here: this only stops the race from crashing the
+    in-request caller; it does not prevent the steal. A full fix would
+    reserve foreground children the same way background ones are
+    (``Dispatcher.enqueue(..., reserved=True)``) and drive them via the
+    shared executor, uniformly with the background path — a larger,
+    cross-cutting follow-up (touches ``ChildLifecycleObserver`` and the
+    handful of low-level tests that untargeted-lease foreground children
+    today). Flagging for review rather than guessing at that larger change.
+    """
+
+    def __init__(self, child_id: str) -> None:
+        self.child_id = child_id
+        super().__init__(
+            f"delegation: child {child_id!r} was claimed by another driver "
+            "before this drive's targeted lease attempt (num_workers>=2 race)"
+        )
+
+
 class UnsupportedSubtaskSuspend(CodedError):
     """SR1 — a driven sub-agent child suspended on a wake condition the
     recursive delegation driver does not support (anything other than a
@@ -256,6 +295,12 @@ def drive_pending_subtasks(host: DrainHost, parent: Any) -> Any:
         return _run_delegation_loop(host, root_id, waiters)
     except TaskCancellationRequested:
         return _abort_cancelled_drain(host, root_id, waiters)
+    except _ChildNotReady:
+        # num_workers>=2 race (see _ChildNotReady) — degrade instead of
+        # crashing: no lease is held at this point, so just hand back the
+        # current durable state; the driver that won the race (or the
+        # observer once it terminates) completes the handoff.
+        return fold(host.event_log, host.content_store, root_id)
 
 
 def resume_woken_parent(host: DrainHost, parent: Any) -> Optional[Any]:
@@ -323,6 +368,11 @@ def resume_woken_parent(host: DrainHost, parent: Any) -> Optional[Any]:
         )
     except TaskCancellationRequested:
         return _abort_cancelled_drain(host, parent.task_id, waiters)
+    except _ChildNotReady:
+        # num_workers>=2 race (see _ChildNotReady) — same degrade as
+        # drive_pending_subtasks: no lease is held here either, hand back
+        # the current durable state instead of crashing.
+        return fold(host.event_log, host.content_store, parent.task_id)
 
 
 def _run_delegation_loop(
@@ -698,63 +748,70 @@ def _descend_to_child(host: DrainHost, expected_child_id: str) -> tuple[Any, Any
         task_id=expected_child_id,
     )
     if child_lease is None:
-        raise RuntimeError(
-            f"delegation: expected child {expected_child_id!r} not ready "
-            "to lease (ChildLifecycleObserver should have enqueued it)"
-        )
+        # num_workers>=2 race: an idle resident worker's untargeted poll may
+        # have already claimed this child (see _ChildNotReady) — degrade
+        # instead of raising an opaque bare error that crashes the whole
+        # in-request drive. No lease was acquired, so nothing to release.
+        raise _ChildNotReady(expected_child_id)
     assert child_lease.task_id == expected_child_id, (
         f"targeted child lease returned {child_lease.task_id!r}, "
         f"expected {expected_child_id!r}"
     )
-    child_engine = host.build_child_engine(child_lease.task_id)
-    child_task = fold(host.event_log, host.content_store, child_lease.task_id)
-    # A child's opening model binding (its agent's declared default model,
-    # else the root session's inherited non-default binding — the resolver's
-    # ``child_model_binding`` callback owns the choice) lands as the child
-    # task's own opening ModelBound — written BEFORE the goal seed, mirroring
-    # InteractionDriver.start's bind-then-seed order, so fold/_bound_model_for
-    # resolve the child on that model and a later cold resume rebuilds the
-    # same binding. Skipped when the host wires no callback (test doubles),
-    # the callback returns no binding (host-default model), or the child is
-    # already bound (re-entrant descent after a suspend).
-    if host.child_model_binding is not None:
-        binding = host.child_model_binding(child_lease.task_id)
-        if binding and not child_task.governance.model_binding:
-            bind_model, bind_identity = binding
-            child_task = child_engine.note_model_bound(
-                child_task,
-                lease_id=child_lease.lease_id,
-                model=bind_model,
-                principal_identity=bind_identity,
-                provider=host.child_provider,
-            )
-    # Seed ONLY the child goal (isolated context — never the parent's
-    # messages or system prompt). Resume-safe: only seed when the child has no
-    # messages yet (a fresh child folds to an empty ``runtime.messages``). A
-    # background-sub-agent crash-recovery re-drive (docs/adr/background-subagent.md)
-    # descends into an already-seeded child to continue it from its own EventLog —
-    # re-seeding the goal there would duplicate it. The foreground path always
-    # descends into a fresh child, so this guard is a no-op for it.
-    if not child_task.runtime.messages:
-        child_task = child_engine.append_user_message(
-            child_task,
-            content=[TextBlock(text=child_task.state.goal)],
-            lease_id=child_lease.lease_id,
-        )
-    # Pre-loop activation of the child's instructions + environment content
-    # channels — the same parity a top-level session gets via
-    # ``InteractionDriver.seed_start`` / ``AgentSessionRunner.prepare()`` (and
-    # what Claude Code gives a subagent). Recorded AFTER the goal seed and BEFORE
-    # the first step so the child's first request carries the workspace block.
-    # The records are first-only/idempotent (so a re-entrant descent is safe) and
-    # land in semi_stable under the ``evolving`` drift policy — they never enter
-    # the stable_prefix, so adding them does not bust prompt caching. ``None``
-    # callback (in-process runner / test doubles) ⇒ no-op, byte-identical.
-    if host.record_session_content is not None:
-        child_task = host.record_session_content(
-            child_lease.task_id, child_task, child_lease.lease_id
-        )
+    # Everything from here on holds ``child_lease`` — wrap the WHOLE region
+    # (engine build, fold, model-binding note, goal seed, session-content
+    # activation, and the step itself) in one try/except so ANY exception
+    # (not just a cancellation raised deep inside run_one_step) releases the
+    # lease before propagating. An unguarded gap here used to leak the lease
+    # on e.g. an UnknownAgentError from build_child_engine.
     try:
+        child_engine = host.build_child_engine(child_lease.task_id)
+        child_task = fold(host.event_log, host.content_store, child_lease.task_id)
+        # A child's opening model binding (its agent's declared default model,
+        # else the root session's inherited non-default binding — the resolver's
+        # ``child_model_binding`` callback owns the choice) lands as the child
+        # task's own opening ModelBound — written BEFORE the goal seed, mirroring
+        # InteractionDriver.start's bind-then-seed order, so fold/_bound_model_for
+        # resolve the child on that model and a later cold resume rebuilds the
+        # same binding. Skipped when the host wires no callback (test doubles),
+        # the callback returns no binding (host-default model), or the child is
+        # already bound (re-entrant descent after a suspend).
+        if host.child_model_binding is not None:
+            binding = host.child_model_binding(child_lease.task_id)
+            if binding and not child_task.governance.model_binding:
+                bind_model, bind_identity = binding
+                child_task = child_engine.note_model_bound(
+                    child_task,
+                    lease_id=child_lease.lease_id,
+                    model=bind_model,
+                    principal_identity=bind_identity,
+                    provider=host.child_provider,
+                )
+        # Seed ONLY the child goal (isolated context — never the parent's
+        # messages or system prompt). Resume-safe: only seed when the child has no
+        # messages yet (a fresh child folds to an empty ``runtime.messages``). A
+        # background-sub-agent crash-recovery re-drive (docs/adr/background-subagent.md)
+        # descends into an already-seeded child to continue it from its own EventLog —
+        # re-seeding the goal there would duplicate it. The foreground path always
+        # descends into a fresh child, so this guard is a no-op for it.
+        if not child_task.runtime.messages:
+            child_task = child_engine.append_user_message(
+                child_task,
+                content=[TextBlock(text=child_task.state.goal)],
+                lease_id=child_lease.lease_id,
+            )
+        # Pre-loop activation of the child's instructions + environment content
+        # channels — the same parity a top-level session gets via
+        # ``InteractionDriver.seed_start`` / ``AgentSessionRunner.prepare()`` (and
+        # what Claude Code gives a subagent). Recorded AFTER the goal seed and BEFORE
+        # the first step so the child's first request carries the workspace block.
+        # The records are first-only/idempotent (so a re-entrant descent is safe) and
+        # land in semi_stable under the ``evolving`` drift policy — they never enter
+        # the stable_prefix, so adding them does not bust prompt caching. ``None``
+        # callback (in-process runner / test doubles) ⇒ no-op, byte-identical.
+        if host.record_session_content is not None:
+            child_task = host.record_session_content(
+                child_lease.task_id, child_task, child_lease.lease_id
+            )
         # Keep the child's lease alive while its step runs — no resident
         # WorkerLoop heartbeats this in-request drain, so a child step longer
         # than the lease TTL would otherwise lose its lease mid-flight.
@@ -768,6 +825,15 @@ def _descend_to_child(host: DrainHost, expected_child_id: str) -> tuple[Any, Any
         # the drain catch the signal and cascade-cancel the tree.
         host.dispatcher.fail(
             child_lease.lease_id, retryable=False, reason="cancelled"
+        )
+        raise
+    except Exception as exc:  # noqa: BLE001 — never leak the lease; mirrors
+        # driver.py's generic-fault backstop (fail retryable, re-raise) so an
+        # in-process / storage fault anywhere in the descent (e.g. a child's
+        # recorded agent_name no longer resolving) converges the Dispatcher's
+        # bounded max_fail_attempts instead of stranding the lease forever.
+        host.dispatcher.fail(
+            child_lease.lease_id, retryable=True, reason=str(exc)
         )
         raise
     return child_task, child_lease
@@ -804,35 +870,40 @@ def _resume_parent_leased(
     """The body of :func:`_resume_parent` for a parent whose woken lease
     the caller already holds (the out-of-band :func:`resume_woken_parent`
     seam probes the lease itself before committing to a resume)."""
-    # Re-fold from the durable log to pick up the observer-written
-    # SubtaskCompleted(s) (governance.subtask_results) + folded messages.
-    parent = fold(host.event_log, host.content_store, frame.parent_id)
-    parent = engine.note_woken(
-        parent, lease_id=parent_lease.lease_id, wake_event=parent_lease.wake_event
-    )
-    if frame.group_wake is None:
-        # SR1 single child: one paired tool_result.
-        result = parent.governance.subtask_results[-1]
-        call_id = _pending_spawn_call_id(parent)
-        parent = engine.append_subagent_result_message(
-            parent,
-            call_id=call_id,
-            output=result.output,
-            success=result.status == "completed",
-            error=result.error,
-            lease_id=parent_lease.lease_id,
-        )
-    else:
-        # SR2 fan-out: N paired tool_results in member order, keyed from
-        # the parent stream; call_ids positional from the assistant msg.
-        wake_event = parent_lease.wake_event  # SubtaskGroupCompleted (B4)
-        call_ids = _pending_spawn_call_ids(
-            parent, len(wake_event.subtask_ids)
-        )
-        parent = engine.append_subagent_group_result_messages(
-            parent, wake_event, call_ids, lease_id=parent_lease.lease_id
-        )
+    # Everything from here on holds ``parent_lease`` — wrap the WHOLE region
+    # (re-fold, note_woken, result-message rendering, and the step itself) in
+    # one try/except so ANY exception releases the lease before propagating,
+    # not just a cancellation raised deep inside run_one_step (mirrors the
+    # identical wrap in _descend_to_child).
     try:
+        # Re-fold from the durable log to pick up the observer-written
+        # SubtaskCompleted(s) (governance.subtask_results) + folded messages.
+        parent = fold(host.event_log, host.content_store, frame.parent_id)
+        parent = engine.note_woken(
+            parent, lease_id=parent_lease.lease_id, wake_event=parent_lease.wake_event
+        )
+        if frame.group_wake is None:
+            # SR1 single child: one paired tool_result.
+            result = parent.governance.subtask_results[-1]
+            call_id = _pending_spawn_call_id(parent)
+            parent = engine.append_subagent_result_message(
+                parent,
+                call_id=call_id,
+                output=result.output,
+                success=result.status == "completed",
+                error=result.error,
+                lease_id=parent_lease.lease_id,
+            )
+        else:
+            # SR2 fan-out: N paired tool_results in member order, keyed from
+            # the parent stream; call_ids positional from the assistant msg.
+            wake_event = parent_lease.wake_event  # SubtaskGroupCompleted (B4)
+            call_ids = _pending_spawn_call_ids(
+                parent, len(wake_event.subtask_ids)
+            )
+            parent = engine.append_subagent_group_result_messages(
+                parent, wake_event, call_ids, lease_id=parent_lease.lease_id
+            )
         # Keep the parent's lease alive while its resume step runs. This is the
         # post-subtask-completion step that re-folds the (now large) context and
         # calls the LLM to continue the turn; with no resident WorkerLoop to
@@ -847,6 +918,15 @@ def _resume_parent_leased(
         # cancel-cascade: release our own lease (see _descend_to_child).
         host.dispatcher.fail(
             parent_lease.lease_id, retryable=False, reason="cancelled"
+        )
+        raise
+    except Exception as exc:  # noqa: BLE001 — never leak the lease; same
+        # generic-fault backstop as _descend_to_child (fail retryable,
+        # re-raise) so a fault anywhere in the resume converges the
+        # Dispatcher's bounded max_fail_attempts instead of stranding the
+        # lease forever.
+        host.dispatcher.fail(
+            parent_lease.lease_id, retryable=True, reason=str(exc)
         )
         raise
     return parent, parent_lease, parent_lease.wake_event

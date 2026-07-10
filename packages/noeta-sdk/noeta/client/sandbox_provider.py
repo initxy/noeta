@@ -111,7 +111,8 @@ class MountSpec:
 
     Mounts are how bytes cross into the container (project files, skills) and
     persist back out; the *execution* layer is orthogonal — every tool still
-    runs THROUGH the container over HTTP (D5, "execution 全经容器"). ``kind``
+    runs THROUGH the container over HTTP (D5, "execution always goes through
+    the container"). ``kind``
     abstracts the storage backend so the same ``MountSpec`` maps to a Local
     ``docker -v`` (``"local-path"`` / ``"volume"``) or a Distributed NAS /
     PVC (``"nas"`` → TAE ``fuse_mount_params``, ``"pvc"``) — the **same

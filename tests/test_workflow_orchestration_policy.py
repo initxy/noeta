@@ -233,6 +233,51 @@ def test_try_except_never_swallows_the_spawn_suspend() -> None:
     assert isinstance(decision, SpawnSubtaskDecision)
 
 
+def test_multiline_triple_quoted_string_literal_survives_the_wrap() -> None:
+    """``_run_script`` wraps the script in a synthetic function so a
+    top-level ``return`` is legal. An earlier ``textwrap.indent``-based
+    string wrap prepended 4 spaces to every physical line of the script,
+    which silently corrupted the interior lines of any multi-line (e.g.
+    triple-quoted) string literal — the added indentation became part of
+    the string's value. The AST-splice wrap must reproduce the literal
+    byte-for-byte instead."""
+    from noeta.protocols.decisions import SpawnSubtaskDecision
+
+    script = (
+        'goal = """first line\n'
+        'second line\n'
+        'third line"""\n'
+        "return agent(goal)\n"
+    )
+    view = _view([])  # no recorded result yet -> the agent() call suspends
+    decision = OrchestrationPolicy(script=script, args={}).decide(None, view)  # type: ignore[arg-type]
+
+    assert isinstance(decision, SpawnSubtaskDecision)
+    assert decision.goal == "first line\nsecond line\nthird line"
+
+
+def test_multiline_string_literal_nested_in_a_block_survives_the_wrap() -> None:
+    """Same corruption risk, but with the literal's own source indentation
+    nested inside an ``if`` block — pins that the fix is not merely
+    "strip a fixed 4-space prefix" but a real AST splice that never touches
+    the literal's interior lines regardless of surrounding structure."""
+    from noeta.protocols.decisions import SpawnSubtaskDecision
+
+    script = (
+        "if True:\n"
+        '    goal = """alpha\n'
+        "beta\n"
+        'gamma"""\n'
+        "    result = agent(goal)\n"
+        "return result\n"
+    )
+    view = _view([])
+    decision = OrchestrationPolicy(script=script, args={}).decide(None, view)  # type: ignore[arg-type]
+
+    assert isinstance(decision, SpawnSubtaskDecision)
+    assert decision.goal == "alpha\nbeta\ngamma"
+
+
 def test_no_agent_calls_finishes_immediately() -> None:
     """Script never calls ``agent()`` → spawns nothing, finishes directly (the spine's degenerate case)."""
     log, cs, disp = _make_runtime()

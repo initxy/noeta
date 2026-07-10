@@ -1493,17 +1493,6 @@ function useChatData() {
     [popupTaskId, popupVm, popupNode, questionsCache],
   );
 
-  // backfillHistory / syncActiveSession: the stream is the single source of
-  // truth and auto-resumes, so these reduce to a reconnect / list refresh for
-  // any caller that still invokes them.
-  const backfillHistory = useCallback(() => {
-    startStream(activeTaskRef.current);
-  }, [startStream]);
-
-  const syncActiveSession = useCallback(() => {
-    loadTaskList({ silent: true });
-  }, [loadTaskList]);
-
   const status = useMemo(
     () => ({
       connection: connectionLabel(connectionState),
@@ -1524,7 +1513,6 @@ function useChatData() {
   return {
     activeDetail,
     activeTaskId,
-    backfillHistory,
     backgroundJobs,
     busyLabel,
     cancelSession,
@@ -1582,7 +1570,6 @@ function useChatData() {
     streamingTurn,
     submitGoal,
     submitQuestionAnswer,
-    syncActiveSession,
     vm,
   };
 }

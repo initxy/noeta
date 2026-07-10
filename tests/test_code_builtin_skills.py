@@ -21,7 +21,6 @@ The load-bearing invariants pinned here:
 
 from __future__ import annotations
 
-from pathlib import Path
 
 from noeta.agent.skills import BUILTIN_SKILLS_DIR, load_builtin_skills
 from noeta.execution.skills import build_skill_composer as build_coding_composer

@@ -2,8 +2,7 @@
 
 Hoisted out of ``noeta.agent`` so the SDK can drive an agent end-to-end without
 the coding product: the multi-turn policy wrappers, the sub-agent delegation
-drain, the :class:`GenericEngineResolver` skeleton, the
-:class:`ResidentSessionRunner` base, and the Protocol-typed
+drain, the :class:`GenericEngineResolver` skeleton, and the Protocol-typed
 :class:`InteractionDriver` (issue 01 complete — noeta.agent keeps thin
 re-export shims until the issue-07 flip).
 
@@ -45,10 +44,6 @@ from noeta.execution.multi_turn import (
 from noeta.execution.resolver import (
     GenericEngineResolver,
     agent_name_of,
-)
-from noeta.execution.runner import (
-    PreparedSession,
-    ResidentSessionRunner,
 )
 from noeta.execution.commands import (
     CommandResolution,
@@ -121,12 +116,10 @@ __all__ = [
     "multi_turn_policy_wrapper",
     "MultiTurnReActPolicy",
     "NEXT_GOAL_WAKE_HANDLE",
-    "PreparedSession",
     "record_environment",
     "record_instructions",
     "render_help",
     "ResidentHost",
-    "ResidentSessionRunner",
     "resolve_command",
     "resolve_skill_roots",
     "resolve_skill_scripts",

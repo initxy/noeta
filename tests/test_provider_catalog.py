@@ -11,9 +11,7 @@ appears as a field name.
 
 from __future__ import annotations
 
-import importlib
 import inspect
-import sys
 
 import pytest
 

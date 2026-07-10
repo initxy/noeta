@@ -12,7 +12,7 @@ from __future__ import annotations
 import http.client
 import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from noeta.agent.backend import BackendConfig, EngineRoom, serve_backend
 from noeta.agent.host.workspace_registry import WorkspaceRegistry

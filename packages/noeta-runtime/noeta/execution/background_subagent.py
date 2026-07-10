@@ -258,10 +258,11 @@ class BackgroundSubagentRegistry:
                 if self._child_is_terminal(child_id):
                     # finished but the notice was lost — re-deliver only.
                     self._safe_deliver(parent_id, child_id)
-                else:
-                    with self._lock:
-                        self._inflight.setdefault(parent_id, set()).add(child_id)
-                    self._submit(parent_id, child_id)
+                elif not self._safe_submit(parent_id, child_id):
+                    # a corrupted/orphaned record's re-submit failed — skip it
+                    # rather than count it recovered, and keep scanning the
+                    # rest (see _safe_submit).
+                    continue
                 recovered.append(child_id)
         return recovered
 
@@ -296,3 +297,32 @@ class BackgroundSubagentRegistry:
                 child_id,
                 exc_info=True,
             )
+
+    def _safe_submit(self, parent_id: str, child_id: str) -> bool:
+        """Wrap a recovery re-submit so ONE corrupted/orphaned record cannot
+        abort host startup (mirrors :meth:`_safe_deliver`'s never-crashes-
+        startup contract; ``Client.__init__`` calls ``recover()`` with no
+        try/except of its own). Registers the child in-flight first (so a
+        drive that starts before failing is still tracked), and rolls that
+        back if ``_submit`` itself raises, so a failed record leaves no
+        phantom in-flight entry blocking the session's background cap.
+        Returns ``True`` on a successful submit, ``False`` on a logged-and-
+        skipped failure."""
+        with self._lock:
+            self._inflight.setdefault(parent_id, set()).add(child_id)
+        try:
+            self._submit(parent_id, child_id)
+        except Exception:  # noqa: BLE001 — recovery never crashes startup
+            with self._lock:
+                kids = self._inflight.get(parent_id)
+                if kids is not None:
+                    kids.discard(child_id)
+                    if not kids:
+                        self._inflight.pop(parent_id, None)
+            _log.warning(
+                "background sub-agent %s recovery re-submit failed",
+                child_id,
+                exc_info=True,
+            )
+            return False
+        return True

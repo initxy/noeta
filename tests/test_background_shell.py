@@ -28,7 +28,6 @@ from typing import Any
 
 from noeta.protocols.tool import ToolContext
 from noeta.runtime.background_shell import ProcessRegistry
-from noeta.protocols.decisions import ToolCall
 from noeta.storage.memory import InMemoryContentStore, InMemoryEventLog
 from noeta.tools.fs import ShellMode, ShellPollTool, ShellRunTool, WorkspaceRoot
 
@@ -332,7 +331,7 @@ def test_shell_poll_tool_returns_status_ref(tmp_path: Path) -> None:
 def test_shell_poll_low_risk(tmp_path: Path) -> None:
     poll = ShellPollTool()
     assert poll.risk_level == "low"
-    run = ShellRunTool(workspace=_ws(tmp_path))
+    ShellRunTool(workspace=_ws(tmp_path))
 
 
 # ---------------------------------------------------------------------------

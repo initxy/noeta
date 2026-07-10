@@ -22,12 +22,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-import pytest
 
 from noeta.agent.registry import AgentRegistry
 from noeta.agent.spec import (
     AgentSpec,
-    BudgetSpec,
     Capabilities,
     ComponentRef,
 )

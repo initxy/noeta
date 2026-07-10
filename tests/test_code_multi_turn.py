@@ -26,7 +26,6 @@ from typing import Any
 
 import pytest
 
-from noeta.core.fold import fold
 from noeta.execution.driver import NotResumableError
 from noeta.execution.multi_turn import (
     NEXT_GOAL_WAKE_HANDLE,

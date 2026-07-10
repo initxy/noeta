@@ -23,7 +23,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import pytest
 
 from noeta.core.engine import Engine
 from noeta.protocols.decisions import TaskStatePatch
@@ -39,7 +38,7 @@ from noeta.storage.memory import (
 
 
 if TYPE_CHECKING:
-    from noeta.protocols.task import Task
+    pass
 
 
 def _make_engine() -> tuple[Engine, InMemoryDispatcher]:

@@ -27,7 +27,6 @@ from typing import Any
 
 import pytest
 
-from noeta.testing.profile import default_budget, default_permission_policy
 from noeta.context.composer import ThreeSegmentComposer
 from noeta.core.engine import Engine
 from noeta.core.fold import fold

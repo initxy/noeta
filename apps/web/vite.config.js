@@ -29,6 +29,7 @@ export default defineConfig({
       "/mcp": "http://127.0.0.1:8765",
       "/preview": "http://127.0.0.1:8765",
       "/health": "http://127.0.0.1:8765",
+      "/workspaces": "http://127.0.0.1:8765",
     },
   },
 });

@@ -5,7 +5,6 @@ from __future__ import annotations
 import inspect
 import threading
 
-import pytest
 
 from noeta.observers.audit import (
     _SUMMARY_FIELDS_BY_EVENT,

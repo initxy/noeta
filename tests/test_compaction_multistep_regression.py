@@ -37,7 +37,6 @@ from noeta.policies.react import ReActPolicy
 from noeta.protocols.messages import (
     LLMRequest,
     LLMResponse,
-    Message,
     TextBlock,
     ToolUseBlock,
 )

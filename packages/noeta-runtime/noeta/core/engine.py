@@ -1137,22 +1137,33 @@ def _recent_tool_calls(
     keys ``(tool_name, canonical input bytes)`` for ``RepetitionGuard``
     (work item ④).
 
-    Pure projection of the recorded ``ToolCallStarted`` prefix — no clock /
+    Pure projection of the recorded ``ToolCallStarted`` suffix — no clock /
     random — so live and resume see the identical history. Arguments
     offloaded to the ContentStore are dereferenced through the shared
     ``resolve_tool_call_arguments`` helper, then canonicalised so the key is
     key-order independent and provider-neutral.
+
+    Called once per proposed tool call, with the *entire* task event stream
+    (``_guard`` reads with no ``after_seq``): scans ``events`` in reverse and
+    stops as soon as ``window`` ``ToolCallStarted`` entries are collected, so
+    ``resolve_tool_call_arguments`` (a ContentStore round-trip for offloaded
+    args) only ever runs for the last ``window`` calls, not every historical
+    one. The result is re-reversed back to chronological (append) order —
+    identical output to a forward scan kept to ``[-window:]``.
     """
     if window <= 0:
         return ()
     keys: list[tuple[str, bytes]] = []
-    for env in events:
+    for env in reversed(events):
         if env.type != "ToolCallStarted":
             continue
         payload = env.payload
         args = resolve_tool_call_arguments(payload, content_store)
         keys.append((payload.tool_name, to_canonical_bytes(args)))
-    return tuple(keys[-window:])
+        if len(keys) >= window:
+            break
+    keys.reverse()
+    return tuple(keys)
 
 
 def _emit_context_plan(

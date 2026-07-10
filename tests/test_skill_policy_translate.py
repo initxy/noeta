@@ -15,7 +15,6 @@ from tests._skill_fixtures import write_skill
 from noeta.core.fold import fold
 from noeta.policies._control_translate import (
     SKILL_TOOL,
-    SPAWN_SUBAGENT_TOOL,
     ControlToggles,
     translate_control_tool,
 )

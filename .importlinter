@@ -319,14 +319,6 @@ ignore_imports =
     noeta.agent.host.storage -> noeta.protocols.dispatcher
     noeta.agent.host.storage -> noeta.protocols.event_log
     noeta.agent.observe._stub_provider -> noeta.protocols.messages
-    noeta.agent.observe.hooks_config -> noeta.guards.hook
-    noeta.agent.observe.hooks_config -> noeta.observers.hook
-    noeta.agent.observe.live_timeline -> noeta.core.fold
-    noeta.agent.observe.live_timeline -> noeta.protocols.content_store
-    noeta.agent.observe.live_timeline -> noeta.protocols.event_log
-    noeta.agent.observe.live_timeline -> noeta.protocols.events
-    noeta.agent.observe.live_timeline -> noeta.protocols.messages
-    noeta.agent.observe.live_timeline -> noeta.protocols.tool_args
     noeta.agent.read_models.catalog -> noeta.core.fold
     noeta.agent.read_models.catalog -> noeta.execution.multi_turn
     noeta.agent.read_models.catalog -> noeta.policies.control_tools

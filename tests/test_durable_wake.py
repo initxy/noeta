@@ -459,7 +459,7 @@ def test_approval_resume_consumes_wake(tmp_path: Any) -> None:
     """P1.1 — `driver.approve` must consume the approval wake. After
     approve-resume the task progresses and the dispatcher holds no stale
     matched (it is terminal / suspended on its own next wake, not re-readied)."""
-    from noeta.protocols.messages import LLMResponse, TextBlock, ToolUseBlock, Usage
+    from noeta.protocols.messages import LLMResponse, ToolUseBlock, Usage
 
     def _tool(call_id: str) -> Any:
         return LLMResponse(

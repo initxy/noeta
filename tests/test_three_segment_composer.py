@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 
 from noeta.context.composer import RenderedSkills, ThreeSegmentComposer
 from noeta.protocols.canonical import from_canonical_bytes

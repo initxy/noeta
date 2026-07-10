@@ -158,6 +158,35 @@ def test_reasoning_tokens_from_completion_tokens_details() -> None:
 
 
 @respx.mock
+def test_usage_maps_with_cached_tokens_to_cache_read() -> None:
+    respx.post(CHAT_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            json=_chat_response(
+                usage={
+                    "prompt_tokens": 100,
+                    "completion_tokens": 40,
+                    "total_tokens": 140,
+                    "prompt_tokens_details": {"cached_tokens": 30},
+                    "completion_tokens_details": {"reasoning_tokens": 15},
+                }
+            ),
+        )
+    )
+    provider = _make_provider()
+    response = provider.complete(_basic_request(text="cached"))
+    # uncached = prompt_tokens - cached_tokens = 100 - 30 = 70
+    assert response.usage == Usage(
+        uncached=70,
+        cache_read=30,
+        cache_write=0,
+        output=40,
+        reasoning_tokens=15,
+    )
+    assert response.usage.input == 100
+
+
+@respx.mock
 def test_empty_usage_yields_empty_usage() -> None:
     # Build the body directly: the _chat_response helper's ``usage or {...}``
     # would substitute the default for a falsy ``{}``, so we bypass it to
