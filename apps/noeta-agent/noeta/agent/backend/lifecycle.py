@@ -151,6 +151,14 @@ class BackendConfig:
     #: Env var holding the container's ``SANDBOX_API_KEY`` (read at provision
     #: time; never recorded). Config key ``sandbox_api_key_env``.
     sandbox_api_key_env: str = "SANDBOX_API_KEY"
+    #: Port for the DEDICATED sandbox live-preview server (origin isolation —
+    #: the panels' iframes need ``allow-same-origin``, so their content must
+    #: never share the main port's origin; see
+    #: ``noeta.agent.host.sandbox_preview_gateway``). ``0`` (default) binds an
+    #: ephemeral port; the frontend discovers it via ``GET /tasks/{id}/preview``.
+    #: Pin it for firewalled deployments. Env
+    #: ``NOETA_AGENT_SANDBOX_PREVIEW_PORT`` / config key ``sandbox_preview_port``.
+    sandbox_preview_port: int = 0
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "BackendConfig":
@@ -259,6 +267,9 @@ class BackendConfig:
             sandbox_cpus=str(pick("SANDBOX_CPUS", "sandbox_cpus", cls.sandbox_cpus)),
             sandbox_api_key_env=str(
                 pick("SANDBOX_API_KEY_ENV", "sandbox_api_key_env", cls.sandbox_api_key_env)
+            ),
+            sandbox_preview_port=int(
+                pick("SANDBOX_PREVIEW_PORT", "sandbox_preview_port", 0)
             ),
         )
 
@@ -431,6 +442,8 @@ def serve_backend(
     def storage_close() -> None:
         """Close any durable storage opened below (rebound when sqlite is on)."""
 
+    sandbox_preview_gateway = None
+    sandbox_preview_server = None
     if engine_room is None:
         # Vision adapters need a ``ContentRef → bytes`` resolver at construction,
         # but the content store only exists once the engine room is built below;
@@ -543,10 +556,68 @@ def serve_backend(
             models=config.models,
             background_drive=config.background_drive,
             num_workers=config.num_workers,
+            # Sandbox browser activation (spec D3 / B6): when this deployment
+            # provisions per-session AIO containers, the browser tool pack can
+            # work, so register the ``web`` subagent into main's delegation
+            # roster. Main stays browser-free — browsing is delegated to ``web``
+            # (the sole identity that opens ``browser``). Gated on the sandbox so
+            # a non-sandbox deployment keeps the pre-browser roster + stable
+            # prefix byte-identical.
+            sandbox_browser=config.sandbox_enabled,
         )
         # Now the content store exists (inside the noeta.sdk host): a vision
         # provider can deref ``ImageBlock(ContentRef)`` bytes at request time.
         image_resolver.bind(engine_room.get_content)
+
+        # Sandbox live-preview gateway (browser/terminal/code panels). Built only
+        # when per-session sandbox is enabled; wired to the container lifecycle
+        # via the engine room's sandbox listeners (W3). Preview traffic is
+        # served on its OWN port (origin isolation — the panels' iframes run
+        # ``allow-same-origin``); the main server keeps only the discovery
+        # route.
+        sandbox_preview_gateway = None
+        if config.sandbox_enabled:
+            from noeta.agent.host.sandbox_preview_gateway import (
+                SandboxPreviewGateway,
+                make_preview_server,
+            )
+            from noeta.client.sandbox_provider import SandboxHandle
+
+            sandbox_preview_gateway = SandboxPreviewGateway()
+            sandbox_preview_server = make_preview_server(
+                sandbox_preview_gateway,
+                host=config.host,
+                port=config.sandbox_preview_port,
+            )
+            threading.Thread(
+                target=sandbox_preview_server.serve_forever,
+                name="noeta-agent-sandbox-preview",
+                daemon=True,
+            ).start()
+
+            def _on_preview_allocate(root_id: str, handle: SandboxHandle) -> None:
+                """Mount a sandbox preview token when a container is allocated.
+
+                The auth headers are snapshotted here, once per mount — same
+                deliberate v1 posture as ``AioBrowserBackend`` (D8 defers
+                per-request minting): the only ``SandboxAuth`` today is
+                ``StaticApiKeyAuth``, and a re-allocate re-mounts fresh
+                headers. A rotating credential needs the factory itself
+                threaded through instead.
+                """
+                sandbox_preview_gateway.mount_root(
+                    root_id,
+                    handle.base_url,
+                    handle.auth.connect_headers(),
+                )
+
+            def _on_preview_release(root_id: str) -> None:
+                """Unmount the preview token on container release."""
+                sandbox_preview_gateway.unmount_root(root_id)
+
+            engine_room.add_sandbox_lifecycle_listener(
+                _on_preview_allocate, _on_preview_release
+            )
 
     router = Router()
     register_task_routes(router)  # T5: SSE stream + command endpoints
@@ -562,6 +633,7 @@ def serve_backend(
         port=config.port,
         router=router,
         app_gateway=app_gateway,
+        sandbox_preview_gateway=sandbox_preview_gateway,
         mcp_registry=mcp_registry,
         workspace_registry=workspace_registry,
         web_assets=web_assets if web_assets is not None else locate_web_assets(),
@@ -581,10 +653,16 @@ def serve_backend(
             server.server_close()
         finally:
             try:
-                engine_room.shutdown()
+                if sandbox_preview_server is not None:
+                    sandbox_preview_server.shutdown()
+                    sandbox_preview_server.server_close()
             finally:
-                # Close the durable storage we opened (the SDK never closes an
-                # injected store); a no-op for the in-memory default.
-                storage_close()
+                try:
+                    engine_room.shutdown()
+                finally:
+                    # Close the durable storage we opened (the SDK never
+                    # closes an injected store); a no-op for the in-memory
+                    # default.
+                    storage_close()
 
     return server, url, shutdown

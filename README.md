@@ -198,8 +198,12 @@ NOETA_AGENT_SANDBOX=1 python -m noeta.agent       # per-session containers, on
 ```
 
 Tune the image and caps with `NOETA_AGENT_SANDBOX_IMAGE` /
-`NOETA_AGENT_SANDBOX_MEMORY` / `NOETA_AGENT_SANDBOX_CPUS`. Global user **memory**
-and **MCP** servers deliberately stay on the host. The isolation is
+`NOETA_AGENT_SANDBOX_MEMORY` / `NOETA_AGENT_SANDBOX_CPUS`. With the sandbox on,
+the web UI's right dock gains three live-preview tabs — **Browser** (noVNC),
+**Terminal** (container PTY), **Code** (code-server) — served from a dedicated
+preview port (ephemeral by default; pin with
+`NOETA_AGENT_SANDBOX_PREVIEW_PORT` behind a firewall or tunnel). Global user
+**memory** and **MCP** servers deliberately stay on the host. The isolation is
 process-plus-mounted-FS, not a full jail; see
 [known limitations](https://initxy.github.io/noeta/operations/limitations/) for
 the mount-isolation level, idle-container cost, and the cross-machine reconnect

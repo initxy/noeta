@@ -107,6 +107,7 @@ function Transcript({
       activeTaskId,
       messageFullCache,
       messageTextCache,
+      onOpenImage,
       onOpenSubtask,
       responseRefIndex: responseRefSeqIndex,
       responseThinkingCache,
@@ -116,6 +117,7 @@ function Transcript({
       activeTaskId,
       messageFullCache,
       messageTextCache,
+      onOpenImage,
       onOpenSubtask,
       responseRefSeqIndex,
       responseThinkingCache,
@@ -308,6 +310,8 @@ const AssistantTurn = memo(function AssistantTurn({ ctx, items, ts }) {
           activeTaskId={ctx.activeTaskId}
           calls={calls}
           diffs={ctx.vm.diffs}
+          images={ctx.vm.images}
+          onOpenImage={ctx.onOpenImage}
           key={`tg-${toolRun[0].callId}`}
         />,
       );
@@ -662,7 +666,7 @@ function groupState(calls) {
 // individual cards, each still independently openable. The group
 // starts open while any call is still running so live work stays visible, and
 // settles closed once everything has resolved. A single call skips the wrapper.
-function ToolGroup({ activeTaskId, calls, diffs }) {
+function ToolGroup({ activeTaskId, calls, diffs, images, onOpenImage }) {
   const anyRunning = calls.some(toolIsRunning);
   const [open, setOpen] = useState(anyRunning);
 
@@ -672,7 +676,15 @@ function ToolGroup({ activeTaskId, calls, diffs }) {
 
   if (calls.length <= 1) {
     const call = calls[0];
-    return call ? <ToolCallCard activeTaskId={activeTaskId} call={call} diffs={diffs} /> : null;
+    return call ? (
+      <ToolCallCard
+        activeTaskId={activeTaskId}
+        call={call}
+        diffs={diffs}
+        images={images}
+        onOpenImage={onOpenImage}
+      />
+    ) : null;
   }
 
   const names = dedupeNames(calls.map((call) => call.toolName || "tool"));
@@ -697,6 +709,8 @@ function ToolGroup({ activeTaskId, calls, diffs }) {
             activeTaskId={activeTaskId}
             call={call}
             diffs={diffs}
+            images={images}
+            onOpenImage={onOpenImage}
             key={call.callId || `tool-${index}`}
           />
         ))}
@@ -717,7 +731,7 @@ function dedupeNames(names) {
   return out.map((entry) => (entry.count > 1 ? `${entry.name} ×${entry.count}` : entry.name));
 }
 
-function ToolCallCard({ activeTaskId, call, diffs }) {
+function ToolCallCard({ activeTaskId, call, diffs, images, onOpenImage }) {
   const failed = call.success === false;
   const state = toolState(call);
   return (
@@ -732,6 +746,11 @@ function ToolCallCard({ activeTaskId, call, diffs }) {
           .filter((diff) => diff.callId === call.callId)
           .map((diff) => (
             <DiffDisclosure activeTaskId={activeTaskId} diff={diff} key={diff.hash} />
+          ))}
+        {images
+          .filter((img) => img.callId === call.callId)
+          .map((img) => (
+            <ImageDisclosure image={img} onOpenImage={onOpenImage} key={img.hash} />
           ))}
       </ToolContent>
     </Tool>
@@ -813,6 +832,31 @@ function renderDiffText(body) {
         </span>
       );
     });
+}
+
+// An image/* artifact (browser screenshot and the like) shown inline under the
+// tool call that produced it — the glanceable counterpart to DiffDisclosure. A
+// screenshot's value is in *seeing* it, so unlike a diff it renders openly (no
+// <details>); the same global content-addressed route the user-image bubbles
+// use (/content/{hash}) serves the bytes, and a click opens the shared Lightbox
+// for a full-size view.
+function ImageDisclosure({ image, onOpenImage }) {
+  const src = imageSrcFor(image.hash);
+  if (!src) return null;
+  const alt = `${image.toolName || "tool"} image`;
+  return (
+    <div className="tool-image">
+      <button
+        type="button"
+        className="tool-image-thumb"
+        title="Click to zoom"
+        aria-label="Zoom in on image"
+        onClick={() => onOpenImage?.(src)}
+      >
+        <img src={src} alt={alt} loading="lazy" />
+      </button>
+    </div>
+  );
 }
 
 // U5 ① — a human-readable one-line summary of what a gated call will do, so the

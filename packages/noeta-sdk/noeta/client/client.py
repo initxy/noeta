@@ -987,6 +987,21 @@ class Client:
             self._host.put_pending_prelude(seeded.task_id, seeded.prelude)
         self._host.dispatcher.release_yield(seeded.lease.lease_id)
 
+    # -- sandbox lifecycle listeners (product wiring) ----------------------
+
+    def add_sandbox_lifecycle_listener(
+        self,
+        on_allocate: Any,
+        on_release: Any,
+    ) -> None:
+        """Register ``(on_allocate, on_release)`` on the sandbox manager.
+
+        Delegates to :meth:`SdkHost.add_sandbox_lifecycle_listener`. Safe on
+        the local path (no sandbox ⇒ no-op). Used by the product backend to
+        wire preview gateway mounts and similar container-tracked side effects.
+        """
+        self._host.add_sandbox_lifecycle_listener(on_allocate, on_release)
+
     def shutdown(self) -> None:
         """Stop resident workers (if any), then unsubscribe observers.
 
