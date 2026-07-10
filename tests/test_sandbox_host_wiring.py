@@ -272,6 +272,48 @@ def test_release_evicts_per_session_backend_cache() -> None:
     assert mgr.resolve(ref)[0] is not first
 
 
+class _ClosableExecEnv(RecordingExecEnv):
+    """A backend exposing the duck-typed ``close`` the manager calls on eviction."""
+
+    def __init__(self, *, base_url: str = "") -> None:
+        super().__init__(base_url=base_url)
+        self.closed = 0
+
+    def close(self) -> None:
+        self.closed += 1
+
+
+def test_release_closes_the_evicted_backend() -> None:
+    # A backend that owns an HTTP pool (the SDK adapters) exposes ``close``;
+    # eviction must call it (duck-typed — RecordingExecEnv without one is fine).
+    provider = FakeProvider()
+    mgr = SandboxExecEnvManager(
+        provider,
+        spec_template=SandboxSpec(image="img"),
+        backend_factory=lambda handle, preamble=None: _ClosableExecEnv(
+            base_url=handle.base_url
+        ),
+    )
+    ref = mgr.allocate("task-root")
+    backend = mgr.resolve(ref)[0]
+    mgr.release("task-root")
+    assert backend.closed == 1
+
+
+def test_teardown_closes_every_cached_backend() -> None:
+    provider = FakeProvider()
+    mgr = SandboxExecEnvManager(
+        provider,
+        spec_template=SandboxSpec(image="img"),
+        backend_factory=lambda handle, preamble=None: _ClosableExecEnv(
+            base_url=handle.base_url
+        ),
+    )
+    backends = [mgr.resolve(mgr.allocate(root))[0] for root in ("task-a", "task-b")]
+    mgr.teardown()
+    assert [b.closed for b in backends] == [1, 1]
+
+
 # --------------------------------------------------------------------------- #
 # resolve_browser — per-session browser backend (browser subsystem, B5)
 # --------------------------------------------------------------------------- #

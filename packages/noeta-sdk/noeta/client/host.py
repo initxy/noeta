@@ -76,7 +76,12 @@ from noeta.runtime.background_shell import (
 from noeta.runtime.cancellation import CancellationRegistry
 from noeta.runtime.file_checkpoint import FileCheckpointRegistry
 from noeta.client.host_config import SandboxExecEnvConfig
-from noeta.client.sandbox import SandboxExecEnvManager, provider_for_config
+from noeta.client.sandbox import (
+    BackendFactory,
+    BrowserBackendFactory,
+    SandboxExecEnvManager,
+    provider_for_config,
+)
 from noeta.client.sandbox_provider import SandboxProvider, SandboxSpec
 from noeta.tools.app import AppPreviewGateway
 from noeta.runtime.llm import RuntimeLLMClient
@@ -599,6 +604,16 @@ class SdkHost(GenericEngineResolver):
     # so a product can inject per-user credentials that expire mid-session. A host
     # runtime injection, never recorded (D5); ``None`` ⇒ no preamble.
     sandbox_exec_preamble: Optional[Callable[[str, Sequence[str]], str]] = None
+    # Optional per-session backend factories, threaded into the
+    # ``SandboxExecEnvManager``. ``None`` ⇒ the SDK defaults (the hand-written
+    # ``AioSandboxExecEnv`` / ``AioBrowserBackend``). The product injects these to
+    # swap in an alternative wire without touching the seam — e.g.
+    # ``noeta.agent.host.sdk_sandbox_exec_env.SdkSandboxExecEnv`` /
+    # ``SdkBrowserBackend`` (the official ``agent-sandbox`` client). The adapters
+    # implement the same ``ExecEnv`` / ``BrowserBackend`` surface, so the tool
+    # schemas — and the stable prefix — are unchanged.
+    sandbox_backend_factory: Optional[BackendFactory] = None
+    sandbox_browser_factory: Optional[BrowserBackendFactory] = None
     # The cache key has a ``workspace`` dimension
     # (the bound **absolute path**, or ``None`` for the host default) and a
     # ``provider`` dimension — so two sessions on different directories or
@@ -843,6 +858,8 @@ class SdkHost(GenericEngineResolver):
                     self.sandbox_provider,
                     spec_template=self.sandbox_spec or SandboxSpec(image=""),
                     exec_preamble=self.sandbox_exec_preamble,
+                    backend_factory=self.sandbox_backend_factory,
+                    browser_factory=self.sandbox_browser_factory,
                 ),
             )
         elif self.exec_env is not None:
@@ -858,6 +875,8 @@ class SdkHost(GenericEngineResolver):
                     # behaviour), unlike the per-session provisioning path.
                     default_ref=self.exec_env.base_url,
                     exec_preamble=self.sandbox_exec_preamble,
+                    backend_factory=self.sandbox_backend_factory,
+                    browser_factory=self.sandbox_browser_factory,
                 ),
             )
 
