@@ -45,6 +45,14 @@ __all__ = [
 #: ``noeta.client.host`` so both sides of the resolver hierarchy use the same cap.
 _MAX_CACHED_ENGINES: int = 256
 
+#: Sentinel for ``_engine_for_agent(policy_wrapper=...)`` distinguishing "caller
+#: did not pass it" (⇒ the host's ``self.policy_wrapper``) from "caller passed
+#: ``None``" (⇒ build unwrapped — a delegated child is one-shot and must NOT
+#: suspend on the next-goal handle). A bare ``Optional[...] = None`` default
+#: cannot tell the two apart, so a subtask's explicit ``None`` would be
+#: overwritten by ``self.policy_wrapper`` and the child would be wrapped.
+_POLICY_WRAPPER_UNSET: Any = object()
+
 
 def agent_name_of(event_log: EventLogFull, task_id: str) -> str:
     """Read a Task's recorded ``TaskCreated.agent_name`` (durable, resume-safe).
@@ -119,7 +127,7 @@ class GenericEngineResolver:
     _engines: OrderedDict[
         tuple[
             str, str, bool, Optional[str], Optional[str], Optional[str],
-            tuple[str, ...], Optional[str], Optional[str],
+            tuple[str, ...], Optional[str], Optional[str], bool,
         ],
         Engine,
     ]
@@ -385,6 +393,27 @@ class GenericEngineResolver:
         """
         task_id = str(getattr(task, "task_id", ""))
         name = agent_name_of(self.event_log, task_id)
+        # A ``__workflow__`` child recorded on the stream is the orchestration
+        # interpreter, NOT a roster agent — route it (with the task_id, so its
+        # script is read off its stream) BEFORE the registry lookup that would
+        # otherwise raise ``UnknownAgentError`` for the reserved name. Mirrors
+        # the drain's ``_build_subtask_engine`` (gate above its ``_lookup_agent``);
+        # without this, a ``__workflow__`` child claimed by a resident worker's
+        # untargeted ``tick()`` (rather than the drain's targeted descent) hits
+        # ``_lookup_agent("__workflow__")`` and hard-errors. The inherited
+        # spawnable set comes from the child's DIRECT parent agent (the one that
+        # called ``run_workflow``) — byte-equal to what the drain threads at the
+        # same tree layer. Returns uncached, exactly as the drain path does.
+        if name == WORKFLOW_AGENT_NAME:
+            parent_id = getattr(task, "parent_task_id", None)
+            inherited: frozenset[str] = frozenset()
+            if parent_id is not None:
+                parent_name = agent_name_of(self.event_log, str(parent_id))
+                parent_agent = self._lookup_agent(parent_name, task_id=str(parent_id))
+                inherited = self._spawnable_set(parent_agent.capabilities.spawnable)
+            return self._build_orchestration_engine(
+                task_id, allowed_subtask_agents=inherited
+            )
         model = self._bound_model_for(task)
         # the per-session workspace absolute path is welded into the durable record,
         # folded from the Task's ``TaskHostBound`` (``governance.workspace``);
@@ -409,6 +438,25 @@ class GenericEngineResolver:
         # CLI / every pre-0042 path) ⇒ no live MCP tools, byte-equal.
         mcp_aliases = getattr(self, "_turn_mcp_aliases", {}).get(task_id, ())
         effort = getattr(self, "_turn_effort", {}).get(task_id)
+        # The multi-turn wrapper is a TOP-LEVEL-session concern only. A delegated
+        # child (has a parent) is one-shot: it must finish with a real
+        # ``TaskCompleted`` so the ``ChildLifecycleObserver`` fires the parent's
+        # wake. Wrapping a child turns its ``FinishDecision`` into a next-goal
+        # suspend → the child never reaches terminal → the parent's
+        # ``SubtaskGroupCompleted`` barrier never fires → deadlock (only under a
+        # resident worker pool / multi-host, where an idle worker's untargeted
+        # ``tick()`` claims the child ahead of the drain's targeted descent).
+        # ``None`` here is the SAME gate the drain's ``_build_subtask_engine``
+        # uses (``policy_wrapper=None``); pass it through so the per-task
+        # resident-worker path matches the in-drain path. Uses the identical
+        # parent/depth predicate as the ``ask_user_question`` mask below.
+        is_subtask = (
+            getattr(task, "parent_task_id", None) is not None
+            or int(getattr(task, "subtask_depth", 0) or 0) > 0
+        )
+        subtask_wrapper: Optional[Callable[[Policy], Policy]] = (
+            None if is_subtask else self.policy_wrapper
+        )
         if name == "unnamed" and self.unnamed_fallback is not None:
             return self._engine_for_agent(
                 self.unnamed_fallback,
@@ -421,6 +469,7 @@ class GenericEngineResolver:
                 effort=effort,
                 task_id=task_id,
                 exec_env_ref=exec_env_ref,
+                policy_wrapper=subtask_wrapper,
             )
         agent = self._lookup_agent(name, task_id=task_id)
         # S1: ask_user_question comes from agent identity, masked to depth-0
@@ -441,6 +490,7 @@ class GenericEngineResolver:
             effort=effort,
             task_id=task_id,
             exec_env_ref=exec_env_ref,
+            policy_wrapper=subtask_wrapper,
         )
 
     def _bound_model_for(self, task: Any) -> str:
@@ -900,6 +950,7 @@ class GenericEngineResolver:
         effort: Optional[str] = None,
         task_id: Optional[str] = None,
         exec_env_ref: Optional[str] = None,
+        policy_wrapper: Any = _POLICY_WRAPPER_UNSET,
     ) -> Engine:
         """Hoisted per-agent Engine builder + cache.
 
@@ -976,9 +1027,29 @@ class GenericEngineResolver:
         # must NOT share a cached Engine (their fs / shell tools target different
         # backends). ``None`` (every local / non-sandbox session) keeps the key
         # byte-equal with the pre-T6 8-tuple semantics.
+        # ``policy_wrapper`` is the 10th dimension — the multi-turn wrapper is a
+        # TOP-LEVEL-session concern (it turns a ``FinishDecision`` into a
+        # next-goal suspend for ``noeta code chat``). A delegated child is
+        # one-shot and must finish with a real ``TaskCompleted``; the resident
+        # worker's per-task ``resolve_engine`` therefore passes ``None`` for a
+        # subtask (mirroring the drain's ``_build_subtask_engine``), while the
+        # root keeps ``self.policy_wrapper``. Keying on ``wrapper is None`` keeps
+        # a wrapped root Engine and an unwrapped child Engine (same agent + model
+        # + workspace + ask — the common explorer case) in SEPARATE cache slots,
+        # so the root's wrapper never leaks to a child via the cache and the
+        # subtask fix is not silently masked. The ``_POLICY_WRAPPER_UNSET``
+        # sentinel distinguishes "caller did not pass it" (⇒ ``self.policy_wrapper``)
+        # from "caller passed ``None``" (⇒ build unwrapped); a plain ``None``
+        # default would conflate the two and re-wrap an explicit-unwrapped child.
+        effective_wrapper = (
+            self.policy_wrapper
+            if policy_wrapper is _POLICY_WRAPPER_UNSET
+            else policy_wrapper
+        )
         key = (
             agent.name, resolved_model, effective_ask, workspace, provider,
             permission_mode, mcp_aliases, effort, exec_env_ref,
+            effective_wrapper is None,
         )
         # #13 / item 3: the global lock guards only the cache map. The build
         # itself runs OUTSIDE it, guarded by a PER-KEY build lock — one build
@@ -1015,7 +1086,7 @@ class GenericEngineResolver:
                     delegation_enabled=eff_delegation,
                     allowed_subtask_agents=eff_subtask_agents,
                     ask_user_question_enabled=effective_ask,
-                    policy_wrapper=self.policy_wrapper,
+                    policy_wrapper=effective_wrapper,
                     workspace=workspace,
                     provider=provider,
                     permission_mode=permission_mode,
