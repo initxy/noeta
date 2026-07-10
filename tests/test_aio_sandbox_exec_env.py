@@ -376,6 +376,101 @@ def test_glob_empty_output_yields_nothing() -> None:
     assert list(_env(fake).glob(Path("/w"), "*.none")) == []
 
 
+# -- tree_snapshot ------------------------------------------------------------ #
+
+
+def _b64(raw: bytes) -> str:
+    return base64.b64encode(raw).decode("ascii")
+
+
+def _snapshot_lines(*lines: str) -> str:
+    return "".join(line + "\n" for line in lines)
+
+
+def test_tree_snapshot_is_one_exec_and_parses_files_and_contents() -> None:
+    # The whole multi-tier walk must be ONE /v1/shell/exec (issue 46): the
+    # command find(1)s every root, and each output line is self-describing —
+    # ``F <b64 path>`` for a plain file, ``C <b64 path> <b64 bytes>`` for a
+    # content_name file with its bytes inlined.
+    skill_md = b"---\nname: demo\n---\nbody\n"
+    fake = FakeAio({"/v1/shell/exec": _exec_ok(output=_snapshot_lines(
+        f"C {_b64(b'/opt/skills/demo/SKILL.md')} {_b64(skill_md)}",
+        f"F {_b64(b'/opt/skills/demo/refs/with space.md')}",
+        f"F {_b64(b'/home/g/notes.txt')}",
+    ))})
+    snap = _env(fake).tree_snapshot(
+        [Path("/opt/skills"), Path("/home/g")], content_name="SKILL.md"
+    )
+    assert len(fake.calls) == 1
+    path, body, _ = fake.calls[0]
+    assert path == "/v1/shell/exec"
+    # Both roots ride in one find; symlinks are followed; stderr (missing-root
+    # noise) is dropped so it cannot pollute the merged output stream.
+    assert body["command"].startswith(
+        "find -L /opt/skills /home/g -type f 2>/dev/null"
+    )
+    assert "SKILL.md" in body["command"]
+    assert snap.files == (
+        Path("/home/g/notes.txt"),
+        Path("/opt/skills/demo/SKILL.md"),
+        Path("/opt/skills/demo/refs/with space.md"),
+    )
+    assert snap.contents == {Path("/opt/skills/demo/SKILL.md"): skill_md}
+
+
+def test_tree_snapshot_empty_roots_never_touches_the_wire() -> None:
+    fake = FakeAio({})
+    snap = _env(fake).tree_snapshot([], content_name="SKILL.md")
+    assert snap.files == () and snap.contents == {}
+    assert fake.calls == []
+
+
+def test_tree_snapshot_empty_output_is_empty_snapshot() -> None:
+    fake = FakeAio({"/v1/shell/exec": _exec_ok(output="")})
+    snap = _env(fake).tree_snapshot([Path("/opt/missing")], content_name="SKILL.md")
+    assert snap.files == () and snap.contents == {}
+
+
+def test_tree_snapshot_unreadable_content_degrades_to_empty_bytes() -> None:
+    # The shell emits ``C <path> `` (empty body field) when the content read
+    # fails — the file stays listed, its bytes are empty (the consumer's
+    # frontmatter parse then skips it with a warning, same as a failed read).
+    fake = FakeAio({"/v1/shell/exec": _exec_ok(
+        output=f"C {_b64(b'/opt/skills/bad/SKILL.md')} \n")})
+    snap = _env(fake).tree_snapshot([Path("/opt/skills")], content_name="SKILL.md")
+    assert snap.files == (Path("/opt/skills/bad/SKILL.md"),)
+    assert snap.contents == {Path("/opt/skills/bad/SKILL.md"): b""}
+
+
+def test_tree_snapshot_malformed_line_raises_sandbox_error() -> None:
+    fake = FakeAio({"/v1/shell/exec": _exec_ok(output="garbage line\n")})
+    with pytest.raises(AioSandboxError):
+        _env(fake).tree_snapshot([Path("/opt/skills")], content_name="SKILL.md")
+
+
+def test_tree_snapshot_nonzero_exit_raises_sandbox_error() -> None:
+    fake = FakeAio({"/v1/shell/exec": _exec_ok(exit_code=127, output="")})
+    with pytest.raises(AioSandboxError):
+        _env(fake).tree_snapshot([Path("/opt/skills")], content_name="SKILL.md")
+
+
+def test_tree_snapshot_parses_spill_file_when_inline_output_truncated() -> None:
+    # AIO spilled the full stream to a container file: the snapshot must read
+    # THAT (whole, via /v1/file/read) and never parse the lossy inline echo.
+    full = f"F {_b64(b'/opt/skills/demo/refs/a.md')}\n"
+    fake = FakeAio({
+        "/v1/shell/exec": _exec_ok(
+            output="F truncated…", full_output_file_path="/tmp/spill.log"
+        ),
+        "/v1/file/read": _ok({"content": _b64(full.encode("utf-8"))}),
+    })
+    snap = _env(fake).tree_snapshot([Path("/opt/skills")], content_name="SKILL.md")
+    assert snap.files == (Path("/opt/skills/demo/refs/a.md"),)
+    read_path, read_body, _ = fake.calls[1]
+    assert read_path == "/v1/file/read"
+    assert read_body["file"] == "/tmp/spill.log"
+
+
 # -- auth + envelope -------------------------------------------------------- #
 
 

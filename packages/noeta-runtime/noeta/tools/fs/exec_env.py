@@ -41,6 +41,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 
@@ -62,6 +63,7 @@ __all__ = [
     "ExclusiveCreateWriteFailed",
     "ExecEnv",
     "LocalExecEnv",
+    "TreeSnapshot",
 ]
 
 
@@ -130,6 +132,26 @@ class ExclusiveCreateWriteFailed(ExclusiveCreateError):
 _SubprocRunner = Callable[..., "subprocess.CompletedProcess[bytes]"]
 
 
+@dataclass(frozen=True)
+class TreeSnapshot:
+    """One recursive listing of file trees, with selected contents inlined.
+
+    Returned by :meth:`ExecEnv.tree_snapshot` — the batch primitive that
+    replaces a per-file ``rglob`` / ``is_file`` / ``read_text`` walk when the
+    backend has a per-call fixed cost (a sandbox HTTP round-trip, issue 46).
+
+    * ``files`` — every **regular file** under any of the requested roots
+      (recursive, symlinks followed), sorted and de-duplicated. Directories are
+      never listed, so a consumer needs no per-entry ``is_file`` probe.
+    * ``contents`` — the raw bytes of each listed file whose *name* equals the
+      requested ``content_name``, keyed by its path. A file that could not be
+      read is listed in ``files`` but absent here.
+    """
+
+    files: tuple[Path, ...]
+    contents: dict[Path, bytes]
+
+
 @runtime_checkable
 class ExecEnv(Protocol):
     """The file-IO + process-execution backend a fs / shell tool acts through.
@@ -184,6 +206,20 @@ class ExecEnv(Protocol):
 
     def rglob(self, base: Path, pattern: str) -> Iterable[Path]:
         """``base.rglob(pattern)`` — recursive pattern expansion."""
+        ...
+
+    def tree_snapshot(
+        self, roots: Sequence[Path], *, content_name: str
+    ) -> TreeSnapshot:
+        """Batch walk: list every regular file under ``roots`` and inline the
+        bytes of each file named ``content_name`` — in ONE backend operation.
+
+        The batch counterpart of ``rglob`` + ``is_file`` + ``read_text`` for
+        bulk discovery (skill indexing, issue 46): on a remote backend each of
+        those is a full round-trip with a fixed cost that dominates, so a
+        per-file walk over N files costs O(N) round-trips; this primitive
+        costs O(1). A missing root contributes nothing (not an error).
+        """
         ...
 
     # -- process -----------------------------------------------------------
@@ -292,6 +328,45 @@ class LocalExecEnv:
     def rglob(self, base: Path, pattern: str) -> Iterable[Path]:
         return base.rglob(pattern)
 
+    def tree_snapshot(
+        self, roots: Sequence[Path], *, content_name: str
+    ) -> TreeSnapshot:
+        # Local IO has no per-call fixed cost, so this is simply the walk the
+        # per-file methods would do, folded into one result. Symlinked
+        # directories are followed with a realpath cycle guard — the same
+        # semantics as the sandbox backend's ``find -L`` (and the host skill
+        # indexer's own walk, which does not route through this).
+        files: set[Path] = set()
+        contents: dict[Path, bytes] = {}
+        seen_dirs: set[str] = set()
+        for root in roots:
+            if not root.is_dir():
+                continue
+            for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
+                try:
+                    real = os.path.realpath(dirpath)
+                except OSError:
+                    dirnames[:] = []
+                    continue
+                if real in seen_dirs:
+                    dirnames[:] = []
+                    continue
+                seen_dirs.add(real)
+                for filename in filenames:
+                    entry = Path(dirpath) / filename
+                    try:
+                        if not entry.is_file():
+                            continue
+                    except OSError:
+                        continue
+                    files.add(entry)
+                    if entry.name == content_name and entry not in contents:
+                        try:
+                            contents[entry] = entry.read_bytes()
+                        except OSError:
+                            continue
+        return TreeSnapshot(tuple(sorted(files)), contents)
+
     def run_argv(
         self,
         argv: list[str],
@@ -399,6 +474,10 @@ class AioSandboxExecEnv:
       container (gated ``NOETA_TEST_AIO_SANDBOX_URL``).
     * **stat** (``exists`` / ``is_file`` / …) runs ``test`` and reads the exit
       code; **``unlink``** runs ``rm``.
+    * **``tree_snapshot``** folds a whole recursive walk + selected reads into
+      ONE ``find``-driven exec (issue 46) — bulk consumers (skill indexing)
+      use it instead of a per-file ``rglob`` / ``is_file`` / ``read_text``
+      loop, whose per-round-trip fixed cost dominates at 100+ files.
 
     ``fence_token`` is the v1 placeholder for the v2 generation-token fence
     (D1): the seam shape already carries it so v2 can fill it without touching
@@ -632,6 +711,74 @@ class AioSandboxExecEnv:
     def rglob(self, base: Path, pattern: str) -> Iterable[Path]:
         # pathlib defines rglob(pat) as glob("**/" + pat); mirror it exactly.
         return self.glob(base, "**/" + pattern)
+
+    def tree_snapshot(
+        self, roots: Sequence[Path], *, content_name: str
+    ) -> TreeSnapshot:
+        # ONE shell exec for the whole walk (issue 46): ``find -L`` lists every
+        # regular file under the roots (symlinks followed — matching the host
+        # indexer walk; a missing root is silenced), and the loop emits one
+        # self-describing line per file:
+        #
+        #   ``F <b64(path)>``                    — a listed file
+        #   ``C <b64(path)> <b64(bytes)>``       — a listed ``content_name``
+        #                                          file with its bytes inlined
+        #
+        # Both fields are base64 (no spaces/newlines), so paths with any
+        # shell-hostile characters parse unambiguously; an unreadable content
+        # file degrades to an empty inline body (listed, no bytes). stderr is
+        # dropped because AIO merges it into the one ``output`` stream we are
+        # about to parse.
+        if not roots:
+            return TreeSnapshot((), {})
+        q_roots = " ".join(shlex.quote(str(r)) for r in roots)
+        q_name = shlex.quote(content_name)
+        command = (
+            f"find -L {q_roots} -type f 2>/dev/null | while IFS= read -r f; do "
+            "p=$(printf '%s' \"$f\" | base64 -w0); "
+            f'if [ "${{f##*/}}" = {q_name} ]; then '
+            "c=$(base64 -w0 < \"$f\" 2>/dev/null) || c=; "
+            "printf 'C %s %s\\n' \"$p\" \"$c\"; "
+            "else printf 'F %s\\n' \"$p\"; fi; done"
+        )
+        data = self._shell(command)
+        if int(data.get("exit_code", 1)) != 0:
+            raise AioSandboxError(
+                f"tree_snapshot: walk failed: {data.get('output', '')!r}"
+            )
+        text = data.get("output") or ""
+        spill_path = data.get("full_output_file_path")
+        if isinstance(spill_path, str) and spill_path:
+            # AIO truncated the inline echo and spilled the full stream to a
+            # container file — parse the spill, never the lossy inline echo.
+            # (Unlike run_argv's tail, the snapshot needs the WHOLE stream; a
+            # skill-tier listing is orders of magnitude below the response cap.)
+            text = self.read_bytes(Path(spill_path)).decode(
+                "utf-8", errors="replace"
+            )
+        files: set[Path] = set()
+        contents: dict[Path, bytes] = {}
+        for line in text.splitlines():
+            if not line:
+                continue
+            kind, _, rest = line.partition(" ")
+            try:
+                if kind == "F" and rest:
+                    path = Path(base64.b64decode(rest, validate=True).decode("utf-8"))
+                elif kind == "C" and rest:
+                    b64_path, _, b64_body = rest.partition(" ")
+                    path = Path(
+                        base64.b64decode(b64_path, validate=True).decode("utf-8")
+                    )
+                    contents[path] = base64.b64decode(b64_body, validate=True)
+                else:
+                    raise ValueError("unknown line shape")
+            except (ValueError, UnicodeDecodeError) as exc:
+                raise AioSandboxError(
+                    f"tree_snapshot: malformed listing line {line!r}: {exc}"
+                ) from exc
+            files.add(path)
+        return TreeSnapshot(tuple(sorted(files)), contents)
 
     # -- process ---------------------------------------------------------- #
 
