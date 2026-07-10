@@ -9,6 +9,7 @@ import dataclasses
 from typing import TYPE_CHECKING
 
 from noeta.agent.spec import Capabilities
+from noeta.client.consolidation import CONSOLIDATION_AGENT_NAME
 from noeta.client.options import (
     AgentDefinition,
     Options,
@@ -22,13 +23,17 @@ if TYPE_CHECKING:
 
 
 __all__ = [
+    "CONSOLIDATION_AGENT",
+    "CONSOLIDATION_AGENT_NAME",
     "MAIN_SYSTEM_PROMPT",
     "MAIN_WEB_SYSTEM_PROMPT",
+    "MEMORY_POLICY_PROMPT",
     "OFFICIAL_SUBAGENTS",
     "WEB_SUBAGENT",
     "main_options",
     "official_specs",
     "sandbox_browser_options",
+    "with_consolidation_agent",
 ]
 
 
@@ -55,14 +60,40 @@ def _load_prompt(name: str) -> str:
     return load_markdown("noeta.presets.prompts", name, strip=False)
 
 
-MAIN_SYSTEM_PROMPT = _load_prompt("main")
+#: The memory-policy prompt fragment (memory v2): what earns a memory, what
+#: never does, and the write hygiene (dedupe before writing / stable slugs /
+#: archive the stale). It rides the preset prompt layer, NOT the memory-index
+#: resident — the index renders zero bytes on an empty store, but the policy
+#: must be in place before the first memory is ever written. Appended (via
+#: :func:`_with_memory_policy`) to the prompt of every preset that opens
+#: ``Capabilities.memory``; exported so custom-spec authors who set
+#: ``memory=True`` can concatenate it onto their own prompts the same way.
+MEMORY_POLICY_PROMPT = _load_prompt("memory-policy")
+
+
+def _with_memory_policy(prompt: str) -> str:
+    """Append the memory-policy fragment to a memory-enabled preset's prompt.
+
+    The prompt files end with a newline, so adding one more yields exactly one
+    blank line between the role prompt and the fragment — a deterministic
+    separator (the result is part of the stable prefix).
+    """
+    return prompt + "\n" + MEMORY_POLICY_PROMPT
+
+
+#: ``main``'s full system prompt: ``main.md`` plus the memory-policy fragment
+#: (``main`` is the one official preset with ``Capabilities.memory=True``; the
+#: three subagents are memory-free and get no fragment).
+MAIN_SYSTEM_PROMPT = _with_memory_policy(_load_prompt("main"))
 #: The sandbox-browser variant of ``main``'s prompt: identical except the
 #: delegation bullet also names the ``web`` specialist. Loaded from its own
 #: file so ``main.md`` (and thus every non-sandbox deployment's stable prefix)
 #: stays byte-identical to pre-browser-subsystem; a test pins the two files to
 #: differ ONLY in that bullet. Used by :func:`sandbox_browser_options` — the
 #: prompt must not mention ``web`` unless ``web`` is actually in the roster.
-MAIN_WEB_SYSTEM_PROMPT = _load_prompt("main-web")
+#: It inherits ``main``'s capabilities (memory included), so it carries the
+#: same memory-policy fragment.
+MAIN_WEB_SYSTEM_PROMPT = _with_memory_policy(_load_prompt("main-web"))
 _GENERAL_PURPOSE_PROMPT = _load_prompt("general-purpose")
 _EXPLORE_PROMPT = _load_prompt("explore")
 _PLAN_PROMPT = _load_prompt("plan")
@@ -215,6 +246,53 @@ WEB_SUBAGENT: AgentDefinition = AgentDefinition(
     # skill_invocation on, matching the other workers.
     capabilities=Capabilities(browser=True, skill_invocation=True),
 )
+
+
+#: The internal memory-consolidation curator (memory v2 phase 3; architecture:
+#: ``docs/adr/memory-consolidation.md``). An ordinary agent driven as an
+#: ordinary root task by the host's session-stop trigger
+#: (``noeta.client.consolidation.run_consolidation``): its goal carries a
+#: host-built digest of recent session activity; its whole tool surface is the
+#: memory pack. ``tools=()`` empties the whitelist so ONLY the
+#: capability-gated pack attaches (``_stage_memory`` is flag-gated, NOT
+#: whitelist-filtered) — no fs, no shell, no delegation; every effect on the
+#: store goes through the same slug-confined ``memory_write`` /
+#: ``memory_archive`` the interactive agent uses. Like every memory-enabled
+#: preset, its prompt carries the memory-policy fragment (duty 3 — backfilling
+#: missed durable facts — is defined BY that policy).
+#:
+#: **Deliberately NOT in ``OFFICIAL_SUBAGENTS``** (it is nobody's delegate),
+#: and its reserved ``__``-prefixed name (re-exported above from
+#: ``noeta.client.consolidation``, the module that seeds by it) keeps it out
+#: of a parent's ``spawnable`` auto-union at compile time and out of the
+#: product's advertised agent list — resolvable for host-seeded root tasks,
+#: never model- or user-selectable (the ``__workflow__`` precedent). Products
+#: register it via :func:`with_consolidation_agent`.
+CONSOLIDATION_AGENT: AgentDefinition = AgentDefinition(
+    description=(
+        "Internal background curator of the long-term memory store: reads a "
+        "host-built digest of recent session activity and merges, archives, "
+        "or backfills memories through the memory tools alone."
+    ),
+    prompt=_with_memory_policy(_load_prompt("consolidation")),
+    tools=(),
+    capabilities=Capabilities(memory=True),
+)
+
+
+def with_consolidation_agent(options: Options) -> Options:
+    """Register :data:`CONSOLIDATION_AGENT` into ``options`` (idempotent shape).
+
+    The product-activation helper for the consolidation trigger (mirrors
+    :func:`sandbox_browser_options`' explicit-opt-in stance): the served
+    backend applies it when its ``memory_consolidation`` config is on, so the
+    ``__consolidation__`` identity resolves for the trigger's ``seed_start``.
+    Because the name is ``__``-reserved, registration changes NO spawnable
+    roster and NO stable prefix — main's compiled spec stays byte-identical.
+    """
+    agents = dict(options.agents)
+    agents[CONSOLIDATION_AGENT_NAME] = CONSOLIDATION_AGENT
+    return dataclasses.replace(options, agents=agents)
 
 
 def main_options() -> Options:

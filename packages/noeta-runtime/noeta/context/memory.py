@@ -17,7 +17,7 @@ Two deliberate contrasts with skills:
   (``noeta.tools.memory``) or receives them via host recall
   (``noeta.execution.memory``).
 
-Red line: every function here is pure over the ``(name, summary)``
+Red line: every function here is pure over the ``(name, summary, type)``
 entries snapshot taken at wiring time — the renderer closes over
 preloaded state and never touches the disk at compose time, so the same
 ledger always composes to the same bytes. Naive token matching
@@ -65,25 +65,36 @@ MEMORY_DRIFT_POLICY = "evolving"
 #: Recall injection cap — keeps a chatty match from flooding the turn.
 DEFAULT_RECALL_MAX_HITS = 5
 
-#: The index source shape: ``(name, first-line summary)`` pairs, sorted
-#: by name (``MemoryStore.entries()`` produces exactly this).
-MemoryEntries = tuple[tuple[str, str], ...]
+#: The index source shape: ``(name, summary, type)`` triples, sorted by
+#: name (``MemoryStore.entries()`` produces exactly this). ``summary`` is
+#: the frontmatter description or the first non-empty body line; ``type``
+#: is the validated frontmatter type or ``""``.
+MemoryEntries = tuple[tuple[str, str, str], ...]
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 #: Name tokens shorter than this never match (single letters are noise);
 #: two-letter slugs like ``ci`` / ``db`` stay recallable.
 _MIN_TOKEN_LEN = 2
+#: Tier-2 (summary) matching needs this many distinct overlapping tokens
+#: — a single shared prose word is too noisy to recall on.
+_SUMMARY_MIN_OVERLAP = 2
 
 
 def render_memory_index_text(entries: MemoryEntries) -> str:
-    """Deterministic index text — the resident's rendered body."""
+    """Deterministic index text — the resident's rendered body.
+
+    An entry with a type renders ``- name (type): summary``; without one
+    the v1 ``- name: summary`` / ``- name`` forms are kept byte-for-byte,
+    so a store whose files carry no frontmatter hashes exactly as before.
+    """
     lines = [
         "Long-term memory index. Each entry is one stored memory; call",
         "the 'memory_read' tool with a memory's name for its full text.",
         "",
     ]
-    for name, summary in entries:
-        lines.append(f"- {name}: {summary}" if summary else f"- {name}")
+    for name, summary, mem_type in entries:
+        label = f"{name} ({mem_type})" if mem_type else name
+        lines.append(f"- {label}: {summary}" if summary else f"- {label}")
     return "\n".join(lines)
 
 
@@ -161,24 +172,30 @@ def match_memories(
     *,
     max_hits: int = DEFAULT_RECALL_MAX_HITS,
 ) -> tuple[str, ...]:
-    """v1 recall matching: a memory hits when any token of its NAME
-    appears as a word in the user text (case-insensitive).
+    """Two-tier recall matching, pure and deterministic.
 
-    Deliberately naive and deterministic — names are author-chosen slugs,
-    so name tokens are high-signal; summaries are NOT matched (too noisy
-    for v1). Hits keep index (name-sorted) order, capped at ``max_hits``.
-    Vector / semantic retrieval is out of scope (its backing service
-    would arrive behind a D1-style adapter, swapping this function)."""
+    Tier 1 (the v1 rule): a memory hits when any token of its NAME
+    appears as a word in the user text (case-insensitive) — names are
+    author-chosen slugs, so one shared token is high-signal. Tier 2: an
+    entry NOT already hit by name hits when its SUMMARY shares at least
+    ``_SUMMARY_MIN_OVERLAP`` distinct tokens with the text (prose needs
+    more evidence than a slug). The ``type`` field never participates.
+
+    Output order: all tier-1 hits in index (name-sorted) order, then all
+    tier-2 hits in index order, capped at ``max_hits`` overall. Vector /
+    semantic retrieval is out of scope (its backing service would arrive
+    behind a D1-style adapter, swapping this function)."""
     text_tokens = _tokens(text)
     if not text_tokens:
         return ()
-    hits: list[str] = []
-    for name, _summary in entries:
+    name_hits: list[str] = []
+    summary_hits: list[str] = []
+    for name, summary, _type in entries:
         if _tokens(name) & text_tokens:
-            hits.append(name)
-            if len(hits) >= max_hits:
-                break
-    return tuple(hits)
+            name_hits.append(name)
+        elif len(_tokens(summary) & text_tokens) >= _SUMMARY_MIN_OVERLAP:
+            summary_hits.append(name)
+    return tuple((name_hits + summary_hits)[:max_hits])
 
 
 def format_recall_text(hits: tuple[tuple[str, str], ...]) -> str:

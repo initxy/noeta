@@ -22,7 +22,7 @@ through the flat `Options.agents` dict.
 | `ask_user_question` | The model can yield for human input via `ask_user_question` control tool. |
 | `delegation` | Can spawn subtasks via the three subagents (`general-purpose`, `explore`, `plan`). |
 | `skill_invocation` | The `skill` control tool for model-driven skill selection. |
-| `memory` | Cross-task memory: `memory_write` / `memory_read` tools + auto-recall at user-message seam. Only `main` enables this. |
+| `memory` | Cross-task memory: the `memory_write` / `memory_read` / `memory_search` / `memory_archive` tools + auto-recall at the user-message seam. Only `main` enables this; its system prompt carries the memory-policy fragment (exported as `MEMORY_POLICY_PROMPT`) telling the model what to save, what not to, and the write hygiene. |
 | `mcp` | MCP tool inheritance: subtasks whose own spec also opens `mcp` inherit the parent's enabled MCP servers. |
 
 ## Sub-agent fan-out

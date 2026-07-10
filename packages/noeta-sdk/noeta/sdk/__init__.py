@@ -31,6 +31,11 @@ from noeta.client.capabilities import (
     permission_modes,
 )
 from noeta.client.client import Client, QueryFailedError, QueryResult, query
+from noeta.client.consolidation import (
+    build_consolidation_digest,
+    consolidation_due,
+    run_consolidation,
+)
 from noeta.client.host_config import HostConfig, SandboxExecEnvConfig
 # The factory seam types behind ``HostConfig.sandbox_backend_factory`` /
 # ``sandbox_browser_factory`` — exported so a product can annotate its injected
@@ -101,6 +106,7 @@ from noeta.protocols.messages import (
 )
 from noeta.protocols.policy import Policy
 from noeta.protocols.values import ContentRef
+from noeta.protocols.wake import NEXT_GOAL_WAKE_HANDLE
 from noeta.protocols.step_context import StepContext
 from noeta.protocols.tool import Tool, ToolContext, ToolResult
 from noeta.protocols.view import View
@@ -150,6 +156,14 @@ __all__ = [
     "Client",
     "query",
     "QueryResult",
+    # memory consolidation (memory v2 phase 3 — the host-callable entry +
+    # the guard/digest halves for hosts that orchestrate their own runs)
+    "run_consolidation",
+    "consolidation_due",
+    "build_consolidation_digest",
+    # the typed chat turn-boundary marker (a product's session-stop seam
+    # recognizes the trailing next-goal suspend by this wake handle)
+    "NEXT_GOAL_WAKE_HANDLE",
     # host-level wiring (D3)
     "HostConfig",
     "SandboxExecEnvConfig",

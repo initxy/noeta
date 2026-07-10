@@ -207,7 +207,7 @@ def test_memory_root_is_global_not_workspace_derived(tmp_path: Path) -> None:
     inputs = _inputs(ws, memory_enabled=True, global_memory_dir=glob_mem)
     assert inputs.memory_store is not None
     assert inputs.memory_store.root == glob_mem
-    names = [n for n, _ in inputs.memory_entries]
+    names = [n for n, _, _ in inputs.memory_entries]
     assert names == ["deploy"]
     assert "stale" not in names
 
@@ -229,8 +229,8 @@ def test_memory_unchanged_across_workspace_switch(tmp_path: Path) -> None:
     assert inputs_a.memory_store is not None and inputs_b.memory_store is not None
     assert inputs_a.memory_store.root == inputs_b.memory_store.root == glob_mem
     assert (
-        [n for n, _ in inputs_a.memory_entries]
-        == [n for n, _ in inputs_b.memory_entries]
+        [n for n, _, _ in inputs_a.memory_entries]
+        == [n for n, _, _ in inputs_b.memory_entries]
         == ["shared"]
     )
 
@@ -254,7 +254,7 @@ def test_memory_dir_override_beats_global(tmp_path: Path) -> None:
     )
     assert inputs.memory_store is not None
     assert inputs.memory_store.root == override
-    assert [n for n, _ in inputs.memory_entries] == ["override-one"]
+    assert [n for n, _, _ in inputs.memory_entries] == ["override-one"]
 
 
 def test_load_memory_store_takes_root_directly(tmp_path: Path) -> None:

@@ -1852,17 +1852,26 @@ class SdkHost(GenericEngineResolver):
             spec = self._lookup_agent(agent, task_id="<unbound>")
         if not spec.capabilities.memory:
             return None
-        memory_root = (
-            self.memory_dir
-            if self.memory_dir is not None
-            else (
-                self.global_memory_dir
-                if self.global_memory_dir is not None
-                else execution_memory.DEFAULT_GLOBAL_MEMORY_DIR
-            )
-        )
-        store = execution_memory.load_memory_store(root=memory_root)
+        store = execution_memory.load_memory_store(root=self.memory_root())
         return store, store.entries()
+
+    def memory_root(self) -> Path:
+        """The resolved memory-store root directory (pure wiring, no IO).
+
+        ONE precedence chain for every consumer — the session builder's tool
+        pack + resident index, :meth:`memory_recall_context`, and a product's
+        host-side memory material (e.g. the consolidation debounce marker,
+        which must sit NEXT TO the store the memory tools mutate):
+        ``memory_dir`` override > ``global_memory_dir`` > the SDK global
+        default (``~/.noeta/memories``). The default is read late off the
+        module (not from-imported) so a test pinning
+        ``noeta.execution.memory.DEFAULT_GLOBAL_MEMORY_DIR`` stays hermetic.
+        """
+        if self.memory_dir is not None:
+            return self.memory_dir
+        if self.global_memory_dir is not None:
+            return self.global_memory_dir
+        return execution_memory.DEFAULT_GLOBAL_MEMORY_DIR
 
     def declared_skill_activations(self, agent: str) -> tuple[str, ...]:
         """The agent spec's declared ``skills`` (``Options.skills``), as plain names.

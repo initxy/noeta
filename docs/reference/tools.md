@@ -55,8 +55,10 @@ opens it).
 
 | Tool | Risk | What it does | Source |
 | --- | --- | --- | --- |
-| `memory_write` | low | Write a markdown memory file to the memory store. | `noeta/tools/memory.py` |
+| `memory_write` | medium | Write a markdown memory file to the memory store. Optional `description` (one-line index summary) and `type` (`user` / `project` / `procedural` / `reference`) parameters are stored as a frontmatter block the tool composes itself. | `noeta/tools/memory.py` |
 | `memory_read` | low | Read the full text of a stored memory on demand. | `noeta/tools/memory.py` |
+| `memory_search` | low | Find memories by content: case-insensitive substring match over names and full text, with grep-style excerpts (up to 3 lines per memory, 10 memories; a `truncated` flag reports when more matched). | `noeta/tools/memory.py` |
+| `memory_archive` | medium | Retire an outdated memory into the store's `archive/` subdirectory — it leaves the index, recall and search but is never deleted (a human can restore it). | `noeta/tools/memory.py` |
 
 ## MCP tools
 
@@ -69,6 +71,7 @@ servers are registered and enabled per session. See
 | Level | Meaning |
 | --- | --- |
 | `low` | No side effects outside the agent's own state. Always allowed. |
+| `medium` | Mutates durable state, but only inside a confined directory (e.g. the memory store). |
 | `high` | Modifies the filesystem or spawns external processes. Subject to `PermissionGuard` approval. |
 
 ## Notes
