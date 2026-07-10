@@ -8,6 +8,18 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-09
+
+### Fixed
+
+- **Delegated subtasks no longer deadlock their parent under the resident
+  worker.** `resolve_engine` wrapped every claimed task with the multi-turn
+  (interactive `Client`) wrapper unconditionally. A child task claimed directly
+  by a resident worker then turned its `FinishDecision` into a next-goal
+  *suspend* instead of a genuine `TaskCompleted`, so the `ChildLifecycleObserver`
+  never woke the parent and the parent's `SubtaskGroupCompleted` barrier
+  deadlocked. A child (its `parent_task_id` set) is now built unwrapped.
+
 ## [0.2.0] - 2026-07-09
 
 ### Added
@@ -414,7 +426,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/initxy/noeta/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/initxy/noeta/compare/v0.1.17...v0.2.0
 [0.1.17]: https://github.com/initxy/noeta/compare/v0.1.16...v0.1.17
 [0.1.16]: https://github.com/initxy/noeta/compare/v0.1.15...v0.1.16
