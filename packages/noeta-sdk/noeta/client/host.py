@@ -1845,6 +1845,26 @@ class SdkHost(GenericEngineResolver):
         store = execution_memory.load_memory_store(root=memory_root)
         return store, store.entries()
 
+    def declared_skill_activations(self, agent: str) -> tuple[str, ...]:
+        """The agent spec's declared ``skills`` (``Options.skills``), as plain names.
+
+        Read at ``InteractionDriver.seed_start`` (mirrors the ``getattr``-guarded
+        seam pattern of :meth:`memory_recall_context`) so ``Options(skills=[...])``
+        pre-activates through the SAME pre-loop
+        ``TaskStatePatch(activate_skills=...)`` channel a slash-command-resolved
+        ``activations`` selector already rides — one activation mechanism, two
+        sources, merged + deduped at the call site. Uses the same alias /
+        ``"unnamed"`` fallback resolution :meth:`resolve_engine_for_agent` applies
+        (via :meth:`_lookup_agent`), so the returned names always match the spec
+        that actually built the seed Engine. An agent with no declared skills
+        (the default) returns ``()`` — byte-identical to the pre-fix no-op.
+        """
+        if agent == "unnamed" and self.unnamed_fallback is not None:
+            spec = self.unnamed_fallback
+        else:
+            spec = self._lookup_agent(agent, task_id="<unbound>")
+        return tuple(ref.name for ref in spec.skills)
+
     @staticmethod
     def _budget_for(spec_budget: BudgetSpec) -> Budget:
         """Translate a declared :class:`BudgetSpec` into a live :class:`Budget`.

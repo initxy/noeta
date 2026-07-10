@@ -11,6 +11,7 @@ text path never triggers it).
 
 from __future__ import annotations
 
+import base64 as _base64
 import json
 from typing import Any
 
@@ -1628,9 +1629,6 @@ def test_outbound_thinking_block_without_signature_not_echoed() -> None:
 # cost for future pull (an image-reading tool returning images).
 
 
-import base64 as _base64
-
-
 # Real bytes of a 1x1 transparent PNG (small enough, unambiguous media type), content-addressed into a ContentRef.
 _PNG_BYTES = _base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQ"
@@ -1910,7 +1908,7 @@ def test_image_bytes_not_written_back_resolver_called_per_request() -> None:
     ContentRef (the ImageBlock is not rewritten); the resolver is called to deref on each wire
     assembly, and the ledger never caches base64. Reusing the same request twice and seeing the
     resolver called each time is indirect evidence that the deref is transient and not written back."""
-    route = respx.post(ENDPOINT).mock(
+    respx.post(ENDPOINT).mock(
         return_value=httpx.Response(200, json=_responses_payload(texts=["ok"]))
     )
     calls: list[ContentRef] = []

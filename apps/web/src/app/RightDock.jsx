@@ -3,6 +3,22 @@ import { EmptyState } from "../components/EmptyState.jsx";
 import { ICON_LG, ICON_SM } from "../shared/icons.js";
 import { FilePanel } from "./FilePanel.jsx";
 
+const PREVIEW_ONLY_PANEL_TYPES = new Set(["browser", "terminal", "code"]);
+
+// The tab/pane to actually render. `panelType` is session-persistent and can
+// name a preview-only tab from a session that HAD a sandbox; if the active
+// session has none (or the container deallocates mid-session), that tab's
+// pane is gated off (only Files/App are unconditional) — so rendering
+// straight off `panelType` would leave every pane hidden with no active tab
+// (a blank dock). This is a pure render-only derivation, not a mutation of
+// the stored `panelType`, so it flips back to the real preview tab the
+// moment `hasPreview` returns rather than permanently forgetting the user's
+// choice. Exported for unit coverage.
+function resolveEffectivePanelType(panelType, hasPreview) {
+  if (!hasPreview && PREVIEW_ONLY_PANEL_TYPES.has(panelType)) return "files";
+  return panelType;
+}
+
 // The right dock: a thin generic shell (drag handle + third column) with a
 // lightweight tab bar on top. Built-in tabs:
 //   Files — self-contained FilePanel (workspace tree)
@@ -50,6 +66,8 @@ function RightDock({
       }/sandbox-preview/${encodeURIComponent(previewInfo.token)}/`
     : "";
 
+  const effectivePanelType = resolveEffectivePanelType(panelType, hasPreview);
+
   return (
     <>
       <div
@@ -64,9 +82,9 @@ function RightDock({
           <button
             type="button"
             role="tab"
-            aria-selected={panelType === "files"}
+            aria-selected={effectivePanelType === "files"}
             className={`right-dock__tab${
-              panelType === "files" ? " is-active" : ""
+              effectivePanelType === "files" ? " is-active" : ""
             }`}
             onClick={() => onSelectPanelType("files")}
           >
@@ -75,9 +93,9 @@ function RightDock({
           <button
             type="button"
             role="tab"
-            aria-selected={panelType === "app"}
+            aria-selected={effectivePanelType === "app"}
             className={`right-dock__tab${
-              panelType === "app" ? " is-active" : ""
+              effectivePanelType === "app" ? " is-active" : ""
             }`}
             onClick={() => onSelectPanelType("app")}
           >
@@ -89,9 +107,9 @@ function RightDock({
               <button
                 type="button"
                 role="tab"
-                aria-selected={panelType === "browser"}
+                aria-selected={effectivePanelType === "browser"}
                 className={`right-dock__tab${
-                  panelType === "browser" ? " is-active" : ""
+                  effectivePanelType === "browser" ? " is-active" : ""
                 }`}
                 onClick={() => onSelectPanelType("browser")}
                 title="Sandbox browser (noVNC)"
@@ -101,9 +119,9 @@ function RightDock({
               <button
                 type="button"
                 role="tab"
-                aria-selected={panelType === "terminal"}
+                aria-selected={effectivePanelType === "terminal"}
                 className={`right-dock__tab${
-                  panelType === "terminal" ? " is-active" : ""
+                  effectivePanelType === "terminal" ? " is-active" : ""
                 }`}
                 onClick={() => onSelectPanelType("terminal")}
                 title="Sandbox terminal"
@@ -113,9 +131,9 @@ function RightDock({
               <button
                 type="button"
                 role="tab"
-                aria-selected={panelType === "code"}
+                aria-selected={effectivePanelType === "code"}
                 className={`right-dock__tab${
-                  panelType === "code" ? " is-active" : ""
+                  effectivePanelType === "code" ? " is-active" : ""
                 }`}
                 onClick={() => onSelectPanelType("code")}
                 title="Sandbox code editor"
@@ -140,8 +158,8 @@ function RightDock({
             session) nor the file tree's expand/selection state. */}
         <div
           className="right-dock__pane"
-          hidden={panelType !== "files"}
-          aria-hidden={panelType !== "files"}
+          hidden={effectivePanelType !== "files"}
+          aria-hidden={effectivePanelType !== "files"}
         >
           <FilePanel
             taskId={activeTaskId}
@@ -156,8 +174,8 @@ function RightDock({
         </div>
         <div
           className="right-dock__pane"
-          hidden={panelType !== "app"}
-          aria-hidden={panelType !== "app"}
+          hidden={effectivePanelType !== "app"}
+          aria-hidden={effectivePanelType !== "app"}
         >
           {appUrl ? (
             <iframe
@@ -217,4 +235,4 @@ function RightDock({
   );
 }
 
-export { RightDock };
+export { RightDock, resolveEffectivePanelType };

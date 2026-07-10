@@ -21,7 +21,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-import pytest
 
 from noeta.runtime.worker import WorkerLoop, install_stop_signals
 

@@ -35,7 +35,7 @@ guard (controlled namespace + AST ban on non-determinism) lives in issue 03.
 
 from __future__ import annotations
 
-import textwrap
+import ast
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -355,12 +355,27 @@ def _run_script(script: str, host: _ScriptHost) -> Any:
     """Compile and execute the orchestration script, returning its ``return`` value (no return → ``None``).
 
     The script is wrapped in a function (so a top-level ``return`` is legal) and ``exec``'d in a
-    namespace containing only the orchestration API. The determinism guard (the "do not inject"
-    side of the controlled namespace + AST ban on non-determinism) belongs to
-    issue 03; this function only does "wrap + run + grab return value".
+    namespace containing only the orchestration API. The wrap operates on the **parsed AST**, not
+    the source text: splicing the script's already-parsed statements into a synthetic function
+    body preserves every literal exactly as written. An earlier ``textwrap.indent``-based
+    string wrap prepended 4 spaces to every physical line, which silently corrupted any
+    multi-line (e.g. triple-quoted) string literal in the script — its interior lines gained the
+    indentation as part of the string's value. The determinism guard (the "do not inject" side of
+    the controlled namespace + AST ban on non-determinism) belongs to issue 03 and runs on the
+    ORIGINAL script text before this ever executes; this function only does "wrap + run + grab
+    return value".
     """
-    wrapped = f"def {_ENTRY_NAME}():\n" + textwrap.indent(script, "    ")
-    code = compile(wrapped, "<workflow>", "exec")
+    tree = ast.parse(script, filename="<workflow>", mode="exec")
+    # Parse a trivial wrapper for its FunctionDef shape, then swap in the script's own
+    # (already-parsed, unmodified) statements as the body — no source text is re-indented or
+    # re-serialized, so every literal in ``script`` reaches the namespace byte-for-byte.
+    wrapper = ast.parse(f"def {_ENTRY_NAME}(): pass", filename="<workflow>", mode="exec")
+    entry = wrapper.body[0]
+    assert isinstance(entry, ast.FunctionDef)
+    if tree.body:
+        entry.body = tree.body
+    ast.fix_missing_locations(wrapper)
+    code = compile(wrapper, "<workflow>", "exec")
     # Controlled namespace (D4): inject only the orchestration API + a safe-builtins allowlist
     # (no import/open/eval/__import__), so even if the AST guard misses something, runtime cannot reach time/random/os.
     namespace: dict[str, Any] = {

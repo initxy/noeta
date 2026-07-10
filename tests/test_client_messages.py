@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from noeta.client import (
     AssistantMessage,
@@ -25,7 +24,6 @@ from noeta.client import (
     as_messages,
     query,
 )
-from noeta.client.host import SdkHost
 from noeta.protocols.events import (
     EventEnvelope,
     TaskCreatedPayload,

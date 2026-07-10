@@ -24,6 +24,7 @@ pluggable **extension interfaces** (``Tool`` / ``LLMProvider`` / ``Policy`` /
 from __future__ import annotations
 
 from noeta import presets
+from noeta.agent.spec import BudgetSpec, Capabilities
 from noeta.client.capabilities import (
     effort_modes,
     model_capabilities,
@@ -128,6 +129,9 @@ __all__ = [
     "SystemPromptPreset",
     "compile_options",
     "register_preset_prompt",
+    # recipe advanced fields (Options.capabilities / Options.budget)
+    "Capabilities",
+    "BudgetSpec",
     # client verbs
     "Client",
     "query",

@@ -28,7 +28,6 @@ from noeta.protocols.messages import (
     ToolResultBlock,
     ToolUseBlock,
 )
-from noeta.protocols.values import ContentRef
 from noeta.storage.memory import (
     InMemoryContentStore,
     InMemoryDispatcher,

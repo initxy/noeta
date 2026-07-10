@@ -1,5 +1,3 @@
-import { KS_ICONS } from "../../shared/icons.js";
-
 function ksCategory(t) {
   if (/^Tool/.test(t)) return t.includes("Approval") || t.includes("Denied")
     ? "cat-governance" : "cat-tool";
@@ -11,12 +9,12 @@ function ksCategory(t) {
 }
 
 const KS_CATEGORIES = [
-  { cls: "cat-lifecycle", label: "lifecycle", icon: KS_ICONS.flag },
-  { cls: "cat-tool", label: "tool", icon: KS_ICONS.tool },
-  { cls: "cat-llm", label: "llm", icon: KS_ICONS.bolt },
-  { cls: "cat-context", label: "context", icon: KS_ICONS.layers },
-  { cls: "cat-governance", label: "governance", icon: KS_ICONS.flag },
-  { cls: "cat-message", label: "message", icon: KS_ICONS.message },
+  { cls: "cat-lifecycle", label: "lifecycle" },
+  { cls: "cat-tool", label: "tool" },
+  { cls: "cat-llm", label: "llm" },
+  { cls: "cat-context", label: "context" },
+  { cls: "cat-governance", label: "governance" },
+  { cls: "cat-message", label: "message" },
 ];
 
 function traceRows(envelopes) {

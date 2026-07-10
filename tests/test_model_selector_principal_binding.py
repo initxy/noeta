@@ -29,7 +29,6 @@ from typing import Any
 import pytest
 
 from tests._sdk_session import official_registry as official_agent_registry
-from noeta.execution.multi_turn import NEXT_GOAL_WAKE_HANDLE
 from noeta.execution.driver import (
     InteractionDriver,
     ModelBindPrelude,

@@ -773,10 +773,27 @@ class InteractionDriver:
         # Emitted AFTER the goal message (goal-then-patch order); the Engine's
         # ``apply_state_patch`` records the per-skill content provenance itself
         # (fold-guarded, first-only). ``()`` ⇒ byte-identical to the no-skill path.
-        if activations:
+        #
+        # Declared skills (``Options.skills`` → ``AgentSpec.skills``) ride the
+        # SAME channel: the host seam ``declared_skill_activations`` (mirrors
+        # ``memory_recall_context`` — ``getattr``-guarded, so a host without the
+        # seam is a clean no-op) resolves the spec's declared skill names, merged
+        # ahead of the explicit ``activations`` and de-duplicated (order-preserving)
+        # into the ONE ``apply_state_patch`` call below — so a skill that is both
+        # declared on the spec and separately activated (e.g. a slash command)
+        # activates exactly once, and a spec with no declared skills stays
+        # byte-identical to the pre-fix path.
+        declared_skills_fn = getattr(host, "declared_skill_activations", None)
+        declared_skills = (
+            declared_skills_fn(agent) if callable(declared_skills_fn) else ()
+        )
+        combined_activations = tuple(
+            dict.fromkeys((*declared_skills, *activations))
+        )
+        if combined_activations:
             engine.apply_state_patch(
                 task,
-                patch=TaskStatePatch(activate_skills=list(activations)),
+                patch=TaskStatePatch(activate_skills=list(combined_activations)),
                 lease_id=lease.lease_id,
             )
         # Pre-loop activation of the session-level instructions + environment

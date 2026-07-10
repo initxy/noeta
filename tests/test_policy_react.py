@@ -274,6 +274,30 @@ def test_max_tokens_response_becomes_retryable_fail_decision() -> None:
     )
 
 
+def test_max_tokens_response_all_thinking_fails_instead_of_recording_empty_message() -> None:
+    """Mirrors ``test_empty_end_turn_fails_instead_of_recording_empty_message``:
+    a reasoning model that spends its whole output budget on ThinkingBlock(s)
+    before any text/tool_use leaves ``history_content`` empty on
+    ``max_tokens`` too (thinking is stripped by ``_strip_thinking``).
+    Recording ``Message(content=[])`` here would reproduce the Anthropic 400
+    on the next request — and since this branch is normally retryable, a
+    retry would resend the very history a poisoned turn just wrote. Guard
+    identically to the end_turn branch instead: fail non-retryable with no
+    assistant_message."""
+    resp = LLMResponse(
+        stop_reason="max_tokens",
+        content=[ThinkingBlock(text="still reasoning...")],
+    )
+    policy, _ = _make_policy([resp])
+
+    decision = policy.decide(_ctx(), _empty_view())
+
+    assert isinstance(decision, FailDecision)
+    assert decision.reason == "llm_empty_response"
+    assert decision.retryable is False
+    assert decision.assistant_message is None
+
+
 def test_error_response_becomes_non_retryable_fail_with_none_message() -> None:
     """``stop_reason=error`` (no category) → ``FailDecision(reason=
     "llm_error", retryable=False, assistant_message=None)``. Engine sees no

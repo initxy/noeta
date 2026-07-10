@@ -1,9 +1,10 @@
 """Built-in Observers.
 
-AuditObserver + MetricsObserver are the in-tree Observers. The
-transport-neutral EventFanout lives with the noeta-cli/server
-slice instead, since its first consumer, SSE, is fundamentally an HTTP
-protocol and the single-host runtime has no HTTP server.
+AuditObserver + MetricsObserver are the in-tree Observers. EventFanout
+(``noeta.observers.fanout``) lives in this package too — it is
+transport-neutral, knowing only :class:`EventEnvelope`; the HTTP/SSE
+transport itself (``noeta.agent.backend``) is a *consumer* of the
+fan-out, not part of it.
 
 Both Observers subscribe through ``EventLogSubscriber.subscribe`` —
 no formal ``Observer`` Protocol is introduced; the existing pattern

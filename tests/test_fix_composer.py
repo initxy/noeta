@@ -19,7 +19,7 @@ from noeta.context.composer import (
     _clear_tool_outputs,
     _is_cleared_marker,
 )
-from noeta.protocols.messages import Message, TextBlock, ToolResultBlock
+from noeta.protocols.messages import Message, ToolResultBlock
 from noeta.storage.memory import InMemoryContentStore
 
 

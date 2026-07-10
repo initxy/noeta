@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import sqlite3
 from typing import Optional
+from urllib.parse import quote
 
 from noeta.protocols.errors import ContentNotFound, NoetaError
 from noeta.protocols.event_log import (
@@ -83,7 +84,15 @@ class SqliteReadOnlyStore:
     def __init__(self, path: str) -> None:
         # mode=ro: the connection physically cannot write — no journal_mode /
         # synchronous PRAGMA writes, no migrations, no file creation.
-        self._conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        #
+        # The path is spliced into a ``file:`` URI, so it must be
+        # percent-encoded first: an unescaped ``?``, ``#``, or ``%`` in the
+        # path would otherwise be parsed as the query-string delimiter,
+        # fragment delimiter, or a broken escape — silently changing which
+        # file is opened (or how) and defeating the read-only guarantee this
+        # class exists for. ``quote(..., safe="/")`` escapes everything but
+        # the path separators, which sqlite's URI filename parser expects.
+        self._conn = sqlite3.connect(f"file:{quote(path, safe='/')}?mode=ro", uri=True)
         self._conn.row_factory = sqlite3.Row
         found = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
         if found != SCHEMA_VERSION:

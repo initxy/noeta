@@ -17,7 +17,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 from noeta.agent.backend import BackendConfig, EngineRoom, serve_backend
+from noeta.agent.backend.read_views import _genesis_parent_task_id
+from noeta.agent.commands import BUILTIN_COMMANDS
 from noeta.agent.host.mcp_registry import McpServerRegistry
+from noeta.protocols.events import EventEnvelope, TaskCreatedPayload
 from noeta.protocols.messages import LLMResponse, TextBlock, Usage
 from noeta.sdk import Options
 from noeta.testing.fake_llm import FakeLLMProvider
@@ -102,6 +105,34 @@ def test_capabilities_projects_enums_and_agents(tmp_path: Path) -> None:
         shutdown()
 
 
+def test_capabilities_slash_commands_sourced_from_builtin_catalog(
+    tmp_path: Path,
+) -> None:
+    """The composer's slash menu is fed from ``noeta.agent.commands`` — not
+    the hardcoded empty list the thin backend used to advertise."""
+    server, _url, shutdown = serve_backend(
+        BackendConfig(host="127.0.0.1", port=0, workspace_dir=tmp_path),
+        engine_room=_room(tmp_path),
+    )
+    host, port = server.server_address[:2]
+    try:
+        status, body = _get(host, port, "/capabilities")
+        assert status == 200, body
+        commands = body["slash_commands"]
+        assert commands, "slash_commands must not be empty"
+        assert {c["name"] for c in commands} == set(BUILTIN_COMMANDS)
+        for command in commands:
+            expected = BUILTIN_COMMANDS[command["name"]]
+            assert command["description"] == expected.description
+            assert command["argument_hint"] == expected.argument_hint
+            # Resolution-only internals stay off the public composer surface.
+            assert "kind" not in command
+            assert "skill" not in command
+            assert "agent" not in command
+    finally:
+        shutdown()
+
+
 def test_capabilities_no_model_no_mcp(tmp_path: Path) -> None:
     server, _url, shutdown = serve_backend(
         BackendConfig(host="127.0.0.1", port=0, workspace_dir=tmp_path),
@@ -182,6 +213,33 @@ def test_preview_info_panels_pin_container_paths() -> None:
 # ---------------------------------------------------------------------------
 # GET /tasks — session list
 # ---------------------------------------------------------------------------
+
+
+def _genesis_envelope(task_id: str, parent_task_id: Optional[str]) -> EventEnvelope:
+    return EventEnvelope.build(
+        task_id=task_id,
+        type="TaskCreated",
+        payload=TaskCreatedPayload(
+            goal="g", policy_name="p", parent_task_id=parent_task_id
+        ),
+    )
+
+
+def test_genesis_parent_task_id_reads_only_the_first_envelope() -> None:
+    """The cheap peek used to skip subtasks before the full fold (see
+    ``_handle_list_tasks``): reads ``envelopes[0]`` only, never the rest."""
+    root_env = _genesis_envelope("root-1", None)
+    child_env = _genesis_envelope("child-1", "root-1")
+
+    assert _genesis_parent_task_id([]) is None
+    assert _genesis_parent_task_id([root_env]) is None
+    assert _genesis_parent_task_id([child_env]) == "root-1"
+
+    # A second envelope's contents never matter — only [0] is consulted.
+    other_type = EventEnvelope.build(
+        task_id="root-1", type="TaskSuspended", payload=object()
+    )
+    assert _genesis_parent_task_id([root_env, other_type]) is None
 
 
 def test_session_list_folds_status_and_title(tmp_path: Path) -> None:

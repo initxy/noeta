@@ -28,7 +28,7 @@ from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.runtime.file_checkpoint import FileCheckpointRegistry
 from noeta.runtime.tool import ToolRuntime
 from noeta.storage.memory import InMemoryContentStore, InMemoryEventLog
-from noeta.tools.fs import FsWriteMode, ReplaceTextTool, WorkspaceRoot
+from noeta.tools.fs import ApplyPatchTool, FsWriteMode, ReplaceTextTool, WorkspaceRoot
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +146,55 @@ def test_edit_tool_surfaces_pre_edit_bytes(tmp_path: Path) -> None:
     assert dry.invoke(
         {"path": "f.py", "old": "bye", "new": "hi"}, ctx
     ).file_changes is None
+
+
+def test_apply_patch_surfaces_pre_edit_bytes_and_feeds_capture(
+    tmp_path: Path,
+) -> None:
+    # apply_patch is a sibling write-side fs tool to edit/write — its batch
+    # must surface ``file_changes`` too, so a turn that used apply_patch is
+    # covered by rewind file-checkpointing exactly like edit/write.
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "a.py").write_text("foo\n", encoding="utf-8")
+    store = InMemoryContentStore()
+    ctx = ToolContext(artifact_store=store)
+    tool = ApplyPatchTool(workspace=WorkspaceRoot.from_path(ws), mode=FsWriteMode.APPLY)
+    result = tool.invoke(
+        {
+            "edits": [
+                {"op": "replace", "path": "a.py", "old": "foo", "new": "bar"},
+                {"op": "create", "path": "b.py", "content": "new\n"},
+            ]
+        },
+        ctx,
+    )
+    assert result.success
+    assert result.file_changes == [
+        {"path": "a.py", "before": b"foo\n"},
+        {"path": "b.py", "before": None},
+    ]
+
+    # feed straight into the real capture path — same as edit/write's baseline.
+    runtime = ToolRuntime(
+        event_log=InMemoryEventLog(),
+        content_store=store,
+        file_checkpoint_registry=FileCheckpointRegistry(),
+    )
+    baselines = runtime._capture_file_baselines("root", result)
+    assert baselines is not None and {b.path for b in baselines} == {"a.py", "b.py"}
+    a_baseline = next(b for b in baselines if b.path == "a.py")
+    b_baseline = next(b for b in baselines if b.path == "b.py")
+    assert a_baseline.content_ref is not None
+    assert store.get(a_baseline.content_ref) == b"foo\n"
+    assert b_baseline.content_ref is None  # created file → "did not exist" marker
+
+    # DRY_RUN never surfaces a baseline (no write, nothing to undo).
+    dry = ApplyPatchTool(workspace=WorkspaceRoot.from_path(ws), mode=FsWriteMode.DRY_RUN)
+    dry_result = dry.invoke(
+        {"edits": [{"op": "replace", "path": "a.py", "old": "bar", "new": "baz"}]}, ctx
+    )
+    assert dry_result.file_changes is None
 
 
 # ---------------------------------------------------------------------------

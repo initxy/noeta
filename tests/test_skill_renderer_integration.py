@@ -20,10 +20,8 @@ Pins the rev3 acceptance criteria:
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-import pytest
 
 from noeta.context.composer import ThreeSegmentComposer
 from noeta.context.skills.indexer import (
@@ -37,7 +35,7 @@ from noeta.protocols.events import ContextPlanComposedPayload
 from noeta.protocols.messages import Message, TextBlock
 from noeta.protocols.decisions import TaskStatePatch
 from noeta.protocols.task import Task, TaskState
-from noeta.protocols.tool import Tool, ToolContext, ToolResult
+from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.storage.memory import InMemoryContentStore, InMemoryEventLog
 
 

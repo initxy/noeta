@@ -1,12 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { connectionLabel } from "./connection.js";
 import {
-  foldTraceTasks,
+  advanceMultiplexStore,
+  createMultiplexStore,
+} from "../domain/multiplex.js";
+import {
+  createTraceTaskCache,
+  foldTraceTasksFromMux,
   foldTraceDetail,
   foldSelections,
   planRefs,
   planView,
 } from "./trace-fold.js";
+
+// A stable empty-array sentinel for "no bucket yet" so an inspected task with
+// no envelopes (or no active task) never hands consumers a fresh array
+// identity each render (mirrors chat-data.js's EMPTY_EVENTS).
+const EMPTY_EVENTS = [];
 
 // runtime/sdk/app three-layer refactor T7: the trace inspector
 // folds the new thin-backend protocol on the frontend. It used to read a global
@@ -51,19 +61,49 @@ function useTraceData() {
   const streamTaskIdsRef = useRef(new Set());
   const planInFlight = useRef(new Set());
 
-  // The inspected task's own timeline (the stream carries the whole subtree).
-  const events = useMemo(
-    () =>
-      taskId
-        ? streamEnvelopes.filter((env) => env && env.task_id === taskId)
-        : [],
-    [streamEnvelopes, taskId],
+  // One INCREMENTAL fold of the multiplexed subtree stream (the same
+  // domain/multiplex.js store the chat app uses, WS-A / P0-1): it folds only
+  // the newly arrived tail each advance and reuses the per-task vm / events
+  // references for buckets that did not change, so a message for one worker no
+  // longer re-buckets + re-`reduceEvents`s the WHOLE subtree (was O(N) per SSE
+  // message, O(N^2) over a session). `root` is passed as null — trace builds
+  // its own tree from parent_task_id (buildTaskTree in TraceApp.jsx), so the
+  // store's root-first `order`/`children` are unused here.
+  const muxStoreRef = useRef(null);
+  if (muxStoreRef.current === null) muxStoreRef.current = createMultiplexStore();
+  // Per-task cache for the couple of tree-row fields the shared vm doesn't
+  // carry (agent_name genesis, created/last event-time bounds) — see
+  // trace-fold.js's foldTraceTasksFromMux.
+  const taskCacheRef = useRef(null);
+  if (taskCacheRef.current === null) taskCacheRef.current = createTraceTaskCache();
+
+  const mux = useMemo(
+    () => advanceMultiplexStore(muxStoreRef.current, streamEnvelopes, null),
+    [streamEnvelopes],
   );
-  // The subtask tree (root → __workflow__ → workers), folded from the stream.
-  const tasks = useMemo(() => foldTraceTasks(streamEnvelopes), [streamEnvelopes]);
+  // The inspected task's own timeline — a direct bucket lookup (was a full
+  // `.filter()` over the whole multiplexed stream on every message). Reused by
+  // the store when the inspected task's bucket did not change this advance, so
+  // the detail/selection/plan folds below skip their own recompute for free
+  // (their useMemo deps key off this reference).
+  const events = useMemo(
+    () => (taskId && mux.eventsByTask[taskId]) || EMPTY_EVENTS,
+    [mux, taskId],
+  );
+  // The inspected task's already-folded view-model, same identity-reuse rule —
+  // avoids a second `reduceEvents` pass in foldTraceDetail below.
+  const activeVm = useMemo(
+    () => (taskId && mux.tasks[taskId]) || null,
+    [mux, taskId],
+  );
+  // The subtask tree (root → __workflow__ → workers), folded from the store.
+  const tasks = useMemo(
+    () => foldTraceTasksFromMux(taskCacheRef.current, mux),
+    [mux],
+  );
   const activeDetail = useMemo(
-    () => foldTraceDetail(taskId, events),
-    [taskId, events],
+    () => foldTraceDetail(taskId, events, activeVm),
+    [taskId, events, activeVm],
   );
   const selections = useMemo(() => foldSelections(events), [events]);
   const planMetas = useMemo(() => planRefs(events), [events]);
@@ -179,6 +219,10 @@ function useTraceData() {
     planInFlight.current = new Set();
     setConnectionState("idle");
     setNotice(null);
+    // A re-root starts a brand-new subtree — drop the incremental fold state
+    // too, so no stale per-task cache entry from the old subtree lingers.
+    muxStoreRef.current = createMultiplexStore();
+    taskCacheRef.current = createTraceTaskCache();
   }, [streamRoot]);
 
   const startLiveTail = useCallback(
@@ -239,18 +283,11 @@ function useTraceData() {
     return () => closeSse();
   }, [closeSse, startLiveTail]);
 
-  // The stream replays history + stays live and auto-resumes on reconnect, so
-  // the old explicit backfill / context refetch reduce to a reconnect.
-  const backfillHistory = useCallback(() => startLiveTail(true), [startLiveTail]);
-  const fetchContext = useCallback(() => {}, []);
-
   return {
     activeContext,
     activeDetail,
-    backfillHistory,
     connection: connectionLabel(connectionState),
     events,
-    fetchContext,
     navigateToTask,
     notice,
     selectedEvent,

@@ -194,7 +194,6 @@ def test_engine_fills_recent_tool_calls_deterministically() -> None:
     )
     engine.run_one_step(task, lease_id=lease_id)
 
-    cs = InMemoryContentStore()  # not used by the recorded inline args path
     events = log.read(task.task_id)
     first = _recent_tool_calls(events, engine._content_store, window=8)
     second = _recent_tool_calls(events, engine._content_store, window=8)

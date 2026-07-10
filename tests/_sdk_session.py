@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from noeta.agent.registry import AgentRegistry
-from noeta.agent.spec import AgentSpec, Capabilities
+from noeta.agent.spec import AgentSpec
 from noeta.client.host import SdkHost
 from noeta.core.wiring import wire_default_observers
 from noeta.execution.driver import InteractionDriver, multi_turn_policy_wrapper

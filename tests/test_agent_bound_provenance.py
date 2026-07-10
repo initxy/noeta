@@ -14,7 +14,6 @@ from pathlib import Path
 from noeta.execution.driver import InteractionDriver, multi_turn_policy_wrapper
 from noeta.client import SdkHost
 from noeta.core.engine import Engine
-from noeta.core.fold import fold
 from noeta.core.snapshot import rehydrate_task
 from noeta.protocols.canonical import restore_dataclass
 from noeta.protocols.events import (
@@ -205,7 +204,8 @@ def _driver_host(ws: Path, responses: list[LLMResponse]) -> tuple[SdkHost, InMem
 
 
 def test_driver_start_locks_taskcreated_agentbound_modelbound_order(tmp_path: Path) -> None:
-    ws = tmp_path / "ws"; ws.mkdir()
+    ws = tmp_path / "ws"
+    ws.mkdir()
     host, event_log = _driver_host(ws, [_end_turn("hi")])
     outcome = InteractionDriver(host).start(goal="hello", agent="main")
 
@@ -222,7 +222,8 @@ def test_driver_start_locks_taskcreated_agentbound_modelbound_order(tmp_path: Pa
 
 
 def test_code_session_runner_emits_agentbound(tmp_path: Path) -> None:
-    ws = tmp_path / "ws"; ws.mkdir()
+    ws = tmp_path / "ws"
+    ws.mkdir()
     host = make_host(
         make_registry(runner_main_spec("main")),
         workspace_dir=ws,

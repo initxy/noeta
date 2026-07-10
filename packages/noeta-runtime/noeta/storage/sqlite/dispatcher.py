@@ -274,7 +274,13 @@ class SqliteDispatcher:
         re-delivered by :meth:`requeue_stale` (at-least-once delivery +
         idempotent consumption = exactly-once).
         """
-        del worker_id  # not recorded on the row; reserved for future audit
+        # sqlite (like in-memory) is single-host by design (see
+        # multi-host-lease-fencing.md), so there is exactly one worker pool
+        # per store and no cross-host lease audit question to answer here.
+        # worker_id is intentionally not recorded on this row — it is not a
+        # gap to be filled later. Postgres, which is multi-host, does record
+        # it per lease (migration 3) for that reason.
+        del worker_id
         with self._lock:
             _begin_immediate_with_retry(self._conn)
             try:
