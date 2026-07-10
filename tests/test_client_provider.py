@@ -18,7 +18,6 @@ import pytest
 
 from noeta.client import AgentDefinition, Client, Options, compile_options, query
 from noeta.protocols.events import (
-    ModelBoundPayload,
     TaskCompletedPayload,
 )
 from noeta.protocols.messages import (
@@ -58,7 +57,6 @@ def _make_ws(tmp_path: Path) -> Path:
 
 def test_provider_excluded_from_identity(tmp_path: Path) -> None:
     """Two Options differing only in ``provider`` → structurally equal specs."""
-    ws = _make_ws(tmp_path)
     provider_a = FakeLLMProvider(responses=_end_script("A"))
     opts_a = Options(system_prompt="be terse", name="main", provider=None)
     opts_b = Options(system_prompt="be terse", name="main", provider=provider_a)

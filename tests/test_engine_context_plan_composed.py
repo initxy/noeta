@@ -14,7 +14,6 @@ from noeta.context.composer import ThreeSegmentComposer
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.policies.stub import StubFinishPolicy
-from noeta.protocols.tool import Tool
 from noeta.storage.memory import (
     InMemoryContentStore,
     InMemoryDispatcher,

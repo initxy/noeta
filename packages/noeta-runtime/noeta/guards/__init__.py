@@ -6,7 +6,8 @@ allowlists with fail-closed risk-level handling. Both target the
 ``noeta.protocols.hooks.Guard`` Protocol; the host application
 explicitly registers whichever instances it wants on its
 ``HookManager`` (there is no auto-wire — the canonical default profile
-is assembled by ``noeta-cli``).
+is assembled by ``noeta.execution.builder``, consumed by the
+apps/noeta-agent host).
 
 The Guards are intentionally isolated to ``noeta.protocols`` imports
 (see ``.importlinter:guards-only-protocols``) so they cannot reach

@@ -145,8 +145,12 @@ def test_registry_unknown_is_hard_error() -> None:
 def test_registry_membership_is_insertion_order_independent() -> None:
     a = AgentSpec(name="a", instructions="x", policy=ComponentRef("react"))
     b = AgentSpec(name="b", instructions="y", policy=ComponentRef("react"))
-    r1 = AgentRegistry(); r1.add(a); r1.add(b)
-    r2 = AgentRegistry(); r2.add(b); r2.add(a)
+    r1 = AgentRegistry()
+    r1.add(a)
+    r1.add(b)
+    r2 = AgentRegistry()
+    r2.add(b)
+    r2.add(a)
     # Same membership regardless of insertion order: resolved specs are equal.
     assert sorted(r1.names()) == sorted(r2.names())
     for name in r1.names():
@@ -154,10 +158,12 @@ def test_registry_membership_is_insertion_order_independent() -> None:
 
 
 def test_registry_member_drift_is_observable() -> None:
-    r1 = AgentRegistry(); r1.add(_bug_fixer())
+    r1 = AgentRegistry()
+    r1.add(_bug_fixer())
     drifted = AgentSpec(
         name="bug-fixer", instructions="DRIFTED", policy=ComponentRef("react", "2"),
     )
-    r2 = AgentRegistry(); r2.add(drifted)
+    r2 = AgentRegistry()
+    r2.add(drifted)
     # A member behaviour change is a real identity change on the resolved spec.
     assert r1.resolve("bug-fixer") != r2.resolve("bug-fixer")

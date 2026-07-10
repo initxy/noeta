@@ -14,7 +14,6 @@ import os
 import signal
 from typing import Any
 
-import pytest
 
 from noeta.runtime._proc_group import send_group_signal
 

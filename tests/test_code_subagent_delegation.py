@@ -12,14 +12,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
 
 from noeta.core.fold import fold
 from noeta.presets import official_specs
 from noeta.policies.react import (
     ReActPolicy,
     SPAWN_SUBAGENT_TOOL,
-    spawn_subagent_tool_schema,
 )
 from noeta.protocols.decisions import (
     SpawnSubtaskDecision,

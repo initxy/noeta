@@ -20,7 +20,6 @@ from noeta.observers.audit import AuditRecord
 from noeta.observers.trace_export import (
     AsyncTraceSink,
     JsonlTraceSink,
-    TraceExportObserver,
     make_jsonl_trace_observer,
 )
 from noeta.storage.memory import InMemoryEventLog

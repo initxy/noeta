@@ -529,6 +529,18 @@ class ApplyPatchTool:
         mode_label = "applied" if applied else "proposed"
         total_added = sum(p.added for p in planned)
         total_removed = sum(p.removed for p in planned)
+        # surface the PRE-edit bytes for every path this call mutated so the
+        # ToolRuntime can stash this turn's rewind baseline (mirrors
+        # ``edit``/``write``'s ``file_changes``): ``before_bytes`` is already
+        # ``None`` for a ``create`` (no pre-edit content) and the original
+        # bytes for a ``replace`` — the same "did-not-exist" vs. "overwrote"
+        # marker those tools use. DRY_RUN writes nothing, so it surfaces no
+        # ``file_changes`` either, matching ``edit``/``write``.
+        file_changes: list[dict[str, Any]] | None = None
+        if applied:
+            file_changes = [
+                {"path": p.rel, "before": p.before_bytes} for p in planned
+            ]
         return ToolResult(
             success=True,
             output=output,
@@ -537,6 +549,7 @@ class ApplyPatchTool:
                 f"apply_patch {len(planned)} file(s) "
                 f"+{total_added}/-{total_removed} ({mode_label})"
             ),
+            file_changes=file_changes,
         )
 
 

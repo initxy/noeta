@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from typing import Optional
 
-import pytest
 
 from noeta.protocols.messages import (
     LLMRequest,

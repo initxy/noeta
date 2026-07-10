@@ -699,10 +699,14 @@ def _extract_thinking(message: dict[str, Any]) -> Optional[ThinkingBlock]:
 def _translate_usage(usage: Any) -> Usage:
     """Map OpenAI's usage wire shape into Noeta-shape :class:`Usage`.
 
-    OpenAI reports a flat total with no cache breakdown:
+    Chat Completions reports a cache breakdown nested under
+    ``prompt_tokens_details`` (mirrors ``openai_responses._translate_usage``'s
+    ``input_tokens_details.cached_tokens`` handling, D2):
 
-      * ``prompt_tokens``     → ``uncached`` (cache_read / cache_write 0,
-        so the derived ``Usage.input`` equals ``prompt_tokens``)
+      * ``prompt_tokens − cached_tokens`` → ``uncached``
+      * ``prompt_tokens_details.cached_tokens`` → ``cache_read`` (absent → 0)
+      * ``cache_write`` is always 0 (Chat Completions does not report
+        cache writes)
       * ``completion_tokens`` → ``output``
       * ``completion_tokens_details.reasoning_tokens`` →
         ``reasoning_tokens`` (newer reasoning models; absent → 0, D-A5)
@@ -714,12 +718,19 @@ def _translate_usage(usage: Any) -> Usage:
     """
     if not isinstance(usage, dict):
         return Usage()
+    prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+    prompt_details = usage.get("prompt_tokens_details")
+    cached = 0
+    if isinstance(prompt_details, dict):
+        cached = int(prompt_details.get("cached_tokens", 0) or 0)
     details = usage.get("completion_tokens_details")
     reasoning = 0
     if isinstance(details, dict):
         reasoning = int(details.get("reasoning_tokens", 0) or 0)
     return Usage(
-        uncached=int(usage.get("prompt_tokens", 0) or 0),
+        uncached=max(0, prompt_tokens - cached),
+        cache_read=cached,
+        cache_write=0,
         output=int(usage.get("completion_tokens", 0) or 0),
         reasoning_tokens=reasoning,
     )

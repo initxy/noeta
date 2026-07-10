@@ -22,9 +22,11 @@ This is a thin server-side projection (like the file tree in
 :mod:`noeta.agent.backend.resource_services`), explicitly allowed for non-event
 index views — the per-conversation UI state still folds on the frontend (D7).
 The thin backend advertises only what it actually wires: a single model + a
-single workspace, no provider registry / workspace registry / skill catalog, so
-those capability lists are empty (the composer degrades them gracefully, exactly
-as the legacy observation-only server did).
+single workspace, no provider registry / skill catalog, so those capability
+lists are empty (the composer degrades them gracefully, exactly as the legacy
+observation-only server did). ``slash_commands`` is the one exception: it is
+always sourced from the built-in catalog (``noeta.agent.commands``), which
+every deployment carries regardless of provider/workspace wiring.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from typing import Any, Optional
 from noeta.sdk import effort_modes, envelope_to_dict, model_capabilities, permission_modes
 
 from noeta.agent.backend.app import BackendHandler, Router
+from noeta.agent.commands import list_commands
 
 
 _MAX_TITLE_CHARS = 80
@@ -78,6 +81,26 @@ def _workspaces_public(handler: BackendHandler) -> list[dict[str, Any]]:
         return []
 
 
+def _slash_commands_public() -> list[dict[str, Any]]:
+    """Project the built-in slash-command catalog for the composer's menu.
+
+    ``noeta.agent.commands.list_commands()`` is the unit-tested catalog
+    (``tests/test_code_commands.py``); the frontend slash menu
+    (``apps/web/src/app/ChatComposer.jsx``'s ``slashMenuItems`` / ``SlashMenu``)
+    only reads ``name`` / ``description`` / ``argument_hint`` per command, so
+    those are the only fields projected here — ``kind`` / ``skill`` / ``agent``
+    are resolution-only details the composer never touches.
+    """
+    return [
+        {
+            "name": c.name,
+            "description": c.description,
+            "argument_hint": c.argument_hint,
+        }
+        for c in list_commands()
+    ]
+
+
 def _handle_capabilities(handler: BackendHandler, params: dict[str, str]) -> None:
     """``GET /capabilities`` → the composer's selectable surface (read-only)."""
     room = handler.engine_room
@@ -105,7 +128,7 @@ def _handle_capabilities(handler: BackendHandler, params: dict[str, str]) -> Non
             # catalog stay unwired (empty lists degrade gracefully).
             "workspaces": _workspaces_public(handler),
             "skills": [],
-            "slash_commands": [],
+            "slash_commands": _slash_commands_public(),
             "providers": {},
             "default_provider": "",
         }
@@ -178,6 +201,35 @@ def _title_from_goal(goal: str) -> Optional[str]:
     return first if len(first) <= _MAX_TITLE_CHARS else first[: _MAX_TITLE_CHARS - 1] + "…"
 
 
+def _genesis_parent_task_id(envelopes: list[Any]) -> Optional[str]:
+    """Peek at a stream's genesis ``TaskCreated`` for its ``parent_task_id``.
+
+    Every task's stream begins with its genesis ``TaskCreated`` at seq 0 (the
+    same invariant ``stream.py``'s catch-up phase relies on — "a genesis
+    envelope at seq == 0 is NOT skipped"), so checking ``envelopes[0]`` is
+    enough; there is no need to run the full :func:`_fold_summary` fold (which
+    walks every envelope and serializes each one through ``envelope_to_dict``)
+    just to read one field. This lets :func:`_handle_list_tasks` skip a
+    subtask's stream BEFORE paying for that fold, not after.
+
+    NOTE (residual cost): the underlying ``EventLogReader.read`` has no
+    first-event-only primitive, so the full stream is still fetched from
+    storage either way — this only avoids the redundant per-envelope
+    fold/serialize CPU work for streams that end up discarded.
+    """
+    if not envelopes:
+        return None
+    first = envelopes[0]
+    if getattr(first, "type", None) == "TaskCreated":
+        return getattr(first.payload, "parent_task_id", None)
+    # Defensive fallback (should not happen — genesis is always seq 0): scan
+    # the rest so a malformed/legacy stream doesn't silently mis-tree.
+    for env in envelopes[1:]:
+        if getattr(env, "type", None) == "TaskCreated":
+            return getattr(env.payload, "parent_task_id", None)
+    return None
+
+
 def _handle_list_tasks(handler: BackendHandler, params: dict[str, str]) -> None:
     """``GET /tasks`` → the root-conversation session list (most-recent first).
 
@@ -185,6 +237,14 @@ def _handle_list_tasks(handler: BackendHandler, params: dict[str, str]) -> None:
     the host default / scratch bucket) + a display ``workspace_name`` resolved
     from the registry, so the sidebar groups sessions by project without opening
     each stream.
+
+    Every task stream is still read once (there is no cheaper way to learn a
+    stream's genesis without reading it — see :func:`_genesis_parent_task_id`),
+    but a subtask's stream is discarded right after that cheap peek: the full
+    :func:`_fold_summary` fold (and the ``envelope_to_dict`` serialization it
+    does per envelope) now only runs for streams that actually become a row,
+    which matters most on a deployment with many/long-lived subtask streams.
+    Root-session output stays byte-identical to the previous full-fold path.
     """
     room = handler.engine_room
     reg = handler.workspace_registry
@@ -193,11 +253,14 @@ def _handle_list_tasks(handler: BackendHandler, params: dict[str, str]) -> None:
         task_id = getattr(summary, "task_id", None)
         if not isinstance(task_id, str):
             continue
-        folded = _fold_summary(room.events(task_id))
+        envelopes = room.events(task_id)
         # Roots only: a subtask rides its parent's multiplexed stream and is
-        # never a top-level session row (docs/.../07-frontend-fold.md).
-        if folded["parent_task_id"]:
+        # never a top-level session row (docs/.../07-frontend-fold.md). Check
+        # cheaply BEFORE the full fold so a subtask's (possibly long) history
+        # is never folded/serialized just to be thrown away.
+        if _genesis_parent_task_id(envelopes):
             continue
+        folded = _fold_summary(envelopes)
         workspace = folded.get("workspace_dir")
         workspace_name = (
             reg.name_for_path(workspace) if reg is not None else None

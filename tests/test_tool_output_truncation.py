@@ -23,23 +23,20 @@ from noeta.core._decision_handlers import (
     truncate_tool_output,
 )
 from noeta.core.engine import Engine
-from noeta.core.fold import fold, messages_from_appended
+from noeta.core.fold import fold
 from noeta.core.wiring import wire_default_observers
 from noeta.policies.react import ReActPolicy
 from noeta.protocols.events import (
     EventEnvelope,
-    MessagesAppendedPayload,
     ToolResultRecordedPayload,
 )
 from noeta.protocols.messages import (
     LLMResponse,
-    Message,
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
     Usage,
 )
-from noeta.protocols.tool import ToolResult
 from noeta.runtime.llm import RuntimeLLMClient
 from noeta.storage.memory import (
     InMemoryContentStore,
@@ -205,7 +202,7 @@ def _engine_and_run(*, tool_output_inline_limit: int | None, tool_size: int = 20
     lease = dispatcher.lease(worker_id="w")
     assert lease is not None
     engine.append_user_message(task, content=[TextBlock(text="run the echo")], lease_id=lease.lease_id)
-    final = engine.run_one_step(task, lease_id=lease.lease_id)
+    engine.run_one_step(task, lease_id=lease.lease_id)
     return task, engine, event_log, content_store, call_id
 
 
@@ -454,7 +451,7 @@ def test_tool_runtime_populates_output_ref() -> None:
     from noeta.core.engine import Engine
 
     e = Engine(event_log=el, content_store=cs, composer=PassthroughComposer())
-    t = e.create_task(goal="g", policy_name="p", task_id=task_id)
+    e.create_task(goal="g", policy_name="p", task_id=task_id)
     dispatcher.enqueue(task_id)
     lease = dispatcher.lease(worker_id="w")
     assert lease is not None

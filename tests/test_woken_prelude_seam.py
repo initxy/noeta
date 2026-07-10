@@ -24,10 +24,8 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 
 from noeta.core.engine import Engine
-from noeta.core.fold import fold
 from noeta.core.wiring import wire_default_observers
 from noeta.protocols.decisions import FinishDecision, YieldForHumanDecision
 from noeta.protocols.messages import TextBlock

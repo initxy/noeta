@@ -18,6 +18,9 @@ dev = [
     "ruff>=0.6",
 ]
 
+[tool.ruff]
+respect-gitignore = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra -m 'not install_smoke'"

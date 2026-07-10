@@ -23,7 +23,6 @@ from noeta.policies.react import SPAWN_SUBAGENT_TOOL
 from noeta.protocols.messages import (
     LLMRequest,
     LLMResponse,
-    Message,
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,

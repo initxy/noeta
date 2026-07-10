@@ -146,9 +146,11 @@ class RuntimeBundle:
 
 def build_tools() -> dict[str, Tool]:
     """Minimal tool registry: only the in-tree ``echo`` FakeTool is wired."""
-    # ``noeta.tools`` lives in ``noeta-sdk`` while this helper
-    # ships in ``noeta-runtime``'s ``noeta.testing``; the import is lazy so
-    # ``noeta.testing`` loads in a runtime-only install.
+    # ``noeta.tools`` ships in noeta-runtime alongside this module, so the
+    # lazy import isn't about install boundaries; it keeps importing
+    # ``noeta.testing.profile`` cheap for callers who only need one of the
+    # other build_* helpers (or the re-exported storage-stack helpers),
+    # not the FakeTool machinery.
     from noeta.tools.fake import FakeTool
 
     return {
@@ -171,7 +173,7 @@ def build_tools() -> dict[str, Tool]:
 
 
 def resolve_tool_pack(
-    name: str, *, live: bool = True
+    name: str,
 ) -> tuple[dict[str, Tool], frozenset[str]]:
     """Resolve a tool-pack name to ``(tools, allowed_tool_names)``.
 
@@ -194,9 +196,9 @@ def build_composer(
     tools: dict[str, Tool],
     content_store: ContentStore,
 ) -> "ThreeSegmentComposer":
-    # ``noeta.context`` lives in ``noeta-sdk`` while this helper
-    # ships in ``noeta-runtime``'s ``noeta.testing``; the import is lazy so
-    # ``noeta.testing`` loads in a runtime-only install.
+    # ``noeta.context`` ships in noeta-runtime alongside this module; the
+    # import stays lazy so importing ``noeta.testing.profile`` for a
+    # single unrelated helper doesn't also pull in ThreeSegmentComposer.
     from noeta.context.composer import ThreeSegmentComposer
 
     return ThreeSegmentComposer(
@@ -216,9 +218,9 @@ def build_policy_factory(
     """Return a factory that takes an LLMClient and returns a wired
     ReActPolicy. ``build_runtime`` injects a RuntimeLLMClient.
     """
-    # ``noeta.policies`` lives in ``noeta-sdk`` while this helper
-    # ships in ``noeta-runtime``'s ``noeta.testing``; the import is lazy so
-    # ``noeta.testing`` loads in a runtime-only install.
+    # ``noeta.policies`` ships in noeta-runtime alongside this module; the
+    # import stays lazy for the same reason as ``build_composer`` above —
+    # keep this module's cheap helpers cheap to import.
     from noeta.policies.react import ReActPolicy
 
     def factory(llm: Any) -> ReActPolicy:

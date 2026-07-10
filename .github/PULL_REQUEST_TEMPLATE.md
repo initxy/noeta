@@ -18,15 +18,16 @@ ADR touched, or write "none — no decision changed".
 ## How verified
 
 ```bash
-uv run pytest
-uv run lint-imports --config .importlinter
-uv run python scripts/lint-naming.py
+make check   # pytest + coverage, mypy --strict on protocols, naming + import lints — mirrors CI
 ```
 
-Note anything that couldn't be verified and why.
+Note anything that couldn't be verified and why. The Postgres storage contract
+tests, the web e2e smoke, and the install smoke run in CI only (see
+[CONTRIBUTING.md](../CONTRIBUTING.md)).
 
 ## Checklist
 
-- [ ] Tests pass (`uv run pytest`) and import/naming lints are clean.
+- [ ] `make check` passes.
 - [ ] If the SDK public surface changed, the `examples/` still run (their smoke tests pass).
 - [ ] If a decision changed, `docs/adr/` and `CONTEXT.md` were updated in lockstep.
+- [ ] A human owner has read this change and can answer review questions about it.

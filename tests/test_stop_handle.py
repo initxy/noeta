@@ -9,7 +9,6 @@ not invoke the underlying :data:`Unsubscribe` more than once.
 from __future__ import annotations
 
 import threading
-from typing import Callable
 
 from noeta.core.observers import ChildLifecycleObserver
 from noeta.observers.audit import AuditObserver

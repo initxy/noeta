@@ -22,7 +22,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import pytest
 
 from tests._skill_fixtures import write_skill
 
@@ -34,6 +33,11 @@ from noeta.agent.spec import (
     ComponentRef,
 )
 from noeta.client.host import SdkHost
+from noeta.execution.builder import (
+    COMPACTION_OFF,
+    build_session_inputs,
+)
+from noeta.guards.budget import Budget
 from noeta.policies.control_tools import SKILL_TOOL, skill_tool_schema
 from noeta.protocols.messages import Usage
 from noeta.storage.memory import (
@@ -42,6 +46,7 @@ from noeta.storage.memory import (
     InMemoryEventLog,
 )
 from noeta.testing.fake_llm import FakeLLMProvider
+from noeta.tools.fs import FsWriteMode, ShellMode
 
 
 # ---------------------------------------------------------------------------
@@ -117,13 +122,6 @@ def test_skill_schema_deterministic_bytes_for_same_input() -> None:
 # ---------------------------------------------------------------------------
 # build_session_inputs integration — flag on/off, empty/non-empty registry
 # ---------------------------------------------------------------------------
-
-from noeta.execution.builder import (
-    COMPACTION_OFF,
-    build_session_inputs,
-)
-from noeta.guards.budget import Budget
-from noeta.tools.fs import FsWriteMode, ShellMode
 
 
 def _build_composer_schemas(

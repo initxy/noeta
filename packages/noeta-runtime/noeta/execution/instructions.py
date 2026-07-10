@@ -103,8 +103,13 @@ def _read_one(
             return None
     else:
         try:
+            # Any read fault (missing file, a directory in the file's place,
+            # permission denied, ...) is "no instructions" — the same
+            # forgiving state the sandbox branch above gives a container
+            # read fault, so a locked-down NOETA.md/AGENTS.md degrades
+            # gracefully instead of crashing session prep.
             raw = path.read_text(encoding="utf-8")
-        except (FileNotFoundError, IsADirectoryError):
+        except OSError:
             return None
     if not raw.strip():
         return None
