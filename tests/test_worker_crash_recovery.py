@@ -103,7 +103,13 @@ class _CaptureSink:
 
 
 def _task(status: str = "running", wake_on: Any = None) -> Any:
-    return SimpleNamespace(status=status, wake_on=wake_on, task_id="t1")
+    # ``parent_task_id`` is read by ``run_leased_task``'s subtask goal-seeding
+    # guard (worker.py); these doubles model root tasks, so ``None`` makes the
+    # guard short-circuit and the step runs normally (the pre-seeding path
+    # these crash-recovery tests were written for).
+    return SimpleNamespace(
+        status=status, wake_on=wake_on, task_id="t1", parent_task_id=None
+    )
 
 
 def test_abandon_after_grace_is_process_shutdown(
