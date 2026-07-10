@@ -24,10 +24,16 @@ from __future__ import annotations
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Callable, Mapping, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, Mapping, Optional, Tuple
 
 from noeta.client.sandbox_provider import SandboxProvider, SandboxSpec
 from noeta.observers.otlp import OtlpHttpPost, OtlpTraceConfig
+
+if TYPE_CHECKING:
+    # Only for annotations (``from __future__ import annotations`` keeps these
+    # out of the runtime import graph — ``noeta.client.sandbox`` imports this
+    # module, so a runtime import here would be circular).
+    from noeta.client.sandbox import BackendFactory, BrowserBackendFactory
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
 from noeta.protocols.event_log import EventLogFull
@@ -182,6 +188,16 @@ class HostConfig:
     #: never LLM-controlled and never recorded (D5); the callback must be total
     #: (return ``""`` on its own failure). Ignored when no sandbox is configured.
     sandbox_exec_preamble: Optional[Callable[[str, Sequence[str]], str]] = None
+    #: Optional per-session backend factories threaded into the
+    #: ``SandboxExecEnvManager``. ``None`` (default) ⇒ the SDK's hand-written
+    #: ``AioSandboxExecEnv`` / ``AioBrowserBackend``. A product injects these to
+    #: swap the sandbox wire without touching the seam — e.g. the official
+    #: ``agent-sandbox`` SDK adapters in ``noeta.agent.host``. The adapters keep
+    #: the same ``ExecEnv`` / ``BrowserBackend`` surface, so the tool schemas —
+    #: and the stable prefix — are unchanged. Ignored when no sandbox is
+    #: configured; a host runtime injection, never part of any agent identity.
+    sandbox_backend_factory: Optional["BackendFactory"] = None
+    sandbox_browser_factory: Optional["BrowserBackendFactory"] = None
 
     # -- host kill-switches ------------------------------------------------
     workflow_allowed: bool = False
