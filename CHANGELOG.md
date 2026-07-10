@@ -8,7 +8,34 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
-## [0.1.17] - 2026-07-09
+## [0.2.0] - 2026-07-09
+
+### Added
+
+- **Sandbox browser subsystem (opt-in).** With `NOETA_AGENT_SANDBOX=1`, the
+  agent gains a noeta-owned browser tool pack (`browser_navigate` / `click` /
+  `type` / `extract` / `screenshot`) driving the per-session container's
+  browser, plus a `web` delegation specialist that owns it. The tool
+  names/schemas are pinned by noeta (stable across AIO image changes), and
+  `main` stays browser-free — it delegates every page interaction to `web`, so
+  a browsing task's token churn is isolated in a child context that returns a
+  distilled result. Off by default: non-sandbox deployments keep a
+  byte-identical agent roster and stable prefix. The screenshot lands as a
+  workspace artifact (viewable in the file panel), not model vision, in this
+  increment.
+- **Live-preview panels.** When the sandbox is on, the web UI's right dock
+  gains three live tabs — **Browser** (noVNC), **Terminal** (container PTY),
+  and **Code** (code-server) — reverse-proxied (HTTP + a stdlib WebSocket
+  pump) to the session's container. They are served from a **dedicated preview
+  port** that holds no noeta state (origin isolation, since the iframes run
+  `allow-same-origin`); discover it via `GET /tasks/{id}/preview`. Pin the port
+  with `NOETA_AGENT_SANDBOX_PREVIEW_PORT` behind a firewall/tunnel. The
+  browser→noeta leg is unguessable-token-only (demo boundary); container
+  credentials ride only the noeta→container leg. See
+  [known limitations](docs/operations/limitations.md).
+- **Inline image artifacts in the transcript.** Image artifacts a tool
+  produces (e.g. `browser_screenshot`) now render inline beneath their tool
+  call in the web UI, opening in the existing lightbox.
 
 ### Fixed
 
@@ -387,7 +414,9 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.1.16...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/initxy/noeta/compare/v0.1.17...v0.2.0
+[0.1.17]: https://github.com/initxy/noeta/compare/v0.1.16...v0.1.17
 [0.1.16]: https://github.com/initxy/noeta/compare/v0.1.15...v0.1.16
 [0.1.15]: https://github.com/initxy/noeta/compare/v0.1.14...v0.1.15
 [0.1.14]: https://github.com/initxy/noeta/compare/v0.1.13...v0.1.14
