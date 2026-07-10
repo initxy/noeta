@@ -56,7 +56,7 @@ export NOETA_AGENT_MODEL := $(MODEL)
 endif
 
 .DEFAULT_GOAL := help
-.PHONY: help run serve web dev install
+.PHONY: help run serve web dev install check
 
 help:
 	@echo "noeta-agent — one-step build + start (still python -m noeta.agent underneath, pure env boundary)"
@@ -66,6 +66,7 @@ help:
 	@echo "  make web        build the frontend to dist/ only"
 	@echo "  make dev        hot reload: backend(8765) + vite dev(5173 auto proxy)"
 	@echo "  make install    first time: uv pip install -e apps/noeta-agent + frontend deps"
+	@echo "  make check      the local CI gate: pytest+coverage, mypy(protocols), naming/import lints"
 	@echo ""
 	@echo "  overridable variables: CONFIG= PORT= HOST= WORKSPACE= PROVIDER= MODEL="
 	@echo "  e.g.: make run CONFIG=examples/openai-compatible/config.json"
@@ -97,3 +98,15 @@ dev:
 install:
 	uv pip install -e apps/noeta-agent
 	cd $(WEB_DIR) && npm ci
+
+## the local CI gate — mirrors .github/workflows/ci.yml minus what needs CI infrastructure.
+## CI-only steps (expected to be absent locally): the Postgres storage contract tests
+## (skipped unless NOETA_TEST_POSTGRES_DSN points at a live server), the Playwright
+## web e2e smoke, and the fresh-venv install smoke.
+check:
+	uv run pytest --cov=noeta --cov-report=term --cov-fail-under=85
+	MYPYPATH=packages/noeta-runtime uv run mypy --strict \
+	  --namespace-packages --explicit-package-bases \
+	  packages/noeta-runtime/noeta/protocols
+	uv run python scripts/lint-naming.py
+	uv run lint-imports --config .importlinter

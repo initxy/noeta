@@ -2,7 +2,7 @@
 
 - Keep answers concise and direct; lead with the conclusion and the next step.
 - Don't add unrelated explanation; when unsure, state your assumptions and the risks.
-- Conversation with the maintainer may be in Chinese; everything committed to the repo (see Language) is English.
+- Conversation may happen in whatever language the other side uses; everything committed to the repo (see Language) is English.
 
 ## Language
 
@@ -13,17 +13,17 @@
 
 ## Workflow
 
-- When the idea isn't clear yet, start with `shape` to pin down the goal, scope, key decisions, and acceptance criteria.
-- Once the goal is clear, use `implement` to carry out the whole implementation; for large tasks with clean boundaries, split work across subagents while the main agent integrates and verifies.
-- When done, use `review` to check the work against the implementation spec, the code changes, and the verification results.
-- Use `improve-architecture` for architecture improvements, refactoring direction, and module design; use `handoff` when work needs to continue in a later session.
+- When the idea isn't clear yet, first converge on a short spec: the goal, scope, key decisions, and acceptance criteria.
+- Once the goal is clear, implement against that spec; for large tasks with clean boundaries, split work across subagents while the main agent integrates and verifies.
+- When done, review the result against the spec, the actual code changes, and the verification output (`make check`; see CONTRIBUTING.md).
+- For architecture improvements, refactoring direction, and module design, start from the existing decisions (see Context / ADR) and the engineering constraints below; when work must continue in a later session, leave a written handoff of current state, decisions made, and next steps.
 
 ## Context / ADR
 
 - Read `CONTEXT.md` first whenever you touch domain concepts, system boundaries, or stable conventions.
 - Read `docs/adr/` first whenever a long-term architecture trade-off is involved.
 - New stable terms go into `CONTEXT.md`; long-term decisions go into an ADR; one-off details are not persisted.
-- Write complex or cross-session `shape` implementation specs into `docs/implementation-specs/`.
+- Write complex or cross-session implementation specs into `docs/implementation-specs/`.
 
 ## Engineering constraints
 

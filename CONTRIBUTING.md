@@ -35,14 +35,37 @@ decision, update `docs/adr/` and the glossary [`CONTEXT.md`](CONTEXT.md) in
 lockstep. Term definitions are in [`CONTEXT.md`](CONTEXT.md); the decision
 format is in [`docs/adr/README.md`](docs/adr/README.md).
 
-## Run the tests + lints after changes
+## Verify with `make check`
+
+`make check` runs the same gate CI runs (see `.github/workflows/ci.yml`), minus
+the steps that need CI infrastructure:
 
 ```bash
 uv sync
-uv run pytest
-uv run lint-imports --config .importlinter
-uv run python scripts/lint-naming.py
+make check   # pytest with coverage (>= 85%), mypy --strict on protocols, naming + import lints
 ```
+
+Three CI steps are expected to be missing locally — don't chase them:
+
+- The **Postgres storage contract tests** run only when
+  `NOETA_TEST_POSTGRES_DSN` points at a live server (CI provides one); locally
+  they skip.
+- The **web e2e smoke** (Playwright) and the **fresh-venv install smoke** run
+  in CI.
 
 Each SDK example (see [`examples/`](examples/)) ships with a smoke test; keep the
 examples runnable when you change the SDK's public surface.
+
+## AI-assisted contributions
+
+Noeta is an AI-native project; contributions written with or by agents are
+first-class and welcome. Two requirements keep that workable:
+
+- **A human owner.** Every PR has a person who has read the change, understands
+  it, and can answer review questions about it. "The agent wrote it" is not an
+  answer.
+- **Verification evidence.** The PR shows its `make check` result and notes
+  anything that couldn't be verified and why (see the PR template).
+
+There is no disclosure requirement — how a change was produced matters less
+than whether someone can stand behind it.
