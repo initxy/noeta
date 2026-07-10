@@ -8,6 +8,32 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-07-10
+
+### Added
+
+- **Multi-tenant memory — per-task store resolution and scoped
+  consolidation.** A product backend serving many end users from one resident
+  `Client` can now give each tenant its own memory store (#53):
+  - **`HostConfig` reaches the memory roots.** `memory_dir` /
+    `global_memory_dir` are now forwarded through the public facade
+    (previously host-internal), and the new `memory_root_resolver`
+    (`task_id → Path | None`) resolves a store root per task. Recall, the
+    memory tool pack, the resident index, and `Client.memory_root(task_id)`
+    all follow one resolution chain, falling back to
+    `memory_dir > global_memory_dir > ~/.noeta/memories` on `None`. The
+    Engine cache partitions by resolved root, so two tenants never share a
+    cached engine's baked-in store.
+  - **Scoped consolidation.** `build_consolidation_digest` /
+    `run_consolidation` take `include_task` to digest only one tenant's root
+    sessions (the digest header states the scoping; the per-root debounce
+    marker makes tenants debounce independently), and
+    `run_consolidation(on_seeded=…)` hands the curation task id to the host
+    before any worker can claim it, so the run curates the same tenant store
+    it was scoped to.
+  - Defaults unchanged: without a resolver or filter, single-tenant hosts are
+    byte-identical. See the new how-to `docs/how-to/multi-tenant-memory.md`.
+
 ## [0.2.3] - 2026-07-10
 
 ### Added
@@ -497,7 +523,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/initxy/noeta/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/initxy/noeta/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/initxy/noeta/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/initxy/noeta/compare/v0.2.0...v0.2.1
