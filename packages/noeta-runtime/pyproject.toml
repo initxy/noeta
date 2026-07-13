@@ -1,6 +1,6 @@
 [project]
 name = "noeta-runtime"
-version = "0.2.5"
+version = "0.2.6"
 description = "Noeta runtime engine: the event-sourced kernel that hosts, records, and schedules agent execution server-side. Durable, multi-worker, crash-safe — the substrate underneath the SDK and the coding agent app."
 license = "Apache-2.0"
 authors = [{ name = "The Noeta Authors" }]
