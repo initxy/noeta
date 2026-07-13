@@ -8,6 +8,20 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-07-13
+
+### Fixed
+
+- **ChildLifecycleObserver no longer loses lineage after a process restart
+  (#57).** The observer rebuilt its `child_id → parent_id` mapping only from
+  live `TaskCreated` events, so a child created before a restart that reached
+  its terminal *after* the restart was a no-op: the parent stream never got
+  `SubtaskCompleted` and a parent suspended on `SubtaskCompleted` /
+  `SubtaskGroupCompleted` waited forever. The observer now replays the
+  persisted EventLog at construction to seed lineage for any not-yet-terminal,
+  non-background child; already-terminal children are skipped so they are not
+  double-notified.
+
 ## [0.2.4] - 2026-07-10
 
 ### Added
@@ -523,7 +537,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/initxy/noeta/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/initxy/noeta/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/initxy/noeta/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/initxy/noeta/compare/v0.2.1...v0.2.2
