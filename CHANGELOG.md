@@ -8,6 +8,22 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-07-13
+
+### Fixed
+
+- **Subtasks now inherit the parent's sandbox binding in `resolve_engine`
+  (#59).** Subtasks spawned via `spawn_subagent` carry no `TaskHostBound` of
+  their own, so their `governance.exec_env_ref` / `workspace` / `provider`
+  folded to `None`. The foreground drain path (`_build_drain_host`) already
+  inherited these from the root parent, but `resolve_engine` (the
+  resident-worker path where an idle worker's untargeted `tick()` claims a
+  child) read the child's own binding only — leaving the subtask on the local
+  host with no `browser_*` tools and container-isolated fs visibility.
+  `resolve_engine` now inherits the parent's bound values when the task is a
+  subtask and its own binding is `None`, so both code paths resolve the same
+  sandbox backend.
+
 ## [0.2.5] - 2026-07-13
 
 ### Fixed
