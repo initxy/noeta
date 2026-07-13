@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from noeta.protocols.events import TaskFailedPayload
 from noeta.protocols.messages import (
     LLMRequest,
     LLMResponse,
@@ -226,7 +227,30 @@ def test_resume_skips_suspended_task_without_wake_event(tmp_path) -> None:
     parent_task_id, original_wake_on = _seed_suspended_task_in_sqlite(db_path)
     assert original_wake_on is not None
 
-    _, _, seed_dispatcher = build_sqlite_stack(db_path)
+    seed_log, _, seed_dispatcher = build_sqlite_stack(db_path)
+    # Settle the stranded child (created in the seed, still ready) WITHOUT
+    # waking the parent. A child created before a restart that completes after
+    # the restart now correctly notifies its parent (issue #57 lineage replay),
+    # which would otherwise mask the lost-wake skip path this test targets.
+    # Mark the child terminal on BOTH the log (so the restarted observer's
+    # lineage replay treats it as already-notified) and the dispatcher (so it
+    # is not re-leased), on an observer-free stack so no SubtaskCompleted /
+    # wake is generated for the parent.
+    child_id = original_wake_on.subtask_id
+    child_lease = seed_dispatcher.lease(
+        worker_id="settle", lease_seconds=60.0, task_id=child_id
+    )
+    assert child_lease is not None
+    seed_dispatcher.fail(
+        child_lease.lease_id, retryable=False, reason="settled before resume"
+    )
+    seed_log.system_emit(
+        task_id=child_id,
+        type="TaskFailed",
+        payload=TaskFailedPayload(reason="settled before resume"),
+        actor="test",
+        origin="system",
+    )
     # Force the task back onto the ready queue WITHOUT going through
     # wake() — this is the at-most-once-loss shape (e.g. a previous
     # lease consumed the matched_wake_event, then the worker crashed
