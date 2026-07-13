@@ -476,6 +476,27 @@ class GenericEngineResolver:
         subtask_wrapper: Optional[Callable[[Policy], Policy]] = (
             None if is_subtask else self.policy_wrapper
         )
+        # Subtasks carry no TaskHostBound of their own — the fold leaves
+        # their governance.exec_env_ref / workspace / provider as None. A
+        # delegation tree runs in ONE container / fs root / provider (the
+        # root parent's binding), so a subtask must inherit the parent's
+        # bound values to resolve the SAME sandbox backend — otherwise the
+        # child gets the local host (no browser tools, container-isolated fs
+        # visibility). Mirrors _build_drain_host's inheritance for the
+        # foreground drain path; this branch covers the resident-worker path
+        # (resolve_engine) where an idle worker claims a child task.
+        if is_subtask:
+            parent_id = getattr(task, "parent_task_id", None)
+            if parent_id is not None:
+                parent = fold(
+                    self.event_log, self.content_store, str(parent_id)
+                )
+                if exec_env_ref is None:
+                    exec_env_ref = self._bound_exec_env_ref_for(parent)
+                if workspace is None:
+                    workspace = self._bound_workspace_for(parent)
+                if provider is None:
+                    provider = self._bound_provider_for(parent)
         if name == "unnamed" and self.unnamed_fallback is not None:
             return self._engine_for_agent(
                 self.unnamed_fallback,
