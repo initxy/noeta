@@ -9,6 +9,14 @@ Subscribes to an EventLog and:
   :meth:`EventLogWriter.system_emit` (cross-stream system write, no
   lease) and wake the parent via :meth:`Dispatcher.wake`.
 
+At construction time the observer replays the persisted EventLog (via
+:meth:`EventLogTaskIndex.list_task_streams` + :meth:`EventLogReader.read`)
+to seed its ``_lineage`` for any not-yet-terminal, non-background child —
+so a child created *before* a process restart that reaches its terminal
+*after* the restart still notifies its parent (issue #57). Already-terminal
+children are skipped: their ``SubtaskCompleted`` was already appended by
+the pre-restart observer.
+
 Delivery semantics are pinned by
 :class:`noeta.protocols.event_log.EventLogSubscriber`: callbacks run
 synchronously before the originating ``EventLog`` write returns, but
@@ -55,8 +63,9 @@ class _Dispatcher(Protocol):
 class ChildLifecycleObserver:
     """Wires parent ↔ child handoff without Engine touching Dispatcher.
 
-    Constructing the observer self-subscribes to ``event_log``; call
-    :meth:`stop` to unsubscribe (mainly useful in tests).
+    Constructing the observer self-subscribes to ``event_log`` and replays
+    the persisted log to rebuild its lineage (see :meth:`_replay_lineage`);
+    call :meth:`stop` to unsubscribe (mainly useful in tests).
     """
 
     def __init__(
@@ -84,9 +93,61 @@ class ChildLifecycleObserver:
         self._lock = threading.Lock()
         self._group_woken: set[str] = set()
         self._handle = subscribe_with_stop(event_log, self._on_event)
+        # Reconstruct ``_lineage`` from the persisted log so a child created
+        # before a process restart that reaches its terminal *after* the restart
+        # still notifies its parent (issue #57). The restarted-process observer
+        # starts with an empty ``_lineage`` (the live ``TaskCreated`` events
+        # predate the restart and are never re-emitted), so without this seed a
+        # post-restart terminal event is a no-op in ``_on_terminal`` and a parent
+        # suspended on ``SubtaskCompleted`` / ``SubtaskGroupCompleted`` waits
+        # forever. Seeded AFTER subscribing so any live terminal that fires
+        # during the replay is caught by ``_on_terminal``; only children not yet
+        # terminal are seeded — an already-terminal child's ``SubtaskCompleted``
+        # was already appended by the pre-restart observer, so re-seeding would
+        # both leak the lineage entry and risk a duplicate parent notification.
+        self._replay_lineage()
 
     def stop(self) -> None:
         self._handle.stop()
+
+    # -- lineage replay ----------------------------------------------------
+
+    # Terminal child states — a child whose stream already carries one of these
+    # was already notified by the (possibly pre-restart) observer, so it must
+    # NOT be re-seeded into ``_lineage``.
+    _TERMINAL_TYPES = ("TaskCompleted", "TaskFailed", "TaskCancelled")
+
+    def _replay_lineage(self) -> None:
+        """Seed ``_lineage`` from the persisted log for not-yet-terminal children.
+
+        Walks every task stream (the observer is constructed on a fresh
+        process after a restart, so it has no in-memory lineage) and records
+        ``child_id -> parent_id`` for any child whose ``TaskCreated`` carries a
+        ``parent_task_id`` and is not ``background`` — but ONLY if that child
+        has not already reached its terminal state. The whole scan runs under
+        ``_lock`` so a concurrent live ``TaskCreated`` / terminal event
+        (delivered through ``_on_event``, which also takes ``_lock``) serialises
+        cleanly: at worst the same key is written twice with the same value,
+        and a terminal event's ``pop`` is idempotent.
+        """
+        with self._lock:
+            for summary in self._log.list_task_streams():
+                parent_id: str | None = None
+                is_background = False
+                terminal = False
+                for env in self._log.read(summary.task_id):
+                    if env.type == "TaskCreated":
+                        parent_id = getattr(env.payload, "parent_task_id", None)
+                        is_background = bool(
+                            getattr(env.payload, "background", None)
+                        )
+                    elif env.type in self._TERMINAL_TYPES:
+                        terminal = True
+                if parent_id is None or is_background or terminal:
+                    continue
+                # ``setdefault`` so a live ``_on_task_created`` that raced the
+                # replay (and already wrote the same value) is not clobbered.
+                self._lineage.setdefault(summary.task_id, parent_id)
 
     # -- callback --------------------------------------------------------
 

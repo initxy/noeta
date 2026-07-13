@@ -1,6 +1,6 @@
 [project]
 name = "noeta-sdk"
-version = "0.2.4"
+version = "0.2.5"
 description = "Noeta SDK: build AI agents that run on the server. Import noeta.sdk, define your tools and policy — durable event-sourced execution, multi-worker scheduling, provider-neutral, no vendor lock-in."
 license = "Apache-2.0"
 authors = [{ name = "The Noeta Authors" }]
@@ -19,7 +19,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
-    "noeta-runtime>=0.2.4",
+    "noeta-runtime>=0.2.5",
 ]
 
 [project.urls]
