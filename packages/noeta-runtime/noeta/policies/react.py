@@ -108,6 +108,13 @@ __all__ = [
 #: ``from noeta.policies.react import SPAWN_SUBAGENT_TOOL`` call sites and the
 #: runner's ``spawn_subagent_tool_schema()`` keep working unchanged.
 
+#: ``ReActPolicy._last_input_tokens_at_call`` sentinel: a compaction collapsed
+#: the history, so no recorded input count describes it any more. Distinct from
+#: ``0`` ("no round-trip yet — fall back to the ctx baseline") because after a
+#: compaction the ctx baseline is stale too and must NOT be fallen back to.
+#: See :meth:`ReActPolicy._real_baseline`.
+_BASELINE_INVALIDATED = -1
+
 
 def _carries_tool_result(message: Message) -> bool:
     """True when ``message`` is a tool-result turn (a ``role="tool"`` message,
@@ -189,6 +196,24 @@ class ReActPolicy:
         # because decide() is called in the same order on resume, the
         # value reconstructs identically (no persisted state needed).
         self._last_estimate_at_call = 0
+        # The provider's REAL input count for the last main round-trip THIS
+        # instance made, or ``0`` before the first one. Pinned beside
+        # ``_last_estimate_at_call`` (same call site, same resume argument) and
+        # read by ``_trigger_estimate`` in preference to
+        # ``StepContext.last_input_tokens``.
+        #
+        # Why both: ``ctx.last_input_tokens`` is fold-projected, and fold only
+        # runs at a lease boundary — the ``LLMRequestFinished`` emitted mid
+        # tool-loop never reaches the in-memory task. So inside ONE
+        # ``Engine.run_one_step`` the ctx baseline is frozen at the entry value
+        # (``0`` on a first turn), which silently degrades the trigger to the
+        # pure chars/4 estimate for the whole turn, however long the tool loop
+        # runs. This field carries the same real count across that gap; ctx
+        # remains the cross-turn baseline for a FRESH instance (which starts
+        # here at ``0``). Most recent wins — never ``max``: after a compaction
+        # the real count DROPS, and a max would pin the trigger to a stale
+        # pre-compaction high and re-fire forever.
+        self._last_input_tokens_at_call = 0
         # ③ (D-3): compaction trigger configuration. When ``context_window``
         # is None compaction is OFF (legacy behaviour — no proactive trigger,
         # an overflow error stays a FailDecision). When set, the available
@@ -276,6 +301,14 @@ class ReActPolicy:
         # "appended since" delta is measured from THIS request's estimate.
         # Pin it AFTER the call so a proactive/early return never advances it.
         self._last_estimate_at_call = estimated
+        # …and pin the real count that came back with it, so the next step in
+        # THIS tool loop mixes against a live baseline instead of a frozen
+        # fold projection. Only the main round-trip counts: the summarize call
+        # inside ``_compaction_decision`` measures a different request and must
+        # not become the baseline. An error response carries an empty Usage
+        # (``input == 0``) and correctly leaves the baseline untouched.
+        if response.usage.input > 0:
+            self._last_input_tokens_at_call = response.usage.input
         # ③ (D-3b) passive trigger: the provider returned an overflow error
         # (②'s category). Compact before retrying instead of failing. The mix
         # baseline (``ctx.last_input_tokens``) is the LAST SUCCESSFUL turn's
@@ -334,10 +367,32 @@ class ReActPolicy:
         mix can only ever raise the trigger size, never mask a genuinely huge
         raw history that the real baseline happens to under-represent.
         """
-        if ctx.last_input_tokens <= 0:
+        baseline = self._real_baseline(ctx)
+        if baseline <= 0:
             return estimated
         delta = max(0, estimated - self._last_estimate_at_call)
-        return max(estimated, ctx.last_input_tokens + delta)
+        return max(estimated, baseline + delta)
+
+    def _real_baseline(self, ctx: StepContext) -> int:
+        """The most recent REAL input count available, or ``0`` if none is.
+
+        ``_last_input_tokens_at_call`` (this instance's own last main
+        round-trip) is strictly more recent than ``ctx.last_input_tokens``
+        (fold-projected at the lease boundary, then frozen for the whole turn),
+        so it wins whenever it is set. A fresh instance has none and falls back
+        to ctx — the cross-turn baseline. Both derive from an already-recorded
+        ``Usage``, so a resumed run re-derives the same number: we never count
+        tokens live.
+
+        ``_BASELINE_INVALIDATED`` (a compaction landed) suppresses BOTH: no
+        recorded count describes the collapsed history, so the caller falls
+        back to the pure estimate rather than trust a stale high.
+        """
+        if self._last_input_tokens_at_call == _BASELINE_INVALIDATED:
+            return 0
+        if self._last_input_tokens_at_call > 0:
+            return self._last_input_tokens_at_call
+        return ctx.last_input_tokens
 
     def _compaction_triggered(self, estimated: int) -> bool:
         window = self._available_window()
@@ -526,6 +581,16 @@ class ReActPolicy:
         summary = enforce_verbatim_constraints(
             summary, extract_safety_constraints(to_summarize)
         )
+        # This decision collapses the prefix, so every real input count we hold
+        # describes a history that is about to stop existing — including ctx's
+        # fold projection, which was taken before the compaction and is frozen
+        # for the rest of the turn. Keeping either would pin the trigger to a
+        # stale pre-compaction high: the next step would re-fire on a history
+        # that just shrank and then die on ``compaction_no_progress`` (its
+        # boundary can no longer advance). Invalidate both and let the pure
+        # estimate carry the trigger until the next round-trip records a count
+        # for the NEW history.
+        self._last_input_tokens_at_call = _BASELINE_INVALIDATED
         return CompactionRequestedDecision(
             reason=reason,
             estimated_tokens=estimated,
@@ -533,6 +598,49 @@ class ReActPolicy:
             boundary_count=boundary,
             composer_version=self._composer_version,
         )
+
+    def _tail_budget_in_estimate_units(self) -> int:
+        """``tail_token_budget`` converted into the unit ``_summary_boundary``
+        actually accumulates in.
+
+        The two knobs from ``derive_compaction_config`` are in DIFFERENT units,
+        which is the whole trap. ``context_window`` (and therefore
+        ``tail_token_budget = available // 3``) counts REAL provider tokens;
+        ``estimate_messages_tokens`` counts chars/4. They coincide only while
+        the heuristic is accurate. When the payload tokenises denser than
+        4 chars/token, they silently diverge — and comparing a chars/4
+        accumulator against a real-token budget then protects a tail far larger
+        than intended: at a measured 4x density the WHOLE history fits inside
+        the "tail", the boundary cannot advance, and a legitimately triggered
+        compaction dies on ``compaction_no_progress``.
+
+        Before the real-usage baseline reached the trigger this was invisible:
+        BOTH sides read chars/4 against real-token knobs, i.e. consistently
+        wrong, so they still agreed with each other (compaction just fired late
+        or never). Correcting only the trigger breaks that accidental symmetry,
+        so the tail must be converted with the same observed density.
+
+        ``_observed_density`` is ``1.0`` until a round-trip has been recorded,
+        which reproduces the pre-existing arithmetic exactly — an unobserved
+        session keeps today's byte-equal behaviour.
+        """
+        return int(self._tail_token_budget / self._observed_density())
+
+    def _observed_density(self) -> float:
+        """REAL provider tokens per chars/4 estimated token, as measured on
+        this instance's last main round-trip (``1.0`` before there is one).
+
+        Both operands are already-recorded numbers pinned at the same call
+        site, so a resumed run re-derives the same ratio — we never measure
+        live. ``_BASELINE_INVALIDATED`` (post-compaction) also yields ``1.0``:
+        with no count describing the collapsed history, the honest fallback is
+        to trust the estimate as written.
+        """
+        if self._last_estimate_at_call <= 0:
+            return 1.0
+        if self._last_input_tokens_at_call <= 0:
+            return 1.0
+        return self._last_input_tokens_at_call / self._last_estimate_at_call
 
     def _summary_boundary(self, history: list[Message]) -> int:
         """How many leading RAW-history messages to collapse — everything older
@@ -559,13 +667,14 @@ class ReActPolicy:
         keeps the boundary monotonic, so the anti-spiral progress guarantee
         (``boundary > view.summary_boundary``) is preserved.
         """
-        if self._tail_token_budget <= 0:
+        budget = self._tail_budget_in_estimate_units()
+        if budget <= 0:
             return 0
         acc = 0
         cutoff = len(history)
         for i in range(len(history) - 1, -1, -1):
             acc += estimate_messages_tokens([history[i]])
-            if acc > self._tail_token_budget:
+            if acc > budget:
                 cutoff = i + 1
                 break
             cutoff = i
