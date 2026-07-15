@@ -8,6 +8,36 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Context compaction now actually counts real tokens, so a long single turn
+  compacts instead of silently overflowing.** `context-compaction.md` decided
+  that the trigger mixes the provider's recorded real usage with a chars/4
+  estimate of the increment, explicitly rejecting pure chars/4. The real
+  baseline reached the policy only through `StepContext.last_input_tokens`,
+  which `Engine` rebuilds from `task.runtime.last_input_tokens` — a field only
+  `fold` writes, and the mid-loop `LLMRequestFinished` is never applied to the
+  in-memory task. So within one `Engine.run_one_step` the baseline stayed
+  frozen at `0` and the trigger degraded to the rejected pure estimate for the
+  whole turn. On a measured production session — 40 round-trips in one turn —
+  real input climbed to 215,836 against a 200,000 window while the trigger read
+  54,426, and nothing ever compacted. `ReActPolicy` now pins the real count off
+  the response it just received, and invalidates it when a compaction collapses
+  the history (a stale pre-compaction high would re-fire on a just-shrunk
+  history and die on `compaction_no_progress`).
+- **The protected tail is converted into the unit it is compared in.**
+  `tail_token_budget` counts real provider tokens; `_summary_boundary`
+  accumulates chars/4. The two only coincide while the heuristic is accurate —
+  a CJK + JSON + base64-signature payload measured ~1.2 chars/token against the
+  assumed 4. While the baseline was dead both sides were consistently wrong and
+  still agreed; correcting the trigger alone breaks that symmetry and turns a
+  working session into `TaskFailed(compaction_no_progress)`, because the whole
+  history fits inside a tail budget four times larger than intended. The budget
+  is now converted with the density observed on the last recorded round-trip
+  (`1.0`, i.e. today's exact arithmetic, until one exists). No
+  `composer_version` bump: this changes the tail size, not the composed
+  structure.
+
 ## [0.2.6] - 2026-07-13
 
 ### Fixed
