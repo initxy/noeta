@@ -567,7 +567,7 @@ wheels = [
 
 [[package]]
 name = "noeta-agent"
-version = "0.2.6"
+version = "0.2.7"
 source = { editable = "apps/noeta-agent" }
 dependencies = [
     { name = "agent-sandbox" },
@@ -584,7 +584,7 @@ requires-dist = [
 
 [[package]]
 name = "noeta-runtime"
-version = "0.2.6"
+version = "0.2.7"
 source = { editable = "packages/noeta-runtime" }
 dependencies = [
     { name = "httpx" },
@@ -599,7 +599,7 @@ requires-dist = [
 
 [[package]]
 name = "noeta-sdk"
-version = "0.2.6"
+version = "0.2.7"
 source = { editable = "packages/noeta-sdk" }
 dependencies = [
     { name = "noeta-runtime" },
