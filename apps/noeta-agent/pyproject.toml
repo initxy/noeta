@@ -1,6 +1,6 @@
 [project]
 name = "noeta-agent"
-version = "0.2.7"
+version = "0.2.8"
 description = "Noeta coding agent: server-side AI coding agent with a web UI. Durable event-sourced execution, multi-worker scheduling, per-session sandbox containers, provider-neutral. Run with python -m noeta.agent."
 license = "Apache-2.0"
 authors = [{ name = "The Noeta Authors" }]
@@ -19,8 +19,8 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
 dependencies = [
-    "noeta-runtime>=0.2.7",
-    "noeta-sdk>=0.2.7",
+    "noeta-runtime>=0.2.8",
+    "noeta-sdk>=0.2.8",
     # Official AIO Sandbox data-plane client (Fern-generated HTTP client). Backs
     # the SDK sandbox adapters (fs / shell / browser) in noeta.agent.host. Capped
     # below 0.1.0: still 0.0.x (pre-1.0, unstable wire). See
