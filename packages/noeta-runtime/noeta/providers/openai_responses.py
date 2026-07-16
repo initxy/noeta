@@ -661,7 +661,8 @@ def _translate_stream_error(error: dict[str, Any]) -> Exception:
     object's ``error``. Mirrors ``_translate_http_error``'s classification,
     keyed off the error code/message instead of an HTTP status (mid-stream
     there is none): rate limits and server-side failures → Transient;
-    context overflow keeps its dedicated bucket; everything else → Fatal.
+    context overflow keeps its dedicated bucket; an error frame carrying no
+    code is a truncated stream → Transient; a genuine coded rejection → Fatal.
     """
     code = str(error.get("code") or "")
     message = str(error.get("message") or "")
@@ -669,6 +670,15 @@ def _translate_stream_error(error: dict[str, Any]) -> Exception:
     if _error_indicates_context_overflow(error):
         return ContextOverflowError(detail)
     if code in _TRANSIENT_STREAM_ERROR_CODES:
+        return TransientError(detail)
+    if not code:
+        # A mid-stream error frame carrying no code is not a classifiable
+        # semantic rejection — in practice it is a truncated / dropped stream:
+        # the gateway emits an empty ``error`` event under load (observed
+        # alongside 429s), which is the same retryable failure the loop already
+        # reissues for a mid-stream disconnect or a stream that ends without a
+        # terminal event. Only a genuine coded rejection is Fatal — treating a
+        # codeless frame as Fatal kills the task on a transient hiccup.
         return TransientError(detail)
     return FatalError(detail)
 

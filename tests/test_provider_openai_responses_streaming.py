@@ -528,6 +528,37 @@ def test_response_failed_with_error_payload_maps_to_fatal() -> None:
 
 
 @respx.mock
+def test_top_level_error_event_without_code_maps_to_transient() -> None:
+    """An error frame with no code (and no message) is not a classifiable
+    rejection — it is a truncated stream the gateway emits under load, so it
+    retries rather than killing the task the way a coded Fatal would."""
+    respx.post(ENDPOINT).mock(
+        return_value=_stream_response(
+            [
+                _text_delta("par"),
+                ("error", {"type": "error", "code": "", "message": ""}),
+            ]
+        )
+    )
+    with pytest.raises(TransientError):
+        _make_provider().complete_streaming(_basic_request(), _DeltaRecorder())
+
+
+@respx.mock
+def test_response_failed_without_code_maps_to_transient() -> None:
+    """Same codeless-frame → transient rule via the response.failed path."""
+    failed = _final_payload(output=[], status="failed")
+    failed["error"] = {"message": "something went wrong"}
+    respx.post(ENDPOINT).mock(
+        return_value=_stream_response(
+            [("response.failed", {"type": "response.failed", "response": failed})]
+        )
+    )
+    with pytest.raises(TransientError):
+        _make_provider().complete_streaming(_basic_request(), _DeltaRecorder())
+
+
+@respx.mock
 def test_response_incomplete_max_output_tokens_maps_to_max_tokens() -> None:
     """The terminal response.incomplete object still goes through
     _parse_response, so the batch stop_reason inference applies unchanged."""
