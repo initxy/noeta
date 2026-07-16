@@ -8,6 +8,8 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.2.10] - 2026-07-16
+
 ### Fixed
 
 - **A resident worker could steal a task out of a resume's wake window and
@@ -668,7 +670,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.2.9...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.2.10...HEAD
+[0.2.10]: https://github.com/initxy/noeta/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/initxy/noeta/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/initxy/noeta/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/initxy/noeta/compare/v0.2.6...v0.2.7
