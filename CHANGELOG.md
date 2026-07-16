@@ -8,6 +8,24 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-07-16
+
+### Fixed
+
+- **A codeless mid-stream error from the Responses gateway killed the task
+  instead of retrying.** The gateway occasionally emits an in-stream `error` /
+  `response.failed` frame carrying neither a `code` nor a `message` (surfacing
+  as `Responses stream error: code=unknown;`, seen under load alongside 429s).
+  `_translate_stream_error` (OpenAI Responses provider) bucketed every code
+  outside the transient allowlist — including an *absent* one — as `FatalError`,
+  so `RuntimeLLMClient` skipped its retry budget and the task failed at once with
+  a non-retryable `llm_error`; long-running tasks died on a single transient
+  gateway hiccup. A codeless error frame is not a classifiable semantic
+  rejection — in practice it is a truncated / dropped stream, the same retryable
+  failure the loop already reissues for a mid-stream disconnect or a stream that
+  ends without a terminal event. An empty code now maps to `TransientError`;
+  only a genuine coded rejection (e.g. `invalid_prompt`) stays `FatalError`.
+
 ## [0.2.10] - 2026-07-16
 
 ### Fixed
@@ -670,7 +688,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.2.10...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.2.11...HEAD
+[0.2.11]: https://github.com/initxy/noeta/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/initxy/noeta/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/initxy/noeta/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/initxy/noeta/compare/v0.2.7...v0.2.8
