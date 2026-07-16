@@ -99,16 +99,21 @@ class Dispatcher(Protocol):
         ``reserved=True`` marks the task as **targeted-lease-only**: an
         untargeted ``lease(task_id=None)`` FIFO poll SKIPS it, so only the
         driver that owns it (a targeted ``lease(task_id=<id>)``) can claim it.
-        This exists for a freshly-created subtask child — enqueued so its
-        delegation drain / background executor can targeted-lease it, but which
-        a resident-worker pool must NOT steal before it has been seeded (only
-        ``subtask_drain._descend_to_child`` seeds a child's goal; a bare
-        ``run_leased_task`` step would drive it with an empty message history).
+        This exists for a task that is enqueued before it has been seeded, so
+        the driver that will seed it can targeted-lease it while a
+        resident-worker pool must NOT steal it first — a bare
+        ``run_leased_task`` step does not seed, and would drive the task with an
+        empty message history that the provider rejects. Two paths reserve: a
+        freshly-created subtask child (only ``subtask_drain._descend_to_child``
+        seeds a child's goal) and a freshly-created root task (only
+        ``InteractionDriver.seed_start``'s tail writes ``ModelBound`` + the
+        opening goal message).
         The flag is a ONE-SHOT claim guard: the first successful ``lease``
-        CLEARS it, so once the child has been seeded and later re-enters the
-        ready queue (a suspend/approval resume ``release_yield``'d to the pool)
-        it is an ordinary untargeted-leaseable task. ``reserved=False`` (the
-        default) is byte-identical to the historical enqueue.
+        CLEARS it, so once the task has been seeded and later re-enters the
+        ready queue (a seed ``release_yield``'d to the pool, or a
+        suspend/approval resume) it is an ordinary untargeted-leaseable task.
+        ``reserved=False`` (the default) is byte-identical to the historical
+        enqueue.
         """
         ...
 

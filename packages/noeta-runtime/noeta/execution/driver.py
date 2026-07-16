@@ -684,7 +684,18 @@ class InteractionDriver:
         note_mcp = getattr(host, "note_turn_mcp", None)
         if note_mcp is not None:
             note_mcp(task.task_id, enabled_mcp)
-        host.dispatcher.enqueue(task.task_id)
+        # ``reserved=True`` keeps this task targeted-lease-only until the lease
+        # below claims it (one-shot; the claim clears the guard). The seed is
+        # only durable once ``note_model_bound`` + the goal message land BELOW,
+        # so between the enqueue and that point the task is ready but unseeded:
+        # a resident-worker pool's untargeted ``lease(task_id=None)`` poll would
+        # otherwise steal it and drive it with an empty message history, which
+        # the provider rejects. Same hazard the background subtask child guards
+        # against (``BackgroundSubagentRegistry._submit``); the root task reaches
+        # it through this seed path. Once seeded, ``_yield_seeded_lease``'s
+        # ``release_yield`` returns it to the pool as an ordinary
+        # untargeted-leaseable task.
+        host.dispatcher.enqueue(task.task_id, reserved=True)
         lease = host.dispatcher.lease(
             worker_id=self._worker_id,
             lease_seconds=self._lease_seconds,
