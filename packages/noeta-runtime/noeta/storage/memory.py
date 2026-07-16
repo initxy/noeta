@@ -799,7 +799,7 @@ class InMemoryDispatcher:
             task.status = "ready"
             self._ready.append(task.task_id)
 
-    def wake(self, task_id: str, wake_event: Any) -> bool:
+    def wake(self, task_id: str, wake_event: Any, *, reserved: bool = False) -> bool:
         """Deliver a wake event. Returns True iff the task is requeued
         (either because it was suspended and the event matched, or
         because the event matches a wake_on that was set even before
@@ -811,6 +811,14 @@ class InMemoryDispatcher:
         cleared only by a consuming
         ``release(consumed_wake_event=…)`` — a crash before that re-delivers
         it via ``requeue_stale``.
+
+        ``reserved=True`` marks the requeued task targeted-lease-only (the
+        one-shot guard :meth:`enqueue` documents): an untargeted poll skips it
+        until the owning driver's targeted lease claims it and clears the flag.
+        Set by a seed-after-wake resume so a resident worker cannot lease the
+        woken-but-not-yet-seeded task. Only the matched→ready branch carries it;
+        a buffered wake never becomes leaseable. ``reserved=False`` (the default)
+        is byte-identical to the historical wake.
         """
         with self._lock:
             if task_id not in self._tasks:
@@ -821,6 +829,7 @@ class InMemoryDispatcher:
                 task.status = "ready"
                 task.wake_on = None
                 task.suspend_reason = None
+                task.reserved = reserved
                 self._ready.append(task_id)
                 return True
             task.pending_wake_events.append(wake_event)

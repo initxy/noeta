@@ -1973,7 +1973,16 @@ class InteractionDriver:
             condition = HumanResponseReceived(handle=handle)
         else:
             expected = repr(condition)
-        host.dispatcher.wake(task_id, condition)
+        # ``reserved=True``: this wake requeues the task to ``ready``, but the
+        # command's own message is only durable once the seed tail below (after
+        # our targeted lease) appends it. Between the wake and that lease the
+        # task is ready-but-unseeded; a resident-worker pool's untargeted poll
+        # would otherwise lease it and re-drive the turn WITHOUT the command's
+        # input (dropping the user's message), and our targeted lease would then
+        # find nothing and raise NotResumableError. The guard is one-shot — the
+        # targeted lease immediately below clears it — so nothing but this seed
+        # can claim the woken task.
+        host.dispatcher.wake(task_id, condition, reserved=True)
         lease = host.dispatcher.lease(
             worker_id=self._worker_id,
             lease_seconds=self._lease_seconds,
@@ -1987,7 +1996,7 @@ class InteractionDriver:
             # must not depend on which acquisition path produced the lease.
             task = fold(host.event_log, host.content_store, task_id)
             if self._restore_dispatcher_to_baseline(task_id, task):
-                host.dispatcher.wake(task_id, condition)
+                host.dispatcher.wake(task_id, condition, reserved=True)
                 lease = host.dispatcher.lease(
                     worker_id=self._worker_id,
                     lease_seconds=self._lease_seconds,
