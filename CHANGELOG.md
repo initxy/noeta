@@ -8,6 +8,26 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A resident worker could steal a root task out of its own seed window and
+  drive it with no user message, failing the turn on a provider 400.**
+  `InteractionDriver.seed_start` enqueues the new task, targeted-leases it, and
+  only then writes `ModelBound` + the opening goal message — so between the
+  enqueue and the claim the task sits `ready` but unseeded. Under the served
+  product's resident `WorkerLoop` pool an untargeted `lease(task_id=None)` poll
+  could land in that window (~5ms), steal the task, and drive it with an empty
+  message history; the seed's own targeted lease then found nothing and raised
+  `dispatcher gave no lease for freshly enqueued task`. Observed once in ~150
+  production tasks: the stolen task's stream jumps `TaskHostBound` →
+  `TaskStarted`, with no `ModelBound` / `MessagesAppended`, and the request goes
+  out with `messages: []`. 0.1.16 fixed exactly this hazard for subtask children
+  by adding `Dispatcher.enqueue(reserved=True)`, but scoped the guard to
+  `BackgroundSubagentRegistry._submit`; the root seed path has the same shape and
+  was left unguarded. `seed_start` now reserves too. The guard stays one-shot —
+  the seed's claim clears it, so `_yield_seeded_lease` hands the seeded task back
+  to the pool unchanged.
+
 ## [0.2.8] - 2026-07-15
 
 ### Fixed
