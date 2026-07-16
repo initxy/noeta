@@ -755,7 +755,7 @@ class PostgresDispatcher:
                 self._conn.execute("ROLLBACK")
                 raise
 
-    def wake(self, task_id: str, wake_event: Any) -> bool:
+    def wake(self, task_id: str, wake_event: Any, *, reserved: bool = False) -> bool:
         with self._lock:
             self._begin_locked()
             try:
@@ -792,9 +792,14 @@ class PostgresDispatcher:
                             " suspend_reason = NULL,"
                             " matched_wake_event_canonical = %s,"
                             " fire_at = NULL,"
-                            " ready_order = %s "
+                            " ready_order = %s,"
+                            # Targeted-lease-only guard for a seed-after-wake
+                            # resume (one-shot; the owning driver's targeted
+                            # lease clears it). ``reserved=False`` writes the
+                            # historical ``false``.
+                            " reserved = %s "
                             "WHERE task_id = %s",
-                            (matched_blob, order, task_id),
+                            (matched_blob, order, reserved, task_id),
                         )
                         self._conn.execute("COMMIT")
                         return True

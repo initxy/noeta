@@ -235,13 +235,25 @@ class Dispatcher(Protocol):
         """
         ...
 
-    def wake(self, task_id: str, wake_event: Any) -> bool:
+    def wake(self, task_id: str, wake_event: Any, *, reserved: bool = False) -> bool:
         """Deliver a wake event to a suspended Task.
 
         Returns True iff the Task was requeued (either because the
         event matched a live ``wake_on``, or because the event was
         buffered against a not-yet-suspended Task and matches on
         eventual suspend).
+
+        ``reserved=True`` marks the requeued Task **targeted-lease-only**
+        (same one-shot guard as :meth:`enqueue`), so an untargeted
+        ``lease(task_id=None)`` FIFO poll SKIPS it until the driver that
+        owns this wake claims it with a targeted lease. A resume that seeds
+        durable state AFTER the wake (``InteractionDriver._seed_wake_common``
+        appends the command's message only after its own targeted lease) sets
+        this so a resident-worker pool cannot lease the woken-but-not-yet-seeded
+        Task and re-drive it WITHOUT the command's input. Only the matched→ready
+        transition carries the flag; a buffered wake (no requeue) never becomes
+        leaseable, so there is nothing to reserve. ``reserved=False`` (the
+        default) is byte-identical to the historical wake.
         """
         ...
 
