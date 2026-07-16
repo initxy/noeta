@@ -628,6 +628,18 @@ def _on_compacted(
     # no-op below.
     task.context.summary_ref = env.payload.summary_ref
     task.context.summary_boundary = env.payload.boundary_count
+    # A compaction INVALIDATES the real-usage baseline: every recorded input
+    # count in hand describes a history that no longer exists. Anything reading
+    # it now over-reads the collapsed history — the trigger would re-fire on a
+    # just-shrunk prefix whose boundary cannot advance (``compaction_no_progress``),
+    # and the Composer's prune would derive an absurd density and over-clear.
+    # ``0`` is the same "no baseline yet" value a fresh task carries, so every
+    # consumer's existing first-turn fallback (pure estimate / density 1.0)
+    # covers this case with no new branch. Belongs in fold rather than in a
+    # Policy-local sentinel: it is a property of the history, so every reader
+    # must see it, and a resumed run must re-derive it — ADR context-compaction
+    # "Decision, part 2" states the rule; this is the layer that owns the field.
+    task.runtime.last_input_tokens = 0
     # ⑥ thrashing detection (D6.1/D6.2): measure the turn-gap between this
     # ``Compacted`` and the previous one and latch a flag when several land
     # back-to-back. The gap is measured in ``GovernanceState.iterations`` — the

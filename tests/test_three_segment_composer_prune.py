@@ -309,3 +309,70 @@ def test_relief_valve_prunes_once_history_exceeds_window() -> None:
     assert by_call["c3"].output == "c" * 400  # newest verbatim
     assert by_call["c1"].output == "[tool output cleared]"
     assert by_call["c2"].output == "[tool output cleared]"
+
+
+def test_relief_valve_opens_on_real_tokens_not_chars_over_four() -> None:
+    """The gate compares against ``available_window``, which counts REAL
+    provider tokens — so a payload that tokenises denser than the chars/4
+    heuristic assumes must still open the valve.
+
+    Measured in production: CJK + JSON + base64 thinking signatures run ~1.2
+    chars/token against the assumed 4. The estimate read ~42k while the real
+    request sat at ~182k against a ~182k window, so this gate stayed shut for an
+    entire session (0 of 99 composes cleared anything) and the only relief left
+    was a full summarize — which then re-read a file it had already fetched.
+    ``last_input_tokens`` is the provider's own count for the previous
+    round-trip; the gate takes the max of the two so a dense payload cannot hide
+    behind the heuristic.
+    """
+    store = InMemoryContentStore()
+    msgs = (
+        _tool_turn("c1", "a" * 400)
+        + _tool_turn("c2", "b" * 400)
+        + _tool_turn("c3", "c" * 400)
+    )
+    estimate = estimate_messages_tokens(msgs)
+    window = estimate + 1000  # chars/4 says: plenty of headroom, stay shut
+
+    task = _task(msgs)
+    # …but the provider billed the previous round-trip AT the window.
+    task.runtime.last_input_tokens = window + 1
+
+    view = _composer(
+        store, tail_token_budget=120, available_window=window
+    ).compose(task)
+    dynamic = view.segments[2].content
+    by_call = {
+        b.call_id: b
+        for m in dynamic
+        for b in m.content
+        if isinstance(b, ToolResultBlock)
+    }
+    assert by_call["c3"].output == "c" * 400  # newest always verbatim
+    assert by_call["c1"].output == "[tool output cleared]"
+    assert by_call["c2"].output == "[tool output cleared]"
+
+
+def test_no_baseline_reproduces_pure_estimate_behaviour() -> None:
+    """``last_input_tokens == 0`` (first turn, or a compaction just zeroed it)
+    → the gate falls back to exactly the pre-existing chars/4 arithmetic.
+
+    This is what keeps the change byte-equal for an unobserved session, and it
+    is the same fallback the Policy's density takes.
+    """
+    store = InMemoryContentStore()
+    msgs = (
+        _tool_turn("c1", "a" * 400)
+        + _tool_turn("c2", "b" * 400)
+        + _tool_turn("c3", "c" * 400)
+    )
+    window = estimate_messages_tokens(msgs) + 1000
+    task = _task(msgs)
+    assert task.runtime.last_input_tokens == 0
+
+    view = _composer(
+        store, tail_token_budget=120, available_window=window
+    ).compose(task)
+    plan = from_canonical_bytes(store.get(view.plan_ref))
+    assert isinstance(plan, ContextPlan)
+    assert plan.cleared_outputs == []  # valve stays shut, as it did before
