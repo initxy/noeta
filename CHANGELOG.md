@@ -8,6 +8,8 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-07-15
+
 ### Fixed
 
 - **Micro-compaction (`_prune_tail`) was dead on any payload denser than the
@@ -620,7 +622,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.2.7...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.2.8...HEAD
+[0.2.8]: https://github.com/initxy/noeta/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/initxy/noeta/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/initxy/noeta/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/initxy/noeta/compare/v0.2.4...v0.2.5
