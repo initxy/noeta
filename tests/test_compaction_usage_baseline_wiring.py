@@ -37,9 +37,15 @@ from typing import Any
 
 from noeta.context.composer import _COMPOSER_VERSION, ThreeSegmentComposer
 from noeta.core.engine import Engine
+from noeta.core.fold import fold
 from noeta.core.hooks import HookManager
 from noeta.core.wiring import wire_default_observers
 from noeta.policies.react import ReActPolicy
+from noeta.protocols.events import (
+    CompactedPayload,
+    LLMRequestFinishedPayload,
+    TaskCreatedPayload,
+)
 from noeta.protocols.messages import (
     LLMRequest,
     LLMResponse,
@@ -266,3 +272,111 @@ def test_recorded_usage_is_durable_in_the_event_log() -> None:
     finished = [e for e in log.read(task_id) if e.type == "LLMRequestFinished"]
     assert finished, [e.type for e in log.read(task_id)]
     assert any(e.payload.usage.input > 0 for e in finished)
+
+
+def test_llm_emits_reach_the_in_memory_task_mid_loop() -> None:
+    """The wire itself: an ``LLMRequestFinished`` emitted INSIDE the tool loop
+    must land on the in-memory task, not just in the EventLog.
+
+    ``fold(events) → state == runtime state`` is the equation ADR
+    single-writer-invariant rests on, and mid-loop it did not hold: the client
+    appends straight to the log and the Engine folds only its OWN emits, so
+    ``RuntimeState.last_input_tokens`` sat at the entry value for the whole
+    turn. Asserted on the task object rather than through a downstream
+    consumer, so a future reader of the baseline inherits the guarantee instead
+    of re-discovering the gap.
+    """
+    dispatcher = InMemoryDispatcher()
+    event_log = InMemoryEventLog(lease_validator=dispatcher)
+    content_store = InMemoryContentStore()
+    wire_default_observers(event_log, dispatcher)
+    provider = _DenseTokenizingProvider(turns=3)
+    engine = Engine(
+        event_log=event_log,
+        content_store=content_store,
+        composer=ThreeSegmentComposer(
+            system_prompt=_SYSTEM_PROMPT,
+            tools=_tools(),
+            content_store=content_store,
+            tail_token_budget=_TAIL,
+        ),
+        policy=ReActPolicy(
+            llm=RuntimeLLMClient(
+                provider=provider,
+                event_log=event_log,
+                content_store=content_store,
+            ),
+            tools=_tools(),
+            system_prompt=_SYSTEM_PROMPT,
+            model="gpt-4o",
+            max_steps=30,
+        ),
+        tools=_tools(),
+        tool_runtime=ToolRuntime(
+            event_log=event_log, content_store=content_store
+        ),
+        hooks=HookManager(),
+    )
+    task = engine.create_task(goal="wire", policy_name="react")
+    dispatcher.enqueue(task.task_id)
+    lease = dispatcher.lease(worker_id="rec")
+    assert lease is not None
+    engine.append_user_message(
+        task, content=[TextBlock(text="go")], lease_id=lease.lease_id
+    )
+    # No compaction knobs on this Policy, so nothing zeroes the baseline —
+    # whatever the last round-trip reported must simply be on the task.
+    engine.run_one_step(task, lease_id=lease.lease_id)
+
+    finished = [
+        e for e in event_log.read(task.task_id)
+        if e.type == "LLMRequestFinished"
+    ]
+    assert len(finished) > 1, "need a real tool loop for this to mean anything"
+    assert task.runtime.last_input_tokens == finished[-1].payload.usage.input
+    assert task.runtime.last_input_tokens > 0
+
+
+def test_compaction_zeroes_the_baseline_in_fold() -> None:
+    """A compaction invalidates the baseline, and fold is what enforces it.
+
+    Every recorded input count describes the pre-collapse history; left in place
+    it over-reads a history that no longer exists — the trigger re-fires on a
+    just-shrunk prefix whose boundary cannot advance, and the Composer's prune
+    derives an absurd density and over-clears. ADR context-compaction "Decision,
+    part 2" states the rule; this pins it to fold (the field's owner) so a
+    resume re-derives it and EVERY reader inherits it, rather than to any one
+    consumer's private sentinel.
+    """
+    log = InMemoryEventLog()
+    cs = InMemoryContentStore()
+    log.emit(
+        task_id="t1",
+        type="TaskCreated",
+        payload=TaskCreatedPayload(goal="g", policy_name="react"),
+    )
+    log.emit(
+        task_id="t1",
+        type="LLMRequestFinished",
+        payload=LLMRequestFinishedPayload(
+            call_id="c1",
+            success=True,
+            cost_usd=0.0,
+            latency_ms=1,
+            usage=Usage(uncached=181_870, output=10),
+        ),
+    )
+    assert fold(log, cs, "t1").runtime.last_input_tokens == 181_870
+
+    log.emit(
+        task_id="t1",
+        type="Compacted",
+        payload=CompactedPayload(
+            summary_ref=cs.put(b'"summary"', media_type="application/json"),
+            boundary_count=5,
+            replaced_count=5,
+            composer_version=_COMPOSER_VERSION,
+        ),
+    )
+    # The count above describes a history the compaction just collapsed.
+    assert fold(log, cs, "t1").runtime.last_input_tokens == 0
