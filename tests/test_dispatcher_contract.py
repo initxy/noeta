@@ -152,6 +152,55 @@ def test_reserved_flag_is_cleared_by_first_lease(make_dispatcher) -> None:
     assert disp.lease(worker_id="w1").task_id == "child"
 
 
+def test_reserved_wake_is_skipped_by_untargeted_lease(make_dispatcher) -> None:
+    """A ``wake(reserved=True)`` requeues the task targeted-lease-only: an
+    untargeted FIFO poll never returns it, but its owning driver's targeted
+    lease does. This keeps a resident-worker pool from stealing a woken task
+    out of a seed-after-wake resume before the command's message is durable."""
+    disp = make_dispatcher()
+    disp.enqueue("t1")
+    lease = disp.lease(worker_id="w")
+    wake_on = HumanResponseReceived(handle="h1")
+    disp.release(lease.lease_id, next_state="suspended", wake_on=wake_on)
+    # A plain ready task the untargeted poll SHOULD return, to prove the skip
+    # below is the reservation and not an empty queue.
+    disp.enqueue("plain")
+    assert disp.wake("t1", HumanResponseReceived(handle="h1"), reserved=True) is True
+    # Untargeted poll walks past the reserved woken task to the plain one.
+    assert disp.lease(worker_id="w1").task_id == "plain"
+    assert disp.lease(worker_id="w1") is None
+    # The owning driver's targeted lease still claims it, carrying the wake.
+    claimed = disp.lease(worker_id="owner", task_id="t1")
+    assert claimed is not None and claimed.task_id == "t1"
+    assert claimed.wake_event == HumanResponseReceived(handle="h1")
+
+
+def test_reserved_wake_flag_is_cleared_by_first_lease(make_dispatcher) -> None:
+    """The ``reserved`` a wake sets is the same ONE-SHOT guard: the owning
+    driver's targeted lease clears it, so a later resume that re-wakes without
+    ``reserved`` is an ordinary untargeted-leaseable task."""
+    disp = make_dispatcher()
+    disp.enqueue("t1")
+    lease = disp.lease(worker_id="w")
+    disp.release(
+        lease.lease_id,
+        next_state="suspended",
+        wake_on=HumanResponseReceived(handle="h1"),
+    )
+    assert disp.wake("t1", HumanResponseReceived(handle="h1"), reserved=True) is True
+    claimed = disp.lease(worker_id="owner", task_id="t1")
+    assert claimed is not None
+    # Suspend again, then wake WITHOUT reserved — the pool may now untargeted-lease it.
+    disp.release(
+        claimed.lease_id,
+        next_state="suspended",
+        wake_on=HumanResponseReceived(handle="h2"),
+        consumed_wake_event=claimed.wake_event,
+    )
+    assert disp.wake("t1", HumanResponseReceived(handle="h2")) is True
+    assert disp.lease(worker_id="w1").task_id == "t1"
+
+
 def test_lease_returns_none_when_no_ready_tasks(make_dispatcher) -> None:
     disp = make_dispatcher()
     assert disp.lease(worker_id="w1") is None

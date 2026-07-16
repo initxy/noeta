@@ -8,6 +8,30 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A resident worker could steal a task out of a resume's wake window and
+  re-drive the turn without the user's new message, dropping it.** The sibling
+  of the 0.2.9 seed-window fix, on the resume path.
+  `InteractionDriver._seed_wake_common` (the `send_goal` / `answer` /
+  `deliver_event` / approve / deny resume) wakes the suspended task — flipping it
+  to `ready` — then targeted-leases it, and only then appends the command's
+  message. Between the wake and the claim the task is `ready` but the new message
+  is not yet durable, so a resident-worker pool's untargeted `lease(task_id=None)`
+  poll could land there, lease the task, and re-drive the turn on the *old*
+  context — silently dropping the user's input. The resume's own targeted lease
+  then found the task already leased and raised `NotResumableError`, which the
+  served product misreads as "task not resumable" and handles by restarting the
+  session fresh (new event stream from seq 0), so the conversation's history
+  appears lost. 0.1.16 added `Dispatcher.enqueue(reserved=True)` for exactly this
+  hazard but only the enqueue path carried it; the wake path had no such guard.
+  `Dispatcher.wake` now takes `reserved` (threaded through the sqlite / postgres
+  / in-memory adapters; no schema change — the `reserved` column already exists),
+  and `_seed_wake_common` sets it. One-shot as before: the resume's targeted
+  lease clears it, so the worker drives the turn normally once the message is
+  durable. `reserved=False` (the default, every other `wake` caller) is
+  byte-identical to the historical wake.
+
 ## [0.2.9] - 2026-07-16
 
 ### Fixed

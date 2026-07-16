@@ -637,7 +637,7 @@ class SqliteDispatcher:
                 self._conn.execute("ROLLBACK")
                 raise
 
-    def wake(self, task_id: str, wake_event: Any) -> bool:
+    def wake(self, task_id: str, wake_event: Any, *, reserved: bool = False) -> bool:
         with self._lock:
             _begin_immediate_with_retry(self._conn)
             try:
@@ -674,9 +674,14 @@ class SqliteDispatcher:
                             " suspend_reason = NULL,"
                             " matched_wake_event_canonical = ?,"
                             " fire_at = NULL,"
-                            " ready_order = ? "
+                            " ready_order = ?,"
+                            # Targeted-lease-only guard for a seed-after-wake
+                            # resume (one-shot; the owning driver's targeted
+                            # lease clears it). ``reserved=False`` writes 0, the
+                            # historical value.
+                            " reserved = ? "
                             "WHERE task_id = ?",
-                            (matched_blob, order, task_id),
+                            (matched_blob, order, 1 if reserved else 0, task_id),
                         )
                         self._conn.execute("COMMIT")
                         return True
