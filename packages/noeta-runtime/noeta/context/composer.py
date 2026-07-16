@@ -58,6 +58,24 @@ __all__ = [
 # now optional bookkeeping, not a contract.
 _COMPOSER_VERSION = "three_segment.v5"
 _PLAN_MEDIA_TYPE = "application/json"
+
+
+def _density(real_baseline: int, estimated: int) -> float:
+    """REAL provider tokens per chars/4 estimated token, measured on the last
+    recorded round-trip (``1.0`` when there is nothing to measure against).
+
+    Mirrors ``ReActPolicy._observed_density``. Kept as a module function rather
+    than shared with the Policy: the two bands do not import each other
+    (provider neutrality), and the inputs differ — the Policy pins its pair at
+    one call site, the Composer reads the fold-projected baseline off the task.
+
+    ``1.0`` reproduces the pre-existing arithmetic exactly, so an unobserved
+    session (first turn, or right after a compaction zeroed the baseline) keeps
+    today's behaviour byte-for-byte.
+    """
+    if real_baseline <= 0 or estimated <= 0:
+        return 1.0
+    return real_baseline / estimated
 #: ③ (D-3c) — the neutral role of the single summary message swapped in for
 #: the covered prefix; ``user`` keeps it provider-neutral and outside the
 #: ``system`` stable_prefix.
@@ -302,7 +320,13 @@ class ThreeSegmentComposer:
             self._apply_summary(task), task
         )
         dynamic_content, selected_refs, dropped_refs, cleared_refs = (
-            self._prune_tail(dynamic_source)
+            self._prune_tail(
+                dynamic_source,
+                real_baseline=task.runtime.last_input_tokens,
+                prefix_estimate=estimate_messages_tokens(
+                    stable_content + semi_content
+                ),
+            )
         )
         # #1 todo re-injection:
         # ``TaskState.todos`` is otherwise write-only — the model writes a
@@ -691,7 +715,11 @@ class ThreeSegmentComposer:
         ]
 
     def _prune_tail(
-        self, messages: list[Message]
+        self,
+        messages: list[Message],
+        *,
+        real_baseline: int = 0,
+        prefix_estimate: int = 0,
     ) -> tuple[
         list[Message], list[ContentRef], list[ContentRef], list[ContentRef]
     ]:
@@ -718,10 +746,21 @@ class ThreeSegmentComposer:
         bytes → same ref) so the same history always produces the same
         markers + refs. ``tail_token_budget is None`` → no prune (legacy
         passthrough), refs empty. ``available_window`` arms the relief-valve
-        gate: while the composed history estimate is below it, the whole history
-        passes through verbatim (refs empty) — clearing only kicks in once the
-        history approaches the usable window, so a half-empty window never
-        forces a tool re-read.
+        gate: while the request is below it, the whole history passes through
+        verbatim (refs empty) — clearing only kicks in once the request
+        approaches the usable window, so a half-empty window never forces a
+        tool re-read.
+
+        ``real_baseline`` is ``RuntimeState.last_input_tokens`` (the provider's
+        count for the previous round-trip) and ``prefix_estimate`` the chars/4
+        size of the stable+semi segments this dynamic tail will be assembled
+        behind. Together they let both knobs above — which count REAL tokens —
+        be read in the same unit the walk accumulates; see the gate comment.
+        Both default to the values a caller with no baseline supplies, which
+        reproduces the pre-existing arithmetic exactly.
+
+        Still pure: both inputs are already-recorded numbers folded off the
+        task, so live + resume derive identical cutoffs.
         """
         if self._tail_token_budget is None:
             return messages, [], [], []
@@ -729,17 +768,46 @@ class ThreeSegmentComposer:
         # clamp. Below the usable window the whole history stays verbatim — a
         # half-empty window must NOT clear tool outputs, or the model loses
         # content it already fetched and re-runs the read (the thrash this gate
-        # fixes). We only start clearing once the composed history approaches
-        # ``available_window``, mirroring the Policy's ``estimated >= window``
-        # summarize trigger so the two compaction layers share one water mark.
-        # Pure: the estimate is the stable chars/4 heuristic and the window is a
-        # deterministic function of the model, so live + resume agree.
+        # fixes). We only start clearing once the request approaches
+        # ``available_window``, mirroring the Policy's summarize trigger so the
+        # two compaction layers share one water mark.
+        #
+        # That water mark is REAL provider tokens (``available_window`` derives
+        # from ``context_window``), so the gate may not be read in chars/4:
+        # the heuristic assumes 4 chars/token and a measured production payload
+        # (CJK + JSON + base64 thinking signatures) runs ~1.2, a ~4x under-read
+        # that held the estimate below the window for an ENTIRE session and left
+        # this valve shut while the real request sat AT the window — the exact
+        # under-count ADR context-compaction rejected for the trigger, still
+        # live here because part 3's density conversion stayed local to the
+        # Policy. ``real_baseline`` (``RuntimeState.last_input_tokens``) is the
+        # provider's own count for the previous round-trip, i.e. the same
+        # content minus the newest tool result. ``max`` mirrors the Policy's
+        # ``max(estimated, baseline + delta)``: the mix can only ever RAISE the
+        # size, so a genuinely huge raw history is never masked and a missing
+        # baseline (first turn, post-compaction) falls back to exactly today's
+        # pure-estimate behaviour. The Policy's ``+ delta`` term has no analogue
+        # here — pairing it needs the estimate of the request the baseline was
+        # measured on, which is not recorded — so the valve opens at most one
+        # round-trip late. Late is the safe direction for a relief valve: the
+        # summarize trigger backstops it, and firing early would clear outputs
+        # the model still needs.
+        estimated = prefix_estimate + estimate_messages_tokens(messages)
         if (
             self._available_window is not None
-            and estimate_messages_tokens(messages) < self._available_window
+            and max(estimated, real_baseline) < self._available_window
         ):
             return messages, [], [], []
-        budget = self._tail_token_budget
+        # Same unit trap one level down, and the one that BITES once the gate
+        # opens: ``tail_token_budget`` counts real tokens while the cutoff walk
+        # below accumulates chars/4. At the measured density the whole history
+        # fits inside the "tail" and nothing is ever cleared — the valve opens
+        # onto a no-op. Convert the budget into the accumulator's unit with the
+        # density observed on the last round-trip, the same ``real ÷ chars/4``
+        # ratio (and the same 1.0-until-observed fallback) the Policy applies to
+        # ``_summary_boundary``. Both operands are already-recorded numbers, so
+        # a replay re-derives the ratio — we never count tokens live.
+        budget = int(self._tail_token_budget / _density(real_baseline, estimated))
         # Decide the cutoff index: messages at index >= cutoff are protected
         # (within budget); messages before cutoff are pruned.
         acc = 0

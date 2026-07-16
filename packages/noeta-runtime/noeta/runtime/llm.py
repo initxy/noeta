@@ -313,8 +313,8 @@ class RuntimeLLMClient:
         # provenance (counts + strategy). It is event-only metadata: it is
         # NOT part of ``req`` / ``request_ref`` (request bytes/hash unchanged).
         # This is the single writer of ``selection``.
-        self._event_log.emit(
-            task_id=ctx.task_id,
+        self._emit(
+            ctx,
             type="LLMRequestStarted",
             payload=LLMRequestStartedPayload(
                 call_id=call_id,
@@ -323,9 +323,6 @@ class RuntimeLLMClient:
                 input_tokens=0,
                 selection=selection,
             ),
-            trace_id=ctx.trace_id,
-            actor="llm",
-            origin="llm",
         )
 
         # 2. Invoke provider, wrapped in the LIVE-only transient-retry loop
@@ -345,8 +342,8 @@ class RuntimeLLMClient:
 
         # 3. LLMResponseRecorded
         response_ref = _put_response(self._content_store, resp)
-        self._event_log.emit(
-            task_id=ctx.task_id,
+        self._emit(
+            ctx,
             type="LLMResponseRecorded",
             payload=LLMResponseRecordedPayload(
                 call_id=call_id,
@@ -354,9 +351,6 @@ class RuntimeLLMClient:
                 stop_reason=resp.stop_reason,
                 output_tokens=resp.usage.output,
             ),
-            trace_id=ctx.trace_id,
-            actor="llm",
-            origin="llm",
         )
 
         # 4. LLMRequestFinished — price the round-trip if a pricing callback
@@ -370,8 +364,8 @@ class RuntimeLLMClient:
             if self._pricing is not None
             else 0.0
         )
-        self._event_log.emit(
-            task_id=ctx.task_id,
+        self._emit(
+            ctx,
             type="LLMRequestFinished",
             payload=LLMRequestFinishedPayload(
                 call_id=call_id,
@@ -380,12 +374,37 @@ class RuntimeLLMClient:
                 latency_ms=latency_ms,
                 usage=resp.usage,
             ),
+        )
+
+        return resp
+
+    def _emit(self, ctx: StepContext, *, type: str, payload: Any) -> None:
+        """Append one LLM event, then fold it onto the Engine's in-memory task.
+
+        The apply half is what keeps ``fold(events) → state`` equal to the
+        runtime state INSIDE a tool loop. Without it the Engine — which folds
+        every event it emits itself — never sees this client's emits, so
+        ``RuntimeState.last_input_tokens`` stays at the entry fold's value for
+        the whole turn and every consumer of the real-usage baseline silently
+        degrades to the chars/4 estimate the compaction ADR rejected. The Engine
+        supplies the applier bound to the task it is stepping (it stays the sole
+        physical writer); ``None`` keeps the emit-only path for callers that
+        build a StepContext without one.
+
+        Only ``LLMRequestFinished`` carries state (``last_input_tokens`` plus the
+        governance counters); the other three fold as no-ops, so routing all four
+        through here costs nothing and leaves no second emit-site to forget.
+        """
+        env = self._event_log.emit(
+            task_id=ctx.task_id,
+            type=type,
+            payload=payload,
             trace_id=ctx.trace_id,
             actor="llm",
             origin="llm",
         )
-
-        return resp
+        if ctx.apply_event is not None:
+            ctx.apply_event(env)
 
     def _invoke_with_retry(
         self,
@@ -427,8 +446,8 @@ class RuntimeLLMClient:
                 if delay is None or attempt >= self._max_retries:
                     return _error_response(exc)
                 attempt += 1
-                self._event_log.emit(
-                    task_id=ctx.task_id,
+                self._emit(
+                    ctx,
                     type="LLMRetryScheduled",
                     payload=LLMRetryScheduledPayload(
                         call_id=call_id,
@@ -438,9 +457,6 @@ class RuntimeLLMClient:
                         category=getattr(exc, "category", CATEGORY_FATAL),
                         error=str(exc)[:500],
                     ),
-                    trace_id=ctx.trace_id,
-                    actor="llm",
-                    origin="llm",
                 )
                 self._sleep(delay)
             except Exception as exc:  # noqa: BLE001 — protocol contract

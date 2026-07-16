@@ -8,6 +8,41 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Micro-compaction (`_prune_tail`) was dead on any payload denser than the
+  chars/4 heuristic, so the tail relief valve never opened and the only relief
+  left was a full summarize.** 0.2.7 corrected the compaction trigger to mix in
+  the provider's recorded real usage and closed by scoping the density
+  conversion to the Policy. Compaction has two layers, and that scope left the
+  other one reading the same real-token knobs in chars/4:
+  `ThreeSegmentComposer._prune_tail` gated on
+  `estimate_messages_tokens(messages) < available_window` and accumulated
+  chars/4 against a real-token `tail_token_budget`. Measured on a production
+  session: 99 composes, `cleared_outputs` empty in all 99 — the estimate read
+  ~42.5k while the real request sat at 181,870 against a 181,616 window. The
+  session went straight to a summarize that collapsed a specification file it
+  then re-read verbatim. The gate now takes `max(estimated, real_baseline)` and
+  the budget is converted by the same observed density the Policy applies to
+  `_summary_boundary`. `composer_version` is unchanged: this moves when the
+  valve opens, not the composed structure.
+- **`fold(events) → state` now holds inside a tool loop, not just across one.**
+  `RuntimeLLMClient` appends its events straight to the EventLog while `Engine`
+  folds only the events it emits itself, so mid-loop the in-memory task diverged
+  from `fold(events)` and `RuntimeState.last_input_tokens` sat at the entry
+  fold's value (`0` on a first turn) however many round-trips the loop made.
+  0.2.7 worked around this inside `ReActPolicy`; a second consumer could not
+  reuse a private workaround. `StepContext` — already the Engine → Policy →
+  client channel, transient and never serialized — now carries an `apply_event`
+  callback bound to the task being stepped, and the client invokes it after each
+  emit. The Engine stays the sole physical writer of `RuntimeState`.
+- **A compaction invalidates the real-usage baseline in `fold`, not in a
+  Policy-private sentinel.** After the prefix collapses every recorded input
+  count over-reads a history that no longer exists — a property of the history,
+  so every reader needs it and a resume must re-derive it. `_on_compacted` zeroes
+  `RuntimeState.last_input_tokens`; `0` is the same value a fresh task carries,
+  so each consumer's existing no-baseline fallback covers the case unchanged.
+
 ## [0.2.7] - 2026-07-15
 
 ### Fixed

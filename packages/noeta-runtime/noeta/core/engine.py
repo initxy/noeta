@@ -838,9 +838,21 @@ class Engine:
             # PREVIOUS round-trip's ``LLMRequestFinished`` (``0`` on the first
             # turn → the Policy falls back to a pure estimate). The other three
             # identifiers are loop-invariant; only ``last_input_tokens`` moves.
+            #
+            # ``apply_event`` hands the LLM client the applier for the task we
+            # are stepping. Its emits land straight in the EventLog, so without
+            # this the in-memory task never folds them and
+            # ``last_input_tokens`` above stays frozen for the WHOLE turn no
+            # matter how many round-trips the tool loop makes — the read is
+            # rebuilt per iteration, but the field behind it never moved. The
+            # Engine stays the sole physical writer of RuntimeState: it owns the
+            # task and supplies the applier; the client only notifies.
             ctx = StepContext(
                 task_id=task.task_id, lease_id=lease_id, trace_id=trace_id,
-                last_input_tokens=task.runtime.last_input_tokens)
+                last_input_tokens=task.runtime.last_input_tokens,
+                apply_event=lambda env: apply_event(
+                    task, env, self._content_store
+                ))
             view = self._composer.compose(task)
             _emit_context_plan(
                 self._emit, self._content_store, task, view, lease_id, trace_id
