@@ -1,0 +1,298 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ---- Design tokens: graphite and jade ----
+   Green-tinted neutrals (not blue-gray), signal green as the only accent;
+   light = warm paper, dark = ink-green graphite. */
+:root {
+  --bg: #f7f7f4;
+  --surface: #ffffff;
+  --surface-2: #efefea;
+  --surface-3: #e6e6e0;
+  --border: #e1e1da;
+  --border-strong: #cfcfc6;
+  --ink: #1d211e;
+  --ink-2: #5c635c;
+  --ink-3: #8b928a;
+  --accent: #177e54;
+  --accent-ink: #ffffff;
+  --accent-soft: #e3f1e9;
+  --danger: #c93a2e;
+  --danger-soft: #f9e9e7;
+  --warn: #9a6700;
+  --warn-soft: #f7efdc;
+  --shadow: 0 1px 2px rgb(29 33 30 / 0.05), 0 4px 16px rgb(29 33 30 / 0.06);
+}
+
+.dark {
+  --bg: #121513;
+  --surface: #191d1a;
+  --surface-2: #202521;
+  --surface-3: #272d28;
+  --border: #2a302b;
+  --border-strong: #39413a;
+  --ink: #e7eae5;
+  --ink-2: #a6ada4;
+  --ink-3: #767d74;
+  --accent: #43c98b;
+  --accent-ink: #0c130e;
+  --accent-soft: #1b2e24;
+  --danger: #e5695c;
+  --danger-soft: #33201d;
+  --warn: #d9a441;
+  --warn-soft: #2f2817;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 16px rgb(0 0 0 / 0.25);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --font-sans:
+    -apple-system, 'SF Pro SC', 'PingFang SC', 'HarmonyOS Sans SC',
+    'Noto Sans CJK SC', 'Source Han Sans SC', 'Microsoft YaHei', sans-serif;
+  --font-mono:
+    'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas,
+    'PingFang SC', monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+/* ---- Signature element: status dot (logo / loading / follow-up) ---- */
+.rail-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 9999px;
+  flex-shrink: 0;
+}
+
+.rail-dot--done {
+  background: var(--border-strong);
+}
+
+.rail-dot--active {
+  background: var(--accent);
+  animation: dot-pulse 1.6s ease-in-out infinite;
+}
+
+.rail-dot--accent {
+  background: var(--accent);
+}
+
+@keyframes dot-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+/* Agent avatar running state: round base with halo pulse (the only motion while running). */
+.agent-avatar--running {
+  animation: avatar-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes avatar-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+}
+
+/* Streaming preview caret: once the durable message lands, StreamingBubble unmounts
+   and this caret disappears automatically. */
+.streaming-caret {
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: currentColor;
+  opacity: 0.7;
+  animation: caret-blink 1s steps(2, start) infinite;
+}
+
+@keyframes caret-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+@keyframes fade-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.msg-enter {
+  animation: fade-slide-in 0.18s ease-out both;
+}
+
+@keyframes slide-over-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.slide-over-enter {
+  animation: slide-over-in 0.2s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rail-dot--active {
+    animation: none;
+  }
+  .agent-avatar--running {
+    animation: none;
+  }
+  .msg-enter {
+    animation: none;
+  }
+  .slide-over-enter {
+    animation: none;
+  }
+  .streaming-caret {
+    animation: none;
+    opacity: 0.4;
+  }
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Markdown body (shared by chat bubbles and file preview). */
+.md-body {
+  line-height: 1.75;
+  word-break: break-word;
+}
+.md-body > * + * {
+  margin-top: 0.6em;
+}
+.md-body h1,
+.md-body h2,
+.md-body h3,
+.md-body h4 {
+  font-weight: 600;
+  line-height: 1.4;
+  margin-top: 1.1em;
+}
+.md-body h1 {
+  font-size: 1.25em;
+}
+.md-body h2 {
+  font-size: 1.15em;
+}
+.md-body h3 {
+  font-size: 1.05em;
+}
+.md-body ul {
+  list-style: disc;
+  padding-left: 1.4em;
+}
+.md-body ol {
+  list-style: decimal;
+  padding-left: 1.4em;
+}
+.md-body li + li {
+  margin-top: 0.2em;
+}
+.md-body a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.md-body blockquote {
+  border-left: 3px solid var(--border-strong);
+  padding-left: 0.9em;
+  color: var(--ink-2);
+}
+.md-body code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.md-body pre {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.8em 1em;
+  overflow-x: auto;
+}
+.md-body pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.85em;
+}
+.md-body table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.md-body th,
+.md-body td {
+  border: 1px solid var(--border);
+  padding: 0.35em 0.7em;
+  text-align: left;
+}
+.md-body th {
+  background: var(--surface-2);
+  font-weight: 600;
+}
+.md-body hr {
+  border: none;
+  border-top: 1px solid var(--border);
+}

@@ -31,7 +31,7 @@ from typing import Any
 
 import pytest
 
-from noeta.agent.read_models.result import (
+from tests._read_models.result import (
     CodeSessionResult,
     _collect_failed_edits,
     _collect_files_changed,

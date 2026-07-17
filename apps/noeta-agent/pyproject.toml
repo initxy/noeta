@@ -1,59 +1,44 @@
 [project]
 name = "noeta-agent"
-version = "0.2.11"
-description = "Noeta coding agent: server-side AI coding agent with a web UI. Durable event-sourced execution, multi-worker scheduling, per-session sandbox containers, provider-neutral. Run with python -m noeta.agent."
-license = "Apache-2.0"
-authors = [{ name = "The Noeta Authors" }]
-readme = "README.md"
-requires-python = ">=3.11"
-classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
-    "Operating System :: OS Independent",
-    "Programming Language :: Python",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Topic :: Software Development :: Libraries :: Application Frameworks",
-]
+version = "0.3.0.dev0"
+description = "Noeta's official product: a multi-user, server-side agent platform."
+requires-python = ">=3.12"
 dependencies = [
-    "noeta-runtime>=0.2.11",
-    "noeta-sdk>=0.2.11",
-    # Official AIO Sandbox data-plane client (Fern-generated HTTP client). Backs
-    # the SDK sandbox adapters (fs / shell / browser) in noeta.agent.host. Capped
-    # below 0.1.0: still 0.0.x (pre-1.0, unstable wire). See
-    # docs/implementation-specs/2026-07-10-sandbox-sdk-adapters.md.
+    # agent-sandbox: the official AIO Sandbox client, the wire behind the SDK
+    # adapters (sdk_sandbox_exec_env / sdk_browser_backend). 0.0.x is pre-1.0
+    # with an unstable wire, so the upper bound is pinned.
     "agent-sandbox>=0.0.30,<0.1.0",
+    "fastapi>=0.115",
+    "httpx>=0.27",
+    "itsdangerous>=2.2",
+    "noeta-sdk",
+    "noeta-runtime",
+    "pydantic-settings>=2.4",
+    "python-multipart>=0.0.9",
+    "pyyaml>=6",
+    "uvicorn[standard]>=0.30",
 ]
 
-[project.urls]
-Homepage = "https://github.com/initxy/noeta"
-Repository = "https://github.com/initxy/noeta"
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.uv.sources]
+noeta-sdk = { workspace = true }
+noeta-runtime = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# PEP 420 namespace layout: `noeta/` and `noeta/agent/` have no __init__.py —
+# noeta-runtime publishes the `noeta.agent` identity layer (spec/registry) and
+# this dist publishes the product modules into the same namespace.
 [tool.hatch.build.targets.wheel]
 packages = ["noeta"]
-
-# Bundle the coding web app into the wheel at noeta/agent/static so an installed
-# ``python -m noeta.agent`` serves the frontend out-of-the-box.
-# The source lives in standalone apps/web. Vite ``dist/`` is the runtime artifact
-# the Python host serves; build apps/web before packaging. Include the source
-# for static contract tests/debuggability, but do not include node_modules.
-[tool.hatch.build.targets.wheel.force-include]
-"../web/dist" = "noeta/agent/static/dist"
-"../web/src" = "noeta/agent/static/src"
-"../web/chat.html" = "noeta/agent/static/chat.html"
-"../web/trace.html" = "noeta/agent/static/trace.html"
-"../web/package.json" = "noeta/agent/static/package.json"
-"../web/package-lock.json" = "noeta/agent/static/package-lock.json"
-"../web/README.md" = "noeta/agent/static/README.md"
-"../web/vite.config.js" = "noeta/agent/static/vite.config.js"
-
-[tool.uv.sources]
-noeta-runtime = { workspace = true }
-noeta-sdk = { workspace = true }

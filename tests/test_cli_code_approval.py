@@ -20,7 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from noeta.agent.observe._stub_provider import CodeStubProvider
+from tests._stub_provider import CodeStubProvider
 from noeta.client.host import SdkHost
 
 from tests._sdk_session import (

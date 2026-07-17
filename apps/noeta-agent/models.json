@@ -1,0 +1,17 @@
+{
+  "models": [
+    {
+      "id": "gpt-5.5-2026-04-24",
+      "label": "GPT 5.5",
+      "default": true,
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "default_effort": "high"
+    },
+    {
+      "id": "gpt-5.4-2026-03-05",
+      "label": "GPT 5.4",
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "default_effort": "high"
+    }
+  ]
+}

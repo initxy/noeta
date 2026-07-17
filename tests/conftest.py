@@ -57,7 +57,7 @@ def _isolate_global_noeta_dirs(
     # call time. Guard the import for a pure-SDK collection run where noeta-agent
     # is absent.
     try:
-        import noeta.agent.skills as _agent_skills
+        import tests._builtin_skills as _agent_skills
     except Exception:  # noeta-agent not importable
         _agent_skills = None  # type: ignore[assignment]
     if _agent_skills is not None:

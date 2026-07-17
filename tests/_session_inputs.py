@@ -1,5 +1,5 @@
-import noeta.agent.skills as _skills
-from noeta.agent.skills import BUILTIN_SKILLS_DIR
+import tests._builtin_skills as _skills
+from tests._builtin_skills import BUILTIN_SKILLS_DIR
 from noeta.execution.builder import build_session_inputs, derive_compaction_config
 from noeta.policies.control_tools import WORKFLOW_AGENT_NAME
 from noeta.presets import official_specs

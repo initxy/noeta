@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from noeta.agent.commands import (
+from tests._commands import (
     BUILTIN_COMMANDS,
     CommandResolution,
     SlashCommand,
@@ -25,7 +25,7 @@ from noeta.agent.commands import (
     list_commands,
     resolve_command,
 )
-from noeta.agent.skills import load_builtin_skills
+from tests._builtin_skills import load_builtin_skills
 from noeta.presets import official_specs
 
 

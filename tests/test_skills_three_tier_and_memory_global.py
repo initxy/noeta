@@ -22,7 +22,7 @@ from pathlib import Path
 
 from tests._skill_fixtures import write_skill_raw
 
-from noeta.agent.skills import (
+from tests._builtin_skills import (
     BUILTIN_SKILLS_DIR,
     DEFAULT_GLOBAL_SKILLS_DIR,
     load_builtin_skills,

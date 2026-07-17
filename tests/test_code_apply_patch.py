@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from noeta.agent.read_models.result import _collect_files_changed
+from tests._read_models.result import _collect_files_changed
 from noeta.protocols.messages import LLMResponse, TextBlock, ToolUseBlock, Usage
 from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.tools.fs import FsWriteMode, ShellMode

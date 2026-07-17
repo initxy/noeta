@@ -203,7 +203,7 @@ def test_provider_and_fake_complete_signatures_unchanged() -> None:
     from noeta.providers.openai_compat import OpenAICompatProvider
     from noeta.providers.anthropic import AnthropicProvider
     from noeta.testing.stub_provider import StubProvider as CliStub
-    from noeta.agent.observe._stub_provider import CodeStubProvider as CodeStub
+    from tests._stub_provider import CodeStubProvider as CodeStub
 
     for cls in (
         OpenAICompatProvider,
