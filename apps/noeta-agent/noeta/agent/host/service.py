@@ -346,6 +346,12 @@ class AgentService:
         before the first channel-topic tool call."""
         self._channel_service = service
 
+    def attach_mcp_store(self, store) -> None:
+        """Attach the per-space MCP connector store (backs the
+        HostConfig.mcp_server_resolver callback + the per-turn enabled-alias
+        set, see _mcp_tokens_for_session); must be called before startup."""
+        self._mcp_store = store
+
     def session_id_for_task(self, task_id: str) -> Optional[str]:
         """root/sub task → owning session (in-memory mapping, rebuilt after
         restart). Used by the board tools' space-ownership resolution
@@ -798,6 +804,12 @@ class AgentService:
                 # only prevents cross-space leaks, never a real store).
                 memory_root_resolver=self._memory_root_for_task,
                 global_memory_dir=s.memories_path / "_quarantine",
+                # Per-space MCP connectors (D9 item 1): each turn passes its
+                # enabled connectors as space-scoped tokens (see
+                # _mcp_tokens_for_session); this callback maps a token back to
+                # the space's connector spec. Credentials live only in the app
+                # store — the SDK sees the resolved spec, never the store.
+                mcp_server_resolver=self._resolve_mcp_spec,
             ),
         )
         self._client.subscribe(self._on_envelope)
@@ -1000,6 +1012,58 @@ class AgentService:
         if not space_id:
             return None
         return self._settings.memories_path / space_id
+
+    # --------------------------------------------------------- MCP wiring
+    #
+    # Per-space MCP connectors (D9 item 1). The SDK's per-turn contract is a
+    # clean enabled-alias list (Client seed verbs' ``enabled_mcp``) plus a
+    # global ``mcp_server_resolver`` callback that maps one alias to its
+    # connect spec — the callback receives no task/space context. Connectors
+    # here are space-scoped and aliases may collide across spaces, so the
+    # per-turn entries carry the scope themselves: each is a
+    # ``<space_id>:<alias>`` token (":" can appear in neither part — space
+    # ids are uuid hex, aliases match the SDK's ^[a-z0-9_-]{1,32}$ rule). The
+    # runtime treats the entries as opaque, NON-durable selectors (never
+    # event-logged), and the connected tools / provenance are named from the
+    # resolved SPEC's clean alias — the composite token never surfaces.
+
+    def _mcp_tokens_for_session(self, session_id: str) -> tuple[str, ...]:
+        """The turn's enabled-MCP token set: one ``<space_id>:<alias>`` token
+        per ENABLED connector of the session's space.
+
+        Computed at seed time (jobs worker), so config edits apply from the
+        next turn. Sessions in spaces without connectors get ``()`` — the
+        seed passes an empty set and behavior is byte-identical to a
+        no-MCP deployment. Failures degrade to ``()`` (a config-store fault
+        must never sink the turn)."""
+        store = getattr(self, "_mcp_store", None)
+        if store is None:
+            return ()
+        space_id = self._space_of_session(session_id)
+        if not space_id:
+            return ()
+        try:
+            aliases = store.list_enabled_aliases(space_id)
+        except Exception:  # noqa: BLE001 - degrade to no MCP, never sink the turn
+            logger.exception("mcp alias listing failed: space=%s", space_id)
+            return ()
+        return tuple(f"{space_id}:{alias}" for alias in aliases)
+
+    def _resolve_mcp_spec(self, token: str) -> Optional[Any]:
+        """``<space_id>:<alias>`` token → the connector's connect spec (WITH
+        credentials), or ``None`` (unconfigured / disabled / malformed — the
+        SDK skips the alias). Wired as ``HostConfig.mcp_server_resolver``;
+        called on worker threads at engine build (the store's sqlite carries
+        its own lock)."""
+        store = getattr(self, "_mcp_store", None)
+        if store is None or ":" not in token:
+            return None
+        space_id, alias = token.split(":", 1)
+        try:
+            return store.resolve_spec(space_id, alias)
+        except Exception:  # noqa: BLE001 - a resolution fault skips the connector
+            logger.exception("mcp spec resolution failed: alias=%s", alias)
+            return None
 
     # ------------------------------------------------ memory consolidation
     def _maybe_consolidate_memory(self, session_id: str) -> None:
@@ -2142,10 +2206,14 @@ class AgentService:
         node_params: Optional[dict] = None,
     ) -> None:
         try:
+            # Per-space MCP connectors: the enabled token set is computed at
+            # seed time, so connector edits apply from the next turn.
+            enabled_mcp = self._mcp_tokens_for_session(session_id)
             if task_id is None:
                 self._start_fresh(
                     session_id, ws, goal, model, effort,
                     node_index=node_index, node_params=node_params,
+                    enabled_mcp=enabled_mcp,
                 )
             else:
                 try:
@@ -2157,7 +2225,8 @@ class AgentService:
                     # asynchronously. Mirrors the upstream engine_room.py
                     # seed/yield pattern (including the noqa: SLF001).
                     seeded = self._client.seed_send_goal(
-                        task_id, goal=goal, model_selector=model, effort=effort
+                        task_id, goal=goal, model_selector=model,
+                        effort=effort, enabled_mcp=enabled_mcp,
                     )
                     self._client._yield_seeded_lease(seeded)  # noqa: SLF001 — SDK surface
                 except Exception as exc:  # noqa: BLE001
@@ -2171,7 +2240,7 @@ class AgentService:
                     logger.info("task %s not resumable, starting fresh", task_id)
                     self._start_fresh(
                         session_id, ws, goal, model, effort,
-                        node_index=node_index,
+                        node_index=node_index, enabled_mcp=enabled_mcp,
                     )
         except Exception as exc:  # noqa: BLE001 - backstop: errors are delivered over SSE
             self._handle_drive_failure(session_id, exc, task_id=task_id)
@@ -2185,6 +2254,7 @@ class AgentService:
         effort: Optional[str] = None,
         node_index: Optional[int] = None,
         node_params: Optional[dict] = None,
+        enabled_mcp: tuple[str, ...] = (),
     ) -> None:
         self._pending_session = session_id
         # Knowledge is per-session bind-mounted by the provider into the
@@ -2204,6 +2274,7 @@ class AgentService:
                 workspace_dir=str(ws),
                 model_selector=model,
                 effort=effort,
+                enabled_mcp=enabled_mcp,
             )
         finally:
             self._pending_session = None
