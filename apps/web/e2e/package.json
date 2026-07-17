@@ -1,0 +1,12 @@
+{
+  "name": "noeta-web-e2e",
+  "private": true,
+  "description": "Browser e2e suite for the platform SPA (isolated from apps/web deps; see README.md)",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "@types/node": "^24.13.2"
+  }
+}
