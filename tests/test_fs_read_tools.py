@@ -198,6 +198,23 @@ def test_read_file_binary_rejected(tmp_path: Path) -> None:
     assert "utf-8" in result.summary
 
 
+def test_read_file_stray_invalid_bytes_decoded_leniently(tmp_path: Path) -> None:
+    # A text file with a few invalid bytes (legacy encoding remnants) is not
+    # binary — it decodes with U+FFFD replacements instead of failing, and the
+    # summary says so. Only a NUL byte marks real binary (see rejection above).
+    ctx, workspace = _ctx_and_workspace(tmp_path)
+    body = b"val x = 1 // caf\xe9\nval y = 2\n"
+    (workspace.root / "legacy.kt").write_bytes(body)
+    result = ReadFileTool(workspace=workspace).invoke({"path": "legacy.kt"}, ctx)
+    assert result.success is True
+    assert result.output["total_lines"] == 2
+    assert "caf�" in result.output["content"]
+    assert "val y = 2" in result.output["content"]
+    assert "non-utf8 bytes replaced" in result.summary
+    # The artifact still holds the original raw bytes.
+    assert result.artifacts[0].size == len(body)
+
+
 # ---------------------------------------------------------------------------
 # read image
 #

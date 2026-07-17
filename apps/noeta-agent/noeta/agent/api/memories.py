@@ -46,7 +46,7 @@ def _membership_or_404(
 def _memory_store(request: Request, space_id: str):
     """The MemoryStore for this space's memory pool (the directory may not
     exist yet — a legitimate empty pool)."""
-    from noeta.tools.memory import MemoryStore
+    from noeta.sdk import MemoryStore
 
     settings = request.app.state.settings
     return MemoryStore(settings.memories_path / space_id)

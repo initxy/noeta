@@ -293,9 +293,7 @@ def build_feedback_analysis_agent(
     - create_suggestion(...) → FeedbackStore.create_suggestion (analysis-mode outlet);
     - create_report(...) → FeedbackStore.create_report (report-mode outlet).
     """
-    from noeta.sdk import Capabilities
-    from noeta.protocols.tool import ToolResult
-    from noeta.sdk import AgentDefinition, tool
+    from noeta.sdk import AgentDefinition, Capabilities, ToolResult, tool
 
     def _no_run() -> ToolResult:
         return ToolResult(
@@ -446,7 +444,7 @@ def build_feedback_analysis_agent(
         query = str(arguments.get("query") or "").strip()
         if not query:
             return ToolResult(success=False, output={}, summary="query must not be empty")
-        from noeta.tools.memory import MemoryStore
+        from noeta.sdk import MemoryStore
 
         store = MemoryStore(memory_root(run.space_id))
         hits = store.search(query)

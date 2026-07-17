@@ -104,135 +104,6 @@ from noeta.agent.store.skills import GLOBAL_SPACE_ID
 logger = logging.getLogger(__name__)
 
 
-def _patch_read_tool_utf8() -> None:
-    """Patch ReadTool.invoke: text files with a few invalid bytes fall back to
-    errors='replace' decoding.
-
-    The SDK's read tool (noeta/tools/fs/read.py) decodes strict UTF-8 and
-    fails outright with ``is not utf-8 text`` on text files containing a few
-    invalid bytes, leaving the agent unable to read them (e.g. some .kt
-    sources with a BOM or legacy encoding bytes).
-
-    Patch strategy: wrap the original invoke; on a UTF-8 decode error, re-read
-    and decode with ``errors="replace"`` (invalid bytes → U+FFFD replacement
-    characters). Everything else (line-number slicing, artifact storage,
-    output clipping) matches the SDK's original implementation.
-    """
-    from noeta.protocols.tool import ToolResult
-    # Import order matters: the noeta.tools.fs package must be initialized
-    # first (the read import runs the full fs/__init__ → edit → _invocation
-    # chain) before importing _invocation separately. The other way around
-    # (_invocation first) hits a circular import when fs/__init__ re-imports
-    # the half-initialized _invocation.
-    from noeta.tools.fs.read import (
-        ReadFileTool, _DEFAULT_READ_LIMIT, _READ_FILE_MEDIA_TYPE, _clip_line,
-    )
-    from noeta.tools._invocation import (
-        require_str, resolve_readable_file,
-    )
-    from noeta.tools._limits import (
-        INLINE_CONTENT_MAX_BYTES, SUMMARY_EMBED_MAX_BYTES,
-        encoded_len, fit_output_fields, truncate_bytes,
-    )
-    from noeta.tools.fs._workspace import tool_error
-
-    _orig_invoke = ReadFileTool.invoke
-
-    def _patched_invoke(self, arguments, ctx):
-        result = _orig_invoke(self, arguments, ctx)
-        # Only intercept the "is not utf-8 text" error; return others as-is.
-        if result.success or "is not utf-8 text" not in (result.summary or ""):
-            return result
-
-        # --- Fallback: re-read + errors="replace" decoding ---
-        path = require_str(
-            arguments, "path",
-            lambda m: tool_error(self.name, m),
-            message="requires non-empty 'path'",
-        )
-        if isinstance(path, ToolResult):
-            return path
-
-        resolved = resolve_readable_file(
-            self.workspace, self.skill_roots, self.name, path,
-            exec_env=self.exec_env,
-        )
-        if isinstance(resolved, ToolResult):
-            return resolved
-
-        offset_raw = arguments.get("offset")
-        limit_raw = arguments.get("limit")
-        offset = offset_raw if isinstance(offset_raw, int) and offset_raw > 0 else 1
-        limit = (
-            limit_raw
-            if isinstance(limit_raw, int) and limit_raw > 0
-            else _DEFAULT_READ_LIMIT
-        )
-
-        try:
-            raw = self.exec_env.read_bytes(resolved)
-        except OSError as exc:
-            return tool_error(self.name, f"read failed: {exc}")
-
-        # The key difference: errors="replace" instead of strict mode.
-        full_text = raw.decode("utf-8", errors="replace")
-
-        # Everything below matches the SDK's read.py:443-493 exactly.
-        ref = ctx.artifact_store.put(raw, media_type=_READ_FILE_MEDIA_TYPE)
-
-        lines = full_text.splitlines(keepends=True)
-        total_lines = len(lines)
-        start = min(offset - 1, total_lines)
-        end = min(start + limit, total_lines)
-        clipped: list[str] = []
-        line_truncated = False
-        for line in lines[start:end]:
-            text_line, was_clipped = _clip_line(line)
-            clipped.append(text_line)
-            line_truncated = line_truncated or was_clipped
-        sliced = "".join(clipped)
-        slice_truncated = end < total_lines or start > 0 or line_truncated
-
-        rel = self._display(resolved)
-        output: dict[str, object] = {
-            "path": rel,
-            "content": sliced,
-            "content_ref": {
-                "hash": ref.hash,
-                "size": ref.size,
-                "media_type": ref.media_type,
-            },
-            "offset": offset,
-            "lines_read": max(0, end - start),
-            "total_lines": total_lines,
-            "truncated": slice_truncated,
-        }
-        if encoded_len(output) > INLINE_CONTENT_MAX_BYTES:
-            output["truncated"] = True
-            output = fit_output_fields(
-                output, shrink_order=["content"], max_bytes=INLINE_CONTENT_MAX_BYTES
-            )
-        summary_path = truncate_bytes(rel, SUMMARY_EMBED_MAX_BYTES)
-        lines_read = output["lines_read"] if isinstance(output, dict) else 0
-        return ToolResult(
-            success=True,
-            output=output,
-            artifacts=[ref],
-            summary=(
-                f"read {summary_path} "
-                f"(lines {output['offset']}–{output['offset'] + lines_read - 1} "
-                f"of {total_lines}; non-utf8 bytes replaced)"
-                if lines_read > 0
-                else f"read {summary_path} (empty; non-utf8 bytes replaced)"
-            ),
-        )
-
-    ReadFileTool.invoke = _patched_invoke
-
-
-_patch_read_tool_utf8()
-
-
 _SYSTEM_PROMPT = """\
 You are noeta-agent, the data platform's event-tracking expert.
 
@@ -1236,7 +1107,7 @@ class AgentService:
         rows."""
         store = self._feedback_store
         try:
-            from noeta.tools.memory import MemoryStore
+            from noeta.sdk import MemoryStore
 
             from noeta.agent.host.feedback_analysis import (
                 FEEDBACK_ANALYSIS_AGENT_NAME,
@@ -2658,7 +2529,7 @@ class AgentService:
         each subtask, not folded through the translator).
 
         For the Trace page: whole envelopes are serialized to JSON structures
-        via to_canonical; ContentRefs in payloads are kept as-is (with
+        via envelope_to_dict; ContentRefs in payloads are kept as-is (with
         __canonical_tag__), not dereferenced.
 
         Each task stream counts seq independently, so a single since_seq
@@ -2687,7 +2558,7 @@ class AgentService:
         root_id = session.task_id
 
         def job() -> dict:
-            from noeta.protocols.canonical import to_canonical
+            from noeta.sdk import envelope_to_dict
 
             events: list[dict] = []
 
@@ -2699,7 +2570,7 @@ class AgentService:
                     envs.append(env)
                     marks[task_id] = env.seq
                     try:
-                        events.append(to_canonical(env))
+                        events.append(envelope_to_dict(env))
                     except Exception:  # noqa: BLE001 - one bad row must not take down the whole page
                         logger.exception(
                             "raw envelope serialize failed: %s",

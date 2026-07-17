@@ -85,7 +85,7 @@ def _register_catalog_specs(models: list["ModelDef"]) -> None:
     (it does not start with claude/gpt → ``provider_family`` still resolves to
     None → the tool surface is unchanged).
     """
-    from noeta.providers.catalog import CATALOG, ModelSpec
+    from noeta.sdk.providers import CATALOG, ModelSpec
 
     for m in models:
         if m.context_window is None or m.id in CATALOG:
