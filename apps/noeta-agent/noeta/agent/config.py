@@ -11,7 +11,9 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import unquote
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # The application project root (the directory holding pyproject.toml,
@@ -147,6 +149,26 @@ class Settings(BaseSettings):
     memory_consolidation: bool = True
     memory_consolidation_debounce_hours: float = 24.0
 
+    # --- observability ---
+    # OTLP trace export: the **full** OTLP/HTTP traces URL (e.g.
+    # http://localhost:4318/v1/traces), threaded to the SDK via
+    # HostConfig.otlp_traces. Export is opt-in through app config only — env
+    # OTLP_ENDPOINT / .env key otlp_endpoint; the ambient OTel-standard
+    # OTEL_EXPORTER_OTLP_ENDPOINT is deliberately NOT honored as an enable
+    # switch (a k8s operator / shared shell injecting it for other apps must
+    # not silently start noeta exporting). Empty = off.
+    otlp_endpoint: str = ""
+    # Extra headers on every OTLP export request (hosted-collector auth), in
+    # the OTel-standard comma-separated form ``k=v,k2=v2`` (values
+    # percent-encoded per the spec). App key OTLP_HEADERS; absent it, the
+    # ambient OTel-standard OTEL_EXPORTER_OTLP_HEADERS rides along. Headers
+    # only apply when otlp_endpoint is set — they never enable anything by
+    # themselves.
+    otlp_headers: str = Field(
+        default="",
+        validation_alias=AliasChoices("otlp_headers", "otel_exporter_otlp_headers"),
+    )
+
     # --- noeta worker pool (single host, multiple workers) ---
     # Number of resident WorkerLoop threads in the noeta Client:
     # start/send_goal/answer hand the lease back to the pool through
@@ -223,6 +245,19 @@ class Settings(BaseSettings):
                 return "openai"
             return "mock"
         return self.llm_provider
+
+    @property
+    def otlp_header_items(self) -> tuple[tuple[str, str], ...]:
+        """Parsed OTLP export headers: ``k=v,k2=v2`` pairs with values
+        percent-decoded (the OTel spec defines them as W3C-baggage
+        percent-encoded, e.g. ``authorization=Basic%20dXNlcg==``). Malformed
+        pairs (no ``=`` / empty key) are dropped."""
+        out: dict[str, str] = {}
+        for pair in self.otlp_headers.split(","):
+            key, sep, value = pair.partition("=")
+            if sep and key.strip():
+                out[key.strip()] = unquote(value.strip())
+        return tuple(out.items())
 
     @property
     def secondary_gateway_configured(self) -> bool:
