@@ -1,0 +1,8 @@
+# Runtime data (application DB, engine event log, per-session workspaces,
+# shared knowledge/skills trees). Never committed.
+data/
+
+.venv/
+.env
+__pycache__/
+*.pyc

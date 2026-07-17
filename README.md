@@ -90,24 +90,21 @@ against the Claude Agent SDK, LangGraph, and Temporal.
 
 ```bash
 pip install noeta-agent        # pulls the SDK + runtime
-python -m noeta.agent          # boots the offline stub coding agent + bundled web UI
+python -m noeta.agent          # boots the multi-user agent platform + web UI
 ```
 
-No API key needed — the default `stub` provider is a deterministic LLM double.
-Open the printed URL and send a message. The same boot, as a program:
+No API key needed — the default `mock` provider is a deterministic LLM double
+(dev-login, SQLite storage). Open the printed URL, log in with any username,
+and send a message. The same assembly, as a program:
 
 <!-- runnable: smoke -->
 ```python
-from noeta.agent.backend.lifecycle import BackendConfig, serve_backend
+from noeta.agent.main import create_app
 
-# Defaults are fully offline: the two-turn stub provider, :memory: storage.
-# port=0 binds an OS-assigned port. Workspace is the current directory.
-config = BackendConfig(port=0)
-server, url, shutdown = serve_backend(config)
-try:
-    assert url.startswith("http://")
-finally:
-    shutdown()
+# Fully offline defaults: the deterministic mock LLM, SQLite app storage,
+# dev-login. create_app assembles the FastAPI application without serving it.
+app = create_app()
+assert "/api/v1/health" in app.openapi()["paths"]
 ```
 
 Next steps: the [quickstart tutorial](https://initxy.github.io/noeta/tutorials/quickstart/)

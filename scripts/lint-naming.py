@@ -95,6 +95,12 @@ EXEMPT_DIR_PARTS: frozenset[str] = frozenset(
 EXEMPT_REL_DIRS: tuple[tuple[str, ...], ...] = (
     ("docs", "adr"),
     ("docs", "design"),
+    # The server-platform application deliberately models an app-layer
+    # "session" entity (the unit of conversation the UI lists and resumes,
+    # grouping one or more engine tasks). The Task-vocabulary ban protects
+    # the engine libraries, where Task stays the only primitive; it does not
+    # extend to the product app's own domain model.
+    ("apps", "noeta-agent"),
 )
 
 # Suffixes worth scanning. We deliberately stay narrow so binary

@@ -50,21 +50,18 @@ matters.
 
 ## 5. Drive it in-process (optional)
 
-If you prefer code over a browser, the same backend boots in a few lines:
+If you prefer code over a browser, the same application assembles in a few
+lines (serving it is one `uvicorn.run` away):
 
 <!-- runnable: smoke -->
 ```python
-from noeta.agent.backend.lifecycle import BackendConfig, serve_backend
+from noeta.agent.main import create_app
 
-# Defaults are fully offline: the stub provider, :memory: storage.
-# port=0 binds an OS-assigned port. Workspace is the current directory.
-config = BackendConfig(port=0)
-server, url, shutdown = serve_backend(config)
-try:
-    assert url.startswith("http://")
-    print(f"Backend running at {url}")
-finally:
-    shutdown()
+# Fully offline defaults: the deterministic mock LLM, SQLite app storage,
+# dev-login. create_app assembles the FastAPI application without serving it.
+app = create_app()
+assert "/api/v1/health" in app.openapi()["paths"]
+print("application assembled")
 ```
 
 ## Next steps

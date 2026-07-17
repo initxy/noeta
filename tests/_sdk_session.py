@@ -184,7 +184,7 @@ def make_host(
     ``mcp_*`` / …).
     """
     if sqlite_path is not None:
-        from noeta.agent.host.storage import open_sqlite_storage
+        from tests._host_storage import open_sqlite_storage
 
         (event_log, content_store, dispatcher), _close = open_sqlite_storage(
             sqlite_path
@@ -228,7 +228,7 @@ def session_result(
     per-turn slice the old runner returned from each ``execute`` / ``resume``
     (pass the last seq seen before the turn).
     """
-    from noeta.agent.read_models.result import (
+    from tests._read_models.result import (
         CodeSessionResult,
         _collect_failed_edits,
         _collect_files_changed,

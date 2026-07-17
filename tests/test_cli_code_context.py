@@ -16,7 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
-from noeta.agent.read_models.context_view import build_code_context_view
+from tests._read_models.context_view import build_code_context_view
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.context_plan import ContextPlan
 from noeta.protocols.events import (
