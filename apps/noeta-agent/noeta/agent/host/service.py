@@ -92,7 +92,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 
 from noeta.agent.host.providers import build_provider
 from noeta.agent.host.title import generate_title
@@ -2102,6 +2102,7 @@ class AgentService:
         model: Optional[str],
         effort: Optional[str] = None,
         task_id: Optional[str] = None,
+        images: Sequence[Any] = (),
     ) -> None:
         """Post one turn of conversation driving (202 semantics: return
         immediately, progress flows over SSE).
@@ -2111,16 +2112,25 @@ class AgentService:
         check follows **that task's** status — other nodes running
         concurrently do not block this node's message. Regular-session
         behavior is unchanged (task_id ignored).
+
+        ``images`` are already-validated ``noeta.sdk.ImageBlock``s (see
+        api/image_input.py); they ride the seeded user turn alongside the
+        goal text.
         """
         if session.workflow is not None:
-            self._send_workflow_message(session, content, model, effort, task_id)
+            self._send_workflow_message(
+                session, content, model, effort, task_id, images=images
+            )
             return
         if session.status != "idle":
             raise SessionBusyError(session.status)
         chosen = model or session.model
         updates: dict[str, Any] = {"status": "running", "model": chosen}
         if session.task_id is None and session.title == "New session":
-            updates["title"] = content.strip().splitlines()[0][:40] or "New session"
+            # splitlines() of an image-only message (empty content) is [];
+            # fall back to the default title instead of indexing into nothing.
+            first_line = (content.strip().splitlines() or [""])[0]
+            updates["title"] = first_line[:40] or "New session"
         self._store.update(session.id, **updates)
         # Bind session → user: the identity seam host-side integrations
         # resolve through (_resolve_context). Done before the drive is posted,
@@ -2130,9 +2140,10 @@ class AgentService:
         ws = self.workspace_for(session.id)
         sid, cur_task = session.id, session.task_id
         goal = content
+        image_blocks = tuple(images)
 
         def job() -> None:
-            self._drive(sid, cur_task, ws, goal, chosen, effort)
+            self._drive(sid, cur_task, ws, goal, chosen, effort, images=image_blocks)
 
         self._submit_nowait(job)
         # Instant UI feedback: seed_start blocks synchronously on sandbox
@@ -2152,6 +2163,7 @@ class AgentService:
         model: Optional[str],
         effort: Optional[str],
         task_id: Optional[str],
+        images: Sequence[Any] = (),
     ) -> None:
         """Workflow-session message driving: route to the target node task,
         per-task busy check."""
@@ -2173,10 +2185,12 @@ class AgentService:
         self._session_to_user[session.id] = session.user
         ws = self.workspace_for(session.id)
         sid, tid, node_index = session.id, target["task_id"], target["node_index"]
+        image_blocks = tuple(images)
 
         def job() -> None:
             self._drive(
-                sid, tid, ws, content, chosen, effort, node_index=node_index
+                sid, tid, ws, content, chosen, effort, node_index=node_index,
+                images=image_blocks,
             )
 
         self._submit_nowait(job)
@@ -2224,6 +2238,7 @@ class AgentService:
         effort: Optional[str] = None,
         node_index: Optional[int] = None,
         node_params: Optional[dict] = None,
+        images: Sequence[Any] = (),
     ) -> None:
         try:
             # Per-space MCP connectors: the enabled token set is computed at
@@ -2233,7 +2248,7 @@ class AgentService:
                 self._start_fresh(
                     session_id, ws, goal, model, effort,
                     node_index=node_index, node_params=node_params,
-                    enabled_mcp=enabled_mcp,
+                    enabled_mcp=enabled_mcp, images=images,
                 )
             else:
                 try:
@@ -2246,7 +2261,7 @@ class AgentService:
                     # seed/yield pattern (including the noqa: SLF001).
                     seeded = self._client.seed_send_goal(
                         task_id, goal=goal, model_selector=model,
-                        effort=effort, enabled_mcp=enabled_mcp,
+                        effort=effort, enabled_mcp=enabled_mcp, images=images,
                     )
                     self._client._yield_seeded_lease(seeded)  # noqa: SLF001 — SDK surface
                 except Exception as exc:  # noqa: BLE001
@@ -2261,6 +2276,7 @@ class AgentService:
                     self._start_fresh(
                         session_id, ws, goal, model, effort,
                         node_index=node_index, enabled_mcp=enabled_mcp,
+                        images=images,
                     )
         except Exception as exc:  # noqa: BLE001 - backstop: errors are delivered over SSE
             self._handle_drive_failure(session_id, exc, task_id=task_id)
@@ -2275,6 +2291,7 @@ class AgentService:
         node_index: Optional[int] = None,
         node_params: Optional[dict] = None,
         enabled_mcp: tuple[str, ...] = (),
+        images: Sequence[Any] = (),
     ) -> None:
         self._pending_session = session_id
         # Knowledge is per-session bind-mounted by the provider into the
@@ -2295,6 +2312,7 @@ class AgentService:
                 model_selector=model,
                 effort=effort,
                 enabled_mcp=enabled_mcp,
+                images=images,
             )
         finally:
             self._pending_session = None
@@ -2612,6 +2630,19 @@ class AgentService:
             # guarantee; during the startup window treat it as missing
             return None
         return await anyio.to_thread.run_sync(self._client.get_content, content_hash)
+
+    def put_content(self, body: bytes, *, media_type: str) -> Any:
+        """Store ``body`` in the content-addressed store and return its
+        ``ContentRef`` (the image-input write side, see api/image_input.py).
+
+        Called from the request path (via the anyio thread pool at the
+        endpoint); the same cross-thread sqlite safety argument as
+        ``get_content_by_hash`` applies — SqliteContentStore.put holds its own
+        lock and the connection uses check_same_thread=False.
+        """
+        if self._client is None:
+            raise RuntimeError("agent service not started")
+        return self._client.put_content(body, media_type=media_type)
 
     async def raw_events(
         self, session: Session, cursor: Optional[dict[str, int]]

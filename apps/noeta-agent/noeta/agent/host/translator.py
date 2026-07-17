@@ -153,8 +153,30 @@ def _from_messages(seq: int, body: Any) -> list[UIEvent]:
                 for b in content
                 if isinstance(b, dict) and b.get("__canonical_tag__") == "text_block"
             ).strip()
-            if text:
-                events.append(UIEvent(seq, "user_message", {"content": text}))
+            # Composer attachments ride the user turn as image_blocks whose
+            # source is a ContentRef; expose {hash, media_type} so the
+            # frontend can render them back via GET /content/{hash}. The
+            # bytes themselves never travel the event stream.
+            images = []
+            for b in content:
+                if not isinstance(b, dict) or b.get("__canonical_tag__") != "image_block":
+                    continue
+                source = b.get("source")
+                if not isinstance(source, dict) or not source.get("hash"):
+                    continue
+                images.append(
+                    {
+                        "hash": str(source["hash"]),
+                        "media_type": str(source.get("media_type") or ""),
+                    }
+                )
+            if text or images:
+                data: dict = {"content": text}
+                if images:
+                    # Only attached when present: text-only frames stay
+                    # byte-identical to the pre-image vocabulary.
+                    data["images"] = images
+                events.append(UIEvent(seq, "user_message", data))
         elif role == "assistant":
             for block in content:
                 if not isinstance(block, dict):

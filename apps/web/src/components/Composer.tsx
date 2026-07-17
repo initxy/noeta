@@ -2,13 +2,30 @@ import {
   useEffect,
   useRef,
   useState,
+  type ClipboardEvent,
+  type DragEvent,
   type FormEvent,
   type KeyboardEvent,
 } from 'react'
-import type { ModelInfo } from '../api/types'
+import type { ImageAttachment, ModelInfo } from '../api/types'
 import { cn } from '../lib/cn'
+import {
+  base64FromDataUrl,
+  classifyImageFile,
+  imageFilesFromDataTransfer,
+  toAttachmentPayload,
+  type PendingImage,
+} from '../lib/imageAttach'
 import { sendKeyHint, useSendMode } from '../state/sendMode'
-import { IconCheck, IconChevron, IconSend, IconStop } from './icons'
+import { useToast } from '../state/toast'
+import {
+  IconCheck,
+  IconChevron,
+  IconClose,
+  IconImage,
+  IconSend,
+  IconStop,
+} from './icons'
 
 /** Effort display labels: low/medium/high/xhigh/max → Low/Medium/High/Extra high/Max; anything else as-is. */
 const EFFORT_LABELS: Record<string, string> = {
@@ -25,7 +42,7 @@ const shortModelLabel = (label: string) =>
   label.replace(/^gpt[\s-]*/i, '').trim() || label
 
 interface ComposerProps {
-  onSend: (content: string) => Promise<void>
+  onSend: (content: string, images: ImageAttachment[]) => Promise<void>
   onStop: () => void
   running: boolean
   disabled: boolean
@@ -53,11 +70,17 @@ export function Composer({
   const [value, setValue] = useState('')
   const [busy, setBusy] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  // Image attachments queued for the next send (validated on ingest;
+  // thumbnail chips with remove render above the textarea).
+  const [images, setImages] = useState<PendingImage[]>([])
+  const nextImageId = useRef(1)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
   // Enter during IME composition only confirms the candidate, never sends; a
   // self-maintained flag backstops isComposing timing differences.
   const composingRef = useRef(false)
   const [sendMode] = useSendMode()
+  const { toast } = useToast()
 
   useEffect(() => {
     const ta = taRef.current
@@ -66,7 +89,61 @@ export function Composer({
     ta.style.height = `${Math.min(ta.scrollHeight, 192)}px`
   }, [value])
 
-  const canSend = !disabled && !running && !busy && value.trim().length > 0
+  // The three attach entry points (picker / paste / drop) all funnel here:
+  // one shared verdict (type whitelist + 5MB cap), rejects surface as toasts.
+  const ingestImageFiles = (files: Iterable<File>) => {
+    for (const file of files) {
+      const verdict = classifyImageFile(file)
+      if (!verdict.ok) {
+        toast(verdict.message)
+        continue
+      }
+      const reader = new FileReader()
+      reader.onload = () => {
+        const dataUrl = String(reader.result || '')
+        const dataBase64 = base64FromDataUrl(dataUrl)
+        if (!dataBase64) return
+        setImages((list) => [
+          ...list,
+          {
+            id: nextImageId.current++,
+            mediaType: verdict.mediaType,
+            dataBase64,
+            dataUrl,
+            name: file.name || 'image',
+          },
+        ])
+      }
+      reader.readAsDataURL(file)
+    }
+  }
+
+  const removeImage = (id: number) =>
+    setImages((list) => list.filter((img) => img.id !== id))
+
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = imageFilesFromDataTransfer(e.clipboardData)
+    if (files.length === 0) return // Plain text pasting stays untouched.
+    e.preventDefault()
+    ingestImageFiles(files)
+  }
+
+  const onDragOver = (e: DragEvent<HTMLFormElement>) => {
+    if (e.dataTransfer.types.includes('Files')) e.preventDefault()
+  }
+
+  const onDrop = (e: DragEvent<HTMLFormElement>) => {
+    const files = imageFilesFromDataTransfer(e.dataTransfer)
+    if (files.length === 0) return
+    e.preventDefault()
+    ingestImageFiles(files)
+  }
+
+  const canSend =
+    !disabled &&
+    !running &&
+    !busy &&
+    (value.trim().length > 0 || images.length > 0)
 
   const submit = async (e?: FormEvent) => {
     e?.preventDefault()
@@ -74,8 +151,9 @@ export function Composer({
     const content = value.trim()
     setBusy(true)
     try {
-      await onSend(content)
+      await onSend(content, toAttachmentPayload(images))
       setValue('')
+      setImages([])
     } finally {
       setBusy(false)
       taRef.current?.focus()
@@ -122,11 +200,35 @@ export function Composer({
   return (
     <form
       onSubmit={submit}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
       className={cn(
         'rounded-2xl border bg-surface shadow-[var(--shadow)] transition-colors focus-within:border-accent',
         hero ? 'border-border-strong' : 'border-border',
       )}
     >
+      {images.length > 0 && (
+        <div className="flex flex-wrap gap-2 px-3 pt-3">
+          {images.map((img) => (
+            <div key={img.id} className="group relative">
+              <img
+                src={img.dataUrl}
+                alt={img.name}
+                className="h-14 w-14 rounded-lg border border-border object-cover"
+              />
+              <button
+                type="button"
+                onClick={() => removeImage(img.id)}
+                title="Remove image"
+                aria-label={`Remove ${img.name}`}
+                className="absolute -right-1.5 -top-1.5 flex h-4.5 w-4.5 items-center justify-center rounded-full border border-border bg-surface text-ink-2 shadow-[var(--shadow)] transition-colors hover:text-danger"
+              >
+                <IconClose className="h-3 w-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <textarea
         ref={taRef}
         rows={hero ? 3 : 1}
@@ -134,6 +236,7 @@ export function Composer({
         disabled={disabled}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={onKeyDown}
+        onPaste={onPaste}
         onCompositionStart={() => {
           composingRef.current = true
         }}
@@ -149,6 +252,27 @@ export function Composer({
       />
       <div className="flex items-center justify-between px-2.5 pb-2.5 pt-1.5">
         <div className="relative flex items-center gap-1.5">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/gif,image/webp"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              ingestImageFiles(e.target.files ?? [])
+              e.target.value = '' // Re-picking the same file must retrigger onChange.
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={disabled}
+            title="Attach images (PNG / JPEG / GIF / WebP, up to 5MB each)"
+            aria-label="Attach images"
+            className="flex h-7 w-7 items-center justify-center rounded-md border border-transparent text-ink-3 transition-colors hover:border-border hover:bg-surface-2 hover:text-ink-2 disabled:cursor-default disabled:opacity-50 disabled:hover:border-transparent disabled:hover:bg-transparent"
+          >
+            <IconImage className="h-4 w-4" />
+          </button>
           <button
             type="button"
             onClick={() => setMenuOpen((v) => !v)}

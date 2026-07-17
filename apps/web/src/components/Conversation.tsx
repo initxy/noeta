@@ -839,9 +839,27 @@ export function Conversation({
                     <div className="flex gap-3">
                       <Avatar src={userAvatar} name={userName} />
                       <div className="min-w-0 flex-1">
-                        <p className="w-fit max-w-full whitespace-pre-wrap break-words rounded-2xl bg-surface-2 px-3.5 py-2 text-[14.5px] font-medium leading-relaxed text-ink">
-                          {item.content}
-                        </p>
+                        {/* Composer image attachments: optimistic sends preview from
+                            local data URLs; replayed history loads by content hash
+                            via GET /content/{hash} (cookie-authenticated <img>). */}
+                        {item.images && item.images.length > 0 && (
+                          <div className="mb-1.5 flex flex-wrap gap-2">
+                            {item.images.map((img, i) => (
+                              <img
+                                key={img.hash ?? `local-${i}`}
+                                src={img.src}
+                                alt="User attachment"
+                                loading="lazy"
+                                className="max-h-56 max-w-72 rounded-xl border border-border object-contain"
+                              />
+                            ))}
+                          </div>
+                        )}
+                        {item.content && (
+                          <p className="w-fit max-w-full whitespace-pre-wrap break-words rounded-2xl bg-surface-2 px-3.5 py-2 text-[14.5px] font-medium leading-relaxed text-ink">
+                            {item.content}
+                          </p>
+                        )}
                       </div>
                     </div>
                   </li>

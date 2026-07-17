@@ -500,8 +500,24 @@ export interface TodoItem {
 /** The four memory operations (folded by the translator per noeta tool name; see backend _MEMORY_TOOL_OPS). */
 export type MemoryOp = 'write' | 'read' | 'search' | 'archive'
 
+/** Composer image attachment as sent in the message request body (base64-encoded). */
+export interface ImageAttachment {
+  media_type: string
+  data_base64: string
+}
+
+/** An image attached to a user turn, as exposed by the user_message event:
+ * a ContentRef handle — the bytes are fetched via GET /content/{hash}. */
+export interface UserMessageImage {
+  hash: string
+  media_type: string
+}
+
 export type UIEvent =
-  | { type: 'user_message'; data: { content: string } }
+  | {
+      type: 'user_message'
+      data: { content: string; images?: UserMessageImage[] }
+    }
   | { type: 'assistant_text'; data: { text: string } }
   | { type: 'thinking'; data: { text: string } }
   | {
