@@ -29,7 +29,7 @@ export HOST
 endif
 
 .DEFAULT_GOAL := help
-.PHONY: help run serve web dev install check
+.PHONY: help run serve web dev install check e2e-web
 
 help:
 	@echo "noeta-agent — one-step build + start (python -m noeta.agent underneath, env-only config)"
@@ -40,6 +40,7 @@ help:
 	@echo "  make dev        hot reload: backend(8000) + vite dev(5273 proxy)"
 	@echo "  make install    first time: uv sync + npm ci in apps/web"
 	@echo "  make check      the local CI gate: root pytest+coverage, app pytest, web tsc+tests, mypy, lints"
+	@echo "  make e2e-web    opt-in browser e2e: build SPA + Playwright against a throwaway backend (not in check)"
 	@echo ""
 	@echo "  overridable variables: PORT= HOST=  (otherwise apps/noeta-agent/.env applies)"
 
@@ -70,6 +71,14 @@ dev:
 install:
 	uv sync
 	cd $(WEB_DIR) && npm ci
+
+## opt-in browser e2e (not part of `make check`): build the SPA, then run the
+## Playwright suite in apps/web/e2e (its own isolated npm package). The suite's
+## webServer block boots `python -m noeta.agent` on port 8123 with a throwaway
+## data dir (wiped per run, mock provider, sandbox off) and tears it down after.
+e2e-web: web
+	@[ -d $(WEB_DIR)/e2e/node_modules ] || (cd $(WEB_DIR)/e2e && npm install)
+	cd $(WEB_DIR)/e2e && npx playwright test
 
 ## the local CI gate — mirrors .github/workflows/ci.yml minus what needs CI infrastructure.
 ## CI-only steps (expected to be absent locally): the Postgres storage contract tests
