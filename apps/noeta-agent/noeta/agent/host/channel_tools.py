@@ -23,8 +23,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from noeta.protocols.tool import ToolContext, ToolResult
-from noeta.tools.decorator import DecoratedTool, tool
+from noeta.sdk import DecoratedTool, ToolContext, ToolResult, tool
 
 _HISTORY_SCHEMA = {
     "type": "object",

@@ -38,7 +38,7 @@ import time
 import uuid
 from typing import Any, Optional
 
-from noeta.protocols.messages import (
+from noeta.sdk import (
     LLMRequest,
     LLMResponse,
     Message,
@@ -47,7 +47,7 @@ from noeta.protocols.messages import (
     ToolUseBlock,
     Usage,
 )
-from noeta.testing.fake_llm import FakeLLMProvider
+from noeta.sdk.testing import FakeLLMProvider
 
 
 def _text_of(msg: Message) -> str:

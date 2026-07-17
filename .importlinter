@@ -284,7 +284,7 @@ forbidden_modules =
     noeta.agent.registry
 
 [importlinter:contract:app-uses-only-sdk]
-name = the engine-facing product tier (host / api) may reach the engine only through noeta.sdk — a RATCHET: every legacy direct import is pinned below in ignore_imports; that list may only shrink (burn-down: promote the symbol onto noeta.sdk, then delete its line), never grow, EXCEPT for ADR-documented deliberate exemptions (the two sdk_* sandbox-adapter modules — the concrete AIO adapters they extend are runtime-internal, kept OFF the noeta.sdk public surface; see the execution-environment-seam ADR). Deliberate CONTEXT.md exemptions stay open: noeta.storage (the host wires a concrete backend) and noeta.read_models (the peripheral projection), so neither is forbidden here.
+name = the engine-facing product tier (host / api) may reach the engine only through noeta.sdk — a RATCHET: the burn-down list is fully burned down (every former pin was promoted onto the noeta.sdk surface); ignore_imports may not grow again EXCEPT for ADR-documented deliberate exemptions (the two sdk_* sandbox-adapter modules — the concrete AIO adapters they extend are runtime-internal, kept OFF the noeta.sdk public surface; see the execution-environment-seam ADR). Deliberate CONTEXT.md exemptions stay open: noeta.storage (the host wires a concrete backend) and noeta.read_models (the peripheral projection), so neither is forbidden here.
 type = forbidden
 ; Only DIRECT imports are forbidden — reaching runtime internals *through*
 ; noeta.sdk is the encapsulation working as intended (same stance as
@@ -315,27 +315,6 @@ ignore_imports =
     ; retirement-slated implementation into the user-facing API).
     noeta.agent.host.sdk_sandbox_exec_env -> noeta.tools.fs.exec_env
     noeta.agent.host.sdk_browser_backend -> noeta.tools.browser
-    ; Burn-down pins (each is a promotion candidate for the noeta.sdk
-    ; public surface).
-    noeta.agent.host.service -> noeta.protocols.tool
-    noeta.agent.host.service -> noeta.protocols.canonical
-    noeta.agent.host.service -> noeta.tools.fs.read
-    noeta.agent.host.service -> noeta.tools.fs._workspace
-    noeta.agent.host.service -> noeta.tools._invocation
-    noeta.agent.host.service -> noeta.tools._limits
-    noeta.agent.host.service -> noeta.tools.memory
-    noeta.agent.host.mock_llm -> noeta.protocols.messages
-    noeta.agent.host.mock_llm -> noeta.testing.fake_llm
-    noeta.agent.host.providers -> noeta.providers.catalog
-    noeta.agent.host.routing_provider -> noeta.protocols.messages
-    noeta.agent.host.board_tools -> noeta.protocols.tool
-    noeta.agent.host.board_tools -> noeta.tools.decorator
-    noeta.agent.host.channel_tools -> noeta.protocols.tool
-    noeta.agent.host.channel_tools -> noeta.tools.decorator
-    noeta.agent.host.feedback_analysis -> noeta.protocols.tool
-    noeta.agent.host.feedback_analysis -> noeta.tools.memory
-    noeta.agent.api.memories -> noeta.tools.memory
-    noeta.agent.api.feedback -> noeta.tools.memory
 
 [importlinter:contract:mcp-tools-boundary]
 name = noeta.tools.mcp may import only noeta.protocols + noeta.tools helpers + stdlib (Phase 4.5 F2)

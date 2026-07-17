@@ -303,7 +303,7 @@ async def adopt_suggestion(
                 detail="adopting a memory suggestion requires memory_name and"
                 " memory_text",
             )
-        from noeta.tools.memory import MemoryStore
+        from noeta.sdk import MemoryStore
 
         try:
             MemoryStore(settings.memories_path / space_id).write(name, text)

@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Optional
 
-from noeta.protocols.messages import LLMRequest, LLMResponse, StreamDelta
+from noeta.sdk import LLMRequest, LLMResponse, StreamDelta
 
 logger = logging.getLogger(__name__)
 
