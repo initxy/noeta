@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react'
-import { eventsUrl } from '../api/endpoints'
+import { contentUrl, eventsUrl } from '../api/endpoints'
 import { readSSE } from '../api/sse'
 import type {
   MemoryOp,
@@ -18,10 +18,20 @@ import {
 
 // ---- Render-item model: SSE events folded in order ----
 
+/** An image shown in a user bubble. Real events carry a content hash (src is
+ * the /content/{hash} URL); optimistic sends have no hash yet (src is the
+ * local data URL) and are replaced when the real user_message arrives. */
+export interface UserImage {
+  hash: string | null
+  src: string
+}
+
 export interface UserItem {
   kind: 'user'
   seq: number
   content: string
+  /** Composer image attachments (absent for text-only messages). */
+  images?: UserImage[]
 }
 
 export interface AssistantItem {
@@ -172,7 +182,8 @@ type Action =
   | { type: 'conn_error'; message: string }
   | { type: 'frame'; frame: SSEFrame }
   | { type: 'question_answered_local'; questionId: string }
-  | { type: 'optimistic_send'; content: string }
+  /** imageDataUrls: local previews of the attachments riding this send. */
+  | { type: 'optimistic_send'; content: string; imageDataUrls?: string[] }
 
 /** Close pending steps on abnormal / terminal states: cancelled tools and drive-layer
  * failures (LLM errors etc.) never get a paired result; without closing they would
@@ -270,6 +281,16 @@ function foldFrame(state: ChatState, frame: SSEFrame): ChatState {
 
   switch (ev.type) {
     case 'user_message': {
+      // Attached images arrive as content hashes; the bytes are fetched from
+      // the content endpoint (the local data-URL preview of an optimistic
+      // send is replaced along with its item below).
+      const images: UserImage[] | undefined = ev.data.images?.map((img) => ({
+        hash: img.hash,
+        src: contentUrl(img.hash),
+      }))
+      const real: UserItem = images
+        ? { kind: 'user', seq, content: ev.data.content, images }
+        : { kind: 'user', seq, content: ev.data.content }
       // Dedup: optimistic_send already rendered a synthetic user item (seq < 0); when
       // the real user_message arrives it replaces that item (with the real seq) instead
       // of appending. Checking only the last item is not enough — after a reset the SSE
@@ -278,18 +299,14 @@ function foldFrame(state: ChatState, frame: SSEFrame): ChatState {
         (it) => it.kind === 'user' && it.seq < 0 && it.content === ev.data.content,
       )
       if (synthIdx >= 0) {
-        items = [
-          ...items.slice(0, synthIdx),
-          { kind: 'user', seq, content: ev.data.content },
-          ...items.slice(synthIdx + 1),
-        ]
+        items = [...items.slice(0, synthIdx), real, ...items.slice(synthIdx + 1)]
         break
       }
       // Fallback: also skip when the last item is a real user message with identical
       // content (guards against duplicate SSE reconnect replays).
       const last = items[items.length - 1]
       if (last?.kind === 'user' && last.content === ev.data.content) break
-      items = [...items, { kind: 'user', seq, content: ev.data.content }]
+      items = [...items, real]
       break
     }
     case 'assistant_text':
@@ -531,6 +548,14 @@ function reducer(state: ChatState, action: Action): ChatState {
             kind: 'user',
             seq: state.syntheticSeq - 1,
             content: action.content,
+            ...(action.imageDataUrls && action.imageDataUrls.length > 0
+              ? {
+                  images: action.imageDataUrls.map((src) => ({
+                    hash: null,
+                    src,
+                  })),
+                }
+              : {}),
           },
         ],
         running: true,
@@ -603,9 +628,12 @@ export function useChat(sessionId: string | null, taskId?: string | null) {
     dispatch({ type: 'question_answered_local', questionId })
   }, [])
 
-  const optimisticSend = useCallback((content: string) => {
-    dispatch({ type: 'optimistic_send', content })
-  }, [])
+  const optimisticSend = useCallback(
+    (content: string, imageDataUrls?: string[]) => {
+      dispatch({ type: 'optimistic_send', content, imageDataUrls })
+    },
+    [],
+  )
 
   return { ...state, markAnswered, optimisticSend }
 }
