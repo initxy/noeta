@@ -203,6 +203,51 @@ export interface KnowledgeSource {
   failed_count?: number | null
 }
 
+/** MCP connector: a per-space MCP server config (http or stdio transport).
+ * Credential VALUES never reach the client — the backend echoes header/env
+ * NAMES only (header_names / env_names). */
+export interface McpConnector {
+  space_id: string
+  alias: string
+  type: 'http' | 'stdio'
+  url: string
+  /** Names of the configured request headers (values stay server-side). */
+  header_names: string[]
+  command: string
+  args: string[]
+  /** Names of the configured env variables (values stay server-side). */
+  env_names: string[]
+  enabled: boolean
+  /** Enabled-tool subset (raw tool names); null = all advertised tools. */
+  tools: string[] | null
+  created_by: string
+  created_at: number
+  updated_at: number
+}
+
+/** One entry of a connector's advertised tool menu (discovery). */
+export interface McpToolInfo {
+  name: string
+  description: string
+}
+
+/** One entry of a connector's prompt menu (discovery). */
+export interface McpPromptInfo {
+  name: string
+  noeta_name: string
+  description: string
+  arguments: { name: string; description?: string; required?: boolean }[]
+}
+
+/** One entry of a connector's static-resource menu (discovery). */
+export interface McpResourceInfo {
+  uri: string
+  name: string
+  description: string
+  mime_type: string
+  noeta_ref: string
+}
+
 /** Sync progress (in-memory state, exposed via sync status while syncing; null otherwise).
  * Phases: starting / cloned / fetched / copying / done, with optional per-phase fields. */
 export interface SyncProgress {

@@ -15,16 +15,18 @@ import type {
 import { cn } from '../lib/cn'
 import { useSpace } from '../state/space'
 import { useToast } from '../state/toast'
+import { McpConnectorsTab } from './McpConnectorsTab'
 import { MemberSearchSelect } from './MemberSearchSelect'
 import {
   IconClose,
+  IconGlobe,
   IconSettings,
   IconSkill,
   IconTrash,
   IconUsers,
 } from './icons'
 
-export type SpaceSettingsTab = 'info' | 'members' | 'agent'
+export type SpaceSettingsTab = 'info' | 'members' | 'agent' | 'connectors'
 
 interface Props {
   spaceId: string
@@ -101,6 +103,9 @@ export function SpaceSettingsPanel({ spaceId, initialTab, onClose }: Props) {
           <TabBtn active={tab === 'agent'} onClick={() => setTab('agent')} icon={<IconSkill className="h-3.5 w-3.5" />}>
             Agent config
           </TabBtn>
+          <TabBtn active={tab === 'connectors'} onClick={() => setTab('connectors')} icon={<IconGlobe className="h-3.5 w-3.5" />}>
+            Connectors
+          </TabBtn>
         </div>
 
         {loading || !detail ? (
@@ -132,6 +137,9 @@ export function SpaceSettingsPanel({ spaceId, initialTab, onClose }: Props) {
             )}
             {tab === 'agent' && (
               <AgentConfigTab spaceId={detail.id} isOwner={isOwner} />
+            )}
+            {tab === 'connectors' && (
+              <McpConnectorsTab spaceId={detail.id} isOwner={isOwner} />
             )}
           </div>
         )}
