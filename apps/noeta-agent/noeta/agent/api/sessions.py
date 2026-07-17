@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from noeta.agent.api.image_input import ImageInputError, build_image_blocks
 from noeta.agent.api.spaces import require_space_member
 from noeta.agent.auth.deps import CurrentUser, get_current_user
 from noeta.agent.host.service import AgentService, SessionBusyError
@@ -236,12 +237,19 @@ async def delete_session(
 
 # ------------------------------------------------------------------- driving
 class MessageBody(BaseModel):
-    content: str = Field(min_length=1, max_length=32000)
+    # content may be empty only for an image-only message (checked in the
+    # handler — pydantic cannot see the cross-field rule).
+    content: str = Field(default="", max_length=32000)
     model: Optional[str] = None
     effort: Optional[str] = None  # OpenAI Responses API reasoning effort (low/medium/high)
     # Workflow sessions: target node task (omitted = the most recently started
     # node); ignored for plain sessions.
     task_id: Optional[str] = None
+    # Composer image attachments: [{media_type, data_base64}]. Kept as raw
+    # dicts — build_image_blocks (api/image_input.py) owns the whole
+    # validate → decode → store pass and maps every violation to a 400
+    # (matching the retired app's contract), not a pydantic 422.
+    images: Optional[list[dict]] = None
 
 
 @router.post("/{session_id}/messages", status_code=202)
@@ -252,6 +260,10 @@ async def post_message(
     user: CurrentUser = Depends(get_current_user),
 ) -> dict:
     session = _own_session(request, session_id, user)
+    if not body.content.strip() and not body.images:
+        raise HTTPException(
+            status_code=422, detail="message needs text content or images"
+        )
     settings = request.app.state.settings
     from noeta.agent.models_config import get_models, validate_model
 
@@ -278,9 +290,20 @@ async def post_message(
                 detail=f"model {chosen} does not support effort: {body.effort}",
             )
     task_id = _resolve_task(request, session, body.task_id)
+    # Decode + store the attachments before seeding: a bad attachment is the
+    # client's fault → 400, the turn is never seeded. Decode + sqlite write
+    # (up to 5MB per image) runs in the thread pool, off the event loop.
+    service = _service(request)
     try:
-        _service(request).send_message(
-            session, body.content, chosen, effort=effort, task_id=task_id
+        images = await anyio.to_thread.run_sync(
+            build_image_blocks, service, body.images
+        )
+    except ImageInputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        service.send_message(
+            session, body.content, chosen, effort=effort, task_id=task_id,
+            images=images,
         )
     except SessionBusyError as exc:
         raise HTTPException(

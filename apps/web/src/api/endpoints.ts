@@ -20,6 +20,7 @@ import type {
   FeedbackSuggestion,
   FileContent,
   FileEntry,
+  ImageAttachment,
   KnowledgeSource,
   MemoryEntry,
   ModelInfo,
@@ -395,12 +396,14 @@ export const sessionsApi = {
     model?: string,
     effort?: string,
     taskId?: string,
+    images?: ImageAttachment[],
   ) =>
     api.post<{ status: string }>(`${BASE}/sessions/${id}/messages`, {
       content,
       ...(model ? { model } : {}),
       ...(effort ? { effort } : {}),
       ...(taskId ? { task_id: taskId } : {}),
+      ...(images && images.length > 0 ? { images } : {}),
     }),
   answer: (
     id: string,

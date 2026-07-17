@@ -333,8 +333,11 @@ def _collect_ref_hashes(obj) -> list[str]:
 
 
 def test_content_endpoint(make_client):
-    """Trace deref data source (consolidated under admin): fetch raw bytes by
-    ContentRef.hash."""
+    """Content-addressed read-back: fetch raw bytes by ContentRef.hash.
+
+    Gated by authentication only (not require_admin): besides the admin Trace
+    deref, the chat user bubble loads composer image attachments from here,
+    so any logged-in user may fetch — the SHA-256 hash is the capability."""
     client = make_client(ADMIN_USERS="alice")
     login(client, "alice")
     sid = create_session(client)
@@ -356,9 +359,12 @@ def test_content_endpoint(make_client):
     assert client.get("/api/v1/content/" + "0" * 64).status_code == 404
     assert client.get("/api/v1/content/not-a-hash").status_code == 404
 
-    # Non-admin fetching content → 404 (the content endpoint is admin-gated)
+    # A logged-in non-admin can fetch too (image render-back path); logging
+    # out entirely → 401.
     client.post("/api/v1/auth/dev-login", json={"username": "bob"})
-    assert client.get(f"/api/v1/content/{hashes[0]}").status_code == 404
+    assert client.get(f"/api/v1/content/{hashes[0]}").status_code == 200
+    client.cookies.clear()
+    assert client.get(f"/api/v1/content/{hashes[0]}").status_code == 401
 
 
 def test_content_read_not_blocked_by_worker(tmp_path, monkeypatch):
