@@ -184,6 +184,14 @@ export const IconUpload = (p: IconProps) => (
   </svg>
 )
 
+export const IconImage = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="2.5" y="3" width="11" height="10" rx="1.5" />
+    <circle cx="6" cy="6.5" r="1" />
+    <path d="M2.5 11.5 6 8.5l2.5 2 2-1.5 3 2.5" />
+  </svg>
+)
+
 export const IconDownload = (p: IconProps) => (
   <svg {...base(p)}>
     <path d="M8 2v8M5 7l3 3 3-3M3 11v1.5a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V11" />
