@@ -21,6 +21,10 @@ import type {
   FileContent,
   FileEntry,
   KnowledgeSource,
+  McpConnector,
+  McpPromptInfo,
+  McpResourceInfo,
+  McpToolInfo,
   MemoryEntry,
   ModelInfo,
   Paginated,
@@ -210,6 +214,79 @@ export const knowledgeApi = {
     api.post<{ items: ResolvedKnowledgePath[] }>(
       `${BASE}/spaces/${spaceId}/knowledge/resolve-paths`,
       { paths },
+    ),
+}
+
+/** Per-space MCP connectors: CRUD + enable toggle + tool subset + discovery
+ * menus. Members read; owners manage. Credential values are write-only —
+ * every response carries scrubbed name lists. */
+export const mcpApi = {
+  list: (spaceId: string) =>
+    api.get<{ servers: McpConnector[] }>(`${BASE}/spaces/${spaceId}/mcp/servers`),
+  /** Create or replace a connector (same alias overwrites). */
+  create: (
+    spaceId: string,
+    data: {
+      alias: string
+      type: 'http' | 'stdio'
+      url?: string
+      headers?: Record<string, string>
+      command?: string
+      args?: string[]
+      env?: Record<string, string>
+      tools?: string[] | null
+      enabled?: boolean
+    },
+  ) =>
+    api.post<{ server: McpConnector }>(
+      `${BASE}/spaces/${spaceId}/mcp/servers`,
+      data,
+    ),
+  /** Merge edit: an omitted field keeps its stored value (credentials never
+   * need re-pasting). */
+  update: (
+    spaceId: string,
+    alias: string,
+    data: {
+      url?: string
+      headers?: Record<string, string>
+      command?: string
+      args?: string[]
+      env?: Record<string, string>
+      tools?: string[] | null
+    },
+  ) =>
+    api.put<{ server: McpConnector }>(
+      `${BASE}/spaces/${spaceId}/mcp/servers/${encodeURIComponent(alias)}`,
+      data,
+    ),
+  setEnabled: (spaceId: string, alias: string, enabled: boolean) =>
+    api.patch<{ server: McpConnector }>(
+      `${BASE}/spaces/${spaceId}/mcp/servers/${encodeURIComponent(alias)}`,
+      { enabled },
+    ),
+  remove: (spaceId: string, alias: string) =>
+    api.delete<{ ok: boolean }>(
+      `${BASE}/spaces/${spaceId}/mcp/servers/${encodeURIComponent(alias)}`,
+    ),
+  /** Set the enabled-tool subset (null = all advertised tools). */
+  setTools: (spaceId: string, alias: string, tools: string[] | null) =>
+    api.put<{ server: McpConnector }>(
+      `${BASE}/spaces/${spaceId}/mcp/servers/${encodeURIComponent(alias)}/tools`,
+      { tools },
+    ),
+  /** Discovery menus (http connectors only): connect + list. */
+  toolMenu: (spaceId: string, alias: string) =>
+    api.get<{ tools: McpToolInfo[] }>(
+      `${BASE}/spaces/${spaceId}/mcp/servers/${encodeURIComponent(alias)}/tools`,
+    ),
+  promptMenu: (spaceId: string, alias: string) =>
+    api.get<{ prompts: McpPromptInfo[] }>(
+      `${BASE}/spaces/${spaceId}/mcp/servers/${encodeURIComponent(alias)}/prompts`,
+    ),
+  resourceMenu: (spaceId: string, alias: string) =>
+    api.get<{ resources: McpResourceInfo[] }>(
+      `${BASE}/spaces/${spaceId}/mcp/servers/${encodeURIComponent(alias)}/resources`,
     ),
 }
 

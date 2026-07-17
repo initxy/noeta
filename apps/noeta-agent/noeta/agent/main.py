@@ -23,6 +23,7 @@ from noeta.agent.api import board as board_api
 from noeta.agent.api import channels as channels_api
 from noeta.agent.api import feedback as feedback_api
 from noeta.agent.api import knowledge as knowledge_api
+from noeta.agent.api import mcp as mcp_api
 from noeta.agent.api import memories as memories_api
 from noeta.agent.api import misc as misc_api
 from noeta.agent.api import sessions as sessions_api
@@ -41,6 +42,7 @@ from noeta.agent.store.board import BoardStore
 from noeta.agent.store.channels import ChannelStore
 from noeta.agent.store.feedback import FeedbackStore
 from noeta.agent.store.knowledge import KnowledgeSourceStore
+from noeta.agent.store.mcp import McpConnectorStore
 from noeta.agent.store.sessions import SessionStore
 from noeta.agent.store.skills import SkillStore
 from noeta.agent.store.spaces import SpaceStore
@@ -117,7 +119,13 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         # restart).
         feedback_store = FeedbackStore(settings.app_db_path)
         feedback_store.reset_stale_running()
+        # Per-space MCP connector configuration (credentials never leave the
+        # server; the resolver feeds specs into the SDK host per turn).
+        mcp_store = McpConnectorStore(settings.app_db_path)
         service = AgentService(settings, store)
+        # MCP connector store (enabled-alias resolution for each turn's
+        # HostConfig.mcp_server_resolver callback).
+        service.attach_mcp_store(mcp_store)
         # Feedback storage (analysis-agent suggestions + run finalization).
         service.attach_feedback_store(feedback_store)
         # Knowledge store (source-status checks when linking knowledge into a
@@ -158,6 +166,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         app.state.channel_service = channel_service
         app.state.board_store = board_store
         app.state.feedback_store = feedback_store
+        app.state.mcp_store = mcp_store
         app.state.agent_service = service
         await service.startup()
         channel_service.start(asyncio.get_running_loop())
@@ -181,6 +190,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             channel_store.close()
             board_store.close()
             feedback_store.close()
+            mcp_store.close()
 
     app = FastAPI(title="noeta-agent", lifespan=lifespan)
     app.add_middleware(
@@ -200,6 +210,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     app.include_router(templates_api.router, prefix="/api/v1")
     app.include_router(space_skills_api.router, prefix="/api/v1")
     app.include_router(knowledge_api.router, prefix="/api/v1")
+    app.include_router(mcp_api.router, prefix="/api/v1")
     app.include_router(channels_api.router, prefix="/api/v1")
     app.include_router(board_api.router, prefix="/api/v1")
     app.include_router(memories_api.router, prefix="/api/v1")
