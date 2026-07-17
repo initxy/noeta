@@ -443,7 +443,13 @@ class AgentService:
     # ------------------------------------------------------------- init
     def _init_client(self) -> None:
         from noeta.sdk import Capabilities
-        from noeta.sdk import AgentDefinition, Client, HostConfig, Options
+        from noeta.sdk import (
+            AgentDefinition,
+            Client,
+            HostConfig,
+            Options,
+            OtlpTraceConfig,
+        )
         from noeta.storage.sqlite import (
             SqliteContentStore,
             SqliteDispatcher,
@@ -798,6 +804,20 @@ class AgentService:
                 # only prevents cross-space leaks, never a real store).
                 memory_root_resolver=self._memory_root_for_task,
                 global_memory_dir=s.memories_path / "_quarantine",
+                # OTLP trace export (opt-in): the Client constructs the
+                # trace-export observer only when OTLP_ENDPOINT is set;
+                # headers ride on every export request (hosted-collector
+                # auth) and never enable anything by themselves. The ambient
+                # OTel-standard endpoint env is deliberately not honored as
+                # an enable switch (see config.py).
+                otlp_traces=(
+                    OtlpTraceConfig(
+                        endpoint=s.otlp_endpoint,
+                        headers=s.otlp_header_items,
+                    )
+                    if s.otlp_endpoint
+                    else None
+                ),
             ),
         )
         self._client.subscribe(self._on_envelope)
