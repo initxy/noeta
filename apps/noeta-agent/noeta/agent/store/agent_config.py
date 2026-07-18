@@ -5,9 +5,9 @@ One row per space (space_id primary key); no row = all defaults. Fields:
 - `prompt`: appended persona segment. At assembly time it is written into the
   session workspace `AGENT.md` (it does not override the platform's base
   system prompt).
-- `memory_enabled`: memory toggle. The SDK memory capability is not wired in
-  yet (it lands with the SDK upgrade branch); the column is persisted ahead of
-  time and takes effect as soon as the capability is wired in.
+- `memory_enabled`: per-space memory toggle. Takes effect only when the
+  platform-level `MEMORY_TOOLS_ENABLED` gate is on (see config.py); memory
+  itself is wired through the SDK's memory_root_resolver seam.
 - `knowledge_sources_json`: JSON list of knowledge-source ids that take part
   in assembly; NULL = all of them.
 - `default_model` / `default_effort`: default model and reasoning effort for
