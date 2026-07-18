@@ -8,6 +8,20 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The compaction summarize round-trip ignored the model's output ceiling,
+  so proactive compaction reliably killed reasoning-model tasks with
+  `compaction_summary_failed`.** `_summary_prompt_request` built its
+  `LLMRequest` without `max_tokens` (unlike every normal turn, which forwards
+  `max_output_tokens`), so a gateway that caps output when the client sends
+  none — e.g. the aidp Responses gateway's 1000-token default — let a reasoning
+  model spend the entire default budget on hidden reasoning and return
+  `stop_reason="max_tokens"` with an empty text body. The empty-summary guard
+  then (correctly) refused to record the empty summary and failed the step,
+  taking down the whole task. The summarize request now forwards
+  `max_output_tokens` the same way a normal turn does.
+
 ## [0.3.0] - 2026-07-17
 
 ### Changed
