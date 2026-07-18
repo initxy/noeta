@@ -1,6 +1,6 @@
 [project]
 name = "noeta-agent"
-version = "0.3.0.dev0"
+version = "0.3.0"
 description = "Noeta's official product: a multi-user, server-side agent platform."
 requires-python = ">=3.12"
 dependencies = [
@@ -11,8 +11,8 @@ dependencies = [
     "fastapi>=0.115",
     "httpx>=0.27",
     "itsdangerous>=2.2",
-    "noeta-sdk",
-    "noeta-runtime",
+    "noeta-sdk>=0.3.0",
+    "noeta-runtime>=0.3.0",
     "pydantic-settings>=2.4",
     "python-multipart>=0.0.9",
     "pyyaml>=6",
