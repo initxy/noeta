@@ -106,6 +106,34 @@ def test_empty_summary_fails_cleanly_without_recording_compaction() -> None:
     assert decision.reason == "compaction_summary_failed"
 
 
+def test_reasoning_model_maxtokens_truncation_fails_cleanly() -> None:
+    # The production shape (trace 75a63fcb…): a reasoning model on a gateway that
+    # caps output when the client sends no ``max_tokens`` spent its whole default
+    # budget on hidden reasoning and returned ``stop_reason="max_tokens"`` with no
+    # text block. The empty-summary guard must still fail cleanly here rather than
+    # record an empty compaction that would destroy the collapsed prefix.
+    decision, provider = _drive(LLMResponse(stop_reason="max_tokens", content=[]))
+    assert len(provider.received_requests) == 1
+    assert isinstance(decision, FailDecision)
+    assert decision.reason == "compaction_summary_failed"
+
+
+def test_summarize_request_forwards_output_ceiling() -> None:
+    # Root-cause guard for the fix: the summarize round-trip must carry the
+    # model's output ceiling (``max_output_tokens``) the same as a normal turn.
+    # Without it a gateway that caps output when no ``max_tokens`` is sent
+    # truncates a reasoning model's summary into the empty ``max_tokens`` body
+    # above, so every proactive compaction dies as ``compaction_summary_failed``.
+    _, provider = _drive(
+        LLMResponse(
+            stop_reason="end_turn", content=[TextBlock(text="real note")]
+        )
+    )
+    assert len(provider.received_requests) == 1
+    # ``_drive`` builds the policy with ``max_output_tokens=50``.
+    assert provider.received_requests[0].max_tokens == 50
+
+
 def test_nonempty_summary_still_compacts() -> None:
     # Guard the happy path: a real summary is still recorded as a compaction.
     decision, _ = _drive(

@@ -482,6 +482,19 @@ class ReActPolicy:
             messages=list(history),
             tools=[],
             system=summary_system,
+            # Forward the model's output ceiling exactly as a normal turn does
+            # (see ``_make_request``). Without it a gateway that caps output at a
+            # stingy default when the client sends no ``max_tokens`` (the aidp
+            # Responses gateway caps at 1000) starves the summary: a reasoning
+            # model spends the whole default budget on hidden reasoning and comes
+            # back ``stop_reason="max_tokens"`` with an EMPTY text body, which the
+            # empty-summary guard below then (correctly) turns into a
+            # ``compaction_summary_failed`` FailDecision — killing the task on
+            # every proactive compaction. ``0`` (host didn't inject) ⇒ ``None`` ⇒
+            # omitted from canonical bytes, so a legacy session's summarize prompt
+            # prefix is byte-identical and the request stays deterministic on
+            # resume.
+            max_tokens=self._max_output_tokens or None,
         )
 
     def _compaction_decision(
