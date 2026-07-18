@@ -1,135 +1,95 @@
-# Use the coding agent
+# Use the platform
 
-**Goal:** drive `python -m noeta.agent` for real coding tasks — configure
-the workspace, use agent presets, manage sessions, and work with skills.
+**Goal:** drive the noeta-agent platform for real work — log in, set up a
+space (knowledge, skills, MCP connectors, agent-config), hold sessions, and
+use the files panel and sandbox preview.
 
-**Before you start:** you have installed Noeta and configured a real
-provider (see [Configure a provider](configure-provider.md)).
+**Before you start:** the platform is running (`make run`, or
+`python -m noeta.agent`; see the [quickstart](../tutorials/quickstart.md)).
+Everything below works in zero-credential mock mode; for real answers wire a
+gateway first ([connect a gateway](configure-provider.md)).
 
-## Start the agent with your workspace
+## 1. Log in
 
-```bash
-NOETA_AGENT_WORKSPACE=./my-project \
-NOETA_AGENT_PROVIDER=anthropic \
-NOETA_AGENT_MODEL=claude-sonnet-4-5-20250929 \
-NOETA_AGENT_API_KEY=sk-ant-… \
-NOETA_AGENT_STORAGE=./my-project/session.sqlite \
-NOETA_AGENT_WRITE_MODE=apply \
-python -m noeta.agent
-```
+Open the server URL (default <http://127.0.0.1:8000>). The default build
+uses **dev-login**: enter any username and you are in. Every user gets a
+**personal space** automatically; usernames listed in `ADMIN_USERS` also see
+the admin console.
 
-Key variables:
+> Dev-login is a development affordance. A real deployment plugs an identity
+> provider into the `AuthProvider` seam and disables dev-login (hot-
+> switchable from the admin console).
 
-| Variable | Why set it |
-| --- | --- |
-| `NOETA_AGENT_WORKSPACE` | The directory the agent reads and edits. Defaults to `.`. |
-| `NOETA_AGENT_STORAGE` | Durable storage for the EventLog. Without this, sessions die with the process. |
-| `NOETA_AGENT_WRITE_MODE` | `apply` lets the agent actually write files. Default `dry_run` proposes diffs only. |
+## 2. Pick or create a space
 
-Open the printed URL in your browser and navigate to `/chat`.
+The space switcher lists your spaces. Your personal space is yours alone;
+**team spaces** are shared — create one, then add members (owners manage
+membership, members use the space). Everything the agent brings to a session
+is scoped to the current space.
 
-## Choose an agent preset
+## 3. Give the space material
 
-The agent is chosen **per task** — when you create a new conversation,
-you can pick which agent to use. The four shipped presets:
+All of this is optional — a bare space chats fine — but it is what makes the
+agent *yours*:
 
-| Preset | When to use |
-| --- | --- |
-| `main` | Default. Full tool surface, spawns sub-agents. Best for general coding work. |
-| `general-purpose` | Self-contained: reads, writes, edits, runs shell. No delegation. |
-| `explore` | Read-only scout. Use it to understand a codebase without risk of edits. |
-| `plan` | Read-only architect. Returns an ordered implementation plan. |
+- **Knowledge** (space page → Knowledge): add a `git_repo` source (clone
+  URL, optional token) or a `local_dir` source, then trigger a sync. Synced
+  content is mounted read-only into session sandboxes and the agent cites it
+  back to source paths.
+- **Skills** (space page → Skills): upload a skill (a `SKILL.md` pack, zip
+  or single file). The model activates skills on demand from its skill menu;
+  platform-wide builtin skills are managed by admins.
+- **MCP connectors** (space page → MCP): register an MCP server under an
+  alias — `http` (URL + headers) or `stdio` (command + args + env) — then
+  optionally restrict it to a tool subset and enable it. Enabled connectors
+  are resolved into the agent every turn; their tools appear as
+  `mcp__<alias>__<tool>`. Credentials stay server-side.
+- **Agent-config** (space page → Agent): a persona prompt (written into each
+  session workspace as `AGENT.md`), the default model and reasoning effort
+  for new sessions, which knowledge sources take part, and the memory
+  toggle.
+- **Templates**: reusable prompts with typed parameters, and multi-node
+  **workflow templates** chaining them.
 
-Pick `explore` when you want the agent to understand a new codebase
-without touching anything; pick `main` when you want it to make changes.
+## 4. Hold a session
 
-## Send a message and watch the trace
+Click **New session**, type a message, pick a model / reasoning effort in
+the composer if you want to override the space default. During a turn you
+see streamed assistant text and thinking, tool calls with results, todo-list
+updates, skill activations, and subtask cards — all replayable: reload the
+page mid-turn and the stream re-derives from the event log.
 
-Type your request in the chat composer — for example:
+- **Questions** — the agent can pause on a structured question (choices +
+  freeform); the session waits until you answer.
+- **Stop** — cancels the running turn; the partial history stays recorded.
+- **Images** — attach PNG / JPEG / GIF / WebP (≤ 5 MB each) in the composer;
+  they ride the turn to vision-capable models.
+- **Templates / workflows** — start a session from a template (parameters →
+  first message) or a workflow template; a workflow session shows one tab
+  per node and advances through a generated handoff you review and confirm.
+- **Feedback** — rate any assistant message; space owners can later run the
+  analysis agent over collected ratings and adopt its suggestions.
 
-```
-Find all Python files that import `pydantic` and list what they use from it.
-```
+Sessions are listed per space; any space member can open a team-space
+session, while deleting is limited to the creator or a space owner.
 
-As the agent works, the trace view fills with events: the LLM turn, each
-tool call (`grep`, `read`, `glob`), and the tool results. You can
-inspect token usage and cache hit rates per turn.
+## 5. Files panel and sandbox preview
 
-If the agent proposes an edit and `NOETA_AGENT_WRITE_MODE=apply`, the
-file changes immediately. If `write_mode=dry_run` (the default), you see
-a unified diff artifact instead — safe for evaluation.
+With the sandbox on (`SANDBOX_ENABLED=true` + Docker), each session runs in
+its own container and the right dock comes alive:
 
-## Manage sessions
+- **Files** — the session workspace (everything the agent wrote), listed and
+  readable from the host-side mount; agent output lands here.
+- **Preview panels** — live **Browser**, **Terminal**, and **Code** views
+  streamed from the session's container (served on a separate preview
+  origin; discovery is automatic).
 
-The left sidebar shows your session list (root conversations only;
-subtasks ride on their parent's stream). Each row shows the status,
-title (from the first message), and agent name.
-
-- **Create** — click "New session" or send a message from an empty state.
-- **Resume** — click a session to continue it. The agent folds the
-  EventLog to recover state, so the conversation picks up where it left
-  off even if you restarted the server.
-- **Close / reopen** — right-click or use the session menu. Closing
-  archives a session; reopening makes it active again.
-- **Cancel** — stops a running session mid-turn. The partial state is
-  preserved in the log.
-- **Delete** — hard-deletes the session and its subtask tree from
-  storage. Irreversible.
-
-## Use skills
-
-Skills are Markdown-based capability packs the model can activate on
-demand. Drop a skill into your workspace:
-
-```
-my-project/
-└── .noeta/
-    └── skills/
-        └── pdf-extract/
-            └── SKILL.md
-```
-
-`SKILL.md` has YAML frontmatter plus a Markdown body:
-
-```markdown
----
-name: pdf-extract
-description: Extract text and tables from PDF files
-version: "1"
----
-
-# PDF Extract
-
-Use `pdftotext` (shell) to extract text from a PDF file.
-Call it with the file path.
-```
-
-When the model decides it needs PDF extraction, it calls `skill:
-pdf-extract`, and the skill body is folded into the next turn's context.
-The model then uses the bundled resources (via `read`) to carry out the
-task.
-
-Global skills go in `~/.noeta/skills/` and are available to all
-workspaces.
-
-## Approve gated tool calls
-
-When `NOETA_AGENT_WRITE_MODE=apply` and `permission_mode=default` (the
-default for `main`), certain tool calls require your approval before
-they execute:
-
-- `edit`, `write`, `apply_patch` — file modifications
-- `shell_run` — shell commands (even with `allowlist` mode, some
-  commands may need approval)
-
-The chat UI shows a pending approval with the tool call details. Click
-**Approve** to let it run, or **Deny** to block it. The approval or
-denial is recorded in the EventLog.
+Without Docker the platform runs in pure conversation mode: no file surface,
+no shell execution — everything else above still works.
 
 ## See also
 
-- [Coding agent reference](../reference/noeta-agent.md) — every env var,
-  tool, and preset
+- [Platform reference](../reference/noeta-agent.md) — architecture and boot modes
 - [HTTP API reference](../reference/http-api.md) — the routes behind the UI
-- [Configure a provider](configure-provider.md) — connect a real LLM
-- [Build custom tools](build-custom-tools.md) — extend the tool surface
+- [Connect an OpenAI-compatible gateway](configure-provider.md)
+- [Connect MCP servers](connect-mcp.md)

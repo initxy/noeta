@@ -3,20 +3,22 @@
 Common issues and how to resolve them. Each entry follows **Symptom →
 Cause → Resolution**.
 
-## Server exits at boot: "needs NOETA_AGENT_API_KEY"
+## The platform answers with the mock script instead of a real model
 
-**Symptom:** `python -m noeta.agent` prints
-`NOETA_AGENT_PROVIDER='openai' needs NOETA_AGENT_API_KEY` and exits.
+**Symptom:** `GET /api/v1/health` returns `{"provider": "mock"}` (and every
+session plays the same scripted demo) even though you configured a gateway.
 
-**Cause:** You set `NOETA_AGENT_PROVIDER` to a real provider (`openai`,
-`anthropic`, `openai-responses`) but did not provide credentials.
+**Cause:** `LLM_PROVIDER=auto` resolves to the offline mock unless **both**
+`LLM_BASE_URL` and `LLM_API_KEY` are set — one empty value silently falls
+back.
 
 **Resolution:**
-- Set `NOETA_AGENT_API_KEY=sk-…` in the environment.
-- For `openai`, also set `NOETA_AGENT_BASE_URL=https://api.openai.com/v1`
-  (or your OpenAI-compatible endpoint).
-- Or use `NOETA_AGENT_PROVIDER=stub` (the default) for a fully offline
-  smoke test — no key needed.
+- Set both keys in `apps/noeta-agent/.env` (environment variables override
+  the file; make sure a stale exported variable isn't blanking one).
+- Remember `LLM_BASE_URL` is the gateway **root** — `/responses` is appended
+  by the provider.
+- `LLM_PROVIDER=openai` makes the fallback loud: boot fails instead of
+  degrading to mock.
 
 ## Task fails with "max_iterations exceeded"
 
@@ -29,17 +31,16 @@ The task still ran and produced durable envelopes — it just terminated
 unsuccessfully.
 
 **Resolution:**
-1. Inspect the trace to see which budget axis fired and why the task
-   needed so many steps.
-2. Raise the budget: the coding agent's default lives in
-   `noeta.agent.host.session.default_coding_budget()`. Programmatic
-   callers pass a `BudgetSpec` via `Options.budget`.
+1. Inspect the trace (admin console → Trace) to see which budget axis fired
+   and why the task needed so many steps.
+2. Programmatic (SDK) callers can raise the budget by passing a
+   `BudgetSpec` via `Options.budget`.
 3. Or trim the task's scope to require fewer steps.
 
-## Tool call denied by PermissionGuard
+## Tool call denied by PermissionGuard (SDK)
 
-**Symptom:** The agent tries to use a tool and gets a `ToolCallDenied`
-event. The trace shows the denial reason.
+**Symptom:** Your SDK agent tries to use a tool and gets a
+`ToolCallDenied` event; the trace shows the denial reason.
 
 **Cause:** `PermissionGuard` rejected the tool call because the tool is
 not in the agent's `allowed_tools` set, or the `permission_mode`
@@ -47,10 +48,10 @@ requires explicit approval for that risk level.
 
 **Resolution:**
 - Widen `allowed_tools` in your `Options` to include the tool.
-- Or change `permission_mode` to `"bypassPermissions"` for low-risk
-  tools (not recommended for `edit`, `write`, or `shell_run`).
-- Or, if using the web UI, click **Approve** on the pending approval
-  prompt.
+- Or resolve the approval programmatically (`Options.can_use_tool`, or the
+  `Client.approve` / `deny` verbs).
+- Note the platform itself has **no per-call approval flow** — execution is
+  sandbox-only by design, so this entry applies to library users.
 
 ## Suspended task never wakes up
 
@@ -63,65 +64,63 @@ been met.
   `fire_at` has not been reached, or a subtask that has not finished).
 - The wake event was produced but does not match the suspended task's
   `WakeCondition` (projection mismatch on identity fields).
-- The worker is not running (`WorkerLoop` is not draining the queue).
+- No worker is draining the queue (embedded-library deployments).
 
 **Resolution:**
 1. Check if the wake event exists: for timers, verify `fire_at` is in
    the past; for subtasks, verify the child reached a terminal state.
-2. Inspect the task's folded detail (`GET /tasks/{id}`) — look for the
-   `suspended_without_wake_event` diagnostic. If present, the task is
-   simply waiting for something that has not happened yet.
-3. Ensure a `WorkerLoop` is running and draining the dispatcher. The
-   `python -m noeta.agent` server does **not** run a `WorkerLoop` — it
-   drives turns inline. If you enqueued a wake externally, you need a
-   worker to pick it up. See [Deploy a worker](../how-to/deploy-worker.md).
+2. Inspect the task's raw trace — a task waiting on something that has not
+   happened yet is working as designed.
+3. Embedded-library users: ensure a `WorkerLoop` is draining the
+   dispatcher (see [Deploy a worker](../how-to/deploy-worker.md)). The
+   platform runs its own resident worker pool (`AGENT_NUM_WORKERS`), so
+   this only applies to your own hosts.
 
 ## Provider returns 401 / authentication error
 
-**Symptom:** The agent fails with an authentication or permission error
-from the LLM provider.
+**Symptom:** Turns fail with an authentication or permission error from
+the LLM gateway.
 
 **Cause:** The API key is missing, expired, or does not have access to
 the requested model.
 
 **Resolution:**
-- Verify `NOETA_AGENT_API_KEY` is set and correct.
-- For Anthropic, keys start with `sk-ant-`; for OpenAI, `sk-`.
-- Check the model name — some models require specific access or
-  permissions.
+- Platform: verify `LLM_API_KEY` (primary gateway, `api-key` header) or
+  `SECONDARY_LLM_API_KEY` (secondary gateway, `Authorization: Bearer`).
+- SDK: verify the key passed to the provider adapter.
 - If using a corporate proxy, set `HTTPS_PROXY` in the environment.
 
 ## "Model not found" or provider error
 
 **Symptom:** The provider returns a model-not-found or unknown-model
-error.
+error, or the composer rejects the model with a 422.
 
-**Cause:** The model name is wrong or the provider does not recognize
-it.
-
-**Resolution:**
-- Anthropic model names include the date suffix:
-  `claude-sonnet-4-5-20250929`, not `claude-sonnet`.
-- OpenAI model names: `gpt-5.5`, `gpt-4o`, etc.
-- Verify the model is available for your API key tier.
-
-## Shell command rejected by allowlist
-
-**Symptom:** `shell_run` returns a rejection even though
-`NOETA_AGENT_SHELL_MODE=allowlist`.
-
-**Cause:** The command is not in the structural allowlist. Only `git
-status`, `git diff`, `pytest`, `uv run pytest`, `npm test`, and `pnpm
-test` are allowed by default. Shell metacharacters (pipes, redirects)
-are rejected before tokenization.
+**Cause:** The platform's model menu comes from
+`apps/noeta-agent/models.json`, not from the gateway — a menu entry whose
+`id` the gateway does not serve fails at the gateway; a model the menu does
+not list fails validation before the turn starts.
 
 **Resolution:**
-- Restructure the command to match an allowlisted form.
-- Or set `NOETA_AGENT_SHELL_MODE=off` to disable `shell_run` entirely
-  (safer than widening the allowlist).
-- The allowlist is structural (argv-pattern based), not string-based —
-  you cannot add custom commands via env vars. To extend it, modify the
-  allowlist in code.
+- Make each `models.json` `id` an exact model name your gateway serves.
+- Vendor naming gotchas: Anthropic model names include the date suffix
+  (`claude-sonnet-4-5-20250929`); check your key's access tier.
+
+## The agent has no shell / files panel is empty
+
+**Symptom:** The agent answers but cannot run commands or produce files;
+`GET /sessions/{id}/files` returns an empty list.
+
+**Cause:** The sandbox is off. Execution is **sandbox-only**: shell and
+file side effects happen only inside a per-session Docker container. With
+`SANDBOX_ENABLED=false` (the default) the platform runs in pure
+conversation mode — shell execution disabled, no file surface.
+
+**Resolution:**
+- Set `SANDBOX_ENABLED=true` in `apps/noeta-agent/.env`, with a local
+  Docker daemon and the stock AIO Sandbox image reachable
+  (`ghcr.io/agent-infra/sandbox`).
+- Check the backend log for container provisioning errors (image pull,
+  port allocation).
 
 ## WorkerLoop: step abandoned on shutdown
 
@@ -145,6 +144,7 @@ are rejected before tokenization.
 
 - [Known limitations](limitations.md) — architectural boundaries that
   are not bugs
+- [Configuration](../reference/configuration.md) — every platform key
 - [Wake & resume](../concepts/wake-resume.md) — how the wake machinery
   works
 - [WorkerLoop reference](../reference/worker-loop.md) — constructor

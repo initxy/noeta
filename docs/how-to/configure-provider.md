@@ -1,155 +1,116 @@
 # Configure a provider
 
-**Goal:** wire Noeta to a real LLM endpoint — Anthropic, OpenAI-compatible,
-or OpenAI Responses API.
-
-**Before you start:** you have installed Noeta and run the stub provider
-from the [quickstart](../tutorials/quickstart.md). You have an API key for your chosen
+**Goal:** point Noeta at a real LLM — the platform at an
+OpenAI-Responses-compatible gateway, or your own SDK agent at any supported
 provider.
 
-## Option A: environment variables (coding agent)
+**Before you start:** you have run the zero-credential mock mode from the
+[quickstart](../tutorials/quickstart.md), and you have a gateway URL + API
+key.
 
-The easiest way to configure a provider for `python -m noeta.agent` is
-through `NOETA_AGENT_*` environment variables:
+## Option A: the platform (`python -m noeta.agent`)
+
+The platform speaks to **OpenAI-Responses-compatible gateways** (the public
+OpenAI API or any self-hosted/vendor gateway speaking the Responses wire
+shape). Configure `apps/noeta-agent/.env`:
+
+```dotenv
+LLM_PROVIDER=auto
+LLM_BASE_URL=https://your-gateway.example.com/v1
+LLM_API_KEY=sk-…
+```
+
+- `LLM_BASE_URL` is the **gateway root** — the provider appends
+  `/responses`. Auth goes through the `api-key` header.
+- `LLM_PROVIDER=auto` (the default) uses the gateway when both values are
+  set and falls back to the offline mock otherwise, so an empty `.env` never
+  breaks boot.
+- The model menu users pick from is `apps/noeta-agent/models.json`: `id`,
+  `label`, one `default: true`, `efforts` (reasoning levels), and — for
+  models the SDK catalog does not know — `context_window` /
+  `max_output_tokens` so context compaction can engage.
+
+Restart the server and check the effective provider:
 
 ```bash
-# Anthropic
-NOETA_AGENT_PROVIDER=anthropic \
-NOETA_AGENT_MODEL=claude-sonnet-4-5-20250929 \
-NOETA_AGENT_API_KEY=sk-ant-… \
-python -m noeta.agent
-
-# OpenAI-compatible (any endpoint that speaks the OpenAI chat/completions format)
-NOETA_AGENT_PROVIDER=openai \
-NOETA_AGENT_MODEL=gpt-5.5 \
-NOETA_AGENT_BASE_URL=https://api.openai.com/v1 \
-NOETA_AGENT_API_KEY=sk-… \
-python -m noeta.agent
-
-# OpenAI Responses API
-NOETA_AGENT_PROVIDER=openai-responses \
-NOETA_AGENT_MODEL=gpt-5.5 \
-NOETA_AGENT_API_KEY=sk-… \
-python -m noeta.agent
+curl -s http://127.0.0.1:8000/api/v1/health
+# {"ok": true, "provider": "openai"}   ← "mock" means credentials didn't take
 ```
 
-`NOETA_AGENT_BASE_URL` is optional for the official OpenAI endpoint
-(defaults to `https://api.openai.com/v1`); set it explicitly for
-self-hosted or third-party OpenAI-compatible endpoints.
+[`examples/openai-compatible/`](https://github.com/initxy/noeta/tree/main/examples/openai-compatible)
+is a copy-paste version of this setup.
 
-## Option B: JSON config file
+### A second gateway
 
-Instead of individual env vars, you can point to a JSON config file:
+Models can route to a second Responses-compatible gateway (different host,
+`Authorization: Bearer` auth): set `SECONDARY_LLM_BASE_URL` +
+`SECONDARY_LLM_API_KEY` and tag the routed models with
+`"gateway": "secondary"` in `models.json`. The secondary only stacks on top
+of an active primary. See the
+[configuration reference](../reference/configuration.md#llm-gateway).
 
-```bash
-NOETA_AGENT_CONFIG=./noeta-config.json python -m noeta.agent
-```
+## Option B: programmatic (SDK)
 
-Where `noeta-config.json` contains:
-
-```json
-{
-  "provider": "anthropic",
-  "model": "claude-sonnet-4-5-20250929",
-  "api_key": "sk-ant-…",
-  "workspace": "./my-project",
-  "storage_url": "./session.sqlite",
-  "write_mode": "dry_run"
-}
-```
-
-## Option C: programmatic (SDK)
-
-When using the SDK directly (`noeta.sdk`), pass a provider to `Options`
-or `Client`:
+When building your own agent on `noeta.sdk`, the provider is an `Options`
+field. The adapters are exported via `noeta.sdk.providers`:
 
 ```python
-from noeta.sdk import Client, Options
-from noeta.llm.anthropic import AnthropicProvider
-
-provider = AnthropicProvider(
-    model="claude-sonnet-4-5-20250929",
-    api_key="sk-ant-…",
-)
+from noeta.sdk import Options
+from noeta.sdk.providers import AnthropicProvider
 
 options = Options(
     system_prompt="You are a helpful assistant.",
     name="my-agent",
-    provider=provider,
+    provider=AnthropicProvider(api_key="sk-ant-…"),
 )
-
-client = Client(options, workspace_dir="./workspace")
 ```
 
-For OpenAI-compatible endpoints, use `OpenAICompatProvider`:
+For OpenAI-compatible chat-completions endpoints, use
+`OpenAICompatProvider`; for the Responses API, `OpenAIResponsesProvider`
+(its `base_url` is the **full** responses endpoint):
 
 ```python
-from noeta.llm.openai_compat import OpenAICompatProvider
+from noeta.sdk.providers import OpenAICompatProvider, OpenAIResponsesProvider
 
-provider = OpenAICompatProvider(
-    model="gpt-5.5",
+chat = OpenAICompatProvider(
     base_url="https://api.openai.com/v1",
     api_key="sk-…",
 )
-```
-
-And for the OpenAI Responses API:
-
-```python
-from noeta.llm.openai_responses import OpenAIResponsesProvider
-
-provider = OpenAIResponsesProvider(
-    model="gpt-5.5",
+responses = OpenAIResponsesProvider(
+    base_url="https://api.openai.com/v1/responses",
     api_key="sk-…",
 )
 ```
 
-## Verify it works
+Offline tests and demos use the deterministic double from
+`noeta.sdk.testing`:
 
-Boot the agent with your real provider and send a simple message:
-
-```bash
-NOETA_AGENT_PROVIDER=anthropic \
-NOETA_AGENT_MODEL=claude-sonnet-4-5-20250929 \
-NOETA_AGENT_API_KEY=sk-ant-… \
-NOETA_AGENT_STORAGE=./test.sqlite \
-python -m noeta.agent
+```python
+from noeta.sdk.testing import FakeLLMProvider
 ```
-
-Open the chat UI and ask "What is 2 + 2?". If you get a real LLM response
-(rather than the stub's canned reply), the provider is wired correctly.
-Check the trace view to confirm the turn shows real token counts and
-usage.
 
 ## Switching providers
 
-To swap backends, change the provider instance — no other code needs to
-change. See [Swap providers](swap-providers.md) for a before/after
-example. The internal protocol is vendor-neutral, so your agent code,
-tools, and recorded history are portable across providers.
-
-All three built-in providers stream tokens to the web UI while a response
-is being generated — no configuration needed. The stub provider does not
-stream (it answers instantly), so don't expect a typing effect on a bare
-boot.
+Provider is **wiring, not identity**: swap the instance and nothing else
+changes — agent code, tools, and recorded history are portable across
+vendors. See [Swap providers](swap-providers.md) for a before/after example.
 
 ## Troubleshooting
 
-- **"No provider configured"** — `NOETA_AGENT_PROVIDER` is unset (defaults
-  to `stub`) or `Options.provider` is `None`.
-- **401 / authentication error** — check your API key. For Anthropic, it
-  starts with `sk-ant-`; for OpenAI, `sk-`.
-- **Model not found** — verify the model name. Anthropic model names
-  include the date suffix (e.g. `claude-sonnet-4-5-20250929`).
-- **Connection timeout** — check `NOETA_AGENT_BASE_URL`. For corporate
-  proxies, you may need to set `HTTPS_PROXY`.
-
-See [Troubleshooting](../operations/troubleshooting.md) for more.
+- **`/health` says `"provider": "mock"`** — `LLM_BASE_URL` or `LLM_API_KEY`
+  is empty (auto fell back), or the `.env` you edited is not
+  `apps/noeta-agent/.env`. Environment variables override the file.
+- **401 / authentication error** — check the key; the primary gateway
+  authenticates via the `api-key` header, the secondary via
+  `Authorization: Bearer`.
+- **Model not in the composer** — the menu comes from `models.json`, not
+  from the gateway; add the entry there.
+- **Context grows without compaction on a custom model** — give the
+  `models.json` entry `context_window` / `max_output_tokens`.
 
 ## See also
 
 - [Provider neutrality](../concepts/provider-neutrality.md) — why the
   internal protocol is vendor-agnostic
+- [Configuration reference](../reference/configuration.md) — every key
 - [Swap providers](swap-providers.md) — before/after code example
-- [SDK reference](../reference/sdk.md) — `Options` and `Client` constructor
-  parameters

@@ -248,15 +248,59 @@ _避免使用：_ Restart、Continue。
 
 另见：[故障模式](/operations/troubleshooting)
 
+## 应用层（noeta-agent 平台）
+
+由产品拥有的词汇（[ADR：server-platform 产品](https://github.com/initxy/noeta/blob/main/docs/adr/server-platform-product.md)）。这些术语没有一个存在于应用层之下：Engine 只认识 Task。
+
+### Session
+
+应用层的对话单元——UI 所列出、恢复和删除的东西。归属于一个用户，限定在一个 Space 内；聚合**一个或多个 Engine Task**（workflow session 的每个节点各拥有一个根任务），并拥有一个工作区目录和一个沙箱容器。仅是应用层索引：持久化在应用数据库中；EventLog 仍是唯一的真相来源。
+_避免使用：_ Conversation、Thread；在应用层之下使用 Session。
+
+### Space
+
+协作与作用域的单元。用户属于 space；space 限定技能、知识源、代理记忆、MCP 连接器、agent-config 和模板的作用范围。每个用户都有一个个人 space；团队 space 的成员由 owner 管理。会话可见性 = space 成员身份。
+_避免使用：_ Team、Organization、Workspace（Workspace 是会话的文件根目录）。
+
+### UI event
+
+产品线上词汇的一帧（`user_message`、`assistant_text`、`thinking`、`tool_call` / `tool_result`、`skill_activated`、`todo_update`、`subtask_started` / `subtask_finished`、`question`、`compaction`、轮次标记等），由**翻译器（translator）**产生——一个作用于 `EventEnvelope` 的确定性、无状态的纯函数。重放就是经由 `since_seq` 从 EventLog 重新推导；token 增量是短暂的，从不重放。原始 envelope 只出现在管理端 trace 表面。
+_避免使用：_ 把原始 `EventEnvelope` 称为 UI event；"projection"（暗示存在一份存储的副本）。
+
+### Skill registry
+
+平台的、由数据库支撑的技能表面：**builtin skills**（管理员管理、平台级）和 **space skills**（各 space 由 owner 上传），二者都以只读方式挂载进会话沙箱，并渲染进模型的技能菜单。它是库级 Skill 格式之上的管理层（`SKILL.md` 保持不变）。
+_避免使用：_ Skill market、Plugin store。
+
+### Knowledge source
+
+space 级的同步内容源，带可插拔的同步适配器；开源核心自带 `git_repo` 和 `local_dir`。物化在共享数据目录之下，以只读方式挂载进沙箱，通过 agent-config 选入组装。
+_避免使用：_ RAG index（没有向量库）、Dataset。
+
+### MCP connector
+
+每个 space 一份的 MCP 服务器配置：alias + 传输方式（`http` | `stdio`）+ 凭据 + 启用的工具子集，存储在应用数据库中，每次读取都会擦除凭据。每轮解析进代理主机；工具以 `mcp__<alias>__<tool>` 出现。取代已退役的全局 `~/.noeta/mcp_servers.json` 注册表。
+_避免使用：_ 全局 MCP 注册表（已退役）、Plugin。
+
+### Agent-config
+
+space 的代理配置：persona 提示词（组装时写入会话工作区的 `AGENT.md`）、默认模型/推理力度（reasoning effort）、知识源选择、记忆开关。由 owner 通过 `GET/PUT /api/v1/spaces/{id}/agent-config` 管理。
+_避免使用：_ Options（SDK 级的代理配置）、Settings（服务器配置）。
+
+### Feedback loop
+
+space 成员的逐消息评分，供给一个由 owner 触发的分析代理，其建议由 owner 把关：采纳进 space 记忆、应用技能补丁（先备份），或导出一份 markdown 报告。
+_避免使用：_ RLHF（没有任何东西在训练模型）。
+
 ## 标记的歧义
 
 ### "Workflow"
 
-不是一等概念。用确定性 Policy + `spawn_subtask` 表达固定过程。模型即兴创作的编排脚本表现为**一个 Task + 一个解释该脚本的 Policy**。
+在 Engine 中不是一等概念。用确定性 Policy + `spawn_subtask` 表达固定过程。模型即兴创作的编排脚本表现为**一个 Task + 一个解释该脚本的 Policy**。（平台的 *workflow session* 是应用层对根任务的顺序编排，不是 Engine 原语。）
 
 ### "Session"
 
-不是一等概念。多轮对话只是一个 Task 反复接收用户输入：**一个交互会话 = 一个 Task**。
+一个**仅存在于应用层的概念**（见上文）。在应用层之下它仍然不是概念：Engine 只认识 Task，多轮对话就是一个 Task 反复接收用户输入。
 
 ### "Run"
 

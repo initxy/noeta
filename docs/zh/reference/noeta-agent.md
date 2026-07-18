@@ -1,120 +1,73 @@
-# Noeta 编码代理（`python -m noeta.agent`）
+# noeta-agent 平台（`python -m noeta.agent`）
 
-一个工作区级别的编码代理。它读取、编辑、运行 shell 命令，并在一个目录上保持多轮会话，将每一步记录在持久化的 EventLog 中，以便通过 fold 该日志离线重新推导运行状态。将它指向一个目录，启动服务器，通过附带的 web UI 或 HTTP 接口驱动它。
+Noeta 的官方产品是一个**可部署的多用户 agent 服务**：FastAPI 后端加 React/TypeScript SPA，作为单个进程交付，并为每个会话（session）供给一个沙箱容器用于 agent 执行。用户登录后在**空间**（space）中协作、与 agent 进行**会话**；agent 的 skill、知识、记忆、MCP 连接器和配置都以空间为作用域。起统领作用的决策见 [server-platform ADR](https://github.com/initxy/noeta/blob/main/docs/adr/server-platform-product.md)。
 
-## 启动服务器
+## 启动
 
-**唯一**入口是 `python -m noeta.agent`——零位置参数，所有配置通过环境变量或 JSON 配置文件完成。它启动一个 HTTP/SSE 聊天服务器以及附带的 web SPA（位于 `<url>/chat`），并阻塞直到收到 SIGINT/SIGTERM。没有 `noeta` 控制台脚本，也没有运维 CLI。
+**唯一**入口是 `python -m noeta.agent` —— 零参数，所有配置都通过 `apps/noeta-agent/.env` 和环境变量完成（见[配置](configuration.md)）。它在同一个端口（默认 8000）上同时提供 `/api/v1/*` 下的 REST + SSE API 和 `apps/web/dist` 里构建好的 SPA。从一份 checkout 出发，Makefile 封装了常用流程：
 
 ```bash
-NOETA_AGENT_WORKSPACE=./my-project \
-NOETA_AGENT_PROVIDER=openai \
-NOETA_AGENT_MODEL=gpt-5.5 \
-NOETA_AGENT_BASE_URL=https://api.openai.com/v1 \
-NOETA_AGENT_API_KEY=sk-… \
-NOETA_AGENT_STORAGE=./session.sqlite \
-python -m noeta.agent
-# → noeta.agent serving at http://127.0.0.1:<port>/ ; chat at <url>/chat
+make install   # 首次：uv sync + 前端依赖
+make run       # 构建 SPA + python -m noeta.agent   → http://127.0.0.1:8000
+make dev       # 热重载：后端在 8000 + vite dev server 在 5273（走代理）
 ```
 
-启动器和环境变量解析位于 `apps/noeta-agent/noeta/agent/__main__.py` 和 `apps/noeta-agent/noeta/agent/host/runner_cli.py` 中的 `RunnerConfig.from_env`——`NOETA_AGENT_*` 旋钮的权威列表。
+### 启动模式
 
-对于库使用（不启动服务器），SDK 从 `noeta.sdk` 导出 `Options`、`query`、`Client`、`compile_options`（`packages/noeta-sdk/noeta/sdk/__init__.py`）；官方四代理配方是 `noeta.presets.main_options()` / `official_specs()`（`packages/noeta-runtime/noeta/presets/__init__.py`）。
+- **零凭证（默认）。** 一切留空：确定性 **mock provider**（一段脚本化的 FakeLLM 演示 —— 提问、skill 激活、写回的回答）、**dev-login**（任意用户名）、SQLite 存储、沙箱关闭。完全离线；测试套件和 CI 跑的正是这个模式。
+- **真实网关。** 把 `LLM_BASE_URL` + `LLM_API_KEY` 设置为任意 OpenAI-Responses 兼容网关（`/responses` 会被自动追加）；在 `models.json` 里定义模型菜单；可选地再加一个第二网关做按模型路由。参见[接入 OpenAI 兼容网关](../how-to/configure-provider.md)。
+- **打开沙箱。** `SANDBOX_ENABLED=true` + 本地 Docker daemon + 现成的 [AIO Sandbox 镜像](https://github.com/agent-infra/sandbox)。每个会话获得自己的容器，带实时的 Browser / Terminal / Code 预览面板。
 
-## 环境配置
+## 架构
 
-| 变量 | 默认值 | 控制内容 |
-| --- | --- | --- |
-| `NOETA_AGENT_WORKSPACE` | `.` | 代理操作的目录 |
-| `NOETA_AGENT_PROVIDER` | `stub` | LLM 适配器：`stub`、`openai`、`anthropic`、`openai-responses` |
-| `NOETA_AGENT_MODEL` | provider 默认值 | 传递给 provider 的模型名称 |
-| `NOETA_AGENT_API_KEY` | — | Provider API key |
-| `NOETA_AGENT_BASE_URL` | provider 默认值 | 覆盖 base URL（例如用于兼容 OpenAI 的端点） |
-| `NOETA_AGENT_STORAGE` | `:memory:` | 持久化 SQLite 文件路径；`:memory:` 仅用于开发 / 测试 |
-| `NOETA_AGENT_WRITE_MODE` | `dry_run` | `dry_run`（仅提议 diff）或 `apply`（执行真实写入） |
-| `NOETA_AGENT_SHELL_MODE` | `allowlist` | `allowlist`（argv 结构化白名单）或 `off` |
-| `NOETA_AGENT_HOST` | `127.0.0.1` | 绑定地址 |
-| `NOETA_AGENT_PORT` | `0`（OS 分配） | 监听端口 |
-| `NOETA_AGENT_CONFIG` | — | JSON 配置文件路径（替代单独的环境变量） |
-
-`NOETA_AGENT_PROVIDER=stub`（默认值）是一个完全离线、确定性的 LLM 替身——不需要 API key 或网络。用它来在全新检出时验证安装、存储和接线。
-
-## 内置工具
-
-工具名称是 provider 安全的 `snake_case`，即模型调用时使用的精确字符串。事实来源：`noeta.tools.fs.build_fs_tools()` 加上 `packages/noeta-sdk/noeta/tools/` 中的 `app/` 和 `web/` 包。
-
-| 工具 | 风险 | 功能 |
-| --- | --- | --- |
-| `read` | 低 | 读取工作区文件（UTF-8），可选按 `offset` / `limit` 切片 |
-| `glob` | 低 | 匹配工作区相对 glob，返回匹配的路径 |
-| `grep` | 低 | 在工作区中进行正则（`re`）内容搜索 |
-| `edit` | 高 | 替换现有文件中精确、唯一的 `old` 子串 |
-| `write` | 高 | 写入文件（创建，或覆盖之前已读取的文件） |
-| `apply_patch` | 高 | 原子地应用一批编辑——全部成功或全部不执行 |
-| `shell_run` | 高 | 在工作区中运行 shell 命令（受模式门控） |
-| `shell_poll` | 低 | 检查后台 shell 作业的状态 / 输出 |
-| `shell_kill` | 高 | 停止你启动的后台 shell 作业 |
-| `run_skill_script` | 高 | 通过白名单解释器运行活跃 skill 的附带脚本 |
-| `open_app` | 低 | 在 web "App" 面板中渲染工作区 HTML 应用 |
-| `webfetch` | 低 | 获取公开网页，渲染为 Markdown |
-| `web_search` | 低 | 执行 web 搜索，返回排名结果（需 key：`NOETA_WEB_SEARCH_API_KEY`） |
-
-没有单独的 `read_file` / `write_file` / `replace_text` / `list_dir` / `git_status` / `git_diff` 工具——那些旧名称已被重命名（`read` / `write` / `edit`）或移除；`git status` / `git diff` 现在是 `shell_run` 内的白名单规则。
-
-远程 MCP 工具动态显示为 `mcp__<alias>__<tool>`（`noeta/tools/mcp/tool.py`）。
-
-## 代理预设
-
-`noeta.presets` 交付官方四件套，与 Claude Code 的阵容对齐（`packages/noeta-runtime/noeta/presets/__init__.py`）。代理是**按任务**在 `POST /tasks` 请求体中选择的（`{"goal": …, "agent": …}`），而非在进程启动时；自定义代理通过扁平的 `Options.agents` 字典配置。
-
-| 代理 | 角色 |
-| --- | --- |
-| `main` | 默认编码代理：完整内置工具面，可派生三个子代理，具备所有能力 |
-| `general-purpose` | 自包含编码 worker：完整的读 / 写 / 编辑 / shell 集，不委派 |
-| `explore` | 只读侦察兵：glob / grep / read + 只读 shell，扇出报告事实，从不编辑 |
-| `plan` | 只读架构师：读取代码并返回有序的实现计划，从不写入 |
-
-运行器在引擎看到工具包**之前**按代理的 `allowed_tools` 过滤工具包，且 `PermissionGuard` 使用相同的白名单，因此被禁止的工具可证明地不可达。
-
-## Skills
-
-一个 skill 包是 `<workspace>/.noeta/skills/<name>/SKILL.md`（加上全局 `~/.noeta/skills` 层）——YAML frontmatter（`name`、`description`、可选的 `version` / `priority`）+ Markdown 正文，任何同级文件作为按需资源附带。
-
-激活是**两阶段**且模型驱动的：
-
-1. 启动时，索引将菜单（名称 + 一行描述）渲染到 `skill` 控制工具的 schema 中。
-2. 当模型调用 `skill: <name>` 时，正文加上绝对基目录行被 fold 进下一轮的半稳定上下文，模型按需 `read` 附带资源（不急于内联）。
+一个**模块化单体**：单进程、单部署单元，缝（seam）是接口而不是服务。
 
 ```text
-# 模型从 skill 菜单中选择，然后调用控制工具：
-skill: pdf-extract
-# → 下一轮携带 SKILL.md 正文 + "Base directory: <abs path>"
-# → 模型通过 `read` 读取资源。
+apps/web (React SPA)  ──  /api/v1 REST + 每会话一条 SSE
+        │
+noeta.agent.api        各 router（auth、sessions、spaces、skills、knowledge、
+        │              mcp、templates、memories、feedback、channels、admin）
+noeta.agent.auth       AuthProvider 缝（dev-login 参考实现）
+noeta.agent.host       引擎宿主：AgentService（内嵌 noeta.sdk Client + worker 池）、
+        │              envelope→UI translator、provider 装配、Docker 沙箱 provider
+noeta.agent.store      应用 SQLite（用户、空间、会话、…）
+noeta.agent.services   知识同步/解析、频道、反馈分析
+        │
+     noeta.sdk         进入引擎的唯一通道
 ```
 
-索引器代码：`packages/noeta-sdk/noeta/context/skills/`。
+关键结构决策：
 
-## 写入与 shell 安全
+- **会话与空间只是应用层的索引。** 一个会话聚合一个或多个引擎任务（工作流会话的每个节点各拥有一个根任务），并拥有一个工作区目录和一个沙箱。应用层之下，引擎只认识 Task；每一次状态变更都经 `noeta.sdk` 的 `Client` 动词流动，EventLog 始终是唯一事实来源。
+- **wire 上是翻译后的事件，不是原始事件。** 后端用一个确定性、无状态的纯函数（`noeta/agent/host/translator.py`）把规范的引擎事件翻译成一套扁平的 UI 事件词汇表，经**每会话一条的 SSE 流**下发。Replay 是从 EventLog 出发、经 `since_seq` 游标的**重新推导** —— 不存在可能漂移的持久化 UI 投影。Token delta 以临时帧的形式随流而下，从不持久化、从不 replay。原始 envelope 只在管理员 trace 面上提供。完整词汇表见 [HTTP API 参考](http-api.md)。
+- **执行只在沙箱里。** agent 的 shell 与文件副作用只发生在每会话专属的容器内；宿主机不暴露任何 shell 工具，也**没有逐调用的审批流程**（带审批的宿主机执行是单用户产品的便利；在共享服务器上它是一个提权面）。会话工作区以读写方式挂载；空间的知识与 skill 以只读方式挂载。没有 Docker 时，平台降级为纯对话模式，shell 执行关闭。
+- **认证是一条缝，不是一个功能。** 每个请求都经 `AuthProvider` 接口认证（`noeta/agent/auth/provider.py`）；开源发行版自带 `DevLoginProvider`（任意用户名、签名会话 cookie），并为 OIDC/SSO 留着这条缝。核心里不内置任何厂商的身份系统。
 
-写入**默认是 dry-run**。`NOETA_AGENT_WRITE_MODE`（`dry_run` vs `apply`）决定 `edit` / `write` / `apply_patch` 是改变字节还是仅发出提议的 unified-diff 产物。这是主机配置，不是请求字段——客户端无法升级到 `apply`。`apply_patch` 是全有或全无路径（验证每个编辑，然后写入；应用出错时进程内回滚）；顺序的 `edit` / `write` 调用是非原子的。
+## 会话 / 空间模型
 
-`shell_run` 受 `NOETA_AGENT_SHELL_MODE` 门控：`allowlist`（默认——`git status` / `git diff` / `pytest` / `uv run pytest` / `npm test` / `pnpm test` 的仅 argv 结构化白名单；shell 元字符在分词前被拒绝）或 `off`。
+- 每个用户都有一个**个人空间**；**团队空间**的成员由所有者管理（角色：owner / member）。会话可见性 = 空间成员身份。
+- 空间为 agent 的工作材料划定作用域：**skill**（内置 + 空间上传）、**知识源**（`git_repo` / `local_dir` 同步）、**长期记忆**、**MCP 连接器**（每空间的别名与工具子集，每轮解析进宿主）、**agent-config**（人设 prompt、默认模型 / 推理力度、知识选择、记忆开关），以及**模板 / 工作流模板**。
+- 会话可以是普通对话、从模板启动，或是**多节点工作流会话** —— 每个节点是各自独立的根任务，经由一份生成后由用户确认的交接文档向前推进。
+- **反馈闭环**把成员评分变成由所有者把关的建议（采纳进记忆、应用 skill 补丁，或导出为 markdown 报告）。
 
-每个路径都经过 `WorkspaceRoot`（realpath + 包含检查，符号链接安全；在任何 IO 之前检查），因此绝对路径 / `..` / 树外符号链接逃逸在读取或写入之前就会失败。审批和写入 / shell 门控被表达为中立的控制机制——参见 [Guard vs Observer](../concepts/guard-observer.md)。
+## 管理员控制台
 
-## MCP 与 hooks
+管理员是一个**角色，不是一套独立部署**：列在 `ADMIN_USERS` 里的用户名在同一台服务器上获得控制台（其他人访问 `/api/v1/admin/*` 一律 404）。它提供用量统计（用户 / 空间 / 会话 / skill / 知识）、跨空间列表与逐空间下钻、内置 skill 管理、动态配置（例如热切换 dev-login），以及**原始事件 trace** —— 任意会话未经翻译的 envelope 流，在 trace UI 中于客户端折叠展示。trace 面是诊断工具，有意与产品 wire 分开。
 
-**MCP**——远程或 stdio 连接器注册在 `~/.noeta/mcp_servers.json` 中（别名 → 传输 / url / 凭据；凭据永远不在请求体中传递），并通过 `enabled_mcp` 字段按会话启用。它们的工具显示为 `mcp__<alias>__<tool>`。
+## 诚实的边界（v1）
 
-**Hooks**——仅有的扩展角色是 **Guard**（在 `before_tool_call` / `before_spawn_subtask` / `before_finish` 否决或变更）和 **Observer**（对已提交事件的只读订阅者）。没有 Mutator 角色——参见 [Guard vs Observer](../concepts/guard-observer.md)。
+- **单进程、单实例** —— 应用状态是 SQLite；水平扩展是后续工作。
+- **默认认证是 dev-login**；真实部署必须接入身份提供方。
+- **尚无限流与配额。**
+- **沙箱隔离是「进程 + 挂载 FS」**，不是完整牢笼。
 
-## 子代理扇出
+## 部署
 
-`main` 可以并行派生三个子代理（`general-purpose`、`explore`、`plan`）。每个派生子任务是一个独立的事件溯源任务，拥有自己的 EventLog；结果通过 `SubtaskCompleted` 唤醒记录到父任务的日志中，因此整棵树可以 fold 回状态。参见 [唤醒与恢复](../concepts/wake-resume.md)。
+平台裸跑就能用：`uv` + 一个可写的 `DATA_DIR` +（可选）供沙箱使用的 Docker。[`examples/deployment/`](https://github.com/initxy/noeta/tree/main/examples/deployment) 提供可选的 docker-compose 封装（应用容器 + 沙箱访问 + 数据卷）。
 
 ## 另见
 
-- [HTTP 接口参考](http-api.md)——后端服务的每条路由
-- [SDK 参考](sdk.md)——编程等价物
-- [操作指南：使用编码代理](../how-to/use-the-coding-agent.md)
-- [配置 provider](../how-to/configure-provider.md)
+- [HTTP API 参考](http-api.md) —— 每条路由与 SSE 词汇表
+- [配置](configuration.md) —— 每个 `.env` 键与默认值
+- [操作指南：使用平台](../how-to/use-the-coding-agent.md) —— UI 走查
+- [接入 OpenAI 兼容网关](../how-to/configure-provider.md)

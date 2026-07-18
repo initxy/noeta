@@ -15,7 +15,7 @@ loop = WorkerLoop(rt, worker_id="my-worker")
 loop.run_forever(install_signals=True)  # 阻塞直到 stop() 被调用
 ```
 
-与 `python -m noeta.agent`（在 HTTP 处理器中内联驱动轮次）不同，`WorkerLoop` 是一个专用排空器：它轮询就绪队列，租约一个任务，推进一步，然后重复。这是需要比任何单个 HTTP 请求存活更久的代理的部署形态。
+`WorkerLoop` 是一个专用排空器：它轮询就绪队列，租约一个任务，推进一步，然后重复。平台内嵌了一个由它们组成的池（`AGENT_NUM_WORKERS`）；本页讲的是如何运行你自己的——这是需要比任何单个 HTTP 请求存活更久的代理的部署形态。
 
 ## 构建 WorkerRuntime
 

@@ -19,7 +19,7 @@ the spine underneath. Noeta makes state event-folded; the SDK does not.
 | **Extension** | Hooks, imperative interception (`PreToolUse`, `PostToolUse`, …) | Five extension seams (tools, policy, guards, observers, content channels) plus the single-writer constraint (observers are read-only) |
 | **Sub-agents** | Agent definitions; output returns to the parent; nesting ≤ 5 levels | Subtasks are independent event-sourced tasks; fan-out concurrency; results flow back via a `SubtaskCompleted` wake |
 | **Concurrency / distribution** | A single `query` / `Client` in-process | A distributed-queue substrate of lease + durable log (currently shipping single-machine) |
-| **Shape** | A TypeScript / Python library sending straight to the Claude API | Three packages — `noeta-runtime` (engine), `noeta-sdk` (client facade), `noeta-agent` (bundled app) |
+| **Shape** | A TypeScript / Python library sending straight to the Claude API | Three packages — `noeta-runtime` (engine), `noeta-sdk` (client facade), `noeta-agent` (the multi-user server platform) |
 
 ## When each wins
 
