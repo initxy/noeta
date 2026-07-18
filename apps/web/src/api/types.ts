@@ -129,7 +129,6 @@ export interface SpaceDetail extends Space {
 export interface AgentConfig {
   /** Appended persona segment (assembled into the session workspace AGENT.md). */
   prompt: string
-  group_entry_enabled: boolean
   /** Memory toggle (a reserved field until the memory feature ships). */
   memory_enabled: boolean
   /** Knowledge-source ids that take part in assembly; null = all. */

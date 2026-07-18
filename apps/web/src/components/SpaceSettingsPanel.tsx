@@ -472,7 +472,6 @@ function AgentConfigTab({ spaceId, isOwner }: { spaceId: string; isOwner: boolea
     try {
       const r = await agentConfigApi.update(spaceId, {
         prompt: config.prompt,
-        group_entry_enabled: config.group_entry_enabled,
         memory_enabled: config.memory_enabled,
         default_model: config.default_model,
         default_effort: config.default_effort,
@@ -538,13 +537,6 @@ function AgentConfigTab({ spaceId, isOwner }: { spaceId: string; isOwner: boolea
       </section>
 
       <section className="mb-4 space-y-2">
-        <ToggleRow
-          label="Group entry"
-          hint="When off, the agent no longer answers via group-chat entry points"
-          checked={config.group_entry_enabled}
-          disabled={!isOwner}
-          onChange={(v) => setConfig({ ...config, group_entry_enabled: v })}
-        />
         <ToggleRow
           label="Memory"
           hint="Takes effect once the memory feature ships; when on, sessions can store and recall this space's memory"

@@ -244,3 +244,72 @@ async def search_users(
     query = q.strip()
     local = _user_store(request).search_users(query, limit)
     return {"users": [u.to_api() for u in local]}
+
+
+# ----------------------------------------------------------- agent config
+class AgentConfigBody(BaseModel):
+    """Partial update: omitted fields keep their current value.
+
+    ``clear_knowledge_sources`` resets the selection to None (= all sources
+    take part); it wins over ``knowledge_sources`` when both are sent.
+    """
+
+    prompt: Optional[str] = None
+    memory_enabled: Optional[bool] = None
+    knowledge_sources: Optional[list[str]] = None
+    clear_knowledge_sources: bool = False
+    default_model: Optional[str] = None
+    default_effort: Optional[str] = None
+
+
+@router.get("/{space_id}/agent-config")
+async def get_agent_config(
+    space_id: str,
+    request: Request,
+    user: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """Space-level agent configuration (persona prompt, memory toggle,
+    knowledge-source selection, default model/effort). Member-readable."""
+    _membership_or_404(request, space_id, user)
+    return {"config": request.app.state.agent_config_store.get(space_id)}
+
+
+@router.put("/{space_id}/agent-config")
+async def put_agent_config(
+    space_id: str,
+    body: AgentConfigBody,
+    request: Request,
+    user: CurrentUser = Depends(get_current_user),
+) -> dict:
+    _space, role = _membership_or_404(request, space_id, user)
+    _require_owner(role)
+    settings = request.app.state.settings
+    fields: dict = {}
+    if body.prompt is not None:
+        fields["prompt"] = body.prompt.strip()
+    if body.memory_enabled is not None:
+        fields["memory_enabled"] = body.memory_enabled
+    if body.clear_knowledge_sources:
+        fields["knowledge_sources"] = None
+    elif body.knowledge_sources is not None:
+        fields["knowledge_sources"] = body.knowledge_sources
+    if body.default_model is not None:
+        if body.default_model:
+            from noeta.agent.models_config import validate_model
+
+            try:
+                validate_model(settings, body.default_model)
+            except ValueError:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"unknown model: {body.default_model}",
+                )
+        fields["default_model"] = body.default_model
+    if body.default_effort is not None:
+        if body.default_effort not in ("", "low", "medium", "high"):
+            raise HTTPException(
+                status_code=422, detail="effort must be low/medium/high"
+            )
+        fields["default_effort"] = body.default_effort
+    store = request.app.state.agent_config_store
+    return {"config": store.put(space_id, **fields)}

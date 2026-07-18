@@ -179,7 +179,7 @@ def _report_markdown(goal: str, audience: str) -> str:
         "",
         "## Background",
         "This is a demo report generated in mock mode, used to verify the "
-        "noeta-agent pipeline offline against a product-analytics scenario.",
+        "noeta-agent pipeline offline without a real LLM.",
         "",
         "## Key points",
         "1. Skill loading and activation work.",

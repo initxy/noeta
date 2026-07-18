@@ -105,9 +105,9 @@ logger = logging.getLogger(__name__)
 
 
 _SYSTEM_PROMPT = """\
-You are noeta-agent, the data platform's event-tracking expert.
+You are noeta-agent, a knowledge-grounded assistant for this workspace.
 
-Stance: data correctness above everything else. Event names, parameter names, enum values, reporting timing, naming conventions and the like must come from an authoritative source (the data dictionary / the space knowledge base / the existing tracking catalog) and be traceable to it; when you cannot find something, say so plainly and point out where to search — never fabricate from memory or force an answer.
+Stance: correctness above everything else. Names, definitions, conventions, and other project facts must come from an authoritative source (the space knowledge base / files in the workspace) and be traceable to it; when you cannot find something, say so plainly and point out where to search — never fabricate from memory or force an answer.
 
 - Respond in the user's language.
 - For key findings or key decisions, state the conclusion and its basis in one sentence; do not narrate every tool call.
@@ -120,7 +120,7 @@ Runtime environment (one dedicated container per session):
 - You have the standard file and command tools: read / write / edit for files, shell_run for shell commands; every operation happens inside this session's container.
 - The current working directory is the session workspace (/workspace inside the container); relative paths are based on it. Write deliverables here — the user sees them directly in the frontend file panel, no extra copying needed.
 - For file search, run rg / find / fd through shell_run; more flexible than dedicated tools.
-- This space's knowledge base lives in the session directory `knowledge/` (read-only) and is your first-hand authoritative source for verifying event names / parameters / conventions: start from `knowledge/<source name>/INDEX.md` to get oriented, and search with shell_run running rg / find.
+- This space's knowledge base lives in the session directory `knowledge/` (read-only) and is your first-hand authoritative source for the space's domain facts and conventions: start from `knowledge/<source name>/INDEX.md` to get oriented, and search with shell_run running rg / find.
 - Read local files (including images) with the read tool; it returns images as image_block. For the static content of a single URL, running curl through shell_run is enough.
 - Citing sources: when a fact in your answer comes from a file under knowledge/, mark it with a footnote — append
   [^1] at the end of the sentence, and list each source at the end of the answer as
@@ -1427,17 +1427,6 @@ class AgentService:
         (knowledge/<source name>/, matching the skill reference contract); CJK
         names as directory names are only a problem for the host-side
         safe_username paths, never for container mount points.
-
-        The space-level derived layer `_derived/` (the unified tracking-point
-        view) is mounted extra at the end. It sits beside the source
-        directories and is not a row in knowledge_sources, so the per-source
-        loop cannot reach it — left unmounted, the skill contract's
-        `knowledge/_derived/point_library.ndjson` would never exist inside the
-        container and retrieval would degrade to full-corpus grep. Mounted
-        only when the selection has not been narrowed: the view is a
-        cross-source join (the tracking-point master table × the code event
-        catalog), and with a source deselected, mounting it would leak that
-        source's content back into the container.
         """
         config_store = getattr(self, "_agent_config_store", None)
         knowledge_store = getattr(self, "_knowledge_store", None)
@@ -1447,19 +1436,14 @@ class AgentService:
         chosen = set(selected) if selected is not None else None
         mounts: list[tuple[str, str]] = []
         root = self._settings.knowledge_path / space_id
-        narrowed = False
         for src in knowledge_store.list_sources(space_id):
             if src.get("status") != "ready":
                 continue
             if chosen is not None and src["id"] not in chosen:
-                narrowed = True
                 continue
             src_dir = root / src["id"]
             if src_dir.is_dir():
                 mounts.append((src["name"], str(src_dir)))
-        derived_dir = root / "_derived"
-        if mounts and not narrowed and derived_dir.is_dir():
-            mounts.append(("_derived", str(derived_dir)))
         return mounts
 
     def _space_has_ready_knowledge(self, space_id: str) -> bool:

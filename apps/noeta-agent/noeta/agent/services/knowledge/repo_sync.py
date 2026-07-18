@@ -164,7 +164,7 @@ def _generate_index_md(
     lines.append("- Use `rg <keyword>` for exact searches by name")
     lines.append(
         "- The repository has no directory overview; search directly by"
-        " event / class / function name"
+        " symbol / class / function name"
     )
     lines.append(f"- Repository origin: {git_url}")
 
