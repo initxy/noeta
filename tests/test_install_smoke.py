@@ -174,7 +174,20 @@ def test_wheel_install_boots_server_and_serves_health(tmp_path: Path) -> None:
         assert '"ok":true' in body.replace(" ", "")
         assert "mock" in body
 
-        # 5. Graceful shutdown: SIGTERM → uvicorn drains the lifespan, then
+        # 5. The wheel must ship the SPA (force-included at noeta/agent/static
+        # — the 0.3.0 wheel shipped API-only because the include was lost in
+        # the platform port): the root path serves the frontend index, not a
+        # 404 and not the bare API.
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/", timeout=5
+        ) as resp:
+            assert resp.status == 200
+            index = resp.read().decode()
+        assert "<div id=" in index and "</html>" in index.lower(), (
+            f"root path did not serve the SPA index: {index[:200]!r}"
+        )
+
+        # 6. Graceful shutdown: SIGTERM → uvicorn drains the lifespan, then
         # re-raises the captured signal so the exit status reflects it
         # (modern uvicorn exits -SIGTERM, older versions 0 — both are the
         # graceful path). The drain evidence is the lifespan-shutdown log
