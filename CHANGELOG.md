@@ -8,6 +8,34 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The compaction summarize round-trip ignored the model's output ceiling,
+  so proactive compaction reliably killed reasoning-model tasks with
+  `compaction_summary_failed`.** `_summary_prompt_request` built its
+  `LLMRequest` without `max_tokens` (unlike every normal turn, which forwards
+  `max_output_tokens`), so a gateway that caps output when the client sends
+  none — e.g. the aidp Responses gateway's 1000-token default — let a reasoning
+  model spend the entire default budget on hidden reasoning and return
+  `stop_reason="max_tokens"` with an empty text body. The empty-summary guard
+  then (correctly) refused to record the empty summary and failed the step,
+  taking down the whole task. The summarize request now forwards
+  `max_output_tokens` the same way a normal turn does.
+
+## [0.3.1] - 2026-07-18
+
+### Fixed
+
+- **A pip-installed `noeta-agent` 0.3.0 served no web frontend.** Two
+  halves: the wheel force-include (`apps/web/dist` → `noeta/agent/static`)
+  was lost in the platform port's pyproject rewrite, so the published
+  wheel shipped API-only; and the server's SPA lookup resolved the wheel
+  candidate against `APP_DIR`, which degenerates to `site-packages` in an
+  installed venv, so even a bundled SPA would not have been found. The
+  include is restored, the lookup is package-relative, and the opt-in
+  install smoke now asserts the root path serves the SPA index, not just
+  `/api/v1/health`.
+
 ## [0.3.0] - 2026-07-17
 
 ### Changed
@@ -738,7 +766,7 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.3.1...HEAD
 [0.2.11]: https://github.com/initxy/noeta/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/initxy/noeta/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/initxy/noeta/compare/v0.2.8...v0.2.9
@@ -748,6 +776,7 @@ Initial preview release.
 [0.2.5]: https://github.com/initxy/noeta/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/initxy/noeta/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/initxy/noeta/compare/v0.2.2...v0.2.3
+[0.3.1]: https://github.com/initxy/noeta/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/initxy/noeta/compare/v0.2.11...v0.3.0
 [0.2.2]: https://github.com/initxy/noeta/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/initxy/noeta/compare/v0.2.0...v0.2.1
