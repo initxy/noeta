@@ -28,11 +28,16 @@ Run any of them directly:
 python examples/minimal_agent.py
 ```
 
-## Want a real model?
+## Running the platform?
 
-[`openai-compatible/`](./openai-compatible/) is a ready-to-use config + instructions
-for booting the official coding agent (`python -m noeta.agent`) against a
-real OpenAI-compatible endpoint.
+Two directories cover the official product (`python -m noeta.agent`)
+rather than the SDK:
+
+- [`openai-compatible/`](./openai-compatible/) — point the platform at a
+  real OpenAI-Responses-compatible gateway (`.env` + `models.json`
+  fragments).
+- [`deployment/`](./deployment/) — optional docker-compose packaging (the
+  platform also runs fine bare with `uv` + a data directory).
 
 ## `_internal/` — contributor demos (not SDK examples)
 

@@ -1,0 +1,22 @@
+{
+  "models": [
+    {
+      "id": "<your-model-id>",
+      "label": "My Model",
+      "default": true,
+      "efforts": ["low", "medium", "high"],
+      "default_effort": "medium",
+      "context_window": 200000,
+      "max_output_tokens": 16384
+    },
+    {
+      "id": "<secondary-gateway-model-id>",
+      "label": "Second Gateway Model",
+      "gateway": "secondary",
+      "efforts": ["low", "medium", "high"],
+      "default_effort": "medium",
+      "context_window": 200000,
+      "max_output_tokens": 16384
+    }
+  ]
+}

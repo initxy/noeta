@@ -21,8 +21,8 @@ from typing import Any
 from noeta.execution.driver import InteractionDriver, multi_turn_policy_wrapper
 from noeta.client import SdkHost
 from noeta.core.fold import fold
-from noeta.agent.read_models.detail import build_code_session_detail
-from noeta.agent.read_models.tail import tail_event_rows
+from tests._read_models.detail import build_code_session_detail
+from tests._read_models.tail import tail_event_rows
 from noeta.policies.react import spawn_subagent_tool_schema
 from noeta.protocols.events import (
     ConversationClosedPayload,

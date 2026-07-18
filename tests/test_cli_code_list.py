@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from noeta.execution.multi_turn import NEXT_GOAL_WAKE_HANDLE
-from noeta.agent.read_models.catalog import (
+from tests._read_models.catalog import (
     CodeSessionRow,
     _status_text,
     filter_code_sessions,

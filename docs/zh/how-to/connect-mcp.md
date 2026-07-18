@@ -1,71 +1,43 @@
 # 连接 MCP 服务器
 
-**目标：** 注册远程（stdio 或 HTTP）MCP 服务器，让 Noeta 可以使用它们的工具，或将你自己的工具打包为进程内 MCP 服务器。
+**目标：** 让空间（space）的 agent 能访问 MCP（Model Context Protocol）服务器，或把你自己的工具打包成进程内 MCP 服务器，供 SDK agent 使用。
 
-**开始之前：** 你有一个可用的 Noeta 安装。你知道 MCP（Model Context Protocol）是什么，并且有一个想要连接的 MCP 服务器。
+**开始之前：** 你有一个正在运行的平台（或一套可用的 SDK 环境），以及一个想接入的 MCP 服务器。
 
-## 方案 A：通过 coding agent 使用远程 MCP
+## 方案 A：平台上的每空间连接器
 
-对于 `python -m noeta.agent`，MCP 服务器注册在主机的连接器存储中，位于 `~/.noeta/mcp_servers.json`：
+MCP 连接器是**空间作用域**的配置，在空间的 MCP 页面（或通过 API）管理。不存在全局注册表文件 —— 已退役的 `~/.noeta/mcp_servers.json` 机制不复存在；每个空间在应用数据库里维护自己的一套连接器。
 
-```json
-{
-  "servers": {
-    "github": {
-      "type": "http",
-      "url": "https://mcp.github.com/mcp",
-      "headers": {
-        "Authorization": "Bearer ghp_…"
-      }
-    },
-    "filesystem": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"],
-      "env": {}
-    }
-  }
-}
-```
+以别名（alias）注册连接器，传输方式二选一：
 
-每个条目有一个 `alias`（键名——`github`、`filesystem`），代理用它来引用服务器。`type` 为 `"http"` 或 `"stdio"`。
+- **`http`** —— 一个 URL 加可选的 headers（bearer token 等）。
+- **`stdio`** —— 本地服务器进程的 command、args 和 env。
 
-凭据（header 值、环境变量）存储在主机端，**永远不会**出现在请求体中或 `/mcp/servers` 发现响应中（该响应返回已清除凭据的条目）。
+然后，对每个连接器可以：
 
-### 按会话启用 MCP
+- **启用 / 禁用。** 启用的连接器**每一轮**都会解析进 agent host —— 无需重启会话（session）；其工具对模型显示为 `mcp__<alias>__<tool>`。
+- **限制工具子集。** 先发现服务器的完整工具菜单，再只保留想暴露的工具（`null` = 全部）。
 
-已注册的服务器不会自动使用。你在创建任务时通过 `enabled_mcp` 字段按会话启用它们：
+凭证（header 值、env 值）存储在服务端，**绝不**回显 —— 列出连接器时返回的是抹去凭证后的条目。只有空间所有者能管理连接器；成员可以查看。
 
-```bash
-# 通过 HTTP
-curl -X POST http://127.0.0.1:<port>/tasks \
-  -H "Content-Type: application/json" \
-  -d '{"goal": "Read the repo README", "enabled_mcp": ["github"]}'
-```
+通过 HTTP（全部位于 `/api/v1/spaces/{space_id}/mcp` 下）：
 
-或在 Web 界面中，创建新会话时从下拉菜单中选择 MCP 服务器。
-
-启用后，MCP 服务器的工具在代理的工具允许列表中显示为 `mcp__<alias>__<tool_name>`。
-
-### 通过 HTTP 管理服务器
-
-后端为连接器存储暴露了 CRUD 端点：
-
-| 路由 | 功能 |
+| 路由 | 作用 |
 | --- | --- |
-| `GET /mcp/servers` | 列出已注册服务器（已清除凭据） |
-| `POST /mcp/servers` | 注册新服务器 |
-| `PUT /mcp/servers/{alias}` | 合并编辑现有服务器 |
-| `DELETE /mcp/servers/{alias}` | 移除服务器 |
-| `GET /mcp/servers/{alias}/tools` | 发现服务器的工具菜单 |
-| `GET /mcp/servers/{alias}/prompts` | 发现服务器的 prompts |
-| `GET /mcp/servers/{alias}/resources` | 发现服务器的资源 |
+| `GET /servers` | 列出连接器（凭证已抹去） |
+| `POST /servers` | 注册连接器（`alias`、`type`、传输字段、可选的 `tools` 子集） |
+| `PUT /servers/{alias}` | 合并式编辑现有连接器 |
+| `PATCH /servers/{alias}` | 启用 / 禁用 |
+| `DELETE /servers/{alias}` | 移除 |
+| `GET /servers/{alias}/tools` | 发现工具菜单 |
+| `PUT /servers/{alias}/tools` | 设置启用的工具子集（`null` = 全部） |
+| `GET /servers/{alias}/prompts` · `/resources` | 发现 prompts / resources |
 
-完整请求和响应格式参见 [HTTP 接口参考](../reference/http-api.md)。
+发现仅走 HTTP：对 `stdio` 连接器发起发现会得到 400（服务器不会因为一次管理性的 GET 就去启动运维者配置的子进程）；连接或握手失败会得到 502 —— 检查 URL、headers，并确认 MCP 服务器确实在运行。
 
 ## 方案 B：进程内 SDK MCP 服务器
 
-对于希望将自己的工具打包成 MCP 形态服务器的 SDK 用户，使用 `create_sdk_mcp_server`：
+想把自己的工具打包成 MCP 形态服务器的 SDK 用户，可以用 `create_sdk_mcp_server`：
 
 ```python
 from noeta.sdk import create_sdk_mcp_server, tool
@@ -96,21 +68,10 @@ options = Options(
 )
 ```
 
-工具显示为 `mcp__my-tools__echo`——与远程 MCP 服务器使用相同的命名约定，但它们在进程内运行，无子进程或网络往返。
-
-## 验证连接
-
-注册服务器后，验证工具发现是否正常工作：
-
-```bash
-curl http://127.0.0.1:<port>/mcp/servers/github/tools
-```
-
-你应该看到服务器的工具菜单作为 JSON 数组返回。如果收到 502，说明服务器已注册但连接或握手失败——检查 URL、headers，并确认 MCP 服务器确实在运行。
+这些工具显示为 `mcp__my-tools__echo` —— 与远程 MCP 服务器同一套命名约定，但它们在进程内运行，没有子进程，也没有网络往返。
 
 ## 另请参阅
 
-- [构建自定义工具](build-custom-tools.md) — 用 `@tool` 定义工具并将它们打包为 SDK MCP 服务器
-- [Coding agent 参考](../reference/noeta-agent.md) — MCP 的环境配置
-- [HTTP 接口参考](../reference/http-api.md) — MCP 路由详情
-- `examples/mcp_server.py` — 完整进程内 MCP 示例
+- [构建自定义工具](build-custom-tools.md) —— 用 `@tool` 定义工具并打包进 SDK MCP 服务器
+- [HTTP API 参考](../reference/http-api.md#mcp-connectors) —— 请求与响应的形态
+- `examples/mcp_server.py` —— 完整的进程内 MCP 示例

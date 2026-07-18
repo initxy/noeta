@@ -22,7 +22,7 @@ The load-bearing invariants pinned here:
 from __future__ import annotations
 
 
-from noeta.agent.skills import BUILTIN_SKILLS_DIR, load_builtin_skills
+from tests._builtin_skills import BUILTIN_SKILLS_DIR, load_builtin_skills
 from noeta.execution.skills import build_skill_composer as build_coding_composer
 from noeta.execution.skills import merge_skill_registries
 from noeta.context.skills import (
@@ -47,9 +47,11 @@ _EXPECTED_BUILTIN_SKILLS = frozenset(
 
 
 def test_builtin_skills_dir_points_at_packaged_layout() -> None:
-    """The constant resolves to ``noeta/agent/skills_builtin`` and each
-    expected skill lives at ``<name>/SKILL.md`` (the SkillIndexer layout)."""
-    assert BUILTIN_SKILLS_DIR.name == "skills_builtin"
+    """The constant resolves to the test-fixture skill pack and each expected
+    skill lives at ``<name>/SKILL.md`` (the SkillIndexer layout). The pack
+    moved from product code into tests/ when the server platform replaced the
+    old app (skills are now DB-managed, not code-shipped)."""
+    assert BUILTIN_SKILLS_DIR.name == "_skills_builtin"
     assert BUILTIN_SKILLS_DIR.is_dir()
     for name in _EXPECTED_BUILTIN_SKILLS:
         assert (BUILTIN_SKILLS_DIR / name / "SKILL.md").is_file()

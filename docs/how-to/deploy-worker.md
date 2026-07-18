@@ -20,9 +20,9 @@ loop = WorkerLoop(rt, worker_id="my-worker")
 loop.run_forever(install_signals=True)  # blocks until stop()
 ```
 
-Unlike `python -m noeta.agent` (which drives turns inline in the HTTP
-handler), `WorkerLoop` is a dedicated drain: it polls the ready queue,
-leases one task, advances it one step, and repeats. This is the
+`WorkerLoop` is a dedicated drain: it polls the ready queue, leases one
+task, advances it one step, and repeats. The platform embeds a pool of
+them (`AGENT_NUM_WORKERS`); this page is for running your own — the
 deployment shape for agents that need to outlive any individual HTTP
 request.
 

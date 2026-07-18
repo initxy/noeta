@@ -2,27 +2,27 @@
 
 Run Noeta in your CI pipeline to smoke-test agent recipes, validate
 custom tools, or automate code review. This tutorial shows how to wire
-Noeta into GitHub Actions using the offline stub provider — no API key
-needed.
+Noeta into GitHub Actions using the offline `FakeLLMProvider` — no API
+key needed.
 
-## Why stub in CI?
+## Why a fake provider in CI?
 
-The `stub` provider is a scripted, offline double that answers with
+`FakeLLMProvider` is a scripted, offline LLM double that answers with
 pre-scripted responses. It's perfect for CI because:
 
 - **No API key required.** Your CI never needs secrets for LLM access.
 - **Deterministic.** Same inputs always produce the same outputs.
 - **Fast.** No network round-trips.
 
-You can also use a real provider in CI (pass `NOETA_AGENT_API_KEY` as a
-secret), but the stub is the right starting point for smoke tests.
+You can also use a real provider in CI (pass the gateway key as a
+secret), but the fake is the right starting point for smoke tests.
 
 ## Step 1: Write a smoke test
 
 Create `tests/test_agent_smoke.py`:
 
 ```python
-"""Smoke test: run the minimal agent recipe end-to-end with the stub provider."""
+"""Smoke test: run the minimal agent recipe end-to-end with the fake provider."""
 
 import tempfile
 from pathlib import Path
@@ -185,9 +185,8 @@ Add a job to `.github/workflows/ci.yml`:
         run: uv run pytest tests/test_agent_smoke.py -v
 ```
 
-> **No frontend build needed.** The `noeta-agent` wheel on PyPI already
-> bundles the built web UI, so `uv sync` pulls a ready-to-run package —
-> no `npm` step required.
+> **No frontend build needed.** SDK smoke tests exercise the library
+> in-process — no `npm` step and no platform server required.
 
 ## Step 4: Run the full test suite in CI
 
@@ -231,10 +230,9 @@ actual LLM behaviour):
         run: uv sync --frozen
       - name: Run integration tests
         env:
-          NOETA_AGENT_PROVIDER: openai
-          NOETA_AGENT_BASE_URL: ${{ secrets.LLM_BASE_URL }}
-          NOETA_AGENT_API_KEY: ${{ secrets.LLM_API_KEY }}
-          NOETA_AGENT_MODEL: ${{ secrets.LLM_MODEL }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
         run: uv run pytest tests/test_integration.py -v -m live
 ```
 
@@ -246,14 +244,14 @@ import pytest
 
 @pytest.mark.live
 def test_agent_with_real_llm():
-    ...  # needs NOETA_AGENT_API_KEY
+    ...  # construct a real provider from your gateway secrets
 ```
 
 ## Key points
 
-- **Stub provider for smoke tests.** `FakeLLMProvider` is in
-  `noeta.testing` — the public home for offline doubles. No secrets,
-  no network.
+- **Fake provider for smoke tests.** `FakeLLMProvider` is in
+  `noeta.testing` (also exported as `noeta.sdk.testing`) — the public
+  home for offline doubles. No secrets, no network.
 - **`uv run pytest`** is the test entry point. The workspace-root
   `pyproject.toml` configures `testpaths = ["tests"]`.
 - **`@pytest.mark.live`** gates real-LLM tests so they don't run in

@@ -130,7 +130,7 @@ with tempfile.TemporaryDirectory() as tmp:
         client.shutdown()
 ```
 
-`Client` is the in-process equivalent of `python -m noeta.agent` — it
+`Client` is the same host machinery the platform embeds — it
 creates a temporary task, drives it to a terminal state, and shuts down.
 `client.messages(task_id)` returns the folded human-readable view: user
 message, tool use, tool result, assistant reply.

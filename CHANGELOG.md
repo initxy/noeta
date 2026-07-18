@@ -8,6 +8,56 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-17
+
+### Changed
+
+- **The official product is now a multi-user server platform.** The
+  single-user, local, no-auth coding agent app (and its raw-envelope wire
+  protocol) is retired and replaced by a deployable multi-user agent
+  service: a FastAPI backend with app-layer sessions and collaboration
+  spaces, pluggable authentication (dev-login reference implementation,
+  signed session cookie), an admin console, and a React 19/TypeScript SPA.
+  The dist name (`noeta-agent`), directory (`apps/noeta-agent`) and
+  entrypoint (`python -m noeta.agent`) are unchanged. The wire protocol is
+  a versioned REST surface plus one SSE stream per session carrying
+  translated flat UI events re-derived from the EventLog on replay
+  (`since_seq`); raw envelopes remain available on the admin trace
+  surface. Agent shell execution is sandbox-only (one container per
+  session); per-call approval no longer exists. Decision record:
+  `docs/adr/server-platform-product.md`.
+- Space-scoped app content: skills, knowledge sources (`git_repo` /
+  `local_dir` sync), agent memory, prompt/workflow templates, a feedback
+  loop (per-message ratings feeding an owner-gated analysis agent), MCP
+  connectors, and per-space agent configuration (persona prompt, default
+  model/effort, knowledge selection).
+
+### Added
+
+- Per-space MCP connector management: CRUD + enable/disable + per-connector
+  tool subsets over `/api/v1/spaces/{space_id}/mcp/servers`, with live
+  tool/prompt/resource discovery for HTTP connectors and per-turn resolver
+  wiring into the engine. Credentials are stored server-side and never
+  echoed.
+- Composer image input: attach/paste/drop PNG/JPEG/GIF/WebP (≤ 5 MB each);
+  images reach the agent as `ImageBlock`s and render back through
+  `GET /api/v1/content/{hash}`.
+- Opt-in OTLP trace export for the platform (`OTLP_ENDPOINT` /
+  `OTLP_HEADERS`).
+- `noeta.sdk` surface: `LLMRequest` / `LLMResponse` / `Message` /
+  `TextBlock` / `ToolUseBlock` / `ToolResultBlock` / `Usage`,
+  `MemoryStore`, `noeta.sdk.testing.FakeLLMProvider`, and
+  `CATALOG` / `ModelSpec` on `noeta.sdk.providers`. The app-layer
+  import ratchet is burned down to its two ADR-documented exemptions.
+- Playwright e2e suite for the platform SPA (`make e2e-web`, opt-in).
+
+### Fixed
+
+- The builtin `read` tool no longer fails with "is not utf-8 text" on text
+  files containing stray invalid bytes: it decodes them with U+FFFD
+  replacements (noted in the tool summary). A NUL byte still marks real
+  binary and keeps the hard error.
+
 ## [0.2.11] - 2026-07-16
 
 ### Fixed
@@ -688,7 +738,7 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.2.11...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.3.0...HEAD
 [0.2.11]: https://github.com/initxy/noeta/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/initxy/noeta/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/initxy/noeta/compare/v0.2.8...v0.2.9
@@ -698,6 +748,7 @@ Initial preview release.
 [0.2.5]: https://github.com/initxy/noeta/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/initxy/noeta/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/initxy/noeta/compare/v0.2.2...v0.2.3
+[0.3.0]: https://github.com/initxy/noeta/compare/v0.2.11...v0.3.0
 [0.2.2]: https://github.com/initxy/noeta/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/initxy/noeta/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/initxy/noeta/compare/v0.1.17...v0.2.0

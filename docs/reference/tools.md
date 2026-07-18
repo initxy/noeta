@@ -46,7 +46,7 @@ sandbox** — `shell_run` spawns external programs in the trusted workspace.
 
 | Tool | Risk | What it does | Source |
 | --- | --- | --- | --- |
-| `open_app` | low | Render a workspace HTML app in the web "App" panel via the single-port preview gateway. | `noeta/tools/app/open_app.py` |
+| `open_app` | low | Publish a workspace HTML app through the host's preview gateway (mounted only when the host wires one; the platform's live sandbox preview covers this need instead). | `noeta/tools/app/open_app.py` |
 
 ## Memory tools
 

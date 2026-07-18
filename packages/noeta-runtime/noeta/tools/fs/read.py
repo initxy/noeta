@@ -433,8 +433,15 @@ class ReadFileTool:
 
         try:
             full_text = raw.decode("utf-8")
+            bytes_replaced = False
         except UnicodeDecodeError:
-            return tool_error(self.name, f"{path!r} is not utf-8 text")
+            # A NUL byte marks real binary. Anything else is a text file with
+            # stray invalid bytes (legacy encodings, BOM remnants) — decode
+            # leniently so the file stays readable instead of failing outright.
+            if b"\x00" in raw:
+                return tool_error(self.name, f"{path!r} is not utf-8 text")
+            full_text = raw.decode("utf-8", errors="replace")
+            bytes_replaced = True
 
         # The artifact is always the FULL file body, independent of the
         # sliced view returned inline. That way the model can pass the
@@ -479,6 +486,7 @@ class ReadFileTool:
                 output, shrink_order=["content"], max_bytes=INLINE_CONTENT_MAX_BYTES
             )
         summary_path = truncate_bytes(rel, SUMMARY_EMBED_MAX_BYTES)
+        note = "; non-utf8 bytes replaced" if bytes_replaced else ""
         return ToolResult(
             success=True,
             output=output,
@@ -486,9 +494,9 @@ class ReadFileTool:
             summary=(
                 f"read {summary_path} "
                 f"(lines {output['offset']}–{output['offset'] + output['lines_read'] - 1} "
-                f"of {total_lines})"
+                f"of {total_lines}{note})"
                 if output["lines_read"] > 0
-                else f"read {summary_path} (empty)"
+                else f"read {summary_path} (empty{note})"
             ),
         )
 
