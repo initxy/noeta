@@ -66,10 +66,11 @@ class SPAStaticFiles(StaticFiles):
 
 def _frontend_dist() -> Path | None:
     """Locate the built SPA. Two candidates, in order: the bundle shipped
-    inside the package tree (``static/``, the wheel layout), then the
-    repo-checkout dev build (``apps/web/dist``)."""
+    inside the package tree (``noeta/agent/static``, the wheel layout —
+    package-relative because APP_DIR degenerates to site-packages in an
+    installed venv), then the repo-checkout dev build (``apps/web/dist``)."""
     candidates = [
-        APP_DIR / "static",
+        Path(__file__).resolve().parent / "static",
         APP_DIR.parent / "web" / "dist",
     ]
     for c in candidates:
