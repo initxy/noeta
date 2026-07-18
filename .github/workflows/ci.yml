@@ -47,13 +47,14 @@ jobs:
         run: uv sync --frozen
 
       # Cache the Chromium download (~30 s per run) keyed on the pinned
-      # @playwright/test version; `playwright install` skips the download
-      # on a hit, and --with-deps still installs the OS packages.
+      # @playwright/test version (the e2e suite is its own npm package under
+      # apps/web/e2e); `playwright install` skips the download on a hit, and
+      # --with-deps still installs the OS packages.
       - name: Resolve Playwright version
         id: playwright-version
         run: >
           echo "version=$(node -e
-          "console.log(require('./apps/web/package-lock.json').packages['node_modules/@playwright/test'].version)")"
+          "console.log(require('./apps/web/e2e/package-lock.json').packages['node_modules/@playwright/test'].version)")"
           >> "$GITHUB_OUTPUT"
 
       - name: Cache Playwright browsers
@@ -62,11 +63,12 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
 
-      - name: Web e2e smoke (Playwright)
-        working-directory: apps/web
+      - name: Web e2e (Playwright against the platform in mock mode)
+        working-directory: apps/web/e2e
         run: |
+          npm ci
           npx playwright install --with-deps chromium
-          npm run test:e2e
+          npx playwright test
 
       - name: Smoke import
         run: uv run python -c "from noeta.core.engine import Engine; print('import OK')"
@@ -79,6 +81,16 @@ jobs:
         env:
           NOETA_TEST_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/postgres
         run: uv run pytest -n auto --cov=noeta --cov-report=term --cov-fail-under=85
+
+      - name: App suite (noeta-agent platform backend)
+        working-directory: apps/noeta-agent
+        run: uv run pytest -q
+
+      - name: Web typecheck + unit tests
+        working-directory: apps/web
+        run: |
+          npx tsc -b --noEmit
+          npx vitest run
 
       - name: mypy strict on protocols
         run: |
