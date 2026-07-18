@@ -101,11 +101,22 @@ from noeta.protocols.decisions import Decision
 from noeta.protocols.messages import (
     ImageBlock,
     LLMProvider,
+    LLMRequest,
+    LLMResponse,
+    Message,
     StreamDelta,
     StreamingProvider,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    Usage,
 )
 from noeta.protocols.policy import Policy
 from noeta.protocols.values import ContentRef
+# The file-per-memory store behind the memory tools. A host that manages
+# memory pools (listing, editing, per-space scoping) opens the same store the
+# agent's memory tools write, so both sides agree on slugs and frontmatter.
+from noeta.tools.memory import MemoryStore
 from noeta.protocols.wake import NEXT_GOAL_WAKE_HANDLE
 from noeta.protocols.step_context import StepContext
 from noeta.protocols.tool import Tool, ToolContext, ToolResult
@@ -226,6 +237,17 @@ __all__ = [
     "LLMProvider",
     "StreamingProvider",
     "StreamDelta",
+    # provider implementation material (the request/response/message types an
+    # LLMProvider implementation consumes and produces)
+    "LLMRequest",
+    "LLMResponse",
+    "Message",
+    "TextBlock",
+    "ToolUseBlock",
+    "ToolResultBlock",
+    "Usage",
+    # memory store (host-side memory pool management)
+    "MemoryStore",
     "Policy",
     "View",
     "Decision",

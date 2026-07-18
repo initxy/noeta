@@ -22,6 +22,8 @@ a small regex, no new dependency); no external library is introduced.
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -102,23 +104,28 @@ def test_runnable_codeblocks_execute_successfully(
 ) -> None:
     """Execute every ``<!-- runnable: ... -->``-tagged code block.
 
-    Each block runs in an isolated namespace (``exec(body, ns)``) so
-    its top-level ``assert`` becomes the success signal."""
+    Each block runs in a fresh subprocess (the same interpreter/venv), so a
+    snippet's top-level ``assert`` is the success signal and no snippet side
+    effect (imports, monkey-patches, global state) can leak into the test
+    process — which is also how a reader actually runs it."""
     assert tag == "smoke", (
         f"unknown runnable tag {tag!r} in {md_path}; only 'smoke' is supported"
     )
     assert lang == "python", (
         f"smoke blocks must be Python (got lang={lang!r}) in {md_path}"
     )
-    namespace: dict[str, object] = {"__name__": "__codeblock__"}
     dedented = textwrap.dedent(body)
-    try:
-        exec(compile(dedented, str(md_path), "exec"), namespace)
-    except SystemExit as exc:
-        if exc.code not in (None, 0):
-            raise AssertionError(
-                f"smoke block in {md_path} exited non-zero: {exc.code}"
-            ) from exc
+    result = subprocess.run(
+        [sys.executable, "-c", dedented],
+        capture_output=True,
+        text=True,
+        cwd=_REPO_ROOT,
+        timeout=120,
+    )
+    assert result.returncode == 0, (
+        f"smoke block in {md_path} exited {result.returncode}:\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
 
 
 def test_repo_root_readme_is_the_canonical_entry() -> None:

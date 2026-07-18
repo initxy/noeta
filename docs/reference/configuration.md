@@ -1,108 +1,144 @@
 # Configuration
 
-Noeta Agent (`python -m noeta.agent`) is configured through environment
-variables and an optional JSON config file. Env vars take precedence over
-the file; the file takes precedence over built-in defaults.
+The platform (`python -m noeta.agent`) is configured through
+**`apps/noeta-agent/.env`** plus environment variables — environment
+variables take precedence over the file, the file over built-in defaults.
+There are no CLI flags. Source of truth:
+`apps/noeta-agent/noeta/agent/config.py` (pydantic-settings; unknown keys in
+a legacy `.env` are ignored). `apps/noeta-agent/.env.example` is the
+annotated starter copy.
 
-## Configuration sources
+**Every key is optional.** With everything left empty the server runs fully
+offline: the deterministic mock LLM, dev-login, SQLite storage, no sandbox.
 
-Precedence (low → high):
+Relative paths (`DATA_DIR`, `SHARED_DATA_DIR`, `MODELS_CONFIG`) resolve
+against the application project root `apps/noeta-agent/`.
 
-1. **Dataclass defaults** — safe offline defaults (`stub` provider, `dry_run` writes, in-memory storage).
-2. **`NOETA_AGENT_CONFIG` file** — a JSON object whose keys override defaults (see [below](#json-config-file-fields)).
-3. **`NOETA_AGENT_*` environment variables** — highest precedence (see [below](#environment-variables)).
+## Server
 
-## Environment variables
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `HOST` | `127.0.0.1` | Bind interface. |
+| `PORT` | `8000` | Listen port. |
+| `LOG_LEVEL` | `INFO` | Backend log level. |
+| `CORS_ORIGINS` | `http://127.0.0.1:5173,http://localhost:5173` | Comma-separated allowed origins (only needed for a separately-served frontend dev server; `make dev`'s vite proxy does not need it). |
 
-| Variable | Type | Default | Purpose |
-| --- | --- | --- | --- |
-| `NOETA_AGENT_CONFIG` | path | *(none)* | Path to a JSON config file. See [JSON config file fields](#json-config-file-fields). |
-| `NOETA_AGENT_HOST` | string | `127.0.0.1` | Interface the HTTP server binds to. **The server is unauthenticated — keep it on localhost.** Binding `0.0.0.0` exposes full engine control (and the preview gateway's proxy) to the network; put a reverse proxy with auth in front if you must. |
-| `NOETA_AGENT_PORT` | int | `8765` | Port the HTTP server listens on. `0` = OS-assigned. |
-| `NOETA_AGENT_WORKSPACE` | path | `$PWD` | Default workspace directory (the agent's file root). |
-| `NOETA_AGENT_WORKSPACES_FILE` | path | `~/.noeta/workspaces.json` | Workspace (project) registry JSON store. |
-| `NOETA_AGENT_MCP_FILE` | path | `~/.noeta/mcp_servers.json` | MCP server connector registry JSON. |
-| `NOETA_AGENT_STORAGE` | URL | *(none)* | Durable storage for EventLog + ContentStore + Dispatcher: a SQLite file path or a `postgresql://` DSN. Unset = in-memory (no persistence). Legacy `NOETA_AGENT_SQLITE` still accepted. |
-| `NOETA_AGENT_PROVIDER` | string | `stub` | Provider adapter: `stub` (offline), `openai`, `openai-responses`, `anthropic`. |
-| `NOETA_AGENT_MODEL` | string | *(none)* | Model identifier served by the configured provider. |
-| `NOETA_AGENT_MODELS` | string | *(none)* | Comma-separated list of selectable models (enables per-turn model switching in the UI). |
-| `NOETA_AGENT_API_KEY` | string | *(none)* | Provider API key. Required for real providers. |
-| `NOETA_AGENT_BASE_URL` | URL | *(none)* | Provider base URL. Required for `openai` and `openai-responses`. |
-| `NOETA_AGENT_API_VERSION` | string | *(none)* | API version query param (used by `openai-responses`). |
-| `NOETA_AGENT_MAX_TOKENS` | int | *(none)* | Output token cap forwarded to requests that carry none. |
-| `NOETA_AGENT_WRITE_MODE` | string | `dry_run` | Filesystem write policy: `dry_run` (stages a diff, safe default) or `apply` (performs real writes). |
-| `NOETA_AGENT_WORKFLOW_ENABLED` | bool | `false` | Host kill-switch for the `run_workflow` control tool. |
-| `NOETA_AGENT_BACKGROUND_DRIVE` | bool | `true` | Drive turns asynchronously on a background thread (command endpoints return `202`). |
-| `NOETA_AGENT_MEMORY_CONSOLIDATION` | bool | `true` | Background memory consolidation: at session-stop seams (close / turn boundary), debounced, a hidden curation agent merges / archives / backfills long-term memories. See `docs/adr/memory-consolidation.md`. |
-| `NOETA_AGENT_MEMORY_CONSOLIDATION_DEBOUNCE_HOURS` | float | `24.0` | Minimum hours between consolidation runs (tracked in `.consolidation-state.json` under the memory root). |
-| `NOETA_AGENT_OTLP_ENDPOINT` | URL | *(none)* | OTLP trace export: the **full** OTLP/HTTP traces URL (e.g. `http://localhost:4318/v1/traces`). Task / tool / LLM execution is exported as spans to any OTLP collector (Jaeger, OpenTelemetry Collector, …). Unset = export off. Export is **opt-in via this variable or the `otlp_endpoint` config key only** — an ambient `OTEL_EXPORTER_OTLP_ENDPOINT` never enables it. Once enabled, the OTel-standard `OTEL_EXPORTER_OTLP_HEADERS` (`k=v,k2=v2`, values percent-encoded) supplies request headers. |
-| `NOETA_WEB_SEARCH_API_KEY` | string | *(none)* | Enables the `web_search` built-in tool. Without this key, the tool is not mounted. |
+## Paths and storage
 
-### Boolean parsing
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `DATA_DIR` | `data` | The writable data root (below). |
+| `SHARED_DATA_DIR` | `data/shared` | Backend-writable content mounted **read-only** into sandboxes: knowledge, skills. In a multi-host future both sides mount the same shared subtree. |
 
-`*_ENABLED` / `*_DRIVE` booleans accept `1`, `true`, `yes`, `on` (case-insensitive) as true; everything else is false.
+`DATA_DIR` layout (created on boot):
 
-## JSON config file fields
-
-Pass the path via `NOETA_AGENT_CONFIG=/path/to/config.json`. The file must
-hold a single JSON object. All keys are optional.
-
-| Key | Type | Default | Purpose |
-| --- | --- | --- | --- |
-| `host` | string | `127.0.0.1` | Bind interface. |
-| `port` | int | `8765` | Bind port. |
-| `workspace_dir` | string | `$PWD` | Default workspace directory. |
-| `workspaces_registry_path` | string | `~/.noeta/workspaces.json` | Workspace registry store. |
-| `mcp_servers_registry_path` | string | `~/.noeta/mcp_servers.json` | MCP connector registry. |
-| `storage_url` | string | *(none)* | Durable storage URL (see env var above). Legacy key `sqlite_path` still accepted. |
-| `provider_id` | string | `stub` | Provider adapter id. |
-| `model` | string | *(none)* | Model id. |
-| `models` | list[string] | `[]` | Selectable model list. |
-| `api_key` | string | *(none)* | Provider API key. |
-| `base_url` | string | *(none)* | Provider base URL. |
-| `api_version` | string | *(none)* | API version. |
-| `max_tokens` | int | *(none)* | Output token cap. |
-| `default_headers` | object[string→string] | `{}` | Extra HTTP headers for provider requests (e.g. gateway `X-TT-LOGID`). File-only. |
-| `write_mode` | string | `dry_run` | Write policy. |
-| `workflow_enabled` | bool | `false` | Workflow tool gate. |
-| `background_drive` | bool | `true` | Async turn driving. |
-| `memory_consolidation` | bool | `true` | Background memory consolidation (see env var above). |
-| `memory_consolidation_debounce_hours` | float | `24.0` | Consolidation debounce window. |
-| `otlp_endpoint` | string | *(none)* | OTLP trace export URL (see env var above). |
-| `otlp_headers` | object[string→string] | `{}` | Extra headers on every OTLP export request (hosted-collector auth). The export carries the audit allowlist projection only — no goals, tool arguments, or message bodies. |
-
-### Example
-
-```json
-{
-  "provider_id": "openai",
-  "model": "gpt-4o-mini",
-  "base_url": "https://api.openai.com/v1",
-  "api_key": "sk-…",
-  "workspace_dir": ".",
-  "storage_url": ":memory:",
-  "host": "127.0.0.1",
-  "port": 8765
-}
+```text
+data/
+├── app.db          # application DB: users, spaces, sessions, skills,
+│                   # templates, knowledge, MCP connectors, feedback, …
+├── noeta.db        # engine storage: EventLog + ContentStore + Dispatcher
+├── workspaces/     # one directory per session (bind-mounted at /workspace
+│                   # in sandbox mode; the files panel reads it)
+├── memories/       # one long-term memory pool per space
+└── shared/         # SHARED_DATA_DIR default location
+    ├── knowledge/       # materialized knowledge sources
+    ├── builtin-skills/  # admin-managed platform skills
+    └── space-skills/    # per-space uploaded skills
 ```
 
-## Provider adapters
+Both databases are SQLite files; Postgres is a documented future option, not
+wired in v1 (the platform is single-process single-instance).
 
-| `provider_id` | Notes |
-| --- | --- |
-| `stub` | *(default)* Offline deterministic two-turn LLM double. No API key, no network. Use this for install + wiring smoke tests. |
-| `openai` | OpenAI-compatible `/chat/completions` endpoint. Requires `api_key` + `base_url`. |
-| `openai-responses` | OpenAI Responses API. Requires `api_key` + `base_url` (the full responses endpoint). Supports vision via `image_resolver`. Consumes `api_version` + `max_tokens`. |
-| `anthropic` | Anthropic Messages API. Requires `api_key`. Optional `base_url`, `max_tokens`, `default_headers`. Supports vision. |
+## LLM gateway
 
-## Write & shell safety
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `LLM_PROVIDER` | `auto` | `auto` \| `openai` \| `mock`. **`auto` resolves to `openai` when `LLM_BASE_URL` and `LLM_API_KEY` are both set, otherwise to the offline `mock`** (deterministic FakeLLM demo script — the zero-credential mode). `openai` without credentials fails at boot. |
+| `LLM_BASE_URL` | *(empty)* | Primary gateway root — any **OpenAI-Responses-compatible** endpoint; the provider appends `/responses`. Auth uses the `api-key` header. |
+| `LLM_API_KEY` | *(empty)* | Primary gateway credential. |
+| `SECONDARY_LLM_BASE_URL` | *(empty)* | Optional second gateway (same Responses protocol, `Authorization: Bearer` auth). |
+| `SECONDARY_LLM_API_KEY` | *(empty)* | Its credential. Both must be set to count as configured; the secondary only stacks **on top of** an active primary — it never stands alone. |
+| `MODELS_CONFIG` | `models.json` | Path to the model-menu file (below). |
+| `LLM_REQUEST_TIMEOUT` | `300.0` | Per-request timeout (seconds). |
+| `LLM_MAX_TOKENS` | `8192` | Output-token cap. |
+| `TITLE_MODEL` | `gpt-5.4-2026-03-05` | Model for async session-title generation (reasoning disabled; no titles under the mock provider). |
 
-- **Writes** are `dry_run` by default: `edit` / `write` / `apply_patch` emit a unified-diff artifact without touching bytes. Set `write_mode: apply` (or `NOETA_AGENT_WRITE_MODE=apply`) for real writes.
-- **`shell_run`** is gated by `ShellMode.ALLOWLIST` by default: only allowlisted argv patterns pass (`git status`, `git diff`, `pytest`, `uv run pytest`, `npm test`, `pnpm test`). Shell metacharacters are rejected before tokenization. This is **path-containment + an allowlist, not a process sandbox** — `shell_run` spawns external programs in the trusted workspace.
+### `models.json`
 
-## Source
+Defines the model menu users pick from (`GET /api/v1/models`). Per entry:
+`id`, `label`, `default` (one entry), `efforts` (reasoning-effort levels),
+`default_effort`, plus backend-only fields: `gateway` (`"openai"` = primary,
+`"secondary"` = routed to the secondary gateway via `RoutingProvider`) and
+`context_window` / `max_output_tokens` (register a spec so context
+compaction works for models the SDK catalog does not know). A missing or
+unparseable file degrades to a single fallback model with a warning — the
+backend never crashes over model config.
 
-The authoritative config parsing lives in
-`noeta.agent.backend.lifecycle.BackendConfig.from_env`
-(`apps/noeta-agent/noeta/agent/backend/lifecycle.py`). Provider construction
-is in `build_provider()` in the same module.
+## Auth and admin
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `DEV_LOGIN_ENABLED` | `true` | The dev-login reference provider: any username, signed cookie. Also a **dynamic config** key — hot-switchable from the admin console (the DB override wins over this static value). |
+| `SESSION_SECRET` | dev placeholder | Signs the session cookie. **Change it in any real deployment.** |
+| `SESSION_COOKIE_NAME` | `noeta_session` | Cookie name. |
+| `SESSION_COOKIE_SECURE` | `false` | Set `true` behind HTTPS. |
+| `ADMIN_USERS` | *(empty)* | Comma-separated usernames that get `is_admin` and the admin console. Empty = nobody; admin endpoints answer 404 for everyone. Under dev-login anybody can log in as an allowlisted name — real deployments plug an identity provider into the `AuthProvider` seam (`noeta/agent/auth/provider.py`). |
+
+## Sandbox
+
+One Docker container per session; the standard fs/shell tool side effects
+route into it through the ExecEnv seam. Disabled = **pure conversation
+mode**: no containers, shell execution off, no file surface.
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `SANDBOX_ENABLED` | `false` | The whole switch. Requires a local Docker daemon. |
+| `SANDBOX_IMAGE` | `ghcr.io/agent-infra/sandbox:latest` | The stock AIO Sandbox image; build your own on top for extra in-sandbox tooling. |
+| `SANDBOX_MEMORY` | `2g` | Per-container memory cap. |
+| `SANDBOX_CPUS` | `2` | Per-container CPU cap. |
+| `SANDBOX_API_KEY_ENV` | `SANDBOX_API_KEY` | **Name** of the env var holding the container API key — read at provisioning, injected into the container and ExecEnv auth, never recorded. Unset var = the container runs without auth (local dev only). |
+| `SANDBOX_PREVIEW_PORT` | `0` | Dedicated reverse-proxy port for the live Browser/Terminal/Code panels. Deliberately a **separate origin** from the main port (the panel iframes run `allow-same-origin`; container content must not share the cookie/API origin). `0` = ephemeral (discovered via `GET /sessions/{id}/preview`); pin it when firewalls need a fixed port. |
+| `SANDBOX_IDLE_STOP_HOURS` | `1.0` | Idle level 1: `docker stop` — memory/CPU return to the host; the container and its disk stay, and resuming re-attaches in seconds. |
+| `SANDBOX_IDLE_REMOVE_HOURS` | `24.0` | Idle level 2: `docker rm` — reclaims disk too; after this only a fresh session works. Keep it much longer than stop. `0`/negative disables a level; both disabled = no reaper. |
+| `SANDBOX_IDLE_CHECK_INTERVAL_HOURS` | `0.1` | Reaper poll interval (one-minute floor). |
+
+## Agent tool switches
+
+Global switches for the agent tool surface (temporary until per-space
+switches land); all default **off**:
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `MEMORY_TOOLS_ENABLED` | `false` | `memory_write/read/search/archive` + auto-recall + consolidation. |
+| `COLLAB_TOOLS_ENABLED` | `false` | The collaboration tools (`channel_read_*`, `board_*`) behind the channels/board preview surface. |
+| `SUBAGENT_ENABLED` | `false` | `spawn_subagent` delegation (explorer / web specialist). |
+
+## Memory consolidation
+
+Only effective when `MEMORY_TOOLS_ENABLED` is on.
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `MEMORY_CONSOLIDATION` | `true` | Background curation at turn boundaries, debounced per space; the consolidation agent gets only the memory tool surface and can archive, never delete. |
+| `MEMORY_CONSOLIDATION_DEBOUNCE_HOURS` | `24.0` | Minimum hours between passes (marker file in the space's memory directory). |
+
+## Observability
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `OTLP_ENDPOINT` | *(empty)* | OTLP trace export: the **full** OTLP/HTTP traces URL (e.g. `http://localhost:4318/v1/traces`). Empty = off. Export is **opt-in through this key only** — the ambient OTel-standard `OTEL_EXPORTER_OTLP_ENDPOINT` is deliberately **not** honored as an enable switch (an operator injecting it for other apps must not silently start noeta exporting). |
+| `OTLP_HEADERS` | *(empty)* | Extra headers on every export request (hosted-collector auth), OTel form `k=v,k2=v2` with percent-encoded values. Falls back to the ambient `OTEL_EXPORTER_OTLP_HEADERS` when unset. Headers apply **only** when `OTLP_ENDPOINT` is set — they never enable anything by themselves. |
+
+## Worker pool
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `AGENT_NUM_WORKERS` | `4` | Resident `WorkerLoop` threads in the embedded noeta Client: N workers drive different sessions' turns concurrently (turns within one session stay serialized by the dispatcher lease). Set `1` to degrade to a single worker. |
+
+## Dynamic config
+
+A small allowlist of settings is hot-reloadable at runtime through the admin
+console (`GET/PUT /api/v1/admin/config`): a DB override wins over the static
+`.env` value, and only settings re-read on every use qualify. Registered
+today: `dev_login_enabled`. Source:
+`apps/noeta-agent/noeta/agent/config_registry.py`.

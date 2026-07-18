@@ -222,7 +222,7 @@ def test_first_sentence_strips_and_truncates_at_first_period() -> None:
 # ---------------------------------------------------------------------------
 
 # Import from the PRODUCT public module (the surface callers actually use).
-from noeta.agent.commands import (  # noqa: E402
+from tests._commands import (  # noqa: E402
     BUILTIN_COMMANDS,
     resolve_command as product_resolve,
 )
@@ -248,9 +248,9 @@ def test_product_builtin_commands_values_are_sdk_slashcommand() -> None:
 
 
 def test_product_reexported_slashcommand_is_sdk_slashcommand() -> None:
-    # ``from noeta.agent.commands import SlashCommand`` must resolve to the
+    # ``from tests._commands import SlashCommand`` must resolve to the
     # *same* class object we have in the SDK module.
-    from noeta.agent.commands import SlashCommand as ProductSlashCommand
+    from tests._commands import SlashCommand as ProductSlashCommand
 
     assert ProductSlashCommand is SlashCommand
 

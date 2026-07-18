@@ -1,23 +1,23 @@
 # 教程：与 Noeta 的 CI 集成 { #tutorial-ci-integration-with-noeta }
 
-在你的 CI 管道中运行 Noeta，以对代理配方进行冒烟测试、验证自定义工具，或自动化代码审查。本教程展示如何使用离线 stub provider 将 Noeta 接入 GitHub Actions——无需 API key。
+在你的 CI 管道中运行 Noeta，以对代理配方进行冒烟测试、验证自定义工具，或自动化代码审查。本教程展示如何使用离线的 `FakeLLMProvider` 将 Noeta 接入 GitHub Actions——无需 API key。
 
-## 为什么在 CI 中使用 stub { #why-stub-in-ci }
+## 为什么在 CI 中使用 fake provider { #why-stub-in-ci }
 
-`stub` provider 是一个脚本化的离线替身，以预设脚本化响应回答。它非常适合 CI，因为：
+`FakeLLMProvider` 是一个脚本化的离线 LLM 替身，以预设脚本化响应回答。它非常适合 CI，因为：
 
 - **无需 API key。** 你的 CI 永远不需要 LLM 访问的密钥。
 - **确定性。** 相同的输入总是产生相同的输出。
 - **快速。** 无网络往返。
 
-你也可以在 CI 中使用真实 provider（将 `NOETA_AGENT_API_KEY` 作为密钥传递），但 stub 是冒烟测试的正确起点。
+你也可以在 CI 中使用真实 provider（以 secret 形式传入网关密钥），但 fake provider 是冒烟测试的正确起点。
 
 ## 步骤 1：编写冒烟测试 { #step-1-write-a-smoke-test }
 
 创建 `tests/test_agent_smoke.py`：
 
 ```python
-"""Smoke test: run the minimal agent recipe end-to-end with the stub provider."""
+"""Smoke test: run the minimal agent recipe end-to-end with the fake provider."""
 
 import tempfile
 from pathlib import Path
@@ -180,7 +180,7 @@ def test_custom_tool_called():
         run: uv run pytest tests/test_agent_smoke.py -v
 ```
 
-> **无需构建前端。** PyPI 上的 `noeta-agent` wheel 已内置构建好的 web UI，`uv sync` 拉取的是即装即用的包——不需要 `npm` 步骤。
+> **无需构建前端。** SDK 冒烟测试在进程内运行库本身——不需要 `npm` 步骤，也不需要平台服务器。
 
 ## 步骤 4：在 CI 中运行完整测试套件 { #step-4-run-the-full-test-suite-in-ci }
 
@@ -223,10 +223,9 @@ MYPYPATH=packages/noeta-runtime \
         run: uv sync --frozen
       - name: Run integration tests
         env:
-          NOETA_AGENT_PROVIDER: openai
-          NOETA_AGENT_BASE_URL: ${{ secrets.LLM_BASE_URL }}
-          NOETA_AGENT_API_KEY: ${{ secrets.LLM_API_KEY }}
-          NOETA_AGENT_MODEL: ${{ secrets.LLM_MODEL }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
         run: uv run pytest tests/test_integration.py -v -m live
 ```
 
@@ -237,12 +236,12 @@ import pytest
 
 @pytest.mark.live
 def test_agent_with_real_llm():
-    ...  # needs NOETA_AGENT_API_KEY
+    ...  # construct a real provider from your gateway secrets
 ```
 
 ## 要点 { #key-points }
 
-- **冒烟测试使用 stub provider。** `FakeLLMProvider` 位于 `noeta.testing`——离线替身的公开归宿。无密钥，无网络。
+- **冒烟测试使用 fake provider。** `FakeLLMProvider` 位于 `noeta.testing`（也以 `noeta.sdk.testing` 导出）——离线替身的公开归宿。无 secret，无网络。
 - **`uv run pytest`** 是测试入口点。工作区根目录的 `pyproject.toml` 配置了 `testpaths = ["tests"]`。
 - **`@pytest.mark.live`** 门控真实 LLM 测试，以便它们不在默认 CI 中运行。使用 `-m "not live"` 跳过它们（已经是 `pyproject.toml` 中的默认值）。
 

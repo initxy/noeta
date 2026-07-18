@@ -13,15 +13,16 @@
 ; vs material: the kernel-services band (runtime / storage / guards / observers
 ; / read_models — noeta-runtime) sits below the SDK **materials** band (context
 ; / policies / tools / providers — noeta-sdk), so a kernel service can never
-; import a material. The ``noeta.code`` namespace was deleted: the
-; product now lives entirely in ``noeta.agent.*`` (a PEP 420 namespace whose
-; identity layer ``spec``/``registry`` ships in noeta-sdk and whose product
-; modules — backend / host / commands / observe / read_models / skills — ship in
-; the product dist). The backend assembles engines through ``noeta.sdk`` (Client /
-; SdkHost); T8 deleted the standalone
-; ``noeta.server`` HTTP stack (A) and the legacy ``noeta.agent.api`` facade +
-; ``noeta.agent.host.session`` runner (B), migrating the engine-behaviour suite
-; onto ``noeta.sdk.Client`` (tests/_sdk_session).
+; import a material. The product lives entirely in ``noeta.agent.*`` (a PEP 420
+; namespace whose identity layer ``spec``/``registry`` ships in the library
+; wheels and whose product modules ship in the product dist). The product is
+; the multi-user server platform: ``main``/``__main__`` (FastAPI assembly +
+; entry), ``api`` (routers), ``auth`` (identity seam), ``host`` (the noeta
+; Client host: AgentService / translator / providers / sandbox adapters),
+; ``store`` (application SQLite), ``services`` (knowledge sync/resolve,
+; channels, feedback), ``workflow``, and the config modules. The app drives
+; the engine only through ``noeta.sdk``; the engine-behaviour suite assembles
+; via ``noeta.sdk.Client`` (tests/_sdk_session).
 
 [importlinter]
 root_package = noeta
@@ -35,10 +36,11 @@ include_external_packages = False
 name = Noeta layering (materials band split from kernel-services)
 type = layers
 layers =
-    noeta.agent.host
-    noeta.agent.commands | noeta.agent.observe
-    noeta.agent.read_models
-    noeta.agent.skills
+    ; The product band: one non-independent group (":" siblings) — intra-app
+    ; structure is the app's own business (host and services are mutually
+    ; recursive); the repo-wide guarantee is only that the whole band sits
+    ; above noeta.sdk.
+    noeta.agent.main : noeta.agent.api : noeta.agent.auth : noeta.agent.host : noeta.agent.store : noeta.agent.services : noeta.agent.workflow : noeta.agent.config : noeta.agent.config_registry : noeta.agent.models_config
     noeta.sdk
     noeta.presets
     noeta.client
@@ -102,11 +104,16 @@ source_modules =
     noeta.tools
     noeta.providers
 forbidden_modules =
+    noeta.agent.main
+    noeta.agent.api
+    noeta.agent.auth
     noeta.agent.host
-    noeta.agent.commands
-    noeta.agent.observe
-    noeta.agent.read_models
-    noeta.agent.skills
+    noeta.agent.store
+    noeta.agent.services
+    noeta.agent.workflow
+    noeta.agent.config
+    noeta.agent.config_registry
+    noeta.agent.models_config
 
 [importlinter:contract:runtime-no-providers]
 name = noeta.runtime must not import noeta.providers (issue 11)
@@ -163,11 +170,14 @@ forbidden_modules =
     noeta.guards
     noeta.observers
     noeta.read_models
+    noeta.agent.main
+    noeta.agent.api
+    noeta.agent.auth
     noeta.agent.host
-    noeta.agent.commands
-    noeta.agent.observe
-    noeta.agent.read_models
-    noeta.agent.skills
+    noeta.agent.store
+    noeta.agent.services
+    noeta.agent.workflow
+    noeta.agent.config
 
 [importlinter:contract:guards-only-protocols]
 name = noeta.guards may only import noeta.protocols (issue 18)
@@ -204,11 +214,13 @@ type = forbidden
 source_modules =
     noeta.read_models
 forbidden_modules =
+    noeta.agent.main
+    noeta.agent.api
+    noeta.agent.auth
     noeta.agent.host
-    noeta.agent.commands
-    noeta.agent.observe
-    noeta.agent.read_models
-    noeta.agent.skills
+    noeta.agent.store
+    noeta.agent.services
+    noeta.agent.workflow
     noeta.runtime
     noeta.context
     noeta.policies
@@ -238,32 +250,22 @@ source_modules =
 forbidden_modules =
     noeta.storage
 
-[importlinter:contract:code-stub-provider-code-only]
-name = noeta.agent.observe._stub_provider must only be imported from the noeta-agent product (Phase 4 I4; cli removed in TL6; moved to observe/ in S1; namespace flipped in the library-SDK refactor)
+[importlinter:contract:app-strict-only-sdk]
+name = the pure application tier (main / entry / auth / store / services / workflow / config) may reach the engine only through noeta.sdk — zero exemptions
 type = forbidden
-source_modules =
-    noeta.protocols
-    noeta.core
-    noeta.runtime
-    noeta.context
-    noeta.storage
-    noeta.policies
-    noeta.tools
-    noeta.providers
-    noeta.guards
-    noeta.observers
-forbidden_modules =
-    noeta.agent.observe._stub_provider
-
-[importlinter:contract:backend-only-sdk]
-name = noeta.agent.backend (the product backend) must reach the engine only through noeta.sdk — never a runtime internal (D2/D5/T4; the encapsulation weld. T8 deleted both the legacy noeta.server HTTP stack (A) and the noeta.agent.host.session runner + noeta.agent.api facade (B); the engine-behaviour suite now assembles via noeta.sdk.Client through tests/_sdk_session)
-type = forbidden
-; Only DIRECT imports are forbidden: the backend reaches runtime internals
-; legitimately *through* noeta.sdk (backend → noeta.sdk → noeta.tools.decorator …),
-; which is the encapsulation working as intended.
+; Only DIRECT imports are forbidden: reaching runtime internals *through*
+; noeta.sdk is the encapsulation working as intended.
 allow_indirect_imports = True
 source_modules =
-    noeta.agent.backend
+    noeta.agent.main
+    noeta.agent.__main__
+    noeta.agent.auth
+    noeta.agent.store
+    noeta.agent.services
+    noeta.agent.workflow
+    noeta.agent.config
+    noeta.agent.config_registry
+    noeta.agent.models_config
 forbidden_modules =
     noeta.core
     noeta.runtime
@@ -277,23 +279,20 @@ forbidden_modules =
     noeta.guards
     noeta.observers
     noeta.read_models
+    noeta.testing
     noeta.agent.spec
     noeta.agent.registry
 
 [importlinter:contract:app-uses-only-sdk]
-name = the rest of the noeta-agent product (host / observe / commands / read_models / skills) may reach the engine only through noeta.sdk — a RATCHET: every legacy direct import is pinned below in ignore_imports; that list may only shrink (burn-down), never grow, EXCEPT for ADR-documented deliberate exemptions (currently the two sdk_* sandbox-adapter modules — the concrete AIO adapters they extend are runtime-internal, kept OFF the noeta.sdk public surface; see the execution-environment-seam ADR). Deliberate CONTEXT.md exemptions stay open: noeta.storage (host wires a concrete backend) and noeta.read_models (the peripheral projection). This activates the full public seal the runtime-sdk-app-restructure ADR left interim as backend-only-sdk.
+name = the engine-facing product tier (host / api) may reach the engine only through noeta.sdk — a RATCHET: the burn-down list is fully burned down (every former pin was promoted onto the noeta.sdk surface); ignore_imports may not grow again EXCEPT for ADR-documented deliberate exemptions (the two sdk_* sandbox-adapter modules — the concrete AIO adapters they extend are runtime-internal, kept OFF the noeta.sdk public surface; see the execution-environment-seam ADR). Deliberate CONTEXT.md exemptions stay open: noeta.storage (the host wires a concrete backend) and noeta.read_models (the peripheral projection), so neither is forbidden here.
 type = forbidden
 ; Only DIRECT imports are forbidden — reaching runtime internals *through*
 ; noeta.sdk is the encapsulation working as intended (same stance as
-; backend-only-sdk above).
+; app-strict-only-sdk above).
 allow_indirect_imports = True
 source_modules =
     noeta.agent.host
-    noeta.agent.observe
-    noeta.agent.commands
-    noeta.agent.read_models
-    noeta.agent.skills
-    noeta.agent.__main__
+    noeta.agent.api
 forbidden_modules =
     noeta.core
     noeta.runtime
@@ -305,11 +304,10 @@ forbidden_modules =
     noeta.protocols
     noeta.guards
     noeta.observers
+    noeta.testing
     noeta.agent.spec
     noeta.agent.registry
 ignore_imports =
-    noeta.agent.commands.registry -> noeta.execution.commands
-    noeta.agent.commands.resolve -> noeta.execution.commands
     ; Deliberate exemptions (ADR: execution-environment-seam, "SDK-adapter
     ; export surface"): the product's official-SDK sandbox adapters extend the
     ; runtime-internal concrete AIO adapters, which are deliberately NOT
@@ -317,36 +315,6 @@ ignore_imports =
     ; retirement-slated implementation into the user-facing API).
     noeta.agent.host.sdk_sandbox_exec_env -> noeta.tools.fs.exec_env
     noeta.agent.host.sdk_browser_backend -> noeta.tools.browser
-    noeta.agent.host.mcp_registry -> noeta.tools.mcp
-    noeta.agent.host.mcp_registry -> noeta.tools.mcp._client
-    noeta.agent.host.mcp_registry -> noeta.tools.mcp._http_client
-    noeta.agent.host.preview_gateway -> noeta.tools.app
-    noeta.agent.host.preview_gateway -> noeta.tools.fs._workspace
-    noeta.agent.host.storage -> noeta.protocols.content_store
-    noeta.agent.host.storage -> noeta.protocols.dispatcher
-    noeta.agent.host.storage -> noeta.protocols.event_log
-    noeta.agent.observe._stub_provider -> noeta.protocols.messages
-    noeta.agent.read_models.catalog -> noeta.core.fold
-    noeta.agent.read_models.catalog -> noeta.execution.multi_turn
-    noeta.agent.read_models.catalog -> noeta.policies.control_tools
-    noeta.agent.read_models.catalog -> noeta.protocols.content_store
-    noeta.agent.read_models.catalog -> noeta.protocols.event_log
-    noeta.agent.read_models.catalog -> noeta.protocols.wake
-    noeta.agent.read_models.context_view -> noeta.protocols.canonical
-    noeta.agent.read_models.context_view -> noeta.protocols.content_store
-    noeta.agent.read_models.context_view -> noeta.protocols.context_plan
-    noeta.agent.read_models.context_view -> noeta.protocols.event_log
-    noeta.agent.read_models.detail -> noeta.core.fold
-    noeta.agent.read_models.detail -> noeta.execution.multi_turn
-    noeta.agent.read_models.detail -> noeta.policies.control_tools
-    noeta.agent.read_models.detail -> noeta.protocols.content_store
-    noeta.agent.read_models.detail -> noeta.protocols.event_log
-    noeta.agent.read_models.detail -> noeta.protocols.wake
-    noeta.agent.read_models.result -> noeta.protocols.content_store
-    noeta.agent.read_models.result -> noeta.protocols.events
-    noeta.agent.read_models.result -> noeta.protocols.tool_args
-    noeta.agent.read_models.tail -> noeta.protocols.event_log
-    noeta.agent.skills -> noeta.context.skills
 
 [importlinter:contract:mcp-tools-boundary]
 name = noeta.tools.mcp may import only noeta.protocols + noeta.tools helpers + stdlib (Phase 4.5 F2)

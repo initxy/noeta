@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from noeta.agent.read_models.detail import build_code_session_detail
+from tests._read_models.detail import build_code_session_detail
 from noeta.core.fold import fold
 from noeta.policies.react import (
     SPAWN_SUBAGENT_TOOL,

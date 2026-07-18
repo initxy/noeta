@@ -15,7 +15,7 @@ means closer to the product:
 | --- | --- | --- |
 | `noeta-runtime` | `packages/noeta-runtime` | The pure engine plus the framework material that runs on it: events, fold, snapshot, the Worker/Dispatcher, storage adapters, Guards, Observers, the ReAct Policy, builtin tools, provider adapters, the ContextComposer, and the official preset agents. Depends on nothing above it and on no specific vendor. |
 | `noeta-sdk` | `packages/noeta-sdk` | A thin in-process client facade: `query` / `Client` / `Options` / `@tool` and the re-exported extension interfaces. No engine internals, no HTTP. |
-| `noeta-agent` | `apps/noeta-agent` | The official coding-agent application: an HTTP/SSE backend consuming the SDK in-process, plus the bundled web frontend (`apps/web`). The only layer with a network surface; entry point `python -m noeta.agent`. |
+| `noeta-agent` | `apps/noeta-agent` | The official product: a multi-user agent server platform — a FastAPI backend consuming the SDK in-process, plus the React SPA it serves (`apps/web`). The only layer with a network surface; entry point `python -m noeta.agent`. |
 
 <p align="center">
   <img src="../assets/architecture.svg" alt="Noeta architecture — the three distributions and module relationships" width="820">

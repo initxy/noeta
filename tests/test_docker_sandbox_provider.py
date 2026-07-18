@@ -112,9 +112,12 @@ def test_allocate_removes_stale_before_run() -> None:
     docker = FakeDocker()
     provider = _provider(docker)
     provider.allocate("task-abc", SandboxSpec(image="img:latest"))
-    # first call is a best-effort rm of a stale same-named container, then run
-    assert docker.calls[0][1] == "rm"
-    assert docker.calls[1][1] == "run"
+    # First a reuse check (inspect) of a same-named running container, then a
+    # best-effort rm of the stale container, then run.
+    assert docker.calls[0][1] == "inspect"
+    ops = [c[1] for c in docker.calls]
+    assert "rm" in ops and "run" in ops
+    assert ops.index("rm") < ops.index("run")
 
 
 def test_allocate_raises_on_docker_run_failure() -> None:
