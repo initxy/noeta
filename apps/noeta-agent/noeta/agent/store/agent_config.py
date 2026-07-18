@@ -5,8 +5,6 @@ One row per space (space_id primary key); no row = all defaults. Fields:
 - `prompt`: appended persona segment. At assembly time it is written into the
   session workspace `AGENT.md` (it does not override the platform's base
   system prompt).
-- `group_entry_enabled`: group-chat entry toggle (checked at the routing
-  layer).
 - `memory_enabled`: memory toggle. The SDK memory capability is not wired in
   yet (it lands with the SDK upgrade branch); the column is persisted ahead of
   time and takes effect as soon as the capability is wired in.
@@ -30,7 +28,6 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS space_agent_config (
     space_id               TEXT PRIMARY KEY,
     prompt                 TEXT NOT NULL DEFAULT '',
-    group_entry_enabled    INTEGER NOT NULL DEFAULT 1,
     memory_enabled         INTEGER NOT NULL DEFAULT 1,
     knowledge_sources_json TEXT,
     default_model          TEXT NOT NULL DEFAULT '',
@@ -40,7 +37,7 @@ CREATE TABLE IF NOT EXISTS space_agent_config (
 """
 
 _COLS = (
-    "space_id,prompt,group_entry_enabled,memory_enabled,"
+    "space_id,prompt,memory_enabled,"
     "knowledge_sources_json,default_model,default_effort,updated_at"
 )
 
@@ -48,7 +45,6 @@ _COLS = (
 #: need a None check).
 DEFAULT_CONFIG = {
     "prompt": "",
-    "group_entry_enabled": True,
     "memory_enabled": True,
     "knowledge_sources": None,  # None = all knowledge sources take part
     "default_model": "",
@@ -58,20 +54,19 @@ DEFAULT_CONFIG = {
 
 def _row_to_dict(row: tuple) -> dict:
     sources: Optional[list[str]] = None
-    if row[4]:
+    if row[3]:
         try:
-            val = json.loads(row[4])
+            val = json.loads(row[3])
             if isinstance(val, list):
                 sources = [str(s) for s in val]
         except ValueError:
             sources = None
     return {
         "prompt": row[1] or "",
-        "group_entry_enabled": bool(row[2]),
-        "memory_enabled": bool(row[3]),
+        "memory_enabled": bool(row[2]),
         "knowledge_sources": sources,
-        "default_model": row[5] or "",
-        "default_effort": row[6] or "",
+        "default_model": row[4] or "",
+        "default_effort": row[5] or "",
     }
 
 
@@ -99,7 +94,7 @@ class AgentConfigStore:
         """Partial update (omitted fields keep their current value; the first
         write fills the rest in with defaults).
 
-        Accepted fields: prompt, group_entry_enabled, memory_enabled,
+        Accepted fields: prompt, memory_enabled,
         knowledge_sources (list | None), default_model, default_effort.
         """
         cur = self.get(space_id)
@@ -117,17 +112,16 @@ class AgentConfigStore:
         with self._lock:
             self._conn.execute(
                 "INSERT INTO space_agent_config"
-                f" ({_COLS}) VALUES (?,?,?,?,?,?,?,?)"
+                f" ({_COLS}) VALUES (?,?,?,?,?,?,?)"
                 " ON CONFLICT(space_id) DO UPDATE SET"
                 " prompt=excluded.prompt,"
-                " group_entry_enabled=excluded.group_entry_enabled,"
                 " memory_enabled=excluded.memory_enabled,"
                 " knowledge_sources_json=excluded.knowledge_sources_json,"
                 " default_model=excluded.default_model,"
                 " default_effort=excluded.default_effort,"
                 " updated_at=excluded.updated_at",
                 (
-                    space_id, cur["prompt"], int(cur["group_entry_enabled"]),
+                    space_id, cur["prompt"],
                     int(cur["memory_enabled"]), sources_json,
                     cur["default_model"], cur["default_effort"], time.time(),
                 ),
