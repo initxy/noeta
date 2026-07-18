@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: "Noeta"
-  text: "Durable runtime for AI agents"
-  tagline: Open-source and self-hostable. A task survives crashes, pauses for a human or a timer, and records every step — provider-neutral, and offline out of the box.
+  text: "A multi-user agent platform on a durable runtime"
+  tagline: Open-source and self-hostable. Sessions and collaboration spaces, per-session sandboxes, and an event-sourced engine that survives crashes and records every step — provider-neutral, and offline out of the box.
   actions:
     - theme: brand
       text: Quickstart
@@ -26,9 +26,9 @@ features:
   - title: Provider-neutral
     details: Anthropic and any OpenAI-compatible endpoint sit behind one internal protocol. Swapping vendors is wiring, not a rewrite.
 
-  - title: Bring your own agent
-    details: The runtime hosts and schedules; you supply the policy, tools, and context.
+  - title: Built for teams
+    details: Multi-user sessions in personal and team spaces, with space-scoped skills, knowledge, memory, and MCP connectors — execution stays inside a per-session sandbox.
 
   - title: Offline-first
-    details: A deterministic stub provider runs the whole stack with no API key and no network.
+    details: A deterministic mock provider plus dev-login run the whole platform with no API key and no network.
 ---

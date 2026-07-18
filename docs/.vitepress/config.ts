@@ -117,7 +117,7 @@ export default defineConfig({
               text: 'How-to guides',
               items: [
                 { text: 'Configure a provider', link: '/how-to/configure-provider' },
-                { text: 'Use the coding agent', link: '/how-to/use-the-coding-agent' },
+                { text: 'Use the platform', link: '/how-to/use-the-coding-agent' },
                 { text: 'Build custom tools', link: '/how-to/build-custom-tools' },
                 { text: 'Spawn sub-agents', link: '/how-to/spawn-subagents' },
                 { text: 'Connect MCP', link: '/how-to/connect-mcp' },
@@ -149,7 +149,7 @@ export default defineConfig({
               text: 'Reference',
               items: [
                 { text: 'SDK API', link: '/reference/sdk' },
-                { text: 'Coding agent', link: '/reference/noeta-agent' },
+                { text: 'Platform', link: '/reference/noeta-agent' },
                 { text: 'HTTP API', link: '/reference/http-api' },
                 { text: 'WorkerLoop', link: '/reference/worker-loop' },
                 { text: 'Comparison', link: '/reference/comparison' },
@@ -213,7 +213,7 @@ export default defineConfig({
               text: '操作指南',
               items: [
                 { text: '配置 Provider', link: '/zh/how-to/configure-provider' },
-                { text: '使用编码代理', link: '/zh/how-to/use-the-coding-agent' },
+                { text: '使用平台', link: '/zh/how-to/use-the-coding-agent' },
                 { text: '构建自定义工具', link: '/zh/how-to/build-custom-tools' },
                 { text: '生成子代理', link: '/zh/how-to/spawn-subagents' },
                 { text: '连接 MCP', link: '/zh/how-to/connect-mcp' },
@@ -245,7 +245,7 @@ export default defineConfig({
               text: '参考',
               items: [
                 { text: 'SDK API', link: '/zh/reference/sdk' },
-                { text: '编码代理', link: '/zh/reference/noeta-agent' },
+                { text: '平台参考', link: '/zh/reference/noeta-agent' },
                 { text: 'HTTP 接口', link: '/zh/reference/http-api' },
                 { text: 'WorkerLoop', link: '/zh/reference/worker-loop' },
                 { text: '对比', link: '/zh/reference/comparison' },

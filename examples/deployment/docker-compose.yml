@@ -1,0 +1,29 @@
+# Optional docker-compose packaging for the noeta-agent platform.
+#
+# Zero-credential mode out of the box: mock LLM, dev-login, sandbox off.
+# See README.md — especially before enabling the sandbox, which needs the
+# docker socket, host networking, and a host-visible DATA_DIR bind mount.
+services:
+  noeta:
+    build:
+      context: ../..
+      dockerfile: examples/deployment/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      HOST: 0.0.0.0
+      DATA_DIR: /data
+      SHARED_DATA_DIR: /data/shared
+      # --- real LLM gateway (empty = offline mock) ---
+      # LLM_BASE_URL: https://your-gateway.example.com/v1
+      # LLM_API_KEY: sk-…
+      # --- admin console ---
+      # ADMIN_USERS: alice,bob
+      # SESSION_SECRET: change-me-in-any-real-deployment
+    volumes:
+      - noeta-data:/data
+      # --- sandbox mode (read README.md first) ---
+      # - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  noeta-data:

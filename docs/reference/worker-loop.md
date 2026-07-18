@@ -4,8 +4,9 @@ The resident drain loop, shipped as the library primitive
 `noeta.runtime.worker.WorkerLoop`
 (`packages/noeta-runtime/noeta/runtime/worker.py:752`). There is no console
 script and nothing launches it for you — an embedder constructs and runs it.
-Note that `python -m noeta.agent` does **not** start a `WorkerLoop`; the chat
-server drives turns inline (see the [coding-agent manual](noeta-agent.md)).
+The platform is itself such an embedder: `python -m noeta.agent` runs a
+resident pool of `WorkerLoop` threads (`AGENT_NUM_WORKERS`, default 4) that
+drive session turns (see the [platform reference](noeta-agent.md)).
 
 ```python
 from noeta.runtime.worker import WorkerLoop

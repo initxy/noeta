@@ -6,9 +6,9 @@ any.
 
 ## Multi-host coordination requires Postgres
 
-**What it means:** Single-host multi-worker is shipped — the agent runs a
-resident `WorkerLoop` pool (`NOETA_AGENT_NUM_WORKERS`, default 1), so
-several tasks progress at once on one host. Multiple *hosts* sharing one
+**What it means:** Single-host multi-worker is shipped — the platform runs a
+resident `WorkerLoop` pool (`AGENT_NUM_WORKERS`, default 4), so
+several sessions' turns progress at once in one process. Multiple *hosts* sharing one
 database is supported only on **Postgres**: emit appends are fenced
 in-transaction against the live lease, lease expiry runs on the database
 clock (so per-host clock skew cannot split-brain), and a `worker_id`
@@ -118,23 +118,21 @@ symptom — the cause may be cap / expired / requeued).
 ## No out-of-band notification for human-in-the-loop waits
 
 **What it means:** Human-in-the-loop is fully wired in-band: the engine
-suspends on `HumanResponseReceived` wake events, the `answer` /
-`approve` / `deny` client verbs deliver the response, and the bundled
-web UI renders structured question forms (choices plus freeform) and
-approval prompts. What does not exist is an out-of-band channel — no
-webhook, email, or cross-session inbox fires when a task starts waiting
-on a human.
+suspends on `HumanResponseReceived` wake events, the `answer` client verb
+delivers the response, and the platform UI renders structured question
+forms (choices plus freeform). What does not exist is an out-of-band
+channel — no webhook, email, or cross-session inbox fires when a task
+starts waiting on a human.
 
-**When you hit it:** An agent asks a question or requests approval
-while nobody has the chat open. The task waits durably (that is the
-point), but nothing notifies anyone that it is waiting.
+**When you hit it:** An agent asks a question while nobody has the
+session open. The task waits durably (that is the point), but nothing
+notifies anyone that it is waiting.
 
-**Workaround:** Keep the web UI open for interactive sessions, or in
-headless deployments poll `GET /tasks` for suspended tasks (and answer
-programmatically via `client.answer(task_id, question_id=...,
-answers=...)`). A custom `Observer` subscribed to the EventLog can
-forward `UserQuestionRequested` / `ToolCallApprovalRequested` events to
-your own notification channel.
+**Workaround:** Keep the session open for interactive work, or poll
+`GET /api/v1/sessions?space_id=…` for waiting sessions and answer over
+`POST /api/v1/sessions/{id}/answer`. SDK users can mount a custom
+`Observer` subscribed to the EventLog to forward
+`UserQuestionRequested` events to their own notification channel.
 
 ## Sandbox side effects are not fenced across worker generations
 
@@ -246,7 +244,7 @@ browser through five noeta-owned tools (`browser_navigate` /
 delegates page work to. Three v1 boundaries:
 
 - **No browser without a container.** The tools appear only in sandbox
-  mode (`NOETA_AGENT_SANDBOX`) for a browser-capable agent; a
+  mode (`SANDBOX_ENABLED=true`) for a browser-capable agent; a
   non-sandbox session has no browser at all.
 - **Perception is text / element-level, not visual.**
   `browser_extract` returns page text plus a numbered list of
@@ -275,8 +273,8 @@ with the seam already reserved. See the execution environment seam ADR
 
 ## Sandbox live-preview panels are demo-boundary and unauthenticated
 
-**What it means:** When per-session sandbox is active
-(`NOETA_AGENT_SANDBOX=1`), the right dock gains three live-preview tabs —
+**What it means:** When the per-session sandbox is active
+(`SANDBOX_ENABLED=true`), the right dock gains three live-preview tabs —
 **Browser** (noVNC), **Terminal** (container PTY), **Code** (code-server) —
 reverse-proxied through a **dedicated preview port**
 (`http://<host>:<preview-port>/sandbox-preview/<token>/...`). The panels'
@@ -284,19 +282,19 @@ iframes need `allow-same-origin`, so container-served content must live on
 an origin holding no noeta state — the preview port serves the gateway and
 nothing else (no control API, no cookies), and the main port serves only the
 discovery endpoint. The port defaults to ephemeral and is discovered via
-`GET /tasks/{id}/preview`; pin it with `NOETA_AGENT_SANDBOX_PREVIEW_PORT`
+`GET /api/v1/sessions/{id}/preview`; pin it with `SANDBOX_PREVIEW_PORT`
 for firewalled setups. Four v1 boundaries:
 
 - **No sandbox ⇒ no panels.** Without a live container,
-  `GET /tasks/{id}/preview` returns 404 and the tabs are hidden; non-sandbox
-  deployments are completely unaffected.
-- **Demo security boundary.** The browser→noeta leg is **unauthenticated** —
-  access control is the unguessable token only (`secrets.token_urlsafe(16)`),
-  same red line as the HTML-app `PreviewGateway`. Credentials
-  (`X-AIO-API-Key`) are injected only on the **noeta→container** leg; the
-  browser never sees them. This is acceptable for localhost single-user
-  demos; hardened browser-leg auth / SSRF allowlist / multi-user isolation
-  are future work.
+  `GET /api/v1/sessions/{id}/preview` returns 404 and the tabs are hidden;
+  non-sandbox deployments are completely unaffected.
+- **Demo security boundary.** The discovery endpoint is authenticated
+  (session visibility), but the browser→noeta **preview leg** is not —
+  access control is the unguessable token only
+  (`secrets.token_urlsafe(16)`). Credentials (`X-AIO-API-Key`) are injected
+  only on the **noeta→container** leg; the browser never sees them. This is
+  acceptable for localhost / trusted-network deployments; hardened
+  browser-leg auth / SSRF allowlist are future work.
 - **Human-in-the-loop control conflicts are not arbitrated.** A user
   typing in the noVNC browser panel and the `web` subagent driving the same
   browser via `browser_*` tools will race for control. This is *intentional
@@ -317,25 +315,35 @@ port reachable on the same hostname).
 **Workaround:** Run noeta on `localhost` for preview (the demo boundary);
 close the agent's browser turn before manually driving noVNC; use the file
 panel + `browser_screenshot` artifact for a durable PNG record; behind a
-tunnel, pin `NOETA_AGENT_SANDBOX_PREVIEW_PORT` and forward that port too.
+tunnel, pin `SANDBOX_PREVIEW_PORT` and forward that port too.
 
 **Why it is this way:** The preview is a host-only transport (no new
 model-facing tools or schema), so stable-prefix is preserved. The token +
 localhost boundary matches the existing `PreviewGateway` posture; hardening
 is explicitly deferred to a later revision (D6 of the preview spec).
 
-## Frontend is a small Vite MPA, not a framework app
+## Platform v1: single instance, dev-login, no quotas
 
-**What it means:** The shipped web app (`/chat`, `/trace`) is a small
-Vite multi-page app with vanilla ES modules. There is no React / Vue /
-Svelte migration planned for the preview.
+**What it means:** The platform's first release draws its product
+boundaries explicitly (they are consequences of the
+server-platform ADR, not accidents):
 
-**When you hit it:** You want to build a complex UI on top of the
-agent.
+- **Single process, single instance.** Application state is SQLite;
+  horizontal scaling of the platform is future work (the engine's
+  multi-host story above is about embedded-library deployments).
+- **Dev-login is the default auth** — any username, signed cookie. It is a
+  development affordance; real deployments plug an identity provider into
+  the `AuthProvider` seam and disable dev-login.
+- **No rate limiting or quotas** — nothing stops one user from consuming
+  the whole gateway budget.
 
-**Workaround:** The [HTTP API](../reference/http-api.md) is the
-integration surface. Build your own frontend against it, or embed the
-agent via the SDK directly.
+**When you hit it:** Deploying for a team beyond a trusted network, or
+under real load.
+
+**Workaround:** Front the server with your own identity (the auth seam)
+and a reverse proxy for TLS and rate limits; keep deployments
+single-instance. The [HTTP API](../reference/http-api.md) is the
+integration surface if you need to build your own frontend or automation.
 
 ## See also
 

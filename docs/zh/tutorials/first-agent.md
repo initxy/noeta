@@ -110,7 +110,7 @@ with tempfile.TemporaryDirectory() as tmp:
         client.shutdown()
 ```
 
-`Client` 是 `python -m noeta.agent` 的进程内等价物 —— 它创建一个临时任务，驱动它到终止状态，然后关闭。`client.messages(task_id)` 返回 fold 后的人类可读视图：用户消息、工具使用、工具结果、助手回复。
+`Client` 就是平台所嵌入的那套主机机制 —— 它创建一个临时任务，驱动它到终止状态，然后关闭。`client.messages(task_id)` 返回 fold 后的人类可读视图：用户消息、工具使用、工具结果、助手回复。
 
 运行后你应该看到类似以下的输出：
 

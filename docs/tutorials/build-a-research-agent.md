@@ -1,84 +1,58 @@
 # Tutorial: Build a research agent
 
-End-to-end: install Noeta, configure a provider, build a research agent
-that can search the web and write reports, then inspect what it did.
+End-to-end: boot the platform against a real gateway, give the agent a
+research task that searches the web and writes a report, then inspect what
+it did.
 
 ## Prerequisites
 
-- Python 3.11+
-- An API key for an OpenAI-compatible provider (or use the offline stub
-  to follow along without one)
+- Python 3.11+ with [uv](https://docs.astral.sh/uv/), Node 20+
+- An API key for an OpenAI-Responses-compatible gateway (or use the
+  offline mock to follow the motions without one)
+- Docker, for the sandbox (the agent needs it to write report files)
 
 ## Step 1: Install
 
 ```bash
-pip install noeta-agent
+git clone https://github.com/initxy/noeta && cd noeta
+make install
 ```
 
-This pulls in the SDK and runtime, with the web frontend already built into the wheel.
+## Step 2: Configure the gateway and sandbox
 
-## Step 2: Configure your provider
+Edit `apps/noeta-agent/.env` (copy `.env.example`):
 
-Create a config file `noeta.config.json`:
-
-```json
-{
-  "provider_id": "openai",
-  "model": "gpt-5.5",
-  "base_url": "https://api.openai.com/v1",
-  "api_key": "<your-api-key>",
-  "workspace_dir": ".",
-  "storage_url": ":memory:",
-  "host": "127.0.0.1",
-  "port": 8765
-}
+```dotenv
+LLM_BASE_URL=https://your-gateway.example.com/v1
+LLM_API_KEY=<your-api-key>
+SANDBOX_ENABLED=true
 ```
 
-> **No API key?** Set `"provider_id": "stub"` and omit `api_key` /
-> `base_url`. The offline stub provider answers with scripted responses
-> — enough to see the UI and event flow, but it won't do real research.
+and put your gateway's model id into `apps/noeta-agent/models.json` (see
+[configure a provider](../how-to/configure-provider.md)).
 
-For web search, set the env var (optional — the agent works without it):
+> **No API key?** Leave everything empty. The offline mock provider plays
+> a scripted conversation — enough to see the UI and event flow, but it
+> won't do real research.
+
+For web search, set the env var (optional — the agent works without it,
+using `webfetch` only):
 
 ```bash
 export NOETA_WEB_SEARCH_API_KEY=<your-tavily-or-similar-key>
 ```
 
-## Step 3: Launch the agent
+## Step 3: Launch and log in
 
 ```bash
 make run
 ```
 
-You should see:
+Open <http://127.0.0.1:8000>, log in with any username (dev-login), and
+start a new session in your personal space. Pick the model and reasoning
+effort in the composer if your `models.json` offers choices.
 
-```
-▶ noeta.agent → http://127.0.0.1:8765/chat
-```
-
-Open that URL in your browser.
-
-## Step 4: Pick the right agent preset
-
-In the chat UI, select the **`main`** agent from the dropdown. The
-`main` preset has the full tool surface:
-
-| Tool | What it does | Risk |
-| --- | --- | --- |
-| `read` | Read a workspace file | low |
-| `glob` | Match glob patterns | low |
-| `grep` | Regex content search | low |
-| `webfetch` | Fetch a web page to Markdown | low |
-| `web_search` | Web search (key-gated) | low |
-| `write` | Write a file | high |
-| `edit` | Replace text in a file | high |
-| `apply_patch` | Atomic batch of edits | high |
-| `shell_run` | Run a shell command | high |
-
-The `main` agent also has `delegation` capability (can spawn sub-agents)
-and `memory` (cross-task recall).
-
-## Step 5: Give it a research task
+## Step 4: Give it a research task
 
 Type into the chat:
 
@@ -95,27 +69,29 @@ What happens next:
 2. It gets ranked hits back as Markdown.
 3. It calls `webfetch` on the top 3 URLs to get full content.
 4. It reads and cross-references the content.
-5. It calls `write` to create `reports/rag-2025.md`.
+5. It calls `write` to create `reports/rag-2025.md` — **inside the
+   session's sandbox container**; the file lands in the session workspace,
+   and the **Files** panel on the right shows it.
 
-> **Write safety:** By default, `write` is **dry-run**. The agent
-> stages a unified diff but doesn't actually change bytes. To enable
-> real writes, set `NOETA_AGENT_WRITE_MODE=apply` (or
-> `"write_mode": "apply"` in your config). See
-> [Configuration](../reference/configuration.md).
+Execution is sandbox-only: every file and shell side effect happens in the
+per-session container, never on your host. Without the sandbox the agent
+can still search and summarize in chat, but has no file surface.
 
-## Step 6: Watch the trace
+## Step 5: Watch the trace
 
-Click the **Trace** tab in the UI. You'll see each step:
+Add your username to `ADMIN_USERS` in `.env` (restart) and open the admin
+console's **Trace** view for your session. You'll see each step:
 
-- `LLMRequestStarted` / `LLMRequestCompleted` — model calls
+- `ContextPlanComposed` — what the model was shown
 - `ToolCallStarted` / `ToolResultRecorded` — tool invocations
 - `MessagesAppended` — context updates
 - `TaskCompleted` — final answer
 
 Each envelope shows `seq`, `type`, `actor`, and `trace_id`. This is the
-EventLog — the single source of truth.
+EventLog — the single source of truth; the chat view you just used is a
+translation derived from exactly this stream.
 
-## Step 7: Inspect the EventLog programmatically
+## Step 6: Inspect the EventLog programmatically
 
 Want to dig deeper? Use the SDK to fold and inspect the event stream:
 
@@ -139,7 +115,7 @@ options = Options(
 #         print(f"  tool={env.payload.tool_name} args={env.payload.arguments}")
 ```
 
-## Step 8: Customize the agent
+## Step 7: Customize the agent
 
 Want a leaner research agent that never edits code? Create a custom
 agent via `Options.agents`:
@@ -175,11 +151,11 @@ options = presets.main_options()  # full main agent
 
 ## What you learned
 
-- How to install and launch Noeta with a real provider
-- Which tools the `main` preset opens and their risk levels
+- How to point the platform at a real gateway and turn on the sandbox
+- How a research turn decomposes into search / fetch / write tool calls
 - How the EventLog records every step
-- How to customize the agent recipe with `Options`
-- Where to look for the trace view and how to read it
+- How to customize an agent recipe with `Options` (SDK)
+- Where to find the admin trace view and how to read it
 
 ## Next steps
 

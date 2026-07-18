@@ -8,19 +8,19 @@ Physically, distribution is **two libraries plus one application**, split along 
 
 - **noeta-runtime** — the **pure engine**: everything needed to run one agent in-process. `protocols` (the only typed boundary) + `core` (Engine / fold / snapshot) + kernel services (`runtime`'s Worker/Dispatcher/ToolRuntime/RuntimeLLMClient/compaction, `storage`, `guards`, `observers`, `read_models`), **plus every opinionated implementation**: `policies` (ReActPolicy), `tools` (builtin tool implementations: fs/shell/mcp/research), `providers` (anthropic/openai_compat = Noeta-shape adapters), `context` (ThreeSegmentComposer + ContentChannelRegistry + skills), the `execution` machine (driver/runner/resolver/builder/multi_turn/subtask_drain + the command mechanism), the `agent` identity layer (AgentSpec/registry), and the four official agents in `noeta.presets` (main/explore/plan/general-purpose). runtime keeps its internal 8-layer import topology intact (kernel ↛ adapter). It ships no HTTP/SSE server.
 - **noeta-sdk** — the **thin client** on top of runtime, and the only thing users import. It exposes the library public surface `client` (query / Client / Options / `compile_options` / messages / parts), the authoring API (`@tool`, `create_sdk_mcp_server`), the re-exported open extension interfaces (Tool / LLMProvider / Policy / Guard / Observer / ContentChannel `ContentKindSpec`, plus the advanced `View` / `Decision`; along with `AgentDefinition` / `SystemPromptPreset` / `as_messages`), and the four re-exported presets. It **contains no engine and no HTTP**; it merely forwards into runtime (an in-process, legitimate dependency).
-- **noeta-agent** (the application shell, `apps/noeta-agent`) — the **official coding-agent product**: a Python backend process that consumes noeta-sdk in-process + a frontend (`apps/web`) + a startup entrypoint, and it **owns the HTTP/SSE server** (the only layer with a network surface). Product code lives under the `noeta.agent.*` namespace (PEP 420: the `noeta.agent` identity layer's spec/registry are published by noeta-runtime, while the product's host/api/backend are published by noeta-agent).
+- **noeta-agent** (the application, `apps/noeta-agent`) — the **official product: a multi-user agent server platform** (see `docs/adr/server-platform-product.md`): a FastAPI backend that consumes noeta-sdk in-process, plus a React/TypeScript SPA (`apps/web`) it serves, shipped as one process (a modular monolith) that provisions one sandbox container per session. It **owns the HTTP/SSE server** (the only layer with a network surface). Product code lives under the `noeta.agent.*` namespace (PEP 420: the `noeta.agent` identity layer's spec/registry are published by noeta-runtime, while the product's api/auth/host/store/services/workflow modules are published by noeta-agent).
 
-Repository shape: `packages/{noeta-runtime,noeta-sdk}` (two libraries) + `apps/{web,noeta-agent}` (the application) + a repo-root `tests/` (the old shell package `packages/noeta` has been deleted). Distribution mapping: `noeta-sdk` ↔ claude-agent-sdk, `noeta-agent` ↔ claude-code; the dist names `noeta-runtime`/`noeta-sdk`/`noeta-agent` are unchanged.
+Repository shape: `packages/{noeta-runtime,noeta-sdk}` (two libraries) + `apps/{web,noeta-agent}` (the application) + a repo-root `tests/` (the old shell package `packages/noeta` has been deleted). Distribution mapping: `noeta-sdk` ↔ claude-agent-sdk; `noeta-agent` is the deployable server platform built on it; the dist names `noeta-runtime`/`noeta-sdk`/`noeta-agent` are unchanged.
 
 **The only public surface is `noeta.sdk`.** Users install noeta-sdk and import only `noeta.sdk`; noeta-runtime is a transitive dependency they never touch. import-linter enforces the in-repo half of this: application code may not import runtime internals directly (`noeta.core` / `noeta.protocols` / `noeta.runtime` / `noeta.policies` / `noeta.tools` [the whole package — the `@tool`/`create_sdk_mcp_server` authoring API lives in `noeta.sdk`, not `noeta.tools`] / `noeta.providers` / `noeta.context` / `noeta.execution` / the `noeta.agent` identity layer) — it may only import `noeta.sdk`. **Deliberate exemptions** the application may import directly: `noeta.storage` (so the host can wire a concrete backend — wiring only, never a second writer), `noeta.read_models` (the peripheral file-tree/preview projection), and — pinned per-module in the `app-uses-only-sdk` ratchet — the two `noeta.agent.host.sdk_*` sandbox-adapter modules may import the concrete AIO adapters (`noeta.tools.fs.exec_env` / `noeta.tools.browser`): those concrete classes are retirement-slated runtime internals kept **off** the `noeta.sdk` public surface (which exposes only the `ExecEnv` / `BrowserBackend` protocols + the `BackendFactory` / `BrowserBackendFactory` / `BoundPreamble` factory types); see the execution-environment-seam ADR. The external-user half ("import only `noeta.sdk`") is guaranteed by wheel packaging (runtime ships as a transitive wheel), since import-linter cannot reach external code. noeta-sdk itself may import runtime (legitimate in-process). Re-layering moves the **distribution, not the import path** (PEP 420 keeps every `noeta.<module>` path stable while the physical wheel moves), so the provider-neutral forbidden contract reruns as-is.
 
 **Locked vs. open.** The **open** extension surfaces are all `Options` fields, re-exported through `noeta.sdk`: Tool / LLMProvider / Policy / Guard / Observer / ContentChannel (register a `ContentKindSpec`). Storage backends (EventLog/ContentStore/Dispatcher) — and the host's other non-identity runtime injections (preview gateway, live-MCP resolver) — are configured through **host config** (`noeta.sdk.HostConfig`, passed as `Client(..., host_config=...)`), not through Options; `HostConfig` never enters `AgentSpec` identity. **Locked**: the Engine main loop and Dispatcher/Worker/Lease (host config can only tune concurrency/lease), and `ContextComposer` — replacing the composer wholesale is **not** open on the user surface (stable-prefix KV-cache reproducibility is a hard constraint; the internal composer is still Protocol-injected, the Engine imports only the protocol, and the builder wires `ThreeSegmentComposer`); the composer's only open hook is registering a `ContentKindSpec`.
 
-**There is no operator CLI.** `run/inspect/resume` are the library core of the runtime's capabilities (inspect / state reconstruction go through `noeta.core.fold`; drain/resume go through `noeta.runtime.worker`), with no argparse wrapper and no `noeta` console script. The only entrypoint is the `python -m noeta.agent` runner, which starts the **application's own backend** (its HTTP/SSE server, not a library server) → wires up the agent/component registry → serves `apps/web`. The frontend-backend wire protocol was fully redesigned: a single SSE envelope-mux stream (carrying canonical `EventEnvelope`s as-is, addressed by `taskId`, with the envelope `seq` doubling as the SSE id so `Last-Event-ID` can resume, and the stream itself as the single source of truth; the same stream additionally carries ephemeral named `delta` frames — token-streaming previews with no SSE id, never persisted and never replayed, the final `MessagesAppended` staying the only durable record) + a set of command endpoints aligned with the Client verbs (start / send_goal / approve / deny / answer / cancel / close / reopen, idempotent 202/ack); peripheral resources (`/content/{hash}`, `/files`+`/file`, `/preview/<token>/`, `/mcp/*`) live on their own endpoints.
+**There is no operator CLI.** `run/inspect/resume` are the library core of the runtime's capabilities (inspect / state reconstruction go through `noeta.core.fold`; drain/resume go through `noeta.runtime.worker`), with no argparse wrapper and no `noeta` console script. The only entrypoint is the `python -m noeta.agent` runner — zero-argument, env-only (`apps/noeta-agent/.env` + environment variables) — which boots the **platform backend** (FastAPI + uvicorn) and serves the SPA build from `apps/web/dist`. The frontend-backend wire is the platform contract: a **versioned REST surface under `/api/v1/*`** plus **one SSE stream per session** (`GET /api/v1/sessions/{id}/events`) carrying **translated flat UI events** (user_message / assistant_text / thinking / tool_call / tool_result / skill_activated / todo_update / subtask_started / subtask_finished / question / question_answered / memory_op / compaction / turn_started / turn_finished, plus synthetic session-level frames), produced by a deterministic, stateless, pure translation over the canonical `EventEnvelope` stream (`noeta.agent.host.translator`). **Replay is re-derivation, not a stored projection**: a reconnect passes `since_seq`, the backend re-reads the EventLog through the Client read surface and re-runs the same translation. Ephemeral `delta` frames (token-streaming previews with no SSE id) ride the same stream, are never persisted and never replayed — the appended message event stays the only durable record. Raw envelopes are served **only** on the admin trace surface (`GET /api/v1/admin/sessions/{id}/raw-events`); the raw-envelope wire is a diagnostics surface, not the product contract.
 
 Installation splits by authoring vs. product:
 - **To write your own agent**: `uv pip install noeta-sdk`, then `import noeta.sdk` (noeta-runtime comes along as an untouchable transitive dependency).
-- **To run the official product**: `uv pip install -e apps/noeta-agent`.
+- **To run the official product**: from a checkout, `make install && make run` (uv workspace sync + frontend build + `python -m noeta.agent`).
 
 On PyPI the project is published under the dist names `noeta-runtime` / `noeta-sdk` / `noeta-agent` (all live at the current release); the bare `noeta` name is held by an unrelated package, so the three-wheel split doubles as the naming workaround.
 
@@ -233,6 +233,42 @@ _Avoid_: View Log, Dump
 Continues actual execution from a suspended state. An operational emergency-stop lever; the normal path is triggered by a wake event.
 _Avoid_: Restart, Continue
 
+### Application layer (the noeta-agent platform)
+
+Vocabulary owned by the product (`docs/adr/server-platform-product.md`). None of these terms exists below the application layer: the engine knows only Tasks.
+
+**Session**:
+The application-layer unit of conversation — what the UI lists, resumes, and deletes. Owned by a user, scoped to a Space; groups **one or more engine tasks** (a workflow session owns one root task per node) and owns one workspace directory and one sandbox container. **App-layer indexing only**: persisted in the application database; every state change still flows through `noeta.sdk` `Client` verbs and the EventLog stays the single source of truth.
+_Avoid_: Conversation, Thread; using Session for anything below the application layer (there it stays a non-concept — see Flagged ambiguities)
+
+**Space**:
+The unit of collaboration and scoping. Users belong to spaces; a space scopes skills, knowledge sources, agent memory, MCP connectors, agent-config, and templates. Every user gets a personal space; team spaces have owner-managed membership (roles: owner / member). Session visibility = space membership.
+_Avoid_: Team, Organization, Workspace (Workspace is already the session's file root)
+
+**UI event**:
+One frame of the product wire vocabulary (user_message, assistant_text, thinking, tool_call/tool_result, skill_activated, todo_update, subtask_started/finished, question, question_answered, memory_op, compaction, turn_started/turn_finished, error, plus synthetic session frames). Produced by the **translator** — a deterministic, stateless, pure function over `EventEnvelope`s (`noeta.agent.host.translator`); replay and live share the same function, so the stream cannot drift from the log.
+_Avoid_: calling raw `EventEnvelope`s UI events (raw envelopes are the admin trace surface only); "projection" (implies a stored copy — replay is re-derivation)
+
+**Skill registry**:
+The platform's database-backed skill surface: **builtin skills** (admin-managed, platform-wide, stored under the shared `builtin-skills/` directory) and **space skills** (owner-uploaded per space). Both are mounted read-only into session sandboxes and rendered into the model's skill menu. The registry is the app's management layer over the library-level Skill format (`SKILL.md` is unchanged).
+_Avoid_: Skill market, plugin store
+
+**Knowledge source**:
+A space-scoped synced content source with pluggable sync adapters; the open-source core ships `git_repo` (clone URL + token) and `local_dir` (managed directory). Materialized under the shared data directory, mounted read-only into session sandboxes, and selected into assembly through agent-config; citations resolve through the knowledge resolve-paths surface.
+_Avoid_: RAG index (there is no vector store), Dataset
+
+**MCP connector**:
+A per-space MCP server configuration: alias + transport (`http` | `stdio`) + credentials + an enabled tool subset, stored in the application database and credential-scrubbed on every read. A per-turn resolver hands the enabled connector specs into the SDK host; connector tools appear to the model as `mcp__<alias>__<tool>`. Replaces the retired global `~/.noeta/mcp_servers.json` registry.
+_Avoid_: global MCP registry (retired), plugin
+
+**Agent-config**:
+The space's agent configuration: persona prompt (written into the session workspace `AGENT.md` at assembly — it does not override the platform's base system prompt), default model / reasoning effort for new sessions, knowledge-source selection, and the memory toggle. Owner-managed via `GET/PUT /api/v1/spaces/{id}/agent-config`.
+_Avoid_: Options (that is the SDK-level agent configuration), Settings (that is server config)
+
+**Feedback loop**:
+Per-message ratings collected from space members, feeding an owner-triggered **analysis agent** whose suggestions are owner-gated: adopt into space memory, apply a skill patch (after a backup), or aggregate into a report exported as markdown. Nothing is applied without the owner's decision.
+_Avoid_: RLHF (nothing trains a model), auto-tuning
+
 ## Relationships
 
 - **Task → Subtask**: one-to-many; a subtask has its own EventLog stream, related through `parent_task_id`.
@@ -245,21 +281,20 @@ _Avoid_: Restart, Continue
 ## Flagged ambiguities
 
 **"Workflow"**:
-Not a first-class concept. Express fixed procedures with a deterministic Policy + spawn_subtask. **Do not** let `WorkflowSpec / WorkflowRunner / WorkflowPolicy` appear in documentation or code. An **orchestration script** the model improvises ("spawn a few assistants first, look at the results, then spawn the next batch") is likewise not a new primitive: it lands as **one Task + a Policy that interprets that script**, and the assistants it spawns are real Subtasks. At most, "workflow" is colloquial shorthand for some model-facing control tool; the class-name ban above still holds.
+Not a first-class concept in the engine. Express fixed procedures with a deterministic Policy + spawn_subtask. **Do not** let `WorkflowSpec / WorkflowRunner / WorkflowPolicy` appear in library documentation or code. An **orchestration script** the model improvises ("spawn a few assistants first, look at the results, then spawn the next batch") is likewise not a new primitive: it lands as **one Task + a Policy that interprets that script**, and the assistants it spawns are real Subtasks. The platform's *workflow session* is app-layer sequencing of root tasks (one root task per node, advanced by user-confirmed handoffs) — an application feature, not an engine primitive; the class-name ban above protects the engine libraries.
 
 **"Session"**:
-Not a first-class concept. Multi-turn conversation is simply one Task receiving user input repeatedly: **one interactive session = one Task**; each question in a session = one **turn** (a cycle of one wake → several Steps → suspend, with the Task resting at `suspended` + `HumanResponseReceived` between turns); each delegation in a session = one **Subtask**.
-Exception: Session is allowed as the **runner name for L3 orchestration** (`AgentSessionRunner`). It **must not** serve as a persistent entity, a wire ID independent of `taskId`, or an event schema name. **Do not** let `SessionStore / ConversationManager` appear in documentation or code, and **do not** let `sessionId` or a hand-rolled `SessionEvent` appear in the wire protocol (the event payload is always the canonical `EventEnvelope`).
+An **application-layer concept only** (see the Application layer vocabulary above; the superseding decision is `docs/adr/server-platform-product.md`). Below the application layer it remains a non-concept: the engine knows only Tasks, and multi-turn conversation is simply one Task receiving user input repeatedly — each question = one **turn** (a cycle of one wake → several Steps → suspend, with the Task resting at `suspended` + `HumanResponseReceived` between turns); each delegation = one **Subtask**. Session is also allowed as the **runner name for L3 orchestration** (`AgentSessionRunner`). **Do not** let session ids or session event schemas appear in engine/SDK code or below-app identifiers; the product wire may key on session ids because the application owns that wire (its event vocabulary is the translated UI events, not a hand-rolled engine schema).
 
 **"Run"**:
 Not a first-class concept. Always use Task. When it appears in external docs or old code, treat it as a Task.
 
 ## Sample dialogue
 
-> User: This task has been waiting on a subtask for a long time — can I cancel it?
+> User: This session has been waiting on a subtask for a long time — can I cancel it?
 >
-> Answer: Yes. The task is currently **suspended**, with wake_on = `SubtaskCompleted(t-child-7)`. The web app's cancel (`POST /tasks/{id}/cancel`) cascades to cancel all in-flight subtasks.
+> Answer: Yes. The session's root task is currently **suspended**, with wake_on = `SubtaskCompleted(t-child-7)`. The platform's cancel (`POST /api/v1/sessions/{id}/cancel`) cascades to cancel all in-flight subtasks.
 >
 > User: How did its earlier ContextPlan pick the files?
 >
-> Answer: Inspect the most recent `ContextPlanComposed` event (in the web timeline, or read the EventLog directly); its selected / dropped entries carry provenance, so you can trace back to the content source (which Skill, which message, and so on).
+> Answer: Inspect the most recent `ContextPlanComposed` event (on the admin trace surface, or read the EventLog directly); its selected / dropped entries carry provenance, so you can trace back to the content source (which Skill, which message, and so on).

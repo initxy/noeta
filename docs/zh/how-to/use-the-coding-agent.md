@@ -1,109 +1,53 @@
-# 使用 coding agent
+# 使用平台
 
-**目标：** 将 `python -m noeta.agent` 用于真实的编码任务——配置工作区、使用代理预设、管理会话以及操作技能。
+**目标：** 用 noeta-agent 平台做真实工作 —— 登录，配置一个空间（space，含知识、skill、MCP 连接器与 agent-config），进行会话（session），并使用文件面板与沙箱预览。
 
-**开始之前：** 你已安装 Noeta 并配置了真实 provider（参见[配置 provider](configure-provider.md)）。
+**开始之前：** 平台已经在运行（`make run`，或 `python -m noeta.agent`；见[快速开始](../tutorials/quickstart.md)）。下面的一切在零凭证 mock 模式下都能工作；想要真实回答，先接好一个网关（[接入网关](configure-provider.md)）。
 
-## 用你的工作区启动代理
+## 1. 登录
 
-```bash
-NOETA_AGENT_WORKSPACE=./my-project \
-NOETA_AGENT_PROVIDER=anthropic \
-NOETA_AGENT_MODEL=claude-sonnet-4-5-20250929 \
-NOETA_AGENT_API_KEY=sk-ant-… \
-NOETA_AGENT_STORAGE=./my-project/session.sqlite \
-NOETA_AGENT_WRITE_MODE=apply \
-python -m noeta.agent
-```
+打开服务器 URL（默认 <http://127.0.0.1:8000>）。默认构建使用 **dev-login**：输入任意用户名即可进入。每个用户都会自动获得一个**个人空间**；列在 `ADMIN_USERS` 里的用户名还能看到管理员控制台。
 
-关键变量：
+> dev-login 是开发用的便利。真实部署会把身份提供方接入 `AuthProvider` 缝并禁用 dev-login（可从管理员控制台热切换）。
 
-| 变量 | 为什么设置它 |
-| --- | --- |
-| `NOETA_AGENT_WORKSPACE` | 代理读取和编辑的目录。默认为 `.`。 |
-| `NOETA_AGENT_STORAGE` | EventLog 的持久化存储。没有它，会话会随进程消亡。 |
-| `NOETA_AGENT_WRITE_MODE` | `apply` 让代理实际写入文件。默认 `dry_run` 仅提议 diff。 |
+## 2. 选择或创建空间
 
-在浏览器中打开打印出的 URL，导航到 `/chat`。
+空间切换器列出你的所有空间。个人空间只属于你自己；**团队空间**是共享的 —— 创建一个，再添加成员（所有者管理成员，成员使用空间）。agent 带进会话的一切都以当前空间为作用域。
 
-## 选择代理预设
+## 3. 给空间准备材料
 
-代理是**按任务**选择的——创建新对话时，你可以选择使用哪个代理。内置的四个预设：
+这些全都是可选的 —— 空空间也能正常聊天 —— 但正是它们让 agent 成为*你的* agent：
 
-| 预设 | 适用场景 |
-| --- | --- |
-| `main` | 默认。完整工具面，可派生子代理。最适合通用编码工作。 |
-| `general-purpose` | 自包含：读取、写入、编辑、运行 shell。不委派。 |
-| `explore` | 只读侦察。用它来理解代码库而无编辑风险。 |
-| `plan` | 只读架构师。返回有序的实现计划。 |
+- **知识**（空间页 → Knowledge）：添加 `git_repo` 源（clone URL，可选 token）或 `local_dir` 源，然后触发一次同步。同步后的内容以只读方式挂载进会话沙箱，agent 的引用会溯源回原始路径。
+- **Skill**（空间页 → Skills）：上传 skill（`SKILL.md` 包，zip 或单个文件）。模型从自己的 skill 菜单按需激活 skill；平台级内置 skill 由管理员管理。
+- **MCP 连接器**（空间页 → MCP）：以别名（alias）注册 MCP 服务器 —— `http`（URL + headers）或 `stdio`（command + args + env）—— 之后可以把它限制到某个工具子集，再启用。启用的连接器每一轮都会解析进 agent；其工具显示为 `mcp__<alias>__<tool>`。凭证只保存在服务端。
+- **Agent-config**（空间页 → Agent）：人设 prompt（以 `AGENT.md` 写入每个会话工作区）、新会话的默认模型与推理力度、哪些知识源参与，以及记忆开关。
+- **模板**：带类型化参数的可复用 prompt，以及把它们串联起来的多节点**工作流模板**。
 
-当你希望代理理解新代码库而不做任何修改时，选择 `explore`；当你希望它做出更改时，选择 `main`。
+## 4. 进行会话
 
-## 发送消息并观察 trace
+点击 **New session**，输入一条消息；想覆盖空间默认值，就在输入框里选模型 / 推理力度。一轮进行中，你会看到流式的助手文本与思考、带结果的工具调用、todo 列表更新、skill 激活和子任务卡片 —— 这一切都可 replay：轮次进行到一半刷新页面，流会从事件日志重新推导出来。
 
-在聊天输入框中输入你的请求——例如：
+- **提问** —— agent 可以停在一个结构化问题上（选项 + 自由填写）；会话会一直等到你作答。
+- **停止** —— 取消正在运行的一轮；已产生的部分历史仍会被记录。
+- **图片** —— 在输入框附加 PNG / JPEG / GIF / WebP（每张 ≤ 5 MB）；它们随这一轮送达具备视觉能力的模型。
+- **模板 / 工作流** —— 从模板（参数 → 首条消息）或工作流模板发起会话；工作流会话每个节点一个标签页，通过一份自动生成、由你审阅确认的交接文档向前推进。
+- **反馈** —— 给任意助手消息评分；空间所有者之后可以让分析 agent 处理收集到的评分，并采纳它给出的建议。
 
-```
-查找所有导入 `pydantic` 的 Python 文件，并列出它们使用了其中的哪些内容。
-```
+会话按空间列出；任何空间成员都能打开团队空间里的会话，删除则仅限创建者或空间所有者。
 
-随着代理的工作，trace 视图会填充事件：LLM 轮次、每次工具调用（`grep`、`read`、`glob`）以及工具结果。你可以检查每轮的 token 用量和 cache 命中率。
+## 5. 文件面板与沙箱预览
 
-如果代理提议编辑且 `NOETA_AGENT_WRITE_MODE=apply`，文件会立即更改。如果 `write_mode=dry_run`（默认），你会看到一个统一 diff 工件——便于安全评估。
+打开沙箱后（`SANDBOX_ENABLED=true` + Docker），每个会话都运行在自己的容器里，右侧面板随之激活：
 
-## 管理会话
+- **文件** —— 会话工作区（agent 写下的一切），通过宿主机侧的挂载列出并可读取；agent 的产出就落在这里。
+- **预览面板** —— 实时的 **Browser**、**Terminal**、**Code** 视图，从会话的容器串流而来（由独立的预览 origin 提供服务；发现是自动完成的）。
 
-左侧边栏显示会话列表（仅根对话；子任务挂载在父级的流上）。每行显示状态、标题（来自第一条消息）和代理名称。
-
-- **创建** — 点击"New session"或从空状态发送消息。
-- **恢复** — 点击会话以继续。代理会 fold EventLog 以恢复状态，因此即使你重启了服务器，对话也会从上次中断的地方继续。
-- **关闭 / 重新打开** — 右键点击或使用会话菜单。关闭会归档会话；重新打开会使其再次激活。
-- **取消** — 在轮次中途停止正在运行的会话。部分状态保留在日志中。
-- **删除** — 从存储中硬删除会话及其子任务树。不可逆。
-
-## 使用技能
-
-技能是基于 Markdown 的能力包，模型可以按需激活。将技能放入你的工作区：
-
-```
-my-project/
-└── .noeta/
-    └── skills/
-        └── pdf-extract/
-            └── SKILL.md
-```
-
-`SKILL.md` 包含 YAML frontmatter 加 Markdown 正文：
-
-```markdown
----
-name: pdf-extract
-description: Extract text and tables from PDF files
-version: "1"
----
-
-# PDF Extract
-
-Use `pdftotext` (shell) to extract text from a PDF file.
-Call it with the file path.
-```
-
-当模型决定需要 PDF 提取时，它会调用 `skill: pdf-extract`，技能正文会被 fold 到下一轮的上下文中。然后模型使用捆绑的资源（通过 `read`）来执行任务。
-
-全局技能放在 `~/.noeta/skills/` 中，对所有工作区可用。
-
-## 批准受控工具调用
-
-当 `NOETA_AGENT_WRITE_MODE=apply` 且 `permission_mode=default`（`main` 的默认值）时，某些工具调用在执行前需要你的批准：
-
-- `edit`、`write`、`apply_patch` — 文件修改
-- `shell_run` — shell 命令（即使在 `allowlist` 模式下，某些命令也可能需要批准）
-
-聊天界面会显示待批准的工具调用详情。点击**Approve**让其执行，或点击**Deny**阻止它。批准或拒绝会记录在 EventLog 中。
+没有 Docker 时，平台以纯对话模式运行：没有文件面板、没有 shell 执行 —— 上面的其余功能照常可用。
 
 ## 另请参阅
 
-- [Coding agent 参考](../reference/noeta-agent.md) — 所有环境变量、工具和预设
-- [HTTP 接口参考](../reference/http-api.md) — UI 背后的路由
-- [配置 provider](configure-provider.md) — 连接真实 LLM
-- [构建自定义工具](build-custom-tools.md) — 扩展工具面
+- [平台参考](../reference/noeta-agent.md) —— 架构与启动模式
+- [HTTP API 参考](../reference/http-api.md) —— UI 背后的路由
+- [接入 OpenAI 兼容网关](configure-provider.md)
+- [连接 MCP 服务器](connect-mcp.md)

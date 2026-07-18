@@ -16,8 +16,9 @@ for.
 | --- | --- | --- |
 | [`real_provider_subtask_demo.py`](./real_provider_subtask_demo.py) | Real-provider sub-task suspend / wake-resume across two Engines. | Yes — skips when env is unset. |
 
-A full bug-fixer coding agent against a real model now runs through the shipping
-backend (`NOETA_AGENT_CONFIG=… python -m noeta.agent`) and the env-gated live suite
+A full agent run against a real model now goes through the shipping
+platform (`python -m noeta.agent` with a gateway configured in
+`apps/noeta-agent/.env`) and the env-gated live suite
 (`tests/test_live_context_supply_e2e.py`).
 
 The real-provider demos are exercised by humans with their own API key;

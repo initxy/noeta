@@ -1,193 +1,179 @@
-# Noeta — 服务端 agent 运行时
+# Noeta — 构建在持久化运行时之上的多用户 agent 平台
 
 [English](README.md) · **简体中文**
 
-**[文档站](https://initxy.github.io/noeta/zh/)** · [快速开始](https://initxy.github.io/noeta/zh/tutorials/quickstart/) · [SDK 参考](https://initxy.github.io/noeta/zh/reference/sdk/) · [配置 provider](https://initxy.github.io/noeta/zh/how-to/configure-provider/)
+**[文档站](https://initxy.github.io/noeta/)** · [快速开始](https://initxy.github.io/noeta/tutorials/quickstart/) · [平台参考](https://initxy.github.io/noeta/reference/noeta-agent/) · [SDK 参考](https://initxy.github.io/noeta/reference/sdk/)
 
-> **为服务端托管 AI agent 而生——不是给 notebook 用的。** 持久化事件溯源执行、多 worker / 多主机调度、每会话沙箱容器——还带一个 agent 亲自驱动的真实浏览器——完整审计与 replay、provider 中立的 LLM 接线。可自托管，无厂商绑定。
+> **一个可自托管、面向团队的 agent 服务** —— 多用户会话（session）与协作空间（space）、每会话一个的沙箱容器、按空间划分的 skill / 知识 / 记忆 / MCP 连接器、一个管理员控制台 —— 全部构建在一条**持久化、事件溯源的运行时**之上，具备完整审计与 replay。零凭证即可完全离线运行；接上任意 OpenAI-Responses 兼容网关就能用真实模型。
 
-Noeta 是一个**在服务端运行 AI agent 的运行时**。它在一条**持久化 event log** 之上托管、记录、调度和回放 agent 执行——和生产系统用来保证 exactly-once 投递与崩溃安全的是同一根脊梁。这一个设计选择，换来了普通进程内 agent 库给不了你的东西：任务扛得住进程被杀、从中断处*精确恢复一次*，可以睡上数小时甚至数天去等人工或定时器，而每次 LLM 调用 / 工具调用 / 审批都是一个可审计、可 replay 的记录事件。而且整套技术栈通过确定性的 `stub` provider **离线、无需 API key** 就能跑通，三十秒上手。
+Noeta 在一个仓库里交付两样东西：
 
-<p align="center">
-  <img src="docs/assets/sandbox-browser.png" alt="Noeta 在每会话沙箱里驱动真实浏览器，并带 Browser / Terminal / Code 实时预览面板" width="860">
-  <br>
-  <em>开启沙箱后：agent 把任务委派给它的 <code>web</code> specialist，由后者在<strong>会话容器内部驱动一个真实浏览器</strong>——打开 Google、搜索、落到发布页——同时右侧 dock 从同一个容器实时串流 <strong>Browser</strong> / <strong>Terminal</strong> / <strong>Code</strong> 面板。一条命令（<code>python -m noeta.agent</code>）就能启动 agent 和这个界面。</em>
-</p>
+- **平台**（`noeta-agent`）—— 一个可部署的多用户 agent 服务：FastAPI 后端加
+  React SPA，作为单个进程交付。用户登录后在**空间**（个人或团队）中工作，与
+  agent 进行**会话**；agent 的执行只发生在每会话专属的 Docker 沙箱里。空间承载
+  agent 的 skill、知识源、长期记忆、MCP 连接器和配置；管理员拥有带用量统计和
+  原始事件 trace 的控制台。
+- **运行时 + SDK**（`noeta-runtime`、`noeta-sdk`）—— 底下的库：持久化事件溯源
+  的任务执行、崩溃安全的 exactly-once 恢复、面向人工与定时器的挂起/唤醒、
+  worker lease、完整审计与 replay。`noeta.sdk` 是进程内构建你自己的 agent 的
+  唯一公开 import 面。
 
-## 重点一览
+## 快速开始 —— 零凭证，60 秒
 
-- **崩溃安全、精确一次的执行。** 状态从只追加的 event log 里 fold 出来，从不攥在内存里——中途杀掉进程，一个全新进程从准确的那一点恢复，精确一次。
-- **长程任务。** 任务可以挂起数小时甚至数天，去等人工审批、定时器或 sub-task，等条件满足时被*精确唤醒一次*——睡着时不占用任何成本。
-- **多 worker / 多主机横向扩展。** 任务从一个由 Postgres 支撑的共享 Dispatcher 里 lease 出来；lease fencing + 数据库时钟过期在跨机器场景下保持 exactly-once 语义。加 worker 就能横向扩展。
-- **每会话沙箱——现在还带一个 agent 亲自驱动的浏览器。** 打开一个开关，每个会话就跑在自己那个用完即弃的 Docker 容器里；每次 fs / shell / skill / web 工具调用都在容器*内部*执行，绝不落在宿主机上。agent 拿到一个**容器内的真实浏览器**，通过 `web` specialist 驱动它（navigate / click / type / extract / screenshot），web UI 则从该容器实时串流 **Browser / Terminal / Code** 面板。
-- **会自我维护的长期记忆。** agent 用自己的一组工具（`memory_write` / `memory_read` / `memory_search` / `memory_archive`）管理一个基于文件的记忆存储，写什么、不写什么由显式的记忆政策约束，每条用户消息上还有确定性的自动召回。会话停下后，一个经防抖的后台整理（consolidation）过程负责打理存储——合并重复、归档被推翻的事实、补写漏记的——并且只能归档，绝不删除。
-- **完整审计与 replay。** 每个事件、每次 LLM 调用、每次工具调用、每个 token/cache 统计都被记录下来，compaction 是一个可逆的叠加层——你能审查某一步*为什么*发生，而不只是*发生了什么*。
-- **Provider 中立，无绑定。** Anthropic 和任意 OpenAI 兼容模型都在同一套内部协议背后——换厂商不用重写历史。
-- **开箱即离线、无需 API key。** 确定性的 `stub` provider 让整套技术栈在没有网络的情况下跑通，因此安装、存储、接线都能在全新 checkout（以及 CI）上验证。
-
-## 对比
-
-Pi、**Claude Agent SDK**（即 Claude Code SDK）和 **Codex SDK** 都是*进程内 harness*：它们给你 agent 循环、工具、MCP 和 sub-agent——然后把存储、分布式和沙箱留给你。它们的「持久化」是一份本地对话记录（Claude Agent SDK 自带的内存 session store，官方文档自己标注*不适合生产*；Codex 把 thread 存在 `~/.codex/sessions` 下），恢复只能在单机、绑定路径，跨租户扩展要你自己搭。
-
-**Noeta 就是这层 harness 底下的服务端底座**——那些你本来要自己写的部分：
-
-| | **Noeta** | Claude Agent SDK | Codex SDK | Pi |
-| --- | --- | --- | --- | --- |
-| agent 循环 · 工具 · MCP · sub-agent | ✅ | ✅ | ✅ | ✅ |
-| 持久状态 | **事件溯源日志**，fold 出来即恢复——Postgres / SQLite / 内存 | 本地对话记录；默认 store *不适合生产*——自备数据库 | 本地 thread 文件 | 本地 session 文件 |
-| 崩溃安全、exactly-once 恢复 | ✅ 任意进程重新 fold 日志 | 仅限同机、`cwd` 必须一致——持久化归你 | 本地恢复单个 thread | 重新打开一份对话记录 |
-| 多 worker / 多主机 | ✅ 共享 Postgres 上 lease fencing | ✗ 一个 agent 一个长驻进程 | ✗ 一个 thread 一个进程 | ✗ |
-| 每会话沙箱 | ✅ 每会话一个用完即弃的容器——agent 驱动浏览器 + 实时预览，重连安全 | 要你自己在自己基建上搭（或用厂商托管） | 仅本地 OS 沙箱 | ✗ |
-| 交付形态 | **可自托管的服务端底座** | 你自己 host + deploy 的 harness | 本地 CLI + SDK 封装 | 进程内 harness |
-
-底子是同一个想法：harness 记录的是一段*对话*；Noeta 记录的是*事件*，状态由它们 fold 出来。正是这一本账本，把崩溃恢复、持久的多主机唤醒、每会话沙箱重连、可逆 compaction 和完整审计，收敛成同一个机制，而不是事后再拼上去的五套各行其是的系统。Provider 中立、可自托管——无厂商绑定。
-
-完整对比（对 Claude Agent SDK、LangGraph、Temporal）见[服务端对比](https://initxy.github.io/noeta/zh/reference/comparison/)。
-
-## 快速开始
+不需要 API key、不需要 Docker、不需要注册账号。从一份全新 checkout 开始
+（Python 3.11+ 配 [uv](https://docs.astral.sh/uv/)，Node 20+）：
 
 ```bash
-pip install noeta-agent   # 自动拉入 SDK + runtime
-python -m noeta.agent     # 启动离线 stub coding agent + 内置 web UI
+git clone https://github.com/initxy/noeta && cd noeta
+make install   # uv sync + 前端依赖
+make run       # 构建 SPA + 在 http://127.0.0.1:8000 启动平台
 ```
 
-不需要 API key——默认的 `stub` provider 是一个确定性 LLM 替身。打开打印出的 URL 并发一条消息。同样的启动，用代码写出来：
+打开 <http://127.0.0.1:8000>，用**任意用户名**登录（dev-login），发一条消息。
+没有配置 LLM 时，平台运行确定性的 **mock provider**：一段脚本化的对话会把真实
+机制完整走一遍 —— 一个澄清提问、一次 skill 激活、一份写回的回答 —— 全程离线。
+想用显式命令代替 `make`：
+
+```bash
+uv sync
+cd apps/web && npm ci && npm run build && cd ../..
+uv run python -m noeta.agent
+```
+
+同样的组装过程，用代码写出来：
 
 <!-- runnable: smoke -->
 ```python
-from noeta.agent.backend.lifecycle import BackendConfig, serve_backend
+from noeta.agent.main import create_app
 
-# 默认完全离线：两轮 stub provider，:memory: 存储。
-# port=0 绑定一个操作系统分配的端口。工作目录是当前目录。
-config = BackendConfig(port=0)
-server, url, shutdown = serve_backend(config)
-try:
-    assert url.startswith("http://")
-finally:
-    shutdown()
+# 完全离线的默认值：确定性 mock LLM、SQLite 应用存储、dev-login。
+# create_app 只组装 FastAPI 应用，不启动服务。
+app = create_app()
+assert "/api/v1/health" in app.openapi()["paths"]
 ```
 
-下一步：[快速开始教程](https://initxy.github.io/noeta/zh/tutorials/quickstart/)会走一遍引导式路径（安装 → 运行 → 打开 web UI → 查看 trace）。要接入真实的 Anthropic 或 OpenAI 兼容模型，请看[配置 provider](https://initxy.github.io/noeta/zh/how-to/configure-provider/)。要在 SDK 上构建自己的 agent——定义 `@tool`、组装 `Options`、调用 `query()`——从[你的第一个 agent](https://initxy.github.io/noeta/zh/tutorials/first-agent/)和可运行的 [`examples/`](examples/)开始。
+## 接入真实模型
 
-## 为什么选择 Noeta —— 服务端优势
+平台对接任意 **OpenAI-Responses 兼容网关**。在 `apps/noeta-agent/.env` 里配置
+（可从 `.env.example` 复制）：
 
-Noeta 是为服务端托管 agent 的现实而建的：崩溃会发生、任务会比单次请求更长、你要跑你并不完全信任的代码、你需要跨 worker 扩展。这些不是后加的补丁——它们是地基。
-
-### 持久、崩溃安全的执行
-
-- **扛得住崩溃** —— 任务状态从不跨运行保留在内存里，而是按需从只追加的 event log 里 *fold（折叠）* 重建。中途杀掉进程，一个全新进程把日志 fold 回到准确的那一点，把活干完——精确一次。
-- **为长程任务而生** —— 任务可以挂起，去等一个人工审批、一个结构化提问、一个定时器，或一个 sub-task，等条件触发时被精确唤醒一次。睡着的时候不占用任何成本。
-
-### 可横向扩展的调度
-
-- **多 worker、多主机** —— 任务从一个由 Postgres 支撑的共享 Dispatcher 里 lease 出来。加 worker 就能横向扩展；lease fencing + 数据库时钟过期在跨机器场景下保持 exactly-once 语义。SQLite 和内存后端在本地开发时保持单机。
-
-### 每会话隔离 —— 带一个 agent 驱动的浏览器
-
-- **一会话一容器** —— 打开沙箱，每个会话都拿到自己全新的 Docker 容器；每次 fs / shell / skill / web 工具调用都在容器*内部*执行，绝不落在宿主机上，一个会话的文件和进程对另一个不可见。为托管你并不完全信任的 agent——以及运行你并不完全信任的代码——而生。
-- **一个 agent 亲自驱动的真实浏览器** —— 开启沙箱后，agent 可以通过 `web` specialist 驱动容器里的浏览器（navigate / click / type / extract / screenshot），而 web UI 的右侧 dock 会从同一个容器实时串流 **Browser**（noVNC）、**Terminal**（容器 PTY）和 **Code**（code-server）面板。
-- **重连安全** —— 容器以地址形式记进日志；崩溃后把任务 fold 回来的 worker 会重连到*同一个*容器，working 文件还在。
-- **密钥不上命令行** —— 容器 key 以名字（而非 argv 值）交给 `docker`。
-
-### 会自我维护的长期记忆
-
-- **模型自管理、一条记忆一个文件** —— agent 通过受 slug 约束的工具保存、搜索、归档记忆，由记忆政策 prompt 引导（什么值得记、什么绝不记、先更新旧条目而非另立新条）。常驻索引加两档召回（先名字 token，再摘要 token）在每条用户消息上把相关记忆带回来——确定性匹配，不需要运维向量服务。
-- **后台自动打理** —— 会话停下后（经防抖，默认 24 小时），一个隐藏的整理 agent 读取近期会话活动的摘要，合并重复记忆、归档被推翻的、补写明显漏记的。它和交互 agent 走同一套记忆工具，只能归档、绝不删除——每次改动人工都能审查和恢复。
-
-### 完整可观测
-
-- **彻底可审查** —— 每个事件、每次 LLM 调用、每次工具调用、每个 token/cache 统计都是一个记录下来的事件。trace 视图（以及原始日志）回答的是某一步*为什么*发生——哪个工具、以谁的权限运行、什么被 compact 掉了——而不只是*发生了什么*。
-- **可 replay** —— compaction 是一个记录下来的叠加层；原始消息仍在日志里，所以历史可审计、可复现。
-
-<p align="center">
-  <img src="docs/assets/trace.png" alt="Noeta 逐任务 trace 视图" width="820">
-  <br>
-  <em>每个任务都有完整 trace——每个事件、每次 LLM 调用、每个 token/cache 统计，直接读自 event log。</em>
-</p>
-
-### Provider 中立，无绑定
-
-- **Anthropic 和任意 OpenAI 兼容端点** 都在同一套内部协议背后。切换厂商只是改接线，不是重写，记录下来的历史也不绑定任何厂商的形态。
-- **自带 agent** —— 运行时负责托管和调度；policy、工具、上下文由你提供。仓库内置了一个 ReAct policy 和一个完整 coding agent，但你完全可以不用它们。
-- **开箱即离线** —— 确定性的 `stub` provider 让整套技术栈在没有 API key、没有网络的情况下跑通，因此安装、存储、接线都能在全新 checkout（以及 CI）上验证。
-
-## 它是怎么工作的
-
-有一个想法贯穿始终：**状态是日志之上的一次 fold，而不是攥在内存里的一个东西。**
-
-agent 走的每一步——每次 LLM 调用、工具调用、审批、挂起——都被追加进一份逐任务的 **event log**。任务的当前状态在需要时从这份日志 *fold（回放）* 得出。运行之间，没有任何持久的东西留在进程内存里。
-
-因为日志是唯一事实来源，那些难的部分就不再是彼此独立的功能，而变成了*同一个*机制：
-
-- **Resume（恢复）** 只是再 fold 一次——重新打开日志、fold、接着跑。
-- **崩溃恢复** 就是由另一个进程再 fold 一次。
-- **挂起 / 唤醒** 是把任务停在一个条件上，被匹配到后精确重新入队一次。
-- **Compaction（压缩）** 是一个记录下来的事件——摘要在组装上下文时叠加上去，原始消息仍在日志里，所以它可审计、可复现。
-
-大对象（工具输出、文件、snapshot）存在一个内容寻址的 store 里，日志指向它。工具的副作用可以跑在宿主机上，或者——当你不信任这个 agent 时——跑在一个每会话的沙箱容器里（见下文）——两种情况下日志看起来都一样，所以崩溃恢复和 replay 都不受影响。完整图景见[事件溯源](https://initxy.github.io/noeta/zh/concepts/event-sourcing/)和[唤醒与恢复](https://initxy.github.io/noeta/zh/concepts/wake-resume/)。
-
-## 每会话沙箱
-
-当你在服务端托管 agent 时——给别人用，或只是跑一段你并不完全信任的代码——你不会想让工具调用碰到宿主机。打开一个开关，Noeta 就为**每个会话新起一个 Docker 容器**，并把*每一个*有副作用的工具都路由进去：文件 read / write / edit / patch、前台 `shell_run`、skill 发现与 skill 脚本、以及 `webfetch` / `web_search`，全都在那个容器里执行，而不是在宿主机上。
-
-- **一会话一容器。** 每个 root task（一段对话）拿到自己那个命名容器，会话开始时创建、结束时销毁。两个并发会话拿到两个独立容器——一个的文件和进程对另一个不可见。
-- **一切都经容器。** fs、shell、skill、web 出网全都经由同一条 HTTP 缝打进容器，所以无论工具跑在宿主机还是容器里，持久 event log 都是字节一致的——resume 和崩溃恢复根本不在乎是哪一种。
-- **重连安全。** 容器以地址形式记进日志；崩溃后把任务 fold 回来的 worker 会重连到*同一个*容器（同机），working 文件还在。
-- **密钥不上命令行。** 容器 key 以名字（而非 argv 值）交给 `docker`；第三方 key（比如 web 搜索的 key）以带外方式交给容器内工具，不落在容器进程表会暴露的命令行上。
-
-### 一个 agent 驱动的浏览器，外加实时预览
-
-开启沙箱后，Noeta 会加上一套**由 noeta 自持的浏览器工具包**，用来驱动容器自己的浏览器——`browser_navigate` / `click` / `type` / `extract` / `screenshot`，工具名与 schema 由 noeta 钉死，所以它们在沙箱镜像变动时保持稳定。主 agent 保持「无浏览器」：它把每一次页面交互都委派给一个专门的 **`web` specialist**，因此一个浏览任务的 token 消耗被隔离在一个返回精炼结果的子上下文里（截图会作为一个 workspace artifact 落盘，你能在文件面板里打开它）。
-
-web UI 的右侧 dock 随后从同一个容器实时串流三个**预览面板**——**Browser**（noVNC）、**Terminal**（容器 PTY）和 **Code**（code-server）——由一个专用预览端口提供（默认临时端口；用 `NOETA_AGENT_SANDBOX_PREVIEW_PORT` 钉住，并置于防火墙或隧道之后）。
-
-开启它——需要本地 Docker daemon 和 AIO Sandbox 镜像（[`agent-infra/sandbox`](https://github.com/agent-infra/sandbox)）：
-
-```bash
-export SANDBOX_API_KEY=$(openssl rand -hex 16)   # 容器的 API key
-NOETA_AGENT_SANDBOX=1 python -m noeta.agent       # 每会话容器，开启
+```dotenv
+LLM_PROVIDER=auto            # auto = 配好网关就用网关，否则回落到离线 mock
+LLM_BASE_URL=https://your-gateway.example.com/v1
+LLM_API_KEY=sk-…
 ```
 
-用 `NOETA_AGENT_SANDBOX_IMAGE` / `NOETA_AGENT_SANDBOX_MEMORY` / `NOETA_AGENT_SANDBOX_CPUS` 调整镜像与资源上限。全局用户**记忆（memory）**和 **MCP** server 有意留在宿主机。隔离级别是「进程 + 挂载 FS」，而非完整牢笼；mount 隔离级别、idle 容器成本，以及跨机重连的边界见[已知限制](https://initxy.github.io/noeta/zh/operations/limitations/)。
+`LLM_BASE_URL` 是网关根地址 —— provider 会自动追加 `/responses`。用户可选的
+模型菜单在 `apps/noeta-agent/models.json`（id、显示名、推理力度档位）；可选的
+第二网关（`SECONDARY_LLM_BASE_URL` / `SECONDARY_LLM_API_KEY`）服务其中标记
+`"gateway": "secondary"` 的模型。参见
+[`examples/openai-compatible/`](examples/openai-compatible/) 的即抄即用配置，
+以及[配置参考](https://initxy.github.io/noeta/reference/configuration/)的完整键表。
+
+## 打开沙箱
+
+执行**在设计上就是仅沙箱的**：agent 的 shell 和文件副作用只发生在每会话专属的
+Docker 容器里，绝不落在宿主机上 —— 没有宿主机 shell 工具，也没有逐调用审批流程。
+没有 Docker 时平台降级为纯对话模式（shell 执行关闭），零凭证快速开始用的正是
+这个模式。
+
+```dotenv
+SANDBOX_ENABLED=true
+```
+
+整个开关就这一行 —— 它需要本地 Docker daemon，并拉取现成的
+[AIO Sandbox 镜像](https://github.com/agent-infra/sandbox)
+（`ghcr.io/agent-infra/sandbox`）。之后每个会话拿到自己的容器：会话工作区
+以读写方式 bind-mount，空间的知识与 skill 以只读方式挂载，web UI 从同一容器
+实时串流 **Browser / Terminal / Code** 面板。空闲容器分两级回收（先 stop，再
+remove）；恢复的会话会重新挂回自己的容器。
+[`examples/deployment/`](examples/deployment/) 提供 docker-compose 封装。
+
+## 空间给 agent 带来什么
+
+agent 带进会话的一切都以它所在的空间为作用域，在 UI（或
+[HTTP API](https://initxy.github.io/noeta/reference/http-api/)）中管理：
+
+- **Skill** —— 可上传的 `SKILL.md` 包，模型按需激活；平台级内置 skill 由管理员
+  管理，空间 skill 由空间所有者管理。
+- **知识源** —— 同步的 `git_repo` / `local_dir` 内容，只读挂载进沙箱，引用可
+  溯源回原始位置。
+- **agent 记忆** —— 每空间一个基于文件的长期记忆池，由 agent 自己的工具写入，
+  成员可浏览、可编辑。
+- **MCP 连接器** —— 每空间的 MCP server（`http` 或 `stdio`），可按连接器裁剪
+  工具子集；凭证绝不离开服务端。
+- **agent-config** —— 人设 prompt、默认模型与推理力度、知识选择、记忆开关。
+- **模板与工作流** —— 可复用的 prompt 模板，以及节点间自动生成交接文档的多节点
+  工作流会话。
+- **反馈闭环** —— 成员为消息评分；分析 agent 把评分转成建议，所有者决定采纳
+  （写入记忆或作为 skill 补丁）或导出为 markdown 报告。
+
+## 底下的运行时
+
+平台正是它所构建的引擎的官方演练场 —— 每个会话轮次都是一个持久化、事件溯源的
+引擎任务：
+
+- **崩溃安全、精确一次的执行。** 状态从只追加的 event log 里 fold 出来，从不
+  攥在内存里 —— 中途杀掉进程，新进程从准确的那一点恢复，精确一次。
+- **长程任务。** 任务可以挂起数小时甚至数天，等一个人工回答、定时器或
+  sub-task，条件满足时被*精确唤醒一次* —— 睡着时不产生任何成本。
+- **完整审计与 replay。** 每个事件、每次 LLM 调用、每次工具调用、每个
+  token/cache 统计都被记录；compaction 是可逆的叠加层。管理员 trace 视图回答
+  的是某一步*为什么*发生，而不只是*发生了什么*。
+- **Provider 中立。** Anthropic 与 OpenAI 兼容适配器都在同一套内部协议背后
+  —— 记录下来的历史不绑定任何厂商的形态。
+- **确定性的离线模式。** mock provider 加 dev-login 让整套技术栈无网络跑通，
+  因此安装、存储、接线都能在全新 checkout（以及 CI）上验证。
+
+前后端之间的 wire 有意**不是**原始 event log：后端把引擎事件翻译成稳定、带版本
+的 UI 事件词汇表，通过每会话一条 SSE 流下发；replay 靠从日志重新推导
+（`since_seq`）而非存一份投影。原始 envelope 只保留在管理员 trace 面上。
+参见[平台参考](https://initxy.github.io/noeta/reference/noeta-agent/)与
+[server-platform ADR](docs/adr/server-platform-product.md)。
+
+## 诚实的边界
+
+平台的第一个版本把自己的边界写明白：
+
+- **单进程、单实例。** 应用状态是 SQLite；水平扩展是后续工作。
+- **默认认证是 dev-login** —— 任意用户名、签名 cookie。它是开发用的便利；
+  真实部署应把身份系统接入可插拔的 `AuthProvider` 缝。
+- **尚无限流与配额。**
+- **沙箱隔离是「进程 + 挂载 FS」**，不是完整牢笼。
 
 ## 只用你需要的那一层
 
-Noeta 以三个包发布，每一层都会自动拉入它下面的层：
-
 | 包 | 你得到什么 | 类比 |
 | --- | --- | --- |
-| `noeta-runtime` | 纯引擎——event log、fold、调度器、工具、policy。进程内嵌入。 | —— |
+| `noeta-runtime` | 纯引擎 —— event log、fold、调度器、工具、policy。进程内嵌入。 | —— |
 | `noeta-sdk` | 你 import 的客户端门面：`query()`、`Client`、`Options`、`@tool`。 | Claude Agent SDK |
-| `noeta-agent` | 开箱即用的 coding agent + web UI + HTTP/SSE server。 | Claude Code |
+| `noeta-agent` | 多用户 agent 平台：FastAPI 后端 + web SPA + 沙箱宿主。 | —— |
 
-装 `noeta-sdk` 来构建你自己的 agent（`import noeta.sdk`）；装 `noeta-agent` 来运行内置产品。唯一的公开面是 `noeta.sdk`——底下的引擎是一个你从不直接碰的传递依赖。
+装 `noeta-sdk`（`uv pip install noeta-sdk`）来构建你自己的 agent ——
+`import noeta.sdk` 是唯一的公开面，底下的引擎是你从不直接碰的传递依赖。
+运行平台则按上文从 checkout 启动。可运行的 [`examples/`](examples/) 两边都覆盖。
 
 ## 文档
 
-完整文档渲染在 **[initxy.github.io/noeta](https://initxy.github.io/noeta/zh/)**（中文路径）。同样的文件以 `*.zh.md` 与英文一起位于 [`docs/`](docs/) 下，可直接在源码中浏览。
+完整文档渲染在 **[initxy.github.io/noeta](https://initxy.github.io/noeta/)**。同样的文件位于 [`docs/`](docs/) 下，可直接在源码中浏览。
 
 | 层 | 从这里开始 | 什么时候读 |
 | --- | --- | --- |
-| 教程（Tutorials） | [快速开始](https://initxy.github.io/noeta/zh/tutorials/quickstart/) | 你是新手，想让它跑起来。 |
-| 操作指南（How-to） | [配置 provider](https://initxy.github.io/noeta/zh/how-to/configure-provider/) | 你有具体任务要完成。 |
-| 概念（Concepts） | [事件溯源](https://initxy.github.io/noeta/zh/concepts/event-sourcing/) | 你想理解设计。 |
-| 参考（Reference） | [SDK 参考](https://initxy.github.io/noeta/zh/reference/sdk/) | 你需要精确的 API 事实。 |
+| 教程（Tutorials） | [快速开始](https://initxy.github.io/noeta/tutorials/quickstart/) | 你是新手，想让它跑起来。 |
+| 操作指南（How-to） | [使用平台](https://initxy.github.io/noeta/how-to/use-the-coding-agent/) | 你有具体任务要完成。 |
+| 概念（Concepts） | [事件溯源](https://initxy.github.io/noeta/concepts/event-sourcing/) | 你想理解设计。 |
+| 参考（Reference） | [平台参考](https://initxy.github.io/noeta/reference/noeta-agent/) · [HTTP API](https://initxy.github.io/noeta/reference/http-api/) · [配置](https://initxy.github.io/noeta/reference/configuration/) · [SDK](https://initxy.github.io/noeta/reference/sdk/) | 你需要精确的事实。 |
 
-更深的内容：[架构概览](https://initxy.github.io/noeta/zh/architecture/overview/)、[故障排查](https://initxy.github.io/noeta/zh/operations/troubleshooting/)，以及记录每个跨模块决策的 [ADR](https://initxy.github.io/noeta/zh/adr/)（术语表在 [`CONTEXT.md`](CONTEXT.md)）。
-
-## 状态与范围
-
-Noeta 处于早期 pre-1.0 预览阶段。它能跑、有测试、核心稳定——但一些边界是有意划定的：
-
-- **并发与恢复已交付，但有边界。** 单机多 worker 池、基于共享 Postgres 的多主机协调（lease fencing、数据库时钟过期）、持久 exactly-once wake，以及步骤中途崩溃恢复，如今都能用。仍有边界：多主机 fencing 仅限 Postgres（SQLite / 内存仍为单机），且崩溃步骤的副作用是被拎出来供人审查、而非自动回滚——见[已知限制](https://initxy.github.io/noeta/zh/operations/limitations/)。
-- **Human-in-the-loop 已端到端** —— 审批、结构化提问、定时器 wake 都可用；缺的是任务开始等待人工时的带外通知（webhook / 收件箱）。
-- **每会话沙箱是可选项** —— 默认关闭（需要本地 Docker daemon + AIO 镜像）。它为每个会话起一个容器、给 agent 一个容器内浏览器 + 实时预览，并隔离「进程 + 挂载 FS」，而非完整牢笼；warm pool / pause-resume 和跨机重连是后续工作（面向分布式 / NAS 的 provider 缝已经预留好）。
-- **web 应用是一个小型 Vite MPA**，使用原生 ES 模块；预览阶段不计划迁移到任何框架。
+更深的内容：[架构概览](https://initxy.github.io/noeta/architecture/overview/)、
+[故障排查](https://initxy.github.io/noeta/operations/troubleshooting/)，以及记录每个跨模块决策缘由的
+[ADR](https://initxy.github.io/noeta/adr/)（术语表在 [`CONTEXT.md`](CONTEXT.md)）。
 
 ## 贡献
 
-开发设置和仓库布局在 [`CONTRIBUTING.md`](CONTRIBUTING.md)；工作约定（人类或 agent）从根目录的 [`AGENTS.md`](AGENTS.md) 入口开始。
+开发设置和仓库布局在 [`CONTRIBUTING.md`](CONTRIBUTING.md)；工作约定（人类或
+agent）从根目录的 [`AGENTS.md`](AGENTS.md) 入口开始。`make check` 是本地 CI
+门禁；`make e2e-web` 运行可选的浏览器 e2e 套件。
 
 ## 许可证
 
-Apache License 2.0—— 见 [`LICENSE`](LICENSE)。
+Apache License 2.0 —— 见 [`LICENSE`](LICENSE)。

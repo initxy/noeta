@@ -1,78 +1,53 @@
 # Connect MCP servers
 
-**Goal:** register remote (stdio or HTTP) MCP servers so Noeta can use
-their tools, or bundle your own tools into an in-process MCP server.
+**Goal:** give a space's agent access to MCP (Model Context Protocol)
+servers, or bundle your own tools into an in-process MCP server for an SDK
+agent.
 
-**Before you start:** you have a working Noeta installation. You know
-what MCP (Model Context Protocol) is and have an MCP server you want to
-connect.
+**Before you start:** you have a running platform (or a working SDK setup)
+and an MCP server you want to connect.
 
-## Option A: remote MCP via the coding agent
+## Option A: per-space connectors on the platform
 
-For `python -m noeta.agent`, MCP servers are registered in the host's
-connector store at `~/.noeta/mcp_servers.json`:
+MCP connectors are **space-scoped** configuration, managed on the space's
+MCP page (or over the API). There is no global registry file — the retired
+`~/.noeta/mcp_servers.json` mechanism is gone; each space carries its own
+connector set in the application database.
 
-```json
-{
-  "servers": {
-    "github": {
-      "type": "http",
-      "url": "https://mcp.github.com/mcp",
-      "headers": {
-        "Authorization": "Bearer ghp_…"
-      }
-    },
-    "filesystem": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"],
-      "env": {}
-    }
-  }
-}
-```
+Register a connector under an alias, with one of two transports:
 
-Each entry has an `alias` (the key — `github`, `filesystem`) that the
-agent uses to reference the server. The `type` is `"http"` or `"stdio"`.
+- **`http`** — a URL plus optional headers (bearer tokens etc.).
+- **`stdio`** — a command, args, and env for a local server process.
 
-Credentials (header values, env vars) are stored host-side and **never**
-travel in request bodies or appear in the `/mcp/servers` discovery
-response (which returns credential-scrubbed entries).
+Then, per connector:
 
-### Enable MCP per session
+- **Enable / disable it.** Enabled connectors are resolved into the agent
+  host **every turn** — no session restart needed; their tools appear to the
+  model as `mcp__<alias>__<tool>`.
+- **Restrict the tool subset.** Discover the server's full tool menu and
+  keep only the tools you want exposed (`null` = all).
 
-Registered servers are not automatically used. You enable them per
-session via the `enabled_mcp` field when creating a task:
+Credentials (header values, env values) are stored server-side and **never**
+echoed back — listing connectors returns credential-scrubbed entries. Only
+the space owner can manage connectors; members can see them.
 
-```bash
-# Via HTTP
-curl -X POST http://127.0.0.1:<port>/tasks \
-  -H "Content-Type: application/json" \
-  -d '{"goal": "Read the repo README", "enabled_mcp": ["github"]}'
-```
-
-Or in the web UI, select MCP servers from the dropdown when creating a
-new session.
-
-When enabled, the MCP server's tools appear as
-`mcp__<alias>__<tool_name>` in the agent's tool allow-list.
-
-### Manage servers via HTTP
-
-The backend exposes CRUD endpoints for the connector store:
+Over HTTP (all under `/api/v1/spaces/{space_id}/mcp`):
 
 | Route | What it does |
 | --- | --- |
-| `GET /mcp/servers` | List registered servers (credentials scrubbed) |
-| `POST /mcp/servers` | Register a new server |
-| `PUT /mcp/servers/{alias}` | Merge-edit an existing server |
-| `DELETE /mcp/servers/{alias}` | Remove a server |
-| `GET /mcp/servers/{alias}/tools` | Discover the server's tool menu |
-| `GET /mcp/servers/{alias}/prompts` | Discover the server's prompts |
-| `GET /mcp/servers/{alias}/resources` | Discover the server's resources |
+| `GET /servers` | List connectors (credentials scrubbed) |
+| `POST /servers` | Register a connector (`alias`, `type`, transport fields, optional `tools` subset) |
+| `PUT /servers/{alias}` | Merge-edit an existing connector |
+| `PATCH /servers/{alias}` | Enable / disable |
+| `DELETE /servers/{alias}` | Remove |
+| `GET /servers/{alias}/tools` | Discover the tool menu |
+| `PUT /servers/{alias}/tools` | Set the enabled tool subset (`null` = all) |
+| `GET /servers/{alias}/prompts` · `/resources` | Discover prompts / resources |
 
-See [HTTP API reference](../reference/http-api.md) for the full request
-and response shapes.
+Discovery is HTTP-only: a `stdio` connector's discovery answers 400 (the
+server does not spawn operator-configured subprocesses from a management
+GET); a failed connect/handshake answers 502 — check the URL, headers, and
+that the MCP server is actually running.
 
 ## Option B: in-process SDK MCP server
 
@@ -112,23 +87,10 @@ The tools appear as `mcp__my-tools__echo` — same naming convention as
 remote MCP servers, but they run in-process with no subprocess or
 network round-trip.
 
-## Verify the connection
-
-After registering a server, verify the tool discovery works:
-
-```bash
-curl http://127.0.0.1:<port>/mcp/servers/github/tools
-```
-
-You should see the server's tool menu as a JSON array. If you get a 502,
-the server is registered but the connection or handshake failed — check
-the URL, headers, and that the MCP server is actually running.
-
 ## See also
 
 - [Build custom tools](build-custom-tools.md) — define tools with `@tool`
   and bundle them into SDK MCP servers
-- [Coding agent reference](../reference/noeta-agent.md) — env config for
-  MCP
-- [HTTP API reference](../reference/http-api.md) — MCP route details
+- [HTTP API reference](../reference/http-api.md#mcp-connectors) — request
+  and response shapes
 - `examples/mcp_server.py` — full in-process MCP example
