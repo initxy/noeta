@@ -164,6 +164,16 @@ class ContextState:
     thinking_by_call_id: dict[str, list[ThinkingBlock]] = field(
         default_factory=dict
     )
+    # Anchored content placement (docs/adr/anchored-content-placement.md):
+    # ``"<kind>:<name>" → rolling-history length at activation``, written ONLY
+    # by fold's activation handlers (``ContextContentRecorded`` / legacy
+    # ``SkillContentRecorded``), first-write-wins. The Composer reads it to
+    # decide placement: an anchor at or before the first assistant message
+    # keeps the resident in ``semi_stable``; a later anchor renders it inside
+    # the dynamic suffix at that point. Defaults empty so an old snapshot
+    # (missing the key) rehydrates anchor-less — those residents stay in
+    # ``semi_stable``, byte-equal to the pre-anchor layout ('optional + last').
+    content_anchors: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass

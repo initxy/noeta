@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from typing import Mapping
 
 from noeta.context.composer import RenderedSkills
 from noeta.context.content_channel import ContentKindSpec, ContentRenderer
@@ -41,6 +42,7 @@ __all__ = [
     "build_instructions_renderer",
     "instructions_content_hash",
     "instructions_content_kind",
+    "instructions_content_kind_from",
     "render_instructions_text",
 ]
 
@@ -133,24 +135,55 @@ def build_instructions_renderer(
 def instructions_content_kind(
     snapshot: InstructionsSnapshot,
 ) -> ContentKindSpec:
+    """The single-file instructions kind (the root ``NOETA.md``/``AGENTS.md``).
+
+    Sugar over :func:`instructions_content_kind_from` with a one-entry
+    mapping — byte-identical rendering for the root-only host.
+    """
+    return instructions_content_kind_from({snapshot.name: snapshot})
+
+
+def instructions_content_kind_from(
+    snapshots: Mapping[str, InstructionsSnapshot],
+) -> ContentKindSpec:
     """The instructions kind's registry item — the WHOLE integration surface.
 
     Register this next to ``skill_content_kind`` / ``memory_content_kind``
-    in a :class:`ContentChannelRegistry` and the instructions file lives
-    in the semi-stable segment, with its ``content_hash`` recorded through
-    the generic ``(kind, name)`` seam under the ``evolving`` policy its
-    recordings carry.
+    in a :class:`ContentChannelRegistry`. ``snapshots`` maps resident name →
+    preloaded snapshot: the root file under its basename, plus (discovery
+    mode, docs/adr/anchored-content-placement.md) every discovered
+    subdirectory file under its workspace-relative path. The mapping is
+    deliberately allowed to be MUTABLE and shared: the discovery hook and the
+    resume preloader add entries at *tool/step* time (the impure band), and
+    the renderer — still a pure function at compose time — only ever looks
+    names up in memory. A name active in the ledger but missing from the
+    mapping (vanished file on resume) renders nothing: the ``evolving``
+    policy already tolerates drift, and a degraded preload may only omit.
     """
-    content_hash = instructions_content_hash(snapshot)
+
+    def _render(names: list[str]) -> RenderedSkills:
+        messages: list[Message] = []
+        for name in names:
+            snapshot = snapshots.get(name)
+            if snapshot is None or not snapshot.text.strip():
+                continue
+            messages.append(
+                Message(
+                    role="user",
+                    content=[TextBlock(text=render_instructions_text(snapshot))],
+                )
+            )
+        return RenderedSkills(messages=messages, selected_skills=[])
 
     def _hashes(name: str) -> tuple[str, str] | None:
-        if name != snapshot.name:
+        snapshot = snapshots.get(name)
+        if snapshot is None:
             return None
-        return (INSTRUCTIONS_VERSION, content_hash)
+        return (INSTRUCTIONS_VERSION, instructions_content_hash(snapshot))
 
     return ContentKindSpec(
         kind=INSTRUCTIONS_KIND,
-        renderer=build_instructions_renderer(snapshot),
+        renderer=_render,
         hashes=_hashes,
         policy=INSTRUCTIONS_DRIFT_POLICY,
     )

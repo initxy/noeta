@@ -25,7 +25,7 @@ interface — rule of two. Product wiring is handled by the same
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Callable, MutableMapping, Optional
 
 from noeta.context.instructions import (
     INSTRUCTIONS_DRIFT_POLICY,
@@ -36,14 +36,20 @@ from noeta.context.instructions import (
 )
 from noeta.core.fold import apply_event
 from noeta.protocols.content_store import ContentStore
+from noeta.protocols.decisions import ToolCall
 from noeta.protocols.event_log import EventLogWriter
 from noeta.protocols.events import ContextContentRecordedPayload
 from noeta.protocols.task import Task
+from noeta.protocols.tool import ToolResult
+from noeta.tools.fs import WorkspaceRoot, path_within
 from noeta.tools.fs.exec_env import ExecEnv
 
 
 __all__ = [
     "DEFAULT_INSTRUCTIONS_FILENAMES",
+    "build_instructions_discovery",
+    "build_instructions_preloader",
+    "discover_instructions",
     "load_instructions",
     "record_instructions",
 ]
@@ -114,6 +120,142 @@ def _read_one(
     if not raw.strip():
         return None
     return InstructionsSnapshot(name=path.name, text=raw)
+
+
+def discover_instructions(
+    workspace_root: Path,
+    resolved_file: Path,
+    *,
+    active: tuple[str, ...] = (),
+    exec_env: Optional[ExecEnv] = None,
+) -> list[InstructionsSnapshot]:
+    """Instruction files between ``resolved_file``'s directory and the root.
+
+    The `read`-triggered discovery walk (docs/adr/anchored-content-placement.md):
+    for every directory strictly BELOW ``workspace_root`` on the path to
+    ``resolved_file`` — shallowest first, so a parent package's conventions
+    render before a child's — the first existing, non-empty candidate of
+    :data:`DEFAULT_INSTRUCTIONS_FILENAMES` wins, exactly the root loader's
+    precedence. The workspace root itself is excluded: the root file is the
+    pre-loop loader's job (and its resident name is the bare basename, not a
+    relative path).
+
+    Snapshot names are POSIX workspace-relative paths (``src/pkg/AGENTS.md``)
+    — unique per directory, and rendered verbatim as the
+    ``<workspace-instructions source=…>`` label. A directory either of whose
+    candidate names is already in ``active`` is skipped without probing (it
+    already contributed a resident this session). ``resolved_file`` outside
+    ``workspace_root`` yields nothing — discovery is fenced to the workspace
+    even though reads are not (write authorization is not instruction
+    authority). Read faults degrade to "no file", same as the root loader.
+    """
+    try:
+        rel = resolved_file.relative_to(workspace_root)
+    except ValueError:
+        return []
+    found: list[InstructionsSnapshot] = []
+    directory = workspace_root
+    # rel.parts[:-1] are the directories strictly below the root, shallowest
+    # first (the last part is the file itself).
+    for part in rel.parts[:-1]:
+        directory = directory / part
+        names = [
+            (directory / filename).relative_to(workspace_root).as_posix()
+            for filename in DEFAULT_INSTRUCTIONS_FILENAMES
+        ]
+        if any(name in active for name in names):
+            continue
+        for filename, name in zip(DEFAULT_INSTRUCTIONS_FILENAMES, names):
+            snapshot = _read_one(directory / filename, exec_env)
+            if snapshot is not None:
+                found.append(InstructionsSnapshot(name=name, text=snapshot.text))
+                break
+    return found
+
+
+def build_instructions_discovery(
+    workspace: WorkspaceRoot,
+    snapshots: MutableMapping[str, InstructionsSnapshot],
+    *,
+    exec_env: Optional[ExecEnv] = None,
+) -> Callable[[Task, ToolCall, ToolResult], list[ContextContentRecordedPayload]]:
+    """The post-tool content-discovery seam for the instructions kind.
+
+    Wired into the Engine as ``content_discovery`` when the host enables
+    ``instructions_discovery``. After a successful ``read`` whose path
+    resolves INSIDE the workspace (component-wise containment — the fence
+    the reads themselves deliberately do not have), it walks
+    :func:`discover_instructions`, parks each new snapshot in the shared
+    ``snapshots`` mapping (so the composer's renderer can render the name the
+    moment fold activates it), and returns the activation payloads for
+    ``handle_tool_calls`` to gate first-only and emit. Everything degrades to
+    ``[]`` — a discovery fault may only omit context, never fail the call.
+    """
+
+    def _discover(
+        task: Task, call: ToolCall, result: ToolResult
+    ) -> list[ContextContentRecordedPayload]:
+        if call.tool_name != "read" or not result.success:
+            return []
+        target = call.arguments.get("path")
+        if not isinstance(target, str) or not target:
+            return []
+        try:
+            resolved = workspace.canonicalise(target)
+        except Exception:  # noqa: BLE001 — discovery may only omit, never raise.
+            return []
+        if not path_within(resolved, workspace.root):
+            return []
+        active = task.state.active_content.get(INSTRUCTIONS_KIND, ())
+        payloads: list[ContextContentRecordedPayload] = []
+        for snapshot in discover_instructions(
+            workspace.root, resolved, active=tuple(active), exec_env=exec_env
+        ):
+            snapshots[snapshot.name] = snapshot
+            payloads.append(
+                ContextContentRecordedPayload(
+                    kind=INSTRUCTIONS_KIND,
+                    name=snapshot.name,
+                    version=INSTRUCTIONS_VERSION,
+                    content_hash=instructions_content_hash(snapshot),
+                    policy=INSTRUCTIONS_DRIFT_POLICY,
+                )
+            )
+        return payloads
+
+    return _discover
+
+
+def build_instructions_preloader(
+    workspace_dir: Path,
+    snapshots: MutableMapping[str, InstructionsSnapshot],
+    *,
+    exec_env: Optional[ExecEnv] = None,
+) -> Callable[[Task], None]:
+    """The resume preload for discovered instruction files.
+
+    Wired into the Engine as ``content_preloader`` (called before each step's
+    compose — the impure band, so the composer's no-disk red line holds). A
+    fresh process resumes with only the root snapshot in the mapping; every
+    instructions name the ledger says is active but the mapping lacks is
+    re-read as ``workspace_dir / name`` (the root basename and the discovered
+    relative paths both resolve this way). A vanished or emptied file leaves
+    the name unrendered — the ``evolving`` policy tolerates drift, and a
+    degraded preload may only omit. No-op when nothing is missing, so the
+    live path pays a set-difference per step and nothing else.
+    """
+
+    def _preload(task: Task) -> None:
+        for name in task.state.active_content.get(INSTRUCTIONS_KIND, ()):
+            if name in snapshots:
+                continue
+            snapshot = _read_one(workspace_dir / name, exec_env)
+            if snapshot is not None:
+                snapshots[name] = InstructionsSnapshot(
+                    name=name, text=snapshot.text
+                )
+
+    return _preload
 
 
 def record_instructions(

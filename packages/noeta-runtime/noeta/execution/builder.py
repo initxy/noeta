@@ -42,11 +42,18 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 from noeta.context.composer import _COMPOSER_VERSION, ThreeSegmentComposer
 from noeta.context.content_channel import ContentChannelRegistry, ContentKindSpec
 from noeta.context.environment import EnvironmentSnapshot, environment_content_kind
-from noeta.context.instructions import InstructionsSnapshot, instructions_content_kind
+from noeta.context.instructions import (
+    InstructionsSnapshot,
+    instructions_content_kind_from,
+)
 from noeta.context.memory import MemoryEntries, memory_content_kind
 from noeta.core.hooks import HookManager
 from noeta.execution.environment import load_environment
-from noeta.execution.instructions import load_instructions
+from noeta.execution.instructions import (
+    build_instructions_discovery,
+    build_instructions_preloader,
+    load_instructions,
+)
 from noeta.execution.memory import DEFAULT_GLOBAL_MEMORY_DIR, load_memory_store
 from noeta.execution.skills import (
     build_skill_composer,
@@ -312,6 +319,15 @@ class SessionInputs:
     #: verbatim to :class:`Engine` (which validates it). A resuming host must
     #: wire the same value so the rebuilt messages match the recording.
     tool_output_inline_limit: Optional[int] = None
+    #: Anchored-content seams (docs/adr/anchored-content-placement.md), built
+    #: only when ``instructions_discovery`` is on. ``content_discovery`` is the
+    #: post-tool ``(task, call, result) → activation payloads`` hook the host
+    #: wires into ``Engine(content_discovery=…)``; ``content_preloader`` is the
+    #: per-step ``(task) → None`` resume re-read the host wires into
+    #: ``Engine(content_preloader=…)``. Both ``None`` by default so every
+    #: existing caller is byte-identical.
+    content_discovery: Optional[Any] = None
+    content_preloader: Optional[Any] = None
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +380,10 @@ class _BuildSpec:
     global_memory_dir: Optional[Path]
     instructions_enabled: bool
     instructions_file: Optional[Path]
+    #: `read`-triggered discovery of subdirectory instruction files
+    #: (docs/adr/anchored-content-placement.md). Default off — byte-identical
+    #: for every existing host. Independent of ``instructions_enabled``.
+    instructions_discovery: bool
     mcp_tools_override: Optional[dict[str, Tool]]
     custom_tools: Optional[dict[str, Tool]]
     app_gateway: Optional[AppPreviewGateway]
@@ -421,6 +441,14 @@ class _ToolAssembly:
     memory_store: Optional[MemoryStore] = None
     memory_entries: MemoryEntries = ()
     instructions_snapshot: Optional[InstructionsSnapshot] = None
+    #: The shared name → snapshot mapping the instructions kind renders from
+    #: (root file under its basename; discovered subdirectory files under
+    #: their workspace-relative paths). Deliberately MUTABLE and shared with
+    #: the discovery hook + resume preloader, which add entries at tool/step
+    #: time — the renderer itself only ever looks up in memory.
+    instructions_snapshots: dict[str, InstructionsSnapshot] = field(
+        default_factory=dict
+    )
     environment_snapshot: Optional[EnvironmentSnapshot] = None
     skill_script_tools: frozenset[str] = frozenset()
     skill_scripts: frozenset[tuple[str, str]] = frozenset()
@@ -533,6 +561,13 @@ def _stage_instructions(spec: _BuildSpec, asm: _ToolAssembly) -> None:
         override_path=spec.instructions_file,
         exec_env=spec.exec_env,
     )
+    if asm.instructions_snapshot is not None:
+        # Seed the shared mapping the kind renders from: the root file lives
+        # under its basename (resident name unchanged → byte-identical
+        # rendering); discovered files join later under relative paths.
+        asm.instructions_snapshots[asm.instructions_snapshot.name] = (
+            asm.instructions_snapshot
+        )
 
 
 def _stage_environment(spec: _BuildSpec, asm: _ToolAssembly) -> None:
@@ -789,11 +824,14 @@ def _build_content_registry(
         content_kinds.append(memory_content_kind(asm.memory_entries))
     # Instructions (third resident): append AFTER memory so existing
     # semi_stable byte layout is unchanged for memory-only sessions.
-    # ``instructions_snapshot is None`` → no kind registered (zero
-    # footprint — same as never adding the feature).
-    if asm.instructions_snapshot is not None:
+    # Registered when a root snapshot loaded (rendering byte-identical to the
+    # single-snapshot kind — same resident name, same bytes) OR when
+    # discovery is armed (an empty mapping renders nothing until the first
+    # discovered activation, zero footprint). Neither → no kind registered,
+    # same as never adding the feature.
+    if asm.instructions_snapshots or spec.instructions_discovery:
         content_kinds.append(
-            instructions_content_kind(asm.instructions_snapshot)
+            instructions_content_kind_from(asm.instructions_snapshots)
         )
     # Environment (fourth resident): append LAST so the semi_stable byte
     # layout is unchanged for sessions that never activate it. Always
@@ -953,6 +991,12 @@ def build_session_inputs(
     global_memory_dir: Optional[Path] = None,
     instructions_enabled: bool = False,
     instructions_file: Optional[Path] = None,
+    #: `read`-triggered discovery of subdirectory ``NOETA.md``/``AGENTS.md``
+    #: (docs/adr/anchored-content-placement.md). Default off ⇒ byte-identical
+    #: for every existing caller. When on, ``SessionInputs`` additionally
+    #: carries the ``content_discovery`` / ``content_preloader`` seams the
+    #: host wires into the Engine.
+    instructions_discovery: bool = False,
     mcp_tools_override: Optional[dict[str, Tool]] = None,
     custom_tools: Optional[dict[str, Tool]] = None,
     #: The host's live preview gateway. When set, the ``open_app``
@@ -1078,6 +1122,7 @@ def build_session_inputs(
         global_memory_dir=global_memory_dir,
         instructions_enabled=instructions_enabled,
         instructions_file=instructions_file,
+        instructions_discovery=instructions_discovery,
         mcp_tools_override=mcp_tools_override,
         custom_tools=custom_tools,
         app_gateway=app_gateway,
@@ -1177,6 +1222,20 @@ def build_session_inputs(
 
     hooks = _build_guards(spec, asm)
 
+    # Anchored-content seams (docs/adr/anchored-content-placement.md): armed
+    # only by ``instructions_discovery``. Both close over the SAME snapshot
+    # mapping the composer's instructions kind renders from, so a discovered
+    # (or resume-preloaded) file is renderable the moment its activation folds.
+    content_discovery = None
+    content_preloader = None
+    if instructions_discovery:
+        content_discovery = build_instructions_discovery(
+            asm.workspace, asm.instructions_snapshots, exec_env=exec_env
+        )
+        content_preloader = build_instructions_preloader(
+            workspace_dir, asm.instructions_snapshots, exec_env=exec_env
+        )
+
     return SessionInputs(
         tools=tools,
         composer=composer,
@@ -1189,4 +1248,6 @@ def build_session_inputs(
         instructions_snapshot=asm.instructions_snapshot,
         environment_snapshot=asm.environment_snapshot,
         tool_output_inline_limit=tool_output_inline_limit,
+        content_discovery=content_discovery,
+        content_preloader=content_preloader,
     )

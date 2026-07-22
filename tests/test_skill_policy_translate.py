@@ -427,8 +427,9 @@ def _run_to_terminal(engine, disp, task) -> None:
 
 def test_engine_skill_invocation_full_chain(tmp_path: Path) -> None:
     """Model calls `skill(alpha)` → patch lands → active_skills contains
-    `alpha` → next compose semi-stable segment has body text →
-    ContextPlan.selected_skills contains `alpha`."""
+    `alpha` → next compose renders the body ANCHORED in the dynamic suffix
+    (docs/adr/anchored-content-placement.md: a mid-task activation no longer
+    rewrites semi_stable) → ContextPlan.selected_skills contains `alpha`."""
     ws = _make_ws_with_skill(tmp_path)
     engine, disp, cs, log = _build_engine_for_tests(
         ws, [_skill_call("alpha"), _end("done")]
@@ -465,19 +466,37 @@ def test_engine_skill_invocation_full_chain(tmp_path: Path) -> None:
     assert "alpha" in plan.selected_skills
 
     # 4. the composer, given the post-patch task, renders the skill body
-    #    into the semi-stable segment.
+    #    ANCHORED inside the dynamic suffix — semi_stable stays empty (the
+    #    activation was mid-task, so the head segments must not move).
     post_task = fold(log, cs, tid)
     view = engine._composer.compose(post_task)
     semi = view.segments[1]
     assert semi.name == "semi_stable"
-    assert len(semi.content) >= 1
-    skill_msg = semi.content[0]
-    assert isinstance(skill_msg, Message)
-    assert skill_msg.role == "user"
-    skill_block = skill_msg.content[0]
-    assert isinstance(skill_block, TextBlock)
-    assert skill_block.text.startswith("Activated skill: alpha")
+    assert semi.content == []
+    dynamic = view.segments[2]
+    assert dynamic.name == "dynamic_suffix"
+    skill_msgs = [
+        m
+        for m in dynamic.content
+        if m.role == "user"
+        and m.content
+        and isinstance(m.content[0], TextBlock)
+        and m.content[0].text.startswith("Activated skill: alpha")
+    ]
+    assert len(skill_msgs) == 1
+    skill_block = skill_msgs[0].content[0]
     assert "Body of the alpha skill." in skill_block.text
+    # The body renders AFTER the activating turn's tool-role ack, never
+    # between an assistant tool_use and its results.
+    idx_skill = dynamic.content.index(skill_msgs[0])
+    idx_tool = max(
+        i for i, m in enumerate(dynamic.content) if m.role == "tool"
+    )
+    assert idx_skill > 0
+    assert dynamic.content[idx_skill - 1].role != "assistant" or not any(
+        isinstance(b, ToolUseBlock) for b in dynamic.content[idx_skill - 1].content
+    )
+    assert idx_skill != idx_tool
 
 
 def test_engine_skill_invocation_no_tool_execution_events(tmp_path: Path) -> None:
@@ -747,11 +766,15 @@ def test_e2e_presets_flag_full_chain(
     assert block.success is True
     assert "Skill 'bravo' loaded" in block.output
 
-    # 4. next-turn semi-stable segment carries the skill body.
+    # 4. next-turn View carries the skill body ANCHORED in the dynamic
+    #    suffix (mid-task activation — docs/adr/anchored-content-placement.md);
+    #    semi_stable stays untouched.
     view = engine._composer.compose(folded)
     semi = next(s for s in view.segments if s.name == "semi_stable")
+    assert semi.content == []
+    dynamic = next(s for s in view.segments if s.name == "dynamic_suffix")
     joined = "\n".join(
-        b.text for m in semi.content if isinstance(m, Message)
+        b.text for m in dynamic.content if isinstance(m, Message)
         for b in m.content if isinstance(b, TextBlock)
     )
     assert "Activated skill: bravo" in joined
@@ -859,15 +882,23 @@ def test_e2e_preloop_skill_coexists_with_midloop_skill(
         e for e in log.read(tid) if e.type == "SkillContentRecorded"
     ]
 
-    # Semi-stable segment carries BOTH bodies.
+    # Placement splits by anchor (docs/adr/anchored-content-placement.md):
+    # the pre-loop "alpha" keeps its semi_stable seat; the mid-loop "bravo"
+    # renders anchored inside the dynamic suffix.
     view = engine._composer.compose(folded)
     semi = next(s for s in view.segments if s.name == "semi_stable")
-    joined = "\n".join(
+    semi_joined = "\n".join(
         b.text for m in semi.content if isinstance(m, Message)
         for b in m.content if isinstance(b, TextBlock)
     )
-    assert "Body of the alpha skill." in joined
-    assert "Body of the bravo skill." in joined
+    assert "Body of the alpha skill." in semi_joined
+    assert "Body of the bravo skill." not in semi_joined
+    dynamic = next(s for s in view.segments if s.name == "dynamic_suffix")
+    dyn_joined = "\n".join(
+        b.text for m in dynamic.content if isinstance(m, Message)
+        for b in m.content if isinstance(b, TextBlock)
+    )
+    assert "Body of the bravo skill." in dyn_joined
 
 
 # ---------------------------------------------------------------------------

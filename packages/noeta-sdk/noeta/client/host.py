@@ -483,6 +483,14 @@ class SdkHost(GenericEngineResolver):
     #: event).
     instructions_enabled: bool = False
     instructions_file: Optional[Path] = None
+    #: `read`-triggered discovery of subdirectory ``NOETA.md``/``AGENTS.md``
+    #: files (docs/adr/anchored-content-placement.md). Like
+    #: ``instructions_enabled`` this is workspace environment material, not
+    #: agent identity. Default False ⇒ byte-identical for every existing
+    #: host. When True, a successful ``read`` inside the workspace activates
+    #: the instruction files between the read file's directory and the
+    #: workspace root; they render anchored at the point of discovery.
+    instructions_discovery: bool = False
     # Skill-tool enforcement level (off/warn/enforce); "off" by default, no
     # intervention.
     skill_tool_enforcement: SkillEnforcementMode = "off"
@@ -1629,6 +1637,7 @@ class SdkHost(GenericEngineResolver):
             global_memory_dir=self.global_memory_dir,
             instructions_enabled=self.instructions_enabled,
             instructions_file=self.instructions_file,
+            instructions_discovery=self.instructions_discovery,
             # When live MCP tools were resolved for this turn, they are passed as
             # the override. ``None`` override ⇒ the builder merges no MCP tools —
             # so resume, which passes empty aliases, gets the same tool set as
@@ -1722,6 +1731,11 @@ class SdkHost(GenericEngineResolver):
             background_subagent_launcher=(
                 self._background_subagents if policy_wrapper is not None else None
             ),
+            # Anchored-content seams (docs/adr/anchored-content-placement.md):
+            # ``None`` unless the host armed ``instructions_discovery``, so
+            # every existing construction is byte-identical.
+            content_discovery=inputs.content_discovery,
+            content_preloader=inputs.content_preloader,
         )
 
     def _build_orchestration_engine(
