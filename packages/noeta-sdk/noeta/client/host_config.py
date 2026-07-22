@@ -199,6 +199,18 @@ class HostConfig:
     #: configured; a host runtime injection, never part of any agent identity.
     sandbox_backend_factory: Optional["BackendFactory"] = None
     sandbox_browser_factory: Optional["BrowserBackendFactory"] = None
+    #: Per-session sandbox opt-out for **execution tiers**: given
+    #: ``(session_root_task_id, workspace_dir)`` return whether to provision a
+    #: container for THAT session. ``False`` ⇒ no container: the driver records
+    #: no ``exec_env_ref`` and the build falls back to ``LocalExecEnv`` + the
+    #: host ``WorkspaceRoot`` fence (the ``local`` tier), reachable even while a
+    #: ``sandbox_provider`` is configured for other sessions. ``None`` (default)
+    #: ⇒ today's behaviour, byte-identical (a configured provider provisions
+    #: every session). Consulted at the top of ``NoetaHost.allocate_exec_env``;
+    #: a host runtime injection, never part of any agent identity. Must be cheap,
+    #: total, and deterministic for a given session (a resumed/reclaimed session
+    #: must resolve the same answer).
+    sandbox_session_policy: Optional[Callable[[str, Optional[str]], bool]] = None
 
     # -- memory store addressing --------------------------------------------
     #: Explicit memory-dir override forwarded to the SdkHost; ``None`` (default)

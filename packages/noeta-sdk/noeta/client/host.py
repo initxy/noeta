@@ -623,6 +623,16 @@ class SdkHost(GenericEngineResolver):
     # schemas — and the stable prefix — are unchanged.
     sandbox_backend_factory: Optional[BackendFactory] = None
     sandbox_browser_factory: Optional[BrowserBackendFactory] = None
+    # Per-session sandbox opt-out (execution tiers): ``(session_root_task_id,
+    # workspace_dir) -> provision?``. Consulted at the top of
+    # ``allocate_exec_env``; ``False`` ⇒ this session gets NO container (return
+    # ``None``), so the driver records no ``exec_env_ref`` and the build falls
+    # back to ``LocalExecEnv`` + the host ``WorkspaceRoot`` fence — the ``local``
+    # execution tier, reachable even while a sandbox provider is configured for
+    # other sessions. ``None`` (default) ⇒ today's behaviour, byte-identical
+    # (every session provisions when a provider is present). A host runtime
+    # injection, never part of any agent identity.
+    sandbox_session_policy: Optional[Callable[[str, Optional[str]], bool]] = None
     # The cache key has a ``workspace`` dimension
     # (the bound **absolute path**, or ``None`` for the host default) and a
     # ``provider`` dimension — so two sessions on different directories or
@@ -905,6 +915,14 @@ class SdkHost(GenericEngineResolver):
         SAME container. ``None`` on the local path (no sandbox configured).
         Addressing only — the API key rides on the wire (D5)."""
         if self._sandbox is None:
+            return None
+        # Execution-tier opt-out (D-C): a per-session policy may decline a
+        # container for THIS session even when a provider is configured. ``False``
+        # ⇒ no ref recorded ⇒ the build falls back to ``LocalExecEnv`` (the
+        # ``local`` tier). ``None`` policy = provision as before.
+        if self.sandbox_session_policy is not None and not self.sandbox_session_policy(
+            session_root_id, workspace
+        ):
             return None
         return self._sandbox.allocate(session_root_id, host_workspace=workspace)
 
