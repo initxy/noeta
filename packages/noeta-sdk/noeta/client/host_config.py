@@ -114,6 +114,15 @@ class HostConfig:
     process-level fs write policy (``"dry_run"`` stages a proposed diff without
     touching disk — the safe default; ``"apply"`` performs real writes); the
     Client maps it to the edit tools' ``FsWriteMode``.
+
+    ``write_roots`` answers "may this task write HERE, outside its workspace?"
+    — ``task_id -> extra writable directories``, consulted per call by ``edit``
+    / ``write`` / ``apply_patch``. ``None`` (default) keeps the single-root
+    wall: an out-of-workspace write simply fails, which is the only honest
+    answer for a host with nobody to ask. A host that *can* ask (the noeta-agent
+    product suspends the call for the owner's ruling and remembers it as a
+    durable grant) wires this so the approved directory is open when the paused
+    call resumes. Reads are never fenced and never consult it.
     """
 
     # -- durable storage (all-or-none) -------------------------------------
@@ -123,6 +132,9 @@ class HostConfig:
 
     # -- host runtime injections -------------------------------------------
     app_gateway: Optional[AppPreviewGateway] = None
+    #: ``task_id -> the directories this task may write outside its workspace``
+    #: (see the class docstring). A wiring concern, never part of identity.
+    write_roots: Optional[Callable[[str], Sequence[str]]] = None
     mcp_server_resolver: Optional[
         Callable[[str], Optional[McpAnyServerSpec]]
     ] = None

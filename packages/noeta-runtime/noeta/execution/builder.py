@@ -87,7 +87,13 @@ from noeta.protocols.tool import Tool
 from noeta.providers.catalog import provider_family, resolve_alias, spec_for
 from noeta.tools.app import AppPreviewGateway, build_app_tools
 from noeta.tools.browser import BrowserBackend, build_browser_tools
-from noeta.tools.fs import FsWriteMode, ShellMode, WorkspaceRoot, build_fs_tools
+from noeta.tools.fs import (
+    FsWriteMode,
+    ShellMode,
+    WorkspaceRoot,
+    WriteRootsResolver,
+    build_fs_tools,
+)
 from noeta.tools.fs.exec_env import ExecEnv
 from noeta.tools.mcp import MCP_PREFIX, McpConfigError
 from noeta.tools.memory import MemoryStore, build_memory_tools
@@ -339,6 +345,7 @@ class _BuildSpec:
     shell_mode: ShellMode
     shell_allowlist: Sequence[Mapping[str, Any]]
     write_path_globs: tuple[str, ...]
+    write_roots: Optional[WriteRootsResolver]
     skills_dir: Optional[Path]
     builtin_skills_dirs: Sequence[Path]
     global_skills_dir: Optional[Path]
@@ -450,6 +457,7 @@ def _stage_fs_pack(spec: _BuildSpec, asm: _ToolAssembly) -> None:
         shell_mode=spec.shell_mode,
         shell_allowlist=spec.shell_allowlist,
         write_path_globs=spec.write_path_globs,
+        write_roots=spec.write_roots,
         exec_env=spec.exec_env,
     )
     # The web pack (``webfetch``) is a built-in but not an
@@ -585,23 +593,13 @@ def _stage_skill_scripts(spec: _BuildSpec, asm: _ToolAssembly) -> None:
         asm.tools[script_tool.name] = script_tool
 
 
-def _stage_read_fence(spec: _BuildSpec, asm: _ToolAssembly) -> None:
-    """Widen the ``read`` tool's containment fence to the skill roots.
-
-    Skill resources are read with the ordinary ``read`` tool
-    (the renderer hands the model each skill's absolute base directory).
-    Widen ``read``'s containment seam to the skill roots so it can reach
-    the global / built-in tiers outside the workspace. ``skill_roots`` is
-    internal config (not in the schema), so the tool set / stable hash is
-    unchanged and live + resume stay byte-equal; the same registry rebuilt
-    on resume yields the same roots. No-op when ``read`` is filtered out
-    (an agent whitelist without it) or no skill has a resolvable root.
-    """
-    read_tool = asm.tools.get("read")
-    if read_tool is not None:
-        skill_roots = resolve_skill_roots(asm.registry, exec_env=spec.exec_env)
-        if skill_roots:
-            read_tool.skill_roots = skill_roots
+# NOTE: there was a ``_stage_read_fence`` here that widened ``read``'s
+# containment fence to the skill roots, so the model could read a skill's
+# bundled references (the renderer hands it each skill's absolute base
+# directory). ``read`` is now unfenced outright — an absolute path is read
+# where it points — so the special case dissolved into the general rule and
+# the stage was removed. ``resolve_skill_roots`` stays: the renderer still
+# needs the base directories to write that line.
 
 
 def _stage_browser(spec: _BuildSpec, asm: _ToolAssembly) -> None:
@@ -693,7 +691,6 @@ _TOOL_PIPELINE: tuple[Callable[[_BuildSpec, _ToolAssembly], None], ...] = (
     _stage_environment,
     _stage_skills_registry,
     _stage_skill_scripts,
-    _stage_read_fence,
     _stage_browser,
     _stage_mcp,
     _stage_custom,
@@ -913,6 +910,14 @@ def build_session_inputs(
     #: path outside the globs. The host derives this from the spec's
     #: ``metadata["write_path_globs"]`` (e.g. ``plans/*.md``).
     write_path_globs: tuple[str, ...] = (),
+    #: Host authorization for writes OUTSIDE the workspace:
+    #: ``task_id -> the extra directories that task may write``, consulted
+    #: per call by ``edit`` / ``write`` / ``apply_patch``. ``None`` (default)
+    #: keeps the single-root wall. Deliberately a resolver, not a fixed
+    #: tuple: the product grows this set mid-session (the owner approves an
+    #: out-of-workspace write while the task is paused), and rebuilding the
+    #: tool set to take it would move the stable prefix.
+    write_roots: Optional[WriteRootsResolver] = None,
     skills_dir: Optional[Path] = None,
     # The lower skill tiers below the workspace-local pack:
     # built-in skills first, then the global ``~/.noeta/skills``. Both are
@@ -1054,6 +1059,7 @@ def build_session_inputs(
         shell_mode=shell_mode,
         shell_allowlist=shell_allowlist,
         write_path_globs=write_path_globs,
+        write_roots=write_roots,
         skills_dir=skills_dir,
         builtin_skills_dirs=builtin_skills_dirs,
         global_skills_dir=global_skills_dir,

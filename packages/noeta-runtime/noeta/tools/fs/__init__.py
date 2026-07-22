@@ -28,7 +28,12 @@ from __future__ import annotations
 from typing import Any, Mapping, Optional, Sequence
 
 from noeta.protocols.tool import Tool
-from noeta.tools.fs._workspace import WorkspaceEscape, WorkspaceRoot
+from noeta.tools.fs._workspace import (
+    WorkspaceEscape,
+    WorkspaceRoot,
+    WriteRootsResolver,
+    path_within,
+)
 from noeta.tools.fs.exec_env import ExecEnv, LocalExecEnv
 from noeta.tools.fs.edit import (
     WRITE_FILE_MAX_BYTES,
@@ -80,8 +85,10 @@ __all__ = [
     "WorkspaceEscape",
     "WorkspaceRoot",
     "WriteFileTool",
+    "WriteRootsResolver",
     "build_fs_tools",
     "is_skill_script_resource",
+    "path_within",
 ]
 
 
@@ -92,6 +99,7 @@ def build_fs_tools(
     shell_mode: ShellMode = ShellMode.ALLOWLIST,
     shell_allowlist: Sequence[Mapping[str, Any]] = (),
     write_path_globs: tuple[str, ...] = (),
+    write_roots: Optional[WriteRootsResolver] = None,
     exec_env: Optional[ExecEnv] = None,
 ) -> dict[str, Tool]:
     """Build the fs tool pack sharing one ``WorkspaceRoot`` + write/shell modes.
@@ -110,6 +118,15 @@ def build_fs_tools(
     directory). It only affects ``write``; ``edit`` / ``apply_patch`` ignore
     the whitelist.
 
+    ``write_roots`` is the host's authorization seam for writes OUTSIDE the
+    workspace: ``task_id -> the directories this task may also write``,
+    consulted per call by ``edit`` / ``write`` / ``apply_patch``. ``None``
+    (default) keeps the single-root wall — a write that resolves outside the
+    workspace fails, full stop. A host that can *ask someone* (the noeta-agent
+    product pauses the call for the owner's ruling and remembers the answer as
+    a durable grant) passes a resolver here so the approved directory is open
+    on the resumed call. Reads are never fenced and ignore this entirely.
+
     ``exec_env`` is the execution backend the fs / shell tools route their real
     IO through. ``None`` (default) ⇒ each tool builds its own ``LocalExecEnv``
     (byte-identical to the pre-seam host behaviour); a sandbox backend
@@ -126,14 +143,19 @@ def build_fs_tools(
         ReadFileTool(workspace=workspace, exec_env=env),
         GlobTool(workspace=workspace, exec_env=env),
         GrepTool(workspace=workspace, exec_env=env),
-        ReplaceTextTool(workspace=workspace, mode=mode, exec_env=env),
+        ReplaceTextTool(
+            workspace=workspace, mode=mode, write_roots=write_roots, exec_env=env
+        ),
         WriteFileTool(
             workspace=workspace,
             mode=mode,
+            write_roots=write_roots,
             allowed_path_globs=write_path_globs,
             exec_env=env,
         ),
-        ApplyPatchTool(workspace=workspace, mode=mode, exec_env=env),
+        ApplyPatchTool(
+            workspace=workspace, mode=mode, write_roots=write_roots, exec_env=env
+        ),
     ]
     if shell_mode is not ShellMode.OFF:
         tools.append(

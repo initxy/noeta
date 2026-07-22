@@ -547,6 +547,10 @@ class SdkHost(GenericEngineResolver):
     #   * extra_content_kinds: custom ContentKindSpec channels appended after
     #     the built-in residents (the ONLY composer extension seam).
     policy_override: Optional[Callable[[Any], Policy]] = None
+    #: Host authorization for out-of-workspace writes (HostConfig.write_roots):
+    #: ``task_id -> extra writable directories``, forwarded verbatim into the
+    #: fs pack. ``None`` ⇒ the single-root wall.
+    write_roots: Optional[Callable[[str], Sequence[str]]] = None
     extra_guards: tuple[Guard, ...] = ()
     extra_content_kinds: tuple[ContentKindSpec, ...] = ()
     # The agent-layer base pool root for **bare sessions** (no
@@ -1581,6 +1585,7 @@ class SdkHost(GenericEngineResolver):
             # A spec carrying metadata["write_path_globs"]
             # gets its ``write`` built path-restricted (e.g. plans/*.md); other specs ⇒ ().
             write_path_globs=_spec_write_path_globs(spec),
+            write_roots=self.write_roots,
             skills_dir=self.skills_dir,
             builtin_skills_dirs=self.builtin_skills_dirs,
             global_skills_dir=self.global_skills_dir,

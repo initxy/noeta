@@ -273,6 +273,7 @@ class Client:
             # to absent, so a bare HostConfig() leaves the tool list / wire
             # byte-identical to today.
             app_gateway=hc.app_gateway,
+            write_roots=hc.write_roots,
             # Sandbox execution backend (D2 host config). ``None`` (default) ⇒
             # the local host; when set, the SdkHost builds a sandbox manager and
             # routes every session's fs / shell IO into the container. ``exec_env``

@@ -115,3 +115,71 @@ def test_resolve_rejects_non_string(tmp_path: Path) -> None:
     root = _make_root(tmp_path)
     with pytest.raises(WorkspaceEscape):
         root.resolve(None)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Authorized write roots — the host's widening seam (extra_roots)
+# ---------------------------------------------------------------------------
+
+
+def _neighbour(tmp_path: Path) -> Path:
+    other = tmp_path / "neighbour"
+    other.mkdir()
+    return Path(os.path.realpath(other))
+
+
+def test_extra_root_admits_the_authorized_directory(tmp_path: Path) -> None:
+    root = _make_root(tmp_path)
+    other = _neighbour(tmp_path)
+    with pytest.raises(WorkspaceEscape):
+        root.resolve(str(other / "a.txt"))
+    widened = root.with_extra_roots([other])
+    assert widened.resolve(str(other / "a.txt")) == other / "a.txt"
+
+
+def test_extra_root_covers_subdirectories(tmp_path: Path) -> None:
+    # Authorizing a directory authorizes everything beneath it — the whole
+    # point of ruling on a directory instead of on each file.
+    root = _make_root(tmp_path).with_extra_roots([_neighbour(tmp_path)])
+    deep = tmp_path / "neighbour" / "src" / "nested" / "a.py"
+    assert root.resolve(str(deep)) == Path(os.path.realpath(deep.parent.parent.parent)) / "src" / "nested" / "a.py"
+
+
+def test_extra_root_does_not_admit_a_string_prefix_sibling(tmp_path: Path) -> None:
+    # ``/…/neighbour-old`` starts with ``/…/neighbour`` as a STRING but is a
+    # different directory. A prefix check would leak it; containment is
+    # component-wise.
+    root = _make_root(tmp_path).with_extra_roots([_neighbour(tmp_path)])
+    sibling = tmp_path / "neighbour-old"
+    sibling.mkdir()
+    with pytest.raises(WorkspaceEscape):
+        root.resolve(str(sibling / "a.txt"))
+
+
+def test_extra_root_does_not_admit_an_unrelated_directory(tmp_path: Path) -> None:
+    root = _make_root(tmp_path).with_extra_roots([_neighbour(tmp_path)])
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    with pytest.raises(WorkspaceEscape):
+        root.resolve(str(elsewhere / "a.txt"))
+
+
+def test_extra_root_symlink_into_it_is_resolved_then_admitted(tmp_path: Path) -> None:
+    # Containment is checked AFTER realpath, so a link is judged by where it
+    # lands, not by where it sits — in both directions.
+    root = _make_root(tmp_path)
+    other = _neighbour(tmp_path)
+    (other / "a.txt").write_text("x")
+    os.symlink(other / "a.txt", root.root / "link.txt")
+    with pytest.raises(WorkspaceEscape):
+        root.resolve("link.txt")
+    assert root.with_extra_roots([other]).resolve("link.txt") == other / "a.txt"
+
+
+def test_relative_display_falls_back_to_absolute_outside_the_workspace(
+    tmp_path: Path,
+) -> None:
+    root = _make_root(tmp_path)
+    other = _neighbour(tmp_path)
+    assert root.relative(root.root / "a.txt") == "a.txt"
+    assert root.relative(other / "a.txt") == (other / "a.txt").as_posix()

@@ -88,6 +88,7 @@ from noeta.context.content_channel import ContentKindSpec
 # them here would freeze them into the user-facing API. The official product
 # reaches them through a pinned import-linter exemption instead (see the
 # execution-environment-seam ADR, "SDK-adapter export surface").
+from noeta.tools.fs import path_within
 from noeta.tools.fs.exec_env import ExecEnv
 from noeta.tools.browser import BrowserBackend
 from noeta.protocols.event_log import Subscriber as Observer
@@ -234,6 +235,10 @@ __all__ = [
     "Tool",
     "ToolContext",
     "ToolResult",
+    # The containment predicate the fs write fence uses, published so a host
+    # deciding what to put in HostConfig.write_roots asks the question exactly
+    # the way the fence will answer it (component-wise, never string-prefix).
+    "path_within",
     "LLMProvider",
     "StreamingProvider",
     "StreamDelta",

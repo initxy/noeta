@@ -45,9 +45,9 @@ from noeta.tools._limits import (
 )
 from noeta.tools.descriptions import load_tool_description
 from noeta.tools.fs._workspace import (
-    WorkspaceEscape,
     WorkspaceRoot,
-    resolve_or_error,
+    path_within,
+    resolve_anywhere,
     tool_error,
 )
 from noeta.tools.fs.exec_env import ExecEnv, LocalExecEnv
@@ -331,17 +331,11 @@ class ReadFileTool:
     """
 
     workspace: WorkspaceRoot
-    #: read-only directories outside the workspace this tool may
-    #: also read: the skill packs (``~/.noeta/skills`` / built-in) whose
-    #: absolute ``Base directory for this skill:`` line the renderer hands
-    #: the model. Injected at wiring time (``build_session_inputs``) from
-    #: ``resolve_skill_roots(registry)``; canonicalised (realpath). Internal
-    #: config, NOT in ``input_schema`` — the tool's provider-facing schema /
-    #: stable hash is unchanged, so the prompt's tool list is unaffected.
-    #: Default empty ⇒ behaves exactly like the single-root wall.
-    skill_roots: tuple[Path, ...] = ()
     #: execution backend for the file read (local host by default, or a
-    #: sandbox container). Path *resolution* stays on ``workspace``.
+    #: sandbox container). Path *resolution* stays on ``workspace``, which
+    #: for ``read`` only anchors relative paths — reads are unfenced, so an
+    #: absolute path is read where it points (a neighbouring checkout, a
+    #: skill pack's bundled reference). See ``_workspace.resolve_anywhere``.
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "read"
     description: str = field(default=load_tool_description("read"))
@@ -361,11 +355,8 @@ class ReadFileTool:
 
     def _display(self, resolved: Path) -> str:
         """Workspace-relative POSIX path, or the absolute POSIX path for a
-        read that landed under a skill root outside the workspace."""
-        try:
-            return self.workspace.relative(resolved)
-        except ValueError:
-            return resolved.as_posix()
+        read that landed outside the workspace."""
+        return self.workspace.relative(resolved)
 
     def invoke(self, arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         path = require_str(
@@ -375,8 +366,7 @@ class ReadFileTool:
         if isinstance(path, ToolResult):
             return path
         resolved = resolve_readable_file(
-            self.workspace, self.skill_roots, self.name, path,
-            exec_env=self.exec_env,
+            self.workspace, self.name, path, exec_env=self.exec_env,
         )
         if isinstance(resolved, ToolResult):
             return resolved
@@ -502,10 +492,14 @@ class ReadFileTool:
 
 
 def _looks_relative(pattern: str) -> bool:
-    """Patterns must be workspace-relative; anchor / / abs / .. is rejected.
+    """Patterns must be relative to the searched root; anchor / / abs / .. is
+    rejected.
 
-    ``Path.glob`` itself supports absolute patterns on POSIX, but a coding
-    agent's pattern is meant to be scoped to the workspace.
+    ``Path.glob`` itself supports absolute patterns on POSIX, but an absolute
+    pattern is *unbounded*: ``/**/*.py`` walks the whole filesystem, and the
+    match cap applies only after the walk has already happened. Scoping is the
+    ``path`` argument's job (a named tree, bounded by construction), never the
+    pattern's — the same division ``grep`` already draws.
     """
     if not pattern:
         return False
@@ -518,10 +512,16 @@ def _looks_relative(pattern: str) -> bool:
 
 @dataclass
 class GlobTool:
-    """Match a workspace-relative glob pattern (``Path.glob`` semantics).
+    """Match a glob pattern under one directory (``Path.glob`` semantics).
 
-    Results are workspace-relative POSIX strings, sorted for
-    determinism, capped to ``_MAX_GLOB_MATCHES``. ``**`` is supported.
+    Optional ``path`` chooses the tree to search — workspace-relative, or
+    absolute to search outside it, resolved unfenced exactly like ``grep``'s
+    (reads are observation; see ``_workspace.resolve_anywhere``). ``pattern``
+    stays relative to that root, which is what keeps every walk bounded.
+
+    Results are POSIX strings (workspace-relative when inside it, absolute
+    when not), sorted for determinism, capped to ``_MAX_GLOB_MATCHES``. ``**``
+    is supported.
     """
 
     workspace: WorkspaceRoot
@@ -532,7 +532,10 @@ class GlobTool:
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",
-            "properties": {"pattern": {"type": "string"}},
+            "properties": {
+                "pattern": {"type": "string"},
+                "path": {"type": "string"},
+            },
             "required": ["pattern"],
             "additionalProperties": False,
         }
@@ -547,22 +550,34 @@ class GlobTool:
             return pattern
         if not _looks_relative(pattern):
             return tool_error(
-                self.name, "pattern must be workspace-relative (no leading '/' / '..')"
+                self.name,
+                "pattern must be relative to the searched directory (no leading "
+                "'/' / '..') — use 'path' to search another tree",
             )
+
+        path_arg = arguments.get("path")
+        if path_arg is None or path_arg == "":
+            path_arg = "."
+        if not isinstance(path_arg, str):
+            return tool_error(self.name, "'path' must be a string")
+        root = resolve_anywhere(self.workspace, self.name, path_arg)
+        if isinstance(root, ToolResult):
+            return root
+
         try:
-            raw_matches = list(self.exec_env.glob(self.workspace.root, pattern))
+            raw_matches = list(self.exec_env.glob(root, pattern))
         except (OSError, ValueError) as exc:
             return tool_error(self.name, f"glob failed: {exc}")
 
         relpaths: list[str] = []
         for match in raw_matches:
-            # Containment safety: the workspace may contain symlinks; a
-            # glob result whose realpath escapes is dropped.
-            try:
-                resolved = self.workspace.resolve(
-                    os.path.relpath(match, self.workspace.root)
-                )
-            except WorkspaceEscape:
+            # Containment safety: the searched tree may contain symlinks; a
+            # match whose real path escapes the tree that was asked about is
+            # dropped. Checked against the search root rather than the
+            # workspace, so the property generalises to an out-of-workspace
+            # search instead of discarding every result of one.
+            resolved = self.workspace.canonicalise(os.fspath(match))
+            if not path_within(resolved, root):
                 continue
             relpaths.append(self.workspace.relative(resolved))
         relpaths.sort()
@@ -638,7 +653,7 @@ class GrepTool:
             path_arg = "."
         if not isinstance(path_arg, str):
             return tool_error(self.name, "'path' must be a string")
-        resolved = resolve_or_error(self.workspace, self.name, path_arg)
+        resolved = resolve_anywhere(self.workspace, self.name, path_arg)
         if isinstance(resolved, ToolResult):
             return resolved
 
@@ -697,16 +712,16 @@ class GrepTool:
         files: list[Path] = []
         for entry in it:
             try:
+                # Symlinks are skipped: the walk stays within one physical
+                # tree, so a link cannot make the same file appear twice (or
+                # send an rglob around a cycle). Reads are unfenced, so this
+                # is a traversal rule, not a containment one — a caller who
+                # wants the link's target greps the target directly.
                 if self.exec_env.is_file(entry) and not self.exec_env.is_symlink(entry):
-                    # Containment guard against any glob/rglob result that
-                    # is a symlink to outside (skipped) — non-symlinks
-                    # under a contained root are already safe.
-                    self.workspace.resolve(
-                        os.path.relpath(entry, self.workspace.root)
-                    )
                     files.append(entry)
-            except (OSError, WorkspaceEscape):
+            except OSError:
                 continue
-        # Deterministic order: sorted by workspace-relative POSIX path.
+        # Deterministic order: sorted by workspace-relative POSIX path
+        # (absolute POSIX for a search rooted outside the workspace).
         files.sort(key=lambda p: self.workspace.relative(p))
         return files

@@ -565,3 +565,117 @@ def test_edit_summary_bounded_for_long_path(tmp_path: Path) -> None:
     assert result.success is True
     # Summary embeds the path — it must stay bounded.
     assert len(result.summary.encode("utf-8")) < 512
+
+
+# ---------------------------------------------------------------------------
+# Out-of-workspace writes — the host authorization seam (write_roots)
+# ---------------------------------------------------------------------------
+
+
+def _authorized_ctx(store: InMemoryContentStore) -> ToolContext:
+    """A ctx carrying the task id the write_roots resolver is keyed by."""
+    return ToolContext(artifact_store=store, metadata={"task_id": "task-1"})
+
+
+def test_write_outside_the_workspace_is_refused_without_authorization(
+    tmp_path: Path,
+) -> None:
+    ctx, workspace, _ = _ctx_and_workspace(tmp_path)
+    other = tmp_path / "neighbour"
+    other.mkdir()
+    tool = WriteFileTool(workspace=workspace, mode=FsWriteMode.APPLY)
+    result = tool.invoke({"path": str(other / "a.txt"), "content": "x"}, ctx)
+    assert result.success is False
+    assert "outside workspace" in result.summary
+    assert not (other / "a.txt").exists()
+
+
+def test_write_outside_the_workspace_lands_once_authorized(tmp_path: Path) -> None:
+    ctx, workspace, store = _ctx_and_workspace(tmp_path)
+    other = tmp_path / "neighbour"
+    other.mkdir()
+    tool = WriteFileTool(
+        workspace=workspace,
+        mode=FsWriteMode.APPLY,
+        write_roots=lambda task_id: [str(other)] if task_id == "task-1" else [],
+    )
+    result = tool.invoke(
+        {"path": str(other / "a.txt"), "content": "x"}, _authorized_ctx(store)
+    )
+    assert result.success is True
+    assert (other / "a.txt").read_text() == "x"
+    # No relative form outside the workspace ⇒ the absolute path is displayed.
+    assert result.output["path"] == (other / "a.txt").resolve().as_posix()
+
+
+def test_authorization_is_keyed_by_task(tmp_path: Path) -> None:
+    # The resolver answers per task, so one task's grant is not another's.
+    ctx, workspace, store = _ctx_and_workspace(tmp_path)
+    other = tmp_path / "neighbour"
+    other.mkdir()
+    tool = WriteFileTool(
+        workspace=workspace,
+        mode=FsWriteMode.APPLY,
+        write_roots=lambda task_id: [str(other)] if task_id == "task-1" else [],
+    )
+    foreign = ToolContext(artifact_store=store, metadata={"task_id": "task-2"})
+    result = tool.invoke({"path": str(other / "a.txt"), "content": "x"}, foreign)
+    assert result.success is False
+    assert not (other / "a.txt").exists()
+
+
+def test_authorization_failure_denies_rather_than_grants(tmp_path: Path) -> None:
+    # A resolver that raises must not open the fence — the degenerate case
+    # fails closed.
+    ctx, workspace, store = _ctx_and_workspace(tmp_path)
+    other = tmp_path / "neighbour"
+    other.mkdir()
+
+    def boom(task_id: str):
+        raise RuntimeError("grant store is down")
+
+    tool = WriteFileTool(
+        workspace=workspace, mode=FsWriteMode.APPLY, write_roots=boom
+    )
+    result = tool.invoke(
+        {"path": str(other / "a.txt"), "content": "x"}, _authorized_ctx(store)
+    )
+    assert result.success is False
+    assert not (other / "a.txt").exists()
+
+
+def test_authorization_without_a_task_id_denies(tmp_path: Path) -> None:
+    ctx, workspace, _ = _ctx_and_workspace(tmp_path)
+    other = tmp_path / "neighbour"
+    other.mkdir()
+    tool = WriteFileTool(
+        workspace=workspace,
+        mode=FsWriteMode.APPLY,
+        write_roots=lambda task_id: [str(other)],
+    )
+    result = tool.invoke({"path": str(other / "a.txt"), "content": "x"}, ctx)
+    assert result.success is False
+
+
+def test_edit_outside_the_workspace_respects_authorization(tmp_path: Path) -> None:
+    ctx, workspace, store = _ctx_and_workspace(tmp_path)
+    other = tmp_path / "neighbour"
+    other.mkdir()
+    target = other / "a.txt"
+    target.write_text("hello world", encoding="utf-8")
+    unauthorized = ReplaceTextTool(workspace=workspace, mode=FsWriteMode.APPLY)
+    assert unauthorized.invoke(
+        {"path": str(target), "old": "world", "new": "there"}, ctx
+    ).success is False
+    assert target.read_text() == "hello world"
+
+    tool = ReplaceTextTool(
+        workspace=workspace,
+        mode=FsWriteMode.APPLY,
+        write_roots=lambda task_id: [str(other)],
+    )
+    result = tool.invoke(
+        {"path": str(target), "old": "world", "new": "there"}, _authorized_ctx(store)
+    )
+    assert result.success is True
+    assert target.read_text() == "hello there"

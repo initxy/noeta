@@ -40,7 +40,7 @@ import fnmatch
 import hashlib
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
 
 from noeta.protocols.errors import ContentNotFound
 from noeta.protocols.tool import ToolContext, ToolResult
@@ -62,6 +62,8 @@ from noeta.tools.fs._diff import (
 )
 from noeta.tools.fs._workspace import (
     WorkspaceRoot,
+    WriteRootsResolver,
+    authorized_workspace,
     resolve_or_error,
     tool_error,
 )
@@ -147,6 +149,9 @@ class ReplaceTextTool:
 
     workspace: WorkspaceRoot
     mode: FsWriteMode = FsWriteMode.DRY_RUN
+    #: Host authorization for writes OUTSIDE the workspace, resolved per call
+    #: (see ``_workspace.authorized_workspace``). ``None`` ⇒ single-root wall.
+    write_roots: Optional[WriteRootsResolver] = None
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "edit"
     description: str = field(default=load_tool_description("edit"))
@@ -180,8 +185,9 @@ class ReplaceTextTool:
         if not isinstance(new, str):
             return tool_error(self.name, "requires string 'new'")
         replace_all = bool(arguments.get("replace_all"))
+        workspace = authorized_workspace(self.workspace, self.write_roots, ctx)
         resolved = resolve_existing_file(
-            self.workspace, self.name, path, exec_env=self.exec_env
+            workspace, self.name, path, exec_env=self.exec_env
         )
         if isinstance(resolved, ToolResult):
             return resolved
@@ -206,7 +212,7 @@ class ReplaceTextTool:
                 self.name, f"'old' matches {count} times in {path!r}; must be unique"
             )
         after = before.replace(old, new) if replace_all else before.replace(old, new, 1)
-        rel = self.workspace.relative(resolved)
+        rel = workspace.relative(resolved)
         diff = compute_diff(before, after, rel)
         diff_ref = ctx.artifact_store.put(
             diff.encode("utf-8"), media_type=DIFF_MEDIA_TYPE
@@ -280,6 +286,9 @@ class WriteFileTool:
 
     workspace: WorkspaceRoot
     mode: FsWriteMode = FsWriteMode.DRY_RUN
+    #: Host authorization for writes OUTSIDE the workspace, resolved per call
+    #: (see ``_workspace.authorized_workspace``). ``None`` ⇒ single-root wall.
+    write_roots: Optional[WriteRootsResolver] = None
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "write"
     description: str = field(default=load_tool_description("write"))
@@ -331,7 +340,8 @@ class WriteFileTool:
                 self.name,
                 f"content {len(body)}B exceeds {WRITE_FILE_MAX_BYTES}B cap",
             )
-        resolved = resolve_or_error(self.workspace, self.name, path)
+        workspace = authorized_workspace(self.workspace, self.write_roots, ctx)
+        resolved = resolve_or_error(workspace, self.name, path)
         if isinstance(resolved, ToolResult):
             return resolved
         # path guard: when this write was built with a path
@@ -339,7 +349,7 @@ class WriteFileTool:
         # outside it BEFORE the read-first check or any IO. The check runs on
         # the canonical workspace-relative form so ``..``/symlink escapes are
         # already collapsed by ``resolve``.
-        rel_guard = self.workspace.relative(resolved)
+        rel_guard = workspace.relative(resolved)
         if not self._path_allowed(rel_guard):
             allowed = ", ".join(self.allowed_path_globs)
             return tool_error(
@@ -385,7 +395,7 @@ class WriteFileTool:
                     self.name, f"parent directory not found for {path!r}"
                 )
 
-        rel = self.workspace.relative(resolved)
+        rel = workspace.relative(resolved)
         diff = compute_diff(before_text, content, rel)
         diff_ref = ctx.artifact_store.put(
             diff.encode("utf-8"), media_type=DIFF_MEDIA_TYPE

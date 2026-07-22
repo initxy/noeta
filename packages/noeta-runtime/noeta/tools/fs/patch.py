@@ -53,7 +53,12 @@ from noeta.tools.fs._diff import (
     diff_stat_counts,
     file_hash,
 )
-from noeta.tools.fs._workspace import WorkspaceEscape, WorkspaceRoot
+from noeta.tools.fs._workspace import (
+    WorkspaceEscape,
+    WorkspaceRoot,
+    WriteRootsResolver,
+    authorized_workspace,
+)
 from noeta.tools.fs.exec_env import ExclusiveCreateError, ExecEnv, LocalExecEnv
 from noeta.tools.fs.edit import (
     FsWriteMode,
@@ -135,6 +140,9 @@ class ApplyPatchTool:
 
     workspace: WorkspaceRoot
     mode: FsWriteMode = FsWriteMode.DRY_RUN
+    #: Host authorization for writes OUTSIDE the workspace, resolved per call
+    #: (see ``_workspace.authorized_workspace``). ``None`` ⇒ single-root wall.
+    write_roots: Optional[WriteRootsResolver] = None
     #: file-IO backend for read / stat / replace-write / rollback (local
     #: host by default). The exclusive-``create`` fd path stays inline (its
     #: granular fd-level recovery is local-only; sandbox create lands in a
@@ -207,8 +215,9 @@ class ApplyPatchTool:
         groups: dict[str, list[_Target]] = {}
         order: list[str] = []                 # exact-key first-appearance order
         collide_owner: dict[str, str] = {}    # fold/NFC key -> owning exact key
+        workspace = authorized_workspace(self.workspace, self.write_roots, ctx)
         for i, edit in enumerate(edits):
-            tgt = self._resolve_target(i, edit)
+            tgt = self._resolve_target(workspace, i, edit)
             if isinstance(tgt, ToolResult):
                 return tgt
             exact = str(tgt.resolved)
@@ -251,8 +260,12 @@ class ApplyPatchTool:
 
     # -- Phase A helpers -------------------------------------------------
 
-    def _resolve_target(self, i: int, edit: Any) -> "_Target | ToolResult":
-        """Validate op/path and resolve to a workspace path (no file read)."""
+    def _resolve_target(
+        self, workspace: WorkspaceRoot, i: int, edit: Any
+    ) -> "_Target | ToolResult":
+        """Validate op/path and resolve it against ``workspace`` — this call's
+        fence, i.e. the workspace plus any host-authorized write roots (no
+        file read)."""
         if not isinstance(edit, dict):
             return _err(f"edit #{i} must be an object")
         op = edit.get("op")
@@ -264,12 +277,12 @@ class ApplyPatchTool:
         if _b(path) > _PATH_MAX_BYTES:
             return _err(f"edit #{i}: path exceeds {_PATH_MAX_BYTES} UTF-8 bytes")
         try:
-            resolved = self.workspace.resolve(path)
+            resolved = workspace.resolve(path)
         except WorkspaceEscape as exc:
             return _err(f"edit #{i}: {exc}")
         return _Target(
             i=i, edit=edit, resolved=resolved,
-            rel=self.workspace.relative(resolved),
+            rel=workspace.relative(resolved),
         )
 
     def _plan_group(self, members: list["_Target"]) -> "_Planned | ToolResult":
