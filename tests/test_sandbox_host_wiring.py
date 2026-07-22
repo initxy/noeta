@@ -630,6 +630,71 @@ def test_seed_build_shares_the_sandbox_backend(
 # --------------------------------------------------------------------------- #
 
 
+# --------------------------------------------------------------------------- #
+# execution tiers — sandbox_session_policy per-session opt-out (D-C / task 12)
+# --------------------------------------------------------------------------- #
+
+
+def test_sandbox_policy_false_declines_container_and_falls_back_local(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from noeta.tools.fs.exec_env import LocalExecEnv
+
+    monkeypatch.setattr(sandbox_mod, "_default_backend_factory", _recording_factory())
+    provider = FakeProvider()
+    seen: list[tuple[str, Optional[str]]] = []
+
+    def policy(root_id: str, workspace: Optional[str]) -> bool:
+        seen.append((root_id, workspace))
+        return False  # the local tier: no container for this session
+
+    host = _make_host(
+        tmp_path, sandbox_provider=provider, sandbox_session_policy=policy
+    )
+    assert host._sandbox is not None  # a provider IS configured
+    ref = host.allocate_exec_env("task-root", str(tmp_path / "ws"))
+    assert ref is None  # policy declined → no ref welded
+    assert provider.allocated == []  # provider.allocate was never called
+    assert seen == [("task-root", str(tmp_path / "ws"))]
+    # The build with no ref falls back to the local backend + host root fence.
+    engine = _build(host, task_id="task-root", exec_env_ref=None)
+    read = engine._tools["read"]
+    assert isinstance(read.exec_env, LocalExecEnv)
+    assert read.workspace.lexical is False
+
+
+def test_sandbox_policy_true_provisions_as_usual(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sandbox_mod, "_default_backend_factory", _recording_factory())
+    provider = FakeProvider(workdir="/workspace")
+    host = _make_host(
+        tmp_path,
+        sandbox_provider=provider,
+        sandbox_session_policy=lambda root_id, ws: True,
+    )
+    ref = host.allocate_exec_env("task-root", str(tmp_path / "ws"))
+    assert ref is not None
+    assert provider.allocated  # provisioned exactly as without a policy
+    engine = _build(host, task_id="task-root", exec_env_ref=ref)
+    assert engine._tools["read"].exec_env.base_url == "http://sbx-1:8080"
+
+
+def test_sandbox_policy_absent_is_byte_identical(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # No policy (None) ⇒ today's behaviour: a configured provider provisions.
+    monkeypatch.setattr(sandbox_mod, "_default_backend_factory", _recording_factory())
+    provider = FakeProvider()
+    host = _make_host(tmp_path, sandbox_provider=provider)
+    assert host.sandbox_session_policy is None
+    assert host.allocate_exec_env("task-root", str(tmp_path / "ws")) is not None
+    assert provider.allocated
+
+
 def test_client_threads_provider_and_reaps_on_shutdown(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

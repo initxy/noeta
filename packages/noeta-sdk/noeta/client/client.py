@@ -284,6 +284,10 @@ class Client:
             sandbox_exec_preamble=hc.sandbox_exec_preamble,
             sandbox_backend_factory=hc.sandbox_backend_factory,
             sandbox_browser_factory=hc.sandbox_browser_factory,
+            # Execution-tier per-session sandbox opt-out (D-C). ``None`` (default)
+            # ⇒ provision as before; a policy returning False keeps a session on
+            # the local backend even while a provider is configured.
+            sandbox_session_policy=hc.sandbox_session_policy,
             # Memory store addressing (issue #53): the host-level roots plus the
             # per-task resolver seam for multi-tenant hosts. All default to
             # absent, so a bare HostConfig() keeps the SDK global default root —

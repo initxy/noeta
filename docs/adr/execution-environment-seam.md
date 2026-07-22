@@ -404,3 +404,45 @@ runtime toggle buys nothing.
 3. **Move the SDK adapters into noeta-sdk.** Rejected: drags `agent-sandbox`
    (+ `volcengine-python-sdk`) into the library dependency set; D1 keeps the
    dependency in the app layer.
+
+## Execution tiers (2026-07-21): a per-session sandbox opt-out; `local` becomes reachable
+
+The v2 per-session path made the sandbox eager: whenever a
+`sandbox_provider` was configured, `InteractionDriver.seed_start` pre-minted a
+root task id and called `allocate_exec_env`, so *every* session got a
+container. That left the `LocalExecEnv` path — the fallback this ADR always
+kept for a build with no `exec_env_ref` — unreachable in practice whenever the
+sandbox was on. The product wants three **execution tiers** per scope
+(`none | local | sandbox`, see `teammate-workspace-product.md` D13), so `local`
+must be reachable *while a provider is configured for other sessions*.
+
+**Decision.** Add exactly one host-config seam:
+`HostConfig.sandbox_session_policy: Optional[Callable[[str, Optional[str]], bool]]`
+— `(session_root_task_id, workspace_dir) -> provision?`. It is consulted at the
+top of `NoetaHost.allocate_exec_env`: a `False` return makes `allocate` return
+`None` *without* calling `provider.allocate`, so the driver records no
+`exec_env_ref` and `_build_engine` takes the existing ref-less branch —
+`LocalExecEnv` + the host `WorkspaceRoot`, byte-identical to a no-sandbox
+build. A `None` policy (the default) is today's behaviour exactly: a configured
+provider provisions every session. **No runtime change was needed** — the
+driver already treats an `allocate` returning `None` as the local path (the
+pre-minted task id stays harmless), and `_build_engine` already falls back to
+`LocalExecEnv` when no ref is welded; this seam only lets the host *decline* per
+session. The embedding product owns the tier→policy mapping (session → tier,
+resolved once at creation and persisted, so a resumed/reclaimed session
+provisions the same way); the SDK stays tenancy-agnostic, exactly as the
+`memory_root_resolver` seam does.
+
+### Alternatives considered (session opt-out)
+
+1. **A per-session `sandbox_provider` (multiple providers).** Rejected: the
+   manager, cache, and reaper are all built around one provider per host; a
+   boolean gate at `allocate` is the whole surface the tiers need.
+2. **A tier enum on the seam (`none|local|sandbox`) instead of a boolean.**
+   Rejected: `none` (strip fs tools) and `local` vs `sandbox` are *product*
+   distinctions the app already expresses in the compiled spec + cwd; the SDK
+   only needs "provision this session's container or not". Keeping the seam a
+   boolean keeps the engine free of product tier vocabulary (D1).
+3. **Make the driver skip `allocate` on a flag.** Rejected: pushes product
+   policy into the runtime; the host-config callback is the sanctioned
+   injection surface and needs no runtime edit.
