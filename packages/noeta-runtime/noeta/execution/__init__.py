@@ -60,6 +60,9 @@ from noeta.execution.environment import (
 )
 from noeta.execution.instructions import (
     DEFAULT_INSTRUCTIONS_FILENAMES,
+    build_instructions_discovery,
+    build_instructions_preloader,
+    discover_instructions,
     load_instructions,
     record_instructions,
 )
@@ -117,6 +120,9 @@ __all__ = [
     "MultiTurnReActPolicy",
     "NEXT_GOAL_WAKE_HANDLE",
     "record_environment",
+    "build_instructions_discovery",
+    "build_instructions_preloader",
+    "discover_instructions",
     "record_instructions",
     "render_help",
     "ResidentHost",

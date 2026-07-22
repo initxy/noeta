@@ -720,6 +720,7 @@ def _on_skill_content_recorded(
         getattr(env.payload, "version", "1")
     )
     _merge_active_content(task.state, "skill", skill_name)
+    _record_content_anchor(task, "skill", skill_name)
 
 
 def _on_context_content_recorded(
@@ -736,6 +737,7 @@ def _on_context_content_recorded(
     if not kind or not name or not getattr(env.payload, "content_hash", ""):
         return
     _merge_active_content(task.state, kind, name)
+    _record_content_anchor(task, kind, name)
 
 
 def _merge_active_content(state: TaskState, kind: str, name: str) -> None:
@@ -744,6 +746,20 @@ def _merge_active_content(state: TaskState, kind: str, name: str) -> None:
     names = state.active_content.get(kind, ())
     if name not in names:
         state.active_content[kind] = (*names, name)
+
+
+def _record_content_anchor(task: Task, kind: str, name: str) -> None:
+    """Record the resident's activation anchor — the rolling-history length at
+    the moment its activation folds (docs/adr/anchored-content-placement.md).
+
+    First-write-wins, matching ``_merge_active_content``'s no-duplicate rule:
+    a re-emitted activation (re-entrant path, malformed stream) never moves an
+    anchor. The anchor is DERIVED state (no event-shape change), so an old
+    recording replays deterministically under the anchored-placement rule.
+    """
+    key = f"{kind}:{name}"
+    if key not in task.context.content_anchors:
+        task.context.content_anchors[key] = len(task.runtime.messages)
 
 
 def _find_background_job(task: Task, job_id: str) -> dict[str, object] | None:

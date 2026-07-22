@@ -237,6 +237,8 @@ class Engine:
         background_runner: Optional[Any] = None,
         file_checkpoint_registry: Optional[Any] = None,
         background_subagent_launcher: Optional[Any] = None,
+        content_discovery: Optional[Any] = None,
+        content_preloader: Optional[Any] = None,
     ) -> None:
         self._event_log = event_log
         self._content_store = content_store
@@ -287,6 +289,12 @@ class Engine:
             background_subagent_launcher
         )
         self._launch_background_subagent = bg_launch
+        # Anchored-content seams (docs/adr/anchored-content-placement.md):
+        # ``content_discovery`` rides the HandlerContext into the tool loop;
+        # ``content_preloader`` runs at the top of each step (see
+        # ``run_one_step``). Both default ``None`` — every existing
+        # construction is byte-identical.
+        self._content_preloader = content_preloader
 
         self._ctx = HandlerContext(
             emit=self._emit,
@@ -310,6 +318,7 @@ class Engine:
             tool_output_inline_limit=tool_output_inline_limit,
             launch_background_subagent=bg_launch,
             background_subagent_capacity=bg_capacity,
+            content_discovery=content_discovery,
         )
 
     # -- task bootstrap ---------------------------------------------------
@@ -811,6 +820,17 @@ class Engine:
         recordings stay byte-identical.
         """
         trace_id = self._latest_trace_id(task.task_id)
+        # Resume preload (docs/adr/anchored-content-placement.md): give the
+        # host one impure hook BEFORE the first compose of this step to
+        # re-supply renderer state the ledger says is active (today: discovered
+        # instruction files a fresh process has not read yet). Best-effort —
+        # a broken preload may only omit context, never fail the step — and a
+        # no-op for every host that wires nothing.
+        if self._content_preloader is not None:
+            try:
+                self._content_preloader(task)
+            except Exception:  # noqa: BLE001 — preload is best-effort.
+                pass
         if task.status == "pending":
             self._emit(
                 task_id=task.task_id,

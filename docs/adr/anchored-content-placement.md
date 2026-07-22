@@ -1,0 +1,41 @@
+# Mid-task content activations render at their activation point; instruction files are discovered on read
+
+## Context
+
+The content channel's residents (skills, memory index, workspace instructions, environment facts) all render into the composer's `semi_stable` segment — a block that sits between the byte-frozen `stable_prefix` and the dialogue. The segment was named for its churn profile: it changes "occasionally". But *when* it changes matters more than how often. A resident activated **pre-loop** (memory index, the root instructions file, seed-time skills) lands before the first token of dialogue exists, so its bytes are part of the prompt the whole session rides on. A resident activated **mid-task** (the model invokes a skill at turn 40) rewrites the segment mid-conversation — and because `semi_stable` precedes the dialogue, the provider's KV cache is invalidated from that point through the entire transcript. Each first activation of each skill costs a full re-prime of everything after the head. The longer the session, the higher the tax — and long sessions are exactly where skills get invoked.
+
+Claude Code solves this with an append-only contract: skill bodies and lazily-discovered `CLAUDE.md` files arrive as messages in the stream, at the point of use; the prompt head never changes mid-session. The hidden half of that design is compaction: content that lives in the transcript is destroyed when the transcript is summarized, so Claude Code needs re-attachment machinery to restore it. noeta's ledger architecture gets that half for free — resident content is not stored in history but re-rendered every compose from folded activation state, so compaction cannot lose it. What noeta lacked was the placement rule.
+
+Separately, the workspace instructions mechanism (`NOETA.md` / `AGENTS.md`, ADR-adjacent to Claude Code's `CLAUDE.md`) loads exactly one file, from the workspace root, once, pre-loop. Instruction files in subdirectories — the monorepo case, where a subtree carries its own conventions — were readable but never loaded. Claude Code lazy-loads them when the model reads files in that subtree; only the harness can implement that trigger, because only the harness sees the tool loop. The same is true here: this is runtime mechanism, not host policy.
+
+## Decision
+
+**Placement follows the activation anchor.** When fold merges a resident into `TaskState.active_content` (from `ContextContentRecorded` / the legacy `SkillContentRecorded`), it also records the current rolling-history length as that resident's **anchor** (`ContextState.content_anchors`, key `"<kind>:<name>"`, first-write-wins). At compose time one rule decides placement for every kind, with no per-kind flag:
+
+* An anchor at or before the first assistant message ⇒ the resident renders in `semi_stable`, exactly as before. Pre-loop activations (memory, environment, root instructions, seed-time skills) are byte-identical to the previous layout.
+* An anchor after the first assistant message ⇒ the resident renders **inside the dynamic suffix, at its anchor position** — one message, at the point in the conversation where it was activated. The head segments do not change; the provider pays only for the inserted tokens.
+
+**Insertion never splits a tool round-trip.** The insertion index is computed in the post-summary coordinate space and then slides forward past any `role="tool"` message, so rendered content can never land between an assistant `tool_use` and its results (providers reject that shape). The slide is deterministic; same folded state ⇒ same bytes.
+
+**Compaction re-hangs, at the summary's edge.** An anchor covered by the compaction boundary re-renders immediately after the summary message, before the surviving turns, in activation order. This is free at the moment it happens — compaction has already invalidated the cache wholesale — and it is automatic: the content is state-derived, so there is no "remember to re-attach" step to forget. This is Claude Code's re-attachment behaviour obtained from the ledger instead of from dedicated machinery.
+
+**Instruction files are discovered when the model reads near them.** A new, default-off host switch (`instructions_discovery`) arms a post-tool hook: after a successful `read` of a file inside the workspace, the runtime walks from the file's directory up to the workspace root and activates every not-yet-active `NOETA.md` / `AGENTS.md` on the way (first non-empty name per directory, same precedence as the root loader; resident name = workspace-relative path). The activation is an ordinary `ContextContentRecorded` (kind `instructions`, policy `evolving`), emitted **after** the turn's batched tool-result message, so the anchor — and therefore the rendered instructions — lands right after the read that triggered it.
+
+**Discovery is fenced to the workspace even though reads are not.** `read` resolves anywhere on the filesystem by design (workspace-write-authorization); auto-loading instruction files from arbitrary read targets would let any directory the model glances at program the agent. Write authorization is not instruction authority — a directory an owner granted `fs_write` on does not thereby get to inject instructions. Discovery therefore fires only for reads that resolve inside the workspace root. Widening that scope is a host decision for a future seam, not a default.
+
+**Resume re-reads from the ledger.** Discovered files are read at trigger time (the impure band), cached in a build-owned snapshot mapping the renderer closes over — the renderer still never touches disk at compose time. On resume the mapping starts with only the root file, so a preload step (engine-level, before compose) re-reads every active-but-missing instructions name from the workspace. A file that has vanished or emptied renders nothing — the `evolving` policy already tolerates drift, and a degraded preload can only omit, never fail the task.
+
+## Rationale
+
+- **Pay-per-activation beats pay-per-transcript.** Anchored insertion costs the new tokens once. The old placement cost a full downstream re-prime per first activation — proportional to everything already said, i.e. worst exactly when the session is longest.
+- **One rule, no kind table.** "Anchor before vs. after the first assistant message" needs no per-kind configuration and no event-shape change: anchors are derived at fold time from the stream, so old recordings replay deterministically under the new rule (their mid-task activations move to their anchors — a deliberate, documented placement change; the content is identical).
+- **The ledger is the re-attachment mechanism.** Storing rendered content in history (Claude Code's shape) forces compaction-aware repair. Deriving it from `active_content` + anchors makes the re-hang a coordinate transform inside one pure function.
+- **The trigger can only live here.** Lazy instruction loading requires seeing every `read` as it happens. A host outside the tool loop cannot build this; the SDK exposing it as a default-off switch is the deep-module answer.
+- **The injection line is trust, not reachability.** Reads are unfenced because reading is observation. Instructions are not observation — they steer the agent — so their auto-load scope stays inside the directory the session was given, the one boundary the owner has actually endorsed.
+
+## Consequences
+
+- Mid-task skill activations no longer rewrite `semi_stable`; tests pinning the old placement assert the new one. Sessions that never activate content mid-task compose byte-identically.
+- A replayed pre-change recording composes its mid-task activations at their anchors — same content, new position. Snapshots carry `content_anchors` going forward; an old snapshot rehydrates without anchors and keeps those residents in `semi_stable` (accepted).
+- `instructions_discovery` defaults off; every existing host is byte-identical. Turning it on costs one directory walk per triggering read plus one file read per newly discovered instructions file, once per session.
+- Subdirectory instruction files become live context the moment the model works near them — the monorepo behaviour Claude Code validated, under noeta's accounting: hashed, folded, replayable.

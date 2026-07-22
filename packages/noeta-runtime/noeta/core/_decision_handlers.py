@@ -385,6 +385,19 @@ class HandlerContext:
     #: background sub-agent per-session cap pre-check (paired with the launch
     #: hook; wired iff that is). ``None`` ⇒ no cap.
     background_subagent_capacity: Optional[BackgroundSubagentCapacityFn] = None
+    #: post-tool content discovery (docs/adr/anchored-content-placement.md):
+    #: ``(task, call, result) → activation payloads`` consulted by
+    #: ``handle_tool_calls`` AFTER the turn's batched tool-result message is
+    #: appended, so the fold-time anchor — and the rendered content — lands
+    #: right after the triggering results. The runtime stays kind-neutral:
+    #: what gets discovered (today: workspace instruction files on ``read``)
+    #: is decided by whatever callable the host wires. ``None`` (default,
+    #: every existing construction) ⇒ no discovery, byte-identical streams.
+    content_discovery: Optional[
+        Callable[
+            [Task, ToolCall, ToolResult], list[ContextContentRecordedPayload]
+        ]
+    ] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1946,6 +1959,7 @@ def handle_tool_calls(
         raise RuntimeError("Engine got tool_calls but no ToolRuntime.")
 
     result_blocks: list[ToolResultBlock] = []
+    executed: list[tuple[ToolCall, ToolResult]] = []
     for idx, call in enumerate(decision.calls):
         verdict = ctx.guard(ProposedToolCall(call=call), task)
         if verdict.verdict is Verdict.DENY:
@@ -2042,6 +2056,7 @@ def handle_tool_calls(
             lease_id=lease_id,
             trace_id=trace_id,
         )
+        executed.append((call, result))
         result_blocks.append(
             wrap_tool_result_block(
                 call,
@@ -2065,6 +2080,32 @@ def handle_tool_calls(
         lease_id=lease_id,
         trace_id=trace_id,
     )
+    # Post-tool content discovery (docs/adr/anchored-content-placement.md):
+    # consulted AFTER the batched results message is appended+folded, so the
+    # activation's fold-time anchor — and therefore the rendered content —
+    # lands right after the results that triggered it (and can never split a
+    # tool_use from its results). First-only gated against the activation
+    # map, mirroring ``maybe_emit_provenance``; a discovery fault may only
+    # omit context, never fail the turn.
+    if ctx.content_discovery is not None:
+        for call, result in executed:
+            try:
+                payloads = ctx.content_discovery(task, call, result)
+            except Exception:  # noqa: BLE001 — discovery is best-effort.
+                continue
+            for payload in payloads:
+                if payload.name in task.state.active_content.get(
+                    payload.kind, ()
+                ):
+                    continue
+                env = ctx.emit(
+                    task_id=task.task_id,
+                    type_="ContextContentRecorded",
+                    payload=payload,
+                    lease_id=lease_id,
+                    trace_id=trace_id,
+                )
+                ctx.apply_event(task, env)
     return None
 
 

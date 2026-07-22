@@ -286,6 +286,14 @@ class ThreeSegmentComposer:
             to_canonical_bytes((stable_content, provider_tool_schemas))
         )
 
+        # Anchored placement (docs/adr/anchored-content-placement.md): split
+        # the active residents by activation anchor. Pre-loop activations
+        # (anchor at/before the first assistant message) render in
+        # ``semi_stable`` exactly as before; mid-task activations render
+        # inside the dynamic suffix at their anchor, so a skill invoked at
+        # turn 40 no longer rewrites the head segments (KV-cache re-prime).
+        semi_names, anchored = self._split_placement(task)
+
         # Render the semi_stable residents from
         # the generic activation map through the kind registry, in
         # registration order. The skill kind keeps one narrow extra:
@@ -296,7 +304,7 @@ class ThreeSegmentComposer:
         renderer_resources: list[RetrievedResource] = []
         for kind in self._content_renderers.kinds():
             rendered = self._content_renderers.render(
-                kind, self._active_names(task, kind)
+                kind, semi_names.get(kind, [])
             )
             semi_content.extend(rendered.messages)
             if kind == _SKILL_KIND:
@@ -304,21 +312,28 @@ class ThreeSegmentComposer:
             renderer_resources.extend(rendered.retrieved_resources)
         semi_hash = _sha256_hex(to_canonical_bytes(semi_content))
 
+        # ③ (D-3c): swap the compacted prefix for the summary message, then
+        # insert the anchored residents at their (post-summary) anchor
+        # positions, then re-attach extended-thinking (Slice C) ahead of each
+        # assistant turn's tool_use, then ③ (D-3e): prune tool outputs older
+        # than the protected tail window.
+        summarized, anchored_skills, anchored_resources = (
+            self._insert_anchored(task, self._apply_summary(task), anchored)
+        )
+        for s in anchored_skills:
+            if s not in selected_skills:
+                selected_skills.append(s)
+        renderer_resources.extend(anchored_resources)
+
         # Issue D: persist the renderer's referenced-resource provenance.
         # The Composer is the single writer of the ContentStore + plan:
         # a ``referenced`` resource's raw bytes go to the store (the
-        # content was already inlined into ``semi_content`` by the
-        # renderer, so it is in ``semi_hash``); a ``skipped`` resource
+        # content was already inlined into the composed messages by the
+        # renderer, so it is in the segment hashes); a ``skipped`` resource
         # carries no ``content_ref`` and never entered the prompt.
         retrieved_resources = self._persist_retrieved(renderer_resources)
 
-        # ③ (D-3c): swap the compacted prefix for the summary message, then
-        # re-attach extended-thinking (Slice C) ahead of each assistant
-        # turn's tool_use, then ③ (D-3e): prune tool outputs older than the
-        # protected tail window.
-        dynamic_source = self._reattach_thinking(
-            self._apply_summary(task), task
-        )
+        dynamic_source = self._reattach_thinking(summarized, task)
         dynamic_content, selected_refs, dropped_refs, cleared_refs = (
             self._prune_tail(
                 dynamic_source,
@@ -417,6 +432,102 @@ class ThreeSegmentComposer:
     # ------------------------------------------------------------------
     # helpers
     # ------------------------------------------------------------------
+
+    def _split_placement(
+        self, task: Task
+    ) -> tuple[dict[str, list[str]], list[tuple[int, int, int, str, str]]]:
+        """Split active residents into semi_stable names vs anchored entries.
+
+        The one placement rule (docs/adr/anchored-content-placement.md): a
+        resident is *anchored* iff its recorded activation anchor lies
+        strictly AFTER the first assistant message of the raw rolling
+        history — i.e. the model had already started talking when the
+        resident activated. Everything else (pre-loop activations, anchor-less
+        residents from old snapshots) keeps today's ``semi_stable`` placement,
+        so a session with no mid-task activation composes byte-identically.
+
+        Returns ``(semi_names_by_kind, anchored)`` where ``anchored`` entries
+        are ``(anchor, kind_index, activation_index, kind, name)`` sorted by
+        that tuple — anchor first, registration order and activation order as
+        deterministic tie-breaks. Pure over folded state.
+        """
+        raw = task.runtime.messages
+        first_assistant: Optional[int] = None
+        for i, msg in enumerate(raw):
+            if msg.role == "assistant":
+                first_assistant = i
+                break
+        anchors = task.context.content_anchors
+        semi: dict[str, list[str]] = {}
+        anchored: list[tuple[int, int, int, str, str]] = []
+        for k_i, kind in enumerate(self._content_renderers.kinds()):
+            kept: list[str] = []
+            for a_i, name in enumerate(self._active_names(task, kind)):
+                anchor = anchors.get(f"{kind}:{name}", 0)
+                if first_assistant is not None and anchor > first_assistant:
+                    anchored.append((anchor, k_i, a_i, kind, name))
+                else:
+                    kept.append(name)
+            semi[kind] = kept
+        anchored.sort()
+        return semi, anchored
+
+    def _insert_anchored(
+        self,
+        task: Task,
+        summarized: list[Message],
+        anchored: list[tuple[int, int, int, str, str]],
+    ) -> tuple[list[Message], list[str], list[RetrievedResource]]:
+        """Render the anchored residents and insert each at its anchor.
+
+        Coordinates: anchors index the RAW rolling history; ``summarized`` is
+        ``[summary] + raw[boundary:]`` when a compaction summary applies, else
+        the raw list. An anchor inside the covered prefix clamps to index 1 —
+        the re-hang bucket right after the summary message (the earliest
+        stable position on the new timeline; compaction already invalidated
+        the cache, so the re-hang is free). An anchor past the end appends.
+        The insertion index then slides forward past any ``role="tool"``
+        message so rendered content can never split an assistant ``tool_use``
+        from its results (providers reject that shape). Deterministic and
+        pure: same folded state ⇒ same bytes.
+
+        Each resident renders through the SAME kind registry as the
+        semi_stable path, one name per call (the renderers are
+        one-message-per-name). Returns the merged list plus the anchored
+        skill names (for ``ContextPlan.selected_skills``) and the renderers'
+        retrieved resources (for provenance persistence).
+        """
+        if not anchored:
+            return summarized, [], []
+        has_summary = task.context.summary_ref is not None
+        boundary = task.context.summary_boundary if has_summary else 0
+        n = len(summarized)
+        inserts_at: dict[int, list[Message]] = {}
+        skill_names: list[str] = []
+        resources: list[RetrievedResource] = []
+        for anchor, _k_i, _a_i, kind, name in anchored:
+            rendered = self._content_renderers.render(kind, [name])
+            if kind == _SKILL_KIND:
+                skill_names.extend(rendered.selected_skills)
+            resources.extend(rendered.retrieved_resources)
+            if not rendered.messages:
+                continue
+            if has_summary:
+                eff = anchor - boundary + 1
+                eff = 1 if eff < 1 else (n if eff > n else eff)
+            else:
+                eff = anchor if anchor < n else n
+            while eff < n and summarized[eff].role == "tool":
+                eff += 1
+            inserts_at.setdefault(eff, []).extend(rendered.messages)
+        if not inserts_at:
+            return summarized, skill_names, resources
+        out: list[Message] = []
+        for i, msg in enumerate(summarized):
+            out.extend(inserts_at.get(i, ()))
+            out.append(msg)
+        out.extend(inserts_at.get(n, ()))
+        return out, skill_names, resources
 
     def _active_names(self, task: Task, kind: str) -> list[str]:
         """The active resident names for ``kind``, read from the generic
