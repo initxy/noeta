@@ -180,14 +180,19 @@ def test_read_file_not_a_file(tmp_path: Path) -> None:
     assert "not a file" in result.summary
 
 
-def test_read_file_escape_rejected(tmp_path: Path) -> None:
+def test_read_reaches_outside_the_workspace(tmp_path: Path) -> None:
+    # Reads are NOT fenced: naming a path above the workspace reads it. The
+    # wall stands on the write side, where the act is irreversible.
     ctx, workspace = _ctx_and_workspace(tmp_path)
-    (tmp_path / "outside.txt").write_text("secret")
+    (tmp_path / "outside.txt").write_text("neighbour")
     result = ReadFileTool(workspace=workspace).invoke(
         {"path": "../outside.txt"}, ctx
     )
-    assert result.success is False
-    assert "outside workspace" in result.summary
+    assert result.success is True
+    assert result.output["content"] == "neighbour"
+    # Outside the workspace there is no relative form, so the display is the
+    # absolute path — which also tells the reader the path left the workspace.
+    assert result.output["path"] == (tmp_path / "outside.txt").resolve().as_posix()
 
 
 def test_read_file_binary_rejected(tmp_path: Path) -> None:
@@ -346,10 +351,57 @@ def test_glob_pattern_required(tmp_path: Path) -> None:
 
 
 def test_glob_absolute_pattern_rejected(tmp_path: Path) -> None:
+    """An absolute PATTERN stays rejected even though reads are unfenced: it is
+    unbounded (``/**/*.py`` walks the whole filesystem, and the match cap only
+    applies after the walk). Scoping is ``path``'s job — the error says so."""
     ctx, workspace = _ctx_and_workspace(tmp_path)
     result = GlobTool(workspace=workspace).invoke({"pattern": "/etc/*"}, ctx)
     assert result.success is False
-    assert "workspace-relative" in result.summary
+    assert "'path'" in result.summary
+
+
+def test_glob_searches_an_absolute_path_outside_the_workspace(tmp_path: Path) -> None:
+    """The read-side asymmetry applies to glob too (it is observation, not
+    mutation), so a neighbouring checkout is reachable by naming it — the same
+    move ``grep`` already allows via its own ``path``."""
+    ctx, workspace = _ctx_and_workspace(tmp_path)
+    other = tmp_path / "other-repo" / "src"
+    other.mkdir(parents=True)
+    (other / "main.py").write_text("x")
+    (other / "notes.txt").write_text("x")
+    result = GlobTool(workspace=workspace).invoke(
+        {"pattern": "**/*.py", "path": str(tmp_path / "other-repo")}, ctx
+    )
+    assert result.success is True
+    # Outside the workspace there is no relative form, so paths show absolute.
+    assert result.output["matches"] == [(other / "main.py").as_posix()]
+
+
+def test_glob_path_scopes_to_a_subdirectory(tmp_path: Path) -> None:
+    ctx, workspace = _ctx_and_workspace(tmp_path)
+    (workspace.root / "top.py").write_text("x")
+    (workspace.root / "sub").mkdir()
+    (workspace.root / "sub" / "deep.py").write_text("x")
+    result = GlobTool(workspace=workspace).invoke(
+        {"pattern": "*.py", "path": "sub"}, ctx
+    )
+    assert result.success is True
+    assert result.output["matches"] == ["sub/deep.py"]
+
+
+def test_glob_path_must_be_a_string(tmp_path: Path) -> None:
+    ctx, workspace = _ctx_and_workspace(tmp_path)
+    result = GlobTool(workspace=workspace).invoke({"pattern": "*", "path": 7}, ctx)
+    assert result.success is False
+
+
+def test_glob_missing_path_yields_no_matches(tmp_path: Path) -> None:
+    ctx, workspace = _ctx_and_workspace(tmp_path)
+    result = GlobTool(workspace=workspace).invoke(
+        {"pattern": "*", "path": str(tmp_path / "nope")}, ctx
+    )
+    assert result.success is True
+    assert result.output["matches"] == []
 
 
 def test_glob_dotdot_pattern_rejected(tmp_path: Path) -> None:
@@ -368,6 +420,24 @@ def test_glob_drops_symlink_to_outside(tmp_path: Path) -> None:
     assert result.success is True
     assert "inside.py" in result.output["matches"]
     assert "link.py" not in result.output["matches"]
+
+
+def test_glob_drops_a_symlink_escaping_the_searched_tree(tmp_path: Path) -> None:
+    """The drop rule generalises: it is now "escapes the tree you asked about",
+    not "escapes the workspace" — otherwise an out-of-workspace search would
+    discard every one of its own results."""
+    ctx, workspace = _ctx_and_workspace(tmp_path)
+    searched = tmp_path / "searched"
+    searched.mkdir()
+    elsewhere = tmp_path / "elsewhere.py"
+    elsewhere.write_text("x")
+    (searched / "real.py").write_text("x")
+    (searched / "link.py").symlink_to(elsewhere)
+    result = GlobTool(workspace=workspace).invoke(
+        {"pattern": "*.py", "path": str(searched)}, ctx
+    )
+    assert result.success is True
+    assert result.output["matches"] == [(searched / "real.py").as_posix()]
 
 
 def test_glob_bounded_under_many_matches(tmp_path: Path) -> None:
@@ -498,13 +568,20 @@ def test_grep_total_vs_inline_when_many_matches(tmp_path: Path) -> None:
     assert len(result.output["matches"]) <= 50
 
 
-def test_grep_escape_rejected(tmp_path: Path) -> None:
+def test_grep_reaches_outside_the_workspace(tmp_path: Path) -> None:
+    # Same rule as read: an absolute path scopes the search wherever it points.
     ctx, workspace = _ctx_and_workspace(tmp_path)
+    neighbour = tmp_path / "neighbour"
+    neighbour.mkdir()
+    (neighbour / "a.py").write_text("needle here\n")
     result = GrepTool(workspace=workspace).invoke(
-        {"pattern": "x", "path": "/etc"}, ctx
+        {"pattern": "needle", "path": str(neighbour)}, ctx
     )
-    assert result.success is False
-    assert "outside workspace" in result.summary
+    assert result.success is True
+    assert result.output["total"] == 1
+    assert result.output["matches"][0]["path"] == (
+        neighbour / "a.py"
+    ).resolve().as_posix()
 
 
 def test_grep_on_single_file(tmp_path: Path) -> None:
@@ -533,7 +610,8 @@ def test_grep_arg_validation(tmp_path: Path, arg_overrides: dict[str, object]) -
 
 
 # ---------------------------------------------------------------------------
-# Read reaches skill roots outside the workspace via skill_roots
+# Reads are unfenced: skill packs and neighbouring trees are reached by naming
+# them, with no per-tool allow-list to keep in sync
 # ---------------------------------------------------------------------------
 
 
@@ -549,11 +627,14 @@ def _skill_root(tmp_path: Path, files: dict[str, str]) -> Path:
 
 
 def test_read_reaches_skill_root_by_absolute_path(tmp_path: Path) -> None:
+    # The renderer hands the model each skill's absolute base directory; the
+    # model reads the bundled file with the ordinary read tool. This used to
+    # need a ``skill_roots`` allow-list injected at build time — now it is just
+    # the general rule.
     ctx, workspace = _ctx_and_workspace(tmp_path)
     root = _skill_root(tmp_path, {"references/NOTE.md": "CONVENTION: be terse."})
-    tool = ReadFileTool(workspace=workspace, skill_roots=(root,))
     abs_path = str(root / "references" / "NOTE.md")
-    result = tool.invoke({"path": abs_path}, ctx)
+    result = ReadFileTool(workspace=workspace).invoke({"path": abs_path}, ctx)
     _assert_output_json_safe(result)
     assert result.success is True
     assert result.output["content"] == "CONVENTION: be terse."
@@ -561,46 +642,34 @@ def test_read_reaches_skill_root_by_absolute_path(tmp_path: Path) -> None:
     assert result.output["path"] == (root / "references" / "NOTE.md").as_posix()
 
 
-def test_read_without_skill_roots_still_walls_off_outside(tmp_path: Path) -> None:
-    ctx, workspace = _ctx_and_workspace(tmp_path)
-    root = _skill_root(tmp_path, {"NOTE.md": "x"})
-    # default skill_roots=() — the absolute path escapes the workspace.
-    tool = ReadFileTool(workspace=workspace)
-    result = tool.invoke({"path": str(root / "NOTE.md")}, ctx)
-    assert result.success is False
-    assert "outside workspace" in result.summary
-
-
-def test_read_rejects_path_outside_all_roots(tmp_path: Path) -> None:
-    ctx, workspace = _ctx_and_workspace(tmp_path)
-    root = _skill_root(tmp_path, {"NOTE.md": "x"})
-    other = tmp_path / "elsewhere.md"
-    other.write_text("secret", encoding="utf-8")
-    tool = ReadFileTool(workspace=workspace, skill_roots=(root,))
-    result = tool.invoke({"path": str(other)}, ctx)
-    assert result.success is False
-    assert "secret" not in str(result.output)
-
-
-def test_read_skill_root_symlink_escape_refused(tmp_path: Path) -> None:
+def test_read_follows_a_symlink_out_of_the_workspace(tmp_path: Path) -> None:
+    # A symlink pointing outside is followed, not refused: with reads unfenced
+    # there is nothing for the old symlink-escape check to protect — the same
+    # bytes are one absolute path away.
     import os
 
     ctx, workspace = _ctx_and_workspace(tmp_path)
-    root = _skill_root(tmp_path, {})
-    outside = tmp_path / "secret.md"
-    outside.write_text("secret", encoding="utf-8")
-    os.symlink(outside, root / "LINK.md")
-    tool = ReadFileTool(workspace=workspace, skill_roots=(root,))
-    result = tool.invoke({"path": str(root / "LINK.md")}, ctx)
-    assert result.success is False
-    assert result.output is None or "secret" not in str(result.output)
+    outside = tmp_path / "outside.md"
+    outside.write_text("neighbour", encoding="utf-8")
+    os.symlink(outside, workspace.root / "LINK.md")
+    result = ReadFileTool(workspace=workspace).invoke({"path": "LINK.md"}, ctx)
+    assert result.success is True
+    assert result.output["content"] == "neighbour"
 
 
-def test_read_relative_path_ignores_skill_roots(tmp_path: Path) -> None:
-    # a relative path always resolves against the workspace, never a skill
-    # root — only absolute targets may land in an extra root.
+def test_read_relative_path_still_resolves_against_the_workspace(
+    tmp_path: Path,
+) -> None:
+    # Unfenced does not mean unanchored: a relative path is joined onto the
+    # workspace exactly as before, so the everyday form is unchanged.
     ctx, workspace = _ctx_and_workspace(tmp_path)
-    root = _skill_root(tmp_path, {"NOTE.md": "from skill"})
-    tool = ReadFileTool(workspace=workspace, skill_roots=(root,))
-    result = tool.invoke({"path": "NOTE.md"}, ctx)  # not in the workspace
+    _skill_root(tmp_path, {"NOTE.md": "from skill"})
+    result = ReadFileTool(workspace=workspace).invoke({"path": "NOTE.md"}, ctx)
+    assert result.success is False
+    assert "not a file" in result.summary
+
+
+def test_read_rejects_an_empty_path(tmp_path: Path) -> None:
+    ctx, workspace = _ctx_and_workspace(tmp_path)
+    result = ReadFileTool(workspace=workspace).invoke({"path": ""}, ctx)
     assert result.success is False

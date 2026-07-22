@@ -665,3 +665,60 @@ def test_failed_apply_surfaces_no_file_changes(
     )
     assert res.success is False
     assert res.file_changes is None
+
+
+# ---------------------------------------------------------------------------
+# Out-of-workspace writes — a batch is authorized as a whole
+# ---------------------------------------------------------------------------
+
+
+def test_batch_outside_the_workspace_needs_authorization(tmp_path: Path) -> None:
+    ctx, _ = _ctx()
+    ws = _ws(tmp_path)
+    other = tmp_path / "neighbour"
+    other.mkdir()
+    edits = [{"op": "create", "path": str(other / "a.txt"), "content": "x"}]
+    assert _tool(ws).invoke({"edits": edits}, ctx).success is False
+    assert not (other / "a.txt").exists()
+
+
+def test_batch_outside_the_workspace_lands_once_authorized(tmp_path: Path) -> None:
+    cs = InMemoryContentStore()
+    ctx = ToolContext(artifact_store=cs, metadata={"task_id": "task-1"})
+    ws = _ws(tmp_path)
+    other = tmp_path / "neighbour"
+    other.mkdir()
+    tool = ApplyPatchTool(
+        workspace=ws,
+        mode=FsWriteMode.APPLY,
+        write_roots=lambda task_id: [str(other)],
+    )
+    edits = [{"op": "create", "path": str(other / "a.txt"), "content": "x"}]
+    assert tool.invoke({"edits": edits}, ctx).success is True
+    assert (other / "a.txt").read_text() == "x"
+
+
+def test_a_partly_authorized_batch_writes_nothing(tmp_path: Path) -> None:
+    # apply_patch is atomic, so authorization is all-or-nothing too: one
+    # unauthorized target refuses the batch, including its in-workspace edits.
+    cs = InMemoryContentStore()
+    ctx = ToolContext(artifact_store=cs, metadata={"task_id": "task-1"})
+    ws = _ws(tmp_path)
+    allowed = tmp_path / "neighbour"
+    allowed.mkdir()
+    forbidden = tmp_path / "elsewhere"
+    forbidden.mkdir()
+    tool = ApplyPatchTool(
+        workspace=ws,
+        mode=FsWriteMode.APPLY,
+        write_roots=lambda task_id: [str(allowed)],
+    )
+    edits = [
+        {"op": "create", "path": "inside.txt", "content": "x"},
+        {"op": "create", "path": str(allowed / "a.txt"), "content": "x"},
+        {"op": "create", "path": str(forbidden / "b.txt"), "content": "x"},
+    ]
+    assert tool.invoke({"edits": edits}, ctx).success is False
+    assert not (ws.root / "inside.txt").exists()
+    assert not (allowed / "a.txt").exists()
+    assert not (forbidden / "b.txt").exists()

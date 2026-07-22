@@ -31,7 +31,7 @@ in the tool; only the generic three-step is hoisted here.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Optional
 
 from noeta.protocols.tool import ToolResult
 from noeta.tools._limits import (
@@ -40,8 +40,8 @@ from noeta.tools._limits import (
 )
 from noeta.tools.fs._workspace import (
     WorkspaceRoot,
+    resolve_anywhere,
     resolve_or_error,
-    resolve_readable,
     tool_error,
 )
 from noeta.tools.fs.exec_env import ExecEnv, LocalExecEnv
@@ -123,19 +123,19 @@ def resolve_existing_file(
 
 def resolve_readable_file(
     workspace: WorkspaceRoot,
-    extra_roots: Sequence[Path],
     tool_name: str,
     path: str,
     *,
     exec_env: Optional[ExecEnv] = None,
 ) -> "Path | ToolResult":
-    """``read``'s fence: ``resolve_readable`` (workspace OR a skill root)
-    then the existing-file check, both byte forms unchanged.
+    """``read``'s resolution: ``resolve_anywhere`` (unfenced — relative under
+    the workspace, absolute as named) then the existing-file check, whose byte
+    form is unchanged.
 
     ``exec_env`` routes the existence check through the tool's backend (the
     container under a sandbox); ``None`` ⇒ the host, byte-identical.
     """
-    resolved = resolve_readable(workspace, extra_roots, tool_name, path)
+    resolved = resolve_anywhere(workspace, tool_name, path)
     if isinstance(resolved, ToolResult):
         return resolved
     if not (exec_env or _DEFAULT_EXEC_ENV).is_file(resolved):

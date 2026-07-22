@@ -3,7 +3,7 @@
   "provider_tool_schemas": [
     {
       "function": {
-        "description": "Reads a file's contents from the workspace, optionally sliced by line.\n\n- `path` is workspace-relative. An absolute path is rejected unless it sits under a skill's `Base directory for this skill:` (shown when a skill activates) — use that base + the skill body's relative reference to read a skill's bundled files. Symlink escapes are always rejected.\n- Reads the whole file by default. `offset` (1-based line) and `limit` (line count) take a slice — use them for large files.\n- The full body is always offloaded as an artifact (`content_ref`); when inline output would exceed the byte budget you get a bounded excerpt plus the ref, never a silently truncated middle.\n- A text target must be valid UTF-8; non-image binary files are rejected (use the right tool for those).\n- Reads image files too (png, jpg, gif, webp): the image is presented to you visually, so you can read screenshots, diagrams, and photos directly.\n- Don't guess a path — locate it first with `grep` (by content) or `glob` (by name).",
+        "description": "Reads a file's contents, optionally sliced by line.\n\n- `path` is workspace-relative, or absolute to read anywhere on this machine — a neighbouring checkout, a skill's `Base directory for this skill:` (shown when a skill activates), a system file. Reading is not fenced; only writing is.\n- Reads the whole file by default. `offset` (1-based line) and `limit` (line count) take a slice — use them for large files.\n- The full body is always offloaded as an artifact (`content_ref`); when inline output would exceed the byte budget you get a bounded excerpt plus the ref, never a silently truncated middle.\n- A text target must be valid UTF-8; non-image binary files are rejected (use the right tool for those).\n- Reads image files too (png, jpg, gif, webp): the image is presented to you visually, so you can read screenshots, diagrams, and photos directly.\n- Don't guess a path — locate it first with `grep` (by content) or `glob` (by name).",
         "name": "read",
         "parameters": {
           "additionalProperties": false,
@@ -30,11 +30,14 @@
     },
     {
       "function": {
-        "description": "Matches a workspace-relative glob pattern and returns the matching file paths.\n\n- Standard glob semantics — `**` matches recursively (e.g. \"**/*.py\", \"src/**/test_*\"). Results are workspace-relative POSIX paths, sorted, and capped — narrow the pattern if truncated.\n- `pattern` must be workspace-relative: no leading `/` and no `..`. Matches whose real path escapes the workspace via symlink are dropped.\n- To search by file content rather than name use `grep`; to read a known file use `read`.",
+        "description": "Matches a glob pattern against file names and returns the matching paths.\n\n- Standard glob semantics — `**` matches recursively (e.g. \"**/*.py\", \"src/**/test_*\"). Results are sorted and capped — narrow the pattern if truncated.\n- Scope with `path` (the directory to search, default: the whole workspace).\n- `path` is workspace-relative, or absolute to search outside the workspace (a neighbouring checkout). Results are workspace-relative POSIX paths, or absolute when the search was rooted outside it.\n- `pattern` is always relative to `path`: no leading `/` and no `..`. Matches whose real path escapes the searched directory via symlink are dropped.\n- To search by file content rather than name use `grep`; to read a known file use `read`.",
         "name": "glob",
         "parameters": {
           "additionalProperties": false,
           "properties": {
+            "path": {
+              "type": "string"
+            },
             "pattern": {
               "type": "string"
             }
@@ -49,7 +52,7 @@
     },
     {
       "function": {
-        "description": "Searches file contents across the workspace with a regular expression (Python `re` syntax).\n\n- Returns each match as file path + line number + the matching line. Locate files-with-matches first, then `read` the surrounding lines to keep search noise low.\n- Scope with `path` (a file or sub-directory) and filter with `glob` (e.g. \"**/*.py\").\n- `pattern` is a Python `re` regular expression. Binary files are skipped automatically.\n- `path` is workspace-relative; absolute paths and symlink escapes are rejected.\n- To match by filename rather than content use `glob`; to read a known file use `read`.",
+        "description": "Searches file contents across the workspace with a regular expression (Python `re` syntax).\n\n- Returns each match as file path + line number + the matching line. Locate files-with-matches first, then `read` the surrounding lines to keep search noise low.\n- Scope with `path` (a file or sub-directory) and filter with `glob` (e.g. \"**/*.py\").\n- `pattern` is a Python `re` regular expression. Binary files are skipped automatically.\n- `path` is workspace-relative, or absolute to search outside the workspace (a neighbouring checkout). Symlinks are not followed, so one walk stays in one tree.\n- To match by filename rather than content use `glob`; to read a known file use `read`.",
         "name": "grep",
         "parameters": {
           "additionalProperties": false,
@@ -74,7 +77,7 @@
     },
     {
       "function": {
-        "description": "Replaces an exact, unique `old` string in an existing file with `new`.\n\n- `old` must match exactly once — zero matches or more than one fails and writes nothing. Include enough surrounding context to make it unique, or target a region that already is.\n- Set `replace_all` to true to replace every occurrence of `old` instead — use this for renames or repeated edits where the same string recurs and you want them all changed.\n- `path` is workspace-relative and must be an existing UTF-8 text file; absolute paths and symlink escapes are rejected.\n- `new` may be empty to delete the matched region. The change is offloaded as a unified diff with before/after hashes.\n- Creating a new file or replacing a whole file body is `write`'s job, not this one's.",
+        "description": "Replaces an exact, unique `old` string in an existing file with `new`.\n\n- `old` must match exactly once — zero matches or more than one fails and writes nothing. Include enough surrounding context to make it unique, or target a region that already is.\n- Set `replace_all` to true to replace every occurrence of `old` instead — use this for renames or repeated edits where the same string recurs and you want them all changed.\n- `path` is workspace-relative and must be an existing UTF-8 text file. A path outside the workspace needs the owner's authorization — the call pauses for their ruling on the directory.\n- `new` may be empty to delete the matched region. The change is offloaded as a unified diff with before/after hashes.\n- Creating a new file or replacing a whole file body is `write`'s job, not this one's.",
         "name": "edit",
         "parameters": {
           "additionalProperties": false,
@@ -104,7 +107,7 @@
     },
     {
       "function": {
-        "description": "Writes a file to the workspace, creating it or overwriting one you've already read.\n\n- `path` is workspace-relative and its parent directory must already exist. Absolute paths and symlink escapes are rejected.\n- Creating a new file always works. Overwriting an existing file requires you to have `read` it earlier in this session, so you never blindly clobber a file you haven't seen.\n- `content` is UTF-8 text, max 64 KB. The change is offloaded as a unified diff with before/after hashes.\n- For a small change to an existing file, prefer `edit` — it sends a surgical diff instead of replacing the whole body.",
+        "description": "Writes a file to the workspace, creating it or overwriting one you've already read.\n\n- `path` is workspace-relative and its parent directory must already exist. A path outside the workspace (absolute, `..`, or through a symlink) needs the owner's authorization: the call pauses, they approve the directory once, and it stays open afterwards. Don't route around a pause — say what you need and why.\n- Creating a new file always works. Overwriting an existing file requires you to have `read` it earlier in this session, so you never blindly clobber a file you haven't seen.\n- `content` is UTF-8 text, max 64 KB. The change is offloaded as a unified diff with before/after hashes.\n- For a small change to an existing file, prefer `edit` — it sends a surgical diff instead of replacing the whole body.",
         "name": "write",
         "parameters": {
           "additionalProperties": false,
@@ -127,7 +130,7 @@
     },
     {
       "function": {
-        "description": "Applies a batch of up to 16 file edits atomically — all succeed or none do.\n\n- Each edit is `replace` (swap a unique substring in an existing file) or `create` (write a brand-new file). All are validated in memory first; an apply-phase failure rolls the whole batch back.\n- Paths are workspace-relative; absolute paths and symlink escapes are rejected. A `replace` target's `old` must occur exactly once — include enough surrounding context to make it unique, and copy it verbatim (indentation, trailing spaces, and newlines must match). A `create` target must not exist yet under an existing parent.\n- Several `replace` edits may target the **same file** to change multiple places in one call; they apply in array order, and each `old` is matched against the file *as left by the earlier edits in this same call* (so don't include text a previous edit already removed). A `create` cannot be combined with any other edit on the same path — a create writes the whole file, so put its final content in one create. Two different spellings of one path that differ only in case or unicode form are rejected.\n- `old`/`new` and `content` each cap at 64 KB (the same safety ceiling as `write`); an absurdly large whole call is rejected — split it into separate calls.\n- Leave `before_sha256` unset. It is an optional staleness guard; if set it must be the SHA-256 of the **entire current file** from a recent read — an empty value is ignored, a wrong one fails the edit.\n- For a single change to one file, prefer `edit`.",
+        "description": "Applies a batch of up to 16 file edits atomically — all succeed or none do.\n\n- Each edit is `replace` (swap a unique substring in an existing file) or `create` (write a brand-new file). All are validated in memory first; an apply-phase failure rolls the whole batch back.\n- Paths are workspace-relative. A path outside the workspace needs the owner's authorization: the whole batch pauses for their ruling on the directory, since a patch applies atomically. A `replace` target's `old` must occur exactly once — include enough surrounding context to make it unique, and copy it verbatim (indentation, trailing spaces, and newlines must match). A `create` target must not exist yet under an existing parent.\n- Several `replace` edits may target the **same file** to change multiple places in one call; they apply in array order, and each `old` is matched against the file *as left by the earlier edits in this same call* (so don't include text a previous edit already removed). A `create` cannot be combined with any other edit on the same path — a create writes the whole file, so put its final content in one create. Two different spellings of one path that differ only in case or unicode form are rejected.\n- `old`/`new` and `content` each cap at 64 KB (the same safety ceiling as `write`); an absurdly large whole call is rejected — split it into separate calls.\n- Leave `before_sha256` unset. It is an optional staleness guard; if set it must be the SHA-256 of the **entire current file** from a recent read — an empty value is ignored, a wrong one fails the edit.\n- For a single change to one file, prefer `edit`.",
         "name": "apply_patch",
         "parameters": {
           "additionalProperties": false,
@@ -437,7 +440,7 @@
         }
       ],
       "name": "stable_prefix",
-      "segment_hash": "ef77a99b6943b45b9bc934d34274729a3cf487ae600d0b6eb7245d3e20f66bff"
+      "segment_hash": "5d69b68dc38f96518f271c2242c061a68133e8c6b140e5403b86af56e7d6a8c5"
     },
     {
       "content": [],
