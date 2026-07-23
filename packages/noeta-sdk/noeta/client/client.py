@@ -301,6 +301,10 @@ class Client:
             delta_sink=hc.delta_sink,
             provider_headers=hc.provider_headers,
             workflow_allowed=hc.workflow_allowed,
+            # Workspace instruction files discovered as the model reads
+            # (anchored-content placement ADR). Off by default; a product opts
+            # in through HostConfig.
+            instructions_discovery=hc.instructions_discovery,
             # Process fs write policy (D3 host config): "apply" performs real
             # writes, anything else stages a dry-run diff (the safe default).
             write_mode=(
@@ -599,9 +603,16 @@ class Client:
         enabled_mcp: tuple[str, ...] = (),
         workspace_dir: Optional[str] = None,
         effort: Optional[str] = None,
+        activations: tuple[str, ...] = (),
     ) -> Any:
         """Create + validate + lease a first turn WITHOUT driving it
-        (driver ``seed_start``); pass the result to :meth:`drive_seeded`."""
+        (driver ``seed_start``); pass the result to :meth:`drive_seeded`.
+
+        ``activations`` are built-in skill names to pin (pre-loop) for this
+        task — the same forced-preload channel a ``/skill-name`` slash command
+        uses (``TaskStatePatched(activate_skills=…)``). A thin forward to the
+        driver's existing ``activations`` parameter; ``()`` keeps the seed
+        byte-identical to the no-skill path."""
         return self._driver.seed_start(
             goal=goal,
             agent=agent if agent is not None else self._main_agent_name,
@@ -611,6 +622,7 @@ class Client:
             enabled_mcp=enabled_mcp,
             workspace_dir=workspace_dir,
             effort=effort,
+            activations=activations,
         )
 
     def seed_send_goal(
