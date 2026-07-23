@@ -249,6 +249,15 @@ class HostConfig:
 
     # -- host kill-switches ------------------------------------------------
     workflow_allowed: bool = False
+    #: ``read``-triggered discovery of subdirectory ``NOETA.md`` / ``AGENTS.md``
+    #: files (docs/adr/anchored-content-placement.md). Forwarded verbatim to
+    #: ``SdkHost.instructions_discovery``. When on, a successful ``read`` inside
+    #: the session workspace activates every not-yet-active instruction file
+    #: between the read file's directory and the workspace root; each renders
+    #: anchored at its point of discovery, so a mid-task activation appends
+    #: instead of rewriting the stable head. ``False`` (default) keeps every
+    #: existing embedding byte-identical.
+    instructions_discovery: bool = False
     #: process fs write policy — "dry_run" (stage a diff, safe default) or
     #: "apply" (real writes). Mapped to FsWriteMode by the Client.
     write_mode: str = "dry_run"
