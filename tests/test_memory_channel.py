@@ -23,6 +23,8 @@ from noeta.context.memory import (
     MEMORY_INDEX_NAME,
     MEMORY_INDEX_VERSION,
     MEMORY_KIND,
+    RecallHit,
+    _tokens,
     build_memory_renderer,
     format_recall_text,
     match_memories,
@@ -78,8 +80,9 @@ def test_index_hash_is_stable_and_tracks_content() -> None:
 
 
 def test_index_bytes_unchanged_for_frontmatterless_store() -> None:
-    """v2 compat contract: entries without a type (every pre-frontmatter
-    file) must render — and therefore hash — byte-identically to v1."""
+    """Entries without a type (every pre-frontmatter file) render bare —
+    no annotation, no placeholder — and the recorded hash is the sha256
+    of exactly the rendered bytes."""
     import hashlib
 
     entries = (*_ENTRIES, ("bare-name", "", ""))
@@ -87,6 +90,10 @@ def test_index_bytes_unchanged_for_frontmatterless_store() -> None:
     assert text == (
         "Long-term memory index. Each entry is one stored memory; call\n"
         "the 'memory_read' tool with a memory's name for its full text.\n"
+        "When the user refers to past decisions, preferences, or earlier\n"
+        "work, check this index before answering from scratch. A memory\n"
+        "records what was true when it was written — verify anything that\n"
+        "may have changed since before relying on it.\n"
         "\n"
         "- deploy-process: How we deploy\n"
         "- naming-rules: Module naming conventions\n"
@@ -317,12 +324,12 @@ def test_compose_places_index_in_semi_stable_and_stays_pure() -> None:
 def test_recall_memories_reads_store_at_call_time(tmp_path: Path) -> None:
     store = _store_with_memories(tmp_path)
     hits = recall_memories(store, "how do we deploy?")
-    assert [name for name, _ in hits] == ["deploy-process"]
-    assert "make deploy" in hits[0][1]
+    assert [h.name for h in hits] == ["deploy-process"]
+    assert hits[0].full and "make deploy" in hits[0].text
     # The injector may be impure: a memory written midway is immediately recallable.
     store.write("rollback-steps", "Rollback\n\nuse make rollback")
     hits = recall_memories(store, "rollback please")
-    assert [name for name, _ in hits] == ["rollback-steps"]
+    assert [h.name for h in hits] == ["rollback-steps"]
 
 
 def test_recall_stops_seeing_archived_memory(tmp_path: Path) -> None:
@@ -338,8 +345,9 @@ def test_recall_stops_seeing_archived_memory(tmp_path: Path) -> None:
 def test_recall_hits_on_summary_tokens_after_name_misses(
     tmp_path: Path,
 ) -> None:
-    # Tier 2 end-to-end: no name token in the text, but two summary
-    # tokens hit — the memory body still comes back verbatim.
+    # Tier 2 end-to-end: no name token in the text, but two summary tokens
+    # hit. A prose guess rides as a POINTER — the summary, verbatim — and
+    # the body is left for the model to fetch with memory_read.
     store = MemoryStore(root=tmp_path / "memories")
     store.write(
         "df-42",
@@ -347,8 +355,29 @@ def test_recall_hits_on_summary_tokens_after_name_misses(
         "Use pgbouncer.",
     )
     hits = recall_memories(store, "postgres connection keeps dropping")
-    assert [name for name, _ in hits] == ["df-42"]
-    assert "pgbouncer" in hits[0][1]
+    assert [h.name for h in hits] == ["df-42"]
+    assert hits[0].full is False
+    assert hits[0].text == "postgres connection pooling notes"
+    assert "pgbouncer" not in format_recall_text(hits)  # body not spent
+
+
+def test_recall_tier1_keeps_the_body_inline(tmp_path: Path) -> None:
+    # The confidence split: a NAME match is the user naming the memory, so
+    # it still costs a body and needs no extra round trip.
+    store = MemoryStore(root=tmp_path / "memories")
+    store.write("pgbouncer-setup", "---\ndescription: pooling\n---\nUse pgbouncer.")
+    hits = recall_memories(store, "how is pgbouncer-setup configured?")
+    assert [(h.name, h.full) for h in hits] == [("pgbouncer-setup", True)]
+    assert "Use pgbouncer." in format_recall_text(hits)
+
+
+def test_recall_pointer_survives_an_empty_summary(tmp_path: Path) -> None:
+    # A summary-less memory can only be reached by name (tier 1), so a
+    # tier-2 pointer with no text is unreachable here; guard the renderer
+    # against it directly — a bare name is still enough to read by.
+    rendered = format_recall_text((RecallHit(name="df-42", text="", full=False),))
+    assert "- df-42" in rendered
+    assert "memory_read" in rendered
 
 
 def test_recall_hit_appends_origin_memory_after_user_message(
@@ -408,21 +437,24 @@ def test_recall_is_verbatim_copy_not_synthesis(tmp_path: Path) -> None:
     )
 
     hits = recall_memories(store, "how do we deploy this module?")
-    by_name = dict(hits)
-    # Both memories hit (name tokens "deploy" and "module"/"naming" — at
-    # least deploy-process must), and each returned body is byte-identical
-    # to the file on disk (no transformation).
-    assert "deploy-process" in by_name
-    for name, body in hits:
-        on_disk = store.read(name)
+    # Both memories may hit (name tokens "deploy" and "module"/"naming" —
+    # at least deploy-process must), and every body returned is
+    # byte-identical to the file on disk (no transformation).
+    assert "deploy-process" in {h.name for h in hits}
+    for hit in hits:
+        on_disk = store.read(hit.name)
         assert on_disk is not None
-        assert body == on_disk  # verbatim, not paraphrased
+        if hit.full:
+            assert hit.text == on_disk  # verbatim, not paraphrased
+        else:
+            # A pointer is the index summary, also copied not written.
+            assert hit.text in on_disk
 
-    # The rendered recall turn carries each body verbatim (the high-signal
-    # exact path survives — a synthesis step would be tempted to drop it).
+    # The rendered recall turn carries each injected text verbatim (the
+    # high-signal exact path survives — a synthesis step would drop it).
     rendered = format_recall_text(hits)
-    for _name, body in hits:
-        assert body in rendered
+    for hit in hits:
+        assert hit.text in rendered
     assert "/etc/prod-secrets" in rendered
 
 
@@ -532,7 +564,60 @@ def test_default_global_memory_dir_is_under_home() -> None:
 
 def test_format_recall_text_contains_names_and_bodies() -> None:
     text = format_recall_text(
-        (("deploy-process", "Always run make deploy."),)
+        (RecallHit("deploy-process", "Always run make deploy.", True),)
     )
     assert "deploy-process" in text
     assert "Always run make deploy." in text
+
+
+def test_format_recall_text_separates_bodies_from_pointers() -> None:
+    text = format_recall_text(
+        (
+            RecallHit("deploy-process", "Always run make deploy.", True),
+            RecallHit("df-42", "postgres pooling notes", False),
+        )
+    )
+    # Bodies first under their own heading, pointers in a trailing list
+    # that names the tool to get the rest.
+    assert text.index("## deploy-process") < text.index("- df-42:")
+    assert "Always run make deploy." in text
+    assert "memory_read" in text
+
+
+# ---------------------------------------------------------------------------
+# Tokenisation — space-free scripts (the bug: recall was dead for them)
+# ---------------------------------------------------------------------------
+
+
+def test_cjk_text_produces_bigram_tokens() -> None:
+    # Before: the word rule found nothing here and match_memories
+    # early-returned on an empty token set, so recall was silently dead
+    # for every wholly-Chinese message.
+    assert _tokens("记忆机制") == {"记忆", "忆机", "机制"}
+    assert _tokens("钱") == {"钱"}  # a lone character still tokenises
+
+
+def test_ascii_tokenisation_is_unchanged() -> None:
+    assert _tokens("Deploy the CI pipeline, a step") == {
+        "deploy", "the", "ci", "pipeline", "step",
+    }  # single-letter "a" still dropped
+
+
+def test_mixed_script_text_tokenises_both_halves() -> None:
+    assert _tokens("这个 memory 怎么做") == {
+        "memory", "这个", "怎么", "么做",
+    }
+
+
+def test_cjk_recall_matches_a_cjk_memory() -> None:
+    entries = (("记忆检索设计", "分层注入与二元组匹配", "project"),)
+    assert match_memories(entries, "记忆检索到底怎么做的") == ("记忆检索设计",)
+    assert match_memories(entries, "完全无关的问题") == ()
+
+
+def test_cjk_query_does_not_reach_an_english_memory() -> None:
+    # Honest limit of token matching: bigrams cannot bridge languages. A
+    # Chinese question never finds a wholly English memory — that gap
+    # needs semantic retrieval, not a wider tokeniser.
+    entries = (("memory-recall", "tiered recall injection", "project"),)
+    assert match_memories(entries, "记忆检索怎么做") == ()

@@ -35,8 +35,9 @@ from noeta.context.memory import (
     MEMORY_INDEX_VERSION,
     MEMORY_KIND,
     MemoryEntries,
+    RecallHit,
     format_recall_text,
-    match_memories,
+    match_memories_tiered,
     memory_index_hash,
 )
 from noeta.core.engine import Engine
@@ -127,22 +128,33 @@ def record_memory_index(
     return task
 
 
-def recall_memories(
-    store: MemoryStore, text: str
-) -> tuple[tuple[str, str], ...]:
-    """The injector's impure half: read the store NOW, match, load bodies.
+def recall_memories(store: MemoryStore, text: str) -> tuple[RecallHit, ...]:
+    """The injector's impure half: read the store NOW, match, load text.
 
     Reading at call time (not from a wiring-time snapshot) means a
     memory written mid-session by ``memory_write`` is immediately
     recallable — legal because this runs before anything enters the
-    ledger. Returns ``(name, full_body)`` pairs in index order;
-    unreadable hits are skipped rather than crashing the turn.
+    ledger. Returns :class:`RecallHit` values in index order; unreadable
+    hits are skipped rather than crashing the turn.
+
+    **Only a tier-1 hit costs a body.** A name match is the user's own
+    words naming the memory, so the body is loaded and injected as it
+    always was. A tier-2 hit — prose overlap against the summary — carries
+    just its index summary, and the model pays for the body only if it
+    calls ``memory_read``. A memory whose file has gone missing is dropped
+    from either tier; a tier-2 entry with an empty summary still rides as
+    a bare name, which is enough to read by.
     """
-    hits: list[tuple[str, str]] = []
-    for name in match_memories(store.entries(), text):
+    entries = store.entries()
+    summaries = {name: summary for name, summary, _type in entries}
+    hits: list[RecallHit] = []
+    for name, by_name in match_memories_tiered(entries, text):
+        if not by_name:
+            hits.append(RecallHit(name=name, text=summaries.get(name, ""), full=False))
+            continue
         body = store.read(name)
         if body is not None:
-            hits.append((name, body))
+            hits.append(RecallHit(name=name, text=body, full=True))
     return tuple(hits)
 
 
