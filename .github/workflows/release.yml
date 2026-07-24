@@ -66,6 +66,12 @@ jobs:
           name: dist
           path: dist/
 
+  # Each publish job runs only when the build produced a wheel whose version
+  # equals the tag — so a partial release (e.g. a runtime+sdk cut while
+  # noeta-agent stays behind) publishes exactly the bumped packages and the
+  # unbumped ones skip cleanly instead of failing on a duplicate upload. A
+  # full lockstep release bumps all three, so all three gates open. The
+  # ``dist/<name>-*`` upload globs still carry the wheel + sdist together.
   publish-runtime:
     needs: build
     runs-on: ubuntu-latest
@@ -75,8 +81,20 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: { name: dist, path: dist/ }
+      - name: Gate on the tag version
+        id: gate
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ls dist/noeta_runtime-"${VERSION}"-*.whl >/dev/null 2>&1; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no noeta_runtime-${VERSION} wheel — not part of this release; skipping"
+          fi
       - uses: astral-sh/setup-uv@v6
-      - run: uv publish --trusted-publishing always dist/noeta_runtime-*
+        if: steps.gate.outputs.publish == 'true'
+      - if: steps.gate.outputs.publish == 'true'
+        run: uv publish --trusted-publishing always dist/noeta_runtime-*
 
   publish-sdk:
     needs: build
@@ -87,8 +105,20 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: { name: dist, path: dist/ }
+      - name: Gate on the tag version
+        id: gate
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ls dist/noeta_sdk-"${VERSION}"-*.whl >/dev/null 2>&1; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no noeta_sdk-${VERSION} wheel — not part of this release; skipping"
+          fi
       - uses: astral-sh/setup-uv@v6
-      - run: uv publish --trusted-publishing always dist/noeta_sdk-*
+        if: steps.gate.outputs.publish == 'true'
+      - if: steps.gate.outputs.publish == 'true'
+        run: uv publish --trusted-publishing always dist/noeta_sdk-*
 
   publish-agent:
     needs: build
@@ -99,5 +129,17 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: { name: dist, path: dist/ }
+      - name: Gate on the tag version
+        id: gate
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ls dist/noeta_agent-"${VERSION}"-*.whl >/dev/null 2>&1; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no noeta_agent-${VERSION} wheel — not part of this release; skipping"
+          fi
       - uses: astral-sh/setup-uv@v6
-      - run: uv publish --trusted-publishing always dist/noeta_agent-*
+        if: steps.gate.outputs.publish == 'true'
+      - if: steps.gate.outputs.publish == 'true'
+        run: uv publish --trusted-publishing always dist/noeta_agent-*
