@@ -8,6 +8,51 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-07-24
+
+### Added
+
+- **Read-triggered instruction discovery** (`HostConfig.instructions_discovery`,
+  off by default). When enabled, a successful `read` inside the session
+  workspace activates the subdirectory `NOETA.md` / `AGENTS.md` files between
+  the read file's directory and the workspace root, each rendered *anchored* at
+  its point of discovery — so a mid-task activation appends instead of
+  rewriting the stable prompt head. `Client.seed_start` and the anchored
+  content-placement seams are forwarded through the SDK. Decision record:
+  `docs/adr/anchored-content-placement.md`.
+- **Per-session sandbox opt-out** (`HostConfig.sandbox_session_policy`). A
+  policy returning `False` keeps a session on the `local` execution tier — no
+  container, the host `WorkspaceRoot` fence — even while a sandbox provider is
+  configured for other sessions. Default (`None`) provisions every session as
+  before.
+- **Host-authorized out-of-workspace writes** (`HostConfig.write_roots`, plus
+  the exported `path_within` containment predicate). A host may open specific
+  directories outside the workspace for a task's `edit` / `write` /
+  `apply_patch`, consulted per call so a grant made while a task is paused takes
+  effect on the resumed call. The default keeps the single-root wall.
+- **`Client.seed_start(activations=…)`** — pin built-in skills pre-loop for a
+  seeded task, the same forced-preload channel a `/skill-name` slash command
+  uses. `()` keeps the seed byte-identical to the no-skill path.
+- **Memory recall now matches CJK text.** A message written without spaces
+  (Chinese / Japanese / Korean) is segmented into character bigrams, so it
+  recalls at all — previously such a message produced no recall. Still pure and
+  deterministic: no dictionary, no service.
+
+### Changed
+
+- **Filesystem reads are no longer fenced to the workspace.** An absolute
+  `read` / `glob` / `grep` path resolves where it points (a neighbouring
+  checkout, a skill pack's bundled reference); `glob` gains an optional `path`
+  argument to choose the tree. Writes stay fenced and widen only by host
+  authorization (`write_roots`). The rationale: a read is observation, not
+  mutation, and `shell_run` already reaches the same bytes (PRD §B19), so a path
+  check in the read tool was never the disclosure boundary — the wall now stands
+  where the irreversible act is.
+- **Memory recall is now two-tier.** A name match injects the full memory body
+  (unchanged); a weaker summary-overlap match injects only a one-line pointer
+  the model expands with `memory_read` if it wants the text — so a chatty match
+  no longer spends whole memories of context on a maybe.
+
 ### Fixed
 
 - **The compaction summarize round-trip ignored the model's output ceiling,
@@ -776,6 +821,7 @@ Initial preview release.
 [0.2.5]: https://github.com/initxy/noeta/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/initxy/noeta/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/initxy/noeta/compare/v0.2.2...v0.2.3
+[0.3.2]: https://github.com/initxy/noeta/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/initxy/noeta/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/initxy/noeta/compare/v0.2.11...v0.3.0
 [0.2.2]: https://github.com/initxy/noeta/compare/v0.2.1...v0.2.2
