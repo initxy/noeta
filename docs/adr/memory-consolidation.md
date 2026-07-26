@@ -4,7 +4,7 @@
 
 Memory v1 (see `docs/adr/unified-context-supply.md`, "Memory v1, four parts") gave the agent a file-based long-term memory with model-managed write/read tools, a resident index, and auto-recall. What it deliberately left out is any process that maintains the store over time: memories only accumulate, duplicates pile up, and facts that later turn out to be wrong stay recallable forever. The industry pattern that emerged for this (OpenAI's background memory rewriting, Claude Code's transcript-driven memory maintenance, Letta's sleep-time compute) is an **asynchronous background pass** that reads recent activity and rewrites the memory store — expensive curation moved off the interactive path.
 
-Memory v2 (spec: `docs/implementation-specs/2026-07-10-memory-v2.md`) adds that pass, plus the primitives it needs (`memory_search`, `memory_archive`, frontmatter). This ADR records the long-term trade-offs: when consolidation runs, what runs it, what it is allowed to do, and which weak-consistency effects we accept.
+Memory v2 (spec: `docs/implementation-specs/archive/2026-07-10-memory-v2.md`) adds that pass, plus the primitives it needs (`memory_search`, `memory_archive`, frontmatter). This ADR records the long-term trade-offs: when consolidation runs, what runs it, what it is allowed to do, and which weak-consistency effects we accept.
 
 ## Decision
 

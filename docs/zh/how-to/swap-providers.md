@@ -12,7 +12,7 @@ Provider 中立性意味着你的代理身份——system prompt、工具、权�
 
 ```python
 from noeta.sdk import Client, Options, query
-from noeta.llm.anthropic import AnthropicProvider
+from noeta.providers.anthropic import AnthropicProvider
 
 options = Options(
     system_prompt="You are a concise assistant.",
@@ -20,27 +20,30 @@ options = Options(
     allowed_tools=None,
 )
 
-anthropic = AnthropicProvider(
-    model="claude-sonnet-4-5-20250929",
-    api_key="sk-ant-…",
-)
+anthropic = AnthropicProvider(api_key="sk-ant-…")
 
-client = Client(options, provider=anthropic, workspace_dir="./")
+client = Client(
+    options,
+    provider=anthropic,
+    workspace_dir="./",
+    model="claude-sonnet-4-5-20250929",
+)
 ```
+
+注意 model 的位置：provider 是**某个厂商 wire 协议的适配器**，而不是与某个模型的绑定，所以它不接受 `model` 参数。模型是按会话在 `Client(model=…)` / `query(model=…)` 上选定的——正因如此，一个 provider 实例可以服务多个模型。
 
 ## 之后：OpenAI 兼容
 
 ```python
-from noeta.llm.openai_compat import OpenAICompatProvider
+from noeta.providers.openai_compat import OpenAICompatProvider
 
 openai = OpenAICompatProvider(
-    model="gpt-5.5",
     base_url="https://api.openai.com/v1",
     api_key="sk-…",
 )
 
 # 相同的 options，相同的 client 构造——只有 provider 变了
-client = Client(options, provider=openai, workspace_dir="./")
+client = Client(options, provider=openai, workspace_dir="./", model="gpt-5.5")
 ```
 
 其他什么都不变：相同的 `Options`、相同的工具、相同的 `Client` 用法。你的历史记录也是可移植的——EventLog 条目与 provider 无关，因此用 Anthropic 开始的会话可以用 OpenAI 恢复。
@@ -57,6 +60,7 @@ result = query(
     goal="What is the capital of France?",
     provider=openai,  # 或 anthropic，或任何 provider
     workspace_dir="./",
+    model="gpt-5.5",
 )
 print(result.answer())
 ```
@@ -66,8 +70,14 @@ print(result.answer())
 对两个 provider 运行相同的目标，确认两者都能产生终止回答：
 
 ```python
-for name, prov in [("anthropic", anthropic), ("openai", openai)]:
-    result = query(options, goal="Say hello.", provider=prov, workspace_dir="./")
+runs = [
+    ("anthropic", anthropic, "claude-sonnet-4-5-20250929"),
+    ("openai", openai, "gpt-5.5"),
+]
+for name, prov, model in runs:
+    result = query(
+        options, goal="Say hello.", provider=prov, workspace_dir="./", model=model
+    )
     print(f"{name}: {result.answer()}")
 ```
 

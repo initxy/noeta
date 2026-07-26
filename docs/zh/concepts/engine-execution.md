@@ -1,11 +1,13 @@
 # 引擎与执行
 
-Engine 是一个**无状态的步骤驱动器**：`run_one_step(task, lease_id=…)` 将 Task 恰好推进一个 Policy 决策，然后返回。它在调用之间不持有任务状态——每一步都从对 EventLog 的一次全新 fold 开始（见[事件溯源](event-sourcing.md)）。
+Engine 是一个**无状态的步骤驱动器**：`run_one_step(task, lease_id=…)` 把 Task 推进到它的下一个**挂起或终止**，然后返回。它在调用之间不持有任务状态——每一步都从对 EventLog 的一次全新 fold 开始（见[事件溯源](event-sourcing.md)）。
+
+这里的"一步"是一个*轮次边界*，不是一次模型往返。在**同一次**调用内部，只要 Policy 返回 `tool_calls`，Engine 就继续转：追加工具结果、重新 compose View、再问一次 Policy。只有非 `tool_calls` 的决策才结束这次调用——终止类决策把 Task 转成 `terminal`，挂起类转成 `suspended`。所以一个跑了十次工具调用的步骤，仍然只是一次 `run_one_step`。
 
 <p align="center">
   <img src="../../assets/turn-sequence.svg" alt="任务执行的一轮——目标提交、租约、步骤循环、完成，通过 SSE 流式传输" width="820">
   <br>
-  <em>通过内置代理完成一整轮：提交 → 租用 → 步骤循环 → 完成。步骤循环的每次迭代就是一次 <code>run_one_step</code>。</em>
+  <em>通过内置代理完成一整轮：提交 → 租用 → 步骤循环 → 完成。整个步骤循环都跑在一次 <code>run_one_step</code> 调用里。</em>
 </p>
 
 ## 一步：组合 → 决策 → 分发

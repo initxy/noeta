@@ -60,8 +60,15 @@ options = Options(
 ```
 
 `allowed_tools` controls which tools the model can call. Pass `None` to
-get all 13 built-in tools, or pass a tuple of `DecoratedTool` instances
-(like our `word_count`) to restrict the surface.
+select all **11** built-in tools, or pass a tuple of `DecoratedTool`
+instances (like our `word_count`) to restrict the surface.
+
+Selected is not the same as mounted: **10** of the 11 mount with no extra
+configuration, because `web_search` appears only when
+`NOETA_WEB_SEARCH_API_KEY` is set. Other tools (memory, browser, `open_app`,
+`run_skill_script`) are not in this whitelist at all — they are gated on a
+capability or a host injection instead. See the
+[tool catalog](../reference/tools.md).
 
 `permission_mode="bypassPermissions"` means tool calls are not gated —
 useful for a low-risk tool like `word_count`. For tools that write files

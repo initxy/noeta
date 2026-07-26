@@ -6,7 +6,9 @@ it did.
 
 ## Prerequisites
 
-- Python 3.11+ with [uv](https://docs.astral.sh/uv/), Node 20+
+- Python 3.12+ with [uv](https://docs.astral.sh/uv/), Node 20+ (this
+  tutorial boots the platform, which requires 3.12; the SDK alone supports
+  3.11)
 - An API key for an OpenAI-Responses-compatible gateway (or use the
   offline mock to follow the motions without one)
 - Docker, for the sandbox (the agent needs it to write report files)

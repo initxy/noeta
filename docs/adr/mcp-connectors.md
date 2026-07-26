@@ -1,5 +1,17 @@
 # Remote MCP connectors = an HTTP request/response subset + a frontend-managed server, credentials stay on the host, requests carry only aliases
 
+> **Status: the management layer is superseded by [server-platform-product.md](server-platform-product.md)**; the client and the resume invariant are live.
+> The "frontend-managed server" and the host-layer `mcp_registry` /
+> `mcp_prompt_expander` described here are retired, along with the global
+> `~/.noeta/mcp_servers.json`. Connectors are now **per-space** rows in the
+> application database, credential-scrubbed on read, handed to the SDK host per
+> turn through `HostConfig.mcp_server_resolver`. Everything else stands: the
+> HTTP request/response subset, the synchronous single-threaded client,
+> credentials never leaving the host, requests carrying only aliases, and the
+> resume rule that the tool spec is pinned into the first
+> `LLMRequestStarted.request_ref` and rebuilt from the recording, never
+> reconnected.
+
 ## Context
 
 On top of the already-delivered local stdio MCP client, this decision adds a **remote HTTP transport + a frontend-managed server + prompts/resources + a unified `@` channel**, while holding two hard lines: a **synchronous single-threaded client**, and the resume-rebuild invariant that **the tool spec is pinned into the first `LLMRequestStarted.request_ref` at recording time, and on resume the tool set is rebuilt from the recording and never reconnected**.

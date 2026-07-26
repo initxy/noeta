@@ -105,8 +105,10 @@ delivery, and stale reclamation. A Worker drives the loop:
 2. The Worker folds the EventLog into a `RuntimeState`.
 3. If `lease.wake_event` is set, the Worker calls `engine.note_woken(…)`,
    which writes a durable `TaskWoken` envelope.
-4. The Worker calls `engine.run_one_step(task, lease_id=…)` repeatedly until
-   the Task suspends or terminates.
+4. The Worker calls `engine.run_one_step(task, lease_id=…)`, which advances the
+   Task to its next suspend or terminal — looping internally over `tool_calls`
+   decisions, so one call covers a whole turn rather than a single model
+   round-trip.
 5. The Worker calls `dispatcher.release(lease_id, next_state=…, wake_on=…)` —
    or `dispatcher.fail(…)` on an unexpected exception.
 
@@ -123,8 +125,8 @@ call `WorkerLoop(…).run_forever(…)` themselves (see the
 
 ### Durable wake: the machinery
 
-[Wake & resume](../concepts/wake-resume.md) states the guarantee —
-single-worker durable exactly-once delivery. The mechanism:
+[Wake & resume](../concepts/wake-resume.md) states the guarantee — durable
+exactly-once delivery. The mechanism:
 
 - The Dispatcher matches an incoming wake event to a suspended Task by
   projection and holds the match durably. Delivery happens at lease time via
@@ -144,11 +146,18 @@ single-worker durable exactly-once delivery. The mechanism:
   `suspended_without_wake_event` — a diagnostic meaning "waiting for
   something that has not happened yet," not a fault.
 
-The guarantee is scoped single-host / single-worker. A crash mid-step
-(after `TaskWoken` but before the step's remaining envelopes land) recovers
-on the next lease: the interrupted attempt is sealed and re-driven
-automatically when side-effect-free, or the Task is parked for a human. The
-open edge — multi-worker fencing — and the recovery scope are catalogued in
+The guarantee holds across concurrent Workers: every lease-checked append is
+fenced, so a stalled Worker whose lease was reclaimed cannot land a write
+behind the new generation. Single-host multi-worker is shipped on every
+backend; **multi-host** is shipped on Postgres, where the fence is an
+in-transaction row-share check evaluated against the database clock (removing
+per-host clock skew from the decision). SQLite and in-memory stay single-host.
+
+A crash mid-step (after `TaskWoken` but before the step's remaining envelopes
+land) recovers on the next lease: the interrupted attempt is sealed and
+re-driven automatically when side-effect-free, or the Task is parked for a
+human. The recovery scope, the SQLite boundary, and the one open edge (sandbox
+side effects are unfenced across Worker generations) are catalogued in
 [known limitations](../operations/limitations.md).
 
 ## Context assembly
@@ -253,11 +262,13 @@ The Lease is what keeps concurrent Workers off the same Task: lease,
 heartbeat, expiry sweep, exactly-once wake delivery, and write validation in
 the log itself.
 
-The shipping shape today is single-host: a local SQLite file, one in-process
-`WorkerLoop`, and fan-out as bounded in-process threads (default 8). Reaching
-a multi-host cluster is a storage-adapter swap plus a worker pool — the
-Engine does not change, because fold is pure and lease validation lives in
-the log. That work is real but unshipped; the honest boundary list is in
+Two shipping shapes today. The default is single-host: a local SQLite file, a
+resident `WorkerLoop` pool in one process (`AGENT_NUM_WORKERS`, default 4), and
+fan-out as bounded in-process threads (default 8). Reaching a multi-host cluster
+is a storage-adapter swap — point the deployment at Postgres and several host
+processes can share one database, their lease-checked writes fenced in-transaction
+against the database clock. The Engine does not change either way, because fold
+is pure and lease validation lives in the log. The honest boundary list is in
 [known limitations](../operations/limitations.md).
 
 Cancellation follows the same cooperative design as the Engine's stop probes:

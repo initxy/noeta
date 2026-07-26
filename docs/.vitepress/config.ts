@@ -46,7 +46,7 @@ export default defineConfig({
 
     // Footer.
     footer: {
-      message: 'Released under the MIT License.',
+      message: 'Released under the Apache License 2.0.',
       copyright: 'Copyright &copy; 2025–2026 Noeta Contributors',
     },
 

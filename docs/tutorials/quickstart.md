@@ -7,7 +7,9 @@ double.
 
 ## 1. Install
 
-You need Python 3.11+ with [uv](https://docs.astral.sh/uv/) and Node 20+:
+You need Python 3.12+ with [uv](https://docs.astral.sh/uv/) and Node 20+.
+(The platform, `noeta-agent`, requires 3.12; the two libraries alone —
+`noeta-runtime` / `noeta-sdk` — support 3.11.)
 
 ```bash
 git clone https://github.com/initxy/noeta && cd noeta

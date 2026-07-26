@@ -21,7 +21,7 @@ Noeta 在一个仓库里交付两样东西：
 ## 快速开始 —— 零凭证，60 秒
 
 不需要 API key、不需要 Docker、不需要注册账号。从一份全新 checkout 开始
-（Python 3.11+ 配 [uv](https://docs.astral.sh/uv/)，Node 20+）：
+（Python 3.12+ 配 [uv](https://docs.astral.sh/uv/)，Node 20+——平台需要 3.12；只用 `noeta-sdk` 库则支持 3.11）：
 
 ```bash
 git clone https://github.com/initxy/noeta && cd noeta

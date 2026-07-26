@@ -149,7 +149,7 @@ shared container when one conversation closes would break the others.
 
 The v1 "one shared container per host, fs/shell only, product-inactive" shape is
 superseded (its record above stays for history). See the implementation spec
-`docs/implementation-specs/2026-07-08-per-session-sandbox.md` for the full design.
+`docs/implementation-specs/archive/2026-07-08-per-session-sandbox.md` for the full design.
 
 **A `SandboxProvider` seam splits *provisioning* from *mechanism*.** v1 addressed
 one pre-existing container by `base_url`; v2 provisions a **fresh container per
@@ -272,7 +272,7 @@ than reverse-engineering its on-disk credential format.
 
 A sandbox session can now drive the container's headless browser. The capability
 lands in two layers, both **sandbox-gated** (no container ⇒ no browser tools) and
-detailed in `docs/implementation-specs/2026-07-09-sandbox-browser-subsystem.md`:
+detailed in `docs/implementation-specs/archive/2026-07-09-sandbox-browser-subsystem.md`:
 
 - **Layer 3 — a noeta-owned browser tool pack.** Five tools (`browser_navigate`
   / `browser_click` / `browser_type` / `browser_extract` / `browser_screenshot`)
@@ -355,7 +355,7 @@ contract is unchanged: same `ExecEnv` / `BrowserBackend` surface, same recorded
 output shapes, tool schemas untouched (stable prefix holds). This also closes
 the file-read defect (the old wire's phantom `encoding=base64` on
 `/v1/file/read`); see
-`docs/implementation-specs/2026-07-10-sandbox-sdk-adapters.md`.
+`docs/implementation-specs/archive/2026-07-10-sandbox-sdk-adapters.md`.
 
 ### SDK-adapter export surface (decided)
 
@@ -412,9 +412,12 @@ The v2 per-session path made the sandbox eager: whenever a
 root task id and called `allocate_exec_env`, so *every* session got a
 container. That left the `LocalExecEnv` path — the fallback this ADR always
 kept for a build with no `exec_env_ref` — unreachable in practice whenever the
-sandbox was on. The product wants three **execution tiers** per scope
-(`none | local | sandbox`, see `teammate-workspace-product.md` D13), so `local`
-must be reachable *while a provider is configured for other sessions*.
+sandbox was on. The motivating product wanted three **execution tiers** per
+scope (`none | local | sandbox`), so `local` must be reachable *while a provider
+is configured for other sessions*. (That product design was never merged — the
+`teammate-workspace-product.md` this once cited does not exist in this
+repository. The seam below is shipped and useful on its own: it is what lets any
+host keep some sessions off the sandbox while a provider serves the rest.)
 
 **Decision.** Add exactly one host-config seam:
 `HostConfig.sandbox_session_policy: Optional[Callable[[str, Optional[str]], bool]]`

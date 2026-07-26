@@ -59,7 +59,7 @@ Dispatcher 负责调度：任务入队、Lease 授予、唤醒事件传递和过
 1. `dispatcher.lease(…)` 返回一个 `Lease(lease_id, task_id, expires_at, wake_event?)`——对一个任务的独占、通过心跳续约的持有权。
 2. Worker 将 EventLog fold 为 `RuntimeState`。
 3. 如果设置了 `lease.wake_event`，Worker 调用 `engine.note_woken(…)`，写入一个持久化的 `TaskWoken` 信封。
-4. Worker 反复调用 `engine.run_one_step(task, lease_id=…)`，直到任务挂起或终止。
+4. Worker 调用 `engine.run_one_step(task, lease_id=…)`，它把任务推进到下一个挂起或终止——内部对 `tool_calls` 决策循环，因此一次调用覆盖的是一整轮，而不是一次模型往返。
 5. Worker 调用 `dispatcher.release(lease_id, next_state=…, wake_on=…)`——或在意外异常时调用 `dispatcher.fail(…)`。
 
 单写入者不变式在此通过机械方式强制执行：EventLog 在每次 `emit(lease_id=…)` 时都会咨询 Dispatcher（作为 `LeaseRegistry`），因此只有活跃 Lease 的持有者才能写入任务流。Observer 在每个信封提交后同步看到它，在写入者线程上但在写入者锁之外，异常会被吞没。
@@ -68,7 +68,7 @@ Dispatcher 负责调度：任务入队、Lease 授予、唤醒事件传递和过
 
 ### 持久化唤醒：机制
 
-[唤醒与恢复](../concepts/wake-resume.md)阐述了保证——单工作者持久化恰好一次传递。机制如下：
+[唤醒与恢复](../concepts/wake-resume.md)阐述了保证——持久化恰好一次传递。机制如下：
 
 - Dispatcher 通过投影将传入的唤醒事件匹配到挂起的任务，并持久化保存匹配结果。传递在 lease 时通过 `Lease.wake_event` 发生。
 - Worker 将唤醒事件传入 `engine.note_woken`，后者在步骤继续之前写入 `TaskWoken(wake_event=…)`。此写入是持久化提交点。
@@ -76,7 +76,9 @@ Dispatcher 负责调度：任务入队、Lease 授予、唤醒事件传递和过
 - 消费是幂等的。Worker 的唤醒分支是一个以最新匹配 `TaskWoken` 信封为键的恢复状态机：如果重新传递的 `TaskWoken` 已经落地，则在不发出第二个的情况下进行协调。
 - 对没有排队唤醒的挂起任务尝试恢复会报告类型化的 `suspended_without_wake_event`——这是一个诊断信息，意为"等待尚未发生的事情"，而非故障。
 
-该保证的范围限于单主机/单工作者。步骤中途的崩溃（在 `TaskWoken` 之后但在步骤其余信封落地之前）在下一次 lease 时恢复：被中断的尝试在无副作用时被密封并自动重新驱动，否则任务被停放等待人工处理。开放的边缘——多工作者 fencing——以及恢复范围在[已知限制](../operations/limitations.md)中有详细记录。
+该保证在多个并发 Worker 之间成立：每一次带 lease 校验的 append 都被 fencing 保护，租约已被回收的滞留 Worker 无法把写落在接手它的那一代之后。单主机多 worker 在所有后端上均已交付；**多主机**在 Postgres 上已交付，fencing 是事务内的 row-share 检查，并以数据库时钟判定（把各主机的时钟偏差从决策里剔除）。SQLite 与内存后端仍是单主机。
+
+步骤中途的崩溃（在 `TaskWoken` 之后但在步骤其余信封落地之前）在下一次 lease 时恢复：被中断的尝试在无副作用时被密封并自动重新驱动，否则任务被停放等待人工处理。恢复范围、SQLite 边界，以及仅剩的那个开放边缘（sandbox 副作用在 Worker 代际之间不受 fencing 保护）在[已知限制](../operations/limitations.md)中有详细记录。
 
 ## 上下文组装
 
@@ -131,7 +133,7 @@ Engine 使用中立的内部协议；厂商适配器在边缘进行转换，将�
 
 一旦事实基础收敛于"在持久化日志上 fold"，分布式主要是一个调度问题。任何能读取存储的进程都可以通过 fold 重建任何任务；执行不假设它在哪台机器上运行。Lease 是防止并发 Worker 操作同一任务的机制：lease、心跳、过期扫描、恰好一次唤醒传递，以及日志本身中的写入验证。
 
-当前的发布形态是单主机：一个本地 SQLite 文件、一个进程内 `WorkerLoop`，以及作为有界进程内线程的扇出（默认 8）。实现多主机集群只需更换存储适配器加上工作者池——Engine 不变，因为 fold 是纯函数且 lease 验证存在于日志中。这项工作是真实的但尚未发布；诚实的边界列表在[已知限制](../operations/limitations.md)中。
+今天有两种发布形态。默认是单主机：一个本地 SQLite 文件、一个进程内的常驻 `WorkerLoop` 池（`AGENT_NUM_WORKERS`，默认 4），以及作为有界进程内线程的扇出（默认 8）。要达到多主机集群，只需更换存储适配器——把部署指向 Postgres，多个 host 进程即可共享一个数据库，它们带 lease 校验的写在事务内按数据库时钟被 fencing 保护。两种形态下 Engine 都不变，因为 fold 是纯函数且 lease 验证存在于日志中。诚实的边界列表在[已知限制](../operations/limitations.md)中。
 
 取消遵循与 Engine 停止探测相同的协作设计：取消标记任务；Worker 和 Engine 在下一个安全点停止；级联取消进行中的 Subtask；后台 shell 进程被注册并在其会话关闭时回收。
 

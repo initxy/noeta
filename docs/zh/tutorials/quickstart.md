@@ -4,7 +4,8 @@
 
 ## 1. 安装
 
-需要 Python 3.11+（配 [uv](https://docs.astral.sh/uv/)）和 Node 20+：
+需要 Python 3.12+（配 [uv](https://docs.astral.sh/uv/)）和 Node 20+。
+（平台 `noeta-agent` 要求 3.12；只用两个库——`noeta-runtime` / `noeta-sdk`——则支持 3.11。）
 
 ```bash
 git clone https://github.com/initxy/noeta && cd noeta

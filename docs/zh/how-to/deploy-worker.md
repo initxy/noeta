@@ -87,7 +87,7 @@ loop.run_forever(install_signals=True)
 | `shutdown_grace_s` | `30.0` | `stop()` 后等待进行中步骤完成的最大时间。`None` = 无限制 |
 | `reliability_sink` | 结构化日志 | `ReliabilityEvent` 的去向 |
 
-**没有 `workers` 参数** — 该循环按设计是单 worker 的。
+**没有 `workers` 参数**：一个 `WorkerLoop` 就是一条 drain 线程。要横向扩容就对同一个存储跑多个循环（各带自己的 `worker_id`）——平台自己的常驻池就是这样（`AGENT_NUM_WORKERS`，默认 4）。并发循环是安全的：带 lease 校验的 append 受 fencing 保护。
 
 ## 运行时发生了什么
 
@@ -122,4 +122,4 @@ loop.run_forever(install_signals=True)
 
 - [WorkerLoop 参考](../reference/worker-loop.md) — 所有构造函数参数、方法和结果类型
 - [唤醒与恢复](../concepts/wake-resume.md) — worker 实现的交付保证
-- [已知限制](../operations/limitations.md) — 单 worker 边界和崩溃恢复范围
+- [已知限制](../operations/limitations.md) — SQLite 的单主机边界和崩溃恢复范围

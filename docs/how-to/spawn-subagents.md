@@ -26,13 +26,29 @@ options = Options(
     system_prompt="You are a lead engineer. Delegate research to the researcher sub-agent.",
     name="lead",
     agents={"researcher": researcher},
-    capabilities={"delegation": True},  # opens the spawn_subagent surface
 )
 ```
 
-Setting `capabilities={"delegation": True}` on the parent tells the SDK
-to expose the `spawn_subagent` control tool to the model. Without it,
-the parent cannot spawn children even if `agents` is populated.
+That is all you need: populating `agents` is itself the opt-in.
+`compile_options` synthesizes the parent's `delegation` capability and unions
+the child names into `spawnable`, so the `spawn_subagent` control tool is
+exposed to the model with `researcher` in its schema.
+
+If you do pass `capabilities` explicitly, it must be a
+[`Capabilities`](../reference/sdk.md) instance — a plain dict raises
+`AttributeError` during compile:
+
+```python
+from noeta.sdk import Capabilities
+
+options = Options(
+    system_prompt="…",
+    name="lead",
+    agents={"researcher": researcher},
+    # Capabilities(...), never {"delegation": True}
+    capabilities=Capabilities(delegation=True, todo_write=True),
+)
+```
 
 ## How spawning works
 
@@ -79,9 +95,14 @@ outcome = client.start(goal="Analyze the codebase and report findings.")
 # The parent's messages
 parent_msgs = client.messages(outcome.task_id)
 
-# Find child task IDs from the envelope stream
+# Find child task IDs from the envelope stream: SubtaskSpawned carries the
+# child's id in payload.subtask_id; SubtaskCompleted carries its result.
 envelopes = client.events(outcome.task_id)
-# SubtaskStarted / SubtaskCompleted envelopes carry the child's task_id
+spawned = [e for e in envelopes if e.type == "SubtaskSpawned"]
+child_ids = [e.payload.subtask_id for e in spawned]
+
+# The child's own stream reads like any other task's
+child_msgs = client.messages(child_ids[0])
 ```
 
 Each child has its own trace in the web UI — look for the subtask links
@@ -98,8 +119,17 @@ from noeta.protocols.messages import (
 )
 from noeta.policies.react import SPAWN_SUBAGENT_TOOL
 
+def _finish(text: str) -> LLMResponse:
+    return LLMResponse(
+        stop_reason="end_turn",
+        content=[TextBlock(text=text)],
+        usage=Usage(uncached=1, output=1),
+    )
+
+
 provider = FakeLLMProvider(
     responses=[
+        # 1. the parent delegates
         LLMResponse(
             stop_reason="tool_use",
             content=[ToolUseBlock(
@@ -109,20 +139,21 @@ provider = FakeLLMProvider(
             )],
             usage=Usage(uncached=1, output=1),
         ),
-        # After the child finishes, the parent resumes with this turn:
-        LLMResponse(
-            stop_reason="end_turn",
-            content=[TextBlock(text="The researcher found the bug.")],
-            usage=Usage(uncached=1, output=1),
-        ),
+        # 2. the CHILD's turn
+        _finish("researcher: the bug is in auth.py"),
+        # 3. the parent resumes with the child's result
+        _finish("The researcher found the bug in auth.py."),
     ]
 )
 ```
 
-The child agent also needs a provider. By default it inherits the
-parent's; for the `FakeLLMProvider`, you need to give the child its own
-scripted response sequence (set `model` on the `AgentDefinition` to a
-named model that maps to a child-specific provider).
+The child inherits the parent's provider — there is one provider per host, and
+the child is an ordinary Task on it. So with `FakeLLMProvider` you do **not**
+wire a second provider: script the parent's and the child's turns into the one
+`responses` list, in the order they are consumed (parent spawn → child → parent
+resume), as above.
+
+See `examples/spawn_subtask.py` for this exact flow as a runnable file.
 
 ## See also
 

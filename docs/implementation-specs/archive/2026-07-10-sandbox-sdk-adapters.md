@@ -1,5 +1,9 @@
 # Sandbox SDK adapters — route fs / shell / browser through `agent-sandbox`
 
+> **Status: Shipped** — the `agent-sandbox` SDK adapters are live as the product's
+> `noeta/agent/host/sdk_sandbox_exec_env.py` / `sdk_browser_backend.py`. Durable
+> decisions: [execution-environment-seam.md](../../adr/execution-environment-seam.md).
+
 ## Goal
 
 Replace noeta's hand-written AIO Sandbox HTTP adapters with implementations

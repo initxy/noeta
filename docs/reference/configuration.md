@@ -21,7 +21,7 @@ against the application project root `apps/noeta-agent/`.
 | `HOST` | `127.0.0.1` | Bind interface. |
 | `PORT` | `8000` | Listen port. |
 | `LOG_LEVEL` | `INFO` | Backend log level. |
-| `CORS_ORIGINS` | `http://127.0.0.1:5173,http://localhost:5173` | Comma-separated allowed origins (only needed for a separately-served frontend dev server; `make dev`'s vite proxy does not need it). |
+| `CORS_ORIGINS` | `http://127.0.0.1:5273,http://localhost:5273` | Comma-separated allowed origins (only needed for a separately-served frontend dev server; `make dev`'s vite proxy does not need it). |
 
 ## Paths and storage
 

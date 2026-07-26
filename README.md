@@ -27,8 +27,9 @@ Noeta ships two things in one repo:
 
 ## Quickstart — zero credentials, 60 seconds
 
-No API key, no Docker, no accounts. From a fresh checkout (Python 3.11+ with
-[uv](https://docs.astral.sh/uv/), Node 20+):
+No API key, no Docker, no accounts. From a fresh checkout (Python 3.12+ with
+[uv](https://docs.astral.sh/uv/), Node 20+ — the platform needs 3.12; the
+`noeta-sdk` library alone supports 3.11):
 
 ```bash
 git clone https://github.com/initxy/noeta && cd noeta

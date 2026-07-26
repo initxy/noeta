@@ -50,7 +50,7 @@ WorkerLoop(
 | `reliability_sink` | `ReliabilityEvent` 的去向；默认：结构化日志 |
 | `step_poll_s` | 等待进行中步骤线程时的轮询节奏 |
 
-**没有 `workers` 旋钮**——循环按设计是单 worker 的。
+**没有 `workers` 旋钮**：一个 `WorkerLoop` 就是一条 drain 线程。要扩容就对同一个存储跑多个循环（各带自己的 `worker_id`）——平台的常驻池正是这么做的（`AGENT_NUM_WORKERS`，默认 4）。并发循环是安全的：带 lease 校验的 append 受 fencing 保护，租约被回收的循环无法把写落在接手它的那个循环之后。
 
 ## 方法与属性
 
@@ -87,7 +87,7 @@ WorkerLoop(
 
 `stop()` 停止租约，并等待进行中步骤最多 `shutdown_grace_s`（其租约由心跳保活）。超时时循环**放弃**该步骤：停止其心跳、发出 `shutdown_abandoned`、设置 `abandoned`，然后返回。Python 无法中断步骤线程——放弃之所以安全只是因为进程退出了；然后租约过期，`requeue_stale` 在下次启动时回收任务。
 
-心跳不能永远延长租约：dispatcher 限制了延长次数，因此 `heartbeat_interval × heartbeat_max` 界定了一步的持有时间；超过限制后租约被强制释放，步骤的下一次写入以 `InvalidLease` 失败。边界条件——单 worker、崩溃恢复范围——在 [已知限制](../operations/limitations.md) 中有编目。
+心跳不能永远延长租约：dispatcher 限制了延长次数，因此 `heartbeat_interval × heartbeat_max` 界定了一步的持有时间；超过限制后租约被强制释放，步骤的下一次写入以 `InvalidLease` 失败。边界条件——SQLite 的单主机限制、崩溃恢复范围——在 [已知限制](../operations/limitations.md) 中有编目。
 
 ## 另见
 

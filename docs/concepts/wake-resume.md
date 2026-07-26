@@ -20,7 +20,7 @@ no separate recovery path (see [Fold & snapshot](fold-and-snapshot.md)).
 
 ## The delivery guarantee
 
-Delivery is **single-worker durable exactly-once**. The matched wake is held
+Delivery is **durable exactly-once**. The matched wake is held
 durably by the Dispatcher and outlives any individual lease: it is cleared
 only when a step consumes it, which happens after the `TaskWoken` envelope is
 safely in the log. If the Worker crashes after leasing but before that write,
@@ -36,20 +36,34 @@ typed `suspended_without_wake_event` — a diagnostic, not a failure. (The full
 crash-recovery machinery behind this guarantee is described in the
 [architecture overview](../architecture/overview.md).)
 
-## What "single-host / single-worker" means
+## How far the guarantee scales
 
-The guarantee above is scoped to the shipped deployment shape: one durable
-store (SQLite) and one resident Worker process draining it. Within that
-scope, a Worker crash at any point between match and consumption resolves to
-exactly one durable `TaskWoken`. A crash **mid-step** — after `TaskWoken`,
-before the step's remaining events land — recovers on the next lease: the
-interrupted attempt is sealed with a durable `StepAttemptAbandoned` marker
-and re-driven automatically when it recorded no side-effectful activity;
-otherwise the Task is parked as a stopped conversation with a system notice
-for a human to verify. One boundary remains open: multi-worker / multi-host
-concurrency (fencing between competing Workers is not shipped). Both the
-recovery scope and that boundary are catalogued in
-[known limitations](../operations/limitations.md).
+The guarantee holds for **many concurrent Workers**, not just one. A Worker
+crash at any point between match and consumption resolves to exactly one
+durable `TaskWoken`, and competing Workers cannot both write: every
+lease-checked append is fenced, so a stalled Worker whose lease was reclaimed
+is rejected rather than allowed to land a write behind the new generation.
+
+Two deployment scopes:
+
+- **Single host, multiple Workers** — shipped on every backend. The platform
+  runs a resident pool by default (`AGENT_NUM_WORKERS`, default 4).
+- **Multiple hosts** — shipped on **Postgres**, where the fence is an in-transaction
+  row-share check against the database clock (so per-host clock skew cannot
+  split-brain). SQLite and in-memory are single-host by definition; a Worker
+  pool on that one host is fine, but pointing two host processes at one SQLite
+  file is not supported.
+
+A crash **mid-step** — after `TaskWoken`, before the step's remaining events
+land — recovers on the next lease: the interrupted attempt is sealed with a
+durable `StepAttemptAbandoned` marker and re-driven automatically when it
+recorded no side-effectful activity; otherwise the Task is parked as a stopped
+conversation with a system notice for a human to verify.
+
+The recovery scope, the SQLite single-host boundary, and the one remaining open
+edge (sandbox side effects are not fenced across Worker generations) are
+catalogued in [known limitations](../operations/limitations.md); the fencing
+design is in the multi-host lease fencing ADR.
 
 Related: [Task model](task-model.md) ·
 [Engine & execution](engine-execution.md) ·

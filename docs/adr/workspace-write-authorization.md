@@ -1,5 +1,15 @@
 # Reads are unfenced; writes outside the workspace are authorized by the owner and remembered as grants
 
+> **Status: the runtime half is live; the product half was never merged.**
+> Shipped: reads are unfenced (`read` / `grep` resolve absolute paths anywhere),
+> writes resolve inside the workspace root, and the `write_roots` seam exists
+> for a host to widen them. **Not shipped**: the grants store, the trust guard,
+> and the About panel described as the product surface — that work lives on an
+> unmerged branch and was rolled off `main` on 2026-07-24, so there is at
+> present no UI through which an owner grants a standing write root. Read the
+> authorization model here as the design intent, not as a description of the
+> current product.
+
 ## Context
 
 Every fs tool resolved user-supplied paths through one `WorkspaceRoot`, which canonicalised the target (`realpath`) and asserted it lived under the session's workspace. A path that landed outside — absolute, `..`-rooted, or through a symlink — produced `WorkspaceEscape`, degraded to a `ToolResult(success=False, "path … resolves outside workspace …")`.

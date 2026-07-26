@@ -1,14 +1,21 @@
 # Engine & execution
 
 The Engine is a **stateless step driver**: `run_one_step(task, lease_id=…)`
-advances a Task by exactly one Policy decision, then returns. It holds no task
-state across calls — every step begins from a fresh fold of the EventLog (see
-[Event sourcing](event-sourcing.md)).
+advances a Task to its next **suspend or terminal**, then returns. It holds no
+task state across calls — every step begins from a fresh fold of the EventLog
+(see [Event sourcing](event-sourcing.md)).
+
+"One step" is a *turn boundary*, not a single model round-trip. Inside one
+call the Engine keeps looping while the Policy returns `tool_calls`: it
+appends the tool results, recomposes the View, and asks the Policy again. Only
+a non-`tool_calls` decision ends the call — terminal decisions move the Task to
+`terminal`, suspending ones to `suspended`. So a step that runs ten tool calls
+is still one `run_one_step`.
 
 <p align="center">
   <img src="../assets/turn-sequence.svg" alt="One turn of task execution — goal submission, lease, step loop, finish, streamed over SSE" width="820">
   <br>
-  <em>One full turn through the bundled agent: submit → lease → step loop → finish. Each iteration of the step loop is one <code>run_one_step</code>.</em>
+  <em>One full turn through the bundled agent: submit → lease → step loop → finish. The whole step loop runs inside one <code>run_one_step</code> call.</em>
 </p>
 
 ## One step: compose → decide → dispatch

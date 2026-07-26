@@ -1,5 +1,9 @@
 # Anchored content placement + instructions discovery
 
+> **Status: Shipped** — released in 0.3.2. Both slices are live: anchored placement for
+> every content kind, and `HostConfig.instructions_discovery` (default off). Durable
+> decisions: [anchored-content-placement.md](../../adr/anchored-content-placement.md).
+
 Implements `docs/adr/anchored-content-placement.md`. Two coupled slices: (A) the
 generic placement rule (all content kinds), (B) the `read`-triggered discovery of
 subdirectory `NOETA.md`/`AGENTS.md` (instructions kind only, flag-gated).
