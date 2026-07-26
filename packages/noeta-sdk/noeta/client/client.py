@@ -177,7 +177,15 @@ class Client:
         if workspace_dir is not None:
             effective_workspace_dir = Path(workspace_dir)
         elif options.cwd is not None:
-            assert isinstance(options.cwd, (str, Path))
+            # ``Options.cwd`` is typed ``object`` (it is wiring, excluded from
+            # the identity hash), so this is a real input check, not a typing
+            # narrowing — it must not be an ``assert`` that ``python -O``
+            # strips into a confusing ``Path()`` TypeError.
+            if not isinstance(options.cwd, (str, Path)):
+                raise TypeError(
+                    "Options.cwd must be a str or Path, got "
+                    f"{type(options.cwd).__name__}"
+                )
             effective_workspace_dir = Path(options.cwd)
         else:
             raise ValueError(
@@ -301,9 +309,18 @@ class Client:
             delta_sink=hc.delta_sink,
             provider_headers=hc.provider_headers,
             workflow_allowed=hc.workflow_allowed,
-            # Workspace instruction files discovered as the model reads
-            # (anchored-content placement ADR). Off by default; a product opts
-            # in through HostConfig.
+            # Per-session background concurrency caps (shell jobs / sub-agents).
+            # Both default to 8, so a bare HostConfig() is unchanged.
+            max_background_jobs_per_session=hc.max_background_jobs_per_session,
+            max_background_subagents_per_session=(
+                hc.max_background_subagents_per_session
+            ),
+            # Workspace instruction files: the root NOETA.md / AGENTS.md at
+            # session start, and the subdirectory files discovered as the model
+            # reads (anchored-content placement ADR). Both off by default; a
+            # product opts in through HostConfig.
+            instructions_enabled=hc.instructions_enabled,
+            instructions_file=hc.instructions_file,
             instructions_discovery=hc.instructions_discovery,
             # Process fs write policy (D3 host config): "apply" performs real
             # writes, anything else stages a dry-run diff (the safe default).
@@ -339,8 +356,15 @@ class Client:
             # default naturally, avoiding allowlist friction.
             # default_model=None makes driver.__init__ fall back to host.model.
             default_model=None,
+            # ``is not None``, not truthiness: an explicitly EMPTY
+            # ``allowed_models`` means "no per-turn model selector is
+            # authorized" (every selector rejected; ``None`` still binds the
+            # host default). Falling back to the stub allowlist there would
+            # silently widen a deliberate lockdown.
             model_allowlist=(
-                frozenset(allowed_models) if allowed_models else STUB_MODEL_ALLOWLIST
+                frozenset(allowed_models)
+                if allowed_models is not None
+                else STUB_MODEL_ALLOWLIST
             ),
         )
         # Wire the driver back into the host as the background-completion
@@ -448,6 +472,7 @@ class Client:
         enabled_mcp: tuple[str, ...] = (),
         workspace_dir: Optional[str] = None,
         effort: Optional[str] = None,
+        activations: tuple[str, ...] = (),
     ) -> Any:
         """Create a Task and drive the first turn (driver ``start``).
 
@@ -472,6 +497,10 @@ class Client:
         turn fold-resolves it (zero mapping). ``effort`` is the per-turn,
         NON-durable reasoning-effort selector. Both default to ``None`` ⇒ the
         host-fixed workspace / effort, byte-identical to the pre-widening path.
+
+        ``activations`` are built-in skill names to pin (pre-loop) for this
+        turn — see :meth:`seed_start`. ``()`` keeps the start byte-identical to
+        the no-skill path.
         """
         outcome = self._driver.start(
             goal=goal,
@@ -482,6 +511,7 @@ class Client:
             enabled_mcp=enabled_mcp,
             workspace_dir=workspace_dir,
             effort=effort,
+            activations=activations,
         )
         return self._drain_approvals(outcome.task_id, outcome)
 
@@ -495,6 +525,7 @@ class Client:
         permission_mode: Optional[str] = None,
         enabled_mcp: tuple[str, ...] = (),
         effort: Optional[str] = None,
+        activations: tuple[str, ...] = (),
     ) -> Any:
         """Append a new user turn (driver ``send_goal``).
 
@@ -508,6 +539,11 @@ class Client:
         ``workspace_dir`` here: a follow-up turn fold-resolves the workspace the
         session was created with, so the workspace is bound once at
         :meth:`start` and never re-passed.
+
+        ``activations`` are built-in skill names to pin (pre-loop) for this
+        turn — see :meth:`seed_start`. This is the channel a mid-conversation
+        ``/skill-name`` slash command rides; ``()`` keeps the append
+        byte-identical to the no-skill path.
         """
         outcome = self._driver.send_goal(
             task_id=task_id,
@@ -517,6 +553,7 @@ class Client:
             permission_mode=permission_mode,
             enabled_mcp=enabled_mcp,
             effort=effort,
+            activations=activations,
         )
         return self._drain_approvals(task_id, outcome)
 
@@ -528,10 +565,18 @@ class Client:
         reason: Optional[str] = None,
         resolver: str = "client",
     ) -> Any:
-        """Approve a pending gated tool call (driver ``approve``)."""
-        return self._driver.approve(
+        """Approve a pending gated tool call (driver ``approve``).
+
+        The resumed turn drains through ``can_use_tool`` like every other
+        turn-driving verb: if it stops on a *further* gated call, the configured
+        callback resolves that one too. Without the drain the same session
+        behaved differently depending on which verb resumed it — auto-resolving
+        after ``send_goal`` but stalling after ``approve``.
+        """
+        outcome = self._driver.approve(
             task_id=task_id, call_id=call_id, reason=reason, resolver=resolver
         )
+        return self._drain_approvals(task_id, outcome)
 
     def deny(
         self,
@@ -541,10 +586,14 @@ class Client:
         reason: Optional[str] = None,
         resolver: str = "client",
     ) -> Any:
-        """Deny a pending gated tool call (driver ``deny``)."""
-        return self._driver.deny(
+        """Deny a pending gated tool call (driver ``deny``).
+
+        The resumed turn drains through ``can_use_tool`` (see :meth:`approve`).
+        """
+        outcome = self._driver.deny(
             task_id=task_id, call_id=call_id, reason=reason, resolver=resolver
         )
+        return self._drain_approvals(task_id, outcome)
 
     def answer(
         self,
@@ -554,13 +603,17 @@ class Client:
         answers: dict[str, Any],
         answered_by: str = "client",
     ) -> Any:
-        """Answer a pending structured user question (driver ``answer``)."""
-        return self._driver.answer(
+        """Answer a pending structured user question (driver ``answer``).
+
+        The resumed turn drains through ``can_use_tool`` (see :meth:`approve`).
+        """
+        outcome = self._driver.answer(
             task_id=task_id,
             question_id=question_id,
             answers=answers,
             answered_by=answered_by,
         )
+        return self._drain_approvals(task_id, outcome)
 
     def deliver_event(
         self,
@@ -577,10 +630,13 @@ class Client:
         turn as an ``origin="system"`` message — never the wake event itself.
         A task not waiting on this ``event_kind`` (including a repeat delivery
         after the wake was consumed) raises the typed ``NotResumableError``.
+
+        The resumed turn drains through ``can_use_tool`` (see :meth:`approve`).
         """
-        return self._driver.deliver_event(
+        outcome = self._driver.deliver_event(
             task_id=task_id, event_kind=event_kind, payload=payload
         )
+        return self._drain_approvals(task_id, outcome)
 
     # -- seed / drive split (async transports) -------------------------------
     #
@@ -635,9 +691,15 @@ class Client:
         permission_mode: Optional[str] = None,
         enabled_mcp: tuple[str, ...] = (),
         effort: Optional[str] = None,
+        activations: tuple[str, ...] = (),
     ) -> Any:
         """Validate + seed a follow-up user turn WITHOUT driving it
-        (driver ``seed_send_goal``)."""
+        (driver ``seed_send_goal``).
+
+        ``activations`` are built-in skill names to pin (pre-loop) for this
+        turn — see :meth:`seed_start`. This is the async-transport counterpart
+        of :meth:`send_goal`'s activations, i.e. the path a product's HTTP
+        command endpoint uses for a mid-conversation ``/skill-name``."""
         return self._driver.seed_send_goal(
             task_id=task_id,
             goal=goal,
@@ -646,6 +708,7 @@ class Client:
             permission_mode=permission_mode,
             enabled_mcp=enabled_mcp,
             effort=effort,
+            activations=activations,
         )
 
     def seed_approve(
@@ -992,6 +1055,13 @@ class Client:
         Returns True if all workers exited within ``timeout`` (``None``
         = wait up to each loop's ``shutdown_grace_s`` which is enforced
         inside ``run_forever``'s shutdown path).
+
+        On a **timeout** the pool state is deliberately NOT cleared: the
+        stragglers are still running and still hold their leases, so forgetting
+        them would let the next :meth:`start_workers` stack a second pool on top
+        of the first (double the workers, both pulling the same ready queue) and
+        would leave the survivors unjoinable. Returning False with the pool still
+        tracked keeps a retry — ``stop_workers`` again — able to finish the job.
         """
         if not self._workers_started:
             return True
@@ -1006,10 +1076,14 @@ class Client:
                 remaining = max(0.0, deadline - __import__("time").monotonic())
             th.join(timeout=remaining)
         all_joined = all(not t.is_alive() for t in self._worker_threads)
+        if not all_joined:
+            # Keep the pool tracked (see above) — the loops are already stopped,
+            # so a later retry only has to re-join.
+            return False
         self._worker_loops.clear()
         self._worker_threads.clear()
         self._workers_started = False
-        return all_joined
+        return True
 
     def _yield_seeded_lease(self, seeded: Any) -> None:
         """Hand a seeded lease back to the ready queue for a worker to pick up.
@@ -1068,8 +1142,15 @@ class Client:
             except Exception:
                 pass
         if self._trace_export is not None:
-            # Unsubscribes, drains the async worker, flushes the sink.
-            self._trace_export.stop()
+            try:
+                # Unsubscribes, drains the async worker, flushes the sink.
+                self._trace_export.stop()
+            except Exception:
+                # A dead OTLP endpoint must not abort shutdown: the sandbox
+                # teardown below is the step that actually releases a remote
+                # container, and letting an exporter flush failure skip it
+                # leaked a live container per Client.
+                pass
         # Reap the host's sandbox backend (if any) so an idle container
         # connection does not outlive the process. No-op on the local path.
         try:

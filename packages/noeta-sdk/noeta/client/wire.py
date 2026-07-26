@@ -6,9 +6,12 @@ JSON-friendly dict is a protocol concern, so it lives on the SDK surface
 (re-exported by ``noeta.sdk``) rather than being re-implemented per app.
 
 The payload is canonicalised (``noeta.protocols.canonical.to_canonical``):
-``ContentRef`` members become structural ``{"hash","size","media_type"}`` dicts
-and dataclass payloads carry ``__canonical_tag__`` — the same shape the legacy
-backend wired, so a folding frontend sees identical bytes.
+event payload dataclasses become plain field dicts, and the *tagged* value
+types nested inside them (``ContentRef`` and friends) become structural dicts
+carrying their ``__canonical_tag__`` — e.g. a ``ContentRef`` renders as
+``{"__canonical_tag__": "content_ref", "hash": …, "size": …, "media_type": …}``,
+so a frontend can dereference it by hash. This is exactly the shape of the
+durable bytes, so a folding frontend and a server-side fold agree.
 """
 
 from __future__ import annotations

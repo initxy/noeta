@@ -11,6 +11,11 @@ orphaning the spawned MCP server subprocess + leaking its fds. The Engine cache
 is now an ``OrderedDict`` that REAPS (``client.shutdown()``) the evicted key's
 clients — idempotent, exception-swallowing so one bad client can't break
 eviction.
+
+The same leak had a second mouth: an Engine build that connected MCP and then
+FAILED staged its clients for a cache put that never came, so nothing ever
+adopted (and therefore nothing ever reaped) them. ``_build_engine`` now discards
+the staged clients on any exception, making the connect failure-atomic.
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ from typing import Any, Mapping
 
 import pytest
 
-from noeta.client.host import _MAX_CACHED_ENGINES, _McpReapingEngineCache
+from noeta.client.host import _MAX_CACHED_ENGINES, _McpReapingEngineCache, SdkHost
 from noeta.tools.mcp import McpError, McpHttpClient
 
 
@@ -171,3 +176,58 @@ def test_del_and_clear_reap() -> None:
 def test_lru_cap_constant_sane() -> None:
     # Guard the eviction-cap constant the host advertises stays positive.
     assert _MAX_CACHED_ENGINES > 0
+
+
+# ---------------------------------------------------------------------------
+# A build that connects MCP and then fails must not orphan the clients.
+#
+# ``_resolve_live_mcp_tools`` connects partway through ``_assemble_engine``;
+# every later step (session inputs, provider lookup, policy factory) can raise,
+# and the base resolver then never puts — so nothing ever adopted the staged
+# clients. They used to be dropped (subprocess + fds leaked for the life of the
+# process); now the build reaps them.
+# ---------------------------------------------------------------------------
+
+
+def test_discard_staged_reaps_unadopted_clients() -> None:
+    cache = _McpReapingEngineCache()
+    orphan = _FakeClient()
+    cache.stage([orphan])
+    # The build raised before any ``cache[key] = engine`` put.
+    cache.discard_staged()
+    assert orphan.shutdowns == 1
+    # Discarding is one-shot: a later put must not adopt the dead clients.
+    cache["k1"] = "engine-1"
+    cache.popitem(last=False)
+    assert orphan.shutdowns == 1
+
+
+def test_discard_staged_without_staging_is_safe() -> None:
+    cache = _McpReapingEngineCache()
+    cache.discard_staged()  # must not raise
+    cache.discard_staged()
+
+
+def test_failed_engine_build_reaps_connected_mcp_clients() -> None:
+    """End-to-end at the host seam: ``_assemble_engine`` raising after the MCP
+    connect leaves no live client behind."""
+
+    class _Host:
+        """The two host methods under test, over a real reaping cache."""
+
+        _engines = _McpReapingEngineCache()
+        _stage_mcp_clients = SdkHost._stage_mcp_clients
+        _discard_staged_mcp_clients = SdkHost._discard_staged_mcp_clients
+        _build_engine = SdkHost._build_engine
+
+        def _assemble_engine(self, *_a: Any, **_kw: Any) -> Any:
+            # Stand in for ``_resolve_live_mcp_tools``: connect + stage...
+            self._stage_mcp_clients([connected])
+            # ...then fail the way a bad provider / policy factory would.
+            raise RuntimeError("engine assembly failed after the MCP connect")
+
+    connected = _FakeClient()
+    host = _Host()
+    with pytest.raises(RuntimeError):
+        host._build_engine("spec", "model")
+    assert connected.shutdowns == 1

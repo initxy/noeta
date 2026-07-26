@@ -174,7 +174,18 @@ def test_build_fs_tools_pack_reads_through_injected_backend() -> None:
 def test_sandbox_config_defaults() -> None:
     cfg = SandboxExecEnvConfig(base_url="http://box:8080")
     assert cfg.api_key_env == "SANDBOX_API_KEY"
-    assert cfg.provision == "attach"
+    assert cfg.workdir == "/workspace"
+
+
+def test_sandbox_config_rejects_the_removed_provision_field() -> None:
+    """``provision`` was a dead field: nothing read it, so ``"eager"`` silently
+    attached instead of provisioning. Per-session provisioning is the
+    ``SandboxProvider`` seam. A caller still passing it must fail loudly rather
+    than quietly get the other behaviour."""
+    with pytest.raises(TypeError):
+        SandboxExecEnvConfig(  # type: ignore[call-arg]
+            base_url="http://box:8080", provision="eager"
+        )
 
 
 def test_sandbox_config_resolve_api_key(monkeypatch: pytest.MonkeyPatch) -> None:

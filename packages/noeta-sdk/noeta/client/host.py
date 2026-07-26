@@ -142,6 +142,19 @@ class _McpReapingEngineCache(OrderedDict):  # type: ignore[type-arg]
     def stage(self, clients: list[Any]) -> None:
         self._staging.pending = list(clients)
 
+    def discard_staged(self) -> None:
+        """Reap + clear anything staged on THIS thread that was never adopted.
+
+        Staging pairs with adoption on the build thread, so a pending list still
+        sitting here means its build never reached the cache put — the clients
+        are orphaned and must be shut down, not merely dropped (an
+        ``McpStdioClient`` drop leaks its subprocess + fds for the life of the
+        process)."""
+        pending = getattr(self._staging, "pending", [])
+        self._staging.pending = []
+        if pending:
+            self._reap(pending)
+
     def _reap(self, clients: list[Any]) -> None:
         for client in clients:
             try:
@@ -1335,11 +1348,12 @@ class SdkHost(GenericEngineResolver):
         aliases and so never reaches here). A returned dict takes the live override
         path.
         """
-        # Clear any clients staged by a prior build that never reached the
-        # cache put (so a no-MCP build can never adopt stale clients). The cache
+        # Reap any clients staged by a prior build that never reached the cache
+        # put (so a no-MCP build can never adopt stale clients, and an orphaned
+        # stdio subprocess is shut down rather than dropped). The cache
         # consumes-and-clears on each ``__setitem__``; this guards the rare
         # build-without-put path (e.g. an exception after staging).
-        self._stage_mcp_clients([])
+        self._discard_staged_mcp_clients()
         resolver = self.mcp_server_resolver
         if not mcp_aliases or resolver is None:
             return None
@@ -1411,7 +1425,33 @@ class SdkHost(GenericEngineResolver):
         if stage is not None:
             stage(clients)
 
-    def _build_engine(
+    def _discard_staged_mcp_clients(self) -> None:
+        """Shut down + clear staged-but-never-adopted MCP clients (see
+        :meth:`_McpReapingEngineCache.discard_staged`). Best-effort, like
+        :meth:`_stage_mcp_clients`: a swapped-in plain cache has nothing to
+        discard."""
+        discard = getattr(self._engines, "discard_staged", None)
+        if discard is not None:
+            discard()
+
+    def _build_engine(self, *args: Any, **kwargs: Any) -> Engine:
+        """Build this turn's Engine, never leaking a connected MCP client.
+
+        :meth:`_assemble_engine` connects the turn's enabled MCP servers partway
+        through and *stages* the live clients for the engine cache to adopt on
+        the put that follows a successful return. Every step after that connect
+        can still raise (a bad session-inputs build, an unknown provider, a
+        failing policy factory) — and the base resolver then never puts, so the
+        staged clients would be adopted by nobody: an ``McpStdioClient``
+        subprocess and its fds would survive, per failed build, for the life of
+        the process. Reaping them here makes the connect failure-atomic."""
+        try:
+            return self._assemble_engine(*args, **kwargs)
+        except BaseException:
+            self._discard_staged_mcp_clients()
+            raise
+
+    def _assemble_engine(
         self,
         agent: AgentSpec,
         model: str,

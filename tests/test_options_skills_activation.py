@@ -119,19 +119,78 @@ def test_declared_skill_dedupes_with_an_explicit_slash_activation(
     write_skill(tmp_path, "greet", description="say hi")
     client, _ = _client(tmp_path, skills=("greet",))
     try:
-        # Reach directly under the driver seam (mirrors ``tests/_sdk_session.py``'s
-        # direct-``InteractionDriver`` pattern) to also pass an explicit
-        # ``activations`` selector for the SAME skill name declared on Options —
-        # ``activations`` has no public ``Client`` surface (it's the driver-level
-        # slash-command channel), so this is the only way to exercise the merge.
-        outcome = client._driver.start(  # noqa: SLF001 — exercising the merge point
-            goal="hi",
-            agent="main",
-            activations=("greet",),
-        )
+        # Pass an explicit ``activations`` selector (the slash-command channel)
+        # for the SAME skill name declared on Options, to exercise the merge.
+        outcome = client.start(goal="hi", activations=("greet",))
         folded = fold(
             client._host.event_log, client._host.content_store, outcome.task_id
         )
         assert folded.state.active_skills == ["greet"]
+    finally:
+        client.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# ``activations`` is reachable on every public goal verb — a product that
+# implements ``/skill-name`` must be able to pin a skill on a MID-conversation
+# turn, not just the opening one. ``seed_start`` alone left the follow-up turns
+# with no public path.
+# ---------------------------------------------------------------------------
+
+
+def _active_skills(client: Client, task_id: str) -> list[str]:
+    folded = fold(client._host.event_log, client._host.content_store, task_id)
+    return folded.state.active_skills
+
+
+def test_start_activates_a_skill_pre_loop(tmp_path: Path) -> None:
+    """``Client.start(activations=...)`` pins the skill before the first
+    request — same channel as ``seed_start``."""
+    write_skill(tmp_path, "greet", description="say hi")
+    client, provider = _client(tmp_path)
+    try:
+        out = client.start(goal="hi", activations=("greet",))
+        assert _active_skills(client, out.task_id) == ["greet"]
+        text = _rendered_text(
+            provider.received_requests[0].system,
+            *provider.received_requests[0].messages,
+        )
+        assert "Body of the greet skill." in text
+    finally:
+        client.shutdown()
+
+
+def test_send_goal_activates_a_skill_on_a_follow_up_turn(tmp_path: Path) -> None:
+    """The mid-conversation ``/skill-name`` path: a turn appended with
+    ``send_goal(activations=...)`` activates the skill for THAT turn."""
+    write_skill(tmp_path, "greet", description="say hi")
+    client, provider = _client(tmp_path)
+    try:
+        out = client.start(goal="hi")
+        assert _active_skills(client, out.task_id) == []
+        before = len(provider.received_requests)
+        client.send_goal(out.task_id, goal="now greet", activations=("greet",))
+        assert _active_skills(client, out.task_id) == ["greet"]
+        follow_up = provider.received_requests[before]
+        text = _rendered_text(follow_up.system, *follow_up.messages)
+        assert "Body of the greet skill." in text
+    finally:
+        client.shutdown()
+
+
+def test_seed_send_goal_activates_a_skill_on_a_follow_up_turn(
+    tmp_path: Path,
+) -> None:
+    """The async-transport counterpart: ``seed_send_goal(activations=...)``
+    carries the activation into the seeded turn."""
+    write_skill(tmp_path, "greet", description="say hi")
+    client, _ = _client(tmp_path)
+    try:
+        out = client.start(goal="hi")
+        seeded = client.seed_send_goal(
+            out.task_id, goal="now greet", activations=("greet",)
+        )
+        client.drive_seeded(seeded)
+        assert _active_skills(client, out.task_id) == ["greet"]
     finally:
         client.shutdown()

@@ -417,9 +417,27 @@ class SandboxExecEnvManager:
 
         A backstop for sessions that never reached a root terminal (an
         interactive conversation resting at ``suspended`` when the process exits)
-        so no container outlives the host. Never raises from a shutdown path."""
+        so no container outlives the host. Never raises from a shutdown path.
+
+        Fires the product's ``on_release`` listeners for every root it reaps,
+        exactly as :meth:`release` does — a listener wired to unmount a preview
+        gateway (or drop any other container-tracked side effect) must run on the
+        shutdown path too, not only on the clean per-session terminal. Listeners
+        run FIRST, while the container is still reachable."""
         with self._lock:
             roots = list(self._handles_by_root)
+        for root in roots:
+            for _, on_rel in self._lifecycle_listeners:
+                try:
+                    on_rel(root)
+                except Exception:
+                    _log.warning(
+                        "sandbox release listener failed for root %s during "
+                        "teardown",
+                        root,
+                        exc_info=True,
+                    )
+        with self._lock:
             evicted: list[object] = [
                 *self._backends_by_ref.values(),
                 *self._browser_by_ref.values(),
