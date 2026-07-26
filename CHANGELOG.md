@@ -8,6 +8,30 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-26
+
+### Added
+
+- **Plugin mechanism** (`noeta.sdk`): a plugin is a module exporting
+  `noeta_plugin(api)`; `PluginAPI` accumulates typed contributions (tools,
+  guards, observers, a provider, content kinds, agents, MCP specs, skill
+  dirs); `load_plugins` discovers from the `noeta.plugins` entry-point group,
+  explicit specs, or trust-gated directories (`~/.noeta/trust.json`);
+  `merge_plugins` folds contributions into `Options` deterministically —
+  collisions raise `PluginError` naming both sources, and load order never
+  changes the compiled `AgentSpec`. See `docs/how-to/write-a-plugin.md`.
+- **First-party example plugins** under `examples/plugins/`:
+  `approval-modes` (graduated chat / approve / smart_approve / auto modes
+  with per-tool always/ask/never overrides), `protected-paths` (path
+  allow/deny guard), `git-checkpoint` (workspace checkpoint observer with a
+  restore path).
+- **Host contract surface**: `noeta.sdk.storage` re-exports the sqlite
+  storage triple so a product host never imports runtime internals;
+  `tests/test_public_surface.py` pins the internal→public mapping;
+  `examples/reference-host/` is a minimal complete host (durable storage,
+  streaming, plugins, stub provider) that doubles as the contract's
+  integration bed.
+
 ### Fixed
 
 - **`noeta.presets` shipped in the wrong wheel.** It imports `noeta.client.*`
