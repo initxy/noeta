@@ -1,0 +1,33 @@
+# Illustrative packaging for the ``protected-paths`` plugin.
+#
+# This file is NOT built or tested by the repo — the tests load ``plugin.py``
+# by explicit path (see tests/test_example_protected_paths.py). It exists to
+# show the ONE thing that turns a module into a discoverable Noeta plugin: an
+# entry point in the ``noeta.plugins`` group the SDK owns.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "noeta-plugin-protected-paths"
+version = "0.1.0"
+description = "A path-containment Guard for Noeta, packaged as a plugin."
+requires-python = ">=3.11"
+dependencies = ["noeta-sdk>=0.4.0"]
+
+# The discovery hook. The entry-point NAME (``protected-paths``) is the
+# plugin's identity: the enable-list key, the per-plugin ``config`` key, and
+# the label used when a contribution collides. The VALUE is
+# ``<importable module>:<factory>`` — the factory the loader invokes with a
+# fresh ``PluginAPI`` (and the config dict, since it declares a second
+# parameter).
+[project.entry-points."noeta.plugins"]
+protected-paths = "plugin:noeta_plugin"
+
+# This example ships a single top-level module (``plugin.py``). A real
+# distribution would usually nest it in a package directory
+# (``protected_paths/plugin.py`` → entry point ``protected_paths.plugin:noeta_plugin``)
+# so the top-level module name is not the generic ``plugin``.
+[tool.hatch.build.targets.wheel]
+only-include = ["plugin.py"]
