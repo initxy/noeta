@@ -14,7 +14,16 @@
 
 ## "单主机 / 单 Worker"是什么意思
 
-上述保证的范围限于已交付的部署形态：一个持久存储（SQLite）和一个常驻 Worker 进程从中消费。在这个范围内，Worker 在匹配和消费之间任何时刻的崩溃都会解析为恰好一个持久的 `TaskWoken`。**步骤中途**的崩溃——在 `TaskWoken` 之后、该步骤的其余事件落地之前——会在下一次租约时恢复：被中断的尝试会被一个持久的 `StepAttemptAbandoned` 标记封存，如果它没有记录任何有副作用的活动，则自动重新驱动；否则 Task 会被停放为一个已停止的对话，并附带一条系统通知供人类核实。一个边界仍然开放：多 Worker / 多主机并发（竞争 Worker 之间的 fencing 尚未交付）。恢复范围和该边界都在[已知限制](../operations/limitations.md)中有记录。
+上述保证对**多个并发 Worker** 成立，而不只是单个。Worker 在匹配和消费之间任何时刻的崩溃都会解析为恰好一个持久的 `TaskWoken`；竞争的 Worker 也不会双写：每一次带 lease 校验的 append 都被 fencing 保护，租约已被回收的滞留 Worker 会被拒绝，而不是把写落在新一代之后。
+
+两种部署范围：
+
+- **单主机、多 Worker**——在所有后端上均已交付。平台默认就跑一个常驻池（`AGENT_NUM_WORKERS`，默认 4）。
+- **多主机**——在 **Postgres** 上已交付，fencing 是事务内的 row-share 检查，并以数据库时钟为准（因此各主机的时钟偏差不会造成脑裂）。SQLite 与内存后端按定义是单主机的：在那一台主机上开 Worker 池没问题，但把两个主机进程指向同一个 SQLite 文件是不支持的。
+
+**步骤中途**的崩溃——在 `TaskWoken` 之后、该步骤的其余事件落地之前——会在下一次租约时恢复：被中断的尝试会被一个持久的 `StepAttemptAbandoned` 标记封存，如果它没有记录任何有副作用的活动，则自动重新驱动；否则 Task 会被停放为一个已停止的对话，并附带一条系统通知供人类核实。
+
+恢复范围、SQLite 的单主机边界，以及仅剩的那个开放边缘（sandbox 副作用在 Worker 代际之间不受 fencing 保护）都记在[已知限制](../operations/limitations.md)里；fencing 的设计见 multi-host lease fencing ADR。
 
 相关：[任务模型](task-model.md) ·
 [引擎与执行](engine-execution.md) ·

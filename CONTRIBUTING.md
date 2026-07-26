@@ -33,7 +33,7 @@ alternatives were rejected (Chesterton's fence) — read the relevant one before
 changing things so you don't re-walk an already-rejected path. When you change a
 decision, update `docs/adr/` and the glossary [`CONTEXT.md`](CONTEXT.md) in
 lockstep. Term definitions are in [`CONTEXT.md`](CONTEXT.md); the decision
-format is in [`docs/adr/README.md`](docs/adr/README.md).
+format is in [`docs/adr/index.md`](docs/adr/index.md).
 
 ## Verify with `make check`
 

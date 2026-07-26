@@ -1,5 +1,9 @@
 # Implementation spec: multi-host Postgres lease fencing
 
+> **Status: Shipped** — the in-transaction `SELECT ... FOR SHARE` fence probe and the
+> database-clock expiry are live in the Postgres EventLog / Dispatcher. Durable
+> decisions: [multi-host-lease-fencing.md](../../adr/multi-host-lease-fencing.md).
+
 Target ADR: `docs/adr/multi-host-lease-fencing.md`
 Date: 2026-07-07
 Scope: Postgres adapter only. Zero code changes to sqlite or in-memory adapters, zero EventLog envelope/payload changes.

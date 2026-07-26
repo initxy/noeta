@@ -190,7 +190,7 @@ def word_count(arguments: dict, ctx: ToolContext) -> ToolResult: ...
 
 ## 官方预设
 
-`presets` —— 模块重新导出（`noeta.presets`，`packages/noeta-runtime/noeta/presets/__init__.py`）。关键条目：`main_options()`（`presets/__init__.py:159`）返回官方主代理 `Options`；`official_specs()`（`presets/__init__.py:185`）返回编译后的四代理集（`main` / `general-purpose` / `explore` / `plan`）。
+`presets` —— 模块重新导出（`noeta.presets`，`packages/noeta-sdk/noeta/presets/__init__.py`）。关键条目：`main_options()`（`presets/__init__.py:159`）返回官方主代理 `Options`；`official_specs()`（`presets/__init__.py:185`）返回编译后的四代理集（`main` / `general-purpose` / `explore` / `plan`）。
 
 ## 另见
 

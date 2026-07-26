@@ -1,5 +1,8 @@
 # Server-platform migration — adopt the downstream multi-user app as the official product
 
+> **Status: Shipped** — merged as PR #71 (`0cfa47b`) and released as 0.3.0/0.3.1/0.3.2.
+> Durable decisions: [server-platform-product.md](../../adr/server-platform-product.md).
+
 ## Goal
 
 Replace the current single-user application layer (`apps/noeta-agent` backend +

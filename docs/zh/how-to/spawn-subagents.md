@@ -22,11 +22,24 @@ options = Options(
     system_prompt="You are a lead engineer. Delegate research to the researcher sub-agent.",
     name="lead",
     agents={"researcher": researcher},
-    capabilities={"delegation": True},  # 开启 spawn_subagent 能力
 )
 ```
 
-在父代理上设置 `capabilities={"delegation": True}` 告诉 SDK 向模型暴露 `spawn_subagent` 控制工具。没有它，即使 `agents` 已填充，父代理也无法派生子代理。
+这样就够了：填充 `agents` 本身就是那个开关。`compile_options` 会自动合成父代理的 `delegation` 能力，并把子代理名并入 `spawnable`，于是 `spawn_subagent` 控制工具会带着 `researcher` 出现在模型可见的 schema 里。
+
+如果你确实要显式传 `capabilities`，它必须是 [`Capabilities`](../reference/sdk.md) 实例——传普通 dict 会在 compile 阶段抛 `AttributeError`：
+
+```python
+from noeta.sdk import Capabilities
+
+options = Options(
+    system_prompt="…",
+    name="lead",
+    agents={"researcher": researcher},
+    # 用 Capabilities(...)，绝不要用 {"delegation": True}
+    capabilities=Capabilities(delegation=True, todo_write=True),
+)
+```
 
 ## 派发如何工作
 
@@ -65,9 +78,14 @@ outcome = client.start(goal="Analyze the codebase and report findings.")
 # 父级消息
 parent_msgs = client.messages(outcome.task_id)
 
-# 从信封流中查找子任务 ID
+# 从信封流中查找子任务 ID：SubtaskSpawned 的 payload.subtask_id 是子任务 id，
+# SubtaskCompleted 携带它的结果。
 envelopes = client.events(outcome.task_id)
-# SubtaskStarted / SubtaskCompleted 信封带有子任务的 task_id
+spawned = [e for e in envelopes if e.type == "SubtaskSpawned"]
+child_ids = [e.payload.subtask_id for e in spawned]
+
+# 子任务的事件流和任何别的任务一样读
+child_msgs = client.messages(child_ids[0])
 ```
 
 每个子任务在 Web 界面中都有自己的 trace——在父级会话视图中查找子任务链接。
@@ -83,8 +101,17 @@ from noeta.protocols.messages import (
 )
 from noeta.policies.react import SPAWN_SUBAGENT_TOOL
 
+def _finish(text: str) -> LLMResponse:
+    return LLMResponse(
+        stop_reason="end_turn",
+        content=[TextBlock(text=text)],
+        usage=Usage(uncached=1, output=1),
+    )
+
+
 provider = FakeLLMProvider(
     responses=[
+        # 1. 父代理派发
         LLMResponse(
             stop_reason="tool_use",
             content=[ToolUseBlock(
@@ -94,17 +121,17 @@ provider = FakeLLMProvider(
             )],
             usage=Usage(uncached=1, output=1),
         ),
-        # 子任务完成后，父代理用此轮恢复：
-        LLMResponse(
-            stop_reason="end_turn",
-            content=[TextBlock(text="The researcher found the bug.")],
-            usage=Usage(uncached=1, output=1),
-        ),
+        # 2. **子任务**的那一轮
+        _finish("researcher: the bug is in auth.py"),
+        # 3. 父代理带着子任务结果恢复
+        _finish("The researcher found the bug in auth.py."),
     ]
 )
 ```
 
-子代理也需要一个 provider。默认情况下它继承父级的；对于 `FakeLLMProvider`，你需要给子代理自己的脚本化响应序列（将 `AgentDefinition` 上的 `model` 设置为一个命名模型，该模型映射到子代理特定的 provider）。
+子代理继承父级的 provider——一个 host 只有一个 provider，子任务不过是它上面的一个普通 Task。所以用 `FakeLLMProvider` 时**不需要**再接第二个 provider：把父代理和子任务的轮次按被消费的顺序（父派发 → 子任务 → 父恢复）写进同一个 `responses` 列表即可，如上。
+
+`examples/spawn_subtask.py` 就是这个流程的可运行版本。
 
 ## 另请参阅
 

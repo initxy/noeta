@@ -39,12 +39,12 @@ SDK asks "how do I give my code an agent loop?" Noeta asks "how do I make
 an agent's running into a ledger I can replay, audit, and carry
 elsewhere?"
 
-> **Honest caveats.** Noeta is an early pre-1.0 preview. The shipped
-> deployment is single-host / single-worker; multi-host coordination and
-> multi-worker fencing are not yet shipped. The ecosystem is smaller —
-> fewer built-in tools, no plugin marketplace, a younger community. If
-> "it just works against Anthropic's API" is the primary requirement, the
-> Claude Agent SDK is the lower-friction choice today.
+> **Honest caveats.** Noeta is an early pre-1.0 preview. Multi-worker
+> pools are shipped, and multi-host coordination is shipped on **Postgres
+> only** — SQLite and in-memory deployments stay single-host. The ecosystem
+> is smaller — fewer built-in tools, no plugin marketplace, a younger
+> community. If "it just works against Anthropic's API" is the primary
+> requirement, the Claude Agent SDK is the lower-friction choice today.
 
 ## Three differences spelled out
 

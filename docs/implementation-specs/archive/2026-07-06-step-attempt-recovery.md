@@ -1,5 +1,8 @@
 # Step-attempt recovery (partial-step-orphan crash edge)
 
+> **Status: Shipped** — `StepAttemptAbandoned` sealing and the re-drive / park split are
+> live. Durable decisions: [step-attempt-recovery.md](../../adr/step-attempt-recovery.md).
+
 P4 round 2. Shaped 2026-07-06 with the maintainer; this spec is the input to
 `implement` and the checklist for `review`.
 

@@ -1,6 +1,8 @@
 # 代理预设
 
-Noeta 提供四个官方代理，与 Claude Code 的阵容对齐。代理在**每个任务**的 `POST /tasks` body 中选择（`{"goal": …, "agent": …}`），而非在进程启动时。自定义代理通过扁平的 `Options.agents` dict 定义。
+Noeta 提供四个官方代理，与 Claude Code 的阵容对齐。
+
+它们是一个 **SDK 层**的接口：你通过构建某个预设的 `Options`（`presets.main_options()`）来选它，再把它交给 `Client` / `query`。noeta-agent 平台并不是一个"预设选择器"——它自己组装宿主侧的 agent 并暴露 session（`POST /sessions`，然后 `POST /sessions/{id}/messages`），它的 API 上没有按请求传的 `agent` 字段。自定义代理通过扁平的 `Options.agents` dict 定义。
 
 ## 四元组
 
@@ -30,13 +32,22 @@ Noeta 提供四个官方代理，与 Claude Code 的阵容对齐。代理在**�
 
 ```python
 from noeta import presets
-from noeta.sdk import Client, query
+from noeta.sdk import query
+from noeta.providers.anthropic import AnthropicProvider
 
 # 构建 main 代理的 Options
 options = presets.main_options()
 
-# 在进程内运行代理
-result = query(options, goal="Refactor module X to use Y")
+# 在进程内运行代理。`provider` 和 `workspace_dir` 是必填的——
+# 缺任一个，Client 会在跑任何一轮之前就抛 ValueError。
+result = query(
+    options,
+    goal="Refactor module X to use Y",
+    provider=AnthropicProvider(api_key="sk-ant-…"),
+    workspace_dir="./",
+    model="claude-sonnet-4-5-20250929",
+)
+print(result.answer())
 ```
 
 或将所有四个代理编译为 specs：
@@ -68,7 +79,7 @@ options = Options(
 
 ## 来源
 
-- 预设：`packages/noeta-runtime/noeta/presets/__init__.py`
+- 预设：`packages/noeta-sdk/noeta/presets/__init__.py`
 - Options / AgentDefinition：`packages/noeta-sdk/noeta/client/options.py`
 - 工具目录：`packages/noeta-runtime/noeta/tools/`
 - 另见：[ADR：工具与代理目录](https://github.com/initxy/noeta/blob/main/docs/adr/tool-and-agent-catalog.md)、[ADR：库-SDK 架构](https://github.com/initxy/noeta/blob/main/docs/adr/library-sdk-architecture.md)

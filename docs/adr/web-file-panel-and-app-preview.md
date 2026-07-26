@@ -1,5 +1,12 @@
 # Web workspace file panel + live HTML app preview: same-origin serving dissolves CORS
 
+> **Status: partly superseded by [server-platform-product.md](server-platform-product.md)** (the platform replaced the single-user web shell).
+> The file panel survives as `GET /sessions/{id}/files` (empty when the sandbox
+> is off). The **live HTML app preview does not**: the platform's per-session
+> sandbox preview covers that need, so `open_app` is now mounted only when a
+> host explicitly wires an `AppPreviewGateway`, and the product does not. The
+> same-origin argument below is still the reason neither surface needs CORS.
+
 ## Context
 
 The web frontend originally had only the conversation area — you couldn't see what files a session had written into the workspace, nor run the HTML the model produced as a real web page. Two capabilities are added here:

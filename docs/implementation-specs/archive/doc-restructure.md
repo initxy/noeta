@@ -1,8 +1,8 @@
 # Implementation Spec: Documentation Restructure (Diataxis)
 
-> **Status**: Implemented (landed in `18c0897`; the site later migrated from MkDocs Material to VitePress in `aa8171e`, which supersedes this spec's MkDocs-specific sections — the portal file is now `docs/index.md`, not `docs/README.md`).
-> **Scope**: User-facing docs only. 37 ADRs in `docs/adr/` stay put. `README.zh-CN.md` is out of scope (regenerated later from final English README via translate-zh).
-> **Goal**: Restructure the flat 7-doc set into a Diataxis-aligned 4-layer architecture (Tutorials / How-to / Concepts / Reference) with clear audience per page.
+> **Status: Shipped** — landed in `18c0897`. The site later migrated from MkDocs Material
+> to VitePress (`aa8171e`), which supersedes this spec's MkDocs-specific sections: the
+> portal file is now `docs/index.md`, not `docs/README.md`.
 
 ---
 
@@ -774,6 +774,8 @@ The batches are ordered by dependency: the portal (batch 1) must point to correc
 **Alternative**: Delete it entirely. The gap analysis conclusions are fully captured in this spec's build cards and the original research is available in git history.
 
 **Maintainer decision needed**: Move or delete? Default recommendation: **move to `docs/implementation-specs/doc-gap-analysis.md`**.
+
+_Outcome (recorded 2026-07-25): neither happened — no `doc-gap-analysis.md` was ever created in this repository. The two paths above are the proposal, not links._
 
 ---
 

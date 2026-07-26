@@ -64,7 +64,12 @@ WorkerLoop(
 | `reliability_sink` | where `ReliabilityEvent`s go; default: structured logs |
 | `step_poll_s` | poll cadence while waiting on the in-flight step thread |
 
-There is **no `workers` knob** — the loop is single-worker by design.
+There is **no `workers` knob**: one `WorkerLoop` is one drain thread. You scale
+by running several loops (each with its own `worker_id`) against the same
+store — which is exactly what the platform's resident pool does
+(`AGENT_NUM_WORKERS`, default 4). Concurrent loops are safe: lease-checked
+appends are fenced, so a loop whose lease was reclaimed cannot write behind the
+loop that took over.
 
 ## Methods & properties
 
@@ -133,8 +138,8 @@ is only safe because the process exits; the lease then expires and
 The heartbeat cannot extend a lease forever: the dispatcher caps extensions,
 so `heartbeat_interval × heartbeat_max` bounds one step's hold; past the cap
 the lease is force-released and the step's next write fails with
-`InvalidLease`. Boundary conditions — single worker, crash-recovery
-scope — are catalogued in
+`InvalidLease`. Boundary conditions — the SQLite single-host limit,
+crash-recovery scope — are catalogued in
 [known limitations](../operations/limitations.md).
 
 ## See also

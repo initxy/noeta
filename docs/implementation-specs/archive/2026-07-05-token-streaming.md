@@ -1,5 +1,9 @@
 # Token streaming: ephemeral deltas over the SSE stream, EventLog stays the truth
 
+> **Status: Shipped** — the ephemeral delta channel is live (`HostConfig.delta_sink` →
+> unnamed, `id:`-less SSE `delta` frames). Durable decisions:
+> [token-streaming-projection.md](../../adr/token-streaming-projection.md).
+
 ## Goal
 
 Stream assistant text/thinking token deltas from the LLM providers to the web UI in real time, while the EventLog, the three-event LLM contract, fold, and resume remain byte-identical to the non-streaming path. Deltas are an ephemeral projection; the final `MessagesAppended` event remains the only durable record.

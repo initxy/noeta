@@ -101,7 +101,10 @@ loop.run_forever(install_signals=True)
 | `shutdown_grace_s` | `30.0` | Max wait for in-flight step after `stop()`. `None` = unbounded |
 | `reliability_sink` | structured logs | Where `ReliabilityEvent`s go |
 
-There is **no `workers` knob** — the loop is single-worker by design.
+There is **no `workers` knob**: one `WorkerLoop` is one drain thread. Scale out
+by running several loops (each with its own `worker_id`) against the same store
+— the platform's own resident pool is exactly that (`AGENT_NUM_WORKERS`,
+default 4). Concurrent loops are safe: lease-checked appends are fenced.
 
 ## What happens at runtime
 
@@ -147,5 +150,5 @@ The loop always proceeds to the next task.
   parameter, method, and outcome type
 - [Wake & resume](../concepts/wake-resume.md) — the delivery guarantee
   the worker implements
-- [Known limitations](../operations/limitations.md) — single-worker
-  boundaries and crash-recovery scope
+- [Known limitations](../operations/limitations.md) — the SQLite single-host
+  boundary and crash-recovery scope

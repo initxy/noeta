@@ -10,6 +10,90 @@ This directory holds Noeta's **Architecture Decision Records (ADRs)**: each file
 
 Rule of thumb: the wider the impact (spanning multiple modules), the more it belongs in `docs/adr/`; the narrower it is, the closer it should sit to the code itself.
 
+## Status
+
+A decision file is **live** unless it says otherwise. When a later decision
+overrides part or all of an earlier one, the earlier file gets a `> **Status:**`
+blockquote directly under its title — nothing else changes, so the original
+reasoning stays readable:
+
+```markdown
+# <the original title>
+
+> **Status: superseded by [server-platform-product.md](server-platform-product.md)** (<what changed>).
+> <one or two sentences: which part is dead, which part still holds.>
+```
+
+Two rules make this useful rather than decorative:
+
+- **Say what survived.** Most supersessions are partial — the wire changed, the
+  invariant did not. A blanket "superseded" throws away a rationale that is
+  still load-bearing.
+- **Never delete a superseded file.** The point of a decision record is the
+  rejected alternatives; deleting it invites someone to re-walk the dead end
+  (the whole Chesterton's fence purpose of this directory).
+
+Without this marker the only way to discover that a decision had been overturned
+was to read all 40+ files and notice the contradiction.
+
+## The decisions
+
+**Foundations** — the invariants everything else is built on:
+[event-sourced-truth](event-sourced-truth.md) ·
+[task-as-only-primitive](task-as-only-primitive.md) ·
+[single-writer-invariant](single-writer-invariant.md) ·
+[storage-protocols-l0](storage-protocols-l0.md) ·
+[provider-neutral](provider-neutral.md) ·
+[doc-code-link-direction](doc-code-link-direction.md)
+
+**Engine & execution**:
+[engine-policy-dataflow](engine-policy-dataflow.md) ·
+[worker-lease-model](worker-lease-model.md) ·
+[step-attempt-recovery](step-attempt-recovery.md) ·
+[multi-host-lease-fencing](multi-host-lease-fencing.md) ·
+[subtask-fanout-and-durable-wake](subtask-fanout-and-durable-wake.md) ·
+[subtask-parallel-execution](subtask-parallel-execution.md) ·
+[background-subagent](background-subagent.md) ·
+[transport-neutral-fanout](transport-neutral-fanout.md) ·
+[workflow-orchestration](workflow-orchestration.md) ·
+[conversation-rewind-and-file-checkpoint](conversation-rewind-and-file-checkpoint.md) ·
+[replay-verify-tolerance](replay-verify-tolerance.md)
+
+**Context & memory**:
+[unified-context-supply](unified-context-supply.md) ·
+[context-compaction](context-compaction.md) ·
+[anchored-content-placement](anchored-content-placement.md) ·
+[memory-consolidation](memory-consolidation.md) ·
+[skill-resource-on-demand](skill-resource-on-demand.md) ·
+[model-driven-skill-invocation](model-driven-skill-invocation.md)
+
+**Tools, agents & providers**:
+[tool-and-agent-catalog](tool-and-agent-catalog.md) ·
+[tool-description-canonical](tool-description-canonical.md) ·
+[control-tools-neutral-mechanism](control-tools-neutral-mechanism.md) ·
+[agent-identity-and-provenance](agent-identity-and-provenance.md) ·
+[provider-adapters-and-multimodal](provider-adapters-and-multimodal.md) ·
+[guard-observer-hooks](guard-observer-hooks.md) ·
+[event-origin-marker](event-origin-marker.md) ·
+[mcp-connectors](mcp-connectors.md) ·
+[plugin-contribution-bundles](plugin-contribution-bundles.md)
+
+**Boundaries, workspace & sandbox**:
+[library-sdk-architecture](library-sdk-architecture.md) ·
+[package-layout](package-layout.md) ·
+[runtime-sdk-app-restructure](runtime-sdk-app-restructure.md) ·
+[execution-environment-seam](execution-environment-seam.md) ·
+[workspace-and-session-path](workspace-and-session-path.md) ·
+[workspace-write-authorization](workspace-write-authorization.md) ·
+[shell-permission-and-background](shell-permission-and-background.md)
+
+**Product**:
+[server-platform-product](server-platform-product.md) ·
+[token-streaming-projection](token-streaming-projection.md) ·
+[web-task-creation](web-task-creation.md) ·
+[web-file-panel-and-app-preview](web-file-panel-and-app-preview.md) ·
+[web-image-attach](web-image-attach.md)
+
 ## ADR template
 
 One topic per file, named with a topic slug (e.g. `provider-neutral.md`). Every file has at least a `Decision` and a `Rationale` section:

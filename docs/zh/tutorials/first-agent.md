@@ -48,7 +48,9 @@ options = Options(
 )
 ```
 
-`allowed_tools` 控制模型可以调用哪些工具。传入 `None` 可获得全部 13 个内置工具，或传入 `DecoratedTool` 实例的元组（如我们的 `word_count`）以限制可用范围。
+`allowed_tools` 控制模型可以调用哪些工具。传入 `None` 会选中全部 **11** 个内置工具，或传入 `DecoratedTool` 实例的元组（如我们的 `word_count`）以限制可用范围。
+
+"被选中"不等于"被挂载"：11 个里有 **10** 个无需额外配置就会挂载，因为 `web_search` 只在设置了 `NOETA_WEB_SEARCH_API_KEY` 时才出现。其他工具（memory、browser、`open_app`、`run_skill_script`）根本不在这个白名单里——它们由 capability 或宿主注入来开关。参见[工具目录](../reference/tools.md)。
 
 `permission_mode="bypassPermissions"` 表示工具调用不受限 —— 对于 `word_count` 这类低风险工具很有用。对于写入文件或运行 shell 命令的工具，使用 `"default"`（用户必须批准每次调用）或 `"acceptEdits"`（编辑自动批准，shell 调用仍需批准）。
 

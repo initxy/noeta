@@ -42,10 +42,15 @@ def fetch_weather(arguments: dict, ctx: ToolContext) -> ToolResult:
 | Parameter | Required | Purpose |
 | --- | --- | --- |
 | `name` | yes | The string the model calls. Must be `snake_case`. |
-| `version` | yes | Feeds the tool's identity fingerprint. Bump when behavior changes. |
-| `risk_level` | yes | `"low"`, `"medium"`, or `"high"`. Used by the permission system. |
-| `description` | yes | The model's primary source of tool semantics. Write it clearly. |
 | `input_schema` | yes | JSON Schema describing the expected arguments. LLM-facing metadata. |
+| `version` | no (`None`) | Feeds the tool's identity fingerprint. Bump when behavior changes. |
+| `risk_level` | no (`"low"`) | `"low"`, `"medium"`, or `"high"`. Used by the permission system. |
+| `description` | no (`""`) | The model's primary source of tool semantics. Write it clearly. |
+
+Only `name` and `input_schema` have no default. Pass the other three anyway:
+an empty `description` leaves the model guessing what the tool does, and the
+default `risk_level="low"` means the tool is auto-approved in every permission
+mode — fine for a read-only lookup, wrong for anything that writes.
 
 ### `ToolResult`
 
@@ -73,9 +78,17 @@ options = Options(
 client = Client(options, provider=my_provider, workspace_dir="./")
 ```
 
-When `allowed_tools` is a tuple of `DecoratedTool` instances, only those
-tools are available. Pass `None` to get all built-in tools plus yours,
-or use `disallowed_tools` to subtract from the full set.
+`allowed_tools` **is** the selection — a custom tool is available only if it
+appears there. `None` means "the built-in whitelist", which does *not* pick up
+a tool merely because you defined it, so list your own alongside the built-ins
+you want:
+
+```python
+allowed_tools=("read", "grep", fetch_weather)
+```
+
+`disallowed_tools` subtracts from the built-in set; it does not add custom
+tools either.
 
 ## Risk levels and permissions
 
@@ -113,12 +126,22 @@ options = Options(
     system_prompt="...",
     name="my-agent",
     mcp_servers=(weather_mcp,),
-    allowed_tools=None,  # all built-ins + MCP tools
+    allowed_tools=None,  # all built-ins + this server's tools
 )
 ```
 
-The MCP server's tools appear as `mcp__weather-tools__fetch_weather` in
-the tool allow-list. The agent can call them just like built-in tools.
+An in-process server's tools keep their **bare** `@tool` name — the model sees
+`fetch_weather`, not `mcp__weather-tools__fetch_weather`. Bundling them this
+way is about grouping and reuse across agents; it does not rename them.
+
+> The `mcp__{alias}__{tool}` prefix belongs to **remote** MCP servers — the
+> ones a host connects per turn through `HostConfig.mcp_server_resolver` (see
+> [Connect MCP](connect-mcp.md)). Those are namespaced because independent
+> third-party servers can and do collide on tool names.
+
+Because the names are bare, an in-process server's tool collides with a
+built-in of the same name. Pick names that will not clash (`fetch_weather`,
+not `read`).
 
 ## Test your tool offline
 

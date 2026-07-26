@@ -17,7 +17,7 @@ time. Swap it, and the same `Options` compiles to the same `AgentSpec`.
 
 ```python
 from noeta.sdk import Client, Options, query
-from noeta.llm.anthropic import AnthropicProvider
+from noeta.providers.anthropic import AnthropicProvider
 
 options = Options(
     system_prompt="You are a concise assistant.",
@@ -25,27 +25,33 @@ options = Options(
     allowed_tools=None,
 )
 
-anthropic = AnthropicProvider(
-    model="claude-sonnet-4-5-20250929",
-    api_key="sk-ant-…",
-)
+anthropic = AnthropicProvider(api_key="sk-ant-…")
 
-client = Client(options, provider=anthropic, workspace_dir="./")
+client = Client(
+    options,
+    provider=anthropic,
+    workspace_dir="./",
+    model="claude-sonnet-4-5-20250929",
+)
 ```
+
+Note where the model lives: a provider is an *adapter for a vendor's wire
+protocol*, not a binding to one model, so it takes no `model` argument. The
+model is chosen per session on `Client(model=…)` / `query(model=…)` — which is
+exactly what lets one provider instance serve many models.
 
 ## After: OpenAI-compatible
 
 ```python
-from noeta.llm.openai_compat import OpenAICompatProvider
+from noeta.providers.openai_compat import OpenAICompatProvider
 
 openai = OpenAICompatProvider(
-    model="gpt-5.5",
     base_url="https://api.openai.com/v1",
     api_key="sk-…",
 )
 
 # Same options, same client construction — only the provider changes
-client = Client(options, provider=openai, workspace_dir="./")
+client = Client(options, provider=openai, workspace_dir="./", model="gpt-5.5")
 ```
 
 Nothing else changes: same `Options`, same tools, same `Client` usage.
@@ -65,6 +71,7 @@ result = query(
     goal="What is the capital of France?",
     provider=openai,  # or anthropic, or any provider
     workspace_dir="./",
+    model="gpt-5.5",
 )
 print(result.answer())
 ```
@@ -75,8 +82,14 @@ Run the same goal against both providers and confirm both produce a
 terminal answer:
 
 ```python
-for name, prov in [("anthropic", anthropic), ("openai", openai)]:
-    result = query(options, goal="Say hello.", provider=prov, workspace_dir="./")
+runs = [
+    ("anthropic", anthropic, "claude-sonnet-4-5-20250929"),
+    ("openai", openai, "gpt-5.5"),
+]
+for name, prov, model in runs:
+    result = query(
+        options, goal="Say hello.", provider=prov, workspace_dir="./", model=model
+    )
     print(f"{name}: {result.answer()}")
 ```
 

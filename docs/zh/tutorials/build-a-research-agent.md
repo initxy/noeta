@@ -4,7 +4,7 @@
 
 ## 前置条件 { #prerequisites }
 
-- Python 3.11+ 及 [uv](https://docs.astral.sh/uv/)，Node 20+
+- Python 3.12+ 及 [uv](https://docs.astral.sh/uv/)，Node 20+（本教程会启动平台，平台要求 3.12；只用 SDK 则支持 3.11）
 - OpenAI-Responses 兼容网关的 API key（或使用离线 mock 走一遍流程而无需 key）
 - Docker，用于沙箱（代理需要它来写报告文件）
 

@@ -1,5 +1,14 @@
 # Web task creation: the request carries only a model selector, provider config stays server-side, and an interactive session finishes on a trailing suspend
 
+> **Status: partly superseded by [server-platform-product.md](server-platform-product.md)** (the platform replaced the single-user web shell).
+> The **endpoint is gone**: task creation is now `POST /sessions` plus
+> `POST /sessions/{id}/messages`, and a session groups one or more engine tasks
+> rather than mapping one-to-one. What still holds — and is the reason to keep
+> reading this file — is the invariant: the request carries only a model
+> selector, provider config stays server-side, and web and every other caller
+> share the one `InteractionDriver.start` / `send_goal` seam with no HTTP-only
+> side path that assembles task config from the request body.
+
 ## Context
 
 The web frontend needs to be able to create sessions, but the web server holds credentials on behalf of many Principals — a real trust boundary — so the request body must not decide provider / credentials / tools. At the same time, an interactive session finishing "normally" must not fabricate a terminal state.
