@@ -8,6 +8,60 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`noeta.presets` shipped in the wrong wheel.** It imports `noeta.client.*`
+  (noeta-sdk) but was packaged into the **noeta-runtime** wheel, so
+  `pip install noeta-runtime` followed by `import noeta.presets` raised
+  `ModuleNotFoundError` — including on the published 0.3.0–0.3.2. The package
+  moved to noeta-sdk (import paths are unchanged, PEP 420), and
+  `test_no_distribution_imports_outside_its_dependency_closure` now pins every
+  distribution's imports to its own dependency closure so it cannot recur.
+- **Background jobs and foreground tool commands inherited the host's stdin.** A
+  detached job has no console to read from, so a spawned command could block on
+  a read (burning its whole timeout) or consume bytes meant for whatever drives
+  the host process. Both spawn paths now pass `stdin=DEVNULL`.
+- **`Client.start` / `send_goal` / `seed_send_goal` now accept `activations`.**
+  Only `seed_start` forwarded it, so a product implementing `/skill-name` could
+  pin a skill on the opening turn but had no public path for any later turn.
+- **A failed Engine build no longer leaks connected MCP clients.** Live clients
+  were staged for the engine cache to adopt on the put that follows a successful
+  build; when a later step raised, nothing ever adopted — and therefore never
+  reaped — them, leaking an `McpStdioClient` subprocess and its fds per failed
+  build. The connect is now failure-atomic.
+- **A dead OTLP endpoint no longer skips sandbox teardown.**
+  `Client.shutdown` ran `trace_export.stop()` unguarded, so an exporter flush
+  failure aborted shutdown before the step that releases a remote container.
+- **`allowed_models=[]` is honored.** An explicitly empty sequence means "no
+  per-turn model selector is authorized"; it previously fell back to the stub
+  allowlist, silently widening a deliberate lockdown.
+- **`stop_workers` keeps the pool tracked on timeout.** It used to clear its
+  state even when a worker had not exited, letting the next `start_workers`
+  stack a second pool on top of the still-running stragglers.
+- **Sandbox `teardown()` fires the `on_release` listeners** for every root it
+  reaps, as `release()` already did — so product-side cleanup (preview gateway
+  mounts and similar container-tracked side effects) also runs on the shutdown
+  path.
+- `Options.cwd` type validation is a real check rather than an `assert` that
+  `python -O` strips into a confusing `Path()` TypeError.
+
+### Added
+
+- `HostConfig.instructions_enabled` / `instructions_file` — the workspace-root
+  `NOETA.md` → `AGENTS.md` switch was reachable only by constructing an
+  `SdkHost` directly, leaving `instructions_discovery` as a half-exposed
+  feature.
+- `HostConfig.max_background_jobs_per_session` /
+  `max_background_subagents_per_session` — three comments already described
+  these caps as "configurable via HostConfig"; now they are.
+
+### Removed
+
+- `SandboxExecEnvConfig.provision`. Nothing ever read it, so `"eager"` silently
+  attached to the shared container instead of provisioning. Per-session
+  provisioning is the `SandboxProvider` seam; passing `provision=` now fails
+  loudly rather than quietly doing the other thing.
+
 ## [0.3.2] - 2026-07-24
 
 ### Added

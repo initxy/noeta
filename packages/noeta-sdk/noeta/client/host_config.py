@@ -28,7 +28,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping, Optional, Tuple
 
 from noeta.client.sandbox_provider import SandboxProvider, SandboxSpec
+from noeta.execution.background_subagent import (
+    DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_SESSION,
+)
 from noeta.observers.otlp import OtlpHttpPost, OtlpTraceConfig
+from noeta.runtime.background_shell import DEFAULT_MAX_BACKGROUND_JOBS_PER_SESSION
 
 if TYPE_CHECKING:
     # Only for annotations (``from __future__ import annotations`` keeps these
@@ -49,22 +53,29 @@ __all__ = ["HostConfig", "SandboxExecEnvConfig"]
 
 @dataclass(frozen=True)
 class SandboxExecEnvConfig:
-    """Config for routing the fs / shell tools to an AIO Sandbox container.
+    """Config for ATTACHING the fs / shell tools to one AIO Sandbox container.
 
     A pure, serialisable config value — it carries only *addressing*, never a
     live client or a secret. The product host turns it into a live
-    ``AioSandboxExecEnv`` (reading the key from the environment, provisioning /
-    attaching a container) and threads that into ``build_session_inputs``; the
-    config alone is import-linter-safe for the backend to build (D2: the
-    backend fills config, the runtime instantiates the adapter).
+    ``AioSandboxExecEnv`` (reading the key from the environment, connecting to
+    the container) and threads that into ``build_session_inputs``; the config
+    alone is import-linter-safe for the backend to build (D2: the backend fills
+    config, the runtime instantiates the adapter).
+
+    **Attach-only.** This config addresses one already-running container that
+    every session shares, and it never owns it (release is a no-op, so a stop
+    here cannot break a peer that reconnected to the same address). Per-session
+    *provisioning* — a fresh container allocated when a session opens and torn
+    down when it ends — is a different seam entirely:
+    :class:`~noeta.client.sandbox_provider.SandboxProvider`. (There used to be a
+    ``provision`` field here offering ``"eager"``; nothing ever read it, so
+    ``"eager"`` silently attached. It was removed rather than left lying —
+    passing it now fails loudly instead of quietly doing the other thing.)
 
     * ``base_url`` — the container's API root (e.g. ``http://host:8080``).
     * ``api_key_env`` — the environment variable holding the container's static
       ``SANDBOX_API_KEY``. The key rides only on the wire, never in a log /
       event / this config (D5). ``None`` env value ⇒ no auth header.
-    * ``provision`` — ``"eager"`` provisions a fresh container when a root task
-      starts; ``"attach"`` connects to an already-running ``base_url`` (the
-      default — the reconnect path a resumed / reclaimed task also takes).
     * ``workdir`` — the container's working directory. In sandbox mode this
       *is* the fs-tools' workspace root (a lexical containment fence, D7): the
       host path a local session would use is meaningless inside the container,
@@ -73,7 +84,6 @@ class SandboxExecEnvConfig:
 
     base_url: str
     api_key_env: str = "SANDBOX_API_KEY"
-    provision: str = "attach"
     workdir: str = "/workspace"
 
     def resolve_api_key(self) -> Optional[str]:
@@ -249,6 +259,30 @@ class HostConfig:
 
     # -- host kill-switches ------------------------------------------------
     workflow_allowed: bool = False
+    #: Per-session background-job concurrency cap, forwarded to
+    #: ``SdkHost.max_background_jobs_per_session``. Over the cap a
+    #: ``shell_run(run_in_background=True)`` spawn is **rejected** (not queued)
+    #: with a "kill one first" refusal the model can act on; no event is
+    #: recorded, so the cap is invisible to resume. Default 8.
+    max_background_jobs_per_session: int = DEFAULT_MAX_BACKGROUND_JOBS_PER_SESSION
+    #: Per-session background SUB-AGENT concurrency cap, forwarded to
+    #: ``SdkHost.max_background_subagents_per_session``
+    #: (docs/adr/background-subagent.md). Over the cap a
+    #: ``spawn_subagent(background=True)`` is rejected before any durable write.
+    #: Default 8.
+    max_background_subagents_per_session: int = (
+        DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_SESSION
+    )
+    #: Project-instructions-file switch, forwarded verbatim to
+    #: ``SdkHost.instructions_enabled``. When on, the session's workspace root
+    #: is searched for ``NOETA.md`` → ``AGENTS.md`` (in that order) and the file
+    #: is rendered into the stable head. ``False`` (default) keeps every
+    #: existing embedding byte-identical.
+    instructions_enabled: bool = False
+    #: Explicit path override for the instructions file; reads ONLY that path
+    #: instead of the ``NOETA.md`` → ``AGENTS.md`` search. Requires
+    #: ``instructions_enabled``; ``None`` (default) keeps the search.
+    instructions_file: Optional[Path] = None
     #: ``read``-triggered discovery of subdirectory ``NOETA.md`` / ``AGENTS.md``
     #: files (docs/adr/anchored-content-placement.md). Forwarded verbatim to
     #: ``SdkHost.instructions_discovery``. When on, a successful ``read`` inside
@@ -256,7 +290,9 @@ class HostConfig:
     #: between the read file's directory and the workspace root; each renders
     #: anchored at its point of discovery, so a mid-task activation appends
     #: instead of rewriting the stable head. ``False`` (default) keeps every
-    #: existing embedding byte-identical.
+    #: existing embedding byte-identical. Independent of
+    #: ``instructions_enabled``: that switch governs the workspace-ROOT file at
+    #: session start, this one governs subdirectory files found while reading.
     instructions_discovery: bool = False
     #: process fs write policy — "dry_run" (stage a diff, safe default) or
     #: "apply" (real writes). Mapped to FsWriteMode by the Client.

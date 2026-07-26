@@ -477,6 +477,30 @@ def test_bare_options_defaults_to_all_builtin_tools() -> None:
     assert {t.name for t in main.tools} == set(BUILTIN_TOOL_CLASSES)
 
 
+def test_builtin_tool_whitelist_is_pinned() -> None:
+    """The built-in whitelist is a number the tutorials quote
+    (``docs/tutorials/first-agent.md``: "all 11 built-in tools", of which 10
+    mount without extra configuration — ``web_search`` needs an API key). It
+    had drifted to a documented 13. Pin the set so the next change to it has
+    to come back and update the prose."""
+    assert set(BUILTIN_TOOL_CLASSES) == {
+        "apply_patch",
+        "edit",
+        "glob",
+        "grep",
+        "read",
+        "shell_kill",
+        "shell_poll",
+        "shell_run",
+        "web_search",
+        "webfetch",
+        "write",
+    }
+    # Everything else — memory, browser, open_app, run_skill_script — is
+    # capability- or host-injection-gated, never part of this whitelist.
+    assert len(BUILTIN_TOOL_CLASSES) == 11
+
+
 def test_allowed_tools_explicit_list() -> None:
     main, _ = compile_options(
         Options(

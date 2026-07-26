@@ -44,8 +44,14 @@ class SdkMcpServer:
     Parameters
     ----------
     name:
-        Server name. Becomes the MCP server alias the agent's tools are
-        namespaced under.
+        Server name — a grouping label for the bundle. It does **not**
+        namespace the tools: an in-process server's tools keep their bare
+        ``@tool`` names (the model sees ``fetch_weather``, not
+        ``mcp__weather-tools__fetch_weather``). The ``mcp__{alias}__{tool}``
+        prefix applies only to REMOTE servers connected per turn through
+        ``HostConfig.mcp_server_resolver``, where third-party name collisions
+        are the concern. Choose bare names that will not collide with a
+        built-in tool.
     version:
         Server version string (informational; defaults to ``"1.0.0"``).
     tools:
