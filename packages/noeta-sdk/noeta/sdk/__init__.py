@@ -67,6 +67,19 @@ from noeta.client.options import (
     compile_options,
     register_preset_prompt,
 )
+from noeta.client.plugins import (
+    LoadedPlugin,
+    PluginAPI,
+    PluginContributions,
+    PluginError,
+    UntrustedPluginDirWarning,
+    grant_trust,
+    is_trusted,
+    load_plugins,
+    merge_plugins,
+    merged_mcp_servers,
+    merged_skill_dirs,
+)
 from noeta.client.wire import envelope_to_dict
 from noeta.sdk.authoring import (
     DecoratedTool,
@@ -263,6 +276,18 @@ __all__ = [
     "VerdictResult",
     "Observer",
     "ContentKindSpec",
+    # plugin mechanism (M1)
+    "PluginAPI",
+    "PluginContributions",
+    "LoadedPlugin",
+    "PluginError",
+    "UntrustedPluginDirWarning",
+    "load_plugins",
+    "merge_plugins",
+    "merged_mcp_servers",
+    "merged_skill_dirs",
+    "grant_trust",
+    "is_trusted",
     # official factory content
     "presets",
 ]
