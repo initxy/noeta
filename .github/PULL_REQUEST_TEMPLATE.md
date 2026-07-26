@@ -6,7 +6,6 @@ What this change does and why. Lead with the conclusion.
 
 - [ ] `noeta-runtime` (engine / kernel / agent materials)
 - [ ] `noeta-sdk` (in-process client surface)
-- [ ] `noeta-agent` (app shell + web)
 - [ ] docs
 
 ## Related ADR

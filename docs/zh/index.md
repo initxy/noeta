@@ -3,32 +3,35 @@ layout: home
 
 hero:
   name: "Noeta"
-  text: "构建在持久化运行时之上的多用户 agent 平台"
-  tagline: 开源、可自托管。会话（session）与协作空间（space）、每会话一个的沙箱，以及一个在崩溃后依然存活、记录每一步的事件溯源引擎——Provider 中立，开箱即可离线运行。
+  text: "面向 AI agent 的持久化、provider 中立运行时 + SDK"
+  tagline: 一个用于构建长程 agent 的 Python 库，建在持久化、事件溯源的运行时之上 —— 崩溃安全的 exactly-once 执行、面向人工与定时器的挂起/唤醒，以及完整的审计与 replay。像 Claude Agent SDK 一样进程内运行；零凭证即可离线运行。
   actions:
     - theme: brand
-      text: 快速开始
-      link: /zh/tutorials/quickstart
+      text: 你的第一个代理
+      link: /zh/tutorials/first-agent
+    - theme: alt
+      text: SDK 参考
+      link: /zh/reference/sdk
     - theme: alt
       text: GitHub
       link: https://github.com/initxy/noeta
 
 features:
-  - title: 崩溃自动恢复
-    details: 任务状态从仅追加的事件日志重建，从不驻留内存。任务中途杀掉进程；新进程把日志 fold 回来并完成剩下的工作——精确一次。
+  - title: 崩溃可恢复
+    details: 任务状态由 append-only 事件日志重建，从不驻留内存。任务执行到一半杀掉进程；新进程 fold 回日志并完成工作 —— exactly-once。
 
-  - title: 全程可追溯
-    details: 每个事件、LLM 轮次、工具调用和 token/cache 统计都被记录。trace 回答的是某一步为什么发生，而不只是发生了什么。
+  - title: 完全可审查
+    details: 每个事件、LLM 轮次、工具调用与 token/缓存统计都被记录。trace 回答某一步为什么发生，而不只是发生了什么。
 
-  - title: 天生支持长周期
-    details: 任务可以挂起等待人工、定时器或子任务，并在条件触发时被精确唤醒一次。
+  - title: 为长程而设计
+    details: 任务可以挂起以等待人工、定时器或子任务，并在条件触发时 exactly-once 唤醒。
 
   - title: Provider 中立
-    details: Anthropic 和任何 OpenAI 兼容端点都位于同一套内部协议之后。切换厂商只是改接线，不是重写。
+    details: Anthropic 与任意 OpenAI 兼容端点都在同一个内部协议之后。切换厂商是接线，不是重写。
 
-  - title: 为团队而生
-    details: 个人与团队空间中的多用户会话；skill、知识、记忆和 MCP 连接器都以空间为作用域——执行始终发生在每会话专属的沙箱里。
+  - title: 进程内，无 server
+    details: import noeta.sdk 即可进程内驱动引擎 —— 你的代码与运行时之间没有 HTTP，就像 Claude Agent SDK。
 
   - title: 离线优先
-    details: 确定性的 mock provider 加上 dev-login，无需 API key、无需网络即可运行整个平台。
+    details: 一个确定性 mock provider 让整个 SDK 无需 API key、无需网络即可运行。
 ---

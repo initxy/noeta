@@ -1,19 +1,18 @@
-# Publish the three noeta distributions (noeta-runtime / noeta-sdk /
-# noeta-agent) to PyPI when a ``v*`` tag is pushed.
+# Publish the two noeta libraries (noeta-runtime / noeta-sdk) to PyPI when a
+# ``v*`` tag is pushed.
 #
 # Auth is PyPI Trusted Publishing (OIDC) — NO API token is stored anywhere.
 #
-# WHY THREE PUBLISH JOBS: PyPI refuses to register the same
+# WHY TWO PUBLISH JOBS: PyPI refuses to register the same
 # repo+workflow+environment combo as a *pending* publisher for more than one
 # not-yet-created project. So each package gets its own GitHub Actions
 # ``environment``, which makes its trusted-publisher config unique. The build
-# runs once; the three jobs only upload their own files.
+# runs once; the two jobs only upload their own files.
 #
 # One-time PyPI setup — pypi.org -> Publishing -> "Add a pending publisher",
 # once per package, all with Owner=initxy, Repository=noeta, Workflow=release.yml:
 #   Project noeta-runtime : Environment = (leave blank)
 #   Project noeta-sdk     : Environment = pypi-sdk
-#   Project noeta-agent   : Environment = pypi-agent
 # (The environment name here must match the ``environment:`` key below exactly.)
 #
 # Release procedure: docs/releasing.md (changelog, lockstep versions +
@@ -27,10 +26,7 @@ on:
   workflow_dispatch: {}   # manual re-run from the Actions tab
 
 jobs:
-  # Build once. The noeta-agent wheel force-includes apps/web/dist, so the
-  # frontend must be built before packaging. Wheels for all three (built
-  # straight from source — the noeta-agent sdist can't reach ../web); sdists
-  # only for the two pure libraries.
+  # Build once: wheels + sdists for both pure-Python libraries.
   build:
     runs-on: ubuntu-latest
     steps:
@@ -43,12 +39,6 @@ jobs:
             echo "::error::CHANGELOG.md has no dated '## [${VERSION}] - YYYY-MM-DD' section; see docs/releasing.md"
             exit 1
           fi
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - name: Build frontend
-        run: make web
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
         with:
@@ -67,10 +57,10 @@ jobs:
           path: dist/
 
   # Each publish job runs only when the build produced a wheel whose version
-  # equals the tag — so a partial release (e.g. a runtime+sdk cut while
-  # noeta-agent stays behind) publishes exactly the bumped packages and the
-  # unbumped ones skip cleanly instead of failing on a duplicate upload. A
-  # full lockstep release bumps all three, so all three gates open. The
+  # equals the tag — so a partial release (e.g. a runtime-only cut while
+  # noeta-sdk stays behind) publishes exactly the bumped package and the
+  # unbumped one skips cleanly instead of failing on a duplicate upload. A
+  # full lockstep release bumps both, so both gates open. The
   # ``dist/<name>-*`` upload globs still carry the wheel + sdist together.
   publish-runtime:
     needs: build
@@ -119,27 +109,3 @@ jobs:
         if: steps.gate.outputs.publish == 'true'
       - if: steps.gate.outputs.publish == 'true'
         run: uv publish --trusted-publishing always dist/noeta_sdk-*
-
-  publish-agent:
-    needs: build
-    runs-on: ubuntu-latest
-    environment: pypi-agent
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with: { name: dist, path: dist/ }
-      - name: Gate on the tag version
-        id: gate
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          if ls dist/noeta_agent-"${VERSION}"-*.whl >/dev/null 2>&1; then
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::no noeta_agent-${VERSION} wheel — not part of this release; skipping"
-          fi
-      - uses: astral-sh/setup-uv@v6
-        if: steps.gate.outputs.publish == 'true'
-      - if: steps.gate.outputs.publish == 'true'
-        run: uv publish --trusted-publishing always dist/noeta_agent-*

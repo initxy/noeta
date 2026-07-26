@@ -22,8 +22,9 @@ matching decision first:
 - **Provider-neutral** — external providers (LLM / storage / observability) are
   adapted to Noeta-shape internal protocols; no single vendor's shape becomes the
   internal contract (`docs/adr/provider-neutral.md`).
-- **Product / shell boundary** — the runtime engine stays free of
-  product-specific assembly (`docs/adr/library-sdk-architecture.md`).
+- **Runtime / SDK boundary** — the runtime engine stays the pure engine; the
+  thin client (`noeta.sdk`) is the only public surface, and it forwards
+  in-process without holding engine internals (`docs/adr/library-sdk-architecture.md`).
 
 ## Architecture decisions
 
@@ -45,13 +46,12 @@ uv sync
 make check   # pytest with coverage (>= 85%), mypy --strict on protocols, naming + import lints
 ```
 
-Three CI steps are expected to be missing locally — don't chase them:
+Two CI steps are expected to be missing locally — don't chase them:
 
 - The **Postgres storage contract tests** run only when
   `NOETA_TEST_POSTGRES_DSN` points at a live server (CI provides one); locally
   they skip.
-- The **web e2e smoke** (Playwright) and the **fresh-venv install smoke** run
-  in CI.
+- The **fresh-venv install smoke** runs in CI.
 
 Each SDK example (see [`examples/`](examples/)) ships with a smoke test; keep the
 examples runnable when you change the SDK's public surface.

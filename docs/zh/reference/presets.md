@@ -2,7 +2,7 @@
 
 Noeta 提供四个官方代理，与 Claude Code 的阵容对齐。
 
-它们是一个 **SDK 层**的接口：你通过构建某个预设的 `Options`（`presets.main_options()`）来选它，再把它交给 `Client` / `query`。noeta-agent 平台并不是一个"预设选择器"——它自己组装宿主侧的 agent 并暴露 session（`POST /sessions`，然后 `POST /sessions/{id}/messages`），它的 API 上没有按请求传的 `agent` 字段。自定义代理通过扁平的 `Options.agents` dict 定义。
+它们是一个 **SDK 层**的接口：你通过构建某个预设的 `Options`（`presets.main_options()`）来选它，再把它交给 `Client` / `query`。自定义代理通过扁平的 `Options.agents` dict 定义。
 
 ## 四元组
 
@@ -33,7 +33,7 @@ Noeta 提供四个官方代理，与 Claude Code 的阵容对齐。
 ```python
 from noeta import presets
 from noeta.sdk import query
-from noeta.providers.anthropic import AnthropicProvider
+from noeta.sdk.providers import AnthropicProvider
 
 # 构建 main 代理的 Options
 options = presets.main_options()

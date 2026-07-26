@@ -3,11 +3,8 @@
 Noeta ships four official agents aligned with Claude Code's roster.
 
 These are an **SDK-level** surface: you pick one by building its `Options`
-(`presets.main_options()`) and handing that to a `Client` / `query`. The
-noeta-agent platform is not a preset picker — it assembles its own host-side
-agent and exposes sessions (`POST /sessions`, then
-`POST /sessions/{id}/messages`), so there is no per-request `agent` field on
-its API. Custom agents go through the flat `Options.agents` dict.
+(`presets.main_options()`) and handing that to a `Client` / `query`. Custom
+agents go through the flat `Options.agents` dict.
 
 ## The quartet
 
@@ -42,7 +39,7 @@ and [ADR: Subtask parallel execution](https://github.com/initxy/noeta/blob/main/
 ```python
 from noeta import presets
 from noeta.sdk import query
-from noeta.providers.anthropic import AnthropicProvider
+from noeta.sdk.providers import AnthropicProvider
 
 # Build the main agent's Options
 options = presets.main_options()

@@ -2,23 +2,22 @@
 
 自顶向下地走读 Noeta 的架构：各包如何分层堆叠，核心事件溯源决策如何塑造每一层，以及扩展面位于何处。对于"X 是什么"这类问题，本页链接到[概念页面](../concepts/event-sourcing.md)而非重新解释；如需精确的 API 签名，请参阅[参考页面](../reference/sdk.md)。
 
-## 三个包
+## 两个包
 
-Noeta 以两个库加一个应用的形式发布，按层级堆叠，越往上越接近产品层：
+Noeta 以两个库的形式发布，按层级堆叠，轻量客户端位于纯引擎之上：
 
 | 包 | 位置 | 角色 |
 | --- | --- | --- |
 | `noeta-runtime` | `packages/noeta-runtime` | 纯引擎及运行于其上的框架材料：事件、fold、快照、Worker/Dispatcher、存储适配器、Guard、Observer、ReAct Policy、内置工具、provider 适配器、ContextComposer，以及官方预设代理。不依赖其上方任何层，也不依赖特定厂商。 |
-| `noeta-sdk` | `packages/noeta-sdk` | 轻量级进程内客户端门面：`query` / `Client` / `Options` / `@tool` 以及重新导出的扩展接口。不含引擎内部实现，不含 HTTP。 |
-| `noeta-agent` | `apps/noeta-agent` | 官方产品：一个多用户代理服务器平台——一个在进程内消费 SDK 的 FastAPI 后端，加上它所服务的 React SPA（`apps/web`）。唯一具有网络暴露面的层；入口为 `python -m noeta.agent`。 |
+| `noeta-sdk` | `packages/noeta-sdk` | 轻量级进程内客户端门面：`query` / `Client` / `Options` / `@tool`、重新导出的扩展接口，以及四个预设代理。唯一的公共暴露面；不含引擎内部实现，不含 HTTP。 |
 
 <p align="center">
-  <img src="../../assets/architecture.svg" alt="Noeta 架构 — 三个发行包与模块关系" width="820">
+  <img src="../../assets/architecture.svg" alt="Noeta 架构 — 两个发行包与模块关系" width="820">
   <br>
-  <em>应用在进程内驱动 SDK；SDK 转发到 runtime 的引擎、材料和存储。箭头为调用路径。</em>
+  <em>host 在进程内驱动 SDK；SDK 转发到 runtime 的引擎、材料和存储。箭头为调用路径。</em>
 </p>
 
-三者都将子包贡献到一个共享的 PEP 420 `noeta.` 命名空间中，因此即使发行包边界发生变化，导入路径也保持不变。依赖方向不靠纪律约束——import-linter 在 CI 中强制执行：runtime 内核不得导入 provider 包，SDK 不得导入应用，应用代码只能导入 `noeta.sdk`（有两个刻意的豁免：`noeta.storage` 用于连接具体后端，`noeta.read_models` 用于只读投影）。用户的公共暴露面仅有 `noeta.sdk`；`noeta-runtime` 作为传递依赖到达，用户从不直接导入。
+两者都将子包贡献到一个共享的 PEP 420 `noeta.` 命名空间中，因此即使发行包边界发生变化，导入路径也保持不变。依赖方向不靠纪律约束——import-linter 在 CI 中强制执行：runtime 内核不得导入 provider 包，`noeta-sdk` 在进程内转发进 runtime。用户的公共暴露面仅有 `noeta.sdk`；`noeta-runtime` 作为传递依赖到达，用户从不直接导入。嵌入这些库的 host 通过 `noeta.sdk` 获取所需的一切，另有两个同样在公共暴露面上的仅连接逃生口——`noeta.storage` 用于连接具体后端，`noeta.read_models` 用于只读投影。
 
 ## 事实基础：状态 = fold(log)
 
@@ -64,7 +63,7 @@ Dispatcher 负责调度：任务入队、Lease 授予、唤醒事件传递和过
 
 单写入者不变式在此通过机械方式强制执行：EventLog 在每次 `emit(lease_id=…)` 时都会咨询 Dispatcher（作为 `LeaseRegistry`），因此只有活跃 Lease 的持有者才能写入任务流。Observer 在每个信封提交后同步看到它，在写入者线程上但在写入者锁之外，异常会被吞没。
 
-排空循环作为库原语 `noeta.runtime.worker.WorkerLoop` 提供——没有运维 CLI。捆绑的代理在进程内运行一个；嵌入者自行调用 `WorkerLoop(…).run_forever(…)`（参见 [WorkerLoop 参考](../reference/worker-loop.md)）。
+排空循环作为库原语 `noeta.runtime.worker.WorkerLoop` 提供——没有运维 CLI，也没有东西为你启动它；嵌入 host 自行调用 `WorkerLoop(…).run_forever(…)`（参见 [WorkerLoop 参考](../reference/worker-loop.md)）。
 
 ### 持久化唤醒：机制
 
@@ -133,7 +132,7 @@ Engine 使用中立的内部协议；厂商适配器在边缘进行转换，将�
 
 一旦事实基础收敛于"在持久化日志上 fold"，分布式主要是一个调度问题。任何能读取存储的进程都可以通过 fold 重建任何任务；执行不假设它在哪台机器上运行。Lease 是防止并发 Worker 操作同一任务的机制：lease、心跳、过期扫描、恰好一次唤醒传递，以及日志本身中的写入验证。
 
-今天有两种发布形态。默认是单主机：一个本地 SQLite 文件、一个进程内的常驻 `WorkerLoop` 池（`AGENT_NUM_WORKERS`，默认 4），以及作为有界进程内线程的扇出（默认 8）。要达到多主机集群，只需更换存储适配器——把部署指向 Postgres，多个 host 进程即可共享一个数据库，它们带 lease 校验的写在事务内按数据库时钟被 fencing 保护。两种形态下 Engine 都不变，因为 fold 是纯函数且 lease 验证存在于日志中。诚实的边界列表在[已知限制](../operations/limitations.md)中。
+今天有两种发布形态。默认是单主机：一个本地 SQLite 文件、一个进程内的常驻 `WorkerLoop` 池（池大小由 host 决定），以及作为有界进程内线程的扇出（默认 8）。要达到多主机集群，只需更换存储适配器——把部署指向 Postgres，多个 host 进程即可共享一个数据库，它们带 lease 校验的写在事务内按数据库时钟被 fencing 保护。两种形态下 Engine 都不变，因为 fold 是纯函数且 lease 验证存在于日志中。诚实的边界列表在[已知限制](../operations/limitations.md)中。
 
 取消遵循与 Engine 停止探测相同的协作设计：取消标记任务；Worker 和 Engine 在下一个安全点停止；级联取消进行中的 Subtask；后台 shell 进程被注册并在其会话关闭时回收。
 

@@ -21,8 +21,8 @@ loop.run_forever(install_signals=True)  # blocks until stop()
 ```
 
 `WorkerLoop` is a dedicated drain: it polls the ready queue, leases one
-task, advances it one step, and repeats. The platform embeds a pool of
-them (`AGENT_NUM_WORKERS`); this page is for running your own — the
+task, advances it one step, and repeats. A host embeds a pool of
+them; this page is for running your own — the
 deployment shape for agents that need to outlive any individual HTTP
 request.
 
@@ -102,9 +102,8 @@ loop.run_forever(install_signals=True)
 | `reliability_sink` | structured logs | Where `ReliabilityEvent`s go |
 
 There is **no `workers` knob**: one `WorkerLoop` is one drain thread. Scale out
-by running several loops (each with its own `worker_id`) against the same store
-— the platform's own resident pool is exactly that (`AGENT_NUM_WORKERS`,
-default 4). Concurrent loops are safe: lease-checked appends are fenced.
+by running several loops (each with its own `worker_id`) against the same store.
+Concurrent loops are safe: lease-checked appends are fenced.
 
 ## What happens at runtime
 

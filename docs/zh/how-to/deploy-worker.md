@@ -15,7 +15,7 @@ loop = WorkerLoop(rt, worker_id="my-worker")
 loop.run_forever(install_signals=True)  # 阻塞直到 stop() 被调用
 ```
 
-`WorkerLoop` 是一个专用排空器：它轮询就绪队列，租约一个任务，推进一步，然后重复。平台内嵌了一个由它们组成的池（`AGENT_NUM_WORKERS`）；本页讲的是如何运行你自己的——这是需要比任何单个 HTTP 请求存活更久的代理的部署形态。
+`WorkerLoop` 是一个专用排空器：它轮询就绪队列，租约一个任务，推进一步，然后重复。一个 host 内嵌了一个由它们组成的池；本页讲的是如何运行你自己的——这是需要比任何单个 HTTP 请求存活更久的代理的部署形态。
 
 ## 构建 WorkerRuntime
 
@@ -87,7 +87,7 @@ loop.run_forever(install_signals=True)
 | `shutdown_grace_s` | `30.0` | `stop()` 后等待进行中步骤完成的最大时间。`None` = 无限制 |
 | `reliability_sink` | 结构化日志 | `ReliabilityEvent` 的去向 |
 
-**没有 `workers` 参数**：一个 `WorkerLoop` 就是一条 drain 线程。要横向扩容就对同一个存储跑多个循环（各带自己的 `worker_id`）——平台自己的常驻池就是这样（`AGENT_NUM_WORKERS`，默认 4）。并发循环是安全的：带 lease 校验的 append 受 fencing 保护。
+**没有 `workers` 参数**：一个 `WorkerLoop` 就是一条 drain 线程。要横向扩容就对同一个存储跑多个循环（各带自己的 `worker_id`）。并发循环是安全的：带 lease 校验的 append 受 fencing 保护。
 
 ## 运行时发生了什么
 

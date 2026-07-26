@@ -1,10 +1,8 @@
-"""Fresh-venv wheel install + ``python -m noeta.agent`` boot smoke.
+"""Fresh-venv wheel install smoke for the two library distributions.
 
-Validates the install path the server platform promises: build the three
-wheels (noeta-runtime, noeta-sdk, noeta-agent), install them into a
-brand-new venv outside the workspace, boot the server with the offline mock
-provider (sandbox off, temp data dir), hit the health endpoint, and shut
-down cleanly. The wheels — not an editable install — are the artifact under
+Build the noeta-runtime and noeta-sdk wheels, install them into a
+brand-new venv outside the workspace, and import the public surface fully
+offline. The wheels — not an editable install — are the artifact under
 test: the packaged metadata + module tree must be enough on their own
 (``PYTHONPATH`` is stripped from the subprocess env).
 
@@ -20,30 +18,23 @@ from __future__ import annotations
 import ast
 import os
 import shutil
-import signal
-import socket
 import subprocess
 import sysconfig
-import time
-import urllib.error
-import urllib.request
 import venv
 from pathlib import Path
 
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-# The three shipped distributions: the two libraries + the product.
+# The two shipped library distributions.
 _PACKAGE_DIRS = (
     _REPO_ROOT / "packages" / "noeta-runtime",
     _REPO_ROOT / "packages" / "noeta-sdk",
-    _REPO_ROOT / "apps" / "noeta-agent",
 )
 
 #: Distribution name → (source root, the noeta-* dists it may import from).
 #: The closure is what the dist's ``dependencies`` actually declare:
-#: noeta-runtime depends on no noeta package, noeta-sdk on runtime, the
-#: product on both.
+#: noeta-runtime depends on no noeta package, noeta-sdk on runtime.
 _DISTRIBUTIONS: dict[str, tuple[Path, frozenset[str]]] = {
     "noeta-runtime": (
         _REPO_ROOT / "packages" / "noeta-runtime" / "noeta",
@@ -52,10 +43,6 @@ _DISTRIBUTIONS: dict[str, tuple[Path, frozenset[str]]] = {
     "noeta-sdk": (
         _REPO_ROOT / "packages" / "noeta-sdk" / "noeta",
         frozenset({"noeta-sdk", "noeta-runtime"}),
-    ),
-    "noeta-agent": (
-        _REPO_ROOT / "apps" / "noeta-agent" / "noeta",
-        frozenset({"noeta-agent", "noeta-sdk", "noeta-runtime"}),
     ),
 }
 
@@ -91,27 +78,20 @@ def _venv_console_script(venv_dir: Path, name: str) -> Path:
     return venv_dir / scripts / f"{name}{suffix}"
 
 
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
-
-
 @pytest.mark.install_smoke
-def test_wheel_install_boots_server_and_serves_health(tmp_path: Path) -> None:
-    """Build the three wheels, install them into a fresh venv, boot
-    ``python -m noeta.agent`` fully offline (mock provider, sandbox off,
-    temp data dir), assert ``GET /api/v1/health`` answers, and shut down.
+def test_wheel_install_imports_public_surface(tmp_path: Path) -> None:
+    """Build the two wheels, install them into a fresh venv, and import
+    the public surface fully offline.
 
     Also gates the TL6 invariant: the wheels must not resurrect a ``noeta``
-    console script — ``python -m noeta.agent`` is the only entry.
+    console script — the libraries ship no entry point at all.
     """
     uv_bin = shutil.which("uv")
     if uv_bin is None:
         pytest.skip("uv not on PATH; CI gates this path via setup-uv")
     env = _clean_env()
 
-    # 1. Build the three wheels out of the workspace checkout.
+    # 1. Build the two library wheels out of the workspace checkout.
     dist_dir = tmp_path / "dist"
     for package_dir in _PACKAGE_DIRS:
         build = subprocess.run(
@@ -125,7 +105,7 @@ def test_wheel_install_boots_server_and_serves_health(tmp_path: Path) -> None:
             f"uv build {package_dir.name} failed:\n{build.stderr}"
         )
     wheels = sorted(dist_dir.glob("*.whl"))
-    assert len(wheels) == 3, f"expected 3 wheels, got {[w.name for w in wheels]}"
+    assert len(wheels) == 2, f"expected 2 wheels, got {[w.name for w in wheels]}"
 
     # 2. Install the wheels into a brand-new venv (third-party deps resolve
     # from the index / uv cache; the noeta-* inter-deps from the local wheels).
@@ -142,90 +122,33 @@ def test_wheel_install_boots_server_and_serves_health(tmp_path: Path) -> None:
         f"uv pip install of the built wheels failed:\n{install.stderr}"
     )
 
-    # TL6: no console script; the module entry is the only entry.
+    # TL6: no console script; the libraries ship no entry point at all.
     noeta_cmd = _venv_console_script(venv_dir, "noeta")
     assert not noeta_cmd.exists(), (
         f"the wheels must not install a `noeta` console script; found {noeta_cmd}"
     )
 
-    # 3. Boot the server offline: mock provider, sandbox off, temp data dir.
-    # The installed config.py resolves relative paths against site-packages,
-    # so every path setting must be absolute here; missing models.json
-    # degrades to the built-in single-model fallback by design.
-    port = _free_port()
-    server_env = dict(
-        env,
-        HOST="127.0.0.1",
-        PORT=str(port),
-        DATA_DIR=str(tmp_path / "data"),
-        SHARED_DATA_DIR=str(tmp_path / "data" / "shared"),
-        LLM_PROVIDER="mock",
-        SANDBOX_ENABLED="false",
-        MEMORY_CONSOLIDATION="false",
-        SESSION_SECRET="install-smoke-secret",
-    )
-    proc = subprocess.Popen(
-        [str(py), "-m", "noeta.agent"],
-        cwd=str(tmp_path),
-        env=server_env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+    # 3. Import the public surface in the fresh venv, fully offline.
+    smoke = subprocess.run(
+        [
+            str(py),
+            "-c",
+            (
+                "import noeta.sdk, noeta.sdk.storage, noeta.presets; "
+                "from noeta.sdk import Client, Options, PluginAPI, "
+                "load_plugins, merge_plugins; "
+                "print('ok')"
+            ),
+        ],
+        capture_output=True,
         text=True,
+        env=env,
+        cwd=str(tmp_path),
     )
-    try:
-        # 4. Health must answer with the mock provider identity.
-        health_url = f"http://127.0.0.1:{port}/api/v1/health"
-        deadline = time.time() + 60
-        body: str | None = None
-        while time.time() < deadline:
-            if proc.poll() is not None:
-                out = proc.stdout.read() if proc.stdout else ""
-                raise AssertionError(
-                    f"server exited early ({proc.returncode}):\n{out}"
-                )
-            try:
-                with urllib.request.urlopen(health_url, timeout=2) as resp:
-                    assert resp.status == 200
-                    body = resp.read().decode()
-                    break
-            except (urllib.error.URLError, ConnectionError, TimeoutError):
-                time.sleep(0.25)
-        assert body is not None, "health endpoint never came up within 60 s"
-        assert '"ok":true' in body.replace(" ", "")
-        assert "mock" in body
-
-        # 5. The wheel must ship the SPA (force-included at noeta/agent/static
-        # — the 0.3.0 wheel shipped API-only because the include was lost in
-        # the platform port): the root path serves the frontend index, not a
-        # 404 and not the bare API.
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/", timeout=5
-        ) as resp:
-            assert resp.status == 200
-            index = resp.read().decode()
-        assert "<div id=" in index and "</html>" in index.lower(), (
-            f"root path did not serve the SPA index: {index[:200]!r}"
-        )
-
-        # 6. Graceful shutdown: SIGTERM → uvicorn drains the lifespan, then
-        # re-raises the captured signal so the exit status reflects it
-        # (modern uvicorn exits -SIGTERM, older versions 0 — both are the
-        # graceful path). The drain evidence is the lifespan-shutdown log
-        # line plus finishing within the bounded wait.
-        proc.terminate()
-        try:
-            out, _ = proc.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            raise AssertionError("server did not shut down within 30 s")
-        assert proc.returncode in (0, -signal.SIGTERM), (
-            f"server did not shut down cleanly ({proc.returncode}):\n{out}"
-        )
-        assert "Application shutdown complete" in out, out
-    finally:
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait(timeout=10)
+    assert smoke.returncode == 0, (
+        f"public-surface import failed in the fresh venv:\n{smoke.stderr}"
+    )
+    assert smoke.stdout.strip() == "ok"
 
 
 def _module_owners() -> dict[str, str]:

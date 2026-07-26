@@ -1,6 +1,6 @@
 # Remote MCP connectors = an HTTP request/response subset + a frontend-managed server, credentials stay on the host, requests carry only aliases
 
-> **Status: the management layer is superseded by [server-platform-product.md](server-platform-product.md)**; the client and the resume invariant are live.
+> **Status: the management layer is superseded by the noeta-agent product's per-space connector registry** (decided in its repository's `server-platform-product.md`); the client and the resume invariant are live.
 > The "frontend-managed server" and the host-layer `mcp_registry` /
 > `mcp_prompt_expander` described here are retired, along with the global
 > `~/.noeta/mcp_servers.json`. Connectors are now **per-space** rows in the

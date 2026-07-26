@@ -1,8 +1,7 @@
 [tool.uv.workspace]
-# Libraries live in packages/ (noeta-runtime /
-# noeta-sdk), the application shell in apps/ (noeta-agent); the shell package noeta is deleted,
-# and the test suite lives at the repo root in tests/.
-members = ["packages/noeta-runtime", "packages/noeta-sdk", "apps/noeta-agent"]
+# Libraries live in packages/ (noeta-runtime / noeta-sdk); the test suite lives
+# at the repo root in tests/.
+members = ["packages/noeta-runtime", "packages/noeta-sdk"]
 
 # The workspace-root pyproject is pytest's rootdir when running from the repo
 # root, so it owns the test config: ``testpaths`` pins collection to ``tests/``
@@ -36,7 +35,3 @@ markers = [
 [tool.coverage.run]
 source = ["noeta"]
 branch = true
-# The application ships its own test suite (apps/noeta-agent/tests, run as a
-# separate pytest invocation); the repo-root coverage gate measures the
-# libraries only.
-omit = ["apps/noeta-agent/*"]

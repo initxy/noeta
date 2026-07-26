@@ -1,28 +1,19 @@
 ; Noeta import-linter contracts.
 ;
-; Enforces the layering across the three-package topology
-; (noeta-runtime / noeta-sdk / noeta-agent product dist).
-; noeta-server folded into noeta-sdk (TL3), its HTTP stack was deleted in the
-; runtime-sdk-app-restructure T8, and noeta-cli was removed (TL6 —
-; ``python -m noeta.agent`` is the only entry, no ``noeta`` console script). All
-; distributions contribute subpackages to the shared PEP 420 ``noeta`` namespace,
-; so the contracts run on import *paths*, which stay invariant while the
-; physical distribution boundary moves. ``protocols`` is the typed boundary
-; (L0) and must not depend on any other in-project module; ``core`` (L1) may
-; depend on ``protocols`` only. The library-SDK layering splits the old L2 band by mechanism
-; vs material: the kernel-services band (runtime / storage / guards / observers
-; / read_models — noeta-runtime) sits below the SDK **materials** band (context
+; Enforces the layering across the two-package topology
+; (noeta-runtime / noeta-sdk). Both distributions contribute subpackages to
+; the shared PEP 420 ``noeta`` namespace, so the contracts run on import
+; *paths*, which stay invariant while the physical distribution boundary
+; moves. ``protocols`` is the typed boundary (L0) and must not depend on any
+; other in-project module; ``core`` (L1) may depend on ``protocols`` only.
+; The library-SDK layering splits the old L2 band by mechanism vs material:
+; the kernel-services band (runtime / storage / guards / observers /
+; read_models — noeta-runtime) sits below the SDK **materials** band (context
 ; / policies / tools / providers — noeta-sdk), so a kernel service can never
-; import a material. The product lives entirely in ``noeta.agent.*`` (a PEP 420
-; namespace whose identity layer ``spec``/``registry`` ships in the library
-; wheels and whose product modules ship in the product dist). The product is
-; the multi-user server platform: ``main``/``__main__`` (FastAPI assembly +
-; entry), ``api`` (routers), ``auth`` (identity seam), ``host`` (the noeta
-; Client host: AgentService / translator / providers / sandbox adapters),
-; ``store`` (application SQLite), ``services`` (knowledge sync/resolve,
-; channels, feedback), ``workflow``, and the config modules. The app drives
-; the engine only through ``noeta.sdk``; the engine-behaviour suite assembles
-; via ``noeta.sdk.Client`` (tests/_sdk_session).
+; import a material. The ``noeta.agent`` identity layer (``spec`` /
+; ``registry``) ships in the library wheels; product hosts live in their own
+; repositories and drive the engine only through ``noeta.sdk`` (the
+; engine-behaviour suite assembles via ``noeta.sdk.Client``, tests/_sdk_session).
 
 [importlinter]
 root_package = noeta
@@ -36,11 +27,6 @@ include_external_packages = False
 name = Noeta layering (materials band split from kernel-services)
 type = layers
 layers =
-    ; The product band: one non-independent group (":" siblings) — intra-app
-    ; structure is the app's own business (host and services are mutually
-    ; recursive); the repo-wide guarantee is only that the whole band sits
-    ; above noeta.sdk.
-    noeta.agent.main : noeta.agent.api : noeta.agent.auth : noeta.agent.host : noeta.agent.store : noeta.agent.services : noeta.agent.workflow : noeta.agent.config : noeta.agent.config_registry : noeta.agent.models_config
     noeta.sdk
     noeta.presets
     noeta.client
@@ -92,28 +78,6 @@ ignore_imports =
     ; mark it as the intentional exception. The library-SDK refactor removed
     ; the old ``noeta.context.composer`` default — the kernel no longer reaches there.
     noeta.core.engine -> noeta.runtime.tool
-
-[importlinter:contract:sdk-not-agent]
-name = SDK layers must not import the noeta-agent product (supersedes execution-not-code / client-not-code / server-core-not-code; the sdk-owned identity layer noeta.agent.spec/registry stays importable)
-type = forbidden
-source_modules =
-    noeta.client
-    noeta.execution
-    noeta.context
-    noeta.policies
-    noeta.tools
-    noeta.providers
-forbidden_modules =
-    noeta.agent.main
-    noeta.agent.api
-    noeta.agent.auth
-    noeta.agent.host
-    noeta.agent.store
-    noeta.agent.services
-    noeta.agent.workflow
-    noeta.agent.config
-    noeta.agent.config_registry
-    noeta.agent.models_config
 
 [importlinter:contract:runtime-no-providers]
 name = noeta.runtime must not import noeta.providers (issue 11)
@@ -170,14 +134,6 @@ forbidden_modules =
     noeta.guards
     noeta.observers
     noeta.read_models
-    noeta.agent.main
-    noeta.agent.api
-    noeta.agent.auth
-    noeta.agent.host
-    noeta.agent.store
-    noeta.agent.services
-    noeta.agent.workflow
-    noeta.agent.config
 
 [importlinter:contract:guards-only-protocols]
 name = noeta.guards may only import noeta.protocols (issue 18)
@@ -214,13 +170,6 @@ type = forbidden
 source_modules =
     noeta.read_models
 forbidden_modules =
-    noeta.agent.main
-    noeta.agent.api
-    noeta.agent.auth
-    noeta.agent.host
-    noeta.agent.store
-    noeta.agent.services
-    noeta.agent.workflow
     noeta.runtime
     noeta.context
     noeta.policies
@@ -249,72 +198,6 @@ source_modules =
     noeta.protocols
 forbidden_modules =
     noeta.storage
-
-[importlinter:contract:app-strict-only-sdk]
-name = the pure application tier (main / entry / auth / store / services / workflow / config) may reach the engine only through noeta.sdk — zero exemptions
-type = forbidden
-; Only DIRECT imports are forbidden: reaching runtime internals *through*
-; noeta.sdk is the encapsulation working as intended.
-allow_indirect_imports = True
-source_modules =
-    noeta.agent.main
-    noeta.agent.__main__
-    noeta.agent.auth
-    noeta.agent.store
-    noeta.agent.services
-    noeta.agent.workflow
-    noeta.agent.config
-    noeta.agent.config_registry
-    noeta.agent.models_config
-forbidden_modules =
-    noeta.core
-    noeta.runtime
-    noeta.execution
-    noeta.policies
-    noeta.tools
-    noeta.providers
-    noeta.context
-    noeta.protocols
-    noeta.storage
-    noeta.guards
-    noeta.observers
-    noeta.read_models
-    noeta.testing
-    noeta.agent.spec
-    noeta.agent.registry
-
-[importlinter:contract:app-uses-only-sdk]
-name = the engine-facing product tier (host / api) may reach the engine only through noeta.sdk — a RATCHET: the burn-down list is fully burned down (every former pin was promoted onto the noeta.sdk surface); ignore_imports may not grow again EXCEPT for ADR-documented deliberate exemptions (the two sdk_* sandbox-adapter modules — the concrete AIO adapters they extend are runtime-internal, kept OFF the noeta.sdk public surface; see the execution-environment-seam ADR). Deliberate CONTEXT.md exemptions stay open: noeta.storage (the host wires a concrete backend) and noeta.read_models (the peripheral projection), so neither is forbidden here.
-type = forbidden
-; Only DIRECT imports are forbidden — reaching runtime internals *through*
-; noeta.sdk is the encapsulation working as intended (same stance as
-; app-strict-only-sdk above).
-allow_indirect_imports = True
-source_modules =
-    noeta.agent.host
-    noeta.agent.api
-forbidden_modules =
-    noeta.core
-    noeta.runtime
-    noeta.execution
-    noeta.policies
-    noeta.tools
-    noeta.providers
-    noeta.context
-    noeta.protocols
-    noeta.guards
-    noeta.observers
-    noeta.testing
-    noeta.agent.spec
-    noeta.agent.registry
-ignore_imports =
-    ; Deliberate exemptions (ADR: execution-environment-seam, "SDK-adapter
-    ; export surface"): the product's official-SDK sandbox adapters extend the
-    ; runtime-internal concrete AIO adapters, which are deliberately NOT
-    ; re-exported through noeta.sdk (publishing them would freeze
-    ; retirement-slated implementation into the user-facing API).
-    noeta.agent.host.sdk_sandbox_exec_env -> noeta.tools.fs.exec_env
-    noeta.agent.host.sdk_browser_backend -> noeta.tools.browser
 
 [importlinter:contract:mcp-tools-boundary]
 name = noeta.tools.mcp may import only noeta.protocols + noeta.tools helpers + stdlib (Phase 4.5 F2)

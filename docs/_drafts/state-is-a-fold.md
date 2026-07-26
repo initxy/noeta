@@ -341,8 +341,9 @@ Code and docs:
 - Repo: [github.com/initxy/noeta](https://github.com/initxy/noeta)
 - Docs: [initxy.github.io/noeta](https://initxy.github.io/noeta/)
 
-Trying it is deliberately cheap: `pip install noeta-agent`, then
-`python -m noeta.agent` — it boots fully offline against a deterministic stub
-provider, no API key and no network needed, so the storage, fold, and wake
-machinery are all inspectable on a fresh checkout. Wire a real Anthropic or
-OpenAI-compatible endpoint when you want a live model.
+Trying it is deliberately cheap: `uv pip install noeta-sdk`, then build an
+`Options` and drive one turn with `query` against a deterministic stub
+provider (`noeta.sdk.testing.FakeLLMProvider`) — no API key and no network
+needed, so the storage, fold, and wake machinery are all inspectable on a
+fresh checkout. Wire a real Anthropic or OpenAI-compatible endpoint when you
+want a live model.

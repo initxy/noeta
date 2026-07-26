@@ -17,7 +17,7 @@ Noeta 和 Claude Agent SDK 都提供了代理循环、工具、MCP、子代理�
 | **扩展** | Hooks，命令式拦截（`PreToolUse`、`PostToolUse`、…） | 五个扩展 seam（工具、策略、Guard、Observer、内容通道）加上单写者约束（Observer 只读） |
 | **子代理** | 代理定义；输出返回给父代理；嵌套 ≤ 5 层 | 子任务是独立的事件溯源任务；扇出并发；结果通过 `SubtaskCompleted` 唤醒流回父任务 |
 | **并发 / 分布式** | 单个 `query` / `Client` 进程内运行 | 基于租约 + 持久化日志的分布式队列底层（当前以单机形式交付） |
-| **形态** | 一个直接调用 Claude API 的 TypeScript / Python 库 | 三个包——`noeta-runtime`（引擎）、`noeta-sdk`（客户端门面）、`noeta-agent`（多用户服务器平台） |
+| **形态** | 一个直接调用 Claude API 的 TypeScript / Python 库 | 两个包——`noeta-runtime`（引擎）+ `noeta-sdk`（你 import 的客户端门面） |
 
 ## 各自的适用场景
 

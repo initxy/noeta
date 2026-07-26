@@ -27,5 +27,4 @@ Which package(s) does this touch?
 
 - [ ] `noeta-runtime` (engine / kernel / agent materials)
 - [ ] `noeta-sdk` (in-process client surface)
-- [ ] `noeta-agent` (app shell + web)
 - [ ] docs / other

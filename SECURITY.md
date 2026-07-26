@@ -29,7 +29,7 @@ Report it privately through GitHub's private vulnerability reporting:
 If you can't use GitHub advisories, email `initxy0@gmail.com` instead.
 
 A useful report includes: what the issue is, the affected package
-(`noeta-runtime` / `noeta-sdk` / `noeta-agent`), a reproduction or proof of
+(`noeta-runtime` / `noeta-sdk`), a reproduction or proof of
 concept, and the impact you think it has.
 
 ## Scope / notable surface
