@@ -92,6 +92,11 @@ def _default_run(
         argv,
         cwd=cwd,
         env=env,
+        # The tool never feeds the child stdin, so hand it DEVNULL rather than
+        # the host's fd 0: an inherited stdin lets a spawned command block
+        # forever on a read (burning the whole timeout) or consume bytes meant
+        # for whatever drives the host process.
+        stdin=subprocess.DEVNULL,
         start_new_session=True,
         **kwargs,
     )
