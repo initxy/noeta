@@ -1,0 +1,141 @@
+# Repo split: this repo becomes SDK-only; the agent product moves out
+
+> **Status: Active**
+
+Companion to
+[2026-07-25-plugin-architecture.md](2026-07-25-plugin-architecture.md) (the
+mechanism this split depends on). Durable plugin decisions live in
+[plugin-contribution-bundles.md](../adr/plugin-contribution-bundles.md).
+
+## Goal
+
+Move the agent product (`apps/noeta-agent` + `apps/web`) into its own
+repository at `/data00/home/xiyang.dai/Documents/noeta-agent`, leaving this
+repo as the SDK-only platform (noeta-runtime + noeta-sdk wheels) — executing
+the move only after the SDK contract (plugin mechanism, public-surface audit,
+reference host) has shipped, so the new repo consumes the published contract
+from day one.
+
+## Non-goals
+
+- No merging of the runtime and sdk wheels (package-layout stands; a separate
+  decision if ever).
+- No renaming: distribution `noeta-agent` and import path `noeta.agent` are
+  kept (the `noeta.*` namespace already spans separately-installed wheels).
+- No app rearchitecture during the move — move first, evolve there (the
+  presets/plugins consumption work is the new repo's own spec).
+- No deployment-data migration; storage schemas are owned by runtime/sdk and
+  unchanged.
+
+## Context
+
+Decided 2026-07-26, superseding the 2026-07-25 layout decision to keep the
+product in-repo. The plugin design clarified the relationship: the SDK is the
+platform contract; the agent product is one host among several (noeta-agent,
+noeta-workspace, third parties). Splitting makes the contract honest — the
+product may only use what pip installs. The cost (cross-repo coordination) is
+mitigated by contract-first sequencing, a reference host in this repo, and an
+editable-install dev workflow.
+
+## Decisions
+
+- **D1 — Destination & history.** New git repo at
+  `/data00/home/xiyang.dai/Documents/noeta-agent`, seeded from a fresh clone
+  via `git filter-repo` restricted to `apps/noeta-agent` + `apps/web` (+ their
+  doc paths), so file history follows. This repo then deletes `apps/` going
+  forward; its own history stays intact.
+- **D2 — Naming & versioning.** Distribution `noeta-agent`, import
+  `noeta.agent`, unchanged. First post-split release is 0.4.0 from the new
+  repo's CI, pinned `noeta-sdk>=0.4,<0.5`. The sdk follows semver with a
+  one-minor deprecation window.
+- **D3 — Contract-first gate (hard).** Surgery starts only after noeta-sdk
+  0.4.0 (plugin mechanism M1 + public-surface audit + reference host) is on
+  PyPI. Rationale: splitting first would pin internal paths and force a second
+  migration.
+- **D4 — Import discipline.** The new repo imports only the `noeta.sdk` public
+  surface — enforced there by import-linter; enforced here by a
+  public-surface completeness test. Gaps found during the audit (sqlite
+  storage triple, `EventEnvelope` wire contract, streaming/sandbox types) are
+  closed by re-export through `noeta.sdk`, never by blessing internal paths.
+- **D5 — Reference host.** A minimal host (`examples/reference-host/`) stays
+  in this repo: sqlite triple + streaming sink + plugin loading. It is the
+  contract-test executor, the host-builder tutorial, and the app's stand-in as
+  integration bed.
+- **D6 — Docs split.** App-layer ADRs (server-platform-product,
+  token-streaming-projection, web-task-creation, web-file-panel-and-app-preview,
+  web-image-attach) are copied to the new repo; the originals get
+  `> **Status:**` pointer blockquotes and are never deleted. CONTEXT.md's
+  app-layer terms (Space, UI event, Skill registry, Knowledge source, MCP
+  connector, Agent-config, Feedback loop) move to the new repo's CONTEXT.md;
+  library terms stay. Product docs pages and their `zh/` mirrors move;
+  each repo keeps its own `releasing.md`; the new repo gets its own
+  AGENTS.md / CLAUDE.md seeded from this repo's working agreement.
+- **D7 — CI & release.** The agent publish job leaves this repo's
+  release.yml; the new repo gets its own workflow (web build + wheel publish,
+  reusing the tag-version gating pattern).
+- **D8 — Dev workflow.** Cross-repo development uses an editable install of
+  this repo (`uv pip install -e ../noeta` style), documented in the new repo's
+  CONTRIBUTING; seam changes are batched to limit coordinated releases.
+- **D9 — Local secrets.** The real gateway `.env` is copied by hand to the new
+  project and stays uncommitted in both.
+- **D10 — Follow-on ownership.** Plugin-architecture M3 (presets + runtime
+  plugins consumption) and M4 (app-plugin plane: routers, channels, scheduled
+  triggers, sandbox-provider selection) execute in the new repo under its own
+  spec; `feishu-channel` remains the app plane's external validation target.
+
+## Plan
+
+- [ ] **Phase 0 — close the in-flight tree.** Land the uncommitted work
+      (presets→sdk move, doc revisions); patch-release if warranted.
+- [ ] **Phase 1 — contract (the gate).** In this repo: plugin M1 + M2 (per the
+      plugin spec) + public-surface audit + reference host + host-builder
+      docs; release runtime/sdk 0.4.0.
+- [ ] **Phase 2 — surgery.**
+  - [ ] Extract `apps/` history into the new repo (filter-repo on a fresh
+        clone); push to its own origin.
+  - [ ] New repo bring-up: pyproject/uv, import-linter (`noeta.sdk` only),
+        pin sdk 0.4, CI + release workflow, AGENTS.md / CONTEXT.md / docs /
+        `.env`; switch any internal imports to the public surface.
+  - [ ] This repo: remove `apps/`, workspace refs, make targets, agent publish
+        job; add ADR status pointers; migrate CONTEXT.md terms; prune docs and
+        `zh/` mirrors; sweep dangling links.
+  - [ ] Verify both sides: new repo `make check` green against the **published**
+        sdk (no path deps) and `python -m noeta.agent` serves the SPA
+        end-to-end; this repo `make check` green.
+- [ ] **Phase 3 — new repo's own spec** for M3/M4 (written there).
+
+## Acceptance criteria
+
+- [ ] New repo builds, tests, and runs from PyPI noeta-sdk only; a full
+      session with streaming works on a dev instance.
+- [ ] `git log --follow` shows pre-split history for moved files in the new
+      repo.
+- [ ] This repo contains no `apps/`, no agent publish job, no dangling doc
+      links; ADR pointers and CONTEXT.md term migration in place.
+- [ ] import-linter in the new repo proves `noeta.sdk`-only imports; the
+      public-surface completeness test here covers everything the app needed.
+- [ ] noeta-agent 0.4.0 published from the new repo; this repo's release.yml
+      publishes runtime+sdk only.
+- [ ] `make check` green in both repos.
+
+## Risks
+
+- **Cross-repo friction**: seam changes now need coordinated releases —
+  mitigated by the editable-install workflow and batching; accepted cost of
+  the split.
+- **Doc link rot**, doubled by the `zh/` mirrors — mitigated by a link sweep
+  in Phase 2 and the vitepress config split.
+- **filter-repo mistakes** — operate on a fresh clone only; verify file counts
+  and `--follow` history before pushing.
+- **Namespace packaging**: `noeta.agent` must keep working beside pip-installed
+  `noeta.runtime`/`noeta.sdk` — already proven by the existing two-wheel
+  layout, but re-verified in Phase 2 bring-up.
+- **Contract gaps discovered late**: anything the app needs that the audit
+  missed shows up as an import-linter failure in Phase 2 — fix by re-export
+  and a sdk patch release, never by blessing an internal path.
+
+## Progress log
+
+- 2026-07-26 — Spec created; direction confirmed by the owner (destination
+  path fixed). Plugin spec revised the same day to hand M3/M4 to the new
+  repo; ADR amended (app plane owned by each host). No surgery started.

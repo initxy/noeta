@@ -35,9 +35,13 @@ Plugins exist on **two planes**, mirroring the `Options` / `HostConfig` split:
 
 - **Runtime plugins** (entry-point group `noeta.plugins`, or plugin
   directories) contribute to agent identity via `Options`.
-- **App plugins** (entry-point group `noeta.app_plugins`) contribute host-level
-  resources to the noeta-agent product: API routers, message-channel adapters,
-  scheduled goal triggers, commands. They never enter `AgentSpec` identity.
+- **App plugins** contribute host-level resources to a host product — for the
+  noeta-agent server: API routers, message-channel adapters, scheduled goal
+  triggers, commands, sandbox-provider selection. They never enter `AgentSpec`
+  identity. The SDK owns only the runtime-plane entry-point group
+  (`noeta.plugins`) and the packaging convention (one pip package may declare
+  several groups); each host defines and owns its app-plane group and API in
+  its own repository.
 
 Discovery and trust:
 
@@ -103,8 +107,9 @@ because the tool execution path remains the sole producer of its result.
 
 ## Consequences
 
-- The loader, `PluginAPI`, and merge land in noeta-sdk; the app-plugin host
-  surface lands in noeta-agent. The engine and composer are untouched.
+- The loader, `PluginAPI`, and merge land in noeta-sdk; app-plugin host
+  surfaces land in each host's own repository (the noeta-agent product lives
+  outside this repo). The engine and composer are untouched.
 - `PluginAPI` mirrors `Options`: whenever a new extension surface is added to
   `Options`, deciding whether plugins may contribute to it is part of that
   surface's design.
