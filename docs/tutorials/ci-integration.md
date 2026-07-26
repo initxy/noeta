@@ -186,7 +186,7 @@ Add a job to `.github/workflows/ci.yml`:
 ```
 
 > **No frontend build needed.** SDK smoke tests exercise the library
-> in-process — no `npm` step and no platform server required.
+> in-process — no `npm` step and no server required.
 
 ## Step 4: Run the full test suite in CI
 

@@ -20,7 +20,7 @@ reasoning stays readable:
 ```markdown
 # <the original title>
 
-> **Status: superseded by [server-platform-product.md](server-platform-product.md)** (<what changed>).
+> **Status: superseded by [runtime-sdk-app-restructure.md](runtime-sdk-app-restructure.md)** (<what changed>).
 > <one or two sentences: which part is dead, which part still holds.>
 ```
 
@@ -86,13 +86,6 @@ was to read all 40+ files and notice the contradiction.
 [workspace-and-session-path](workspace-and-session-path.md) ·
 [workspace-write-authorization](workspace-write-authorization.md) ·
 [shell-permission-and-background](shell-permission-and-background.md)
-
-**Product**:
-[server-platform-product](server-platform-product.md) ·
-[token-streaming-projection](token-streaming-projection.md) ·
-[web-task-creation](web-task-creation.md) ·
-[web-file-panel-and-app-preview](web-file-panel-and-app-preview.md) ·
-[web-image-attach](web-image-attach.md)
 
 ## ADR template
 

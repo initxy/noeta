@@ -180,7 +180,7 @@ def test_custom_tool_called():
         run: uv run pytest tests/test_agent_smoke.py -v
 ```
 
-> **无需构建前端。** SDK 冒烟测试在进程内运行库本身——不需要 `npm` 步骤，也不需要平台服务器。
+> **无需构建前端。** SDK 冒烟测试在进程内运行库本身——不需要 `npm` 步骤，也不需要服务器。
 
 ## 步骤 4：在 CI 中运行完整测试套件 { #step-4-run-the-full-test-suite-in-ci }
 

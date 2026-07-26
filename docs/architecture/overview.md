@@ -6,32 +6,32 @@ surfaces sit. For "what is X" questions this page links to the
 [concept pages](../concepts/event-sourcing.md) rather than re-explaining; for
 exact API signatures see the [reference pages](../reference/sdk.md).
 
-## The three packages
+## The two packages
 
-Noeta ships as two libraries plus one application, stacked so that higher
-means closer to the product:
+Noeta ships as two libraries, stacked so the thin client sits on the pure
+engine:
 
 | Package | Location | Role |
 | --- | --- | --- |
 | `noeta-runtime` | `packages/noeta-runtime` | The pure engine plus the framework material that runs on it: events, fold, snapshot, the Worker/Dispatcher, storage adapters, Guards, Observers, the ReAct Policy, builtin tools, provider adapters, the ContextComposer, and the official preset agents. Depends on nothing above it and on no specific vendor. |
-| `noeta-sdk` | `packages/noeta-sdk` | A thin in-process client facade: `query` / `Client` / `Options` / `@tool` and the re-exported extension interfaces. No engine internals, no HTTP. |
-| `noeta-agent` | `apps/noeta-agent` | The official product: a multi-user agent server platform — a FastAPI backend consuming the SDK in-process, plus the React SPA it serves (`apps/web`). The only layer with a network surface; entry point `python -m noeta.agent`. |
+| `noeta-sdk` | `packages/noeta-sdk` | A thin in-process client facade: `query` / `Client` / `Options` / `@tool`, the re-exported extension interfaces, and the four preset agents. The only public surface; no engine internals, no HTTP. |
 
 <p align="center">
-  <img src="../assets/architecture.svg" alt="Noeta architecture — the three distributions and module relationships" width="820">
+  <img src="../assets/architecture.svg" alt="Noeta architecture — the two distributions and module relationships" width="820">
   <br>
-  <em>The app drives the SDK in-process; the SDK forwards into the runtime's engine, materials, and storage. Arrows are call paths.</em>
+  <em>A host drives the SDK in-process; the SDK forwards into the runtime's engine, materials, and storage. Arrows are call paths.</em>
 </p>
 
-All three contribute subpackages to one shared PEP 420 `noeta.` namespace, so
+Both contribute subpackages to one shared PEP 420 `noeta.` namespace, so
 import paths stay put even if the distribution boundary shifts. The
 dependency direction is not left to discipline — import-linter enforces it in
-CI: the runtime kernel may not import a provider package, the SDK may not
-import the application, and application code may import only `noeta.sdk`
-(with two deliberate exemptions: `noeta.storage` for wiring a concrete
-backend, and `noeta.read_models` for read-only projections). The public
-surface for users is `noeta.sdk` alone; `noeta-runtime` arrives as a
-transitive dependency they never import directly.
+CI: the runtime kernel may not import a provider package, and `noeta-sdk`
+forwards into the runtime in-process. The public surface for users is
+`noeta.sdk` alone; `noeta-runtime` arrives as a transitive dependency they
+never import directly. A host that embeds these libraries reaches everything
+through `noeta.sdk`, with two wiring-only escape hatches also on the public
+surface — `noeta.storage` for wiring a concrete backend and
+`noeta.read_models` for read-only projections.
 
 ## Ground truth: state = fold(log)
 
@@ -119,8 +119,8 @@ see each envelope synchronously after it commits, on the writer thread but
 outside the writer lock, with exceptions swallowed.
 
 The drain loop ships as a library primitive, `noeta.runtime.worker.WorkerLoop`
-— there is no operator CLI. The bundled agent runs one in-process; embedders
-call `WorkerLoop(…).run_forever(…)` themselves (see the
+— there is no operator CLI and nothing launches it for you; an embedding host
+calls `WorkerLoop(…).run_forever(…)` itself (see the
 [WorkerLoop reference](../reference/worker-loop.md)).
 
 ### Durable wake: the machinery
@@ -263,8 +263,8 @@ heartbeat, expiry sweep, exactly-once wake delivery, and write validation in
 the log itself.
 
 Two shipping shapes today. The default is single-host: a local SQLite file, a
-resident `WorkerLoop` pool in one process (`AGENT_NUM_WORKERS`, default 4), and
-fan-out as bounded in-process threads (default 8). Reaching a multi-host cluster
+resident `WorkerLoop` pool in one process (the pool size is the host's choice),
+and fan-out as bounded in-process threads (default 8). Reaching a multi-host cluster
 is a storage-adapter swap — point the deployment at Postgres and several host
 processes can share one database, their lease-checked writes fenced in-transaction
 against the database clock. The Engine does not change either way, because fold

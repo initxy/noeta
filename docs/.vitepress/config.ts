@@ -94,7 +94,7 @@ export default defineConfig({
       lang: 'en',
       themeConfig: {
         nav: [
-          { text: 'Guide', link: '/tutorials/quickstart' },
+          { text: 'Guide', link: '/tutorials/first-agent' },
           { text: 'API', link: '/reference/sdk' },
           { text: 'GitHub', link: 'https://github.com/initxy/noeta' },
         ],
@@ -104,9 +104,7 @@ export default defineConfig({
             {
               text: 'Tutorials',
               items: [
-                { text: 'Quickstart', link: '/tutorials/quickstart' },
                 { text: 'Your first agent', link: '/tutorials/first-agent' },
-                { text: 'Build a research agent', link: '/tutorials/build-a-research-agent' },
                 { text: 'CI integration', link: '/tutorials/ci-integration' },
               ],
             },
@@ -117,7 +115,6 @@ export default defineConfig({
               text: 'How-to guides',
               items: [
                 { text: 'Configure a provider', link: '/how-to/configure-provider' },
-                { text: 'Use the platform', link: '/how-to/use-the-coding-agent' },
                 { text: 'Build custom tools', link: '/how-to/build-custom-tools' },
                 { text: 'Spawn sub-agents', link: '/how-to/spawn-subagents' },
                 { text: 'Connect MCP', link: '/how-to/connect-mcp' },
@@ -150,11 +147,8 @@ export default defineConfig({
               text: 'Reference',
               items: [
                 { text: 'SDK API', link: '/reference/sdk' },
-                { text: 'Platform', link: '/reference/noeta-agent' },
-                { text: 'HTTP API', link: '/reference/http-api' },
                 { text: 'WorkerLoop', link: '/reference/worker-loop' },
                 { text: 'Comparison', link: '/reference/comparison' },
-                { text: 'Configuration', link: '/reference/configuration' },
                 { text: 'Tools', link: '/reference/tools' },
                 { text: 'Presets', link: '/reference/presets' },
                 { text: 'Plugins', link: '/reference/plugins' },
@@ -191,7 +185,7 @@ export default defineConfig({
       link: '/zh/',
       themeConfig: {
         nav: [
-          { text: '指南', link: '/zh/tutorials/quickstart' },
+          { text: '指南', link: '/zh/tutorials/first-agent' },
           { text: '概念', link: '/zh/concepts/event-sourcing' },
           { text: 'API', link: '/zh/reference/sdk' },
           { text: 'GitHub', link: 'https://github.com/initxy/noeta' },
@@ -202,9 +196,7 @@ export default defineConfig({
             {
               text: '教程',
               items: [
-                { text: '快速开始', link: '/zh/tutorials/quickstart' },
                 { text: '你的第一个代理', link: '/zh/tutorials/first-agent' },
-                { text: '构建研究代理', link: '/zh/tutorials/build-a-research-agent' },
                 { text: 'CI 集成', link: '/zh/tutorials/ci-integration' },
               ],
             },
@@ -215,7 +207,6 @@ export default defineConfig({
               text: '操作指南',
               items: [
                 { text: '配置 Provider', link: '/zh/how-to/configure-provider' },
-                { text: '使用平台', link: '/zh/how-to/use-the-coding-agent' },
                 { text: '构建自定义工具', link: '/zh/how-to/build-custom-tools' },
                 { text: '生成子代理', link: '/zh/how-to/spawn-subagents' },
                 { text: '连接 MCP', link: '/zh/how-to/connect-mcp' },
@@ -248,11 +239,8 @@ export default defineConfig({
               text: '参考',
               items: [
                 { text: 'SDK API', link: '/zh/reference/sdk' },
-                { text: '平台参考', link: '/zh/reference/noeta-agent' },
-                { text: 'HTTP 接口', link: '/zh/reference/http-api' },
                 { text: 'WorkerLoop', link: '/zh/reference/worker-loop' },
                 { text: '对比', link: '/zh/reference/comparison' },
-                { text: '配置', link: '/zh/reference/configuration' },
                 { text: '工具', link: '/zh/reference/tools' },
                 { text: '预设代理', link: '/zh/reference/presets' },
                 { text: '插件', link: '/zh/reference/plugins' },

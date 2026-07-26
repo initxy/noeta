@@ -27,7 +27,7 @@ What you expected to happen instead.
 
 - OS:
 - Python version:
-- Install path used: <!-- apps/noeta-agent | packages/noeta-sdk | packages/noeta-runtime -->
+- Install path used: <!-- packages/noeta-sdk | packages/noeta-runtime -->
 - Provider: <!-- stub | openai-compat | anthropic -->
 - Noeta version / commit: <!-- `main` @ <sha>, or the 0.1.0 tag -->
 

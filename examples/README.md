@@ -28,16 +28,13 @@ Run any of them directly:
 python examples/minimal_agent.py
 ```
 
-## Running the platform?
+## A real host
 
-Two directories cover the official product (`python -m noeta.agent`)
-rather than the SDK:
-
-- [`openai-compatible/`](./openai-compatible/) — point the platform at a
-  real OpenAI-Responses-compatible gateway (`.env` + `models.json`
-  fragments).
-- [`deployment/`](./deployment/) — optional docker-compose packaging (the
-  platform also runs fine bare with `uv` + a data directory).
+[`reference-host/`](./reference-host/) assembles a minimal but real Noeta
+host from the `noeta.sdk` public surface only — durable SQLite storage, live
+token streaming, plugins, and the official `main` preset. It is the smallest
+program that stands up a durable, plugin-extended, streaming agent the way an
+embedding host would.
 
 ## `_internal/` — contributor demos (not SDK examples)
 

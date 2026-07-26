@@ -3,12 +3,15 @@ layout: home
 
 hero:
   name: "Noeta"
-  text: "A multi-user agent platform on a durable runtime"
-  tagline: Open-source and self-hostable. Sessions and collaboration spaces, per-session sandboxes, and an event-sourced engine that survives crashes and records every step — provider-neutral, and offline out of the box.
+  text: "A durable, provider-neutral runtime + SDK for AI agents"
+  tagline: A Python library for building long-horizon agents on a durable, event-sourced runtime — crash-safe exactly-once execution, suspend/wake for humans and timers, and full audit + replay. In-process like the Claude Agent SDK; offline out of the box.
   actions:
     - theme: brand
-      text: Quickstart
-      link: /tutorials/quickstart
+      text: Your first agent
+      link: /tutorials/first-agent
+    - theme: alt
+      text: SDK reference
+      link: /reference/sdk
     - theme: alt
       text: GitHub
       link: https://github.com/initxy/noeta
@@ -26,9 +29,9 @@ features:
   - title: Provider-neutral
     details: Anthropic and any OpenAI-compatible endpoint sit behind one internal protocol. Swapping vendors is wiring, not a rewrite.
 
-  - title: Built for teams
-    details: Multi-user sessions in personal and team spaces, with space-scoped skills, knowledge, memory, and MCP connectors — execution stays inside a per-session sandbox.
+  - title: In-process, no server
+    details: Import noeta.sdk and drive the engine in-process — no HTTP between your code and the runtime, like the Claude Agent SDK.
 
   - title: Offline-first
-    details: A deterministic mock provider plus dev-login run the whole platform with no API key and no network.
+    details: A deterministic mock provider runs the whole SDK with no API key and no network.
 ---

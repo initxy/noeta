@@ -1,13 +1,13 @@
 # Releasing
 
-`noeta-runtime` / `noeta-sdk` / `noeta-agent` are published from one repo under
-one tag, but they do **not** have to move together. A merged behavior change to
-`packages/noeta-runtime`, `packages/noeta-sdk`, or `apps/noeta-agent` should be
-followed by a release — published packages must not lag `main`.
+`noeta-runtime` / `noeta-sdk` are published from one repo under one tag, but
+they do **not** have to move together. A merged behavior change to
+`packages/noeta-runtime` or `packages/noeta-sdk` should be followed by a
+release — published packages must not lag `main`.
 
 ## What a tag publishes
 
-One `vX.Y.Z` tag triggers `release.yml`, which builds all three distributions
+One `vX.Y.Z` tag triggers `release.yml`, which builds both distributions
 once and then runs one publish job per package. **Each publish job is gated on
 the tag version**: it uploads only if the build produced a wheel whose version
 equals `X.Y.Z`, and otherwise skips with a notice.
@@ -16,9 +16,9 @@ The practical consequence: bump only the packages you are actually releasing.
 The unbumped ones skip cleanly instead of failing on a duplicate upload. Both
 shapes are supported and normal:
 
-- **Lockstep** — bump all three to `X.Y.Z`; all three gates open.
-- **Partial** — bump only what changed (e.g. `0.3.2` was a runtime + sdk cut
-  with `noeta-agent` held at `0.3.1`); the held package's job skips.
+- **Lockstep** — bump both to `X.Y.Z`; both gates open.
+- **Partial** — bump only what changed (e.g. a runtime-only fix leaves
+  `noeta-sdk` at its current version); the held package's job skips.
 
 Cross-package `>=` lower bounds are what keep a partial release coherent: a
 bumped `noeta-sdk` must raise its `noeta-runtime>=` floor to the version
@@ -32,7 +32,7 @@ carrying the behavior it now depends on.
 
 ## Procedure
 
-1. Decide the scope: which of the three packages this release actually ships
+1. Decide the scope: which of the two packages this release actually ships
    (see "What a tag publishes"). A package whose source did not change stays at
    its current version.
 2. Update `CHANGELOG.md`: rename `## [Unreleased]` to `## [X.Y.Z] - <date>`
@@ -44,9 +44,8 @@ carrying the behavior it now depends on.
    whatever is missing. `release.yml` refuses to publish a tag whose version has
    no dated changelog section.
 3. Bump `version` in each pyproject **in scope**, and raise the cross-package
-   `>=` lower bounds that must move with it (`noeta-sdk` →
-   `noeta-runtime>=X.Y.Z`; `noeta-agent` → both). Leave out-of-scope packages
-   alone.
+   `>=` lower bound that must move with it (`noeta-sdk` →
+   `noeta-runtime>=X.Y.Z`). Leave the out-of-scope package alone.
 4. Run `uv sync` to refresh `uv.lock`.
 5. Merge to `main` via PR with CI green.
 6. `git tag vX.Y.Z && git push origin vX.Y.Z` — `release.yml` builds the
@@ -67,11 +66,8 @@ in step 3.
 
 ## Notes
 
-- `noeta-agent` is **wheel-only**: its wheel force-includes `../web/*`, which
-  an sdist can't reach. Building locally, use `uv build --all-packages
-  --wheel` — never a plain `uv build`.
 - Trusted-publisher environment mapping on pypi.org: runtime → (blank env),
-  sdk → `pypi-sdk`, agent → `pypi-agent`.
+  sdk → `pypi-sdk`.
 - A module must ship in the wheel whose dependencies it imports.
   `tests/test_install_smoke.py::test_no_distribution_imports_outside_its_dependency_closure`
   enforces this statically — it is what catches "works in the checkout,

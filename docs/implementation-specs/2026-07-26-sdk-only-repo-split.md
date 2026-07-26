@@ -85,24 +85,32 @@ editable-install dev workflow.
 
 ## Plan
 
-- [ ] **Phase 0 — close the in-flight tree.** Land the uncommitted work
+- [x] **Phase 0 — close the in-flight tree.** Land the uncommitted work
       (presets→sdk move, doc revisions); patch-release if warranted.
-- [ ] **Phase 1 — contract (the gate).** In this repo: plugin M1 + M2 (per the
+- [x] **Phase 1 — contract (the gate).** In this repo: plugin M1 + M2 (per the
       plugin spec) + public-surface audit + reference host + host-builder
-      docs; release runtime/sdk 0.4.0.
-- [ ] **Phase 2 — surgery.**
-  - [ ] Extract `apps/` history into the new repo (filter-repo on a fresh
-        clone); push to its own origin.
-  - [ ] New repo bring-up: pyproject/uv, import-linter (`noeta.sdk` only),
-        pin sdk 0.4, CI + release workflow, AGENTS.md / CONTEXT.md / docs /
-        `.env`; switch any internal imports to the public surface.
-  - [ ] This repo: remove `apps/`, workspace refs, make targets, agent publish
-        job; add ADR status pointers; migrate CONTEXT.md terms; prune docs and
-        `zh/` mirrors; sweep dangling links.
-  - [ ] Verify both sides: new repo `make check` green against the **published**
-        sdk (no path deps) and `python -m noeta.agent` serves the SPA
-        end-to-end; this repo `make check` green.
-- [ ] **Phase 3 — new repo's own spec** for M3/M4 (written there).
+      docs; 0.4.0 bumped locally (owner directive: no tag / no push /
+      no PyPI yet — the new repo consumes an editable local install instead).
+- [x] **Phase 2 — surgery.**
+  - [x] Extract `apps/` history into the new repo (filter-repo on a fresh
+        clone; paths rehomed apps/noeta-agent→/, apps/web→web/; merged into
+        the owner's pre-seeded harness repo, no push).
+  - [x] New repo bring-up: standalone pyproject with editable path sources to
+        this repo, import-linter (`noeta.sdk` only), CI + release workflow,
+        AGENTS.md verbs / CONTEXT.md / docs / `.env`; internal imports
+        rewritten to the public surface.
+  - [x] This repo: remove `apps/`, workspace refs, make targets, agent publish
+        job; migrate CONTEXT.md terms; prune docs and `zh/` mirrors; sweep
+        dangling links. **D6 deviation (owner directive):** app ADRs were
+        *moved*, not stub-pointered — the five files live in the new repo's
+        `docs/adr/` and the surviving ADRs' inline references were annotated
+        "(now in the noeta-agent repository)".
+  - [x] Verify both sides: this repo `make check` green; new repo `make
+        check` green against the **locally installed** sdk (PyPI consumption
+        deferred until the owner publishes 0.4.0).
+- [ ] **Phase 3 — new repo's own spec** for M3/M4 (its
+      `docs/specs/2026-07-26-migrate-app-from-monorepo.md` records the
+      migration; M3/M4 remain queued there).
 
 ## Acceptance criteria
 
@@ -139,3 +147,19 @@ editable-install dev workflow.
 - 2026-07-26 — Spec created; direction confirmed by the owner (destination
   path fixed). Plugin spec revised the same day to hand M3/M4 to the new
   repo; ADR amended (app plane owned by each host). No surgery started.
+- 2026-07-26 (later) — Phases 0–2 executed. Notable deltas vs. the plan:
+  the owner had pre-seeded the destination with an init-harness skeleton, so
+  the extraction was **merged** into it (`--allow-unrelated-histories`)
+  rather than seeding a fresh repo; 0.4.0 is bumped locally only (no tag /
+  push / publish per owner directive), so the new repo consumes editable
+  path sources (`[tool.uv.sources]`) until a real release; app ADRs moved
+  without stub pointers (owner: "as if the agent never existed"), inline
+  references annotated instead. Friction log: two opus subagents finished
+  their work but failed to emit structured reports (result junk / retry-cap
+  errors) — disk state + tests were treated as the source of truth and
+  verified independently; the app-coupled tests left in this repo
+  (docker-sandbox/browser-backend/exec-env, public-surface scanner,
+  server-boot install smoke) were removed or rewritten for the two-wheel
+  world. Both gates green: this repo `make check` exit 0 (3,20x root tests +
+  mypy + import-linter + naming lint), new repo `make check` green (333
+  pytest + 101 vitest + lint-imports).

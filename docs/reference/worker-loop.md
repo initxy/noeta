@@ -3,10 +3,9 @@
 The resident drain loop, shipped as the library primitive
 `noeta.runtime.worker.WorkerLoop`
 (`packages/noeta-runtime/noeta/runtime/worker.py:752`). There is no console
-script and nothing launches it for you — an embedder constructs and runs it.
-The platform is itself such an embedder: `python -m noeta.agent` runs a
-resident pool of `WorkerLoop` threads (`AGENT_NUM_WORKERS`, default 4) that
-drive session turns (see the [platform reference](noeta-agent.md)).
+script and nothing launches it for you — an embedding host constructs and runs
+it, and scales by running several loops (each with its own `worker_id`)
+against one store (see [Deploy a worker](../how-to/deploy-worker.md)).
 
 ```python
 from noeta.runtime.worker import WorkerLoop
@@ -66,10 +65,8 @@ WorkerLoop(
 
 There is **no `workers` knob**: one `WorkerLoop` is one drain thread. You scale
 by running several loops (each with its own `worker_id`) against the same
-store — which is exactly what the platform's resident pool does
-(`AGENT_NUM_WORKERS`, default 4). Concurrent loops are safe: lease-checked
-appends are fenced, so a loop whose lease was reclaimed cannot write behind the
-loop that took over.
+store. Concurrent loops are safe: lease-checked appends are fenced, so a loop
+whose lease was reclaimed cannot write behind the loop that took over.
 
 ## Methods & properties
 

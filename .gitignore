@@ -49,10 +49,5 @@ Thumbs.db
 *.tmp
 
 # Leftover pre-platform local config (may contain an api_key). Nothing reads it
-# any more — the platform is env-only (apps/noeta-agent/.env, see
-# docs/reference/configuration.md) — but keep it ignored so a stale local copy
-# can never be committed.
+# any more, but keep it ignored so a stale local copy can never be committed.
 /noeta.config.json
-
-# Local artifacts from Playwright MCP test runs (console logs / page snapshots)
-/.playwright-mcp/

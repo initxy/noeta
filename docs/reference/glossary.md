@@ -32,7 +32,7 @@ See also: [Presets](presets.md), [ADR: Tool and agent catalog](https://github.co
 
 The declarative agent configuration (public surface `noeta.sdk.Options`). Compiled by `compile_options` into an `AgentSpec`. **The sole way to express both the official agent set and custom agents.**
 
-See also: [API Reference](/reference/sdk), [Configuration](configuration.md)
+See also: [API Reference](/reference/sdk)
 
 ### Step
 
@@ -65,7 +65,7 @@ See also: [Tools Reference](tools.md), [ADR: Tool description canonical](https:/
 A Noeta-shape adapter for an external service (LLM / storage / vector store). `LLMProvider` is open via `Options.provider` and re-exported through `noeta.sdk`. Storage backends are configured through **host config**, not Options. **Not a context content source.**
 _Avoid:_ Vendor, Backend, Connector.
 
-See also: [Configuration](configuration.md#provider-adapters), [ADR: Provider adapters and multimodal](https://github.com/initxy/noeta/blob/main/docs/adr/provider-adapters-and-multimodal.md), [ADR: Provider-neutral](https://github.com/initxy/noeta/blob/main/docs/adr/provider-neutral.md)
+See also: [ADR: Provider adapters and multimodal](https://github.com/initxy/noeta/blob/main/docs/adr/provider-adapters-and-multimodal.md), [ADR: Provider-neutral](https://github.com/initxy/noeta/blob/main/docs/adr/provider-neutral.md)
 
 ### Skill
 
@@ -251,59 +251,15 @@ _Avoid:_ Restart, Continue.
 
 See also: [Failure Modes](/operations/troubleshooting)
 
-## Application layer (the noeta-agent platform)
-
-Vocabulary owned by the product ([ADR: server-platform product](https://github.com/initxy/noeta/blob/main/docs/adr/server-platform-product.md)). None of these terms exists below the application layer: the engine knows only Tasks.
-
-### Session
-
-The application-layer unit of conversation — what the UI lists, resumes, and deletes. Owned by a user, scoped to a Space; groups **one or more engine tasks** (a workflow session owns one root task per node) and owns one workspace directory and one sandbox container. App-layer indexing only: persisted in the application database; the EventLog stays the single source of truth.
-_Avoid:_ Conversation, Thread; using Session below the application layer.
-
-### Space
-
-The unit of collaboration and scoping. Users belong to spaces; a space scopes skills, knowledge sources, agent memory, MCP connectors, agent-config, and templates. Every user gets a personal space; team spaces have owner-managed membership. Session visibility = space membership.
-_Avoid:_ Team, Organization, Workspace (Workspace is the session's file root).
-
-### UI event
-
-One frame of the product wire vocabulary (`user_message`, `assistant_text`, `thinking`, `tool_call` / `tool_result`, `skill_activated`, `todo_update`, `subtask_started` / `subtask_finished`, `question`, `compaction`, turn markers, …), produced by the **translator** — a deterministic, stateless, pure function over `EventEnvelope`s. Replay is re-derivation from the EventLog via `since_seq`; token deltas are ephemeral and never replayed. Raw envelopes appear only on the admin trace surface.
-_Avoid:_ calling raw `EventEnvelope`s UI events; "projection" (implies a stored copy).
-
-### Skill registry
-
-The platform's database-backed skill surface: **builtin skills** (admin-managed, platform-wide) and **space skills** (owner-uploaded per space), both mounted read-only into session sandboxes and rendered into the model's skill menu. The management layer over the library-level Skill format (`SKILL.md` is unchanged).
-_Avoid:_ Skill market, plugin store.
-
-### Knowledge source
-
-A space-scoped synced content source with pluggable sync adapters; the open-source core ships `git_repo` and `local_dir`. Materialized under the shared data directory, mounted read-only into sandboxes, selected into assembly through agent-config.
-_Avoid:_ RAG index (there is no vector store), Dataset.
-
-### MCP connector
-
-A per-space MCP server configuration: alias + transport (`http` | `stdio`) + credentials + an enabled tool subset, stored in the application database and credential-scrubbed on every read. Resolved into the agent host per turn; tools appear as `mcp__<alias>__<tool>`. Replaces the retired global `~/.noeta/mcp_servers.json` registry.
-_Avoid:_ global MCP registry (retired), plugin.
-
-### Agent-config
-
-The space's agent configuration: persona prompt (written into the session workspace `AGENT.md` at assembly), default model / reasoning effort, knowledge-source selection, memory toggle. Owner-managed via `GET/PUT /api/v1/spaces/{id}/agent-config`.
-_Avoid:_ Options (the SDK-level agent configuration), Settings (server config).
-
-### Feedback loop
-
-Per-message ratings from space members feeding an owner-triggered analysis agent whose suggestions are owner-gated: adopt into space memory, apply a skill patch (after a backup), or export a markdown report.
-_Avoid:_ RLHF (nothing trains a model).
-
 ## Flagged ambiguities
 
 ### "Workflow"
 
-Not a first-class concept in the engine. Express fixed procedures with a deterministic Policy + `spawn_subtask`. An orchestration script the model improvises lands as **one Task + a Policy that interprets that script**. (The platform's *workflow session* is app-layer sequencing of root tasks, not an engine primitive.)
+Not a first-class concept in the engine. Express fixed procedures with a deterministic Policy + `spawn_subtask`. An orchestration script the model improvises lands as **one Task + a Policy that interprets that script**. Multi-node "workflow" sequencing of root tasks is something a host builds on top of the libraries, not an engine primitive.
 
 ### "Session"
 
-An **application-layer concept only** (see above). Below the application layer it remains a non-concept: the engine knows only Tasks, and multi-turn conversation is one Task receiving user input repeatedly.
+**Not a concept in these libraries.** The engine knows only Tasks, and multi-turn conversation is one Task receiving user input repeatedly; a host that groups turns into a user-visible session owns that concept itself.
 
 ### "Run"
 

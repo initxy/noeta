@@ -1,6 +1,6 @@
 # WorkerLoop 参考
 
-常驻排空循环，作为库原语 `noeta.runtime.worker.WorkerLoop` 交付（`packages/noeta-runtime/noeta/runtime/worker.py:752`）。没有控制台脚本，也没有东西为你启动它——嵌入者构造并运行它。平台本身就是这样一个嵌入者：`python -m noeta.agent` 运行一个常驻的 `WorkerLoop` 线程池（`AGENT_NUM_WORKERS`，默认 4）来驱动会话轮次（参见[平台参考](noeta-agent.md)）。
+常驻排空循环，作为库原语 `noeta.runtime.worker.WorkerLoop` 交付（`packages/noeta-runtime/noeta/runtime/worker.py:752`）。没有控制台脚本，也没有东西为你启动它——嵌入 host 构造并运行它，并通过对同一个存储跑多个循环（各带自己的 `worker_id`）来扩容（参见[部署 worker](../how-to/deploy-worker.md)）。
 
 ```python
 from noeta.runtime.worker import WorkerLoop
@@ -50,7 +50,7 @@ WorkerLoop(
 | `reliability_sink` | `ReliabilityEvent` 的去向；默认：结构化日志 |
 | `step_poll_s` | 等待进行中步骤线程时的轮询节奏 |
 
-**没有 `workers` 旋钮**：一个 `WorkerLoop` 就是一条 drain 线程。要扩容就对同一个存储跑多个循环（各带自己的 `worker_id`）——平台的常驻池正是这么做的（`AGENT_NUM_WORKERS`，默认 4）。并发循环是安全的：带 lease 校验的 append 受 fencing 保护，租约被回收的循环无法把写落在接手它的那个循环之后。
+**没有 `workers` 旋钮**：一个 `WorkerLoop` 就是一条 drain 线程。要扩容就对同一个存储跑多个循环（各带自己的 `worker_id`）。并发循环是安全的：带 lease 校验的 append 受 fencing 保护，租约被回收的循环无法把写落在接手它的那个循环之后。
 
 ## 方法与属性
 

@@ -46,8 +46,8 @@ is rejected rather than allowed to land a write behind the new generation.
 
 Two deployment scopes:
 
-- **Single host, multiple Workers** — shipped on every backend. The platform
-  runs a resident pool by default (`AGENT_NUM_WORKERS`, default 4).
+- **Single host, multiple Workers** — shipped on every backend. A host
+  runs a resident `WorkerLoop` pool.
 - **Multiple hosts** — shipped on **Postgres**, where the fence is an in-transaction
   row-share check against the database clock (so per-host clock skew cannot
   split-brain). SQLite and in-memory are single-host by definition; a Worker
