@@ -301,6 +301,11 @@ class ProcessRegistry:
             argv,
             cwd=str(cwd),
             env=env,
+            # A detached job must NOT inherit the host's stdin: it has no
+            # console to read from, and an inherited fd 0 lets it steal bytes
+            # from whatever drives the host process. DEVNULL gives it an
+            # immediate, deterministic EOF instead.
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,  # merge so one buffer = the model's view
             # tools m4: the job leads its own process group so kill reaps

@@ -55,9 +55,15 @@ def _ws(tmp_path: Path) -> WorkspaceRoot:
 
 
 def _spawn_blocker(reg: ProcessRegistry, tmp_path: Path, task_id: str = "t-1") -> dict[str, Any]:
-    """Spawn a process that blocks (reads stdin) so it stays RUNNING until killed."""
+    """Spawn a process that stays RUNNING until killed.
+
+    It sleeps rather than reading stdin: the registry hands every job
+    ``stdin=DEVNULL`` (a detached job has no console), so a stdin read returns
+    EOF immediately and the "blocker" would exit on its own — the watcher could
+    then reap it before the cap assertion ran, making these tests flaky.
+    """
     return reg.spawn(
-        argv=_py("import sys; sys.stdin.read()"),
+        argv=_py("import time; time.sleep(300)"),
         cwd=tmp_path,
         env={},
         command="python blocker",
