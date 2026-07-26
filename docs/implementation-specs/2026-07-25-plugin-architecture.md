@@ -97,12 +97,12 @@ Dependency order; each milestone ends with `make check` green.
 
 - [x] **M0 — Records.** ADR `plugin-contribution-bundles.md` written and
       indexed (amended 2026-07-26 for split ownership).
-- [ ] **M1 — SDK mechanism.** `PluginAPI` + loader (entry points, directories,
+- [x] **M1 — SDK mechanism.** `PluginAPI` + loader (entry points, directories,
       trust store, enable-list) + deterministic merge into `Options` +
       collision errors + tests (identity property, order invariance, trust
       gating) + `docs/how-to/write-a-plugin.md` + `docs/reference/plugins.md`
       + CONTEXT.md terms (D8).
-- [ ] **M2 — First-party example plugins** in `examples/plugins/`, each with
+- [x] **M2 — First-party example plugins** in `examples/plugins/`, each with
       tests:
       - `approval-modes` — goose-style `chat` / `approve` / `smart_approve`
         (keyed on tool `risk_level`) / `auto`, plus per-tool
@@ -172,3 +172,14 @@ Dependency order; each milestone ends with `make check` green.
   bed; sandbox-provider plugins confirmed as app-plane (host-owned);
   knowledge-source sync adapters noted as a future host-plane contribution
   target.
+- 2026-07-26 — M1 + M2 landed. SDK mechanism shipped in
+  `noeta.client.plugins` (`PluginAPI` + `load_plugins` + `merge_plugins` +
+  the host-plane accessors + trust store), re-exported through `noeta.sdk`,
+  with `tests/test_plugins.py` covering the identity property, order
+  invariance, collisions, and trust gating. All three first-party example
+  plugins (`approval-modes`, `protected-paths`, `git-checkpoint`) are in
+  `examples/plugins/`, each packaged with a `pyproject.toml` entry point, a
+  README, and a test. Docs published: `docs/how-to/write-a-plugin.md` +
+  `docs/reference/plugins.md`, both registered in the VitePress nav (en);
+  CONTEXT.md gained the D8 terms (Plugin, App Plugin). Remaining: M5
+  (ToolResultTransform, still gated) and the release bump.

@@ -90,6 +90,13 @@ _Avoid_: Vendor, Backend, Connector
 A local, static LLM-workflow template at `.noeta/skills/<name>/SKILL.md`, optionally with resource files (reference docs / scripts). Three-layer merge (builtin < global `~/.noeta/skills` < workspace). Two-stage on-demand loading: the **menu** (name + one-line summary) is rendered into the model-visible `skill` control tool schema; once the model selects one, its body is rendered into the semi-stable segment (that segment is exempt from compaction, so the body survives naturally). `state_patch.activate_skills` is the recording channel; both the pre-loop forced preload (`--skill` / the `activate_skills` helper) and the model's selection feed into the same activation state and run through the same render pipeline, with state merge deduplicating automatically. It is now **absorbed as a content-channel tenant of `kind="skill"`**: activation recording emits a generic `ContextContentRecorded` (with drift policy `pinned`), `activate_skills` is kept as skill-specific syntactic sugar, and fold mirrors it into the generic `active_content`. **Its accompanying resources use the third tier of progressive disclosure**: the renderer reads no files and injects no content, only prepending a line with the **absolute base directory** before the body (`Base directory for this skill: <source_path.parent>`, rendered as-is with no resolution — deterministic); the model combines that line with the relative links in the body into absolute paths and reads them on demand via the **generic `read` tool** — reads are unfenced, so the absolute path just works — the `skill_roots` allow-list this once needed was deleted when the special case dissolved into the general rule (see Write fence). The dedicated tool `read_skill_resource` (the old 0047 design) has been retired; activation no longer eagerly loads the accompanying files into context. **Not the same thing as a Tool.**
 _Avoid_: Plugin, Module, Macro
 
+**Plugin**:
+A discoverable bundle of typed contributions to the open extension surfaces, merged deterministically into `Options` before compile; operator-level in server-style hosts.
+_Avoid_: Extension (that is the seam vocabulary), MCP connector (configuration, not code).
+
+**App Plugin**:
+A plugin on a host's own plane (routers / channels / schedules / commands); never part of `AgentSpec` identity; defined by each host.
+
 ### State and events
 
 **EventLog**:
