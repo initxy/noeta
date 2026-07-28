@@ -78,7 +78,15 @@ load_plugins(
 
 ### 名字推导与 allow-list
 
-插件的名字是 entry-point 名、模块/文件的 stem，或者模块级的 `noeta_plugin_name` 覆盖。`enabled` 和 `config` 都以这个名字为键。对 `modules` 来说，`enabled` 是在模块被导入之前拿**推导出的候选 stem** 来匹配的（不导入就无法兑现模块级的覆盖）。
+插件的名字是 entry-point 名；对模块 / 文件 / 目录来源，则是模块级的 `noeta_plugin_name` 覆盖，没有覆盖时回退到模块 / 文件的 stem。`enabled` 和 `config` 都以这个名字为键。
+
+`enabled` 永远在插件被导入**之前**生效，未获批准的代码不会运行。对文件和目录来源，覆盖名是被**静态**读取的（`ast` 解析，不执行代码），所以它必须是模块级的字符串**字面量**：
+
+```python
+noeta_plugin_name = "block-shell"     # allow-list 能看到
+noeta_plugin_name = _compute_name()   # config / 冲突标签仍然认它，
+                                      # 但 allow-list 会回退到文件 stem
+```
 
 ### 大声失败
 
@@ -90,7 +98,8 @@ load_plugins(
 
 - **确定性排序。** 贡献在合并前按 `(插件名, 贡献名)` 排序，所以编译出的 `AgentSpec` 不随插件加载顺序而变。基础工具先按它们给定的顺序排在前面，然后是排好序的插件工具；guards 和 observers 在基础的之后按排好序的插件顺序追加。
 - **工具展开。** 当 `allowed_tools=None` 且没有插件工具时，它保持 `None`（字节级相同的默认值）。当有插件工具时，`None` 的基础会先展开成完整的内置集，于是插件是**添加**工具，而不是悄悄替换掉内置工具。
-- **冲突 = 错误。** 任何被两个插件贡献、或已经存在于基础 `options` 上的 tool、agent、content kind 或 MCP alias，以及第二个 provider，都会抛出 `PluginError` 并点名**两个**来源。v1 里没有覆盖开关。
+- **冲突 = 错误。** 任何被两个插件贡献、或已经存在于基础 `options` 上的 tool、agent、content kind 或 MCP alias，以及第二个 provider，都会抛出 `PluginError` 并点名**两个**来源。v1 里没有覆盖开关。基础的工具名包含它的进程内 `mcp_servers` 贡献的工具——`compile_options` 会把那些工具展平到 allow-list 上，所以少了这项检查，两者之一就会悄悄消失。
+- **被禁用 = 错误。** 名字出现在基础 `disallowed_tools` 里的贡献工具同样会抛错：编译会一声不响地丢掉它，留下一个"已启用但工具根本不存在"的插件。
 - **只有身份平面**落到返回的 `Options` 上。宿主平面的贡献（MCP spec、技能目录）在这里也会做冲突检查，但要通过下面的访问器读取——它们没有 `Options` 面。
 
 对于一个已经在基础上的名字，冲突来源在错误信息里标为 `<base options>`；插件来源则标为 `plugin '<name>'`。
@@ -113,8 +122,10 @@ load_plugins(
 
 | 函数 | 签名 | 行为 |
 | --- | --- | --- |
-| `is_trusted(path, store=None)` | `→ bool` | `path` 的绝对形式是否被记录；缺失的存储 ⇒ `False`，绝不报错 |
-| `grant_trust(path, store=None)` | `→ None` | 记录 `path` 的绝对形式（幂等）；若存储及其父目录不存在则创建 |
+| `is_trusted(path, store=None)` | `→ bool` | `path` 的规范形式是否被记录；缺失的存储 ⇒ `False`，绝不报错 |
+| `grant_trust(path, store=None)` | `→ None` | 记录 `path` 的规范形式（幂等）；若存储及其父目录不存在则创建 |
+
+两侧用同一套规则规范化路径——展开 `~`、取绝对、解析符号链接——所以路径怎么拼写从不影响信任判定：写成 `~/ws/../ws/plugins` 的授权，能匹配对 `/home/me/ws/plugins` 的查询。手写进存储的条目在读取时同样会被规范化。
 
 两者的 `store` 都默认是 `DEFAULT_TRUST_STORE`。格式损坏（非 JSON）的存储在读取时会抛 `PluginError`。
 

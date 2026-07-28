@@ -10,7 +10,9 @@ throwaway ``tmp_path`` git repo. The invariants under test:
    -byte untouched by checkpointing, and the checkpoint ref is not a branch.
 3. Non-mutating tool calls record nothing.
 4. ``restore_checkpoint`` writes a checkpoint's tree back into the working tree
-   (tip or a specific commit) without moving ``HEAD`` or the index.
+   (tip or a specific commit) without moving ``HEAD`` or the index; and a repo
+   with **no configured git identity** still records checkpoints, attributed to
+   the plugin's own identity rather than the user.
 5. The Observer swallows failures (guard-observer ADR) — a non-git path never
    raises into the caller.
 6. The plugin factory wires the Observer onto ``Options.observers`` via the
@@ -20,6 +22,7 @@ throwaway ``tmp_path`` git repo. The invariants under test:
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 from pathlib import Path
 
@@ -243,6 +246,49 @@ def test_restore_on_missing_ref_raises(tmp_path):
     repo = _init_repo(tmp_path)
     with pytest.raises(mod.GitCheckpointError):
         mod.restore_checkpoint(repo)
+
+
+# ---------------------------------------------------------------------------
+# 4b. Checkpoint identity — works without a configured git user
+# ---------------------------------------------------------------------------
+
+
+def test_checkpoint_records_in_a_repo_with_no_configured_identity(
+    tmp_path, monkeypatch
+):
+    """A repo with no ``user.name`` / ``user.email`` still gets checkpoints.
+
+    ``git commit-tree`` refuses to guess an identity ("unable to auto-detect
+    email address"), and the Observer swallows failures — so without an explicit
+    identity a fresh repo would silently record nothing. The plugin exports its
+    own (``noeta-checkpoint``), which also keeps a checkpoint from masquerading
+    as the user's own commit.
+    """
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
+    for var in (
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    mod = _load_module()
+    repo = tmp_path / "no_identity"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "a.txt").write_text("v1\n", encoding="utf-8")
+
+    mod.GitCheckpointObserver(repo)(_started("write", 1))
+
+    tip = _ref_tip(repo)
+    assert tip, "no checkpoint recorded in a repo without a git identity"
+    who = _git(repo, "show", "-s", "--format=%an <%ae>|%cn <%ce>", tip)
+    assert who == (
+        "noeta-checkpoint <noeta-checkpoint@localhost>|"
+        "noeta-checkpoint <noeta-checkpoint@localhost>"
+    )
 
 
 # ---------------------------------------------------------------------------

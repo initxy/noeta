@@ -103,10 +103,20 @@ compiled spec — `merge_plugins` re-sorts.
 
 ### Name derivation and the allow-list
 
-A plugin's name is the entry-point name, the module/file stem, or a module-level
-`noeta_plugin_name` override. `enabled` and `config` are keyed by that name. For
-`modules`, `enabled` is matched against the **derived candidate stem** before the
-module is imported (a module-level override cannot be honored without importing).
+A plugin's name is the entry-point name, or — for module / file / directory
+sources — a module-level `noeta_plugin_name` override, falling back to the
+module/file stem. `enabled` and `config` are keyed by that name.
+
+`enabled` is always applied **before** the plugin is imported, so unapproved
+code never runs. For file and directory sources the override is read
+*statically* (an `ast` parse, no execution), which is why it must be a
+module-level string **literal**:
+
+```python
+noeta_plugin_name = "block-shell"     # seen by the allow-list
+noeta_plugin_name = _compute_name()   # honored for config/collisions, but the
+                                      # allow-list falls back to the file stem
+```
 
 ### Loud failure
 
@@ -133,6 +143,12 @@ Fold `plugins` into `options`, returning a new `Options`.
 - **Collision = error.** Any tool, agent, content kind, or MCP alias contributed
   by two plugins or already present on the base `options`, or a second provider,
   raises `PluginError` naming **both** sources. There is no override flag in v1.
+  The base's tool names include the tools its in-process `mcp_servers`
+  contribute — `compile_options` flattens those onto the allow-list, so without
+  the check one of the two would vanish silently.
+- **Disallowed = error.** A contributed tool whose name is in the base's
+  `disallowed_tools` raises too: compilation would drop it without a word,
+  leaving an enabled plugin whose tool never exists.
 - **Identity plane only** lands on the returned `Options`. Host-plane
   contributions (MCP specs, skill dirs) are collision-checked here but read via
   the accessors below — they have no `Options` surface.
@@ -166,8 +182,13 @@ consult it; `trusted_dirs` are always scanned.
 
 | Function | Signature | Behaviour |
 | --- | --- | --- |
-| `is_trusted(path, store=None)` | `→ bool` | whether `path`'s absolute form is recorded; a missing store ⇒ `False`, never an error |
-| `grant_trust(path, store=None)` | `→ None` | record `path`'s absolute form (idempotent); creates the store and its parent directory if absent |
+| `is_trusted(path, store=None)` | `→ bool` | whether `path`'s canonical form is recorded; a missing store ⇒ `False`, never an error |
+| `grant_trust(path, store=None)` | `→ None` | record `path`'s canonical form (idempotent); creates the store and its parent directory if absent |
+
+Both sides canonicalise the path the same way — `~` expanded, absolute, symlinks
+resolved — so how a path is spelled never decides trust: a grant written as
+`~/ws/../ws/plugins` matches a lookup of `/home/me/ws/plugins`. Entries written
+by hand are canonicalised on read too.
 
 `store` defaults to `DEFAULT_TRUST_STORE` for both. A malformed (non-JSON) store
 raises `PluginError` on read.
