@@ -29,7 +29,7 @@ The smallest plugin is one `.py` file that exports `noeta_plugin`:
 
 ```python
 # my_plugin.py — a plugin contributing one Guard.
-from noeta.protocols.hooks import (
+from noeta.sdk import (
     GuardContext, ProposedAction, ProposedToolCall, VerdictResult,
 )
 
@@ -132,6 +132,11 @@ independent of the filename — set `noeta_plugin_name` at module top level:
 noeta_plugin_name = "block-shell"
 ```
 
+Write it as a plain string literal: the loader reads it *statically* (no import)
+so the `enabled` allow-list can be applied before your module runs. A name
+computed at import time still keys `config` and collision messages, but the
+allow-list then falls back to the file stem.
+
 ## Testing it
 
 Load the plugin end-to-end and assert on the merged `Options` — all public
@@ -177,9 +182,10 @@ build-backend = "hatchling.build"
 
 The entry-point value points at the `noeta_plugin` factory. A host started with
 `load_plugins(entry_points=True)` discovers every installed plugin in the group.
-(A dash is not a valid Python module name, so the importable package is
-`block_shell` even though the plugin names itself `block-shell` via
-`noeta_plugin_name`.)
+For an installed plugin the entry-point **key** is the plugin's name — keep it
+identical to the module's `noeta_plugin_name`, so the plugin answers to one name
+whether it is installed or loaded from a path. (A dash is not a valid Python
+module name, so the importable package is still `block_shell`.)
 
 Installed plugins are arbitrary code the host runs, so a server-style host also
 passes an explicit `enabled` allow-list — only operator-approved plugins load,

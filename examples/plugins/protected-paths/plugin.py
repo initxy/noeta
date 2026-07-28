@@ -75,13 +75,14 @@ from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Optional
 
-from noeta.protocols.hooks import (
+from noeta.sdk import (
     GuardContext,
+    PluginError,
     ProposedAction,
     ProposedToolCall,
     VerdictResult,
+    path_within,
 )
-from noeta.sdk import PluginError, path_within
 
 
 #: The loader derives a plugin's name from its module/file stem; this file is

@@ -57,6 +57,14 @@ editable-install dev workflow.
   public-surface completeness test. Gaps found during the audit (sqlite
   storage triple, `EventEnvelope` wire contract, streaming/sandbox types) are
   closed by re-export through `noeta.sdk`, never by blessing internal paths.
+  The one standing exception predates this split and keeps its own ADR: the
+  two SDK sandbox-adapter modules (`sdk_sandbox_exec_env` /
+  `sdk_browser_backend`) extend the **concrete** AIO adapters, which are held
+  off the public surface on purpose (execution-environment-seam ADR, "SDK-adapter
+  export surface"). They stay pinned `ignore_imports` entries in the new repo's
+  contract — scoped to exactly those two importer→module pairs — rather than
+  turning a retirement-slated implementation into user-facing API. Any *other*
+  gap is closed by re-export.
 - **D5 — Reference host.** A minimal host (`examples/reference-host/`) stays
   in this repo: sqlite triple + streaming sink + plugin loading. It is the
   contract-test executor, the host-builder tutorial, and the app's stand-in as
@@ -115,16 +123,23 @@ editable-install dev workflow.
 ## Acceptance criteria
 
 - [ ] New repo builds, tests, and runs from PyPI noeta-sdk only; a full
-      session with streaming works on a dev instance.
-- [ ] `git log --follow` shows pre-split history for moved files in the new
-      repo.
-- [ ] This repo contains no `apps/`, no agent publish job, no dangling doc
-      links; ADR pointers and CONTEXT.md term migration in place.
-- [ ] import-linter in the new repo proves `noeta.sdk`-only imports; the
-      public-surface completeness test here covers everything the app needed.
+      session with streaming works on a dev instance. **Open** — it consumes
+      editable path sources until 0.4.0 is published.
+- [x] `git log --follow` shows pre-split history for moved files in the new
+      repo (verified 2026-07-28 on `noeta/agent/main.py`).
+- [x] This repo contains no `apps/`, no agent publish job, no dangling doc
+      links; CONTEXT.md term migration in place (ADRs were *moved*, not
+      stub-pointered — the D6 deviation recorded below).
+- [x] import-linter in the new repo proves `noeta.sdk`-only imports (with the
+      two D4 sandbox-adapter exemptions); the public-surface completeness test
+      here pins what a host binds to and keeps the reference host + first-party
+      plugins on public paths.
 - [ ] noeta-agent 0.4.0 published from the new repo; this repo's release.yml
-      publishes runtime+sdk only.
-- [ ] `make check` green in both repos.
+      publishes runtime+sdk only. **Open** — publishing is the maintainer's
+      call; release.yml is already runtime+sdk only.
+- [x] `make check` green in both repos (re-verified 2026-07-28: this repo
+      3,2xx tests + 12 contracts; new repo 333 pytest + 101 vitest + 1
+      contract).
 
 ## Risks
 
@@ -163,3 +178,15 @@ editable-install dev workflow.
   world. Both gates green: this repo `make check` exit 0 (3,20x root tests +
   mypy + import-linter + naming lint), new repo `make check` green (333
   pytest + 101 vitest + lint-imports).
+- 2026-07-28 — Review pass; two split-side gaps closed. (a) The public-surface
+  scanner had been deleted with the app it scanned, leaving D4's "enforced here"
+  half unimplemented (and the 0.4.0 changelog claiming a file that no longer
+  existed). `tests/test_public_surface.py` is back in a split-independent
+  form: it pins the paths and symbols a host binds to, asserts
+  `noeta.sdk.storage` is a zero-logic re-export, and scans the host-contract
+  examples (reference host + first-party plugins) for any non-public `noeta.*`
+  import. That scan immediately found a real gap — the `ProposedAction` members
+  were not public, so both example guards imported `noeta.protocols.hooks`;
+  closed by re-export per D4. (b) The two sandbox-adapter `ignore_imports`
+  entries in the new repo were a silent deviation from D4's absolute wording;
+  D4 now records them as the standing, ADR-scoped exception they are.

@@ -16,7 +16,7 @@
 
 ```python
 # my_plugin.py —— 一个贡献单个 Guard 的插件。
-from noeta.protocols.hooks import (
+from noeta.sdk import (
     GuardContext, ProposedAction, ProposedToolCall, VerdictResult,
 )
 
@@ -101,6 +101,8 @@ plugins = load_plugins(
 noeta_plugin_name = "block-shell"
 ```
 
+把它写成普通字符串字面量：加载器是**静态**读取它的（不导入），这样 `enabled` allow-list 才能在你的模块运行之前生效。在导入时算出来的名字仍然是 `config` 和冲突信息的键，但 allow-list 这时会回退到文件 stem。
+
 ## 测试它
 
 端到端地加载插件，并对合并后的 `Options` 做断言——全是公开面，不碰发现机制的内部：
@@ -136,7 +138,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 ```
 
-entry point 的值指向 `noeta_plugin` 工厂。用 `load_plugins(entry_points=True)` 启动的宿主会发现该组里每一个已安装的插件。（短横线不是合法的 Python 模块名，所以即使插件通过 `noeta_plugin_name` 把自己命名为 `block-shell`，可导入的包仍然是 `block_shell`。）
+entry point 的值指向 `noeta_plugin` 工厂。用 `load_plugins(entry_points=True)` 启动的宿主会发现该组里每一个已安装的插件。对已安装的插件来说，entry-point 的**键**就是插件的名字——让它和模块里的 `noeta_plugin_name` 保持一致，插件无论是被安装还是按路径加载都只有一个名字。（短横线不是合法的 Python 模块名，所以可导入的包仍然是 `block_shell`。）
 
 已安装的插件是宿主要运行的任意代码，所以服务端风格的宿主还会传一个显式的 `enabled` allow-list——只有运维批准的插件会加载，其余的在被导入之前就跳过：
 

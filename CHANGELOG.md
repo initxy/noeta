@@ -19,15 +19,22 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
   explicit specs, or trust-gated directories (`~/.noeta/trust.json`);
   `merge_plugins` folds contributions into `Options` deterministically —
   collisions raise `PluginError` naming both sources, and load order never
-  changes the compiled `AgentSpec`. See `docs/how-to/write-a-plugin.md`.
+  changes the compiled `AgentSpec`. The `enabled` allow-list is keyed on the
+  plugin's name (a file's `noeta_plugin_name` literal is read statically, so an
+  unapproved plugin is never imported), and trust grants are matched on a
+  canonical path. See `docs/how-to/write-a-plugin.md`.
 - **First-party example plugins** under `examples/plugins/`:
   `approval-modes` (graduated chat / approve / smart_approve / auto modes
   with per-tool always/ask/never overrides), `protected-paths` (path
   allow/deny guard), `git-checkpoint` (workspace checkpoint observer with a
   restore path).
 - **Host contract surface**: `noeta.sdk.storage` re-exports the sqlite
-  storage triple so a product host never imports runtime internals;
-  `tests/test_public_surface.py` pins the internal→public mapping;
+  storage triple so a product host never imports runtime internals; the
+  `ProposedAction` members (`ProposedToolCall` / `ProposedSpawnSubtask` /
+  `ProposedFinish`) are re-exported too, so a Guard can dispatch on them
+  without reaching into `noeta.protocols.hooks`;
+  `tests/test_public_surface.py` pins the symbols a host binds to (and proves
+  the reference host and every first-party plugin live on the public surface);
   `examples/reference-host/` is a minimal complete host (durable storage,
   streaming, plugins, stub provider) that doubles as the contract's
   integration bed.

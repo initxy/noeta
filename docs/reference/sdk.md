@@ -324,7 +324,8 @@ Implement one of these and mount it through the matching `Options` field:
 | `LLMProvider` | `provider` | `noeta/protocols/messages.py` |
 | `StreamingProvider` / `StreamDelta` (optional capability: `complete_streaming(request, on_delta, request_headers=None)` still returns the complete `LLMResponse`; deltas are ephemeral side effects) | implement alongside `LLMProvider` on `provider`; consumed via `HostConfig.delta_sink` | `messages.py` |
 | `Policy` | `policy` | `noeta/protocols/policy.py` |
-| `Guard` / `GuardContext` / `ProposedAction` / `VerdictResult` | `guards` | `noeta/protocols/hooks.py` / `111` / (payload types) / `45` |
+| `Guard` / `GuardContext` / `VerdictResult` | `guards` | `noeta/protocols/hooks.py` |
+| `ProposedAction` and its members `ProposedToolCall` / `ProposedSpawnSubtask` / `ProposedFinish` (a guard dispatches on them) | passed to `Guard.check` | `noeta/protocols/hooks.py` |
 | `Observer` (= `Subscriber`, a `Callable[[EventEnvelope], None]`) | `observers` | `noeta/protocols/event_log.py` |
 | `ContentKindSpec` | `content_channels` | `noeta/context/content_channel.py` |
 | `Decision` (union of Policy decision types) | returned by a custom `Policy` | `noeta/protocols/decisions.py` |
