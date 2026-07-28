@@ -122,21 +122,24 @@ Dependency order; each milestone ends with `make check` green.
 
 ## Acceptance criteria
 
-- [ ] A plugin installed via entry point and one via a trusted workspace
+- [x] A plugin installed via entry point and one via a trusted workspace
       directory both load; an unlisted (server) or untrusted (workspace)
-      plugin does not, with a clear message.
-- [ ] `Options` assembled via plugin merge compiles to an `AgentSpec`
+      plugin does not, with a clear message. (`tests/test_plugins.py`; the
+      allow-list is keyed on the plugin's *name* and decided before import.)
+- [x] `Options` assembled via plugin merge compiles to an `AgentSpec`
       byte-identical to the equivalent hand-written `Options`, and is
       invariant under plugin load order (tests assert both).
-- [ ] Collisions fail at client build, naming both contributors.
-- [ ] `approval-modes`: the four modes produce the expected verdicts (chat
+- [x] Collisions fail at client build, naming both contributors — including
+      against the base's in-process `mcp_servers` tools, and against
+      `disallowed_tools` (which compilation would otherwise drop silently).
+- [x] `approval-modes`: the four modes produce the expected verdicts (chat
       denies tools; approve requires approval on all; smart_approve allows
       low-risk and requires approval otherwise; auto allows), with per-tool
       overrides winning; unit-tested.
-- [ ] The reference host loads a plugin end-to-end (contract test — shared
+- [x] The reference host loads a plugin end-to-end (contract test — shared
       with the split spec's Phase 1).
-- [ ] Docs published (how-to + reference), ADR indexed, CONTEXT.md terms
-      added; `make check` green at every milestone.
+- [x] Docs published (how-to + reference, en + `zh/`), ADR indexed,
+      CONTEXT.md terms added; `make check` green at every milestone.
 
 ## Risks
 
@@ -183,3 +186,28 @@ Dependency order; each milestone ends with `make check` green.
   `docs/reference/plugins.md`, both registered in the VitePress nav (en);
   CONTEXT.md gained the D8 terms (Plugin, App Plugin). Remaining: M5
   (ToolResultTransform, still gated) and the release bump.
+- 2026-07-28 — Review pass over M1/M2 before the release; five defects fixed
+  (all pre-release, so they are folded into the 0.4.0 changelog entry rather
+  than a new section):
+  1. `enabled` filtered twice — once on the pre-import candidate, once on the
+     post-import name — so a plugin using `noeta_plugin_name` (the whole
+     first-party corpus) could never be enabled and failed **silently**. The
+     name is now derived before import by statically parsing the
+     `noeta_plugin_name` literal (`_declared_name`), and the post-import
+     re-check is gone: one key, decided before any plugin code runs.
+  2. Tool-name collisions against the base's in-process `mcp_servers` were not
+     detected (compilation de-duplicates by name), and a contributed tool
+     listed in `disallowed_tools` was dropped without a word. Both now raise.
+  3. Trust grants compared unnormalised paths, so a grant spelled with `..`
+     did not match its own directory. Both sides canonicalise now.
+  4. `git-checkpoint` never used its `_CHECKPOINT_AUTHOR` / `_CHECKPOINT_EMAIL`
+     constants: in a repo with no configured git identity `commit-tree`
+     refused, the Observer swallowed the failure (per the ADR) and **no
+     checkpoint was ever recorded**. The identity is exported on every git
+     call; a regression test runs against an identity-free repo.
+  5. `ProposedToolCall` / `ProposedSpawnSubtask` / `ProposedFinish` were not on
+     the public surface, so both example guards imported
+     `noeta.protocols.hooks` — a plugin author could not write a Guard without
+     reaching into a runtime internal. Re-exported through `noeta.sdk`; the
+     examples now import only public paths, and `tests/test_public_surface.py`
+     keeps them there.

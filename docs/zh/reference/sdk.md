@@ -182,7 +182,8 @@ def word_count(arguments: dict, ctx: ToolContext) -> ToolResult: ...
 | `LLMProvider` | `provider` | `noeta/protocols/messages.py:286` |
 | `StreamingProvider` / `StreamDelta`（可选能力：`complete_streaming(request, on_delta, request_headers=None)` 仍返回完整的 `LLMResponse`；delta 是临时副作用） | 在 `provider` 上与 `LLMProvider` 一起实现；通过 `HostConfig.delta_sink` 消费 | `messages.py` |
 | `Policy` | `policy` | `noeta/protocols/policy.py:21` |
-| `Guard` / `GuardContext` / `ProposedAction` / `VerdictResult` | `guards` | `noeta/protocols/hooks.py:159` / `111` /（载荷类型）/ `45` |
+| `Guard` / `GuardContext` / `VerdictResult` | `guards` | `noeta/protocols/hooks.py` |
+| `ProposedAction` 及其成员 `ProposedToolCall` / `ProposedSpawnSubtask` / `ProposedFinish`（guard 按类型分派） | 传入 `Guard.check` | `noeta/protocols/hooks.py` |
 | `Observer`（= `Subscriber`，一个 `Callable[[EventEnvelope], None]`） | `observers` | `noeta/protocols/event_log.py:47` |
 | `ContentKindSpec` | `content_channels` | `noeta/context/content_channel.py:63` |
 | `Decision`（Policy 决策类型的联合） | 由自定义 `Policy` 返回 | `noeta/protocols/decisions.py:427` |

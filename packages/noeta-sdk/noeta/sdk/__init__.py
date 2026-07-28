@@ -109,6 +109,13 @@ from noeta.protocols.hooks import (
     Guard,
     GuardContext,
     ProposedAction,
+    # The ``ProposedAction`` members: a Guard dispatches on them
+    # (``isinstance(action, ProposedToolCall)``), so exporting only the union
+    # would leave every guard author — plugins included — reaching into
+    # ``noeta.protocols.hooks``.
+    ProposedFinish,
+    ProposedSpawnSubtask,
+    ProposedToolCall,
     VerdictResult,
 )
 from noeta.protocols.decisions import Decision
@@ -273,6 +280,9 @@ __all__ = [
     "Guard",
     "GuardContext",
     "ProposedAction",
+    "ProposedToolCall",
+    "ProposedSpawnSubtask",
+    "ProposedFinish",
     "VerdictResult",
     "Observer",
     "ContentKindSpec",

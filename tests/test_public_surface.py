@@ -1,0 +1,215 @@
+"""Public-surface completeness contract for host builders.
+
+The repo-split spec (``docs/implementation-specs/2026-07-26-sdk-only-repo-split.md``,
+decision D4) puts the *host* half of the import contract in the product
+repository (import-linter: the app may reach only ``noeta.sdk``) and the
+*library* half here: whatever a host legitimately needs must be reachable
+through the public surface, or the contract has a hole and the host is pushed
+back onto a runtime internal.
+
+Its predecessor scanned ``apps/noeta-agent`` for internal imports; that target
+left with the split, so this is the split-independent replacement:
+
+1. **Pinned surface** — the paths and symbols a host binds to are importable
+   from ``noeta.sdk`` / ``noeta.sdk.storage`` (the data list below is the
+   contract; adding to it is how a new host need gets blessed).
+2. **Zero-logic re-export** — ``noeta.sdk.storage`` hands back the very objects
+   ``noeta.storage.sqlite`` defines, so the blessed path cannot drift into a
+   parallel implementation.
+3. **Live proof** — every ``noeta.*`` import in the host-contract examples (the
+   reference host and the first-party plugins, this repo's stand-in for a
+   product) lands on the public surface. A gap shows up here as a failing test
+   rather than as an internal import in someone's product.
+"""
+
+from __future__ import annotations
+
+import ast
+import importlib
+from pathlib import Path
+
+import pytest
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+#: The host-contract examples: the reference host (split-spec D5) and the
+#: first-party plugins. These are written against the public surface on purpose
+#: and stand in for a product host. The rest of ``examples/`` are runtime-level
+#: demos that deliberately show internals (composer, policies, in-memory
+#: stores) and are out of scope here.
+HOST_EXAMPLE_ROOTS = (
+    REPO_ROOT / "examples" / "reference-host",
+    REPO_ROOT / "examples" / "plugins",
+)
+
+#: Public roots. A module is public if it equals one of these or is a submodule
+#: (so ``noeta.sdk.storage`` / ``noeta.sdk.testing`` / ``noeta.presets.*`` are
+#: all covered).
+PUBLIC_ROOTS = ("noeta.sdk", "noeta.presets")
+
+#: The host contract: public path -> the symbols a host binds to there. This is
+#: the completeness half of split-spec D4 — a host need that is missing here is
+#: closed by a **re-export**, never by blessing an internal path.
+HOST_CONTRACT: dict[str, tuple[str, ...]] = {
+    # Durable storage: the sqlite triple a host constructs and injects.
+    "noeta.sdk.storage": (
+        "SqliteContentStore",
+        "SqliteDispatcher",
+        "SqliteEventLog",
+    ),
+    "noeta.sdk": (
+        # Assembly
+        "Client",
+        "HostConfig",
+        "Options",
+        "AgentDefinition",
+        "compile_options",
+        # Tool + MCP authoring
+        "tool",
+        "create_sdk_mcp_server",
+        # Hooks — a Guard dispatches on the ProposedAction members, so the
+        # union alone is not enough to write one.
+        "Guard",
+        "GuardContext",
+        "ProposedAction",
+        "ProposedToolCall",
+        "ProposedSpawnSubtask",
+        "ProposedFinish",
+        "VerdictResult",
+        "Observer",
+        "ContentKindSpec",
+        # Streaming + the wire projection a product serves to its clients
+        "StreamDelta",
+        "envelope_to_dict",
+        # Execution-environment seam (the abstract types; the concrete AIO
+        # adapters stay internal on purpose — execution-environment-seam ADR)
+        "ExecEnv",
+        "BrowserBackend",
+        "SandboxExecEnvConfig",
+        # Plugins
+        "PluginAPI",
+        "PluginError",
+        "load_plugins",
+        "merge_plugins",
+        "merged_mcp_servers",
+        "merged_skill_dirs",
+        "grant_trust",
+        "is_trusted",
+        # Workspace helpers a path guard needs
+        "path_within",
+    ),
+    # Official factory content a host may start from.
+    "noeta.presets": ("main_options",),
+    # Test doubles a host's own suite runs on.
+    "noeta.sdk.testing": ("FakeLLMProvider",),
+}
+
+
+# ---------------------------------------------------------------------------
+# 1. The pinned surface
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", sorted(HOST_CONTRACT))
+def test_contract_path_exports_its_symbols(path: str) -> None:
+    """Every path in the contract imports and exports every symbol named."""
+    module = importlib.import_module(path)
+    missing = [s for s in HOST_CONTRACT[path] if not hasattr(module, s)]
+    assert not missing, (
+        f"{path} no longer exports {missing} — a host binds to these; "
+        f"re-export them (never point a host at an internal path)"
+    )
+
+
+def test_sdk_exports_are_declared_in_all() -> None:
+    """``noeta.sdk``'s contract symbols are declared, not accidental."""
+    import noeta.sdk as sdk
+
+    declared = set(sdk.__all__)
+    undeclared = [s for s in HOST_CONTRACT["noeta.sdk"] if s not in declared]
+    assert not undeclared, (
+        f"{undeclared} are importable from noeta.sdk but missing from __all__ — "
+        f"the public surface is what __all__ says it is"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 2. The storage bless is a live, zero-logic re-export
+# ---------------------------------------------------------------------------
+
+
+def test_storage_bless_is_a_live_zero_logic_reexport() -> None:
+    """``noeta.sdk.storage`` re-exports the internal objects themselves.
+
+    Identity, not equality: the blessed path must be the same class the runtime
+    uses, so the contract cannot pass on a stale copy.
+    """
+    import noeta.sdk.storage as public
+    import noeta.storage.sqlite as internal
+
+    for name in HOST_CONTRACT["noeta.sdk.storage"]:
+        assert getattr(public, name) is getattr(internal, name), (
+            f"noeta.sdk.storage.{name} is not the same object as "
+            f"noeta.storage.sqlite.{name} — the re-export must be zero-logic"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 3. The examples prove a host can live on the public surface
+# ---------------------------------------------------------------------------
+
+
+def _iter_example_files():
+    for root in HOST_EXAMPLE_ROOTS:
+        for path in sorted(root.rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            yield path
+
+
+def _imported_noeta_modules(path: Path) -> set[str]:
+    """Every ``noeta.*`` module a file imports (module targets, not symbols)."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "noeta" or alias.name.startswith("noeta."):
+                    out.add(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0 and node.module and (
+                node.module == "noeta" or node.module.startswith("noeta.")
+            ):
+                out.add(node.module)
+    return out
+
+
+def _is_public(module: str) -> bool:
+    return module == "noeta" or any(
+        module == root or module.startswith(root + ".") for root in PUBLIC_ROOTS
+    )
+
+
+def test_examples_exist() -> None:
+    """Guard: the scan must have something to scan."""
+    assert list(_iter_example_files()), EXAMPLES_ROOT
+
+
+def test_examples_import_only_the_public_surface() -> None:
+    """The reference host and every first-party plugin stay on ``noeta.sdk``.
+
+    They are this repo's stand-in for a product host (split-spec D5), so a
+    runtime-internal import here is the contract gap a real host would hit —
+    close it with a re-export and add the symbol to ``HOST_CONTRACT``.
+    """
+    violations = [
+        f"{path.relative_to(REPO_ROOT)}: {module}"
+        for path in _iter_example_files()
+        for module in sorted(_imported_noeta_modules(path))
+        if not _is_public(module)
+    ]
+    assert not violations, (
+        "an example reaches a runtime internal — bless a re-export through "
+        "noeta.sdk (never the internal path):\n  " + "\n  ".join(violations)
+    )

@@ -67,7 +67,7 @@ install::
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Optional
 
-from noeta.protocols.hooks import (
+from noeta.sdk import (
     GuardContext,
     ProposedAction,
     ProposedToolCall,
