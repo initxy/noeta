@@ -17,10 +17,10 @@ description = "Goose-style tool-approval modes (chat / approve / smart_approve /
 requires-python = ">=3.10"
 dependencies = ["noeta-sdk"]
 
-# The SDK-owned runtime-plane plugin group (ADR D2). ``load_plugins`` reads
-# ``noeta_plugin_name`` from the loaded module for the effective plugin name, so
-# the entry-point key here is documentation; the module names itself
-# "approval-modes".
+# The SDK-owned runtime-plane plugin group (ADR D2). For an installed plugin the
+# entry-point KEY is the plugin's identity — the enable-list key, the ``config``
+# key, and the collision label — so it must match the ``noeta_plugin_name`` the
+# module declares for the path-loaded case ("approval-modes" in both places).
 [project.entry-points."noeta.plugins"]
 approval-modes = "approval_modes.plugin:noeta_plugin"
 

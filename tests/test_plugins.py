@@ -9,14 +9,19 @@ Covers the spec's acceptance criteria:
 3. Collision errors name **both** contributors (tool / agent / content kind /
    mcp alias), a second provider conflict, and collisions with the base
    ``Options``.
-4. Trust gating of workspace directories against the trust store.
+4. Trust gating of workspace directories against the trust store (matched on a
+   canonical path, so spelling never decides trust).
 5. Entry-point loading via an injected iterable, config passing, and loud
    broken-plugin failure.
+6. The ``enabled`` allow-list is keyed on the plugin's *name* — including a
+   ``noeta_plugin_name`` a file declares — and an unlisted plugin is never
+   imported.
 """
 
 from __future__ import annotations
 
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -33,7 +38,12 @@ from noeta.client.plugins import (
     merged_skill_dirs,
 )
 from noeta.context.content_channel import ContentKindSpec
-from noeta.sdk import AgentDefinition, Options, compile_options
+from noeta.sdk import (
+    AgentDefinition,
+    Options,
+    compile_options,
+    create_sdk_mcp_server,
+)
 from noeta.tools.decorator import tool
 
 
@@ -258,7 +268,29 @@ def test_grant_trust_idempotent(tmp_path):
     import json
 
     data = json.loads(store.read_text())
-    assert data["trusted"].count(str(d.absolute())) == 1
+    assert data["trusted"].count(str(Path(d).resolve())) == 1
+
+
+def test_trust_survives_a_different_spelling_of_the_same_dir(tmp_path):
+    """A grant and a lookup written differently still name one directory.
+
+    Both sides canonicalise (``~`` expansion + absolute + resolve), so a
+    workspace path carrying a ``..`` segment — the shape a host composes when it
+    joins a workspace root with ``.noeta/plugins`` — is not a second, untrusted
+    directory.
+    """
+    store = tmp_path / "trust.json"
+    ws = tmp_path / "ws" / "plugins"
+    ws.mkdir(parents=True)
+    detour = tmp_path / "ws" / ".." / "ws" / "plugins"
+
+    grant_trust(detour, store)
+    assert is_trusted(ws, store) is True
+
+    # ...and the reverse direction: granted canonically, asked for by detour.
+    other_store = tmp_path / "trust2.json"
+    grant_trust(ws, other_store)
+    assert is_trusted(detour, other_store) is True
 
 
 # ---------------------------------------------------------------------------
@@ -397,3 +429,130 @@ def test_module_loading_via_explicit_path(tmp_path):
     _write_plugin(d, "mymod", _SIMPLE_PLUGIN)
     plugins = load_plugins(modules=[str(d / "mymod.py")])
     assert [p.name for p in plugins] == ["mymod"]
+
+
+# ---------------------------------------------------------------------------
+# 6. The allow-list is keyed on the plugin's name, decided before import
+# ---------------------------------------------------------------------------
+
+
+#: The first-party corpus' shape: ``<plugin-dir>/plugin.py`` naming itself via
+#: ``noeta_plugin_name``. Importing it leaves a marker file behind, so a test can
+#: prove an unlisted plugin was never executed.
+_NAMED_PLUGIN = """
+    import pathlib
+
+    noeta_plugin_name = "protected-things"
+
+    pathlib.Path(__file__).with_name("IMPORTED").write_text("yes")
+
+    def noeta_plugin(api):
+        api.add_tool("grep")
+"""
+
+
+def test_enabled_matches_the_declared_name_of_a_file_plugin(tmp_path):
+    """``enabled`` uses the declared ``noeta_plugin_name``, not the file stem."""
+    d = tmp_path / "mods"
+    _write_plugin(d, "plugin", _NAMED_PLUGIN)
+
+    plugins = load_plugins(
+        modules=[str(d / "plugin.py")], enabled=["protected-things"]
+    )
+    assert [p.name for p in plugins] == ["protected-things"]
+
+
+def test_enabled_skips_an_unlisted_file_without_importing_it(tmp_path):
+    """An unapproved plugin is skipped *before* its module body runs."""
+    d = tmp_path / "mods"
+    _write_plugin(d, "plugin", _NAMED_PLUGIN)
+
+    plugins = load_plugins(modules=[str(d / "plugin.py")], enabled=["something-else"])
+    assert plugins == []
+    assert not (d / "IMPORTED").exists(), "unlisted plugin was imported"
+
+
+def test_enabled_matches_the_declared_name_in_a_directory_source(tmp_path):
+    """Same rule for discovered directory plugins (stem ``plugin`` either way)."""
+    d = tmp_path / "home_plugins"
+    _write_plugin(d, "plugin", _NAMED_PLUGIN)
+
+    assert load_plugins(trusted_dirs=[d], enabled=["nope"]) == []
+    assert not (d / "IMPORTED").exists()
+
+    plugins = load_plugins(trusted_dirs=[d], enabled=["protected-things"])
+    assert [p.name for p in plugins] == ["protected-things"]
+
+
+def test_config_is_keyed_on_the_declared_name(tmp_path):
+    """The declared name is also the ``config`` key for a file-loaded plugin."""
+    d = tmp_path / "mods"
+    _write_plugin(
+        d,
+        "plugin",
+        """
+        noeta_plugin_name = "cfg-by-name"
+
+        seen = {}
+
+        def noeta_plugin(api, config):
+            seen.update(config)
+            api.add_tool("grep")
+        """,
+    )
+    plugins = load_plugins(
+        modules=[str(d / "plugin.py")],
+        enabled=["cfg-by-name"],
+        config={"cfg-by-name": {"k": 1}},
+    )
+    assert [p.name for p in plugins] == ["cfg-by-name"]
+
+
+# ---------------------------------------------------------------------------
+# 7. Collisions the compiler would otherwise resolve silently
+# ---------------------------------------------------------------------------
+
+
+def test_tool_collision_with_an_in_process_mcp_server_tool():
+    """A plugin tool may not shadow a tool an in-process MCP server contributes.
+
+    ``compile_options`` flattens ``Options.mcp_servers`` onto the allow-list and
+    de-duplicates by name, so without this check one of the two would vanish
+    silently.
+    """
+
+    @tool(name="shared", version="1", risk_level="low", input_schema=_SCHEMA)
+    def mcp_side(arguments, ctx):  # pragma: no cover — identity-only
+        raise NotImplementedError
+
+    @tool(name="shared", version="2", risk_level="low", input_schema=_SCHEMA)
+    def plugin_side(arguments, ctx):  # pragma: no cover — identity-only
+        raise NotImplementedError
+
+    base = Options(
+        system_prompt="root",
+        allowed_tools=(),
+        mcp_servers=(create_sdk_mcp_server(name="srv", tools=[mcp_side]),),
+    )
+    lp = _loaded("plugin_a", lambda api: api.add_tool(plugin_side))
+
+    with pytest.raises(PluginError) as exc:
+        merge_plugins(base, [lp])
+    message = str(exc.value)
+    assert "shared" in message
+    assert "plugin_a" in message
+    assert "<base options>" in message
+
+
+def test_plugin_tool_listed_in_disallowed_tools_raises():
+    """An enabled plugin whose tool is disallowed fails the build, not silently."""
+    base = Options(
+        system_prompt="root", allowed_tools=(), disallowed_tools=("plugin_tool",)
+    )
+    lp = _loaded("plugin_a", lambda api: api.add_tool(plugin_tool))
+
+    with pytest.raises(PluginError) as exc:
+        merge_plugins(base, [lp])
+    message = str(exc.value)
+    assert "plugin_tool" in message
+    assert "disallowed_tools" in message

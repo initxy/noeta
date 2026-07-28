@@ -109,13 +109,10 @@ class StdoutDeltaSink:
         self, ctx: StepContext, call_id: str, delta: StreamDelta
     ) -> None:
         try:
-            # ``thinking`` deltas are the model's private reasoning preview;
-            # a product may route them to a separate pane. Here we tag them so
-            # the two streams stay legible in one place.
-            if delta.kind == "thinking":
-                self._out.write(delta.text)
-            else:
-                self._out.write(delta.text)
+            # Both delta kinds go to the same stream here. A real product routes
+            # ``thinking`` (the model's private reasoning preview) to its own
+            # pane instead of interleaving it with the answer text.
+            self._out.write(delta.text)
             self._out.flush()
         except Exception:
             # Never let a slow / broken output stream fail the LLM call.

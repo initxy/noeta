@@ -34,6 +34,7 @@ Two planes, mirroring the ``Options`` / ``HostConfig`` split
 
 from __future__ import annotations
 
+import ast
 import importlib
 import importlib.metadata
 import importlib.util
@@ -53,7 +54,12 @@ from typing import (
     Sequence,
 )
 
-from noeta.client.options import Options, AgentDefinition, _compile_tool
+from noeta.client.options import (
+    Options,
+    AgentDefinition,
+    _compile_tool,
+    _mcp_server_tool_entries,
+)
 from noeta.client.parts import BUILTIN_TOOL_CLASSES
 from noeta.context.content_channel import ContentKindSpec
 
@@ -320,27 +326,42 @@ def _read_trusted(store: Path) -> list[str]:
     return [str(p) for p in trusted]
 
 
-def is_trusted(path: Any, store: Optional[Path] = None) -> bool:
-    """Return whether ``path``'s absolute form is recorded in the trust store.
+def _canonical(path: Any) -> str:
+    """The canonical trust key for ``path``: ``~`` expanded, absolute, resolved.
 
-    ``store`` defaults to :data:`DEFAULT_TRUST_STORE`. A missing store is
-    treated as "nothing trusted" (returns ``False``), never an error.
+    Both sides of the trust comparison go through this, so a grant written as
+    ``~/ws/../ws/plugins`` still matches a lookup of ``/home/me/ws/plugins``.
+    Symlinks are resolved too — the key names the *directory the code is read
+    from*, which is what an operator grants. Non-existent paths resolve
+    lexically (``strict=False``) rather than raising.
+    """
+    return str(Path(path).expanduser().resolve())
+
+
+def is_trusted(path: Any, store: Optional[Path] = None) -> bool:
+    """Return whether ``path``'s canonical form is recorded in the trust store.
+
+    ``store`` defaults to :data:`DEFAULT_TRUST_STORE`. Stored entries are
+    canonicalised on read as well, so a store written by an older version (or
+    by hand) still matches. A missing store is treated as "nothing trusted"
+    (returns ``False``), never an error.
     """
     store = Path(store) if store is not None else DEFAULT_TRUST_STORE
-    target = str(Path(path).absolute())
-    return target in _read_trusted(store)
+    target = _canonical(path)
+    return any(_canonical(p) == target for p in _read_trusted(store))
 
 
 def grant_trust(path: Any, store: Optional[Path] = None) -> None:
-    """Record ``path``'s absolute form as trusted (idempotent).
+    """Record ``path``'s canonical form as trusted (idempotent).
 
     Creates the store (and its parent directory) if absent. Safe to call
-    repeatedly — an already-trusted path is left unchanged.
+    repeatedly — a path that is already trusted under any spelling is left
+    unchanged.
     """
     store = Path(store) if store is not None else DEFAULT_TRUST_STORE
-    target = str(Path(path).absolute())
+    target = _canonical(path)
     trusted = _read_trusted(store)
-    if target not in trusted:
+    if all(_canonical(p) != target for p in trusted):
         trusted.append(target)
     store.parent.mkdir(parents=True, exist_ok=True)
     store.write_text(
@@ -382,10 +403,17 @@ def load_plugins(
       silently). Both scan top-level ``*.py`` (files starting with ``_`` are
       skipped); each file must export ``noeta_plugin``.
 
-    ``enabled`` (when not ``None``) is an allow-list of plugin names: only those
-    load; every other candidate is skipped before it is imported. ``config``
-    maps plugin name → a ``dict`` passed as the factory's second argument, but
-    **only** to factories whose signature declares a second parameter.
+    ``enabled`` (when not ``None``) is an allow-list of plugin *names*: only
+    those load; every other candidate is skipped **before it is imported**, so
+    unapproved plugin code never runs. The name is known ahead of the import for
+    every source: an entry point carries it, and a file's ``noeta_plugin_name``
+    override is read statically (:func:`_declared_name`) — declare it as a
+    module-level string *literal* so the allow-list can see it. A file with no
+    literal override is keyed by its stem, and a name computed at import time is
+    honoured for ``config`` and collision labels but cannot key the allow-list.
+    ``config`` maps plugin name → a ``dict`` passed as the factory's second
+    argument, but **only** to factories whose signature declares a second
+    parameter.
 
     A broken plugin (import error, missing factory, factory raise) fails loudly
     with :class:`PluginError` naming the plugin — never a silent skip (the one
@@ -397,8 +425,10 @@ def load_plugins(
     loaded: list[LoadedPlugin] = []
 
     def _accept(name: str, factory: Any, origin: str) -> None:
-        if enabled_set is not None and name not in enabled_set:
-            return
+        # No allow-list check here: every source filters on the plugin's name
+        # *before* importing it (that is the point of the allow-list), and a
+        # second check on a post-import name would silently drop a plugin the
+        # operator did approve.
         if name in seen_names:
             raise PluginError(
                 f"duplicate plugin name {name!r}: found in both "
@@ -426,8 +456,6 @@ def load_plugins(
     for spec in modules:
         candidate = _candidate_module_name(spec)
         if enabled_set is not None and candidate not in enabled_set:
-            # Cannot honour a module-level name override without importing,
-            # but the derived candidate is the documented allow-list key.
             continue
         module = _import_target(spec)
         name = getattr(module, _NAME_ATTR, candidate)
@@ -436,19 +464,19 @@ def load_plugins(
 
     # -- 3. directories ---------------------------------------------------
     for d in _dir_files(trusted_dirs):
-        _accept_dir_file(d, enabled_set, seen_names, _accept)
+        _accept_dir_file(d, enabled_set, _accept)
     for wdir in workspace_dirs:
         wpath = Path(wdir)
         if not is_trusted(wpath, trust_store):
             warnings.warn(
                 f"skipping untrusted workspace plugin directory {wpath} — "
-                f"grant_trust({str(wpath.absolute())!r}) to load it",
+                f"grant_trust({_canonical(wpath)!r}) to load it",
                 UntrustedPluginDirWarning,
                 stacklevel=2,
             )
             continue
         for d in _scan_dir(wpath):
-            _accept_dir_file(d, enabled_set, seen_names, _accept)
+            _accept_dir_file(d, enabled_set, _accept)
 
     return loaded
 
@@ -456,13 +484,12 @@ def load_plugins(
 def _accept_dir_file(
     path: Path,
     enabled_set: Optional[set],
-    seen_names: dict,
     accept: Callable[[str, Any, str], None],
 ) -> None:
-    candidate = path.stem
+    candidate = _file_plugin_name(path)
     if enabled_set is not None and candidate not in enabled_set:
         return
-    module = _load_module_from_file(candidate, path)
+    module = _load_module_from_file(path.stem, path)
     name = getattr(module, _NAME_ATTR, candidate)
     factory = _module_factory(name, module, str(path))
     accept(name, factory, f"directory file {str(path)!r}")
@@ -494,8 +521,49 @@ def _load_entry_point(name: str, ep: Any) -> Any:
 
 def _candidate_module_name(spec: str) -> str:
     if _looks_like_path(spec):
-        return Path(spec).stem
+        return _file_plugin_name(Path(spec))
     return spec.rsplit(".", 1)[-1]
+
+
+def _file_plugin_name(path: Path) -> str:
+    """The plugin name a file will load under, derived **without importing it**.
+
+    A module-level ``noeta_plugin_name = "..."`` literal wins over the file
+    stem, so the allow-list key is the plugin's real name even for the common
+    ``<plugin-dir>/plugin.py`` layout. Falls back to the stem when the file
+    declares no literal (or cannot be parsed).
+    """
+    return _declared_name(path) or path.stem
+
+
+def _declared_name(path: Path) -> Optional[str]:
+    """The literal ``noeta_plugin_name`` ``path`` declares, or ``None``.
+
+    Parsed statically with :mod:`ast` — no import, no code execution — so
+    ``enabled`` can be honoured *before* an unapproved plugin runs. A name
+    computed at import time is invisible here on purpose: the allow-list must
+    be decidable without running the module.
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except (OSError, SyntaxError, ValueError):
+        return None
+    for node in tree.body:
+        targets: Sequence[Any]
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        else:
+            continue
+        if not any(
+            isinstance(t, ast.Name) and t.id == _NAME_ATTR for t in targets
+        ):
+            continue
+        value = node.value
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            return value.value
+    return None
 
 
 def _looks_like_path(spec: str) -> bool:
@@ -607,9 +675,21 @@ def _invoke_factory(
 
 
 def _base_tool_names(options: Options) -> tuple[str, ...]:
+    """Every tool name the base ``Options`` already carries into compilation.
+
+    Both of ``compile_options``' sources: the allow-list (``None`` ⇒ the full
+    built-in set) **and** the in-process MCP servers, whose tools are flattened
+    onto the allow-list at compile time. Reading only the first would let a
+    plugin tool silently shadow an in-process MCP tool of the same name
+    (``compile_options`` de-duplicates by name, first entry wins) instead of
+    failing loudly like every other collision.
+    """
     if options.allowed_tools is None:
-        return tuple(sorted(BUILTIN_TOOL_CLASSES))
-    return tuple(_compile_tool(e).name for e in options.allowed_tools)
+        base: tuple[Any, ...] = tuple(sorted(BUILTIN_TOOL_CLASSES))
+    else:
+        base = tuple(options.allowed_tools)
+    entries = base + _mcp_server_tool_entries(options.mcp_servers)
+    return tuple(_compile_tool(e).name for e in entries)
 
 
 def _register(
@@ -633,9 +713,12 @@ def merge_plugins(
     Contributions are ordered by ``(plugin name, contribution name)`` before
     they are merged, so the compiled ``AgentSpec`` is invariant under plugin
     load order. Any name collision — a tool, agent, content kind, or MCP alias
-    claimed by two plugins or already present on the base ``options``, or a
-    second provider — raises :class:`PluginError` naming **both** sources. There
-    is no override mechanism (ADR D4).
+    claimed by two plugins or already present on the base ``options`` (including
+    the tools its in-process ``mcp_servers`` contribute), or a second provider —
+    raises :class:`PluginError` naming **both** sources. There is no override
+    mechanism (ADR D4). A contributed tool the base lists in
+    ``disallowed_tools`` raises as well: compilation would drop it silently,
+    leaving an enabled plugin whose tool never exists.
 
     Only the *identity-plane* contributions (tools, agents, content kinds,
     provider, guards, observers) land on the returned ``Options``. Host-plane
@@ -669,11 +752,22 @@ def merge_plugins(
     observers: list[Any] = []
     agents_add: dict[str, AgentDefinition] = {}
 
+    disallowed = set(options.disallowed_tools)
+
     for plugin in ordered:
         c = plugin.contributions
         src = f"plugin {plugin.name!r}"
         for tname, entry in c.tools:
             _register(tool_reg, "tool", tname, src)
+            if tname in disallowed:
+                # compile_options would drop it without a word, leaving an
+                # enabled plugin whose tool never exists. Say so at build time.
+                raise PluginError(
+                    f"tool {tname!r} is contributed by {src} but listed in "
+                    f"Options.disallowed_tools — it would be dropped at "
+                    f"compile; drop it from disallowed_tools or do not enable "
+                    f"the plugin"
+                )
             tool_entries.append((plugin.name, tname, entry))
         for aname, defn in c.agents:
             _register(agent_reg, "agent", aname, src)

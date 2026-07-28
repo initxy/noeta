@@ -103,8 +103,19 @@ def _git(
     operates on a scratch index instead of the repo's real ``.git/index``.
     ``check=False`` returns ``""`` on a non-zero exit instead of raising (used
     to probe whether the checkpoint ref exists yet).
+
+    The checkpoint identity (:data:`_CHECKPOINT_AUTHOR` /
+    :data:`_CHECKPOINT_EMAIL`) is exported on every call, so ``commit-tree``
+    succeeds in a repo with no ``user.name`` / ``user.email`` configured (where
+    git otherwise refuses to auto-detect one) and a checkpoint is never
+    attributed to the user.
     """
-    env: dict[str, str] = {}
+    env: dict[str, str] = {
+        "GIT_AUTHOR_NAME": _CHECKPOINT_AUTHOR,
+        "GIT_AUTHOR_EMAIL": _CHECKPOINT_EMAIL,
+        "GIT_COMMITTER_NAME": _CHECKPOINT_AUTHOR,
+        "GIT_COMMITTER_EMAIL": _CHECKPOINT_EMAIL,
+    }
     if index is not None:
         env["GIT_INDEX_FILE"] = str(index)
     result = subprocess.run(
