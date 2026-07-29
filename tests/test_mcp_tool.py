@@ -15,14 +15,13 @@ import pytest
 
 from noeta.protocols.tool import ToolContext
 from noeta.storage.memory import InMemoryContentStore
-from noeta.tools.mcp import (
-    McpConfigError,
-    McpServerSpec,
+from noeta.builtins.mcp.impl import (
     build_mcp_tools,
     make_mcp_tool_name,
     parse_mcp_tool_specs,
 )
-from noeta.tools.mcp.tool import _result_to_tool_result
+from noeta.builtins.mcp.impl.tool import _result_to_tool_result
+from noeta.runtime.mcp import McpConfigError, McpServerSpec
 
 
 _FAKE = str(Path(__file__).parent / "_fixtures" / "fake_mcp_server.py")

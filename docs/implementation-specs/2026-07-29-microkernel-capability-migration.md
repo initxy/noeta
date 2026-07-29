@@ -113,7 +113,7 @@ band; only concrete backends move into builtins.
   byte-identical. (Riskiest first: KV-cache byte-identity.)
 - [x] **M2 — providers, governance, reminders, sandbox.** Builder/composer
   take injections; `observers.otlp` decided: host wiring (`noeta.client.otlp`).
-- [ ] **M3 — memory, browser, app, mcp.** Execution wiring
+- [x] **M3 — memory, browser, app, mcp.** Execution wiring
   (memory/instructions/environment) goes injection-side; runtime keeps seams
   only.
 - [ ] **M4 — packaging.** Deps move; install smoke re-pinned; import-linter
@@ -236,3 +236,60 @@ is **committed first** — this migration must not stack on an unreviewed tree.
   ``builtins/sandbox/impl/browser.py`` imports
   ``noeta.tools.mcp._http_client`` as its transport — when M3 moves the mcp
   pack, either the HTTP client sinks kernel-side or the edge is re-pointed.
+- **2026-07-29 — M3 landed.** Four movers; the driver's memory seam inverted:
+
+  * **Memory.** ``noeta.tools.memory`` → ``builtins/memory/impl/store.py``
+    (store + 4 tool classes + pack builder + ``DEFAULT_GLOBAL_MEMORY_DIR`` /
+    ``load_memory_store``, both formerly in ``execution.memory``); the
+    store-touching recall glue (``recall_memories`` /
+    ``memory_reminder_provider`` / ``append_user_message_with_recall``) →
+    ``…/impl/recall.py``. ``noeta.execution.memory`` is **seams only**:
+    ``record_memory_index`` (kernel-pure over ``context.memory``),
+    ``intake_providers`` (now composes a bound ``ReminderProvider``, not a
+    store), and ``RecallGoalPrelude`` (field ``store`` → ``recall``). The
+    host seam contract changed: ``memory_recall_context`` returns
+    ``(recall_provider, entries)`` — the host binds the impl's provider to
+    the live store; the kernel driver never sees a store. Builder takes
+    ``memory_factory`` (→ ``impl:build_memory_pack``; ``root=None`` reads
+    the impl default LATE for test hermeticity — conftest now pins
+    ``builtins.memory.impl.store.DEFAULT_GLOBAL_MEMORY_DIR``);
+    ``SessionInputs.memory_store`` is an opaque handle.
+    ``noeta.sdk.MemoryStore`` became a lazy module-``__getattr__``
+    re-export. ``recall_intake_*`` goldens byte-identical.
+  * **Browser.** The ``BrowserBackend`` Protocol sank to
+    ``noeta.runtime.browser`` (M1 ``exec_env`` precedent); the pack
+    (5 tools + ``build_browser_tools`` + ``BROWSER_TOOL_NAMES``) →
+    ``builtins/browser/impl/``; ``noeta.tools.browser`` deleted. Builder
+    takes ``browser_tools_factory`` (loud-fail only when backend +
+    capability are both present); the host's approval roster resolves via
+    ``parts.browser_tool_names()``. The manifest stays contribution-free ON
+    PURPOSE — identity ``tool`` contributions would merge into an
+    activating agent's AgentSpec, which the capability flag deliberately
+    does not do (parity pinned).
+  * **App.** ``AppPreviewGateway`` / ``AppMount`` sank to
+    ``noeta.runtime.app_preview``; ``open_app`` + ``build_app_tools`` →
+    ``builtins/app/impl/``; ``noeta.tools.app`` deleted. New ``app``
+    built-in dir (declaration-free manifest, same rationale as browser);
+    ``app`` joined ``_INERT_BUILTIN_ACTIVATIONS``. Builder takes
+    ``app_tools_factory`` (loud-fail only when a gateway is present).
+  * **MCP.** Vocabulary sank to ``noeta.runtime.mcp`` (``MCP_PREFIX``,
+    ``McpConfigError`` / ``McpError``, ``HttpPostFn``, the server specs —
+    the M2 governance-vocabulary precedent; ``noeta.sdk``'s six MCP names
+    re-export from there statically); the connector impl (clients,
+    ``McpTool``, discovery, prompts, resources) → ``builtins/mcp/impl/``;
+    ``noeta.tools.mcp`` deleted (its import-linter contract + the pinned M1
+    exemption retired with it). New ``mcp`` built-in dir (declaration-free
+    manifest; the ``mcp`` activation name already existed as a capability
+    flag). The host's live-MCP path resolves ``build_mcp_tools`` /
+    ``mcp_provenance_from_specs`` via ``parts.mcp_impl()``. The M2-recorded
+    sandbox coupling resolved as a **documented first-party cross-plugin
+    edge**: ``builtins/sandbox/impl/browser.py`` imports
+    ``noeta.builtins.mcp.impl._http_client`` as its private transport (both
+    ship in the sdk wheel).
+
+  ``noeta.tools`` now holds only authoring machinery + shared helpers
+  (``decorator`` / ``fake`` / ``_invocation`` / ``_limits`` / ``_refs`` /
+  ``descriptions`` / the phase-2-parked ``skill_script``). Catalogue: 12
+  built-ins (app + mcp new). Gates: parity goldens 5/5 +
+  ``recall_intake_*`` byte-identical, 3375 passed / 129 skipped, coverage
+  87.60%, mypy strict clean, import-linter 9/9 KEPT.

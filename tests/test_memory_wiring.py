@@ -31,7 +31,7 @@ from noeta.context.memory import MEMORY_KIND
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
 from noeta.runtime.governance import Budget
 from noeta.presets import official_specs
-from noeta.tools.memory import (
+from noeta.builtins.memory.impl.store import (
     MEMORY_ARCHIVE_TOOL_NAME,
     MEMORY_READ_TOOL_NAME,
     MEMORY_SEARCH_TOOL_NAME,

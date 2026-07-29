@@ -29,9 +29,11 @@ below from importing it). Only consumers import it.
 
 from __future__ import annotations
 
+from noeta.builtins.app import MANIFEST as _APP
 from noeta.builtins.browser import MANIFEST as _BROWSER
 from noeta.builtins.fs import MANIFEST as _FS
 from noeta.builtins.governance import MANIFEST as _GOVERNANCE
+from noeta.builtins.mcp import MANIFEST as _MCP
 from noeta.builtins.memory import MANIFEST as _MEMORY
 from noeta.builtins.presets import MANIFEST as _PRESETS
 from noeta.builtins.providers import MANIFEST as _PROVIDERS
@@ -57,6 +59,8 @@ _BUILTINS: tuple[PluginManifest, ...] = (
     _WEB,
     _MEMORY,
     _BROWSER,
+    _APP,
+    _MCP,
     _SKILLS,
     _REMINDERS,
     _GOVERNANCE,

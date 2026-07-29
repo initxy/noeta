@@ -17,10 +17,26 @@ MANIFEST = PluginManifest(
     name="memory",
     requires_noeta=">=0.4",
     contributions=(
-        c("tool", "memory_write", "noeta.tools.memory:MemoryWriteTool"),
-        c("tool", "memory_read", "noeta.tools.memory:MemoryReadTool"),
-        c("tool", "memory_search", "noeta.tools.memory:MemorySearchTool"),
-        c("tool", "memory_archive", "noeta.tools.memory:MemoryArchiveTool"),
+        c(
+            "tool",
+            "memory_write",
+            "noeta.builtins.memory.impl.store:MemoryWriteTool",
+        ),
+        c(
+            "tool",
+            "memory_read",
+            "noeta.builtins.memory.impl.store:MemoryReadTool",
+        ),
+        c(
+            "tool",
+            "memory_search",
+            "noeta.builtins.memory.impl.store:MemorySearchTool",
+        ),
+        c(
+            "tool",
+            "memory_archive",
+            "noeta.builtins.memory.impl.store:MemoryArchiveTool",
+        ),
         c(
             "prompt_fragment",
             "memory-policy",
@@ -33,7 +49,7 @@ MANIFEST = PluginManifest(
         c(
             "reminder_provider",
             "memory-recall",
-            "noeta.execution.memory:memory_reminder_provider",
+            "noeta.builtins.memory.impl.recall:memory_reminder_provider",
             seams=["turn_intake"],
         ),
     ),

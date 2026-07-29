@@ -35,6 +35,7 @@ import time
 from typing import Any, Callable, Optional
 
 from noeta.runtime._env import scrub_env
+from noeta.runtime.mcp import McpError
 
 
 __all__ = [
@@ -52,15 +53,6 @@ DEFAULT_MCP_LINE_CAP = 1 * 1024 * 1024  # 1 MB per JSON-RPC line
 DEFAULT_MCP_TOTAL_CAP = 8 * 1024 * 1024  # 8 MB cumulative per call
 _PROTOCOL_VERSION = "2024-11-05"
 _MAX_INTERLEAVED_MESSAGES = 64  # notifications tolerated before a response
-
-
-class McpError(Exception):
-    """A transport / protocol / timeout fault talking to an MCP server.
-
-    Always caught by ``McpTool.invoke`` and turned into a typed failed
-    ``ToolResult`` (never propagates out of a tool call). At ``prepare``
-    time (spawn / initialize / tools-list) it propagates as a fail-fast.
-    """
 
 
 #: The process-launch entrypoint. Injectable so tests can (a) substitute

@@ -1,11 +1,14 @@
 """``AppPreviewGateway`` — the host seam the ``open_app`` tool registers a
 mount against.
 
-The tool lives in the SDK; the concrete preview gateway (a second HTTP
-listener + a mount registry + the same-origin ``/api`` proxy) lives in the
-noeta-agent product layer. The SDK must not import the product, so the tool
-depends only on this narrow structural Protocol — exactly the pattern
-``BackgroundRunner`` uses for the background-shell seam.
+The tool lives in the ``app`` built-in plugin
+(``noeta.builtins.app.impl`` — microkernel M3; this Protocol sank here from
+``noeta.tools.app``, the M1 kernel-seam precedent); the concrete preview
+gateway (a second HTTP listener + a mount registry + the same-origin
+``/api`` proxy) lives in the noeta-agent product layer. Neither side may
+import the other, so the tool and the kernel builder depend only on this
+narrow structural Protocol — exactly the pattern ``BackgroundRunner`` uses
+for the background-shell seam.
 
 ``mount`` is the only operation the tool needs: hand the gateway a workspace
 directory + the app subdirectory + the forward target + the owning task, get

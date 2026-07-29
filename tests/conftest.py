@@ -45,12 +45,13 @@ def _isolate_global_noeta_dirs(
     skills = root / "skills"
     memories = root / "memories"
 
-    # SDK builder reads the memory constant at call time on the None-fallback.
+    # The memory factory / host root chain read the constant at call time on
+    # the None-fallback — off the memory built-in's store module (microkernel
+    # M3), which is the ONE canonical binding every consumer resolves late.
     monkeypatch.setattr(
-        "noeta.execution.memory.DEFAULT_GLOBAL_MEMORY_DIR", memories, raising=False
-    )
-    monkeypatch.setattr(
-        "noeta.execution.builder.DEFAULT_GLOBAL_MEMORY_DIR", memories, raising=False
+        "noeta.builtins.memory.impl.store.DEFAULT_GLOBAL_MEMORY_DIR",
+        memories,
+        raising=False,
     )
     # The global skills tier is a noeta-agent product concept (``noeta.agent.skills``
     # owns ``DEFAULT_GLOBAL_SKILLS_DIR``); ``tests/_session_inputs`` reads it at

@@ -1,7 +1,10 @@
 import tests._builtin_skills as _skills
 from tests._builtin_skills import BUILTIN_SKILLS_DIR
 from noeta.client.parts import (
+    default_app_tools_factory,
+    default_browser_tools_factory,
     default_guards_factory,
+    default_memory_factory,
     default_reminder_specs,
     default_tool_factories,
     derive_compaction_config,
@@ -25,6 +28,9 @@ def default_factory_kwargs():
         "web_tools_factory": web_f,
         "base_reminders": default_reminder_specs(),
         "guards_factory": default_guards_factory(),
+        "memory_factory": default_memory_factory(),
+        "browser_tools_factory": default_browser_tools_factory(),
+        "app_tools_factory": default_app_tools_factory(),
     }
 
 
@@ -92,6 +98,9 @@ def build_code_replay_inputs(*, workspace_dir, agent, content_store, model, **kw
     kwargs.setdefault("web_tools_factory", _web_f)
     kwargs.setdefault("base_reminders", default_reminder_specs())
     kwargs.setdefault("guards_factory", default_guards_factory())
+    kwargs.setdefault("memory_factory", default_memory_factory())
+    kwargs.setdefault("browser_tools_factory", default_browser_tools_factory())
+    kwargs.setdefault("app_tools_factory", default_app_tools_factory())
     _raw_globs = agent.metadata.get("write_path_globs")
     if _raw_globs:
         kwargs.setdefault(

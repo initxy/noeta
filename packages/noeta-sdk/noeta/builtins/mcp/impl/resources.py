@@ -37,9 +37,9 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from noeta.tools.mcp._client import McpError, SpawnFn
-from noeta.tools.mcp._http_client import HttpPostFn
-from noeta.tools.mcp.tool import McpAnyServerSpec, _connect_client, cap_injected
+from noeta.builtins.mcp.impl._client import McpError, SpawnFn
+from noeta.builtins.mcp.impl._http_client import HttpPostFn
+from noeta.builtins.mcp.impl.tool import McpAnyServerSpec, _connect_client, cap_injected
 
 
 __all__ = [

@@ -113,7 +113,17 @@ _ACTIVATION_CAPABILITY_FLAG: Mapping[str, str] = {
 #: (their runtime contributions are host-wired or land in a later milestone).
 #: Recognised so a typo in the activation list still fails loudly.
 _INERT_BUILTIN_ACTIVATIONS: frozenset[str] = frozenset(
-    {"fs", "web", "skills", "reminders", "governance", "providers", "presets", "sandbox"}
+    {
+        "app",
+        "fs",
+        "governance",
+        "presets",
+        "providers",
+        "reminders",
+        "sandbox",
+        "skills",
+        "web",
+    }
 )
 
 #: Every recognised built-in activation name (no plugin code executes to know

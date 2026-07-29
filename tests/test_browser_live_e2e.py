@@ -32,8 +32,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from noeta.builtins.sandbox.impl.browser import AioBrowserBackend, AioBrowserError
-from noeta.tools.browser import BROWSER_TOOL_NAMES
-from noeta.tools.mcp._http_client import McpHttpClient
+from noeta.builtins.browser.impl import BROWSER_TOOL_NAMES
+from noeta.builtins.mcp.impl._http_client import McpHttpClient
 
 
 #: Env var that gates this whole module.
@@ -251,7 +251,7 @@ class TestLiveWireNames:
         missing = expected_aio - live_names
         assert not missing, (
             f"AIO image is missing browser tools our backend expects: {sorted(missing)}. "
-            "Wire constants in noeta.tools.browser._backend need re-pinning."
+            "Wire constants in noeta.builtins.sandbox.impl.browser need re-pinning."
         )
 
     def test_noeta_tool_names_are_ours(self) -> None:

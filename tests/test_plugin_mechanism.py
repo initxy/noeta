@@ -504,7 +504,7 @@ def test_builtins_default_on_and_disable_individually():
     assert load_plugins(builtins=False).names() == ()
     # Real discovery reads the noeta.builtins catalogue (M2).
     assert set(load_plugins(builtins=True).names()) == {
-        "browser", "fs", "governance", "memory", "presets",
+        "app", "browser", "fs", "governance", "mcp", "memory", "presets",
         "providers", "reminders", "sandbox", "skills", "web",
     }
 

@@ -16,7 +16,7 @@ from noeta.protocols.tool import ToolContext
 from noeta.storage.memory import InMemoryContentStore
 from noeta.tools._limits import INLINE_CONTENT_MAX_BYTES
 from noeta.builtins.sandbox.impl.browser import AioBrowserError
-from noeta.tools.browser import BROWSER_TOOL_NAMES, build_browser_tools
+from noeta.builtins.browser.impl import BROWSER_TOOL_NAMES, build_browser_tools
 
 
 class FakeBackend:

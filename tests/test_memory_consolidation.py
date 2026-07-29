@@ -142,7 +142,7 @@ def test_marker_corrupt_file_degrades_to_due(tmp_path: Path) -> None:
 
 def test_marker_is_invisible_to_the_memory_store(tmp_path: Path) -> None:
     """The dot-file marker must never surface as a memory (index/recall glob)."""
-    from noeta.execution.memory import load_memory_store
+    from noeta.builtins.memory.impl.store import load_memory_store
 
     root = tmp_path / "memories"
     write_consolidation_marker(root, now=NOW)
@@ -471,7 +471,7 @@ def test_consolidation_tool_surface_is_memory_pack_only(tmp_path: Path) -> None:
     whitelist-filtered) — no fs, no shell, no web."""
     from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
     from noeta.runtime.governance import Budget
-    from noeta.tools.memory import (
+    from noeta.builtins.memory.impl.store import (
         MEMORY_ARCHIVE_TOOL_NAME,
         MEMORY_READ_TOOL_NAME,
         MEMORY_SEARCH_TOOL_NAME,

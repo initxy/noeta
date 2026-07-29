@@ -45,7 +45,7 @@ from noeta.sdk import AgentDefinition, Client, HostConfig, Options
 from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.runtime.shell_policy import ShellMode
 from noeta.runtime.workspace import FsWriteMode
-from noeta.tools.memory import MEMORY_WRITE_TOOL_NAME
+from noeta.builtins.memory.impl.store import MEMORY_WRITE_TOOL_NAME
 
 from tests._sdk_session import make_driver, make_host, make_registry, runner_main_spec
 
@@ -139,7 +139,7 @@ def test_memory_root_resolver_first_then_host_chain(tmp_path: Path) -> None:
 
 
 def test_memory_root_host_chain_without_resolver(tmp_path: Path) -> None:
-    from noeta.execution import memory as execution_memory
+    from noeta.builtins.memory.impl import store as memory_store_mod
 
     explicit = tmp_path / "explicit"
     global_dir = tmp_path / "global"
@@ -151,7 +151,7 @@ def test_memory_root_host_chain_without_resolver(tmp_path: Path) -> None:
     )
     assert host2.memory_root() == explicit
     host3, _ = _memory_host(tmp_path, [])
-    assert host3.memory_root() == execution_memory.DEFAULT_GLOBAL_MEMORY_DIR
+    assert host3.memory_root() == memory_store_mod.DEFAULT_GLOBAL_MEMORY_DIR
 
 
 def test_host_config_forwards_memory_fields(tmp_path: Path) -> None:

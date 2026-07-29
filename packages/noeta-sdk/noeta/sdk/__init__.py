@@ -117,7 +117,7 @@ from noeta.context.content_channel import ContentKindSpec
 # execution-environment-seam ADR, "SDK-adapter export surface").
 from noeta.runtime.workspace import path_within
 from noeta.runtime.exec_env import ExecEnv
-from noeta.tools.browser import BrowserBackend
+from noeta.runtime.browser import BrowserBackend
 from noeta.protocols.event_log import Subscriber as Observer
 from noeta.protocols.hooks import (
     Guard,
@@ -148,10 +148,10 @@ from noeta.protocols.messages import (
 )
 from noeta.protocols.policy import Policy
 from noeta.protocols.values import ContentRef
-# The file-per-memory store behind the memory tools. A host that manages
-# memory pools (listing, editing, per-space scoping) opens the same store the
-# agent's memory tools write, so both sides agree on slugs and frontmatter.
-from noeta.tools.memory import MemoryStore
+# The file-per-memory store behind the memory tools (``MemoryStore``) is
+# re-exported LAZILY via the module ``__getattr__`` below: since microkernel
+# M3 it lives in the ``memory`` built-in plugin, and nothing statically
+# imports ``noeta.builtins`` — the loader's dynamic doorway is the only path.
 from noeta.protocols.wake import NEXT_GOAL_WAKE_HANDLE
 from noeta.protocols.step_context import StepContext
 from noeta.protocols.tool import Tool, ToolContext, ToolResult
@@ -162,8 +162,8 @@ from noeta.protocols.view import View
 # gateway, live-MCP resolver). Separate from Options (which carries agent
 # identity); a product backend passes a populated HostConfig to opt into durable
 # storage / preview / MCP while still driving the engine only through noeta.sdk.
-from noeta.tools.app import AppMount, AppPreviewGateway
-from noeta.tools.mcp import (
+from noeta.runtime.app_preview import AppMount, AppPreviewGateway
+from noeta.runtime.mcp import (
     HttpPostFn,
     McpAnyServerSpec,
     McpConfigError,
@@ -321,3 +321,18 @@ __all__ = [
     # official factory content
     "presets",
 ]
+
+
+def __getattr__(name: str) -> object:
+    # Lazy public re-exports whose implementations live in built-in plugins
+    # (microkernel M3): resolved through the loader's dynamic-import doorway
+    # on first access, keeping the universal "nothing statically imports
+    # noeta.builtins" rule intact. ``MemoryStore`` — the file-per-memory store
+    # behind the memory tools; a host that manages memory pools (listing,
+    # editing, per-space scoping) opens the same store the agent's memory
+    # tools write, so both sides agree on slugs and frontmatter.
+    if name == "MemoryStore":
+        import importlib
+
+        return importlib.import_module("noeta.builtins.memory.impl").MemoryStore
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

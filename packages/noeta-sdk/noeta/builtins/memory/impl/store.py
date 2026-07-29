@@ -1,8 +1,8 @@
 """Memory v1 tools — writing a memory / reading its full text on demand are ORDINARY tools.
 
 One file per memory under a single host-chosen directory (a fixed global
-dir, default ``~/.noeta/memories``, wired by ``noeta.execution.memory``;
-never per-session workspace).
+dir, default :data:`DEFAULT_GLOBAL_MEMORY_DIR` below; never per-session
+workspace).
 Writing a memory is a routine act — the whole point of the ``evolving``
 drift policy its index recordings carry — so these are plain SDK tools
 with zero new mechanisms: results travel the ordinary tool-result
@@ -24,9 +24,11 @@ and ``type`` tags the entry; a file without (or with a malformed) fence
 keeps the v1 first-line behavior byte-for-byte.
 
 Layering note: this module deliberately knows nothing about the content
-channel — ``noeta.tools`` and ``noeta.context`` are independent siblings,
-so the store hands over plain ``(name, summary, type)`` tuples and the
-glue lives one band up in ``noeta.execution.memory``.
+channel — the store hands over plain ``(name, summary, type)`` tuples; the
+pure index pieces live kernel-side in ``noeta.context.memory`` and the
+recall glue lives beside this module in
+``noeta.builtins.memory.impl.recall`` (microkernel M3: both halves moved
+here from ``noeta.tools.memory`` / ``noeta.execution.memory``).
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ from noeta.tools._limits import INLINE_CONTENT_MAX_BYTES, truncate_bytes
 
 
 __all__ = [
+    "DEFAULT_GLOBAL_MEMORY_DIR",
     "MEMORY_ARCHIVE_TOOL_NAME",
     "MEMORY_FILE_SUFFIX",
     "MEMORY_READ_TOOL_NAME",
@@ -53,6 +56,7 @@ __all__ = [
     "MemoryStore",
     "MemoryWriteTool",
     "build_memory_tools",
+    "load_memory_store",
 ]
 
 
@@ -541,3 +545,25 @@ def build_memory_tools(store: MemoryStore) -> dict[str, Tool]:
         MEMORY_SEARCH_TOOL_NAME: MemorySearchTool(store=store),
         MEMORY_ARCHIVE_TOOL_NAME: MemoryArchiveTool(store=store),
     }
+
+
+#: Memory is pinned to ONE global directory (never per-session
+#: workspace), so memories survive a workspace switch and stay cross-scenario.
+#: The agent layer configures the root and falls back to this default
+#: (``~/.noeta/memories``) when nothing is set; ``expanduser`` resolves ``~``
+#: against the running user's home. Consumers read this LATE off the module
+#: (never from-import it) so a test can pin it hermetically.
+DEFAULT_GLOBAL_MEMORY_DIR: Path = Path("~/.noeta/memories").expanduser()
+
+
+def load_memory_store(*, root: Path) -> MemoryStore:
+    """Build the global :class:`MemoryStore` at ``root``.
+
+    ``root`` is the **fixed global** memory directory the agent layer
+    supplies (default :data:`DEFAULT_GLOBAL_MEMORY_DIR`) — it is no longer
+    derived from the per-session workspace, so reads / writes land in one
+    place regardless of which workspace the turn runs in. A missing
+    directory is a valid empty store — an unconfigured global dir pays
+    nothing (``entries() == ()`` keeps every default flow byte-identical).
+    """
+    return MemoryStore(root=root)

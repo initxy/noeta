@@ -10,8 +10,8 @@ inline-content ceiling (64 KiB) with a visible truncation marker.
 from __future__ import annotations
 
 from noeta.tools._limits import INLINE_CONTENT_MAX_BYTES
-from noeta.tools.mcp.prompts import flatten_prompt_messages
-from noeta.tools.mcp.resources import flatten_resource_contents
+from noeta.builtins.mcp.impl.prompts import flatten_prompt_messages
+from noeta.builtins.mcp.impl.resources import flatten_resource_contents
 
 
 def test_flatten_prompt_messages_caps_oversize_injection() -> None:

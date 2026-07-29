@@ -1,43 +1,46 @@
-"""Local stdio MCP (Model Context Protocol) external tool registration.
+"""``mcp`` built-in — the MCP (Model Context Protocol) connector (impl).
 
-Exposes tools from operator-allowlisted local stdio MCP
+Exposes tools from operator-allowlisted local stdio / remote HTTP MCP
 servers as ordinary Noeta ``Tool``s, governed by
 the existing ``PermissionGuard`` / approval and recorded in the EventLog.
+
+Microkernel M3: moved here from ``noeta.tools.mcp``. The connector
+*vocabulary* (``MCP_PREFIX`` / ``McpConfigError`` / ``McpError`` /
+``HttpPostFn`` / the server specs) sank into :mod:`noeta.runtime.mcp` — the
+kernel builder's reserved-prefix check and the ``noeta.sdk`` public surface
+speak it statically; this package re-exports those names so the connector's
+one import surface stays whole. The SDK host reaches ``build_mcp_tools`` /
+``mcp_provenance_from_specs`` through the loader's dynamic-import doorway
+(:mod:`noeta.client.parts`).
 """
 
 from __future__ import annotations
 
-from noeta.tools.mcp._client import (
+from noeta.builtins.mcp.impl._client import (
     DEFAULT_MCP_TIMEOUT_S,
-    McpError,
     McpStdioClient,
 )
-from noeta.tools.mcp._http_client import (
+from noeta.builtins.mcp.impl._http_client import (
     DEFAULT_MCP_HTTP_TIMEOUT_S,
-    HttpPostFn,
     McpHttpClient,
 )
-from noeta.tools.mcp.prompts import (
+from noeta.runtime.mcp import HttpPostFn, McpError
+from noeta.builtins.mcp.impl.prompts import (
     MCP_PROMPT_ORIGIN_PREFIX,
     discover_prompts,
     expand_prompt,
     flatten_prompt_messages,
     make_mcp_prompt_name,
 )
-from noeta.tools.mcp.resources import (
+from noeta.builtins.mcp.impl.resources import (
     MCP_RESOURCE_ORIGIN_PREFIX,
     discover_resources,
     flatten_resource_contents,
     make_mcp_resource_ref,
     read_resource,
 )
-from noeta.tools.mcp.tool import (
-    MCP_PREFIX,
-    McpAnyServerSpec,
-    McpConfigError,
-    McpHttpServerSpec,
+from noeta.builtins.mcp.impl.tool import (
     McpServerSkip,
-    McpServerSpec,
     McpTool,
     McpToolSpec,
     build_mcp_tools,
@@ -45,6 +48,13 @@ from noeta.tools.mcp.tool import (
     make_mcp_tool_name,
     mcp_provenance_from_specs,
     parse_mcp_tool_specs,
+)
+from noeta.runtime.mcp import (
+    MCP_PREFIX,
+    McpAnyServerSpec,
+    McpConfigError,
+    McpHttpServerSpec,
+    McpServerSpec,
 )
 
 

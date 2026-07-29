@@ -29,8 +29,8 @@ from noeta.runtime.governance import PermissionPolicy
 from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.runtime.shell_policy import ShellMode
 from noeta.runtime.workspace import FsWriteMode
-from noeta.tools.mcp import McpServerSpec
-from noeta.tools.mcp.tool import McpTool
+from noeta.runtime.mcp import McpServerSpec
+from noeta.builtins.mcp.impl.tool import McpTool
 
 
 _FAKE = str(Path(__file__).parent / "_fixtures" / "fake_mcp_server.py")

@@ -36,7 +36,6 @@ from noeta.context.environment import EnvironmentSnapshot
 from noeta.context.instructions import InstructionsSnapshot
 from noeta.context.memory import MemoryEntries
 from noeta.context.reminders import ReminderSpec
-from noeta.execution import memory as execution_memory
 from noeta.execution.builder import build_session_inputs
 from noeta.execution.environment import load_environment
 from noeta.execution.host import AgentRegistryProtocol
@@ -79,11 +78,17 @@ from noeta.runtime.background_shell import (
 from noeta.runtime.cancellation import CancellationRegistry
 from noeta.runtime.file_checkpoint import FileCheckpointRegistry
 from noeta.client.parts import (
+    browser_tool_names,
     catalog_price,
+    default_app_tools_factory,
+    default_browser_tools_factory,
+    mcp_impl,
     default_guards_factory,
+    default_memory_factory,
     default_reminder_specs,
     default_tool_factories,
     derive_compaction_config,
+    memory_impl,
     provider_family,
 )
 from noeta.client.host_config import SandboxExecEnvConfig
@@ -94,24 +99,17 @@ from noeta.client.sandbox import (
     provider_for_config,
 )
 from noeta.client.sandbox_provider import SandboxProvider, SandboxSpec
-from noeta.tools.app import AppPreviewGateway
+from noeta.runtime.app_preview import AppPreviewGateway
 from noeta.runtime.llm import RuntimeLLMClient
-from noeta.tools.browser import BROWSER_TOOL_NAMES
 from noeta.runtime.exec_env import ExecEnv
 from noeta.runtime.shell_policy import ShellMode
 from noeta.runtime.workspace import FsWriteMode
-from noeta.tools.memory import MemoryStore
 from noeta.runtime.shell_policy import (
     build_allowlist,
     command_in_allowlist,
     load_project_shell_allowlist,
 )
-from noeta.tools.mcp import (
-    HttpPostFn,
-    McpAnyServerSpec,
-    build_mcp_tools,
-    mcp_provenance_from_specs,
-)
+from noeta.runtime.mcp import HttpPostFn, McpAnyServerSpec
 
 
 __all__ = ["SdkHost"]
@@ -1421,12 +1419,12 @@ class SdkHost(GenericEngineResolver):
                 task_id=task_id,
                 type="McpProvenanceRecorded",
                 payload=McpProvenanceRecordedPayload(
-                    servers=mcp_provenance_from_specs(specs)
+                    servers=mcp_impl().mcp_provenance_from_specs(specs)
                 ),
                 actor="mcp",
                 origin="observer",
             )
-        tools, clients, skipped = build_mcp_tools(
+        tools, clients, skipped = mcp_impl().build_mcp_tools(
             tuple(specs), http_post=self.mcp_http_post, skip_on_failure=True
         )
         # Stage the live clients so the engine cache adopts them when the base
@@ -1623,7 +1621,9 @@ class SdkHost(GenericEngineResolver):
         # clean no-op when browser is off (no backend ⇒ no browser tools).
         if browser_enabled and effective_permission != "bypassPermissions":
             require_approval_tools = tuple(require_approval_tools) + tuple(
-                n for n in BROWSER_TOOL_NAMES if n not in require_approval_tools
+                n
+                for n in browser_tool_names()
+                if n not in require_approval_tools
             )
         # Build a sorted (name, description) directory of
         # the delegation-allowed sub-agents so spawn_subagent's JSON schema
@@ -1661,6 +1661,9 @@ class SdkHost(GenericEngineResolver):
             web_tools_factory=_web_factory,
             base_reminders=default_reminder_specs(),
             guards_factory=default_guards_factory(),
+            memory_factory=default_memory_factory(),
+            browser_tools_factory=default_browser_tools_factory(),
+            app_tools_factory=default_app_tools_factory(),
             workspace_dir=workspace_dir,
             system_prompt=spec.instructions,
             allowed_tools=spec_tool_names,
@@ -1875,6 +1878,7 @@ class SdkHost(GenericEngineResolver):
             web_tools_factory=_web_factory,
             base_reminders=default_reminder_specs(),
             guards_factory=default_guards_factory(),
+            memory_factory=default_memory_factory(),
             workspace_dir=self.workspace_dir,
             system_prompt=WORKFLOW_SYSTEM_PROMPT,
             allowed_tools=frozenset(),
@@ -1986,17 +1990,20 @@ class SdkHost(GenericEngineResolver):
 
     def memory_recall_context(
         self, agent: str, task_id: Optional[str] = None
-    ) -> Optional[tuple[MemoryStore, MemoryEntries]]:
-        """The (store, entries-snapshot) pair for ``agent``'s memory recall.
+    ) -> Optional[tuple[Any, MemoryEntries]]:
+        """The (recall-provider, entries-snapshot) pair for ``agent``'s memory recall.
 
         The seam the :class:`~noeta.execution.driver.InteractionDriver`'s seed
         path (``seed_start`` / ``seed_send_goal``) reads to run the deleted
         runner's prepare-time memory wiring: record the index resident
         (``ContextContentRecorded`` kind=memory, policy=evolving) and route the
-        incoming goal through ``append_user_message_with_recall`` so hits land
+        incoming goal through the ``turn_intake`` recording seam so hits land
         as one ``origin="memory"`` turn. Retrieval therefore happens on the
         WRITE side (at recording time), never at compose time — the composer
-        stays a pure function of folded state.
+        stays a pure function of folded state. Microkernel M3: the provider is
+        the memory built-in's ``memory_reminder_provider`` bound HERE to the
+        live store — the kernel driver composes providers and never sees a
+        store.
 
         Returns ``None`` when the agent's spec lacks ``Capabilities.memory``
         (only the ``main`` preset enables it), so a memory-off agent's stream
@@ -2009,12 +2016,12 @@ class SdkHost(GenericEngineResolver):
         tools use. ``task_id`` is the task the goal is being recorded on; the
         driver passes it so a multi-tenant host recalls from that tenant's
         store (``None`` — a caller without a task — keeps the host-level
-        chain). The global default is read late off the module (not
+        chain). The global default is read late off the impl module (never
         from-imported) so a test pinning
-        ``noeta.execution.memory.DEFAULT_GLOBAL_MEMORY_DIR`` stays hermetic.
-        An empty / missing directory is a valid empty store (``entries ==
-        ()``): the index record no-ops and recall never hits, so the default
-        flow pays zero bytes.
+        ``noeta.builtins.memory.impl.store.DEFAULT_GLOBAL_MEMORY_DIR`` stays
+        hermetic. An empty / missing directory is a valid empty store
+        (``entries == ()``): the index record no-ops and recall never hits, so
+        the default flow pays zero bytes.
         """
         if agent == "unnamed" and self.unnamed_fallback is not None:
             spec = self.unnamed_fallback
@@ -2022,8 +2029,9 @@ class SdkHost(GenericEngineResolver):
             spec = self._lookup_agent(agent, task_id="<unbound>")
         if not spec.capabilities.memory:
             return None
-        store = execution_memory.load_memory_store(root=self.memory_root(task_id))
-        return store, store.entries()
+        impl = memory_impl()
+        store = impl.load_memory_store(root=self.memory_root(task_id))
+        return impl.memory_reminder_provider(store), store.entries()
 
     def intake_reminder_providers(self, agent: str) -> tuple[Any, ...]:
         """``agent``'s activated ``reminder_provider`` s for the ``turn_intake`` seam.
@@ -2053,9 +2061,10 @@ class SdkHost(GenericEngineResolver):
         it returns a root, else ``memory_dir`` override > ``global_memory_dir``
         > the SDK global default (``~/.noeta/memories``). ``task_id=None`` (or
         no resolver — every single-tenant host) keeps the host-level chain
-        byte-identical. The default is read late off the module (not
-        from-imported) so a test pinning
-        ``noeta.execution.memory.DEFAULT_GLOBAL_MEMORY_DIR`` stays hermetic.
+        byte-identical. The default is read late off the impl's store module
+        (never from-imported) so a test pinning
+        ``noeta.builtins.memory.impl.store.DEFAULT_GLOBAL_MEMORY_DIR`` stays
+        hermetic.
         """
         override = self._memory_root_override(task_id)
         if override is not None:
@@ -2064,7 +2073,8 @@ class SdkHost(GenericEngineResolver):
             return self.memory_dir
         if self.global_memory_dir is not None:
             return self.global_memory_dir
-        return execution_memory.DEFAULT_GLOBAL_MEMORY_DIR
+        default_root: Path = memory_impl().DEFAULT_GLOBAL_MEMORY_DIR
+        return default_root
 
     def _memory_root_override(self, task_id: Optional[str]) -> Optional[Path]:
         """The per-task root the injected resolver maps ``task_id`` to, or ``None``.
