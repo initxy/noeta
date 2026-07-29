@@ -19,7 +19,7 @@ from noeta.protocols.event_log import (
     SNAPSHOT_BASELINE_EVENT_TYPES,
     EventLogReader,
 )
-from noeta.protocols.events import EventEnvelope
+from noeta.protocols.events import EventEnvelope, goal_from_payload
 from noeta.protocols.messages import Message
 from noeta.protocols.task import Task, TaskState
 from noeta.protocols.tool_args import resolve_tool_call_arguments
@@ -52,14 +52,14 @@ def fold(
             # next ``_write_snapshot`` from a post-18 Engine will
             # produce a body that reactivates the accelerated path.
             events = event_log.read(task_id)
-            task = _bootstrap_from_genesis(events, task_id)
+            task = _bootstrap_from_genesis(events, task_id, content_store)
             tail = events[1:] if events else []
         else:
             task = rehydrate_task(state_dict)
             tail = event_log.read(task_id, after_seq=snap.seq)
     else:
         events = event_log.read(task_id)
-        task = _bootstrap_from_genesis(events, task_id)
+        task = _bootstrap_from_genesis(events, task_id, content_store)
         tail = events[1:] if events else []
 
     for env in tail:
@@ -129,7 +129,9 @@ def _snapshot_is_legacy_for_issue18(state_dict: dict[str, object]) -> bool:
     return "spawned_subtasks" not in governance
 
 
-def _bootstrap_from_genesis(events: list[EventEnvelope], task_id: str) -> Task:
+def _bootstrap_from_genesis(
+    events: list[EventEnvelope], task_id: str, content_store: ContentStore
+) -> Task:
     if not events:
         return Task(task_id=task_id)
     genesis = events[0]
@@ -143,7 +145,9 @@ def _bootstrap_from_genesis(events: list[EventEnvelope], task_id: str) -> Task:
         status="pending",
         parent_task_id=getattr(payload, "parent_task_id", None),
         subtask_depth=getattr(payload, "subtask_depth", 0),
-        state=TaskState(goal=getattr(payload, "goal", "")),
+        # goal_from_payload derefs a spilled goal (``goal_ref``) so
+        # ``state.goal`` always holds the full text regardless of size.
+        state=TaskState(goal=goal_from_payload(payload, content_store)),
     )
 
 
@@ -459,13 +463,13 @@ def _on_user_question_answered(
 
 
 def _on_subtask_denied(
-    task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
+    task: Task, env: EventEnvelope, content_store: ContentStore
 ) -> None:
     task.governance.denied.append(
         {
             "type": "SubtaskDenied",
             "agent_name": env.payload.agent_name,
-            "goal": env.payload.goal,
+            "goal": goal_from_payload(env.payload, content_store),
             "reason": env.payload.reason,
         }
     )
@@ -857,7 +861,7 @@ def _find_background_subagent(
 
 
 def _on_background_subagent_started(
-    task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
+    task: Task, env: EventEnvelope, content_store: ContentStore
 ) -> None:
     # (docs/adr/background-subagent.md): a sub-agent was launched in the
     # background — append the running audit entry. The parent did NOT suspend on
@@ -867,7 +871,7 @@ def _on_background_subagent_started(
         {
             "subtask_id": env.payload.subtask_id,
             "agent_name": env.payload.agent_name,
-            "goal": env.payload.goal,
+            "goal": goal_from_payload(env.payload, content_store),
             "status": "running",
             "call_id": env.payload.call_id,
         }

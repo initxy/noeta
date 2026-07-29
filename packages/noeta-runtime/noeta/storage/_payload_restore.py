@@ -173,7 +173,12 @@ def _restore_llm_request_finished_payload(d: Any) -> LLMRequestFinishedPayload:
 
 
 _PAYLOAD_RESTORERS: dict[str, Callable[[Any], Any]] = {
-    "TaskCreated":         lambda d: TaskCreatedPayload(**d),
+    # ``restore_dataclass`` (not ``**d``) on the goal-carrying payloads: they
+    # grew an additive optional ``goal_ref`` (goal spill), so a reader one
+    # version behind a writer that adds the NEXT additive key must fold/resume
+    # instead of crashing on an unexpected keyword (same one-way tolerance as
+    # AgentBound / TaskHostBound below).
+    "TaskCreated":         lambda d: restore_dataclass(TaskCreatedPayload, d),
     "TaskStarted":         lambda d: TaskStartedPayload(**d),
     "TaskStatePatched":    lambda d: TaskStatePatchedPayload(**d),
     "MessagesAppended":    lambda d: MessagesAppendedPayload(**d),
@@ -186,12 +191,12 @@ _PAYLOAD_RESTORERS: dict[str, Callable[[Any], Any]] = {
     "ToolCallStarted":     lambda d: ToolCallStartedPayload(**d),
     "ToolResultRecorded":  lambda d: ToolResultRecordedPayload(**d),
     "ToolCallFinished":    lambda d: ToolCallFinishedPayload(**d),
-    "SubtaskSpawned":      lambda d: SubtaskSpawnedPayload(**d),
+    "SubtaskSpawned":      lambda d: restore_dataclass(SubtaskSpawnedPayload, d),
     "StepTransitionMarked": lambda d: StepTransitionMarkedPayload(**d),
     "CompactionRequested": lambda d: CompactionRequestedPayload(**d),
     "Compacted":           lambda d: CompactedPayload(**d),
     "SubtaskCompleted":    lambda d: SubtaskCompletedPayload(**d),
-    "SubtaskDenied":       lambda d: SubtaskDeniedPayload(**d),
+    "SubtaskDenied":       lambda d: restore_dataclass(SubtaskDeniedPayload, d),
     "TaskSuspended":       lambda d: TaskSuspendedPayload(**d),
     "TaskWoken":           lambda d: TaskWokenPayload(**d),
     "ToolCallDenied":      lambda d: ToolCallDeniedPayload(**d),
@@ -224,7 +229,9 @@ _PAYLOAD_RESTORERS: dict[str, Callable[[Any], Any]] = {
     "BackgroundShellExited":  lambda d: BackgroundShellExitedPayload(**d),
     "BackgroundShellKilled":  lambda d: BackgroundShellKilledPayload(**d),
     "BackgroundShellLost":    lambda d: BackgroundShellLostPayload(**d),
-    "BackgroundSubagentStarted":   lambda d: BackgroundSubagentStartedPayload(**d),
+    "BackgroundSubagentStarted":   lambda d: restore_dataclass(
+        BackgroundSubagentStartedPayload, d
+    ),
     "BackgroundSubagentDelivered": lambda d: BackgroundSubagentDeliveredPayload(**d),
 }
 

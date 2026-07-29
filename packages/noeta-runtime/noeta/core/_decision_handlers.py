@@ -74,6 +74,7 @@ from noeta.protocols.events import (
     TaskSuspendedPayload,
     ToolCallDeniedPayload,
     UserQuestionRequestedPayload,
+    spill_goal,
 )
 from noeta.protocols.hooks import (
     ProposedAction,
@@ -1242,13 +1243,15 @@ def handle_spawn_subtask(
     """
     def _on_deny(raw_reason: Optional[str]) -> Task:
         reason = raw_reason or "denied"
+        goal_inline, goal_ref = spill_goal(ctx.content_store, decision.goal)
         ctx.emit(
             task_id=task.task_id,
             type_="SubtaskDenied",
             payload=SubtaskDeniedPayload(
                 agent_name=decision.agent_name,
-                goal=decision.goal,
+                goal=goal_inline,
                 reason=reason,
+                goal_ref=goal_ref,
             ),
             lease_id=lease_id,
             trace_id=trace_id,
@@ -1274,14 +1277,16 @@ def handle_spawn_subtask(
         return routed
 
     subtask_id = ctx.id_factory()
+    goal_inline, goal_ref = spill_goal(ctx.content_store, decision.goal)
     ctx.emit(
         task_id=task.task_id,
         type_="SubtaskSpawned",
         payload=SubtaskSpawnedPayload(
             subtask_id=subtask_id,
             agent_name=decision.agent_name,
-            goal=decision.goal,
+            goal=goal_inline,
             inputs=dict(decision.inputs),
+            goal_ref=goal_ref,
         ),
         lease_id=lease_id,
         trace_id=trace_id,
@@ -1432,13 +1437,15 @@ def handle_spawn_background_subtask(
         # conversation (unlike a foreground denial) — the model just gets a
         # denial tool_result and keeps its turn.
         reason = verdict.reason or "denied"
+        goal_inline, goal_ref = spill_goal(ctx.content_store, decision.goal)
         ctx.emit(
             task_id=task.task_id,
             type_="SubtaskDenied",
             payload=SubtaskDeniedPayload(
                 agent_name=decision.agent_name,
-                goal=decision.goal,
+                goal=goal_inline,
                 reason=reason,
+                goal_ref=goal_ref,
             ),
             lease_id=lease_id,
             trace_id=trace_id,
@@ -1480,14 +1487,16 @@ def handle_spawn_background_subtask(
 
     # --- ALLOW: launch in the background ---
     subtask_id = ctx.id_factory()
+    goal_inline, goal_ref = spill_goal(ctx.content_store, decision.goal)
     ctx.emit(
         task_id=task.task_id,
         type_="BackgroundSubagentStarted",
         payload=BackgroundSubagentStartedPayload(
             subtask_id=subtask_id,
             agent_name=decision.agent_name,
-            goal=decision.goal,
+            goal=goal_inline,
             call_id=call_id,
+            goal_ref=goal_ref,
         ),
         lease_id=lease_id,
         trace_id=trace_id,
@@ -1581,11 +1590,13 @@ def _deny_fanout_batch(
     """SR2 (B3/B6) — all-or-none deny: emit one ``SubtaskDenied`` (the
     failing spec for a per-spec deny, the first spec for a global one) +
     fail the parent. **Zero** ``SubtaskSpawned`` / child ``TaskCreated``."""
+    goal_inline, goal_ref = spill_goal(ctx.content_store, spec.goal)
     ctx.emit(
         task_id=task.task_id,
         type_="SubtaskDenied",
         payload=SubtaskDeniedPayload(
-            agent_name=spec.agent_name, goal=spec.goal, reason=reason
+            agent_name=spec.agent_name, goal=goal_inline, reason=reason,
+            goal_ref=goal_ref,
         ),
         lease_id=lease_id,
         trace_id=trace_id,
@@ -1677,14 +1688,16 @@ def handle_spawn_subtasks(
         # result↔call pairing is positional from the assistant message
         # Canonical bytes of SubtaskSpawned are
         # identical to the SR1 single-child path.
+        goal_inline, goal_ref = spill_goal(ctx.content_store, spec.goal)
         ctx.emit(
             task_id=task.task_id,
             type_="SubtaskSpawned",
             payload=SubtaskSpawnedPayload(
                 subtask_id=sid,
                 agent_name=spec.agent_name,
-                goal=spec.goal,
+                goal=goal_inline,
                 inputs=dict(spec.inputs),
+                goal_ref=goal_ref,
             ),
             lease_id=lease_id,
             trace_id=trace_id,
