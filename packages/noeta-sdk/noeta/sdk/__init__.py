@@ -114,8 +114,8 @@ from noeta.context.content_channel import ContentKindSpec
 # them here would freeze them into the user-facing API. The official product
 # reaches them through a pinned import-linter exemption instead (see the
 # execution-environment-seam ADR, "SDK-adapter export surface").
-from noeta.tools.fs import path_within
-from noeta.tools.fs.exec_env import ExecEnv
+from noeta.runtime.workspace import path_within
+from noeta.runtime.exec_env import ExecEnv
 from noeta.tools.browser import BrowserBackend
 from noeta.protocols.event_log import Subscriber as Observer
 from noeta.protocols.hooks import (

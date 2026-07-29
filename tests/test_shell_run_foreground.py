@@ -14,8 +14,9 @@ from pathlib import Path
 
 from noeta.protocols.tool import ToolContext
 from noeta.storage.memory import InMemoryContentStore
-from noeta.tools.fs.shell import ShellMode, ShellRunTool
-from noeta.tools.fs._workspace import WorkspaceRoot
+from noeta.builtins.fs.impl.shell import ShellRunTool
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.workspace import WorkspaceRoot
 
 
 def _tool_and_ctx(tmp_path: Path) -> tuple[ShellRunTool, ToolContext]:

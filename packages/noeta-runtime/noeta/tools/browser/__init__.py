@@ -73,7 +73,7 @@ def _require_str(
 
     Inlined (rather than importing ``noeta.tools._invocation.require_str``) so the
     browser pack stays self-contained and free of the ``_invocation`` ↔
-    ``noeta.tools.fs`` import cycle when it is imported standalone. Same shape as
+    ``noeta.runtime.exec_env`` import cycle when it is imported standalone. Same shape as
     the shared helper: the failure ``summary`` is ``"{name}: {message}"``.
     """
     value = arguments.get(key)

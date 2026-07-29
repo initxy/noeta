@@ -9,7 +9,7 @@ human approval (Issue A). It is **separate** from ``shell_run`` — its
 argv is constructed by Noeta (interpreter + resolved script realpath +
 validated args), never from a free-form command string.
 
-Layering: this lives in L2 ``noeta.tools.fs`` and reuses the shell
+Layering: this lives in the ``noeta.tools`` band (skills subsystem, phase 2) and reuses the shell
 module's restricted-subprocess primitive. It takes the resolved script
 map as **plain ``(skill, relpath, root_path)`` tuples** — it never
 imports ``noeta.context.skills``. Honest boundary (same as ``shell_run``):
@@ -36,16 +36,16 @@ from noeta.tools._limits import (
     truncate_bytes,
 )
 from noeta.tools._refs import ref_json
-from noeta.tools.fs._subprocess import run_argv, tail_bytes
-from noeta.tools.fs.exec_env import ExecEnv
-from noeta.tools.fs.shell import (
+from noeta.runtime.subproc import run_argv, tail_bytes
+from noeta.runtime.exec_env import ExecEnv
+from noeta.runtime.shell_policy import (
     DEFAULT_SHELL_OUTPUT_CAP,
     DEFAULT_SHELL_TIMEOUT_S,
     _SHELL_META_CHARS,
     _STDERR_TAIL_BYTES,
     _STDOUT_TAIL_BYTES,
 )
-from noeta.tools.fs._workspace import WorkspaceRoot
+from noeta.runtime.workspace import WorkspaceRoot
 
 
 __all__ = [

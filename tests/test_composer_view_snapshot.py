@@ -53,6 +53,7 @@ from pathlib import Path
 
 import pytest
 
+from tests._session_inputs import default_factory_kwargs
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
 from noeta.guards.budget import Budget
 from noeta.presets import official_specs
@@ -95,6 +96,7 @@ def _compose_view_payload(preset: str) -> dict[str, object]:
     content_store = InMemoryContentStore()
 
     inputs = build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=workspace,
         system_prompt=spec.instructions,
         allowed_tools=allowed,

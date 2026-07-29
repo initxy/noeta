@@ -23,6 +23,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from tests._session_inputs import default_factory_kwargs
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
 from noeta.guards.budget import Budget
 from noeta.policies.control_tools import (
@@ -32,7 +33,8 @@ from noeta.policies.control_tools import (
 )
 from noeta.policies.descriptions import load_control_tool_description
 from noeta.storage.memory import InMemoryContentStore
-from noeta.tools.fs import FsWriteMode, ShellMode
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.workspace import FsWriteMode
 
 
 def _build_composer_schemas(
@@ -47,6 +49,7 @@ def _build_composer_schemas(
     """
     content_store = InMemoryContentStore()
     inputs = build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=ws,
         system_prompt="you are helpful",
         allowed_tools=frozenset({"read"}),

@@ -214,6 +214,9 @@ source_modules =
 forbidden_modules =
     noeta.storage
 
+# The mcp band's one kernel exemption: scrub_env sank into the kernel band
+# with the subprocess plumbing (microkernel M1); the stdio client's env
+# scrubbing is kernel infrastructure, not a kernel-services dependency.
 [importlinter:contract:mcp-tools-boundary]
 name = noeta.tools.mcp may import only noeta.protocols + noeta.tools helpers + stdlib (Phase 4.5 F2)
 type = forbidden
@@ -229,3 +232,5 @@ forbidden_modules =
     noeta.guards
     noeta.observers
     noeta.agent
+ignore_imports =
+    noeta.tools.mcp._client -> noeta.runtime._env

@@ -108,7 +108,7 @@ band; only concrete backends move into builtins.
 
 ## Milestones
 
-- [ ] **M1 — inversion proof on fs/web.** Move fs/web impls; replace the
+- [x] **M1 — inversion proof on fs/web.** Move fs/web impls; replace the
   static default tool table with loader resolution; parity goldens 5/5
   byte-identical. (Riskiest first: KV-cache byte-identity.)
 - [ ] **M2 — providers, governance, reminders, sandbox.** Builder/composer
@@ -152,3 +152,26 @@ is **committed first** — this migration must not stack on an unreviewed tree.
   — sweep with a grep gate before each milestone closes.
 - **Scope creep into phase 2** — skills/policy entanglement is explicitly out;
   any discovered coupling is recorded here and deferred, not solved inline.
+
+## Progress log
+
+- **2026-07-29 — M1 landed.** Kernel sinks: ``noeta.runtime.exec_env``
+  (protocol + ``LocalExecEnv`` + the AIO backend until M2),
+  ``noeta.runtime.workspace`` (``WorkspaceRoot`` / ``path_within`` /
+  ``WriteRootsResolver`` / ``FsWriteMode``), ``noeta.runtime.subproc``,
+  ``noeta.runtime._env``, and ``noeta.runtime.shell_policy`` (``ShellMode`` +
+  the allowlist machinery + the project rules file — split out of the old
+  ``shell.py``). Moves: the nine fs tool classes + pack factory into
+  ``noeta/builtins/fs/impl/``, the web pair into ``noeta/builtins/web/impl/``;
+  manifest refs now point at the sibling impl modules; the old
+  ``noeta.tools.fs`` / ``noeta.tools.web`` packages are gone
+  (``skill_script.py`` parked at ``noeta.tools.skill_script`` until phase 2).
+  Inversion: ``client/parts.py`` static table replaced by
+  ``builtin_tool_classes()`` (manifest-driven, ref-resolved, memoized;
+  ``BUILTIN_TOOL_CLASSES`` kept as a module ``__getattr__``);
+  ``build_session_inputs`` grew ``fs_tools_factory`` / ``web_tools_factory``
+  (None fails loudly) and the SDK host injects
+  ``parts.default_tool_factories()``. Import-linter: one pinned exemption
+  (``noeta.tools.mcp._client -> noeta.runtime._env``). 81 test files swept.
+  Gates: parity goldens 5/5 byte-identical, 3375 passed, coverage 87.6%,
+  import-linter 13/13, mypy strict clean.

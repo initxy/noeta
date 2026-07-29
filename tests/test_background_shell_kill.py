@@ -41,13 +41,9 @@ from noeta.storage.memory import (
     InMemoryEventLog,
 )
 from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.tools.fs import (
-    FsWriteMode,
-    ShellKillTool,
-    ShellMode,
-    ShellRunTool,
-    WorkspaceRoot,
-)
+from noeta.builtins.fs.impl import ShellKillTool, ShellRunTool
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.workspace import FsWriteMode, WorkspaceRoot
 
 
 # ---------------------------------------------------------------------------

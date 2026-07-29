@@ -60,9 +60,9 @@ from noeta.protocols.content_store import ContentStore
 from noeta.protocols.decisions import TaskStatePatch
 from noeta.protocols.task import Task
 from noeta.protocols.tool import Tool
-from noeta.tools.fs import WorkspaceRoot
-from noeta.tools.fs.exec_env import ExecEnv
-from noeta.tools.fs.skill_script import (
+from noeta.runtime.workspace import WorkspaceRoot
+from noeta.runtime.exec_env import ExecEnv
+from noeta.tools.skill_script import (
     SKILL_SCRIPT_TOOL_NAME,
     RunSkillScriptTool,
     is_skill_script_resource,

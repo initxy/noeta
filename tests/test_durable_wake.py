@@ -394,7 +394,8 @@ def _coding_session(
     """A production ``SdkHost`` + ``InteractionDriver`` over an in-memory L0
     triple (the shipping SDK assembly the deleted runner is replaced by)."""
     from noeta.testing.fake_llm import FakeLLMProvider
-    from noeta.tools.fs import FsWriteMode, ShellMode
+    from noeta.runtime.shell_policy import ShellMode
+    from noeta.runtime.workspace import FsWriteMode
 
     from tests._sdk_session import (
         make_driver,

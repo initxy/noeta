@@ -1,5 +1,6 @@
 import tests._builtin_skills as _skills
 from tests._builtin_skills import BUILTIN_SKILLS_DIR
+from noeta.client.parts import default_tool_factories
 from noeta.execution.builder import build_session_inputs, derive_compaction_config
 from noeta.policies.control_tools import WORKFLOW_AGENT_NAME
 from noeta.presets import official_specs
@@ -7,6 +8,13 @@ from noeta.presets import official_specs
 from tests._sdk_session import default_coding_budget
 
 _ALIASES = {"default": "main"}
+
+
+def default_factory_kwargs():
+    """fs/web tool-pack factory kwargs required by ``build_session_inputs``
+    (microkernel M1) — tests that call the builder directly splat these in."""
+    fs_f, web_f = default_tool_factories()
+    return {"fs_tools_factory": fs_f, "web_tools_factory": web_f}
 
 
 def known_subtask_agents(names):
@@ -66,6 +74,11 @@ def build_code_replay_inputs(*, workspace_dir, agent, content_store, model, **kw
     # from the spec metadata at LIVE time, so the replay rebuild must derive the
     # SAME globs (otherwise plan's ``write`` tool schema → composed View → bytes
     # diverge). Mirrors noeta.agent.host.session._spec_write_path_globs.
+    # microkernel M1: build_session_inputs requires the tool factories; default
+    # to the SDK's builtin packs unless the caller injects its own.
+    _fs_f, _web_f = default_tool_factories()
+    kwargs.setdefault("fs_tools_factory", _fs_f)
+    kwargs.setdefault("web_tools_factory", _web_f)
     _raw_globs = agent.metadata.get("write_path_globs")
     if _raw_globs:
         kwargs.setdefault(

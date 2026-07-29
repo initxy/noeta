@@ -14,7 +14,7 @@ from pathlib import Path
 
 from noeta.protocols.tool import ToolContext
 from noeta.tools.app import AppMount, OpenAppTool, build_app_tools
-from noeta.tools.fs._workspace import WorkspaceRoot
+from noeta.runtime.workspace import WorkspaceRoot
 
 
 class _FakeGateway:

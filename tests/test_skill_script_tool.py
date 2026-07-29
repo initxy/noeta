@@ -17,7 +17,8 @@ from typing import Any
 
 from noeta.protocols.tool import ToolContext
 from noeta.storage.memory import InMemoryContentStore
-from noeta.tools.fs import RunSkillScriptTool, WorkspaceRoot
+from noeta.runtime.workspace import WorkspaceRoot
+from noeta.tools.skill_script import RunSkillScriptTool
 
 
 def _ws(tmp_path: Path) -> WorkspaceRoot:

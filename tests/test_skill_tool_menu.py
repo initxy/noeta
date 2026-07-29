@@ -25,6 +25,7 @@ from typing import Any
 
 from tests._skill_fixtures import write_skill
 
+from tests._session_inputs import default_factory_kwargs
 from noeta.agent.registry import AgentRegistry
 from noeta.agent.spec import (
     AgentSpec,
@@ -46,7 +47,8 @@ from noeta.storage.memory import (
     InMemoryEventLog,
 )
 from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.tools.fs import FsWriteMode, ShellMode
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.workspace import FsWriteMode
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +132,7 @@ def _build_composer_schemas(
     """Call ``build_session_inputs`` and return composer control schemas."""
     content_store = InMemoryContentStore()
     inputs = build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=ws,
         system_prompt="you are helpful",
         allowed_tools=frozenset({"read"}),

@@ -649,7 +649,8 @@ def test_recovered_stream_folds_bytes_equal_from_scratch(stack: Any) -> None:
 
 def _coding_session(ws: Any, responses: list[Any]) -> Any:
     from noeta.testing.fake_llm import FakeLLMProvider
-    from noeta.tools.fs import FsWriteMode, ShellMode
+    from noeta.runtime.shell_policy import ShellMode
+    from noeta.runtime.workspace import FsWriteMode
 
     from tests._sdk_session import (
         make_driver,

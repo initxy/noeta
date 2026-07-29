@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests._session_inputs import default_factory_kwargs
 from noeta.execution.builder import build_session_inputs, derive_compaction_config
 from noeta.storage.memory import InMemoryContentStore
 from noeta.tools.browser import BROWSER_TOOL_NAMES
@@ -50,6 +51,7 @@ def _session(
     allowed_tools=frozenset({"read"}),
 ):
     return build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=workspace_dir,
         system_prompt=_SYSTEM,
         allowed_tools=allowed_tools,

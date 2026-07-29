@@ -2,7 +2,7 @@
 
 This is the seam that turns a :class:`~noeta.client.sandbox_provider.SandboxProvider`
 (the agent layer's "who provisions the container", D1) into live
-:class:`~noeta.tools.fs.exec_env.ExecEnv` backends and owns their lifetime,
+:class:`~noeta.runtime.exec_env.ExecEnv` backends and owns their lifetime,
 **keyed per session root** (v2, D4). It sits above ``noeta.tools`` (the SDK's
 ``noeta.client`` band may import the AIO adapter; the tools band could never
 reach up to build it), so ``SdkHost`` holds it directly (like
@@ -51,7 +51,7 @@ from noeta.client.sandbox_provider import (
     encode_exec_env_ref,
 )
 from noeta.tools.browser import AioBrowserBackend, BrowserBackend
-from noeta.tools.fs.exec_env import AioSandboxExecEnv, ExecEnv
+from noeta.runtime.exec_env import AioSandboxExecEnv, ExecEnv
 
 _log = logging.getLogger(__name__)
 

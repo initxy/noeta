@@ -19,13 +19,8 @@ from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.runtime.tool import _encode_output
 from noeta.storage.memory import InMemoryContentStore
 from noeta.tools._limits import INLINE_CONTENT_MAX_BYTES, INLINE_OUTPUT_MAX_BYTES
-from noeta.tools.fs import (
-    GlobTool,
-    GrepTool,
-    ReadFileTool,
-    WorkspaceRoot,
-    build_fs_tools,
-)
+from noeta.builtins.fs.impl import GlobTool, GrepTool, ReadFileTool, build_fs_tools
+from noeta.runtime.workspace import WorkspaceRoot
 
 
 def _ctx_and_workspace(tmp_path: Path) -> tuple[ToolContext, WorkspaceRoot]:
@@ -289,7 +284,7 @@ def test_read_image_detected_by_content_not_extension(tmp_path: Path) -> None:
 def test_read_image_over_limit_degrades(tmp_path: Path) -> None:
     # An image over the inline byte limit degrades (no auto-resize in v1) with
     # an actionable message and emits no image.
-    from noeta.tools.fs.read import IMAGE_MAX_BYTES
+    from noeta.builtins.fs.impl.read import IMAGE_MAX_BYTES
 
     ctx, workspace = _ctx_and_workspace(tmp_path)
     big = _PNG_MAGIC + b"\x00" * (IMAGE_MAX_BYTES + 1)

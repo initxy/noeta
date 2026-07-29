@@ -17,7 +17,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from noeta.tools.fs._subprocess import _RunOutcome, run_argv
+from noeta.runtime.subproc import _RunOutcome, run_argv
 
 
 def _alive(pid: int) -> bool:

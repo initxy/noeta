@@ -25,7 +25,8 @@ from noeta.protocols.messages import LLMResponse, TextBlock, Usage
 from noeta.protocols.wake import NEXT_GOAL_WAKE_HANDLE
 from noeta.runtime.worker import WorkerLoop
 from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.tools.fs import FsWriteMode, ShellMode
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.workspace import FsWriteMode
 
 from tests._sdk_session import (
     default_coding_budget,

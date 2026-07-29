@@ -43,7 +43,8 @@ from noeta.protocols.messages import (
 )
 from noeta.sdk import AgentDefinition, Client, HostConfig, Options
 from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.tools.fs import FsWriteMode, ShellMode
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.workspace import FsWriteMode
 from noeta.tools.memory import MEMORY_WRITE_TOOL_NAME
 
 from tests._sdk_session import make_driver, make_host, make_registry, runner_main_spec

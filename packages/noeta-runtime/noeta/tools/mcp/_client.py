@@ -5,7 +5,7 @@ newline-delimited JSON-RPC 2.0 (one JSON object per line on stdin /
 stdout; the server's logs go to stderr). Noeta's runtime is synchronous
 and single-threaded, so this is a deliberately tiny **sync** client — no
 asyncio, no `mcp` SDK dependency — modelled on the subprocess discipline
-in ``noeta.tools.fs.shell``:
+in ``noeta.runtime.shell_policy``:
 
 * launched with an argv list (never ``shell=True``) + a scrubbed env;
 * stderr → ``DEVNULL`` so a chatty server can never fill a pipe and
@@ -34,7 +34,7 @@ import subprocess
 import time
 from typing import Any, Callable, Optional
 
-from noeta.tools._env import scrub_env
+from noeta.runtime._env import scrub_env
 
 
 __all__ = [

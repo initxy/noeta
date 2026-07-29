@@ -44,7 +44,7 @@ from noeta.protocols.content_store import ContentStore
 from noeta.protocols.event_log import EventLogWriter
 from noeta.protocols.events import ContextContentRecordedPayload
 from noeta.protocols.task import Task
-from noeta.tools.fs.exec_env import ExecEnv
+from noeta.runtime.exec_env import ExecEnv
 
 
 __all__ = [

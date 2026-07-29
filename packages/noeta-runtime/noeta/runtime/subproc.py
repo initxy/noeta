@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from noeta.runtime._proc_group import send_group_signal
-from noeta.tools._env import scrub_env
+from noeta.runtime._env import scrub_env
 
 
 __all__ = [

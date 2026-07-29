@@ -34,7 +34,7 @@ _OUTPUT_MEDIA_TYPE = "application/json"
 
 #: the media type the PRE-edit baseline bytes are offloaded
 #: under. Deliberately ``text/plain`` to MATCH what ``read`` offloads file
-#: bodies as (``noeta.tools.fs.read._READ_FILE_MEDIA_TYPE``), so a file the AI
+#: bodies as (``noeta.builtins.fs.impl.read._READ_FILE_MEDIA_TYPE``), so a file the AI
 #: read before editing dedups to ONE ContentStore blob (the baseline ref and
 #: the read-precondition ref are the same content-addressed key).
 _BASELINE_MEDIA_TYPE = "text/plain"

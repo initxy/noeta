@@ -45,7 +45,8 @@ from noeta.storage.memory import (
     InMemoryDispatcher,
     InMemoryEventLog,
 )
-from noeta.tools.fs import FsWriteMode, ShellMode
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.workspace import FsWriteMode
 
 #: Legacy-recording alias the runner used (``TaskCreated.agent_name="default"``
 #: maps to the canonical ``"main"``); the SdkHost resolves it via ``aliases``.

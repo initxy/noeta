@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from noeta.tools.fs._workspace import WorkspaceEscape, WorkspaceRoot
+from noeta.runtime.workspace import WorkspaceEscape, WorkspaceRoot
 
 
 def _make_root(tmp_path: Path) -> WorkspaceRoot:

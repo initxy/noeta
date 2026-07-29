@@ -16,7 +16,7 @@ MANIFEST = PluginManifest(
     name="web",
     requires_noeta=">=0.4",
     contributions=(
-        c("tool", "webfetch", "noeta.tools.web.fetch:WebFetchTool"),
-        c("tool", "web_search", "noeta.tools.web.search:WebSearchTool"),
+        c("tool", "webfetch", "noeta.builtins.web.impl.fetch:WebFetchTool"),
+        c("tool", "web_search", "noeta.builtins.web.impl.search:WebSearchTool"),
     ),
 )

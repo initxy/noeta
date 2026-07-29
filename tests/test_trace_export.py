@@ -246,7 +246,8 @@ def test_code_session_trace_file_writes_jsonl(tmp_path: Path) -> None:
     event log exactly like the product backend wires it."""
     from noeta.protocols.messages import LLMResponse, TextBlock, Usage
     from noeta.testing.fake_llm import FakeLLMProvider
-    from noeta.tools.fs import FsWriteMode, ShellMode
+    from noeta.runtime.shell_policy import ShellMode
+    from noeta.runtime.workspace import FsWriteMode
 
     from tests._sdk_session import (
         make_driver,

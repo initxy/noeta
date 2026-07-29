@@ -47,20 +47,20 @@ from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.tools._limits import INLINE_OUTPUT_MAX_BYTES
 from noeta.tools._refs import ref_json
 from noeta.tools.descriptions import load_tool_description
-from noeta.tools.fs._diff import (
+from noeta.builtins.fs.impl._diff import (
     DIFF_MEDIA_TYPE,
     compute_diff,
     diff_stat_counts,
     file_hash,
 )
-from noeta.tools.fs._workspace import (
+from noeta.runtime.workspace import (
     WorkspaceEscape,
     WorkspaceRoot,
     WriteRootsResolver,
     authorized_workspace,
 )
-from noeta.tools.fs.exec_env import ExclusiveCreateError, ExecEnv, LocalExecEnv
-from noeta.tools.fs.edit import (
+from noeta.runtime.exec_env import ExclusiveCreateError, ExecEnv, LocalExecEnv
+from noeta.builtins.fs.impl.edit import (
     FsWriteMode,
     WRITE_FILE_MAX_BYTES,
 )

@@ -28,7 +28,8 @@ from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.runtime.file_checkpoint import FileCheckpointRegistry
 from noeta.runtime.tool import ToolRuntime
 from noeta.storage.memory import InMemoryContentStore, InMemoryEventLog
-from noeta.tools.fs import ApplyPatchTool, FsWriteMode, ReplaceTextTool, WorkspaceRoot
+from noeta.builtins.fs.impl import ApplyPatchTool, ReplaceTextTool
+from noeta.runtime.workspace import FsWriteMode, WorkspaceRoot
 
 
 # ---------------------------------------------------------------------------

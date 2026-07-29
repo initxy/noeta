@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from tests._session_inputs import default_factory_kwargs
 from noeta.agent.registry import AgentRegistry, UnknownAgentError
 from noeta.agent.spec import (
     AgentSpec,
@@ -37,7 +38,8 @@ from noeta.storage.memory import (
     InMemoryEventLog,
 )
 from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.tools.fs import FsWriteMode, ShellMode
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.workspace import FsWriteMode
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +305,7 @@ def test_default_host_byte_equal_to_direct_builder(tmp_path: Path) -> None:
     from noeta.client.host import _approval_set_for
 
     direct_inputs = build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=host.workspace_dir,
         system_prompt=main_spec.instructions,
         allowed_tools=spec_tool_names,

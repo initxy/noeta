@@ -18,14 +18,14 @@ from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.runtime.tool import _encode_output
 from noeta.storage.memory import InMemoryContentStore
 from noeta.tools._limits import INLINE_CONTENT_MAX_BYTES
-from noeta.tools.fs._subprocess import _RunOutcome
-from noeta.tools.web import (
+from noeta.runtime.subproc import _RunOutcome
+from noeta.builtins.web.impl import (
     ContainerCurlFetchTransport,
     HttpFetchTransport,
     WebFetchTool,
     build_web_tools,
 )
-from noeta.tools.web.fetch import html_to_markdown
+from noeta.builtins.web.impl.fetch import html_to_markdown
 
 
 _PAGE = (

@@ -19,6 +19,7 @@ import hashlib
 from pathlib import Path
 from typing import Optional
 
+from tests._session_inputs import default_factory_kwargs
 from noeta.context.composer import RenderedSkills, ThreeSegmentComposer
 from noeta.context.content_channel import ContentChannelRegistry
 from noeta.context.environment import ENVIRONMENT_KIND
@@ -52,7 +53,8 @@ from noeta.storage.memory import (
     InMemoryEventLog,
 )
 from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.tools.fs import FsWriteMode, ShellMode
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.workspace import FsWriteMode
 
 from tests._sdk_session import (
     make_driver,
@@ -307,6 +309,7 @@ def test_instructions_disabled_default_no_change_in_builder(tmp_path: Path) -> N
     """SDK defaults to False; build_session_inputs behaves as if the feature didn't exist."""
     _write(tmp_path / "NOETA.md", "# rules\n")
     baseline = build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=tmp_path,
         system_prompt="p",
         allowed_tools=frozenset({"read_file"}),
@@ -326,6 +329,7 @@ def test_instructions_disabled_default_no_change_in_builder(tmp_path: Path) -> N
 def test_enabled_but_no_file_zero_footprint(tmp_path: Path) -> None:
     """Flag on but no file: the kind isn't registered at all, byte-equivalent to flag off."""
     inputs = build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=tmp_path,
         system_prompt="p",
         allowed_tools=frozenset({"read_file"}),
@@ -348,6 +352,7 @@ def test_enabled_adds_kind_after_skill_and_memory(tmp_path: Path) -> None:
     # An empty memory dir is fine too; with memory_enabled=True, memory must take the second slot
     (tmp_path / ".noeta" / "memories").mkdir(parents=True)
     inputs = build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=tmp_path,
         system_prompt="p",
         allowed_tools=frozenset({"read_file"}),
@@ -373,6 +378,7 @@ def test_instructions_file_override_in_builder(tmp_path: Path) -> None:
     custom = tmp_path / "elsewhere" / "CUSTOM.md"
     _write(custom, "# my rules\n")
     inputs = build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=tmp_path,
         system_prompt="p",
         allowed_tools=frozenset({"read_file"}),

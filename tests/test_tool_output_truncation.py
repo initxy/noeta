@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from tests._session_inputs import default_factory_kwargs
 from noeta.context.composer import _COMPOSER_VERSION, ThreeSegmentComposer
 from noeta.core._decision_handlers import (
     _validate_tool_output_inline_limit,
@@ -334,6 +335,7 @@ def test_product_limit_propagates_to_handler_via_custom_echo(tmp_path: Path) -> 
     )
 
     inputs = build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=ws,
         system_prompt=_SYSTEM,
         allowed_tools=frozenset({"echo"}),
@@ -409,6 +411,7 @@ def test_product_default_none_zero_impact(tmp_path: Path) -> None:
         script={("big",): "Y" * 500},
     )
     inputs = build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=ws,
         system_prompt=_SYSTEM,
         allowed_tools=frozenset({"echo"}),
