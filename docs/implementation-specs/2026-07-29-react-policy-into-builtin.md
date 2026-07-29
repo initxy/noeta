@@ -56,13 +56,33 @@ tools"). The entanglement audit (2026-07-29, this session) shrank the problem:
   AgentSpec), the composed-request snapshots (control-tool schemas render
   kernel-side, unchanged), and the ReAct prompt bytes (move code, not text).
 
-## Sever list (grep-verified 2026-07-29)
+## Sever list (grep-verified 2026-07-29, second pass)
 
-`execution/builder.py` (ReActPolicy + spawn_subagent_tool_schema),
-`execution/subtask_drain.py` (SPAWN_SUBAGENT_TOOL), `testing/profile.py`
-(build_policy_factory), `policies/orchestration.py` (moves with react).
+- `execution/builder.py` — imports `ReActPolicy` + `spawn_subagent_tool_schema`
+  (line ~74; schema used at ~905, construction at ~1352). NOTE: the default
+  is a **closure** (`_default_react_factory(llm)`) over many kernel-computed
+  kwargs (control flags, `skill_menu_names`, `content_store`, the compaction
+  knobs, `output_schema` / `thinking` / `effort`). The injected seam is
+  therefore a *factory builder*: `default_policy_factory(**kernel_kwargs) ->
+  (llm -> Policy)` — the builder passes exactly the kwargs it passes today,
+  protocols-typed, and keeps the `policy_factory_override` priority.
+- `execution/subtask_drain.py` — `SPAWN_SUBAGENT_TOOL` (line 32; sink to
+  `control_tools` per P-D2 alongside `spawn_subagent_tool_schema`).
+- `client/host.py` — statically imports `noeta.policies.orchestration`
+  (line 45: `WORKFLOW_SYSTEM_PROMPT` + the workflow policy pieces used by
+  `_build_orchestration_engine`); after the move this resolves through a
+  `parts` accessor (react/orchestration impl doorway).
+- `testing/profile.py` — `build_policy_factory` (dynamic doorway at call
+  time, M2 guards precedent).
+- `tests/test_install_smoke.py` — `_RUNTIME_ALONE_SCRIPT` imports
+  `noeta.policies.react`; switch the hand-injected agent to a hand-written
+  protocol-level Policy (the honest kernel-alone story, acceptance 4).
+- Prose only (no code edge): `control_semantics.py` docstrings,
+  `resolver.py` line 77 comment.
+
 Tests sweep: everything importing `noeta.policies.react` /
-`noeta.policies.orchestration`.
+`noeta.policies.orchestration` (test_react_engine_loop + the workflow
+suites are the big consumers).
 
 ## Milestones
 
