@@ -17,7 +17,7 @@ time. Swap it, and the same `Options` compiles to the same `AgentSpec`.
 
 ```python
 from noeta.sdk import Client, Options, query
-from noeta.providers.anthropic import AnthropicProvider
+from noeta.sdk.providers import AnthropicProvider
 
 options = Options(
     system_prompt="You are a concise assistant.",
@@ -43,7 +43,7 @@ exactly what lets one provider instance serve many models.
 ## After: OpenAI-compatible
 
 ```python
-from noeta.providers.openai_compat import OpenAICompatProvider
+from noeta.sdk.providers import OpenAICompatProvider
 
 openai = OpenAICompatProvider(
     base_url="https://api.openai.com/v1",

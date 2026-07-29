@@ -75,7 +75,7 @@ When `tool_output_inline_limit` (host-level, default None=off) is positive, `wra
 
 - Adding a kind of material only touches the SDK: register a kind in `noeta.context.content_channel` (the replaceable kind table + rendering rule), with the runtime untouched. `noeta.context.composer` handles semi-stable segment rendering, source labels, and content-channel tenants; `noeta.context.memory` is the memory-index tenant, and `noeta.context.instructions` is the third tenant, the instructions file.
 - Protocol and fold side: `Message.origin` in `noeta.protocols.messages`; the generic content-fingerprint event `ContextContentRecorded` in `noeta.protocols.events`; the generic activation table `TaskState.active_content` in `noeta.protocols.task`; the merge fold for origin / active_content in `noeta.core.fold`.
-- The origin → vendor wire-format mapping is sealed inside each adapter (`noeta.providers.anthropic` / `noeta.providers.openai_compat` / `noeta.providers.openai_responses`), keeping the ledger neutral.
-- memory reads and writes are ordinary tools (`noeta.tools.memory`), and the recall injection seam is in `noeta.execution.memory`.
+- The origin → vendor wire-format mapping is sealed inside each adapter (`noeta.builtins.providers.impl.anthropic` / `noeta.builtins.providers.impl.openai_compat` / `noeta.builtins.providers.impl.openai_responses`), keeping the ledger neutral.
+- memory reads and writes are ordinary tools (`noeta.builtins.memory.impl.store`), and the recall injection seam is in `noeta.execution.memory`.
 - Request-level bindings are in `noeta.client.options`; the canonical `__canonical_omit_none__` is in `noeta.protocols.canonical`; tool-result truncation is carried by `wrap_tool_result_block` + `tool_output_inline_limit`.
 - How compaction cooperates with the semi-stable segment and the tail budget is covered in `docs/adr/context-compaction.md`.

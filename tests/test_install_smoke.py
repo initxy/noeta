@@ -1,7 +1,7 @@
 """Fresh-venv wheel install smoke for the two library distributions.
 
 Two closures, per the microkernel distribution boundary (acceptance 4/5 of
-``docs/implementation-specs/2026-07-29-microkernel-capability-migration.md``):
+``docs/implementation-specs/archive/2026-07-29-microkernel-capability-migration.md``):
 
 * **runtime-alone** — the noeta-runtime wheel installed by itself is a pure
   kernel: kernel imports work, no capability impl (``noeta.builtins``) or SDK

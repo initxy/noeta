@@ -33,8 +33,8 @@ Hook ordering uses a single integer `priority`; **no topological sort**. A lifec
 
 ## Consequences
 
-- The Guard's 3 action points + the verdict types themselves land in `noeta.core.hooks`, `noeta.protocols.hooks`, and `noeta.guards.*`.
-- The Observer's async subscription (swallowing exceptions, not flowing back to the writer) lands in `noeta.observers.*` (`audit` / `fanout` / `__init__`) and `noeta.guards.hook`.
+- The Guard's 3 action points + the verdict types themselves land in `noeta.core.hooks`, `noeta.protocols.hooks`, and the built-in guard implementations in `noeta.builtins.governance.impl` (`budget` / `permission` / `repetition` / `hook_guard`; their config vocabulary sits kernel-side in `noeta.runtime.governance`).
+- The Observer's async subscription (swallowing exceptions, not flowing back to the writer) lands in `noeta.observers.*` (`audit` / `fanout` / `__init__`) and the `HookObserver` in `noeta.builtins.governance.impl.hook_observer`.
 - The `require_approval → yield_for_human` conversion lands in `noeta.core._decision_handlers`.
 - The swallowing of EventLog-subscriber exceptions lands in `noeta.storage.sqlite.eventlog`.
 - A content-rewriting need cannot go through a hook; it must move to a Policy or ContextComposer, to preserve the single-writer invariant.

@@ -21,7 +21,7 @@ The host boundary set by `library-sdk-architecture.md` must be respected here: c
 ## Decision
 
 - **Scope = remote HTTP transport + a frontend-managed server + prompts + resources + a unified `@`.** Whether the server is local stdio or cloud HTTP, Noeta is always the client (the borrowing party). **Non-goals**: exposing Noeta as an MCP server (the reverse direction, a separate project), server-initiated pushes (`list_changed` / `sampling` / `elicitation`), OAuth, resource templates, and Claude-Code-style lazy ToolSearch.
-- **Layering: transport in the sdk; config storage + management interface in noeta-agent; config UI + the `@` selector in web.** The pipe that actually connects to a server and exchanges JSON-RPC belongs to the engine (`noeta/tools/mcp/`) and must not be written into the product backend or frontend.
+- **Layering: transport in the sdk; config storage + management interface in noeta-agent; config UI + the `@` selector in web.** The pipe that actually connects to a server and exchanges JSON-RPC belongs to the engine (`noeta/builtins/mcp/impl/` since the 2026-07-29 microkernel migration) and must not be written into the product backend or frontend.
 - **Config lives in a host-side store, and credentials never leave the host. A chat/task request carries only "the list of aliases enabled this time."** The frontend adds / edits / deletes a server through a dedicated management interface (`POST /mcp-servers`); config (including token/URL) is persisted host-side. Each task request body contains only aliases like `["github","notion"]`—the backend looks up the full config from its own store, connects to the server, and pulls tools.
 - **The HTTP transport does only a "request/response" subset, thereby preserving the synchronous single-threaded client.** It implements request-response calls (`initialize` / `tools/list` / `tools/call` / `prompts/list` / `prompts/get` / `resources/list` / `resources/read`); it does none of the three server-initiated pushes.
 - **auth v1 does static credentials only; OAuth is deferred, but the schema reserves a slot for it.** The config form accepts a Bearer token / API key + a custom header, sent in the HTTP header on each call. The server config schema reserves a token + an optional refresh field.
@@ -55,7 +55,7 @@ The host boundary set by `library-sdk-architecture.md` must be respected here: c
 
 ## Consequences
 
-- The transport lands in the engine's `noeta.tools.mcp` (HTTP transport, resume-rebuild recording, `mcp__alias__tool` naming), and must not seep into the product backend/frontend.
+- The transport lands in `noeta.builtins.mcp.impl` (HTTP transport, resume-rebuild recording, `mcp__alias__tool` naming; the MCP vocabulary — `MCP_PREFIX`, `McpServerSpec`, the error types — sits kernel-side in `noeta.runtime.mcp`), and must not seep into the product backend/frontend.
 - Host-side server config persistence + management interface, and resolution of the unified `@` channel, are borne respectively by the host-layer `mcp_registry`, `mcp_prompt_expander`, and `content_resolver`; a subtask's MCP inheritance is controlled by `AgentSpec.Capabilities.mcp` (presets set the defaults).
 - Credentials have hard in/out constraints: never into the request body, never into any recording, never into `host_config_fingerprint`. When OAuth is wired later, the token backfill must still land host-side to keep this boundary.
 - Static credentials are v1's only auth form; the schema already reserves a slot for refresh, but token refresh/expiry/reconnect logic as a whole is deferred.

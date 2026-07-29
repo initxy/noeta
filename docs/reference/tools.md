@@ -15,21 +15,22 @@ on a capability, `open_app` on a host-wired gateway, `run_skill_script` on
 
 ## Filesystem tools
 
-Built by `build_fs_tools()` in `noeta.tools.fs`. Each tool carries a
+Built by `build_fs_tools()` in the `fs` built-in plugin
+(`noeta.builtins.fs.impl`, shipped in the noeta-sdk wheel). Each tool carries a
 `risk_level` used by the `PermissionGuard`.
 
 | Tool | Risk | What it does | Source |
 | --- | --- | --- | --- |
-| `read` | low | Read a file (utf-8), optionally sliced by line `offset` / `limit`. **Reads are unfenced** — see below. | `noeta/tools/fs/read.py` |
-| `glob` | low | Match a workspace-relative glob pattern and return matching paths. | `noeta/tools/fs/read.py` |
-| `grep` | low | Regex (`re` module) content search across the workspace. | `noeta/tools/fs/read.py` |
-| `edit` | high | Replace an exact, unique `old` substring in an existing file. Dry-run by default. | `noeta/tools/fs/edit.py` |
-| `write` | high | Write a file (create, or overwrite one previously read). Dry-run by default. | `noeta/tools/fs/edit.py` |
-| `apply_patch` | high | Apply a small batch of edits atomically — all succeed or none. Dry-run by default. | `noeta/tools/fs/patch.py` |
-| `shell_run` | high | Run a shell command in the workspace. Mode-gated: `ALLOWLIST` by default, `OFF` removes the tool entirely. | `noeta/tools/fs/shell.py` |
-| `shell_poll` | low | Check status / output of a background shell job. | `noeta/tools/fs/shell.py` |
-| `shell_kill` | high | Stop a background shell job you started (SIGTERM → SIGKILL). | `noeta/tools/fs/shell.py` |
-| `run_skill_script` | high | Run an active skill's bundled script via an allowlisted interpreter. | `noeta/tools/fs/skill_script.py` |
+| `read` | low | Read a file (utf-8), optionally sliced by line `offset` / `limit`. **Reads are unfenced** — see below. | `noeta/builtins/fs/impl/read.py` |
+| `glob` | low | Match a workspace-relative glob pattern and return matching paths. | `noeta/builtins/fs/impl/read.py` |
+| `grep` | low | Regex (`re` module) content search across the workspace. | `noeta/builtins/fs/impl/read.py` |
+| `edit` | high | Replace an exact, unique `old` substring in an existing file. Dry-run by default. | `noeta/builtins/fs/impl/edit.py` |
+| `write` | high | Write a file (create, or overwrite one previously read). Dry-run by default. | `noeta/builtins/fs/impl/edit.py` |
+| `apply_patch` | high | Apply a small batch of edits atomically — all succeed or none. Dry-run by default. | `noeta/builtins/fs/impl/patch.py` |
+| `shell_run` | high | Run a shell command in the workspace. Mode-gated: `ALLOWLIST` by default, `OFF` removes the tool entirely. | `noeta/builtins/fs/impl/shell.py` |
+| `shell_poll` | low | Check status / output of a background shell job. | `noeta/builtins/fs/impl/shell.py` |
+| `shell_kill` | high | Stop a background shell job you started (SIGTERM → SIGKILL). | `noeta/builtins/fs/impl/shell.py` |
+| `run_skill_script` | high | Run an active skill's bundled script via an allowlisted interpreter. | `noeta/tools/skill_script.py` |
 
 ### Reads are unfenced
 
@@ -70,14 +71,14 @@ sandbox** — `shell_run` spawns external programs in the trusted workspace.
 
 | Tool | Risk | What it does | Source |
 | --- | --- | --- | --- |
-| `webfetch` | low | Fetch a public web page over HTTP(S) and render it to Markdown. Always available. | `noeta/tools/web/fetch.py` |
-| `web_search` | low | Run a web search and return ranked hits as Markdown. **Only mounted when `NOETA_WEB_SEARCH_API_KEY` is set.** | `noeta/tools/web/search.py` |
+| `webfetch` | low | Fetch a public web page over HTTP(S) and render it to Markdown. Always available. | `noeta/builtins/web/impl/fetch.py` |
+| `web_search` | low | Run a web search and return ranked hits as Markdown. **Only mounted when `NOETA_WEB_SEARCH_API_KEY` is set.** | `noeta/builtins/web/impl/search.py` |
 
 ## App tools
 
 | Tool | Risk | What it does | Source |
 | --- | --- | --- | --- |
-| `open_app` | low | Publish a workspace HTML app through the host's preview gateway (mounted only when the host wires one). | `noeta/tools/app/open_app.py` |
+| `open_app` | low | Publish a workspace HTML app through the host's preview gateway (mounted only when the host wires one). | `noeta/builtins/app/impl/__init__.py` |
 
 ## Memory tools
 
@@ -86,14 +87,15 @@ opens it).
 
 | Tool | Risk | What it does | Source |
 | --- | --- | --- | --- |
-| `memory_write` | medium | Write a markdown memory file to the memory store. Optional `description` (one-line index summary) and `type` (`user` / `project` / `procedural` / `reference`) parameters are stored as a frontmatter block the tool composes itself. | `noeta/tools/memory.py` |
-| `memory_read` | low | Read the full text of a stored memory on demand. | `noeta/tools/memory.py` |
-| `memory_search` | low | Find memories by content: case-insensitive substring match over names and full text, with grep-style excerpts (up to 3 lines per memory, 10 memories; a `truncated` flag reports when more matched). | `noeta/tools/memory.py` |
-| `memory_archive` | medium | Retire an outdated memory into the store's `archive/` subdirectory — it leaves the index, recall and search but is never deleted (a human can restore it). | `noeta/tools/memory.py` |
+| `memory_write` | medium | Write a markdown memory file to the memory store. Optional `description` (one-line index summary) and `type` (`user` / `project` / `procedural` / `reference`) parameters are stored as a frontmatter block the tool composes itself. | `noeta/builtins/memory/impl/store.py` |
+| `memory_read` | low | Read the full text of a stored memory on demand. | `noeta/builtins/memory/impl/store.py` |
+| `memory_search` | low | Find memories by content: case-insensitive substring match over names and full text, with grep-style excerpts (up to 3 lines per memory, 10 memories; a `truncated` flag reports when more matched). | `noeta/builtins/memory/impl/store.py` |
+| `memory_archive` | medium | Retire an outdated memory into the store's `archive/` subdirectory — it leaves the index, recall and search but is never deleted (a human can restore it). | `noeta/builtins/memory/impl/store.py` |
 
 ## Browser tools
 
-Built by `build_browser_tools()` in `noeta.tools.browser`. Mounted only when
+Built by `build_browser_tools()` in the `browser` built-in plugin
+(`noeta.builtins.browser.impl`). Mounted only when
 **both** hold: the agent's spec opens `Capabilities.browser`, and the session is
 bound to a live sandbox container. Among the official presets that is the `web`
 subagent alone — `main` stays browser-free and delegates to it, so a
@@ -104,11 +106,11 @@ route through approval unless the session bypasses permissions.
 
 | Tool | Risk | What it does | Source |
 | --- | --- | --- | --- |
-| `browser_navigate` | high | Go to a `url`; returns the page snapshot. | `noeta/tools/browser/__init__.py` |
-| `browser_click` | high | Click the interactive element at `index` (from the snapshot's numbered list). | `noeta/tools/browser/__init__.py` |
-| `browser_type` | high | Type text into the element at `index`. | `noeta/tools/browser/__init__.py` |
-| `browser_extract` | high | Re-read the current page as a snapshot (no arguments). | `noeta/tools/browser/__init__.py` |
-| `browser_screenshot` | high | Capture a PNG and store it as a **workspace artifact**, returning its `ContentRef`. It is not fed to the model as vision. | `noeta/tools/browser/__init__.py` |
+| `browser_navigate` | high | Go to a `url`; returns the page snapshot. | `noeta/builtins/browser/impl/__init__.py` |
+| `browser_click` | high | Click the interactive element at `index` (from the snapshot's numbered list). | `noeta/builtins/browser/impl/__init__.py` |
+| `browser_type` | high | Type text into the element at `index`. | `noeta/builtins/browser/impl/__init__.py` |
+| `browser_extract` | high | Re-read the current page as a snapshot (no arguments). | `noeta/builtins/browser/impl/__init__.py` |
+| `browser_screenshot` | high | Capture a PNG and store it as a **workspace artifact**, returning its `ContentRef`. It is not fed to the model as vision. | `noeta/builtins/browser/impl/__init__.py` |
 
 The four text tools return a *page snapshot*: page text plus numbered
 interactive elements. That numbering is what `browser_click` / `browser_type`

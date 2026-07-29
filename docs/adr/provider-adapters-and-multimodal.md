@@ -10,7 +10,7 @@ Two existing conventions are premises here: provider-neutral, one file per provi
 
 ### Add `OpenAIResponsesProvider` alongside the Chat-compatible adapter, named by protocol rather than vendor
 
-We create `noeta.providers.openai_responses`; `openai_compat.py` (OpenAI **Chat** compatible) is left untouched. The naming follows the protocol: the new file is the **OpenAI Responses compatible** one. The gateway's Azure-flavored transport (`api-key` header, `?api-version` query) is just a construction detail and is **not called "azure"** — azure isn't a protocol, just one gateway that carries this protocol. The transport layer is all construction parameters: `base_url` (**the complete responses endpoint; the provider POSTs directly and does not append a `/openai/responses` path**) / `api_key` / `api_version` / `timeout_seconds` (**default 300s**: a high-effort call measured around 80s, and 60s would time out) / `extra_headers` / `image_resolver`. Error classification reuses the existing neutral taxonomy (429/5xx→Transient, 400 ctx_overflow→ContextOverflow, other 4xx→Fatal).
+We create `noeta.providers.openai_responses` (since the 2026-07-29 microkernel migration: `noeta.builtins.providers.impl.openai_responses`); `openai_compat.py` (OpenAI **Chat** compatible) is left untouched. The naming follows the protocol: the new file is the **OpenAI Responses compatible** one. The gateway's Azure-flavored transport (`api-key` header, `?api-version` query) is just a construction detail and is **not called "azure"** — azure isn't a protocol, just one gateway that carries this protocol. The transport layer is all construction parameters: `base_url` (**the complete responses endpoint; the provider POSTs directly and does not append a `/openai/responses` path**) / `api_key` / `api_version` / `timeout_seconds` (**default 300s**: a high-effort call measured around 80s, and 60s would time out) / `extra_headers` / `image_resolver`. Error classification reuses the existing neutral taxonomy (429/5xx→Transient, 400 ctx_overflow→ContextOverflow, other 4xx→Fatal).
 
 ### The Responses wire translation is written from scratch, not reused from Chat
 
@@ -60,7 +60,7 @@ The `Block` union gains `ImageBlock` (field `source: ContentRef`) + canonical re
 
 ## Consequences
 
-- The new adapter's full responsibilities (wire translation, stop_reason inference, effort/thinking mapping, encrypted_content continuation, the image inlining primitive) land in `noeta.providers.openai_responses`; `openai_compat` / `anthropic` each carry an `ImageBlock` defense branch; the catalog gains `supports_vision` and new model entries in `noeta.providers.catalog`.
+- The new adapter's full responsibilities (wire translation, stop_reason inference, effort/thinking mapping, encrypted_content continuation, the image inlining primitive) land in `noeta.builtins.providers.impl.openai_responses`; `openai_compat` / `anthropic` each carry an `ImageBlock` defense branch; the catalog gains `supports_vision` and new model entries in `noeta.builtins.providers.impl.catalog`.
 
 - Core protocol layer: `ImageBlock(ContentRef)` and its canonical registration land in the message protocol; `append_user_message` changes its signature to `list[Block]`, and the sole-origin-writer validation stays in the engine.
 

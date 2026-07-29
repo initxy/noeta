@@ -384,20 +384,23 @@ name.
 
 ## Built-in plugins (`D11`)
 
-noeta re-expresses its own capabilities as built-in plugins in `noeta/builtins/`
-(the top-of-stack band beside `noeta.presets`). Each is a **thin declaration** —
-a `PluginManifest` whose contributions carry `ref` strings into runtime
-implementations that stay in their own import-linter bands; nothing in the
-catalog imports those implementations, so listing a built-in runs zero runtime
-code. The loader reaches the catalog by a **dynamic** import (`builtin_manifests()`),
-so there is no static edge up into `noeta.builtins`.
+noeta expresses its own capabilities as built-in plugins in `noeta/builtins/`
+(the top-of-stack band beside `noeta.presets`). Since the 2026-07-29
+microkernel migration each directory holds the manifest **and** the
+implementation: `__init__.py` is the zero-execution `MANIFEST` (a
+`PluginManifest` whose contributions carry `ref` strings), `impl/` is the code,
+and the refs point at the sibling impl modules. Nothing in the manifest layer
+imports the impl, so listing a built-in still runs zero capability code. The
+loader reaches the catalog by a **dynamic** import (`builtin_manifests()`), and
+`.importlinter`'s universal `sdk-core-not-builtins` contract keeps every band —
+kernel included — free of static edges into `noeta.builtins`.
 
-The ten built-ins (one directory per built-in under `noeta/builtins/`, each
-holding its `MANIFEST` — the canonical worked corpus of manifest declarations):
-`fs`, `web`, `memory`, `browser`, `skills`, `reminders`, `governance`,
-`providers`, `sandbox`, `presets`. Adding a first-party capability is adding a
-directory here (plus a `SurfaceSpec` registration only when a genuinely new
-surface is needed).
+The twelve built-ins (one directory per built-in under `noeta/builtins/` — the
+canonical worked corpus of manifest declarations): `fs`, `web`, `memory`,
+`browser`, `app`, `mcp`, `skills`, `reminders`, `governance`, `providers`,
+`sandbox`, `presets`. Adding a first-party capability is adding a directory
+here (plus a `SurfaceSpec` registration only when a genuinely new surface is
+needed).
 
 ## Trust store
 

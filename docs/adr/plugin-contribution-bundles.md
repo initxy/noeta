@@ -205,19 +205,23 @@ an addendum on `guard-observer-hooks.md`.
 ### Built-in plugins ride the same path
 
 noeta is its own first plugin author. `noeta.builtins/` is a top-of-stack band
-beside `noeta.presets`; each built-in is a **thin manifest declaration** whose
-`ref`s point into runtime implementations that stay untouched in their own
-import-linter bands. The catalogue is inert data — listing a built-in's
-contributions runs zero runtime code. The loader reaches `noeta.builtins` by a
-**dynamic import** from `noeta.client.plugin_set`; there is no static edge, and
-`.importlinter`'s `sdk-core-not-builtins` forbidden contract enforces that the
-loader never statically imports the band above it. The catalogue currently holds
-ten built-ins — `fs`, `web`, `memory`, `browser`, `skills`, `reminders`,
-`governance`, `providers`, `sandbox`, `presets` — so every standard surface has
-a built-in reference declaration ridden through the identical
-loader / validation / merge path as any external plugin. Adding a first-party
-capability is adding an entry to the catalogue (plus a `SurfaceSpec`
-registration only when a genuinely new surface is needed).
+beside `noeta.presets`; each built-in is one directory holding its manifest
+**and — since the 2026-07-29 microkernel migration (see the Addendum) — its
+implementation**: `noeta/builtins/<name>/__init__.py` is the zero-execution
+`MANIFEST`, `noeta/builtins/<name>/impl/` is the code, and the manifest `ref`s
+point at the sibling impl modules. The catalogue is inert data — listing a
+built-in's contributions runs zero runtime code, and importing `noeta.builtins`
+(the manifest layer) imports zero impl modules. The loader reaches
+`noeta.builtins` by a **dynamic import** from `noeta.client.plugin_set`; there
+is no static edge, and `.importlinter`'s `sdk-core-not-builtins` forbidden
+contract enforces it — universally: *every* band, kernel included, is a source.
+The catalogue currently holds twelve built-ins — `fs`, `web`, `memory`,
+`browser`, `app`, `mcp`, `skills`, `reminders`, `governance`, `providers`,
+`sandbox`, `presets` — so every standard surface has a built-in declaration
+ridden through the identical loader / validation / merge path as any external
+plugin. Adding a first-party capability is adding a directory to the catalogue
+(plus a `SurfaceSpec` registration only when a genuinely new surface is
+needed).
 
 ## Rationale
 
@@ -328,3 +332,42 @@ registration only when a genuinely new surface is needed).
 - Whenever a new extension surface is added, deciding its `plane`,
   `activation_scope`, and whether plugins may contribute to it is part of that
   surface's design — one `SurfaceSpec` row, one D6 scope choice.
+
+## Addendum — 2026-07-29: the microkernel migration finishes the thought
+
+The original decision left the built-ins as *thin declarations over runtime
+implementations*: the manifest lived in `noeta.builtins`, the code stayed in
+kernel bands (`noeta.tools.*`, `noeta.guards`, `noeta.providers`, …). The
+microkernel capability migration
+(`docs/implementation-specs/archive/2026-07-29-microkernel-capability-migration.md`)
+completed the inversion — *the engine hosts execution; everything an agent is
+made of is a plugin, including ours*:
+
+- **Manifest and implementation are co-located.** Every official capability
+  implementation moved into its plugin directory
+  (`noeta/builtins/<name>/impl/`), shipped in the **noeta-sdk** wheel. The
+  noeta-runtime wheel is a pure kernel — impl-free (verified by the install
+  smoke) and transport-free (`httpx` moved to noeta-sdk).
+- **The defaults ride the loader.** The bare-`Options()` defaults (the 11
+  fs/web tools, the default guards, the three compose-time reminders, the
+  provider facts) are obtained by resolving the built-in manifests through the
+  `noeta.client.parts` accessors at client build; static default tables are
+  gone. `DEFAULT_PLUGINS = ("fs", "web")` keeps a bare `Options()`
+  byte-identical (pinned by the parity goldens).
+- **The kernel builder is injection-only.** `build_session_inputs` takes
+  factories (`fs/web/browser/app_tools_factory`, `guards_factory`,
+  `memory_factory`, `base_reminders`, pre-resolved provider facts) that fail
+  loudly when absent; installed alone, the runtime runs an agent only with
+  hand-injected protocol objects.
+- **Config vocabulary sank kernel-side** so specs stay typed without the
+  impls: `noeta.runtime.{workspace,shell_policy,exec_env,governance,browser,
+  app_preview,mcp}` — pinned lean by the `kernel-vocabulary-diet` import
+  contract (they import only `noeta.protocols`).
+- **`sdk-core-not-builtins` became universal**: nothing statically imports
+  `noeta.builtins` — every band is a source; the loader's dynamic `ref`
+  resolution is the only doorway. This single contract now also carries the
+  provider-neutral kernel↛adapter rule.
+- **Scope**: the skills subsystem and `ReActPolicy` remain kernel-side pending
+  their own phase-2 designs; control tools (`todo_write` / `skill` /
+  `ask_user_question`) stay kernel permanently (they are renderings of kernel
+  Decision variants, not contributions).

@@ -41,6 +41,6 @@ An early version built a dedicated tool `read_skill_resource` for this; that ded
 
 ## Consequences
 
-- The landing points are `noeta.context.skills.indexer` (`render()` emits the base-directory line, doesn't read the disk), `noeta.tools.fs.read` / `noeta.tools.fs._workspace` (`ReadFileTool.skill_roots` internal field; `resolve_readable` takes the absolute target and re-checks it against the skill-root allowlist).
+- The landing points are `noeta.context.skills.indexer` (`render()` emits the base-directory line, doesn't read the disk), `noeta.builtins.fs.impl.read` / `noeta.runtime.workspace` (`ReadFileTool.skill_roots` internal field; `resolve_readable` takes the absolute target and re-checks it against the skill-root allowlist).
 - The assembly-time injection lands in `noeta.execution.skills` (`resolve_skill_roots`; the early `resolve_skill_resources` / `build_skill_resource_wiring` are deleted).
 - Costs and watch-outs: `source_path` enters the rendered bytes, so a session that has activated a skill must fold against the same skill directory path to reproduce the prompt; the red lines (the renderer doesn't touch the disk, the loosening is only for read/absolute paths/skill root, the realpath containment check is preserved, `run_skill_script` is unaffected) must all be held when changing the related code.

@@ -127,9 +127,10 @@ shared container when one conversation closes would break the others.
 
 ## Consequences
 
-- The `ExecEnv` protocol, `LocalExecEnv`, and `AioSandboxExecEnv` live in
-  `noeta.tools.fs.exec_env` (the materials band, alongside the tools that use them —
-  not the kernel-services band, which may not import materials). `SandboxExecEnvConfig`
+- The `ExecEnv` protocol and `LocalExecEnv` live in `noeta.runtime.exec_env`, and
+  `AioSandboxExecEnv` in `noeta.builtins.sandbox.impl.exec_env` (since the
+  2026-07-29 microkernel migration; at decision time all three sat together in
+  `noeta.tools.fs.exec_env`, the materials band). `SandboxExecEnvConfig`
   and `HostConfig.exec_env` live in the SDK host-config surface; the SDK host owns the
   manager that builds and reconnects backends and reaps them on shutdown.
 - `TaskHostBound` gains an optional `exec_env_ref` (omitted from the canonical form
@@ -373,7 +374,11 @@ The product's two adapter modules reach the concrete classes through
 (`noeta.agent.host.sdk_sandbox_exec_env -> noeta.tools.fs.exec_env`,
 `noeta.agent.host.sdk_browser_backend -> noeta.tools.browser`) — the same
 deliberate-exemption mechanism as `noeta.storage` / `noeta.read_models`, scoped
-to exactly two modules so the ratchet keeps its burn-down meaning.
+to exactly two modules so the ratchet keeps its burn-down meaning. (Since the
+2026-07-29 microkernel migration those target modules have moved: the concrete
+AIO adapters live in `noeta.builtins.sandbox.impl.exec_env` /
+`noeta.builtins.sandbox.impl.browser`, and the browser tool pack in
+`noeta.builtins.browser.impl`.)
 
 The inheritance carries an implicit base-class contract — the parent's methods
 reach their transport only through `_shell` / `read_bytes` / `write_bytes`, and

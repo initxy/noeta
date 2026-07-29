@@ -4,20 +4,20 @@ Noeta 提供一组内置工具，由文件系统包、Web 包、App 包以及（
 
 ## 文件系统工具
 
-由 `noeta.tools.fs` 中的 `build_fs_tools()` 构建。每个工具携带一个 `risk_level`，供 `PermissionGuard` 使用。
+由 `fs` 内置插件（`noeta.builtins.fs.impl`，随 noeta-sdk wheel 发布）中的 `build_fs_tools()` 构建。每个工具携带一个 `risk_level`，供 `PermissionGuard` 使用。
 
 | 工具 | 风险 | 用途 | 来源 |
 | --- | --- | --- | --- |
-| `read` | low | 读取工作区文件（utf-8），可选按行 `offset` / `limit` 切片。 | `noeta/tools/fs/read.py` |
-| `glob` | low | 匹配工作区相对 glob 模式并返回匹配路径。 | `noeta/tools/fs/read.py` |
-| `grep` | low | 跨工作区的正则（`re` 模块）内容搜索。 | `noeta/tools/fs/read.py` |
-| `edit` | high | 替换现有文件中精确、唯一的 `old` 子串。默认 dry-run。 | `noeta/tools/fs/edit.py` |
-| `write` | high | 写入文件（创建，或覆盖先前读取过的文件）。默认 dry-run。 | `noeta/tools/fs/edit.py` |
-| `apply_patch` | high | 原子性地应用一小批编辑——全部成功或全部失败。默认 dry-run。 | `noeta/tools/fs/patch.py` |
-| `shell_run` | high | 在工作区中运行 shell 命令。受模式门控：默认 `ALLOWLIST`，`OFF` 完全移除该工具。 | `noeta/tools/fs/shell.py` |
-| `shell_poll` | low | 检查后台 shell 作业的状态 / 输出。 | `noeta/tools/fs/shell.py` |
-| `shell_kill` | high | 停止你启动的后台 shell 作业（SIGTERM → SIGKILL）。 | `noeta/tools/fs/shell.py` |
-| `run_skill_script` | high | 通过允许列表中的解释器运行活动技能的捆绑脚本。 | `noeta/tools/fs/skill_script.py` |
+| `read` | low | 读取工作区文件（utf-8），可选按行 `offset` / `limit` 切片。 | `noeta/builtins/fs/impl/read.py` |
+| `glob` | low | 匹配工作区相对 glob 模式并返回匹配路径。 | `noeta/builtins/fs/impl/read.py` |
+| `grep` | low | 跨工作区的正则（`re` 模块）内容搜索。 | `noeta/builtins/fs/impl/read.py` |
+| `edit` | high | 替换现有文件中精确、唯一的 `old` 子串。默认 dry-run。 | `noeta/builtins/fs/impl/edit.py` |
+| `write` | high | 写入文件（创建，或覆盖先前读取过的文件）。默认 dry-run。 | `noeta/builtins/fs/impl/edit.py` |
+| `apply_patch` | high | 原子性地应用一小批编辑——全部成功或全部失败。默认 dry-run。 | `noeta/builtins/fs/impl/patch.py` |
+| `shell_run` | high | 在工作区中运行 shell 命令。受模式门控：默认 `ALLOWLIST`，`OFF` 完全移除该工具。 | `noeta/builtins/fs/impl/shell.py` |
+| `shell_poll` | low | 检查后台 shell 作业的状态 / 输出。 | `noeta/builtins/fs/impl/shell.py` |
+| `shell_kill` | high | 停止你启动的后台 shell 作业（SIGTERM → SIGKILL）。 | `noeta/builtins/fs/impl/shell.py` |
+| `run_skill_script` | high | 通过允许列表中的解释器运行活动技能的捆绑脚本。 | `noeta/tools/skill_script.py` |
 
 ### Shell 允许列表（默认）
 
@@ -33,14 +33,14 @@ Shell 元字符（`|`、`;`、`&&`、`>` 等）在分词之前被拒绝。这是
 
 | 工具 | 风险 | 用途 | 来源 |
 | --- | --- | --- | --- |
-| `webfetch` | low | 通过 HTTP(S) 获取公共网页并渲染为 Markdown。始终可用。 | `noeta/tools/web/fetch.py` |
-| `web_search` | low | 运行 Web 搜索并以 Markdown 返回排名结果。**仅在设置 `NOETA_WEB_SEARCH_API_KEY` 时挂载。** | `noeta/tools/web/search.py` |
+| `webfetch` | low | 通过 HTTP(S) 获取公共网页并渲染为 Markdown。始终可用。 | `noeta/builtins/web/impl/fetch.py` |
+| `web_search` | low | 运行 Web 搜索并以 Markdown 返回排名结果。**仅在设置 `NOETA_WEB_SEARCH_API_KEY` 时挂载。** | `noeta/builtins/web/impl/search.py` |
 
 ## App 工具
 
 | 工具 | 风险 | 用途 | 来源 |
 | --- | --- | --- | --- |
-| `open_app` | low | 通过单端口预览网关在 Web "App" 面板中渲染工作区 HTML 应用。 | `noeta/tools/app/open_app.py` |
+| `open_app` | low | 通过单端口预览网关在 Web "App" 面板中渲染工作区 HTML 应用。 | `noeta/builtins/app/impl/__init__.py` |
 
 ## 记忆工具
 
@@ -48,10 +48,10 @@ Shell 元字符（`|`、`;`、`&&`、`>` 等）在分词之前被拒绝。这是
 
 | 工具 | 风险 | 用途 | 来源 |
 | --- | --- | --- | --- |
-| `memory_write` | medium | 将 markdown 记忆文件写入记忆存储。可选参数 `description`（一行索引摘要）和 `type`（`user` / `project` / `procedural` / `reference`）由工具自行组装为 frontmatter 块存储。 | `noeta/tools/memory.py` |
-| `memory_read` | low | 按需读取已存储记忆的完整文本。 | `noeta/tools/memory.py` |
-| `memory_search` | low | 按内容查找记忆：对名称与全文做大小写不敏感的子串匹配，返回 grep 风格摘录（每条记忆最多 3 行，最多 10 条记忆；命中更多时以 `truncated` 标志说明）。 | `noeta/tools/memory.py` |
-| `memory_archive` | medium | 将过时的记忆移入存储的 `archive/` 子目录——它从索引、召回和搜索中消失，但绝不删除（人工可恢复）。 | `noeta/tools/memory.py` |
+| `memory_write` | medium | 将 markdown 记忆文件写入记忆存储。可选参数 `description`（一行索引摘要）和 `type`（`user` / `project` / `procedural` / `reference`）由工具自行组装为 frontmatter 块存储。 | `noeta/builtins/memory/impl/store.py` |
+| `memory_read` | low | 按需读取已存储记忆的完整文本。 | `noeta/builtins/memory/impl/store.py` |
+| `memory_search` | low | 按内容查找记忆：对名称与全文做大小写不敏感的子串匹配，返回 grep 风格摘录（每条记忆最多 3 行，最多 10 条记忆；命中更多时以 `truncated` 标志说明）。 | `noeta/builtins/memory/impl/store.py` |
+| `memory_archive` | medium | 将过时的记忆移入存储的 `archive/` 子目录——它从索引、召回和搜索中消失，但绝不删除（人工可恢复）。 | `noeta/builtins/memory/impl/store.py` |
 
 ## MCP 工具
 
