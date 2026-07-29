@@ -1,6 +1,8 @@
 # SDK extensibility redesign: manifest plugins, surface registry, activation
 
-> **Status: Active**
+> **Status: Shipped** — landed in `6d01b11` (feat!: rebuild the plugin
+> mechanism); the durable decisions live in
+> [plugin-contribution-bundles.md](../../adr/plugin-contribution-bundles.md).
 
 Supersedes the *mechanism* design of
 [2026-07-25-plugin-architecture.md](archive/2026-07-25-plugin-architecture.md)
