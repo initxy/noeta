@@ -51,7 +51,7 @@ from noeta.client.sandbox_provider import (
     decode_exec_env_ref,
     encode_exec_env_ref,
 )
-from noeta.tools.browser import BrowserBackend
+from noeta.runtime.browser import BrowserBackend
 from noeta.runtime.exec_env import ExecEnv
 
 _log = logging.getLogger(__name__)

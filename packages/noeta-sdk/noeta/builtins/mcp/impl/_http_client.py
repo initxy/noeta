@@ -1,6 +1,6 @@
 """Minimal synchronous HTTP JSON-RPC client for a remote MCP server.
 
-The sibling of :class:`~noeta.tools.mcp._client.McpStdioClient`:
+The sibling of :class:`~noeta.builtins.mcp.impl._client.McpStdioClient`:
 where the stdio client talks to a local subprocess over newline-delimited
 JSON-RPC, this one talks to a **remote HTTP** endpoint — but it keeps the same
 two Noeta commitments F2 fixed for stdio:
@@ -27,7 +27,7 @@ body, event, or recording. They ride only on the wire.
 
 Caps (mirroring the stdio client): a per-call ``timeout`` and a response body
 ``total_cap`` (bounded memory). Every transport / protocol / timeout fault
-raises :class:`~noeta.tools.mcp._client.McpError`, which the shared ``McpTool``
+raises :class:`~noeta.runtime.mcp.McpError`, which the shared ``McpTool``
 wrapper turns into a typed failed ``ToolResult``; at ``prepare`` time
 (initialize / tools-list) it propagates as a fail-fast.
 """
@@ -39,11 +39,11 @@ import urllib.error
 import urllib.request
 from typing import Any, Callable, Mapping, Optional
 
-from noeta.tools.mcp._client import (
+from noeta.builtins.mcp.impl._client import (
     DEFAULT_MCP_TIMEOUT_S,
     DEFAULT_MCP_TOTAL_CAP,
-    McpError,
 )
+from noeta.runtime.mcp import HttpPostFn, McpError
 
 
 __all__ = [
@@ -57,10 +57,6 @@ DEFAULT_MCP_HTTP_TIMEOUT_S = DEFAULT_MCP_TIMEOUT_S
 _PROTOCOL_VERSION = "2024-11-05"
 
 
-#: The HTTP POST entrypoint. Injectable so tests can substitute a fake
-#: transport (and prove resume NEVER reaches it). Takes the JSON-RPC request
-#: object + the merged request headers; returns the raw response body bytes.
-HttpPostFn = Callable[[dict[str, Any], Mapping[str, str]], bytes]
 
 
 class McpHttpClient:

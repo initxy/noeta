@@ -13,7 +13,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from noeta.protocols.tool import ToolContext
-from noeta.tools.app import AppMount, OpenAppTool, build_app_tools
+from noeta.builtins.app.impl import OpenAppTool, build_app_tools
+from noeta.runtime.app_preview import AppMount
 from noeta.runtime.workspace import WorkspaceRoot
 
 

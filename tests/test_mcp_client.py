@@ -15,7 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from noeta.tools.mcp import McpError, McpStdioClient
+from noeta.builtins.mcp.impl import McpStdioClient
+from noeta.runtime.mcp import McpError
 
 
 _FAKE = str(Path(__file__).parent / "_fixtures" / "fake_mcp_server.py")

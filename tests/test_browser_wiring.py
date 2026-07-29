@@ -17,7 +17,7 @@ from tests._session_inputs import default_factory_kwargs
 from noeta.client.parts import derive_compaction_config
 from noeta.execution.builder import build_session_inputs
 from noeta.storage.memory import InMemoryContentStore
-from noeta.tools.browser import BROWSER_TOOL_NAMES
+from noeta.builtins.browser.impl import BROWSER_TOOL_NAMES
 
 from tests._sdk_session import coding_replay_budget
 
@@ -26,7 +26,7 @@ _SYSTEM = "you are a coding agent"
 
 
 class _FakeBrowser:
-    """A structural :class:`~noeta.tools.browser.BrowserBackend` — no socket."""
+    """A structural :class:`~noeta.runtime.browser.BrowserBackend` — no socket."""
 
     def navigate(self, url: str) -> str:
         return f"nav {url}"

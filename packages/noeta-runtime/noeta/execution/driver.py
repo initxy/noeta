@@ -744,18 +744,21 @@ class InteractionDriver:
         # the step — same shape the in-process CodeSessionRunner uses.
         engine = host.resolve_engine(task)
         # Memory auto-recall (the deleted runner's prepare-time D5/D6 wiring,
-        # ported onto the seed path). The host seam resolves the (store,
-        # entries) pair ONLY for an agent whose spec enables
+        # ported onto the seed path). The host seam resolves the
+        # (recall-provider, entries) pair ONLY for an agent whose spec enables
         # ``Capabilities.memory`` (``None`` otherwise) — a memory-off agent's
         # stream stays byte-identical, and the ``getattr`` guard keeps hosts
         # without the seam (test doubles / control-plane-only hosts) a clean
-        # no-op. Runner-prepare order: the index resident is recorded FIRST
-        # (one ``ContextContentRecorded`` kind=memory, policy=evolving; empty
-        # entries no-op), then the goal enters through the recall seam below.
-        # Retrieval runs on the WRITE side (now, at recording time), never at
-        # compose time — hits land as ONE ``origin="memory"`` turn right after
-        # the human goal, and resume folds them back without re-retrieving.
-        memory_store = None
+        # no-op. Microkernel M3: the provider arrives already bound to a live
+        # store by the host (the memory built-in's ``memory_reminder_provider``)
+        # — the kernel driver never sees a store. Runner-prepare order: the
+        # index resident is recorded FIRST (one ``ContextContentRecorded``
+        # kind=memory, policy=evolving; empty entries no-op), then the goal
+        # enters through the recall seam below. Retrieval runs on the WRITE
+        # side (now, at recording time), never at compose time — hits land as
+        # ONE ``origin="memory"`` turn right after the human goal, and resume
+        # folds them back without re-retrieving.
+        recall_provider = None
         recall_context = getattr(host, "memory_recall_context", None)
         if callable(recall_context):
             # The task id rides along so a host with a per-task
@@ -763,7 +766,7 @@ class InteractionDriver:
             # single-tenant host ignores it (same resolution chain).
             memory = recall_context(agent, task_id=task.task_id)
             if memory is not None:
-                memory_store, memory_entries = memory
+                recall_provider, memory_entries = memory
                 record_memory_index(
                     host.event_log, host.content_store, task,
                     entries=memory_entries, lease_id=lease.lease_id,
@@ -794,7 +797,7 @@ class InteractionDriver:
         # providers, or providers that all return nothing ⇒ exactly the plain
         # ``append_user_message`` bytes.
         providers = intake_providers(
-            memory_store, _intake_providers_for(host, agent)
+            recall_provider, _intake_providers_for(host, agent)
         )
         if providers:
             task = record_intake_reminders(
@@ -1128,22 +1131,22 @@ class InteractionDriver:
             activate_skills=tuple(activations),
         )
         turn_agent = agent_name_of(self._host.event_log, task_id)
-        memory_store = None
+        recall_provider = None
         recall_context = getattr(self._host, "memory_recall_context", None)
         if callable(recall_context):
             # task_id rides along for per-task memory-root resolution
             # (multi-tenant hosts); the single-tenant chain is unchanged.
             memory = recall_context(turn_agent, task_id=task_id)
             if memory is not None:
-                memory_store, _memory_entries = memory
+                recall_provider, _memory_entries = memory
         # Same two provider sources as the seed path (built-in recall + the
         # agent's activated ``turn_intake`` plugins), so a follow-up turn gets the
         # intake the opening turn got. Neither ⇒ the plain prelude, unchanged.
         plugin_providers = _intake_providers_for(self._host, turn_agent)
-        if memory_store is not None or plugin_providers:
+        if recall_provider is not None or plugin_providers:
             append = RecallGoalPrelude(
                 content=[TextBlock(text=goal), *images],
-                store=memory_store,
+                recall=recall_provider,
                 providers=plugin_providers,
                 origin=goal_origin,
                 attachment_texts=tuple(attachment_texts),

@@ -1,19 +1,23 @@
-"""``noeta.tools.browser`` — the noeta-owned browser tool pack (spec layer 3).
+"""``browser`` built-in — the noeta-owned browser tool pack (impl).
 
 Five tools — ``browser_navigate`` / ``browser_click`` / ``browser_type`` /
 ``browser_extract`` / ``browser_screenshot`` — whose **name / schema /
 description are pinned by noeta** so the model-facing contract (and therefore the
 stable-prefix KV-cache bytes) never drifts when the AIO Sandbox container image
 changes its own tool names (spec D1, CONTEXT.md Stable Prefix). Each tool's
-``invoke`` delegates to a :class:`~noeta.tools.browser._backend.BrowserBackend`
+``invoke`` delegates to a :class:`~noeta.runtime.browser.BrowserBackend`
 (in production the AIO adapter from the ``sandbox`` built-in plugin,
-``noeta.builtins.sandbox.impl.browser`` — microkernel M2) which is the single
-place the container ``/mcp`` browser wire is pinned.
+``noeta.builtins.sandbox.impl.browser``) which is the single place the
+container ``/mcp`` browser wire is pinned.
 
 The pack is closure-constructed like the fs pack: :func:`build_browser_tools`
 takes one backend and returns exactly the five tools keyed by name. It is a
 per-session tool pack (mounted only in sandbox mode with a browser-capable
 agent), injected the way fs tools are — NOT an MCP connector (spec D2).
+Microkernel M3: moved here from ``noeta.tools.browser``; the kernel keeps the
+:class:`~noeta.runtime.browser.BrowserBackend` Protocol and takes this pack's
+factory injected (``build_session_inputs(browser_tools_factory=…)``, resolved
+by the SDK host through :func:`noeta.client.parts.default_browser_tools_factory`).
 
 Perception v1 (spec D4): the four text tools return a page snapshot (page text +
 numbered interactive elements); ``browser_screenshot`` stores the PNG as a
@@ -31,7 +35,7 @@ from noeta.tools._limits import (
     fit_output_fields,
 )
 from noeta.tools._refs import ref_json
-from noeta.tools.browser._backend import BrowserBackend
+from noeta.runtime.browser import BrowserBackend
 from noeta.tools.descriptions import load_tool_description
 
 

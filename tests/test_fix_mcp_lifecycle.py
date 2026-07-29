@@ -26,7 +26,8 @@ from typing import Any, Mapping
 import pytest
 
 from noeta.client.host import _MAX_CACHED_ENGINES, _McpReapingEngineCache, SdkHost
-from noeta.tools.mcp import McpError, McpHttpClient
+from noeta.builtins.mcp.impl import McpHttpClient
+from noeta.runtime.mcp import McpError
 
 
 # ---------------------------------------------------------------------------

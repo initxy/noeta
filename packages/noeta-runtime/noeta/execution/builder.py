@@ -55,7 +55,6 @@ from noeta.execution.instructions import (
     build_instructions_preloader,
     load_instructions,
 )
-from noeta.execution.memory import DEFAULT_GLOBAL_MEMORY_DIR, load_memory_store
 from noeta.execution.skills import (
     build_skill_composer,
     build_skill_script_wiring,
@@ -85,13 +84,12 @@ from noeta.protocols.content_store import ContentStore
 from noeta.protocols.hooks import Guard
 from noeta.protocols.policy import Policy
 from noeta.protocols.tool import Tool
-from noeta.tools.app import AppPreviewGateway, build_app_tools
-from noeta.tools.browser import BrowserBackend, build_browser_tools
+from noeta.runtime.app_preview import AppPreviewGateway
+from noeta.runtime.browser import BrowserBackend
 from noeta.runtime.exec_env import ExecEnv
 from noeta.runtime.shell_policy import ShellMode
 from noeta.runtime.workspace import FsWriteMode, WorkspaceRoot, WriteRootsResolver
-from noeta.tools.mcp import MCP_PREFIX, McpConfigError
-from noeta.tools.memory import MemoryStore, build_memory_tools
+from noeta.runtime.mcp import MCP_PREFIX, McpConfigError
 
 
 __all__ = [
@@ -235,12 +233,14 @@ class SessionInputs:
     #: composer's kinds declare.
     content_hashes: Callable[[str, str], Optional[tuple[str, str]]]
     #: Memory v1 wiring surface. ``memory_store`` is
-    #: the workspace's file store (``None`` when ``memory_enabled`` was
-    #: off); ``memory_entries`` is the load-time index snapshot the
+    #: the session's file store as an OPAQUE handle (microkernel M3: the
+    #: concrete ``MemoryStore`` lives in the memory built-in; the kernel
+    #: passes it through, never calls it) — ``None`` when ``memory_enabled``
+    #: was off; ``memory_entries`` is the load-time index snapshot the
     #: composer's renderer AND the pre-loop ``record_memory_index`` must
     #: share (one snapshot, one fingerprint — record time equals compose
     #: time by construction).
-    memory_store: Optional[MemoryStore] = None
+    memory_store: Optional[Any] = None
     memory_entries: MemoryEntries = ()
     #: Instructions file wiring surface. ``instructions_snapshot`` is the
     #: load-time snapshot (``None`` when ``instructions_enabled`` is off
@@ -336,6 +336,51 @@ class GuardsFactory(Protocol):
         hooks_pre_tool_use: tuple[PreToolUseRule, ...],
         extra_guards: tuple[Guard, ...],
     ) -> HookManager: ...
+
+
+class AppToolsFactory(Protocol):
+    """Loader-resolved constructor of the app-preview pack (microkernel M3).
+
+    The kernel never imports the ``open_app`` tool: the SDK host resolves the
+    ``app`` built-in plugin's pack factory through the plugin loader and
+    injects it here. Called only when the host wired a live preview gateway.
+    Signature = ``noeta.builtins.app.impl:build_app_tools``.
+    """
+
+    def __call__(
+        self, workspace: WorkspaceRoot, gateway: AppPreviewGateway
+    ) -> dict[str, Tool]: ...
+
+
+class BrowserToolsFactory(Protocol):
+    """Loader-resolved constructor of the browser tool pack (microkernel M3).
+
+    The kernel never imports a browser tool: the SDK host resolves the
+    ``browser`` built-in plugin's pack factory through the plugin loader and
+    injects it here. Called only when the session has a live backend AND the
+    agent opens the ``browser`` capability. Signature =
+    ``noeta.builtins.browser.impl:build_browser_tools``.
+    """
+
+    def __call__(self, backend: BrowserBackend) -> dict[str, Tool]: ...
+
+
+class MemoryFactory(Protocol):
+    """Loader-resolved constructor of the memory kit (microkernel M3).
+
+    The kernel never imports the memory store or tools: the SDK host resolves
+    the ``memory`` built-in plugin's pack factory through the plugin loader
+    and injects it here. Returns ``(store, entries-snapshot, tools)`` — the
+    store rides through :class:`SessionInputs` as an opaque handle; the
+    entries snapshot is shared by the composer's renderer and the pre-loop
+    ``record_memory_index`` (one snapshot, one fingerprint). ``root=None``
+    means the impl's global default directory. Signature =
+    ``noeta.builtins.memory.impl:build_memory_pack``.
+    """
+
+    def __call__(
+        self, *, root: Optional[Path] = None
+    ) -> tuple[Any, MemoryEntries, dict[str, Tool]]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -446,6 +491,22 @@ class _BuildSpec:
     #: ``_stage_fs_pack``. ``None`` (kernel-alone / stub) drops neither edit
     #: tool — the documented no-catalog semantic, NOT a silent fallback.
     provider_family: Optional[str] = None
+    #: Loader-resolved memory kit factory (microkernel M3, D2):
+    #: ``noeta.builtins.memory.impl:build_memory_pack``, resolved by the SDK
+    #: host and injected here. ``None`` fails loudly at the memory stage when
+    #: ``memory_enabled`` — the kernel never imports the store or tools.
+    memory_factory: Optional[MemoryFactory] = None
+    #: Loader-resolved browser tool pack factory (microkernel M3, D2):
+    #: ``noeta.builtins.browser.impl:build_browser_tools``, resolved by the
+    #: SDK host and injected here. ``None`` fails loudly at the browser stage
+    #: when a live backend + the capability are both present — the kernel
+    #: never imports a browser tool.
+    browser_tools_factory: Optional[BrowserToolsFactory] = None
+    #: Loader-resolved app-preview pack factory (microkernel M3, D2):
+    #: ``noeta.builtins.app.impl:build_app_tools``, resolved by the SDK host
+    #: and injected here. ``None`` fails loudly at the app stage when a live
+    #: gateway is present — the kernel never imports the tool.
+    app_tools_factory: Optional[AppToolsFactory] = None
 
 
 @dataclass(slots=True)
@@ -465,7 +526,7 @@ class _ToolAssembly:
 
     tools: dict[str, Tool] = field(default_factory=dict)
     registry: Any = None
-    memory_store: Optional[MemoryStore] = None
+    memory_store: Optional[Any] = None
     memory_entries: MemoryEntries = ()
     instructions_snapshot: Optional[InstructionsSnapshot] = None
     #: The shared name → snapshot mapping the instructions kind renders from
@@ -563,22 +624,27 @@ def _stage_memory(spec: _BuildSpec, asm: _ToolAssembly) -> None:
     """
     if not spec.memory_enabled:
         return
+    if spec.memory_factory is None:
+        raise RuntimeError(
+            "memory factory was not injected — the SDK host resolves the "
+            "memory built-in plugin through the plugin loader and passes "
+            "memory_factory (microkernel M3); the kernel builder imports no "
+            "memory implementation"
+        )
     # Memory root is a FIXED global dir, not workspace-
     # derived. Precedence: explicit ``memory_dir`` override >
-    # ``global_memory_dir`` (agent-configured) > the SDK default
-    # ``~/.noeta/memories``. The same root resolves live + resume.
+    # ``global_memory_dir`` (agent-configured) > the impl's global default
+    # (``root=None`` — the factory reads its own module default late, so a
+    # test pinning it stays hermetic). The same root resolves live + resume.
     memory_root = (
         spec.memory_dir
         if spec.memory_dir is not None
-        else (
-            spec.global_memory_dir
-            if spec.global_memory_dir is not None
-            else DEFAULT_GLOBAL_MEMORY_DIR
-        )
+        else spec.global_memory_dir
     )
-    asm.memory_store = load_memory_store(root=memory_root)
-    asm.memory_entries = asm.memory_store.entries()
-    for _name, _tool in build_memory_tools(asm.memory_store).items():
+    asm.memory_store, asm.memory_entries, memory_tools = spec.memory_factory(
+        root=memory_root
+    )
+    for _name, _tool in memory_tools.items():
         asm.tools[_name] = _tool
 
 
@@ -689,7 +755,14 @@ def _stage_browser(spec: _BuildSpec, asm: _ToolAssembly) -> None:
     agent) ⇒ nothing merged, byte-identical tool set.
     """
     if spec.browser_backend is not None and spec.browser_enabled:
-        for name, tool in build_browser_tools(spec.browser_backend).items():
+        if spec.browser_tools_factory is None:
+            raise RuntimeError(
+                "browser tool pack factory was not injected — the SDK host "
+                "resolves the browser built-in plugin through the plugin "
+                "loader and passes browser_tools_factory (microkernel M3); "
+                "the kernel builder imports no tool implementation"
+            )
+        for name, tool in spec.browser_tools_factory(spec.browser_backend).items():
             asm.tools[name] = tool
 
 
@@ -744,7 +817,16 @@ def _stage_app(spec: _BuildSpec, asm: _ToolAssembly) -> None:
     the workspace built above + the host gateway.
     """
     if spec.app_gateway is not None:
-        for name, tool in build_app_tools(asm.workspace, spec.app_gateway).items():
+        if spec.app_tools_factory is None:
+            raise RuntimeError(
+                "app tool pack factory was not injected — the SDK host "
+                "resolves the app built-in plugin through the plugin loader "
+                "and passes app_tools_factory (microkernel M3); the kernel "
+                "builder imports no tool implementation"
+            )
+        for name, tool in spec.app_tools_factory(
+            asm.workspace, spec.app_gateway
+        ).items():
             asm.tools[name] = tool
 
 
@@ -1102,6 +1184,20 @@ def build_session_inputs(
     #: by the edit-tool mutex. ``None`` ⇒ both edit tools stay (the documented
     #: unrecognised-model semantic — byte-identical for stub/test builds).
     provider_family: Optional[str] = None,
+    #: Loader-resolved memory kit factory (microkernel M3, D2): the
+    #: ``memory`` built-in plugin's ``build_memory_pack``, resolved by the
+    #: SDK host and injected here; ``None`` fails loudly when memory is on.
+    memory_factory: Optional[MemoryFactory] = None,
+    #: Loader-resolved browser tool pack factory (microkernel M3, D2): the
+    #: ``browser`` built-in plugin's ``build_browser_tools``, resolved by the
+    #: SDK host and injected here; ``None`` fails loudly only when a live
+    #: backend + the browser capability are both present.
+    browser_tools_factory: Optional[BrowserToolsFactory] = None,
+    #: Loader-resolved app-preview pack factory (microkernel M3, D2): the
+    #: ``app`` built-in plugin's ``build_app_tools``, resolved by the SDK
+    #: host and injected here; ``None`` fails loudly only when a live
+    #: preview gateway is present.
+    app_tools_factory: Optional[AppToolsFactory] = None,
 ) -> SessionInputs:
     """Build the generic-session live/resume inputs from explicit
     operator-supplied pieces.
@@ -1195,6 +1291,9 @@ def build_session_inputs(
         base_reminders=base_reminders,
         guards_factory=guards_factory,
         provider_family=provider_family,
+        memory_factory=memory_factory,
+        browser_tools_factory=browser_tools_factory,
+        app_tools_factory=app_tools_factory,
         repetition_threshold=repetition_threshold,
         repetition_action=repetition_action,
         repetition_window=repetition_window,

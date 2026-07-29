@@ -35,13 +35,15 @@ from noeta.context.memory import (
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.core.wiring import wire_default_observers
-from noeta.execution.memory import (
-    DEFAULT_GLOBAL_MEMORY_DIR,
+from noeta.builtins.memory.impl.recall import (
     append_user_message_with_recall,
-    load_memory_store,
     recall_memories,
-    record_memory_index,
 )
+from noeta.builtins.memory.impl.store import (
+    DEFAULT_GLOBAL_MEMORY_DIR,
+    load_memory_store,
+)
+from noeta.execution.memory import record_memory_index
 from noeta.policies.stub import StubScriptedPolicy
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.decisions import FinishDecision
@@ -51,7 +53,7 @@ from noeta.storage.memory import (
     InMemoryDispatcher,
     InMemoryEventLog,
 )
-from noeta.tools.memory import MemoryStore
+from noeta.builtins.memory.impl.store import MemoryStore
 
 
 _ENTRIES = (

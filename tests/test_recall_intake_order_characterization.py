@@ -39,12 +39,13 @@ from typing import Any, Optional
 
 import pytest
 
-from noeta.execution.memory import (
-    RecallGoalPrelude,
+from noeta.builtins.memory.impl.recall import (
     append_user_message_with_recall,
+    memory_reminder_provider,
 )
+from noeta.builtins.memory.impl.store import MemoryStore
+from noeta.execution.memory import RecallGoalPrelude
 from noeta.protocols.messages import Block, MessageOrigin, TextBlock
-from noeta.tools.memory import MemoryStore
 
 from tests._snapshot import assert_snapshot, stable_json
 
@@ -153,7 +154,9 @@ def test_recall_goal_prelude_full_order(store: MemoryStore) -> None:
     engine = _RecordingEngine()
     prelude = RecallGoalPrelude(
         content=[TextBlock(text=_GOAL_WITH_HIT)],
-        store=store,
+        # Microkernel M3: the prelude takes the bound provider, not a store —
+        # the host binds the memory built-in's provider exactly like this.
+        recall=memory_reminder_provider(store),
         origin="system",
         attachment_texts=("attachment one", "attachment two"),
         activate_skills=("skill-a",),
@@ -175,7 +178,9 @@ def test_prelude_order_invariants(store: MemoryStore) -> None:
     engine = _RecordingEngine()
     prelude = RecallGoalPrelude(
         content=[TextBlock(text=_GOAL_WITH_HIT)],
-        store=store,
+        # Microkernel M3: the prelude takes the bound provider, not a store —
+        # the host binds the memory built-in's provider exactly like this.
+        recall=memory_reminder_provider(store),
         origin="system",
         attachment_texts=("attachment one", "attachment two"),
         activate_skills=("skill-a",),

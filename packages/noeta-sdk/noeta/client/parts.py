@@ -29,11 +29,17 @@ __all__ = [
     "POLICY_REF",
     "builtin_tool_classes",
     "builtin_tool_ref",
+    "browser_tool_names",
     "catalog_price",
+    "default_app_tools_factory",
+    "default_browser_tools_factory",
     "default_guards_factory",
+    "default_memory_factory",
     "default_reminder_specs",
     "default_tool_factories",
     "derive_compaction_config",
+    "mcp_impl",
+    "memory_impl",
     "provider_family",
     "resolve_model_alias",
 ]
@@ -156,6 +162,95 @@ def resolve_model_alias(selector: str) -> str:
     """
     resolved: str = _catalog().resolve_alias(selector)
     return resolved
+
+
+# --- browser built-in accessors (microkernel M3) ---------------------------
+
+
+def default_browser_tools_factory() -> Callable[..., Any]:
+    """The browser tool pack factory for the kernel builder.
+
+    Resolved from the ``browser`` built-in plugin's body
+    (``noeta.builtins.browser.impl:build_browser_tools``) — the injection the
+    microkernel builder requires (its ``browser_tools_factory`` param); the
+    kernel itself imports no browser tool.
+    """
+    return _resolve_ref("noeta.builtins.browser.impl:build_browser_tools")
+
+
+def browser_tool_names() -> tuple[str, ...]:
+    """The five noeta-owned browser tool names (loader-resolved roster).
+
+    The host's approval gating needs the fixed roster; it lives beside the
+    pack in the browser built-in and is resolved through the same doorway.
+    """
+    names: tuple[str, ...] = _resolve_ref(
+        "noeta.builtins.browser.impl:BROWSER_TOOL_NAMES"
+    )
+    return names
+
+
+# --- app built-in accessor (microkernel M3) --------------------------------
+
+
+def default_app_tools_factory() -> Callable[..., Any]:
+    """The app-preview pack factory for the kernel builder.
+
+    Resolved from the ``app`` built-in plugin's body
+    (``noeta.builtins.app.impl:build_app_tools``) — the injection the
+    microkernel builder requires (its ``app_tools_factory`` param); the
+    kernel itself imports no tool implementation.
+    """
+    return _resolve_ref("noeta.builtins.app.impl:build_app_tools")
+
+
+# --- mcp built-in accessor (microkernel M3) --------------------------------
+
+_MCP_MOD: Optional[Any] = None
+
+
+def mcp_impl() -> Any:
+    """The ``mcp`` built-in's impl module, loader-resolved (memoized).
+
+    SDK core reaches the connector implementation only through this doorway —
+    ``build_mcp_tools`` / ``mcp_provenance_from_specs`` (the host's live-MCP
+    path) hang off the returned module; the vocabulary (specs, errors,
+    ``MCP_PREFIX``) is kernel-side in :mod:`noeta.runtime.mcp`.
+    """
+    global _MCP_MOD
+    if _MCP_MOD is None:
+        _MCP_MOD = importlib.import_module("noeta.builtins.mcp.impl")
+    return _MCP_MOD
+
+
+# --- memory built-in accessors (microkernel M3) ----------------------------
+
+_MEMORY_MOD: Optional[Any] = None
+
+
+def memory_impl() -> Any:
+    """The ``memory`` built-in's impl module, loader-resolved (memoized).
+
+    SDK core reaches the store / recall implementation only through this
+    doorway — ``build_memory_pack`` / ``load_memory_store`` /
+    ``memory_reminder_provider`` / the late-read
+    ``DEFAULT_GLOBAL_MEMORY_DIR`` all hang off the returned module.
+    """
+    global _MEMORY_MOD
+    if _MEMORY_MOD is None:
+        _MEMORY_MOD = importlib.import_module("noeta.builtins.memory.impl")
+    return _MEMORY_MOD
+
+
+def default_memory_factory() -> Callable[..., Any]:
+    """The memory kit factory for the kernel builder.
+
+    Resolved from the ``memory`` built-in plugin's body
+    (``noeta.builtins.memory.impl:build_memory_pack``) — the injection the
+    microkernel builder requires (its ``memory_factory`` param); the kernel
+    itself imports no memory implementation.
+    """
+    return _resolve_ref("noeta.builtins.memory.impl:build_memory_pack")
 
 
 def default_guards_factory() -> Callable[..., Any]:

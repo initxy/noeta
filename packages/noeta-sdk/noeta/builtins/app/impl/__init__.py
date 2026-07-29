@@ -13,6 +13,12 @@ The tool is only ever constructed when a real gateway is injected (the
 noeta-agent live serving path); every other build path — including the SDK/test
 fixtures — passes no gateway, so the tool is absent and the tool set (hence
 the prompt's tool list) is unchanged on those paths.
+
+Microkernel M3: moved here (the ``app`` built-in plugin) from
+``noeta.tools.app``; the :class:`~noeta.runtime.app_preview.AppPreviewGateway`
+seam sank into the kernel band, and the kernel builder takes this pack's
+factory injected (``build_session_inputs(app_tools_factory=…)``, resolved by
+the SDK host through :func:`noeta.client.parts.default_app_tools_factory`).
 """
 
 from __future__ import annotations
@@ -21,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from noeta.protocols.tool import Tool, ToolContext, ToolResult
-from noeta.tools.app._gateway import AppPreviewGateway
+from noeta.runtime.app_preview import AppPreviewGateway
 from noeta.tools.descriptions import load_tool_description
 from noeta.tools._invocation import require_str
 from noeta.runtime.workspace import WorkspaceRoot, resolve_or_error, tool_error

@@ -44,8 +44,8 @@ from noeta.protocols.dispatcher import Dispatcher
 from noeta.protocols.event_log import EventLogFull
 from noeta.protocols.messages import StreamDelta
 from noeta.protocols.step_context import StepContext
-from noeta.tools.app import AppPreviewGateway
-from noeta.tools.mcp import HttpPostFn, McpAnyServerSpec
+from noeta.runtime.app_preview import AppPreviewGateway
+from noeta.runtime.mcp import HttpPostFn, McpAnyServerSpec
 
 
 __all__ = ["HostConfig", "SandboxExecEnvConfig"]
