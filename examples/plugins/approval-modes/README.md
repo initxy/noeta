@@ -1,10 +1,10 @@
 # `approval-modes` — goose-style tool-approval modes
 
-A first-party example [Plugin](../../../docs/adr/plugin-contribution-bundles.md)
-that contributes a single [`Guard`](../../../packages/noeta-runtime/noeta/protocols/hooks.py)
-gating tool calls by an operator-chosen **mode**, with per-tool overrides. It is
-the reference for a *config-driven* plugin: `noeta_plugin(api, config)` reads the
-operator's config and folds it into one immutable policy.
+A first-party example [manifest plugin](../../../docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md)
+that contributes a single `Guard` on the `guard` surface (governance,
+process-wide — spec D6), gating tool calls by an operator-chosen **mode**, with
+per-tool overrides. It is the reference for packaging a *configured* object: the
+guard's immutable `ApprovalPolicy` is built from the environment at import.
 
 ## Modes
 
@@ -36,41 +36,49 @@ So `mode: auto` with `overrides: {write: never}` runs everything except `write`;
 The guard gates only tool calls — subtask spawns and finishes pass through
 (approval is about *tool execution*, matching the built-in `PermissionGuard`).
 
-## Config
+## Config — via the environment
 
-All keys are optional:
+The shipped guard reads its mode from the environment when the plugin module is
+imported:
 
-```json
-{
-  "mode": "smart_approve",
-  "overrides": { "write": "never", "read": "always" },
-  "low_risk_tools": ["read", "grep", "glob", "ls"]
-}
+| Environment variable | Default | Meaning |
+| --- | --- | --- |
+| `NOETA_APPROVAL_MODE` | `approve` | one of `chat` / `approve` / `smart_approve` / `auto` |
+
+The finer knobs (`overrides`, `low_risk_tools`) remain available to a host that
+constructs its own guard directly:
+
+```python
+from importlib import import_module  # or load plugin.py by path
+mod = ...  # the plugin module
+guard = mod.ApprovalModesGuard(mod.build_policy({
+    "mode": "smart_approve",
+    "overrides": {"write": "never", "read": "always"},
+    "low_risk_tools": ["read", "grep", "glob", "ls"],
+}))
 ```
 
-An unknown `mode`, a bad override token, or a non-list `low_risk_tools` raises at
-factory time; the loader surfaces it as a `PluginError` naming this plugin, so a
-misconfiguration fails the client build loudly rather than a mid-session turn.
+`build_policy` raises `ValueError` on an unknown `mode`, a bad override token, or
+a non-list `low_risk_tools`, so a misconfiguration fails loudly.
 
 ## Loading
 
-Installed as a package it is discovered through its `noeta.plugins` entry point
-(see [`pyproject.toml`](./pyproject.toml)) with
-`load_plugins(entry_points=True)`. In this repository it is loaded by **explicit
-path**, no install:
+Installed as a package it is discovered through its `[tool.noeta]` manifest +
+`noeta.plugins` entry point (see [`pyproject.toml`](./pyproject.toml)) with
+`load_plugin_set(entry_points=True)`. In this repository it is loaded by
+**explicit path**, no install:
 
 ```python
-from noeta.sdk import Options, load_plugins, merge_plugins
+import os
+from noeta.sdk import Client, load_plugin_set, presets
 
-plugins = load_plugins(
-    modules=["examples/plugins/approval-modes/plugin.py"],
-    config={"approval-modes": {"mode": "smart_approve", "overrides": {"write": "never"}}},
-)
-options = merge_plugins(Options(system_prompt="You are a helpful agent."), plugins)
+os.environ["NOETA_APPROVAL_MODE"] = "smart_approve"
+pset = load_plugin_set(builtins=False, modules=["examples/plugins/approval-modes/plugin.py"])
+client = Client(presets.main_options(), plugins=pset)  # guard is process-wide
 ```
 
-The contributed guard lands on `options.guards`; the config is keyed by the
-plugin's name (`approval-modes`), which the module fixes via
-`noeta_plugin_name`.
+The single-file `plugin = PluginBuilder("approval-modes")` fixes the plugin's
+identity name. Verify the shipped manifest with
+`python -m noeta.sdk.plugin_check examples/plugins/approval-modes`.
 
 Tested in [`tests/test_example_approval_modes.py`](../../../tests/test_example_approval_modes.py).

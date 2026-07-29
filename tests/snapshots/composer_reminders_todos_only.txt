@@ -1,0 +1,12 @@
+[
+  {
+    "origin": null,
+    "role": "user",
+    "text": "Do the task."
+  },
+  {
+    "origin": "system",
+    "role": "user",
+    "text": "Your current todo list (unfinished items only). Keep it updated as you make progress — mark items in_progress / completed via todo_write so it stays accurate:\n- [pending] First step\n- [in_progress] Second step"
+  }
+]

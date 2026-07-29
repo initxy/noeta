@@ -246,6 +246,7 @@ class Engine:
         background_subagent_launcher: Optional[Any] = None,
         content_discovery: Optional[Any] = None,
         content_preloader: Optional[Any] = None,
+        tool_result_transforms: tuple[Any, ...] = (),
     ) -> None:
         self._event_log = event_log
         self._content_store = content_store
@@ -262,11 +263,27 @@ class Engine:
         # error. ``None`` is allowed and disables truncation entirely.
         _validate_tool_output_inline_limit(tool_output_inline_limit)
         self._tool_output_inline_limit = tool_output_inline_limit
-        if tool_runtime is None and tools:
+        if tool_runtime is None and (tools or tool_result_transforms):
             # Default ToolRuntime so tests can pass tools without wiring the
             # wrapper (an injected one brings its own); see _default_tool_runtime.
+            # ``tool_result_transforms`` (spec D9) ride the default runtime so an
+            # agent's activated redaction/transform stages record their output —
+            # and they alone are enough to build one, so a transform is never
+            # silently dropped just because this engine was compiled with no tools.
             tool_runtime = _default_tool_runtime(
-                event_log, content_store, background_runner, file_checkpoint_registry)
+                event_log, content_store, background_runner,
+                file_checkpoint_registry, tool_result_transforms)
+        elif tool_runtime is not None and tool_result_transforms:
+            # An injected runtime carries its own (possibly empty) transform
+            # chain, so honouring these would mean reaching into someone else's
+            # wrapper. Refuse loudly: silently ignoring them turns an activated
+            # redaction plugin into a no-op while every listing still reports it
+            # as wired. Pass the stages to the ToolRuntime you inject instead.
+            raise ValueError(
+                "tool_result_transforms cannot be applied to an injected "
+                "tool_runtime — pass them to ToolRuntime(tool_result_transforms=…) "
+                "when you construct it"
+            )
         self._tool_runtime = tool_runtime
         self._hooks = hooks or HookManager()
         self._clock = clock or time.time
@@ -1430,11 +1447,13 @@ def _default_tool_runtime(
     content_store: Any,
     background_runner: Any,
     file_checkpoint_registry: Any,
+    tool_result_transforms: tuple[Any, ...] = (),
 ) -> Any:
     """Convenience ToolRuntime for callers that pass ``tools`` but no explicit
     ``tool_runtime`` (mostly tests). Forward the host's
     background runner and per-turn file-checkpoint gate so ``shell_run`` bg jobs
-    and AI-edit rewind baselines reach the runtime. Local import breaks the
+    and AI-edit rewind baselines reach the runtime, plus the agent's
+    ``tool_result_transform`` stages (D9). Local import breaks the
     runtime→core import cycle."""
     from noeta.runtime.tool import ToolRuntime
 
@@ -1443,6 +1462,7 @@ def _default_tool_runtime(
         content_store=content_store,
         background_runner=background_runner,
         file_checkpoint_registry=file_checkpoint_registry,
+        tool_result_transforms=tool_result_transforms,
     )
 
 

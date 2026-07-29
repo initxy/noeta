@@ -1,14 +1,16 @@
-# Packaging for the ``approval-modes`` example plugin.
+# Illustrative packaging for the ``approval-modes`` manifest plugin.
 #
-# This file exists to show the *real* distribution shape: a pip package that
-# declares one entry point in the SDK-owned ``noeta.plugins`` group, so a host
-# started with ``load_plugins(entry_points=True)`` discovers it after install.
+# This file shows the *real* distribution shape (spec D1): the ``[tool.noeta]``
+# static manifest (mirrored to ``noeta-plugin.toml`` package data, read WITHOUT
+# importing plugin code) plus an entry point in the SDK-owned ``noeta.plugins``
+# group so a host started with ``load_plugins(entry_points=True)`` discovers the
+# distribution.
 #
 # In THIS repository the plugin is NOT installed; the tests load it by explicit
-# path via ``load_plugins(modules=[".../plugin.py"])``. When packaged for real,
-# the ``approval-modes`` directory becomes the importable ``approval_modes``
-# package (dashes are not valid in a Python module name) and the entry-point
-# target below resolves to ``approval_modes.plugin:noeta_plugin``.
+# path via ``load_plugin_set(modules=[".../plugin.py"])``. When packaged for
+# real, the ``approval-modes`` directory becomes the importable
+# ``approval_modes`` package (dashes are not valid in a Python module name), so
+# ``ref`` resolves to ``approval_modes:GUARD``.
 
 [project]
 name = "noeta-plugin-approval-modes"
@@ -17,12 +19,23 @@ description = "Goose-style tool-approval modes (chat / approve / smart_approve /
 requires-python = ">=3.10"
 dependencies = ["noeta-sdk"]
 
-# The SDK-owned runtime-plane plugin group (ADR D2). For an installed plugin the
-# entry-point KEY is the plugin's identity — the enable-list key, the ``config``
-# key, and the collision label — so it must match the ``noeta_plugin_name`` the
-# module declares for the path-loaded case ("approval-modes" in both places).
+[tool.noeta]
+name = "approval-modes"
+requires-noeta = ">=0.4"
+
+[tool.noeta.config-schema.env]
+NOETA_APPROVAL_MODE = "one of ('chat', 'approve', 'smart_approve', 'auto') (default: approve)"
+
+[[tool.noeta.contributions]]
+surface = "guard"
+name = "approval_modes"
+ref = "approval_modes:GUARD"
+
+# The discovery hook (its VALUE is not a factory in the manifest mechanism — the
+# manifest is read from package data; the entry point only makes the dist
+# discoverable).
 [project.entry-points."noeta.plugins"]
-approval-modes = "approval_modes.plugin:noeta_plugin"
+approval-modes = "approval_modes"
 
 [build-system]
 requires = ["hatchling"]

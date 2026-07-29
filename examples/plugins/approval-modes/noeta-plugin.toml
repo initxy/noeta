@@ -1,0 +1,15 @@
+# The shipped static manifest (spec D1) — mirrored from ``[tool.noeta]`` into
+# wheel package data so the loader reads the plugin's identity + contributions
+# WITHOUT importing plugin code. ``python -m noeta.sdk.plugin_check`` verifies
+# this file matches what ``plugin.py``'s decorators declare.
+name = "approval-modes"
+requires-noeta = ">=0.4"
+
+# Descriptive only — the mechanism never reads it (config is environment-sourced).
+[config-schema.env]
+NOETA_APPROVAL_MODE = "one of ('chat', 'approve', 'smart_approve', 'auto') (default: approve)"
+
+[[contributions]]
+surface = "guard"
+name = "approval_modes"
+ref = "approval_modes:GUARD"

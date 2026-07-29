@@ -28,7 +28,7 @@ import dataclasses
 
 import pytest
 
-from noeta.agent.spec import BudgetSpec, Capabilities, ComponentRef, ToolRef
+from noeta.agent.spec import BudgetSpec, ComponentRef, ToolRef
 from noeta.client import (
     AgentDefinition,
     Options,
@@ -37,6 +37,7 @@ from noeta.client import (
     compile_options,
     register_preset_prompt,
 )
+from noeta.client.options import DEFAULT_PLUGINS
 from noeta.client.parts import BUILTIN_TOOL_CLASSES, COMPOSER_REF, POLICY_REF
 from noeta.presets import official_specs
 from noeta.tools.decorator import tool
@@ -66,7 +67,7 @@ def _base_options() -> Options:
         allowed_tools=("read", my_tool),
         skills=("search", "plan"),
         budget=BudgetSpec(max_iterations=42),
-        capabilities=Capabilities(todo_write=True),
+        plugins=DEFAULT_PLUGINS + ("todo_write",),
         metadata={"owner": "tester"},
         model="claude-sonnet-4-5",
     )
@@ -114,10 +115,11 @@ def test_substantive_budget_changes_identity() -> None:
     assert base != mutated
 
 
-def test_substantive_capabilities_changes_identity() -> None:
-    base, _ = compile_options(_base_options())
+def test_substantive_activation_changes_identity() -> None:
+    """Dropping a feature-bundle activation changes the compiled identity."""
+    base, _ = compile_options(_base_options())  # todo_write active
     mutated, _ = compile_options(
-        dataclasses.replace(_base_options(), capabilities=Capabilities(todo_write=False))
+        dataclasses.replace(_base_options(), plugins=DEFAULT_PLUGINS)
     )
     assert base != mutated
 
@@ -242,29 +244,12 @@ def test_child_agent_identity_deterministic() -> None:
     assert child_a == child_b
 
 
-def test_explicit_capabilities_preserves_flags_and_unions_spawnable() -> None:
-    # Caller sets delegation=False explicitly with a child present → we
-    # respect delegation=False (per _capabilities_for additive contract) but
-    # still union spawnable so the child name is listed.
-    explicit_caps = Capabilities(
-        todo_write=True,
-        ask_user_question=True,
-        delegation=False,
-        spawnable=("other_agent",),
-    )
-    opts = Options(
-        system_prompt="parent",
-        name="parent",
-        capabilities=explicit_caps,
-        agents={"kid_x": AgentDefinition(description="kid x", prompt="child prompt")},
-    )
-    main, _ = compile_options(opts)
-    # Explicit flags preserved verbatim.
-    assert main.capabilities.todo_write is True
-    assert main.capabilities.ask_user_question is True
-    assert main.capabilities.delegation is False
-    # spawnable is union of explicit + inline.
-    assert tuple(main.capabilities.spawnable) == ("kid_x", "other_agent")
+# NOTE: the removed ``Options.capabilities`` field also carried the only path to
+# set ``delegation`` / ``spawnable`` by hand (the explicit-caps union). Under the
+# redesign those are purely structural — ``delegation=bool(children)`` and
+# ``spawnable`` = the sorted ``agents`` keys — so the old
+# ``test_explicit_capabilities_preserves_flags_and_unions_spawnable`` case tested
+# a capability that no longer exists and was dropped.
 
 
 # ---------------------------------------------------------------------------
@@ -740,18 +725,18 @@ def test_permission_mode_change_does_not_affect_identity() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 14. AgentDefinition.capabilities (advanced field)
+# 14. AgentDefinition activation (plugins=) compiles into child identity
 # ---------------------------------------------------------------------------
 
 
-def test_agent_definition_capabilities_compiled_into_child_spec() -> None:
-    """An AgentDefinition with capabilities compiles to a child spec whose
-    identity differs from a child spec built with default Capabilities() —
-    i.e. capabilities are compiled into the child spec's identity."""
+def test_agent_definition_activation_compiled_into_child_spec() -> None:
+    """An AgentDefinition activation compiles into the child spec identity:
+    a child that activates feature bundles differs from a plain child —
+    i.e. activation is compiled into the child spec's identity."""
     defn_with_caps = AgentDefinition(
         description="d",
         prompt="p",
-        capabilities=Capabilities(todo_write=True, ask_user_question=True),
+        plugins=("todo_write", "ask_user_question"),
     )
     defn_plain = AgentDefinition(description="d", prompt="p")
     opts_with = Options(system_prompt="root", name="main", agents={"c": defn_with_caps})
@@ -762,16 +747,16 @@ def test_agent_definition_capabilities_compiled_into_child_spec() -> None:
 
     assert kids_with[0].capabilities.todo_write is True
     assert kids_with[0].capabilities.ask_user_question is True
-    # With vs without capabilities: identities must differ.
+    # With vs without activation: identities must differ.
     assert kids_with[0] != kids_plain[0]
 
 
-def test_agent_definition_capabilities_none_defaults_to_empty_capabilities() -> None:
-    """With capabilities unset (default None), the child spec's capabilities
-    are the all-default Capabilities(); spawnable stays empty (children are
-    flat leaves and do not union spawnable like the parent does)."""
+def test_agent_definition_no_activation_defaults_to_empty_capabilities() -> None:
+    """With no activation (default empty ``plugins``), the child spec's
+    capabilities are the all-default Capabilities(); spawnable stays empty
+    (children are flat leaves and do not union spawnable like the parent does)."""
     defn = AgentDefinition(description="d", prompt="p")
-    assert defn.capabilities is None  # surface default really is None
+    assert defn.plugins == ()  # surface default: no activation
     _, kids = compile_options(Options(system_prompt="root", name="main", agents={"c": defn}))
     caps = kids[0].capabilities
     # All flags False.
@@ -788,18 +773,17 @@ def test_agent_definition_capabilities_none_defaults_to_empty_capabilities() -> 
 
 
 def test_options_skill_invocation_passthrough() -> None:
-    """When Options.capabilities sets skill_invocation=True, the flag passes
-    through to the compiled main spec and its identity differs from the
-    False version."""
+    """When ``plugins`` activates skill_invocation, the flag passes through to
+    the compiled main spec and its identity differs from the un-activated
+    version."""
     opts_false = Options(
         system_prompt="hi",
         name="main",
-        capabilities=Capabilities(skill_invocation=False),
     )
     opts_true = Options(
         system_prompt="hi",
         name="main",
-        capabilities=Capabilities(skill_invocation=True),
+        plugins=DEFAULT_PLUGINS + ("skill_invocation",),
     )
     main_false, _ = compile_options(opts_false)
     main_true, _ = compile_options(opts_true)
@@ -810,13 +794,13 @@ def test_options_skill_invocation_passthrough() -> None:
 
 
 def test_agent_definition_skill_invocation_passthrough() -> None:
-    """When AgentDefinition.capabilities sets skill_invocation=True, the flag
-    passes through to the compiled child spec and its identity differs from
-    a child spec built with default Capabilities()."""
+    """When an AgentDefinition activates skill_invocation, the flag passes
+    through to the compiled child spec and its identity differs from a child
+    spec built with no activation."""
     defn_true = AgentDefinition(
         description="d",
         prompt="p",
-        capabilities=Capabilities(skill_invocation=True),
+        plugins=("skill_invocation",),
     )
     defn_plain = AgentDefinition(description="d", prompt="p")
 

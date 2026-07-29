@@ -1,0 +1,7 @@
+[
+  {
+    "op": "append_user_message",
+    "origin": null,
+    "text": "What is the weather like today?"
+  }
+]

@@ -65,9 +65,10 @@ from noeta.execution.host import ResidentHost
 from noeta.execution.instructions import record_instructions
 from noeta.execution.memory import (
     RecallGoalPrelude,
-    append_user_message_with_recall,
+    intake_providers,
     record_memory_index,
 )
+from noeta.execution.reminders import ReminderProvider, record_intake_reminders
 from noeta.execution.resolver import agent_name_of
 from noeta.execution.subtask_drain import UnsupportedSubtaskSuspend
 from noeta.providers.catalog import resolve_alias
@@ -295,6 +296,18 @@ def multi_turn_policy_wrapper(policy: Policy) -> Policy:
     in a trailing next-goal suspend.
     """
     return MultiTurnReActPolicy(policy, final=False)
+
+
+def _intake_providers_for(host: Any, agent: str) -> tuple[ReminderProvider, ...]:
+    """``agent``'s activated ``turn_intake`` reminder providers (D7, track A).
+
+    Read through the ``getattr``-guarded host seam, the same pattern
+    ``memory_recall_context`` / ``declared_skill_activations`` use — a host that
+    does not implement it (test doubles, control-plane-only hosts) is a clean
+    no-op rather than an attribute error.
+    """
+    seam = getattr(host, "intake_reminder_providers", None)
+    return tuple(seam(agent)) if callable(seam) else ()
 
 
 def _background_exit_notice(summary: str, ref: ContentRef, job_id: str) -> str:
@@ -761,16 +774,23 @@ class InteractionDriver:
         # an MCP-prompt-expanded opening goal arrives ``origin="system"`` so the
         # transcript shows host-injected content riding the user channel — and,
         # being a recorded message, resume reads it back and never re-expands.
-        # A memory-enabled session routes the goal through the recall seam
-        # (the SDK port of the runner's ``append_user_message_with_recall``
-        # intake): identical goal bytes, plus one ``origin="memory"`` follow-up
-        # turn when the store has hits — no hits ⇒ exactly the plain bytes.
-        if memory_store is not None:
-            task = append_user_message_with_recall(
+        # A session with any ``turn_intake`` provider routes the goal through the
+        # recording seam: identical goal bytes, plus one recorded follow-up turn
+        # per reminder a provider returns. Two provider sources compose here — the
+        # built-in memory recall (bound to the live store above) and the providers
+        # this agent's activated plugins contribute (D7, track A), read through the
+        # ``getattr``-guarded host seam so a host without it is a clean no-op. No
+        # providers, or providers that all return nothing ⇒ exactly the plain
+        # ``append_user_message`` bytes.
+        providers = intake_providers(
+            memory_store, _intake_providers_for(host, agent)
+        )
+        if providers:
+            task = record_intake_reminders(
                 engine, task,
                 content=[TextBlock(text=goal), *images],
                 lease_id=lease.lease_id,
-                store=memory_store,
+                providers=providers,
                 origin=goal_origin,
             )
         else:
@@ -1096,22 +1116,28 @@ class InteractionDriver:
             attachment_texts=tuple(attachment_texts),
             activate_skills=tuple(activations),
         )
+        turn_agent = agent_name_of(self._host.event_log, task_id)
+        memory_store = None
         recall_context = getattr(self._host, "memory_recall_context", None)
         if callable(recall_context):
             # task_id rides along for per-task memory-root resolution
             # (multi-tenant hosts); the single-tenant chain is unchanged.
-            memory = recall_context(
-                agent_name_of(self._host.event_log, task_id), task_id=task_id
-            )
+            memory = recall_context(turn_agent, task_id=task_id)
             if memory is not None:
                 memory_store, _memory_entries = memory
-                append = RecallGoalPrelude(
-                    content=[TextBlock(text=goal), *images],
-                    store=memory_store,
-                    origin=goal_origin,
-                    attachment_texts=tuple(attachment_texts),
-                    activate_skills=tuple(activations),
-                )
+        # Same two provider sources as the seed path (built-in recall + the
+        # agent's activated ``turn_intake`` plugins), so a follow-up turn gets the
+        # intake the opening turn got. Neither ⇒ the plain prelude, unchanged.
+        plugin_providers = _intake_providers_for(self._host, turn_agent)
+        if memory_store is not None or plugin_providers:
+            append = RecallGoalPrelude(
+                content=[TextBlock(text=goal), *images],
+                store=memory_store,
+                providers=plugin_providers,
+                origin=goal_origin,
+                attachment_texts=tuple(attachment_texts),
+                activate_skills=tuple(activations),
+            )
         prelude: WokenPrelude
         if model_selector is None and provider_selector is None:
             # No per-turn switch — the conversation keeps both bindings; no

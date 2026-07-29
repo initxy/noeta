@@ -1,4 +1,4 @@
-"""Tests for the first-party ``protected-paths`` example plugin (M2).
+"""Tests for the first-party ``protected-paths`` manifest plugin (M5).
 
 Covered:
 
@@ -8,9 +8,10 @@ Covered:
   non-mutating / non-tool actions are ignored;
 * deny-glob precedence (a glob denies even inside an allowed root) and
   deny-glob-only mode (no roots);
-* the factory's loud misconfiguration failure and config validation;
-* the end-to-end load-by-path + ``merge_plugins`` wiring — the guard lands on
-  ``Options.guards`` and enforces there.
+* the manifest ships a configured guard built from the environment;
+* the new loading API — ``load_plugin_set`` lists the ``guard`` contribution
+  without executing plugin code, and ``process_hooks`` resolves the configured
+  guard (governance, process-wide, D6).
 
 The plugin lives in a hyphenated directory (not an importable package), so —
 like the plugin loader — the module is loaded by explicit file path.
@@ -19,10 +20,9 @@ like the plugin loader — the module is loaded by explicit file path.
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 from types import ModuleType
-
-import pytest
 
 from noeta.protocols.decisions import SpawnSubtaskDecision, ToolCall
 from noeta.protocols.hooks import (
@@ -32,13 +32,7 @@ from noeta.protocols.hooks import (
     ProposedToolCall,
     Verdict,
 )
-from noeta.sdk import (
-    Options,
-    PluginAPI,
-    PluginError,
-    load_plugins,
-    merge_plugins,
-)
+from noeta.sdk import PluginBuilder, load_plugin_set
 
 
 # ---------------------------------------------------------------------------
@@ -64,9 +58,22 @@ def _load_module() -> ModuleType:
     return module
 
 
+def _load_with_env(**env: str) -> ModuleType:
+    """Re-execute the plugin module with ``env`` applied (it reads env at import)."""
+    saved = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    try:
+        return _load_module()
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 _MOD = _load_module()
 ProtectedPathsGuard = _MOD.ProtectedPathsGuard
-noeta_plugin = _MOD.noeta_plugin
 
 
 # ---------------------------------------------------------------------------
@@ -220,70 +227,80 @@ def test_deny_glob_only_mode_without_roots():
 
 
 # ---------------------------------------------------------------------------
-# Factory — config validation + loud misconfiguration
+# Manifest — the configured guard is built from the environment
 # ---------------------------------------------------------------------------
 
 
-def test_factory_requires_some_protection():
-    api = PluginAPI("protected-paths")
-    with pytest.raises(PluginError):
-        noeta_plugin(api)  # no config at all → protects nothing
+def test_module_exposes_builder_and_configured_guard():
+    assert isinstance(_MOD.plugin, PluginBuilder)
+    assert _MOD.plugin.name == "protected-paths"
+    assert isinstance(_MOD.GUARD, ProtectedPathsGuard)
+    assert _MOD.GUARD.name == "protected_paths"
 
 
-def test_factory_rejects_bare_string_roots():
-    api = PluginAPI("protected-paths")
-    with pytest.raises(PluginError):
-        noeta_plugin(api, {"allowed_roots": "/ws"})
-
-
-def test_factory_rejects_empty_root_entry():
-    api = PluginAPI("protected-paths")
-    with pytest.raises(PluginError):
-        noeta_plugin(api, {"allowed_roots": ["  "]})
-
-
-def test_factory_adds_one_guard(tmp_path):
-    api = PluginAPI("protected-paths")
-    noeta_plugin(api, {"allowed_roots": [str(tmp_path)]})
-    contributions = api._contributions()
-    assert len(contributions.guards) == 1
-    assert contributions.guards[0].name == "protected_paths"
-
-
-# ---------------------------------------------------------------------------
-# End-to-end — load by explicit path + merge_plugins
-# ---------------------------------------------------------------------------
-
-
-def test_end_to_end_load_and_merge(tmp_path):
-    plugins = load_plugins(
-        modules=[str(PLUGIN_PATH)],
-        config={"protected-paths": {"allowed_roots": [str(tmp_path)]}},
-    )
-    # The module override sets the name to ``protected-paths`` despite plugin.py.
-    assert [p.name for p in plugins] == ["protected-paths"]
-
-    base = Options(
-        system_prompt="root",
-        allowed_tools=("read", "write", "edit", "apply_patch"),
-    )
-    merged = merge_plugins(base, plugins)
-
-    guards = [g for g in merged.guards if g.name == "protected_paths"]
-    assert len(guards) == 1
-    guard = guards[0]
-
-    # The wired guard enforces: inside allows, traversal denies.
+def test_manifest_guard_fences_the_env_configured_root(tmp_path):
+    mod = _load_with_env(NOETA_PROTECTED_PATHS_ROOTS=str(tmp_path))
+    guard = mod.GUARD
+    # Configured from NOETA_PROTECTED_PATHS_ROOTS: inside allows, outside denies.
     assert _tool_verdict(
-        guard, "write", {"path": "a.txt", "content": "x"}
+        guard, "write", {"path": str(tmp_path / "a.txt"), "content": "x"}
     ).verdict is Verdict.ALLOW
     assert _tool_verdict(
-        guard, "write", {"path": "../a.txt", "content": "x"}
+        guard, "write", {"path": "/etc/passwd", "content": "x"}
     ).verdict is Verdict.DENY
 
 
-def test_end_to_end_missing_config_fails_loudly():
-    # Enabled without config ⇒ the factory raises, and the loader surfaces it
-    # as a PluginError at build time (never a silent skip, never mid-session).
-    with pytest.raises(PluginError):
-        load_plugins(modules=[str(PLUGIN_PATH)])
+def test_manifest_deny_globs_from_env(tmp_path):
+    mod = _load_with_env(
+        NOETA_PROTECTED_PATHS_ROOTS=str(tmp_path),
+        NOETA_PROTECTED_PATHS_DENY_GLOBS="*.env,id_rsa",
+    )
+    assert _tool_verdict(
+        mod.GUARD, "write", {"path": str(tmp_path / "config.env"), "content": "x"}
+    ).verdict is Verdict.DENY
+    assert _tool_verdict(
+        mod.GUARD, "write", {"path": str(tmp_path / "ok.txt"), "content": "x"}
+    ).verdict is Verdict.ALLOW
+
+
+def test_default_config_protects_cwd_not_nothing():
+    # No env ⇒ the guard defaults to the cwd (never an empty root set — a fence
+    # that protects nothing is a bug, not a default).
+    guard = ProtectedPathsGuard(allowed_roots=_MOD._roots_from_env())
+    assert guard._allowed_roots  # non-empty
+
+
+# ---------------------------------------------------------------------------
+# End-to-end — the new manifest loading API (load_plugin_set + process_hooks)
+# ---------------------------------------------------------------------------
+
+
+def test_load_plugin_set_lists_the_guard_without_execution(tmp_path):
+    pset = load_plugin_set(builtins=False, modules=[str(PLUGIN_PATH)])
+    assert pset.names() == ("protected-paths",)
+    # Listing reads only the static manifest.
+    listed = pset.contributions("guard")
+    assert [(p, c.surface, c.name) for p, c in listed] == [
+        ("protected-paths", "guard", "protected_paths")
+    ]
+
+
+def test_process_hooks_resolves_the_configured_guard(tmp_path):
+    # Env is read when the plugin module is executed by the loader.
+    os.environ["NOETA_PROTECTED_PATHS_ROOTS"] = str(tmp_path)
+    try:
+        pset = load_plugin_set(builtins=False, modules=[str(PLUGIN_PATH)])
+        guards, observers = pset.process_hooks()
+    finally:
+        os.environ.pop("NOETA_PROTECTED_PATHS_ROOTS", None)
+
+    assert observers == ()  # no observer contributions
+    assert len(guards) == 1  # governance: in force process-wide, no activation
+    guard = guards[0]
+    assert guard.name == "protected_paths"
+    assert _tool_verdict(
+        guard, "write", {"path": str(tmp_path / "a.txt"), "content": "x"}
+    ).verdict is Verdict.ALLOW
+    assert _tool_verdict(
+        guard, "write", {"path": "/etc/passwd", "content": "x"}
+    ).verdict is Verdict.DENY

@@ -35,11 +35,13 @@ from noeta.context.content_channel import ContentKindSpec
 from noeta.context.environment import EnvironmentSnapshot
 from noeta.context.instructions import InstructionsSnapshot
 from noeta.context.memory import MemoryEntries
+from noeta.context.reminders import ReminderSpec
 from noeta.execution import memory as execution_memory
 from noeta.execution.builder import build_session_inputs, derive_compaction_config
 from noeta.execution.environment import load_environment
 from noeta.execution.host import AgentRegistryProtocol
 from noeta.execution.instructions import load_instructions
+from noeta.execution.reminders import TURN_INTAKE
 from noeta.execution.resolver import GenericEngineResolver
 from noeta.policies.orchestration import (
     OrchestrationPolicy,
@@ -574,6 +576,36 @@ class SdkHost(GenericEngineResolver):
     write_roots: Optional[Callable[[str], Sequence[str]]] = None
     extra_guards: tuple[Guard, ...] = ()
     extra_content_kinds: tuple[ContentKindSpec, ...] = ()
+    #: Per-agent ``tool_result_transform`` stages (spec D9) — ``agent name ->
+    #: ordered (priority, plugin, name) ``ToolResult -> ToolResult`` callables.
+    #: A wiring-plane surface that follows per-agent activation (D6): the Client
+    #: resolves the map from the activated plugin set, and ``_build_engine`` picks
+    #: the stages for the agent it is building. Empty default ⇒ every existing
+    #: construction records the untransformed result, byte-identical.
+    tool_result_transforms: Mapping[str, tuple[Callable[[Any], Any], ...]] = field(
+        default_factory=dict
+    )
+    #: Per-agent compose-time reminders (spec D8, track B) — ``agent name ->
+    #: ReminderSpec`` s, appended after the three built-ins in that agent's
+    #: composer reminder registry and interleaved by priority. Same per-agent
+    #: activation scoping as ``tool_result_transforms``.
+    extra_reminders: Mapping[str, tuple[ReminderSpec, ...]] = field(
+        default_factory=dict
+    )
+    #: Per-agent recorded reminder providers (spec D7, track A) — ``agent name ->
+    #: seam name -> ordered providers``. Read by the recording path through
+    #: :meth:`intake_reminder_providers`; a provider's output is *recorded*, so
+    #: resume folds it back from the ledger and never re-invokes it.
+    reminder_providers: Mapping[str, Mapping[str, tuple[Any, ...]]] = field(
+        default_factory=dict
+    )
+    #: Per-agent content-kind residents contributed by activated plugins — the
+    #: activation-scoped sibling of ``extra_content_kinds`` (which is host-wide,
+    #: carrying ``Options.content_channels``). Both are appended after the
+    #: built-in residents; this one only for the agent that activated the plugin.
+    activated_content_kinds: Mapping[str, tuple[ContentKindSpec, ...]] = field(
+        default_factory=dict
+    )
     # The agent-layer base pool root for **bare sessions** (no
     # workspace_id). The agent layer does ``mkdir <workspace_base>/session-<uuid>``
     # and passes the resulting absolute path as ``workspace_dir`` to the driver.
@@ -1714,7 +1746,14 @@ class SdkHost(GenericEngineResolver):
             # extension points. Fed to live + resume from the same host fields.
             policy_factory_override=self.policy_override,
             extra_guards=self.extra_guards,
-            extra_content_kinds=self.extra_content_kinds,
+            # Host-wide channels (Options.content_channels) plus the ones this
+            # agent's activated plugins contribute (D6). ``()`` for both ⇒ the
+            # built-in resident layout, byte-identical.
+            extra_content_kinds=self.extra_content_kinds
+            + tuple(self.activated_content_kinds.get(agent.name, ())),
+            # Compose-time reminders this agent's activated plugins contribute
+            # (D8, track B), interleaved by priority with the built-in three.
+            extra_reminders=tuple(self.extra_reminders.get(agent.name, ())),
         )
         # Route to the bound provider's adapter instance
         # (``None`` ⇒ host default), so a session on a different provider runs
@@ -1776,6 +1815,13 @@ class SdkHost(GenericEngineResolver):
             # every existing construction is byte-identical.
             content_discovery=inputs.content_discovery,
             content_preloader=inputs.content_preloader,
+            # tool_result_transform stages (D9) for THIS agent — selected by the
+            # agent's name from the per-agent map the Client resolved from the
+            # activated plugin set. ``()`` for an agent that activated no
+            # transform-bearing plugin (byte-identical recording).
+            tool_result_transforms=tuple(
+                self.tool_result_transforms.get(agent.name, ())
+            ),
         )
 
     def _build_orchestration_engine(
@@ -1954,6 +2000,23 @@ class SdkHost(GenericEngineResolver):
             return None
         store = execution_memory.load_memory_store(root=self.memory_root(task_id))
         return store, store.entries()
+
+    def intake_reminder_providers(self, agent: str) -> tuple[Any, ...]:
+        """``agent``'s activated ``reminder_provider`` s for the ``turn_intake`` seam.
+
+        The track-A counterpart of :meth:`memory_recall_context` (D7): the
+        recording path asks for the providers, runs them before the incoming turn
+        enters the ledger, and records what they return as follow-up turns. The
+        two compose — a memory-enabled agent that also activates a RAG plugin runs
+        the built-in recall *and* the plugin, in that order (the built-in is bound
+        to a live store by the host, so it is prepended by the caller rather than
+        living in this table).
+
+        Empty for every agent that activated no provider-bearing plugin, which is
+        what keeps a plugin-free session's ledger byte-identical. Read defensively
+        by the driver (``getattr``), so a host without this seam is a clean no-op.
+        """
+        return tuple(self.reminder_providers.get(agent, {}).get(TURN_INTAKE, ()))
 
     def memory_root(self, task_id: Optional[str] = None) -> Path:
         """The resolved memory-store root directory (pure wiring, no IO).

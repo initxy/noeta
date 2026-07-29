@@ -1,0 +1,22 @@
+"""``web`` — the default web tool pack (fetch + search).
+
+Like ``fs``, activating ``web`` is identity-inert: the default tool set of a
+bare ``Options`` still comes from ``BUILTIN_TOOL_CLASSES`` in the compile path
+(byte-identity). This declaration is the reference manifest and the listing
+surface.
+"""
+
+from __future__ import annotations
+
+from noeta.builtins._declare import c
+from noeta.client.plugin_manifest import PluginManifest
+
+
+MANIFEST = PluginManifest(
+    name="web",
+    requires_noeta=">=0.4",
+    contributions=(
+        c("tool", "webfetch", "noeta.tools.web.fetch:WebFetchTool"),
+        c("tool", "web_search", "noeta.tools.web.search:WebSearchTool"),
+    ),
+)

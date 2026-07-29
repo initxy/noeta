@@ -38,3 +38,35 @@ Hook ordering uses a single integer `priority`; **no topological sort**. A lifec
 - The `require_approval → yield_for_human` conversion lands in `noeta.core._decision_handlers`.
 - The swallowing of EventLog-subscriber exceptions lands in `noeta.storage.sqlite.eventlog`.
 - A content-rewriting need cannot go through a hook; it must move to a Policy or ContextComposer, to preserve the single-writer invariant.
+
+## Addendum (2026-07-28): plugin-contributed guards/observers are process-scoped
+
+The manifest-plugin redesign (`plugin-contribution-bundles.md`, decision D6)
+opens `guard` and `observer` as two of the standard extension surfaces, so a
+third-party package can now contribute a Guard or an Observer through its
+manifest. This addendum records the **effect-domain** rule for those two
+surfaces, which is deliberately different from every other plugin surface.
+
+Most plugin surfaces (`tool`, `agent`, `prompt_fragment`, `policy`,
+`reminder_provider`, `reminder`, `tool_result_transform`, `content_kind`)
+**follow per-agent activation**: an agent carries a contribution only if its
+`Options.plugins` / `AgentDefinition.plugins` list activates the contributing
+plugin. Guards and Observers do **not**:
+
+- **A loaded `guard` / `observer` is in force for every agent in the process,
+  regardless of which plugins that agent activated.** Governance is operator
+  authority — permission interception, budget enforcement, and audit are not an
+  agent author's choice, and an author must not be able to opt out of compliance
+  by omitting an activation. This is why the two surfaces sit on the `wiring`
+  plane with `activation_scope = "process"` rather than `identity` /
+  `per-agent`.
+- Mechanically, `PluginSet.process_hooks()` resolves every loaded external
+  plugin's guard + observer values (built-in governance guards are the engine's
+  own default stack, wired separately), and the `Client` folds them into the
+  process-wide guard stack and the Observer subscriptions — the same stacks the
+  five built-in default hooks and any `Options.guards` / `Options.observers`
+  already occupy. The two-roles-only rule above is untouched: a plugin
+  contributes an existing role, it does not introduce a third.
+
+The asymmetry is the one deliberate exception in the plugin effect model; the
+full table lives in `plugin-contribution-bundles.md` (D6).

@@ -1,6 +1,14 @@
-"""``git-checkpoint`` — a first-party example Noeta plugin.
+"""``git-checkpoint`` — a first-party example Noeta manifest plugin.
 
-The plugin contributes a single :class:`~noeta.protocols.event_log.Subscriber`
+Demonstrated SDK capability
+---------------------------
+A **manifest plugin** (the SDK-extensibility redesign,
+``docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md``, D1)
+contributing one :class:`~noeta.sdk.Observer` on the ``observer`` surface. Like
+``guard``, an ``observer`` is *governance* authority (spec D6): loaded ⇒ in force
+process-wide for every agent, never gated on activation.
+
+The plugin contributes a single :class:`~noeta.sdk.Observer`
 (a post-commit event Observer) that snapshots the workspace every time the
 agent starts a *mutating* file tool call (``write`` / ``edit`` / ``apply_patch``
 by default). Each snapshot is recorded as a commit on a dedicated ref
@@ -29,25 +37,33 @@ repo degrades to "no checkpoint recorded", never a failed agent turn.
 :func:`restore_checkpoint`, by contrast, is an explicit operator call and
 *does* raise on failure.
 
-The plugin's identity name is ``git-checkpoint`` (``noeta_plugin_name``); the
-factory reads its workspace repo path and tuning from the operator ``config``
-dict (see :func:`noeta_plugin`).
+Configuration (environment, not per-plugin config dict)
+-------------------------------------------------------
+The manifest mechanism resolves a contribution's ``ref`` to a live object and
+does not thread a per-plugin config dict; configuration is read from the
+environment when the module is imported:
+
+* ``NOETA_GIT_CHECKPOINT_REPO`` — the workspace git repo to checkpoint. Absent
+  ⇒ the process working directory (a host injects the real workspace root).
+* ``NOETA_GIT_CHECKPOINT_REF`` — the checkpoint ref (default
+  ``refs/noeta/checkpoints``).
+
+The :class:`GitCheckpointObserver` is independently constructable and
+unit-testable — the manifest only packages a configured instance.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import tempfile
 import threading
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
+from noeta.sdk import PluginBuilder
 
-#: Factory name override consumed by the loader (``load_plugins``) so the
-#: plugin's identity is ``git-checkpoint`` regardless of the file's stem.
-noeta_plugin_name = "git-checkpoint"
 
 #: The dedicated ref checkpoints are recorded on. Deliberately outside
 #: ``refs/heads/*`` so it is never a branch and never moves ``HEAD``.
@@ -76,7 +92,8 @@ __all__ = [
     "GitCheckpointObserver",
     "GitCheckpointError",
     "restore_checkpoint",
-    "noeta_plugin",
+    "OBSERVER",
+    "plugin",
     "DEFAULT_CHECKPOINT_REF",
     "DEFAULT_MUTATING_TOOLS",
 ]
@@ -289,30 +306,37 @@ def restore_checkpoint(
         _rmtree(scratch)
 
 
-def noeta_plugin(api: Any, config: Optional[dict] = None) -> None:
-    """Plugin factory — contribute the checkpoint Observer.
+# ---------------------------------------------------------------------------
+# Environment-sourced configuration + the manifest (spec D1).
+# ---------------------------------------------------------------------------
 
-    Operator ``config`` keys (all optional):
 
-    * ``repo_path`` — the workspace git repo to checkpoint. Defaults to the
-      current working directory (a server host injects the real workspace
-      root here).
-    * ``ref`` — the checkpoint ref (default ``refs/noeta/checkpoints``).
-    * ``mutating_tools`` — the tool names that trigger a checkpoint
-      (default ``("write", "edit", "apply_patch")``).
+#: The declarative config schema, carried on the manifest for operator tooling.
+#: Descriptive only — the mechanism never reads it (config is environment-sourced).
+CONFIG_SCHEMA = {
+    "env": {
+        "NOETA_GIT_CHECKPOINT_REPO": "workspace git repo to checkpoint (default: cwd)",
+        "NOETA_GIT_CHECKPOINT_REF": f"checkpoint ref (default: {DEFAULT_CHECKPOINT_REF})",
+    }
+}
 
-    The Observer is *wiring-layer* (``Options.observers``), so it does not
-    enter ``AgentSpec`` identity: enabling checkpointing never changes the
-    compiled agent or its cache prefix.
-    """
-    cfg = dict(config or {})
-    repo_path = cfg.get("repo_path", Path.cwd())
-    ref = cfg.get("ref", DEFAULT_CHECKPOINT_REF)
-    mutating_tools = cfg.get("mutating_tools", DEFAULT_MUTATING_TOOLS)
-    api.add_observer(
-        GitCheckpointObserver(
-            repo_path,
-            ref=ref,
-            mutating_tools=mutating_tools,
-        )
-    )
+
+#: The configured Observer the manifest ships. Built once from the environment
+#: at import; a distributed install exposes it at the ``ref`` below
+#: (``git_checkpoint:OBSERVER``), while the single-file load caches this very
+#: object so resolution never re-imports. An Observer is *wiring-layer* and
+#: never enters ``AgentSpec`` identity, so enabling checkpointing never changes
+#: the compiled agent or its cache prefix.
+OBSERVER = GitCheckpointObserver(
+    os.environ.get("NOETA_GIT_CHECKPOINT_REPO", os.getcwd()),
+    ref=os.environ.get("NOETA_GIT_CHECKPOINT_REF", DEFAULT_CHECKPOINT_REF),
+)
+
+
+#: The single-file manifest (decorator sugar *is* the manifest, spec D1).
+#: ``python -m noeta.sdk.plugin_check`` derives the TOML from this builder and
+#: verifies it against the shipped ``noeta-plugin.toml`` / ``[tool.noeta]``.
+plugin = PluginBuilder(
+    "git-checkpoint", requires_noeta=">=0.4", config_schema=CONFIG_SCHEMA
+)
+plugin.contribute("observer", OBSERVER, name="git_checkpoint", ref="git_checkpoint:OBSERVER")

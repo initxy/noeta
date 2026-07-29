@@ -1,13 +1,22 @@
 """First-party Noeta plugin — ``protected-paths``: a path-containment Guard.
 
-What it does
-------------
-This plugin contributes a single :class:`~noeta.protocols.hooks.Guard` that
-inspects every **file-mutating** built-in fs tool call and DENIES it when the
+Demonstrated SDK capability
+---------------------------
+A **manifest plugin** (the SDK-extensibility redesign,
+``docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md``, D1) that
+contributes a single :class:`~noeta.sdk.Guard` on the ``guard`` surface. The
+guard is *governance* authority: once the plugin is loaded it is in force for
+**every** agent in the process, regardless of which agents activate which
+plugins (spec D6) — an operator must not be able to opt an agent out of a write
+fence by omitting an activation.
+
+What the guard does
+-------------------
+It inspects every **file-mutating** built-in fs tool call and DENIES it when the
 target path escapes a configured allowlist of roots, or matches an optional
 deny-glob. It is the packaged, operator-configurable form of the ad-hoc
 ``can_use_tool`` path check: a plugin any host can enable **by name** without
-writing guard code (see ``docs/adr/plugin-contribution-bundles.md``).
+writing guard code.
 
 The mutating built-in fs tools it inspects, and the path arguments it reads
 (the real tool schemas live under
@@ -19,9 +28,9 @@ The mutating built-in fs tools it inspects, and the path arguments it reads
 
 Every other tool (``read`` / ``glob`` / ``grep`` / ``shell_run`` / any custom
 tool) and every non-tool action (spawn / finish) is allowed untouched — the
-guard is about *where writes land*, nothing else. ``shell_run`` is
-deliberately out of scope: a shell can touch anything, so a path guard cannot
-fence it. Confine shell IO with a sandbox execution environment instead.
+guard is about *where writes land*, nothing else. ``shell_run`` is deliberately
+out of scope: a shell can touch anything, so a path guard cannot fence it.
+Confine shell IO with a sandbox execution environment instead.
 
 Containment is LEXICAL
 ----------------------
@@ -40,31 +49,24 @@ fencing use the runtime's realpath-based ``WorkspaceRoot`` or a real sandbox
 execution environment. This trade-off is deliberate and is restated in the
 README.
 
-Configuration
--------------
-The factory reads two keys from its config dict (both individually optional)::
+Configuration (environment, not per-plugin config dict)
+-------------------------------------------------------
+The manifest mechanism resolves a contribution's ``ref`` to a live object; it
+does **not** thread a per-plugin config dict (that would make agent identity
+depend on operator config). Configuration is therefore **orthogonal**, read
+from the environment when the module is imported:
 
-    {
-        "allowed_roots": ["/abs/workspace", "/abs/scratch"],
-        "deny_globs": ["*.env", "*/secrets/*", "id_rsa"]
-    }
+* ``NOETA_PROTECTED_PATHS_ROOTS`` — ``os.pathsep``-separated writable roots.
+  Absent ⇒ the process working directory (so the guard always protects
+  *something* — a fence that protects nothing is a bug, not a default).
+* ``NOETA_PROTECTED_PATHS_DENY_GLOBS`` — comma-separated ``fnmatch`` patterns;
+  a match on the raw path, its normalized absolute form, or its basename DENIES
+  the call even inside an allowed root. Denies always win over containment.
 
-* ``allowed_roots`` — directories a write may land in. Relative entries are
-  resolved against the process cwd. Empty ⇒ the containment check is disabled
-  (deny-glob-only mode).
-* ``deny_globs`` — ``fnmatch`` patterns; a match on the raw path, its
-  normalized absolute form, or its basename DENIES the call even inside an
-  allowed root. Denies always win over containment.
-
-Enabling the plugin with neither key is a misconfiguration and fails the client
-build loudly (a protection guard that protects nothing is a bug, not a default).
-
-Wiring
-------
-The guard folds into ``Options.guards`` via :func:`noeta.sdk.merge_plugins`;
-the operator passes per-plugin config through
-``load_plugins(config={"protected-paths": {...}})``. See the README for the
-entry-point and explicit-path load recipes.
+A host injects these before it loads the plugin (see the reference host, which
+sets ``NOETA_PROTECTED_PATHS_ROOTS`` to the session workspace). The
+:class:`ProtectedPathsGuard` is independently constructable and unit-testable —
+the manifest only packages it.
 """
 
 from __future__ import annotations
@@ -77,18 +79,12 @@ from typing import Any, Optional
 
 from noeta.sdk import (
     GuardContext,
-    PluginError,
+    PluginBuilder,
     ProposedAction,
     ProposedToolCall,
     VerdictResult,
     path_within,
 )
-
-
-#: The loader derives a plugin's name from its module/file stem; this file is
-#: ``plugin.py``, so we override the derived name to the intended identity. The
-#: name is the enable-list key, the ``config`` key, and the collision label.
-noeta_plugin_name = "protected-paths"
 
 
 #: The file-mutating built-in fs tools this guard inspects. Read-only tools
@@ -140,8 +136,8 @@ class ProtectedPathsGuard:
     logic. Duplicate priorities are fine (the ``HookManager`` keeps a stable
     order); the number only fixes *when* the check runs, never *whether*.
 
-    Constructable and unit-testable on its own; the :func:`noeta_plugin` factory
-    is the packaged path that builds it from operator config.
+    Constructable and unit-testable on its own; the manifest packages a
+    configured instance built from the environment (see the module docstring).
     """
 
     name = "protected_paths"
@@ -204,52 +200,51 @@ class ProtectedPathsGuard:
         return None
 
 
-def _as_str_sequence(value: Any, key: str) -> tuple[str, ...]:
-    """Coerce a config value to a tuple of non-empty strings, or raise loudly.
-
-    A bare string is rejected explicitly: ``"allowed_roots": "/ws"`` is almost
-    always a mistake for ``["/ws"]``, and silently iterating its characters
-    would be a nasty surprise.
-    """
-    if isinstance(value, str):
-        raise PluginError(
-            f"protected-paths: {key!r} must be a list of strings, not a bare "
-            f"string ({value!r})"
-        )
-    if not isinstance(value, Sequence):
-        raise PluginError(
-            f"protected-paths: {key!r} must be a list of strings; got "
-            f"{type(value).__name__}"
-        )
-    out: list[str] = []
-    for item in value:
-        if not isinstance(item, str) or not item.strip():
-            raise PluginError(
-                f"protected-paths: every {key!r} entry must be a non-empty "
-                f"string; got {item!r}"
-            )
-        out.append(item)
-    return tuple(out)
+# ---------------------------------------------------------------------------
+# Environment-sourced configuration (see the module docstring).
+# ---------------------------------------------------------------------------
 
 
-def noeta_plugin(api: Any, config: Optional[Mapping[str, Any]] = None) -> None:
-    """Contribute the :class:`ProtectedPathsGuard`, configured from ``config``.
+def _roots_from_env() -> tuple[str, ...]:
+    raw = os.environ.get("NOETA_PROTECTED_PATHS_ROOTS")
+    if raw:
+        parts = tuple(p for p in raw.split(os.pathsep) if p.strip())
+        if parts:
+            return parts
+    return (os.getcwd(),)  # never empty — a fence that protects nothing is a bug
 
-    ``config`` is the per-plugin dict the loader threads through
-    ``load_plugins(config={"protected-paths": {...}})`` (it is ``{}`` when the
-    operator enables the plugin without config). Both keys are individually
-    optional, but enabling the plugin with NEITHER an allowed root nor a deny
-    glob is a misconfiguration and raises :class:`~noeta.sdk.PluginError` — a
-    guard that protects nothing would silently pass every write.
-    """
-    cfg = dict(config or {})
-    allowed_roots = _as_str_sequence(cfg.get("allowed_roots", ()), "allowed_roots")
-    deny_globs = _as_str_sequence(cfg.get("deny_globs", ()), "deny_globs")
-    if not allowed_roots and not deny_globs:
-        raise PluginError(
-            "protected-paths: configure at least one 'allowed_roots' entry or "
-            "one 'deny_globs' entry — a guard with neither protects nothing"
-        )
-    api.add_guard(
-        ProtectedPathsGuard(allowed_roots=allowed_roots, deny_globs=deny_globs)
-    )
+
+def _globs_from_env() -> tuple[str, ...]:
+    raw = os.environ.get("NOETA_PROTECTED_PATHS_DENY_GLOBS")
+    if not raw:
+        return ()
+    return tuple(g.strip() for g in raw.split(",") if g.strip())
+
+
+#: The declarative config schema, carried on the manifest for operator tooling.
+#: Descriptive only — the mechanism never reads it (config is environment-sourced).
+CONFIG_SCHEMA = {
+    "env": {
+        "NOETA_PROTECTED_PATHS_ROOTS": "os.pathsep-separated writable roots (default: cwd)",
+        "NOETA_PROTECTED_PATHS_DENY_GLOBS": "comma-separated fnmatch deny globs (default: none)",
+    }
+}
+
+
+#: The configured guard the manifest ships. Built once from the environment at
+#: import; a distributed install exposes it at the ``ref`` below
+#: (``protected_paths:GUARD``), while the single-file load caches this very
+#: object so resolution never re-imports.
+GUARD = ProtectedPathsGuard(
+    allowed_roots=_roots_from_env(), deny_globs=_globs_from_env()
+)
+
+
+#: The single-file manifest (decorator sugar *is* the manifest, spec D1). The
+#: builder name is the plugin identity — the enable-list key and the collision
+#: label. ``python -m noeta.sdk.plugin_check`` derives the TOML from this builder
+#: and verifies it against the shipped ``noeta-plugin.toml`` / ``[tool.noeta]``.
+plugin = PluginBuilder(
+    "protected-paths", requires_noeta=">=0.4", config_schema=CONFIG_SCHEMA
+)
+plugin.contribute("guard", GUARD, name="protected_paths", ref="protected_paths:GUARD")

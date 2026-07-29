@@ -66,7 +66,7 @@ Client(options, *, provider=None, workspace_dir=None, model=None,
 | `name` | `str = "main"` | 身份 |
 | `skills` | `tuple[str, ...] = ()` | 身份 |
 | `budget` | `BudgetSpec \| None` — `None` ⇒ 默认 `max_subtask_depth=3` | 身份 |
-| `capabilities` | `Capabilities \| None` — `None` ⇒ 从子项派生 | 身份 |
+| `plugins` | `tuple[str, ...] = DEFAULT_PLUGINS`（`("fs", "web")`）——按代理的插件**激活**：内置特性 bundle 名（`memory` / `skill_invocation` / `browser` / `todo_write` / `ask_user_question` / `mcp` / `delegation`），以及交给 `Client` 的 `PluginSet` 中已加载插件的名字 | 身份 |
 | `agents` | `Mapping[str, AgentDefinition] = {}` — 扁平、非递归 | 身份 |
 | `allowed_tools` | `tuple \| None` — `None` ⇒ **全部 11 个内置**；条目是名称字符串或 `DecoratedTool` | 身份 |
 | `disallowed_tools` | `tuple[str, ...] = ()` — 从白名单中减去 | 身份 |
@@ -90,7 +90,7 @@ Client(options, *, provider=None, workspace_dir=None, model=None,
 
 ### `AgentDefinition` — `client/options.py:121`
 
-扁平面子代理配方：`description`（必填，非空）、`prompt`（必填）、`tools`（`None` ⇒ 全部内置）、`model`、`capabilities`、`metadata`。不能嵌套——子项是叶子。
+扁平子代理配方：`description`（必填，非空）、`prompt`（必填）、`tools`（`None` ⇒ 全部内置）、`model`、`plugins`（按代理的激活，默认 `()`——没有 `fs`/`web`；`plugins=("delegation",)` 是给子代理授予 spawn 权限的方式）、`metadata`。不能嵌套——子项是叶子。没有 `capabilities` 字段：它随 `Capabilities` 编写面一并被移除了。
 
 ### `SystemPromptPreset` — `client/options.py:101`
 

@@ -41,6 +41,11 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 
 from noeta.context.composer import _COMPOSER_VERSION, ThreeSegmentComposer
 from noeta.context.content_channel import ContentChannelRegistry, ContentKindSpec
+from noeta.context.reminders import (
+    ReminderRegistry,
+    ReminderSpec,
+    default_reminder_registry,
+)
 from noeta.context.environment import EnvironmentSnapshot, environment_content_kind
 from noeta.context.instructions import (
     InstructionsSnapshot,
@@ -60,7 +65,6 @@ from noeta.execution.skills import (
     build_skill_script_wiring,
     extract_skill_allowed_tools_raw,
     load_workspace_skills,
-    resolve_skill_roots,
     skill_content_kind,
 )
 from noeta.guards.budget import Budget, BudgetGuard
@@ -411,6 +415,10 @@ class _BuildSpec:
     #: other caller (product host, tests, resume) is byte-identical.
     extra_guards: tuple[Guard, ...]
     extra_content_kinds: tuple[ContentKindSpec, ...]
+    #: Per-agent-activated compose-time reminders (D8), appended after the three
+    #: built-in reminders in the composer's reminder registry. Default ``()`` so
+    #: every existing caller composes byte-identically (the built-in three only).
+    extra_reminders: tuple[ReminderSpec, ...]
     repetition_threshold: int
     repetition_action: RepetitionAction
     repetition_window: int
@@ -852,6 +860,20 @@ def _build_content_registry(
     return ContentChannelRegistry(content_kinds)
 
 
+def _build_reminder_registry(spec: _BuildSpec) -> ReminderRegistry:
+    """The compose-time reminder registry (D8) — three built-ins + activated extras.
+
+    The three built-in reminders (todo / delegation / read) are always present,
+    with priorities that keep the composed dynamic-suffix tail byte-identical to
+    the pre-migration append order. Per-agent-activated plugin reminders
+    (``extra_reminders``) append after them and interleave by priority — the
+    exact mirror of how ``_build_content_registry`` extends the built-in content
+    kinds with ``Options.content_channels``. Empty extras ⇒ byte-identical to the
+    built-in-only composer.
+    """
+    return default_reminder_registry(spec.extra_reminders)
+
+
 def _build_guards(spec: _BuildSpec, asm: _ToolAssembly) -> HookManager:
     """The guard HookManager in the live session's registration order.
 
@@ -1045,6 +1067,9 @@ def build_session_inputs(
     policy_factory_override: Optional[Callable[[Any], Policy]] = None,
     extra_guards: tuple[Guard, ...] = (),
     extra_content_kinds: tuple[ContentKindSpec, ...] = (),
+    #: Per-agent-activated compose-time reminders (D8, track B). Default ``()`` so
+    #: every existing caller composes the built-in three only, byte-identically.
+    extra_reminders: tuple[ReminderSpec, ...] = (),
 ) -> SessionInputs:
     """Build the generic-session live/resume inputs from explicit
     operator-supplied pieces.
@@ -1132,6 +1157,7 @@ def build_session_inputs(
         hooks_pre_tool_use=hooks_pre_tool_use,
         extra_guards=extra_guards,
         extra_content_kinds=extra_content_kinds,
+        extra_reminders=extra_reminders,
         repetition_threshold=repetition_threshold,
         repetition_action=repetition_action,
         repetition_window=repetition_window,
@@ -1154,12 +1180,14 @@ def build_session_inputs(
     control_action_schemas = _build_control_action_schemas(spec, asm)
     skill_menu_names = _skill_menu_names(spec, asm)
     content_registry = _build_content_registry(spec, asm)
+    reminder_registry = _build_reminder_registry(spec)
     composer = build_skill_composer(
         system_prompt=system_prompt,
         tools=tools,
         content_store=content_store,
         skill_registry=asm.registry,
         content_renderers=content_registry,
+        reminders=reminder_registry,
         control_action_schemas=control_action_schemas,
         # 0 ⇒ None (pruning OFF) to match ReActPolicy semantics: policy side
         # uses `tail_token_budget or 0` where both None and 0 mean "no tail

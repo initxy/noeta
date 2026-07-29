@@ -27,7 +27,6 @@ from noeta.context.content_channel import (
 from noeta.core.fold import fold
 from noeta.execution.instructions import (
     build_instructions_discovery,
-    build_instructions_preloader,
     discover_instructions,
 )
 from noeta.protocols.canonical import to_canonical_bytes

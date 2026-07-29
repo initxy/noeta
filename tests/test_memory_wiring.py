@@ -25,7 +25,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from noeta.agent.spec import Capabilities
 from noeta.context.environment import ENVIRONMENT_KIND
 from noeta.context.memory import MEMORY_KIND
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
@@ -62,9 +61,7 @@ def test_memory_flag_is_identity_bearing() -> None:
 
     base, _ = compile_options(Options(system_prompt="x", name="a"))
     on, _ = compile_options(
-        Options(
-            system_prompt="x", name="a", capabilities=Capabilities(memory=True)
-        )
+        Options(system_prompt="x", name="a", plugins=("memory",))
     )
     # Turning memory on is a real identity change on the compiled spec.
     assert base != on

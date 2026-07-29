@@ -87,13 +87,12 @@ HOST_CONTRACT: dict[str, tuple[str, ...]] = {
         "ExecEnv",
         "BrowserBackend",
         "SandboxExecEnvConfig",
-        # Plugins
-        "PluginAPI",
+        # Plugins (manifest mechanism: the loader / set a host binds to, the
+        # builder an authored plugin uses, plus the trust-store + error surface)
         "PluginError",
-        "load_plugins",
-        "merge_plugins",
-        "merged_mcp_servers",
-        "merged_skill_dirs",
+        "load_plugin_set",
+        "PluginSet",
+        "PluginBuilder",
         "grant_trust",
         "is_trusted",
         # Workspace helpers a path guard needs
@@ -193,7 +192,7 @@ def _is_public(module: str) -> bool:
 
 def test_examples_exist() -> None:
     """Guard: the scan must have something to scan."""
-    assert list(_iter_example_files()), EXAMPLES_ROOT
+    assert list(_iter_example_files()), HOST_EXAMPLE_ROOTS
 
 
 def test_examples_import_only_the_public_surface() -> None:

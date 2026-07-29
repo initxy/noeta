@@ -20,6 +20,11 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Protocol
 
+from noeta.context.reminders import (
+    ReminderRegistry,
+    ReminderView,
+    default_reminder_registry,
+)
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.context_plan import ContextPlan
@@ -216,6 +221,7 @@ class ThreeSegmentComposer:
         content_store: ContentStore,
         skill_renderer: Optional[SkillRenderer] = None,
         content_renderers: Optional[ContentRenderers] = None,
+        reminders: Optional[ReminderRegistry] = None,
         control_action_schemas: Optional[list[dict[str, Any]]] = None,
         tail_token_budget: Optional[int] = None,
         available_window: Optional[int] = None,
@@ -239,6 +245,17 @@ class ThreeSegmentComposer:
             content_renderers
             if content_renderers is not None
             else _SkillOnlyRenderers(skill_renderer or _default_skill_renderer)
+        )
+        # Compose-time reminder registry (D8): the dynamic-suffix-tail reminders
+        # are rendered through this table, exactly as semi_stable residents render
+        # through ``content_renderers``. ``None`` falls back to the three built-in
+        # reminders (todo / delegation / read) so every direct-construction call
+        # site stays byte-identical; the builder passes a registry that also
+        # carries per-agent-activated plugin reminders. The composer stays a pure
+        # function of folded state — the registry only ever appends to the
+        # volatile dynamic suffix, never the stable prefix.
+        self._reminders: ReminderRegistry = (
+            reminders if reminders is not None else default_reminder_registry()
         )
         # ③ (D-3e): the protected tail-window size in *estimated tokens*
         # (D-3d). When set, tool-result outputs of messages older than this
@@ -343,37 +360,25 @@ class ThreeSegmentComposer:
                 ),
             )
         )
-        # #1 todo re-injection:
-        # ``TaskState.todos`` is otherwise write-only — the model writes a
-        # checklist through ``todo_write`` but never sees it again, so multi-step
-        # planning goes blind. Append a compose-time ``<system-reminder>`` listing
-        # the unfinished todos to the END of the dynamic_suffix (the volatile
-        # segment), then hash. This is a View-only product: it is NOT written to
-        # ``runtime.messages`` and emits no event, so it never enters the folded
-        # truth. It is regenerated from the folded ``TaskState.todos`` on every
-        # compose ⇒ resume reproduces it automatically, and because it lands in
-        # dynamic_content only it cannot churn the stable_prefix / semi_stable
-        # hashes the prompt cache rides on.
-        dynamic_content = self._append_todo_reminder(task, dynamic_content)
-        # Layer-3 fan-out nudge (mirrors Claude Code's compose-time concurrency
-        # reminder): while delegation is offered AND the model has not spawned
-        # yet, restate at the tail that parallel delegation = multiple
-        # ``spawn_subagent`` calls in one turn. See ``_append_concurrency_reminder``.
+        # Compose-time reminders (D8): the todo re-injection, the delegation
+        # fan-out nudge, and the compaction-thrashing read hint are rendered
+        # through the reminder registry and appended, in priority order, to the
+        # END of the dynamic_suffix (the volatile segment), then hashed. Each is
+        # a View-only product: NOT written to ``runtime.messages`` and emitting no
+        # event, so it never enters the folded truth; regenerated from the folded
+        # projection on every compose ⇒ resume reproduces it automatically; and,
+        # landing in dynamic_content only, it cannot churn the stable_prefix /
+        # semi_stable hashes the prompt cache rides on. ``delegation_enabled`` is
+        # whether the ``spawn_subagent`` control schema is offered this compose
+        # (the fan-out nudge gates on it).
         delegation_enabled = any(
             isinstance(schema, dict)
             and schema.get("function", {}).get("name")
             == _SPAWN_SUBAGENT_TOOL_NAME
             for schema in provider_tool_schemas
         )
-        dynamic_content = self._append_concurrency_reminder(
+        dynamic_content = self._append_reminders(
             task, dynamic_content, delegation_enabled=delegation_enabled
-        )
-        # ⑥ compaction thrashing nudge (mirrors Claude Code's "Autocompact is
-        # thrashing" hint): when fold has latched ``ContextState.compaction_thrashing``
-        # (several compactions within a few turns of each other), suggest a
-        # different read strategy. See ``_append_compaction_thrashing_reminder``.
-        dynamic_content = self._append_compaction_thrashing_reminder(
-            task, dynamic_content
         )
         dynamic_hash = _sha256_hex(to_canonical_bytes(dynamic_content))
 
@@ -663,165 +668,63 @@ class ThreeSegmentComposer:
             )
         return out
 
-    def _append_todo_reminder(
-        self, task: Task, dynamic_content: list[Message]
-    ) -> list[Message]:
-        """#1: append a ``<system-reminder>`` listing the unfinished todos.
-
-        ``TaskState.todos`` is a replace-all checklist of ``{id, content,
-        status}`` (status ∈ ``pending`` / ``in_progress`` / ``completed``,
-        ``control_semantics.TODO_WRITE_STATUSES``). It is folded state but,
-        without this re-injection, never re-enters the prompt — the model is
-        blind to its own plan after writing it. We surface only the *unfinished*
-        items (anything not ``completed``); an empty list or an all-completed
-        list yields no reminder (return the input list unchanged) so a finished
-        checklist does not nag.
-
-        The reminder is a single ``Message(role="user", origin="system")``
-        carrying one ``TextBlock``. ``origin="system"`` makes each provider
-        adapter wrap it in ``<system-reminder>`` tags and merge it into the
-        adjacent user wire turn (the existing ``Message.origin`` rendering
-        mechanism — no adapter change here). It is appended only to the View's
-        ``dynamic_content``; it is never written to ``runtime.messages`` and
-        emits no event (D6 red line), so it stays out of the folded truth and is
-        re-derived from ``TaskState.todos`` on every compose (resume reproduces
-        it). Pure: same todos → same reminder bytes.
-        """
-        unfinished = [
-            t
-            for t in task.state.todos
-            if isinstance(t, dict) and t.get("status") != "completed"
-        ]
-        if not unfinished:
-            return dynamic_content
-        lines = [
-            f"- [{t.get('status', 'pending')}] {t.get('content', '')}"
-            for t in unfinished
-        ]
-        # Plain text only — NO ``<system-reminder>`` tag here. The tag is an
-        # Anthropic-specific idiom synthesized by the adapter at wire-build time
-        # for ``origin="system"`` turns (anthropic adapter wraps; the OpenAI
-        # adapters render a native mid-history ``role="system"`` message). Baking
-        # the literal tag into this neutral View leaks it to every provider —
-        # Anthropic double-wraps it, OpenAI ships the stray tag inside its system
-        # message. Keep the View provider-neutral and let each adapter speak its
-        # own dialect.
-        reminder = (
-            "Your current todo list (unfinished items only). Keep it updated as "
-            "you make progress — mark items in_progress / completed via "
-            "todo_write so it stays accurate:\n"
-            + "\n".join(lines)
-        )
-        return [
-            *dynamic_content,
-            Message(
-                role="user",
-                content=[TextBlock(text=reminder)],
-                origin="system",
-            ),
-        ]
-
-    def _append_concurrency_reminder(
+    def _append_reminders(
         self,
         task: Task,
         dynamic_content: list[Message],
         *,
         delegation_enabled: bool,
     ) -> list[Message]:
-        """Layer-3 just-in-time fan-out nudge — mirrors Claude Code's
-        ``isInitial && showConcurrencyNote`` compose-time reminder.
+        """Render the compose-time reminder registry onto the dynamic-suffix tail.
 
-        The stable prefix already carries the parallel-spawn rule (``main.md``
-        rule 10 + the ``spawn_subagent`` description's MUST), but a model attends
-        most to the tail. So while delegation is offered AND the model has not
-        yet spawned any sub-agent, append a ``<system-reminder>`` at the very end
-        of the dynamic_suffix restating that parallel delegation means multiple
-        ``spawn_subagent`` calls in ONE turn — the exact failure mode where a
-        model declares parallel intent then spawns one at a time (each single
-        spawn suspends the parent, so one-per-turn is strictly sequential).
+        Builds the narrow :class:`~noeta.context.reminders.ReminderView`
+        projection from folded state (plus the two compose-time facts the
+        composer alone knows: whether ``spawn_subagent`` is offered this compose,
+        and whether a spawn already landed in history), runs every registered
+        reminder in ``(priority, name)`` order, and wraps each non-``None`` text
+        in one ``Message(role="user", origin="system")`` — the existing
+        ``Message.origin`` rendering that each adapter turns into a
+        ``<system-reminder>`` (Anthropic wraps + merges into the adjacent user
+        turn; the OpenAI adapters render a native mid-history ``role="system"``
+        message). Plain text only here — baking the literal tag into the neutral
+        View would leak it to every provider.
 
-        Self-limiting: once the first ``spawn_subagent`` lands in the rolling
-        history the nudge disappears, so a long delegation run is not nagged
-        every turn. Like ``_append_todo_reminder`` it is a View-only product —
-        ``role="user"`` / ``origin="system"`` (adapters wrap it in
-        ``<system-reminder>``), appended to ``dynamic_content`` only, never
-        written to ``runtime.messages`` and emitting no event, so it stays out of
-        the folded truth, rides only the volatile (uncached) segment, and is
-        re-derived every compose (resume reproduces it). Pure: same inputs → same
-        bytes.
+        Every reminder is a View-only product: appended to ``dynamic_content``
+        only, never written to ``runtime.messages`` and emitting no event (D6 red
+        line), so it stays out of the folded truth, rides only the volatile
+        (uncached) segment, and is re-derived from the folded projection on every
+        compose (resume reproduces it). Pure: same projection → same bytes.
         """
-        if not delegation_enabled:
-            return dynamic_content
-        already_spawned = any(
+        # ``already_spawned`` is read by exactly one reminder (``delegation-nudge``),
+        # which renders nothing unless delegation is offered — so the scan is
+        # short-circuited off ``delegation_enabled``. Without the guard every leaf
+        # sub-agent (explore / plan / web / __consolidation__ — none of them
+        # delegate) would walk the whole rolling history on every compose to
+        # compute a value the reminder then discards.
+        already_spawned = delegation_enabled and any(
             isinstance(block, ToolUseBlock)
             and block.tool_name == _SPAWN_SUBAGENT_TOOL_NAME
             for message in task.runtime.messages
             for block in (getattr(message, "content", None) or [])
         )
-        if already_spawned:
-            return dynamic_content
-        # Plain text only — the ``<system-reminder>`` tag is the adapter's job
-        # (see ``_append_todo_reminder``). A hardcoded tag here double-wraps on
-        # Anthropic and leaks into OpenAI's system message.
-        reminder = (
-            "When you delegate independent work to sub-agents, batch ALL the "
-            "goals into ONE spawn_subagent call's spawns array so they run "
-            "concurrently and the results return together. Spawning one per "
-            "turn is sequential, not parallel."
+        view = ReminderView(
+            todos=tuple(task.state.todos),
+            delegation_enabled=delegation_enabled,
+            already_spawned=already_spawned,
+            compaction_thrashing=task.context.compaction_thrashing,
         )
+        texts = self._reminders.render_all(view)
+        if not texts:
+            return dynamic_content
         return [
             *dynamic_content,
-            Message(
-                role="user",
-                content=[TextBlock(text=reminder)],
-                origin="system",
-            ),
-        ]
-
-    def _append_compaction_thrashing_reminder(
-        self, task: Task, dynamic_content: list[Message]
-    ) -> list[Message]:
-        """⑥: append a ``<system-reminder>`` suggesting a different read
-        strategy when compaction is thrashing.
-
-        Mirrors Claude Code's "Autocompact is thrashing" nudge. fold latches
-        ``ContextState.compaction_thrashing`` when several compactions land
-        within a few turns of each other (a single large file / large tool
-        output keeps refilling the window, so compaction spins without buying
-        headroom — see ``fold._on_compacted``). When the flag is set, append a
-        trailing reminder suggesting chunked reads / reading only the relevant
-        section / extracting the key points before re-reading. Advisory tone, not
-        an error — the model is free to ignore it (R4).
-
-        Like ``_append_todo_reminder`` it is a View-only product — a single
-        ``Message(role="user", origin="system")`` (adapters wrap it in
-        ``<system-reminder>``), appended to ``dynamic_content`` only, never
-        written to ``runtime.messages`` and emitting no event, so it stays out of
-        the folded truth, rides only the volatile (uncached) segment, and is
-        re-derived from the folded flag every compose (resume reproduces it). The
-        flag clears in fold the moment a non-close compaction resets the run, so
-        the reminder disappears on its own — the composer only ever reads it.
-        Pure: same flag → same bytes.
-        """
-        if not task.context.compaction_thrashing:
-            return dynamic_content
-        # Plain text only — the ``<system-reminder>`` tag is the adapter's job
-        # (see ``_append_todo_reminder``). A hardcoded tag here double-wraps on
-        # Anthropic and leaks into OpenAI's system message.
-        reminder = (
-            "The context window keeps getting refilled to the limit by what "
-            "looks like a single large file or large tool output, so compaction "
-            "is spinning without freeing real headroom. Consider a different "
-            "reading strategy: read in chunks, read only the relevant section, "
-            "or extract the key points once and re-read on demand instead of "
-            "pulling the whole large content back into context each time."
-        )
-        return [
-            *dynamic_content,
-            Message(
-                role="user",
-                content=[TextBlock(text=reminder)],
-                origin="system",
+            *(
+                Message(
+                    role="user",
+                    content=[TextBlock(text=text)],
+                    origin="system",
+                )
+                for text in texts
             ),
         ]
 

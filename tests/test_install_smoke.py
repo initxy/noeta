@@ -135,8 +135,8 @@ def test_wheel_install_imports_public_surface(tmp_path: Path) -> None:
             "-c",
             (
                 "import noeta.sdk, noeta.sdk.storage, noeta.presets; "
-                "from noeta.sdk import Client, Options, PluginAPI, "
-                "load_plugins, merge_plugins; "
+                "from noeta.sdk import Client, Options, PluginSet, "
+                "load_plugin_set, PluginBuilder; "
                 "print('ok')"
             ),
         ],

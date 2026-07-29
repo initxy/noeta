@@ -321,12 +321,6 @@ def test_options_vs_handwritten_spec_identity() -> None:
         name="main",
         allowed_tools=("read", "edit"),
         budget=BudgetSpec(max_iterations=5),
-        capabilities=Capabilities(
-            todo_write=False,
-            ask_user_question=False,
-            delegation=False,
-            spawnable=(),
-        ),
     )
     compiled, descendants = compile_options(options)
     assert len(descendants) == 0

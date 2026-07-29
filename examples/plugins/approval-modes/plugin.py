@@ -1,13 +1,14 @@
-"""First-party example plugin — goose-style tool-approval modes.
+"""First-party example manifest plugin — goose-style tool-approval modes.
 
 Demonstrated SDK capability
 ---------------------------
-A **Plugin** (``docs/adr/plugin-contribution-bundles.md``) that contributes a
-single :class:`~noeta.protocols.hooks.Guard` through the ``PluginAPI``. It shows
-the config-driven factory shape (``noeta_plugin(api, config)``): the loader
-passes the operator's plugin config to any factory that declares a second
-parameter, and the factory folds it into an immutable policy that drives one
-tool-call gate.
+A **manifest plugin** (the SDK-extensibility redesign,
+``docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md``, D1) that
+contributes a single :class:`~noeta.sdk.Guard` on the ``guard`` surface —
+*governance* authority, so once loaded it applies to every agent in the process
+(spec D6). It shows how a configured object is packaged: the guard's immutable
+:class:`ApprovalPolicy` is built from the environment at import (the mechanism
+resolves a ``ref`` to a live object, never threading a per-plugin config dict).
 
 Four modes decide the verdict for a proposed tool call (goose's permission
 modes, expressed as Noeta ``Verdict`` values):
@@ -28,7 +29,8 @@ mode. The guard only gates tool calls; subtask spawns and finishes pass through
 
 Config shape
 ------------
-The factory reads (all keys optional)::
+:func:`build_policy` validates and builds an :class:`ApprovalPolicy` from a
+dict (all keys optional)::
 
     {
       "mode": "smart_approve",                    # default "approve"
@@ -38,23 +40,25 @@ The factory reads (all keys optional)::
     }                                                    # smart_approve set
 
 An unknown ``mode``, a bad override token, or a non-list ``low_risk_tools``
-raises ``ValueError`` at factory time; the loader wraps it in a ``PluginError``
-naming this plugin, so a misconfiguration fails the client build loudly rather
-than a mid-session turn.
+raises ``ValueError`` (a misconfiguration fails the client build loudly rather
+than a mid-session turn). The manifest ships a policy built from the
+environment: ``NOETA_APPROVAL_MODE`` selects the mode (default ``approve``);
+the finer knobs (``overrides`` / ``low_risk_tools``) stay available to a host
+that constructs its own :class:`ApprovalModesGuard`.
 
 Loading it
 ----------
-Installed as a package it is discovered via its ``noeta.plugins`` entry point
-(see ``pyproject.toml``). In this repository it is loaded by explicit path — no
-install::
+Installed as a package it is discovered via its ``noeta.plugins`` entry point +
+its shipped ``noeta-plugin.toml`` (see ``pyproject.toml``). In this repository
+it is loaded by explicit path — no install::
 
-    from noeta.sdk import Options, load_plugins, merge_plugins
+    from noeta.sdk import Client, load_plugin_set, presets
 
-    plugins = load_plugins(
+    pset = load_plugin_set(
+        builtins=False,
         modules=["examples/plugins/approval-modes/plugin.py"],
-        config={"approval-modes": {"mode": "smart_approve"}},
     )
-    options = merge_plugins(Options(system_prompt="..."), plugins)
+    client = Client(presets.main_options(), plugins=pset)  # guard is process-wide
 """
 
 # NOTE: deliberately *no* ``from __future__ import annotations``. This module is
@@ -64,28 +68,25 @@ install::
 # (its ``KW_ONLY`` detection), which is absent for a path-loaded module and
 # raises. Eager (real) annotations sidestep that lookup entirely.
 
+import os
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Optional
 
 from noeta.sdk import (
     GuardContext,
+    PluginBuilder,
     ProposedAction,
     ProposedToolCall,
     VerdictResult,
 )
 
 
-#: Override the module-stem name the loader would otherwise derive (``plugin``),
-#: so the plugin loads — and is keyed in the operator config map — under a
-#: stable, meaningful name.
-noeta_plugin_name = "approval-modes"
-
-
 __all__ = [
     "ApprovalPolicy",
     "ApprovalModesGuard",
     "build_policy",
-    "noeta_plugin",
+    "GUARD",
+    "plugin",
     "MODES",
     "OVERRIDES",
     "DEFAULT_MODE",
@@ -228,11 +229,34 @@ def build_policy(config: Optional[Mapping[str, Any]] = None) -> ApprovalPolicy:
     return ApprovalPolicy(mode=mode, overrides=overrides, low_risk_tools=low_risk)
 
 
-def noeta_plugin(api: Any, config: Optional[Mapping[str, Any]] = None) -> None:
-    """Plugin factory: contribute the approval-modes guard built from ``config``.
+# ---------------------------------------------------------------------------
+# Environment-sourced configuration + the manifest (spec D1).
+# ---------------------------------------------------------------------------
 
-    The loader passes the operator's per-plugin config as the second argument
-    (this factory declares it, so it is honored); an absent config defaults to
-    ``approve`` mode.
-    """
-    api.add_guard(ApprovalModesGuard(build_policy(config)))
+
+#: The declarative config schema, carried on the manifest for operator tooling.
+#: Descriptive only — the mechanism never reads it (config is environment-sourced).
+CONFIG_SCHEMA = {
+    "env": {
+        "NOETA_APPROVAL_MODE": f"one of {MODES} (default: {DEFAULT_MODE})",
+    }
+}
+
+
+#: The configured guard the manifest ships. Its mode comes from the environment
+#: at import; a distributed install exposes it at the ``ref`` below
+#: (``approval_modes:GUARD``), while the single-file load caches this very object
+#: so resolution never re-imports.
+GUARD = ApprovalModesGuard(
+    build_policy({"mode": os.environ.get("NOETA_APPROVAL_MODE", DEFAULT_MODE)})
+)
+
+
+#: The single-file manifest (decorator sugar *is* the manifest, spec D1). The
+#: builder name is the plugin identity. ``python -m noeta.sdk.plugin_check``
+#: derives the TOML from this builder and verifies it against the shipped
+#: ``noeta-plugin.toml`` / ``[tool.noeta]``.
+plugin = PluginBuilder(
+    "approval-modes", requires_noeta=">=0.4", config_schema=CONFIG_SCHEMA
+)
+plugin.contribute("guard", GUARD, name="approval_modes", ref="approval_modes:GUARD")

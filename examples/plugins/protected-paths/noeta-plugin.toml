@@ -1,0 +1,17 @@
+# The shipped static manifest (spec D1). A distributed plugin mirrors its
+# ``[tool.noeta]`` (pyproject.toml) into this ``noeta-plugin.toml`` as wheel
+# package data, so the loader reads a plugin's identity + contributions WITHOUT
+# importing any plugin code. ``python -m noeta.sdk.plugin_check`` verifies this
+# file matches what ``plugin.py``'s decorators declare.
+name = "protected-paths"
+requires-noeta = ">=0.4"
+
+# Descriptive only — the mechanism never reads it (config is environment-sourced).
+[config-schema.env]
+NOETA_PROTECTED_PATHS_ROOTS = "os.pathsep-separated writable roots (default: cwd)"
+NOETA_PROTECTED_PATHS_DENY_GLOBS = "comma-separated fnmatch deny globs (default: none)"
+
+[[contributions]]
+surface = "guard"
+name = "protected_paths"
+ref = "protected_paths:GUARD"

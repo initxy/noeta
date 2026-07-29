@@ -1,0 +1,10 @@
+# The shipped static manifest (spec D1). ``python -m noeta.sdk.plugin_check``
+# verifies this file matches what ``plugin.py``'s decorators declare.
+name = "checklist-reminder"
+requires-noeta = ">=0.4"
+
+[[contributions]]
+surface = "reminder"
+name = "long-checklist"
+ref = "checklist_reminder:long_checklist_reminder"
+priority = 400

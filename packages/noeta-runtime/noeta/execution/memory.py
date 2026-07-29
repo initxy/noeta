@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Optional
+from typing import Any, ClassVar, Optional, Sequence
 
 from noeta.context.memory import (
     MEMORY_DRIFT_POLICY,
@@ -42,6 +42,12 @@ from noeta.context.memory import (
 )
 from noeta.core.engine import Engine
 from noeta.core.fold import apply_event
+from noeta.execution.reminders import (
+    Reminder,
+    ReminderProvider,
+    RecallView,
+    record_intake_reminders,
+)
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.decisions import TaskStatePatch
 from noeta.protocols.event_log import EventLogWriter
@@ -55,7 +61,9 @@ __all__ = [
     "DEFAULT_GLOBAL_MEMORY_DIR",
     "RecallGoalPrelude",
     "append_user_message_with_recall",
+    "intake_providers",
     "load_memory_store",
+    "memory_reminder_provider",
     "recall_memories",
     "record_memory_index",
 ]
@@ -158,15 +166,45 @@ def recall_memories(store: MemoryStore, text: str) -> tuple[RecallHit, ...]:
     return tuple(hits)
 
 
-def _recall_key(content: list[Block]) -> str:
-    """Derive the recall match key from a user turn's ``content``.
+def memory_reminder_provider(store: MemoryStore) -> ReminderProvider:
+    """The built-in memory auto-recall as a track-A ``reminder_provider`` (D7).
 
-    D5: only the ``TextBlock`` texts feed retrieval — images
-    ride the turn but never participate in recall. Concatenated in block
-    order (newline-joined) so a multi-block text turn matches the same as
-    the old single-string call.
+    Re-expresses the former inline recall as a provider on the ``turn_intake``
+    seam: given the intake :class:`~noeta.execution.reminders.RecallView`, it
+    reads the store NOW (impure — legal because the output is recorded), matches
+    against the incoming message text, and returns at most ONE
+    ``Reminder(origin="memory")`` carrying the formatted hits (or nothing on a
+    miss). Bound to a live ``store`` at wiring time, exactly like the memory
+    tools — the ``memory`` built-in plugin *declares* this provider (the listing
+    surface), while the store binding stays host wiring.
     """
-    return "\n".join(b.text for b in content if isinstance(b, TextBlock))
+    def provider(view: RecallView) -> tuple[Reminder, ...]:
+        hits = recall_memories(store, view.text)
+        if not hits:
+            return ()
+        return (Reminder(text=format_recall_text(hits), origin="memory"),)
+
+    return provider
+
+
+def intake_providers(
+    store: Optional[MemoryStore],
+    extra: Sequence[ReminderProvider] = (),
+) -> tuple[ReminderProvider, ...]:
+    """The ``turn_intake`` provider list for one append: built-in recall, then plugins.
+
+    ONE composition rule for both intake call sites (the seed path and the
+    ``send_goal`` prelude), so they cannot drift. The built-in memory recall goes
+    first because it is the pre-existing behaviour and its recorded position is
+    pinned by the characterization goldens; the activated plugins' providers
+    follow in their own ``(plugin, name)`` order. No store and no plugins ⇒ an
+    empty tuple, which records exactly the plain-append bytes.
+    """
+    providers: list[ReminderProvider] = []
+    if store is not None:
+        providers.append(memory_reminder_provider(store))
+    providers.extend(extra)
+    return tuple(providers)
 
 
 def append_user_message_with_recall(
@@ -179,7 +217,7 @@ def append_user_message_with_recall(
     trace_id: Optional[str] = None,
     origin: Optional[MessageOrigin] = None,
 ) -> Task:
-    """The D6 v1 user-message intake seam: retrieve, then ledger both turns.
+    """The D7 v1 user-message intake seam: retrieve, then ledger both turns.
 
     Order is load-bearing: retrieval (impure) runs first; the human turn
     lands untagged (role's natural author); hits land as ONE follow-up
@@ -190,12 +228,12 @@ def append_user_message_with_recall(
     stays provider-neutral. No hits ⇒ exactly the plain
     ``append_user_message`` ledger bytes.
 
-    D5: the seam now carries ``content: list[Block]``; the
-    recall key is the concatenated ``TextBlock`` text (:func:`_recall_key`)
-    so images ride the turn but never drive retrieval. The human turn
-    appends ``content`` as-is; the memory-hit turn still appends the
-    single ``[TextBlock(format_recall_text(hits))]`` with
-    ``origin="memory"``.
+    D7 re-expression: this is now a thin wrapper over the generic
+    ``turn_intake`` recording seam (:func:`~noeta.execution.reminders.record_intake_reminders`)
+    driven by a single provider — the built-in memory recall
+    (:func:`memory_reminder_provider`). The recording order (message, then the
+    ``origin="memory"`` follow-up) is preserved verbatim, so the ledger bytes
+    are byte-identical to the pre-redesign inline seam.
 
     ``origin`` is forwarded to the incoming turn's append (the
     driver's ``goal_origin`` passthrough — e.g. an MCP-prompt-expanded goal
@@ -203,20 +241,15 @@ def append_user_message_with_recall(
     is this seam's own and never varies. ``None`` (a human-typed goal)
     keeps the human turn's bytes identical to the plain append.
     """
-    hits = recall_memories(store, _recall_key(content))
-    task = engine.append_user_message(
-        task, content=content, lease_id=lease_id, trace_id=trace_id,
+    return record_intake_reminders(
+        engine,
+        task,
+        content=content,
+        lease_id=lease_id,
+        providers=(memory_reminder_provider(store),),
+        trace_id=trace_id,
         origin=origin,
     )
-    if hits:
-        task = engine.append_user_message(
-            task,
-            content=[TextBlock(text=format_recall_text(hits))],
-            lease_id=lease_id,
-            trace_id=trace_id,
-            origin="memory",
-        )
-    return task
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,10 +271,19 @@ class RecallGoalPrelude:
     routed through the recall seam, so a memory-enabled session's
     ``send_goal`` differs from the plain prelude solely by the optional
     ``origin="memory"`` follow-up turn.
+
+    ``store`` and ``providers`` are the two provider sources and either may be
+    absent. ``store`` is the built-in memory recall (bound to a live store by the
+    host, so it cannot be declared as a plain provider); ``providers`` are the
+    ``turn_intake`` providers the agent's activated plugins contribute (D7). Both
+    run at the same seam, built-in first, so an agent with memory *and* a RAG
+    plugin records the built-in recall ahead of the plugin's. With neither, this
+    degrades to exactly ``AppendMessagePrelude``'s bytes.
     """
 
     content: list[Block]
-    store: MemoryStore
+    store: Optional[MemoryStore] = None
+    providers: tuple[ReminderProvider, ...] = ()
     origin: Optional[MessageOrigin] = None
     attachment_texts: tuple[str, ...] = ()
     activate_skills: tuple[str, ...] = ()
@@ -255,9 +297,10 @@ class RecallGoalPrelude:
                 task, content=[TextBlock(text=text)], lease_id=lease_id,
                 origin="system",
             )
-        task = append_user_message_with_recall(
+        task = record_intake_reminders(
             engine, task, content=self.content, lease_id=lease_id,
-            store=self.store, origin=self.origin,
+            providers=intake_providers(self.store, self.providers),
+            origin=self.origin,
         )
         if self.activate_skills:
             task = engine.apply_state_patch(
