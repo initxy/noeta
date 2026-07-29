@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from noeta.context.skills import SkillIndexer
-from noeta.context.skills.indexer import SkillDescription, SkillRegistry
+from noeta.builtins.skills.impl import SkillIndexer
+from noeta.builtins.skills.impl.indexer import SkillDescription, SkillRegistry
 from noeta.protocols.canonical import from_canonical, to_canonical
 from noeta.protocols.context_plan import ContextPlan
 from noeta.protocols.decisions import TaskStatePatch
@@ -100,7 +100,7 @@ def test_render_has_one_message_per_skill(tmp_path: Path) -> None:
 
 def test_content_not_in_semi_stable(tmp_path: Path) -> None:
     from noeta.context.composer import ThreeSegmentComposer
-    from noeta.context.skills import build_skill_renderer
+    from noeta.builtins.skills.impl import build_skill_renderer
     from noeta.protocols.task import Task, TaskState
     from noeta.storage.memory import InMemoryContentStore
 

@@ -29,13 +29,13 @@ from noeta.context.content_channel import (
     ContentChannelRegistry,
     ContentKindSpec,
 )
-from noeta.context.skills import (
+from noeta.builtins.skills.impl import (
     SkillDescription,
     SkillRegistry,
     build_skill_renderer,
 )
 from noeta.core.fold import fold
-from noeta.execution.skills import build_skill_composer, skill_content_kind
+from noeta.builtins.skills.impl import build_skill_composer, skill_content_kind
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.decisions import TaskStatePatch
 from noeta.protocols.events import (

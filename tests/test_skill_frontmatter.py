@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from noeta.context.skills._frontmatter import (
+from noeta.builtins.skills.impl._frontmatter import (
     FrontmatterError,
     parse,
 )

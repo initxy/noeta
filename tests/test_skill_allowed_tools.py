@@ -13,7 +13,7 @@ import logging
 import noeta.builtins.governance.impl.permission as permission_mod
 from noeta.builtins.governance.impl.permission import PermissionGuard
 from noeta.runtime.governance import PermissionPolicy
-from noeta.policies.skill_tools import (
+from noeta.builtins.skills.impl.allowed_tools import (
     CLAUDE_TO_NOETA_TOOL as _CLAUDE_TO_NOETA_TOOL,
     parse_allowed_tools as _parse_allowed_tools,
     resolve_skill_allowed_tools,
@@ -177,7 +177,7 @@ def test_mode_off_never_gates() -> None:
 def test_malformed_diagnostic_logged_once(caplog) -> None:  # type: ignore[no-untyped-def]
     # The single diagnostic now fires at SDK resolution time (once), not on
     # every guard tool check.
-    caplog.set_level(logging.WARNING, logger="noeta.policies.skill_tools")
+    caplog.set_level(logging.WARNING, logger="noeta.builtins.skills.impl.allowed_tools")
     g = _guard(raw=(("s", "bad: value"),))
     # resolved once already; multiple checks must not re-log.
     _check(g, "read", ("s",))

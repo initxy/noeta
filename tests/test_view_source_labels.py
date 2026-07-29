@@ -17,7 +17,7 @@ from pathlib import Path
 
 from noeta.context.composer import RenderedSkills, ThreeSegmentComposer
 from noeta.context.content_channel import ContentChannelRegistry, ContentKindSpec
-from noeta.context.skills import SkillIndexer
+from noeta.builtins.skills.impl import SkillIndexer
 from noeta.protocols.decisions import TaskStatePatch
 from noeta.protocols.messages import (
     Message,

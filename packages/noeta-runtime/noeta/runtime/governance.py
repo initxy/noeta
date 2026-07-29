@@ -116,8 +116,8 @@ class PermissionPolicy:
     # ``skill_tool_enforcement`` is the mode (default ``off``).
     # ``skill_allowed_tools`` is a plain immutable
     # ``(skill_name, frozenset_of_neutral_noeta_tool_names)`` map — the
-    # grants are **already parsed and alias-resolved** by noeta-sdk
-    # (``noeta.policies.skill_tools.resolve_skill_allowed_tools``), which
+    # grants are **already parsed and alias-resolved** by the skills
+    # built-in (``noeta.builtins.skills.impl:resolve_skill_allowed_tools``), which
     # knows both the product (Claude) and neutral Noeta vocabularies. The
     # guard stores the resolved map directly and never imports any product
     # vocabulary (preserving the guard impl's protocols-only diet AND

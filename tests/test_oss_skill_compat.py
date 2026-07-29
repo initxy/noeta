@@ -36,13 +36,13 @@ from pathlib import Path
 
 import pytest
 
-from noeta.execution.skills import (
-    activate_skills,
+from noeta.builtins.skills.impl import (
     build_skill_composer as build_coding_composer,
     load_workspace_skills,
 )
-from noeta.context.skills import SkillRegistry
-from noeta.context.skills.indexer import SkillDescription
+from noeta.execution.skills import activate_skills
+from noeta.builtins.skills.impl import SkillRegistry
+from noeta.builtins.skills.impl.indexer import SkillDescription
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.protocols.messages import TextBlock
