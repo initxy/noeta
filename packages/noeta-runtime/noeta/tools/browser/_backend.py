@@ -10,7 +10,7 @@ lives: a narrow :class:`BrowserBackend` Protocol (the injection point tools call
 through, and the seam tests substitute) plus :class:`AioBrowserBackend`, the
 single place the container's ``/mcp`` browser wire is pinned.
 
-Mirrors :class:`~noeta.tools.fs.exec_env.AioSandboxExecEnv`: base_url + an
+Mirrors :class:`~noeta.runtime.exec_env.AioSandboxExecEnv`: base_url + an
 optional per-call auth-header factory + an injectable transport (the internal
 :class:`~noeta.tools.mcp._http_client.McpHttpClient`), with the AIO tool
 names / argument shapes captured as module-level constants so a wire drift is a
@@ -89,7 +89,7 @@ class AioBrowserError(OSError):
     treat a remote browser fault exactly like any other IO failure — the tool's
     ``invoke`` maps it to ``ToolResult(success=False, ...)`` uniformly and never
     lets it escape to crash the worker (mirrors
-    :class:`~noeta.tools.fs.exec_env.AioSandboxError`).
+    :class:`~noeta.runtime.exec_env.AioSandboxError`).
     """
 
 

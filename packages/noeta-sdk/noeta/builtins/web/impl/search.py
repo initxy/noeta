@@ -42,8 +42,8 @@ from noeta.tools._limits import (
     truncate_bytes,
 )
 from noeta.tools.descriptions import load_tool_description
-from noeta.tools.fs._subprocess import _RunOutcome
-from noeta.tools.fs.exec_env import ExecEnv
+from noeta.runtime.subproc import _RunOutcome
+from noeta.runtime.exec_env import ExecEnv
 
 
 __all__ = [
@@ -78,7 +78,7 @@ def _outcome_error_text(outcome: "_RunOutcome") -> str:
 
     Prefers ``stderr`` (where ``curl -sS`` writes its error), falling back to
     ``stdout`` because the AIO backend merges both streams into ``stdout`` (see
-    :class:`~noeta.tools.fs.exec_env.AioSandboxExecEnv`). Shared by both web
+    :class:`~noeta.runtime.exec_env.AioSandboxExecEnv`). Shared by both web
     container transports so their failure messages read the same.
     """
     stderr = outcome.stderr.decode("utf-8", errors="replace").strip()

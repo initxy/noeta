@@ -26,7 +26,8 @@ from noeta.protocols.hooks import GuardContext, ProposedToolCall, Verdict
 from noeta.protocols.messages import LLMResponse, TextBlock, ToolUseBlock, Usage
 from noeta.guards.permission import PermissionGuard, PermissionPolicy
 from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.tools.fs import FsWriteMode, ShellMode
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.workspace import FsWriteMode
 from noeta.tools.mcp import McpServerSpec
 from noeta.tools.mcp.tool import McpTool
 

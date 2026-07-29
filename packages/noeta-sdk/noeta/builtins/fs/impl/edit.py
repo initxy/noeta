@@ -54,20 +54,21 @@ from noeta.tools._limits import (
 )
 from noeta.tools._refs import ref_json
 from noeta.tools.descriptions import load_tool_description
-from noeta.tools.fs._diff import (
+from noeta.builtins.fs.impl._diff import (
     DIFF_MEDIA_TYPE,
     compute_diff,
     diff_stat_counts,
     file_hash,
 )
-from noeta.tools.fs._workspace import (
+from noeta.runtime.workspace import (
+    FsWriteMode,
     WorkspaceRoot,
     WriteRootsResolver,
     authorized_workspace,
     resolve_or_error,
     tool_error,
 )
-from noeta.tools.fs.exec_env import ExecEnv, LocalExecEnv
+from noeta.runtime.exec_env import ExecEnv, LocalExecEnv
 
 
 __all__ = [
@@ -122,18 +123,6 @@ def _was_read_this_session(ctx: ToolContext, raw: bytes) -> bool:
     except ContentNotFound:
         return False
     return True
-
-
-class FsWriteMode(str, Enum):
-    """Pre-run write policy passed to the edit tools at construction.
-
-    ``DRY_RUN`` produces the proposed diff artifact + ``applied=False``;
-    ``APPLY`` performs the write. The Engine never sees this enum — the
-    decision lives entirely on the closure-injected ``FsToolPack``.
-    """
-
-    DRY_RUN = "dry_run"
-    APPLY = "apply"
 
 
 @dataclass

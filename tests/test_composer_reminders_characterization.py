@@ -41,6 +41,7 @@ from pathlib import Path
 
 import pytest
 
+from tests._session_inputs import default_factory_kwargs
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
 from noeta.guards.budget import Budget
 from noeta.protocols.messages import Message, TextBlock, ToolUseBlock
@@ -90,6 +91,7 @@ def _dynamic_suffix_payload(
     content_store = InMemoryContentStore()
 
     inputs = build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=workspace,
         system_prompt="You are main.",
         allowed_tools=frozenset({"read"}),

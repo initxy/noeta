@@ -38,13 +38,13 @@ from noeta.tools._limits import (
     INLINE_OUTPUT_MAX_BYTES,
     encoded_len,
 )
-from noeta.tools.fs._workspace import (
+from noeta.runtime.workspace import (
     WorkspaceRoot,
     resolve_anywhere,
     resolve_or_error,
     tool_error,
 )
-from noeta.tools.fs.exec_env import ExecEnv, LocalExecEnv
+from noeta.runtime.exec_env import ExecEnv, LocalExecEnv
 
 
 #: Shared stateless host backend for the existing-file check when a caller does

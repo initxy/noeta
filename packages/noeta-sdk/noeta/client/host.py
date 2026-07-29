@@ -77,6 +77,7 @@ from noeta.runtime.background_shell import (
 )
 from noeta.runtime.cancellation import CancellationRegistry
 from noeta.runtime.file_checkpoint import FileCheckpointRegistry
+from noeta.client.parts import default_tool_factories
 from noeta.client.host_config import SandboxExecEnvConfig
 from noeta.client.sandbox import (
     BackendFactory,
@@ -88,10 +89,11 @@ from noeta.client.sandbox_provider import SandboxProvider, SandboxSpec
 from noeta.tools.app import AppPreviewGateway
 from noeta.runtime.llm import RuntimeLLMClient
 from noeta.tools.browser import BROWSER_TOOL_NAMES
-from noeta.tools.fs import FsWriteMode, ShellMode
-from noeta.tools.fs.exec_env import ExecEnv
+from noeta.runtime.exec_env import ExecEnv
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.workspace import FsWriteMode
 from noeta.tools.memory import MemoryStore
-from noeta.tools.fs.shell import (
+from noeta.runtime.shell_policy import (
     build_allowlist,
     command_in_allowlist,
     load_project_shell_allowlist,
@@ -1645,7 +1647,10 @@ class SdkHost(GenericEngineResolver):
         # is the durable truth, and the resume path passes empty aliases.
         mcp_tools_override = self._resolve_live_mcp_tools(mcp_aliases, task_id=task_id)
         memory_override = self._memory_root_override(task_id)
+        _fs_factory, _web_factory = default_tool_factories()
         inputs = build_session_inputs(
+            fs_tools_factory=_fs_factory,
+            web_tools_factory=_web_factory,
             workspace_dir=workspace_dir,
             system_prompt=spec.instructions,
             allowed_tools=spec_tool_names,
@@ -1851,7 +1856,10 @@ class SdkHost(GenericEngineResolver):
                 entries.append((n, str(child.metadata.get("description", ""))))
             if any(d for _, d in entries):
                 directory = tuple(entries)
+        _fs_factory, _web_factory = default_tool_factories()
         inputs = build_session_inputs(
+            fs_tools_factory=_fs_factory,
+            web_tools_factory=_web_factory,
             workspace_dir=self.workspace_dir,
             system_prompt=WORKFLOW_SYSTEM_PROMPT,
             allowed_tools=frozenset(),

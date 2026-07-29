@@ -340,7 +340,7 @@ def test_builtin_sandbox_plugin_declares_the_aio_adapters() -> None:
     # The refs point at the AIO adapter classes (listing surface — no execution).
     refs = {c.ref for _p, c in pset.contributions("sandbox_provider")}
     assert refs == {
-        "noeta.tools.fs.exec_env:AioSandboxExecEnv",
+        "noeta.runtime.exec_env:AioSandboxExecEnv",
         "noeta.tools.browser:AioBrowserBackend",
     }
 

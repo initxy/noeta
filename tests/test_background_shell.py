@@ -29,7 +29,9 @@ from typing import Any
 from noeta.protocols.tool import ToolContext
 from noeta.runtime.background_shell import ProcessRegistry
 from noeta.storage.memory import InMemoryContentStore, InMemoryEventLog
-from noeta.tools.fs import ShellMode, ShellPollTool, ShellRunTool, WorkspaceRoot
+from noeta.builtins.fs.impl import ShellPollTool, ShellRunTool
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.workspace import WorkspaceRoot
 
 
 # ---------------------------------------------------------------------------

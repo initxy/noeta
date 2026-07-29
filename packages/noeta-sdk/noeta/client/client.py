@@ -55,7 +55,7 @@ from noeta.storage.memory import (
     InMemoryEventLog,
 )
 from noeta.tools.decorator import DecoratedTool
-from noeta.tools.fs.edit import FsWriteMode
+from noeta.runtime.workspace import FsWriteMode
 
 from noeta.client.host import SdkHost
 from noeta.client.host_config import HostConfig

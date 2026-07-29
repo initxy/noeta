@@ -49,7 +49,8 @@ from noeta.protocols.step_context import StepContext
 from noeta.protocols.view import View
 from noeta.protocols.wake import HumanResponseReceived
 from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.tools.fs import FsWriteMode, ShellMode
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.workspace import FsWriteMode
 
 from tests._sdk_session import (
     make_driver,
@@ -346,7 +347,7 @@ def test_per_turn_last_shell_is_not_cumulative(
             args=argv, returncode=rc, stdout=b"pytest output\n", stderr=b""
         )
 
-    monkeypatch.setattr("noeta.tools.fs._subprocess._default_run", fake_run)
+    monkeypatch.setattr("noeta.runtime.subproc._default_run", fake_run)
 
     responses = [
         # Turn 1: pytest (rc=0) then end_turn → suspend.

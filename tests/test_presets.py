@@ -204,7 +204,7 @@ def test_shell_triplet_descriptions_load_from_resources() -> None:
     # description from descriptions/<name>.md (not an inline Python string), so
     # the class default equals the resource text verbatim.
     from noeta.tools.descriptions import load_tool_description
-    from noeta.tools.fs import ShellKillTool, ShellPollTool, ShellRunTool
+    from noeta.builtins.fs.impl import ShellKillTool, ShellPollTool, ShellRunTool
 
     assert ShellRunTool.description == load_tool_description("shell_run")
     assert ShellPollTool.description == load_tool_description("shell_poll")

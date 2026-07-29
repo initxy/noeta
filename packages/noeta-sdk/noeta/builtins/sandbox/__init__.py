@@ -25,7 +25,7 @@ MANIFEST = PluginManifest(
         c(
             "sandbox_provider",
             "aio-exec-env",
-            "noeta.tools.fs.exec_env:AioSandboxExecEnv",
+            "noeta.runtime.exec_env:AioSandboxExecEnv",
         ),
         c(
             "sandbox_provider",

@@ -41,8 +41,8 @@ from noeta.tools._limits import (
     truncate_bytes,
 )
 from noeta.tools.descriptions import load_tool_description
-from noeta.tools.fs.exec_env import ExecEnv
-from noeta.tools.web.search import _outcome_error_text, build_web_search_tool
+from noeta.runtime.exec_env import ExecEnv
+from noeta.builtins.web.impl.search import _outcome_error_text, build_web_search_tool
 
 
 __all__ = [

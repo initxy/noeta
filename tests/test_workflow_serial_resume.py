@@ -51,7 +51,8 @@ from noeta.storage.memory import (
 )
 from noeta.testing.composer import trivial_three_segment
 from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.tools.fs import FsWriteMode, ShellMode
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.workspace import FsWriteMode
 
 from tests._sdk_session import (
     coding_replay_budget,

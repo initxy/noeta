@@ -15,7 +15,7 @@ silent default version would let two behaviourally different tools share an
 identity, so we force the author to state it.
 
 ``input_schema`` is passed explicitly as a hand-written JSON-Schema-shaped dict.
-This repo authors those dicts by hand (see ``noeta.tools.fs`` / ``noeta.tools.mcp``)
+This repo authors those dicts by hand (see ``noeta.builtins.fs.impl`` / ``noeta.tools.mcp``)
 rather than deriving them from type hints; the decorator stays in step and adds
 no schema-derivation dependency.
 

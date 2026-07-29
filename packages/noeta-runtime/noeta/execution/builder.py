@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
 
 from noeta.context.composer import _COMPOSER_VERSION, ThreeSegmentComposer
 from noeta.context.content_channel import ContentChannelRegistry, ContentKindSpec
@@ -98,17 +98,11 @@ from noeta.protocols.tool import Tool
 from noeta.providers.catalog import provider_family, resolve_alias, spec_for
 from noeta.tools.app import AppPreviewGateway, build_app_tools
 from noeta.tools.browser import BrowserBackend, build_browser_tools
-from noeta.tools.fs import (
-    FsWriteMode,
-    ShellMode,
-    WorkspaceRoot,
-    WriteRootsResolver,
-    build_fs_tools,
-)
-from noeta.tools.fs.exec_env import ExecEnv
+from noeta.runtime.exec_env import ExecEnv
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.workspace import FsWriteMode, WorkspaceRoot, WriteRootsResolver
 from noeta.tools.mcp import MCP_PREFIX, McpConfigError
 from noeta.tools.memory import MemoryStore, build_memory_tools
-from noeta.tools.web import build_web_tools
 
 
 __all__ = [
@@ -339,6 +333,36 @@ class SessionInputs:
 # ---------------------------------------------------------------------------
 
 
+class FsToolsFactory(Protocol):
+    """Loader-resolved constructor of the fs tool pack (microkernel M1).
+
+    The kernel never imports a tool implementation: the SDK host resolves the
+    ``fs`` built-in plugin's pack factory through the plugin loader and injects
+    it here. Signature = ``noeta.builtins.fs.impl:build_fs_tools``.
+    """
+
+    def __call__(
+        self,
+        workspace: WorkspaceRoot,
+        *,
+        mode: FsWriteMode = FsWriteMode.DRY_RUN,
+        shell_mode: ShellMode = ShellMode.ALLOWLIST,
+        shell_allowlist: Sequence[Mapping[str, Any]] = (),
+        write_path_globs: tuple[str, ...] = (),
+        write_roots: Optional[WriteRootsResolver] = None,
+        exec_env: Optional[ExecEnv] = None,
+    ) -> dict[str, Tool]: ...
+
+
+class WebToolsFactory(Protocol):
+    """Loader-resolved constructor of the web tool pack (microkernel M1).
+
+    Signature = ``noeta.builtins.web.impl:build_web_tools``.
+    """
+
+    def __call__(self, *, exec_env: Optional[ExecEnv] = None) -> dict[str, Tool]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class _BuildSpec:
     """All operator inputs to one session build, frozen.
@@ -427,6 +451,10 @@ class _BuildSpec:
     thinking: Optional[str]
     effort: Optional[str]
     tool_output_inline_limit: Optional[int]
+    #: Loader-resolved tool pack factories (microkernel M1, D2). ``None``
+    #: fails loudly at the fs stage — the kernel never imports a tool impl.
+    fs_tools_factory: Optional[FsToolsFactory] = None
+    web_tools_factory: Optional[WebToolsFactory] = None
 
 
 @dataclass(slots=True)
@@ -487,7 +515,14 @@ def _stage_fs_pack(spec: _BuildSpec, asm: _ToolAssembly) -> None:
         asm.workspace = WorkspaceRoot.from_path(spec.workspace_dir)
     else:
         asm.workspace = WorkspaceRoot.for_container(spec.workspace_dir)
-    full_pack = build_fs_tools(
+    if spec.fs_tools_factory is None or spec.web_tools_factory is None:
+        raise RuntimeError(
+            "fs/web tool pack factories were not injected — the SDK host "
+            "resolves the fs/web built-in plugins through the plugin loader "
+            "and passes fs_tools_factory/web_tools_factory (microkernel M1); "
+            "the kernel builder imports no tool implementation"
+        )
+    full_pack = spec.fs_tools_factory(
         asm.workspace,
         mode=spec.write_mode,
         shell_mode=spec.shell_mode,
@@ -503,7 +538,7 @@ def _stage_fs_pack(spec: _BuildSpec, asm: _ToolAssembly) -> None:
     # explore / plan / general-purpose (explicit whitelists without it) do not.
     # Sandbox mode routes webfetch / web_search egress THROUGH the container
     # (curl via the ExecEnv, S9); ``None`` keeps the host httpx path.
-    full_pack.update(build_web_tools(exec_env=spec.exec_env))
+    full_pack.update(spec.web_tools_factory(exec_env=spec.exec_env))
     # The edit↔apply_patch difference is provider-specific and is
     # absorbed HERE, at the assembly layer — not in any tool field, not in the
     # prompt, not in the AgentSpec whitelist (so fingerprints never drift on a
@@ -1070,6 +1105,12 @@ def build_session_inputs(
     #: Per-agent-activated compose-time reminders (D8, track B). Default ``()`` so
     #: every existing caller composes the built-in three only, byte-identically.
     extra_reminders: tuple[ReminderSpec, ...] = (),
+    #: Loader-resolved tool pack factories (microkernel M1, D2): the SDK
+    #: host resolves the ``fs`` / ``web`` built-in plugins' pack factories
+    #: through the plugin loader and injects them here. The kernel builder
+    #: itself never imports a tool implementation; ``None`` fails loudly.
+    fs_tools_factory: Optional[FsToolsFactory] = None,
+    web_tools_factory: Optional[WebToolsFactory] = None,
 ) -> SessionInputs:
     """Build the generic-session live/resume inputs from explicit
     operator-supplied pieces.
@@ -1158,6 +1199,8 @@ def build_session_inputs(
         extra_guards=extra_guards,
         extra_content_kinds=extra_content_kinds,
         extra_reminders=extra_reminders,
+        fs_tools_factory=fs_tools_factory,
+        web_tools_factory=web_tools_factory,
         repetition_threshold=repetition_threshold,
         repetition_action=repetition_action,
         repetition_window=repetition_window,

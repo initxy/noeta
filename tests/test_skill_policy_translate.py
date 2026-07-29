@@ -12,6 +12,7 @@ from pathlib import Path
 
 from tests._skill_fixtures import write_skill
 
+from tests._session_inputs import default_factory_kwargs
 from noeta.core.fold import fold
 from noeta.policies._control_translate import (
     SKILL_TOOL,
@@ -387,6 +388,7 @@ def _build_engine_for_tests(
     wire_default_observers(log, disp)
 
     inputs = build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=ws,
         system_prompt=system_prompt,
         allowed_tools=frozenset({"read_file"}),
@@ -630,6 +632,7 @@ def test_engine_skill_invocation_unknown_skill_no_event_no_crash(
     wire_default_observers(log, disp)
 
     inputs = build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=ws,
         system_prompt="you are helpful",
         allowed_tools=frozenset({"read_file"}),
@@ -932,6 +935,7 @@ def test_product_flag_on_with_skills_grows_skill_tool(tmp_path: Path) -> None:
     ws_with.mkdir()
     write_skill(ws_with, "alpha", "desc")
     inputs_with = build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=ws_with,
         system_prompt="p",
         allowed_tools=frozenset(),
@@ -951,6 +955,7 @@ def test_product_flag_on_with_skills_grows_skill_tool(tmp_path: Path) -> None:
     ws_empty = tmp_path / "ws_empty"
     ws_empty.mkdir()
     inputs_empty = build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=ws_empty,
         system_prompt="p",
         allowed_tools=frozenset(),

@@ -42,7 +42,8 @@ from noeta.client.parts import BUILTIN_TOOL_CLASSES
 from noeta.presets import official_specs
 from noeta.protocols.messages import LLMResponse, TextBlock, ToolUseBlock, Usage
 from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.tools.fs import FsWriteMode, ShellMode
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.workspace import FsWriteMode
 
 from tests._sdk_session import make_driver, make_host, make_registry, runner_main_spec
 
@@ -452,7 +453,7 @@ def test_bug_fixer_fake_llm_full_loop_fixes_failing_test(
     assert "return a - b" in target.read_text()
 
     monkeypatch.setattr(
-        "noeta.tools.fs._subprocess._default_run",
+        "noeta.runtime.subproc._default_run",
         _make_subprocess_runner(workspace),
     )
     host = make_host(

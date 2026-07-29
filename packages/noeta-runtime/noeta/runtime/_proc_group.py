@@ -4,7 +4,7 @@ Three kill paths independently open-coded the same POSIX incantation —
 ``os.getpgid`` → ``os.killpg`` with a single-PID fallback, swallowing the
 dead-process / not-permitted races:
 
-* :func:`noeta.tools.fs._subprocess._kill_process_group` — the exec-tool
+* :func:`noeta.runtime.subproc._kill_process_group` — the exec-tool
   timeout teardown (synchronous TERM → grace → KILL).
 * :meth:`noeta.runtime.background_shell.ProcessRegistry._terminate` — the
   background-job single-signal send (escalation orchestrated by the caller).

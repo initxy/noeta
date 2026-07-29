@@ -28,7 +28,8 @@ from noeta.policies.control_tools import load_questions_body
 from noeta.protocols.task import GovernanceState, Task
 from noeta.protocols.values import EVENT_PAYLOAD_MAX_BYTES, ContentRef
 from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.tools.fs import FsWriteMode, ShellMode
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.workspace import FsWriteMode
 
 from tests._sdk_session import make_driver, make_host, make_registry, runner_main_spec
 

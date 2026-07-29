@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests._session_inputs import default_factory_kwargs
 from noeta.context.environment import ENVIRONMENT_KIND
 from noeta.context.memory import MEMORY_KIND
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
@@ -40,6 +41,7 @@ from noeta.tools.memory import (
 
 def _inputs(ws: Path, **kwargs):
     return build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=ws,
         system_prompt="p",
         allowed_tools=frozenset({"read"}),
@@ -179,7 +181,8 @@ def _memory_session(
     same memory machinery (tools + resident index + seed-path recall) the
     shipping backend builds."""
     from noeta.testing.fake_llm import FakeLLMProvider
-    from noeta.tools.fs import FsWriteMode, ShellMode
+    from noeta.runtime.shell_policy import ShellMode
+    from noeta.runtime.workspace import FsWriteMode
 
     from tests._sdk_session import (
         make_driver,

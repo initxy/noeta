@@ -24,7 +24,7 @@ from noeta.protocols.tool import Tool, ToolContext, ToolResult
 from noeta.tools.app._gateway import AppPreviewGateway
 from noeta.tools.descriptions import load_tool_description
 from noeta.tools._invocation import require_str
-from noeta.tools.fs._workspace import WorkspaceRoot, resolve_or_error, tool_error
+from noeta.runtime.workspace import WorkspaceRoot, resolve_or_error, tool_error
 
 
 __all__ = ["OpenAppTool", "build_app_tools"]

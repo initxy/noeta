@@ -58,8 +58,8 @@ from noeta.storage.memory import (
     InMemoryEventLog,
 )
 from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.tools.fs._subprocess import _RunOutcome
-from noeta.tools.fs.exec_env import AioSandboxExecEnv
+from noeta.runtime.subproc import _RunOutcome
+from noeta.runtime.exec_env import AioSandboxExecEnv
 
 
 # --------------------------------------------------------------------------- #
@@ -524,7 +524,7 @@ def _build(host: SdkHost, **kw: Any) -> Any:
 
 
 def test_host_without_config_uses_local_backend(tmp_path: Path) -> None:
-    from noeta.tools.fs.exec_env import LocalExecEnv
+    from noeta.runtime.exec_env import LocalExecEnv
 
     host = _make_host(tmp_path)
     assert host._sandbox is None
@@ -639,7 +639,7 @@ def test_sandbox_policy_false_declines_container_and_falls_back_local(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from noeta.tools.fs.exec_env import LocalExecEnv
+    from noeta.runtime.exec_env import LocalExecEnv
 
     monkeypatch.setattr(sandbox_mod, "_default_backend_factory", _recording_factory())
     provider = FakeProvider()

@@ -7,7 +7,7 @@ executes via an allowlisted interpreter. Default off ⇒ the tool does not
 exist.
 
 Live recording uses a **fake runner** patched onto the
-``noeta.tools.fs._subprocess._default_run`` seam (so the test does not
+``noeta.runtime.subproc._default_run`` seam (so the test does not
 depend on a real `bash`).
 """
 
@@ -21,9 +21,10 @@ import pytest
 from noeta.execution.skills import build_skill_script_wiring, load_workspace_skills
 from noeta.protocols.messages import LLMResponse, TextBlock, ToolUseBlock, Usage
 from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.tools.fs import WorkspaceRoot
-from noeta.tools.fs.skill_script import SKILL_SCRIPT_TOOL_NAME
-from noeta.tools.fs import FsWriteMode, ShellMode
+from noeta.runtime.workspace import WorkspaceRoot
+from noeta.tools.skill_script import SKILL_SCRIPT_TOOL_NAME
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.workspace import FsWriteMode
 
 from tests._sdk_session import make_driver, make_host, make_registry, runner_main_spec
 
@@ -186,7 +187,7 @@ def test_approve_runs_script(
 ) -> None:
     ws = _make_ws(tmp_path)
     monkeypatch.setattr(
-        "noeta.tools.fs._subprocess._default_run", _fake_run
+        "noeta.runtime.subproc._default_run", _fake_run
     )
     host, driver, _provider = _session(ws, [_run_script_call(), _end("done")], enabled=True)
     out = driver.start(goal="run the script", agent="main", activations=("scripted",))
@@ -207,7 +208,7 @@ def test_deny_does_not_run_script(
 ) -> None:
     ws = _make_ws(tmp_path)
     monkeypatch.setattr(
-        "noeta.tools.fs._subprocess._default_run", _boom
+        "noeta.runtime.subproc._default_run", _boom
     )  # nothing should spawn
     host, driver, _provider = _session(ws, [_run_script_call(), _end("done")], enabled=True)
     out = driver.start(goal="run the script", agent="main", activations=("scripted",))
@@ -222,7 +223,7 @@ def test_undiscovered_relpath_denied_no_spawn(
 ) -> None:
     ws = _make_ws(tmp_path)
     monkeypatch.setattr(
-        "noeta.tools.fs._subprocess._default_run", _boom
+        "noeta.runtime.subproc._default_run", _boom
     )
     host, driver, _provider = _session(
         ws, [_run_script_call(relpath="ghost.sh"), _end("done")], enabled=True

@@ -27,7 +27,8 @@ from noeta.storage.memory import (
 from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.client import SdkHost
 from noeta.execution.driver import multi_turn_policy_wrapper
-from noeta.tools.fs import FsWriteMode, ShellMode
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.workspace import FsWriteMode
 
 
 def _end_turn(text: str = "done") -> LLMResponse:

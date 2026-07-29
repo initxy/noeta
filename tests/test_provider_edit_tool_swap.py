@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from tests._session_inputs import default_factory_kwargs
 from noeta.client.options import AgentDefinition, Options, compile_options
 from noeta.execution.builder import (
     COMPACTION_OFF,
@@ -39,6 +40,7 @@ _FULL_EDIT_TOOLS = frozenset(
 
 def _tool_names(*, model: str, allowed: frozenset[str] = _FULL_EDIT_TOOLS) -> set[str]:
     inputs = build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=Path("/"),  # never written (DRY_RUN default)
         system_prompt="p",
         allowed_tools=allowed,
@@ -192,6 +194,7 @@ def test_model_swap_does_not_touch_agent_definition_or_prompt() -> None:
     # for both families (no "if you are GPT use apply_patch" prompt steering).
     for model in ("claude-opus-4-8", "gpt-4o"):
         inputs = build_session_inputs(
+            **default_factory_kwargs(),
             workspace_dir=Path("/"),
             system_prompt=prompt,
             allowed_tools=allowed,
@@ -210,7 +213,7 @@ def test_model_swap_does_not_touch_agent_definition_or_prompt() -> None:
 
 def test_apply_patch_description_loads_from_resource() -> None:
     from noeta.tools.descriptions import load_tool_description
-    from noeta.tools.fs import ApplyPatchTool
+    from noeta.builtins.fs.impl import ApplyPatchTool
 
     assert ApplyPatchTool.description == load_tool_description("apply_patch")
 

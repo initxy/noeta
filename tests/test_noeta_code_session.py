@@ -29,7 +29,8 @@ from tests._skill_fixtures import write_skill_raw
 from noeta.presets import official_specs
 from noeta.protocols.messages import LLMResponse, TextBlock, ToolUseBlock, Usage
 from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.tools.fs import FsWriteMode, ShellMode
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.workspace import FsWriteMode
 
 from tests._sdk_session import (
     make_driver,
@@ -409,7 +410,7 @@ def test_runner_summary_captures_last_shell(
         )
 
     monkeypatch.setattr(
-        "noeta.tools.fs._subprocess._default_run", fake_subprocess_run
+        "noeta.runtime.subproc._default_run", fake_subprocess_run
     )
 
     workspace_path = _make_workspace(tmp_path)

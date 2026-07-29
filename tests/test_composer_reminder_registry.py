@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from tests._session_inputs import default_factory_kwargs
 from noeta.context.reminders import (
     BUILTIN_REMINDER_PRIORITIES,
     ReminderRegistry,
@@ -112,6 +113,7 @@ def test_default_registry_appends_extras_by_priority() -> None:
 def _session(extra_reminders=()):
     workspace = Path(tempfile.mkdtemp(prefix="reminder_registry_"))
     return build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=workspace,
         system_prompt="You are main.",
         allowed_tools=frozenset({"read"}),

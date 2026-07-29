@@ -47,7 +47,7 @@ from noeta.storage.memory import (
     InMemoryEventLog,
 )
 from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.tools.fs._subprocess import _RunOutcome
+from noeta.runtime.subproc import _RunOutcome
 
 from tests._sdk_session import official_registry
 

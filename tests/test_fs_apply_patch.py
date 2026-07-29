@@ -18,13 +18,13 @@ import pytest
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.tool import ToolContext
 from noeta.storage.memory import InMemoryContentStore
-from noeta.tools.fs import FsWriteMode, WorkspaceRoot
-from noeta.tools.fs.patch import (
+from noeta.runtime.workspace import FsWriteMode, WorkspaceRoot
+from noeta.builtins.fs.impl.patch import (
     MAX_PATCH_CANONICAL_BYTES,
     MAX_PATCH_EDITS,
     ApplyPatchTool,
 )
-from noeta.tools.fs.edit import _sha256
+from noeta.builtins.fs.impl.edit import _sha256
 
 
 def _ws(tmp_path: Path, files: dict[str, str] | None = None) -> WorkspaceRoot:
@@ -653,7 +653,7 @@ def test_failed_apply_surfaces_no_file_changes(
     # ``file_changes`` for the checkpoint gate to (wrongly) stash.
     ws = _ws(tmp_path, {"a.py": "foo\n"})
     ctx, _cs = _ctx()
-    from noeta.tools.fs.exec_env import LocalExecEnv
+    from noeta.runtime.exec_env import LocalExecEnv
 
     def _boom(self: LocalExecEnv, path: Path, data: bytes) -> None:
         raise OSError("disk full")

@@ -42,6 +42,7 @@ from __future__ import annotations
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from enum import Enum
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -297,3 +298,15 @@ def resolve_anywhere(
     if not isinstance(path, str) or not path:
         return tool_error(tool_name, "path must be a non-empty string")
     return workspace.canonicalise(path)
+
+
+class FsWriteMode(str, Enum):
+    """Pre-run write policy passed to the edit tools at construction.
+
+    ``DRY_RUN`` produces the proposed diff artifact + ``applied=False``;
+    ``APPLY`` performs the write. The Engine never sees this enum — the
+    decision lives entirely on the closure-injected ``FsToolPack``.
+    """
+
+    DRY_RUN = "dry_run"
+    APPLY = "apply"

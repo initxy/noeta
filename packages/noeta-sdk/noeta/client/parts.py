@@ -13,70 +13,90 @@ product package.
 
 from __future__ import annotations
 
+import importlib
 from dataclasses import MISSING, fields
-from typing import Any
+from typing import Any, Callable, Optional
 
 from noeta.agent.spec import ComponentRef, ToolRef
-from noeta.tools.fs.edit import ReplaceTextTool, WriteFileTool
-from noeta.tools.fs.patch import ApplyPatchTool
-from noeta.tools.fs.read import GlobTool, GrepTool, ReadFileTool
-from noeta.tools.fs.shell import ShellKillTool, ShellPollTool, ShellRunTool
-from noeta.tools.web.fetch import WebFetchTool
-from noeta.tools.web.search import WebSearchTool
 
 
 __all__ = [
     "BUILTIN_TOOL_CLASSES",
     "COMPOSER_REF",
     "POLICY_REF",
+    "builtin_tool_classes",
     "builtin_tool_ref",
+    "default_tool_factories",
 ]
 
 
-#: name → fs tool class. SDK single source
-#: (``roster.specs._FS_TOOL_CLASSES`` removed; no mirror copy).
-_FS_TOOL_CLASSES: dict[str, type] = {
-    "read": ReadFileTool,
-    "glob": GlobTool,
-    "grep": GrepTool,
-    "edit": ReplaceTextTool,
-    "write": WriteFileTool,
-    "apply_patch": ApplyPatchTool,
-    "shell_run": ShellRunTool,
-    # shell_poll / shell_kill join the built-in catalog so
-    # they can enter a preset whitelist (main / general-purpose via tools=None).
-    # The background mechanism itself is unchanged; this only makes the
-    # already-existing tool classes addressable by name through builtin_tool_ref.
-    "shell_poll": ShellPollTool,
-    "shell_kill": ShellKillTool,
-}
+def _resolve_ref(ref: str) -> Any:
+    """Resolve an explicit ``pkg.mod:attr`` manifest ref (microkernel M1).
+
+    The same doorway the plugin loader uses — a dynamic import at the
+    sanctioned execution boundary. SDK core keeps **no static edge** into the
+    builtins band.
+    """
+    module_name, _, attr = ref.partition(":")
+    obj: Any = importlib.import_module(module_name)
+    for part in attr.split("."):
+        obj = getattr(obj, part)
+    return obj
 
 
-#: name → web tool class. Phase 2: ``webfetch`` is a built-in but
-#: NOT an fs tool (it takes an HTTP transport, no ``WorkspaceRoot``), so it
-#: lives in its own group rather than ``_FS_TOOL_CLASSES``. Joining
-#: ``BUILTIN_TOOL_CLASSES`` makes it addressable by name in a preset whitelist
-#: and puts it in ``main``'s ``tools=None`` full-catalog set; explore / plan /
-#: general-purpose keep their explicit whitelists (no webfetch).
-#:
-#: ``web_search`` is whitelisted the same way (so ``main`` may receive it), but
-#: it is constructed only when ``NOETA_WEB_SEARCH_API_KEY`` is set: with no key
-#: ``build_web_tools`` omits it from the runtime pack, so the whitelist's
-#: intersection with the pack drops it — the model never sees a search tool it
-#: cannot use. Listing it here costs nothing without a key.
-_WEB_TOOL_CLASSES: dict[str, type] = {
-    "webfetch": WebFetchTool,
-    "web_search": WebSearchTool,
-}
+_TOOL_CLASS_CACHE: Optional[dict[str, type]] = None
 
 
-#: Alias to the built-in tool classes — the single mapping
-#: :func:`builtin_tool_ref` consults. Missing names raise ``KeyError`` loudly
-#: so we never mint a tool ref with guessed metadata.
-BUILTIN_TOOL_CLASSES: dict[str, type] = {
-    **_FS_TOOL_CLASSES,
-    **_WEB_TOOL_CLASSES,
-}
+def builtin_tool_classes() -> dict[str, type]:
+    """name → class for the default built-in tools, **loader-resolved**.
+
+    Microkernel M1 (D2): SDK core holds no static tool table. The ``fs`` /
+    ``web`` built-in plugin manifests declare the default 11 tools; this
+    function reads those manifests (inert data) and resolves each ``tool``
+    contribution's ref at the sanctioned execution boundary (client build /
+    compile). Memoized — the classes are import-stable for the process.
+
+    ``web_search`` is listed like every other name, but the *runtime pack*
+    constructs it only when ``NOETA_WEB_SEARCH_API_KEY`` is set — the
+    whitelist's intersection with the built pack drops it otherwise, so the
+    model never sees a search tool it cannot use.
+    """
+    global _TOOL_CLASS_CACHE
+    if _TOOL_CLASS_CACHE is None:
+        builtins_mod = importlib.import_module("noeta.builtins")
+        out: dict[str, type] = {}
+        for manifest in builtins_mod.builtin_manifests():
+            if manifest.name not in ("fs", "web"):
+                continue
+            for c in manifest.contributions:
+                if c.surface != "tool" or c.ref is None:
+                    continue
+                out[c.name] = _resolve_ref(c.ref)
+        _TOOL_CLASS_CACHE = out
+    return _TOOL_CLASS_CACHE
+
+
+def default_tool_factories() -> tuple[Callable[..., Any], Callable[..., Any]]:
+    """``(fs_tools_factory, web_tools_factory)`` for the kernel builder.
+
+    Resolved from the ``fs`` / ``web`` built-in plugin bodies
+    (``noeta.builtins.<name>.impl:build_*_tools``) — the injection the
+    microkernel builder requires (its ``fs_tools_factory`` /
+    ``web_tools_factory`` params); the kernel itself imports no tool
+    implementation.
+    """
+    return (
+        _resolve_ref("noeta.builtins.fs.impl:build_fs_tools"),
+        _resolve_ref("noeta.builtins.web.impl:build_web_tools"),
+    )
+
+
+def __getattr__(name: str) -> Any:
+    # Compatibility surface: ``BUILTIN_TOOL_CLASSES`` stays importable as a
+    # module attribute, now backed by the loader-resolved table.
+    if name == "BUILTIN_TOOL_CLASSES":
+        return builtin_tool_classes()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 #: ReAct decision-mapping behaviour version — SDK single source
@@ -121,12 +141,13 @@ def builtin_tool_ref(name: str) -> ToolRef:
         If ``name`` is not in :data:`BUILTIN_TOOL_CLASSES`. The message
         enumerates the valid names.
     """
-    if name not in BUILTIN_TOOL_CLASSES:
-        available = ", ".join(sorted(BUILTIN_TOOL_CLASSES))
+    classes = builtin_tool_classes()
+    if name not in classes:
+        available = ", ".join(sorted(classes))
         raise KeyError(
             f"Unknown built-in tool {name!r}. Available: {available}"
         )
-    cls = BUILTIN_TOOL_CLASSES[name]
+    cls = classes[name]
     return ToolRef(
         name=name,
         version="1",

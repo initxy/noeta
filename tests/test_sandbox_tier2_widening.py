@@ -26,10 +26,10 @@ from noeta.execution.environment import load_environment
 from noeta.execution.instructions import load_instructions
 from noeta.protocols.tool import ToolContext
 from noeta.storage.memory import InMemoryContentStore
-from noeta.tools.fs._subprocess import _RunOutcome
-from noeta.tools.fs._workspace import WorkspaceRoot
-from noeta.tools.fs.shell import load_project_shell_allowlist
-from noeta.tools.fs.skill_script import RunSkillScriptTool
+from noeta.runtime.subproc import _RunOutcome
+from noeta.runtime.workspace import WorkspaceRoot
+from noeta.runtime.shell_policy import load_project_shell_allowlist
+from noeta.tools.skill_script import RunSkillScriptTool
 
 
 class FakeContainer:

@@ -19,10 +19,11 @@ from typing import Iterable
 
 from noeta.protocols.tool import ToolContext
 from noeta.storage.memory import InMemoryContentStore
-from noeta.tools.fs import ShellMode, build_fs_tools
-from noeta.tools.fs._subprocess import _RunOutcome
-from noeta.tools.fs._workspace import WorkspaceRoot
-from noeta.tools.fs.exec_env import AioSandboxExecEnv, LocalExecEnv
+from noeta.builtins.fs.impl import build_fs_tools
+from noeta.runtime.shell_policy import ShellMode
+from noeta.runtime.subproc import _RunOutcome
+from noeta.runtime.workspace import WorkspaceRoot
+from noeta.runtime.exec_env import AioSandboxExecEnv, LocalExecEnv
 
 
 class _SandboxLike:

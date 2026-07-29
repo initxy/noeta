@@ -1,7 +1,8 @@
-"""`noeta.tools.web` — the web tool pack (second wave).
+"""``noeta.builtins.web.impl`` — the web tool pack implementation.
 
-Ships two read-only tools that take no ``WorkspaceRoot`` (so they live here, not
-in ``noeta.tools.fs``), both ``risk_level="low"`` with no workspace mutation:
+The ``web`` built-in plugin's body (microkernel migration, M1). Ships two
+read-only tools that take no ``WorkspaceRoot``, both ``risk_level="low"``
+with no workspace mutation:
 
 * ``webfetch`` — fetch a public URL, convert the HTML body to a compact Markdown
   rendering, and return it (offloading the full body to the ContentStore when it
@@ -16,18 +17,21 @@ production wires the real httpx-backed transport. Private / authenticated URLs
 and auth / quota failures surface at the transport (HTTP 401/403 or a connection
 error) and degrade to a clear ``ToolResult(success=False, ...)`` — these
 limitations are documented in the tools' description resources.
+
+This module is reached only through the plugin loader's ``ref`` resolution;
+nothing imports it statically.
 """
 
 from __future__ import annotations
 
-from noeta.tools.web.fetch import (
+from noeta.builtins.web.impl.fetch import (
     ContainerCurlFetchTransport,
     FetchTransport,
     HttpFetchTransport,
     WebFetchTool,
     build_web_tools,
 )
-from noeta.tools.web.search import (
+from noeta.builtins.web.impl.search import (
     ContainerCurlSearchTransport,
     HttpSearchTransport,
     SearchResult,

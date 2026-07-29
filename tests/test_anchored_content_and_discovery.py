@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests._session_inputs import default_factory_kwargs
 from noeta.context.composer import RenderedSkills, ThreeSegmentComposer
 from noeta.context.content_channel import (
     ContentChannelRegistry,
@@ -46,7 +47,7 @@ from noeta.protocols.task import Task
 from noeta.protocols.tool import ToolResult
 from noeta.storage.memory import InMemoryContentStore, InMemoryEventLog
 from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.tools.fs import WorkspaceRoot
+from noeta.runtime.workspace import WorkspaceRoot
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +439,7 @@ def _build_discovery_engine(ws: Path, responses: list[LLMResponse]):
 
     def _inputs():
         return build_session_inputs(
+            **default_factory_kwargs(),
             workspace_dir=ws,
             system_prompt="sys",
             allowed_tools=frozenset({"read"}),
@@ -610,6 +612,7 @@ def test_discovery_off_by_default_no_seams(tmp_path: Path) -> None:
 
     ws = _ws(tmp_path)
     inputs = build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=ws,
         system_prompt="sys",
         allowed_tools=frozenset({"read"}),

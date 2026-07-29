@@ -18,14 +18,15 @@ from typing import Iterable, Optional
 
 import pytest
 
+from tests._session_inputs import default_factory_kwargs
 from noeta.client.host_config import HostConfig, SandboxExecEnvConfig
 from noeta.execution.builder import build_session_inputs, derive_compaction_config
 from noeta.protocols.tool import ToolContext
 from noeta.storage.memory import InMemoryContentStore
-from noeta.tools.fs import build_fs_tools
-from noeta.tools.fs._subprocess import _RunOutcome
-from noeta.tools.fs._workspace import WorkspaceEscape, WorkspaceRoot
-from noeta.tools.fs.exec_env import ExecEnv, LocalExecEnv
+from noeta.builtins.fs.impl import build_fs_tools
+from noeta.runtime.subproc import _RunOutcome
+from noeta.runtime.workspace import WorkspaceEscape, WorkspaceRoot
+from noeta.runtime.exec_env import ExecEnv, LocalExecEnv
 
 from tests._sdk_session import coding_replay_budget
 
@@ -211,6 +212,7 @@ _SYSTEM = "you are a coding agent"
 
 def _session(*, workspace_dir: Path, exec_env: ExecEnv | None):
     return build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=workspace_dir,
         system_prompt=_SYSTEM,
         allowed_tools=frozenset({"read", "write", "edit", "shell_run"}),

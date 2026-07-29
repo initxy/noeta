@@ -1,94 +1,68 @@
-"""`noeta.tools.fs` — the file-system tool pack for Noeta Code (Phase 4).
+"""``noeta.builtins.fs.impl`` — the file-system tool pack implementation.
 
-The pack is *closure-constructed*: ``build_fs_tools`` takes one
-``WorkspaceRoot`` (the path-containment seam), an ``FsWriteMode`` (the
-``DRY_RUN`` / ``APPLY`` policy for the edit tools), and a ``ShellMode``
-(the ``OFF`` / ``ALLOWLIST`` / ``ARBITRARY`` policy for shell + git
-tools), and returns the dict of Tool instances keyed by their
-provider-safe ``snake_case`` name. Each tool keeps a reference to the
-workspace + its mode so the runtime never has to pass them in (the L0
-``Tool`` Protocol stays unchanged).
+The ``fs`` built-in plugin's body (microkernel migration, M1): the tool
+classes plus the closure-construction factory. The pack is
+*closure-constructed*: :func:`build_fs_tools` takes one ``WorkspaceRoot``
+(the path-containment seam), an ``FsWriteMode`` (the ``DRY_RUN`` / ``APPLY``
+policy for the edit tools), and a ``ShellMode`` (the ``OFF`` / ``ALLOWLIST``
+/ ``ARBITRARY`` policy for the shell tools), and returns the dict of Tool
+instances keyed by their provider-safe ``snake_case`` name. Each tool keeps a
+reference to the workspace + its mode so the runtime never has to pass them
+in (the L0 ``Tool`` Protocol stays unchanged).
 
-The modes are bound at construction (B13): the CLI (I4) maps
-``--allow-write`` / ``--allow-shell`` / ``--read-only`` flags into
-single mode values *before* the Engine starts. There is no
-"see-diff-then-apply" pause inside the Engine, and there is no run-time
-re-negotiation of shell privileges.
-
-* **I1** shipped the read-only tools — ``read`` / ``glob`` / ``grep``.
-* **I2** added ``edit`` / ``write`` (rename of the
-  former ``replace_text`` / ``write_file``) with the
-  dry-run-by-default policy.
-* **I5** adds ``shell_run`` with the ALLOWLIST-by-default policy.
-  ``OFF`` removes ``shell_run`` entirely (the daemon default Agent).
+The policy types themselves (``WorkspaceRoot`` / ``FsWriteMode`` /
+``ShellMode`` / the shell allowlist / ``ExecEnv``) are **kernel**
+infrastructure in ``noeta.runtime`` — the kernel and other consumers depend
+on them without touching this plugin body. This module is reached only
+through the plugin loader's ``ref`` resolution (or by the pack factory ref);
+nothing imports it statically.
 """
 
 from __future__ import annotations
 
 from typing import Any, Mapping, Optional, Sequence
 
-from noeta.protocols.tool import Tool
-from noeta.tools.fs._workspace import (
-    WorkspaceEscape,
-    WorkspaceRoot,
-    WriteRootsResolver,
-    path_within,
-)
-from noeta.tools.fs.exec_env import ExecEnv, LocalExecEnv
-from noeta.tools.fs.edit import (
+from noeta.builtins.fs.impl.edit import (
     WRITE_FILE_MAX_BYTES,
-    FsWriteMode,
     ReplaceTextTool,
     WriteFileTool,
 )
-from noeta.tools.fs.patch import (
+from noeta.builtins.fs.impl.patch import (
     MAX_PATCH_CANONICAL_BYTES,
     MAX_PATCH_EDITS,
     ApplyPatchTool,
 )
-from noeta.tools.fs.read import GlobTool, GrepTool, ReadFileTool
-from noeta.tools.fs.shell import (
-    DEFAULT_SHELL_OUTPUT_CAP,
-    DEFAULT_SHELL_TIMEOUT_S,
+from noeta.builtins.fs.impl.read import GlobTool, GrepTool, ReadFileTool
+from noeta.builtins.fs.impl.shell import (
     ShellKillTool,
-    ShellMode,
     ShellPollTool,
     ShellRunTool,
-    build_allowlist,
 )
-from noeta.tools.fs.skill_script import (
-    SKILL_SCRIPT_TOOL_NAME,
-    RunSkillScriptTool,
-    is_skill_script_resource,
+from noeta.protocols.tool import Tool
+from noeta.runtime.exec_env import ExecEnv, LocalExecEnv
+from noeta.runtime.shell_policy import ShellMode, build_allowlist
+from noeta.runtime.workspace import (
+    FsWriteMode,
+    WorkspaceRoot,
+    WriteRootsResolver,
 )
 
 
 __all__ = [
     "ApplyPatchTool",
-    "DEFAULT_SHELL_OUTPUT_CAP",
-    "DEFAULT_SHELL_TIMEOUT_S",
     "FsToolPack",
-    "MAX_PATCH_CANONICAL_BYTES",
-    "MAX_PATCH_EDITS",
-    "FsWriteMode",
     "GlobTool",
     "GrepTool",
+    "MAX_PATCH_CANONICAL_BYTES",
+    "MAX_PATCH_EDITS",
     "ReadFileTool",
     "ReplaceTextTool",
-    "RunSkillScriptTool",
-    "SKILL_SCRIPT_TOOL_NAME",
     "ShellKillTool",
-    "ShellMode",
     "ShellPollTool",
     "ShellRunTool",
     "WRITE_FILE_MAX_BYTES",
-    "WorkspaceEscape",
-    "WorkspaceRoot",
     "WriteFileTool",
-    "WriteRootsResolver",
     "build_fs_tools",
-    "is_skill_script_resource",
-    "path_within",
 ]
 
 
@@ -130,7 +104,7 @@ def build_fs_tools(
     ``exec_env`` is the execution backend the fs / shell tools route their real
     IO through. ``None`` (default) ⇒ each tool builds its own ``LocalExecEnv``
     (byte-identical to the pre-seam host behaviour); a sandbox backend
-    (:class:`~noeta.tools.fs.exec_env.AioSandboxExecEnv`) makes the whole pack
+    (:class:`~noeta.runtime.exec_env.AioSandboxExecEnv`) makes the whole pack
     act against a container — paired with a container ``workspace``
     (:meth:`WorkspaceRoot.for_container`). It never changes a tool's
     name / schema / description, so the stable prefix is unaffected.

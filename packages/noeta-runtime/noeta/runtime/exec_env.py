@@ -45,7 +45,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 
-from noeta.tools.fs._subprocess import (
+from noeta.runtime.subproc import (
     _RunOutcome,
     cap_stream,
     run_argv as _local_run_argv,
@@ -245,7 +245,7 @@ class ExecEnv(Protocol):
     ) -> _RunOutcome:
         """Spawn ``argv`` under ``cwd``, capture output, enforce timeout + cap.
 
-        Returns the same :class:`~noeta.tools.fs._subprocess._RunOutcome` the
+        Returns the same :class:`~noeta.runtime.subproc._RunOutcome` the
         tools already consume.
         """
         ...

@@ -20,15 +20,15 @@ from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.runtime.tool import _encode_output
 from noeta.storage.memory import InMemoryContentStore
 from noeta.tools._limits import INLINE_CONTENT_MAX_BYTES, encoded_len
-from noeta.tools.fs._subprocess import _RunOutcome
-from noeta.tools.web import (
+from noeta.runtime.subproc import _RunOutcome
+from noeta.builtins.web.impl import (
     ContainerCurlSearchTransport,
     HttpSearchTransport,
     SearchResult,
     WebSearchTool,
     build_web_tools,
 )
-from noeta.tools.web.search import (
+from noeta.builtins.web.impl.search import (
     SEARCH_API_KEY_ENV,
     results_to_markdown,
 )

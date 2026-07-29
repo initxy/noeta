@@ -44,13 +44,13 @@ from noeta.tools._limits import (
     truncate_bytes,
 )
 from noeta.tools.descriptions import load_tool_description
-from noeta.tools.fs._workspace import (
+from noeta.runtime.workspace import (
     WorkspaceRoot,
     path_within,
     resolve_anywhere,
     tool_error,
 )
-from noeta.tools.fs.exec_env import ExecEnv, LocalExecEnv
+from noeta.runtime.exec_env import ExecEnv, LocalExecEnv
 
 
 __all__ = [

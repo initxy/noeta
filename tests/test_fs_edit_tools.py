@@ -24,15 +24,14 @@ from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.runtime.tool import _encode_output
 from noeta.storage.memory import InMemoryContentStore
 from noeta.tools._limits import INLINE_OUTPUT_MAX_BYTES
-from noeta.tools.fs import (
+from noeta.builtins.fs.impl import (
     WRITE_FILE_MAX_BYTES,
-    FsWriteMode,
     ReadFileTool,
     ReplaceTextTool,
-    WorkspaceRoot,
     WriteFileTool,
     build_fs_tools,
 )
+from noeta.runtime.workspace import FsWriteMode, WorkspaceRoot
 
 
 def _ctx_and_workspace(

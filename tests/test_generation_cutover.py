@@ -26,6 +26,7 @@ from typing import Optional
 
 from tests._skill_fixtures import write_skill
 
+from tests._session_inputs import default_factory_kwargs
 from noeta.core.engine import Engine, emit_context_content_recorded
 from noeta.core.fold import fold
 from noeta.core.wiring import wire_default_observers
@@ -332,6 +333,7 @@ def test_composer_reads_generic_map_only(tmp_path: Path) -> None:
     write_skill(ws, "alpha", description="a")
     cs = InMemoryContentStore()
     inputs = build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=ws,
         system_prompt="p",
         allowed_tools=frozenset({"read_file"}),
@@ -434,6 +436,7 @@ def _record_session(
 
     def _inputs():
         return build_session_inputs(
+            **default_factory_kwargs(),
             workspace_dir=ws,
             system_prompt="you are helpful",
             allowed_tools=frozenset({"read_file"}),

@@ -30,7 +30,7 @@ from typing import Iterable
 
 from noeta.context.skills import SkillIndexer
 from noeta.execution.skills import load_workspace_skills
-from noeta.tools.fs.exec_env import LocalExecEnv, TreeSnapshot
+from noeta.runtime.exec_env import LocalExecEnv, TreeSnapshot
 
 
 _REVIEW = b"---\nname: review\ndescription: builtin review\n---\n\nReview body.\n"

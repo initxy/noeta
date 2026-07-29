@@ -51,9 +51,9 @@ from noeta.agent.spec import (
     ToolRef,
 )
 from noeta.client.parts import (
-    BUILTIN_TOOL_CLASSES,
     COMPOSER_REF,
     POLICY_REF,
+    builtin_tool_classes,
     builtin_tool_ref,
 )
 from noeta.context.content_channel import ContentKindSpec
@@ -874,7 +874,7 @@ def compile_options(
         (``None`` = full built-in set, same default as the main Options),
         plus any tools its activation contributes (loudly on a clash)."""
         if defn_tools is None:
-            base: tuple[Any, ...] = tuple(sorted(BUILTIN_TOOL_CLASSES))
+            base: tuple[Any, ...] = tuple(sorted(builtin_tool_classes()))
         else:
             base = defn_tools
         return _merge_plugin_tools(
@@ -964,7 +964,7 @@ def compile_options(
     # explicit, separate source, so they are added even under a replacement
     # allow-list. External plugin activation (D6) contributes its tools on top.
     if options.allowed_tools is None:
-        base = tuple(sorted(BUILTIN_TOOL_CLASSES))
+        base = tuple(sorted(builtin_tool_classes()))
     else:
         base = options.allowed_tools
     tool_entries = tuple(base) + _mcp_server_tool_entries(options.mcp_servers)

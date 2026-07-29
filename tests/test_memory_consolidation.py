@@ -17,6 +17,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from tests._session_inputs import default_factory_kwargs
 from noeta.client.consolidation import (
     CONSOLIDATION_AGENT_NAME,
     CONSOLIDATION_MARKER_FILENAME,
@@ -480,6 +481,7 @@ def test_consolidation_tool_surface_is_memory_pack_only(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()
     inputs = build_session_inputs(
+        **default_factory_kwargs(),
         workspace_dir=ws,
         system_prompt="curate",
         allowed_tools=frozenset(),  # the compiled spec's empty whitelist

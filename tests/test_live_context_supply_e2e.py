@@ -99,7 +99,8 @@ requires_live_llm = pytest.mark.skipif(
 
 
 def _session(workspace: Path, *, max_steps: int = 8):
-    from noeta.tools.fs import FsWriteMode, ShellMode
+    from noeta.runtime.shell_policy import ShellMode
+    from noeta.runtime.workspace import FsWriteMode
 
     from tests._sdk_session import (
         make_driver,
