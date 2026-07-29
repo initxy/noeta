@@ -95,6 +95,7 @@ from noeta.protocols.events import (
     ModelBoundPayload,
     StepAttemptAbandonedPayload,
     TaskCreatedPayload,
+    spill_goal,
     TaskSnapshotPayload,
     TaskStartedPayload,
     TaskStatePatchedPayload,
@@ -137,6 +138,7 @@ _RECENT_TOOL_CALLS_WINDOW = 32
 
 def _emit_child_task_created(
     event_log: EventLog,
+    content_store: ContentStore,
     actor: str,
     policy_name: str,
     *,
@@ -158,18 +160,23 @@ def _emit_child_task_created(
     behaviour with the pre-refactor inline write. ``background=True``
     (docs/adr/background-subagent.md) marks the child so the
     ``ChildLifecycleObserver`` skips it; the default ``False`` omits the key
-    (``__canonical_omit_none__``) ⇒ byte-identical to every foreground child."""
+    (``__canonical_omit_none__``) ⇒ byte-identical to every foreground child.
+    An oversized ``goal`` spills to the ContentStore (``spill_goal``) instead
+    of blowing the payload cap — content-addressed, so it lands on the same
+    ref the parent's ``SubtaskSpawned`` spill wrote."""
+    goal_inline, goal_ref = spill_goal(content_store, goal)
     return event_log.system_emit(
         task_id=child_task_id,
         type="TaskCreated",
         payload=TaskCreatedPayload(
-            goal=goal,
+            goal=goal_inline,
             policy_name=policy_name,
             agent_name=agent_name,
             parent_task_id=parent_task_id,
             inputs=dict(inputs),
             subtask_depth=subtask_depth,
             background=True if background else None,
+            goal_ref=goal_ref,
         ),
         actor=actor,
         origin="engine",
@@ -300,7 +307,7 @@ class Engine:
             emit=self._emit,
             create_child_task=(
                 lambda **kw: _emit_child_task_created(
-                    self._event_log, self._actor,
+                    self._event_log, self._content_store, self._actor,
                     self._SUBTASK_DEFAULT_POLICY_NAME, **kw,
                 )
             ),
@@ -349,12 +356,17 @@ class Engine:
         _validate_genesis_provenance(agent_name, host_binding)
         tid = task_id or f"task-{uuid.uuid4().hex}"
         trace = trace_id or f"trace-{uuid.uuid4().hex}"
+        # An oversized goal spills to the ContentStore (goal_ref) — the genesis
+        # event has no other escape from the payload cap, and a host-supplied
+        # goal is unbounded text. The returned Task keeps the full goal.
+        goal_inline, goal_ref = spill_goal(self._content_store, goal)
         payload = TaskCreatedPayload(
-            goal=goal,
+            goal=goal_inline,
             policy_name=policy_name,
             agent_name=agent_name,
             parent_task_id=parent_task_id,
             inputs=dict(inputs or {}),
+            goal_ref=goal_ref,
         )
         self._event_log.system_emit(
             task_id=tid,

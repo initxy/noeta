@@ -11,10 +11,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, Optional
 
-from noeta.protocols.canonical import from_canonical_bytes, register
+from noeta.protocols.canonical import from_canonical_bytes, register, to_canonical_bytes
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.messages import Usage
-from noeta.protocols.values import ContentRef
+from noeta.protocols.values import EVENT_PAYLOAD_MAX_BYTES, ContentRef
 from noeta.protocols.wake import SubtaskResult, WakeCondition
 
 
@@ -115,6 +115,15 @@ class TaskCreatedPayload:
     Carries the immutable header (goal, principal, contract, budget) that
     later ``fold`` calls use to bootstrap empty state. Phase 0 keeps the
     shape minimal; more fields land alongside their consumers.
+
+    A large ``goal`` is spilled to the ContentStore (the genesis event has
+    no other escape from the ``EVENT_PAYLOAD_MAX_BYTES`` cap —
+    ``MessagesAppended.messages_ref`` only covers subsequent messages) —
+    ``goal`` then holds ``""`` and the full text is reachable via
+    ``goal_ref``. Small goals stay inline with ``goal_ref=None``;
+    ``__canonical_omit_none__`` drops the absent ref so a small-goal event
+    is byte-identical to a pre-spill recording. Write through
+    :func:`spill_goal`, read with :func:`goal_from_payload`.
     """
 
     goal: str
@@ -135,8 +144,49 @@ class TaskCreatedPayload:
     #: foreground child; ``__canonical_omit_none__`` drops the absent key so every
     #: pre-existing recording is byte-identical (same rule as ``answer_ref``).
     background: Optional[bool] = None
+    #: Spill escape for an oversized ``goal`` — see the class docstring.
+    goal_ref: Optional[ContentRef] = None
 
-    __canonical_omit_none__ = frozenset({"background"})
+    __canonical_omit_none__ = frozenset({"background", "goal_ref"})
+
+
+#: Goal bytes above this go to the ContentStore so no goal-carrying event
+#: (``TaskCreated`` / ``SubtaskSpawned`` / ``SubtaskDenied`` /
+#: ``BackgroundSubagentStarted``) can blow the ``EVENT_PAYLOAD_MAX_BYTES``
+#: cap; the ~1 KB headroom covers the surrounding payload structure (same
+#: rationale as the ``TaskCompleted`` answer spill).
+GOAL_INLINE_LIMIT = EVENT_PAYLOAD_MAX_BYTES - 1024
+
+_GOAL_MEDIA_TYPE = "application/json"
+
+
+def spill_goal(
+    content_store: ContentStore, goal: str
+) -> tuple[str, Optional[ContentRef]]:
+    """Keep a small goal inline; spill a large one to the ContentStore.
+
+    Returns ``(goal, None)`` for the inline case and ``("", ref)`` for the
+    spilled case; the pair maps onto the ``goal`` / ``goal_ref`` fields of
+    every goal-carrying payload. Deterministic (fixed size threshold +
+    content-addressed ref), so a replayed decision re-emits byte-identical
+    events. Read the value back with :func:`goal_from_payload`.
+    """
+    body = to_canonical_bytes(goal)
+    if len(body) <= GOAL_INLINE_LIMIT:
+        return goal, None
+    return "", content_store.put(body, media_type=_GOAL_MEDIA_TYPE)
+
+
+def goal_from_payload(payload: Any, content_store: ContentStore) -> str:
+    """The full goal of any goal-carrying payload: derefs ``goal_ref`` (set
+    when the goal was spilled to the ContentStore) or returns the inline
+    ``goal``. The single reader every consumer should use so the spill is
+    transparent. Defensive ``getattr`` so a legacy / malformed payload reads
+    as ``""`` (the same tolerance ``fold``'s genesis bootstrap always had)."""
+    ref = getattr(payload, "goal_ref", None)
+    if ref is not None:
+        return str(from_canonical_bytes(content_store.get(ref)))
+    return str(getattr(payload, "goal", "") or "")
 
 
 @dataclass(frozen=True, slots=True)
@@ -401,14 +451,20 @@ class ToolCallFinishedPayload:
 class SubtaskSpawnedPayload:
     """Parent stream: parent's Policy asked to spawn a child Task.
 
-    The full child spec is captured inline (Phase 0 inputs stay well under
-    the 4-KB envelope ceiling; larger inputs would need a ContentRef).
+    A large ``goal`` is spilled to the ContentStore via ``goal_ref`` (same
+    contract as ``TaskCreated`` — see :func:`spill_goal` /
+    :func:`goal_from_payload`); ``inputs`` stay inline (Phase 0 inputs are
+    small; larger inputs would need their own ContentRef).
     """
 
     subtask_id: str
     agent_name: str
     goal: str
     inputs: dict[str, Any] = field(default_factory=dict)
+    #: Spill escape for an oversized ``goal`` — see :func:`spill_goal`.
+    goal_ref: Optional[ContentRef] = None
+
+    __canonical_omit_none__ = frozenset({"goal_ref"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -1021,11 +1077,19 @@ class SubtaskDeniedPayload:
 
     The parent Task transitions to terminal/failed; the child is never
     bootstrapped. This is the spawn analogue of ``ToolCallDenied``.
+
+    A large ``goal`` is spilled to the ContentStore via ``goal_ref`` (same
+    contract as ``TaskCreated`` — the denied spec's goal is model-controlled
+    text and must not blow the payload cap on the denial record).
     """
 
     agent_name: str
     goal: str
     reason: str
+    #: Spill escape for an oversized ``goal`` — see :func:`spill_goal`.
+    goal_ref: Optional[ContentRef] = None
+
+    __canonical_omit_none__ = frozenset({"goal_ref"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -1219,6 +1283,10 @@ class BackgroundSubagentStartedPayload:
     agent_name: str
     goal: str
     call_id: str
+    #: Spill escape for an oversized ``goal`` — see :func:`spill_goal`.
+    goal_ref: Optional[ContentRef] = None
+
+    __canonical_omit_none__ = frozenset({"goal_ref"})
 
 
 @dataclass(frozen=True, slots=True)
