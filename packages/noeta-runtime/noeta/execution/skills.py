@@ -245,8 +245,9 @@ def extract_skill_allowed_tools_raw(
     the ``PermissionPolicy`` build site; the kernel guard receives the
     already-resolved neutral grants. Sorted by skill name for deterministic
     ordering. This extraction lives in the execution layer on purpose: it
-    reads ``noeta.context.skills`` here so ``noeta.guards`` never has to (it
-    may only import ``noeta.protocols``).
+    reads ``noeta.context.skills`` here so the permission guard
+    (``noeta.builtins.governance.impl``) never has to — a guard keeps a
+    ``noeta.protocols``-only diet.
     """
     out: list[tuple[str, str]] = []
     for name in registry.names():
@@ -390,7 +391,7 @@ def build_skill_composer(
     tail-window prune (D-3e). ``None`` (default, and for any model the catalog
     does not describe) keeps the legacy no-prune behaviour. The value is a
     deterministic function of the model
-    (:func:`noeta.execution.builder.derive_compaction_config`), so a resumed
+    (``derive_compaction_config``, in the providers built-in's catalog), so a resumed
     turn derives the SAME budget and composes the same prefix bytes (the
     stable-prefix prompt cache only hits when the prefix is byte-stable).
     ``available_window`` (``context_window - max_output - buffer``) arms the

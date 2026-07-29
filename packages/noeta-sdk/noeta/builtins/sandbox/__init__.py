@@ -9,7 +9,8 @@ host wiring, NEVER agent identity, so these declarations are NOT merged onto
 any ``AgentSpec`` and never follow per-agent activation. Secrets never appear
 here: the adapters take a live ``SandboxAuth`` strategy at wiring time (never a
 manifest / config / ledger value). This manifest is the listing / reference
-surface — the refs point at the AIO backend + browser adapter classes.
+surface — the refs point at the AIO backend + browser adapter classes in this
+plugin's own ``impl`` package (microkernel M2).
 """
 
 from __future__ import annotations
@@ -25,12 +26,12 @@ MANIFEST = PluginManifest(
         c(
             "sandbox_provider",
             "aio-exec-env",
-            "noeta.runtime.exec_env:AioSandboxExecEnv",
+            "noeta.builtins.sandbox.impl.exec_env:AioSandboxExecEnv",
         ),
         c(
             "sandbox_provider",
             "aio-browser",
-            "noeta.tools.browser:AioBrowserBackend",
+            "noeta.builtins.sandbox.impl.browser:AioBrowserBackend",
         ),
     ),
 )

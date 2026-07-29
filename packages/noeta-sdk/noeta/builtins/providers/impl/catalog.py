@@ -13,10 +13,13 @@ Provider neutrality: both Anthropic and OpenAI rows live in the
 adapter already maps its wire usage into the neutral :class:`Usage`
 (Foundation-A); the catalog only prices that neutral shape.
 
-import-linter: this module sits in ``noeta.providers`` and so may import
-**only** ``noeta.protocols`` + stdlib (``providers-only-protocols`` contract).
-``noeta.runtime`` must NOT import this — pricing reaches ``RuntimeLLMClient``
-as an injected callback (see ``noeta.agent.wiring.engine``).
+Layering (microkernel M2): this module lives in the ``providers`` built-in
+plugin. The kernel must NOT import it — pricing reaches ``RuntimeLLMClient``
+as an injected callback, the model-alias resolver reaches the
+``InteractionDriver`` as an injected callable, and the edit-tool family +
+compaction knobs reach ``build_session_inputs`` pre-resolved
+(``provider_family=`` / ``compaction=``) — all wired by the SDK host through
+:mod:`noeta.client.parts`.
 
 Pricing provenance (D-C2): all public-model rows (Anthropic + OpenAI) were
 verified against the vendors' official pricing/model pages on 2026-07-05;
@@ -30,6 +33,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from noeta.context.composer import _COMPOSER_VERSION
+from noeta.execution.builder import COMPACTION_OFF, CompactionConfig
 from noeta.protocols.messages import Usage
 
 
@@ -41,6 +46,7 @@ __all__ = [
     "resolve_alias",
     "price",
     "provider_family",
+    "derive_compaction_config",
 ]
 
 
@@ -288,4 +294,73 @@ def price(model_id: str, usage: Usage) -> float:
         + usage.cache_read / 1_000_000 * spec.cache_read_price_per_mtok
         + usage.cache_write / 1_000_000 * spec.cache_write_price_per_mtok
         + usage.output / 1_000_000 * spec.output_price_per_mtok
+    )
+
+
+# ---------------------------------------------------------------------------
+# Compaction knobs derived from the catalog (moved out of the kernel builder
+# at microkernel M2 — the kernel keeps the CompactionConfig TYPE and takes the
+# derived knobs pre-resolved through ``build_session_inputs(compaction=…)``).
+# ---------------------------------------------------------------------------
+
+#: Fixed headroom (estimated tokens) reserved under the context window beyond
+#: the output cap, so the available history window leaves slack for the system
+#: prompt + provider tool schemas + the next response. Deterministic constant (D-3d):
+#: the same value on live + resume.
+_COMPACTION_BUFFER_TOKENS = 2_000
+
+#: Fraction of the usable window kept as the verbatim recent tail, expressed as
+#: a denominator (``tail = available // N``). Compaction keeps
+#: a verbatim tail because noeta cannot re-read disk during compose (resume
+#: determinism) — but half the window (the original ``N=2``) is heavier than
+#: needed: the summary keeps file paths and the model re-reads with ``read``, so
+#: a smaller tail frees window at the cost of less recent verbatim fidelity.
+#: ``N=3`` (a third) is the conservative first step toward Claude's much leaner
+#: stance (near-zero verbatim tail). Smaller tail ⇒ compaction fires LESS often
+#: (more headroom after each) and each summary covers a bigger prefix.
+#: Deterministic constant: same value on live + resume.
+_TAIL_FRACTION_DENOM = 3
+
+
+def derive_compaction_config(model: str) -> CompactionConfig:
+    """Derive the compaction knobs for ``model`` from the sdk catalog.
+
+    ``model`` may be a friendly ALIAS (``opus`` / ``sonnet`` / ``haiku``) or a
+    real catalog id; it is resolved via :func:`resolve_alias` BEFORE the catalog
+    lookup. Without that resolution an alias (the common selector a host passes)
+    misses ``spec_for`` with ``KeyError`` and silently disables compaction
+    (fix B). ``resolve_alias`` passes a non-alias value through unchanged, so a
+    real id and the test-only ``stub-model`` are unaffected.
+
+    Returns :data:`~noeta.execution.builder.COMPACTION_OFF` for any model the
+    catalog does not describe after resolution (so ``stub-model`` keeps legacy
+    behaviour and existing recordings stay byte-equal). For a catalogued model
+    the available window is ``context_window - max_output_tokens - buffer`` and
+    the protected tail is ``available // _TAIL_FRACTION_DENOM`` (a third — see
+    the constant's note for the trade-off; always strictly smaller than the
+    window, so a misconfiguration that would otherwise leave nothing to
+    summarise cannot arise). All numbers are deterministic functions of the
+    spec, and live + resume resolve the SAME ``model`` string here, so both
+    paths derive identical knobs.
+    """
+    try:
+        spec = spec_for(resolve_alias(model))
+    except KeyError:
+        return COMPACTION_OFF
+    available = max(
+        0,
+        spec.context_window
+        - spec.max_output_tokens
+        - _COMPACTION_BUFFER_TOKENS,
+    )
+    # Protect a third of the available window as the recent tail. Strictly < the
+    # available window so summarising always has a non-empty prefix to collapse
+    # when the trigger fires.
+    tail = available // _TAIL_FRACTION_DENOM
+    return CompactionConfig(
+        context_window=spec.context_window,
+        max_output_tokens=spec.max_output_tokens,
+        compaction_buffer=_COMPACTION_BUFFER_TOKENS,
+        tail_token_budget=tail,
+        composer_version=_COMPOSER_VERSION,
     )

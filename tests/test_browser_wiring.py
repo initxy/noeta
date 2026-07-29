@@ -14,7 +14,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from tests._session_inputs import default_factory_kwargs
-from noeta.execution.builder import build_session_inputs, derive_compaction_config
+from noeta.client.parts import derive_compaction_config
+from noeta.execution.builder import build_session_inputs
 from noeta.storage.memory import InMemoryContentStore
 from noeta.tools.browser import BROWSER_TOOL_NAMES
 

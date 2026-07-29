@@ -54,7 +54,7 @@ import logging
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, ClassVar, Optional
+from typing import Any, Callable, ClassVar, Optional
 
 from noeta.execution.multi_turn import (
     NEXT_GOAL_WAKE_HANDLE,
@@ -71,7 +71,6 @@ from noeta.execution.memory import (
 from noeta.execution.reminders import ReminderProvider, record_intake_reminders
 from noeta.execution.resolver import agent_name_of
 from noeta.execution.subtask_drain import UnsupportedSubtaskSuspend
-from noeta.providers.catalog import resolve_alias
 from noeta.core.engine import suspend_on_human_handle
 from noeta.core.fold import BoundedEventLog, fold
 from noeta.core.snapshot import serialize_task_state, snapshot_media_type
@@ -466,6 +465,7 @@ class InteractionDriver:
         principal: Principal = LOCAL_PRINCIPAL,
         model_allowlist: frozenset[str] = STUB_MODEL_ALLOWLIST,
         default_model: Optional[str] = None,
+        alias_resolver: Optional[Callable[[str], str]] = None,
     ) -> None:
         self._host = host
         self._worker_id = worker_id
@@ -480,6 +480,17 @@ class InteractionDriver:
         #: host-fixed model so the opening ``ModelBound`` records the same id
         #: the Engine would use anyway → byte-equal with the no-selector path.
         self._default_model = default_model or host.model
+        #: Friendly-alias → real-model-id resolver (microkernel M2). The model
+        #: catalog (and with it the ``opus``/``sonnet``/``haiku`` alias table)
+        #: lives in the ``providers`` built-in plugin; the SDK client injects
+        #: its ``resolve_alias`` here. ``None`` ⇒ identity — the CORRECT
+        #: kernel-alone semantic, not a fallback: with no catalog there are no
+        #: aliases, so every selector already IS a real id (the stub/test path,
+        #: byte-identical). A resuming host must inject the same resolver the
+        #: live host used or an alias-bound recording diverges.
+        self._resolve_alias: Callable[[str], str] = (
+            alias_resolver if alias_resolver is not None else (lambda s: s)
+        )
 
     # -- start ------------------------------------------------------------
 
@@ -2184,7 +2195,8 @@ class InteractionDriver:
         carry the real id and never drift; a rejected selector still raises
         with the original alias before any resolution or durable write. A
         non-alias selector (already a real id, or the test-only ``stub-model``)
-        passes through :func:`resolve_alias` unchanged.
+        passes through the injected alias resolver unchanged (identity when no
+        catalog resolver was injected — microkernel M2).
         """
         if selector is None:
             return self._default_model
@@ -2193,7 +2205,7 @@ class InteractionDriver:
             raise ModelSelectorError(
                 selector=selector, allowed=sorted(allowed)
             )
-        return resolve_alias(selector)
+        return self._resolve_alias(selector)
 
     def _authorized_models(self) -> frozenset[str]:
         """The selectors this driver may bind = principal ∩ allowlist.
@@ -2238,7 +2250,7 @@ class InteractionDriver:
         When ``model_selector`` is given it is tested directly against that
         vocabulary.  When only ``bound_model`` is available it is a
         resolved-alias id, so we expand ``declared`` with resolved ids too
-        (``resolve_alias`` is idempotent on real ids) to bridge the two
+        (the alias resolver is idempotent on real ids) to bridge the two
         vocabularies.  Either failure raises :class:`ProviderSelectorError`
         *before* any durable write. The host exposes its registry via the
         (optional, host-tolerant) ``provider_models`` table — a single-provider
@@ -2262,7 +2274,7 @@ class InteractionDriver:
         # - no selector      → test bound_model (resolved id) against both
         #   the selector vocabulary AND its resolved-id expansions, bridging
         #   the alias/id vocabulary gap.
-        candidates = set(declared) | {resolve_alias(m) for m in declared}
+        candidates = set(declared) | {self._resolve_alias(m) for m in declared}
         effective = model_selector if model_selector is not None else bound_model
         if effective not in candidates:
             raise ProviderSelectorError(

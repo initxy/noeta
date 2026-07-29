@@ -1,4 +1,4 @@
-"""Shared ``Retry-After`` parsing (``noeta.providers.codecs.parse_retry_after``).
+"""Shared ``Retry-After`` parsing (``noeta.builtins.providers.impl.codecs.parse_retry_after``).
 
 All three provider adapters (anthropic / openai_compat / openai_responses)
 translate a 429 into ``TransientError(retry_after=parse_retry_after(...))``.
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from noeta.providers.codecs import parse_retry_after
+from noeta.builtins.providers.impl.codecs import parse_retry_after
 
 
 # ---------------------------------------------------------------------------

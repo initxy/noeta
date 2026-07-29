@@ -56,8 +56,8 @@ class ToolRef:
 
 @dataclass(frozen=True, slots=True)
 class BudgetSpec:
-    """Declared default budget caps. Mirrors ``noeta.guards.budget.Budget`` 1:1
-    so a host can build the live guard straight from the spec. ``None`` ⇒ no
+    """Declared default budget caps. Mirrors ``noeta.runtime.governance.Budget``
+    1:1 so a host can build the live guard straight from the spec. ``None`` ⇒ no
     cap for that dimension."""
 
     max_iterations: int | None = None

@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import pytest
 
-from noeta.guards.repetition import RepetitionGuard, RepetitionPolicy
+from noeta.builtins.governance.impl.repetition import RepetitionGuard
+from noeta.runtime.governance import RepetitionPolicy
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.decisions import SpawnSubtaskDecision, ToolCall
 from noeta.protocols.hooks import (

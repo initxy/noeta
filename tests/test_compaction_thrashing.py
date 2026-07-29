@@ -20,7 +20,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from noeta.client.parts import default_reminder_specs
 from noeta.context.composer import ThreeSegmentComposer
+from noeta.context.reminders import ReminderRegistry
 from noeta.core.fold import _HANDLERS, _THRASH_CLOSE_TURNS, _THRASH_RUN_LIMIT
 from noeta.protocols.events import (
     CompactedPayload,
@@ -191,6 +193,10 @@ def _composer() -> ThreeSegmentComposer:
         system_prompt="you are a helpful agent",
         tools={"echo": _FakeTool("echo")},
         content_store=InMemoryContentStore(),
+        # Microkernel M2: a bare composer has no reminders; these tests cover
+        # the built-in read-suggestion reminder, so inject the loader-resolved
+        # three the way the builder does.
+        reminders=ReminderRegistry(default_reminder_specs()),
     )
 
 

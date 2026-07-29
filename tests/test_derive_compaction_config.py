@@ -17,8 +17,9 @@ behaviour ⇒ existing stub-model recordings resume identically.
 
 from __future__ import annotations
 
-from noeta.execution.builder import COMPACTION_OFF, derive_compaction_config
-from noeta.providers.catalog import resolve_alias, spec_for
+from noeta.client.parts import derive_compaction_config
+from noeta.execution.builder import COMPACTION_OFF
+from noeta.builtins.providers.impl.catalog import resolve_alias, spec_for
 
 
 def test_alias_opus_turns_compaction_on() -> None:
@@ -52,7 +53,7 @@ def test_tail_is_a_third_of_available_window() -> None:
     frees window — the summary keeps file paths and the model re-reads with
     ``read`` — at the cost of less recent verbatim fidelity.
     """
-    from noeta.execution.builder import _COMPACTION_BUFFER_TOKENS
+    from noeta.builtins.providers.impl.catalog import _COMPACTION_BUFFER_TOKENS
 
     spec = spec_for(resolve_alias("opus"))
     available = (

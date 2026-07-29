@@ -23,7 +23,8 @@ from noeta.builtins.fs.impl import build_fs_tools
 from noeta.runtime.shell_policy import ShellMode
 from noeta.runtime.subproc import _RunOutcome
 from noeta.runtime.workspace import WorkspaceRoot
-from noeta.runtime.exec_env import AioSandboxExecEnv, LocalExecEnv
+from noeta.builtins.sandbox.impl.exec_env import AioSandboxExecEnv
+from noeta.runtime.exec_env import LocalExecEnv
 
 
 class _SandboxLike:

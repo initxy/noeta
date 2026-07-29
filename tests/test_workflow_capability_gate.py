@@ -25,7 +25,7 @@ from typing import Any
 
 from tests._session_inputs import default_factory_kwargs
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
-from noeta.guards.budget import Budget
+from noeta.runtime.governance import Budget
 from noeta.policies.control_tools import (
     RUN_WORKFLOW_TOOL,
     WORKFLOW_AGENT_NAME,

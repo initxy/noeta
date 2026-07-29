@@ -9,8 +9,8 @@ counterpart calls ``glob(pattern="*")`` (a read-only fs tool present in
 the coding pack). Two distinct scripted turns ⇒ relocated verbatim
 here rather than re-exported.
 
-This module is **NOT** in :mod:`noeta.providers` — that package is
-reserved for real provider adapters (OpenAI-compat, Anthropic).
+This module is **NOT** beside the real provider adapters (the ``providers``
+built-in plugin, ``noeta.builtins.providers.impl``).
 ``noeta.testing`` is test-support and gives the stub a cli-free home so
 tests can import it without reaching into ``noeta.cli``.
 

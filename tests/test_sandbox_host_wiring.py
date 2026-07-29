@@ -59,7 +59,7 @@ from noeta.storage.memory import (
 )
 from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.runtime.subproc import _RunOutcome
-from noeta.runtime.exec_env import AioSandboxExecEnv
+from noeta.builtins.sandbox.impl.exec_env import AioSandboxExecEnv
 
 
 # --------------------------------------------------------------------------- #

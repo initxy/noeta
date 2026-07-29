@@ -43,7 +43,7 @@ import pytest
 
 from tests._session_inputs import default_factory_kwargs
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
-from noeta.guards.budget import Budget
+from noeta.runtime.governance import Budget
 from noeta.protocols.messages import Message, TextBlock, ToolUseBlock
 from noeta.protocols.task import Task
 from noeta.storage.memory import InMemoryContentStore

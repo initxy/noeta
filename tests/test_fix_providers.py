@@ -19,9 +19,9 @@ from __future__ import annotations
 import httpx
 
 from noeta.protocols.messages import Message, TextBlock, Usage
-from noeta.providers.anthropic import _is_context_overflow
-from noeta.providers.catalog import price, spec_for
-from noeta.providers.openai_responses import _message_to_responses
+from noeta.builtins.providers.impl.anthropic import _is_context_overflow
+from noeta.builtins.providers.impl.catalog import price, spec_for
+from noeta.builtins.providers.impl.openai_responses import _message_to_responses
 
 
 # --- openai_responses: origin rendering -------------------------------------

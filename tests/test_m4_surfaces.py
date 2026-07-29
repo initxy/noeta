@@ -337,11 +337,12 @@ def test_builtin_sandbox_plugin_declares_the_aio_adapters() -> None:
     assert "sandbox" in pset.names()
     names = {c.name for _p, c in pset.contributions("sandbox_provider")}
     assert names == {"aio-exec-env", "aio-browser"}
-    # The refs point at the AIO adapter classes (listing surface — no execution).
+    # The refs point at the AIO adapter classes (listing surface — no
+    # execution) — in the plugin's own impl package since microkernel M2.
     refs = {c.ref for _p, c in pset.contributions("sandbox_provider")}
     assert refs == {
-        "noeta.runtime.exec_env:AioSandboxExecEnv",
-        "noeta.tools.browser:AioBrowserBackend",
+        "noeta.builtins.sandbox.impl.exec_env:AioSandboxExecEnv",
+        "noeta.builtins.sandbox.impl.browser:AioBrowserBackend",
     }
 
 

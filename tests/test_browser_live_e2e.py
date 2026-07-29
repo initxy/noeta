@@ -2,7 +2,7 @@
 
 Starts a real AIO Sandbox container via Docker, serves a fixture HTML page
 through a host-reachable http server, and drives the real
-:class:`~noeta.tools.browser.AioBrowserBackend` through all five noeta-owned
+:class:`~noeta.builtins.sandbox.impl.browser.AioBrowserBackend` through all five noeta-owned
 browser verbs — navigate / extract / type / click / screenshot — plus pins the
 container's ``/mcp`` browser tool names against our backend constants so a
 wire drift fails loudly here rather than perturbing the model-facing schema.
@@ -31,11 +31,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from noeta.tools.browser import (
-    BROWSER_TOOL_NAMES,
-    AioBrowserBackend,
-    AioBrowserError,
-)
+from noeta.builtins.sandbox.impl.browser import AioBrowserBackend, AioBrowserError
+from noeta.tools.browser import BROWSER_TOOL_NAMES
 from noeta.tools.mcp._http_client import McpHttpClient
 
 

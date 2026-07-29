@@ -37,7 +37,7 @@ from noeta.context.instructions import InstructionsSnapshot
 from noeta.context.memory import MemoryEntries
 from noeta.context.reminders import ReminderSpec
 from noeta.execution import memory as execution_memory
-from noeta.execution.builder import build_session_inputs, derive_compaction_config
+from noeta.execution.builder import build_session_inputs
 from noeta.execution.environment import load_environment
 from noeta.execution.host import AgentRegistryProtocol
 from noeta.execution.instructions import load_instructions
@@ -48,10 +48,12 @@ from noeta.policies.orchestration import (
     StructuredOutputPolicy,
     WORKFLOW_SYSTEM_PROMPT,
 )
-from noeta.guards.budget import Budget
-from noeta.guards.hook import PreToolUseRule
-from noeta.guards.permission import SkillEnforcementMode
-from noeta.guards.repetition import RepetitionAction
+from noeta.runtime.governance import (
+    Budget,
+    PreToolUseRule,
+    RepetitionAction,
+    SkillEnforcementMode,
+)
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
 from noeta.protocols.event_log import EventLogFull
@@ -65,7 +67,6 @@ from noeta.protocols.policy import Policy
 from noeta.protocols.step_context import StepContext
 from noeta.protocols.tool import Tool
 from noeta.protocols.values import ContentRef
-from noeta.providers.catalog import price as catalog_price
 from noeta.execution.background_delivery import BackgroundDelivery, DeliverFn
 from noeta.execution.background_subagent import (
     DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_SESSION,
@@ -77,7 +78,14 @@ from noeta.runtime.background_shell import (
 )
 from noeta.runtime.cancellation import CancellationRegistry
 from noeta.runtime.file_checkpoint import FileCheckpointRegistry
-from noeta.client.parts import default_tool_factories
+from noeta.client.parts import (
+    catalog_price,
+    default_guards_factory,
+    default_reminder_specs,
+    default_tool_factories,
+    derive_compaction_config,
+    provider_family,
+)
 from noeta.client.host_config import SandboxExecEnvConfig
 from noeta.client.sandbox import (
     BackendFactory,
@@ -1651,12 +1659,17 @@ class SdkHost(GenericEngineResolver):
         inputs = build_session_inputs(
             fs_tools_factory=_fs_factory,
             web_tools_factory=_web_factory,
+            base_reminders=default_reminder_specs(),
+            guards_factory=default_guards_factory(),
             workspace_dir=workspace_dir,
             system_prompt=spec.instructions,
             allowed_tools=spec_tool_names,
             content_store=self.content_store,
             model=model,
             compaction=derive_compaction_config(model),
+            # The catalog's vendor-family judgment for the edit-tool mutex
+            # (microkernel M2 — the kernel holds no model opinions).
+            provider_family=provider_family(model),
             # Session-level budget override; None uses today's spec-derived path.
             budget=self.budget
             if self.budget is not None
@@ -1860,12 +1873,15 @@ class SdkHost(GenericEngineResolver):
         inputs = build_session_inputs(
             fs_tools_factory=_fs_factory,
             web_tools_factory=_web_factory,
+            base_reminders=default_reminder_specs(),
+            guards_factory=default_guards_factory(),
             workspace_dir=self.workspace_dir,
             system_prompt=WORKFLOW_SYSTEM_PROMPT,
             allowed_tools=frozenset(),
             content_store=self.content_store,
             model=self.model,
             compaction=derive_compaction_config(self.model),
+            provider_family=provider_family(self.model),
             budget=self.budget
             if self.budget is not None
             else self._budget_for(BudgetSpec()),

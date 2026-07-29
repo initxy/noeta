@@ -31,7 +31,7 @@ from tests._session_inputs import default_factory_kwargs
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
 from noeta.execution.memory import DEFAULT_GLOBAL_MEMORY_DIR, load_memory_store
 from noeta.execution.skills import load_workspace_skills
-from noeta.guards.budget import Budget
+from noeta.runtime.governance import Budget
 from noeta.storage.memory import InMemoryContentStore
 
 

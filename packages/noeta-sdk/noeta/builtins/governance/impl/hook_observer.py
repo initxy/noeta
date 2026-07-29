@@ -12,16 +12,20 @@ callback does only lightweight matching + a non-blocking enqueue onto a
 bounded queue, and a single background worker thread runs the commands.
 A full queue drops + logs (back-pressure never blocks emit).
 
-Layer boundary: this lives in ``noeta.observers`` and may import only
-``noeta.protocols`` + stdlib (``observers-only-protocols`` forbids
-``noeta.tools``), so the command runner uses a **local minimal env
-scrub** rather than ``noeta.tools._env``. The runner is **injectable** so
-tests can substitute a fake (no real subprocess / no real sleep).
+Layer boundary: this deliberately imports only ``noeta.protocols`` + stdlib,
+so the command runner uses a **local minimal env scrub** rather than a shared
+helper. The runner is **injectable** so tests can substitute a fake (no real
+subprocess / no real sleep).
 
-This observer is **live-only**: it is wired only at the live construction
-point (``noeta.execution.builder``) and never participates in fold / resume /
-state reconstruction, so a hook side-effect cannot perturb a rebuilt state
-and a resume never re-fires a user notification.
+This observer is **live-only**: a host wires it at its live construction
+point, and it never participates in fold / resume / state reconstruction, so
+a hook side-effect cannot perturb a rebuilt state and a resume never re-fires
+a user notification.
+
+Microkernel M2: moved here from ``noeta.observers.hook`` — the ``governance``
+built-in plugin's ``observer`` contribution refs this class; the rule types
+(``PostToolUseRule`` / ``NotificationRule``) travel with it because only the
+host that wires the observer ever constructs them.
 """
 
 from __future__ import annotations
@@ -58,8 +62,8 @@ _DEFAULT_QUEUE_MAX = 256
 _WORKER_POLL_S = 0.1
 
 #: Minimal env a notify command inherits. Deliberately a small local
-#: copy (not ``noeta.tools._env``) to keep ``noeta.observers`` importing
-#: only ``noeta.protocols`` + stdlib (``observers-only-protocols``).
+#: copy (not a shared helper) to keep this observer importing only
+#: ``noeta.protocols`` + stdlib.
 _OBS_ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR")
 
 

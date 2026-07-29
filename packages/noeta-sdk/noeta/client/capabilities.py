@@ -2,10 +2,11 @@
 
 The app product drives the engine only through ``noeta.sdk``; the composer's
 selectable enums (permission /
-effort modes) and the per-model vision gate are runtime facts the SDK already
+effort modes) and the per-model vision gate are facts the SDK already
 depends on, so they are projected here and re-exported through ``noeta.sdk``
-rather than letting the backend reach for a runtime internal (``noeta.providers``
-is forbidden to ``noeta.agent.backend``).
+rather than letting the backend reach for an internal (the model catalog
+lives in the ``providers`` built-in plugin since microkernel M2, reached only
+through the loader's dynamic-import doorway).
 
 These are small, pure projections — no state, no I/O — kept together so the one
 public capabilities surface is legible.
@@ -38,7 +39,9 @@ def model_capabilities(models: Sequence[str]) -> dict[str, dict[str, bool]]:
     (test stubs like ``stub-model``) has no spec and is conservatively reported
     non-vision — fail-closed, never advertise vision we cannot vouch for.
     """
-    from noeta.providers import catalog
+    import importlib
+
+    catalog = importlib.import_module("noeta.builtins.providers.impl.catalog")
 
     out: dict[str, dict[str, bool]] = {}
     for model in models:

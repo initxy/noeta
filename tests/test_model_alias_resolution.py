@@ -16,7 +16,8 @@ import pytest
 
 from noeta.execution.driver import InteractionDriver, ModelSelectorError
 from noeta.core.fold import fold
-from noeta.providers.catalog import resolve_alias
+from noeta.builtins.providers.impl.catalog import resolve_alias
+from noeta.client.parts import resolve_model_alias
 from noeta.protocols.messages import LLMResponse, TextBlock, Usage
 from noeta.protocols.values import Principal
 from noeta.storage.memory import (
@@ -70,6 +71,9 @@ def test_start_resolves_alias_to_real_model_id_in_model_bound(
     driver = InteractionDriver(
         host,
         principal=Principal(identity="bob", allowed_models=frozenset({"opus"})),
+        # Microkernel M2: the alias table lives in the providers built-in;
+        # the client injects it — mirrored here.
+        alias_resolver=resolve_model_alias,
     )
     out = driver.start(goal="hello", agent="main", model_selector="opus")
 
@@ -88,6 +92,7 @@ def test_bound_model_matches_resolver_lookup(tmp_path: Path) -> None:
     driver = InteractionDriver(
         host,
         principal=Principal(identity="bob", allowed_models=frozenset({"haiku"})),
+        alias_resolver=resolve_model_alias,
     )
     out = driver.start(goal="hello", agent="main", model_selector="haiku")
 
@@ -106,7 +111,9 @@ def test_selector_outside_allowlist_still_raises_before_resolution(
     ws.mkdir()
     host, _, event_log = _host(ws, responses=[_end_turn()])
     driver = InteractionDriver(
-        host, principal=Principal(identity="bob", allowed_models=frozenset({"sonnet"}))
+        host,
+        principal=Principal(identity="bob", allowed_models=frozenset({"sonnet"})),
+        alias_resolver=resolve_model_alias,
     )
     with pytest.raises(ModelSelectorError) as exc:
         driver.start(goal="x", agent="main", model_selector="opus")

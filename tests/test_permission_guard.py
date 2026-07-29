@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from typing import Any
 
 
-from noeta.guards.permission import PermissionGuard, PermissionPolicy
+from noeta.builtins.governance.impl.permission import PermissionGuard
+from noeta.runtime.governance import PermissionPolicy
 from noeta.protocols.decisions import SpawnSubtaskDecision, ToolCall
 from noeta.protocols.hooks import (
     GuardContext,

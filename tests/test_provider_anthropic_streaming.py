@@ -1,4 +1,4 @@
-"""Streaming test matrix for :class:`noeta.providers.anthropic.AnthropicProvider`.
+"""Streaming test matrix for :class:`noeta.builtins.providers.impl.anthropic.AnthropicProvider`.
 
 Token-streaming Slice 2: ``complete_streaming`` speaks the Anthropic Messages
 streaming protocol (SSE) and must stay shape-identical to the batch path —
@@ -39,7 +39,7 @@ from noeta.protocols.messages import (
     Usage,
 )
 from noeta.protocols.values import ContentRef
-from noeta.providers.anthropic import AnthropicProvider
+from noeta.builtins.providers.impl.anthropic import AnthropicProvider
 
 
 BASE_URL = "https://api.anthropic.test"

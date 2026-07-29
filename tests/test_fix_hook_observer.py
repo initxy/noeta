@@ -12,7 +12,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from noeta.observers.hook import HookObserver, PostToolUseRule
+from noeta.builtins.governance.impl.hook_observer import HookObserver, PostToolUseRule
 
 
 class _FakeLog:

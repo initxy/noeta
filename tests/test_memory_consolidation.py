@@ -470,7 +470,7 @@ def test_consolidation_tool_surface_is_memory_pack_only(tmp_path: Path) -> None:
     capability-gated memory pack (``_stage_memory`` is flag-gated, not
     whitelist-filtered) — no fs, no shell, no web."""
     from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
-    from noeta.guards.budget import Budget
+    from noeta.runtime.governance import Budget
     from noeta.tools.memory import (
         MEMORY_ARCHIVE_TOOL_NAME,
         MEMORY_READ_TOOL_NAME,

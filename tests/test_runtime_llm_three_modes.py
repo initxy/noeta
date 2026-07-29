@@ -582,7 +582,7 @@ def openai_normal_recording() -> tuple[
     import respx
     import httpx
 
-    from noeta.providers.openai_compat import OpenAICompatProvider
+    from noeta.builtins.providers.impl.openai_compat import OpenAICompatProvider
     from noeta.runtime.llm import RuntimeLLMClient
 
     base_url = "https://example.test/v1"

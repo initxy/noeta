@@ -27,12 +27,13 @@ scope (a loop is a *tool* phenomenon).
 Priority 30 sits between ``PermissionGuard`` (20) and ``HookGuard`` (100): a
 hard allow/deny decision precedes this "suspected loop" heuristic, but the
 heuristic precedes user PreToolUse hooks.
+
+Microkernel M2: the class moved here from ``noeta.guards.repetition``; its
+:class:`~noeta.runtime.governance.RepetitionPolicy` configuration type sank
+into the kernel vocabulary module.
 """
 
 from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Literal
 
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.hooks import (
@@ -41,36 +42,10 @@ from noeta.protocols.hooks import (
     ProposedToolCall,
     VerdictResult,
 )
+from noeta.runtime.governance import RepetitionPolicy
 
 
-__all__ = ["RepetitionAction", "RepetitionGuard", "RepetitionPolicy"]
-
-
-#: D-4b — what to do once the loop is detected. ``require_approval`` (default)
-#: routes through the existing HITL approval suspend; ``deny`` fails the call
-#: closed (with a model-visible result so the model can self-correct).
-RepetitionAction = Literal["require_approval", "deny"]
-
-
-@dataclass(frozen=True, slots=True)
-class RepetitionPolicy:
-    """Tuning for :class:`RepetitionGuard`.
-
-    ``threshold`` is the number of **consecutive** identical calls (counting
-    the proposed one) that trips the action. ``threshold <= 0`` disables the
-    guard entirely (a defensive off switch). ``window`` bounds how far back the
-    Engine scans when building the history; it is an upper bound on the
-    consecutive run the guard can observe.
-    """
-
-    #: Consecutive identical-call count (incl. the proposed call) that trips.
-    #: Default 3 per D-4. ``<= 0`` disables the guard.
-    threshold: int = 3
-    #: Action on trip. Default ``require_approval`` per D-4 (decision to human).
-    action: RepetitionAction = "require_approval"
-    #: How many recent tool calls the Engine should fold into the history. Must
-    #: be ``>= threshold`` for the guard to ever trip; defaulted generously.
-    window: int = 8
+__all__ = ["RepetitionGuard"]
 
 
 class RepetitionGuard:

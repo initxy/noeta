@@ -21,7 +21,8 @@ import pytest
 
 from noeta.core.fold import fold
 from noeta.core.snapshot import rehydrate_task
-from noeta.guards.budget import Budget, BudgetGuard
+from noeta.builtins.governance.impl.budget import BudgetGuard
+from noeta.runtime.governance import Budget
 from noeta.policies.react import SPAWN_SUBAGENT_TOOL
 from noeta.protocols.decisions import SpawnSubtaskDecision
 from noeta.protocols.events import TaskCreatedPayload

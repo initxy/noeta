@@ -1,5 +1,5 @@
 """Streaming test matrix for
-:meth:`noeta.providers.openai_responses.OpenAIResponsesProvider.complete_streaming`.
+:meth:`noeta.builtins.providers.impl.openai_responses.OpenAIResponsesProvider.complete_streaming`.
 
 Token streaming (Slice 5a): the streamed path POSTs the same body as the
 batch path plus ``stream:true``, emits ephemeral ``StreamDelta``s for text /
@@ -33,7 +33,7 @@ from noeta.protocols.messages import (
     ToolUseBlock,
     Usage,
 )
-from noeta.providers.openai_responses import OpenAIResponsesProvider
+from noeta.builtins.providers.impl.openai_responses import OpenAIResponsesProvider
 
 
 # Same endpoint convention as the batch test matrix: base_url IS the complete

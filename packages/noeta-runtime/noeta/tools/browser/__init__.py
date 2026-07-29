@@ -6,8 +6,9 @@ description are pinned by noeta** so the model-facing contract (and therefore th
 stable-prefix KV-cache bytes) never drifts when the AIO Sandbox container image
 changes its own tool names (spec D1, CONTEXT.md Stable Prefix). Each tool's
 ``invoke`` delegates to a :class:`~noeta.tools.browser._backend.BrowserBackend`
-(``AioBrowserBackend`` in production) which is the single place the container
-``/mcp`` browser wire is pinned.
+(in production the AIO adapter from the ``sandbox`` built-in plugin,
+``noeta.builtins.sandbox.impl.browser`` — microkernel M2) which is the single
+place the container ``/mcp`` browser wire is pinned.
 
 The pack is closure-constructed like the fs pack: :func:`build_browser_tools`
 takes one backend and returns exactly the five tools keyed by name. It is a
@@ -30,17 +31,11 @@ from noeta.tools._limits import (
     fit_output_fields,
 )
 from noeta.tools._refs import ref_json
-from noeta.tools.browser._backend import (
-    AioBrowserBackend,
-    AioBrowserError,
-    BrowserBackend,
-)
+from noeta.tools.browser._backend import BrowserBackend
 from noeta.tools.descriptions import load_tool_description
 
 
 __all__ = [
-    "AioBrowserBackend",
-    "AioBrowserError",
     "BROWSER_TOOL_NAMES",
     "BrowserBackend",
     "build_browser_tools",

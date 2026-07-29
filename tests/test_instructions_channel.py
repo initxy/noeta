@@ -42,7 +42,7 @@ from noeta.execution.instructions import (
     load_instructions,
     record_instructions,
 )
-from noeta.guards.budget import Budget
+from noeta.runtime.governance import Budget
 from noeta.policies.stub import StubScriptedPolicy
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.decisions import FinishDecision

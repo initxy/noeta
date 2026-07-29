@@ -10,11 +10,9 @@ from __future__ import annotations
 
 import logging
 
-import noeta.guards.permission as permission_mod
-from noeta.guards.permission import (
-    PermissionGuard,
-    PermissionPolicy,
-)
+import noeta.builtins.governance.impl.permission as permission_mod
+from noeta.builtins.governance.impl.permission import PermissionGuard
+from noeta.runtime.governance import PermissionPolicy
 from noeta.policies.skill_tools import (
     CLAUDE_TO_NOETA_TOOL as _CLAUDE_TO_NOETA_TOOL,
     parse_allowed_tools as _parse_allowed_tools,

@@ -325,7 +325,7 @@ def test_activate_skills_then_engine_seam_no_double_emit(tmp_path: Path) -> None
 
 def test_composer_reads_generic_map_only(tmp_path: Path) -> None:
     from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
-    from noeta.guards.budget import Budget
+    from noeta.runtime.governance import Budget
     from noeta.protocols.task import Task, TaskState
 
     ws = tmp_path / "ws"
@@ -421,7 +421,7 @@ def _record_session(
     """
     from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
     from noeta.execution.skills import build_skill_hashes
-    from noeta.guards.budget import Budget
+    from noeta.runtime.governance import Budget
     from noeta.runtime.llm import RuntimeLLMClient
     from noeta.runtime.tool import ToolRuntime
 

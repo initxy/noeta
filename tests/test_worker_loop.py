@@ -112,7 +112,7 @@ def test_run_leased_task_drains_pending_task() -> None:
 
 
 def test_run_leased_task_skips_suspended_without_wake() -> None:
-    from noeta.guards.permission import PermissionPolicy
+    from noeta.runtime.governance import PermissionPolicy
 
     perm = PermissionPolicy(
         allowed_tools=frozenset({"echo"}),

@@ -20,7 +20,8 @@ import pytest
 
 from tests._session_inputs import default_factory_kwargs
 from noeta.client.host_config import HostConfig, SandboxExecEnvConfig
-from noeta.execution.builder import build_session_inputs, derive_compaction_config
+from noeta.client.parts import derive_compaction_config
+from noeta.execution.builder import build_session_inputs
 from noeta.protocols.tool import ToolContext
 from noeta.storage.memory import InMemoryContentStore
 from noeta.builtins.fs.impl import build_fs_tools

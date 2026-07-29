@@ -27,7 +27,7 @@ def test_effort_modes_match_options_enum() -> None:
 
 
 def test_model_capabilities_projects_catalog_vision() -> None:
-    from noeta.providers import catalog
+    from noeta.builtins.providers.impl import catalog
 
     # A known vision-capable id, an alias, and an uncatalogued stub.
     vision_ids = [k for k, v in catalog.CATALOG.items() if v.supports_vision]

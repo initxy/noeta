@@ -1,7 +1,7 @@
 """Skill ``allowed-tools`` resolution — the Claude→Noeta alias map + parser.
 
-Relocated from ``noeta.guards.permission`` (mechanism-vs-material):
-the kernel guard operates only on **neutral** Noeta tool names, so the
+Relocated from the permission guard (mechanism-vs-material):
+the guard operates only on **neutral** Noeta tool names, so the
 product (Claude) vocabulary + its alias map belong in noeta-sdk, which knows
 both vocabularies. A host (noeta-code wiring) calls
 :func:`resolve_skill_allowed_tools` to turn the raw
@@ -11,7 +11,8 @@ both vocabularies. A host (noeta-code wiring) calls
 ``PermissionPolicy.skill_allowed_tools`` field expects.
 
 Layering: this module imports only stdlib — it sits in the SDK
-materials band (``noeta.policies``), above ``noeta.guards``.
+materials band (``noeta.policies``), above the guard implementations
+(``noeta.builtins.governance.impl`` since microkernel M2).
 """
 
 from __future__ import annotations

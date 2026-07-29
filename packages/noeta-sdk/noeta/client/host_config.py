@@ -31,7 +31,7 @@ from noeta.client.sandbox_provider import SandboxProvider, SandboxSpec
 from noeta.execution.background_subagent import (
     DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_SESSION,
 )
-from noeta.observers.otlp import OtlpHttpPost, OtlpTraceConfig
+from noeta.client.otlp import OtlpHttpPost, OtlpTraceConfig
 from noeta.runtime.background_shell import DEFAULT_MAX_BACKGROUND_JOBS_PER_SESSION
 
 if TYPE_CHECKING:

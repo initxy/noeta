@@ -12,7 +12,8 @@ import re
 from typing import Any
 
 from noeta.core.hooks import HookManager
-from noeta.guards.hook import HookGuard, MatchArg, PreToolUseRule
+from noeta.builtins.governance.impl.hook_guard import HookGuard
+from noeta.runtime.governance import MatchArg, PreToolUseRule
 from noeta.protocols.decisions import ToolCall
 from noeta.protocols.hooks import (
     GuardContext,

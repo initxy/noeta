@@ -82,9 +82,9 @@ from noeta.protocols.messages import (
     Usage,
 )
 from noeta.protocols.values import ContentRef
-from noeta.providers import catalog
-from noeta.providers._sse import iter_sse_events
-from noeta.providers.codecs import parse_retry_after
+from noeta.builtins.providers.impl import catalog
+from noeta.builtins.providers.impl._sse import iter_sse_events
+from noeta.builtins.providers.impl.codecs import parse_retry_after
 
 
 #: A narrowly injected ``ContentRef → bytes`` deref callback (backed by

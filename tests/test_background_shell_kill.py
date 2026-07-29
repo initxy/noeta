@@ -28,7 +28,8 @@ from typing import Any
 from tests._sdk_session import official_registry as official_agent_registry
 from noeta.client import SdkHost
 from noeta.execution.driver import InteractionDriver, multi_turn_policy_wrapper
-from noeta.guards.permission import PermissionGuard, PermissionPolicy
+from noeta.builtins.governance.impl.permission import PermissionGuard
+from noeta.runtime.governance import PermissionPolicy
 from noeta.protocols.decisions import ToolCall
 from noeta.protocols.hooks import GuardContext, ProposedToolCall, Verdict
 from noeta.protocols.messages import LLMResponse, TextBlock, Usage
