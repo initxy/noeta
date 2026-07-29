@@ -20,8 +20,8 @@ from pathlib import Path
 
 import pytest
 
-from noeta.context.skills import SkillIndexer
-from noeta.context.skills.indexer import SkillRegistry
+from noeta.builtins.skills.impl import SkillIndexer
+from noeta.builtins.skills.impl.indexer import SkillRegistry
 
 
 def _write(path: Path, content: str) -> None:
@@ -135,7 +135,7 @@ def test_invalid_frontmatter_skipped_and_logged(
     _write(tmp_path / "good" / "SKILL.md", _skill_doc("good", "valid"))
     _write(tmp_path / "bad" / "SKILL.md", "no-frontmatter at all\n")
 
-    caplog.set_level(logging.WARNING, logger="noeta.context.skills.indexer")
+    caplog.set_level(logging.WARNING, logger="noeta.builtins.skills.impl.indexer")
     registry = SkillIndexer(tmp_path).index()
 
     assert set(registry.names()) == {"good"}
@@ -152,7 +152,7 @@ def test_missing_required_name_skipped(
         tmp_path / "anon" / "SKILL.md",
         "---\ndescription: orphan\n---\nbody\n",
     )
-    caplog.set_level(logging.WARNING, logger="noeta.context.skills.indexer")
+    caplog.set_level(logging.WARNING, logger="noeta.builtins.skills.impl.indexer")
     registry = SkillIndexer(tmp_path).index()
     assert registry.names() == ()
     assert any("missing required key 'name'" in r.getMessage() for r in caplog.records)
@@ -165,7 +165,7 @@ def test_missing_required_description_skipped(
         tmp_path / "x" / "SKILL.md",
         "---\nname: x\n---\n",
     )
-    caplog.set_level(logging.WARNING, logger="noeta.context.skills.indexer")
+    caplog.set_level(logging.WARNING, logger="noeta.builtins.skills.impl.indexer")
     registry = SkillIndexer(tmp_path).index()
     assert registry.names() == ()
     assert any(
@@ -177,7 +177,7 @@ def test_invalid_name_format_skipped(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     _write(tmp_path / "bad" / "SKILL.md", _skill_doc("Bad_Name!", "no"))
-    caplog.set_level(logging.WARNING, logger="noeta.context.skills.indexer")
+    caplog.set_level(logging.WARNING, logger="noeta.builtins.skills.impl.indexer")
     registry = SkillIndexer(tmp_path).index()
     assert registry.names() == ()
     assert any("invalid 'name' value" in r.getMessage() for r in caplog.records)
@@ -190,7 +190,7 @@ def test_invalid_priority_skipped(
         tmp_path / "p" / "SKILL.md",
         "---\nname: p\ndescription: pdesc\npriority: not-a-number\n---\n",
     )
-    caplog.set_level(logging.WARNING, logger="noeta.context.skills.indexer")
+    caplog.set_level(logging.WARNING, logger="noeta.builtins.skills.impl.indexer")
     registry = SkillIndexer(tmp_path).index()
     assert registry.names() == ()
     assert any("invalid 'priority'" in r.getMessage() for r in caplog.records)
@@ -207,7 +207,7 @@ def test_typo_of_known_key_skipped_for_missing_required(
         tmp_path / "tp" / "SKILL.md",
         "---\nname: tp\ndescrption: typo\n---\nbody\n",
     )
-    caplog.set_level(logging.WARNING, logger="noeta.context.skills.indexer")
+    caplog.set_level(logging.WARNING, logger="noeta.builtins.skills.impl.indexer")
     registry = SkillIndexer(tmp_path).index()
     assert "tp" not in registry.names()
     assert any(
@@ -227,7 +227,7 @@ def test_unknown_frontmatter_key_loads_as_metadata(
         "---\nname: ef\ndescription: d\nextra_field: bar\n"
         "allowed-tools: [Read, Bash]\n---\n",
     )
-    caplog.set_level(logging.WARNING, logger="noeta.context.skills.indexer")
+    caplog.set_level(logging.WARNING, logger="noeta.builtins.skills.impl.indexer")
     registry = SkillIndexer(tmp_path).index()
     assert "ef" in registry.names()
     desc = registry.get("ef")
@@ -258,7 +258,7 @@ def test_nested_unknown_metadata_block_loads_as_metadata(
         "---\n"
         "# docs\n",
     )
-    caplog.set_level(logging.WARNING, logger="noeta.context.skills.indexer")
+    caplog.set_level(logging.WARNING, logger="noeta.builtins.skills.impl.indexer")
     registry = SkillIndexer(tmp_path).index()
     desc = registry.get("lark-doc")
     assert desc is not None
@@ -291,7 +291,7 @@ def test_folded_description_loads(
         "---\n"
         "body\n",
     )
-    caplog.set_level(logging.WARNING, logger="noeta.context.skills.indexer")
+    caplog.set_level(logging.WARNING, logger="noeta.builtins.skills.impl.indexer")
     registry = SkillIndexer(tmp_path).index()
     desc = registry.get("lark-whiteboard")
     assert desc is not None
@@ -310,7 +310,7 @@ def test_duplicate_frontmatter_key_warns(
         tmp_path / "d" / "SKILL.md",
         "---\nname: d\ndescription: first\ndescription: second\n---\n",
     )
-    caplog.set_level(logging.WARNING, logger="noeta.context.skills.indexer")
+    caplog.set_level(logging.WARNING, logger="noeta.builtins.skills.impl.indexer")
     registry = SkillIndexer(tmp_path).index()
     d = registry.get("d")
     assert d is not None
@@ -360,7 +360,7 @@ def test_duplicate_name_first_wins_by_sorted_posix_path(
     )
     assert posix_sorted == ["a-dir/SKILL.md", "z-dir/SKILL.md"]
 
-    caplog.set_level(logging.WARNING, logger="noeta.context.skills.indexer")
+    caplog.set_level(logging.WARNING, logger="noeta.builtins.skills.impl.indexer")
     registry = SkillIndexer(tmp_path).index()
 
     dup = registry.get("dup")

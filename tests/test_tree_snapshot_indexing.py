@@ -28,8 +28,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Iterable
 
-from noeta.context.skills import SkillIndexer
-from noeta.execution.skills import load_workspace_skills
+from noeta.builtins.skills.impl import SkillIndexer
+from noeta.builtins.skills.impl import load_workspace_skills
 from noeta.runtime.exec_env import LocalExecEnv, TreeSnapshot
 
 

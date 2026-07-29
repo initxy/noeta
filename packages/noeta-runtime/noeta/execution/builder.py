@@ -55,13 +55,7 @@ from noeta.execution.instructions import (
     build_instructions_preloader,
     load_instructions,
 )
-from noeta.execution.skills import (
-    build_skill_composer,
-    build_skill_script_wiring,
-    extract_skill_allowed_tools_raw,
-    load_workspace_skills,
-    skill_content_kind,
-)
+from noeta.execution.skills import SkillsKit
 from noeta.runtime.governance import (
     Budget,
     PreToolUseRule,
@@ -79,7 +73,6 @@ from noeta.policies.react import (
     ReActPolicy,
     spawn_subagent_tool_schema,
 )
-from noeta.policies.skill_tools import resolve_skill_allowed_tools
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.hooks import Guard
 from noeta.protocols.policy import Policy
@@ -365,6 +358,29 @@ class BrowserToolsFactory(Protocol):
     def __call__(self, backend: BrowserBackend) -> dict[str, Tool]: ...
 
 
+class SkillsFactory(Protocol):
+    """Loader-resolved constructor of the skills kit (microkernel phase 2a).
+
+    The kernel never imports the skill indexer, the ``run_skill_script``
+    tool, or the allowed-tools resolver: the SDK host resolves the ``skills``
+    built-in plugin's kit factory through the plugin loader and injects it
+    here. One call assembles everything the session build consumes from the
+    skill subsystem (registry, script wiring, content kind, resolved
+    grants). Signature = ``noeta.builtins.skills.impl:build_skills_kit``.
+    """
+
+    def __call__(
+        self,
+        *,
+        workspace_dir: Path,
+        override_skills_dir: Optional[Path],
+        lower_skill_dirs: Sequence[Path],
+        workspace: WorkspaceRoot,
+        scripts_enabled: bool,
+        exec_env: Optional[ExecEnv],
+    ) -> SkillsKit: ...
+
+
 class MemoryFactory(Protocol):
     """Loader-resolved constructor of the memory kit (microkernel M3).
 
@@ -507,6 +523,12 @@ class _BuildSpec:
     #: and injected here. ``None`` fails loudly at the app stage when a live
     #: gateway is present — the kernel never imports the tool.
     app_tools_factory: Optional[AppToolsFactory] = None
+    #: Loader-resolved skills kit factory (microkernel phase 2a):
+    #: ``noeta.builtins.skills.impl:build_skills_kit``, resolved by the SDK
+    #: host and injected here. ``None`` fails loudly at the skills stage —
+    #: the pipeline runs it unconditionally, and the kernel never imports the
+    #: indexer / script tool / grant resolver.
+    skills_factory: Optional[SkillsFactory] = None
 
 
 @dataclass(slots=True)
@@ -526,6 +548,11 @@ class _ToolAssembly:
 
     tools: dict[str, Tool] = field(default_factory=dict)
     registry: Any = None
+    #: The skill kind's ContentKindSpec + the resolved allowed-tools grants,
+    #: produced by the skills stage's kit (microkernel phase 2a) and consumed
+    #: by the content-registry phase / the guards phase.
+    skill_content_kind: Optional[ContentKindSpec] = None
+    skill_allowed_tools: tuple[tuple[str, frozenset[str]], ...] = ()
     memory_store: Optional[Any] = None
     memory_entries: MemoryEntries = ()
     instructions_snapshot: Optional[InstructionsSnapshot] = None
@@ -688,47 +715,48 @@ def _stage_environment(spec: _BuildSpec, asm: _ToolAssembly) -> None:
     )
 
 
-def _stage_skills_registry(spec: _BuildSpec, asm: _ToolAssembly) -> None:
-    """Three-tier skill registry load (feeds script / read-fence / menu / kind).
+def _stage_skills(spec: _BuildSpec, asm: _ToolAssembly) -> None:
+    """The skills kit — registry, script tool, content kind, grants
+    (microkernel phase 2a: one loader-resolved factory call replaces the
+    old registry + script stages; the tool-append order is unchanged, the
+    two stages were adjacent).
 
-    Three-tier skill merge — built-in + global tiers below
-    the workspace-local pack (built-in < global < workspace, workspace
-    wins). The lower tiers default empty (SDK / test path), so existing
-    single-dir recordings stay byte-identical.
+    Three-tier skill merge — built-in + global tiers below the
+    workspace-local pack (built-in < global < workspace, workspace wins).
+    The lower tiers default empty (SDK / test path), so existing single-dir
+    recordings stay byte-identical. Sandbox mode indexes every tier THROUGH
+    the container (``exec_env``): the dirs are container mount points and
+    the rendered base directories are container paths (D6-Skills).
+
+    Issue E scripts: same single-source wiring for every construction path —
+    append run_skill_script (after the agent filter) + the guard fields, so
+    a script/approval recording resumes byte-equal. Default off.
     """
+    if spec.skills_factory is None:
+        raise RuntimeError(
+            "skills factory was not injected — the SDK host resolves the "
+            "skills built-in plugin through the plugin loader and passes "
+            "skills_factory (microkernel phase 2a); the kernel builder "
+            "imports no skills implementation"
+        )
     lower_skill_dirs: list[Path] = list(spec.builtin_skills_dirs)
     if spec.global_skills_dir is not None:
         lower_skill_dirs.append(spec.global_skills_dir)
-    # Sandbox mode indexes every tier THROUGH the container (``exec_env``): the
-    # dirs are container mount points (built-in / global) or the container
-    # ``<workdir>/.noeta/skills``, and the rendered base directories — which the
-    # model then ``read``s — are container paths (D6-Skills). The product wires
-    # the container skill dirs when it enables the sandbox (S10).
-    asm.registry = load_workspace_skills(
-        spec.workspace_dir,
+    kit = spec.skills_factory(
+        workspace_dir=spec.workspace_dir,
         override_skills_dir=spec.skills_dir,
         lower_skill_dirs=lower_skill_dirs,
+        workspace=asm.workspace,
+        scripts_enabled=spec.allow_skill_scripts,
         exec_env=spec.exec_env,
     )
-
-
-def _stage_skill_scripts(spec: _BuildSpec, asm: _ToolAssembly) -> None:
-    """run_skill_script tool + the PermissionGuard fields (flag-gated).
-
-    Issue E: same single-source wiring as CodeSessionRunner.prepare —
-    append run_skill_script (after the agent filter) + the guard fields,
-    so a script/approval recording resumes byte-equal. Default off.
-    """
-    script_tool, skill_script_tools, skill_scripts = build_skill_script_wiring(
-        asm.registry,
-        asm.workspace,
-        enabled=spec.allow_skill_scripts,
-        exec_env=spec.exec_env,
-    )
-    asm.skill_script_tools = skill_script_tools
-    asm.skill_scripts = skill_scripts
-    if script_tool is not None:
-        asm.tools[script_tool.name] = script_tool
+    asm.registry = kit.registry
+    asm.skill_content_kind = kit.content_kind
+    asm.skill_allowed_tools = kit.allowed_tools
+    asm.skill_script_tools = kit.skill_script_tools
+    asm.skill_scripts = kit.skill_scripts
+    if kit.script_tool is not None:
+        asm.tools[kit.script_tool.name] = kit.script_tool
 
 
 # NOTE: there was a ``_stage_read_fence`` here that widened ``read``'s
@@ -843,8 +871,7 @@ _TOOL_PIPELINE: tuple[Callable[[_BuildSpec, _ToolAssembly], None], ...] = (
     _stage_memory,
     _stage_instructions,
     _stage_environment,
-    _stage_skills_registry,
-    _stage_skill_scripts,
+    _stage_skills,
     _stage_browser,
     _stage_mcp,
     _stage_custom,
@@ -934,9 +961,12 @@ def _build_content_registry(
     composer's render rules AND the engine's generic content_hashes seam
     so the rendered content and the recorded fingerprint come from one source.
     """
-    content_kinds: list[ContentKindSpec] = [
-        skill_content_kind(asm.registry, exec_env=spec.exec_env)
-    ]
+    if asm.skill_content_kind is None:
+        raise RuntimeError(
+            "skills stage did not run — the content registry needs the "
+            "skill ContentKindSpec from the injected skills kit"
+        )
+    content_kinds: list[ContentKindSpec] = [asm.skill_content_kind]
     if spec.memory_enabled:
         # The second resident: renders the index snapshot
         # into semi_stable when activated; policy "evolving".
@@ -1030,9 +1060,7 @@ def _build_guards(spec: _BuildSpec, asm: _ToolAssembly) -> HookManager:
         require_approval_tools=tuple(spec.require_approval_tools),
         shell_approval_predicate=spec.shell_approval_predicate,
         skill_tool_enforcement=spec.skill_tool_enforcement,
-        skill_allowed_tools=resolve_skill_allowed_tools(
-            extract_skill_allowed_tools_raw(asm.registry)
-        ),
+        skill_allowed_tools=asm.skill_allowed_tools,
         allowed_subtask_agents=(
             spec.allowed_subtask_agents if spec.delegation_enabled else None
         ),
@@ -1198,6 +1226,11 @@ def build_session_inputs(
     #: host and injected here; ``None`` fails loudly only when a live
     #: preview gateway is present.
     app_tools_factory: Optional[AppToolsFactory] = None,
+    #: Loader-resolved skills kit factory (microkernel phase 2a): the
+    #: ``skills`` built-in plugin's ``build_skills_kit``, resolved by the SDK
+    #: host and injected here; ``None`` fails loudly at the skills stage
+    #: (the pipeline runs it unconditionally).
+    skills_factory: Optional[SkillsFactory] = None,
 ) -> SessionInputs:
     """Build the generic-session live/resume inputs from explicit
     operator-supplied pieces.
@@ -1294,6 +1327,7 @@ def build_session_inputs(
         memory_factory=memory_factory,
         browser_tools_factory=browser_tools_factory,
         app_tools_factory=app_tools_factory,
+        skills_factory=skills_factory,
         repetition_threshold=repetition_threshold,
         repetition_action=repetition_action,
         repetition_window=repetition_window,
@@ -1317,11 +1351,14 @@ def build_session_inputs(
     skill_menu_names = _skill_menu_names(spec, asm)
     content_registry = _build_content_registry(spec, asm)
     reminder_registry = _build_reminder_registry(spec)
-    composer = build_skill_composer(
+    # Microkernel phase 2a: the composer is constructed directly — the old
+    # ``build_skill_composer`` wrapper's only skill-specific behaviour was a
+    # single-kind registry fallback this call never used (the multi-kind
+    # ``content_registry`` is always passed explicitly).
+    composer = ThreeSegmentComposer(
         system_prompt=system_prompt,
         tools=tools,
         content_store=content_store,
-        skill_registry=asm.registry,
         content_renderers=content_registry,
         reminders=reminder_registry,
         control_action_schemas=control_action_schemas,

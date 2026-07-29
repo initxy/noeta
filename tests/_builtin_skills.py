@@ -3,7 +3,7 @@
 The built-in coding skills (commit/review/init/handoff/verify/simplify)
 are PRODUCT content — they ship inside the noeta-agent namespace at
 ``noeta/agent/skills_builtin/<name>/SKILL.md``. The skill *machine*
-(indexer/renderer/activation) lives in the SDK (``noeta.context.skills``
+(indexer/renderer/activation) lives in the SDK (``noeta.builtins.skills.impl``
 + ``noeta.execution.skills``); this module only anchors the product's
 bundled pack on disk.
 
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from noeta.context.skills import SkillIndexer, SkillRegistry
+from noeta.builtins.skills.impl import SkillIndexer, SkillRegistry
 
 
 __all__ = [

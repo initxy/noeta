@@ -253,7 +253,8 @@ def test_emit_context_content_recorded_skips_blank() -> None:
 
 
 def test_activate_skills_emits_generic_event(tmp_path: Path) -> None:
-    from noeta.execution.skills import activate_skills, load_workspace_skills
+    from noeta.builtins.skills.impl import load_workspace_skills
+    from noeta.execution.skills import activate_skills
 
     ws = tmp_path / "ws"
     ws.mkdir()
@@ -285,11 +286,8 @@ def test_activate_skills_emits_generic_event(tmp_path: Path) -> None:
 
 def test_activate_skills_then_engine_seam_no_double_emit(tmp_path: Path) -> None:
     """The four activation entry points converge to exactly one generic event per (task, kind, name)."""
-    from noeta.execution.skills import (
-        activate_skills,
-        build_skill_hashes,
-        load_workspace_skills,
-    )
+    from noeta.builtins.skills.impl import load_workspace_skills
+    from noeta.execution.skills import activate_skills, build_skill_hashes
 
     ws = tmp_path / "ws"
     ws.mkdir()

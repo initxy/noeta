@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from noeta.context.composer import RenderedSkills
-from noeta.context.skills.indexer import (
+from noeta.builtins.skills.impl.indexer import (
     SkillDescription,
     SkillRegistry,
     build_skill_renderer,
@@ -78,7 +78,7 @@ def test_resolve_drops_unknown_active_skill(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     registry = _registry(_desc("known"))
-    caplog.set_level(logging.INFO, logger="noeta.context.skills.indexer")
+    caplog.set_level(logging.INFO, logger="noeta.builtins.skills.impl.indexer")
     resolved = registry.resolve(["known", "ghost"])
     assert [d.name for d in resolved] == ["known"]
     assert any("ghost" in r.getMessage() for r in caplog.records)

@@ -24,7 +24,7 @@ from typing import Any
 
 
 from noeta.context.composer import ThreeSegmentComposer
-from noeta.context.skills.indexer import (
+from noeta.builtins.skills.impl.indexer import (
     SkillDescription,
     SkillRegistry,
     build_skill_renderer,

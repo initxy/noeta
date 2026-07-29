@@ -18,11 +18,11 @@ from pathlib import Path
 
 import pytest
 
-from noeta.execution.skills import build_skill_script_wiring, load_workspace_skills
+from noeta.builtins.skills.impl import build_skill_script_wiring, load_workspace_skills
 from noeta.protocols.messages import LLMResponse, TextBlock, ToolUseBlock, Usage
 from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.runtime.workspace import WorkspaceRoot
-from noeta.tools.skill_script import SKILL_SCRIPT_TOOL_NAME
+from noeta.builtins.skills.impl.script import SKILL_SCRIPT_TOOL_NAME
 from noeta.runtime.shell_policy import ShellMode
 from noeta.runtime.workspace import FsWriteMode
 

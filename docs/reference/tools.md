@@ -30,7 +30,7 @@ Built by `build_fs_tools()` in the `fs` built-in plugin
 | `shell_run` | high | Run a shell command in the workspace. Mode-gated: `ALLOWLIST` by default, `OFF` removes the tool entirely. | `noeta/builtins/fs/impl/shell.py` |
 | `shell_poll` | low | Check status / output of a background shell job. | `noeta/builtins/fs/impl/shell.py` |
 | `shell_kill` | high | Stop a background shell job you started (SIGTERM → SIGKILL). | `noeta/builtins/fs/impl/shell.py` |
-| `run_skill_script` | high | Run an active skill's bundled script via an allowlisted interpreter. | `noeta/tools/skill_script.py` |
+| `run_skill_script` | high | Run an active skill's bundled script via an allowlisted interpreter. | `noeta/builtins/skills/impl/script.py` |
 
 ### Reads are unfenced
 

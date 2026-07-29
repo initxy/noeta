@@ -23,9 +23,9 @@ from __future__ import annotations
 
 
 from tests._builtin_skills import BUILTIN_SKILLS_DIR, load_builtin_skills
-from noeta.execution.skills import build_skill_composer as build_coding_composer
-from noeta.execution.skills import merge_skill_registries
-from noeta.context.skills import (
+from noeta.builtins.skills.impl import build_skill_composer as build_coding_composer
+from noeta.builtins.skills.impl import merge_skill_registries
+from noeta.builtins.skills.impl import (
     SkillDescription,
     SkillIndexer,
     SkillRegistry,

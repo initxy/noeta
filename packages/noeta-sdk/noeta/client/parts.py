@@ -36,12 +36,14 @@ __all__ = [
     "default_guards_factory",
     "default_memory_factory",
     "default_reminder_specs",
+    "default_skills_kit_factory",
     "default_tool_factories",
     "derive_compaction_config",
     "mcp_impl",
     "memory_impl",
     "provider_family",
     "resolve_model_alias",
+    "skills_impl",
 ]
 
 
@@ -251,6 +253,35 @@ def default_memory_factory() -> Callable[..., Any]:
     itself imports no memory implementation.
     """
     return _resolve_ref("noeta.builtins.memory.impl:build_memory_pack")
+
+
+def default_skills_kit_factory() -> Callable[..., Any]:
+    """The skills kit factory for the kernel builder (microkernel phase 2a).
+
+    Resolved from the ``skills`` built-in plugin's body
+    (``noeta.builtins.skills.impl:build_skills_kit``) — the injection the
+    microkernel builder requires (its ``skills_factory`` param); the kernel
+    itself imports no skills implementation.
+    """
+    return _resolve_ref("noeta.builtins.skills.impl:build_skills_kit")
+
+
+_SKILLS_MOD: Optional[Any] = None
+
+
+def skills_impl() -> Any:
+    """The ``skills`` built-in's impl module, loader-resolved (memoized).
+
+    SDK core reaches the skill material only through this doorway — the
+    indexer / registry types, ``load_workspace_skills``, and the
+    ``run_skill_script`` tool hang off the returned module; the kernel seams
+    (``SkillsKit`` / ``activate_skills`` / the hash helpers) stay importable
+    from :mod:`noeta.execution.skills`.
+    """
+    global _SKILLS_MOD
+    if _SKILLS_MOD is None:
+        _SKILLS_MOD = importlib.import_module("noeta.builtins.skills.impl")
+    return _SKILLS_MOD
 
 
 def default_guards_factory() -> Callable[..., Any]:

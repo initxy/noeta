@@ -187,7 +187,8 @@ def _default_skill_renderer(_: list[str]) -> RenderedSkills:
     explicit ``skill_renderer``. Yields an empty semi_stable segment
     and an empty ``selected_skills`` list — Composer still folds an
     empty list into the ``ContextPlan`` body, but no skill body bytes
-    enter the View. Wire :func:`noeta.context.skills.build_skill_renderer`
+    enter the View. Wire the skills built-in's ``build_skill_renderer``
+    (``noeta.builtins.skills.impl``)
     (issue 21) when real Skill activation is wanted.
     """
     return RenderedSkills(messages=[], selected_skills=[])

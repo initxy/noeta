@@ -25,14 +25,14 @@ import pytest
 
 from tests._skill_fixtures import write_skill_raw
 
-from noeta.execution.skills import (
+from noeta.builtins.skills.impl import (
     DEFAULT_SKILLS_SUBDIR,
-    activate_skills,
     build_skill_composer as build_coding_composer,
     load_workspace_skills,
 )
+from noeta.execution.skills import activate_skills
 from noeta.context.composer import ThreeSegmentComposer
-from noeta.context.skills import SkillRegistry
+from noeta.builtins.skills.impl import SkillRegistry
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.protocols.canonical import to_canonical_bytes

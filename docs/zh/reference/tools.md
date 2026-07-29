@@ -17,7 +17,7 @@ Noeta 提供一组内置工具，由文件系统包、Web 包、App 包以及（
 | `shell_run` | high | 在工作区中运行 shell 命令。受模式门控：默认 `ALLOWLIST`，`OFF` 完全移除该工具。 | `noeta/builtins/fs/impl/shell.py` |
 | `shell_poll` | low | 检查后台 shell 作业的状态 / 输出。 | `noeta/builtins/fs/impl/shell.py` |
 | `shell_kill` | high | 停止你启动的后台 shell 作业（SIGTERM → SIGKILL）。 | `noeta/builtins/fs/impl/shell.py` |
-| `run_skill_script` | high | 通过允许列表中的解释器运行活动技能的捆绑脚本。 | `noeta/tools/skill_script.py` |
+| `run_skill_script` | high | 通过允许列表中的解释器运行活动技能的捆绑脚本。 | `noeta/builtins/skills/impl/script.py` |
 
 ### Shell 允许列表（默认）
 

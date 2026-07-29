@@ -33,7 +33,7 @@ from noeta.builtins.memory.impl.store import (
     DEFAULT_GLOBAL_MEMORY_DIR,
     load_memory_store,
 )
-from noeta.execution.skills import load_workspace_skills
+from noeta.builtins.skills.impl import load_workspace_skills
 from noeta.runtime.governance import Budget
 from noeta.storage.memory import InMemoryContentStore
 
