@@ -1,11 +1,17 @@
 # noeta-runtime
 
-The Noeta **engine**: the pure kernel (`protocols`, `core` = Engine + fold +
-snapshot, and the kernel services — Worker / Dispatcher / ToolRuntime /
-RuntimeLLMClient, storage, guards, observers, read models) **plus the agent
-materials** that run on it (`policies`, `tools`, `providers`, `context`), the
-execution machinery, the agent identity layer (`agent` = AgentSpec / registry)
-and the official preset quartet. Everything needed to run an agent in-process.
+The Noeta **engine**: a pure kernel — `protocols` (the only typed boundary),
+`core` (Engine + fold + snapshot), the kernel services (Worker / Dispatcher /
+ToolRuntime / RuntimeLLMClient, storage, observers, read models), the material
+mechanisms (`context` = the locked composer + registries, `policies`,
+`tools` = authoring machinery), the injection-only `execution` builder, and
+the agent identity layer (`agent` = AgentSpec / registry). It carries **no
+capability implementation and no HTTP client**: installed alone it runs an
+agent with hand-injected protocol objects; the official capabilities (tool
+packs, provider adapters, guards, memory, browser, app, MCP, sandbox
+backends) ship as built-in plugins inside the
+[noeta-sdk](https://github.com/initxy/noeta) wheel and arrive through the
+plugin loader.
 
 Part of the [Noeta](https://github.com/initxy/noeta) workspace. Apache-2.0.
 

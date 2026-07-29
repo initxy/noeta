@@ -12,7 +12,7 @@ Provider 中立性意味着你的代理身份——system prompt、工具、权�
 
 ```python
 from noeta.sdk import Client, Options, query
-from noeta.providers.anthropic import AnthropicProvider
+from noeta.sdk.providers import AnthropicProvider
 
 options = Options(
     system_prompt="You are a concise assistant.",
@@ -35,7 +35,7 @@ client = Client(
 ## 之后：OpenAI 兼容
 
 ```python
-from noeta.providers.openai_compat import OpenAICompatProvider
+from noeta.sdk.providers import OpenAICompatProvider
 
 openai = OpenAICompatProvider(
     base_url="https://api.openai.com/v1",

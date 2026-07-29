@@ -291,10 +291,12 @@ set; all `None` ⇒ in-memory.
 | `instructions_discovery` | `False` | `read`-triggered discovery of subdirectory instruction files ([Composer & cache](../concepts/composer-and-cache.md)) |
 | `write_mode` | `"dry_run"` | `"apply"` performs real writes |
 
-Related re-exports from `noeta.tools.app` / `noeta.tools.mcp`:
-`AppPreviewGateway`, `AppMount`, `McpServerSpec` (stdio),
-`McpHttpServerSpec`, `McpAnyServerSpec` (their union), `McpError`,
-`McpConfigError`, `HttpPostFn`.
+Related re-exports from the kernel vocabulary modules
+`noeta.runtime.app_preview` / `noeta.runtime.mcp`: `AppPreviewGateway`,
+`AppMount`, `McpServerSpec` (stdio), `McpHttpServerSpec`, `McpAnyServerSpec`
+(their union), `McpError`, `McpConfigError`, `HttpPostFn`. (The MCP connector
+and app-tool *implementations* live in the `mcp` / `app` built-in plugins —
+`noeta.builtins.mcp.impl` / `noeta.builtins.app.impl`.)
 
 ## Errors (typed / coded)
 

@@ -49,7 +49,7 @@ All of them reuse existing primitives and add no new runtime primitives: the Con
 
 ## Consequences
 
-- On the shell-tool side, allowlist matching, rule derivation, and project-file loading/appending (`command_in_allowlist` / `rule_spec_from_command` / `load_project_shell_allowlist` / `append_project_shell_rule`), the `run_in_background` flag, and ARBITRARY full-bash all land in `noeta.tools.fs.shell`; the injected decision used for gating lands in `noeta.guards` as `PermissionPolicy.conditional_approval`.
+- On the shell-tool side, allowlist matching, rule derivation, and project-file loading/appending (`command_in_allowlist` / `rule_spec_from_command` / `load_project_shell_allowlist` / `append_project_shell_rule`) land kernel-side in `noeta.runtime.shell_policy` (since the 2026-07-29 microkernel migration), while the `run_in_background` flag and ARBITRARY full-bash land with the shell tool in `noeta.builtins.fs.impl.shell`; the injected decision used for gating lands in `noeta.runtime.governance` as `PermissionPolicy.conditional_approval`.
 - The host process registry, the growable ContentStore artifact, conservative PID recovery, and the concurrency cap land in `noeta.runtime.background_shell`; the boundary events `BackgroundShellStarted/Exited/Killed/Polled/Lost` land in `noeta.protocols.events`.
 - Mechanism C's wake + notification preamble reuses the wake mechanism of subtask-fanout-and-durable-wake.md and the origin marker of event-origin-marker.md, introducing no new durable shape.
 - Accepted drift cost: after the project allowlist file changes, resuming an earlier task may have the guard judge differently than at recording time. This is the simplicity bought by deliberately keeping it out of durable state under single-tenancy.

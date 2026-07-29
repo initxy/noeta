@@ -1,6 +1,12 @@
 # Microkernel migration — official capability implementations move into the plugin band
 
-> **Status: Active**
+> **Status: Shipped** — landed across `9d81206` (M1 fs/web), `24c99bb` (M2
+> providers/governance/reminders/sandbox), `99b4034` (M3
+> memory/browser/app/mcp), `f179904` (M4 packaging) and the M5 docs commit;
+> the durable decisions live in the
+> [plugin-contribution-bundles.md](../../adr/plugin-contribution-bundles.md)
+> 2026-07-29 addendum. Phase 2 (skills subsystem + ReActPolicy) is
+> deliberately out — each needs its own spec.
 
 ## Goal
 
@@ -125,7 +131,7 @@ band; only concrete backends move into builtins.
   only.
 - [x] **M4 — packaging.** Deps move; install smoke re-pinned; import-linter
   re-layered; runtime wheel verified impl-free.
-- [ ] **M5 — docs.** CONTEXT.md distribution-boundary + Locked-vs-open
+- [x] **M5 — docs.** CONTEXT.md distribution-boundary + Locked-vs-open
   rewrite; plugin-contribution-bundles ADR addendum; reference/how-to (en+zh);
   spec ticks.
 
@@ -358,3 +364,38 @@ is **committed first** — this migration must not stack on an unreviewed tree.
   (packaging moved no code), install smoke 2/2 + 4 static, 3377 passed /
   129 skipped, coverage ≥ 85 gate green, mypy strict clean, naming lint
   clean, import-linter 10/10 KEPT.
+- **2026-07-29 — M5 landed.** Docs only:
+
+  * **CONTEXT.md** — the Distribution boundary section rewritten for the
+    microkernel (noeta-runtime = pure kernel, transport-free, injection-only
+    builder; noeta-sdk carries ``noeta.builtins`` with every capability
+    impl + the httpx dep); Locked-vs-open gained the D2 statement (noeta's
+    own defaults ride the plugin path through the ``parts`` accessors, no
+    static default tables); the **Tool** / **Provider** / **Built-in
+    plugin** vocabulary entries updated (12-dir catalogue, manifest + impl
+    co-located, ``noeta.sdk.providers`` as the supported adapter path).
+  * **ADRs** — ``plugin-contribution-bundles`` gained the microkernel
+    addendum (co-location, loader-resolved defaults, injection-only
+    builder, vocabulary sinks, the universal contract, phase-2 scope) and
+    its built-ins section updated; ``provider-neutral`` re-expresses
+    kernel↛adapter via the universal ``sdk-core-not-builtins`` contract
+    (the retired ``runtime-no-providers`` / ``providers-only-protocols``
+    pair is named as history); 13 further ADRs swept for moved paths
+    (landing-point references updated, decision narratives untouched).
+  * **Reference / how-to (en+zh)** — ``swap-providers`` imports fixed to
+    ``noeta.sdk.providers`` (the old ``noeta.providers.*`` imports were a
+    live API break); ``reference/tools`` source paths re-pointed at
+    ``noeta/builtins/*/impl/``; ``reference/sdk`` re-export provenance
+    fixed to the kernel vocabulary modules (``noeta.runtime.app_preview`` /
+    ``noeta.runtime.mcp``); ``reference/plugins`` built-ins section
+    updated to the manifest+impl co-location and the 12-name catalogue.
+  * **Wheel READMEs** — both package READMEs (the wheel long descriptions)
+    updated to the kernel / catalogue split.
+  * **Wrap-up nit** (carried from the plugin redesign): the three newer
+    example plugins (``checklist-reminder`` / ``memory-recall`` /
+    ``redaction``) gained the illustrative ``pyproject.toml`` the older
+    three ship (entry point + ``[tool.noeta]`` mirror; ``plugin_check``
+    passes 3/3).
+
+  Spec archived as Shipped. Phase 2 (skills subsystem + ReActPolicy) needs
+  its own specs — deliberately not folded in here.

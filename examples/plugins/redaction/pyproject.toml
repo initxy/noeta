@@ -1,0 +1,39 @@
+# Illustrative packaging for the ``redaction`` manifest plugin.
+#
+# This file shows the *real* distribution shape (spec D1): the ``[tool.noeta]``
+# static manifest (mirrored to ``noeta-plugin.toml`` package data, read WITHOUT
+# importing plugin code) plus an entry point in the SDK-owned ``noeta.plugins``
+# group so a host started with ``load_plugins(entry_points=True)`` discovers the
+# distribution.
+#
+# In THIS repository the plugin is NOT installed; the tests load it by explicit
+# path via ``load_plugin_set(modules=[".../plugin.py"])``. When packaged for
+# real, the ``redaction`` directory becomes the importable ``redaction``
+# package, so ``ref`` resolves to ``redaction:scrub_secrets``.
+
+[project]
+name = "noeta-plugin-redaction"
+version = "0.1.0"
+description = "A secret-scrubbing tool_result_transform stage: the transformed result IS the recorded output."
+requires-python = ">=3.10"
+dependencies = ["noeta-sdk"]
+
+[tool.noeta]
+name = "redaction"
+requires-noeta = ">=0.4"
+
+[[tool.noeta.contributions]]
+surface = "tool_result_transform"
+name = "scrub-secrets"
+ref = "redaction:scrub_secrets"
+priority = 50
+
+# The discovery hook (its VALUE is not a factory in the manifest mechanism — the
+# manifest is read from package data; the entry point only makes the dist
+# discoverable).
+[project.entry-points."noeta.plugins"]
+redaction = "redaction"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

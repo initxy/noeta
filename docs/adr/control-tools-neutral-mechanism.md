@@ -10,7 +10,7 @@ The mechanism boundary follows `library-sdk-architecture.md`; the opacity of Dec
 
 ### Remove the three control-tool variants from the L0 closed union
 
-Delete `TodoWriteDecision` / `PlanModeDecision` / `AskUserQuestionDecision` from `protocols/decisions.py`. They carry **product semantics**, not "host mechanism," so by mechanism vs material they belong to the sdk. After the demotion, the kernel (`noeta.core` / `noeta.protocols` / `noeta.guards`) **holds no product semantics at all**.
+Delete `TodoWriteDecision` / `PlanModeDecision` / `AskUserQuestionDecision` from `protocols/decisions.py`. They carry **product semantics**, not "host mechanism," so by mechanism vs material they belong to the sdk. After the demotion, the kernel (`noeta.core` / `noeta.protocols` / `noeta.runtime.governance` — since the 2026-07-29 microkernel migration the guard implementations themselves live outside the kernel, in `noeta.builtins.governance.impl`) **holds no product semantics at all**.
 
 ### Introduce a neutral variant `StatePatchDecision`: the "persistent-state-write twin" of `ToolCallsDecision`
 
@@ -30,7 +30,7 @@ Asking a question is no longer its own Decision variant; the sdk expresses it as
 
 - **Typed plan-mode deny**: originally a `model_visible_on_deny: bool` was added to `VerdictResult` to let the kernel decide whether a deny is model-visible, **replacing** the practice of guessing a product-convention prefix via `reason.startswith('plan_mode_read_only:')`. **Current state**: the plan-mode path was later removed (see `workspace-and-session-path.md`), so both `VerdictResult.model_visible_on_deny` and the `plan_mode_read_only:` prefix no longer exist; `VerdictResult` now carries only `verdict` + `reason`.
 
-- `guards/permission.py` drops the `_CLAUDE_TO_NOETA_TOOL` alias table (moved into the sdk's `policies/skill_tools.py`); risk is unified to the neutral `low/medium/high`.
+- `guards/permission.py` (today `noeta/builtins/governance/impl/permission.py`) drops the `_CLAUDE_TO_NOETA_TOOL` alias table (moved into the sdk's `policies/skill_tools.py`); risk is unified to the neutral `low/medium/high`.
 
 - The stale `'cli'` provenance default in `runtime/worker.py` is changed to the host-neutral `'host'`.
 
