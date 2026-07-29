@@ -6,12 +6,22 @@
 ; *paths*, which stay invariant while the physical distribution boundary
 ; moves. ``protocols`` is the typed boundary (L0) and must not depend on any
 ; other in-project module; ``core`` (L1) may depend on ``protocols`` only.
-; The library-SDK layering splits the old L2 band by mechanism vs material:
-; the kernel-services band (runtime / storage / observers / read_models —
-; noeta-runtime) sits below the SDK **materials** band (context / policies /
-; tools — noeta-sdk), so a kernel service can never import a material.
-; (Microkernel M2: the old guards / providers bands dissolved into
-; ``noeta.builtins`` — governance / providers plugins.) The ``noeta.agent`` identity layer (``spec`` /
+;
+; Microkernel layer table (M4 redraw). noeta-runtime is a pure kernel: the
+; kernel-services band (runtime / storage / observers / read_models), the
+; materials band above it (context — the locked composer + registries;
+; policies — phase 2; tools — authoring machinery only, every capability
+; impl moved out), and ``execution`` (the injection-only session builder).
+; noeta-sdk carries ``client`` (SDK core — the assembly boundary that
+; injects the parts), ``presets`` / ``builtins`` (top-of-stack content: the
+; built-in plugin catalogue holds every official capability impl), and the
+; ``noeta.sdk`` façade. The old guards / providers / tool-pack
+; implementation bands are gone — they live inside ``noeta.builtins.*.impl``
+; and are reachable ONLY through the loader's dynamic ``ref`` doorway
+; (``sdk-core-not-builtins`` below is the universal static ban, which is
+; also what keeps kernel↛adapter: ``noeta.runtime`` can never statically
+; import the provider / backend adapters, because they all live in
+; ``noeta.builtins``). The ``noeta.agent`` identity layer (``spec`` /
 ; ``registry``) ships in the library wheels; product hosts live in their own
 ; repositories and drive the engine only through ``noeta.sdk`` (the
 ; engine-behaviour suite assembles via ``noeta.sdk.Client``, tests/_sdk_session).
@@ -111,6 +121,28 @@ source_modules =
     noeta.agent.registry
 forbidden_modules =
     noeta.builtins
+
+[importlinter:contract:kernel-vocabulary-diet]
+name = kernel vocabulary modules (runtime.{governance,browser,app_preview,mcp}) import only noeta.protocols (microkernel M2/M3 sinks stay pure config/protocol vocabulary)
+type = forbidden
+source_modules =
+    noeta.runtime.governance
+    noeta.runtime.browser
+    noeta.runtime.app_preview
+    noeta.runtime.mcp
+forbidden_modules =
+    noeta.core
+    noeta.context
+    noeta.storage
+    noeta.policies
+    noeta.tools
+    noeta.observers
+    noeta.read_models
+    noeta.execution
+    noeta.agent
+    noeta.client
+    noeta.sdk
+    noeta.presets
 
 [importlinter:contract:agent-only-protocols]
 name = noeta.agent identity layer (spec/registry) may only import noeta.protocols (narrowed to the identity submodules — the rest of the noeta.agent namespace is product content)

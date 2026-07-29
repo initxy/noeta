@@ -102,9 +102,16 @@ band; only concrete backends move into builtins.
   keep — now universally — "nothing statically imports `noeta.builtins`";
   keep kernel↛adapter as "kernel bands import only protocols"; the
   `noeta.tools.mcp` narrow contract is redrawn inside builtins.
-- Loader knobs keep working: `builtins=False` / `disabled_builtins` — with D2
-  a bare `Options()` against a builtins-less PluginSet now **fails loudly**
-  naming the missing activation (intended consequence; document it).
+- Loader knobs keep working: `builtins=False` / `disabled_builtins` — **amended
+  in M4**: the knobs scope the *loaded set* (the external audit / resolution
+  surface), never the SDK's own defaults. A bare `Options()` against a
+  builtins-less PluginSet still resolves its default fs/web roster through the
+  `noeta.client.parts` doorway (the M1-landed architecture reads the catalogue
+  directly, not the session set) — the reference host documents and relies on
+  exactly this semantic (`builtins=False` + preset recipe). The loud-failure
+  guarantee for a truly builtins-less *environment* is the runtime-alone
+  closure: the kernel builder's loud-fail `None` injections name the missing
+  part (install smoke, acceptance 4).
 
 ## Milestones
 
@@ -116,7 +123,7 @@ band; only concrete backends move into builtins.
 - [x] **M3 — memory, browser, app, mcp.** Execution wiring
   (memory/instructions/environment) goes injection-side; runtime keeps seams
   only.
-- [ ] **M4 — packaging.** Deps move; install smoke re-pinned; import-linter
+- [x] **M4 — packaging.** Deps move; install smoke re-pinned; import-linter
   re-layered; runtime wheel verified impl-free.
 - [ ] **M5 — docs.** CONTEXT.md distribution-boundary + Locked-vs-open
   rewrite; plugin-contribution-bundles ADR addendum; reference/how-to (en+zh);
@@ -141,8 +148,14 @@ is **committed first** — this migration must not stack on an unreviewed tree.
 7. `make check` green; all import-linter contracts KEPT after re-layering.
 8. External authoring path (PluginBuilder / manifest / `@tool`) unchanged;
    `noeta.sdk` public surface unchanged (public-surface contract test).
-9. `builtins=False` + bare `Options()` fails loudly naming the missing
-   activation.
+9. *(amended in M4 — the original wording contradicted criterion 6)*
+   `builtins=False` scopes the loaded set only: a bare `Options()` against a
+   builtins-less PluginSet compiles byte-identically to the no-set build
+   (pinned by `test_builtinless_set_keeps_the_default_capability_surface`);
+   the reference host's `builtins=False` + preset recipe behaves unchanged.
+   The loud failure for a genuinely builtins-less environment lives in the
+   runtime-alone closure (criterion 4): the kernel builder's loud-fail
+   injections name the missing part.
 
 ## Risks
 
@@ -293,3 +306,55 @@ is **committed first** — this migration must not stack on an unreviewed tree.
   built-ins (app + mcp new). Gates: parity goldens 5/5 +
   ``recall_intake_*`` byte-identical, 3375 passed / 129 skipped, coverage
   87.60%, mypy strict clean, import-linter 9/9 KEPT.
+- **2026-07-29 — M4 landed.** Packaging only — no code moved:
+
+  * **Dependency move (acceptance 5).** ``httpx`` left noeta-runtime's
+    ``pyproject.toml`` and arrived in noeta-sdk's (runtime code no longer
+    imports it anywhere — grep-verified, only two comments mention it);
+    ``uv lock`` re-pinned. A new always-on static test
+    (``test_httpx_is_an_sdk_dependency_not_a_runtime_one``) pins the
+    declaration so a stray re-add fails in every dev run, not just CI.
+  * **Install smoke re-pinned to the two closures (acceptance 4).**
+    ``tests/test_install_smoke.py`` now proves BOTH halves: the sdk-closure
+    test additionally asserts the impls arrived (the parts doorway resolves
+    the 11-tool default roster) and inspects the wheels (``noeta/builtins/``
+    ships in the sdk wheel ONLY); a new runtime-alone test installs the
+    kernel wheel by itself into a fresh venv — kernel imports work
+    (one module per band, incl. ``noeta.testing.profile``, which imports
+    runtime-alone but whose ``build_runtime`` needs the sdk at call time),
+    ``noeta.builtins`` / ``noeta.client`` / ``noeta.sdk`` /
+    ``noeta.presets`` / ``httpx`` are absent, and a **hand-injected agent**
+    (FakeTool + FakeLLMProvider + ReActPolicy over in-memory storage —
+    protocol objects only) runs a scripted turn to ``TaskCompleted``. The
+    wheel-content inspection doubles as the "runtime wheel impl-free"
+    verification.
+  * **Import-linter redraw.** The header narrative now tells the
+    microkernel story (materials band = locked composer + phase-2 policies
+    + authoring-only tools, all kernel-side; every capability impl in
+    ``noeta.builtins.*.impl`` behind the universal
+    ``sdk-core-not-builtins`` ban — which is also what keeps
+    kernel↛adapter, since every adapter now lives in builtins). One new
+    contract: **kernel-vocabulary-diet** — the M2/M3 vocabulary sinks
+    (``noeta.runtime.{governance,browser,app_preview,mcp}``) may import
+    nothing in-project beyond ``noeta.protocols``, so config vocabulary can
+    never fatten into impl-reaching modules. 10/10 KEPT.
+  * **Acceptance 9 amended** (the M1-carried nuance, resolved as
+    "amend the criterion"): the original wording — ``builtins=False`` +
+    bare ``Options()`` fails loudly — contradicted acceptance 6, because
+    the reference host *documents and relies on* loading its example
+    plugins with ``builtins=False`` while the preset recipe keeps noeta's
+    own capabilities (its ``builtins=False`` comment says exactly this).
+    Under the landed architecture the loader knob scopes the **loaded set**
+    (the external audit / resolution surface); the SDK's defaults arrive
+    through the ``noeta.client.parts`` doorway, which reads the catalogue
+    directly. Pinned by
+    ``test_builtinless_set_keeps_the_default_capability_surface`` (bare
+    ``Options()`` against a builtins-less set compiles byte-identically to
+    the no-set build). The loud-failure guarantee for a genuinely
+    builtins-less *environment* is the runtime-alone closure: the kernel
+    builder's loud-fail ``None`` injections name the missing part.
+
+  Gates: parity goldens 5/5 + reminder/recall snapshots untouched
+  (packaging moved no code), install smoke 2/2 + 4 static, 3377 passed /
+  129 skipped, coverage ≥ 85 gate green, mypy strict clean, naming lint
+  clean, import-linter 10/10 KEPT.

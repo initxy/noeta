@@ -19,6 +19,10 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
+    # Microkernel M4: httpx lives here — the HTTP-speaking capability impls
+    # (providers, web, mcp, sandbox backends, otlp export) all ship in this
+    # wheel; noeta-runtime is transport-free.
+    "httpx>=0.28.1",
     "noeta-runtime>=0.4.0",
 ]
 

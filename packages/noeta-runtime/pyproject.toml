@@ -19,10 +19,11 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
-    "httpx>=0.28.1",
     # [binary] bundles libpq so the Postgres storage adapters work out of
     # the box (the langchain-postgres / dbt pattern; the maintainer chose
     # zero-setup over the psycopg "libraries depend on bare psycopg" advice).
+    # Microkernel M4: httpx moved to noeta-sdk — the kernel is transport-free;
+    # every HTTP-speaking impl (providers, web, mcp, sandbox, otlp) ships there.
     "psycopg[binary]>=3.2",
 ]
 

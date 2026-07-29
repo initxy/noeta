@@ -673,6 +673,40 @@ def test_already_spawned_scan_is_skipped_for_a_non_delegating_agent() -> None:
 
 
 # ===========================================================================
+# Loader knobs — builtins=False scopes the loaded set, never the SDK defaults
+# ===========================================================================
+
+
+def test_builtinless_set_keeps_the_default_capability_surface(tmp_path: Path) -> None:
+    """``builtins=False`` scopes the *loaded set*, not the SDK's own defaults.
+
+    Microkernel acceptance 9 as amended in M4: the loader knob governs which
+    plugins the session can list / resolve (the external audit surface); a bare
+    ``Options()`` still obtains its default fs/web roster through the
+    ``noeta.client.parts`` doorway, which reads the built-in catalogue directly.
+    The reference host (``examples/reference-host``) documents and relies on
+    exactly this — its example plugins load with ``builtins=False`` while the
+    preset recipe keeps noeta's own capabilities.
+    """
+    baseline = _client(tmp_path, _bare(), FakeLLMProvider(responses=[_end_turn()]))
+    try:
+        golden = dataclasses.asdict(baseline.registry.resolve("main"))
+    finally:
+        baseline.shutdown()
+
+    scoped = _client(
+        tmp_path,
+        _bare(),
+        FakeLLMProvider(responses=[_end_turn()]),
+        load_plugins(builtins=False),
+    )
+    try:
+        assert dataclasses.asdict(scoped.registry.resolve("main")) == golden
+    finally:
+        scoped.shutdown()
+
+
+# ===========================================================================
 # Reference host — the plugin env must not outlive the build
 # ===========================================================================
 
