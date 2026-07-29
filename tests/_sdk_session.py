@@ -37,7 +37,7 @@ from noeta.agent.spec import AgentSpec
 from noeta.client.host import SdkHost
 from noeta.core.wiring import wire_default_observers
 from noeta.execution.driver import InteractionDriver, multi_turn_policy_wrapper
-from noeta.guards.budget import Budget
+from noeta.runtime.governance import Budget
 from noeta.presets import official_specs
 from noeta.protocols.messages import LLMProvider
 from noeta.storage.memory import (

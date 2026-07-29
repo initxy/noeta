@@ -8,7 +8,8 @@ only ever resolve to ``deny`` (fail-closed) or ``require_approval`` —
 
 from __future__ import annotations
 
-from noeta.guards.permission import PermissionGuard, PermissionPolicy
+from noeta.builtins.governance.impl.permission import PermissionGuard
+from noeta.runtime.governance import PermissionPolicy
 from noeta.protocols.decisions import ToolCall
 from noeta.protocols.hooks import GuardContext, ProposedToolCall, Verdict
 

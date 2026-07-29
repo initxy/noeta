@@ -26,7 +26,8 @@ import importlib.util
 from pathlib import Path
 
 from noeta.client.plugin_set import load_plugins
-from noeta.context.reminders import ReminderSpec, default_reminder_registry, ReminderView
+from noeta.client.parts import default_reminder_specs
+from noeta.context.reminders import ReminderRegistry, ReminderSpec, ReminderView
 from noeta.execution.reminders import (
     RecallView,
     ReminderProviderRegistry,
@@ -156,8 +157,11 @@ def test_checklist_reminder_is_pure_over_the_projection():
 
 def test_checklist_reminder_renders_at_the_tail_after_the_builtins():
     mod = _load("checklist-reminder")
-    registry = default_reminder_registry(
-        extra=[ReminderSpec("long-checklist", 400, mod.long_checklist_reminder)]
+    registry = ReminderRegistry(
+        (
+            *default_reminder_specs(),
+            ReminderSpec("long-checklist", 400, mod.long_checklist_reminder),
+        )
     )
     rendered = registry.render_all(ReminderView(todos=_todos(mod.THRESHOLD + 2)))
     # priority 400 > the three built-ins (100/200/300), so it is the last item.

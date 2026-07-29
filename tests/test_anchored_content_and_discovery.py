@@ -423,7 +423,7 @@ def _build_discovery_engine(ws: Path, responses: list[LLMResponse]):
     from noeta.core.engine import Engine
     from noeta.core.wiring import wire_default_observers
     from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
-    from noeta.guards.budget import Budget
+    from noeta.runtime.governance import Budget
     from noeta.runtime.llm import RuntimeLLMClient
     from noeta.runtime.tool import ToolRuntime
     from noeta.storage.memory import (
@@ -608,7 +608,7 @@ def test_preloader_degrades_when_file_vanishes(tmp_path: Path) -> None:
 
 def test_discovery_off_by_default_no_seams(tmp_path: Path) -> None:
     from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
-    from noeta.guards.budget import Budget
+    from noeta.runtime.governance import Budget
 
     ws = _ws(tmp_path)
     inputs = build_session_inputs(

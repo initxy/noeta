@@ -1,6 +1,12 @@
 """OTLP trace export — the documented follow-on ``inner`` adapter for
 :class:`noeta.observers.trace_export.TraceExportObserver`.
 
+Microkernel M2 placement decision: this is **host wiring** (telemetry a
+deployment opts into through ``HostConfig``), not agent governance — so it
+lives in the SDK ``noeta.client`` band rather than the ``governance``
+built-in, and the runtime wheel no longer carries the one module whose
+default transport wants ``httpx``.
+
 Ships the EventLog to any OTLP/HTTP collector (Jaeger, the OpenTelemetry
 Collector, Langfuse behind a collector, …) as real spans. It consumes the
 same :class:`~noeta.observers.audit.AuditRecord` allowlist projection as
@@ -28,7 +34,7 @@ Wire format: the OTLP/HTTP **JSON** encoding of
 uint64 nanos), POSTed to the configured ``/v1/traces`` URL. Hand-encoding
 the JSON keeps this module free of any OpenTelemetry SDK dependency; the
 only non-stdlib need is an HTTP POST, injected (tests) or defaulting to
-``httpx`` (already a runtime dependency), imported lazily off the hot path.
+``httpx`` (a noeta-sdk dependency), imported lazily off the hot path.
 
 Threading: the sink runs on the single :class:`AsyncTraceSink` worker
 thread (records arrive serially, per-task in seq order), so the assembler
@@ -484,7 +490,7 @@ def _encode_request(
                 "resource": {"attributes": [_kv("service.name", service_name)]},
                 "scopeSpans": [
                     {
-                        "scope": {"name": "noeta.observers.otlp"},
+                        "scope": {"name": "noeta.client.otlp"},
                         "spans": spans,
                     }
                 ],
@@ -495,7 +501,7 @@ def _encode_request(
 
 
 def _default_http_post(url: str, body: bytes, headers: Mapping[str, str]) -> None:
-    import httpx  # runtime dependency; imported off the emit hot path
+    import httpx  # noeta-sdk dependency; imported off the emit hot path
 
     httpx.post(url, content=body, headers=dict(headers), timeout=10.0).raise_for_status()
 

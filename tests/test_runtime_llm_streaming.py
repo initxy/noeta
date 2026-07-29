@@ -22,7 +22,7 @@ from noeta.protocols.messages import (
     Usage,
 )
 from noeta.protocols.step_context import StepContext
-from noeta.providers._sse import iter_sse_events
+from noeta.builtins.providers.impl._sse import iter_sse_events
 from noeta.runtime.llm import RuntimeLLMClient
 from noeta.storage.memory import InMemoryContentStore, InMemoryEventLog
 from noeta.testing.fake_llm import FakeLLMProvider, FakeStreamingLLMProvider

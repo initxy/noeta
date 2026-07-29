@@ -111,8 +111,8 @@ band; only concrete backends move into builtins.
 - [x] **M1 — inversion proof on fs/web.** Move fs/web impls; replace the
   static default tool table with loader resolution; parity goldens 5/5
   byte-identical. (Riskiest first: KV-cache byte-identity.)
-- [ ] **M2 — providers, governance, reminders, sandbox.** Builder/composer
-  take injections; decide `observers.otlp` placement.
+- [x] **M2 — providers, governance, reminders, sandbox.** Builder/composer
+  take injections; `observers.otlp` decided: host wiring (`noeta.client.otlp`).
 - [ ] **M3 — memory, browser, app, mcp.** Execution wiring
   (memory/instructions/environment) goes injection-side; runtime keeps seams
   only.
@@ -175,3 +175,64 @@ is **committed first** — this migration must not stack on an unreviewed tree.
   (``noeta.tools.mcp._client -> noeta.runtime._env``). 81 test files swept.
   Gates: parity goldens 5/5 byte-identical, 3375 passed, coverage 87.6%,
   import-linter 13/13, mypy strict clean.
+- **2026-07-29 — M2 landed.** Four movers, one decision:
+
+  * **Reminders.** ``noeta.context.reminders`` is registry mechanism only
+    (``ReminderView`` / ``ReminderSpec`` / ``ReminderRegistry``); the three
+    renderers + ``BUILTIN_REMINDER_PRIORITIES`` moved to
+    ``noeta/builtins/reminders/impl/`` (manifest refs re-pointed). A bare
+    composer now has an EMPTY reminder registry; the builder takes
+    ``base_reminders`` (None fails loudly) and the SDK resolves the specs
+    from the manifest — ref + declared priority — via
+    ``parts.default_reminder_specs()``. ``composer_reminders_*`` snapshots
+    byte-identical.
+  * **Governance.** Guard *config* vocabulary sank to
+    ``noeta.runtime.governance`` (``Budget`` / ``PermissionPolicy`` /
+    ``RepetitionPolicy`` + actions / ``PreToolUseRule`` + ``MatchArg`` /
+    ``RiskLevel`` + ``KNOWN_RISK_LEVELS`` / ``SkillEnforcementMode`` — the
+    M1 ``runtime.workspace``/``shell_policy`` precedent); the four guard
+    classes + the live-only ``HookObserver`` (with its rule types) moved to
+    ``noeta/builtins/governance/impl/``; ``noeta.guards`` deleted. The old
+    ``_build_guards`` body is now the impl's ``build_default_guards``; the
+    builder takes ``guards_factory`` (None fails loudly), pre-shaping the
+    kernel-side facts (sdk-resolved skill grants, delegation-gated agent
+    set) and passing operator fields through. SDK injects
+    ``parts.default_guards_factory()``. ``testing/profile.py`` keeps type
+    imports kernel-side and resolves guard classes via the dynamic doorway
+    at call time.
+  * **otlp decision.** ``observers/otlp.py`` → ``noeta/client/otlp.py``:
+    telemetry is **host wiring** (a ``HostConfig`` opt-in), not agent
+    governance — and the runtime wheel sheds its one httpx-wanting module
+    (feeds M4). ``noeta.sdk.OtlpTraceConfig`` re-export unchanged.
+  * **Providers.** ``noeta.providers.*`` (3 adapters + codecs + ``_sse`` +
+    catalog) moved to ``noeta/builtins/providers/impl/``;
+    ``derive_compaction_config`` (+ its two constants) moved out of the
+    kernel builder into the catalog module (kernel keeps the
+    ``CompactionConfig`` type + ``COMPACTION_OFF``). Kernel severances:
+    ``select_provider_edit_tool`` now maps a *family* (not a model) and the
+    builder takes ``provider_family`` pre-resolved (``None`` ⇒ drop
+    neither — the documented no-catalog semantic); the ``InteractionDriver``
+    takes ``alias_resolver`` (``None`` ⇒ identity — with no catalog there
+    are no aliases, so identity IS the kernel-correct semantic, the one
+    deliberate deviation from loud-fail). SDK-side accessors in ``parts``
+    (``derive_compaction_config`` / ``provider_family`` / ``catalog_price``
+    / ``resolve_model_alias``, memoized dynamic resolution);
+    ``sdk/providers.py`` is now a PEP 562 lazy re-export;
+    ``client/capabilities.py`` resolves the catalog dynamically.
+  * **Sandbox.** ``AioSandboxExecEnv`` (+ ``AioHttpPost`` /
+    ``AioSandboxError``) split out of ``runtime/exec_env.py`` (kernel keeps
+    ``ExecEnv`` + ``LocalExecEnv`` + ``TreeSnapshot`` + the exclusive-create
+    errors) into ``noeta/builtins/sandbox/impl/exec_env.py``;
+    ``AioBrowserBackend`` (+ ``AioBrowserError`` + the ``/mcp`` wire
+    constants) split out of ``tools/browser/_backend.py`` (kernel keeps the
+    ``BrowserBackend`` Protocol) into ``…/impl/browser.py``; manifest refs
+    re-pointed. ``client/sandbox.py``'s default factories resolve the
+    adapters through the dynamic doorway on first use.
+
+  Import-linter re-drawn minimally: the ``guards`` / ``providers`` bands
+  dissolved; ``sdk-core-not-builtins`` widened to the **universal** "nothing
+  statically imports ``noeta.builtins``" (all bands as sources, D2);
+  10/10 KEPT. Discovered coupling for M3 (recorded, not solved):
+  ``builtins/sandbox/impl/browser.py`` imports
+  ``noeta.tools.mcp._http_client`` as its transport — when M3 moves the mcp
+  pack, either the HTTP client sinks kernel-side or the edge is re-pointed.

@@ -17,7 +17,8 @@ from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.core.hooks import HookManager
 from noeta.core.snapshot import serialize_task_state
-from noeta.guards.budget import Budget, BudgetGuard
+from noeta.builtins.governance.impl.budget import BudgetGuard
+from noeta.runtime.governance import Budget
 from noeta.policies.stub import StubScriptedPolicy
 from noeta.protocols.decisions import FinishDecision, WaitTimerDecision
 from noeta.storage.memory import (

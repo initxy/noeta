@@ -33,7 +33,7 @@ from noeta.protocols.messages import (
     ToolUseBlock,
     Usage,
 )
-from noeta.providers.openai_compat import OpenAICompatProvider
+from noeta.builtins.providers.impl.openai_compat import OpenAICompatProvider
 
 
 BASE_URL = "https://example.test/v1"

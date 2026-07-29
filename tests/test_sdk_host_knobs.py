@@ -25,12 +25,10 @@ from noeta.agent.spec import (
     ToolRef,
 )
 from noeta.client.host import SdkHost
-from noeta.execution.builder import (
-    build_session_inputs,
-    derive_compaction_config,
-)
-from noeta.guards.budget import Budget
-from noeta.guards.permission import PermissionGuard
+from noeta.client.parts import derive_compaction_config
+from noeta.execution.builder import build_session_inputs
+from noeta.runtime.governance import Budget
+from noeta.builtins.governance.impl.permission import PermissionGuard
 from noeta.protocols.messages import Usage
 from noeta.storage.memory import (
     InMemoryContentStore,

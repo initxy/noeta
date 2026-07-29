@@ -32,12 +32,13 @@ Comparison operator choice:
   it's still below.
 * ``cost_usd`` uses ``>=`` — the cost has already been incurred; once
   at the cap the task should not continue.
+
+Microkernel M2: the class moved here from ``noeta.guards.budget``; its
+:class:`~noeta.runtime.governance.Budget` configuration type sank into the
+kernel vocabulary module.
 """
 
 from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Optional
 
 from noeta.protocols.hooks import (
     GuardContext,
@@ -47,30 +48,10 @@ from noeta.protocols.hooks import (
     ProposedToolCall,
     VerdictResult,
 )
+from noeta.runtime.governance import Budget
 
 
-__all__ = ["Budget", "BudgetGuard"]
-
-
-@dataclass(frozen=True, slots=True)
-class Budget:
-    """Hard caps on a Task's resource consumption.
-
-    All fields optional; ``None`` means "no cap on this dimension".
-    Per-instance (the same Budget covers every Task the BudgetGuard
-    sees in Phase 1); Phase 2 introduces per-task budgets through
-    the Principal / Contract record.
-    """
-
-    max_iterations: Optional[int] = None
-    max_tool_calls: Optional[int] = None
-    max_cost_usd: Optional[float] = None
-    max_spawned_subtasks: Optional[int] = None
-    #: SR1 — maximum **child depth** allowed to be created. Root depth is 0;
-    #: ``max_subtask_depth=1`` lets a root spawn a child (depth 1) but denies
-    #: that child spawning a grandchild (depth 2). ``None`` = no depth cap
-    #: (existing behaviour). Checked only for ``ProposedSpawnSubtask``.
-    max_subtask_depth: Optional[int] = None
+__all__ = ["BudgetGuard"]
 
 
 class BudgetGuard:

@@ -167,7 +167,7 @@ def _seed_suspended_task_in_sqlite(db_path: str) -> tuple[str, Any]:
     """Drive a task through a SpawnSubtaskDecision so it suspends with
     a non-trivial ``wake_on``, then leave the parent in the dispatcher's
     suspended state. Returns ``(task_id, wake_on)``."""
-    from noeta.guards.permission import PermissionPolicy
+    from noeta.runtime.governance import PermissionPolicy
     from noeta.policies.stub import StubScriptedPolicy
     from noeta.protocols.decisions import SpawnSubtaskDecision
 

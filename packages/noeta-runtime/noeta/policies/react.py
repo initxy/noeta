@@ -35,7 +35,7 @@ Scope:
   Task**; a subtask uses its own Policy with its own counter.
 
 Layering: this module imports only ``noeta.protocols.*`` and
-``noeta.runtime.*``. It never imports ``noeta.providers.*`` (provider
+``noeta.runtime.*``. It never imports a provider adapter (provider
 injection happens at the call site, behind a ``RuntimeLLMClient``) and
 never imports ``noeta.testing.*`` (per ``production-cannot-import-testing``).
 """
@@ -221,7 +221,7 @@ class ReActPolicy:
         # and BOTH triggers (proactive estimate / passive overflow) return a
         # ``CompactionRequestedDecision``. The window/output/buffer come from
         # the catalog ModelSpec (D-C1) but are INJECTED here — react.py never
-        # imports ``noeta.providers`` (sibling band, provider neutrality). The
+        # imports the providers built-in (provider neutrality). The
         # ``tail_token_budget`` is the protected tail window the summarize
         # boundary is computed against; ``composer_version`` is recorded on
         # the Compacted event (the sdk owns the string — runtime stays

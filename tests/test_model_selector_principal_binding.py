@@ -36,6 +36,7 @@ from noeta.execution.driver import (
     multi_turn_policy_wrapper,
 )
 from noeta.client import SdkHost
+from noeta.client.parts import resolve_model_alias
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.protocols.events import ModelBoundPayload, TaskCreatedPayload
@@ -245,6 +246,9 @@ def test_start_emits_opening_model_bound_for_allowed_selector(
         principal=Principal(
             identity="bob", allowed_models=frozenset({"opus", "haiku"})
         ),
+        # Microkernel M2: the alias table lives in the providers built-in;
+        # the client injects it — mirrored here.
+        alias_resolver=resolve_model_alias,
     )
     out = driver.start(goal="hello", agent="main", model_selector="opus")
     assert out.status == "suspended"
@@ -357,6 +361,7 @@ def test_per_turn_switch_records_two_model_bounds(tmp_path: Path) -> None:
         principal=Principal(
             identity="carol", allowed_models=frozenset({"opus", "haiku"})
         ),
+        alias_resolver=resolve_model_alias,
     )
 
     started = driver.start(goal="first", agent="main", model_selector="opus")
@@ -407,7 +412,9 @@ def test_send_goal_rejects_switch_outside_allowlist_leaves_no_bound(
     ws.mkdir()
     host, _, event_log = _host(ws, responses=[_end_turn("t1")])
     driver = InteractionDriver(
-        host, principal=Principal(identity="dave", allowed_models=frozenset({"opus"}))
+        host,
+        principal=Principal(identity="dave", allowed_models=frozenset({"opus"})),
+        alias_resolver=resolve_model_alias,
     )
     started = driver.start(goal="first", agent="main", model_selector="opus")
     before = len(

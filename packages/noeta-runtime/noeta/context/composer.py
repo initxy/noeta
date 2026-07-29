@@ -20,11 +20,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Protocol
 
-from noeta.context.reminders import (
-    ReminderRegistry,
-    ReminderView,
-    default_reminder_registry,
-)
+from noeta.context.reminders import ReminderRegistry, ReminderView
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.context_plan import ContextPlan
@@ -248,14 +244,15 @@ class ThreeSegmentComposer:
         )
         # Compose-time reminder registry (D8): the dynamic-suffix-tail reminders
         # are rendered through this table, exactly as semi_stable residents render
-        # through ``content_renderers``. ``None`` falls back to the three built-in
-        # reminders (todo / delegation / read) so every direct-construction call
-        # site stays byte-identical; the builder passes a registry that also
-        # carries per-agent-activated plugin reminders. The composer stays a pure
-        # function of folded state — the registry only ever appends to the
-        # volatile dynamic suffix, never the stable prefix.
+        # through ``content_renderers``. ``None`` is an EMPTY registry
+        # (microkernel M2): the three built-in renderers live in the
+        # ``reminders`` built-in plugin, and the kernel builder injects them —
+        # resolved through the plugin loader — via its ``base_reminders``
+        # parameter; a composer constructed bare renders no reminders. The
+        # composer stays a pure function of folded state — the registry only
+        # ever appends to the volatile dynamic suffix, never the stable prefix.
         self._reminders: ReminderRegistry = (
-            reminders if reminders is not None else default_reminder_registry()
+            reminders if reminders is not None else ReminderRegistry(())
         )
         # ③ (D-3e): the protected tail-window size in *estimated tokens*
         # (D-3d). When set, tool-result outputs of messages older than this

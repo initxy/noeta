@@ -51,7 +51,7 @@ from noeta.client.sandbox_provider import (
     decode_exec_env_ref,
     encode_exec_env_ref,
 )
-from noeta.observers.otlp import OtlpTraceConfig
+from noeta.client.otlp import OtlpTraceConfig
 from noeta.client.messages import (
     AssistantMessage,
     Result,
@@ -110,9 +110,10 @@ from noeta.context.content_channel import ContentKindSpec
 # seam protocols (the types ``HostConfig.sandbox_backend_factory`` /
 # ``sandbox_browser_factory`` are written against). The concrete AIO adapters
 # (``AioSandboxExecEnv`` / ``AioBrowserBackend``) are deliberately NOT public:
-# they are runtime implementation detail slated for retirement, and publishing
-# them here would freeze them into the user-facing API. The official product
-# reaches them through a pinned import-linter exemption instead (see the
+# they are implementation detail slated for retirement — since microkernel M2
+# they live in the ``sandbox`` built-in plugin
+# (``noeta.builtins.sandbox.impl``) and the SDK's sandbox manager resolves
+# them through the loader's dynamic-import doorway (see the
 # execution-environment-seam ADR, "SDK-adapter export surface").
 from noeta.runtime.workspace import path_within
 from noeta.runtime.exec_env import ExecEnv

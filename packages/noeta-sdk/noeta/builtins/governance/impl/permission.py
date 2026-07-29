@@ -24,12 +24,16 @@ vocabulary (e.g. a Claude→Noeta ``allowed-tools`` alias map) is resolved
 **above** the guard, in noeta-sdk, and the resolved neutral grants are
 injected via ``PermissionPolicy.skill_allowed_tools``. The guard knows
 both vocabularies for neither.
+
+Microkernel M2: the class moved here from ``noeta.guards.permission``; its
+:class:`~noeta.runtime.governance.PermissionPolicy` configuration type (and
+the ``RiskLevel`` / ``SkillEnforcementMode`` vocabulary) sank into the kernel
+vocabulary module.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, Literal, Mapping, Optional
+from typing import Optional
 
 from noeta.protocols.hooks import (
     GuardContext,
@@ -39,77 +43,10 @@ from noeta.protocols.hooks import (
     VerdictResult,
 )
 from noeta.protocols.tool import Tool
+from noeta.runtime.governance import KNOWN_RISK_LEVELS, PermissionPolicy
 
 
-__all__ = ["PermissionGuard", "PermissionPolicy", "SkillEnforcementMode"]
-
-
-RiskLevel = Literal["low", "medium", "high"]
-
-
-_KNOWN_RISK_LEVELS: tuple[str, ...] = ("low", "medium", "high")
-
-
-#: Phase 4.5 Issue B — skill ``allowed-tools`` enforcement mode.
-#: ``off`` (default) disables the feature; ``approval`` gates an
-#: out-of-grant call through the Issue A HITL approval path;
-#: ``deny`` fails it closed.
-SkillEnforcementMode = Literal["off", "approval", "deny"]
-
-
-@dataclass(frozen=True, slots=True)
-class PermissionPolicy:
-    """Allow/deny rules for tools and subtask spawns."""
-
-    allowed_tools: Optional[frozenset[str]] = None
-    denied_tools: frozenset[str] = field(default_factory=frozenset)
-    max_risk_level: Optional[RiskLevel] = None
-    allowed_subtask_agents: Optional[frozenset[str]] = None
-    # Phase 4.5 Issue A — tools that, when they would otherwise be
-    # allowed, require an explicit human approval (HITL). The guard
-    # returns ``require_approval`` (→ ``yield_for_human`` suspend) rather
-    # than ``allow``. Hard-deny conditions (denylist / allowlist / risk
-    # ceiling) still take precedence — there is no point asking a human
-    # about a call the policy already forbids.
-    require_approval_tools: frozenset[str] = field(default_factory=frozenset)
-    # Per-CALL conditional approval predicate. Built ABOVE the guard (in
-    # noeta-sdk, which can see tool semantics) and injected as a plain callable
-    # so the guard stays ``protocols``-only. Given ``(tool_name, arguments)`` it
-    # returns True iff THIS specific call needs human sign-off — used for
-    # ``shell_run`` under default/acceptEdits: a command already in the effective
-    # allowlist runs silently, an unknown one is gated through the Issue A HITL
-    # path. ``None`` (every pre-feature path: CLI / bypass) ⇒ no
-    # per-call gate, byte-identical to before. Excluded from eq/hash (it is a
-    # closure that is never serialized).
-    conditional_approval: Optional[
-        Callable[[str, Mapping[str, Any]], bool]
-    ] = field(default=None, compare=False)
-    # Phase 4.5 Issue B — skill ``allowed-tools`` enforcement.
-    # ``skill_tool_enforcement`` is the mode (default ``off``).
-    # ``skill_allowed_tools`` is a plain immutable
-    # ``(skill_name, frozenset_of_neutral_noeta_tool_names)`` map — the
-    # grants are **already parsed and alias-resolved** by noeta-sdk
-    # (``noeta.policies.skill_tools.resolve_skill_allowed_tools``), which
-    # knows both the product (Claude) and neutral Noeta vocabularies. The
-    # guard stores the resolved map directly and never imports any product
-    # vocabulary (preserves ``guards may only import noeta.protocols`` AND
-    # keeps the kernel free of provider tool-name opinion). A declaring
-    # skill that resolved to an empty grant still appears here (fail-safe:
-    # enforcement stays ON for that skill and it grants nothing).
-    skill_tool_enforcement: SkillEnforcementMode = "off"
-    skill_allowed_tools: tuple[tuple[str, frozenset[str]], ...] = ()
-    # Phase 4.5 Issue E — skill-bundled script execution.
-    # ``skill_script_tools`` names the exec tools whose execution is an
-    # always-approval **guard invariant** (e.g. ``{"run_skill_script"}``):
-    # such a call is gated by a fail-closed precheck → ``require_approval``
-    # here, never falling through to ``allow`` and not relying on
-    # ``require_approval_tools``. ``skill_scripts`` is the discovered
-    # ``(skill, relpath)`` set the precheck validates against (the tool
-    # gets the richer ``(skill, relpath, root_path)`` map separately).
-    skill_script_tools: frozenset[str] = field(default_factory=frozenset)
-    skill_scripts: frozenset[tuple[str, str]] = field(
-        default_factory=frozenset
-    )
+__all__ = ["PermissionGuard"]
 
 
 class PermissionGuard:
@@ -163,12 +100,12 @@ class PermissionGuard:
                     "PermissionGuard; fail-closed (issue 18 B4)"
                 )
             risk = tool.risk_level
-            if risk not in _KNOWN_RISK_LEVELS:
+            if risk not in KNOWN_RISK_LEVELS:
                 return VerdictResult.deny(
                     f"tool {name!r} has unknown risk_level {risk!r}; "
-                    f"fail-closed (known levels: {_KNOWN_RISK_LEVELS})"
+                    f"fail-closed (known levels: {KNOWN_RISK_LEVELS})"
                 )
-            if _KNOWN_RISK_LEVELS.index(risk) > _KNOWN_RISK_LEVELS.index(
+            if KNOWN_RISK_LEVELS.index(risk) > KNOWN_RISK_LEVELS.index(
                 self._policy.max_risk_level
             ):
                 return VerdictResult.deny(

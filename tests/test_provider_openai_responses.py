@@ -1,4 +1,4 @@
-"""Test matrix for :class:`noeta.providers.openai_responses.OpenAIResponsesProvider`.
+"""Test matrix for :class:`noeta.builtins.providers.impl.openai_responses.OpenAIResponsesProvider`.
 
 Adapter foundation (text part):
 a tracer bullet of text in, text out. All HTTP traffic goes through a ``respx`` mock;
@@ -36,7 +36,7 @@ from noeta.protocols.messages import (
     Usage,
 )
 from noeta.protocols.values import ContentRef
-from noeta.providers.openai_responses import OpenAIResponsesProvider
+from noeta.builtins.providers.impl.openai_responses import OpenAIResponsesProvider
 
 
 # base_url IS the complete responses endpoint

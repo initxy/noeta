@@ -15,7 +15,7 @@ import time
 from types import SimpleNamespace
 from typing import Any
 
-from noeta.observers.hook import HookObserver, NotificationRule, PostToolUseRule
+from noeta.builtins.governance.impl.hook_observer import HookObserver, NotificationRule, PostToolUseRule
 
 
 class _FakeLog:

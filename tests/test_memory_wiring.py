@@ -29,7 +29,7 @@ from tests._session_inputs import default_factory_kwargs
 from noeta.context.environment import ENVIRONMENT_KIND
 from noeta.context.memory import MEMORY_KIND
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
-from noeta.guards.budget import Budget
+from noeta.runtime.governance import Budget
 from noeta.presets import official_specs
 from noeta.tools.memory import (
     MEMORY_ARCHIVE_TOOL_NAME,

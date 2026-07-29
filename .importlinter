@@ -7,10 +7,11 @@
 ; moves. ``protocols`` is the typed boundary (L0) and must not depend on any
 ; other in-project module; ``core`` (L1) may depend on ``protocols`` only.
 ; The library-SDK layering splits the old L2 band by mechanism vs material:
-; the kernel-services band (runtime / storage / guards / observers /
-; read_models — noeta-runtime) sits below the SDK **materials** band (context
-; / policies / tools / providers — noeta-sdk), so a kernel service can never
-; import a material. The ``noeta.agent`` identity layer (``spec`` /
+; the kernel-services band (runtime / storage / observers / read_models —
+; noeta-runtime) sits below the SDK **materials** band (context / policies /
+; tools — noeta-sdk), so a kernel service can never import a material.
+; (Microkernel M2: the old guards / providers bands dissolved into
+; ``noeta.builtins`` — governance / providers plugins.) The ``noeta.agent`` identity layer (``spec`` /
 ; ``registry``) ships in the library wheels; product hosts live in their own
 ; repositories and drive the engine only through ``noeta.sdk`` (the
 ; engine-behaviour suite assembles via ``noeta.sdk.Client``, tests/_sdk_session).
@@ -31,8 +32,8 @@ layers =
     noeta.builtins | noeta.presets
     noeta.client
     noeta.execution
-    noeta.context | noeta.policies | noeta.tools | noeta.providers
-    noeta.runtime | noeta.storage | noeta.guards | noeta.observers | noeta.read_models
+    noeta.context | noeta.policies | noeta.tools
+    noeta.runtime | noeta.storage | noeta.observers | noeta.read_models
     noeta.agent.registry
     noeta.agent.spec
     noeta.core
@@ -53,7 +54,6 @@ forbidden_modules =
     noeta.storage
     noeta.policies
     noeta.tools
-    noeta.guards
     noeta.observers
     noeta.agent
 
@@ -68,7 +68,6 @@ forbidden_modules =
     noeta.storage
     noeta.policies
     noeta.tools
-    noeta.guards
     noeta.observers
     noeta.agent
 ignore_imports =
@@ -79,14 +78,6 @@ ignore_imports =
     ; the old ``noeta.context.composer`` default — the kernel no longer reaches there.
     noeta.core.engine -> noeta.runtime.tool
 
-[importlinter:contract:runtime-no-providers]
-name = noeta.runtime must not import noeta.providers (issue 11)
-type = forbidden
-source_modules =
-    noeta.runtime
-forbidden_modules =
-    noeta.providers
-
 [importlinter:contract:sdk-core-not-presets]
 name = SDK core must not import noeta.presets (presets is top-of-stack factory content, only consumers import it)
 type = forbidden
@@ -96,14 +87,13 @@ source_modules =
     noeta.context
     noeta.policies
     noeta.tools
-    noeta.providers
     noeta.agent.spec
     noeta.agent.registry
 forbidden_modules =
     noeta.presets
 
 [importlinter:contract:sdk-core-not-builtins]
-name = SDK core must not import noeta.builtins (built-in plugins are top-of-stack declarations reached only by ref; the loader imports them dynamically)
+name = Nothing statically imports noeta.builtins (universal, microkernel D2 — built-in plugins are reached only by ref; the loader imports them dynamically)
 type = forbidden
 source_modules =
     noeta.client
@@ -111,26 +101,16 @@ source_modules =
     noeta.context
     noeta.policies
     noeta.tools
-    noeta.providers
+    noeta.runtime
+    noeta.storage
+    noeta.observers
+    noeta.read_models
+    noeta.core
+    noeta.protocols
     noeta.agent.spec
     noeta.agent.registry
 forbidden_modules =
     noeta.builtins
-
-[importlinter:contract:providers-only-protocols]
-name = noeta.providers may only import noeta.protocols (issue 11)
-type = forbidden
-source_modules =
-    noeta.providers
-forbidden_modules =
-    noeta.core
-    noeta.runtime
-    noeta.context
-    noeta.storage
-    noeta.policies
-    noeta.tools
-    noeta.guards
-    noeta.observers
 
 [importlinter:contract:agent-only-protocols]
 name = noeta.agent identity layer (spec/registry) may only import noeta.protocols (narrowed to the identity submodules — the rest of the noeta.agent namespace is product content)
@@ -145,24 +125,8 @@ forbidden_modules =
     noeta.storage
     noeta.policies
     noeta.tools
-    noeta.providers
-    noeta.guards
     noeta.observers
     noeta.read_models
-
-[importlinter:contract:guards-only-protocols]
-name = noeta.guards may only import noeta.protocols (issue 18)
-type = forbidden
-source_modules =
-    noeta.guards
-forbidden_modules =
-    noeta.core
-    noeta.runtime
-    noeta.context
-    noeta.storage
-    noeta.policies
-    noeta.tools
-    noeta.providers
 
 [importlinter:contract:observers-only-protocols]
 name = noeta.observers may only import noeta.protocols (issue 19)
@@ -176,8 +140,6 @@ forbidden_modules =
     noeta.storage
     noeta.policies
     noeta.tools
-    noeta.providers
-    noeta.guards
 
 [importlinter:contract:read-models-isolated]
 name = noeta.read_models may only import noeta.protocols + noeta.core.fold (CW5a)
@@ -189,8 +151,6 @@ forbidden_modules =
     noeta.context
     noeta.policies
     noeta.tools
-    noeta.providers
-    noeta.guards
     noeta.observers
     noeta.storage
     noeta.core
@@ -209,7 +169,6 @@ source_modules =
     noeta.context
     noeta.policies
     noeta.tools
-    noeta.providers
     noeta.protocols
 forbidden_modules =
     noeta.storage
@@ -228,8 +187,6 @@ forbidden_modules =
     noeta.context
     noeta.storage
     noeta.policies
-    noeta.providers
-    noeta.guards
     noeta.observers
     noeta.agent
 ignore_imports =

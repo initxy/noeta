@@ -10,7 +10,9 @@ from __future__ import annotations
 from typing import Any
 
 
+from noeta.client.parts import default_reminder_specs
 from noeta.context.composer import RenderedSkills, ThreeSegmentComposer
+from noeta.context.reminders import ReminderRegistry
 from noeta.protocols.canonical import from_canonical_bytes
 from noeta.protocols.context_plan import ContextPlan
 from noeta.protocols.messages import (
@@ -73,6 +75,10 @@ def _composer(
         # and lose the body the test wrote.
         content_store=content_store if content_store is not None else InMemoryContentStore(),
         skill_renderer=skill_renderer,
+        # Microkernel M2: a bare composer has no reminders; these behavior
+        # tests cover the built-in three, so inject them the way the builder
+        # does (loader-resolved specs).
+        reminders=ReminderRegistry(default_reminder_specs()),
     )
 
 
@@ -512,6 +518,7 @@ def _delegating_composer() -> ThreeSegmentComposer:
         tools={"echo": _FakeTool("echo")},
         content_store=InMemoryContentStore(),
         control_action_schemas=[_SPAWN_SCHEMA],
+        reminders=ReminderRegistry(default_reminder_specs()),
     )
 
 

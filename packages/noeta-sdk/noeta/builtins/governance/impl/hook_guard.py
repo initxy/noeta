@@ -15,16 +15,16 @@ wins first and this guard is never consulted for that call. A user rule
 can therefore only **tighten** a call the built-ins already allowed — it
 can neither loosen a built-in denial nor rewrite a built-in approval.
 
-Rules arrive as plain data (parsed in L3), so this module imports only
-``noeta.protocols`` (the ``guards-only-protocols`` contract holds).
+Rules arrive as plain data (parsed in L3, typed by
+:class:`~noeta.runtime.governance.PreToolUseRule` — the kernel vocabulary
+module they sank into at microkernel M2, when this class moved here from
+``noeta.guards.hook``).
 """
 
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass
 from fnmatch import fnmatchcase
-from typing import Any, Literal, Optional
+from typing import Any
 
 from noeta.protocols.hooks import (
     GuardContext,
@@ -32,40 +32,10 @@ from noeta.protocols.hooks import (
     ProposedToolCall,
     VerdictResult,
 )
+from noeta.runtime.governance import MATCH_STRING_CAP, MatchArg, PreToolUseRule
 
 
-__all__ = ["HookGuard", "MatchArg", "PreToolUseRule", "MATCH_STRING_CAP"]
-
-
-#: Cap on the length of a string before ``contains`` / ``regex`` is
-#: evaluated — bounds pathological-regex / huge-argument cost.
-MATCH_STRING_CAP = 64 * 1024
-
-HookAction = Literal["allow", "deny", "require_approval"]
-
-
-@dataclass(frozen=True, slots=True)
-class MatchArg:
-    """A deterministic predicate on one tool argument.
-
-    ``path`` is a tuple of **object keys** (dotted in the config, e.g.
-    ``("opts", "force")``) — no array indexing. Exactly one operator is
-    set. ``equals`` is structural/scalar JSON equality; ``contains`` /
-    ``regex`` apply only when the resolved value is a ``str`` (else: no
-    match). ``pattern`` is the regex compiled at parse time (fail-fast)."""
-
-    path: tuple[str, ...]
-    op: Literal["equals", "contains", "regex"]
-    value: Any = None
-    pattern: Optional[re.Pattern[str]] = None
-
-
-@dataclass(frozen=True, slots=True)
-class PreToolUseRule:
-    match_tool: str
-    action: HookAction
-    match_arg: Optional[MatchArg] = None
-    reason: Optional[str] = None
+__all__ = ["HookGuard"]
 
 
 def _resolve_path(args: dict[str, Any], path: tuple[str, ...]) -> tuple[bool, Any]:

@@ -6,7 +6,9 @@ three built-in reminders survive the migration unchanged), this module pins the
 new mechanism:
 
 * the registry orders by ``(priority, name)`` and rejects duplicate names;
-* the default registry IS the three built-ins in the byte-identical order;
+* the loader-resolved base (microkernel M2: the ``reminders`` built-in's specs,
+  via ``noeta.client.parts.default_reminder_specs``) IS the three built-ins in
+  the byte-identical order;
 * a **plugin reminder renders at the dynamic-suffix tail**, after the built-ins,
   when wired through the builder's ``extra_reminders`` seam;
 * the **stable-prefix hash is unchanged across steps** with reminders active —
@@ -21,15 +23,15 @@ from pathlib import Path
 import pytest
 
 from tests._session_inputs import default_factory_kwargs
+from noeta.builtins.reminders.impl import BUILTIN_REMINDER_PRIORITIES
+from noeta.client.parts import default_reminder_specs
 from noeta.context.reminders import (
-    BUILTIN_REMINDER_PRIORITIES,
     ReminderRegistry,
     ReminderSpec,
     ReminderView,
-    default_reminder_registry,
 )
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
-from noeta.guards.budget import Budget
+from noeta.runtime.governance import Budget
 from noeta.protocols.messages import Message, TextBlock
 from noeta.protocols.task import Task
 from noeta.storage.memory import InMemoryContentStore
@@ -82,9 +84,11 @@ def test_render_all_skips_none() -> None:
     assert registry.render_all(ReminderView()) == ["shown"]
 
 
-def test_default_registry_is_the_three_builtins() -> None:
-    """The default registry carries exactly the three built-ins, todo->delegation->read."""
-    registry = default_reminder_registry()
+def test_default_specs_are_the_three_builtins() -> None:
+    """The loader-resolved base carries exactly the three built-ins,
+    todo->delegation->read (microkernel M2: resolved from the ``reminders``
+    manifest, never statically imported)."""
+    registry = ReminderRegistry(default_reminder_specs())
     assert [s.name for s in registry.specs()] == [
         "unfinished-todos",
         "delegation-nudge",
@@ -98,10 +102,10 @@ def test_default_registry_is_the_three_builtins() -> None:
     ]
 
 
-def test_default_registry_appends_extras_by_priority() -> None:
+def test_default_specs_append_extras_by_priority() -> None:
     """A high-priority extra interleaves after the built-ins by its priority."""
     extra = ReminderSpec("plugin-note", 999, lambda v: "NOTE")
-    registry = default_reminder_registry((extra,))
+    registry = ReminderRegistry((*default_reminder_specs(), extra))
     assert [s.name for s in registry.specs()][-1] == "plugin-note"
 
 

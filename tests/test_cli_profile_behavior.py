@@ -23,7 +23,7 @@ from noeta.testing.profile import (
     default_budget,
     default_permission_policy,
 )
-from noeta.guards.permission import PermissionPolicy
+from noeta.runtime.governance import PermissionPolicy
 from noeta.core.fold import fold
 from noeta.policies.stub import StubScriptedPolicy
 from noeta.protocols.decisions import (

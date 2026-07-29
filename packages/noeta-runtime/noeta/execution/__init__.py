@@ -35,7 +35,6 @@ from noeta.execution.builder import (
     CompactionConfig,
     SessionInputs,
     build_session_inputs,
-    derive_compaction_config,
 )
 from noeta.execution.multi_turn import (
     MultiTurnReActPolicy,
@@ -98,7 +97,6 @@ __all__ = [
     "CompactionConfig",
     "DEFAULT_INSTRUCTIONS_FILENAMES",
     "DEFAULT_SKILLS_SUBDIR",
-    "derive_compaction_config",
     "DrainHost",
     "drive_pending_subtasks",
     "extract_skill_allowed_tools_raw",

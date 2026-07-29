@@ -26,8 +26,8 @@ from noeta.testing.profile import (
     default_budget,
     default_permission_policy,
 )
-from noeta.guards.budget import BudgetGuard
-from noeta.guards.permission import PermissionGuard
+from noeta.builtins.governance.impl.budget import BudgetGuard
+from noeta.builtins.governance.impl.permission import PermissionGuard
 from noeta.observers.audit import AuditObserver
 from noeta.observers.metrics import MetricsObserver
 from noeta.observers.fanout import EnvelopeBroadcaster, EventFanout

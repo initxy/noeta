@@ -10,7 +10,7 @@ a trace file is sensitive operational data, not a scrubbed artifact).
 
 Three pieces, all `noeta.protocols` + stdlib only (``observers-only-
 protocols`` holds; this module itself stays free of ``httpx`` / OTel —
-the OTLP ``inner`` adapter lives in :mod:`noeta.observers.otlp`):
+the OTLP ``inner`` adapter lives in :mod:`noeta.client.otlp`, host wiring):
 
 * :class:`JsonlTraceSink` — an inner exporter (the :class:`TraceSink`
   shape: ``__call__(record)`` + ``close()``): one canonical-JSON line
@@ -58,7 +58,7 @@ class TraceSink(Protocol):
     """The inner-exporter shape: a serially-invoked :data:`AuditSink`
     plus a ``close()`` that releases its transport (file handle, final
     HTTP flush). Implementations: :class:`JsonlTraceSink`,
-    :class:`noeta.observers.otlp.OtlpSpanSink`."""
+    :class:`noeta.client.otlp.OtlpSpanSink`."""
 
     def __call__(self, record: AuditRecord) -> None: ...
 

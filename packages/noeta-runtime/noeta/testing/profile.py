@@ -38,8 +38,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 from noeta.core.engine import Engine
 from noeta.core.hooks import HookManager
 from noeta.core.wiring import wire_default_observers
-from noeta.guards.budget import Budget, BudgetGuard
-from noeta.guards.permission import PermissionGuard, PermissionPolicy
+from noeta.runtime.governance import Budget, PermissionPolicy
 from noeta.observers.audit import AuditObserver
 from noeta.observers.metrics import MetricsObserver
 from noeta.observers.fanout import EnvelopeBroadcaster, EventFanout
@@ -269,10 +268,21 @@ def build_runtime(
     )
     policy = policy_factory(llm)
 
-    # rev2 B2: real HookManager + register guards + pass to Engine
+    # rev2 B2: real HookManager + register guards + pass to Engine.
+    # Microkernel M2: the guard classes live in the ``governance`` built-in
+    # plugin (noeta-sdk); this test-support assembly resolves them through the
+    # loader's dynamic-import doorway at call time — the same discipline as
+    # ``noeta.client.parts`` — so ``noeta.testing`` keeps no static edge into
+    # ``noeta.builtins`` (and the runtime wheel stays importable without it;
+    # calling ``build_runtime`` requires noeta-sdk, which every test run has).
+    import importlib
+
+    _governance = importlib.import_module("noeta.builtins.governance.impl")
     hook_manager = HookManager()
-    hook_manager.register(BudgetGuard(budget=budget))
-    hook_manager.register(PermissionGuard(policy=permission_policy, tools=tools))
+    hook_manager.register(_governance.BudgetGuard(budget=budget))
+    hook_manager.register(
+        _governance.PermissionGuard(policy=permission_policy, tools=tools)
+    )
 
     engine = Engine(
         event_log=event_log,

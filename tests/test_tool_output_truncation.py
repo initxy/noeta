@@ -323,7 +323,8 @@ def test_product_limit_propagates_to_handler_via_custom_echo(tmp_path: Path) -> 
     Approach: test three-layer pass-through via the isomorphic chain
     build_session_inputs -> SessionInputs -> Engine, the same construction
     the production ``SdkHost`` runs (byte-identical to the product layer)."""
-    from noeta.execution.builder import build_session_inputs, derive_compaction_config
+    from noeta.client.parts import derive_compaction_config
+    from noeta.execution.builder import build_session_inputs
 
     ws = tmp_path / "ws"
     ws.mkdir()
@@ -401,7 +402,8 @@ def test_product_limit_propagates_to_handler_via_custom_echo(tmp_path: Path) -> 
 
 def test_product_default_none_zero_impact(tmp_path: Path) -> None:
     """Product layer passes no explicit limit -> SessionInputs.tool_output_inline_limit is None."""
-    from noeta.execution.builder import build_session_inputs, derive_compaction_config
+    from noeta.client.parts import derive_compaction_config
+    from noeta.execution.builder import build_session_inputs
 
     ws = tmp_path / "ws"
     ws.mkdir()

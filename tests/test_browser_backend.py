@@ -15,7 +15,7 @@ from typing import Any, Optional
 
 import pytest
 
-from noeta.tools.browser import AioBrowserBackend, AioBrowserError
+from noeta.builtins.sandbox.impl.browser import AioBrowserBackend, AioBrowserError
 
 
 BASE = "http://sandbox.local:8080"

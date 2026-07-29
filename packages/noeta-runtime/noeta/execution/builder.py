@@ -39,13 +39,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
 
-from noeta.context.composer import _COMPOSER_VERSION, ThreeSegmentComposer
+from noeta.context.composer import ThreeSegmentComposer
 from noeta.context.content_channel import ContentChannelRegistry, ContentKindSpec
-from noeta.context.reminders import (
-    ReminderRegistry,
-    ReminderSpec,
-    default_reminder_registry,
-)
+from noeta.context.reminders import ReminderRegistry, ReminderSpec
 from noeta.context.environment import EnvironmentSnapshot, environment_content_kind
 from noeta.context.instructions import (
     InstructionsSnapshot,
@@ -67,17 +63,11 @@ from noeta.execution.skills import (
     load_workspace_skills,
     skill_content_kind,
 )
-from noeta.guards.budget import Budget, BudgetGuard
-from noeta.guards.hook import HookGuard, PreToolUseRule
-from noeta.guards.permission import (
-    PermissionGuard,
-    PermissionPolicy,
-    SkillEnforcementMode,
-)
-from noeta.guards.repetition import (
+from noeta.runtime.governance import (
+    Budget,
+    PreToolUseRule,
     RepetitionAction,
-    RepetitionGuard,
-    RepetitionPolicy,
+    SkillEnforcementMode,
 )
 from noeta.policies.control_tools import (
     ask_user_question_tool_schema,
@@ -95,7 +85,6 @@ from noeta.protocols.content_store import ContentStore
 from noeta.protocols.hooks import Guard
 from noeta.protocols.policy import Policy
 from noeta.protocols.tool import Tool
-from noeta.providers.catalog import provider_family, resolve_alias, spec_for
 from noeta.tools.app import AppPreviewGateway, build_app_tools
 from noeta.tools.browser import BrowserBackend, build_browser_tools
 from noeta.runtime.exec_env import ExecEnv
@@ -110,7 +99,6 @@ __all__ = [
     "COMPACTION_OFF",
     "SessionInputs",
     "build_session_inputs",
-    "derive_compaction_config",
     "select_provider_edit_tool",
 ]
 
@@ -128,25 +116,32 @@ _ANTHROPIC_EDIT_TOOL = "edit"
 _OPENAI_EDIT_TOOL = "apply_patch"
 
 
-def select_provider_edit_tool(model: str) -> dict[str, None]:
-    """Return the edit-tool name(s) to **drop** for the bound ``model``.
+def select_provider_edit_tool(family: Optional[str]) -> dict[str, None]:
+    """Return the edit-tool name(s) to **drop** for the bound model's ``family``.
 
     The provider difference (Anthropic ships ``edit``, OpenAI /
     GPT ships ``apply_patch``) is absorbed at the assembly layer — it is NOT a
     tool field and NOT a prompt instruction. This helper maps the model's vendor
-    family (via :func:`noeta.providers.catalog.provider_family`) to the set of
-    edit tools that must be removed from the freshly-built fs pack:
+    family to the set of edit tools that must be removed from the freshly-built
+    fs pack:
 
     * an **Anthropic** model drops ``apply_patch`` (keeps ``edit``);
     * an **OpenAI / GPT** model drops ``edit`` (keeps ``apply_patch``);
-    * an **unrecognised** model (test/stub sentinel, uncatalogued id) drops
-      nothing — both stay so existing recordings resume byte-equal.
+    * an **unrecognised** model (``None`` family — test/stub sentinel,
+      uncatalogued id) drops nothing — both stay so existing recordings resume
+      byte-equal.
+
+    Microkernel M2: the model→family judgment lives in the ``providers``
+    built-in's catalog (``provider_family``); the SDK host resolves it and
+    passes the family through ``build_session_inputs(provider_family=…)`` —
+    the kernel keeps only this family→drop mapping (its own assembly-layer
+    vocabulary: the two tool names). A kernel-alone caller that injects no
+    family gets the no-op filter, which is exactly the no-catalog semantic.
 
     The return value is a ``{name: None}`` mapping (a cheap set-with-stable-
     iteration) the caller pops out of the tool dict; ``None`` family ⇒ empty
     mapping ⇒ no-op filter.
     """
-    family = provider_family(model)
     if family == "anthropic":
         return {_OPENAI_EDIT_TOOL: None}
     if family == "openai":
@@ -155,26 +150,8 @@ def select_provider_edit_tool(model: str) -> dict[str, None]:
 
 
 # ---------------------------------------------------------------------------
-# Compaction config (③ finding 1) — hoisted from noeta.execution.builder
+# Compaction config (③ finding 1)
 # ---------------------------------------------------------------------------
-
-#: Fixed headroom (estimated tokens) reserved under the context window beyond
-#: the output cap, so the available history window leaves slack for the system
-#: prompt + provider tool schemas + the next response. Deterministic constant (D-3d):
-#: the same value on live + resume.
-_COMPACTION_BUFFER_TOKENS = 2_000
-
-#: Fraction of the usable window kept as the verbatim recent tail, expressed as
-#: a denominator (``tail = available // N``). Compaction keeps
-#: a verbatim tail because noeta cannot re-read disk during compose (resume
-#: determinism) — but half the window (the original ``N=2``) is heavier than
-#: needed: the summary keeps file paths and the model re-reads with ``read``, so
-#: a smaller tail frees window at the cost of less recent verbatim fidelity.
-#: ``N=3`` (a third) is the conservative first step toward Claude's much leaner
-#: stance (near-zero verbatim tail). Smaller tail ⇒ compaction fires LESS often
-#: (more headroom after each) and each summary covers a bigger prefix.
-#: Deterministic constant: same value on live + resume.
-_TAIL_FRACTION_DENOM = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,47 +182,12 @@ COMPACTION_OFF = CompactionConfig(
 )
 
 
-def derive_compaction_config(model: str) -> CompactionConfig:
-    """Derive the compaction knobs for ``model`` from the sdk catalog.
-
-    ``model`` may be a friendly ALIAS (``opus`` / ``sonnet`` / ``haiku``) or a
-    real catalog id; it is resolved via :func:`resolve_alias` BEFORE the catalog
-    lookup. Without that resolution an alias (the common selector a host passes)
-    misses ``spec_for`` with ``KeyError`` and silently disables compaction
-    (fix B). ``resolve_alias`` passes a non-alias value through unchanged, so a
-    real id and the test-only ``stub-model`` are unaffected.
-
-    Returns :data:`COMPACTION_OFF` for any model the catalog does not describe
-    after resolution (so ``stub-model`` keeps legacy behaviour and existing
-    recordings stay byte-equal). For a catalogued model the available window is
-    ``context_window - max_output_tokens - buffer`` and the protected tail is
-    ``available // _TAIL_FRACTION_DENOM`` (a third — see the constant's note for
-    the trade-off; always strictly smaller than the window, so a misconfiguration
-    that would otherwise leave nothing to summarise cannot arise). All numbers
-    are deterministic functions of the spec, and live + resume resolve the SAME
-    ``model`` string here, so both paths derive identical knobs.
-    """
-    try:
-        spec = spec_for(resolve_alias(model))
-    except KeyError:
-        return COMPACTION_OFF
-    available = max(
-        0,
-        spec.context_window
-        - spec.max_output_tokens
-        - _COMPACTION_BUFFER_TOKENS,
-    )
-    # Protect a third of the available window as the recent tail. Strictly < the
-    # available window so summarising always has a non-empty prefix to collapse
-    # when the trigger fires.
-    tail = available // _TAIL_FRACTION_DENOM
-    return CompactionConfig(
-        context_window=spec.context_window,
-        max_output_tokens=spec.max_output_tokens,
-        compaction_buffer=_COMPACTION_BUFFER_TOKENS,
-        tail_token_budget=tail,
-        composer_version=_COMPOSER_VERSION,
-    )
+# NOTE (microkernel M2): ``derive_compaction_config`` — the catalog-driven
+# derivation of these knobs — moved into the ``providers`` built-in plugin
+# (``noeta.builtins.providers.impl.catalog``), reachable SDK-side through
+# :func:`noeta.client.parts.derive_compaction_config`. The kernel keeps the
+# ``CompactionConfig`` TYPE and takes the derived knobs pre-resolved
+# (``build_session_inputs(compaction=…)``) — it holds no model opinions.
 
 
 # ---------------------------------------------------------------------------
@@ -363,6 +305,39 @@ class WebToolsFactory(Protocol):
     def __call__(self, *, exec_env: Optional[ExecEnv] = None) -> dict[str, Tool]: ...
 
 
+class GuardsFactory(Protocol):
+    """Loader-resolved constructor of the default guard stack (microkernel M2).
+
+    The kernel never imports a guard class: the SDK host resolves the
+    ``governance`` built-in plugin's factory through the plugin loader and
+    injects it here. The kernel calls it with the finished tool assembly, the
+    skill-derived guard facts, and the operator passthrough fields; it returns
+    the registered :class:`~noeta.core.hooks.HookManager`. Signature =
+    ``noeta.builtins.governance.impl:build_default_guards``.
+    """
+
+    def __call__(
+        self,
+        *,
+        tools: dict[str, Tool],
+        budget: Budget,
+        require_approval_tools: tuple[str, ...],
+        shell_approval_predicate: Optional[
+            Callable[[str, Mapping[str, Any]], bool]
+        ],
+        skill_tool_enforcement: SkillEnforcementMode,
+        skill_allowed_tools: tuple[tuple[str, frozenset[str]], ...],
+        allowed_subtask_agents: Optional[frozenset[str]],
+        skill_script_tools: frozenset[str],
+        skill_scripts: frozenset[tuple[str, str]],
+        repetition_threshold: int,
+        repetition_action: RepetitionAction,
+        repetition_window: int,
+        hooks_pre_tool_use: tuple[PreToolUseRule, ...],
+        extra_guards: tuple[Guard, ...],
+    ) -> HookManager: ...
+
+
 @dataclass(frozen=True, slots=True)
 class _BuildSpec:
     """All operator inputs to one session build, frozen.
@@ -455,6 +430,22 @@ class _BuildSpec:
     #: fails loudly at the fs stage — the kernel never imports a tool impl.
     fs_tools_factory: Optional[FsToolsFactory] = None
     web_tools_factory: Optional[WebToolsFactory] = None
+    #: Loader-resolved built-in compose-time reminders (microkernel M2, D2):
+    #: the three renders the ``reminders`` built-in plugin declares, resolved by
+    #: the SDK host and injected here. ``None`` fails loudly at the reminder-
+    #: registry phase — the kernel never imports a renderer.
+    base_reminders: Optional[tuple[ReminderSpec, ...]] = None
+    #: Loader-resolved default guard-stack factory (microkernel M2, D2):
+    #: ``noeta.builtins.governance.impl:build_default_guards``, resolved by the
+    #: SDK host and injected here. ``None`` fails loudly at the guards phase —
+    #: the kernel never imports a guard class.
+    guards_factory: Optional[GuardsFactory] = None
+    #: The bound model's vendor family (``"anthropic"`` / ``"openai"`` /
+    #: ``None``), resolved by the SDK host from the providers built-in's
+    #: catalog (microkernel M2) and consumed by the edit-tool mutex in
+    #: ``_stage_fs_pack``. ``None`` (kernel-alone / stub) drops neither edit
+    #: tool — the documented no-catalog semantic, NOT a silent fallback.
+    provider_family: Optional[str] = None
 
 
 @dataclass(slots=True)
@@ -542,10 +533,13 @@ def _stage_fs_pack(spec: _BuildSpec, asm: _ToolAssembly) -> None:
     # The edit↔apply_patch difference is provider-specific and is
     # absorbed HERE, at the assembly layer — not in any tool field, not in the
     # prompt, not in the AgentSpec whitelist (so fingerprints never drift on a
-    # model swap). The bound model's vendor family decides which of the two
-    # mutually-exclusive edit tools survives; an unrecognised model drops
-    # neither (both stay → existing recordings resume byte-equal).
-    for _drop in select_provider_edit_tool(spec.model):
+    # model swap). The bound model's vendor family — resolved by the SDK host
+    # from the providers built-in's catalog and injected as
+    # ``provider_family`` (microkernel M2) — decides which of the two
+    # mutually-exclusive edit tools survives; an unrecognised model (``None``
+    # family, e.g. any kernel-alone / stub build) drops neither (both stay →
+    # existing recordings resume byte-equal).
+    for _drop in select_provider_edit_tool(spec.provider_family):
         full_pack.pop(_drop, None)
     asm.tools = {
         name: tool
@@ -896,17 +890,26 @@ def _build_content_registry(
 
 
 def _build_reminder_registry(spec: _BuildSpec) -> ReminderRegistry:
-    """The compose-time reminder registry (D8) — three built-ins + activated extras.
+    """The compose-time reminder registry (D8) — injected base + activated extras.
 
-    The three built-in reminders (todo / delegation / read) are always present,
-    with priorities that keep the composed dynamic-suffix tail byte-identical to
-    the pre-migration append order. Per-agent-activated plugin reminders
-    (``extra_reminders``) append after them and interleave by priority — the
-    exact mirror of how ``_build_content_registry`` extends the built-in content
-    kinds with ``Options.content_channels``. Empty extras ⇒ byte-identical to the
-    built-in-only composer.
+    Microkernel M2: the three built-in reminders (todo / delegation / read) are
+    no longer imported here — the SDK host resolves the ``reminders`` built-in
+    plugin's renders through the plugin loader and injects them as
+    ``base_reminders`` (their priorities keep the composed dynamic-suffix tail
+    byte-identical to the pre-migration append order). Per-agent-activated
+    plugin reminders (``extra_reminders``) append after them and interleave by
+    priority — the exact mirror of how ``_build_content_registry`` extends the
+    built-in content kinds with ``Options.content_channels``. Empty extras ⇒
+    byte-identical to the built-in-only composer.
     """
-    return default_reminder_registry(spec.extra_reminders)
+    if spec.base_reminders is None:
+        raise RuntimeError(
+            "base reminders were not injected — the SDK host resolves the "
+            "reminders built-in plugin through the plugin loader and passes "
+            "base_reminders (microkernel M2); the kernel builder imports no "
+            "reminder renderer"
+        )
+    return ReminderRegistry((*spec.base_reminders, *spec.extra_reminders))
 
 
 def _build_guards(spec: _BuildSpec, asm: _ToolAssembly) -> HookManager:
@@ -915,75 +918,50 @@ def _build_guards(spec: _BuildSpec, asm: _ToolAssembly) -> HookManager:
     Issue A: rebuild the exact guard shape the live session ran so a resumed
     Engine reproduces guard-origin events (the approval suspend +
     ``ToolCallApprovalRequested``, or a guard deny) consistently.
-    Registration order mirrors the live runner. The budget and compaction
-    defaults are supplied by the caller (product layer) so this helper
-    stays noeta.agent-agnostic.
+
+    Microkernel M2: the construction body moved into the ``governance``
+    built-in plugin (``build_default_guards``) — this phase pre-shapes the
+    kernel-side facts and delegates to the injected factory:
+
+    * Issue B — the raw skill ``allowed-tools`` map is extracted and
+      sdk-resolved HERE (both halves are kernel machinery) so an enforcement
+      recording reproduces byte-equal.
+    * Issue C — delegation targets are authorized only while delegation is
+      enabled; the caller has already roster-filtered the set through the same
+      single-source helper the live runner uses, so an unknown
+      ``--delegate-to`` produces the identical (empty) allow-list — live deny
+      == resume deny, no SubtaskDenied-vs-SubtaskSpawned divergence.
+
+    The budget and repetition defaults are supplied by the caller (product
+    layer) so this phase stays noeta.agent-agnostic.
     """
-    tools = asm.tools
-    hooks = HookManager()
-    hooks.register(BudgetGuard(budget=spec.budget))
-    hooks.register(
-        PermissionGuard(
-            policy=PermissionPolicy(
-                allowed_tools=frozenset(tools),
-                require_approval_tools=frozenset(
-                    n for n in spec.require_approval_tools if n in tools
-                ),
-                conditional_approval=spec.shell_approval_predicate,
-                # Issue B: same raw map extraction + sdk resolve as the live
-                # session so an enforcement recording reproduces byte-equal.
-                skill_tool_enforcement=spec.skill_tool_enforcement,
-                skill_allowed_tools=resolve_skill_allowed_tools(
-                    extract_skill_allowed_tools_raw(asm.registry)
-                ),
-                # Issue C: authorize delegation targets (named sub-agents),
-                # NOT via the normal tool allow-list. The caller has already
-                # roster-filtered this set through the same single-source
-                # helper the live runner uses, so an unknown `--delegate-to`
-                # produces the identical (empty) allow-list — live deny ==
-                # resume deny, no SubtaskDenied-vs-SubtaskSpawned divergence.
-                allowed_subtask_agents=(
-                    spec.allowed_subtask_agents
-                    if spec.delegation_enabled
-                    else None
-                ),
-                # Issue E: same guard fields the live session wired.
-                skill_script_tools=asm.skill_script_tools,
-                skill_scripts=asm.skill_scripts,
-            ),
-            tools=tools,
+    if spec.guards_factory is None:
+        raise RuntimeError(
+            "guards factory was not injected — the SDK host resolves the "
+            "governance built-in plugin through the plugin loader and passes "
+            "guards_factory (microkernel M2); the kernel builder imports no "
+            "guard implementation"
         )
+    return spec.guards_factory(
+        tools=asm.tools,
+        budget=spec.budget,
+        require_approval_tools=tuple(spec.require_approval_tools),
+        shell_approval_predicate=spec.shell_approval_predicate,
+        skill_tool_enforcement=spec.skill_tool_enforcement,
+        skill_allowed_tools=resolve_skill_allowed_tools(
+            extract_skill_allowed_tools_raw(asm.registry)
+        ),
+        allowed_subtask_agents=(
+            spec.allowed_subtask_agents if spec.delegation_enabled else None
+        ),
+        skill_script_tools=asm.skill_script_tools,
+        skill_scripts=asm.skill_scripts,
+        repetition_threshold=spec.repetition_threshold,
+        repetition_action=spec.repetition_action,
+        repetition_window=spec.repetition_window,
+        hooks_pre_tool_use=spec.hooks_pre_tool_use,
+        extra_guards=spec.extra_guards,
     )
-    # Work item ④: same anti-loop RepetitionGuard the live session wired
-    # (same threshold/action/window, registered after Permission), so a
-    # recording whose guard tripped reproduces its require_approval suspend /
-    # deny byte-equal. Default threshold 0 ⇒ not registered (matches live).
-    if spec.repetition_threshold > 0:
-        hooks.register(
-            RepetitionGuard(
-                RepetitionPolicy(
-                    threshold=spec.repetition_threshold,
-                    action=spec.repetition_action,
-                    window=spec.repetition_window,
-                )
-            )
-        )
-    # F3: rebuild the deterministic PreToolUse HookGuard from the same
-    # rules the live session used (same priority-after-built-ins), so a
-    # recording with hook-origin deny/approval events reproduces
-    # byte-equal. The operator must pass the same --hooks-file at resume;
-    # omitting it leaves the guard unbuilt and the recording diverges
-    # (we never recover hooks config from the recording). The HookObserver
-    # is intentionally NOT rebuilt (live-only side-effect).
-    if spec.hooks_pre_tool_use:
-        hooks.register(HookGuard(spec.hooks_pre_tool_use))
-    # SDK ``Options.guards`` extension point (T3): user-supplied Guards
-    # register AFTER the built-in stack, in the order given (the caller owns
-    # ordering via each Guard's own ``priority``). Empty ⇒ byte-identical to
-    # the built-in-only path.
-    for guard in spec.extra_guards:
-        hooks.register(guard)
-    return hooks
 
 
 def build_session_inputs(
@@ -1111,6 +1089,19 @@ def build_session_inputs(
     #: itself never imports a tool implementation; ``None`` fails loudly.
     fs_tools_factory: Optional[FsToolsFactory] = None,
     web_tools_factory: Optional[WebToolsFactory] = None,
+    #: Loader-resolved built-in compose-time reminders (microkernel M2, D2):
+    #: the three renders declared by the ``reminders`` built-in plugin,
+    #: resolved by the SDK host and injected here; ``None`` fails loudly.
+    base_reminders: Optional[tuple[ReminderSpec, ...]] = None,
+    #: Loader-resolved default guard-stack factory (microkernel M2, D2):
+    #: the ``governance`` built-in plugin's ``build_default_guards``, resolved
+    #: by the SDK host and injected here; ``None`` fails loudly.
+    guards_factory: Optional[GuardsFactory] = None,
+    #: The bound model's vendor family, resolved by the SDK host from the
+    #: providers built-in's catalog (``provider_family(model)``) and consumed
+    #: by the edit-tool mutex. ``None`` ⇒ both edit tools stay (the documented
+    #: unrecognised-model semantic — byte-identical for stub/test builds).
+    provider_family: Optional[str] = None,
 ) -> SessionInputs:
     """Build the generic-session live/resume inputs from explicit
     operator-supplied pieces.
@@ -1201,6 +1192,9 @@ def build_session_inputs(
         extra_reminders=extra_reminders,
         fs_tools_factory=fs_tools_factory,
         web_tools_factory=web_tools_factory,
+        base_reminders=base_reminders,
+        guards_factory=guards_factory,
+        provider_family=provider_family,
         repetition_threshold=repetition_threshold,
         repetition_action=repetition_action,
         repetition_window=repetition_window,

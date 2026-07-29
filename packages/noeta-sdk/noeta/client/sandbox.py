@@ -3,10 +3,11 @@
 This is the seam that turns a :class:`~noeta.client.sandbox_provider.SandboxProvider`
 (the agent layer's "who provisions the container", D1) into live
 :class:`~noeta.runtime.exec_env.ExecEnv` backends and owns their lifetime,
-**keyed per session root** (v2, D4). It sits above ``noeta.tools`` (the SDK's
-``noeta.client`` band may import the AIO adapter; the tools band could never
-reach up to build it), so ``SdkHost`` holds it directly (like
-``_process_registry``) instead of threading a callable down from the product.
+**keyed per session root** (v2, D4). The concrete AIO adapters live in the
+``sandbox`` built-in plugin (microkernel M2) and are resolved through the
+loader's dynamic-import doorway on first use; ``SdkHost`` holds this manager
+directly (like ``_process_registry``) instead of threading a callable down
+from the product.
 
 **v1 → v2.** v1 addressed ONE external container by ``base_url`` and cached a
 single backend keyed by that URL — every session on the host shared it. v2 makes
@@ -38,7 +39,7 @@ import dataclasses
 import logging
 import threading
 from collections.abc import Sequence
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from noeta.client.host_config import SandboxExecEnvConfig
 from noeta.client.sandbox_provider import (
@@ -50,8 +51,8 @@ from noeta.client.sandbox_provider import (
     decode_exec_env_ref,
     encode_exec_env_ref,
 )
-from noeta.tools.browser import AioBrowserBackend, BrowserBackend
-from noeta.runtime.exec_env import AioSandboxExecEnv, ExecEnv
+from noeta.tools.browser import BrowserBackend
+from noeta.runtime.exec_env import ExecEnv
 
 _log = logging.getLogger(__name__)
 
@@ -98,7 +99,21 @@ BackendFactory = Callable[[SandboxHandle, Optional[BoundPreamble]], ExecEnv]
 BrowserBackendFactory = Callable[[SandboxHandle], BrowserBackend]
 
 
-def _default_browser_factory(handle: SandboxHandle) -> AioBrowserBackend:
+def _resolve_aio(attr: str) -> Any:
+    """Resolve one AIO adapter class from the ``sandbox`` built-in plugin.
+
+    Microkernel M2: the concrete adapters live in
+    ``noeta.builtins.sandbox.impl`` and SDK core reaches them only through the
+    loader's dynamic-import doorway (the same discipline as
+    ``noeta.client.parts``) — deferred to first use so a host that never
+    provisions a sandbox never imports the adapter modules.
+    """
+    import importlib
+
+    return getattr(importlib.import_module("noeta.builtins.sandbox.impl"), attr)
+
+
+def _default_browser_factory(handle: SandboxHandle) -> BrowserBackend:
     """Build the real AIO browser adapter for a container handle.
 
     Mirrors :func:`_default_backend_factory`: the handle's live
@@ -108,9 +123,10 @@ def _default_browser_factory(handle: SandboxHandle) -> AioBrowserBackend:
     ``base_url + "/mcp"`` internally — noeta owns the browser tool schemas, so
     the AIO browser wire is isolated in the adapter and never reaches the model.
     """
-    return AioBrowserBackend(
+    backend: BrowserBackend = _resolve_aio("AioBrowserBackend")(
         base_url=handle.base_url, auth_headers=handle.auth.connect_headers
     )
+    return backend
 
 
 def _default_backend_factory(
@@ -127,11 +143,12 @@ def _default_backend_factory(
     cross-generation fencing is v2 orchestration (D7), and the seam already
     carries the field.
     """
-    return AioSandboxExecEnv(
+    backend: ExecEnv = _resolve_aio("AioSandboxExecEnv")(
         base_url=handle.base_url,
         auth_headers=handle.auth.connect_headers,
         preamble=preamble,
     )
+    return backend
 
 
 class _ConfigAttachProvider:

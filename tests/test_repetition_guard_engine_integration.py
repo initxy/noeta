@@ -16,7 +16,8 @@ from __future__ import annotations
 
 from noeta.core.engine import Engine
 from noeta.core.hooks import HookManager
-from noeta.guards.repetition import RepetitionGuard, RepetitionPolicy
+from noeta.builtins.governance.impl.repetition import RepetitionGuard
+from noeta.runtime.governance import RepetitionPolicy
 from noeta.policies.stub import StubScriptedPolicy
 from noeta.protocols.decisions import (
     FinishDecision,

@@ -1,6 +1,6 @@
 """OpenAI Responses adapter live LLM E2E, four loops (live marker).
 
-Drive :class:`noeta.providers.openai_responses.OpenAIResponsesProvider`
+Drive :class:`noeta.builtins.providers.impl.openai_responses.OpenAIResponsesProvider`
 directly against the real gateway over four chains, verifying that the
 outbound/inbound translation
 closes the loop on a live model:
@@ -81,7 +81,7 @@ def _build_provider(content_store: Optional[Any] = None):
     """Build the Responses provider from env; ``image_resolver`` wires to
     content_store.get (same wiring as the product runner_cli). base_url is the
     **full** responses endpoint."""
-    from noeta.providers.openai_responses import OpenAIResponsesProvider
+    from noeta.builtins.providers.impl.openai_responses import OpenAIResponsesProvider
 
     return OpenAIResponsesProvider(
         base_url=os.environ["NOETA_AGENT_BASE_URL"],

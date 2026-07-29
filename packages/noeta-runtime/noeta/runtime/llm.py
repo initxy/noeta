@@ -264,9 +264,9 @@ class RuntimeLLMClient:
         self._content_store = content_store
         self._id_factory = id_factory or _default_id_factory
         self._clock = clock or _default_clock
-        # ① billing: provider-neutral pricing is INJECTED (runtime must not
-        # import noeta.providers). ``pricing(model, usage) -> USD``
-        # is supplied by the code-layer wiring (catalog.price); ``None`` keeps
+        # ① billing: provider-neutral pricing is INJECTED (the kernel never
+        # imports the providers built-in). ``pricing(model, usage) -> USD``
+        # is supplied by the SDK host wiring (catalog price); ``None`` keeps
         # the stub / no-pricing path at cost_usd=0.0.
         self._pricing = pricing
         self._provider_headers = provider_headers

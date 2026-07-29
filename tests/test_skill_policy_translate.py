@@ -373,7 +373,7 @@ def _build_engine_for_tests(
     from noeta.core.engine import Engine
     from noeta.core.wiring import wire_default_observers
     from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
-    from noeta.guards.budget import Budget
+    from noeta.runtime.governance import Budget
     from noeta.runtime.llm import RuntimeLLMClient
     from noeta.runtime.tool import ToolRuntime
     from noeta.storage.memory import (
@@ -616,7 +616,7 @@ def test_engine_skill_invocation_unknown_skill_no_event_no_crash(
     from noeta.core.engine import Engine
     from noeta.core.wiring import wire_default_observers
     from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
-    from noeta.guards.budget import Budget
+    from noeta.runtime.governance import Budget
     from noeta.runtime.llm import RuntimeLLMClient
     from noeta.runtime.tool import ToolRuntime
     from noeta.storage.memory import (
@@ -914,7 +914,7 @@ def test_product_flag_on_with_skills_grows_skill_tool(tmp_path: Path) -> None:
     workspace has at least one skill the schema carries the skill tool; when no
     skills exist the schema is unchanged (no skill tool)."""
     from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
-    from noeta.guards.budget import Budget
+    from noeta.runtime.governance import Budget
     from noeta.policies.control_tools import SKILL_TOOL
     from noeta.presets import official_specs
     from noeta.storage.memory import InMemoryContentStore

@@ -1,4 +1,4 @@
-"""Test matrix for :class:`noeta.providers.anthropic.AnthropicProvider`.
+"""Test matrix for :class:`noeta.builtins.providers.impl.anthropic.AnthropicProvider`.
 
 Every adapter rule gets a dedicated case. All HTTP traffic is
 mocked via ``respx`` so the suite performs zero real network calls. Tests
@@ -35,7 +35,7 @@ from noeta.protocols.messages import (
     Usage,
 )
 from noeta.protocols.values import ContentRef
-from noeta.providers.anthropic import AnthropicProvider
+from noeta.builtins.providers.impl.anthropic import AnthropicProvider
 
 
 BASE_URL = "https://api.anthropic.test"
@@ -1588,7 +1588,7 @@ def _const_resolver(raw: bytes) -> Any:
 def test_image_block_to_anthropic_emits_base64_source() -> None:
     """Unit: the ImageBlock translator deref's via the resolver and emits the
     Anthropic base64 ``image`` content block with the ref's media_type."""
-    from noeta.providers.anthropic import _image_block_to_anthropic
+    from noeta.builtins.providers.impl.anthropic import _image_block_to_anthropic
 
     block = ImageBlock(source=_IMG_REF)
     out = _image_block_to_anthropic(block, _const_resolver(_PNG_BYTES))

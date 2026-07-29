@@ -13,7 +13,8 @@ from __future__ import annotations
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.core.hooks import HookManager
-from noeta.guards.budget import Budget, BudgetGuard
+from noeta.builtins.governance.impl.budget import BudgetGuard
+from noeta.runtime.governance import Budget
 from noeta.policies.stub import StubScriptedPolicy
 from noeta.protocols.decisions import FinishDecision, ToolCall, ToolCallsDecision
 from noeta.protocols.messages import (
@@ -24,7 +25,7 @@ from noeta.protocols.messages import (
     Usage,
 )
 from noeta.protocols.step_context import StepContext
-from noeta.providers.catalog import price
+from noeta.builtins.providers.impl.catalog import price
 from noeta.runtime.llm import RuntimeLLMClient
 from noeta.runtime.tool import ToolRuntime
 from noeta.storage.memory import (

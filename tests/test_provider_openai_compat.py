@@ -1,4 +1,4 @@
-"""Test matrix for :class:`noeta.providers.openai_compat.OpenAICompatProvider`.
+"""Test matrix for :class:`noeta.builtins.providers.impl.openai_compat.OpenAICompatProvider`.
 
 Each OpenAICompatProvider translation rule gets a dedicated case. All HTTP
 traffic is mocked via ``respx``, so the suite makes zero real network calls.
@@ -30,7 +30,7 @@ from noeta.protocols.messages import (
     Usage,
 )
 from noeta.protocols.values import ContentRef
-from noeta.providers.openai_compat import OpenAICompatProvider
+from noeta.builtins.providers.impl.openai_compat import OpenAICompatProvider
 
 
 BASE_URL = "https://example.test/v1"

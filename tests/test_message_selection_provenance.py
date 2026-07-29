@@ -200,8 +200,8 @@ def test_request_ref_hash_identical_with_and_without_selection() -> None:
 
 
 def test_provider_and_fake_complete_signatures_unchanged() -> None:
-    from noeta.providers.openai_compat import OpenAICompatProvider
-    from noeta.providers.anthropic import AnthropicProvider
+    from noeta.builtins.providers.impl.openai_compat import OpenAICompatProvider
+    from noeta.builtins.providers.impl.anthropic import AnthropicProvider
     from noeta.testing.stub_provider import StubProvider as CliStub
     from tests._stub_provider import CodeStubProvider as CodeStub
 

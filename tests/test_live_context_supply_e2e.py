@@ -54,7 +54,7 @@ def _build_provider() -> Optional[Any]:
         )
         if any(os.environ.get(v) is None for v in required):
             return None
-        from noeta.providers.openai_compat import OpenAICompatProvider
+        from noeta.builtins.providers.impl.openai_compat import OpenAICompatProvider
 
         return OpenAICompatProvider(
             base_url=os.environ["NOETA_OPENAI_BASE_URL"],
@@ -63,7 +63,7 @@ def _build_provider() -> Optional[Any]:
     if provider_kind == "anthropic":
         if os.environ.get("NOETA_API_KEY") is None:
             return None
-        from noeta.providers.anthropic import AnthropicProvider
+        from noeta.builtins.providers.impl.anthropic import AnthropicProvider
 
         max_tokens_str = os.environ.get("NOETA_MAX_TOKENS")
         return AnthropicProvider(

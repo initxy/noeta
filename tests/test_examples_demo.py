@@ -31,7 +31,7 @@ from noeta.context.composer import ThreeSegmentComposer
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.core.wiring import wire_default_observers
-from noeta.guards.permission import PermissionPolicy
+from noeta.runtime.governance import PermissionPolicy
 from noeta.policies.react import ReActPolicy
 from noeta.policies.stub import StubScriptedPolicy
 from noeta.protocols.decisions import FinishDecision, SpawnSubtaskDecision

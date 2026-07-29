@@ -18,6 +18,9 @@ from dataclasses import MISSING, fields
 from typing import Any, Callable, Optional
 
 from noeta.agent.spec import ComponentRef, ToolRef
+from noeta.context.reminders import ReminderSpec
+from noeta.execution.builder import CompactionConfig
+from noeta.protocols.messages import Usage
 
 
 __all__ = [
@@ -26,7 +29,13 @@ __all__ = [
     "POLICY_REF",
     "builtin_tool_classes",
     "builtin_tool_ref",
+    "catalog_price",
+    "default_guards_factory",
+    "default_reminder_specs",
     "default_tool_factories",
+    "derive_compaction_config",
+    "provider_family",
+    "resolve_model_alias",
 ]
 
 
@@ -89,6 +98,115 @@ def default_tool_factories() -> tuple[Callable[..., Any], Callable[..., Any]]:
         _resolve_ref("noeta.builtins.fs.impl:build_fs_tools"),
         _resolve_ref("noeta.builtins.web.impl:build_web_tools"),
     )
+
+
+# --- providers built-in accessors (microkernel M2) -------------------------
+# The model catalog lives in the ``providers`` built-in plugin
+# (``noeta.builtins.providers.impl.catalog``); SDK core reaches it only
+# through the loader's dynamic-import doorway. The catalog module is
+# import-stable for the process, so the resolution is memoized.
+
+_CATALOG_MOD: Optional[Any] = None
+
+
+def _catalog() -> Any:
+    global _CATALOG_MOD
+    if _CATALOG_MOD is None:
+        _CATALOG_MOD = importlib.import_module(
+            "noeta.builtins.providers.impl.catalog"
+        )
+    return _CATALOG_MOD
+
+
+def derive_compaction_config(model: str) -> CompactionConfig:
+    """Catalog-derived compaction knobs for ``model`` (loader-resolved).
+
+    The SDK-side accessor for the ``providers`` built-in's
+    ``derive_compaction_config`` — the value the kernel builder takes
+    pre-resolved through ``build_session_inputs(compaction=…)``.
+    """
+    config: CompactionConfig = _catalog().derive_compaction_config(model)
+    return config
+
+
+def provider_family(model: str) -> Optional[str]:
+    """The bound model's vendor family (loader-resolved catalog judgment).
+
+    Injected into ``build_session_inputs(provider_family=…)`` for the
+    edit↔apply_patch assembly mutex; ``None`` for any uncatalogued selector.
+    """
+    family: Optional[str] = _catalog().provider_family(model)
+    return family
+
+
+def catalog_price(model: str, usage: Usage) -> float:
+    """USD for one round-trip's ``Usage`` (loader-resolved catalog pricing).
+
+    The pricing callback the SDK host injects into ``RuntimeLLMClient``.
+    """
+    cost: float = _catalog().price(model, usage)
+    return cost
+
+
+def resolve_model_alias(selector: str) -> str:
+    """Friendly alias → real model-id (loader-resolved catalog table).
+
+    The alias resolver the SDK client injects into the
+    ``InteractionDriver`` (identity for any non-alias selector).
+    """
+    resolved: str = _catalog().resolve_alias(selector)
+    return resolved
+
+
+def default_guards_factory() -> Callable[..., Any]:
+    """The default guard-stack factory for the kernel builder.
+
+    Resolved from the ``governance`` built-in plugin's body
+    (``noeta.builtins.governance.impl:build_default_guards``) — the injection
+    the microkernel builder requires (its ``guards_factory`` param); the
+    kernel itself imports no guard implementation.
+    """
+    return _resolve_ref("noeta.builtins.governance.impl:build_default_guards")
+
+
+_REMINDER_SPEC_CACHE: Optional[tuple[ReminderSpec, ...]] = None
+
+
+def default_reminder_specs() -> tuple[ReminderSpec, ...]:
+    """The three built-in compose-time reminders, **loader-resolved**.
+
+    Microkernel M2 (D2): the ``reminders`` built-in plugin's manifest declares
+    the three renders (ref + priority); this function reads that manifest
+    (inert data) and resolves each ``reminder`` contribution at the sanctioned
+    execution boundary, returning the :class:`ReminderSpec` tuple the kernel
+    builder requires as its ``base_reminders`` injection. Memoized — the
+    renders are pure module-level functions, import-stable for the process.
+    """
+    global _REMINDER_SPEC_CACHE
+    if _REMINDER_SPEC_CACHE is None:
+        builtins_mod = importlib.import_module("noeta.builtins")
+        specs: list[ReminderSpec] = []
+        for manifest in builtins_mod.builtin_manifests():
+            if manifest.name != "reminders":
+                continue
+            for c in manifest.contributions:
+                if c.surface != "reminder" or c.ref is None:
+                    continue
+                priority = c.params.get("priority")
+                if not isinstance(priority, int):
+                    raise RuntimeError(
+                        f"built-in reminder {c.name!r} declares no integer "
+                        f"priority — the manifest must carry the composed order"
+                    )
+                specs.append(
+                    ReminderSpec(
+                        name=c.name,
+                        priority=priority,
+                        render=_resolve_ref(c.ref),
+                    )
+                )
+        _REMINDER_SPEC_CACHE = tuple(specs)
+    return _REMINDER_SPEC_CACHE
 
 
 def __getattr__(name: str) -> Any:

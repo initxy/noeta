@@ -38,7 +38,7 @@ from noeta.execution.builder import (
     COMPACTION_OFF,
     build_session_inputs,
 )
-from noeta.guards.budget import Budget
+from noeta.runtime.governance import Budget
 from noeta.policies.control_tools import SKILL_TOOL, skill_tool_schema
 from noeta.protocols.messages import Usage
 from noeta.storage.memory import (

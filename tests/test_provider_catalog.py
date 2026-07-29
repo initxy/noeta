@@ -16,7 +16,7 @@ import inspect
 import pytest
 
 from noeta.protocols.messages import Usage
-from noeta.providers.catalog import (
+from noeta.builtins.providers.impl.catalog import (
     ALIASES,
     ModelSpec,
     price,
@@ -205,13 +205,24 @@ def test_price_unknown_model_raises_keyerror() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_catalog_module_only_imports_protocols_and_stdlib() -> None:
-    import noeta.providers.catalog as catalog_mod
+def test_catalog_module_import_diet() -> None:
+    """The catalog keeps a narrow diet: protocols, plus (microkernel M2) the
+    two kernel modules ``derive_compaction_config`` reaches DOWNWARD —
+    ``noeta.execution.builder`` for the ``CompactionConfig`` type and
+    ``noeta.context.composer`` for the composer version. Builtins→kernel is
+    the allowed direction; anything else appearing here is a smell."""
+    import noeta.builtins.providers.impl.catalog as catalog_mod
 
+    allowed = (
+        "from noeta.protocols",
+        "import noeta.protocols",
+        "from noeta.execution.builder import",
+        "from noeta.context.composer import",
+    )
     src = inspect.getsource(catalog_mod)
     for line in src.splitlines():
         line = line.strip()
         if line.startswith("from noeta") or line.startswith("import noeta"):
-            assert line.startswith("from noeta.protocols") or line.startswith(
-                "import noeta.protocols"
-            ), f"catalog imports a non-protocols noeta module: {line}"
+            assert line.startswith(allowed), (
+                f"catalog imports an unexpected noeta module: {line}"
+            )

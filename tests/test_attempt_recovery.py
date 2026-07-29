@@ -20,8 +20,9 @@ from noeta.core.fold import fold
 from noeta.core.hooks import HookManager
 from noeta.core.snapshot import serialize_task_state
 from noeta.core.wiring import wire_default_observers
-from noeta.guards.budget import Budget, BudgetGuard
-from noeta.guards.permission import PermissionGuard, PermissionPolicy
+from noeta.builtins.governance.impl.budget import BudgetGuard
+from noeta.builtins.governance.impl.permission import PermissionGuard
+from noeta.runtime.governance import Budget, PermissionPolicy
 from noeta.policies.stub import StubScriptedPolicy
 from noeta.protocols.decisions import (
     FinishDecision,

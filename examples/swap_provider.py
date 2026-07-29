@@ -13,8 +13,8 @@ This example runs the identical recipe twice against two different
 provider instances and shows both produce a terminal answer. In a real
 deployment those two would be, e.g.::
 
-    from noeta.providers.openai_compat import OpenAICompatProvider
-    from noeta.providers.anthropic import AnthropicProvider
+    from noeta.builtins.providers.impl.openai_compat import OpenAICompatProvider
+    from noeta.builtins.providers.impl.anthropic import AnthropicProvider
 
     openai = OpenAICompatProvider(base_url=..., api_key=...)
     claude = AnthropicProvider(api_key=..., default_max_tokens=1024)

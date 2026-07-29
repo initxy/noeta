@@ -8,7 +8,8 @@ for ``max_iterations`` (B5), and the consumption-style ``>=`` for
 from __future__ import annotations
 
 
-from noeta.guards.budget import Budget, BudgetGuard
+from noeta.builtins.governance.impl.budget import BudgetGuard
+from noeta.runtime.governance import Budget
 from noeta.protocols.decisions import (
     SpawnSubtaskDecision,
     ToolCall,

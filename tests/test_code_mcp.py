@@ -24,7 +24,8 @@ from tests._sdk_session import (
 from noeta.protocols.decisions import ToolCall
 from noeta.protocols.hooks import GuardContext, ProposedToolCall, Verdict
 from noeta.protocols.messages import LLMResponse, TextBlock, ToolUseBlock, Usage
-from noeta.guards.permission import PermissionGuard, PermissionPolicy
+from noeta.builtins.governance.impl.permission import PermissionGuard
+from noeta.runtime.governance import PermissionPolicy
 from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.runtime.shell_policy import ShellMode
 from noeta.runtime.workspace import FsWriteMode

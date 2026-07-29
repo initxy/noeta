@@ -1,7 +1,12 @@
 import tests._builtin_skills as _skills
 from tests._builtin_skills import BUILTIN_SKILLS_DIR
-from noeta.client.parts import default_tool_factories
-from noeta.execution.builder import build_session_inputs, derive_compaction_config
+from noeta.client.parts import (
+    default_guards_factory,
+    default_reminder_specs,
+    default_tool_factories,
+    derive_compaction_config,
+)
+from noeta.execution.builder import build_session_inputs
 from noeta.policies.control_tools import WORKFLOW_AGENT_NAME
 from noeta.presets import official_specs
 
@@ -11,10 +16,16 @@ _ALIASES = {"default": "main"}
 
 
 def default_factory_kwargs():
-    """fs/web tool-pack factory kwargs required by ``build_session_inputs``
-    (microkernel M1) — tests that call the builder directly splat these in."""
+    """Loader-resolved injection kwargs required by ``build_session_inputs``
+    (microkernel M1/M2) — tests that call the builder directly splat these in:
+    the fs/web tool-pack factories plus the three built-in reminders."""
     fs_f, web_f = default_tool_factories()
-    return {"fs_tools_factory": fs_f, "web_tools_factory": web_f}
+    return {
+        "fs_tools_factory": fs_f,
+        "web_tools_factory": web_f,
+        "base_reminders": default_reminder_specs(),
+        "guards_factory": default_guards_factory(),
+    }
 
 
 def known_subtask_agents(names):
@@ -79,6 +90,8 @@ def build_code_replay_inputs(*, workspace_dir, agent, content_store, model, **kw
     _fs_f, _web_f = default_tool_factories()
     kwargs.setdefault("fs_tools_factory", _fs_f)
     kwargs.setdefault("web_tools_factory", _web_f)
+    kwargs.setdefault("base_reminders", default_reminder_specs())
+    kwargs.setdefault("guards_factory", default_guards_factory())
     _raw_globs = agent.metadata.get("write_path_globs")
     if _raw_globs:
         kwargs.setdefault(

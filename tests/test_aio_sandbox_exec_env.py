@@ -18,12 +18,8 @@ from typing import Any, Mapping
 
 import pytest
 
-from noeta.runtime.exec_env import (
-    AioSandboxError,
-    AioSandboxExecEnv,
-    ExclusiveCreateExists,
-    ExclusiveCreateWriteFailed,
-)
+from noeta.builtins.sandbox.impl.exec_env import AioSandboxError, AioSandboxExecEnv
+from noeta.runtime.exec_env import ExclusiveCreateExists, ExclusiveCreateWriteFailed
 
 
 BASE = "http://sandbox.local:8080"

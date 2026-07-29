@@ -65,8 +65,8 @@ from noeta.protocols.messages import (
     ToolUseBlock,
     Usage,
 )
-from noeta.providers._sse import iter_sse_events
-from noeta.providers.codecs import (
+from noeta.builtins.providers.impl._sse import iter_sse_events
+from noeta.builtins.providers.impl.codecs import (
     decode_tool_arguments,
     encode_tool_arguments,
     parse_retry_after,

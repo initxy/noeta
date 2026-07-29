@@ -25,13 +25,14 @@ from typing import Any, Callable, Mapping, Optional
 from noeta.agent.registry import AgentRegistry
 from noeta.context.reminders import ReminderSpec
 from noeta.core.wiring import wire_default_observers
-from noeta.observers.otlp import make_otlp_trace_observer
+from noeta.client.otlp import make_otlp_trace_observer
 from noeta.observers.trace_export import TraceExportObserver
 from noeta.execution import (
     InteractionDriver,
     multi_turn_policy_wrapper,
 )
 from noeta.client.messages import ViewItem, as_messages
+from noeta.client.parts import resolve_model_alias
 from noeta.execution.driver import DriveOutcome, STUB_MODEL_ALLOWLIST
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
@@ -577,6 +578,10 @@ class Client:
                 if allowed_models is not None
                 else STUB_MODEL_ALLOWLIST
             ),
+            # Microkernel M2: the kernel driver holds no model catalog; the
+            # friendly-alias table lives in the providers built-in and is
+            # injected here (identity for non-alias selectors).
+            alias_resolver=resolve_model_alias,
         )
         # Wire the driver back into the host as the background-completion
         # notifier (Mechanism C). The driver wraps the host, so the host cannot
