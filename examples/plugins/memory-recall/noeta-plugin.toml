@@ -1,0 +1,10 @@
+# The shipped static manifest (spec D1). ``python -m noeta.sdk.plugin_check``
+# verifies this file matches what ``plugin.py``'s decorators declare.
+name = "memory-recall"
+requires-noeta = ">=0.4"
+
+[[contributions]]
+surface = "reminder_provider"
+name = "rag-recall"
+ref = "memory_recall:rag_recall"
+seams = ["turn_intake"]

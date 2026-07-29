@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from noeta.context.composer import ThreeSegmentComposer
+from noeta.context.reminders import ReminderRegistry
 from noeta.context.content_channel import (
     ContentChannelRegistry,
     ContentKindSpec,
@@ -367,6 +368,7 @@ def build_skill_composer(
     tail_token_budget: Optional[int] = None,
     available_window: Optional[int] = None,
     content_renderers: Optional[ContentChannelRegistry] = None,
+    reminders: Optional[ReminderRegistry] = None,
 ) -> ThreeSegmentComposer:
     """Wire ``ThreeSegmentComposer`` with the workspace skill renderer.
 
@@ -413,6 +415,7 @@ def build_skill_composer(
             if content_renderers is not None
             else ContentChannelRegistry([skill_content_kind(skill_registry)])
         ),
+        reminders=reminders,
         control_action_schemas=control_action_schemas,
         tail_token_budget=tail_token_budget,
         available_window=available_window,

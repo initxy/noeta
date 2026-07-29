@@ -34,22 +34,6 @@ That is all you need: populating `agents` is itself the opt-in.
 the child names into `spawnable`, so the `spawn_subagent` control tool is
 exposed to the model with `researcher` in its schema.
 
-If you do pass `capabilities` explicitly, it must be a
-[`Capabilities`](../reference/sdk.md) instance — a plain dict raises
-`AttributeError` during compile:
-
-```python
-from noeta.sdk import Capabilities
-
-options = Options(
-    system_prompt="…",
-    name="lead",
-    agents={"researcher": researcher},
-    # Capabilities(...), never {"delegation": True}
-    capabilities=Capabilities(delegation=True, todo_write=True),
-)
-```
-
 ## How spawning works
 
 When the parent model calls `spawn_subagent(agent="researcher",

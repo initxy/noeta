@@ -28,7 +28,7 @@ name = Noeta layering (materials band split from kernel-services)
 type = layers
 layers =
     noeta.sdk
-    noeta.presets
+    noeta.builtins | noeta.presets
     noeta.client
     noeta.execution
     noeta.context | noeta.policies | noeta.tools | noeta.providers
@@ -101,6 +101,21 @@ source_modules =
     noeta.agent.registry
 forbidden_modules =
     noeta.presets
+
+[importlinter:contract:sdk-core-not-builtins]
+name = SDK core must not import noeta.builtins (built-in plugins are top-of-stack declarations reached only by ref; the loader imports them dynamically)
+type = forbidden
+source_modules =
+    noeta.client
+    noeta.execution
+    noeta.context
+    noeta.policies
+    noeta.tools
+    noeta.providers
+    noeta.agent.spec
+    noeta.agent.registry
+forbidden_modules =
+    noeta.builtins
 
 [importlinter:contract:providers-only-protocols]
 name = noeta.providers may only import noeta.protocols (issue 11)

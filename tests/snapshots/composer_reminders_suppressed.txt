@@ -1,0 +1,12 @@
+[
+  {
+    "origin": null,
+    "role": "user",
+    "text": "Do the task."
+  },
+  {
+    "origin": null,
+    "role": "assistant",
+    "text": ""
+  }
+]

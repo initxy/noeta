@@ -11,13 +11,15 @@ from noeta.sdk import query, Client, Options, tool
 
 ## Client verbs
 
-### `query(options, goal, *, provider=None, workspace_dir=None, model=None, images=()) → QueryResult`
+### `query(options, goal, *, provider=None, workspace_dir=None, model=None, images=(), plugins=None) → QueryResult`
 
 One-shot query: drives a single turn to a genuine terminal and returns the
 full envelope stream with pre-folded projections
 (`packages/noeta-sdk/noeta/client/client.py`). Creates a temporary
 `Client(multi_turn=False)` and shuts it down before returning. Use `Client`
-directly for multi-turn work.
+directly for multi-turn work. `plugins` is a loaded `PluginSet` (see [Plugin
+mechanism](#plugin-mechanism)); its plugins take effect only where
+`Options.plugins` activates them.
 
 ### `QueryResult` — `client/client.py`
 
@@ -36,7 +38,7 @@ before teardown — do not re-project raw envelopes with a fresh store.
 
 ```python
 Client(options, *, provider=None, workspace_dir=None, model=None,
-       multi_turn=True, host_config=None, allowed_models=None)
+       multi_turn=True, host_config=None, allowed_models=None, plugins=None)
 ```
 
 A provider must come from the `provider` kwarg or `Options.provider`, and a
@@ -44,7 +46,11 @@ workspace from `workspace_dir` or `Options.cwd` — otherwise `ValueError`.
 Storage defaults to in-memory; pass a `HostConfig` to inject a durable triple.
 `allowed_models` is the per-turn model-selector allowlist: `None` keeps the
 driver's stub default, and an explicitly **empty** sequence authorizes no
-selector at all (`model_selector=None` still binds the host default).
+selector at all (`model_selector=None` still binds the host default). `plugins`
+is a loaded `PluginSet` (see [Plugin mechanism](#plugin-mechanism)): its
+identity-plane contributions reach an agent only where `Options.plugins`
+activates the plugin, while its governance guards/observers apply process-wide.
+An activation name absent from the loaded set fails the build.
 
 > Line numbers are deliberately omitted throughout this page — they drift on
 > every edit. The module path plus the member name is the stable coordinate.
@@ -127,7 +133,7 @@ Frozen dataclass compiled into `AgentSpec`s. Fields split into **identity**
 | `name` | `str = "main"` | identity |
 | `skills` | `tuple[str, ...] = ()` | identity |
 | `budget` | `BudgetSpec \| None` — `None` ⇒ default with `max_subtask_depth=3` | identity |
-| `capabilities` | `Capabilities \| None` — `None` ⇒ derived from children | identity |
+| `plugins` | `tuple[str, ...] = DEFAULT_PLUGINS` (`("fs", "web")`) — per-agent plugin **activation**: built-in feature-bundle names (`memory` / `skill_invocation` / `browser` / `todo_write` / `ask_user_question` / `mcp` / `delegation`) and names of loaded plugins in the `PluginSet` handed to `Client` | identity |
 | `agents` | `Mapping[str, AgentDefinition] = {}` — flat, non-recursive | identity |
 | `allowed_tools` | `tuple \| None` — `None` ⇒ **all 11 built-ins**; entries are name strings or `DecoratedTool`s | identity |
 | `disallowed_tools` | `tuple[str, ...] = ()` — subtracted from the allow-list | identity |
@@ -153,8 +159,11 @@ invalid `permission_mode` raises at compile time (`options.py`).
 ### `AgentDefinition` — `client/options.py`
 
 Flat child-agent recipe: `description` (required, non-empty), `prompt`
-(required), `tools` (`None` ⇒ all built-ins), `model`, `capabilities`,
-`metadata`. Cannot nest — children are leaves.
+(required), `tools` (`None` ⇒ all built-ins), `model`, `plugins`
+(per-agent activation, default `()` — no `fs`/`web`; `plugins=("delegation",)`
+is how a child is granted the right to spawn), `metadata`. Cannot nest —
+children are leaves. There is no `capabilities` field: it was removed with the
+rest of the `Capabilities` authoring surface.
 
 ### `SystemPromptPreset` — `client/options.py`
 
@@ -330,6 +339,36 @@ Implement one of these and mount it through the matching `Options` field:
 | `ContentKindSpec` | `content_channels` | `noeta/context/content_channel.py` |
 | `Decision` (union of Policy decision types) | returned by a custom `Policy` | `noeta/protocols/decisions.py` |
 | `StepContext` / `View` | passed to a custom `Policy` | `noeta/protocols/step_context.py` / `noeta/protocols/view.py` |
+
+## Plugin mechanism
+
+**Manifest-declared contribution packages over a surface registry**, with a
+host-level **load** / agent-level **activation** split. Full contract in the
+[Plugins reference](plugins.md); the `noeta.sdk` surface:
+
+| Symbol | Role | Source |
+| --- | --- | --- |
+| `PluginManifest` / `ManifestContribution` | the static manifest (`name`, `requires-noeta`, contributions) | `client/plugin_manifest.py` |
+| `PluginBuilder` | single-file decorator sugar that *is* a manifest | `client/plugin_manifest.py` |
+| `SurfaceSpec` / `SurfaceRegistry` / `standard_registry` | the surface registry (plane, scope, validator, collision, merge, ordering) | `client/surfaces.py` |
+| `load_plugin_set(...) → PluginSet` | the five-source loader (built-ins / entry points / modules / user dirs / workspace dirs) | `client/plugin_set.py` |
+| `PluginSet` | the loaded set — listable / collision-checkable **without executing plugin code** | `client/plugin_set.py` |
+| `PluginActivation` | one external plugin's identity-plane contributions (built by `Client`) | `client/options.py` |
+| `DEFAULT_PLUGINS` | `("fs", "web")` — the default of `Options.plugins` (identity-inert) | `client/options.py` |
+| `grant_trust` / `is_trusted` | the workspace-dir trust store | `client/plugins.py` |
+| `PluginError` / `UntrustedPluginDirWarning` | loud load faults / the one non-raising skip | `client/plugins.py` |
+
+Activate loaded plugins per-agent through `Options.plugins` /
+`AgentDefinition.plugins`, and hand the `PluginSet` to `Client(options,
+plugins=…)` or `query(…, plugins=…)`. Governance surfaces (`guard` / `observer`)
+apply process-wide once loaded; every other surface follows activation.
+`load_plugin_set` is the `noeta.sdk` name for `client.plugin_set.load_plugins`.
+
+> The 0.4.0 `noeta_plugin(api)` bundle path (`PluginAPI`, `load_plugins`,
+> `merge_plugins`, `merged_mcp_servers`, `merged_skill_dirs`, `LoadedPlugin`,
+> `PluginContributions`) has been **removed** and replaced by the manifest
+> mechanism above; only the shared trust-store + error primitives remain in
+> `client/plugins.py`.
 
 ## Official presets
 

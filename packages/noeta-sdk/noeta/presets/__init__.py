@@ -8,9 +8,9 @@ from __future__ import annotations
 import dataclasses
 from typing import TYPE_CHECKING
 
-from noeta.agent.spec import Capabilities
 from noeta.client.consolidation import CONSOLIDATION_AGENT_NAME
 from noeta.client.options import (
+    DEFAULT_PLUGINS,
     AgentDefinition,
     Options,
     compile_options,
@@ -183,10 +183,10 @@ OFFICIAL_SUBAGENTS: dict[str, AgentDefinition] = {
         # progress); delegation stays off (no spawnable) — gp is a leaf worker
         # and never spawns further down. This is the one spot we intentionally
         # do NOT mirror CC, which lets general-purpose spawn agents.
-        # ``mcp=True`` — the real working worker opts INTO
-        # inheriting the parent task's enabled MCP tool set (it connects its
-        # own independent sessions, R-1 records its own specs).
-        capabilities=Capabilities(skill_invocation=True, mcp=True),
+        # ``mcp`` — the real working worker opts INTO inheriting the parent
+        # task's enabled MCP tool set (it connects its own independent sessions,
+        # R-1 records its own specs). Expressed as activation (D5).
+        plugins=("skill_invocation", "mcp"),
     ),
     "explore": AgentDefinition(
         description=(
@@ -198,7 +198,7 @@ OFFICIAL_SUBAGENTS: dict[str, AgentDefinition] = {
         # write family (edit/write/apply_patch). shell_run is in the set but
         # the prompt restricts it to read-only commands.
         tools=_SCOUT_TOOLS,
-        capabilities=Capabilities(skill_invocation=True),
+        plugins=("skill_invocation",),
     ),
     "plan": AgentDefinition(
         description=(
@@ -213,7 +213,7 @@ OFFICIAL_SUBAGENTS: dict[str, AgentDefinition] = {
         # metadata.)
         tools=_SCOUT_TOOLS,
         # plan opens ONLY ask_user_question (no todo_write, no skill_invocation).
-        capabilities=Capabilities(ask_user_question=True),
+        plugins=("ask_user_question",),
     ),
 }
 
@@ -243,8 +243,8 @@ WEB_SUBAGENT: AgentDefinition = AgentDefinition(
     prompt=_WEB_PROMPT,
     tools=_WEB_TOOLS,
     # browser: the noeta-owned browser pack (flag-gated, sandbox-backed).
-    # skill_invocation on, matching the other workers.
-    capabilities=Capabilities(browser=True, skill_invocation=True),
+    # skill_invocation on, matching the other workers. Activation (D5).
+    plugins=("browser", "skill_invocation"),
 )
 
 
@@ -276,7 +276,7 @@ CONSOLIDATION_AGENT: AgentDefinition = AgentDefinition(
     ),
     prompt=_with_memory_policy(_load_prompt("consolidation")),
     tools=(),
-    capabilities=Capabilities(memory=True),
+    plugins=("memory",),
 )
 
 
@@ -308,16 +308,13 @@ def main_options() -> Options:
         system_prompt=MAIN_SYSTEM_PROMPT,
         name="main",
         agents=dict(OFFICIAL_SUBAGENTS),
-        capabilities=Capabilities(
-            todo_write=True,
-            ask_user_question=True,
-            delegation=True,
-            skill_invocation=True,
-            memory=True,
-            # main opens MCP inheritance — a worker it delegates to
-            # whose own spec also opens ``mcp`` inherits main's enabled servers.
-            mcp=True,
-        ),  # spawnable is filled in to the three sub-names by compile's additive union
+        # Activation (D5): the built-in feature bundles main opens. ``fs`` / ``web``
+        # are the default tool packs (DEFAULT_PLUGINS); ``memory`` / ``mcp`` and
+        # the control-tool bundles fold into the same identity flags the retired
+        # ``Capabilities(...)`` set. ``delegation`` / ``spawnable`` are derived
+        # structurally from the three subagents by compile's additive union.
+        plugins=DEFAULT_PLUGINS
+        + ("todo_write", "ask_user_question", "skill_invocation", "memory", "mcp"),
     )
 
 

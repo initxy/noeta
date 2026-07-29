@@ -1,6 +1,11 @@
 # Plugin architecture: mechanism, first-party plugins, and the host contract
 
-> **Status: Active**
+> **Status: Shipped** — M1+M2 (loader, `PluginAPI`, merge, examples) landed in
+> the 0.4.0 local release (`904a2aa`, fixes in `81dd59d`). The remaining item
+> (tool-result transform) and the mechanism itself are superseded by
+> [2026-07-28-sdk-extensibility-redesign.md](../2026-07-28-sdk-extensibility-redesign.md)
+> (manifest + surface registry + activation; no compatibility owed — 0.4.0 was
+> never published).
 
 Durable decisions live in
 [plugin-contribution-bundles.md](../adr/plugin-contribution-bundles.md); this

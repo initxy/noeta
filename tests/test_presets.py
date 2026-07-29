@@ -330,7 +330,8 @@ def test_memory_policy_fragment_only_in_memory_presets() -> None:
     assert specs["main"].capabilities.memory is True
     assert MEMORY_POLICY_PROMPT in specs["main"].instructions
     web_opts = sandbox_browser_options()
-    assert web_opts.capabilities.memory is True
+    web_main, _ = compile_options(sandbox_browser_options())
+    assert web_main.capabilities.memory is True
     assert MEMORY_POLICY_PROMPT in web_opts.system_prompt
     for name in ("explore", "plan", "general-purpose"):
         assert specs[name].capabilities.memory is False

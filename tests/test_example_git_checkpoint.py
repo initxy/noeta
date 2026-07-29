@@ -28,9 +28,8 @@ from pathlib import Path
 
 import pytest
 
-from noeta.client.plugins import load_plugins, merge_plugins
 from noeta.protocols.events import EventEnvelope, ToolCallStartedPayload
-from noeta.sdk import Options
+from noeta.sdk import PluginBuilder, load_plugin_set
 
 
 _PLUGIN_PATH = (
@@ -308,42 +307,75 @@ def test_observer_swallows_non_git_path(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 6. Plugin factory wiring through the SDK loader
+# 6. Manifest wiring through the new loader (load_plugin_set + process_hooks)
 # ---------------------------------------------------------------------------
 
 
-def test_plugin_factory_wires_observer_onto_options(tmp_path):
-    repo = _init_repo(tmp_path)
-    plugins = load_plugins(
-        modules=[str(_PLUGIN_PATH)],
-        config={"git-checkpoint": {"repo_path": str(repo), "ref": _CHECKPOINT_REF}},
+def _load_module():
+    spec = importlib.util.spec_from_file_location(
+        "_git_checkpoint_manifest", _PLUGIN_PATH
     )
-    assert [p.name for p in plugins] == ["git-checkpoint"]
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
-    observers = plugins[0].contributions.observers
-    assert len(observers) == 1
+
+def test_module_exposes_builder_and_configured_observer():
+    mod = _load_module()
+    assert isinstance(mod.plugin, PluginBuilder)
+    assert mod.plugin.name == "git-checkpoint"
+    assert type(mod.OBSERVER).__name__ == "GitCheckpointObserver"
+    assert mod.OBSERVER.name == "git_checkpoint"
+
+
+def test_load_plugin_set_lists_the_observer_without_execution():
+    pset = load_plugin_set(builtins=False, modules=[str(_PLUGIN_PATH)])
+    assert pset.names() == ("git-checkpoint",)
+    listed = pset.contributions("observer")
+    assert [(p, c.surface, c.name) for p, c in listed] == [
+        ("git-checkpoint", "observer", "git_checkpoint")
+    ]
+
+
+def test_process_hooks_resolves_env_configured_observer(tmp_path):
+    # The observer's repo + ref come from the environment (read at plugin import).
+    repo = _init_repo(tmp_path)
+    saved = {
+        k: os.environ.get(k)
+        for k in ("NOETA_GIT_CHECKPOINT_REPO", "NOETA_GIT_CHECKPOINT_REF")
+    }
+    os.environ["NOETA_GIT_CHECKPOINT_REPO"] = str(repo)
+    os.environ["NOETA_GIT_CHECKPOINT_REF"] = _CHECKPOINT_REF
+    try:
+        pset = load_plugin_set(builtins=False, modules=[str(_PLUGIN_PATH)])
+        guards, observers = pset.process_hooks()
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    assert guards == ()  # no guard contributions
+    assert len(observers) == 1  # governance: process-wide, no activation
     observer = observers[0]
     assert type(observer).__name__ == "GitCheckpointObserver"
     assert observer.repo_path == repo
     assert observer.ref == _CHECKPOINT_REF
-
-    # Wired onto Options.observers by merge_plugins; functionally live.
-    merged = merge_plugins(Options(system_prompt="root", allowed_tools=()), plugins)
-    assert observer in merged.observers
+    # Functionally live: a mutating tool call records a checkpoint.
     observer(_started("write", 1))
     assert _ref_exists(repo)
 
 
-def test_plugin_factory_defaults_and_custom_mutating_tools(tmp_path):
+def test_custom_mutating_tools_via_direct_construction(tmp_path):
+    # The mutating-tool set is a construction knob (the manifest ships the
+    # default set); construct the Observer directly to narrow it.
+    mod = _load_module()
     repo = _init_repo(tmp_path)
-    plugins = load_plugins(
-        modules=[str(_PLUGIN_PATH)],
-        config={"git-checkpoint": {"repo_path": str(repo), "mutating_tools": ["write"]}},
-    )
-    observer = plugins[0].contributions.observers[0]
+    observer = mod.GitCheckpointObserver(repo, mutating_tools=["write"])
 
-    # "edit" is no longer in the custom mutating set → ignored.
-    observer(_started("edit", 1))
+    observer(_started("edit", 1))  # "edit" not in the custom set → ignored
     assert not _ref_exists(repo)
     observer(_started("write", 2))
     assert _ref_exists(repo)

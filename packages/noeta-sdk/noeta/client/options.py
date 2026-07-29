@@ -11,10 +11,10 @@ Design notes:
 
 * ``Options`` is *identity-layer sugar*. Compilation is **additive** — it
   fills in SDK defaults (policy=react, composer=three_segment) rather than
-  overriding user intent. If the caller supplies a ``capabilities`` we keep
-  it verbatim; only ``spawnable`` is unioned with the ``agents`` dict's keys
-  so a parent that forgot to list a child's name does not silently drop the
-  delegation right. Reserved ``__``-prefixed names are the one exception:
+  overriding user intent. ``delegation`` / ``spawnable`` are derived
+  structurally from the ``agents`` dict keys, so a parent never silently drops
+  a child's delegation right. Reserved ``__``-prefixed names are the one
+  exception:
   they compile into the registry but stay out of the auto-union (internal,
   host-driven identities — see :func:`compile_options`).
 * ``provider`` / ``workspace_dir`` / storage wiring live on
@@ -32,8 +32,9 @@ Design notes:
   ``allowed_tools=()``.
 * Child agents are declared via the flat ``agents: dict[str, AgentDefinition]``
   (Claude Agent SDK shape). There is **no recursive nesting** — deep trees
-  must be expressed by declaring every agent at the top level and using the
-  ``Capabilities.spawnable`` mechanism to wire delegation paths.
+  must be expressed by declaring every agent at the top level; the compiled
+  ``AgentSpec.capabilities.spawnable`` (derived from the ``agents`` keys) wires
+  the delegation paths.
 """
 
 from __future__ import annotations
@@ -65,9 +66,111 @@ __all__ = [
     "AgentDefinition",
     "Options",
     "SystemPromptPreset",
+    "PluginActivation",
+    "DEFAULT_PLUGINS",
     "compile_options",
+    "effective_root_policy",
     "register_preset_prompt",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Activation vocabulary (spec D5 / D6)
+# ---------------------------------------------------------------------------
+
+
+#: The pinned default activation set for a bare ``Options()`` — the ``fs`` and
+#: ``web`` built-in tool packs. Both are **identity-inert** in compilation (the
+#: default 11-tool set still comes from ``BUILTIN_TOOL_CLASSES`` so a bare
+#: ``Options()`` is byte-identical — the parity golden pins this), so listing
+#: them here documents the conceptual default without perturbing the compiled
+#: ``AgentSpec``. Memory / browser stay off, matching the parity contract.
+DEFAULT_PLUGINS: tuple[str, ...] = ("fs", "web")
+
+
+#: Built-in feature-bundle activation names that map onto a ``Capabilities``
+#: identity flag (D5: ``memory=True`` becomes ``plugins=["memory"]`` etc.). These
+#: are the runtime's own stable feature vocabulary; activating one flips the
+#: matching identity flag and nothing else — the tool / prompt wiring those
+#: bundles imply is already carried by the (unchanged) capability-gated engine
+#: build and preset prompt baking, so activation stays byte-identity-safe.
+_ACTIVATION_CAPABILITY_FLAG: Mapping[str, str] = {
+    "todo_write": "todo_write",
+    "ask_user_question": "ask_user_question",
+    "skill_invocation": "skill_invocation",
+    "memory": "memory",
+    "mcp": "mcp",
+    "browser": "browser",
+    # The one structural capability that is ALSO authorable. ``delegation`` is
+    # normally derived (a root with children delegates, a flat child does not),
+    # but the derivation alone leaves no way to give a child the right to spawn —
+    # the job the retired ``AgentDefinition.capabilities`` did. Activating it is
+    # additive: it can turn delegation ON, never off (see _capabilities_from).
+    "delegation": "delegation",
+}
+
+#: Built-in activation names that carry **no** identity effect in compilation
+#: (their runtime contributions are host-wired or land in a later milestone).
+#: Recognised so a typo in the activation list still fails loudly.
+_INERT_BUILTIN_ACTIVATIONS: frozenset[str] = frozenset(
+    {"fs", "web", "skills", "reminders", "governance", "providers", "presets", "sandbox"}
+)
+
+#: Every recognised built-in activation name (no plugin code executes to know
+#: them — they are the SDK's own feature vocabulary).
+#:
+#: This is a superset of the built-in plugin **catalogue**
+#: (``noeta.builtins.BUILTIN_PLUGIN_NAMES``): the catalogue names the plugins
+#: that ship declarations, this set additionally carries the capability flags
+#: that have no catalogue entry (``todo_write`` / ``mcp`` / …). The catalogue
+#: sits ABOVE ``noeta.client`` in the import bands, so this module cannot read
+#: it; ``noeta.builtins`` closes the loop instead by asserting the containment at
+#: import (``_assert_activation_vocabulary``), which is what catches a new
+#: built-in that nobody added here.
+BUILTIN_ACTIVATIONS: frozenset[str] = (
+    frozenset(_ACTIVATION_CAPABILITY_FLAG) | _INERT_BUILTIN_ACTIVATIONS
+)
+
+#: Backwards-compatible private alias (this module's own call sites).
+_BUILTIN_ACTIVATIONS = BUILTIN_ACTIVATIONS
+
+
+@dataclass(frozen=True)
+class PluginActivation:
+    """The identity-plane contributions one **loaded external plugin** carries.
+
+    Built by :class:`~noeta.client.client.Client` from a resolved
+    :class:`~noeta.client.plugin_set.PluginSet` and passed to
+    :func:`compile_options`, so ``noeta.client.options`` never imports the
+    loader (which imports it — the edge would be a cycle). Built-in feature
+    bundles are handled by name inside :func:`compile_options`; this type carries
+    only the *third-party* identity contributions that **follow activation**
+    (D6): extra tools, extra child agents, extra prompt fragments. Wiring-plane
+    contributions (guard / observer / provider / mcp / skills / sandbox) are not
+    here — they never follow per-agent activation.
+    """
+
+    #: Tool entries (built-in name strings or ``.ref``-bearing tool objects).
+    tools: tuple[Any, ...] = ()
+    #: ``(agent_name, AgentDefinition)`` child agents.
+    agents: tuple[tuple[str, "AgentDefinition"], ...] = ()
+    #: ``ContentKindSpec`` semi-stable residents, in contribution-name order. The
+    #: ``Client`` appends these to the activating agent's content channels.
+    content_kinds: tuple[Any, ...] = ()
+    #: ``(contribution_name, text)`` prompt fragments, appended after the prompt.
+    prompt_fragments: tuple[tuple[str, str], ...] = ()
+    #: Extra ``Capabilities`` flags this plugin's activation forces on. There is
+    #: no manifest surface for these, so ``PluginSet.identity_activations()``
+    #: never sets them — the field exists for a caller that drives
+    #: :func:`compile_options` directly and wants an activation to imply a
+    #: capability flag (a host expressing its own feature bundle, say). Names must
+    #: be :class:`~noeta.agent.spec.Capabilities` field names.
+    capability_flags: tuple[str, ...] = ()
+    #: The single ``policy`` contribution this plugin carries (D10), a
+    #: ``(llm) -> Policy`` factory exposing a ``.ref`` — or ``None``. Combined
+    #: with the base ``Options.policy`` at compile: a base plus an active plugin
+    #: policy, or two active plugin policies, is a loud single-valued collision.
+    policy: Optional[Any] = None
 
 
 # ---------------------------------------------------------------------------
@@ -125,8 +228,9 @@ class AgentDefinition:
 
     Unlike the legacy ``Options.subagents`` tuple, ``AgentDefinition``
     **cannot nest** — it has no ``agents`` / ``subagents`` field. Deep
-    trees must be expressed by declaring every agent at the top level and
-    using the ``Capabilities.spawnable`` mechanism.
+    trees must be expressed by declaring every agent at the top level; the
+    compiled ``AgentSpec.capabilities.spawnable`` (derived from the ``agents``
+    keys) wires the delegation paths.
 
     Parameters
     ----------
@@ -146,12 +250,6 @@ class AgentDefinition:
         Preferred model id for this child. ``None`` ⇒ host default.
         Excluded from identity (matches ``Options.model``
         semantics).
-    capabilities:
-        **Advanced field.** Child-agent behaviour capabilities, peer to
-        :attr:`Options.capabilities`. Note: a child ``AgentDefinition``'s
-        capabilities do **not** get the ``spawnable`` union — children are
-        flat leaves and should not delegate further. ``None`` ⇒ compiler
-        fills in ``Capabilities()`` (all False, empty spawnable).
     metadata:
         Extra observational labels, merged into the child's
         ``AgentSpec.metadata`` (``description`` is written automatically by
@@ -168,7 +266,14 @@ class AgentDefinition:
     prompt: str
     tools: tuple[Any, ...] | None = None
     model: str | None = None
-    capabilities: Optional[Capabilities] = None
+    #: **Activation (D5).** Names of loaded plugins this child agent activates —
+    #: built-in feature bundles (``"memory"`` / ``"skill_invocation"`` /
+    #: ``"browser"`` …) or third-party plugin names. Enters identity: activating
+    #: a feature bundle flips the matching capability flag, an external plugin
+    #: contributes its identity-plane tools / agents / prompt fragments. Peer to
+    #: :attr:`Options.plugins` but with no ``fs`` / ``web`` default (a child's
+    #: tools come from :attr:`tools`).
+    plugins: tuple[str, ...] = ()
     metadata: Mapping[str, str] = field(default_factory=dict)
 
 
@@ -215,12 +320,15 @@ class Options:
     budget:
         Default budget caps. ``None`` ⇒ :class:`BudgetSpec` with
         ``max_subtask_depth=3`` (runaway-recursion guard).
-    capabilities:
-        Behaviour-shaping capabilities surfaced to the policy. ``None`` ⇒ the
-        compiler fills in ``delegation=bool(children)`` and
-        ``spawnable=tuple(child names)``. When supplied explicitly, the
-        caller's values are kept as-is except ``spawnable`` is **unioned**
-        with the inline child names.
+    plugins:
+        **Activation (D5).** Names of loaded plugins this agent activates —
+        the successor to the retired ``capabilities=`` field. Built-in feature
+        bundles (``"memory"`` / ``"skill_invocation"`` / ``"browser"`` …) map
+        onto the compiled ``AgentSpec.capabilities`` identity flags; third-party
+        plugin names pull in that plugin's identity-plane contributions. The
+        compiler always fills in ``delegation=bool(children)`` and
+        ``spawnable=tuple(child names)`` structurally. Defaults to
+        :data:`DEFAULT_PLUGINS`.
     model:
         Preferred LLM model id. A host routing hint — excluded from
         identity.
@@ -334,7 +442,15 @@ class Options:
     name: str = "main"
     skills: tuple[str, ...] = ()
     budget: Optional[BudgetSpec] = None
-    capabilities: Optional[Capabilities] = None
+    #: **Activation (D5).** Names of loaded plugins this agent activates. Built-in
+    #: feature bundles map onto identity capability flags (``plugins=["memory"]``
+    #: is the successor to ``Capabilities(memory=True)``); third-party plugin
+    #: names pull in that plugin's identity-plane contributions. Defaults to
+    #: :data:`DEFAULT_PLUGINS` (``fs`` / ``web`` — identity-inert, so a bare
+    #: ``Options()`` compiles byte-identically). Unknown names fail compilation
+    #: loudly (built-in vocabulary + the loaded ``PluginSet`` handed to
+    #: ``Client``).
+    plugins: tuple[str, ...] = DEFAULT_PLUGINS
     model: Optional[str] = None
     metadata: Mapping[str, str] = field(default_factory=dict)
     provider: Optional[LLMProvider] = None
@@ -460,6 +576,56 @@ def _resolve_system_prompt(sp: str | SystemPromptPreset) -> str:
     return base
 
 
+def _append_fragments(
+    prompt: str, activations: tuple[tuple[str, PluginActivation], ...]
+) -> str:
+    """Append external plugin prompt fragments after ``prompt`` (D6 / D10).
+
+    Fragments are ordered ``(plugin, contribution name)`` across all activated
+    plugins and joined after a blank-line separator, mirroring how the presets
+    bake the memory-policy fragment. No activation ⇒ ``prompt`` unchanged
+    (byte-identity for the preset / parity path, which uses only built-in
+    bundles that contribute no fragment through this channel).
+    """
+    frags = sorted(
+        (plugin, name, text)
+        for plugin, act in activations
+        for name, text in act.prompt_fragments
+    )
+    if not frags:
+        return prompt
+    return prompt + "\n\n" + "\n\n".join(text for _plugin, _name, text in frags)
+
+
+def _resolve_effective_policy(
+    base_policy: object,
+    external: tuple[tuple[str, PluginActivation], ...],
+    *,
+    where: str,
+) -> object:
+    """The single decision-policy factory for an agent (D10; single-valued).
+
+    Combines the base ``Options.policy`` with the ``policy`` contribution of each
+    activated external plugin. Zero ⇒ ``None`` (the built-in ReAct policy). More
+    than one — a base plus an active plugin policy, or two active plugin
+    policies — is a loud collision naming **both** sides (the same rule as
+    ``provider``); there is no override.
+    """
+    sources: list[tuple[str, object]] = []
+    if base_policy is not None:
+        sources.append((f"{where}.policy", base_policy))
+    for plugin, act in external:
+        if act.policy is not None:
+            sources.append((f"active plugin {plugin!r}", act.policy))
+    if len(sources) > 1:
+        both = " and ".join(label for label, _ in sources)
+        raise ValueError(
+            f"policy is single-valued on {where} but supplied by {both} — "
+            f"no override (D10)"
+        )
+    return sources[0][1] if sources else None
+
+
 def _compile_tool_list(
     entries: tuple[Any, ...],
     disallowed: tuple[str, ...],
@@ -479,33 +645,146 @@ def _compile_tool_list(
     return tuple(out)
 
 
-def _capabilities_for(
-    explicit: Optional[Capabilities], subagent_names: tuple[str, ...]
-) -> Capabilities:
-    """Resolve :class:`Capabilities` per the D2 additive rule.
+def _merge_plugin_tools(
+    base: tuple[ToolRef, ...],
+    external: tuple[tuple[str, PluginActivation], ...],
+    disallowed: tuple[str, ...],
+    *,
+    where: str,
+) -> tuple[ToolRef, ...]:
+    """Append the activated plugins' tools to ``base``, loudly on any conflict (D4).
 
-    Rule: if the caller gave an explicit ``capabilities`` we keep every
-    flag as-is, but *union* ``spawnable`` with the inline subagent names
-    so a subagent the caller declared but forgot to list in ``spawnable``
-    is still delegatable. ``delegation`` is **not** forced on — if the
-    caller explicitly set ``delegation=False`` we respect it.
+    Three outcomes that used to be silent drops are errors here, because each one
+    leaves an activated plugin whose tool simply does not exist at runtime while
+    every listing still reports it as contributed:
 
-    If no explicit capabilities are given we synthesise them:
-    ``delegation=bool(agents)`` and ``spawnable`` = all child names.
+    * a plugin tool whose name is already taken (by a built-in, by the caller's
+      own ``allowed_tools``, or by another activated plugin) — named on both sides;
+    * a plugin tool named in ``disallowed_tools`` — activation and subtraction
+      contradict each other, and guessing which the caller meant is not our call;
+    * (implicitly) two plugins contributing the same tool name, which
+      ``PluginSet.merged()`` also rejects at load.
     """
-    if explicit is None:
-        return Capabilities(
-            delegation=bool(subagent_names),
-            spawnable=subagent_names,
-        )
+    owner: dict[str, str] = {ref.name: where for ref in base}
+    disallowed_set = set(disallowed)
+    out = list(base)
+    for plugin, act in external:
+        for entry in act.tools:
+            ref = _compile_tool(entry)
+            if ref.name in disallowed_set:
+                raise ValueError(
+                    f"active plugin {plugin!r} contributes the tool {ref.name!r}, "
+                    f"which {where} also lists in `disallowed_tools` — activation "
+                    f"and subtraction contradict; drop one"
+                )
+            prior = owner.get(ref.name)
+            if prior is not None:
+                raise ValueError(
+                    f"tool {ref.name!r} on {where} is contributed by both {prior} "
+                    f"and active plugin {plugin!r} — no override"
+                )
+            owner[ref.name] = f"active plugin {plugin!r}"
+            out.append(ref)
+    return tuple(out)
 
-    existing = set(explicit.spawnable)
-    for n in subagent_names:
-        existing.add(n)
-    new_spawnable = tuple(sorted(existing))
-    if new_spawnable == explicit.spawnable:
-        return explicit
-    return dataclasses.replace(explicit, spawnable=new_spawnable)
+
+def _merge_plugin_agents(
+    base: Mapping[str, "AgentDefinition"],
+    external: tuple[tuple[str, PluginActivation], ...],
+) -> dict[str, "AgentDefinition"]:
+    """Fold the activated plugins' child agents into the base roster (no override).
+
+    A plugin whose child agent shadows one the caller declared would silently
+    re-point every ``spawn_subagent`` at the plugin's implementation, so a clash
+    with the base ``Options.agents`` — or between two activated plugins — names
+    both contributors and fails.
+    """
+    merged: dict[str, AgentDefinition] = dict(base)
+    owner: dict[str, str] = {name: "Options.agents" for name in base}
+    for plugin, act in external:
+        for name, defn in act.agents:
+            prior = owner.get(name)
+            if prior is not None:
+                raise ValueError(
+                    f"child agent {name!r} is contributed by both {prior} and "
+                    f"active plugin {plugin!r} — no override"
+                )
+            owner[name] = f"active plugin {plugin!r}"
+            merged[name] = defn
+    return merged
+
+
+def _resolve_activation(
+    activation: tuple[str, ...],
+    plugins: Optional[Mapping[str, PluginActivation]],
+    *,
+    where: str,
+) -> tuple[frozenset[str], tuple[tuple[str, PluginActivation], ...]]:
+    """Split an activation list into capability flags + external contributions.
+
+    Every name must be a recognised built-in activation (:data:`_BUILTIN_ACTIVATIONS`)
+    or the name of a loaded plugin in ``plugins`` — anything else raises
+    ``ValueError`` naming both the offending name and ``where`` (spec D5: unknown
+    activation fails compilation loudly). Built-in feature bundles resolve to the
+    matching identity flag (or to nothing, for the identity-inert bundles);
+    external plugin names resolve to a ``(plugin name, PluginActivation)`` pair
+    so downstream ordering (prompt fragments / policy collisions) can name the
+    contributing plugin.
+    """
+    flags: set[str] = set()
+    external: list[tuple[str, PluginActivation]] = []
+    for name in activation:
+        flag = _ACTIVATION_CAPABILITY_FLAG.get(name)
+        if flag is not None:
+            flags.add(flag)
+        elif name in _INERT_BUILTIN_ACTIVATIONS:
+            continue
+        elif plugins is not None and name in plugins:
+            act = plugins[name]
+            external.append((name, act))
+            flags.update(act.capability_flags)
+        else:
+            known = ", ".join(sorted(_BUILTIN_ACTIVATIONS))
+            loaded = (
+                ", ".join(sorted(plugins)) if plugins else "<none loaded>"
+            )
+            raise ValueError(
+                f"unknown plugin activation {name!r} on {where} — not a built-in "
+                f"activation ({known}) and not in the loaded plugin set "
+                f"({loaded}). Load it before activating, or fix the name."
+            )
+    return frozenset(flags), tuple(external)
+
+
+def _capabilities_from(
+    flags: frozenset[str],
+    subagent_names: tuple[str, ...],
+    *,
+    derive_delegation: bool,
+) -> Capabilities:
+    """Fold activation flags + the inline child roster into identity ``Capabilities``.
+
+    ``flags`` are the capability names the activation forces on (built-in
+    feature bundles plus any external plugin ``capability_flags``).
+    ``spawnable`` is always the sorted child roster — activation cannot name an
+    agent, so the ``agents`` dict stays its only authoring path (spec D5/D6).
+
+    ``delegation`` is normally structural (``derive_delegation`` — the root gets
+    it from having children; a flat child does not), but the
+    :data:`_ACTIVATION_CAPABILITY_FLAG` entry can additionally turn it ON. The
+    combination is a union, never an override: a root with children delegates
+    whether or not it activated the flag, and a child that activated it delegates
+    despite having no inline roster of its own (the successor to the retired
+    ``AgentDefinition.capabilities=Capabilities(delegation=True)``).
+    """
+    kw = {flag: True for flag in flags}
+    seeded = dataclasses.replace(Capabilities(), **kw) if kw else Capabilities()
+
+    spawnable = tuple(sorted(set(seeded.spawnable) | set(subagent_names)))
+    delegation = seeded.delegation or (bool(subagent_names) if derive_delegation else False)
+    if delegation == seeded.delegation and spawnable == seeded.spawnable:
+        return seeded
+    return dataclasses.replace(seeded, delegation=delegation, spawnable=spawnable)
 
 
 # ---------------------------------------------------------------------------
@@ -513,8 +792,26 @@ def _capabilities_for(
 # ---------------------------------------------------------------------------
 
 
+def effective_root_policy(
+    options: Options,
+    plugins: Optional[Mapping[str, PluginActivation]] = None,
+) -> object:
+    """The single ``(llm) -> Policy`` factory a root agent runs (D10), or ``None``.
+
+    The ``Client`` wires this as the host's process-wide ``policy_override`` — the
+    *runtime* half of the policy surface, the twin of the identity ``.ref``
+    :func:`compile_options` bakes into the ``AgentSpec``. Same single-valued
+    collision rule (a base ``Options.policy`` plus an active plugin policy, or two
+    active plugin policies, fails loudly).
+    """
+    _flags, external = _resolve_activation(options.plugins, plugins, where="Options")
+    return _resolve_effective_policy(options.policy, external, where="Options")
+
+
 def compile_options(
     options: Options,
+    *,
+    plugins: Optional[Mapping[str, PluginActivation]] = None,
 ) -> tuple[AgentSpec, tuple[AgentSpec, ...]]:
     """Pure-compile an :class:`Options` recipe into ``(main, descendants)``.
 
@@ -526,6 +823,14 @@ def compile_options(
     ----------
     options:
         The top-level recipe to compile.
+    plugins:
+        The identity-plane contributions of the loaded **external** plugins,
+        keyed by plugin name (spec D5). ``Client`` builds this from a resolved
+        :class:`~noeta.client.plugin_set.PluginSet`. ``None`` (the parity path /
+        a bare compile) means only built-in feature-bundle activations are
+        recognised — any other activation name fails loudly. Activation is
+        identity-affecting; wiring-plane plugin effects (guard / observer /
+        provider / …) do not pass through here.
 
     Returns
     -------
@@ -547,18 +852,37 @@ def compile_options(
             f"Must be one of: {legal}."
         )
 
+    # -- 0. Resolve the root agent's activation (D5) ------------------------
+    # Built-in feature bundles fold into capability flags; external plugin names
+    # pull in their identity-plane contributions (extra tools / child agents /
+    # prompt fragments). Presets activate only built-in bundles, so `root_external`
+    # is empty and the compiled bytes are byte-identical to the pre-redesign
+    # `capabilities=` recipe form (the parity contract).
+    root_flags, root_external = _resolve_activation(
+        options.plugins, plugins, where="Options"
+    )
+    effective_agents = _merge_plugin_agents(options.agents, root_external)
+
     # -- 1. Compile the flat `agents` dict -----------------------
-    def _compile_defn_tools(defn_tools: tuple[Any, ...] | None) -> tuple[ToolRef, ...]:
+    def _compile_defn_tools(
+        defn_tools: tuple[Any, ...] | None,
+        external: tuple[tuple[str, PluginActivation], ...],
+        *,
+        where: str,
+    ) -> tuple[ToolRef, ...]:
         """Shared helper: resolve an AgentDefinition.tools field
-        (``None`` = full built-in set, same default as the main Options)."""
+        (``None`` = full built-in set, same default as the main Options),
+        plus any tools its activation contributes (loudly on a clash)."""
         if defn_tools is None:
-            base = tuple(sorted(BUILTIN_TOOL_CLASSES))
+            base: tuple[Any, ...] = tuple(sorted(BUILTIN_TOOL_CLASSES))
         else:
             base = defn_tools
-        return _compile_tool_list(base, ())
+        return _merge_plugin_tools(
+            _compile_tool_list(tuple(base), ()), external, (), where=where
+        )
 
     agent_defn_names: list[str] = []
-    for agent_name, defn in sorted(options.agents.items()):
+    for agent_name, defn in sorted(effective_agents.items()):
         # description non-empty check
         if not defn.description or not defn.description.strip():
             raise ValueError(
@@ -575,8 +899,23 @@ def compile_options(
         seen_names.add(agent_name)
         agent_defn_names.append(agent_name)
 
-        child_tools = _compile_defn_tools(defn.tools)
-        child_caps = defn.capabilities if defn.capabilities is not None else Capabilities()
+        # A child's own activation (D6: feature surfaces follow activation).
+        child_flags, child_external = _resolve_activation(
+            defn.plugins, plugins, where=f"AgentDefinition {agent_name!r}"
+        )
+        child_tools = _compile_defn_tools(
+            defn.tools, child_external, where=f"AgentDefinition {agent_name!r}"
+        )
+        child_caps = _capabilities_from(
+            child_flags, (), derive_delegation=False
+        )
+        child_instructions = _append_fragments(defn.prompt, child_external)
+        # D10 single-valued policy: a flat child never carries a base
+        # ``Options.policy``, so this only fails loudly when a child activates
+        # TWO policy-contributing plugins. A child keeps ``POLICY_REF`` identity
+        # (like it ignores the root ``Options.policy`` for its own spec); the
+        # runtime decision policy is the host's process-wide ``policy_override``.
+        _resolve_effective_policy(None, child_external, where=f"AgentDefinition {agent_name!r}")
         # description is recipe-owned; extra wiring labels (e.g.
         # ``write_path_globs``) merge UNDER it so a defn can never silently
         # clobber the description the registry / UI reads. metadata is
@@ -587,13 +926,13 @@ def compile_options(
         }
         child_spec = AgentSpec(
             name=agent_name,
-            instructions=defn.prompt,
+            instructions=child_instructions,
             policy=POLICY_REF,
             composer=COMPOSER_REF,
             tools=child_tools,
             skills=(),
             default_budget=BudgetSpec(max_subtask_depth=3),
-            capabilities=child_caps,  # flat children: defn.capabilities verbatim, no spawnable union
+            capabilities=child_caps,  # flat children: no spawnable union
             metadata=child_metadata,
             default_model=defn.model,
         )
@@ -604,41 +943,59 @@ def compile_options(
     # kept out of the parent's ``spawnable`` auto-union, so they never enter
     # the model-facing ``spawn_subagent`` directory (and never churn the
     # parent's stable prefix). The ``__workflow__`` precedent, now generalized:
-    # ``__consolidation__`` (noeta.presets) rides this rule. A caller that
-    # REALLY wants one delegatable can still list it in an explicit
-    # ``capabilities.spawnable`` — only the implicit union filters.
+    # ``__consolidation__`` (noeta.presets) rides this rule. The filter is
+    # absolute — with ``Capabilities`` retired there is no ``spawnable``
+    # override, and reintroducing one would put the reserved name back in the
+    # model-facing directory. An agent that should be delegatable simply does
+    # not carry the reserved prefix.
     all_child_names = tuple(
         sorted(n for n in agent_defn_names if not n.startswith("__"))
     )
 
-    # -- 2. Resolve system_prompt -------------------------------------------
-    instructions = _resolve_system_prompt(options.system_prompt)
+    # -- 2. Resolve system_prompt (+ activation prompt fragments) ----------
+    instructions = _append_fragments(
+        _resolve_system_prompt(options.system_prompt), root_external
+    )
 
     # -- 3. Resolve tools (replacement branch only) ----------------------------
     # Replacement semantics (D4): allowed_tools=None ⇒ full built-in set;
     # any tuple ⇒ exactly those. In-process MCP servers (Options.mcp_servers)
     # contribute their tools on top of whichever base applies — they are an
     # explicit, separate source, so they are added even under a replacement
-    # allow-list.
+    # allow-list. External plugin activation (D6) contributes its tools on top.
     if options.allowed_tools is None:
         base = tuple(sorted(BUILTIN_TOOL_CLASSES))
     else:
         base = options.allowed_tools
     tool_entries = tuple(base) + _mcp_server_tool_entries(options.mcp_servers)
-    tool_refs = _compile_tool_list(tool_entries, options.disallowed_tools)
+    tool_refs = _merge_plugin_tools(
+        _compile_tool_list(tool_entries, options.disallowed_tools),
+        root_external,
+        options.disallowed_tools,
+        where="Options",
+    )
 
-    # -- 3b. Resolve the decision policy ref (identity) ---------------------
+    # -- 3b. Resolve the decision policy ref (identity, D10) ----------------
+    # Combine the base ``Options.policy`` with any active plugin ``policy``
+    # contribution (single-valued — a collision fails loudly here). The resolved
+    # factory's ``.ref`` enters identity so a swapped brain is a distinct agent;
+    # the ``Client`` wires the SAME resolved factory as the host policy_override.
+    effective_policy = _resolve_effective_policy(
+        options.policy, root_external, where="Options"
+    )
     policy_ref = (
-        _resolve_policy_ref(options.policy)
-        if options.policy is not None
+        _resolve_policy_ref(effective_policy)
+        if effective_policy is not None
         else POLICY_REF
     )
 
     # -- 4. Resolve skills --------------------------------------------------
     skill_refs = tuple(ComponentRef(name=s) for s in options.skills)
 
-    # -- 5. Resolve capabilities (additive union with child names) ----------
-    caps = _capabilities_for(options.capabilities, all_child_names)
+    # -- 5. Resolve capabilities (activation flags + additive child union) --
+    caps = _capabilities_from(
+        root_flags, all_child_names, derive_delegation=True
+    )
 
     # -- 6. Budget + max_turns merging --------------------------------------
     if options.budget is None:

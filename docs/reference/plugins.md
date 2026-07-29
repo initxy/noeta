@@ -1,218 +1,471 @@
-# Plugins reference (`noeta.client.plugins`)
+# Plugins reference
 
-The plugin mechanism — discoverable bundles of typed `Options` contributions,
-folded deterministically into a base `Options` before `compile_options`. Every
-symbol below is re-exported through `noeta.sdk`; source of truth:
-`packages/noeta-sdk/noeta/client/plugins.py`.
+The plugin mechanism — **manifest-declared contribution packages over a surface
+registry**, with a **host-level load / agent-level activation** split. A plugin
+carries a static manifest listing its contributions; loading reads those
+manifests (no plugin code runs) into a `PluginSet`; an agent then *activates* the
+plugins it uses through `Options.plugins`. Every symbol below is re-exported
+through `noeta.sdk`; source of truth:
+`packages/noeta-sdk/noeta/client/{plugin_manifest,surfaces,plugin_set}.py`.
 
 ```python
 from noeta.sdk import (
-    PluginAPI, load_plugins, merge_plugins,
-    merged_mcp_servers, merged_skill_dirs,
-    grant_trust, is_trusted,
-    PluginError, LoadedPlugin, PluginContributions, UntrustedPluginDirWarning,
+    # the manifest + the single-file builder
+    PluginManifest, ManifestContribution, PluginBuilder,
+    # the surface registry (the generality mechanism)
+    SurfaceSpec, SurfaceRegistry, standard_registry,
+    # the loader + the loaded set
+    load_plugin_set, PluginSet,
+    # activation
+    PluginActivation, DEFAULT_PLUGINS,
+    # trust + errors
+    grant_trust, is_trusted, PluginError,
 )
 ```
 
-A **Plugin** is a Python module exporting a `noeta_plugin(api)` factory. The
-factory records contributions onto a `PluginAPI`; loading runs the factory;
-`merge_plugins` folds the results into an `Options`. The mechanism adds no engine
-power — it only populates the open extension surfaces `Options` already exposes.
+> `load_plugin_set` is the `noeta.sdk` name for `noeta.client.plugin_set.load_plugins`
+> (the internal function is `load_plugins`; it is re-exported under the
+> `load_plugin_set` alias so it does not collide with the retiring 0.4.0
+> `load_plugins`, see [The retired bundle path](#the-retired-bundle-path)).
 
 > Line numbers are omitted throughout — they drift on every edit. The module path
 > plus the member name is the stable coordinate.
 
-## Two planes
+This mechanism implements the [SDK-extensibility
+redesign](https://github.com/initxy/noeta/blob/main/docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md)
+(decision numbers `D1`–`D12` are cited inline).
 
-A plugin's contributions split by where they land:
+## The model in one screen
 
-- **Identity plane** — tools, agents, content kinds, provider, guards,
-  observers — fold into the `Options` returned by `merge_plugins`, and so into
-  `AgentSpec` identity (tools + agents) or its wiring (the rest).
-- **Host plane** — MCP server specs and skill directories — are validated and
-  collision-checked but do **not** enter `Options` (they have no `Options`
-  surface). A host reads them with `merged_mcp_servers` / `merged_skill_dirs`
-  and wires them into its `HostConfig`.
+- A **Plugin** (`D1`) is a package (or a single `.py` file) carrying a **static
+  manifest**: a `name`, a `requires-noeta` range, an optional `config-schema`,
+  and a list of **contributions**, each naming a **surface** plus a `ref` (an
+  import string) or `path` (a resource).
+- A **Surface** (`D2`/`D3`) is one extension point — `tool`, `guard`, `policy`,
+  `reminder`, … Each has a `SurfaceSpec` describing how a contribution to it is
+  validated, how it collides, how it merges, and how it orders. The loader is
+  **surface-agnostic**: it consults the registry and nothing else, so a host can
+  register its own surfaces.
+- **Load** (`D5`, host level): `load_plugin_set(...) -> PluginSet` — which plugin
+  *code* is available in the process. A `PluginSet` is listable and
+  collision-checkable **without executing plugin code**.
+- **Activate** (`D5`, agent level): `Options.plugins: list[str]` and
+  `AgentDefinition.plugins` — which loaded plugins *this agent* uses. Activation
+  enters `AgentSpec` identity. `Client(options, plugins=<PluginSet>)` binds the
+  two together; an activation name that is not in the loaded set fails the build.
 
-## `PluginAPI`
+## Manifest format (`D1`)
 
-The accumulator a factory receives (`plugins.py`). A pure recorder — no live
-engine handles; every method appends a typed contribution and validates eagerly
-where the check is cheap. A bad entry, a second provider, or a duplicate name
-*within one plugin* raises `PluginError` at factory time, naming the plugin.
+A manifest is inert data — reading it imports **no** plugin code. There are two
+forms.
 
-| Method | Records | Collision key | Eager validation (raises `PluginError`) |
-| --- | --- | --- | --- |
-| `add_tool(tool)` | a built-in name string or a `.ref`-bearing tool | the resolved tool name | unknown built-in name / bad `.ref`; duplicate name in this plugin |
-| `add_guard(guard)` | a `Guard` | — | `None` guard |
-| `add_observer(observer)` | a post-commit `Observer` | — | non-callable observer |
-| `set_provider(provider)` | the single `LLMProvider` | (single-valued) | `None` provider; a second call |
-| `add_content_kind(spec)` | a `ContentKindSpec` | `spec.kind` | non-`ContentKindSpec`; duplicate kind |
-| `add_agent(name, definition)` | an `AgentDefinition` child | `name` | empty name; non-`AgentDefinition`; duplicate name |
-| `add_mcp_server(alias, spec)` | a host-plane MCP server spec | `alias` | empty alias; `None` spec; duplicate alias |
-| `add_skill_dir(path)` | a host-plane skill directory (coerced to an absolute `Path`) | — | empty path. Existence is **not** required — the directory may be provisioned later |
+### Distributed form — `[tool.noeta]` / `noeta-plugin.toml`
 
-`add_tool` resolves each entry to its `ToolRef` immediately, so the name it
-collides on is fixed at factory time. `add_skill_dir` stores an absolute path
-but does not stat it.
+An installed package declares its manifest under `[tool.noeta]` in
+`pyproject.toml` and **mirrors it into the wheel as package data**
+`noeta-plugin.toml`, located via the distribution metadata. The reader
+(`read_distribution_manifest`, `plugin_manifest.py`) reads that file straight off
+disk for a regular install, and falls back to `importlib.util.find_spec` (which
+locates a package without importing it) for an editable install — the
+zero-execution guarantee holds in both.
 
-## `load_plugins(...)`
+```toml
+# pyproject.toml — the plugin's manifest lives under [tool.noeta]
+[tool.noeta]
+name = "house-style"
+requires-noeta = ">=0.4"
 
-Discover and invoke plugins from up to three opt-in sources. Every source is off
-unless its argument is supplied; a bare `load_plugins()` returns `[]`.
+[[tool.noeta.contributions]]
+surface = "prompt_fragment"
+name    = "house-style"
+ref     = "house_style:HOUSE_STYLE"     # module:attr import string
 
-```python
-load_plugins(
-    *,
-    entry_points=False,
-    modules=(),
-    trusted_dirs=(),
-    workspace_dirs=(),
-    enabled=None,
-    config=None,
-    trust_store=None,
-    entry_point_group="noeta.plugins",
-) -> list[LoadedPlugin]
+[[tool.noeta.contributions]]
+surface  = "tool"
+ref      = "house_style.tools:LintTool"
 ```
 
-| Parameter | Type / default | Meaning |
+`parse_manifest_text` accepts three TOML shapes, in priority order:
+`[tool.noeta]` (a `pyproject.toml` that also carries the plugin), `[noeta]`, and
+bare top-level keys (the mirrored `noeta-plugin.toml`).
+
+### Manifest fields
+
+| Field | Shape | Meaning |
 | --- | --- | --- |
-| `entry_points` | `bool \| Iterable = False` | `True` discovers the `noeta.plugins` group via `importlib.metadata`; an iterable of entry-point-like objects (`.name` + `.load()`) injects them (the testing seam); `False` discovers none |
-| `modules` | `Sequence[str] = ()` | dotted module paths (`importlib.import_module`) or `.py` file paths (loaded by location); each must export `noeta_plugin` |
-| `trusted_dirs` | `Sequence = ()` | directories scanned **unconditionally** for top-level `*.py` (files starting with `_` skipped) |
-| `workspace_dirs` | `Sequence = ()` | directories scanned **only** when recorded in the trust store; otherwise skipped with `UntrustedPluginDirWarning` |
-| `enabled` | `Iterable[str] \| None = None` | an allow-list of plugin names; when set, every other candidate is skipped before it is imported |
-| `config` | `Mapping[str, dict] \| None = None` | plugin name → config dict, passed as the factory's second argument, **only** to a factory that declares a second positional parameter |
-| `trust_store` | `Path \| None = None` | the trust store consulted for `workspace_dirs`; defaults to `DEFAULT_TRUST_STORE` (`~/.noeta/trust.json`) |
-| `entry_point_group` | `str = "noeta.plugins"` | the entry-point group to discover |
+| `name` | `str`, required | the plugin's identity — the load-time dedup key and the activation name |
+| `requires-noeta` | `str \| None` | a version range (advisory in v1) |
+| `config-schema` | `table \| None` | an optional schema for operator config |
+| `contributions` | array of tables | one entry per contribution |
 
-Returns a `list[LoadedPlugin]` in discovery order (entry points, then modules,
-then trusted dirs, then workspace dirs). Ordering here does **not** affect the
-compiled spec — `merge_plugins` re-sorts.
+Each contribution is a `ManifestContribution` (`plugin_manifest.py`):
 
-### The three sources
+| Key | Shape | Meaning |
+| --- | --- | --- |
+| `surface` | `str`, required | a registered surface name (see the [catalog](#surface-catalog-d3)) |
+| `name` | `str` | collision / ordering key **and** listing label; derived from `ref` / `path` when omitted |
+| `ref` | `str \| None` | a `module` or `module:qualname` import string — resolved **only** at the execution boundary |
+| `path` | `str \| None` | a resource path (for resource-only surfaces such as `skills`) |
+| `params` | remaining keys | surface-specific params kept verbatim (e.g. `priority` for `reminder`, `seams` for `reminder_provider`) |
 
-1. **Entry points** — packaged, installed plugins. `entry_points=True` reads the
-   `noeta.plugins` group; each entry point's loaded object is the plugin's
-   `noeta_plugin` factory. This is the server-style source, paired with `enabled`.
-2. **Explicit modules / files** — `modules` holds dotted import paths or `.py`
-   file paths. The in-repo way to load a plugin without installing it.
-3. **Directories** — `trusted_dirs` (unconditional) and `workspace_dirs`
-   (trust-gated). Both scan top-level `*.py`, skipping files starting with `_`;
-   each file must export `noeta_plugin`.
+When `name` is omitted it is derived from the `ref`'s attribute (or the module's
+last segment), else from the `path` basename.
 
-### Name derivation and the allow-list
+### Single-file form — `PluginBuilder`
 
-A plugin's name is the entry-point name, or — for module / file / directory
-sources — a module-level `noeta_plugin_name` override, falling back to the
-module/file stem. `enabled` and `config` are keyed by that name.
-
-`enabled` is always applied **before** the plugin is imported, so unapproved
-code never runs. For file and directory sources the override is read
-*statically* (an `ast` parse, no execution), which is why it must be a
-module-level string **literal**:
+A local `.py` plugin declares one module-level `PluginBuilder` and decorates its
+contributions; the builder **is** the manifest (`D1`). Acceptable because local
+files pass an explicit trust gate anyway.
 
 ```python
-noeta_plugin_name = "block-shell"     # seen by the allow-list
-noeta_plugin_name = _compute_name()   # honored for config/collisions, but the
-                                      # allow-list falls back to the file stem
+# brevity.py — a single-file plugin
+from noeta.sdk import PluginBuilder
+
+plugin = PluginBuilder("brevity", requires_noeta=">=0.4")
+
+plugin.prompt_fragment("Answer in at most three sentences.", name="be-brief")
+
+@plugin.reminder(priority=500)
+def stay_brief(view):
+    return None  # a real reminder returns str | None from the folded projection
 ```
 
-### Loud failure
+`PluginBuilder(name, *, requires_noeta=None, config_schema=None)` exposes one
+decorator/method per surface — each forwards to the generic `contribute(surface,
+value, *, name=None, ref=None, path=None, **params)`:
 
-A broken plugin fails loudly with `PluginError` naming the plugin — an import
-error, a missing `noeta_plugin`, a non-callable factory, a factory raise, or a
-duplicate plugin name found in two sources. The single non-raising skip is an
-untrusted `workspace_dirs` entry, which warns with `UntrustedPluginDirWarning`.
-The rule is deliberate: a bad plugin must fail the client build at startup, never
-a mid-session turn.
+| Method | Surface | Params |
+| --- | --- | --- |
+| `tool(fn=None, *, name=None)` | `tool` | — |
+| `reminder(fn=None, *, name=None, priority=0)` | `reminder` | `priority` |
+| `reminder_provider(fn=None, *, name=None, seams=())` | `reminder_provider` | `seams` |
+| `tool_result_transform(fn=None, *, name=None, priority=0)` | `tool_result_transform` | `priority` |
+| `guard(obj=None, *, name=None)` | `guard` | — |
+| `observer(fn=None, *, name=None)` | `observer` | — |
+| `prompt_fragment(text, *, name)` | `prompt_fragment` | — |
+| `policy(factory=None, *, name=None)` | `policy` | — |
+| `sandbox_provider(obj=None, *, name=None)` | `sandbox_provider` | — |
 
-## `merge_plugins(options, plugins) -> Options`
+`manifest()` returns the equivalent `PluginManifest`; the decorated objects are
+also cached (`resolved_objects`) so the loader resolves a single-file plugin's
+contributions without a second import. `python -m noeta.sdk.plugin_check` (there
+is **no** console script) derives and verifies the TOML from the decorators at
+publish time.
 
-Fold `plugins` into `options`, returning a new `Options`.
+## Surface catalog (`D3`)
 
-- **Deterministic ordering.** Contributions are sorted by
-  `(plugin name, contribution name)` before merge, so the compiled `AgentSpec` is
-  invariant under plugin load order. Base tools keep their given order first,
-  then the sorted plugin tools; guards and observers append in sorted-plugin
-  order after the base's.
-- **Tool expansion.** With `allowed_tools=None` and no plugin tools, it stays
-  `None` (byte-identical default). With plugin tools, a `None` base first expands
-  to the full built-in set, so plugins **add** tools rather than silently
-  replacing the built-ins.
-- **Collision = error.** Any tool, agent, content kind, or MCP alias contributed
-  by two plugins or already present on the base `options`, or a second provider,
-  raises `PluginError` naming **both** sources. There is no override flag in v1.
-  The base's tool names include the tools its in-process `mcp_servers`
-  contribute — `compile_options` flattens those onto the allow-list, so without
-  the check one of the two would vanish silently.
-- **Disallowed = error.** A contributed tool whose name is in the base's
-  `disallowed_tools` raises too: compilation would drop it without a word,
-  leaving an enabled plugin whose tool never exists.
-- **Identity plane only** lands on the returned `Options`. Host-plane
-  contributions (MCP specs, skill dirs) are collision-checked here but read via
-  the accessors below — they have no `Options` surface.
+The standard catalog is fourteen surfaces (`surfaces.py`, `STANDARD_SURFACES`).
+Each row is a `SurfaceSpec`: which **plane** it lives on, how its effect is
+**scoped** across agents (`D6`), its **collision key**, its **merge rule**, and
+its **ordering**. ★ = new in this redesign.
 
-The collision source for a name already on the base is labelled `<base options>`
-in the error message; a plugin source is labelled `plugin '<name>'`.
+| Surface | Plane | Scope (`D6`) | Collision key | Merge | Ordering | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| `tool` | identity | per-agent | `name` | append | `(plugin, name)` | includes tool packs |
+| `agent` | identity | per-agent | `name` | append | `(plugin, name)` | an `AgentDefinition` |
+| `content_kind` | identity | per-agent | `kind` | append | `(plugin, name)` | a `ContentKindSpec` |
+| `prompt_fragment` ★ | identity | per-agent | `name` | append | `(plugin, name)` | appended after the preset prompt |
+| `policy` ★ | identity | per-agent | **single-valued** | single | — | base + active plugin, or two plugins, = error |
+| `guard` | wiring | **process** | none | append | `(plugin, name)` | governance — see [scope](#effect-scoping-d6) |
+| `observer` | wiring | **process** | none | append | `(plugin, name)` | governance — see [scope](#effect-scoping-d6) |
+| `provider` | wiring | host-wired | **single-valued** | single | — | `Options.provider` collision = error |
+| `reminder_provider` ★ | wiring | per-agent | `name` | append | `(plugin, name)` | recorded injection (track A) |
+| `reminder` ★ | wiring | per-agent | `name` | append | **priority** | compose-time, pure (track B) |
+| `tool_result_transform` ★ | wiring | per-agent | `name` | append | **priority** | ToolRuntime stage before recording |
+| `mcp_server` | host | host-wired | `alias` | append | `(plugin, name)` | connectable server spec |
+| `skills` | host | host-wired | none | append | `(plugin, name)` | resource-only (`path`) |
+| `sandbox_provider` ★ | host | host-wired | `name` | append | `(plugin, name)` | host selects one |
 
-## Host-plane accessors
+- **Collision key** `none` means the surface never collides (guards / observers
+  / skill dirs). `single-valued` means at most one across the whole loaded set.
+- **Ordering** `priority` orders by an integer `priority` param first, ties
+  broken by `(plugin, name)` — the guard-observer-hooks precedent. Everything
+  else sorts by `(plugin, name)`, so discovery order never changes the result.
 
-Host-plane contributions never enter `Options`; a host collects them separately
-and wires them into its `HostConfig`.
+Host-defined surfaces extend this table (see [SurfaceRegistry](#surfacespec-surfaceregistry-d2)).
 
-### `merged_mcp_servers(plugins) -> dict[str, spec]`
+### Effect scoping (`D6`)
 
-Collect the MCP server specs as `alias → spec`, sorted by plugin name. Raises
-`PluginError` on an alias collision across plugins (the same check
-`merge_plugins` performs). Wire the result into
-`HostConfig.mcp_server_resolver`.
+The one deliberate asymmetry — which surfaces follow per-agent activation and
+which are process-wide:
 
-### `merged_skill_dirs(plugins) -> tuple[Path, ...]`
+| Surfaces | Rule |
+| --- | --- |
+| `tool` `agent` `content_kind` `prompt_fragment` `policy` `reminder_provider` `reminder` `tool_result_transform` | **follow per-agent activation** — feature semantics: an agent that does not activate the plugin does not get them |
+| `guard` `observer` | **loaded ⇒ in force for every agent in the process.** Governance is operator authority; an agent author must not opt out of interception or audit by omitting an activation |
+| `provider` `sandbox_provider` `mcp_server` `skills` | host wiring; the host selects and binds them, never per-agent |
 
-Collect the skill directories, de-duplicated and ordered by
-`(plugin name, path)`; a directory contributed by more than one plugin appears
-once. Wire the result into the host's skills directories.
+## `SurfaceSpec` / `SurfaceRegistry` (`D2`)
+
+The registry is the generality mechanism — the loader consults it and nothing
+else, so **adding a surface is registering one `SurfaceSpec`, not editing the
+loader**.
+
+```python
+@dataclass(frozen=True)
+class SurfaceSpec:
+    name: str
+    plane: "identity" | "wiring" | "host"
+    activation_scope: "per-agent" | "process" | "host-wired"
+    validator: Callable[[Any], None]   # raises on an illegal contribution value
+    collision_key: "name" | "kind" | "alias" | "single-valued" | "none"
+    merge_rule: "append" | "single" | "dict-merge"
+    ordering: "sorted" | "priority" = "sorted"
+```
+
+`validator` runs on a **resolved** value (after a `ref` is imported); listing and
+manifest-level collision never call it, so they stay execution-free.
+
+`standard_registry()` returns a fresh `SurfaceRegistry` seeded with the fourteen
+standard surfaces. A host registers additional **app-plane** surfaces on a
+**copy** before load — the same validation / collision / ordering pipeline runs
+over them unchanged:
+
+```python
+from noeta.sdk import standard_registry, SurfaceSpec, PluginError
+
+def _valid_route(value):
+    if not callable(value):
+        raise PluginError("http_route must be callable")
+
+reg = standard_registry()                       # a fresh copy
+reg.register(SurfaceSpec(
+    "http_route", "host", "host-wired", _valid_route, "name", "append",
+))
+plugins = load_plugin_set(registry=reg, ...)    # the host's surface is live
+```
+
+`SurfaceRegistry` methods: `register(spec)` (a duplicate name raises),
+`get(name)`, `names()`, `__contains__`, `copy()`.
+
+## Sources and the load pipeline (`D4`)
+
+Five sources, each with its own gate. Discovery order **never** affects the
+result (only error attribution).
+
+| # | Source | `load_plugin_set` argument | Gate |
+| --- | --- | --- | --- |
+| 0 | built-in plugins (`noeta.builtins`) | `builtins=True` (default) | on by default; disable per-name with `disabled_builtins` |
+| 1 | entry points (`noeta.plugins` group) | `entry_points=True` | `enabled` allow-list, applied **before any import** |
+| 2 | explicit modules / file paths | `modules=[...]` | caller-specified = authorized |
+| 3 | `~/.noeta/plugins/` (or any) | `user_dirs=[...]` | the user's own machine = trusted |
+| 4 | workspace `.noeta/plugins/` | `workspace_dirs=[...]` | trust store (untrusted dir → loud warning + skip) |
+
+The pipeline for every candidate: **read manifest** (zero code execution for the
+package / `.toml` forms) → **`enabled` gate before any import** → **trust gate**
+(source 4 only) → **resolve `ref`s** → **validate per `SurfaceSpec`** →
+**collision check** → **deterministic merge** sorted by `(plugin, contribution)`.
+Resolution / validation only happen when a caller reaches the execution boundary
+(`PluginSet.resolve` and friends); listing and merge run over the static
+manifests alone.
+
+### `load_plugin_set(...) -> PluginSet`
+
+```python
+load_plugin_set(
+    *,
+    builtins=True,               # bool | Iterable[PluginManifest]
+    disabled_builtins=(),        # Iterable[str]
+    entry_points=False,          # bool | Iterable[entry-point-like]
+    modules=(),                  # Sequence[str] — dotted modules or file/dir/.toml paths
+    user_dirs=(),                # Sequence[path] — scanned unconditionally
+    workspace_dirs=(),           # Sequence[path] — scanned only when trusted
+    enabled=None,                # Iterable[str] | None — allow-list of plugin names
+    trust_store=None,            # Path | None — defaults to ~/.noeta/trust.json
+    registry=None,               # SurfaceRegistry | None — defaults to standard_registry()
+    entry_point_group="noeta.plugins",
+) -> PluginSet
+```
+
+- `builtins=True` discovers the built-in catalog (`D11`); pass an iterable of
+  `PluginManifest`s to inject a custom set (the testing seam). `disabled_builtins`
+  drops built-ins by name.
+- `entry_points=True` discovers the `noeta.plugins` group via
+  `importlib.metadata`; an iterable of entry-point-like objects (`.name` +
+  `.dist`) injects them. An entry point whose distribution ships no
+  `noeta-plugin.toml` fails loudly.
+- `modules` entries may be a dotted module (importing it is authorized), a `.py`
+  file, a directory (scanned like a source-3/4 dir), or a `.toml` manifest.
+- `user_dirs` load unconditionally; `workspace_dirs` load only when the directory
+  is recorded in the trust store, else are skipped with an
+  `UntrustedPluginDirWarning`. Both scan sub-directories carrying a
+  `noeta-plugin.toml` (zero execution) **and** top-level `*.py` single-file
+  plugins (executed — a trusted directory), skipping files starting with `_`.
+
+A cross-source duplicate plugin **name** is an error naming both origins.
+
+## `PluginSet`
+
+The loaded, host-level set (`plugin_set.py`). Frozen; holds the discovered
+`LoadedPlugin`s plus the surface registry they loaded against.
+
+| Member | Returns | Executes plugin code? |
+| --- | --- | --- |
+| `names()` / `__iter__` / `__len__` / `__contains__` / `get(name)` | listing | no |
+| `contributions(surface=None)` | `((plugin_name, ManifestContribution), …)` — every contribution, optionally one surface | **no** (`D5` / acceptance-2) |
+| `merged()` | `MergedContributions` — collision-checked, deterministically ordered | **no** |
+| `resolve()` | `(ResolvedContribution, …)` — every contribution with its `ref` imported and validated | **yes** — the execution boundary |
+| `identity_activations()` | `dict[str, PluginActivation]` — each **external** plugin's identity-plane contributions (tools / agents / prompt fragments / policy) | yes |
+| `activation_transforms()` | `dict[str, ((priority, name, fn), …)]` — each external plugin's `tool_result_transform` stages | yes |
+| `process_hooks()` | `(guards, observers)` — every **external** plugin's governance hooks, in `(plugin, name)` order | yes |
+
+`contributions()` is the acceptance-2 guarantee: a caller sees exactly what an
+installed plugin contributes without any of its code running.
+
+```python
+pset = load_plugin_set()                    # built-ins on
+for plugin_name, contribution in pset.contributions("tool"):
+    print(plugin_name, contribution.name)   # no plugin body imported
+
+pset.get("memory").manifest.requires_noeta  # ">=0.4"
+```
+
+`Client` calls `identity_activations` / `activation_transforms` / `process_hooks`
+during the build (never a mid-session turn); built-in plugins are excluded from
+all three — their feature effect rides the capability-flag vocabulary compile
+handles by name (see [Activation](#activation-d5-d6)), and the default guard /
+observer stack is the engine's own.
+
+## Activation (`D5` / `D6`)
+
+Loading makes plugin code *available*; **activation** decides which loaded
+plugins an agent uses. Activation names live on `Options.plugins` and
+`AgentDefinition.plugins`, and enter `AgentSpec` identity.
+
+```python
+from noeta.sdk import Options, Client, load_plugin_set, DEFAULT_PLUGINS
+
+pset = load_plugin_set(modules=["./brevity.py"])   # built-ins + the local plugin
+
+options = Options(
+    system_prompt="You are a coding agent.",
+    plugins=DEFAULT_PLUGINS + ("memory", "brevity"),   # activate three by name
+)
+
+client = Client(options, provider=..., workspace_dir=".", plugins=pset)
+```
+
+An activation name must be one of:
+
+- a **built-in feature bundle** that maps onto a `Capabilities` identity flag
+  (`D5`): `memory`, `browser`, `skill_invocation`, `todo_write`,
+  `ask_user_question`, `mcp` — activating one flips the matching flag and nothing
+  else (`memory=True` becomes `plugins=["memory"]`);
+- `delegation` — the one *structural* capability that is also authorable. It is
+  normally derived (a root with `agents` delegates; a flat child does not), and
+  activating it only ever turns it **on**: it is how a child agent is granted the
+  right to spawn, which the retired `AgentDefinition.capabilities` used to do.
+  `spawnable` stays derived from the `agents` dict — activation cannot name an
+  agent;
+- an **identity-inert built-in** recognised so a typo still fails loudly but with
+  no compile effect: `fs`, `web`, `skills`, `reminders`, `governance`,
+  `providers`, `presets`, `sandbox`;
+- the **name of a loaded plugin** in the `PluginSet` handed to `Client` — its
+  identity-plane contributions (extra tools / child agents / prompt fragments /
+  policy) fold in.
+
+`DEFAULT_PLUGINS = ("fs", "web")` is the default of `Options.plugins`; both are
+identity-inert (the default 11-tool set still comes from `BUILTIN_TOOL_CLASSES`),
+so a **bare `Options()` compiles byte-identically** to the pre-redesign spec — the
+parity contract. `AgentDefinition.plugins` defaults to `()` (a child's tools come
+from its own `tools` field).
+
+`Capabilities` is retired as the activation vocabulary: `Capabilities(memory=True)`
+becomes `plugins=["memory"]`, and the official presets declare their activation
+sets this way (`presets/__init__.py`). The `Options.capabilities` /
+`AgentDefinition.capabilities` authoring fields are **removed** — `plugins=` is the
+only activation path. (The compiled `AgentSpec.capabilities` stays the identity
+carrier; activation flips its flags.)
+
+An unknown activation name fails compilation with a `ValueError` naming both the
+offending name and where it appeared (`Options` or the child agent), listing the
+built-in vocabulary and the loaded set — load it before activating, or fix the
+name.
+
+## Built-in plugins (`D11`)
+
+noeta re-expresses its own capabilities as built-in plugins in `noeta/builtins/`
+(the top-of-stack band beside `noeta.presets`). Each is a **thin declaration** —
+a `PluginManifest` whose contributions carry `ref` strings into runtime
+implementations that stay in their own import-linter bands; nothing in the
+catalog imports those implementations, so listing a built-in runs zero runtime
+code. The loader reaches the catalog by a **dynamic** import (`builtin_manifests()`),
+so there is no static edge up into `noeta.builtins`.
+
+The ten built-ins (one directory per built-in under `noeta/builtins/`, each
+holding its `MANIFEST` — the canonical worked corpus of manifest declarations):
+`fs`, `web`, `memory`, `browser`, `skills`, `reminders`, `governance`,
+`providers`, `sandbox`, `presets`. Adding a first-party capability is adding a
+directory here (plus a `SurfaceSpec` registration only when a genuinely new
+surface is needed).
 
 ## Trust store
 
-The workspace-directory trust store is a JSON file — `{"trusted": [abs path, ...]}` —
+The workspace-directory trust store is a JSON file — `{"trusted": [abs path, …]}` —
 at `DEFAULT_TRUST_STORE` (`~/.noeta/trust.json`) by default. Only `workspace_dirs`
-consult it; `trusted_dirs` are always scanned.
+consult it; `user_dirs` are always scanned.
 
 | Function | Signature | Behaviour |
 | --- | --- | --- |
 | `is_trusted(path, store=None)` | `→ bool` | whether `path`'s canonical form is recorded; a missing store ⇒ `False`, never an error |
-| `grant_trust(path, store=None)` | `→ None` | record `path`'s canonical form (idempotent); creates the store and its parent directory if absent |
+| `grant_trust(path, store=None)` | `→ None` | record `path`'s canonical form (idempotent); creates the store and its parent if absent |
 
 Both sides canonicalise the path the same way — `~` expanded, absolute, symlinks
-resolved — so how a path is spelled never decides trust: a grant written as
-`~/ws/../ws/plugins` matches a lookup of `/home/me/ws/plugins`. Entries written
-by hand are canonicalised on read too.
+resolved — so how a path is spelled never decides trust. A malformed (non-JSON)
+store raises `PluginError` on read.
 
-`store` defaults to `DEFAULT_TRUST_STORE` for both. A malformed (non-JSON) store
-raises `PluginError` on read.
+```python
+from noeta.sdk import grant_trust, load_plugin_set
 
-## Types and constants
+grant_trust("./workspace/.noeta/plugins")                      # writes ~/.noeta/trust.json
+pset = load_plugin_set(workspace_dirs=["./workspace/.noeta/plugins"])
+```
 
-| Type | Shape | Source |
-| --- | --- | --- |
-| `LoadedPlugin` | frozen: `name: str`, `contributions: PluginContributions` | `plugins.py` |
-| `PluginContributions` | frozen: `tools`, `guards`, `observers`, `provider`, `content_kinds`, `agents`, `mcp_servers`, `skill_dirs` — one plugin factory's output; preserves the plugin's contribution order | `plugins.py` |
-| `PluginError` | `RuntimeError` subclass — every load fault and merge collision | `plugins.py` |
-| `UntrustedPluginDirWarning` | `UserWarning` — an untrusted `workspace_dirs` entry was skipped | `plugins.py` |
+## Failure semantics
 
-Module-level constants on `noeta.client.plugins` (not re-exported through
-`noeta.sdk`):
+Load faults are **loud** and fail the client build at startup — never a
+mid-session turn:
 
-- `PLUGIN_ENTRY_POINT_GROUP = "noeta.plugins"` — the SDK-owned runtime-plane
-  entry-point group.
-- `DEFAULT_TRUST_STORE = Path.home() / ".noeta" / "trust.json"` — the default
-  trust store.
+- A bad or missing manifest, a broken file, an unimportable `ref`, a missing
+  `ref` attribute, or a value that fails its surface `validator` raises
+  `PluginError` naming the plugin.
+- **Any collision** — two plugins claiming the same key; a cross-source duplicate
+  plugin name; a second `policy` / `provider` — raises `PluginError` **naming both
+  sides. There is no override.** (Collisions against a base `Options.policy` /
+  `Options.provider` are caught by `compile_options` / the `Client` build.)
+- An **unknown activation name** raises `ValueError` at compile.
+
+The single non-raising skip is an **untrusted `workspace_dirs`** entry, which
+warns with `UntrustedPluginDirWarning` and is skipped.
+
+```python
+from noeta.sdk import load_plugin_set, PluginError
+
+pset = load_plugin_set(builtins=[m_a, m_b])   # both contribute prompt_fragment "frag"
+try:
+    pset.merged()
+except PluginError as exc:
+    #  prompt_fragment 'frag' on surface 'prompt_fragment' is contributed by both
+    #  plugin 'a' and plugin 'b' — no override
+    ...
+```
+
+## The retired bundle path
+
+The 0.4.0 mechanism — `noeta_plugin(api)` factories, the `PluginAPI` accumulator,
+`load_plugins` + `merge_plugins`, `LoadedPlugin`, `PluginContributions`, and
+`merged_mcp_servers` / `merged_skill_dirs` — has been **removed** from `noeta.sdk`
+and replaced outright by the manifest mechanism on this page (nothing of 0.4.0 was
+published, so no compatibility was owed). Only the primitives the manifest
+mechanism reuses survive in `client/plugins.py`: the trust-store functions
+(`grant_trust` / `is_trusted`) and `PluginError` / `UntrustedPluginDirWarning`.
 
 ## See also
 
 - [Write a plugin](../how-to/write-a-plugin.md) — the task-oriented guide
-- [SDK reference](sdk.md) — the `Options` fields a plugin folds into
+- [SDK reference](sdk.md) — `Options.plugins` activation and the `Client` /
+  `query` `plugins=` argument
+- [SDK-extensibility redesign](https://github.com/initxy/noeta/blob/main/docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md)
+  — the full decision record (`D1`–`D12`)
 - [ADR: Plugin contribution bundles](https://github.com/initxy/noeta/blob/main/docs/adr/plugin-contribution-bundles.md)
-  — the design rationale (planes, deterministic merge, strict collisions)
+  — the durable design rationale

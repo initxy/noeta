@@ -16,7 +16,6 @@ from pathlib import Path
 
 import pytest
 
-from noeta.agent.spec import Capabilities
 from noeta.client.options import AgentDefinition, Options, compile_options
 from noeta.execution.builder import (
     COMPACTION_OFF,
@@ -165,7 +164,6 @@ def test_model_swap_does_not_touch_agent_definition_or_prompt() -> None:
                 description="worker",
                 prompt="do the task",
                 tools=("read", "edit", "apply_patch"),
-                capabilities=Capabilities(),
             )
         },
     )

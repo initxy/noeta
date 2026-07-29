@@ -1,0 +1,12 @@
+[
+  {
+    "origin": null,
+    "role": "user",
+    "text": "Do the task."
+  },
+  {
+    "origin": "system",
+    "role": "user",
+    "text": "The context window keeps getting refilled to the limit by what looks like a single large file or large tool output, so compaction is spinning without freeing real headroom. Consider a different reading strategy: read in chunks, read only the relevant section, or extract the key points once and re-read on demand instead of pulling the whole large content back into context each time."
+  }
+]

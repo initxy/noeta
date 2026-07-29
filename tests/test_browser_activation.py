@@ -15,9 +15,7 @@ invariant.
 
 from __future__ import annotations
 
-from pathlib import Path
 
-import pytest
 
 from noeta.client.options import compile_options
 from noeta.presets import (
@@ -45,7 +43,9 @@ class TestSandboxBrowserOptions:
         # Direction A: main never opens ``browser`` — it has no browser tools
         # and must delegate to ``web``. Only ``web`` opens the capability.
         opts = sandbox_browser_options()
-        assert opts.capabilities.browser is False
+        assert "browser" not in opts.plugins
+        main, _ = compile_options(opts)
+        assert main.capabilities.browser is False
 
     def test_compiles_web_into_registry(self) -> None:
         main, descendants = compile_options(sandbox_browser_options())
@@ -122,8 +122,12 @@ class TestDefaultInvariant:
         assert "web" not in opts.agents
 
     def test_default_browser_off(self) -> None:
+        # Browser is expressed as activation (D5): main does not activate it, so
+        # the compiled identity carries browser=False.
         opts = main_options()
-        assert opts.capabilities.browser is False
+        assert "browser" not in opts.plugins
+        main, _ = compile_options(opts)
+        assert main.capabilities.browser is False
 
     def test_official_specs_has_no_web(self) -> None:
         specs = official_specs()

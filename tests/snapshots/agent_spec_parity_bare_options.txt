@@ -1,0 +1,94 @@
+{
+  "descendants": [],
+  "root": {
+    "capabilities": {
+      "ask_user_question": false,
+      "browser": false,
+      "delegation": false,
+      "mcp": false,
+      "memory": false,
+      "skill_invocation": false,
+      "spawnable": [],
+      "todo_write": false
+    },
+    "composer": {
+      "name": "three_segment",
+      "version": "v3"
+    },
+    "default_budget": {
+      "max_cost_usd": null,
+      "max_iterations": null,
+      "max_spawned_subtasks": null,
+      "max_subtask_depth": 3,
+      "max_tool_calls": null
+    },
+    "default_model": null,
+    "guards": [],
+    "instructions": "You are a helpful assistant.",
+    "metadata": {},
+    "name": "main",
+    "observers": [],
+    "policy": {
+      "name": "react",
+      "version": "1"
+    },
+    "skills": [],
+    "tools": [
+      {
+        "name": "apply_patch",
+        "risk_level": "high",
+        "version": "1"
+      },
+      {
+        "name": "edit",
+        "risk_level": "high",
+        "version": "1"
+      },
+      {
+        "name": "glob",
+        "risk_level": "low",
+        "version": "1"
+      },
+      {
+        "name": "grep",
+        "risk_level": "low",
+        "version": "1"
+      },
+      {
+        "name": "read",
+        "risk_level": "low",
+        "version": "1"
+      },
+      {
+        "name": "shell_kill",
+        "risk_level": "high",
+        "version": "1"
+      },
+      {
+        "name": "shell_poll",
+        "risk_level": "low",
+        "version": "1"
+      },
+      {
+        "name": "shell_run",
+        "risk_level": "high",
+        "version": "1"
+      },
+      {
+        "name": "web_search",
+        "risk_level": "low",
+        "version": "1"
+      },
+      {
+        "name": "webfetch",
+        "risk_level": "low",
+        "version": "1"
+      },
+      {
+        "name": "write",
+        "risk_level": "high",
+        "version": "1"
+      }
+    ]
+  }
+}

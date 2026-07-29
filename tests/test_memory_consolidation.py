@@ -433,8 +433,14 @@ def test_preset_exports_and_roster_isolation() -> None:
     assert preset_name == CONSOLIDATION_AGENT_NAME == "__consolidation__"
     assert CONSOLIDATION_AGENT_NAME not in OFFICIAL_SUBAGENTS
     assert CONSOLIDATION_AGENT.tools == ()
-    assert CONSOLIDATION_AGENT.capabilities is not None
-    assert CONSOLIDATION_AGENT.capabilities.memory is True
+    # Memory is expressed as activation (D5): the compiled child carries
+    # capabilities.memory=True.
+    assert "memory" in CONSOLIDATION_AGENT.plugins
+    _cmain, _cdesc = compile_options(
+        with_consolidation_agent(main_options())
+    )
+    _consol = next(d for d in _cdesc if d.name == CONSOLIDATION_AGENT_NAME)
+    assert _consol.capabilities.memory is True
 
     base_main, base_desc = compile_options(main_options())
     main, desc = compile_options(with_consolidation_agent(main_options()))

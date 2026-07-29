@@ -1,9 +1,14 @@
-# Illustrative packaging for the ``protected-paths`` plugin.
+# Illustrative packaging for the ``protected-paths`` manifest plugin.
 #
-# This file is NOT built or tested by the repo — the tests load ``plugin.py``
-# by explicit path (see tests/test_example_protected_paths.py). It exists to
-# show the ONE thing that turns a module into a discoverable Noeta plugin: an
-# entry point in the ``noeta.plugins`` group the SDK owns.
+# This file is NOT built or tested by the repo — the tests load ``plugin.py`` by
+# explicit path (see tests/test_example_protected_paths.py). It shows the TWO
+# things that turn a module into a discoverable Noeta manifest plugin (spec D1):
+#
+#   1. ``[tool.noeta]`` — the static manifest, mirrored into the wheel as the
+#      ``noeta-plugin.toml`` package data the loader reads WITHOUT importing any
+#      plugin code (kept in sync with ``plugin.py`` by ``plugin_check``).
+#   2. an entry point in the SDK-owned ``noeta.plugins`` group, so a host started
+#      with ``load_plugins(entry_points=True)`` discovers the distribution.
 
 [build-system]
 requires = ["hatchling"]
@@ -12,22 +17,31 @@ build-backend = "hatchling.build"
 [project]
 name = "noeta-plugin-protected-paths"
 version = "0.1.0"
-description = "A path-containment Guard for Noeta, packaged as a plugin."
+description = "A path-containment Guard for Noeta, packaged as a manifest plugin."
 requires-python = ">=3.11"
 dependencies = ["noeta-sdk>=0.4.0"]
 
-# The discovery hook. The entry-point NAME (``protected-paths``) is the
-# plugin's identity: the enable-list key, the per-plugin ``config`` key, and
-# the label used when a contribution collides. The VALUE is
-# ``<importable module>:<factory>`` — the factory the loader invokes with a
-# fresh ``PluginAPI`` (and the config dict, since it declares a second
-# parameter).
-[project.entry-points."noeta.plugins"]
-protected-paths = "plugin:noeta_plugin"
+# The static manifest (D1). A real distribution ships ``plugin.py`` inside an
+# importable package (``protected_paths/``), so ``ref`` reads
+# ``protected_paths:GUARD``.
+[tool.noeta]
+name = "protected-paths"
+requires-noeta = ">=0.4"
 
-# This example ships a single top-level module (``plugin.py``). A real
-# distribution would usually nest it in a package directory
-# (``protected_paths/plugin.py`` → entry point ``protected_paths.plugin:noeta_plugin``)
-# so the top-level module name is not the generic ``plugin``.
+[tool.noeta.config-schema.env]
+NOETA_PROTECTED_PATHS_ROOTS = "os.pathsep-separated writable roots (default: cwd)"
+NOETA_PROTECTED_PATHS_DENY_GLOBS = "comma-separated fnmatch deny globs (default: none)"
+
+[[tool.noeta.contributions]]
+surface = "guard"
+name = "protected_paths"
+ref = "protected_paths:GUARD"
+
+# The discovery hook. The distribution ships its manifest as package data; the
+# entry point only needs to exist so ``entry_points=True`` finds the
+# distribution (its VALUE is not a factory in the manifest mechanism).
+[project.entry-points."noeta.plugins"]
+protected-paths = "protected_paths"
+
 [tool.hatch.build.targets.wheel]
-only-include = ["plugin.py"]
+only-include = ["plugin.py", "noeta-plugin.toml"]

@@ -1,12 +1,15 @@
-# `protected-paths` — a path-containment Guard, packaged as a plugin
+# `protected-paths` — a path-containment Guard, packaged as a manifest plugin
 
-A first-party example [plugin](../../../docs/adr/plugin-contribution-bundles.md)
-that contributes **one `Guard`**. The guard inspects every file-mutating
-built-in tool call and **denies** it when the target path escapes a configured
-allowlist of roots, or matches an optional deny-glob.
+A first-party example [manifest plugin](../../../docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md)
+that contributes **one `Guard`** on the `guard` surface. The guard inspects
+every file-mutating built-in tool call and **denies** it when the target path
+escapes a configured allowlist of roots, or matches an optional deny-glob.
 
-It is the packaged, operator-configurable form of an ad-hoc `can_use_tool`
-path check: any host can enable it *by name* instead of writing guard code.
+`guard` is a **governance** surface (spec D6): once the plugin is loaded the
+guard is in force for **every** agent in the process — an operator cannot opt an
+agent out of a write fence by omitting an activation. It is the packaged form of
+an ad-hoc `can_use_tool` path check: any host can enable it *by name* instead of
+writing guard code.
 
 ## What it inspects
 
@@ -22,28 +25,23 @@ Everything else is allowed untouched: read-only tools (`read` / `glob` /
 a path guard cannot fence it. Confine shell IO with a sandbox execution
 environment instead.
 
-## Configuration
+## Configuration — via the environment
 
-The plugin factory reads two keys from its per-plugin config dict, both
-individually optional:
+The manifest mechanism resolves a contribution's `ref` to a live object; it does
+**not** thread a per-plugin config dict (that would make agent identity depend on
+operator config). Configuration is therefore *orthogonal to identity*, read from
+the environment when the plugin module is imported:
 
-```jsonc
-{
-  "allowed_roots": ["/abs/workspace", "/abs/scratch"],
-  "deny_globs": ["*.env", "*/secrets/*", "id_rsa"]
-}
-```
+| Environment variable | Meaning |
+| --- | --- |
+| `NOETA_PROTECTED_PATHS_ROOTS` | `os.pathsep`-separated writable roots. Absent ⇒ the process working directory (so the guard always protects *something*). |
+| `NOETA_PROTECTED_PATHS_DENY_GLOBS` | comma-separated [`fnmatch`](https://docs.python.org/3/library/fnmatch.html) patterns. A match on the raw path, its normalized absolute form, **or** its basename denies the call, *even inside an allowed root*. |
 
-- **`allowed_roots`** — directories a write may land in. Relative entries are
-  resolved against the process working directory. Empty ⇒ the containment
-  check is disabled (the plugin runs in deny-glob-only mode).
-- **`deny_globs`** — [`fnmatch`](https://docs.python.org/3/library/fnmatch.html)
-  patterns. A match on the raw path, its normalized absolute form, **or** its
-  basename denies the call, *even inside an allowed root*. Denies always win.
-
-Enabling the plugin with **neither** key is a misconfiguration and fails the
-client build loudly — a protection guard that protects nothing is a bug, not a
-sensible default.
+A host injects these before it loads the plugin — the
+[reference host](../../reference-host/host.py) sets `NOETA_PROTECTED_PATHS_ROOTS`
+to the session workspace. The `ProtectedPathsGuard` is also independently
+constructable (`ProtectedPathsGuard(allowed_roots=…, deny_globs=…)`) for tests
+and hosts that wire it directly.
 
 ## Containment is lexical — read this before you trust it
 
@@ -66,46 +64,54 @@ deliberate.
 
 ## Enabling it
 
-### As an installed package (entry point)
+### As an installed package (entry point + shipped manifest)
 
-The [`pyproject.toml`](./pyproject.toml) here declares an entry point in the
-`noeta.plugins` group the SDK owns. Once such a package is installed, discover
-it and thread its config by name:
+The [`pyproject.toml`](./pyproject.toml) declares a `[tool.noeta]` static
+manifest (mirrored to [`noeta-plugin.toml`](./noeta-plugin.toml) as wheel package
+data) plus an entry point in the `noeta.plugins` group. The loader reads the
+manifest **without importing any plugin code**:
 
 ```python
-from noeta.sdk import Options, load_plugins, merge_plugins
+import os
+from noeta.sdk import Client, load_plugin_set, presets
 
-plugins = load_plugins(
-    entry_points=True,
-    enabled=["protected-paths"],  # server-style: explicit enable-list
-    config={"protected-paths": {"allowed_roots": ["/srv/workspace"]}},
-)
-options = merge_plugins(Options(system_prompt="…"), plugins)
+os.environ["NOETA_PROTECTED_PATHS_ROOTS"] = "/srv/workspace"
+pset = load_plugin_set(entry_points=True, enabled=["protected-paths"])
+client = Client(presets.main_options(), plugins=pset)  # guard is process-wide
 ```
 
 ### From an explicit file path (local / dev, no install)
 
 ```python
+import os
 from pathlib import Path
-from noeta.sdk import Options, load_plugins, merge_plugins
+from noeta.sdk import Client, load_plugin_set, presets
 
 here = Path(__file__).parent
-plugins = load_plugins(
-    modules=[str(here / "plugin.py")],
-    config={"protected-paths": {"allowed_roots": [str(here / "workspace")]}},
-)
-options = merge_plugins(Options(system_prompt="…"), plugins)
+os.environ["NOETA_PROTECTED_PATHS_ROOTS"] = str(here / "workspace")
+pset = load_plugin_set(builtins=False, modules=[str(here / "plugin.py")])
+client = Client(presets.main_options(), plugins=pset)
 ```
 
-The module sets `noeta_plugin_name = "protected-paths"`, so the plugin's name
-(the enable-list key, the `config` key, and the collision label) stays
-`protected-paths` even though the file is `plugin.py`. The tests
+The single-file `plugin = PluginBuilder("protected-paths")` fixes the plugin's
+identity name (the enable-list key and the collision label) even though the file
+is `plugin.py`. The tests
 ([`tests/test_example_protected_paths.py`](../../../tests/test_example_protected_paths.py))
 load it exactly this way.
 
+## Verifying the shipped manifest
+
+`plugin.py`'s decorators are the source of truth; the shipped `noeta-plugin.toml`
+must match them. Verify with:
+
+```bash
+python -m noeta.sdk.plugin_check examples/plugins/protected-paths
+```
+
 ## Files
 
-- [`plugin.py`](./plugin.py) — the `ProtectedPathsGuard` and the
-  `noeta_plugin(api, config)` factory.
-- [`pyproject.toml`](./pyproject.toml) — an illustration of the entry-point
+- [`plugin.py`](./plugin.py) — the `ProtectedPathsGuard`, the env-configured
+  `GUARD` instance, and the single-file `PluginBuilder` manifest.
+- [`noeta-plugin.toml`](./noeta-plugin.toml) — the shipped static manifest.
+- [`pyproject.toml`](./pyproject.toml) — the `[tool.noeta]` + entry-point
   packaging convention (not built or tested here).

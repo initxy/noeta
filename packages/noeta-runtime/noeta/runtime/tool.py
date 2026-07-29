@@ -16,7 +16,7 @@ inline ``output_ref`` keeps the payload under the 4-KB ceiling.
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from typing import Any, Callable, Optional, Sequence
 
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.decisions import ToolCall
@@ -59,10 +59,20 @@ class ToolRuntime:
         actor: str = "tool_runtime",
         background_runner: Optional[Any] = None,
         file_checkpoint_registry: Optional[Any] = None,
+        tool_result_transforms: Sequence[Callable[[ToolResult], ToolResult]] = (),
     ) -> None:
         self._event_log = event_log
         self._content_store = content_store
         self._actor = actor
+        # Pure ``ToolResult -> ToolResult`` stages (spec D9) applied INSIDE this
+        # boundary, before recording — so the transformed result is the one that
+        # reaches the ledger + ContentStore (a redaction stage keeps the secret
+        # out of both). Already ordered ``(priority, plugin, name)`` by the
+        # loader; ``()`` (every non-plugin construction) is byte-identical to the
+        # pre-transform recording.
+        self._tool_result_transforms: tuple[
+            Callable[[ToolResult], ToolResult], ...
+        ] = tuple(tool_result_transforms)
         # the host's ProcessRegistry (structurally a
         # ``noeta.protocols.tool.BackgroundRunner``). ``None`` ⇒ background
         # execution disabled; the ToolContext carries ``None`` and the
@@ -119,13 +129,23 @@ class ToolRuntime:
             # gap for any raising tool (notably user-authored ``@tool``s). We
             # synthesise a failed result so the normal trio still records and
             # the model sees a paired, informative ``tool_result``.
-            message = f"{type(exc).__name__}: {exc}"
-            if len(message) > 2000:
-                message = message[:2000] + "…"
             result = ToolResult(
                 success=False,
-                summary=f"tool {call.tool_name!r} raised — {message}",
+                summary=f"tool {call.tool_name!r} raised — {_fault_message(exc)}",
             )
+
+        # tool_result_transform stages (D9): run BEFORE any recording, so the
+        # transformed result is the only thing that reaches the ledger and the
+        # ContentStore. A stage that raises, or returns a non-``ToolResult`` (the
+        # boundary must stay typed), is an author error — but it must NOT escape
+        # ``invoke``: ``ToolCallStarted`` is already committed, so bailing here
+        # would strand the assistant ``tool_use`` with no matching ``tool_result``
+        # and the next compose→decide would take a fatal provider 400 (the same
+        # trap the raising-tool branch above closes). We therefore substitute a
+        # failed result carrying ONLY the fault message — the untransformed
+        # payload is discarded, so a broken redaction stage still leaks nothing
+        # durable — and let the normal trio record it.
+        result = self._apply_transforms(result, call)
 
         # stash this turn's rewind baseline for each file this
         # call edited for the FIRST time this turn. The per-turn gate dedups
@@ -169,6 +189,44 @@ class ToolRuntime:
         # downstream handlers (e.g. inline truncation markers) can
         # cross-reference the full-audit ContentRef without re-encoding.
         object.__setattr__(result, "output_ref", output_ref)
+        return result
+
+    def _apply_transforms(self, result: ToolResult, call: ToolCall) -> ToolResult:
+        """Run the ``tool_result_transform`` chain, containing any stage fault.
+
+        A stage that raises or returns a non-``ToolResult`` collapses the whole
+        call to a failed :class:`ToolResult` naming the offending stage. Two
+        properties matter and both are load-bearing:
+
+        * the fault never propagates out of :meth:`invoke`, so the three-event
+          envelope still records and the ``tool_use`` keeps its ``tool_result``;
+        * the substituted result carries **no** part of the original output, so a
+          redaction stage that blew up cannot leak the payload it was meant to
+          scrub into the EventLog or the ContentStore.
+        """
+        for transform in self._tool_result_transforms:
+            stage = getattr(transform, "__name__", None) or type(transform).__name__
+            try:
+                transformed = transform(result)
+            except Exception as exc:  # noqa: BLE001 — see the docstring
+                return ToolResult(
+                    success=False,
+                    summary=(
+                        f"tool {call.tool_name!r} result transform {stage!r} "
+                        f"raised — {_fault_message(exc)}; the untransformed "
+                        f"result was discarded"
+                    ),
+                )
+            if not isinstance(transformed, ToolResult):
+                return ToolResult(
+                    success=False,
+                    summary=(
+                        f"tool {call.tool_name!r} result transform {stage!r} "
+                        f"returned {type(transformed).__name__}, expected "
+                        f"ToolResult; the untransformed result was discarded"
+                    ),
+                )
+            result = transformed
         return result
 
     def _capture_file_baselines(
@@ -256,6 +314,12 @@ class ToolRuntime:
                 current = str(parent)
         self._root_cache[task_id] = current
         return current
+
+
+def _fault_message(exc: BaseException) -> str:
+    """``Type: message``, capped so one exploding exception cannot flood a summary."""
+    message = f"{type(exc).__name__}: {exc}"
+    return message if len(message) <= 2000 else message[:2000] + "…"
 
 
 def _encode_output(output: Any) -> bytes:

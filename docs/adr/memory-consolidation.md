@@ -10,7 +10,7 @@ Memory v2 (spec: `docs/implementation-specs/archive/2026-07-10-memory-v2.md`) ad
 
 ### Consolidation is an ordinary agent on an ordinary root task
 
-Consolidation runs as a normal root-level task on the resident worker pool — not a new scheduler, not an engine hook, not an in-turn side effect. Its agent (`__consolidation__`, an `AgentDefinition` with `tools=()` and `Capabilities(memory=True)`) sees exactly the memory tool pack and nothing else; its goal carries a host-built digest of recent session activity. All of its effects on the store go through the same `memory_write` / `memory_archive` tools the interactive agent uses — one mutation surface, two callers.
+Consolidation runs as a normal root-level task on the resident worker pool — not a new scheduler, not an engine hook, not an in-turn side effect. Its agent (`__consolidation__`, an `AgentDefinition` with `tools=()` and `plugins=("memory",)`) sees exactly the memory tool pack and nothing else; its goal carries a host-built digest of recent session activity. All of its effects on the store go through the same `memory_write` / `memory_archive` tools the interactive agent uses — one mutation surface, two callers.
 
 ### Trigger: session-stop seams with a debounce marker, no new scheduling
 

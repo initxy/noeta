@@ -20,11 +20,17 @@ What it wires
   When the injected provider is a ``StreamingProvider`` the runtime pushes each
   ephemeral :class:`~noeta.sdk.StreamDelta` through the sink while a turn is in
   flight (the deltas are previews only — never persisted).
-* **Plugins** — the first-party example plugins under ``examples/plugins/*`` are
-  loaded by explicit path (:func:`~noeta.sdk.load_plugins`) and folded
-  deterministically into the base ``Options`` (:func:`~noeta.sdk.merge_plugins`).
-  Host-plane contributions (MCP servers / skill dirs) are read separately and
-  wired into ``HostConfig``.
+* **Plugins** — the first-party example **manifest plugins** under
+  ``examples/plugins/*`` are loaded by explicit path
+  (:func:`~noeta.sdk.load_plugin_set` → a :class:`~noeta.sdk.PluginSet`) and
+  handed to :class:`~noeta.sdk.Client` as ``plugins=``. The Client wires them
+  per the effect-scoping rules (spec D6): the ``guard`` / ``observer`` plugins
+  (``protected-paths`` / ``approval-modes`` / ``git-checkpoint``) are governance
+  authority, in force process-wide once loaded; the ``redaction``
+  ``tool_result_transform`` is per-agent, so the host **activates** it on the
+  main agent (``Options.plugins``). Plugin config is *orthogonal to identity* in
+  the manifest mechanism, so the host injects it through the **environment** (it
+  points ``protected-paths`` at the session workspace).
 * **A preset recipe** — the agent identity comes from
   :func:`noeta.presets.main_options` (the official ``main`` agent), so the host
   ships a real, capable agent rather than a toy prompt.
@@ -46,11 +52,13 @@ Run it::
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence, TextIO
+from typing import Any, Iterator, Optional, Sequence, TextIO
 
 from noeta.sdk import (
     Client,
@@ -58,14 +66,12 @@ from noeta.sdk import (
     LLMRequest,
     LLMResponse,
     Options,
+    PluginSet,
     StepContext,
     StreamDelta,
     TextBlock,
     Usage,
-    load_plugins,
-    merge_plugins,
-    merged_mcp_servers,
-    merged_skill_dirs,
+    load_plugin_set,
     presets,
 )
 from noeta.sdk.storage import (
@@ -80,6 +86,9 @@ __all__ = [
     "StdoutDeltaSink",
     "build_reference_host",
     "default_plugin_modules",
+    "default_activation",
+    "apply_plugin_env",
+    "plugin_env_scope",
     "main",
 ]
 
@@ -124,19 +133,99 @@ class StdoutDeltaSink:
 # Plugin discovery (explicit-path loading of examples/plugins/*)
 # ---------------------------------------------------------------------------
 
+#: The example plugins whose effect the reference host wires. The three
+#: governance plugins are process-wide once loaded (no activation needed); the
+#: three per-agent surfaces (``redaction``'s ``tool_result_transform``,
+#: ``checklist-reminder``'s compose-time ``reminder``, ``memory-recall``'s
+#: recorded ``reminder_provider``) are also named in :func:`default_activation`,
+#: because a per-agent surface fires only for an agent that activates it (D6).
+_WIRED_PLUGINS: tuple[str, ...] = (
+    "protected-paths",
+    "approval-modes",
+    "git-checkpoint",
+    "redaction",
+    "checklist-reminder",
+    "memory-recall",
+)
+
 
 def default_plugin_modules() -> list[str]:
-    """Every ``examples/plugins/*/plugin.py`` path, sorted (for reproducibility).
+    """The wired example plugins' ``plugin.py`` paths, sorted (reproducible order).
 
     A server host discovers plugins via entry points + an operator enable-list;
     in this repo the example plugins are not installed, so the reference host
     loads them by explicit file path — the ``modules=[...]`` seam of
-    :func:`~noeta.sdk.load_plugins`. Load order never affects the compiled
-    ``AgentSpec`` (``merge_plugins`` sorts deterministically), but we sort here
-    anyway so the discovered set is stable.
+    :func:`~noeta.sdk.load_plugin_set`. Load order never affects the compiled
+    ``AgentSpec`` (the merge is deterministic), but we sort here anyway so the
+    discovered set is stable.
     """
     plugins_dir = Path(__file__).resolve().parents[1] / "plugins"
-    return sorted(str(p) for p in plugins_dir.glob("*/plugin.py"))
+    return sorted(str(plugins_dir / name / "plugin.py") for name in _WIRED_PLUGINS)
+
+
+def default_activation() -> tuple[str, ...]:
+    """The loaded plugins the main agent **activates** (per-agent surfaces, D6).
+
+    The three feature plugins — ``redaction`` (a ``tool_result_transform``),
+    ``checklist-reminder`` (a compose-time ``reminder``) and ``memory-recall`` (a
+    recorded ``reminder_provider``) — each fire only for an agent that activates
+    them. The governance guards / observer apply process-wide without it.
+    """
+    return ("redaction", "checklist-reminder", "memory-recall")
+
+
+def apply_plugin_env(workspace_dir: Path) -> dict[str, str]:
+    """Inject the example plugins' config through the environment (D1).
+
+    The manifest mechanism keeps config *orthogonal to agent identity* — it
+    resolves a contribution's ``ref`` to a live object and never threads a
+    per-plugin config dict — so a host configures a plugin the 12-factor way:
+    through the environment, read when the plugin module is imported. Here the
+    host points ``protected-paths`` and ``git-checkpoint`` at the session
+    workspace. Returns the variables it set (for transparency / the demo).
+
+    Must run **before** the plugin modules are loaded (they read the environment
+    at import). Returns the injected mapping.
+
+    This mutates ``os.environ`` for the rest of the process — right for a real
+    host, which configures itself once at startup and then runs. A caller that
+    builds hosts repeatedly in ONE process (a test suite, a multi-tenant driver)
+    wants :func:`plugin_env_scope` instead: variables pointed at a per-build
+    temporary directory outlive that directory if never restored, so the NEXT
+    build reads a path that no longer exists.
+    """
+    env = _plugin_env(workspace_dir)
+    os.environ.update(env)
+    return env
+
+
+@contextmanager
+def plugin_env_scope(workspace_dir: Path) -> Iterator[dict[str, str]]:
+    """:func:`apply_plugin_env` for the duration of a block, then restored.
+
+    The plugin modules read their config at import, so the variables only have to
+    be in force while :func:`~noeta.sdk.load_plugin_set` runs — after that the
+    guards are built and the values have done their job. Restoring on exit is
+    what keeps one build's workspace path out of the next one's environment.
+    """
+    env = _plugin_env(workspace_dir)
+    previous = {key: os.environ.get(key) for key in env}
+    os.environ.update(env)
+    try:
+        yield env
+    finally:
+        for key, old in previous.items():
+            if old is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old
+
+
+def _plugin_env(workspace_dir: Path) -> dict[str, str]:
+    return {
+        "NOETA_PROTECTED_PATHS_ROOTS": str(workspace_dir),
+        "NOETA_GIT_CHECKPOINT_REPO": str(workspace_dir),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -149,18 +238,31 @@ class ReferenceHost:
     """A live, durable, plugin-extended Noeta session driver.
 
     Built by :func:`build_reference_host`. Holds the sqlite triple (so it can be
-    closed cleanly), the merged :class:`~noeta.sdk.Options` (agent identity +
-    the plugins' guards / observers), the wired :class:`~noeta.sdk.Client`, and
-    the streaming sink. :meth:`run` drives one session turn.
+    closed cleanly), the agent :class:`~noeta.sdk.Options` (identity + the
+    per-agent activation), the loaded :class:`~noeta.sdk.PluginSet` (the host
+    hands it to the Client, which wires guards / observers / transforms per D6),
+    the wired :class:`~noeta.sdk.Client`, and the streaming sink. :meth:`run`
+    drives one session turn.
     """
 
     client: Client
     options: Options
+    plugins: PluginSet
     db_path: Path
     delta_sink: StdoutDeltaSink
     _event_log: SqliteEventLog
     _content_store: SqliteContentStore
     _dispatcher: SqliteDispatcher
+
+    def guard_names(self) -> list[str]:
+        """The names of the process-wide guards the loaded plugins contribute."""
+        guards, _observers = self.plugins.process_hooks()
+        return sorted(getattr(g, "name", type(g).__name__) for g in guards)
+
+    def observer_names(self) -> list[str]:
+        """The names of the process-wide observers the loaded plugins contribute."""
+        _guards, observers = self.plugins.process_hooks()
+        return sorted(getattr(o, "name", type(o).__name__) for o in observers)
 
     def run(self, goal: str) -> Any:
         """Create the session (if new) and drive one turn to its trailing stop.
@@ -203,7 +305,7 @@ def build_reference_host(
     workspace_dir: Path,
     db_path: Optional[Path] = None,
     plugin_modules: Optional[Sequence[str]] = None,
-    plugin_config: Optional[Mapping[str, dict]] = None,
+    activate: Optional[Sequence[str]] = None,
     base_options: Optional[Options] = None,
     delta_out: Optional[TextIO] = None,
 ) -> ReferenceHost:
@@ -224,13 +326,14 @@ def build_reference_host(
         allocates a fresh file under a temp dir — the "tmp/dev path".
     plugin_modules:
         Explicit ``plugin.py`` paths to load. ``None`` ⇒
-        :func:`default_plugin_modules` (the ``examples/plugins/*`` corpus).
-    plugin_config:
-        Per-plugin config dict (``{plugin_name: {...}}``) threaded to each
-        plugin factory that declares a config parameter.
+        :func:`default_plugin_modules` (the wired example plugins).
+    activate:
+        The loaded plugins the main agent activates (per-agent surfaces, D6).
+        ``None`` ⇒ :func:`default_activation` (``redaction``). Governance
+        guards / observers do not need activation.
     base_options:
-        The base agent recipe the plugins fold into. ``None`` ⇒
-        :func:`noeta.presets.main_options` (the official ``main`` agent).
+        The base agent recipe. ``None`` ⇒ :func:`noeta.presets.main_options`
+        (the official ``main`` agent).
     delta_out:
         Where the streaming sink writes token text. ``None`` ⇒ ``sys.stdout``.
     """
@@ -245,72 +348,63 @@ def build_reference_host(
     event_log = SqliteEventLog(str(db_path), lease_validator=dispatcher)
     content_store = SqliteContentStore(str(db_path))
 
-    # 2. Discover + load the example plugins by explicit path, then fold their
-    #    typed contributions deterministically into the preset recipe. A
-    #    collision (or a broken plugin) fails loudly right here, at build time —
-    #    never a mid-session turn.
+    # 2. Inject plugin config through the environment BEFORE loading (the plugin
+    #    modules read it at import), then discover + load the example manifest
+    #    plugins by explicit path. A broken plugin fails loudly right here, at
+    #    build time — never a mid-session turn. ``builtins=False`` keeps the
+    #    loaded set to just the example plugins (noeta's own capabilities are
+    #    already in the preset recipe).
     modules = (
         list(plugin_modules)
         if plugin_modules is not None
         else default_plugin_modules()
     )
-    loaded = load_plugins(modules=modules, config=plugin_config)
+    with plugin_env_scope(workspace_dir):
+        plugins = load_plugin_set(builtins=False, modules=modules)
+
+    # 3. The agent recipe + per-agent activation. The governance guards /
+    #    observer apply process-wide once loaded; ``redaction`` is a per-agent
+    #    ``tool_result_transform`` the main agent must activate (Options.plugins).
     base = base_options if base_options is not None else presets.main_options()
-    options = merge_plugins(base, loaded)
+    activation = tuple(activate) if activate is not None else default_activation()
+    new_activation = tuple(base.plugins) + tuple(
+        name for name in activation if name not in base.plugins
+    )
+    options = replace(base, plugins=new_activation)
 
-    # 2b. Host-plane contributions live off Options (they have no identity
-    #     surface): a host reads them separately and wires them into HostConfig.
-    #     The example corpus contributes none, so these are empty — shown here as
-    #     the pattern a richer host follows.
-    mcp_servers = merged_mcp_servers(loaded)
-    skill_dirs = merged_skill_dirs(loaded)  # noqa: F841 — wire where a host has a skills root
-    mcp_resolver = (lambda alias: mcp_servers.get(alias)) if mcp_servers else None
-
-    # 3. Host-level wiring: the injected storage triple + the streaming sink +
-    #    any host-plane MCP resolver. None of this touches the agent identity.
+    # 4. Host-level wiring: the injected storage triple + the streaming sink.
+    #    None of this touches the agent identity. Host-plane plugin contributions
+    #    (mcp_server / skills) would be read via ``plugins.contributions(surface)``
+    #    and wired into HostConfig; the example corpus contributes none.
     delta_sink = StdoutDeltaSink(delta_out)
     host_config = HostConfig(
         event_log=event_log,
         content_store=content_store,
         dispatcher=dispatcher,
         delta_sink=delta_sink,
-        mcp_server_resolver=mcp_resolver,
     )
 
-    # 4. The live client over the merged recipe + host config. multi_turn keeps
-    #    the session open after a finished turn (a real interactive host).
+    # 5. The live client over the recipe + host config + loaded PluginSet. The
+    #    Client resolves the plugins and wires them per D6. multi_turn keeps the
+    #    session open after a finished turn (a real interactive host).
     client = Client(
         options,
         provider=provider,
         workspace_dir=workspace_dir,
         host_config=host_config,
+        plugins=plugins,
     )
 
     return ReferenceHost(
         client=client,
         options=options,
+        plugins=plugins,
         db_path=db_path,
         delta_sink=delta_sink,
         _event_log=event_log,
         _content_store=content_store,
         _dispatcher=dispatcher,
     )
-
-
-def default_plugin_config(workspace_dir: Path) -> dict[str, dict]:
-    """A sensible per-plugin config for the example corpus, keyed by plugin name.
-
-    * ``protected-paths`` — fence writes to the workspace (the guard refuses to
-      load with neither an allowed root nor a deny glob, so this is required).
-    * ``approval-modes`` — ``smart_approve``: allow read-only tools, ask for the
-      rest.
-    * ``git-checkpoint`` — snapshot the workspace repo around mutating tools.
-    """
-    return {
-        "protected-paths": {"allowed_roots": [str(workspace_dir)]},
-        "approval-modes": {"mode": "smart_approve"},
-        "git-checkpoint": {"repo_path": str(workspace_dir)},
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -366,7 +460,6 @@ def main() -> int:
     host = build_reference_host(
         provider=_ScriptedStreamingProvider(),
         workspace_dir=workspace,
-        plugin_config=default_plugin_config(workspace),
     )
     try:
         print("--- streaming (live token deltas) -------------------------")
@@ -378,8 +471,10 @@ def main() -> int:
         print(f"deltas seen:   {host.delta_sink.delta_count}")
         print(f"sqlite file:   {host.db_path}  (exists={host.db_path.exists()})")
         print(f"events stored: {len(host.events(outcome.task_id))}")
-        guard_names = sorted(getattr(g, "name", "?") for g in host.options.guards)
-        print(f"active guards: {guard_names}")
+        print(f"loaded plugins:  {list(host.plugins.names())}")
+        print(f"process guards:  {host.guard_names()}")
+        print(f"process observers: {host.observer_names()}")
+        print(f"activated:       {list(host.options.plugins)}")
     finally:
         host.close()
     return 0

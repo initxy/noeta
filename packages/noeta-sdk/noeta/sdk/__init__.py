@@ -61,24 +61,37 @@ from noeta.client.messages import (
     as_messages,
 )
 from noeta.client.options import (
+    DEFAULT_PLUGINS,
     AgentDefinition,
     Options,
+    PluginActivation,
     SystemPromptPreset,
     compile_options,
     register_preset_prompt,
 )
+# Plugin trust store + shared error surface (the primitives the manifest
+# mechanism stands on; the retired 0.4.0 contribution-bundle path is gone).
 from noeta.client.plugins import (
-    LoadedPlugin,
-    PluginAPI,
-    PluginContributions,
     PluginError,
     UntrustedPluginDirWarning,
     grant_trust,
     is_trusted,
-    load_plugins,
-    merge_plugins,
-    merged_mcp_servers,
-    merged_skill_dirs,
+)
+# Manifest-plugin mechanism (SDK-extensibility redesign): the surface registry,
+# the static manifest reader, the five-source loader / PluginSet, and the
+# activation contributions type. ``load_plugin_set`` is the manifest-based
+# loader a host binds to.
+from noeta.client.plugin_manifest import (
+    ManifestContribution,
+    PluginBuilder,
+    PluginManifest,
+)
+from noeta.client.plugin_set import PluginSet
+from noeta.client.plugin_set import load_plugins as load_plugin_set
+from noeta.client.surfaces import (
+    SurfaceRegistry,
+    SurfaceSpec,
+    standard_registry,
 )
 from noeta.client.wire import envelope_to_dict
 from noeta.sdk.authoring import (
@@ -181,7 +194,9 @@ __all__ = [
     "SystemPromptPreset",
     "compile_options",
     "register_preset_prompt",
-    # recipe advanced fields (Options.capabilities / Options.budget)
+    # recipe advanced field (Options.budget) + the compiled AgentSpec identity
+    # type (AgentSpec.capabilities — read-only projection; activation via
+    # Options.plugins is the authoring path)
     "Capabilities",
     "BudgetSpec",
     # client verbs
@@ -286,18 +301,22 @@ __all__ = [
     "VerdictResult",
     "Observer",
     "ContentKindSpec",
-    # plugin mechanism (M1)
-    "PluginAPI",
-    "PluginContributions",
-    "LoadedPlugin",
+    # plugin trust store + error surface (shared by the manifest mechanism)
     "PluginError",
     "UntrustedPluginDirWarning",
-    "load_plugins",
-    "merge_plugins",
-    "merged_mcp_servers",
-    "merged_skill_dirs",
     "grant_trust",
     "is_trusted",
+    # manifest-plugin mechanism (SDK-extensibility redesign, M1 + M2)
+    "SurfaceSpec",
+    "SurfaceRegistry",
+    "standard_registry",
+    "PluginManifest",
+    "ManifestContribution",
+    "PluginBuilder",
+    "PluginSet",
+    "load_plugin_set",
+    "PluginActivation",
+    "DEFAULT_PLUGINS",
     # official factory content
     "presets",
 ]

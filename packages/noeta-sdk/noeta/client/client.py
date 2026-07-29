@@ -20,9 +20,10 @@ from __future__ import annotations
 import threading
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from noeta.agent.registry import AgentRegistry
+from noeta.context.reminders import ReminderSpec
 from noeta.core.wiring import wire_default_observers
 from noeta.observers.otlp import make_otlp_trace_observer
 from noeta.observers.trace_export import TraceExportObserver
@@ -61,8 +62,11 @@ from noeta.client.host_config import HostConfig
 from noeta.client.options import (
     AgentDefinition,
     Options,
+    PluginActivation,
     compile_options,
+    effective_root_policy,
 )
+from noeta.client.plugin_set import PluginSet
 
 
 __all__ = ["Client", "QueryFailedError", "QueryResult", "query"]
@@ -91,7 +95,10 @@ def _scan_entries(entries: tuple[Any, ...], gathered: dict[str, Tool]) -> None:
             gathered[entry.name] = entry
 
 
-def _collect_custom_tools(root: Options) -> dict[str, Tool]:
+def _collect_custom_tools(
+    root: Options,
+    activations: Optional[Mapping[str, PluginActivation]] = None,
+) -> dict[str, Tool]:
     """Gather every ``DecoratedTool`` closure referenced from ``root``.
 
     Scans (in order):
@@ -99,6 +106,9 @@ def _collect_custom_tools(root: Options) -> dict[str, Tool]:
     * Every ``root.allowed_tools`` entry (when not ``None``).
     * Every ``AgentDefinition.tools`` entry in ``root.agents`` (when not
       ``None``).
+    * Every activated plugin's contributed tools — ``compile_options`` puts their
+      ``ToolRef`` in the spec, so the closure has to reach the host too or the
+      agent carries a tool name the runtime cannot build.
 
     The agents tree is flat — there is no recursive nesting, so no tree
     walk is needed.
@@ -109,12 +119,112 @@ def _collect_custom_tools(root: Options) -> dict[str, Tool]:
     for defn in root.agents.values():
         if isinstance(defn, AgentDefinition) and defn.tools is not None:
             _scan_entries(defn.tools, gathered)
+    for act in (activations or {}).values():
+        _scan_entries(tuple(act.tools), gathered)
+        for _name, defn in act.agents:
+            if isinstance(defn, AgentDefinition) and defn.tools is not None:
+                _scan_entries(defn.tools, gathered)
     # In-process MCP servers (Options.mcp_servers): their bundled @tool
     # closures are custom tools too. Duck-typed by ``.tools`` (the SdkMcpServer
     # value object) so noeta.client takes no upward import on noeta.sdk.
     for server in root.mcp_servers:
         _scan_entries(tuple(getattr(server, "tools", ())), gathered)
     return gathered
+
+
+# ---------------------------------------------------------------------------
+# Per-agent activation folding (D6 — feature surfaces follow activation)
+# ---------------------------------------------------------------------------
+
+
+def _activated_names(
+    options: Options, plugins: Optional["PluginSet"]
+) -> Optional[frozenset[str]]:
+    """Every plugin name some agent activates — the resolution scope (D5).
+
+    Resolving a plugin imports its refs and runs its module body, so that step is
+    restricted to plugins an agent actually opted into. The set is computed in two
+    passes because an activated plugin may itself contribute a child agent with
+    its own activation list: pass one covers the base recipe, and if resolving it
+    contributes children naming further plugins, the scope widens and resolves
+    again. Resolution is memoised on the ``PluginSet``, so the second pass only
+    pays for the plugins the first one did not already reach.
+
+    ``None`` (no loaded set) means there is nothing to scope.
+    """
+    if plugins is None:
+        return None
+    names = {*options.plugins}
+    for defn in options.agents.values():
+        if isinstance(defn, AgentDefinition):
+            names.update(defn.plugins)
+    seen: set[str] = set()
+    while True:
+        pending = names - seen
+        if not pending:
+            return frozenset(names)
+        seen |= pending
+        for act in plugins.identity_activations(only=frozenset(names)).values():
+            for _child, defn in act.agents:
+                if isinstance(defn, AgentDefinition):
+                    names.update(defn.plugins)
+
+
+def _agent_activations(
+    options: Options,
+    plugin_agents: Mapping[str, AgentDefinition],
+) -> dict[str, tuple[str, ...]]:
+    """``agent name -> its activation list``, over the effective agent roster.
+
+    The roster is the base ``Options.agents`` plus the child agents the activated
+    plugins contribute — the same set ``compile_options`` compiles — so a
+    plugin-contributed child gets its own per-agent wiring rather than silently
+    running with none.
+    """
+    out: dict[str, tuple[str, ...]] = {options.name: tuple(options.plugins)}
+    for name, defn in {**dict(options.agents), **dict(plugin_agents)}.items():
+        if isinstance(defn, AgentDefinition):
+            out[name] = tuple(defn.plugins)
+    return out
+
+
+def _ordered_stages(
+    source: Mapping[str, tuple[tuple[Any, str, Any], ...]],
+    activation: tuple[str, ...],
+) -> list[tuple[Any, str, str, Any]]:
+    """One agent's contributions to a priority-ordered surface.
+
+    Collects ``(priority, plugin, contribution name, value)`` across every plugin
+    the agent activates and sorts by that triple — the ordering every
+    priority-ordered surface in the D3 table shares.
+    """
+    entries = [
+        (priority, plugin, cname, value)
+        for plugin in activation
+        for priority, cname, value in source.get(plugin, ())
+    ]
+    entries.sort(key=lambda e: (e[0], e[1], e[2]))
+    return entries
+
+
+def _seam_providers(
+    source: Mapping[str, tuple[tuple[tuple[str, ...], str, Any], ...]],
+    activation: tuple[str, ...],
+) -> dict[str, tuple[Any, ...]]:
+    """One agent's ``reminder_provider`` s, grouped by recording seam (track A, D7).
+
+    A provider may declare several seams; within a seam the order is
+    ``(plugin, contribution name)`` — the order the recording path runs them in.
+    """
+    by_seam: dict[str, list[tuple[str, str, Any]]] = {}
+    for plugin in activation:
+        for seams, cname, provider in source.get(plugin, ()):
+            for seam in seams:
+                by_seam.setdefault(seam, []).append((plugin, cname, provider))
+    return {
+        seam: tuple(p for _pl, _n, p in sorted(entries, key=lambda e: (e[0], e[1])))
+        for seam, entries in sorted(by_seam.items())
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +267,7 @@ class Client:
         multi_turn: bool = True,
         host_config: Optional[HostConfig] = None,
         allowed_models: Optional[Sequence[str]] = None,
+        plugins: Optional["PluginSet"] = None,
     ) -> None:
         # 0. Resolve provider: explicit kwarg first, then Options.provider
         #    (D5: wiring is NOT identity — the AgentSpec identity never sees it).
@@ -193,15 +304,97 @@ class Client:
                 "Client(workspace_dir=...) kwarg or set Options.cwd"
             )
 
-        # 1. Compile + register (including child agents)
-        main_spec, descendant_specs = compile_options(options)
+        # 1. Compile + register (including child agents).
+        #    Manifest-level collision detection first (zero execution): duplicate
+        #    tool / agent / content-kind names, a duplicate mcp alias, a second
+        #    single-valued policy or provider. Raises PluginError naming BOTH
+        #    plugins — there is no override, and running it here means a bad set
+        #    fails at build with a manifest-level message rather than surfacing
+        #    later as a contribution that silently went missing.
+        if plugins is not None:
+            plugins.merged()
+        #    Activation (D5): a loaded PluginSet supplies the identity-plane
+        #    contributions each activated external plugin carries; compile
+        #    validates every activation name against the built-in vocabulary +
+        #    this loaded set, failing loudly on an unknown name. Resolution is
+        #    scoped to the activated names, so loading a plugin no agent activates
+        #    never runs its module body (D5: a set stays auditable until something
+        #    opts in).
+        activated = _activated_names(options, plugins)
+        activation_map = (
+            plugins.identity_activations(only=activated) if plugins is not None else None
+        )
+        main_spec, descendant_specs = compile_options(options, plugins=activation_map)
+        # D10 policy: the runtime half of the (identity ref already baked by
+        # compile) single-valued policy surface — the base Options.policy OR the
+        # single active plugin policy (a collision already failed the compile
+        # above). Wired as the host's process-wide policy_override, replacing the
+        # old ``options.policy`` pass-through.
+        effective_policy = effective_root_policy(options, activation_map)
+        # The per-agent wiring surfaces (D6: feature surfaces follow activation).
+        # Each resolves the activated plugins' contributions, then folds them into
+        # an ``agent name -> ordered values`` map the SdkHost selects from when it
+        # builds that agent's Engine:
+        #   * tool_result_transform (D9) — ToolResult stages inside the ToolRuntime
+        #   * reminder             (D8, track B) — pure compose-time renders
+        #   * reminder_provider    (D7, track A) — recorded, per recording seam
+        #   * content_kind         (D6) — semi-stable composer residents
+        # An agent that activates none of them gets an empty entry, which is
+        # byte-identical to the pre-plugin construction.
+        agent_activations = _agent_activations(
+            options,
+            {
+                name: defn
+                for act in (activation_map or {}).values()
+                for name, defn in act.agents
+            },
+        )
+        empty: dict[str, tuple[Any, ...]] = {}
+        transform_map = (
+            plugins.activation_transforms(only=activated) if plugins is not None else empty
+        )
+        reminder_map = (
+            plugins.activation_reminders(only=activated) if plugins is not None else empty
+        )
+        provider_map = (
+            plugins.activation_reminder_providers(only=activated)
+            if plugins is not None
+            else empty
+        )
+        tool_result_transforms: dict[str, tuple[Any, ...]] = {}
+        extra_reminders: dict[str, tuple[ReminderSpec, ...]] = {}
+        reminder_providers: dict[str, Mapping[str, tuple[Any, ...]]] = {}
+        activated_content_kinds: dict[str, tuple[Any, ...]] = {}
+        for _agent, _activation in agent_activations.items():
+            _stages = _ordered_stages(transform_map, _activation)
+            if _stages:
+                tool_result_transforms[_agent] = tuple(v for _p, _pl, _n, v in _stages)
+            _rems = _ordered_stages(reminder_map, _activation)
+            if _rems:
+                extra_reminders[_agent] = tuple(
+                    ReminderSpec(name=_n, priority=_p, render=_v)
+                    for _p, _pl, _n, _v in _rems
+                )
+            _seams = _seam_providers(provider_map, _activation)
+            if _seams:
+                reminder_providers[_agent] = _seams
+            _kinds = tuple(
+                kind
+                for _plugin in sorted(_activation)
+                for kind in getattr(
+                    (activation_map or {}).get(_plugin), "content_kinds", ()
+                )
+            )
+            if _kinds:
+                activated_content_kinds[_agent] = _kinds
         registry: AgentRegistry = AgentRegistry()
         registry.add(main_spec)
         for d in descendant_specs:
             registry.add(d)
 
-        # 2. Collect custom tools (all nodes, including descendants)
-        custom_tools = _collect_custom_tools(options)
+        # 2. Collect custom tools (all nodes, including descendants and the
+        #    activated plugins' contributions).
+        custom_tools = _collect_custom_tools(options, activation_map)
 
         # 3. Open stores (dispatcher first — the event log needs it as
         #    lease_validator). The durable-storage host config may inject an
@@ -222,11 +415,21 @@ class Client:
         self._unsubscribe_default: Callable[[], None] = wire_default_observers(
             event_log, dispatcher
         )
+        # D6 effect scoping: a loaded plugin's guard / observer contributions are
+        # governance authority — in force process-wide for EVERY agent regardless
+        # of which plugins that agent activates. Resolved here from the loaded set
+        # and folded into the process guard stack + observer subscriptions.
+        plugin_guards: tuple[Any, ...] = ()
+        plugin_observers: tuple[Any, ...] = ()
+        if plugins is not None:
+            plugin_guards, plugin_observers = plugins.process_hooks()
         # (T3) — custom Observer
         # extension point: subscribe each user-supplied post-commit callback
-        # alongside the defaults and collect their unsubscribes for shutdown.
+        # alongside the defaults (and the process-wide plugin observers) and
+        # collect their unsubscribes for shutdown.
         self._unsubscribe_observers: list[Callable[[], None]] = [
-            event_log.subscribe(obs) for obs in options.observers
+            event_log.subscribe(obs)
+            for obs in tuple(options.observers) + plugin_observers
         ]
         self._shutdown = False
         # Resident worker pool (lazily started by start_workers). Each loop
@@ -272,9 +475,17 @@ class Client:
             # policy: the custom Options.policy IS the ``(llm) -> Policy``
             # factory (it also carries the .ref compile_options put in the
             # spec); guards / content_channels pass through verbatim.
-            policy_override=options.policy,
-            extra_guards=tuple(options.guards),
+            policy_override=effective_policy,
+            # D6: options.guards (agent wiring) + process-wide plugin guards.
+            extra_guards=tuple(options.guards) + plugin_guards,
             extra_content_kinds=tuple(options.content_channels),
+            # D9: per-agent tool_result_transform stages (empty ⇒ byte-identical).
+            tool_result_transforms=tool_result_transforms,
+            # The other three per-agent activation surfaces. All empty by default,
+            # so a host with no plugins builds exactly the same engine as before.
+            extra_reminders=extra_reminders,
+            reminder_providers=reminder_providers,
+            activated_content_kinds=activated_content_kinds,
             # (D3) — host-level runtime
             # injections (NOT agent identity): the HTML-app preview gateway
             # (open_app) and the live-MCP alias resolver + transport. All default
@@ -1308,6 +1519,7 @@ def query(
     workspace_dir: Optional[Path] = None,
     model: Optional[str] = None,
     images: Sequence[ImageBlock] = (),
+    plugins: Optional[PluginSet] = None,
 ) -> QueryResult:
     """One-shot SDK query: single turn, all envelopes + folded projections.
 
@@ -1333,6 +1545,7 @@ def query(
         workspace_dir=workspace_dir,
         model=model,
         multi_turn=False,
+        plugins=plugins,
     )
     try:
         outcome = client.start(goal=goal, images=images)
