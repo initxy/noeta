@@ -146,7 +146,7 @@ def test_changing_tools_changes_stable_prefix_hash() -> None:
 
 
 def test_changing_active_skills_changes_semi_stable_hash() -> None:
-    renderer = lambda skills: RenderedContent(  # noqa: E731
+    renderer = lambda skills, resolve=None: RenderedContent(  # noqa: E731
         messages=[
             Message(role="user", content=[TextBlock(text=f"skill:{s}")])
             for s in skills
@@ -213,7 +213,7 @@ def test_provider_tool_schemas_is_populated_from_tool_input_schemas() -> None:
 
 def test_plan_ref_body_deserializes_to_context_plan_with_expected_fields() -> None:
     store = InMemoryContentStore()
-    renderer = lambda skills: RenderedContent(  # noqa: E731
+    renderer = lambda skills, resolve=None: RenderedContent(  # noqa: E731
         messages=[
             Message(role="user", content=[TextBlock(text=f"skill:{s}")])
             for s in skills
@@ -256,7 +256,7 @@ def test_dynamic_suffix_content_is_task_runtime_messages_verbatim() -> None:
 
 
 def test_iter_messages_returns_semi_stable_and_dynamic_suffix() -> None:
-    renderer = lambda skills: RenderedContent(  # noqa: E731
+    renderer = lambda skills, resolve=None: RenderedContent(  # noqa: E731
         messages=[
             Message(role="user", content=[TextBlock(text=f"skill:{s}")])
             for s in skills

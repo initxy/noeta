@@ -39,6 +39,7 @@ from noeta.context.instructions import (
     InstructionsSnapshot,
 )
 from noeta.execution.instructions import InstructionsKit
+from noeta.protocols.content_store import ContentStore
 from noeta.protocols.decisions import ToolCall
 from noeta.protocols.events import ContextContentRecordedPayload
 from noeta.protocols.task import Task
@@ -174,6 +175,8 @@ def build_instructions_discovery(
     snapshots: MutableMapping[str, InstructionsSnapshot],
     *,
     kit: InstructionsKit,
+    content_store: ContentStore,
+    render_text: Callable[[InstructionsSnapshot], str],
     exec_env: Optional[ExecEnv] = None,
 ) -> Callable[[Task, ToolCall, ToolResult], list[ContextContentRecordedPayload]]:
     """The post-tool content-discovery seam for the instructions kind.
@@ -182,11 +185,14 @@ def build_instructions_discovery(
     ``instructions_discovery``. After a successful ``read`` whose path
     resolves INSIDE the workspace (component-wise containment — the fence
     the reads themselves deliberately do not have), it walks
-    :func:`discover_instructions`, parks each new snapshot in the shared
-    ``snapshots`` mapping (so the composer's renderer can render the name the
-    moment fold activates it), and returns the activation payloads for
-    ``handle_tool_calls`` to gate first-only and emit. Everything degrades to
-    ``[]`` — a discovery fault may only omit context, never fail the call.
+    :func:`discover_instructions`, **puts each new file's rendered bytes into
+    the ContentStore** (so the composer's renderer can resolve the name's
+    bytes the moment fold activates it — spec §6; ``ref.hash`` equals the
+    recorded ``content_hash`` by construction), parks the snapshot in the
+    shared ``snapshots`` mapping (still the source for the ``content_hash``
+    seam), and returns the activation payloads for ``handle_tool_calls`` to
+    gate and emit. Everything degrades to ``[]`` — a discovery fault may only
+    omit context, never fail the call.
     """
 
     def _discover(
@@ -203,7 +209,7 @@ def build_instructions_discovery(
             return []
         if not path_within(resolved, workspace.root):
             return []
-        active = task.state.active_content.get(INSTRUCTIONS_KIND, ())
+        active = task.state.active_content.get(INSTRUCTIONS_KIND, {})
         payloads: list[ContextContentRecordedPayload] = []
         for snapshot in discover_instructions(
             workspace.root,
@@ -213,12 +219,18 @@ def build_instructions_discovery(
             exec_env=exec_env,
         ):
             snapshots[snapshot.name] = snapshot
+            # Put the rendered bytes so the composer's renderer can resolve
+            # them at the recorded hash (spec §6); ``ref.hash`` == the recorded
+            # ``content_hash`` (both are sha256 of the rendered text).
+            ref = content_store.put(
+                render_text(snapshot).encode("utf-8"), media_type="text/markdown"
+            )
             payloads.append(
                 ContextContentRecordedPayload(
                     kind=INSTRUCTIONS_KIND,
                     name=snapshot.name,
                     version=INSTRUCTIONS_VERSION,
-                    content_hash=kit.content_hash(snapshot),
+                    content_hash=ref.hash,
                     policy=INSTRUCTIONS_DRIFT_POLICY,
                 )
             )
@@ -247,7 +259,7 @@ def build_instructions_preloader(
     """
 
     def _preload(task: Task) -> None:
-        for name in task.state.active_content.get(INSTRUCTIONS_KIND, ()):
+        for name in task.state.active_content.get(INSTRUCTIONS_KIND, {}):
             if name in snapshots:
                 continue
             snapshot = _read_one(workspace_dir / name, exec_env)

@@ -21,7 +21,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 
-from noeta.context.composer import RenderedContent
+from noeta.context.composer import ContentResolve, RenderedContent
 from noeta.context.content_channel import ContentKindSpec, ContentRenderer
 from noeta.context.memory import (
     MEMORY_DRIFT_POLICY,
@@ -118,25 +118,27 @@ def memory_index_hash(entries: MemoryEntries) -> str:
 
 
 def build_memory_renderer(entries: MemoryEntries) -> ContentRenderer:
-    """Bind an entries snapshot to the channel's renderer shape.
+    """The memory index renderer — pure over (folded state, content store).
 
-    Pure over the snapshot: renders one ``role="user"`` message holding
-    the index when the ``index`` resident is active AND the snapshot is
-    non-empty; anything else renders nothing (an unconfigured memory
-    host leaves the ``semi_stable`` bytes untouched — zero footprint).
-    ``selected_skills`` stays empty: that ``RenderedContent`` field is
-    the skill kind's plan extra, not the channel contract (renamed at
-    the issue-07 generation switch).
+    Renders one ``role="user"`` message holding the index body **resolved
+    from the ContentStore at the index resident's currently-active hash**
+    (spec §6) when the ``index`` resident is active; anything else renders
+    nothing. The ``entries`` snapshot is not read at compose time — the
+    ledger's active hash fully determines the bytes, so a refresh (the store
+    changed, a new hash recorded) shows the new index and a mutated backing
+    store on disk changes nothing. ``entries`` is retained only so the
+    sibling :func:`memory_content_kind` can share the builder call shape.
+    ``selected_skills`` stays empty: that ``RenderedContent`` field is the
+    skill kind's plan extra, not the channel contract.
     """
 
-    index_text = render_memory_index_text(entries) if entries else ""
-
-    def _render(names: list[str]) -> RenderedContent:
-        if MEMORY_INDEX_NAME not in names or not entries:
+    def _render(names: list[str], resolve: ContentResolve) -> RenderedContent:
+        if MEMORY_INDEX_NAME not in names:
             return RenderedContent(messages=[], selected_skills=[])
+        text = resolve(MEMORY_KIND, MEMORY_INDEX_NAME).decode("utf-8")
         return RenderedContent(
             messages=[
-                Message(role="user", content=[TextBlock(text=index_text)])
+                Message(role="user", content=[TextBlock(text=text)])
             ],
             selected_skills=[],
         )

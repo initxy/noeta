@@ -114,7 +114,7 @@ def test_generic_seam_patch_emits_context_content_recorded() -> None:
     # Causal order preserved: provenance before the durable patch.
     assert types.index("ContextContentRecorded") < types.index("TaskStatePatched")
     # Folds into the generic activation map on the in-memory task.
-    assert task.state.active_content.get("skill") == ("alpha",)
+    assert tuple(task.state.active_content.get("skill", {})) == ("alpha",)
 
 
 def test_generic_seam_dedupes_second_activation() -> None:
@@ -226,7 +226,7 @@ def test_emit_context_content_recorded_is_kind_neutral_and_first_only() -> None:
     assert len(events) == 1
     assert events[0].payload.kind == "persona"
     assert events[0].payload.policy == "evolving"
-    assert task.state.active_content.get("persona") == ("navigator",)
+    assert tuple(task.state.active_content.get("persona", {})) == ("navigator",)
 
 
 def test_emit_context_content_recorded_skips_blank() -> None:
@@ -353,7 +353,7 @@ def test_composer_reads_generic_map_only(tmp_path: Path) -> None:
 
     # Generic map → renders.
     task_map = Task(
-        task_id="t1", state=TaskState(active_content={"skill": ("alpha",)})
+        task_id="t1", state=TaskState(active_content={"skill": {"alpha": ""}})
     )
     assert "Body of the alpha skill." in _semi_text(task_map)
 
@@ -505,8 +505,7 @@ def test_legacy_and_generic_fold_to_same_activation_state(tmp_path: Path) -> Non
     old = fold(log_old, cs_old, tid_old)
     new = fold(log_new, cs_new, tid_new)
     assert old.state.active_skills == new.state.active_skills == ["alpha"]
-    assert (
-        old.state.active_content
-        == new.state.active_content
-        == {"skill": ("alpha",)}
-    )
+    # Both generations fold to the same {name: hash} map (same content_hash),
+    # and the activated name set is exactly {"alpha"}.
+    assert old.state.active_content == new.state.active_content
+    assert tuple(old.state.active_content.get("skill", {})) == ("alpha",)

@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from noeta.context.composer import RenderedContent, ContentRenderer
+from noeta.context.composer import ContentRenderer, ContentResolve, RenderedContent
 from noeta.protocols.messages import Message, TextBlock
 
 from . import _frontmatter
@@ -438,7 +438,9 @@ class SkillRegistry:
         resolved.sort(key=lambda d: (d.priority, d.name))
         return tuple(resolved)
 
-    def render(self, active: list[str]) -> RenderedContent:
+    def render(
+        self, active: list[str], resolve: ContentResolve | None = None
+    ) -> RenderedContent:
         """Adapter consumed by :class:`ThreeSegmentComposer`.
 
         Resolves ``active`` (drop unknowns, sort by priority/name),
@@ -448,6 +450,12 @@ class SkillRegistry:
         Messages and the post-resolve name list so Composer can write
         ``ContextPlan.selected_skills`` without re-implementing the
         resolution rules.
+
+        ``resolve`` (the spec §6 byte-deref) is accepted for the uniform
+        ``ContentRenderer`` shape but unused: a skill's rendered body is
+        composed from the preloaded :class:`SkillRegistry` (its
+        environment-specific base-directory line is not content-addressed),
+        and skills are ``pinned`` — there is no refresh to resolve.
         """
         resolved = self.resolve(active)
         messages: list[Message] = []

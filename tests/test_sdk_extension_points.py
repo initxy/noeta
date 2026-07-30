@@ -94,12 +94,13 @@ class _CustomPolicyProvider:
         return _ToolThenFinishPolicy()
 
 
-def _empty_renderer(names: list[str]) -> RenderedContent:
+def _empty_renderer(names: list[str], resolve=None) -> RenderedContent:
     """A custom content channel that renders nothing until activated.
 
     The composer calls every registered kind's renderer each compose with
     that kind's active names (empty here — the channel is mounted but never
-    activated), so it must return a valid empty render.
+    activated) and the §6 ``resolve``, so it must accept both and return a
+    valid empty render.
     """
     return RenderedContent(messages=[], selected_skills=[])
 

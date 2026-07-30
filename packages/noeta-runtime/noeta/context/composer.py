@@ -42,6 +42,7 @@ __all__ = [
     "RenderedContent",
     "RetrievedResource",
     "ContentRenderer",
+    "ContentResolve",
     "ThreeSegmentComposer",
 ]
 
@@ -135,7 +136,18 @@ class RenderedContent:
     retrieved_resources: list[RetrievedResource] = field(default_factory=list)
 
 
-ContentRenderer = Callable[[list[str]], RenderedContent]
+#: Deref a resident's currently-active bytes: ``resolve(kind, name)`` returns
+#: the bytes recorded for the hash the ledger has active for ``(kind, name)``
+#: (spec §6). A renderer reads its content through this, so the composed bytes
+#: are a pure function of (folded state, content store) — refresh moves bytes,
+#: a mutated backing store on disk does not. Raises when the pair is not active.
+ContentResolve = Callable[[str, str], bytes]
+
+#: A content kind's render rule: ``(active_names, resolve) -> RenderedContent``.
+#: ``resolve`` derefs recorded bytes (above); a renderer whose content is not
+#: content-addressed (e.g. skills render from a preloaded registry) accepts the
+#: parameter and ignores it.
+ContentRenderer = Callable[[list[str], ContentResolve], RenderedContent]
 
 
 #: The content channel's resident kind for skills. The
@@ -158,7 +170,9 @@ class ContentRenderers(Protocol):
 
     def kinds(self) -> tuple[str, ...]: ...
 
-    def render(self, kind: str, names: list[str]) -> RenderedContent: ...
+    def render(
+        self, kind: str, names: list[str], resolve: ContentResolve
+    ) -> RenderedContent: ...
 
 
 class _SkillOnlyRenderers:
@@ -176,11 +190,15 @@ class _SkillOnlyRenderers:
     def kinds(self) -> tuple[str, ...]:
         return (_SKILL_KIND,)
 
-    def render(self, kind: str, names: list[str]) -> RenderedContent:
-        return self._renderer(names)
+    def render(
+        self, kind: str, names: list[str], resolve: ContentResolve
+    ) -> RenderedContent:
+        return self._renderer(names, resolve)
 
 
-def _default_content_renderer(_: list[str]) -> RenderedContent:
+def _default_content_renderer(
+    _: list[str], __: ContentResolve
+) -> RenderedContent:
     """Default no-op renderer.
 
     Returned when ``ThreeSegmentComposer`` is constructed without an
@@ -314,12 +332,13 @@ class ThreeSegmentComposer:
         # registration order. The skill kind keeps one narrow extra:
         # its post-resolve name list feeds ``ContextPlan.selected_skills``
         # (kept skill-named for plan-body byte stability).
+        resolve = self._content_resolve(task)
         semi_content: list[Message] = []
         selected_skills: list[str] = []
         renderer_resources: list[RetrievedResource] = []
         for kind in self._content_renderers.kinds():
             rendered = self._content_renderers.render(
-                kind, semi_names.get(kind, [])
+                kind, semi_names.get(kind, []), resolve
             )
             semi_content.extend(rendered.messages)
             if kind == _SKILL_KIND:
@@ -508,8 +527,9 @@ class ThreeSegmentComposer:
         inserts_at: dict[int, list[Message]] = {}
         skill_names: list[str] = []
         resources: list[RetrievedResource] = []
+        resolve = self._content_resolve(task)
         for anchor, _k_i, _a_i, kind, name in anchored:
-            rendered = self._content_renderers.render(kind, [name])
+            rendered = self._content_renderers.render(kind, [name], resolve)
             if kind == _SKILL_KIND:
                 skill_names.extend(rendered.selected_skills)
             resources.extend(rendered.retrieved_resources)
@@ -543,8 +563,39 @@ class ThreeSegmentComposer:
         merges in, and pre-generic snapshot bodies are seeded at
         rehydrate — so any folded stream composes the identical bytes the
         bridge produced.
+
+        Names are returned **sorted** so the layout is a pure function of
+        the activation set, never of activation/load timing (spec law 3) —
+        and identical whether the map was folded fresh or rehydrated from a
+        canonical (key-sorted) snapshot body. Byte-neutral for the built-in
+        residents (single-name in ``semi_stable``, and the skill renderer
+        re-sorts by ``(priority, name)`` regardless).
         """
-        return list(task.state.active_content.get(kind, ()))
+        return sorted(task.state.active_content.get(kind, {}))
+
+    def _content_resolve(self, task: Task) -> ContentResolve:
+        """Bind the ledger's active hashes to a byte-deref over the store.
+
+        ``resolve(kind, name)`` returns the bytes recorded for the resident's
+        currently-active hash (spec §6), so a renderer that reads through it
+        composes a pure function of (folded state, content store): a refresh
+        (new hash) yields new bytes, a mutated backing store on disk changes
+        nothing. Raises ``KeyError`` when ``(kind, name)`` is not active with a
+        real hash (a caller bug); a renderer for a kind whose content is not
+        content-addressed — the skill registry — simply never calls it.
+        """
+        active = task.state.active_content
+        store = self._content_store
+
+        def _resolve(kind: str, name: str) -> bytes:
+            content_hash = active.get(kind, {}).get(name)
+            if not content_hash:
+                raise KeyError(
+                    f"resolve({kind!r}, {name!r}): not an active resident"
+                )
+            return store.get(ContentRef(hash=content_hash, size=0, media_type=""))
+
+        return _resolve
 
     def _persist_retrieved(
         self, resources: list[RetrievedResource]

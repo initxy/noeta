@@ -23,8 +23,9 @@ from __future__ import annotations
 import hashlib
 from typing import Mapping
 
-from noeta.context.composer import RenderedContent
+from noeta.context.composer import ContentResolve, RenderedContent
 from noeta.context.content_channel import ContentKindSpec, ContentRenderer
+from noeta.protocols.errors import ContentNotFound
 from noeta.context.environment import (
     ENVIRONMENT_DRIFT_POLICY,
     ENVIRONMENT_KIND,
@@ -145,21 +146,23 @@ def environment_content_hash(snapshot: EnvironmentSnapshot) -> str:
 def build_environment_renderer(
     snapshot: EnvironmentSnapshot,
 ) -> ContentRenderer:
-    """Bind a snapshot to the channel's renderer shape.
+    """The environment renderer — pure over (folded state, content store).
 
-    Pure over the snapshot: renders one ``role="user"`` message holding
-    the tagged environment block when :data:`ENVIRONMENT_NAME` is active;
-    anything else renders nothing (a never-activated kind leaves the
-    ``semi_stable`` bytes untouched — zero footprint).
+    Renders one ``role="user"`` message holding the tagged environment block
+    **resolved from the ContentStore at the resident's active hash** (spec §6)
+    when :data:`ENVIRONMENT_NAME` is active; anything else renders nothing. The
+    ``snapshot`` is not read at compose time — the ledger's active hash fully
+    determines the bytes; retained only so the sibling
+    :func:`environment_content_kind` can share the builder call shape.
     """
-    rendered_text = render_environment_text(snapshot)
 
-    def _render(names: list[str]) -> RenderedContent:
+    def _render(names: list[str], resolve: ContentResolve) -> RenderedContent:
         if ENVIRONMENT_NAME not in names:
             return RenderedContent(messages=[], selected_skills=[])
+        text = resolve(ENVIRONMENT_KIND, ENVIRONMENT_NAME).decode("utf-8")
         return RenderedContent(
             messages=[
-                Message(role="user", content=[TextBlock(text=rendered_text)])
+                Message(role="user", content=[TextBlock(text=text)])
             ],
             selected_skills=[],
         )
@@ -237,26 +240,26 @@ def instructions_content_hash(snapshot: InstructionsSnapshot) -> str:
 def build_instructions_renderer(
     snapshot: InstructionsSnapshot,
 ) -> ContentRenderer:
-    """Bind a snapshot to the channel's renderer shape.
+    """The single-file instructions renderer — pure over (state, store).
 
-    Pure over the snapshot: renders one ``role="user"`` message holding
-    the tagged instructions body when the snapshot's name is active AND
-    the snapshot text is non-empty; anything else renders nothing (an
-    absent-instructions host leaves the ``semi_stable`` bytes
-    untouched — zero footprint).
+    Renders one ``role="user"`` message holding the tagged instructions body
+    **resolved from the ContentStore at the resident's active hash** (spec §6)
+    when the snapshot's name is active; anything else renders nothing. The
+    ``snapshot`` is not read at compose time; retained only to name the active
+    resident and share the builder call shape.
     """
     active_name = snapshot.name
-    non_empty = bool(snapshot.text and snapshot.text.strip())
-    rendered_text = (
-        render_instructions_text(snapshot) if non_empty else ""
-    )
 
-    def _render(names: list[str]) -> RenderedContent:
-        if active_name not in names or not non_empty:
+    def _render(names: list[str], resolve: ContentResolve) -> RenderedContent:
+        if active_name not in names:
+            return RenderedContent(messages=[], selected_skills=[])
+        try:
+            text = resolve(INSTRUCTIONS_KIND, active_name).decode("utf-8")
+        except ContentNotFound:
             return RenderedContent(messages=[], selected_skills=[])
         return RenderedContent(
             messages=[
-                Message(role="user", content=[TextBlock(text=rendered_text)])
+                Message(role="user", content=[TextBlock(text=text)])
             ],
             selected_skills=[],
         )
@@ -283,26 +286,27 @@ def instructions_content_kind_from(
     ``snapshots`` maps resident name → preloaded snapshot: the root file
     under its basename, plus (discovery mode,
     docs/adr/anchored-content-placement.md) every discovered subdirectory
-    file under its workspace-relative path. The mapping is deliberately
-    allowed to be MUTABLE and shared: the discovery hook and the resume
-    preloader add entries at *tool/step* time (the impure band), and the
-    renderer — still a pure function at compose time — only ever looks
-    names up in memory. A name active in the ledger but missing from the
-    mapping (vanished file on resume) renders nothing: the ``evolving``
-    policy already tolerates drift, and a degraded preload may only omit.
+    file under its workspace-relative path. The mapping still feeds the
+    ``content_hash`` seam (:func:`_hashes`) and the discovery hook, but the
+    renderer no longer reads it — it **resolves each active name's bytes from
+    the ContentStore at the ledger's active hash** (spec §6), so the composed
+    instructions are a pure function of (folded state, store). A name active
+    in the ledger whose bytes are absent (vanished file, degraded preload)
+    renders nothing: the ``evolving`` policy tolerates drift, and a resolve
+    miss may only omit.
     """
 
-    def _render(names: list[str]) -> RenderedContent:
+    def _render(names: list[str], resolve: ContentResolve) -> RenderedContent:
         messages: list[Message] = []
         for name in names:
-            snapshot = snapshots.get(name)
-            if snapshot is None or not snapshot.text.strip():
+            try:
+                text = resolve(INSTRUCTIONS_KIND, name).decode("utf-8")
+            except ContentNotFound:
+                continue
+            if not text.strip():
                 continue
             messages.append(
-                Message(
-                    role="user",
-                    content=[TextBlock(text=render_instructions_text(snapshot))],
-                )
+                Message(role="user", content=[TextBlock(text=text)])
             )
         return RenderedContent(messages=messages, selected_skills=[])
 
@@ -377,7 +381,12 @@ def build_instructions_session_pack(ctx: SessionBuildContext) -> PackContributio
         )
     if discovery:
         exports[EXPORT_CONTENT_DISCOVERY] = build_instructions_discovery(
-            ctx.workspace, snapshots, kit=kit, exec_env=ctx.exec_env
+            ctx.workspace,
+            snapshots,
+            kit=kit,
+            content_store=content_store,
+            render_text=render_instructions_text,
+            exec_env=ctx.exec_env,
         )
         exports[EXPORT_CONTENT_PRELOADER] = build_instructions_preloader(
             ctx.workspace_dir, snapshots, exec_env=ctx.exec_env

@@ -1531,7 +1531,9 @@ def emit_context_content_recorded(
     """
     if not kind or not name or not content_hash:
         return task
-    if name in task.state.active_content.get(kind, ()):
+    # Hash last-write-wins (spec §3): no-op only when this exact hash is
+    # already active for ``(kind, name)``; a new hash records a refresh.
+    if task.state.active_content.get(kind, {}).get(name) == content_hash:
         return task
     env = engine._emit(
         task_id=task.task_id,

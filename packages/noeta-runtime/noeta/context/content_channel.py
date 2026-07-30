@@ -36,7 +36,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Iterable, Optional
 
-from noeta.context.composer import ContentRenderer, RenderedContent
+from noeta.context.composer import (
+    ContentRenderer,
+    ContentResolve,
+    RenderedContent,
+)
 from noeta.protocols.events import CONTENT_DRIFT_POLICIES
 
 
@@ -111,11 +115,13 @@ class ContentChannelRegistry:
     def get(self, kind: str) -> Optional[ContentKindSpec]:
         return self._items.get(kind)
 
-    def render(self, kind: str, names: list[str]) -> RenderedContent:
+    def render(
+        self, kind: str, names: list[str], resolve: ContentResolve
+    ) -> RenderedContent:
         item = self._items.get(kind)
         if item is None:
             raise KeyError(f"content kind {kind!r} is not registered")
-        return item.renderer(names)
+        return item.renderer(names, resolve)
 
     def content_hashes(self) -> Callable[[str, str], Optional[tuple[str, str]]]:
         """Build the generic ``(kind, name) → (version, hash)`` resolver

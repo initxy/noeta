@@ -67,7 +67,7 @@ def test_record_content_emits_and_activates_with_plugin_actor() -> None:
     # The kernel stamps the plugin provenance label; the single-writer invariant
     # is about the physical writer (this recorder), not the actor string.
     assert events[0].actor == "plugin:memory"
-    assert rec.task.state.active_content["memory"] == ("index",)
+    assert rec.task.state.active_content["memory"] == {"index": ref.hash}
 
 
 def test_record_content_noops_on_empty_triple() -> None:
@@ -120,7 +120,10 @@ def test_run_content_init_runs_hooks_in_order_and_stamps_each_plugin() -> None:
         ("alpha", "plugin:alpha"),
         ("beta", "plugin:beta"),
     ]
-    assert task.state.active_content == {"alpha": ("a",), "beta": ("b",)}
+    assert {k: set(v) for k, v in task.state.active_content.items()} == {
+        "alpha": {"a"},
+        "beta": {"b"},
+    }
 
 
 def test_run_content_init_is_idempotent_when_nothing_changed() -> None:

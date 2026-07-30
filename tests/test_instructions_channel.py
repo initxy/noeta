@@ -161,23 +161,25 @@ def test_hash_is_stable_and_tracks_content() -> None:
     )
 
 
+def _instr_resolve(kind: str, name: str) -> bytes:
+    """A fake ``resolve`` returning the sample instructions bytes (spec §6)."""
+    return render_instructions_text(_SAMPLE_SNAPSHOT).encode("utf-8")
+
+
 def test_renderer_renders_user_message_when_name_active() -> None:
     renderer = build_instructions_renderer(_SAMPLE_SNAPSHOT)
-    rendered = renderer(["NOETA.md"])
+    rendered = renderer(["NOETA.md"], _instr_resolve)
     assert isinstance(rendered, RenderedContent)
     assert len(rendered.messages) == 1
     assert rendered.messages[0].role == "user"
     assert "Reply in Chinese" in rendered.messages[0].content[0].text
 
 
-def test_renderer_renders_nothing_when_inactive_or_empty() -> None:
+def test_renderer_renders_nothing_when_name_inactive() -> None:
     renderer = build_instructions_renderer(_SAMPLE_SNAPSHOT)
-    # Name not in active list → no messages
-    assert renderer([]).messages == []
-    assert renderer(["AGENTS.md"]).messages == []
-    # Empty text → no render even when the name is active
-    empty = InstructionsSnapshot(name="NOETA.md", text="  \n\n ")
-    assert build_instructions_renderer(empty)(["NOETA.md"]).messages == []
+    # Name not in active list → no messages, and resolve is never called.
+    assert renderer([], _instr_resolve).messages == []
+    assert renderer(["AGENTS.md"], _instr_resolve).messages == []
 
 
 def test_kind_is_evolving_and_resolves_through_generic_seam() -> None:
@@ -276,7 +278,9 @@ def test_activation_emits_evolving_event_and_activates() -> None:
     assert payload.content_hash == instructions_content_hash(_SAMPLE_SNAPSHOT)
     assert payload.version == INSTRUCTIONS_VERSION
     assert events[0].actor == "plugin:instructions"
-    assert task.state.active_content[INSTRUCTIONS_KIND] == ("NOETA.md",)
+    assert task.state.active_content[INSTRUCTIONS_KIND] == {
+        "NOETA.md": instructions_content_hash(_SAMPLE_SNAPSHOT)
+    }
 
 
 def test_compose_places_instructions_in_semi_stable_pure() -> None:
@@ -454,7 +458,7 @@ def test_product_default_instructions_enabled_records_event(
     assert found[0].payload.policy == "evolving"
     assert found[0].payload.name == "NOETA.md"
     folded = fold(host.event_log, host.content_store, out.task_id)
-    assert folded.state.active_content.get(INSTRUCTIONS_KIND) == (
+    assert tuple(folded.state.active_content.get(INSTRUCTIONS_KIND, {})) == (
         "NOETA.md",
     )
     # The instructions text is in semi_stable

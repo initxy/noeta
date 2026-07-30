@@ -173,11 +173,17 @@ class TaskStatePatch:
                 s for s in state.active_skills if s not in drop
             ]
         if self.activate_skills or self.deactivate_skills:
-            # The skill sugar mirrors into the generic
-            # activation map — kind "skill" stays in lockstep with
-            # ``active_skills`` (empty ⇒ key absent).
+            # The skill sugar mirrors into the generic activation map — kind
+            # "skill" stays in lockstep with ``active_skills`` (empty ⇒ key
+            # absent). The provenance hash a skill's ``ContextContentRecorded``
+            # already folded (emitted BEFORE this patch) is preserved; a skill
+            # activated with no recorded hash carries "" (skills are pinned, so
+            # the renderer keys off the registry, not the hash).
             if state.active_skills:
-                state.active_content["skill"] = tuple(state.active_skills)
+                prev = state.active_content.get("skill", {})
+                state.active_content["skill"] = {
+                    s: prev.get(s, "") for s in state.active_skills
+                }
             else:
                 state.active_content.pop("skill", None)
 

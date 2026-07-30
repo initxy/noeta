@@ -64,6 +64,12 @@ def _make_log_cs() -> tuple[InMemoryEventLog, InMemoryContentStore]:
     return InMemoryEventLog(), InMemoryContentStore()
 
 
+def _names(active_content: dict) -> dict:
+    """Project ``active_content`` (kind → {name → hash}, R8) to kind → name
+    tuple so assertions stay hash-agnostic while preserving activation order."""
+    return {kind: tuple(names) for kind, names in active_content.items()}
+
+
 def _seed_genesis(log: InMemoryEventLog, task_id: str = "t1") -> None:
     log.emit(
         task_id=task_id,
@@ -158,7 +164,7 @@ def test_fold_context_content_recorded_into_active_content() -> None:
         payload=_content_event(kind="persona", name="navigator", policy="pinned"),
     )
     task = fold(log, cs, "t1")
-    assert task.state.active_content == {
+    assert _names(task.state.active_content) == {
         "memory": ("index",),
         "persona": ("navigator",),
     }
@@ -176,7 +182,7 @@ def test_fold_context_content_recorded_dedupes_same_kind_name() -> None:
             payload=_content_event(kind="memory", name="index"),
         )
     task = fold(log, cs, "t1")
-    assert task.state.active_content == {"memory": ("index",)}
+    assert _names(task.state.active_content) == {"memory": ("index",)}
 
 
 def test_fold_context_content_recorded_ignores_blank_fields() -> None:
@@ -221,7 +227,7 @@ def test_old_skill_event_and_sugar_fold_into_same_map() -> None:
     )
     task = fold(log, cs, "t1")
     assert task.state.active_skills == ["alpha"]
-    assert task.state.active_content == {"skill": ("alpha",)}
+    assert _names(task.state.active_content) == {"skill": ("alpha",)}
     # Legacy provenance fold unchanged.
     assert task.governance.skill_content_hashes == {"alpha": "h_alpha"}
     assert task.governance.skill_content_versions == {"alpha": "1"}
@@ -231,19 +237,19 @@ def test_deactivate_sugar_keeps_map_in_lockstep() -> None:
     state = TaskState()
     TaskStatePatch(activate_skills=["a", "b"]).apply(state)
     assert state.active_skills == ["a", "b"]
-    assert state.active_content == {"skill": ("a", "b")}
+    assert _names(state.active_content) == {"skill": ("a", "b")}
     TaskStatePatch(deactivate_skills=["a"]).apply(state)
     assert state.active_skills == ["b"]
-    assert state.active_content == {"skill": ("b",)}
+    assert _names(state.active_content) == {"skill": ("b",)}
     TaskStatePatch(deactivate_skills=["b"]).apply(state)
     assert state.active_skills == []
     assert state.active_content == {}
 
 
 def test_non_skill_patch_leaves_generic_map_alone() -> None:
-    state = TaskState(active_content={"memory": ("index",)})
+    state = TaskState(active_content={"memory": {"index": "h"}})
     TaskStatePatch(set_goal="g2").apply(state)
-    assert state.active_content == {"memory": ("index",)}
+    assert state.active_content == {"memory": {"index": "h"}}
 
 
 def test_three_routes_converge_into_one_map() -> None:
@@ -278,7 +284,7 @@ def test_three_routes_converge_into_one_map() -> None:
         payload=_content_event(kind="memory", name="index", policy="evolving"),
     )
     task = fold(log, cs, "t1")
-    assert task.state.active_content == {
+    assert _names(task.state.active_content) == {
         "skill": ("alpha",),
         "memory": ("index",),
     }
@@ -408,28 +414,30 @@ def test_generic_seam_unknown_skill_skips_emission() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_snapshot_roundtrip_normalises_name_tuples() -> None:
+def test_snapshot_roundtrip_normalises_name_hash_maps() -> None:
     task = Task(task_id="t1")
-    task.state.active_content = {"memory": ("index",)}
+    task.state.active_content = {"memory": {"index": "h"}}
     body = serialize_task_state(task)
     rebuilt = rehydrate_task(deserialize_task_state(body))
-    assert rebuilt.state.active_content == {"memory": ("index",)}
-    assert isinstance(rebuilt.state.active_content["memory"], tuple)
+    assert rebuilt.state.active_content == {"memory": {"index": "h"}}
+    # The inner {name: hash} map deserialises back to a plain dict (R8).
+    assert isinstance(rebuilt.state.active_content["memory"], dict)
 
 
 def test_pre_generic_snapshot_body_seeds_skill_entry() -> None:
     # A snapshot written before the generic map existed: it has the sugar
-    # list but no ``active_content`` key at all.
+    # list but no ``active_content`` key at all. Seeded with empty hashes
+    # (pre-generic bodies carry none; skills are pinned so the "" is inert).
     task = Task(task_id="t1")
     task.state.active_skills = ["alpha"]
     state_dict = task.state_dict()
     state_dict["state"].pop("active_content")
     rebuilt = rehydrate_task(state_dict)
     assert rebuilt.state.active_skills == ["alpha"]
-    assert rebuilt.state.active_content == {"skill": ("alpha",)}
+    assert _names(rebuilt.state.active_content) == {"skill": ("alpha",)}
 
 
-def test_accelerated_fold_matches_from_scratch_over_old_snapshot() -> None:
+def test_accelerated_fold_matches_from_scratch() -> None:
     log, cs = _make_log_cs()
     _seed_genesis(log)
     log.emit(
@@ -446,12 +454,12 @@ def test_accelerated_fold_matches_from_scratch_over_old_snapshot() -> None:
             patch=TaskStatePatch(activate_skills=["alpha"]).to_dict()
         ),
     )
-    # Mid-stream snapshot whose body pre-dates the generic map (no
-    # ``active_content`` key — exactly what old code serialized).
+    # Mid-stream snapshot carrying the generic activation map with its hashes
+    # (R8): accelerating over it must rebuild byte-identically to a from-scratch
+    # fold — the hashes ride the body, so no reconstruction guessing is needed.
     prefix = fold(log, cs, "t1", ignore_snapshots=True)
-    old_body = prefix.state_dict()
-    old_body["state"].pop("active_content")
-    ref = cs.put(to_canonical_bytes(old_body), media_type=snapshot_media_type())
+    body = prefix.state_dict()
+    ref = cs.put(to_canonical_bytes(body), media_type=snapshot_media_type())
     log.emit(
         task_id="t1",
         type="TaskSnapshot",
@@ -475,7 +483,7 @@ def test_accelerated_fold_matches_from_scratch_over_old_snapshot() -> None:
 
     accelerated = fold(log, cs, "t1")
     from_scratch = fold(log, cs, "t1", ignore_snapshots=True)
-    assert accelerated.state.active_content == {"skill": ("alpha", "beta")}
+    assert _names(accelerated.state.active_content) == {"skill": ("alpha", "beta")}
     assert to_canonical_bytes(accelerated.state_dict()) == to_canonical_bytes(
         from_scratch.state_dict()
     )
