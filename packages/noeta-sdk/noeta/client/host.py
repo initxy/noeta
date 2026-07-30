@@ -619,6 +619,13 @@ class SdkHost(GenericEngineResolver):
     activated_content_kinds: Mapping[str, tuple[ContentKindSpec, ...]] = field(
         default_factory=dict
     )
+    #: Per-agent session packs contributed by activated external plugins
+    #: (microkernel phase 3) — appended after the built-in packs and
+    #: interleaved by priority in the kernel builder's generic loop. Empty ⇒
+    #: byte-identical to the built-in-only session.
+    activated_session_packs: Mapping[str, tuple[Any, ...]] = field(
+        default_factory=dict
+    )
     # The agent-layer base pool root for **bare sessions** (no
     # workspace_id). The agent layer does ``mkdir <workspace_base>/session-<uuid>``
     # and passes the resulting absolute path as ``workspace_dir`` to the driver.
@@ -1683,7 +1690,7 @@ class SdkHost(GenericEngineResolver):
         if self.app_gateway is not None:
             session_backends["app_preview"] = self.app_gateway
         inputs = build_session_inputs(
-            session_packs=self._session_packs(),
+            session_packs=self._session_packs(agent.name),
             base_reminders=default_reminder_specs(),
             guards_factory=default_guards_factory(),
             default_policy_factory=default_policy_factory(),
@@ -2147,20 +2154,30 @@ class SdkHost(GenericEngineResolver):
         default_root: Path = memory_impl().DEFAULT_GLOBAL_MEMORY_DIR
         return default_root
 
-    def _session_packs(self) -> tuple[Any, ...]:
+    def _session_packs(self, agent_name: Optional[str] = None) -> tuple[Any, ...]:
         """The kernel builder's ``session_packs`` injection (phase 3).
 
         The built-in manifests' ``session_pack`` contributions, loader-
-        resolved and ``(priority, plugin, name)``-ordered. A disabled
-        ``skills`` built-in simply drops its pack — the honest expression the
-        old ``None``-factory special case routed through a kernel ``if``.
-        Both build paths (session + workflow orchestration) go through here
-        so they can never disagree about which packs are wired.
+        resolved and ``(priority, plugin, name)``-ordered, plus — when
+        ``agent_name`` is given — the packs this agent's activated external
+        plugins contribute (the Client folds them into
+        ``activated_session_packs``). The kernel builder's generic loop
+        re-sorts the merged list by ``(priority, name)``, so an external pack
+        interleaves at its declared band. A disabled ``skills`` built-in
+        simply drops its pack — the honest expression the old
+        ``None``-factory special case routed through a kernel ``if``. Both
+        build paths (session + workflow orchestration) go through here so
+        they can never disagree about which packs are wired.
         """
         disabled = (
             frozenset() if self.skills_enabled else frozenset({"skills"})
         )
-        return default_session_packs(disabled=disabled)
+        packs: tuple[Any, ...] = default_session_packs(disabled=disabled)
+        if agent_name is not None:
+            packs = packs + tuple(
+                self.activated_session_packs.get(agent_name, ())
+            )
+        return packs
 
     def _memory_root_override(self, task_id: Optional[str]) -> Optional[Path]:
         """The per-task root the injected resolver maps ``task_id`` to, or ``None``.
