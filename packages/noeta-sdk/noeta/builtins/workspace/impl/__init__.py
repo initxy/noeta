@@ -56,6 +56,7 @@ from noeta.execution.session_pack import (
     EXPORT_INSTRUCTIONS_SNAPSHOTS,
     PackContribution,
     SessionBuildContext,
+    SessionRecorder,
 )
 from noeta.protocols.messages import Message, TextBlock
 from pathlib import Path
@@ -351,8 +352,10 @@ def build_instructions_session_pack(ctx: SessionBuildContext) -> PackContributio
     discovery = bool(cfg.get("instructions_discovery", False))
     override = cast(Optional[Path], cfg.get("instructions_file"))
     kit = build_instructions_kit()
+    content_store = ctx.content_store
     snapshots: dict[str, InstructionsSnapshot] = {}
     exports: dict[str, object] = {EXPORT_INSTRUCTIONS_SNAPSHOTS: snapshots}
+    root_snapshot: Optional[InstructionsSnapshot] = None
     if enabled:
         snapshot = load_instructions(
             ctx.workspace_dir,
@@ -366,6 +369,7 @@ def build_instructions_session_pack(ctx: SessionBuildContext) -> PackContributio
             # relative paths.
             snapshots[snapshot.name] = snapshot
             exports[EXPORT_INSTRUCTIONS_SNAPSHOT] = snapshot
+            root_snapshot = snapshot
     kinds: tuple[ContentKindContribution, ...] = ()
     if snapshots or discovery:
         kinds = (
@@ -378,7 +382,29 @@ def build_instructions_session_pack(ctx: SessionBuildContext) -> PackContributio
         exports[EXPORT_CONTENT_PRELOADER] = build_instructions_preloader(
             ctx.workspace_dir, snapshots, exec_env=ctx.exec_env
         )
-    return PackContribution(content_kinds=kinds, exports=exports)
+
+    def _init(rec: SessionRecorder) -> None:
+        """Pre-loop activation of the ROOT instructions resident (spec §4.5).
+
+        Records the same root snapshot the composer's kind renders from; the
+        ``ref.hash`` equals the rendered-instructions sha256 the fingerprint
+        always carried, so the emitted event is byte-identical to the retired
+        ``record_instructions`` call. Discovered subtree files activate later
+        through the content-discovery hook, not here. No root file ⇒ no-op.
+        """
+        if root_snapshot is None:
+            return
+        body = render_instructions_text(root_snapshot).encode("utf-8")
+        ref = content_store.put(body, media_type="text/markdown")
+        rec.record_content(
+            kind=INSTRUCTIONS_KIND,
+            name=root_snapshot.name,
+            version=INSTRUCTIONS_VERSION,
+            ref=ref,
+            policy=INSTRUCTIONS_DRIFT_POLICY,
+        )
+
+    return PackContribution(content_kinds=kinds, init=_init, exports=exports)
 
 
 def build_environment_session_pack(ctx: SessionBuildContext) -> PackContribution:
@@ -393,9 +419,30 @@ def build_environment_session_pack(ctx: SessionBuildContext) -> PackContribution
     """
     snapshot = load_environment(ctx.workspace_dir, exec_env=ctx.exec_env)
     kit = build_environment_kit()
+    content_store = ctx.content_store
+
+    def _init(rec: SessionRecorder) -> None:
+        """Pre-loop activation of the environment resident (spec §4.5).
+
+        Records the same snapshot the composer's kind renders from; ``ref.hash``
+        equals the rendered-environment sha256 the fingerprint always carried,
+        so the emitted event is byte-identical to the retired
+        ``record_environment`` call.
+        """
+        body = render_environment_text(snapshot).encode("utf-8")
+        ref = content_store.put(body, media_type="text/markdown")
+        rec.record_content(
+            kind=ENVIRONMENT_KIND,
+            name=ENVIRONMENT_NAME,
+            version=ENVIRONMENT_VERSION,
+            ref=ref,
+            policy=ENVIRONMENT_DRIFT_POLICY,
+        )
+
     return PackContribution(
         content_kinds=(
             ContentKindContribution(400, kit.content_kind(snapshot)),
         ),
+        init=_init,
         exports={EXPORT_ENVIRONMENT_SNAPSHOT: snapshot},
     )

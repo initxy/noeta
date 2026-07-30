@@ -43,12 +43,15 @@ from typing import (
 from noeta.context.content_channel import ContentKindSpec
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.tool import Tool
+from noeta.protocols.values import ContentRef
 from noeta.runtime.exec_env import ExecEnv
 from noeta.runtime.workspace import WorkspaceRoot
 
 
 __all__ = [
     "SessionBuildContext",
+    "SessionRecorder",
+    "InitHook",
     "ContentKindContribution",
     "PackContribution",
     "SessionPackFactory",
@@ -148,6 +151,43 @@ class SessionBuildContext:
         return bool(self.capability_flags.get(name, False))
 
 
+@runtime_checkable
+class SessionRecorder(Protocol):
+    """The one scoped write verb a plugin gets (spec §4.4).
+
+    Handed by the kernel to a contribution's ``init`` hook at session seed
+    time. ``record_content`` activates (or refreshes) a resident content item:
+    the kernel stamps the envelope and emits one ``ContextContentRecorded``
+    through its single-writer path, so a plugin never touches a raw
+    ``EventLog``. This is not a security fence (in-process Python has none) —
+    it is invariant preservation by construction: lifecycle events, message
+    origin, and slice ownership cannot be corrupted by a buggy plugin, and the
+    well-typed path is the easy path. The verb no-ops when ``(kind, name)`` is
+    already active with an identical hash and records a refresh otherwise.
+    """
+
+    def record_content(
+        self,
+        *,
+        kind: str,
+        name: str,
+        version: str,
+        ref: ContentRef,
+        policy: str,
+    ) -> None:
+        """Activate/refresh the ``(kind, name)`` resident at ``ref``'s bytes."""
+        ...
+
+
+#: A contribution's pre-loop activation hook: ``(SessionRecorder) -> None``.
+#: Run once per session build (including resume) at seed time; its recording
+#: side effects are gated by the recorder's no-op-on-unchanged-hash rule, so
+#: it is idempotent per drive (spec §6). The generic successor of the three
+#: feature-named kernel seed recorders — third-party packs record their own
+#: resident kinds through the same seam, with zero kernel edits.
+InitHook = Callable[[SessionRecorder], None]
+
+
 @dataclass(frozen=True, slots=True)
 class ContentKindContribution:
     """One content kind + its registration priority.
@@ -178,6 +218,10 @@ class PackContribution:
 
     tools: Mapping[str, Tool] = field(default_factory=dict)
     content_kinds: tuple[ContentKindContribution, ...] = ()
+    #: Pre-loop activation hook (spec §4.5): a closure that records this pack's
+    #: resident content items through the kernel-handed :class:`SessionRecorder`
+    #: at seed time. ``None`` ⇒ the pack activates no pre-loop residents.
+    init: Optional[InitHook] = None
     exports: Mapping[str, object] = field(default_factory=dict)
 
 

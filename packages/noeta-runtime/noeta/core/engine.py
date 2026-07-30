@@ -246,6 +246,7 @@ class Engine:
         background_subagent_launcher: Optional[Any] = None,
         content_discovery: Optional[Any] = None,
         content_preloader: Optional[Any] = None,
+        content_init_hooks: tuple[Any, ...] = (),
         tool_result_transforms: tuple[Any, ...] = (),
         answer_codec: Optional[Any] = None,
     ) -> None:
@@ -320,6 +321,11 @@ class Engine:
         # ``run_one_step``). Both default ``None`` — every existing
         # construction is byte-identical.
         self._content_preloader = content_preloader
+        # The contributed pre-loop ``init`` hooks (spec §4.5): the driver reads
+        # this generic tuple off the resolved session Engine and runs each
+        # through a ``SeedRecorder`` at seed time (the generic successor of the
+        # feature-named seed recorders). ``()`` ⇒ no pre-loop residents.
+        self._content_init_hooks = content_init_hooks
         # The ask_user_question answer codec (control-tool-surface S2, D8): a
         # duck-typed ``AskAnswerCodec`` the SDK host reads off the session's
         # ``SessionInputs.control_exports`` and threads here, so the driver's
@@ -355,6 +361,15 @@ class Engine:
             background_subagent_capacity=bg_capacity,
             content_discovery=content_discovery,
         )
+
+    @property
+    def content_init_hooks(self) -> tuple[Any, ...]:
+        """The contributed pre-loop ``init`` hooks (spec §4.5).
+
+        Read by the driver's seed path to activate each pack's residents
+        through a ``SeedRecorder``; the engine itself never invokes them.
+        """
+        return self._content_init_hooks
 
     # -- task bootstrap ---------------------------------------------------
 

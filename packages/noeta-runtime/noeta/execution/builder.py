@@ -57,6 +57,7 @@ from noeta.execution.session_pack import (
     EXPORT_MEMORY_ENTRIES,
     EXPORT_MEMORY_STORE,
     EXPORT_SKILLS_KIT,
+    InitHook,
     PackContribution,
     SessionBuildContext,
     SessionPackEntry,
@@ -212,6 +213,13 @@ class SessionInputs:
     #: existing caller is byte-identical.
     content_discovery: Optional[Any] = None
     content_preloader: Optional[Any] = None
+    #: The contributed pre-loop ``init`` hooks (spec §4.5), folded and
+    #: priority-ordered from the pack loop. The host wires them onto the
+    #: session's Engine; the driver runs them through a
+    #: :class:`~noeta.execution.recorder.SeedRecorder` at seed time — the
+    #: generic successor of the three feature-named kernel seed recorders. Empty
+    #: for a session whose packs activate no pre-loop residents.
+    init_hooks: tuple[InitHook, ...] = ()
     #: The control tools' collected mount exports (control-tool-surface S2, D8) —
     #: a closed-vocabulary mapping the host threads to the kernel seams that
     #: consume it. The only S2 tenant is the ``ask_user_question`` answer codec
@@ -920,12 +928,17 @@ def build_session_inputs(
 
     pack_kinds: list[tuple[int, int, ContentKindSpec]] = []
     exports: dict[str, object] = {}
+    init_hooks: list[InitHook] = []
     for seq, entry in enumerate(entries):
         contrib = entry.factory(ctx)
         for name, tool in contrib.tools.items():
             tools[name] = tool
         for ck in contrib.content_kinds:
             pack_kinds.append((ck.priority, seq, ck.spec))
+        # Pre-loop activation hooks fold in pack-loop order (priority, name),
+        # so the driver's SeedRecorder records residents deterministically.
+        if contrib.init is not None:
+            init_hooks.append(contrib.init)
         for key, value in contrib.exports.items():
             if key in exports:
                 raise RuntimeError(
@@ -1093,5 +1106,6 @@ def build_session_inputs(
         tool_output_inline_limit=tool_output_inline_limit,
         content_discovery=content_discovery,
         content_preloader=content_preloader,
+        init_hooks=tuple(init_hooks),
         control_exports=control_exports,
     )
