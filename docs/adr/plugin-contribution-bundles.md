@@ -455,11 +455,16 @@ plugin contribution with zero kernel edits*:
   of `execution/instructions.py` / `execution/environment.py` into
   `workspace.impl`; the two residents' construction is now the `workspace`
   built-in's two `session_pack` factories (`instructions` band 400,
-  `environment` band 500). The kernel keeps the typed **record seams**
-  (`record_instructions` / `record_environment` / `record_memory_index`) and
-  the resident **kit types**; the host reaches the loaders through the
-  `noeta.client.parts.workspace_impl` doorway for its own record path (record ==
-  compose stays true because both halves live in the one plugin).
+  `environment` band 500). The kernel keeps the resident **kit types**
+  (`InstructionsKit` / `EnvironmentKit` / `MemoryIndexKit`); the typed record
+  seams `record_instructions` / `record_environment` / `record_memory_index`
+  are **gone** as of the kernel final form — each resident now records through
+  its plugin's generic `init` hook + the scoped `SessionRecorder`
+  (`docs/implementation-specs/kernel-final-form.md`; see the
+  unified-context-supply Clarification 2026-07-30). The host reaches the loaders
+  through the `noeta.client.parts.workspace_impl` doorway for the discovery
+  hook's own path (record == compose stays true because both halves live in the
+  one plugin).
 - **External packs follow per-agent activation.** A third-party plugin's
   `session_pack` contributions fold on the `Client` into each agent's
   `activated_session_packs` and the host merges them **after** the built-in set;
