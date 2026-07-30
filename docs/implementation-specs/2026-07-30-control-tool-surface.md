@@ -184,7 +184,7 @@ hardcoded if-chain (`execution/builder.py:457`
   descriptions + indexed skill menu + workflow on + per-helper
   structured-output schema), plus the all-off case. This is the lock the
   whole migration is verified against; lands before any move.
-- [ ] **S1 — mechanism.** Register the `control_tool` SurfaceSpec; add
+- [x] **S1 — mechanism.** Register the `control_tool` SurfaceSpec; add
   `ControlToolMount` / `ControlToolBuildContext`; builder's post-tools
   phase becomes the generic dual-priority mount loop, with the six
   existing schema functions wired as fixed internal entries (no built-in
@@ -262,3 +262,16 @@ Each stage gates on `make check` before the next starts.
   the builder kwargs (`todo_write_enabled` … `structured_output_schema`)
   and the composer field name are part of the golden's seam — S1/S2 keep
   them stable. `make check`: 3399 passed / 129 skipped.
+- 2026-07-30 — S1 landed: `control_tool` is the 16th surface;
+  `execution/control_tool.py` holds `ControlToolBuildContext` /
+  `ControlToolMount` (translate is Optional — `structured_output` mounts
+  `translate=None`, schema-only) / `ControlToolEntry`; the builder's
+  if-chain became the generic dual-priority loop
+  (`_run_control_tool_mounts` + a fixed `_CONTROL_TOOL_ENTRIES` table of
+  six internal factories); `ControlToggles` deleted, `ControlToolSpec`
+  reduced to `(name, translate)`, `ControlTranslateContext` shed
+  `skill_menu_names` (closures capture the menu); the policy seam is
+  `control_translate_specs: tuple[ControlToolSpec, ...]` threaded through
+  `PolicyFactoryBuilder` → `build_react_policy_factory` → `ReActPolicy`
+  (not a `SessionInputs` field). S0 golden byte-identical; `make check`
+  3405 passed / 129 skipped; import-linter 10/10.

@@ -19,6 +19,10 @@ from noeta.builtins.governance.impl.budget import BudgetGuard
 from noeta.runtime.governance import Budget
 from noeta.builtins.react.impl import ReActPolicy
 from noeta.policies.control_tools import SPAWN_SUBAGENT_TOOL
+from noeta.policies.control_semantics import (
+    ControlToolSpec,
+    translate_spawn_subagent,
+)
 from noeta.protocols.decisions import (
     SpawnSubtaskDecision,
     SpawnSubtasksDecision,
@@ -183,7 +187,9 @@ def _view() -> View:
 def _decide(resp: LLMResponse) -> Any:
     policy = ReActPolicy(
         llm=_OneShot(resp), tools={}, system_prompt="p", model="m",
-        delegation_enabled=True,
+        control_translate_specs=(
+            ControlToolSpec(SPAWN_SUBAGENT_TOOL, translate_spawn_subagent),
+        ),
     )
     return policy.decide(StepContext(task_id="t", lease_id="l", trace_id="tr"), _view())
 

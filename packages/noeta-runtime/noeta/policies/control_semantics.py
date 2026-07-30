@@ -42,7 +42,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 
 from noeta.policies.descriptions import load_control_tool_description
 from noeta.policies.workflow_sandbox import check_workflow_script
@@ -106,9 +106,16 @@ __all__ = [
     # structured_output
     "STRUCTURED_OUTPUT_TOOL",
     "structured_output_tool_schema",
-    # translation seam
-    "ControlToggles",
+    # translation seam — mechanism the dispatcher consumes + the per-tool
+    # translate adapters the mount loop references by name.
+    "ControlTranslateContext",
+    "ControlToolSpec",
     "translate_control_tool",
+    "translate_ask_user_question",
+    "translate_todo_write",
+    "translate_spawn_subagent",
+    "translate_run_workflow",
+    "make_skill_translate",
 ]
 
 
@@ -170,136 +177,134 @@ def _ack_patch_decision(
 
 
 @dataclass(frozen=True)
-class ControlToggles:
-    """The default-off enable flags that gate each control-tool branch.
-
-    Collected from the ``*_enabled`` booleans ``ReActPolicy`` carries so the
-    translation seam takes one small value object instead of four args. The
-    routing order in :func:`translate_control_tool` (ask → plan → todo →
-    spawn → skill) is fixed and independent of these flags — a disabled branch
-    is simply skipped, exactly as the four nested ``if self._*_enabled`` guards
-    did in ``react.py``.
-    """
-
-    ask_user_question: bool = False
-    todo_write: bool = False
-    delegation: bool = False
-    skill_invocation: bool = False
-    #: gate the ``run_workflow`` control tool. Routed last (after
-    #: ``skill``); a disabled branch is skipped, default off so existing
-    #: recordings/stable hashes are unchanged.
-    workflow: bool = False
-
-
-@dataclass(frozen=True)
 class ControlTranslateContext:
     """The per-turn inputs a control tool's translate step reads.
 
     Assembled once by :func:`translate_control_tool`: the LLM ``response``, the
-    Policy's assistant :class:`Message`, the out-of-band ``ThinkingBlock`` s
+    Policy's assistant :class:`Message`, and the out-of-band ``ThinkingBlock`` s
     extracted once (threaded into every control Decision so a reasoning-model
-    turn keeps its signature), plus the two tool-specific reads — ``content_store``
-    for ``ask_user_question``'s spilled question body, ``skill_menu_names`` for
-    ``skill``'s menu gate. A spec ignores the fields it does not need.
+    turn keeps its signature), plus ``content_store`` for ``ask_user_question``'s
+    spilled question body. This context carries NO feature-named field: a
+    translate that needs build-time state (the ``skill`` menu) captures it in its
+    closure (see :func:`make_skill_translate`), so the mechanism stays neutral.
+    A spec ignores the fields it does not need.
     """
 
     response: LLMResponse
     assistant_message: Message
     assistant_thinking: tuple[ThinkingBlock, ...]
     content_store: Optional[ContentStore]
-    skill_menu_names: frozenset[str]
 
 
 @dataclass(frozen=True)
 class ControlToolSpec:
-    """One control tool's routing entry: its enable gate + its translate step.
+    """One control tool's decision-time routing entry: name + translate step.
 
-    The registry :data:`_CONTROL_TOOL_SPECS` is an ORDERED tuple — a spec's
-    position IS the fixed routing priority when several control tools co-occur in
-    one turn (``ask_user_question`` → ``todo_write`` → ``spawn_subagent`` →
-    ``skill`` → ``run_workflow``), byte-identical to the original nested ``if``
-    chain. Adding a control tool = append a spec here (mirrors registering a
-    ``ContentKindSpec`` on the content channel); the dispatcher body stays put.
+    The dispatcher :func:`translate_control_tool` consumes an ORDERED tuple of
+    these (the builder mounts them in routing-priority order); a spec's position
+    IS its routing priority when several control tools co-occur in one turn.
+    Mounting a spec IS enablement — there is no ``enabled`` predicate, because a
+    disabled tool contributes no mount and therefore no spec. This is the type
+    the dispatcher consumes (D9): it lives in ``noeta.policies`` so the mount
+    loop (``noeta.execution``) can build it without ``policies`` importing
+    ``execution``.
     """
 
     #: Model-visible control-tool name (readability / debug; not routing input).
     name: str
-    #: Read this tool's default-off enable flag off the turn's toggles.
-    enabled: Callable[[ControlToggles], bool]
     #: Translate the turn into this tool's neutral Decision, or ``None`` when the
     #: turn carries no call to it (the dispatcher then tries the next spec).
     translate: Callable[["ControlTranslateContext"], Optional[Decision]]
 
 
-#: The control-tool routing table, in fixed priority order (see
-#: :class:`ControlToolSpec`). The ``translate`` closures reference the
-#: ``_maybe_*`` helpers defined further down; Python resolves those names at call
-#: time, so declaring the table here (ahead of the helpers) is fine.
-_CONTROL_TOOL_SPECS: tuple[ControlToolSpec, ...] = (
-    ControlToolSpec(
-        name="ask_user_question",
-        enabled=lambda t: t.ask_user_question,
-        translate=lambda c: _maybe_ask_user_question_decision(
-            c.response,
-            c.assistant_message,
-            content_store=c.content_store,
-            assistant_thinking=c.assistant_thinking,
-        ),
-    ),
-    ControlToolSpec(
-        name="todo_write",
-        enabled=lambda t: t.todo_write,
-        translate=lambda c: _maybe_todo_write_decision(
-            c.response, c.assistant_message, assistant_thinking=c.assistant_thinking
-        ),
-    ),
-    ControlToolSpec(
-        name="spawn_subagent",
-        enabled=lambda t: t.delegation,
-        translate=lambda c: _maybe_spawn_decision(
-            c.response, c.assistant_message, assistant_thinking=c.assistant_thinking
-        ),
-    ),
-    ControlToolSpec(
-        name="skill",
-        enabled=lambda t: t.skill_invocation,
-        translate=lambda c: _maybe_skill_decision(
-            c.response,
-            c.assistant_message,
-            menu_names=c.skill_menu_names,
-            assistant_thinking=c.assistant_thinking,
-        ),
-    ),
-    ControlToolSpec(
-        name="run_workflow",
-        enabled=lambda t: t.workflow,
-        translate=lambda c: _maybe_workflow_decision(
-            c.response, c.assistant_message, assistant_thinking=c.assistant_thinking
-        ),
-    ),
-)
+# ---------------------------------------------------------------------------
+# The per-tool translate seam. Each adapter reads a ``ControlTranslateContext``
+# and delegates to the tool's ``_maybe_*`` helper (defined further down; Python
+# resolves those names at call time, so declaring these ahead of the helpers is
+# fine). The mount loop (``execution/builder.py``) references these by name to
+# build each :class:`ControlToolSpec`. ``skill`` needs its menu, so it is a
+# closure FACTORY: the built closure captures the names and the context stays
+# feature-neutral (D2).
+# ---------------------------------------------------------------------------
+
+
+def translate_ask_user_question(ctx: ControlTranslateContext) -> Optional[Decision]:
+    return _maybe_ask_user_question_decision(
+        ctx.response,
+        ctx.assistant_message,
+        content_store=ctx.content_store,
+        assistant_thinking=ctx.assistant_thinking,
+    )
+
+
+def translate_todo_write(ctx: ControlTranslateContext) -> Optional[Decision]:
+    return _maybe_todo_write_decision(
+        ctx.response,
+        ctx.assistant_message,
+        assistant_thinking=ctx.assistant_thinking,
+    )
+
+
+def translate_spawn_subagent(ctx: ControlTranslateContext) -> Optional[Decision]:
+    return _maybe_spawn_decision(
+        ctx.response,
+        ctx.assistant_message,
+        assistant_thinking=ctx.assistant_thinking,
+    )
+
+
+def translate_run_workflow(ctx: ControlTranslateContext) -> Optional[Decision]:
+    return _maybe_workflow_decision(
+        ctx.response,
+        ctx.assistant_message,
+        assistant_thinking=ctx.assistant_thinking,
+    )
+
+
+def make_skill_translate(
+    menu_names: frozenset[str],
+) -> Callable[[ControlTranslateContext], Optional[Decision]]:
+    """Build the ``skill`` translate closure over its indexed menu names (D2).
+
+    The closure captures ``menu_names`` so :func:`_maybe_skill_decision`
+    validates an ordered skill against the same set the schema's enum was built
+    from — WITHOUT the neutral :class:`ControlTranslateContext` carrying a
+    feature-named ``skill_menu_names`` field.
+    """
+
+    def translate(ctx: ControlTranslateContext) -> Optional[Decision]:
+        return _maybe_skill_decision(
+            ctx.response,
+            ctx.assistant_message,
+            menu_names=menu_names,
+            assistant_thinking=ctx.assistant_thinking,
+        )
+
+    return translate
 
 
 def translate_control_tool(
     response: LLMResponse,
     assistant_message: Message,
     *,
-    toggles: ControlToggles,
+    specs: Sequence[ControlToolSpec],
     content_store: Optional[ContentStore] = None,
-    skill_menu_names: frozenset[str] = frozenset(),
 ) -> Decision | None:
     """Translate a control-tool ``tool_use`` turn into a neutral Decision.
 
-    Walks :data:`_CONTROL_TOOL_SPECS` in its fixed routing-priority order and
-    returns the first enabled spec whose ``translate`` yields a Decision; ``None``
-    when no enabled control tool is present (the caller then falls through to the
-    normal ``tool_calls`` path). Order matters when several control tools co-occur
-    in one turn; the table order is byte-identical to the original nested
-    ``_maybe_*`` dispatch in ``ReActPolicy._response_to_decision``.
+    Walks the caller-supplied ``specs`` in order (the builder mounts them in
+    routing-priority order) and returns the first spec whose ``translate`` yields
+    a Decision; ``None`` when no mounted control tool is present (the caller then
+    falls through to the normal ``tool_calls`` path). Order matters when several
+    control tools co-occur in one turn. Mounting IS enablement: a disabled tool
+    contributes no spec, so there is no per-spec ``enabled`` gate here — the
+    routing order (ask → todo → spawn → skill → workflow) is the mount loop's
+    ``routing_priority`` sort, byte-identical to the original nested ``_maybe_*``
+    dispatch.
 
     Extended-thinking end-to-end (Slice B): the LLM's ThinkingBlocks are extracted
     ONCE from ``response.content`` here and threaded (via
-    :class:`ControlTranslateContext`) into every control Decision the helpers
+    :class:`ControlTranslateContext`) into every control Decision the specs
     build, matching the parallel ``ToolCallsDecision`` path in ``react.py`` so a
     reasoning-model turn that emits thinking + a control tool_use still carries its
     signature.
@@ -307,19 +312,17 @@ def translate_control_tool(
     ctx = ControlTranslateContext(
         response=response,
         assistant_message=assistant_message,
-        # Extract out-of-band thinking once so every helper reuses the same tuple
+        # Extract out-of-band thinking once so every spec reuses the same tuple
         # (non-reasoning models → empty tuple, no-op, byte-safe).
         assistant_thinking=tuple(
             b for b in response.content if isinstance(b, ThinkingBlock)
         ),
         content_store=content_store,
-        skill_menu_names=skill_menu_names,
     )
-    for spec in _CONTROL_TOOL_SPECS:
-        if spec.enabled(toggles):
-            decision = spec.translate(ctx)
-            if decision is not None:
-                return decision
+    for spec in specs:
+        decision = spec.translate(ctx)
+        if decision is not None:
+            return decision
     return None
 
 

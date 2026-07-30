@@ -14,10 +14,12 @@ from tests._skill_fixtures import write_skill
 
 from tests._session_inputs import default_factory_kwargs
 from noeta.core.fold import fold
-from noeta.policies._control_translate import (
+from noeta.policies.control_semantics import (
     SKILL_TOOL,
-    ControlToggles,
+    ControlToolSpec,
+    make_skill_translate,
     translate_control_tool,
+    translate_spawn_subagent,
 )
 # Deliberately the deep module: this pins react.py's OWN re-export of the
 # kernel constant (the parity assertion below), which the package door does
@@ -123,11 +125,12 @@ def _assistant_message(response: LLMResponse) -> Message:
 
 
 def _translate(response: LLMResponse, menu: frozenset[str] = _MENU):
+    # Control-tool-surface S1: the skill mount's translate closure captures its
+    # menu; the dispatcher takes the routing-ordered specs (here just skill).
     return translate_control_tool(
         response,
         _assistant_message(response),
-        toggles=ControlToggles(skill_invocation=True),
-        skill_menu_names=menu,
+        specs=(ControlToolSpec(SKILL_TOOL, make_skill_translate(menu)),),
     )
 
 
@@ -143,13 +146,13 @@ def test_skill_tool_constant_parity() -> None:
 
 
 def test_flag_off_returns_none() -> None:
-    """When the toggle is off, a `skill` call falls through unchanged."""
+    """With no mounted specs, a `skill` call falls through unchanged (mounting
+    IS enablement — a disabled tool contributes no spec to route)."""
     response = _skill_call("alpha")
     decision = translate_control_tool(
         response,
         _assistant_message(response),
-        toggles=ControlToggles(),  # all False, default
-        skill_menu_names=_MENU,
+        specs=(),  # nothing mounted → nothing routed
     )
     assert decision is None
 
@@ -296,8 +299,11 @@ def test_translate_spawn_mixed_with_skill_recoverable_with_both_toggles() -> Non
     decision = translate_control_tool(
         response,
         _assistant_message(response),
-        toggles=ControlToggles(delegation=True, skill_invocation=True),
-        skill_menu_names=_MENU,
+        # Routing order: spawn (band 300) before skill (band 400).
+        specs=(
+            ControlToolSpec("spawn_subagent", translate_spawn_subagent),
+            ControlToolSpec(SKILL_TOOL, make_skill_translate(_MENU)),
+        ),
     )
     # Spawn branch is tried before skill in routing order — the mixed
     # batch is caught there and turned into an ack.

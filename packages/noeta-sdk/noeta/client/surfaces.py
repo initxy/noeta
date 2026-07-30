@@ -7,7 +7,7 @@ how a contribution to it is *validated*, how contributions *collide*, how they
 else, so adding a future surface is registering one ``SurfaceSpec``, not
 changing the loader.
 
-:func:`standard_registry` seeds the standard catalogue (D3 — all fifteen
+:func:`standard_registry` seeds the standard catalogue (D3 — all sixteen
 surfaces). A host may :meth:`SurfaceRegistry.register` additional app-plane
 surfaces on a copy **before** load; the same validation / collision / ordering
 pipeline runs over them unchanged.
@@ -195,16 +195,20 @@ def _v_path(value: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# The standard catalogue (D3) — fifteen surfaces.
+# The standard catalogue (D3) — sixteen surfaces.
 # ---------------------------------------------------------------------------
 
 
-#: The fifteen standard surfaces, in the D3 table order. ``★`` surfaces are new
+#: The sixteen standard surfaces, in the D3 table order. ``★`` surfaces are new
 #: in this redesign; their runtime wiring lands in M3/M4, but the mechanism
 #: (registry entry + validation + collision + ordering) is complete here.
 #: ``session_pack`` (microkernel phase 3) is the session-construction surface:
 #: a factory ``(SessionBuildContext) -> PackContribution`` the kernel builder
 #: runs in one priority-ordered loop — see ``noeta.execution.session_pack``.
+#: ``control_tool`` (control-tool-surface S1) is the control-tool-construction
+#: surface: a factory ``(ControlToolBuildContext) -> ControlToolMount | None``
+#: the kernel builder runs in the post-tools dual-priority mount loop — see
+#: ``noeta.execution.control_tool``.
 STANDARD_SURFACES: tuple[SurfaceSpec, ...] = (
     SurfaceSpec("tool", "identity", "per-agent", _v_tool, "name", "append"),
     SurfaceSpec("agent", "identity", "per-agent", _v_agent, "name", "append"),
@@ -252,6 +256,10 @@ STANDARD_SURFACES: tuple[SurfaceSpec, ...] = (
         "session_pack", "wiring", "per-agent", _v_callable("session_pack"),
         "name", "append", "priority",
     ),
+    SurfaceSpec(
+        "control_tool", "identity", "per-agent", _v_callable("control_tool"),
+        "name", "append", "priority",
+    ),
 )
 
 
@@ -260,7 +268,7 @@ def standard_registry() -> SurfaceRegistry:
 
     A new registry every call, so a host that extends it (``reg =
     standard_registry(); reg.register(app_surface)``) never mutates a shared
-    global. All fifteen standard surfaces are present.
+    global. All sixteen standard surfaces are present.
     """
     registry = SurfaceRegistry()
     for spec in STANDARD_SURFACES:
