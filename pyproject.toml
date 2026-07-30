@@ -22,6 +22,13 @@ dev = [
 [tool.ruff]
 respect-gitignore = false
 
+[tool.ruff.lint.per-file-ignores]
+# PEP 562 lazy re-export modules: names in __all__ are served by a module
+# __getattr__ (the microkernel dynamic-import doorway — no static builtins
+# edge), which F822 cannot see.
+"packages/noeta-sdk/noeta/sdk/providers.py" = ["F822"]
+"packages/noeta-sdk/noeta/client/parts.py" = ["F822"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra -m 'not install_smoke'"
