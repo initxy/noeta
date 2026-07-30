@@ -9,7 +9,7 @@ from noeta.client.parts import (
     derive_compaction_config,
 )
 from noeta.execution.builder import build_session_inputs
-from noeta.policies.control_tools import WORKFLOW_AGENT_NAME
+from noeta.policies.control_semantics import WORKFLOW_AGENT_NAME
 from noeta.presets import official_specs
 
 from tests._sdk_session import default_coding_budget
@@ -161,11 +161,12 @@ def build_code_replay_inputs(*, workspace_dir, agent, content_store, model, **kw
     # session packs; default to the SDK's builtin set unless the caller
     # injects its own.
     kwargs.setdefault("session_packs", default_session_packs())
-    # control-tool-surface S2: the three migrated control tools (todo_write /
-    # ask_user_question / delegation) now arrive as manifest-resolved control_tool
-    # entries; the builder keeps only skill / run_workflow / structured_output
-    # internal. Wire the SDK built-in set so a directly-built session mounts the
-    # same control schemas the SdkHost live path does (the S0 golden's seam).
+    # control-tool-surface S2/S2b: every control tool (todo_write /
+    # ask_user_question / delegation / skill / run_workflow / structured_output)
+    # now arrives as a manifest-resolved control_tool entry; the builder keeps no
+    # internal control-tool table. Wire the SDK built-in set so a directly-built
+    # session mounts the same control schemas the SdkHost live path does (the S0
+    # golden's seam).
     kwargs.setdefault("control_tools", default_control_tools())
     kwargs.setdefault("base_reminders", default_reminder_specs())
     kwargs.setdefault("guards_factory", default_guards_factory())

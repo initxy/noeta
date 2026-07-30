@@ -19,7 +19,7 @@ from noeta.builtins.governance.impl.budget import BudgetGuard
 from noeta.runtime.governance import Budget
 from noeta.builtins.react.impl import ReActPolicy
 from noeta.builtins.delegation.impl import translate_spawn_subagent
-from noeta.policies.control_tools import SPAWN_SUBAGENT_TOOL
+from noeta.policies.control_semantics import SPAWN_SUBAGENT_TOOL
 from noeta.policies.control_semantics import ControlToolSpec
 from noeta.protocols.decisions import (
     SpawnSubtaskDecision,

@@ -26,10 +26,8 @@ from noeta.execution.control_tool import (
     ControlToolEntry,
     ControlToolMount,
 )
-from noeta.policies.control_semantics import (
-    ControlTranslateContext,
-    make_skill_translate,
-)
+from noeta.policies.control_semantics import ControlTranslateContext
+from noeta.builtins.skills.impl import make_skill_translate
 from noeta.protocols.decisions import Decision, StatePatchDecision
 from noeta.protocols.messages import (
     LLMResponse,

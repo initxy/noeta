@@ -144,7 +144,7 @@ def test_missing_provider_raises_value_error(tmp_path: Path) -> None:
 
 
 def _spawn(agent: str, goal: str = "child goal") -> LLMResponse:
-    from noeta.policies.control_tools import SPAWN_SUBAGENT_TOOL
+    from noeta.policies.control_semantics import SPAWN_SUBAGENT_TOOL
     from noeta.protocols.messages import ToolUseBlock
 
     return LLMResponse(

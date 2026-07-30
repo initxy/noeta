@@ -561,6 +561,25 @@ class PluginBuilder:
             return self._decorator("session_pack", name=name, priority=priority)
         return self.contribute("session_pack", factory, name=name, priority=priority)
 
+    def control_tool(
+        self, factory: Any = None, *, name: Optional[str] = None, priority: int = 0
+    ) -> Any:
+        """Contribute a ``control_tool`` (control-tool-surface S2; carries ``priority``).
+
+        ``factory`` is a ``(ControlToolBuildContext) -> ControlToolMount | None``
+        callable the kernel builder's dual-priority mount loop runs when an agent
+        activates this plugin — it self-gates on the build context and returns a
+        materialized ``ControlToolMount`` (a provider-facing schema + a
+        response→neutral-Decision translate closure + its two priority bands) or
+        ``None``. ``priority`` orders factory execution (ties broken by
+        ``(plugin, name)``); the OUTPUT byte orders come from each mount's own
+        ``schema_priority`` / ``routing_priority``. The built-in bands run
+        100–600; an external control tool picks its own bands relative to them.
+        """
+        if factory is None:
+            return self._decorator("control_tool", name=name, priority=priority)
+        return self.contribute("control_tool", factory, name=name, priority=priority)
+
     def manifest(self) -> PluginManifest:
         """The static :class:`PluginManifest` this builder describes."""
         return PluginManifest(

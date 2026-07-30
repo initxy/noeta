@@ -28,7 +28,10 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from noeta.core.fold import fold
-from noeta.policies.control_tools import RUN_WORKFLOW_TOOL, SPAWN_SUBAGENT_TOOL
+from noeta.policies.control_semantics import (
+    RUN_WORKFLOW_TOOL,
+    SPAWN_SUBAGENT_TOOL,
+)
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
 from noeta.protocols.engine import EngineProtocol

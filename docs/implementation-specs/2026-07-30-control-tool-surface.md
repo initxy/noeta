@@ -190,7 +190,7 @@ hardcoded if-chain (`execution/builder.py:457`
   existing schema functions wired as fixed internal entries (no built-in
   moves yet). S0 golden byte-identical; `ReActPolicy` switches to mounted
   translate specs; `ControlToggles` deleted.
-- [ ] **S2 — the moves.** Create `todo_write/`, `ask_user_question/`,
+- [x] **S2 — the moves.** Create `todo_write/`, `ask_user_question/`,
   `delegation/` built-ins; move schema + translate + description into
   each; `skill` → `skills/`, `run_workflow` + `structured_output` +
   `workflow_sandbox.py` → `react/`; ask answer codec → mount exports
@@ -288,3 +288,15 @@ Each stage gates on `make check` before the next starts.
   excluded from `identity_activations()`. Internal entries table down to
   skill / run_workflow / structured_output. `make check` 3406 passed;
   install-smoke green.
+- 2026-07-30 — S2b landed: skill → `skills/`, run_workflow +
+  structured_output + `workflow_sandbox.py` → `react/` (all .md git-mv
+  byte-identical); `_CONTROL_TOOL_ENTRIES` and the two shims and
+  `policies/descriptions/` deleted; `noeta.policies` = `control_semantics`
+  (mechanism + the three reserved constants + `concurrent_fanout_enabled`)
+  + `stub` only; `PluginBuilder.control_tool` sugar + extension proof
+  (`tests/test_control_tool_extension.py`, 5 tests: dual bands, per-agent
+  activation gate, loud collision). Deviation: the mount-loop test needed
+  a one-line import repoint (`make_skill_translate` moved) — assertions
+  untouched; the S0 golden passed fully unchanged. Six docs/ files still
+  reference old paths — S4 scope. `make check` 3411 passed; wheels verified
+  (.md at new homes, no `policies/descriptions` anywhere).

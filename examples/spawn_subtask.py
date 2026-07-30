@@ -31,7 +31,7 @@ import tempfile
 from pathlib import Path
 
 from noeta.client import AgentDefinition, Client, Options
-from noeta.policies.control_tools import SPAWN_SUBAGENT_TOOL
+from noeta.policies.control_semantics import SPAWN_SUBAGENT_TOOL
 from noeta.protocols.messages import (
     LLMResponse,
     TextBlock,

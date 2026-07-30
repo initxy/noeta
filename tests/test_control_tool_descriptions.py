@@ -9,12 +9,13 @@ directly in each ``*_tool_schema()`` function — and sourced from a sibling
 loudly if a new control tool ships without a function-level description or
 hard-codes it inline instead of externalizing it.
 
-Control-tool-surface S2 split the homes: ``todo_write`` / ``ask_user_question``
-/ ``spawn_subagent`` migrated into their built-ins (schema + ``.md`` collocated
-beside the impl, loaded via the shared L0 ``load_markdown``); ``skill`` /
-``run_workflow`` stay kernel-resident (``.md`` in ``noeta.policies.descriptions``,
-loaded via ``load_control_tool_description``). Each schema's description must
-still equal its own externalized ``.md`` resource.
+Control-tool-surface S2/S2b moved every control tool into a built-in (schema +
+``.md`` collocated beside the impl, loaded via the shared L0 ``load_markdown``):
+``todo_write`` / ``ask_user_question`` / ``spawn_subagent`` into their own
+built-ins; ``skill`` into ``skills``; ``run_workflow`` into ``react``. The kernel
+``policies`` band keeps NO control-tool description any more. Each schema's
+description must still equal its own externalized ``.md`` resource, wherever it
+now lives.
 """
 from __future__ import annotations
 
@@ -22,14 +23,10 @@ from typing import Any, Callable
 
 from noeta.builtins.ask_user_question.impl import ask_user_question_tool_schema
 from noeta.builtins.delegation.impl import spawn_subagent_tool_schema
+from noeta.builtins.react.impl import run_workflow_tool_schema
+from noeta.builtins.skills.impl import SKILL_TOOL, skill_tool_schema
 from noeta.builtins.todo_write.impl import todo_write_tool_schema
-from noeta.policies.control_semantics import (
-    RUN_WORKFLOW_TOOL,
-    SKILL_TOOL,
-    run_workflow_tool_schema,
-    skill_tool_schema,
-)
-from noeta.policies.descriptions import load_control_tool_description
+from noeta.policies.control_semantics import RUN_WORKFLOW_TOOL
 from noeta.protocols.resources import load_markdown
 
 # (tool name, freshly built schema, its externalized-description loader) —
@@ -54,11 +51,11 @@ _CONTROL_SCHEMAS: dict[str, tuple[dict[str, Any], Callable[[], str]]] = {
     ),
     SKILL_TOOL: (
         skill_tool_schema(),
-        lambda: load_control_tool_description(SKILL_TOOL),
+        lambda: load_markdown("noeta.builtins.skills.impl", "skill"),
     ),
     RUN_WORKFLOW_TOOL: (
         run_workflow_tool_schema(),
-        lambda: load_control_tool_description(RUN_WORKFLOW_TOOL),
+        lambda: load_markdown("noeta.builtins.react.impl", "run_workflow"),
     ),
 }
 

@@ -25,7 +25,7 @@ def load_markdown(anchor_package: str, name: str, *, strip: bool = True) -> str:
     """Read the text of the ``<name>.md`` resource inside ``anchor_package``.
 
     ``anchor_package`` is the dotted path of the package holding the resource
-    (e.g. ``"noeta.policies.descriptions"``); ``name`` is the bare name (e.g.
+    (e.g. ``"noeta.builtins.skills.impl"``); ``name`` is the bare name (e.g.
     ``"skill"``). Read via :mod:`importlib.resources` so it works inside a wheel
     too (no reliance on ``__file__``-relative paths). The result is cached by
     ``(anchor_package, name, strip)`` — one read per resource per process. A

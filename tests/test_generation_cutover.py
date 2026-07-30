@@ -369,7 +369,7 @@ def test_composer_reads_generic_map_only(tmp_path: Path) -> None:
 
 
 def _skill_call(skill_name: str, call_id: str = "sk") -> LLMResponse:
-    from noeta.policies._control_translate import SKILL_TOOL
+    from noeta.builtins.skills.impl import SKILL_TOOL
 
     return LLMResponse(
         stop_reason="tool_use",

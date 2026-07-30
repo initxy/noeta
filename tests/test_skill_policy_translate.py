@@ -16,16 +16,16 @@ from tests._session_inputs import default_factory_kwargs
 from noeta.core.fold import fold
 from noeta.builtins.delegation.impl import translate_spawn_subagent
 from noeta.policies.control_semantics import (
-    SKILL_TOOL,
     ControlToolSpec,
-    make_skill_translate,
     translate_control_tool,
 )
-# Deliberately the deep module: this pins react.py's OWN re-export of the
-# kernel constant (the parity assertion below), which the package door does
-# not expose.
-from noeta.builtins.react.impl.react import (
-    SKILL_TOOL as _REACT_SKILL_TOOL,
+from noeta.builtins.skills.impl import SKILL_TOOL, make_skill_translate
+# Deliberately the deep module (control-tool-surface S2b: ``skill`` moved into
+# the ``skills`` built-in): this pins the deep ``control_tool`` module's constant
+# against the package door's re-export (the parity assertion below), which is
+# where ``skill`` vocabulary now lives.
+from noeta.builtins.skills.impl.control_tool import (
+    SKILL_TOOL as _SKILLS_SKILL_TOOL,
 )
 from noeta.protocols.canonical import from_canonical_bytes
 from noeta.protocols.context_plan import ContextPlan
@@ -142,7 +142,7 @@ def _translate(response: LLMResponse, menu: frozenset[str] = _MENU):
 def test_skill_tool_constant_parity() -> None:
     """SKILL_TOOL is the same constant on both sides of the seam."""
     assert SKILL_TOOL == "skill"
-    assert _REACT_SKILL_TOOL == SKILL_TOOL
+    assert _SKILLS_SKILL_TOOL == SKILL_TOOL
 
 
 def test_flag_off_returns_none() -> None:
@@ -700,7 +700,7 @@ def test_e2e_presets_flag_full_chain(
     """
     from noeta.core.engine import Engine
     from noeta.core.wiring import wire_default_observers
-    from noeta.policies.control_tools import SKILL_TOOL
+    from noeta.builtins.skills.impl import SKILL_TOOL
     from noeta.runtime.llm import RuntimeLLMClient
     from noeta.runtime.tool import ToolRuntime
     from noeta.storage.memory import (
@@ -924,7 +924,7 @@ def test_product_flag_on_with_skills_grows_skill_tool(tmp_path: Path) -> None:
     skills exist the schema is unchanged (no skill tool)."""
     from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
     from noeta.runtime.governance import Budget
-    from noeta.policies.control_tools import SKILL_TOOL
+    from noeta.builtins.skills.impl import SKILL_TOOL
     from noeta.presets import official_specs
     from noeta.storage.memory import InMemoryContentStore
 

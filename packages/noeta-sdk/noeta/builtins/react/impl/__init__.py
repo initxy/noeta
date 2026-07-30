@@ -2,14 +2,16 @@
 
 The official decision-mapping policy: :class:`ReActPolicy` (``react``) and the
 workflow interpreter :class:`OrchestrationPolicy` + ``StructuredOutputPolicy``
-+ ``WORKFLOW_SYSTEM_PROMPT`` (``orchestration``). The kernel keeps the control
-band (``noeta.policies.control_tools`` / ``control_semantics`` /
-``workflow_sandbox`` — the control-tool schemas, translation, and the
-workflow-script validation sandbox, per phase-1 D3) and the generic multi-turn
-wrapper (``noeta.execution.multi_turn``); nothing imports this package
-statically —
-the SDK resolves :func:`build_react_policy_factory` through
-``noeta.client.parts`` at client build.
++ ``WORKFLOW_SYSTEM_PROMPT`` (``orchestration``). Since control-tool-surface S2b
+this built-in ALSO owns the workflow control tools — ``run_workflow`` +
+``structured_output`` schemas + translate + their ``.md`` descriptions
+(``control_tool``) and the determinism sandbox (``workflow_sandbox``) — declared
+as two ``control_tool`` contributions on the manifest. The kernel keeps only the
+neutral control MECHANISM (``noeta.policies.control_semantics`` — the mount /
+routing types + reserved ``run_workflow`` / ``__workflow__`` vocabulary) and the
+generic multi-turn wrapper (``noeta.execution.multi_turn``); nothing imports this
+package statically — the SDK resolves :func:`build_react_policy_factory` and the
+two control-tool factories through the manifest at client build.
 """
 
 from __future__ import annotations
@@ -21,6 +23,14 @@ from noeta.protocols.content_store import ContentStore
 from noeta.protocols.policy import Policy
 from noeta.protocols.tool import Tool
 
+from .control_tool import (
+    STRUCTURED_OUTPUT_TOOL,
+    build_run_workflow_control_tool,
+    build_structured_output_control_tool,
+    run_workflow_tool_schema,
+    structured_output_tool_schema,
+    translate_run_workflow,
+)
 from .orchestration import (
     OrchestrationPolicy,
     StructuredOutputPolicy,
@@ -36,11 +46,17 @@ from .react import (
 __all__ = [
     "OrchestrationPolicy",
     "ReActPolicy",
+    "STRUCTURED_OUTPUT_TOOL",
     "StructuredOutputPolicy",
     "WORKFLOW_SYSTEM_PROMPT",
     "build_react_policy_factory",
+    "build_run_workflow_control_tool",
+    "build_structured_output_control_tool",
     "enforce_verbatim_constraints",
     "extract_safety_constraints",
+    "run_workflow_tool_schema",
+    "structured_output_tool_schema",
+    "translate_run_workflow",
 ]
 
 

@@ -19,12 +19,12 @@ from pathlib import Path
 import pytest
 
 from noeta.policies.control_semantics import (
+    RUN_WORKFLOW_TOOL,
     ControlToolSpec,
     translate_control_tool,
-    translate_run_workflow,
 )
-from noeta.policies.workflow_sandbox import SAFE_BUILTINS, check_workflow_script
-from noeta.policies.control_tools import RUN_WORKFLOW_TOOL
+from noeta.builtins.react.impl import translate_run_workflow
+from noeta.builtins.react.impl.workflow_sandbox import SAFE_BUILTINS, check_workflow_script
 from noeta.protocols.decisions import SpawnSubtaskDecision, StatePatchDecision
 from noeta.protocols.messages import (
     LLMResponse,

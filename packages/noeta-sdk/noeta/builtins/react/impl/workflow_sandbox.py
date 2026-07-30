@@ -17,9 +17,10 @@ Two gates:
   (``agent`` / ``log`` / ``args``) plus a safe builtin set with no ``import`` / ``open`` / ``eval`` / ``exec`` /
   ``__import__``. Even if the AST check misses something, runtime can't reach ``time`` / ``random`` / ``os``.
 
-This module depends only on the stdlib ``ast`` / ``builtins``, so both ``control_semantics`` (translation time) and
-the ``react`` built-in's ``orchestration`` (exec time) can import it without a cycle. Public-named on purpose: since
-phase 2b the exec-time importer lives in the noeta-sdk wheel, so this is kernel surface the built-ins band depends on.
+This module depends only on the stdlib ``ast`` / ``builtins``. Control-tool-surface S2b moved it out of the kernel
+(``noeta.policies``) into the ``react`` built-in beside its two consumers, so both now import it as a sibling: the
+``control_tool`` translate (``check_workflow_script`` at translation time) and ``orchestration`` (``SAFE_BUILTINS`` at
+exec time). Public-named on purpose so those sibling modules import stable names.
 """
 
 from __future__ import annotations

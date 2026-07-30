@@ -218,7 +218,7 @@ _RUNTIME_ALONE_SCRIPT = """
     import noeta.runtime.governance
     import noeta.storage.memory
     import noeta.context.composer
-    import noeta.policies.control_tools
+    import noeta.policies.control_semantics
     import noeta.read_models.sessions
     import noeta.observers.audit
     import noeta.agent.spec

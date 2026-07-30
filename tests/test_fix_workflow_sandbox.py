@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from noeta.policies.workflow_sandbox import check_workflow_script
+from noeta.builtins.react.impl.workflow_sandbox import check_workflow_script
 
 
 @pytest.mark.parametrize(

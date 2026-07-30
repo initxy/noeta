@@ -10,7 +10,7 @@ from tests._read_models.detail import build_code_session_detail
 from noeta.core.fold import fold
 from noeta.core.snapshot import rehydrate_task, serialize_task_state
 from noeta.builtins.ask_user_question.impl import ASK_USER_QUESTION_TOOL
-from noeta.policies.control_tools import SPAWN_SUBAGENT_TOOL
+from noeta.policies.control_semantics import SPAWN_SUBAGENT_TOOL
 from noeta.protocols.canonical import from_canonical_bytes, to_canonical_bytes
 from noeta.protocols.events import (
     EventEnvelope,

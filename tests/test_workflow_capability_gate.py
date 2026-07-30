@@ -14,8 +14,9 @@ delegation-enabled agent gets run_workflow" — of the four (workflow, delegatio
 combinations, only both-on exposes the tool.
 
 The description source is pinned too: ``run_workflow``'s description loads from
-an independent text resource (``noeta/policies/descriptions/run_workflow.md``,
-four sections) covering what / when / when-not / preconditions.
+an independent text resource beside the ``react`` built-in
+(``noeta/builtins/react/impl/run_workflow.md``, four sections) covering what /
+when / when-not / preconditions.
 """
 
 from __future__ import annotations
@@ -26,12 +27,12 @@ from typing import Any
 from tests._session_inputs import default_factory_kwargs
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
 from noeta.runtime.governance import Budget
-from noeta.policies.control_tools import (
+from noeta.policies.control_semantics import (
     RUN_WORKFLOW_TOOL,
     WORKFLOW_AGENT_NAME,
-    run_workflow_tool_schema,
 )
-from noeta.policies.descriptions import load_control_tool_description
+from noeta.builtins.react.impl import run_workflow_tool_schema
+from noeta.protocols.resources import load_markdown
 from noeta.storage.memory import InMemoryContentStore
 from noeta.runtime.shell_policy import ShellMode
 from noeta.runtime.workspace import FsWriteMode
@@ -134,7 +135,7 @@ def test_run_workflow_description_from_resource() -> None:
     """The schema's description equals the loaded text resource (not an inline
     Python string), so editing the .md edits the model-facing semantics."""
     schema = run_workflow_tool_schema()
-    expected = load_control_tool_description("run_workflow")
+    expected = load_markdown("noeta.builtins.react.impl", "run_workflow")
     assert schema["function"]["description"] == expected
     # Sanity: it is the actual file content, not an empty/placeholder string.
     assert expected.startswith("Run a short Python orchestration script")
@@ -143,7 +144,7 @@ def test_run_workflow_description_from_resource() -> None:
 def test_run_workflow_description_has_four_sections() -> None:
     """Every tool description carries the symmetric four sections
     (what / when / when-NOT / preconditions)."""
-    text = load_control_tool_description("run_workflow")
+    text = load_markdown("noeta.builtins.react.impl", "run_workflow")
     for heading in (
         "## What it does",
         "## When to use",

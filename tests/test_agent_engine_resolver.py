@@ -547,7 +547,7 @@ def test_subtask_engine_is_not_multi_turn_wrapped(tmp_path: Path) -> None:
     unconditionally), and the child's ``FinishDecision`` became a next-goal
     suspend → no ``TaskCompleted`` → the parent's
     ``SubtaskGroupCompleted`` barrier never fired → deadlock."""
-    from noeta.policies.control_tools import WORKFLOW_AGENT_NAME  # noqa: F401
+    from noeta.policies.control_semantics import WORKFLOW_AGENT_NAME  # noqa: F401
 
     event_log, content_store, dispatcher = _storage()
     seed = build_engine_for_agent(

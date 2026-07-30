@@ -2,8 +2,8 @@
 
 One workflow run = **one Task + one Policy that interprets an orchestration script**:
 
-* The main agent calls the control tool ``run_workflow(script=...)`` → (``control_semantics``)
-  translates it into ``SpawnSubtaskDecision(agent_name=WORKFLOW_AGENT_NAME, inputs={script,args})``,
+* The main agent calls the control tool ``run_workflow(script=...)`` → (this built-in's
+  ``control_tool`` translate) turns it into ``SpawnSubtaskDecision(agent_name=WORKFLOW_AGENT_NAME, inputs={script,args})``,
   same family as ``spawn_subagent`` and sharing its plumbing (D5).
 * The spawned subtask is not bound to a catalog agent but to :class:`OrchestrationPolicy`
   (the host's ``_build_child_engine`` builds it when it sees the reserved name
@@ -39,13 +39,14 @@ import ast
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from noeta.policies.workflow_sandbox import SAFE_BUILTINS
-from noeta.policies.control_semantics import concurrent_fanout_enabled
-from noeta.policies.control_tools import (
+from noeta.policies.control_semantics import (
     SPAWN_SUBAGENT_TOOL,
-    STRUCTURED_OUTPUT_TOOL,
     WORKFLOW_AGENT_NAME,
+    concurrent_fanout_enabled,
 )
+
+from .control_tool import STRUCTURED_OUTPUT_TOOL
+from .workflow_sandbox import SAFE_BUILTINS
 from noeta.protocols.decisions import (
     Decision,
     FailDecision,
