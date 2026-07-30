@@ -141,8 +141,12 @@ def _build_composer_schemas(
         compaction=COMPACTION_OFF,
         budget=Budget(),
         capability_flags={"skill_invocation": skill_invocation_enabled},
-        write_mode=FsWriteMode.DRY_RUN,
-        shell_mode=ShellMode.OFF,
+        plugin_config={
+            "fs": {
+                "write_mode": FsWriteMode.DRY_RUN,
+                "shell_mode": ShellMode.OFF,
+            },
+        },
     )
     return list(inputs.composer._control_action_schemas)
 
