@@ -176,6 +176,11 @@ _CC_STYLE_TOOLS = (
     "shell_kill",
     "webfetch",
 )
+# Each description .md ships beside its tool's impl (phase 2c) — the
+# builtin package that owns the tool owns the text.
+_DESCRIPTION_PACKAGE = {
+    name: "noeta.builtins.fs.impl" for name in _CC_STYLE_TOOLS[:-1]
+} | {"webfetch": "noeta.builtins.web.impl"}
 _DROPPED_FOUR_SECTION_HEADINGS = (
     "## What it does",
     "## When to use",
@@ -186,9 +191,9 @@ _DROPPED_FOUR_SECTION_HEADINGS = (
 
 @pytest.mark.parametrize("name", _CC_STYLE_TOOLS)
 def test_tool_description_is_cc_short_form(name: str) -> None:
-    from noeta.tools.descriptions import load_tool_description
+    from noeta.protocols.resources import load_markdown
 
-    text = load_tool_description(name)
+    text = load_markdown(_DESCRIPTION_PACKAGE[name], name)
     # Opens with a non-empty one-line summary, not a markdown heading.
     first_line = text.strip().splitlines()[0]
     assert first_line and not first_line.startswith("#"), (
@@ -201,14 +206,14 @@ def test_tool_description_is_cc_short_form(name: str) -> None:
 
 def test_shell_triplet_descriptions_load_from_resources() -> None:
     # the three shell tool classes pull their canonical
-    # description from descriptions/<name>.md (not an inline Python string), so
-    # the class default equals the resource text verbatim.
-    from noeta.tools.descriptions import load_tool_description
+    # description from an in-package <name>.md (not an inline Python string),
+    # so the class default equals the resource text verbatim.
+    from noeta.protocols.resources import load_markdown
     from noeta.builtins.fs.impl import ShellKillTool, ShellPollTool, ShellRunTool
 
-    assert ShellRunTool.description == load_tool_description("shell_run")
-    assert ShellPollTool.description == load_tool_description("shell_poll")
-    assert ShellKillTool.description == load_tool_description("shell_kill")
+    assert ShellRunTool.description == load_markdown("noeta.builtins.fs.impl", "shell_run")
+    assert ShellPollTool.description == load_markdown("noeta.builtins.fs.impl", "shell_poll")
+    assert ShellKillTool.description == load_markdown("noeta.builtins.fs.impl", "shell_kill")
     # Semantics still present in the text (detached handle + job_id).
     assert "run_in_background" in ShellRunTool.description
     assert "job_id" in ShellPollTool.description

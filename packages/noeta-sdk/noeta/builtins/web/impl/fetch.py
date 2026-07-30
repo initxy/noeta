@@ -40,7 +40,7 @@ from noeta.tools._limits import (
     fit_output_fields,
     truncate_bytes,
 )
-from noeta.tools.descriptions import load_tool_description
+from noeta.protocols.resources import load_markdown
 from noeta.runtime.exec_env import ExecEnv
 from noeta.builtins.web.impl.search import _outcome_error_text, build_web_search_tool
 
@@ -149,7 +149,7 @@ class WebFetchTool:
 
     transport: FetchTransport
     name: str = "webfetch"
-    description: str = field(default=load_tool_description("webfetch"))
+    description: str = field(default=load_markdown(__package__, "webfetch"))
     risk_level: str = "low"
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {

@@ -27,17 +27,18 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
+from noeta.context.content_channel import ContentKindSpec
 from noeta.context.environment import (
     ENVIRONMENT_DRIFT_POLICY,
     ENVIRONMENT_KIND,
     ENVIRONMENT_NAME,
     ENVIRONMENT_VERSION,
     EnvironmentSnapshot,
-    environment_content_hash,
 )
 from noeta.core.fold import apply_event
 from noeta.protocols.content_store import ContentStore
@@ -48,9 +49,28 @@ from noeta.runtime.exec_env import ExecEnv
 
 
 __all__ = [
+    "EnvironmentKit",
     "load_environment",
     "record_environment",
 ]
+
+
+@dataclass(frozen=True)
+class EnvironmentKit:
+    """What one session build consumes from the environment resident.
+
+    The SkillsKit pattern (phase 2c): the renderer prose, the hash rule and
+    the ``ContentKindSpec`` factory are product material and live in the
+    ``workspace`` built-in plugin
+    (``noeta.builtins.workspace.impl:build_environment_kit``); the kernel
+    receives them as one injected bundle so the compose-time renderer and
+    the record-time fingerprint share a single source of truth.
+    """
+
+    #: ``snapshot -> ContentKindSpec`` — the registry item factory.
+    content_kind: Callable[[EnvironmentSnapshot], ContentKindSpec]
+    #: ``snapshot -> sha256(rendered bytes)`` — the recorded fingerprint.
+    content_hash: Callable[[EnvironmentSnapshot], str]
 
 #: Upper bound on the captured ``git status --short`` body. The status of a
 #: large dirty tree can run unbounded; a model only needs the gist for
@@ -193,16 +213,17 @@ def record_environment(
     task: Task,
     *,
     snapshot: Optional[EnvironmentSnapshot],
+    kit: EnvironmentKit,
     lease_id: Optional[str] = None,
     trace_id: Optional[str] = None,
 ) -> Task:
     """Pre-loop activation of the environment resident — write-side only.
 
     Emits one ``ContextContentRecorded`` carrying the content fingerprint
-    (:func:`environment_content_hash` — same function the kind spec's
-    ``hashes`` resolver uses, so the recorded fingerprint and the composed
-    bytes share one source of truth) and converges live state through
-    ``apply_event``, exactly like ``record_instructions`` /
+    (``kit.content_hash`` — the same injected kit whose ``content_kind``
+    the composer renders from, so the recorded fingerprint and the
+    composed bytes share one source of truth) and converges live state
+    through ``apply_event``, exactly like ``record_instructions`` /
     ``record_memory_index``.
 
     ``snapshot is None`` is a no-op (defensive symmetry with the other
@@ -221,7 +242,7 @@ def record_environment(
             kind=ENVIRONMENT_KIND,
             name=ENVIRONMENT_NAME,
             version=ENVIRONMENT_VERSION,
-            content_hash=environment_content_hash(snapshot),
+            content_hash=kit.content_hash(snapshot),
             policy=ENVIRONMENT_DRIFT_POLICY,
         ),
         lease_id=lease_id,

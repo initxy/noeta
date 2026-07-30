@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from noeta.builtins.memory.impl import store as _store_mod
+from noeta.builtins.memory.impl.index import build_memory_index_kit
 from noeta.builtins.memory.impl.recall import (
     append_user_message_with_recall,
     memory_reminder_provider,
@@ -45,6 +46,7 @@ __all__ = [
     "MemoryStore",
     "MemoryWriteTool",
     "append_user_message_with_recall",
+    "build_memory_index_kit",
     "build_memory_pack",
     "build_memory_tools",
     "load_memory_store",

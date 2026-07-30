@@ -135,7 +135,8 @@ def test_memory_entries_snapshot_shared_with_hashes(tmp_path: Path) -> None:
     """record and compose share one entries snapshot — the (version, hash)
     resolved by the generic seam must equal the index fingerprint computed from
     the snapshot (one source of truth)."""
-    from noeta.context.memory import MEMORY_INDEX_NAME, memory_index_hash
+    from noeta.context.memory import MEMORY_INDEX_NAME
+    from noeta.builtins.memory.impl.index import memory_index_hash
 
     ws = tmp_path / "ws"
     ws.mkdir()

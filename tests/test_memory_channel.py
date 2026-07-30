@@ -23,8 +23,11 @@ from noeta.context.memory import (
     MEMORY_INDEX_NAME,
     MEMORY_INDEX_VERSION,
     MEMORY_KIND,
+)
+from noeta.builtins.memory.impl.index import (
     RecallHit,
     _tokens,
+    build_memory_index_kit,
     build_memory_renderer,
     format_recall_text,
     match_memories,
@@ -60,6 +63,9 @@ _ENTRIES = (
     ("deploy-process", "How we deploy", ""),
     ("naming-rules", "Module naming conventions", ""),
 )
+
+# The injected resident kit (phase 2c) — the record seam takes it explicitly.
+_KIT = build_memory_index_kit()
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +273,7 @@ def test_record_memory_index_emits_evolving_event_and_activates() -> None:
     engine = _engine(log, cs, _composer(cs, _ENTRIES))
     task = engine.create_task(goal="g", policy_name="scripted")
 
-    task = record_memory_index(log, cs, task, entries=_ENTRIES)
+    task = record_memory_index(log, cs, task, entries=_ENTRIES, kit=_KIT)
 
     events = [
         e for e in log.read(task.task_id)
@@ -287,11 +293,11 @@ def test_record_memory_index_is_first_only_and_skips_empty() -> None:
     engine = _engine(log, cs, _composer(cs, _ENTRIES))
     task = engine.create_task(goal="g", policy_name="scripted")
 
-    task = record_memory_index(log, cs, task, entries=())
+    task = record_memory_index(log, cs, task, entries=(), kit=_KIT)
     assert MEMORY_KIND not in task.state.active_content  # not configured = zero footprint
 
-    task = record_memory_index(log, cs, task, entries=_ENTRIES)
-    task = record_memory_index(log, cs, task, entries=_ENTRIES)
+    task = record_memory_index(log, cs, task, entries=_ENTRIES, kit=_KIT)
+    task = record_memory_index(log, cs, task, entries=_ENTRIES, kit=_KIT)
     events = [
         e for e in log.read(task.task_id)
         if e.type == "ContextContentRecorded"
@@ -304,7 +310,7 @@ def test_compose_places_index_in_semi_stable_and_stays_pure() -> None:
     composer = _composer(cs, _ENTRIES)
     engine = _engine(log, cs, composer)
     task = engine.create_task(goal="g", policy_name="scripted")
-    task = record_memory_index(log, cs, task, entries=_ENTRIES)
+    task = record_memory_index(log, cs, task, entries=_ENTRIES, kit=_KIT)
 
     first = composer.compose(task)
     second = composer.compose(task)
@@ -517,7 +523,7 @@ def test_replay_never_reruns_retrieval_bytes_equal(tmp_path: Path) -> None:
     composer = _composer(cs, entries_at_record)
     engine = _engine(log, cs, composer)
     task = engine.create_task(goal="g", policy_name="scripted")
-    task = record_memory_index(log, cs, task, entries=entries_at_record)
+    task = record_memory_index(log, cs, task, entries=entries_at_record, kit=_KIT)
     disp.enqueue(task.task_id)
     lease = disp.lease(worker_id="w-mem")
     assert lease is not None

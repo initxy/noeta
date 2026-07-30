@@ -46,7 +46,7 @@ from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.tools._limits import INLINE_OUTPUT_MAX_BYTES
 from noeta.tools._refs import ref_json
-from noeta.tools.descriptions import load_tool_description
+from noeta.protocols.resources import load_markdown
 from noeta.builtins.fs.impl._diff import (
     DIFF_MEDIA_TYPE,
     compute_diff,
@@ -151,7 +151,7 @@ class ApplyPatchTool:
     name: str = "apply_patch"
     # the LLM-facing description is the four-section text resource
     # (descriptions/apply_patch.md), not an inline Python string.
-    description: str = field(default=load_tool_description("apply_patch"))
+    description: str = field(default=load_markdown(__package__, "apply_patch"))
     risk_level: str = "high"
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {

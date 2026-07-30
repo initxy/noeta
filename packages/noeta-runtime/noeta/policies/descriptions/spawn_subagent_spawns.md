@@ -1,0 +1,1 @@
+The sub-agents to spawn. ONE entry delegates and waits for that single result. SEVERAL entries fan out and run CONCURRENTLY; their results return together, in entry order. Always batch independent goals into one call — spawning one entry per turn is strictly sequential, never parallel.

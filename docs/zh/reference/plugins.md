@@ -269,7 +269,7 @@ client = Client(options, provider=..., workspace_dir=".", plugins=pset)
 
 - 一个映射到 `Capabilities` 身份标志（`D5`）的**内置特性 bundle**：`memory`、`browser`、`skill_invocation`、`todo_write`、`ask_user_question`、`mcp`——激活其中之一只会翻转对应的标志、别无其他（`memory=True` 变成 `plugins=["memory"]`）；
 - `delegation`——唯一一个既是**结构性**、又可被显式编写的能力。它通常是推导出来的（带 `agents` 的根代理可以委派；扁平子代理不能），而激活它只会把它**打开**：这是给一个子代理授予 spawn 权限的方式，也就是已退役的 `AgentDefinition.capabilities` 从前做的事。`spawnable` 仍然只从 `agents` 字典推导——激活无法指名某个代理；
-- 一个**对身份无影响的内置项**，之所以被识别，是为了让打错的名字仍然大声失败、但不产生任何 compile 效果：`fs`、`web`、`skills`、`reminders`、`governance`、`providers`、`presets`、`sandbox`；
+- 一个**对身份无影响的内置项**，之所以被识别，是为了让打错的名字仍然大声失败、但不产生任何 compile 效果：`fs`、`web`、`skills`、`reminders`、`governance`、`providers`、`presets`、`sandbox`、`workspace`；
 - 交给 `Client` 的那个 `PluginSet` 里某个**已加载插件的名字**——它的身份平面贡献（额外的 tool / 子代理 / prompt fragment / policy）会折叠进来。
 
 `DEFAULT_PLUGINS = ("fs", "web")` 是 `Options.plugins` 的默认值；两者都对身份无影响（默认的 11 个工具集仍来自 `BUILTIN_TOOL_CLASSES`），所以一个**裸的 `Options()` 会字节级相同地编译**成重新设计之前的 spec——这就是对等契约（parity contract）。`AgentDefinition.plugins` 默认为 `()`（子代理的工具来自它自己的 `tools` 字段）。
@@ -282,7 +282,7 @@ client = Client(options, provider=..., workspace_dir=".", plugins=pset)
 
 noeta 把自己的能力表达为 `noeta/builtins/` 里的内置插件（栈顶那条 band，与 `noeta.presets` 并列）。自 2026-07-29 的 microkernel 迁移起，每个目录同时持有 manifest **和**实现：`__init__.py` 是零执行的 `MANIFEST`（一个 `PluginManifest`，其贡献携带 `ref` 字符串），`impl/` 是代码，`ref` 指向同目录下的 impl 模块。manifest 层不导入任何 impl，所以列出一个内置插件依然运行零能力代码。加载器通过一次**动态**导入（`builtin_manifests()`）触及目录，而 `.importlinter` 里全域生效的 `sdk-core-not-builtins` 契约保证每一条 band——包括内核——都没有通往 `noeta.builtins` 的静态边。
 
-十三个内置插件（`noeta/builtins/` 下一个内置插件一个目录——manifest 声明的权威范例集）：`fs`、`web`、`memory`、`browser`、`app`、`mcp`、`skills`、`react`、`reminders`、`governance`、`providers`、`sandbox`、`presets`。新增一个第一方能力就是在这里加一个目录（只有当确实需要一个全新的 surface 时，才额外注册一个 `SurfaceSpec`）。
+十四个内置插件（`noeta/builtins/` 下一个内置插件一个目录——manifest 声明的权威范例集）：`fs`、`web`、`memory`、`browser`、`app`、`mcp`、`skills`、`react`、`reminders`、`governance`、`providers`、`sandbox`、`presets`、`workspace`。新增一个第一方能力就是在这里加一个目录（只有当确实需要一个全新的 surface 时，才额外注册一个 `SurfaceSpec`）。
 
 ## 信任存储
 

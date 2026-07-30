@@ -53,7 +53,7 @@ from noeta.tools._limits import (
     truncate_bytes,
 )
 from noeta.tools._refs import ref_json
-from noeta.tools.descriptions import load_tool_description
+from noeta.protocols.resources import load_markdown
 from noeta.builtins.fs.impl._diff import (
     DIFF_MEDIA_TYPE,
     compute_diff,
@@ -143,7 +143,7 @@ class ReplaceTextTool:
     write_roots: Optional[WriteRootsResolver] = None
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "edit"
-    description: str = field(default=load_tool_description("edit"))
+    description: str = field(default=load_markdown(__package__, "edit"))
     # PRD D2: write-side fs tools are high-risk so PermissionGuard treats
     # them as privileged. A policy that permits medium-risk tools must
     # not accidentally allow file mutation.
@@ -280,7 +280,7 @@ class WriteFileTool:
     write_roots: Optional[WriteRootsResolver] = None
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "write"
-    description: str = field(default=load_tool_description("write"))
+    description: str = field(default=load_markdown(__package__, "write"))
     # PRD D2: write-side fs tools are high-risk so PermissionGuard treats
     # them as privileged. A policy that permits medium-risk tools must
     # not accidentally allow file creation.

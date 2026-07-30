@@ -40,6 +40,7 @@ from noeta.builtins.fs.impl.shell import (
 )
 from noeta.protocols.tool import Tool
 from noeta.runtime.exec_env import ExecEnv, LocalExecEnv
+from noeta.builtins.fs.impl.shell_rules import DEFAULT_SHELL_RULES
 from noeta.runtime.shell_policy import ShellMode, build_allowlist
 from noeta.runtime.workspace import (
     FsWriteMode,
@@ -136,7 +137,9 @@ def build_fs_tools(
             ShellRunTool(
                 workspace=workspace,
                 mode=shell_mode,
-                rules=build_allowlist(shell_allowlist),
+                rules=build_allowlist(
+                    shell_allowlist, base_rules=DEFAULT_SHELL_RULES
+                ),
                 exec_env=env,
             )
         )
@@ -152,3 +155,16 @@ def build_fs_tools(
 # ``FsToolPack`` is the public name from the PRD; in I5 it equals the
 # read + edit + shell builder.
 FsToolPack = build_fs_tools
+
+#: Provider-mutex edit-tool table (phase 2c): which of this pack's two
+#: mutually-exclusive batch/precise edit tools the assembly layer must DROP
+#: for a bound model's vendor family (Anthropic ships ``edit``, OpenAI /
+#: GPT ships ``apply_patch``). The fs built-in owns the two names because it
+#: ships both tools; the model→family judgment lives in the providers
+#: built-in's catalog, and the kernel builder applies the drop mechanically
+#: through its ``edit_tool_mutex`` injection (an unrecognised family drops
+#: nothing — both stay, so existing recordings resume byte-equal).
+PROVIDER_EDIT_TOOL_MUTEX: Mapping[str, tuple[str, ...]] = {
+    "anthropic": ("apply_patch",),
+    "openai": ("edit",),
+}

@@ -1,0 +1,299 @@
+"""Workspace-context material — the environment + instructions residents.
+
+Phase 2c: the renderer prose, hash rules and ``ContentKindSpec`` factories
+for the two workspace residents moved here from
+``noeta.context.{environment,instructions}`` (which keep only the kind
+vocabulary constants and the snapshot types). The kernel consumes this
+material solely through the injected kits
+(:class:`noeta.execution.environment.EnvironmentKit` /
+:class:`noeta.execution.instructions.InstructionsKit`) — the reminders
+built-in precedent: registry mechanism kernel-side, rendered material here.
+
+Red line (unchanged from the kernel days): every renderer is pure over a
+wiring-time snapshot — no disk, no clock at compose time — so the same
+folded state always composes the same bytes. The impure loaders stay
+kernel-side in ``noeta.execution.{environment,instructions}``.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from typing import Mapping
+
+from noeta.context.composer import RenderedSkills
+from noeta.context.content_channel import ContentKindSpec, ContentRenderer
+from noeta.context.environment import (
+    ENVIRONMENT_DRIFT_POLICY,
+    ENVIRONMENT_KIND,
+    ENVIRONMENT_NAME,
+    ENVIRONMENT_VERSION,
+    EnvironmentSnapshot,
+)
+from noeta.context.instructions import (
+    INSTRUCTIONS_DRIFT_POLICY,
+    INSTRUCTIONS_KIND,
+    INSTRUCTIONS_VERSION,
+    InstructionsSnapshot,
+)
+from noeta.execution.environment import EnvironmentKit
+from noeta.execution.instructions import InstructionsKit
+from noeta.protocols.messages import Message, TextBlock
+
+
+__all__ = [
+    "DEFAULT_INSTRUCTIONS_FILENAMES",
+    "build_environment_kit",
+    "build_environment_renderer",
+    "build_instructions_kit",
+    "build_instructions_renderer",
+    "environment_content_hash",
+    "environment_content_kind",
+    "instructions_content_hash",
+    "instructions_content_kind",
+    "instructions_content_kind_from",
+    "render_environment_text",
+    "render_instructions_text",
+]
+
+
+#: Workspace-root search order for the instructions file. The first
+#: existing, non-empty candidate wins. NOETA.md is canonical (the
+#: project's CLAUDE.md counterpart); AGENTS.md is a common GitHub /
+#: repo convention supported as a fallback.
+DEFAULT_INSTRUCTIONS_FILENAMES = ("NOETA.md", "AGENTS.md")
+
+
+# ---------------------------------------------------------------------------
+# Environment resident
+# ---------------------------------------------------------------------------
+
+
+def render_environment_text(snapshot: EnvironmentSnapshot) -> str:
+    """Deterministic rendered body — the resident's rendered text.
+
+    Wraps the facts in a single ``<workspace-environment>`` tag block so
+    the model can tell this segment apart from surrounding prompt text.
+    The format mirrors instructions' tagged style: one block, fixed field
+    order, trivially diffable. The middle line states the resolution rule
+    explicitly so the model knows the directory is the relative-path
+    anchor, not just trivia.
+
+    The git branch / status / date lines are appended only when captured —
+    an empty field (non-git workspace, or capture that failed / was
+    skipped) renders no line at all, keeping the block tight.
+    """
+    lines = [
+        "<workspace-environment>",
+        f"Working directory: {snapshot.workspace_display}",
+        "File paths for read, edit, glob, and grep resolve relative to "
+        "this directory.",
+        f"Is a git repository: {'true' if snapshot.is_git_repo else 'false'}",
+        f"Platform: {snapshot.platform}",
+    ]
+    if snapshot.git_branch:
+        lines.append(f"Git branch: {snapshot.git_branch}")
+    if snapshot.git_status:
+        lines.append(f"Git status:\n{snapshot.git_status}")
+    if snapshot.captured_date:
+        lines.append(f"Captured at: {snapshot.captured_date}")
+    lines.append("</workspace-environment>")
+    return "\n".join(lines)
+
+
+def environment_content_hash(snapshot: EnvironmentSnapshot) -> str:
+    """``sha256`` over the *rendered* bytes — one source of truth.
+
+    Same rule as instructions: the recorded ``content_hash`` IS what the
+    model actually saw, so hashing the rendered output (not the raw fields)
+    keeps the record-time and compose-time ``content_hash`` in lock-step.
+    """
+    return hashlib.sha256(
+        render_environment_text(snapshot).encode("utf-8")
+    ).hexdigest()
+
+
+def build_environment_renderer(
+    snapshot: EnvironmentSnapshot,
+) -> ContentRenderer:
+    """Bind a snapshot to the channel's renderer shape.
+
+    Pure over the snapshot: renders one ``role="user"`` message holding
+    the tagged environment block when :data:`ENVIRONMENT_NAME` is active;
+    anything else renders nothing (a never-activated kind leaves the
+    ``semi_stable`` bytes untouched — zero footprint).
+    """
+    rendered_text = render_environment_text(snapshot)
+
+    def _render(names: list[str]) -> RenderedSkills:
+        if ENVIRONMENT_NAME not in names:
+            return RenderedSkills(messages=[], selected_skills=[])
+        return RenderedSkills(
+            messages=[
+                Message(role="user", content=[TextBlock(text=rendered_text)])
+            ],
+            selected_skills=[],
+        )
+
+    return _render
+
+
+def environment_content_kind(
+    snapshot: EnvironmentSnapshot,
+) -> ContentKindSpec:
+    """The environment kind's registry item — the WHOLE integration surface.
+
+    Registered next to the skill / memory / instructions kinds in a
+    ``ContentChannelRegistry`` so the environment block lives in the
+    semi-stable segment, with its ``content_hash`` recorded through the
+    generic ``(kind, name)`` seam under the ``evolving`` policy its
+    recordings carry.
+    """
+    content_hash = environment_content_hash(snapshot)
+
+    def _hashes(name: str) -> tuple[str, str] | None:
+        if name != ENVIRONMENT_NAME:
+            return None
+        return (ENVIRONMENT_VERSION, content_hash)
+
+    return ContentKindSpec(
+        kind=ENVIRONMENT_KIND,
+        renderer=build_environment_renderer(snapshot),
+        hashes=_hashes,
+        policy=ENVIRONMENT_DRIFT_POLICY,
+    )
+
+
+def build_environment_kit() -> EnvironmentKit:
+    """The kernel builder's ``environment_kit`` injection (phase 2c)."""
+    return EnvironmentKit(
+        content_kind=environment_content_kind,
+        content_hash=environment_content_hash,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Instructions resident
+# ---------------------------------------------------------------------------
+
+
+def render_instructions_text(snapshot: InstructionsSnapshot) -> str:
+    """Deterministic rendered body — the resident's rendered text.
+
+    Wraps the raw instructions in a single ``<workspace-instructions
+    source="…">`` tag block so the model can tell this segment apart
+    from surrounding prompt text. The tag format mirrors memory's
+    plain-text rendering style: one heading, one body, kept trivially
+    diffable.
+    """
+    return (
+        f'<workspace-instructions source="{snapshot.name}">\n'
+        f"{snapshot.text}\n"
+        f"</workspace-instructions>"
+    )
+
+
+def instructions_content_hash(snapshot: InstructionsSnapshot) -> str:
+    """``sha256`` over the *rendered* bytes — one source of truth.
+
+    Same rule as memory: the recorded ``content_hash`` IS what the model
+    actually saw, so hashing the rendered output (not the raw file) keeps
+    the record-time and compose-time ``content_hash`` in lock-step.
+    """
+    return hashlib.sha256(
+        render_instructions_text(snapshot).encode("utf-8")
+    ).hexdigest()
+
+
+def build_instructions_renderer(
+    snapshot: InstructionsSnapshot,
+) -> ContentRenderer:
+    """Bind a snapshot to the channel's renderer shape.
+
+    Pure over the snapshot: renders one ``role="user"`` message holding
+    the tagged instructions body when the snapshot's name is active AND
+    the snapshot text is non-empty; anything else renders nothing (an
+    absent-instructions host leaves the ``semi_stable`` bytes
+    untouched — zero footprint).
+    """
+    active_name = snapshot.name
+    non_empty = bool(snapshot.text and snapshot.text.strip())
+    rendered_text = (
+        render_instructions_text(snapshot) if non_empty else ""
+    )
+
+    def _render(names: list[str]) -> RenderedSkills:
+        if active_name not in names or not non_empty:
+            return RenderedSkills(messages=[], selected_skills=[])
+        return RenderedSkills(
+            messages=[
+                Message(role="user", content=[TextBlock(text=rendered_text)])
+            ],
+            selected_skills=[],
+        )
+
+    return _render
+
+
+def instructions_content_kind(
+    snapshot: InstructionsSnapshot,
+) -> ContentKindSpec:
+    """The single-file instructions kind (the root ``NOETA.md``/``AGENTS.md``).
+
+    Sugar over :func:`instructions_content_kind_from` with a one-entry
+    mapping — byte-identical rendering for the root-only host.
+    """
+    return instructions_content_kind_from({snapshot.name: snapshot})
+
+
+def instructions_content_kind_from(
+    snapshots: Mapping[str, InstructionsSnapshot],
+) -> ContentKindSpec:
+    """The instructions kind's registry item — the WHOLE integration surface.
+
+    ``snapshots`` maps resident name → preloaded snapshot: the root file
+    under its basename, plus (discovery mode,
+    docs/adr/anchored-content-placement.md) every discovered subdirectory
+    file under its workspace-relative path. The mapping is deliberately
+    allowed to be MUTABLE and shared: the discovery hook and the resume
+    preloader add entries at *tool/step* time (the impure band), and the
+    renderer — still a pure function at compose time — only ever looks
+    names up in memory. A name active in the ledger but missing from the
+    mapping (vanished file on resume) renders nothing: the ``evolving``
+    policy already tolerates drift, and a degraded preload may only omit.
+    """
+
+    def _render(names: list[str]) -> RenderedSkills:
+        messages: list[Message] = []
+        for name in names:
+            snapshot = snapshots.get(name)
+            if snapshot is None or not snapshot.text.strip():
+                continue
+            messages.append(
+                Message(
+                    role="user",
+                    content=[TextBlock(text=render_instructions_text(snapshot))],
+                )
+            )
+        return RenderedSkills(messages=messages, selected_skills=[])
+
+    def _hashes(name: str) -> tuple[str, str] | None:
+        snapshot = snapshots.get(name)
+        if snapshot is None:
+            return None
+        return (INSTRUCTIONS_VERSION, instructions_content_hash(snapshot))
+
+    return ContentKindSpec(
+        kind=INSTRUCTIONS_KIND,
+        renderer=_render,
+        hashes=_hashes,
+        policy=INSTRUCTIONS_DRIFT_POLICY,
+    )
+
+
+def build_instructions_kit() -> InstructionsKit:
+    """The kernel builder's ``instructions_kit`` injection (phase 2c)."""
+    return InstructionsKit(
+        content_kind_from=instructions_content_kind_from,
+        content_hash=instructions_content_hash,
+        filenames=DEFAULT_INSTRUCTIONS_FILENAMES,
+    )

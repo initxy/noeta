@@ -506,6 +506,7 @@ def test_builtins_default_on_and_disable_individually():
     assert set(load_plugins(builtins=True).names()) == {
         "app", "browser", "fs", "governance", "mcp", "memory", "presets",
         "providers", "react", "reminders", "sandbox", "skills", "web",
+        "workspace",
     }
 
 

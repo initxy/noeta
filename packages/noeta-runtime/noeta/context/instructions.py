@@ -1,37 +1,26 @@
-"""Project instructions file — the content channel's THIRD resident.
+"""Project instructions file — the content channel's THIRD resident (vocabulary).
 
-Mirror of :mod:`noeta.context.memory` specialised to the one-file
-``NOETA.md`` / ``AGENTS.md`` workspace instructions mechanism (the
-project's counterpart to Claude Code's ``CLAUDE.md``). The
-generic channel absorbs this exactly like it absorbed memory: one
-:class:`ContentKindSpec` registered next to the skill and memory kinds,
-no composer change, no runtime change.
+Phase 2c: this module keeps only the kind **vocabulary** — the channel
+constants and the :class:`InstructionsSnapshot` type — shared by the kernel
+loader/discovery/recording seams (``noeta.execution.instructions``), fold,
+and the ``workspace`` built-in plugin. The tag-block renderer, hash rule,
+``ContentKindSpec`` factories AND the candidate-filename convention
+(``NOETA.md``/``AGENTS.md``) live in ``noeta.builtins.workspace.impl`` and
+reach the kernel only through the injected
+:class:`noeta.execution.instructions.InstructionsKit`.
 
-Two deliberate matches with memory:
+Two deliberate matches with memory (unchanged):
 
 * **Drift policy is ``evolving``** — the instructions file evolves day
   to day together with the repo, so the recording carries the ``evolving``
   policy: the ``content_hash`` is recorded as provenance and free to move.
-* **Only ONE resident body** — a single workspace has a single
-  instructions file; future multi-file variants (e.g. a repo-scoped
-  instructions directory) would add names, not mechanisms.
-
-Red line: every function here is pure over a wiring-time
-:class:`InstructionsSnapshot` — the renderer closes over preloaded
-state and never touches the disk at compose time. The impure half
-(reading the workspace file) lives in
-:mod:`noeta.execution.instructions`, before anything enters the ledger.
+* **Residents are named** — the root file under its basename, discovered
+  subdirectory files under their workspace-relative paths.
 """
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
-from typing import Mapping
-
-from noeta.context.composer import RenderedSkills
-from noeta.context.content_channel import ContentKindSpec, ContentRenderer
-from noeta.protocols.messages import Message, TextBlock
 
 
 __all__ = [
@@ -39,11 +28,6 @@ __all__ = [
     "INSTRUCTIONS_KIND",
     "INSTRUCTIONS_VERSION",
     "InstructionsSnapshot",
-    "build_instructions_renderer",
-    "instructions_content_hash",
-    "instructions_content_kind",
-    "instructions_content_kind_from",
-    "render_instructions_text",
 ]
 
 
@@ -72,118 +56,3 @@ class InstructionsSnapshot:
 
     name: str
     text: str
-
-
-def render_instructions_text(snapshot: InstructionsSnapshot) -> str:
-    """Deterministic rendered body — the resident's rendered text.
-
-    Wraps the raw instructions in a single ``<workspace-instructions
-    source="…">`` tag block so the model can tell this segment apart
-    from surrounding prompt text. The tag format mirrors memory's
-    plain-text rendering style: one heading, one body, kept trivially
-    diffable.
-    """
-    return (
-        f'<workspace-instructions source="{snapshot.name}">\n'
-        f"{snapshot.text}\n"
-        f"</workspace-instructions>"
-    )
-
-
-def instructions_content_hash(snapshot: InstructionsSnapshot) -> str:
-    """``sha256`` over the *rendered* bytes — one source of truth.
-
-    Same rule as memory: the recorded ``content_hash`` IS what the model
-    actually saw, so hashing the rendered output (not the raw file) keeps
-    the record-time and compose-time ``content_hash`` in lock-step.
-    """
-    return hashlib.sha256(
-        render_instructions_text(snapshot).encode("utf-8")
-    ).hexdigest()
-
-
-def build_instructions_renderer(
-    snapshot: InstructionsSnapshot,
-) -> ContentRenderer:
-    """Bind a snapshot to the channel's renderer shape.
-
-    Pure over the snapshot: renders one ``role="user"`` message holding
-    the tagged instructions body when the snapshot's name is active AND
-    the snapshot text is non-empty; anything else renders nothing (an
-    absent-instructions host leaves the ``semi_stable`` bytes
-    untouched — zero footprint).
-    """
-    active_name = snapshot.name
-    non_empty = bool(snapshot.text and snapshot.text.strip())
-    rendered_text = (
-        render_instructions_text(snapshot) if non_empty else ""
-    )
-
-    def _render(names: list[str]) -> RenderedSkills:
-        if active_name not in names or not non_empty:
-            return RenderedSkills(messages=[], selected_skills=[])
-        return RenderedSkills(
-            messages=[
-                Message(role="user", content=[TextBlock(text=rendered_text)])
-            ],
-            selected_skills=[],
-        )
-
-    return _render
-
-
-def instructions_content_kind(
-    snapshot: InstructionsSnapshot,
-) -> ContentKindSpec:
-    """The single-file instructions kind (the root ``NOETA.md``/``AGENTS.md``).
-
-    Sugar over :func:`instructions_content_kind_from` with a one-entry
-    mapping — byte-identical rendering for the root-only host.
-    """
-    return instructions_content_kind_from({snapshot.name: snapshot})
-
-
-def instructions_content_kind_from(
-    snapshots: Mapping[str, InstructionsSnapshot],
-) -> ContentKindSpec:
-    """The instructions kind's registry item — the WHOLE integration surface.
-
-    Register this next to ``skill_content_kind`` / ``memory_content_kind``
-    in a :class:`ContentChannelRegistry`. ``snapshots`` maps resident name →
-    preloaded snapshot: the root file under its basename, plus (discovery
-    mode, docs/adr/anchored-content-placement.md) every discovered
-    subdirectory file under its workspace-relative path. The mapping is
-    deliberately allowed to be MUTABLE and shared: the discovery hook and the
-    resume preloader add entries at *tool/step* time (the impure band), and
-    the renderer — still a pure function at compose time — only ever looks
-    names up in memory. A name active in the ledger but missing from the
-    mapping (vanished file on resume) renders nothing: the ``evolving``
-    policy already tolerates drift, and a degraded preload may only omit.
-    """
-
-    def _render(names: list[str]) -> RenderedSkills:
-        messages: list[Message] = []
-        for name in names:
-            snapshot = snapshots.get(name)
-            if snapshot is None or not snapshot.text.strip():
-                continue
-            messages.append(
-                Message(
-                    role="user",
-                    content=[TextBlock(text=render_instructions_text(snapshot))],
-                )
-            )
-        return RenderedSkills(messages=messages, selected_skills=[])
-
-    def _hashes(name: str) -> tuple[str, str] | None:
-        snapshot = snapshots.get(name)
-        if snapshot is None:
-            return None
-        return (INSTRUCTIONS_VERSION, instructions_content_hash(snapshot))
-
-    return ContentKindSpec(
-        kind=INSTRUCTIONS_KIND,
-        renderer=_render,
-        hashes=_hashes,
-        policy=INSTRUCTIONS_DRIFT_POLICY,
-    )

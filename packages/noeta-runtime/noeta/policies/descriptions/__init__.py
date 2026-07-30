@@ -1,28 +1,31 @@
 """Control-tool descriptions as independent text resources.
 
-Mirrors the :mod:`noeta.tools.descriptions` mechanism for the **control**
-layer: a control tool's LLM-facing description lives in a sibling
-``<name>.md`` file in this package, not in a Python string literal. This
+The **control** layer's description resources: a control tool's LLM-facing
+description lives in a sibling ``<name>.md`` file in this package, not in a
+Python string literal (execution-tool descriptions follow the same shape,
+shipped beside each tool's builtin impl since phase 2c). This
 lets the descriptions iterate like documentation (clean ``git diff``,
 editable by non-engineers) while staying the single canonical source the
 composer renders into the provider tool schema.
 
 Loading delegates to the shared :func:`noeta.protocols.resources.load_markdown`
-(generalized). Previously this loader was duplicated verbatim
-from ``noeta.tools.descriptions`` because ``noeta.policies`` and ``noeta.tools``
-are independent siblings on the same import layer (a ``policies → tools`` edge
-is forbidden). With agent prompts becoming a third consumer of the same
-mechanism, the shared implementation now lives in the L0 ``noeta.protocols``
-layer — which every higher layer may import and which depends on nothing — so
-all three call sites share one canonical loader instead of each copying it.
+(generalized): the loader lives in the L0 ``noeta.protocols`` layer — which
+every higher layer may import and which depends on nothing — so every
+description/prompt resource consumer (this package, the builtin tool impls,
+``noeta.presets``) shares one canonical loader instead of each copying it.
 
-Every description file follows the same four-section shape so the model
-gets symmetric guidance per control tool:
+Every tool-level description file follows the same four-section shape so
+the model gets symmetric guidance per control tool:
 
 * **What it does** — the action.
 * **When to use** — the trigger.
 * **When NOT to use** — the anti-trigger.
 * **Preconditions** — what must already hold before the call.
+
+Property-level prose long enough to iterate like documentation (e.g. the
+``spawn_subagent`` ``spawns`` / ``background`` argument texts) lives here
+too, under ``<tool>_<property>.md`` — short schema-shape one-liners stay
+inline in ``control_semantics``.
 """
 
 from __future__ import annotations

@@ -41,7 +41,7 @@ from noeta.tools._limits import (
     fit_output_fields,
     truncate_bytes,
 )
-from noeta.tools.descriptions import load_tool_description
+from noeta.protocols.resources import load_markdown
 from noeta.runtime.subproc import _RunOutcome
 from noeta.runtime.exec_env import ExecEnv
 
@@ -160,7 +160,7 @@ class WebSearchTool:
 
     transport: SearchTransport
     name: str = "web_search"
-    description: str = field(default=load_tool_description("web_search"))
+    description: str = field(default=load_markdown(__package__, "web_search"))
     risk_level: str = "low"
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {

@@ -22,7 +22,6 @@ from noeta.execution.driver import (
     ModelSelectorError,
     NotResumableError,
     ProviderSelectorError,
-    STUB_MODEL_ALLOWLIST,
     TaskAlreadyTerminalError,
     multi_turn_policy_wrapper,
 )
@@ -54,11 +53,12 @@ from noeta.execution.commands import (
     resolve_command,
 )
 from noeta.execution.environment import (
+    EnvironmentKit,
     load_environment,
     record_environment,
 )
 from noeta.execution.instructions import (
-    DEFAULT_INSTRUCTIONS_FILENAMES,
+    InstructionsKit,
     build_instructions_discovery,
     build_instructions_preloader,
     discover_instructions,
@@ -90,7 +90,8 @@ __all__ = [
     "CommandResolution",
     "COMPACTION_OFF",
     "CompactionConfig",
-    "DEFAULT_INSTRUCTIONS_FILENAMES",
+    "EnvironmentKit",
+    "InstructionsKit",
     "DrainHost",
     "drive_pending_subtasks",
     "first_sentence",
@@ -119,6 +120,5 @@ __all__ = [
     "SessionInputs",
     "skill_content_hash",
     "SlashCommand",
-    "STUB_MODEL_ALLOWLIST",
     "UnsupportedSubtaskSuspend",
 ]

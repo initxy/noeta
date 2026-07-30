@@ -188,7 +188,7 @@ def test_run_skill_script_rejects_escape_lexically_in_container() -> None:
 
 def test_load_instructions_reads_container_file() -> None:
     container = FakeContainer({"/workspace/NOETA.md": b"# Project rules\n"})
-    snap = load_instructions(Path("/workspace"), exec_env=container)
+    snap = load_instructions(Path("/workspace"), filenames=("NOETA.md", "AGENTS.md"), exec_env=container)
     assert snap is not None
     assert snap.name == "NOETA.md"
     assert "Project rules" in snap.text
@@ -196,7 +196,7 @@ def test_load_instructions_reads_container_file() -> None:
 
 def test_load_instructions_none_when_absent_in_container() -> None:
     container = FakeContainer({})
-    assert load_instructions(Path("/workspace"), exec_env=container) is None
+    assert load_instructions(Path("/workspace"), filenames=("NOETA.md", "AGENTS.md"), exec_env=container) is None
 
 
 def test_load_environment_probes_git_in_container() -> None:

@@ -60,7 +60,7 @@ The carrying mechanism still follows existing conventions: the AgentSpec from `a
 
 - Where the tool structure and AgentSpec land: the tool field structure (zero additions) is in `noeta.protocols.tool`, `AgentSpec`/`Capabilities` are in `noeta.agent.spec`, and the existing preset-of-four names are in `noeta.presets`.
 
-- Where tool implementations and descriptions land: `read/write/edit/grep/glob` are in `noeta.builtins.fs.impl` (since the 2026-07-29 microkernel migration), and the standalone short `.md` description resources are in `noeta.tools.descriptions` / `noeta.policies.descriptions`.
+- Where tool implementations and descriptions land: `read/write/edit/grep/glob` are in `noeta.builtins.fs.impl` (since the 2026-07-29 microkernel migration), and the standalone short `.md` description resources ship beside each tool's impl in its builtin package (phase 2c) / in `noeta.policies.descriptions` for the control tools.
 
 - Where assembly and internal agents land: switching tool variants by model and injecting Capabilities tools is in `noeta.execution.builder`; compaction's verbatim-preservation constraint is in `context-compaction.md`. (The former `noeta.execution.title` internal agent has been removed — the product derives session titles with a lightweight heuristic in the app backend's read views.)
 

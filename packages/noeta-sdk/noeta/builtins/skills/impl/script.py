@@ -41,7 +41,7 @@ from noeta.runtime.exec_env import ExecEnv
 from noeta.runtime.shell_policy import (
     DEFAULT_SHELL_OUTPUT_CAP,
     DEFAULT_SHELL_TIMEOUT_S,
-    _SHELL_META_CHARS,
+    SHELL_META_CHARS,
     _STDERR_TAIL_BYTES,
     _STDOUT_TAIL_BYTES,
 )
@@ -79,7 +79,7 @@ def is_skill_script_resource(relpath: str) -> bool:
 
 
 def _has_meta(s: str) -> bool:
-    return any(c in _SHELL_META_CHARS for c in s)
+    return any(c in SHELL_META_CHARS for c in s)
 
 
 def _err(message: str) -> ToolResult:

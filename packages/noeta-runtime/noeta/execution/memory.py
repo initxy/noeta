@@ -29,15 +29,15 @@ memory-off agent. The kernel never sees the store behind the provider.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, ClassVar, Optional, Sequence
+from typing import Any, Callable, ClassVar, Optional, Sequence
 
+from noeta.context.content_channel import ContentKindSpec
 from noeta.context.memory import (
     MEMORY_DRIFT_POLICY,
     MEMORY_INDEX_NAME,
     MEMORY_INDEX_VERSION,
     MEMORY_KIND,
     MemoryEntries,
-    memory_index_hash,
 )
 from noeta.core.fold import apply_event
 from noeta.execution.reminders import (
@@ -53,10 +53,29 @@ from noeta.protocols.task import Task
 
 
 __all__ = [
+    "MemoryIndexKit",
     "RecallGoalPrelude",
     "intake_providers",
     "record_memory_index",
 ]
+
+
+@dataclass(frozen=True)
+class MemoryIndexKit:
+    """What one session build consumes from the memory index resident.
+
+    The SkillsKit pattern (phase 2c): the index renderer prose, the hash
+    rule and the ``ContentKindSpec`` factory are product material and live
+    in the ``memory`` built-in plugin
+    (``noeta.builtins.memory.impl:build_memory_index_kit``); the kernel
+    receives them as one injected bundle so the compose-time renderer and
+    the record-time fingerprint share a single source of truth.
+    """
+
+    #: ``entries -> ContentKindSpec`` — the registry item factory.
+    content_kind: Callable[[MemoryEntries], ContentKindSpec]
+    #: ``entries -> sha256(rendered index bytes)`` — the recorded fingerprint.
+    content_hash: Callable[[MemoryEntries], str]
 
 
 def record_memory_index(
@@ -65,18 +84,19 @@ def record_memory_index(
     task: Task,
     *,
     entries: MemoryEntries,
+    kit: MemoryIndexKit,
     lease_id: Optional[str] = None,
     trace_id: Optional[str] = None,
 ) -> Task:
     """Pre-loop activation of the index resident — write-side only.
 
     Emits one ``ContextContentRecorded`` carrying the index fingerprint
-    (:func:`memory_index_hash` — the same function the kind spec's
-    ``hashes`` resolver uses, so the recorded fingerprint and the composed
-    bytes share one source of truth) and converges live state through
-    ``apply_event``, exactly like the engine-side provenance helpers. Empty
-    ``entries`` is a no-op (unconfigured memory leaves the ledger
-    untouched), and re-recording an already-active index is dropped
+    (``kit.content_hash`` — the same injected kit whose ``content_kind``
+    the composer renders from, so the recorded fingerprint and the
+    composed bytes share one source of truth) and converges live state
+    through ``apply_event``, exactly like the engine-side provenance
+    helpers. Empty ``entries`` is a no-op (unconfigured memory leaves the
+    ledger untouched), and re-recording an already-active index is dropped
     first-only, like ``emit_skill_content_recorded``.
 
     Takes the host-owned ``event_log`` / ``content_store`` pair rather
@@ -95,7 +115,7 @@ def record_memory_index(
             kind=MEMORY_KIND,
             name=MEMORY_INDEX_NAME,
             version=MEMORY_INDEX_VERSION,
-            content_hash=memory_index_hash(entries),
+            content_hash=kit.content_hash(entries),
             policy=MEMORY_DRIFT_POLICY,
         ),
         lease_id=lease_id,

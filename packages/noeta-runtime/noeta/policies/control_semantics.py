@@ -1047,6 +1047,14 @@ SPAWN_SUBAGENT_TOOL = "spawn_subagent"
 
 
 _SPAWN_SUBAGENT_DESCRIPTION = load_control_tool_description("spawn_subagent")
+#: Property-level prose long enough to iterate like documentation lives in
+#: the same ``.md`` resource package, under ``<tool>_<property>.md``.
+_SPAWN_SUBAGENT_SPAWNS_DESCRIPTION = load_control_tool_description(
+    "spawn_subagent_spawns"
+)
+_SPAWN_SUBAGENT_BACKGROUND_DESCRIPTION = load_control_tool_description(
+    "spawn_subagent_background"
+)
 
 
 def spawn_subagent_tool_schema(
@@ -1089,14 +1097,7 @@ def spawn_subagent_tool_schema(
                     "spawns": {
                         "type": "array",
                         "minItems": 1,
-                        "description": (
-                            "The sub-agents to spawn. ONE entry delegates and "
-                            "waits for that single result. SEVERAL entries fan "
-                            "out and run CONCURRENTLY; their results return "
-                            "together, in entry order. Always batch independent "
-                            "goals into one call — spawning one entry per turn "
-                            "is strictly sequential, never parallel."
-                        ),
+                        "description": _SPAWN_SUBAGENT_SPAWNS_DESCRIPTION,
                         "items": {
                             "type": "object",
                             "properties": {
@@ -1117,19 +1118,7 @@ def spawn_subagent_tool_schema(
                     # sub-agent's result is delivered as a notice when it finishes.
                     "background": {
                         "type": "boolean",
-                        "description": (
-                            "Run the sub-agent in the background instead of "
-                            "waiting for it. With background=true you immediately "
-                            "get a 'started' acknowledgement and keep working; the "
-                            "sub-agent runs concurrently and its result is "
-                            "delivered to you automatically when it finishes — you "
-                            "never poll or wait. Use it for independent, "
-                            "longer-running work (research, a broad scan) you want "
-                            "off the critical path. Omit it (the default) to "
-                            "delegate and wait for the result inline. Only valid "
-                            "with exactly ONE spawns entry (a fan-out batch is "
-                            "always foreground)."
-                        ),
+                        "description": _SPAWN_SUBAGENT_BACKGROUND_DESCRIPTION,
                     },
                 },
                 "required": ["spawns"],
@@ -1330,9 +1319,9 @@ WORKFLOW_AGENT_NAME = "__workflow__"
 #: string. ``run_workflow`` is a **control-layer orchestration
 #: tool** — it goes through ``SpawnSubtaskDecision`` (→ ``OrchestrationPolicy``),
 #: NOT the ToolRuntime — so its description resource lives beside the control
-#: vocabulary in ``noeta.policies`` rather than in ``noeta.tools.descriptions``
-#: (a ``policies → tools`` import is forbidden by the layering contract; the
-#: loader mechanism is mirrored, not imported).
+#: vocabulary in ``noeta.policies`` rather than beside an execution tool's
+#: impl (built-in tool descriptions ship in their builtin's package since
+#: phase 2c).
 _RUN_WORKFLOW_DESCRIPTION = load_control_tool_description("run_workflow")
 
 
@@ -1475,6 +1464,10 @@ def _maybe_workflow_decision(
 #: the session-level ``output_schema`` (top-level final-answer shape).
 STRUCTURED_OUTPUT_TOOL = "structured_output"
 
+_STRUCTURED_OUTPUT_DESCRIPTION = load_control_tool_description(
+    "structured_output"
+)
+
 
 def structured_output_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
     """Provider-visible schema for :data:`STRUCTURED_OUTPUT_TOOL`.
@@ -1489,10 +1482,7 @@ def structured_output_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
         "type": "function",
         "function": {
             "name": STRUCTURED_OUTPUT_TOOL,
-            "description": (
-                "Provide your final answer as a structured object matching the "
-                "required JSON schema. Call this exactly once when you are done."
-            ),
+            "description": _STRUCTURED_OUTPUT_DESCRIPTION,
             "parameters": dict(schema),
         },
     }

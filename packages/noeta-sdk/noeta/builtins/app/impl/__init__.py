@@ -28,7 +28,7 @@ from typing import Any
 
 from noeta.protocols.tool import Tool, ToolContext, ToolResult
 from noeta.runtime.app_preview import AppPreviewGateway
-from noeta.tools.descriptions import load_tool_description
+from noeta.protocols.resources import load_markdown
 from noeta.tools._invocation import require_str
 from noeta.runtime.workspace import WorkspaceRoot, resolve_or_error, tool_error
 
@@ -45,7 +45,7 @@ class OpenAppTool:
     workspace: WorkspaceRoot
     gateway: AppPreviewGateway
     name: str = "open_app"
-    description: str = field(default=load_tool_description("open_app"))
+    description: str = field(default=load_markdown(__package__, "open_app"))
     risk_level: str = "low"
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {

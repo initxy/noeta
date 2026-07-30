@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from noeta.context.memory import (
+from noeta.builtins.memory.impl.index import (
     RecallHit,
     format_recall_text,
     match_memories_tiered,
