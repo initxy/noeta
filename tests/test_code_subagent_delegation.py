@@ -97,7 +97,7 @@ def _session(
 ):
     """A one-shot SDK host that may delegate to ``spawnable``.
 
-    ``delegate_to=("explore",)`` maps to ``capabilities.delegation=True`` +
+    ``delegate_to=("explore",)`` maps to ``plugins=("delegation", …)`` +
     ``spawnable=("explore",)`` on the main spec (the SDK host reads delegation
     rights off the spec); the named children are registered alongside it.
     Returns ``(host, driver, provider)`` — the shared ``FakeLLMProvider`` carries

@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from tests._session_inputs import default_factory_kwargs
+from noeta.agent.spec import agent_activates
 from noeta.client.consolidation import (
     CONSOLIDATION_AGENT_NAME,
     CONSOLIDATION_MARKER_FILENAME,
@@ -435,13 +436,13 @@ def test_preset_exports_and_roster_isolation() -> None:
     assert CONSOLIDATION_AGENT_NAME not in OFFICIAL_SUBAGENTS
     assert CONSOLIDATION_AGENT.tools == ()
     # Memory is expressed as activation (D5): the compiled child carries
-    # capabilities.memory=True.
+    # "memory" in its plugins tuple.
     assert "memory" in CONSOLIDATION_AGENT.plugins
     _cmain, _cdesc = compile_options(
         with_consolidation_agent(main_options())
     )
     _consol = next(d for d in _cdesc if d.name == CONSOLIDATION_AGENT_NAME)
-    assert _consol.capabilities.memory is True
+    assert agent_activates(_consol, "memory") is True
 
     base_main, base_desc = compile_options(main_options())
     main, desc = compile_options(with_consolidation_agent(main_options()))
@@ -449,7 +450,7 @@ def test_preset_exports_and_roster_isolation() -> None:
     # the spawnable auto-union, so the spawn_subagent directory (and the
     # stable prefix) stays byte-identical.
     assert main == base_main
-    assert CONSOLIDATION_AGENT_NAME not in main.capabilities.spawnable
+    assert CONSOLIDATION_AGENT_NAME not in main.spawnable
     names = sorted(d.name for d in desc)
     assert CONSOLIDATION_AGENT_NAME in names
     assert names == sorted(
@@ -457,8 +458,8 @@ def test_preset_exports_and_roster_isolation() -> None:
     )
     spec = next(d for d in desc if d.name == CONSOLIDATION_AGENT_NAME)
     assert spec.tools == ()  # empty whitelist — see the session-inputs test
-    assert spec.capabilities.memory is True
-    assert spec.capabilities.delegation is False
+    assert agent_activates(spec, "memory") is True
+    assert agent_activates(spec, "delegation") is False
     # The prompt carries the memory policy fragment (duty 3 is defined by it).
     from noeta.presets import MEMORY_POLICY_PROMPT
 

@@ -31,7 +31,6 @@ from noeta.agent.registry import AgentRegistry
 from noeta.agent.spec import (
     AgentSpec,
     BudgetSpec,
-    Capabilities,
     ComponentRef,
     ToolRef,
 )
@@ -112,7 +111,7 @@ def _spec() -> AgentSpec:
         policy=ComponentRef("react", "1"),
         composer=ComponentRef("three_segment", "v3"),
         tools=(ToolRef(name="read", risk_level="low", version="1"),),
-        capabilities=Capabilities(),
+        plugins=(),
         default_budget=BudgetSpec(max_iterations=20),
         metadata={},
     )

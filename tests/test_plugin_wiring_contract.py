@@ -24,6 +24,7 @@ from typing import Any, Sequence
 
 import pytest
 
+from noeta.agent.spec import agent_activates
 from noeta.builtins import BUILTIN_PLUGIN_NAMES, assert_activation_vocabulary
 from noeta.client.options import (
     BUILTIN_ACTIVATIONS,
@@ -364,7 +365,7 @@ def test_a_plugin_child_agent_without_a_clash_is_compiled() -> None:
         _bare(plugins=("helpful",)), plugins=activation
     )
     assert [d.name for d in descendants] == ["scout"]
-    assert main.capabilities.spawnable == ("scout",)
+    assert main.spawnable == ("scout",)
 
 
 # ===========================================================================
@@ -637,13 +638,13 @@ def test_a_child_agent_can_be_granted_delegation() -> None:
         description="a lead", prompt="p", plugins=("delegation",)
     )
     _main, descendants = compile_options(_bare(agents={"lead": child}))
-    assert descendants[0].capabilities.delegation is True
+    assert agent_activates(descendants[0], "delegation") is True
 
 
 def test_activating_delegation_on_a_childless_root_is_additive() -> None:
     main, _d = compile_options(_bare(plugins=("delegation",)))
-    assert main.capabilities.delegation is True
-    assert main.capabilities.spawnable == ()
+    assert agent_activates(main, "delegation") is True
+    assert main.spawnable == ()
 
 
 # ===========================================================================

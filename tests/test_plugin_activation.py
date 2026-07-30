@@ -2,8 +2,8 @@
 
 These pin the switch-over that completes M1:
 
-* built-in feature-bundle activation folds onto the ``Capabilities`` identity
-  flags exactly as the retired ``Capabilities(...)`` recipe field did;
+* built-in feature-bundle activation folds into the ``AgentSpec.plugins``
+  identity tuple exactly as the retired ``Capabilities(...)`` recipe field did;
 * an unknown activation name fails compilation loudly (D5 / acceptance-4);
 * per-agent activation makes an external plugin's tools follow the agent that
   activates it, and NOT a sibling that does not (D6 / acceptance-6);
@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from noeta.agent.spec import Capabilities
+from noeta.agent.spec import agent_activates
 from noeta.client.options import (
     DEFAULT_PLUGINS,
     AgentDefinition,
@@ -39,42 +39,34 @@ def _bare(**kw: object) -> Options:
 
 
 def test_default_plugins_is_identity_inert() -> None:
-    """A bare ``Options()`` activates ``fs`` / ``web`` — inert, all flags off."""
+    """A bare ``Options()`` activates ``fs`` / ``web`` — inert, no feature flags."""
     assert Options(system_prompt="x").plugins == DEFAULT_PLUGINS
     main, _ = compile_options(_bare())
-    assert main.capabilities == Capabilities()  # every flag False
+    # The identity tuple is exactly the inert default packs; no feature name.
+    assert main.plugins == DEFAULT_PLUGINS
+    assert main.spawnable == ()
 
 
 def test_memory_activation_sets_the_flag() -> None:
     """``plugins=["memory"]`` is the successor to ``Capabilities(memory=True)``."""
     main, _ = compile_options(_bare(plugins=("memory",)))
-    assert main.capabilities.memory is True
-    # And nothing else flips.
-    assert main.capabilities == Capabilities(memory=True)
+    assert agent_activates(main, "memory") is True
+    # And nothing else lands in the tuple.
+    assert main.plugins == ("memory",)
+    assert main.spawnable == ()
 
 
 def test_control_and_feature_bundles_all_map() -> None:
-    main, _ = compile_options(
-        _bare(
-            plugins=(
-                "todo_write",
-                "ask_user_question",
-                "skill_invocation",
-                "memory",
-                "mcp",
-                "browser",
-            )
-        )
+    names = (
+        "todo_write",
+        "ask_user_question",
+        "skill_invocation",
+        "memory",
+        "mcp",
+        "browser",
     )
-    c = main.capabilities
-    assert (
-        c.todo_write
-        and c.ask_user_question
-        and c.skill_invocation
-        and c.memory
-        and c.mcp
-        and c.browser
-    )
+    main, _ = compile_options(_bare(plugins=names))
+    assert all(agent_activates(main, n) for n in names)
 
 
 def test_control_tool_plugin_names_coexist_with_activation_bundles() -> None:
@@ -97,8 +89,10 @@ def test_control_tool_plugin_names_coexist_with_activation_bundles() -> None:
         _bare(plugins=("todo_write", "ask_user_question", "delegation")),
         plugins=activation,
     )
-    c = main.capabilities
-    assert c.todo_write and c.ask_user_question and c.delegation
+    assert all(
+        agent_activates(main, n)
+        for n in ("todo_write", "ask_user_question", "delegation")
+    )
 
 
 def test_delegation_and_spawnable_stay_structural() -> None:
@@ -109,8 +103,8 @@ def test_delegation_and_spawnable_stay_structural() -> None:
         },
     )
     main, _ = compile_options(opts)
-    assert main.capabilities.delegation is True
-    assert main.capabilities.spawnable == ("child",)
+    assert agent_activates(main, "delegation") is True
+    assert main.spawnable == ("child",)
 
 
 def test_child_activation_flows_to_child_caps() -> None:
@@ -123,8 +117,8 @@ def test_child_activation_flows_to_child_caps() -> None:
     )
     _, descendants = compile_options(opts)
     (child,) = descendants
-    assert child.capabilities.skill_invocation is True
-    assert child.capabilities.delegation is False  # flat child never derives it
+    assert agent_activates(child, "skill_invocation") is True
+    assert agent_activates(child, "delegation") is False  # flat child never derives it
 
 
 def test_unknown_activation_fails_loudly() -> None:

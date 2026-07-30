@@ -2,8 +2,9 @@
 
 Switch surface follows the flag precedent (431bccd + f0f39c1 review round):
 
-* ``Capabilities.memory`` is an identity flag (part of structural equality);
-  only ``main`` enables it in presets.
+* The ``"memory"`` activation is an identity flag (part of structural
+  equality — membership in ``AgentSpec.plugins``); only ``main`` enables it in
+  presets.
 * ``build_session_inputs(memory_enabled=…, memory_dir=…)`` is the single
   construction point for live/replay: bytes match only when the switch matches.
   On → memory_write/read tools join the tool table (fixed order
@@ -29,6 +30,7 @@ from tests._session_inputs import (
     default_factory_kwargs,
     fold_legacy_capability_kwargs,
 )
+from noeta.agent.spec import agent_activates
 from noeta.context.environment import ENVIRONMENT_KIND
 from noeta.context.memory import MEMORY_KIND
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
@@ -59,7 +61,7 @@ def _inputs(ws: Path, **kwargs):
 
 
 # ---------------------------------------------------------------------------
-# 1. Capabilities.memory — part of Agent identity
+# 1. the "memory" activation — part of Agent identity
 # ---------------------------------------------------------------------------
 
 
@@ -72,8 +74,8 @@ def test_memory_flag_is_identity_bearing() -> None:
     )
     # Turning memory on is a real identity change on the compiled spec.
     assert base != on
-    assert base.capabilities.memory is False
-    assert on.capabilities.memory is True
+    assert agent_activates(base, "memory") is False
+    assert agent_activates(on, "memory") is True
 
 
 # ---------------------------------------------------------------------------
@@ -84,9 +86,9 @@ def test_memory_flag_is_identity_bearing() -> None:
 
 def test_presets_main_has_memory_subagents_do_not() -> None:
     specs = official_specs()
-    assert specs["main"].capabilities.memory is True
+    assert agent_activates(specs["main"], "memory") is True
     for name in ("explore", "plan", "general-purpose"):
-        assert specs[name].capabilities.memory is False
+        assert agent_activates(specs[name], "memory") is False
 
 
 # ---------------------------------------------------------------------------
@@ -183,8 +185,8 @@ def _memory_session(
     mem_dir=None,
     multi_turn: bool = False,
 ):
-    """An SDK session with memory wired off ``spec.capabilities.memory`` — the
-    same memory machinery (tools + resident index + seed-path recall) the
+    """An SDK session with memory wired off the spec's ``"memory"`` activation —
+    the same memory machinery (tools + resident index + seed-path recall) the
     shipping backend builds."""
     from noeta.testing.fake_llm import FakeLLMProvider
     from noeta.runtime.shell_policy import ShellMode

@@ -109,7 +109,7 @@ def assert_activation_vocabulary() -> None:
             f"built-in plugin(s) {missing} are in the catalogue but not in "
             f"noeta.client.options.BUILTIN_ACTIVATIONS, so no agent can "
             f"activate them — add each name to _ACTIVATION_CAPABILITY_FLAG (if "
-            f"it flips a Capabilities flag) or _INERT_BUILTIN_ACTIVATIONS"
+            f"it maps onto a feature flag) or _INERT_BUILTIN_ACTIVATIONS"
         )
 
 

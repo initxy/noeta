@@ -65,9 +65,9 @@ def _load_prompt(name: str) -> str:
 #: archive the stale). It rides the preset prompt layer, NOT the memory-index
 #: resident — the index renders zero bytes on an empty store, but the policy
 #: must be in place before the first memory is ever written. Appended (via
-#: :func:`_with_memory_policy`) to the prompt of every preset that opens
-#: ``Capabilities.memory``; exported so custom-spec authors who set
-#: ``memory=True`` can concatenate it onto their own prompts the same way.
+#: :func:`_with_memory_policy`) to the prompt of every preset that activates
+#: ``memory``; exported so custom-spec authors who set
+#: ``plugins=["memory"]`` can concatenate it onto their own prompts the same way.
 MEMORY_POLICY_PROMPT = _load_prompt("memory-policy")
 
 
@@ -82,7 +82,7 @@ def _with_memory_policy(prompt: str) -> str:
 
 
 #: ``main``'s full system prompt: ``main.md`` plus the memory-policy fragment
-#: (``main`` is the one official preset with ``Capabilities.memory=True``; the
+#: (``main`` is the one official preset that activates ``memory``; the
 #: three subagents are memory-free and get no fragment).
 MAIN_SYSTEM_PROMPT = _with_memory_policy(_load_prompt("main"))
 #: The sandbox-browser variant of ``main``'s prompt: identical except the
@@ -91,7 +91,7 @@ MAIN_SYSTEM_PROMPT = _with_memory_policy(_load_prompt("main"))
 #: stays byte-identical to pre-browser-subsystem; a test pins the two files to
 #: differ ONLY in that bullet. Used by :func:`sandbox_browser_options` — the
 #: prompt must not mention ``web`` unless ``web`` is actually in the roster.
-#: It inherits ``main``'s capabilities (memory included), so it carries the
+#: It inherits ``main``'s activation (memory included), so it carries the
 #: same memory-policy fragment.
 MAIN_WEB_SYSTEM_PROMPT = _with_memory_policy(_load_prompt("main-web"))
 _GENERAL_PURPOSE_PROMPT = _load_prompt("general-purpose")
@@ -144,7 +144,7 @@ _GENERAL_PURPOSE_TOOLS = (
 
 #: The ``web`` subagent's whitelist-filtered base tools. The browser pack
 #: (``browser_*``) is NOT listed here — it is flag-gated by
-#: ``Capabilities(browser=True)`` + a live sandbox backend (like memory), not by
+#: the ``browser`` activation + a live sandbox backend (like memory), not by
 #: this whitelist. These are the supporting tools: read/write to save findings,
 #: read-only shell + ``webfetch`` (a raw-content fetch when no interaction is
 #: needed). No ``edit``/``apply_patch`` — a browser worker writes fresh notes, it
@@ -310,8 +310,9 @@ def main_options() -> Options:
         agents=dict(OFFICIAL_SUBAGENTS),
         # Activation (D5): the built-in feature bundles main opens. ``fs`` / ``web``
         # are the default tool packs (DEFAULT_PLUGINS); ``memory`` / ``mcp`` and
-        # the control-tool bundles fold into the same identity flags the retired
-        # ``Capabilities(...)`` set. ``delegation`` / ``spawnable`` are derived
+        # the control-tool bundles fold into the same identity the retired
+        # ``Capabilities(...)`` set carried, now the ``AgentSpec.plugins`` tuple.
+        # ``delegation`` folds into that tuple and ``spawnable`` is derived
         # structurally from the three subagents by compile's additive union.
         plugins=DEFAULT_PLUGINS
         + ("todo_write", "ask_user_question", "skill_invocation", "memory", "mcp"),
@@ -325,7 +326,7 @@ def sandbox_browser_options() -> Options:
     Product-activation helper (the sandbox-browser-subsystem spec, D3 / B6):
     when a deployment provisions a per-session AIO Sandbox (``NOETA_AGENT_SANDBOX``
     on), the browser tool pack can actually work, so the ``web`` browsing
-    specialist — the only identity that opens ``Capabilities.browser=True`` —
+    specialist — the only identity that activates ``browser`` —
     is wired into main's delegation roster. Main does NOT open ``browser``: it
     has no ``browser_*`` tools and must delegate every page interaction to
     ``web`` (which isolates browsing token churn in a child context and returns

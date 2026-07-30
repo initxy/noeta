@@ -20,9 +20,9 @@ from noeta.agent.registry import AgentRegistry, UnknownAgentError
 from noeta.agent.spec import (
     AgentSpec,
     BudgetSpec,
-    Capabilities,
     ComponentRef,
     ToolRef,
+    agent_activates,
 )
 from noeta.client.host import SdkHost
 from noeta.client.parts import derive_compaction_config
@@ -98,7 +98,7 @@ def _simple_main_spec(
         policy=ComponentRef("react", "1"),
         composer=ComponentRef("three_segment", "v3"),
         tools=tools,
-        capabilities=Capabilities(),
+        plugins=(),
         default_budget=BudgetSpec(max_iterations=20),
         metadata={},
     )
@@ -367,7 +367,7 @@ def test_sdk_host_plan_pack_has_no_write(tmp_path: Path) -> None:
         "stub-model",
         delegation_enabled=False,
         allowed_subtask_agents=frozenset(),
-        ask_user_question_enabled=plan_spec.capabilities.ask_user_question,
+        ask_user_question_enabled=agent_activates(plan_spec, "ask_user_question"),
         policy_wrapper=None,
     )
     # The whole write family is physically absent from plan's pack.

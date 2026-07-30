@@ -17,6 +17,7 @@ from collections import OrderedDict
 from typing import Any, Callable, Optional
 
 from noeta.agent.registry import UnknownAgentError
+from noeta.agent.spec import agent_activates
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.execution.environment import record_environment
@@ -170,10 +171,11 @@ class GenericEngineResolver:
         """Resolve ``name`` → an agent object, or raise ``UnknownAgentError``.
 
         Contract for implementations:
-          * The returned object must expose ``.name`` and ``.capabilities``;
-            ``capabilities`` must have boolean members ``todo_write``,
-            ``ask_user_question``, ``delegation`` and a
-            ``spawnable`` member parseable by :meth:`_spawnable_set`.
+          * The returned object must expose ``.name``, ``.plugins`` (the
+            activation tuple read through
+            :func:`~noeta.agent.spec.agent_activates` — ``"todo_write"`` /
+            ``"ask_user_question"`` / ``"delegation"`` / ``"mcp"`` membership),
+            and a ``.spawnable`` member parseable by :meth:`_spawnable_set`.
             (``plan_mode`` was removed)
           * An unknown ``name`` **must** raise ``UnknownAgentError`` carrying
             the supplied ``task_id``, the bad ``name``, and a sorted
@@ -184,7 +186,7 @@ class GenericEngineResolver:
         raise NotImplementedError
 
     def _spawnable_set(self, spawnable: Any) -> frozenset[str]:
-        """Parse ``agent.capabilities.spawnable`` into a set of known agent names.
+        """Parse ``agent.spawnable`` into a set of known agent names.
 
         Accepts whatever shape the product's agent definitions emit (a list, a
         frozenset, an alias-bearing dict …) and returns a ``frozenset`` of
@@ -224,9 +226,9 @@ class GenericEngineResolver:
         knobs (write modes, shell modes, workspace dir, provider, hooks,
         budget, MCP specs, skill settings, …). The hook receives the four
         cross-product arguments it computed; an implementation is responsible
-        for reading the remaining fields off ``self`` and/or
-        ``agent.capabilities`` (e.g. ``todo_write_enabled``) and forwarding
-        them to its engine factory.
+        for reading the remaining fields off ``self`` and/or the agent's
+        activation tuple (e.g. ``agent_activates(agent, "todo_write")``) and
+        forwarding them to its engine factory.
 
         ``workspace`` is the per-session workspace **absolute path**
         (``None`` ⇒ the host-fixed default dir). An implementation uses it
@@ -429,7 +431,7 @@ class GenericEngineResolver:
             if parent_id is not None:
                 parent_name = agent_name_of(self.event_log, str(parent_id))
                 parent_agent = self._lookup_agent(parent_name, task_id=str(parent_id))
-                inherited = self._spawnable_set(parent_agent.capabilities.spawnable)
+                inherited = self._spawnable_set(parent_agent.spawnable)
             return self._build_orchestration_engine(
                 task_id, allowed_subtask_agents=inherited
             )
@@ -519,7 +521,7 @@ class GenericEngineResolver:
             agent,
             model=model,
             ask_user_question_enabled=(
-                agent.capabilities.ask_user_question
+                agent_activates(agent, "ask_user_question")
                 and getattr(task, "parent_task_id", None) is None
                 and int(getattr(task, "subtask_depth", 0) or 0) == 0
             ),
@@ -632,7 +634,7 @@ class GenericEngineResolver:
                 self.unnamed_fallback,
                 model=model,
                 ask_user_question_enabled=(
-                    self.unnamed_fallback.capabilities.ask_user_question
+                    agent_activates(self.unnamed_fallback, "ask_user_question")
                 ),
                 workspace=workspace,
                 provider=provider,
@@ -647,7 +649,7 @@ class GenericEngineResolver:
         return self._engine_for_agent(
             agent,
             model=model,
-            ask_user_question_enabled=agent.capabilities.ask_user_question,
+            ask_user_question_enabled=agent_activates(agent, "ask_user_question"),
             workspace=workspace,
             provider=provider,
             permission_mode=permission_mode,
@@ -772,7 +774,7 @@ class GenericEngineResolver:
         cancel_check = lambda: self.is_cancelled(root_id)  # noqa: E731
         root_agent_name = agent_name_of(self.event_log, parent_task.task_id)
         root_agent = self._lookup_agent(root_agent_name, task_id=parent_task.task_id)
-        inherited_subtasks = self._spawnable_set(root_agent.capabilities.spawnable)
+        inherited_subtasks = self._spawnable_set(root_agent.spawnable)
         # children share the root session's fs root — the
         # delegation tree runs in ONE workspace (the root parent's absolute path
         # binding), not each child's host default. ``None`` parent workspace ⇒
@@ -837,13 +839,10 @@ class GenericEngineResolver:
 
         def _child_mcp_aliases(child_agent: Any) -> tuple[str, ...]:
             # D8 gate: inherit the parent's enabled aliases only when the child
-            # spec opts in. ``getattr`` default False keeps a spec without the
-            # capability (or a non-AgentSpec like __workflow__) MCP-free.
-            return (
-                inherited_mcp
-                if getattr(child_agent.capabilities, "mcp", False)
-                else ()
-            )
+            # spec opts in. ``agent_activates`` tolerates a spec without the
+            # ``mcp`` activation (or a non-AgentSpec like __workflow__ carrying no
+            # ``plugins``) — both stay MCP-free.
+            return inherited_mcp if agent_activates(child_agent, "mcp") else ()
 
         def _build_subtask_engine(task_id: str) -> Engine:
             # a child recorded as __workflow__ is the orchestration
@@ -1026,7 +1025,7 @@ class GenericEngineResolver:
 
         S3b: delegation is AGENT identity too, gated by the host kill-switch.
         The authorized sub-agent set comes from the agent's own
-        ``capabilities.spawnable`` (filtered to known agents) — never a host
+        ``spawnable`` (filtered to known agents) — never a host
         input. When delegation is off (agent declares none, or the deployment
         disabled it) the set is empty so no spawn_subagent schema is exposed.
         """
@@ -1039,18 +1038,20 @@ class GenericEngineResolver:
         # (already depth-masked) value the caller passed; when unspecified it
         # falls back to the agent's own capability.
         effective_ask = (
-            agent.capabilities.ask_user_question
+            agent_activates(agent, "ask_user_question")
             if ask_user_question_enabled is None
             else ask_user_question_enabled
         )
         # S3b: delegation is AGENT identity too, gated by the host kill-switch.
         # The authorized sub-agent set comes from the agent's own
-        # ``capabilities.spawnable`` (filtered to known agents) — never a host
+        # ``spawnable`` (filtered to known agents) — never a host
         # input. When delegation is off (agent declares none, or the deployment
         # disabled it) the set is empty so no spawn_subagent schema is exposed.
-        eff_delegation = agent.capabilities.delegation and self.delegation_allowed
+        eff_delegation = (
+            agent_activates(agent, "delegation") and self.delegation_allowed
+        )
         eff_subtask_agents = (
-            self._spawnable_set(agent.capabilities.spawnable)
+            self._spawnable_set(agent.spawnable)
             if eff_delegation
             else frozenset()
         )

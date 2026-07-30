@@ -26,7 +26,6 @@ import pytest
 from noeta.agent.spec import (
     AgentSpec,
     BudgetSpec,
-    Capabilities,
 )
 from noeta.client import (
     Client,
@@ -339,7 +338,8 @@ def test_options_vs_handwritten_spec_identity() -> None:
         guards=(),
         observers=(),
         default_budget=BudgetSpec(max_iterations=5),
-        capabilities=Capabilities(),
+        plugins=("fs", "web"),
+        spawnable=(),
         metadata={},
         default_model=None,
     )

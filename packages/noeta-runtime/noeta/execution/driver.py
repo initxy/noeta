@@ -736,7 +736,7 @@ class InteractionDriver:
         # Memory auto-recall (the deleted runner's prepare-time D5/D6 wiring,
         # ported onto the seed path). The host seam resolves the
         # (recall-provider, entries) pair ONLY for an agent whose spec enables
-        # ``Capabilities.memory`` (``None`` otherwise) — a memory-off agent's
+        # the ``"memory"`` activation (``None`` otherwise) — a memory-off agent's
         # stream stays byte-identical, and the ``getattr`` guard keeps hosts
         # without the seam (test doubles / control-plane-only hosts) a clean
         # no-op. Microkernel M3: the provider arrives already bound to a live

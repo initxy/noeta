@@ -24,7 +24,7 @@ pluggable **extension interfaces** (``Tool`` / ``LLMProvider`` / ``Policy`` /
 from __future__ import annotations
 
 from noeta import presets
-from noeta.agent.spec import BudgetSpec, Capabilities
+from noeta.agent.spec import BudgetSpec
 from noeta.client.capabilities import (
     effort_modes,
     model_capabilities,
@@ -199,10 +199,9 @@ __all__ = [
     "SystemPromptPreset",
     "compile_options",
     "register_preset_prompt",
-    # recipe advanced field (Options.budget) + the compiled AgentSpec identity
-    # type (AgentSpec.capabilities — read-only projection; activation via
-    # Options.plugins is the authoring path)
-    "Capabilities",
+    # recipe advanced field (Options.budget). The compiled AgentSpec identity
+    # carries activation as the ``plugins`` tuple + ``spawnable`` (D6); the
+    # authoring path is ``Options.plugins``.
     "BudgetSpec",
     # client verbs
     "Client",

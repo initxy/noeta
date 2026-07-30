@@ -5,8 +5,9 @@ factory (band 300 — the pre-migration schema band). Its mount also publishes t
 answer codec as a mount export (D8), so the kernel driver's ``answer`` path can
 decode a submitted answer without importing this built-in. ``ask_user_question``
 stays a recognized activation name, so ``plugins=("ask_user_question",)`` still
-folds to ``Capabilities.ask_user_question=True`` — the plugin name matching the
-activation name does not change activation semantics.
+lands ``"ask_user_question"`` in the compiled ``AgentSpec.plugins`` identity
+tuple — the plugin name matching the activation name does not change activation
+semantics.
 """
 
 from __future__ import annotations

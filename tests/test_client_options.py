@@ -28,7 +28,7 @@ import dataclasses
 
 import pytest
 
-from noeta.agent.spec import BudgetSpec, ComponentRef, ToolRef
+from noeta.agent.spec import BudgetSpec, ComponentRef, ToolRef, agent_activates
 from noeta.client import (
     AgentDefinition,
     Options,
@@ -213,13 +213,13 @@ def test_child_agents_flat_and_capabilities_set() -> None:
     assert {s.name for s in descendants} == {"child_a", "child_b"}
 
     # Parent: delegation=True, spawnable = sorted union of child names.
-    assert main.capabilities.delegation is True
-    assert tuple(main.capabilities.spawnable) == ("child_a", "child_b")
+    assert agent_activates(main, "delegation") is True
+    assert tuple(main.spawnable) == ("child_a", "child_b")
 
     # Children: no delegation, no spawnable (flat leaves).
     for s in descendants:
-        assert s.capabilities.delegation is False
-        assert tuple(s.capabilities.spawnable) == ()
+        assert agent_activates(s, "delegation") is False
+        assert tuple(s.spawnable) == ()
 
 
 def test_child_agents_name_collides_with_root_raises_valueerror() -> None:
@@ -330,12 +330,12 @@ def test_agents_dict_produces_child_spec_with_description_metadata() -> None:
     assert child.metadata.get("description") == "A researcher that finds facts."
     # Children get the standard budget guard (max_subtask_depth=3).
     assert child.default_budget.max_subtask_depth == 3
-    # Children get Capabilities() — delegation False, no spawnable.
-    assert child.capabilities.delegation is False
-    assert tuple(child.capabilities.spawnable) == ()
+    # Children get an empty activation — delegation False, no spawnable.
+    assert agent_activates(child, "delegation") is False
+    assert tuple(child.spawnable) == ()
     # Parent spawnable includes the flat dict name.
-    assert tuple(main.capabilities.spawnable) == ("researcher",)
-    assert main.capabilities.delegation is True
+    assert tuple(main.spawnable) == ("researcher",)
+    assert agent_activates(main, "delegation") is True
 
 
 def test_agents_dict_child_metadata_merges_under_description() -> None:
@@ -414,7 +414,7 @@ def test_agents_dict_distinct_children_compile_cleanly() -> None:
     )
     main, kids = compile_options(opts)
     assert {s.name for s in kids} == {"a", "b"}
-    assert tuple(sorted(main.capabilities.spawnable)) == ("a", "b")
+    assert tuple(sorted(main.spawnable)) == ("a", "b")
 
 
 def test_agents_child_model_passes_through() -> None:
@@ -745,26 +745,27 @@ def test_agent_definition_activation_compiled_into_child_spec() -> None:
     _, kids_with = compile_options(opts_with)
     _, kids_plain = compile_options(opts_plain)
 
-    assert kids_with[0].capabilities.todo_write is True
-    assert kids_with[0].capabilities.ask_user_question is True
+    assert agent_activates(kids_with[0], "todo_write") is True
+    assert agent_activates(kids_with[0], "ask_user_question") is True
     # With vs without activation: identities must differ.
     assert kids_with[0] != kids_plain[0]
 
 
 def test_agent_definition_no_activation_defaults_to_empty_capabilities() -> None:
     """With no activation (default empty ``plugins``), the child spec's
-    capabilities are the all-default Capabilities(); spawnable stays empty
+    activation tuple is empty; spawnable stays empty
     (children are flat leaves and do not union spawnable like the parent does)."""
     defn = AgentDefinition(description="d", prompt="p")
     assert defn.plugins == ()  # surface default: no activation
     _, kids = compile_options(Options(system_prompt="root", name="main", agents={"c": defn}))
-    caps = kids[0].capabilities
-    # All flags False.
-    assert caps.todo_write is False
-    assert caps.ask_user_question is False
-    assert caps.delegation is False
+    child = kids[0]
+    # No feature activated.
+    assert child.plugins == ()
+    assert agent_activates(child, "todo_write") is False
+    assert agent_activates(child, "ask_user_question") is False
+    assert agent_activates(child, "delegation") is False
     # spawnable empty (not the parent's spawnable, and no union across children).
-    assert tuple(caps.spawnable) == ()
+    assert tuple(child.spawnable) == ()
 
 
 # ---------------------------------------------------------------------------
@@ -788,8 +789,8 @@ def test_options_skill_invocation_passthrough() -> None:
     main_false, _ = compile_options(opts_false)
     main_true, _ = compile_options(opts_true)
 
-    assert main_false.capabilities.skill_invocation is False
-    assert main_true.capabilities.skill_invocation is True
+    assert agent_activates(main_false, "skill_invocation") is False
+    assert agent_activates(main_true, "skill_invocation") is True
     assert main_true != main_false
 
 
@@ -811,8 +812,8 @@ def test_agent_definition_skill_invocation_passthrough() -> None:
         Options(system_prompt="root", name="main", agents={"c": defn_plain})
     )
 
-    assert kids_true[0].capabilities.skill_invocation is True
-    assert kids_plain[0].capabilities.skill_invocation is False
+    assert agent_activates(kids_true[0], "skill_invocation") is True
+    assert agent_activates(kids_plain[0], "skill_invocation") is False
     assert kids_true[0] != kids_plain[0]
 
 

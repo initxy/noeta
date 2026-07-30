@@ -17,6 +17,7 @@ from __future__ import annotations
 
 
 
+from noeta.agent.spec import agent_activates
 from noeta.client.options import compile_options
 from noeta.presets import (
     MAIN_SYSTEM_PROMPT,
@@ -45,31 +46,27 @@ class TestSandboxBrowserOptions:
         opts = sandbox_browser_options()
         assert "browser" not in opts.plugins
         main, _ = compile_options(opts)
-        assert main.capabilities.browser is False
+        assert agent_activates(main, "browser") is False
 
     def test_compiles_web_into_registry(self) -> None:
         main, descendants = compile_options(sandbox_browser_options())
         names = {main.name} | {d.name for d in descendants}
         assert "web" in names
         web = next(d for d in descendants if d.name == "web")
-        assert web.capabilities.browser is True
+        assert agent_activates(web, "browser") is True
 
     def test_main_spawnable_includes_web(self) -> None:
         main, _descendants = compile_options(sandbox_browser_options())
-        assert "web" in main.capabilities.spawnable
+        assert "web" in main.spawnable
 
     def test_main_identity_unchanged_from_main(self) -> None:
-        """Activation only adds ``web`` to the roster; main's full capability
+        """Activation only adds ``web`` to the roster; main's full activation
         identity is byte-identical to :func:`main_options` — including
-        ``browser`` (stays ``False``; direction A). No drift of the
-        conversational agent's capabilities."""
+        ``browser`` (stays off; direction A). No drift of the conversational
+        agent's ``plugins`` tuple."""
         base_main, _ = compile_options(main_options())
         sb_main, _ = compile_options(sandbox_browser_options())
-        for field in ("todo_write", "ask_user_question", "delegation",
-                       "skill_invocation", "memory", "mcp", "browser"):
-            assert getattr(sb_main.capabilities, field) == getattr(
-                base_main.capabilities, field
-            ), f"capabilities.{field} drifted during browser activation"
+        assert sb_main.plugins == base_main.plugins
 
 
 # -- Prompt / roster lockstep ---------------------------------------------- #
@@ -127,7 +124,7 @@ class TestDefaultInvariant:
         opts = main_options()
         assert "browser" not in opts.plugins
         main, _ = compile_options(opts)
-        assert main.capabilities.browser is False
+        assert agent_activates(main, "browser") is False
 
     def test_official_specs_has_no_web(self) -> None:
         specs = official_specs()
@@ -135,11 +132,11 @@ class TestDefaultInvariant:
 
     def test_official_main_browser_off(self) -> None:
         specs = official_specs()
-        assert specs["main"].capabilities.browser is False
+        assert agent_activates(specs["main"], "browser") is False
 
     def test_official_main_spawnable_has_no_web(self) -> None:
         specs = official_specs()
-        assert "web" not in specs["main"].capabilities.spawnable
+        assert "web" not in specs["main"].spawnable
 
 
 # -- EngineRoom full-chain smoke ------------------------------------------ #

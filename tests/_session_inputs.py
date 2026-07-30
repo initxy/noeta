@@ -1,5 +1,6 @@
 import tests._builtin_skills as _skills
 from tests._builtin_skills import BUILTIN_SKILLS_DIR
+from noeta.agent.spec import agent_activates
 from noeta.client.parts import (
     default_control_tools,
     default_guards_factory,
@@ -144,14 +145,14 @@ def build_code_replay_inputs(*, workspace_dir, agent, content_store, model, **kw
     #   the global tier is read from ``noeta.agent.skills.DEFAULT_GLOBAL_SKILLS_DIR``
     #   at call time (conftest redirects that module attribute to a tmp dir,
     #   keeping the suite hermetic).
-    # * the memory switch is sourced from agent capabilities (the sole truth
-    #   source for the memory flag; SdkHost + product resolve effective flags
-    #   under the same discipline) — main on, the three sub-agents off. When
-    #   replaying a recording that explicitly overrode cfg.memory_enabled, the
-    #   caller passes the same value explicitly.
+    # * the memory switch is sourced from the agent's ``"memory"`` activation
+    #   (the sole truth source for the memory flag; SdkHost + product resolve
+    #   effective flags under the same discipline) — main on, the three sub-agents
+    #   off. When replaying a recording that explicitly overrode
+    #   cfg.memory_enabled, the caller passes the same value explicitly.
     kwargs.setdefault("builtin_skills_dirs", (BUILTIN_SKILLS_DIR,))
     kwargs.setdefault("global_skills_dir", _skills.DEFAULT_GLOBAL_SKILLS_DIR)
-    kwargs.setdefault("memory_enabled", agent.capabilities.memory)
+    kwargs.setdefault("memory_enabled", agent_activates(agent, "memory"))
     fold_legacy_capability_kwargs(kwargs)
     # plan's restricted-write path whitelist is host-injected
     # from the spec metadata at LIVE time, so the replay rebuild must derive the

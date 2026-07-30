@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from noeta.agent.spec import Capabilities
+from noeta.agent.spec import agent_activates
 from noeta.client.options import Options, SystemPromptPreset, compile_options
 from noeta.client.parts import BUILTIN_TOOL_CLASSES
 from noeta.presets import (
@@ -34,20 +34,20 @@ def test_official_specs_four_keys_exact() -> None:
 def test_main_spawnable_three_subagents_sorted() -> None:
     specs = official_specs()
     main = specs["main"]
-    assert tuple(main.capabilities.spawnable) == (
+    assert tuple(main.spawnable) == (
         "explore",
         "general-purpose",
         "plan",
     )
     # main has all three control-plane switches on + skill_invocation + memory
     # (plan_mode was dropped).
-    assert main.capabilities.todo_write is True
-    assert main.capabilities.ask_user_question is True
-    assert main.capabilities.delegation is True
-    assert main.capabilities.skill_invocation is True
-    assert main.capabilities.memory is True
+    assert agent_activates(main, "todo_write") is True
+    assert agent_activates(main, "ask_user_question") is True
+    assert agent_activates(main, "delegation") is True
+    assert agent_activates(main, "skill_invocation") is True
+    assert agent_activates(main, "memory") is True
     # main opens MCP inheritance for opt-in workers.
-    assert main.capabilities.mcp is True
+    assert agent_activates(main, "mcp") is True
 
 
 def test_each_subagent_description_non_empty() -> None:
@@ -283,20 +283,17 @@ def test_subagent_capabilities_exact() -> None:
     # working worker, so it opts into inheriting the parent's enabled MCP tool
     # set). explore / plan stay mcp=False (kept physically MCP-free).
     specs = official_specs()
-    assert specs["general-purpose"].capabilities == Capabilities(
-        skill_invocation=True,
-        mcp=True,
-    )
+    assert specs["general-purpose"].plugins == ("mcp", "skill_invocation")
     # Explicit: gp neither narrates (todo_write) nor delegates further down.
-    assert specs["general-purpose"].capabilities.todo_write is False
-    assert specs["general-purpose"].capabilities.delegation is False
-    assert specs["general-purpose"].capabilities.spawnable == ()
-    assert specs["general-purpose"].capabilities.mcp is True
-    assert specs["plan"].capabilities == Capabilities(ask_user_question=True)
-    assert specs["plan"].capabilities.mcp is False
+    assert agent_activates(specs["general-purpose"], "todo_write") is False
+    assert agent_activates(specs["general-purpose"], "delegation") is False
+    assert specs["general-purpose"].spawnable == ()
+    assert agent_activates(specs["general-purpose"], "mcp") is True
+    assert specs["plan"].plugins == ("ask_user_question",)
+    assert agent_activates(specs["plan"], "mcp") is False
     # explore:skill_invocation True, todo_write False, mcp False (read-only scout)
-    assert specs["explore"].capabilities == Capabilities(skill_invocation=True)
-    assert specs["explore"].capabilities.mcp is False
+    assert specs["explore"].plugins == ("skill_invocation",)
+    assert agent_activates(specs["explore"], "mcp") is False
 
 
 # ---------------------------------------------------------------------------
@@ -323,23 +320,23 @@ def test_official_subagents_three_keys() -> None:
 
 # ---------------------------------------------------------------------------
 # 8. Memory-policy prompt fragment (memory v2): in the prompt iff the preset
-#    opens Capabilities.memory
+#    activates memory
 # ---------------------------------------------------------------------------
 
 
 def test_memory_policy_fragment_only_in_memory_presets() -> None:
     # The fragment rides the prompt of memory-enabled presets — main and its
-    # sandbox-browser variant (which inherits main's capabilities) — and of
+    # sandbox-browser variant (which inherits main's activation) — and of
     # no memory-free preset.
     specs = official_specs()
-    assert specs["main"].capabilities.memory is True
+    assert agent_activates(specs["main"], "memory") is True
     assert MEMORY_POLICY_PROMPT in specs["main"].instructions
     web_opts = sandbox_browser_options()
     web_main, _ = compile_options(sandbox_browser_options())
-    assert web_main.capabilities.memory is True
+    assert agent_activates(web_main, "memory") is True
     assert MEMORY_POLICY_PROMPT in web_opts.system_prompt
     for name in ("explore", "plan", "general-purpose"):
-        assert specs[name].capabilities.memory is False
+        assert agent_activates(specs[name], "memory") is False
         assert MEMORY_POLICY_PROMPT not in specs[name].instructions
 
 

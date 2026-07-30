@@ -5,11 +5,12 @@ For each of ``main`` / ``explore`` / ``plan`` / ``general-purpose`` this pins:
 * ``system_prompt`` — the verbatim instructions the model is given;
 * ``tools`` — the allowed tool set (name + version + risk_level), the surface
   advertised to the model;
-* ``capabilities`` — the control surfaces / delegation rights that shape the
-  agent's behaviour and are part of its identity.
+* ``plugins`` / ``spawnable`` — the activation tuple (control surfaces /
+  delegation rights) that shapes the agent's behaviour and is its identity (D6:
+  ``Capabilities`` retired).
 
 A refactor that silently changes any of these (re-words a prompt, drops a tool,
-flips a capability) fails the matching golden with a human-readable text diff.
+flips an activation) fails the matching golden with a human-readable text diff.
 This is the lightweight stand-in for the deleted verify/replay byte-equality
 moat.
 
@@ -51,31 +52,13 @@ def test_preset_set_is_the_canonical_four() -> None:
     assert set(_PRESET_NAMES) == {"main", "explore", "plan", "general-purpose"}
 
 
-def _capabilities_view(spec: AgentSpec) -> dict[str, object]:
-    """Serialize an agent's capabilities into a stable, fully-explicit dict.
-
-    Unlike the fingerprint descriptor (which conditionally omits default-False
-    flags), the snapshot lists *every* flag explicitly so a flag flipping from
-    True back to False is just as visible in the diff as the reverse.
-    """
-    caps = spec.capabilities
-    return {
-        "todo_write": caps.todo_write,
-        "ask_user_question": caps.ask_user_question,
-        "delegation": caps.delegation,
-        "skill_invocation": caps.skill_invocation,
-        "memory": caps.memory,
-        "mcp": caps.mcp,
-        "spawnable": list(caps.spawnable),
-    }
-
-
 def _preset_view(spec: AgentSpec) -> dict[str, object]:
     """Build the stable, model-visible snapshot payload for one preset.
 
     ``tools`` are already sorted by ``AgentSpec.__post_init__``; each is
     rendered as ``{name, version, risk_level}`` — the identity surface the model
-    sees.
+    sees. ``plugins`` / ``spawnable`` are the activation tuple (already sorted by
+    ``__post_init__``) — the identity that shapes behaviour (D6).
     """
     return {
         "name": spec.name,
@@ -84,13 +67,14 @@ def _preset_view(spec: AgentSpec) -> dict[str, object]:
             {"name": t.name, "version": t.version, "risk_level": t.risk_level}
             for t in spec.tools
         ],
-        "capabilities": _capabilities_view(spec),
+        "plugins": list(spec.plugins),
+        "spawnable": list(spec.spawnable),
     }
 
 
 @pytest.mark.parametrize("preset", _PRESET_NAMES)
 def test_preset_prompt_tools_capabilities_snapshot(preset: str) -> None:
-    """The preset's system prompt + tool set + capabilities match its golden."""
+    """The preset's system prompt + tool set + activation match its golden."""
     spec = _SPECS[preset]
     payload = stable_json(_preset_view(spec))
     assert_snapshot(f"preset_{preset}.txt", payload)

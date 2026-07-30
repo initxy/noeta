@@ -55,6 +55,7 @@ from pathlib import Path
 import pytest
 
 from tests._session_inputs import default_factory_kwargs
+from noeta.agent.spec import agent_activates
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
 from noeta.runtime.governance import Budget
 from noeta.presets import official_specs
@@ -80,14 +81,13 @@ def _compose_view_payload(preset: str) -> dict[str, object]:
     """Build ``preset``'s composer through the real assembly path and compose a
     fixed minimal Task, returning the stable serialization of the View.
 
-    Wiring mirrors ``official_specs()[preset].capabilities`` so the control-tool
-    schema injection matches what the live session would emit (delegation /
-    todo_write / ask_user_question / skill_invocation flags + the spawnable
-    sub-agent directory). ``model="stub-model"`` keeps compaction off and the
-    tool schemas free of any provider-edit drop.
+    Wiring mirrors ``official_specs()[preset]``'s activation tuple so the
+    control-tool schema injection matches what the live session would emit
+    (delegation / todo_write / ask_user_question / skill_invocation flags + the
+    spawnable sub-agent directory). ``model="stub-model"`` keeps compaction off
+    and the tool schemas free of any provider-edit drop.
     """
     spec = official_specs()[preset]
-    caps = spec.capabilities
     allowed = frozenset(t.name for t in spec.tools)
 
     # A throwaway temp workspace: nothing is read from it (no skills/memory),
@@ -105,16 +105,16 @@ def _compose_view_payload(preset: str) -> dict[str, object]:
         model="stub-model",
         compaction=COMPACTION_OFF,
         budget=Budget(),
-        allowed_subtask_agents=frozenset(caps.spawnable),
-        delegation_enabled=caps.delegation,
-        todo_write_enabled=caps.todo_write,
-        ask_user_question_enabled=caps.ask_user_question,
-        skill_invocation_enabled=caps.skill_invocation,
+        allowed_subtask_agents=frozenset(spec.spawnable),
+        delegation_enabled=agent_activates(spec, "delegation"),
+        todo_write_enabled=agent_activates(spec, "todo_write"),
+        ask_user_question_enabled=agent_activates(spec, "ask_user_question"),
+        skill_invocation_enabled=agent_activates(spec, "skill_invocation"),
         # The spawn_subagent control schema embeds the sub-agent directory
         # (name + description). Descriptions are pinned by test_prompt_snapshot;
         # here we pass empty descriptions so this golden stays focused on the
         # injection + ordering, not the descriptive prose.
-        subtask_agent_directory=tuple((name, "") for name in caps.spawnable),
+        subtask_agent_directory=tuple((name, "") for name in spec.spawnable),
     )
 
     task = Task(task_id="t-fixed")
