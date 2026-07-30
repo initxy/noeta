@@ -40,7 +40,7 @@ from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.core.hooks import HookManager
 from noeta.core.wiring import wire_default_observers
-from noeta.builtins.react.impl.react import ReActPolicy
+from noeta.builtins.react.impl import ReActPolicy
 from noeta.protocols.events import (
     CompactedPayload,
     LLMRequestFinishedPayload,

@@ -19,10 +19,12 @@ Noeta ships as **two libraries** sharing one `noeta.` namespace:
   (Tool / LLMProvider / Policy / Guard / Observer / ContentChannel), and the
   plugin loader. It contains no engine — it forwards in-process into the
   runtime.
-- **noeta-runtime** — the pure engine underneath: durable event-sourced task
-  execution, fold/snapshot, the scheduler and worker leases, builtin tools,
-  provider adapters, and the context composer. You install it only as a
-  transitive dependency of `noeta-sdk`; you never import it directly.
+- **noeta-runtime** — the pure kernel underneath: durable event-sourced task
+  execution, fold/snapshot, the scheduler and worker leases, the context
+  composer, and the control-tool band. It carries no capability implementation
+  of its own — the tool packs, provider adapters and policies all live in
+  `noeta-sdk`'s built-in plugins. You install it only as a transitive
+  dependency of `noeta-sdk`; you never import it directly.
 
 ## Install
 
@@ -157,7 +159,7 @@ Every turn is a durable, event-sourced engine task:
 | Package | You get | Analogous to |
 | --- | --- | --- |
 | `noeta-sdk` | The client facade you import: `query()`, `Client`, `Options`, `@tool`, presets, the extension interfaces. | Claude Agent SDK |
-| `noeta-runtime` | The pure engine — event log, fold, scheduler, tools, policies, providers. A transitive dependency you never import directly. | — |
+| `noeta-runtime` | The pure kernel — event log, fold, scheduler, the session builder, the control-tool band. No capability implementation of its own. A transitive dependency you never import directly. | — |
 
 The runnable [`examples/`](examples/) cover the SDK surface end to end — a
 minimal agent, custom tools, an in-process MCP server, a permission gate,

@@ -17,7 +17,8 @@ from typing import Any
 from noeta.core.fold import fold
 from noeta.builtins.governance.impl.budget import BudgetGuard
 from noeta.runtime.governance import Budget
-from noeta.builtins.react.impl.react import ReActPolicy, SPAWN_SUBAGENT_TOOL
+from noeta.builtins.react.impl import ReActPolicy
+from noeta.policies.control_tools import SPAWN_SUBAGENT_TOOL
 from noeta.protocols.decisions import (
     SpawnSubtaskDecision,
     SpawnSubtasksDecision,

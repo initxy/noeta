@@ -19,6 +19,9 @@ from noeta.policies._control_translate import (
     ControlToggles,
     translate_control_tool,
 )
+# Deliberately the deep module: this pins react.py's OWN re-export of the
+# kernel constant (the parity assertion below), which the package door does
+# not expose.
 from noeta.builtins.react.impl.react import (
     SKILL_TOOL as _REACT_SKILL_TOOL,
 )

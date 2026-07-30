@@ -32,7 +32,7 @@ from noeta.agent.registry import UnknownAgentError
 from noeta.execution.resolver import agent_name_of
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
-from noeta.builtins.react.impl.react import ReActPolicy
+from noeta.builtins.react.impl import ReActPolicy
 from noeta.protocols.messages import (
     LLMRequest,
     LLMResponse,

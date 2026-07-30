@@ -27,20 +27,6 @@ options = Options(
 
 这样就够了：填充 `agents` 本身就是那个开关。`compile_options` 会自动合成父代理的 `delegation` 能力，并把子代理名并入 `spawnable`，于是 `spawn_subagent` 控制工具会带着 `researcher` 出现在模型可见的 schema 里。
 
-如果你确实要显式传 `capabilities`，它必须是 [`Capabilities`](../reference/sdk.md) 实例——传普通 dict 会在 compile 阶段抛 `AttributeError`：
-
-```python
-from noeta.sdk import Capabilities
-
-options = Options(
-    system_prompt="…",
-    name="lead",
-    agents={"researcher": researcher},
-    # 用 Capabilities(...)，绝不要用 {"delegation": True}
-    capabilities=Capabilities(delegation=True, todo_write=True),
-)
-```
-
 ## 派发如何工作
 
 当父模型调用 `spawn_subagent(agent="researcher", goal="...")` 时，运行时：
@@ -99,7 +85,7 @@ from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.protocols.messages import (
     LLMResponse, TextBlock, ToolUseBlock, Usage,
 )
-from noeta.policies.react import SPAWN_SUBAGENT_TOOL
+from noeta.policies.control_tools import SPAWN_SUBAGENT_TOOL
 
 def _finish(text: str) -> LLMResponse:
     return LLMResponse(

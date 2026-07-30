@@ -23,7 +23,7 @@ from __future__ import annotations
 from noeta.testing.composer import trivial_three_segment
 from noeta.core.engine import Engine
 from noeta.core.fold import messages_from_appended
-from noeta.builtins.react.impl.react import ReActPolicy
+from noeta.builtins.react.impl import ReActPolicy
 from noeta.protocols.events import EventEnvelope
 from noeta.protocols.messages import (
     LLMResponse,

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from noeta.builtins.react.impl.react import ReActPolicy
+from noeta.builtins.react.impl import ReActPolicy
 from noeta.protocols.decisions import (
     CompactionRequestedDecision,
     FailDecision,

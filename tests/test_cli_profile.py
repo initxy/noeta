@@ -31,7 +31,7 @@ from noeta.builtins.governance.impl.permission import PermissionGuard
 from noeta.observers.audit import AuditObserver
 from noeta.observers.metrics import MetricsObserver
 from noeta.observers.fanout import EnvelopeBroadcaster, EventFanout
-from noeta.builtins.react.impl.react import ReActPolicy
+from noeta.builtins.react.impl import ReActPolicy
 from noeta.protocols.messages import LLMRequest, LLMResponse, TextBlock, Usage
 
 

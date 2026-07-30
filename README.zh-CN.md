@@ -17,9 +17,10 @@ Noeta 交付**两个库**，共享同一个 `noeta.` 命名空间：
   `noeta.presets` 里的四个官方 agent、开放的扩展接口
   （Tool / LLMProvider / Policy / Guard / Observer / ContentChannel），
   以及插件加载器。它不含引擎 —— 只是进程内转发进运行时。
-- **noeta-runtime** —— 底下的纯引擎：持久化事件溯源的任务执行、fold/snapshot、
-  调度器与 worker lease、内置工具、provider 适配器、上下文 composer。你只会把它
-  作为 `noeta-sdk` 的传递依赖装上，从不直接 import。
+- **noeta-runtime** —— 底下的纯内核：持久化事件溯源的任务执行、fold/snapshot、
+  调度器与 worker lease、上下文 composer、控制工具带。自身不含任何能力实现
+  （工具包、provider 适配器、policy 都住在 `noeta-sdk` 的内置插件里）。你只会
+  把它作为 `noeta-sdk` 的传递依赖装上，从不直接 import。
 
 ## 安装
 
@@ -144,7 +145,7 @@ python examples/reference-host/host.py   # 对着一个脚本化的离线 provid
 | 包 | 你得到什么 | 类比 |
 | --- | --- | --- |
 | `noeta-sdk` | 你 import 的客户端门面：`query()`、`Client`、`Options`、`@tool`、预设、扩展接口。 | Claude Agent SDK |
-| `noeta-runtime` | 纯引擎 —— event log、fold、调度器、工具、policy、provider。你从不直接 import 的传递依赖。 | —— |
+| `noeta-runtime` | 纯内核 —— event log、fold、调度器、会话 builder、控制工具带。自身不含任何能力实现。你从不直接 import 的传递依赖。 | —— |
 
 可运行的 [`examples/`](examples/) 端到端覆盖 SDK 面 —— 最小 agent、自定义工具、
 进程内 MCP server、权限门、provider 替换、子代理委派，以及在任务中途扛住

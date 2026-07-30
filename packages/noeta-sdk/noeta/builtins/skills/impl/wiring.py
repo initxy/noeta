@@ -58,7 +58,6 @@ __all__ = [
     "extract_skill_allowed_tools_raw",
     "load_workspace_skills",
     "merge_skill_registries",
-    "resolve_skill_roots",
     "resolve_skill_scripts",
     "skill_content_kind",
 ]
@@ -140,32 +139,13 @@ def resolve_skill_scripts(
     return tuple(out)
 
 
-def resolve_skill_roots(
-    registry: SkillRegistry,
-    *,
-    exec_env: Optional[ExecEnv] = None,
-) -> tuple[Path, ...]:
-    """The roots of every skill with a resolvable path (host realpath or,
-    in sandbox mode, the container path).
-
-    These widen the ``read`` tool's containment seam so it can reach a
-    skill's bundled resources outside the workspace — the global
-    (``~/.noeta/skills``) / built-in tiers ``WorkspaceRoot`` would
-    otherwise reject. The renderer hands the model each skill's
-    ``source_path.parent`` as the ``Base directory for this skill:`` line;
-    this returns the matching roots so a ``read`` of ``<base>/<relpath>``
-    lands inside one — host-canonicalised locally, the verbatim container path
-    under a sandbox (``exec_env`` set). Sorted + de-duplicated for determinism.
-    """
-    roots: set[Path] = set()
-    for name in registry.names():
-        desc = registry.get(name)
-        if desc is None:
-            continue
-        root = _skill_root(desc, exec_env)
-        if root is not None:
-            roots.add(root)
-    return tuple(sorted(roots))
+# NOTE: there was a ``resolve_skill_roots`` here, returning every skill's root
+# so the ``read`` tool's containment fence could be widened to reach a skill's
+# bundled resources. ``read`` is now unfenced outright (an absolute path is
+# read where it points), the builder's read-fence stage is gone, and the
+# renderer writes its ``Base directory for this skill:`` line from the
+# description's own ``source_path.parent`` — so the function had no caller left
+# and was deleted rather than kept as a plausible-looking seam.
 
 
 def build_skill_script_wiring(
@@ -342,6 +322,12 @@ def build_skill_composer(
     renamed on hoist to reflect that the skill-composer glue is no longer
     coding-product specific.)
 
+    Scope, stated plainly: the session build does NOT come through here — the
+    kernel builder constructs :class:`ThreeSegmentComposer` directly, with the
+    multi-kind content registry it already assembled. What remains is a
+    convenience constructor for callers holding just a skill registry (the
+    composer tests, and an embedder wiring skills without the kernel builder).
+
     The 3-segment context policy is reused as-is:
 
     * ``stable_prefix`` — coding-Agent role + tool schema + safety prompt.
@@ -369,9 +355,9 @@ def build_skill_composer(
     The skill renderer is wired as the
     ``kind="skill"`` item of a content-channel registry — same renderer
     function, byte-identical output; further kinds (memory, issue 05)
-    extend the registry instead of the composer. A caller that already
-    built a multi-kind registry (``noeta.execution.builder``) passes it as
-    ``content_renderers``; the default builds the single-kind registry.
+    extend the registry instead of the composer. A caller that already built a
+    multi-kind registry passes it as ``content_renderers``; the default builds
+    the single-kind registry.
     """
     return ThreeSegmentComposer(
         system_prompt=system_prompt,

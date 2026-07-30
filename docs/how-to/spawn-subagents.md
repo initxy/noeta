@@ -101,7 +101,7 @@ from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.protocols.messages import (
     LLMResponse, TextBlock, ToolUseBlock, Usage,
 )
-from noeta.policies.react import SPAWN_SUBAGENT_TOOL
+from noeta.policies.control_tools import SPAWN_SUBAGENT_TOOL
 
 def _finish(text: str) -> LLMResponse:
     return LLMResponse(
