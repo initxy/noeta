@@ -544,6 +544,23 @@ class PluginBuilder:
             return self._decorator("sandbox_provider", name=name)
         return self.contribute("sandbox_provider", obj, name=name)
 
+    def session_pack(
+        self, factory: Any = None, *, name: Optional[str] = None, priority: int = 0
+    ) -> Any:
+        """Contribute a ``session_pack`` (microkernel phase 3; carries ``priority``).
+
+        ``factory`` is a ``(SessionBuildContext) -> PackContribution`` callable
+        the kernel builder's generic loop runs when an agent activates this
+        plugin — the session-construction half of a capability: tools, content
+        kinds, named exports. Ordered like a ``reminder``: integer ``priority``
+        first, ties broken by ``(plugin, name)``. The built-in bands run
+        100–1000; an external pack picks its own band relative to them (e.g.
+        ``priority=1100`` appends after everything).
+        """
+        if factory is None:
+            return self._decorator("session_pack", name=name, priority=priority)
+        return self.contribute("session_pack", factory, name=name, priority=priority)
+
     def manifest(self) -> PluginManifest:
         """The static :class:`PluginManifest` this builder describes."""
         return PluginManifest(

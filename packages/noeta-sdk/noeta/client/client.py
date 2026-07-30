@@ -24,6 +24,7 @@ from typing import Any, Callable, Mapping, Optional
 
 from noeta.agent.registry import AgentRegistry
 from noeta.context.reminders import ReminderSpec
+from noeta.execution.session_pack import SessionPackEntry
 from noeta.core.wiring import wire_default_observers
 from noeta.client.otlp import make_otlp_trace_observer
 from noeta.observers.trace_export import TraceExportObserver
@@ -370,10 +371,16 @@ class Client:
             if plugins is not None
             else empty
         )
+        session_pack_map = (
+            plugins.activation_session_packs(only=activated)
+            if plugins is not None
+            else empty
+        )
         tool_result_transforms: dict[str, tuple[Any, ...]] = {}
         extra_reminders: dict[str, tuple[ReminderSpec, ...]] = {}
         reminder_providers: dict[str, Mapping[str, tuple[Any, ...]]] = {}
         activated_content_kinds: dict[str, tuple[Any, ...]] = {}
+        activated_session_packs: dict[str, tuple[Any, ...]] = {}
         for _agent, _activation in agent_activations.items():
             _stages = _ordered_stages(transform_map, _activation)
             if _stages:
@@ -387,6 +394,12 @@ class Client:
             _seams = _seam_providers(provider_map, _activation)
             if _seams:
                 reminder_providers[_agent] = _seams
+            _packs = _ordered_stages(session_pack_map, _activation)
+            if _packs:
+                activated_session_packs[_agent] = tuple(
+                    SessionPackEntry(name=_n, priority=_p, factory=_v)
+                    for _p, _pl, _n, _v in _packs
+                )
             _kinds = tuple(
                 kind
                 for _plugin in sorted(_activation)
@@ -495,6 +508,10 @@ class Client:
             extra_reminders=extra_reminders,
             reminder_providers=reminder_providers,
             activated_content_kinds=activated_content_kinds,
+            # Microkernel phase 3: external plugins' session packs, per agent —
+            # appended after the built-in packs and interleaved by priority in
+            # the kernel builder's generic loop. Empty ⇒ byte-identical.
+            activated_session_packs=activated_session_packs,
             # (D3) — host-level runtime
             # injections (NOT agent identity): the HTML-app preview gateway
             # (open_app) and the live-MCP alias resolver + transport. All default

@@ -11,26 +11,27 @@ so no second code path exists.
 Byte-stable construction is the headline constraint: a resumed turn rebuilds
 the SAME tool set / composer / guards from the same inputs, so the prefix it
 composes stays byte-stable (the stable-prefix prompt cache only hits when the
-prefix is byte-stable). All commentary, construction order, and literal values
-are preserved word-for-word.
+prefix is byte-stable).
 
-Internal shape (C02 deepening): :func:`build_session_inputs` keeps its exact
-public interface (the 30+ keyword params resume must pass to rebuild
-identically), but its body is no longer one 446-line function. It now:
+Internal shape (microkernel phase 3): the builder enumerates no capability.
+:func:`build_session_inputs`:
 
 * freezes the operator inputs into a :class:`_BuildSpec` (read-only),
-* threads a single mutable :class:`_ToolAssembly` accumulator through an
-  EXPLICIT ordered tool pipeline — ``_TOOL_PIPELINE`` — where each stage
-  self-decides "whether to enable + how to build/filter" and owns its
-  read-fence side effect,
+* builds the containment :class:`WorkspaceRoot` and the generic
+  :class:`~noeta.execution.session_pack.SessionBuildContext`,
+* runs every :class:`~noeta.execution.session_pack.SessionPackEntry` —
+  manifest-contributed packs plus the two kernel-owned injections (mcp /
+  custom) — through ONE ``(priority, name)``-sorted loop, merging tools
+  (later-wins), content kinds (their own priority) and named exports,
 * then runs the post-tools phases (control schemas → content channels →
   composer → policy factory → guards) as named helpers reading from the
   assembly.
 
-The pipeline list IS the construction-order contract that used to live only
-in prose comments + the implicit top-to-bottom statement order. Nothing about
-the produced tool set / allowed_tools filter / guard registration / composer
-bytes changes — the stages run in the same order and do the same mutations.
+The priority bands are the construction-order contract (fs=100 → web=200 →
+memory=300 → instructions=400 → environment=500 → skills=600 → browser=700
+→ mcp=800 → custom=900 → app=1000), load-bearing for byte-equality (tool
+dict insertion order feeds the Engine's deterministic ToolSchemaRecorded
+emission) and locked by ``tests/test_session_pack_goldens.py``.
 """
 
 from __future__ import annotations
@@ -368,9 +369,10 @@ class _BuildSpec:
     guards_factory: Optional[GuardsFactory] = None
     #: The bound model's vendor family (``"anthropic"`` / ``"openai"`` /
     #: ``None``), resolved by the SDK host from the providers built-in's
-    #: catalog (microkernel M2) and consumed by the edit-tool mutex in
-    #: ``_stage_fs_pack``. ``None`` (kernel-alone / stub) drops neither edit
-    #: tool — the documented no-catalog semantic, NOT a silent fallback.
+    #: catalog (microkernel M2) and exposed to packs through the context
+    #: (the fs pack keys its own edit-tool mutex on it). ``None``
+    #: (kernel-alone / stub) drops neither edit tool — the documented
+    #: no-catalog semantic, NOT a silent fallback.
     provider_family: Optional[str] = None
     #: The manifest-contributed session packs (microkernel phase 3): resolved
     #: by the SDK host (``noeta.client.parts.default_session_packs`` + the
@@ -436,20 +438,14 @@ class _ToolAssembly:
 # ---------------------------------------------------------------------------
 
 
-# NOTE (microkernel phase 3, S2): the fs / web / memory / skills packs are no
-# longer kernel-internal — their factories are ``session_pack`` manifest
-# contributions (``noeta.builtins.<name>.impl:build_<name>_session_pack``),
-# resolved by the SDK host and passed in as ``session_packs``. The kernel
-# keeps only the not-yet-migrated packs below (instructions / environment /
-# browser / app — S3/S4) plus the two kernel-owned injections (mcp / custom).
-
-
-# NOTE (microkernel phase 3, S3): the browser / app packs moved onto the
-# ``session_pack`` surface with their seam Protocols (``BrowserBackend`` →
-# the browser plugin, ``AppPreviewGateway`` → the app plugin;
-# ``noeta.runtime.browser`` / ``noeta.runtime.app_preview`` are deleted).
-# Their live backing objects ride the generic ``backends`` bag under the
-# plugins' own names (``"browser"`` / ``"app_preview"``).
+# NOTE (microkernel phase 3): every capability pack is a ``session_pack``
+# manifest contribution (``noeta.builtins.<name>.impl:build_*_session_pack``)
+# resolved by the SDK host and passed in as ``session_packs``; the capability
+# seam Protocols live in their plugins (``BrowserBackend`` → browser,
+# ``AppPreviewGateway`` → app) and their live backing objects ride the
+# generic ``backends`` bag under the plugins' own names. The kernel owns only
+# the two pre-built injections below (mcp / custom), which ride the same loop
+# as fixed-priority internal entries.
 
 
 # ---------------------------------------------------------------------------
