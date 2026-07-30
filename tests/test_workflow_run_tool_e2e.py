@@ -19,7 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from noeta.core.fold import fold
-from noeta.policies.control_tools import RUN_WORKFLOW_TOOL, WORKFLOW_AGENT_NAME
+from noeta.policies.control_semantics import RUN_WORKFLOW_TOOL, WORKFLOW_AGENT_NAME
 from noeta.protocols.messages import (
     LLMResponse,
     TextBlock,

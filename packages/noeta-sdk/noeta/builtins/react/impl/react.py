@@ -37,7 +37,7 @@ Scope:
 Layering: since phase 2b this module ships in noeta-sdk's ``react`` built-in
 and reaches the kernel across the wheel boundary — so it imports only the
 kernel's PUBLIC surface: ``noeta.protocols.*``, ``noeta.runtime.*``, and the
-control band (``noeta.policies.control_semantics`` / ``control_tools``). No
+control mechanism band (``noeta.policies.control_semantics``). No
 underscore-private kernel name is imported here: a private name carries no
 compatibility contract, and a skewed ``noeta-runtime`` would then fail at
 policy construction rather than at install. It never imports a provider
@@ -52,10 +52,8 @@ import json
 from typing import Any, Optional, Protocol
 
 from noeta.policies.control_semantics import (
-    SKILL_TOOL,
     SPAWN_SUBAGENT_TOOL,
     ControlToolSpec,
-    skill_tool_schema,
     translate_control_tool,
 )
 from noeta.protocols.content_store import ContentStore
@@ -88,17 +86,17 @@ from noeta.protocols.view import View
 __all__ = [
     "ReActPolicy",
     "SPAWN_SUBAGENT_TOOL",
-    "SKILL_TOOL",
-    "skill_tool_schema",
     "extract_safety_constraints",
     "enforce_verbatim_constraints",
 ]
 
 #: ``SPAWN_SUBAGENT_TOOL`` is defined in ``noeta.policies.control_semantics``
-#: (the kernel's control band) and re-exported here for this module's own
-#: readers. It is NOT this module's public address: control tools are kernel
-#: vocabulary. The ``todo_write`` / ``ask_user_question`` / ``spawn_subagent``
-#: SCHEMA functions moved into their built-ins (control-tool-surface S2); react
+#: (the kernel's reserved control vocabulary) and re-exported here for this
+#: module's own readers. It is NOT this module's public address: control tools
+#: are kernel vocabulary. Every control-tool SCHEMA function moved into its
+#: built-in — ``todo_write`` / ``ask_user_question`` / ``spawn_subagent``
+#: (control-tool-surface S2), then ``skill`` (skills) + ``run_workflow`` /
+#: ``structured_output`` (this built-in's ``control_tool`` module, S2b); react
 #: never used them (they were dead re-exports), so they are gone here.
 
 #: ``ReActPolicy._last_input_tokens_at_call`` sentinel: a compaction collapsed

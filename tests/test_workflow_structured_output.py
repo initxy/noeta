@@ -21,7 +21,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from noeta.policies.control_tools import RUN_WORKFLOW_TOOL, STRUCTURED_OUTPUT_TOOL
+from noeta.policies.control_semantics import RUN_WORKFLOW_TOOL
+from noeta.builtins.react.impl import STRUCTURED_OUTPUT_TOOL
 from noeta.builtins.react.impl.orchestration import MAX_STRUCTURED_OUTPUT_NUDGES
 from noeta.protocols.messages import (
     LLMRequest,

@@ -27,7 +27,7 @@ from noeta.execution.subtask_drain import (
     drive_pending_subtasks,
     resume_woken_parent,
 )
-from noeta.policies.control_tools import WORKFLOW_AGENT_NAME
+from noeta.policies.control_semantics import WORKFLOW_AGENT_NAME
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
 from noeta.protocols.event_log import EventLogFull

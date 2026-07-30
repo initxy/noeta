@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from noeta.core.fold import fold
-from noeta.policies.control_tools import SPAWN_SUBAGENT_TOOL
+from noeta.policies.control_semantics import SPAWN_SUBAGENT_TOOL
 from noeta.protocols.messages import (
     LLMRequest,
     LLMResponse,

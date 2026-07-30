@@ -39,7 +39,7 @@ from noeta.execution.builder import (
     build_session_inputs,
 )
 from noeta.runtime.governance import Budget
-from noeta.policies.control_tools import SKILL_TOOL, skill_tool_schema
+from noeta.builtins.skills.impl import SKILL_TOOL, skill_tool_schema
 from noeta.protocols.messages import Usage
 from noeta.storage.memory import (
     InMemoryContentStore,
