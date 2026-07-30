@@ -141,11 +141,9 @@ def _build_composer_schemas(
         compaction=COMPACTION_OFF,
         budget=Budget(),
         capability_flags={"skill_invocation": skill_invocation_enabled},
+        # The fs write/shell knobs ride plugin_config["fs"] (spec §4.2).
         plugin_config={
-            "fs": {
-                "write_mode": FsWriteMode.DRY_RUN,
-                "shell_mode": ShellMode.OFF,
-            },
+            "fs": {"write_mode": FsWriteMode.DRY_RUN, "shell_mode": ShellMode.OFF},
         },
     )
     return list(inputs.composer._control_action_schemas)
