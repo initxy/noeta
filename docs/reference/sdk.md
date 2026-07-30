@@ -291,11 +291,14 @@ set; all `None` ⇒ in-memory.
 | `instructions_discovery` | `False` | `read`-triggered discovery of subdirectory instruction files ([Composer & cache](../concepts/composer-and-cache.md)) |
 | `write_mode` | `"dry_run"` | `"apply"` performs real writes |
 
-Related re-exports from the kernel vocabulary modules
-`noeta.runtime.app_preview` / `noeta.runtime.mcp`: `AppPreviewGateway`,
-`AppMount`, `McpServerSpec` (stdio), `McpHttpServerSpec`, `McpAnyServerSpec`
-(their union), `McpError`, `McpConfigError`, `HttpPostFn`. (The MCP connector
-and app-tool *implementations* live in the `mcp` / `app` built-in plugins —
+Related re-exports: `AppPreviewGateway` / `AppMount` are re-exported **lazily**
+from the `app` built-in plugin (`noeta.builtins.app.impl`) — the `open_app`
+tool's Protocol moved there with its implementation when the kernel shed its
+last capability seams (microkernel phase 3; `noeta.runtime.app_preview` is
+deleted). The kernel vocabulary module `noeta.runtime.mcp` still supplies
+`McpServerSpec` (stdio), `McpHttpServerSpec`, `McpAnyServerSpec` (their union),
+`McpError`, `McpConfigError`, `HttpPostFn`. (The MCP connector and app-tool
+*implementations* live in the `mcp` / `app` built-in plugins —
 `noeta.builtins.mcp.impl` / `noeta.builtins.app.impl`.)
 
 ## Errors (typed / coded)

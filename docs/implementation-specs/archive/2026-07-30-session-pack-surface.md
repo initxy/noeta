@@ -1,10 +1,11 @@
 # The `session_pack` surface — the builder sheds its per-feature seams (microkernel phase 3)
 
-> **Status: Active** — shaped 2026-07-30 (owner interview, four decisions
-> confirmed). Follows phase 2c (`c2569d7`); the durable outcome will land as
-> an addendum to
-> [plugin-contribution-bundles.md](../adr/plugin-contribution-bundles.md)
-> (a fifteenth standard surface) when the last milestone ships.
+> **Status: Shipped** — landed as the S1–S6 commit series
+> (`861a712` → `1d0e671` → `4eaedc3` → `f22b7c4` → `0960f11`), following phase
+> 2c (`c2569d7`). The durable decisions live in the
+> [plugin-contribution-bundles.md](../../adr/plugin-contribution-bundles.md)
+> `2026-07-30` microkernel addendum (the fifteenth standard surface; the
+> builder is now generic).
 
 ## Goal
 
@@ -215,37 +216,37 @@ the session-assembly path.
 
 ## Milestones
 
-- [ ] **S1 — seam.** `SessionBuildContext` / `PackContribution` /
+- [x] **S1 — seam.** `SessionBuildContext` / `PackContribution` /
   `SessionPackFactory` land in `noeta.execution.session_pack`; the
   `session_pack` SurfaceSpec (fifteenth) + `PluginSet` projection land in
   the SDK; the builder grows the generic loop **driven by internally
   wrapped legacy factories** (no manifest change yet, no behaviour change);
   stable-prefix / semi-stable / tool-order goldens recorded against
   pre-migration `main`. Gates green.
-- [ ] **S2 — fs/web/memory/skills migrate.** Four manifests gain
+- [x] **S2 — fs/web/memory/skills migrate.** Four manifests gain
   `session_pack` contributions; host resolves packs through the generic
   projection; their legacy builder fields and `parts.py` accessors are
   deleted; `edit_tool_mutex` folds into the fs pack; skills'
   `disabled_builtins` honouring moves into the pack path. Goldens
   byte-identical.
-- [ ] **S3 — browser/app + backend bag.** Protocols move to their plugins,
+- [x] **S3 — browser/app + backend bag.** Protocols move to their plugins,
   `runtime/browser.py` / `runtime/app_preview.py` deleted, sandbox adapter
   re-pointed at `browser`'s Protocol, host populates `backends` from
   `sandbox_provider` contributions + gateway; `browser_backend` /
   `browser_enabled` / `app_gateway` parameters deleted. Goldens
   byte-identical.
-- [ ] **S4 — kits + loader halves.** `memory_index` / `instructions` /
+- [x] **S4 — kits + loader halves.** `memory_index` / `instructions` /
   `environment` become pack contributions (snapshots + content kinds);
   loader halves move to `workspace.impl` per D10; `client/host.py:2024`
   path re-pointed through the doorway; feature-named config parameters
   collapse into `plugin_config`. Goldens byte-identical; semi-stable
   registration order proven unchanged.
-- [ ] **S5 — kernel cleanup + extension proof.** Remaining feature-named
+- [x] **S5 — kernel cleanup + extension proof.** Remaining feature-named
   parameters deleted; mcp/custom wrapped as fixed-priority internal
   entries; signature-lock test re-baselined; **the goal test lands**: a
   single-file `PluginBuilder` plugin contributes a toy session pack and its
   tool appears in a session with zero kernel/SDK-host edits.
-- [ ] **S6 — docs.** ADR plugin-contribution-bundles addendum (fifteenth
+- [x] **S6 — docs.** ADR plugin-contribution-bundles addendum (fifteenth
   surface, builder now generic); CONTEXT.md gains `Session pack`,
   `SessionBuildContext`, `PackContribution`, `backend bag`; this spec →
   Shipped + archived. Release rides the already-pending release chain.
@@ -298,3 +299,56 @@ the session-assembly path.
   surface-registry precedent and the grep-verified wiring inventory
   (builder stages/fields, host call sites, thin manifests, ordering
   contracts). Spec written; implementation not started.
+
+- **2026-07-30 — S1–S6 landed.** Five commits, seam-first per D4.
+  **S1** (`861a712`): `SessionBuildContext` / `PackContribution` /
+  `SessionPackFactory` / `SessionPackEntry` land in
+  `noeta.execution.session_pack`; the `session_pack` SurfaceSpec (fifteenth)
+  + the `PluginSet` projection land in the SDK; the builder grows the generic
+  `(priority, name)` loop driven by internally-wrapped legacy factories (no
+  behaviour change); the byte-order goldens are recorded against pre-migration
+  `main`. **S2** (`1d0e671`): `fs` / `web` / `memory` / `skills` manifests gain
+  their `session_pack` contributions, the host resolves packs through
+  `parts.default_session_packs()`, the legacy builder fields + `parts.py`
+  accessors are deleted, `edit_tool_mutex` folds into the fs pack, and skills'
+  `disabled_builtins` honouring moves into the pack path. **S3** (`4eaedc3`):
+  `BrowserBackend` → the `browser` built-in, `AppPreviewGateway` / `AppMount`
+  → the `app` built-in, `runtime/browser.py` / `runtime/app_preview.py`
+  deleted, the sandbox adapter re-pointed at `browser`'s Protocol, and the host
+  populates `SessionBuildContext.backends` from the `sandbox_provider`
+  contributions + the product gateway; `browser_backend` / `browser_enabled` /
+  `app_gateway` builder parameters gone. **S4** (`f22b7c4`): `memory_index` /
+  `instructions` / `environment` become pack contributions (content kinds +
+  exported snapshots), the loader halves move into `workspace.impl` (D10), the
+  `client/host.py` record path re-points through `parts.workspace_impl`, and
+  the feature-named config parameters collapse into `plugin_config`. **S5**
+  (`0960f11`): `PluginBuilder.session_pack()` lands, the `Client` folds
+  activated external plugins' packs into per-agent `activated_session_packs`,
+  the host merges them after the built-in set, and
+  `tests/test_session_pack_extension.py` proves a single-file third-party
+  plugin's pack tool reaches a built session with zero kernel/SDK-host edits.
+  **S6**: this doc — the ADR `2026-07-30` addendum (fifteenth surface, generic
+  builder), the four CONTEXT.md terms (`Session pack`, `SessionBuildContext`,
+  `PackContribution`, `Backend bag`), the doc sweep, and this archive.
+
+  **Deviation:** `PackContribution`'s side-state rides a single named `exports`
+  bag (single-writer keys, the `EXPORT_*` constants — e.g. `EXPORT_MEMORY_STORE`
+  / `EXPORT_INSTRUCTIONS_SNAPSHOTS` / `EXPORT_CONTENT_DISCOVERY`) rather than
+  the spec's typed `snapshots` / `memory_state` fields. Same closed-set rule
+  (a key is admitted only when an existing kernel seam consumes it), one uniform
+  mechanism instead of two per-need fields — content kinds ride their own
+  `content_kinds` tuple, everything else is one `name → object` map the
+  `SessionInputs` fields read by constant.
+
+  **Deviation:** tool merge is **later-wins**, not a loop-time raise. D6 wrote
+  "name collision raises"; the landed contract preserves the pre-migration
+  custom-shadows semantics (a later pack — `custom` at band 900 — may
+  deliberately shadow an earlier name, exactly as `custom_tools` always did),
+  and the *accidental* cross-plugin collision is caught **upstream at the
+  manifest merge** (`session_pack` collides on `name`), where it names both
+  sides — so the loud collision check still exists, just at the honest layer.
+
+  Gates: 3391 passed / 129 skipped, coverage 88%, mypy strict clean, naming
+  lint clean, import-linter 10 kept / 0 broken. Byte-equality goldens
+  (default + fully-loaded session), resume parity, and the extension proof all
+  green; commits `861a712` / `1d0e671` / `4eaedc3` / `f22b7c4` / `0960f11`.

@@ -108,7 +108,7 @@ surface name loudly (no override).
 
 ### D3 — The standard surface catalogue
 
-Fourteen surfaces, seeded by `standard_registry()`:
+Fifteen surfaces, seeded by `standard_registry()`:
 
 | Surface | Plane | Scope (D6) | Cardinality | Notes |
 |---|---|---|---|---|
@@ -126,6 +126,7 @@ Fourteen surfaces, seeded by `standard_registry()`:
 | `mcp_server` | host | host-wired | multi, alias-keyed | |
 | `skills` | host | host-wired | multi, path | resource-only plugins |
 | `sandbox_provider` | host | host-wired | multi, name-keyed; host selects one | |
+| `session_pack` | wiring | per-agent | multi, name-keyed, `priority` | session-construction factory `(SessionBuildContext) -> PackContribution` (microkernel phase 3 — see the 2026-07-30 Addendum) |
 
 The three reminder tracks (A = recorded `reminder_provider`; B = compose-time
 `reminder`; C = the pre-existing resident `content_kind` / `ContentKindSpec`)
@@ -215,9 +216,9 @@ built-in's contributions runs zero runtime code, and importing `noeta.builtins`
 `noeta.builtins` by a **dynamic import** from `noeta.client.plugin_set`; there
 is no static edge, and `.importlinter`'s `sdk-core-not-builtins` forbidden
 contract enforces it — universally: *every* band, kernel included, is a source.
-The catalogue currently holds thirteen built-ins — `fs`, `web`, `memory`,
+The catalogue currently holds fourteen built-ins — `fs`, `web`, `memory`,
 `browser`, `app`, `mcp`, `skills`, `react`, `reminders`, `governance`,
-`providers`, `sandbox`, `presets` — so every standard surface has a built-in declaration
+`providers`, `sandbox`, `presets`, `workspace` — so every standard surface has a built-in declaration
 ridden through the identical loader / validation / merge path as any external
 plugin. Adding a first-party capability is adding a directory to the catalogue
 (plus a `SurfaceSpec` registration only when a genuinely new surface is
@@ -376,3 +377,81 @@ made of is a plugin, including ours*:
   (`todo_write` / `skill` / `ask_user_question`, the spawn/workflow dispatch
   vocabulary, the workflow-script validation sandbox) stay kernel permanently
   (they are renderings of kernel Decision variants, not contributions).
+
+## Addendum — 2026-07-30: the builder goes generic (microkernel phase 3)
+
+The 2026-07-29 migration co-located every capability's manifest and impl but
+left the kernel builder still enumerating capabilities by name — `_BuildSpec`
+carried thirteen per-feature factory/kit fields and `_TOOL_PIPELINE` hardcoded
+nine per-feature stages, so a new session-assembled capability was still a
+kernel edit. The `session_pack` surface
+(`docs/implementation-specs/archive/2026-07-30-session-pack-surface.md`) closes
+that last gap — *adding or changing a session-assembled capability is now a
+plugin contribution with zero kernel edits*:
+
+- **The catalogue is fifteen surfaces.** `session_pack` is the fifteenth
+  (plane `wiring`, `activation_scope` per-agent, `collision_key` `name`,
+  `merge_rule` `append`, ordering **`priority`** — the `reminder` /
+  `tool_result_transform` precedent). It is the **session-construction half**
+  of a capability: a factory `(SessionBuildContext) -> PackContribution` the
+  kernel builder runs when the contributing plugin is activated for the agent.
+  `PackContribution` carries `tools` + `content_kinds` (each with its **own**
+  registration priority, because the semi-stable layout order genuinely differs
+  from the tool order) + named `exports` — every field consumed by an existing
+  kernel seam. (The D3 table and its count are updated inline above.)
+- **The kernel builder is generic — one priority-ordered loop.**
+  `_TOOL_PIPELINE` and the nine `_stage_*` methods are gone; `build_session_inputs`
+  builds the containment `WorkspaceRoot` and one frozen `SessionBuildContext`,
+  then runs every `SessionPackEntry` through a single `(priority, name)`-sorted
+  loop, merging tools (later-wins), content kinds (own priority), and exports.
+  Built-in bands reproduce the pre-migration byte order — `fs`=100, `web`=200,
+  `memory`=300, `instructions`=400, `environment`=500, `skills`=600,
+  `browser`=700, `app`=1000 — with `mcp`=800 / `custom`=900 as the two
+  **kernel-owned fixed-priority entries** wrapping the parameters D1 keeps
+  (`mcp_tools_override` / `custom_tools`). Tool dict insertion order feeds the
+  deterministic `ToolSchemaRecorded` emission and the stable-prefix hash, so the
+  bands are **locked by the `test_session_pack_goldens.py` byte-equality
+  goldens**, not by convention.
+- **Capability-seam Protocols live in their plugins.** `runtime/browser.py` and
+  `runtime/app_preview.py` are deleted; the kernel holds **no** capability-seam
+  Protocol. `BrowserBackend` moved into the `browser` built-in (the `sandbox`
+  built-in's adapter implements it, importing the Protocol — a normal, one-way
+  plugin→plugin dependency); `AppPreviewGateway` / `AppMount` into the `app`
+  built-in. The live backings ride the generic `backends` bag: the host
+  populates `SessionBuildContext.backends` by the **contributing plugins' own
+  names** — `"browser"` from the sandbox provider, `"app_preview"` from the
+  product gateway, never the kernel's vocabulary; an absent name means the
+  capability has no live backing, and the pack returns the empty contribution.
+- **Per-plugin config rides `plugin_config`; capability flags ride
+  `capability_flags`.** The feature-named config parameters (`skills_dir`,
+  `memory_dir`, `instructions_*`, …) left the kernel signature; the host maps
+  its unchanged public fields into `plugin_config = {"skills": {…}, "memory":
+  {…}, "workspace": {…}}` and each pack parses only its own entry. The derived
+  per-agent flags reach a pack as `capability_flags` (`"memory"`, `"browser"`,
+  …); a pack **self-gates** on its context — inapplicable ⇒ the empty
+  `PackContribution` — the kernel never gates for it.
+- **The instructions/environment loader halves live in the `workspace` plugin
+  (D10).** `load_instructions` / `discover_instructions` /
+  `build_instructions_*` and `load_environment` + the git/date helpers moved out
+  of `execution/instructions.py` / `execution/environment.py` into
+  `workspace.impl`; the two residents' construction is now the `workspace`
+  built-in's two `session_pack` factories (`instructions` band 400,
+  `environment` band 500). The kernel keeps the typed **record seams**
+  (`record_instructions` / `record_environment` / `record_memory_index`) and
+  the resident **kit types**; the host reaches the loaders through the
+  `noeta.client.parts.workspace_impl` doorway for its own record path (record ==
+  compose stays true because both halves live in the one plugin).
+- **External packs follow per-agent activation.** A third-party plugin's
+  `session_pack` contributions fold on the `Client` into each agent's
+  `activated_session_packs` and the host merges them **after** the built-in set;
+  the builder loop interleaves them by declared priority. The extension proof
+  (`tests/test_session_pack_extension.py`) is the goal test: a single-file
+  plugin's pack tool reaches a built session, appends or interleaves at its
+  band, and scopes to the activating agent only — **zero** kernel or SDK-host
+  edits.
+- **The per-feature factory injections the 2026-07-29 addendum listed are
+  retired.** `fs`/`web`/`browser`/`app_tools_factory`, `memory_factory`, and the
+  three kit fields are gone from `_BuildSpec` and `parts.py`, replaced by the
+  single `parts.default_session_packs()` accessor; `mcp_tools_override` /
+  `custom_tools` / `exec_env` and the generically-typed `guards_factory` /
+  `default_policy_factory` / `base_reminders` injections stay (D1 / Non-goals).

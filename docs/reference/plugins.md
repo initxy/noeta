@@ -154,7 +154,7 @@ publish time.
 
 ## Surface catalog (`D3`)
 
-The standard catalog is fourteen surfaces (`surfaces.py`, `STANDARD_SURFACES`).
+The standard catalog is fifteen surfaces (`surfaces.py`, `STANDARD_SURFACES`).
 Each row is a `SurfaceSpec`: which **plane** it lives on, how its effect is
 **scoped** across agents (`D6`), its **collision key**, its **merge rule**, and
 its **ordering**. ★ = new in this redesign.
@@ -175,6 +175,7 @@ its **ordering**. ★ = new in this redesign.
 | `mcp_server` | host | host-wired | `alias` | append | `(plugin, name)` | connectable server spec |
 | `skills` | host | host-wired | none | append | `(plugin, name)` | resource-only (`path`) |
 | `sandbox_provider` ★ | host | host-wired | `name` | append | `(plugin, name)` | host selects one |
+| `session_pack` | wiring | per-agent | `name` | append | **priority** | session-construction factory `(SessionBuildContext) -> PackContribution` (microkernel phase 3) |
 
 - **Collision key** `none` means the surface never collides (guards / observers
   / skill dirs). `single-valued` means at most one across the whole loaded set.
@@ -216,7 +217,7 @@ class SurfaceSpec:
 `validator` runs on a **resolved** value (after a `ref` is imported); listing and
 manifest-level collision never call it, so they stay execution-free.
 
-`standard_registry()` returns a fresh `SurfaceRegistry` seeded with the fourteen
+`standard_registry()` returns a fresh `SurfaceRegistry` seeded with the fifteen
 standard surfaces. A host registers additional **app-plane** surfaces on a
 **copy** before load — the same validation / collision / ordering pipeline runs
 over them unchanged:

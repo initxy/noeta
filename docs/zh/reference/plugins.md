@@ -107,12 +107,13 @@ def stay_brief(view):
 | `prompt_fragment(text, *, name)` | `prompt_fragment` | — |
 | `policy(factory=None, *, name=None)` | `policy` | — |
 | `sandbox_provider(obj=None, *, name=None)` | `sandbox_provider` | — |
+| `session_pack(factory=None, *, name=None, priority=0)` | `session_pack` | `priority` |
 
 `manifest()` 返回等价的 `PluginManifest`；被装饰的对象还会被缓存（`resolved_objects`），于是加载器无需二次导入就能解析单文件插件的贡献。`python -m noeta.sdk.plugin_check`（**没有** console script）在发布时从装饰器推导并校验 TOML。
 
 ## Surface 目录（`D3`） {#surface-catalog-d3}
 
-标准目录有十四个 surface（`surfaces.py`，`STANDARD_SURFACES`）。每一行是一个 `SurfaceSpec`：它落在哪个**平面（plane）**上、它的效果如何在各代理间**限定作用域（scope）**（`D6`）、它的**冲突键（collision key）**、它的**合并规则（merge rule）**，以及它的**排序（ordering）**。★ = 本次重新设计新增。
+标准目录有十五个 surface（`surfaces.py`，`STANDARD_SURFACES`）。每一行是一个 `SurfaceSpec`：它落在哪个**平面（plane）**上、它的效果如何在各代理间**限定作用域（scope）**（`D6`）、它的**冲突键（collision key）**、它的**合并规则（merge rule）**，以及它的**排序（ordering）**。★ = 本次重新设计新增。
 
 | Surface | Plane | Scope（`D6`） | Collision key | Merge | Ordering | 备注 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -130,6 +131,7 @@ def stay_brief(view):
 | `mcp_server` | host | host-wired | `alias` | append | `(plugin, name)` | 可连接的 server spec |
 | `skills` | host | host-wired | none | append | `(plugin, name)` | 只有资源（`path`） |
 | `sandbox_provider` ★ | host | host-wired | `name` | append | `(plugin, name)` | 宿主从中选一个 |
+| `session_pack` ★ | wiring | per-agent | `name` | append | **priority** | 会话构造工厂（microkernel phase 3）：`(SessionBuildContext) -> PackContribution`，内核 builder 的通用循环按优先级带运行 |
 
 - **Collision key** 为 `none` 表示该 surface 从不冲突（guard / observer / 技能目录）。`single-valued` 表示在整个已加载集合里至多一个。
 - **Ordering** 为 `priority` 时，先按整数 `priority` 参数排序，同分再按 `(plugin, name)` 打破平手——沿用 guard-observer-hooks 的先例。其余一律按 `(plugin, name)` 排序，所以发现顺序从不改变结果。
@@ -164,7 +166,7 @@ class SurfaceSpec:
 
 `validator` 在**已解析**的值上运行（在 `ref` 被导入之后）；列出和 manifest 级的冲突检查从不调用它，所以它们保持零执行。
 
-`standard_registry()` 返回一个以十四个标准 surface 播种的全新 `SurfaceRegistry`。宿主在加载前于一个**副本**上注册额外的 **app-plane** surface——同一套校验 / 冲突 / 排序流水线会原封不动地作用在它们上：
+`standard_registry()` 返回一个以十五个标准 surface 播种的全新 `SurfaceRegistry`。宿主在加载前于一个**副本**上注册额外的 **app-plane** surface——同一套校验 / 冲突 / 排序流水线会原封不动地作用在它们上：
 
 ```python
 from noeta.sdk import standard_registry, SurfaceSpec, PluginError
