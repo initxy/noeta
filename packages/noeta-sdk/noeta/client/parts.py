@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import importlib
 from dataclasses import MISSING, fields
-from typing import Any, Callable, Mapping, Optional, Protocol, cast
+from typing import Any, Callable, Optional, Protocol, cast
 
 from noeta.agent.spec import ComponentRef, ToolRef
 from noeta.context.reminders import ReminderSpec

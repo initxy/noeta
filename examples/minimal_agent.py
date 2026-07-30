@@ -21,11 +21,11 @@ no API key and no network — every call is a pre-scripted response, which
 is also what the smoke test relies on. To point it at a real model,
 replace ``_demo_provider()`` with one of the real adapters::
 
-    from noeta.builtins.providers.impl.openai_compat import OpenAICompatProvider
+    from noeta.sdk.providers import OpenAICompatProvider
     provider = OpenAICompatProvider(base_url=..., api_key=...)
 
     # or
-    from noeta.builtins.providers.impl.anthropic import AnthropicProvider
+    from noeta.sdk.providers import AnthropicProvider
     provider = AnthropicProvider(api_key=..., default_max_tokens=1024)
 
 then pass ``model="<your-model-id>"`` to :func:`run`.

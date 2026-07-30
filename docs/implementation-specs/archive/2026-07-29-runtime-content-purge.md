@@ -1,6 +1,8 @@
 # Microkernel phase 2c — runtime content purge
 
-Status: Implemented (2026-07-30) — committed to main; pending review + archive
+> **Status: Shipped** — landed on main @c2569d7 (2026-07-30, phase 2c: the
+> runtime sheds its last product content; `workspace` becomes the 14th
+> built-in); reviewed and archived 2026-07-30.
 
 ## Goal
 
