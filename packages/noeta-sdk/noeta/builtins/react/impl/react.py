@@ -55,16 +55,8 @@ from noeta.policies.control_semantics import (
     SKILL_TOOL,
     SPAWN_SUBAGENT_TOOL,
     ControlToolSpec,
-    spawn_subagent_tool_schema,
-    translate_control_tool,
-)
-from noeta.policies.control_tools import (
-    ASK_USER_QUESTION_TOOL,
-    TODO_WRITE_STATUSES,
-    TODO_WRITE_TOOL,
-    ask_user_question_tool_schema,
     skill_tool_schema,
-    todo_write_tool_schema,
+    translate_control_tool,
 )
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.decisions import (
@@ -96,25 +88,18 @@ from noeta.protocols.view import View
 __all__ = [
     "ReActPolicy",
     "SPAWN_SUBAGENT_TOOL",
-    "TODO_WRITE_TOOL",
-    "TODO_WRITE_STATUSES",
-    "ASK_USER_QUESTION_TOOL",
     "SKILL_TOOL",
-    "ask_user_question_tool_schema",
-    "spawn_subagent_tool_schema",
-    "todo_write_tool_schema",
     "skill_tool_schema",
     "extract_safety_constraints",
     "enforce_verbatim_constraints",
 ]
 
-#: ``SPAWN_SUBAGENT_TOOL`` and ``spawn_subagent_tool_schema`` are defined in
-#: ``noeta.policies.control_semantics`` (the kernel's control band) and
-#: re-exported here for this module's own readers. They are NOT this module's
-#: public address: the supported import is
-#: ``from noeta.policies.control_tools import SPAWN_SUBAGENT_TOOL`` — control
-#: tools are kernel vocabulary, and phase 2b deleted the old
-#: ``noeta.policies.react`` path this comment used to point at.
+#: ``SPAWN_SUBAGENT_TOOL`` is defined in ``noeta.policies.control_semantics``
+#: (the kernel's control band) and re-exported here for this module's own
+#: readers. It is NOT this module's public address: control tools are kernel
+#: vocabulary. The ``todo_write`` / ``ask_user_question`` / ``spawn_subagent``
+#: SCHEMA functions moved into their built-ins (control-tool-surface S2); react
+#: never used them (they were dead re-exports), so they are gone here.
 
 #: ``ReActPolicy._last_input_tokens_at_call`` sentinel: a compaction collapsed
 #: the history, so no recorded input count describes it any more. Distinct from

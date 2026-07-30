@@ -18,10 +18,8 @@ from typing import Any
 
 from tests._read_models.detail import build_code_session_detail
 from noeta.core.fold import fold
-from noeta.policies.control_tools import (
-    SPAWN_SUBAGENT_TOOL,
-    TODO_WRITE_TOOL,
-)
+from noeta.builtins.todo_write.impl import TODO_WRITE_TOOL
+from noeta.policies.control_tools import SPAWN_SUBAGENT_TOOL
 from noeta.protocols.decisions import TaskStatePatch
 from noeta.protocols.events import TaskCreatedPayload
 from noeta.protocols.messages import LLMResponse, TextBlock, ToolUseBlock, Usage

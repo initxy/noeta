@@ -20,6 +20,7 @@ from typing import Any, Callable, Mapping, Optional, Protocol, cast
 from noeta.agent.spec import ComponentRef, ToolRef
 from noeta.context.reminders import ReminderSpec
 from noeta.execution.builder import CompactionConfig
+from noeta.execution.control_tool import ControlToolEntry
 from noeta.execution.session_pack import SessionPackEntry
 from noeta.protocols.messages import Usage
 from noeta.protocols.policy import Policy
@@ -39,6 +40,7 @@ __all__ = [
     "default_instructions_kit",
     "default_memory_index_kit",
     "default_policy_factory",
+    "default_control_tools",
     "default_reminder_specs",
     "default_session_packs",
     "default_shell_rules",
@@ -417,6 +419,60 @@ def default_session_packs(
         keyed.sort(key=lambda t: (t[0], t[1], t[2]))
         cached = tuple(entry for _p, _pl, _n, entry in keyed)
         _SESSION_PACK_CACHE[disabled] = cached
+    return cached
+
+
+_CONTROL_TOOL_CACHE: dict[frozenset[str], tuple[ControlToolEntry, ...]] = {}
+
+
+def default_control_tools(
+    *, disabled: frozenset[str] = frozenset()
+) -> tuple[ControlToolEntry, ...]:
+    """The built-in ``control_tool`` entries, **loader-resolved** and ordered.
+
+    Control-tool-surface S2: the mirror of :func:`default_session_packs` for the
+    ``control_tool`` surface. The built-in manifests
+    (``noeta.builtins.{todo_write,ask_user_question,delegation}``) declare their
+    control-tool factories (ref + priority); this function reads those manifests
+    (inert data), resolves each ``control_tool`` contribution's ref at the
+    sanctioned execution boundary, and returns the :class:`ControlToolEntry`
+    tuple sorted ``(priority, plugin, name)`` — the built-in half of the kernel
+    builder's ``control_tools`` injection. ``disabled`` drops a built-in's entry
+    entirely. Memoized per disabled-set — the factories are pure module-level
+    functions, import-stable for the process.
+    """
+    cached = _CONTROL_TOOL_CACHE.get(disabled)
+    if cached is None:
+        builtins_mod = importlib.import_module("noeta.builtins")
+        keyed: list[tuple[int, str, str, ControlToolEntry]] = []
+        for manifest in builtins_mod.builtin_manifests():
+            if manifest.name in disabled:
+                continue
+            for c in manifest.contributions:
+                if c.surface != "control_tool" or c.ref is None:
+                    continue
+                priority = c.params.get("priority")
+                if not isinstance(priority, int):
+                    raise RuntimeError(
+                        f"built-in control tool {c.name!r} declares no "
+                        f"integer priority — the manifest must carry the "
+                        f"mount-loop iteration order"
+                    )
+                keyed.append(
+                    (
+                        priority,
+                        manifest.name,
+                        c.name,
+                        ControlToolEntry(
+                            name=c.name,
+                            priority=priority,
+                            factory=_resolve_ref(c.ref),
+                        ),
+                    )
+                )
+        keyed.sort(key=lambda t: (t[0], t[1], t[2]))
+        cached = tuple(entry for _p, _pl, _n, entry in keyed)
+        _CONTROL_TOOL_CACHE[disabled] = cached
     return cached
 
 

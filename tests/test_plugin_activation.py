@@ -77,6 +77,30 @@ def test_control_and_feature_bundles_all_map() -> None:
     )
 
 
+def test_control_tool_plugin_names_coexist_with_activation_bundles() -> None:
+    """control-tool-surface S2: ``todo_write`` / ``ask_user_question`` /
+    ``delegation`` are now BOTH real built-in plugins (a ``control_tool``
+    contribution each) AND activation bundle names. Naming the plugins the same
+    must NOT change activation semantics: with the full built-in catalogue
+    loaded, ``plugins=(those names)`` still folds to the matching identity flags
+    and never errors as a duplicate/unknown activation — the capability-flag
+    branch resolves first, and built-in plugins are excluded from the external
+    activation map so they can never collide there.
+    """
+    loaded = load_plugins(builtins=True)
+    activation = loaded.identity_activations()
+    # The real plugins exist in the loaded set but are excluded from the
+    # external activation vocabulary (built-ins never follow per-agent activation).
+    assert {"todo_write", "ask_user_question", "delegation"} <= set(loaded.names())
+    assert not ({"todo_write", "ask_user_question", "delegation"} & set(activation))
+    main, _ = compile_options(
+        _bare(plugins=("todo_write", "ask_user_question", "delegation")),
+        plugins=activation,
+    )
+    c = main.capabilities
+    assert c.todo_write and c.ask_user_question and c.delegation
+
+
 def test_delegation_and_spawnable_stay_structural() -> None:
     """delegation / spawnable derive from the child roster, not activation."""
     opts = _bare(

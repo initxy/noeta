@@ -31,7 +31,7 @@ from noeta.core.fold import fold
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.event_log import EventLogReader, EventLogTaskIndex
 from noeta.protocols.wake import HumanResponseReceived
-from noeta.policies.control_tools import QUESTION_HANDLE_PREFIX
+from noeta.builtins.ask_user_question.impl import QUESTION_HANDLE_PREFIX
 
 
 __all__ = [

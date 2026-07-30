@@ -86,8 +86,8 @@ class ResidentHost(Protocol):
       trace-id recovery on cancel; passed to :func:`noeta.core.fold.fold`
       for task-state reconstruction).
     * ``content_store`` — content-addressed blob store (passed to
-      :func:`~noeta.core.fold.fold` and
-      :func:`~noeta.policies.control_tools.load_questions_body`).
+      :func:`~noeta.core.fold.fold` and the ask answer codec the driver reads
+      off the resolved Engine, control-tool-surface S2 / D8).
     * ``dispatcher`` — task lifecycle (``enqueue`` / ``lease`` / ``wake``).
     * ``model`` — host-fixed default model id used when a Task has no
       folded ``ModelBound`` (old recordings, CLI sessions that never

@@ -14,12 +14,12 @@ from tests._skill_fixtures import write_skill
 
 from tests._session_inputs import default_factory_kwargs
 from noeta.core.fold import fold
+from noeta.builtins.delegation.impl import translate_spawn_subagent
 from noeta.policies.control_semantics import (
     SKILL_TOOL,
     ControlToolSpec,
     make_skill_translate,
     translate_control_tool,
-    translate_spawn_subagent,
 )
 # Deliberately the deep module: this pins react.py's OWN re-export of the
 # kernel constant (the parity assertion below), which the package door does

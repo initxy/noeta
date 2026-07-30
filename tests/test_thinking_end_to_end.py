@@ -21,12 +21,12 @@ from noeta.context.composer import ThreeSegmentComposer
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.core.wiring import wire_default_observers
+from noeta.builtins.ask_user_question.impl import translate_ask_user_question
+from noeta.builtins.delegation.impl import translate_spawn_subagent
+from noeta.builtins.todo_write.impl import translate_todo_write
 from noeta.policies.control_semantics import (
     ControlToolSpec,
-    translate_ask_user_question,
     translate_control_tool,
-    translate_spawn_subagent,
-    translate_todo_write,
 )
 from noeta.builtins.react.impl import ReActPolicy
 from noeta.protocols.decisions import (

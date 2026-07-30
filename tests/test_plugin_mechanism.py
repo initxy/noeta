@@ -510,11 +510,12 @@ def test_builtins_default_on_and_disable_individually():
     assert set(load_plugins(builtins=[a, b]).names()) == {"fs", "web"}
     assert load_plugins(builtins=[a, b], disabled_builtins=["web"]).names() == ("fs",)
     assert load_plugins(builtins=False).names() == ()
-    # Real discovery reads the noeta.builtins catalogue (M2).
+    # Real discovery reads the noeta.builtins catalogue (M2; control-tool-surface
+    # S2 adds the three control-tool built-ins → 17).
     assert set(load_plugins(builtins=True).names()) == {
-        "app", "browser", "fs", "governance", "mcp", "memory", "presets",
-        "providers", "react", "reminders", "sandbox", "skills", "web",
-        "workspace",
+        "app", "ask_user_question", "browser", "delegation", "fs", "governance",
+        "mcp", "memory", "presets", "providers", "react", "reminders", "sandbox",
+        "skills", "todo_write", "web", "workspace",
     }
 
 

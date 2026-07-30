@@ -87,11 +87,7 @@ from noeta.protocols.decisions import TaskStatePatch
 from noeta.protocols.messages import ImageBlock, MessageOrigin, TextBlock
 from noeta.protocols.policy import Policy
 from noeta.protocols.task import Task
-from noeta.policies.control_tools import (
-    load_questions_body,
-    normalize_answer_document,
-    question_handle,
-)
+from noeta.execution.control_tool import CONTROL_EXPORT_ASK_ANSWER_CODEC
 from noeta.protocols.canonical import from_canonical_bytes
 from noeta.protocols.values import LOCAL_PRINCIPAL, ContentRef, Principal
 from noeta.protocols.wake import (
@@ -1444,27 +1440,62 @@ class InteractionDriver:
         answers: dict[str, Any],
         answered_by: str = "driver",
     ) -> SeededTurn:
-        """Validate + seed an answer-and-resume turn (async transport half)."""
-        task = self._require_human_suspend(task_id, question_handle(question_id))
+        """Validate + seed an answer-and-resume turn (async transport half).
+
+        The ask answer codec (``question_handle`` / ``load_questions_body`` /
+        ``normalize_answer_document``) is no longer a kernel import: it moved into
+        the ``ask_user_question`` built-in and reaches this driver as the
+        session's ``CONTROL_EXPORT_ASK_ANSWER_CODEC`` mount export (D8), read off
+        the resolved Engine. A session that never mounted ``ask_user_question``
+        carries no codec and answering it fails loudly.
+        """
+        codec = self._answer_codec(task_id)
+        handle = codec.question_handle(question_id)
+        task = self._require_human_suspend(task_id, handle)
         pending = task.governance.pending_questions.get(question_id)
         if pending is None:
             raise RuntimeError(
                 f"task {task_id!r} is suspended on question-{question_id} "
                 "but has no matching pending question"
             )
-        questions = load_questions_body(
+        questions = codec.load_questions_body(
             self._host.content_store, pending["questions_ref"]
         )
-        normalized = normalize_answer_document({"answers": answers}, questions)
+        normalized = codec.normalize_answer_document({"answers": answers}, questions)
         return self._seed_woken(
             task_id,
-            handle=question_handle(question_id),
+            handle=handle,
             prelude=AnswerUserQuestionPrelude(
                 question_id=question_id,
                 answers=normalized,
                 answered_by=answered_by,
             ),
         )
+
+    def _answer_codec(self, task_id: str) -> Any:
+        """The session's ask answer codec (D8), read off the resolved Engine.
+
+        The ``ask_user_question`` built-in's mount publishes an
+        :class:`~noeta.execution.control_tool.AskAnswerCodec` under
+        :data:`~noeta.execution.control_tool.CONTROL_EXPORT_ASK_ANSWER_CODEC`; the
+        SDK host threads it onto every Engine whose session mounted the tool. We
+        fold the task, resolve its Engine (cached — the drive that follows reuses
+        it), and read the codec structurally. A session that never mounted
+        ``ask_user_question`` has no codec, so answering it fails loudly here
+        rather than silently mis-decoding.
+        """
+        host = self._host
+        task = fold(host.event_log, host.content_store, task_id)
+        engine = host.resolve_engine(task)
+        codec = getattr(engine, "answer_codec", None)
+        if codec is None:
+            raise RuntimeError(
+                f"task {task_id!r}: this session's Engine carries no ask answer "
+                f"codec — the 'ask_user_question' control tool was not mounted, so "
+                f"its {CONTROL_EXPORT_ASK_ANSWER_CODEC!r} mount export is absent "
+                f"and a submitted answer cannot be decoded"
+            )
+        return codec
 
     def deliver_event(
         self,

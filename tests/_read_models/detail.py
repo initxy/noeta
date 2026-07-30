@@ -31,7 +31,7 @@ from noeta.protocols.wake import (
     SubtaskGroupCompleted,
     TimerFired,
 )
-from noeta.policies.control_tools import (
+from noeta.builtins.ask_user_question.impl import (
     load_answers_body,
     load_questions_body,
     question_id_from_handle,

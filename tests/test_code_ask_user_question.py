@@ -9,7 +9,8 @@ from typing import Any
 from tests._read_models.detail import build_code_session_detail
 from noeta.core.fold import fold
 from noeta.core.snapshot import rehydrate_task, serialize_task_state
-from noeta.policies.control_tools import ASK_USER_QUESTION_TOOL, SPAWN_SUBAGENT_TOOL
+from noeta.builtins.ask_user_question.impl import ASK_USER_QUESTION_TOOL
+from noeta.policies.control_tools import SPAWN_SUBAGENT_TOOL
 from noeta.protocols.canonical import from_canonical_bytes, to_canonical_bytes
 from noeta.protocols.events import (
     EventEnvelope,
@@ -24,7 +25,7 @@ from noeta.protocols.messages import (
     ToolUseBlock,
     Usage,
 )
-from noeta.policies.control_tools import load_questions_body
+from noeta.builtins.ask_user_question.impl import load_questions_body
 from noeta.protocols.task import GovernanceState, Task
 from noeta.protocols.values import EVENT_PAYLOAD_MAX_BYTES, ContentRef
 from noeta.testing.fake_llm import FakeLLMProvider

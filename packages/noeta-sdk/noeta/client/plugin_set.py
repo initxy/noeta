@@ -413,6 +413,16 @@ class PluginSet:
                     kinds.append((rc.name, rc.value))
                 elif rc.surface == "prompt_fragment":
                     frags.append((rc.name, rc.value))
+                elif rc.surface == "control_tool":
+                    # ``control_tool`` is declared identity-plane (it enters
+                    # durable identity in S3), but it is RESOLVED the same wiring
+                    # way as ``session_pack`` — a per-agent projection through
+                    # :meth:`activation_control_tools`, merged with the built-in +
+                    # internal entries in the builder's mount loop. So it is not
+                    # carried here (that projection owns it); skipping keeps this
+                    # method from choking on an identity-plane surface it does not
+                    # bind (control-tool-surface S2).
+                    continue
                 elif rc.surface == "policy":
                     # Single-valued surface: at most one per plugin (the merge
                     # would already reject two). Cross-plugin collisions with the
@@ -483,6 +493,27 @@ class PluginSet:
         boundary as :meth:`activation_transforms`.
         """
         return self._activation_params("session_pack", _priority, only)
+
+    def activation_control_tools(
+        self, only: Optional[Iterable[str]] = None
+    ) -> dict[str, tuple[tuple[int, str, Any], ...]]:
+        """Resolve each **external** plugin's ``control_tool`` factories
+        (control-tool-surface S2).
+
+        Returns ``plugin name -> ((priority, contribution name, factory), …)``
+        for the ``control_tool`` surface. The host merges these — after the
+        built-in control tools it resolves from the built-in manifests — with the
+        kernel's remaining internal entries and hands the union to the builder's
+        dual-priority mount loop, so an agent that activates the plugin gets its
+        control tool mounted (schema rendered in band, translate routed in band).
+        The ``control_tool`` surface is declared identity-plane (it enters durable
+        identity in S3), but it is RESOLVED here the SAME wiring way as
+        :meth:`activation_session_packs` (a per-agent projection, ordered
+        ``(priority, plugin, name)``); :meth:`identity_activations` deliberately
+        skips it. Same scoping / execution boundary as
+        :meth:`activation_transforms`.
+        """
+        return self._activation_params("control_tool", _priority, only)
 
     def activation_reminder_providers(
         self, only: Optional[Iterable[str]] = None

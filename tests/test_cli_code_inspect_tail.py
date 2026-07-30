@@ -23,7 +23,7 @@ from noeta.client import SdkHost
 from noeta.core.fold import fold
 from tests._read_models.detail import build_code_session_detail
 from tests._read_models.tail import tail_event_rows
-from noeta.policies.control_tools import spawn_subagent_tool_schema
+from noeta.builtins.delegation.impl import spawn_subagent_tool_schema
 from noeta.protocols.events import (
     ConversationClosedPayload,
     LLMRequestStartedPayload,

@@ -247,6 +247,7 @@ class Engine:
         content_discovery: Optional[Any] = None,
         content_preloader: Optional[Any] = None,
         tool_result_transforms: tuple[Any, ...] = (),
+        answer_codec: Optional[Any] = None,
     ) -> None:
         self._event_log = event_log
         self._content_store = content_store
@@ -319,6 +320,16 @@ class Engine:
         # ``run_one_step``). Both default ``None`` — every existing
         # construction is byte-identical.
         self._content_preloader = content_preloader
+        # The ask_user_question answer codec (control-tool-surface S2, D8): a
+        # duck-typed ``AskAnswerCodec`` the SDK host reads off the session's
+        # ``SessionInputs.control_exports`` and threads here, so the driver's
+        # ``answer`` path can decode a submitted answer WITHOUT importing the
+        # ``ask_user_question`` built-in (the kernel never imports noeta.builtins).
+        # ``None`` on every engine whose session never mounted ``ask_user_question``
+        # (and on every kernel-alone / hand-built engine) — an answer arriving for
+        # such a session fails loudly in the driver. A public read attribute (not
+        # a ``_``-private one) because the driver reads it structurally.
+        self.answer_codec = answer_codec
 
         self._ctx = HandlerContext(
             emit=self._emit,
