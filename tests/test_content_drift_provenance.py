@@ -205,23 +205,30 @@ def test_code_session_records_content_provenance(
     # emitted in a new recording — only the generic ContextContentRecorded.
     assert not [e for e in events if e.type == "ToolSchemaRecorded"]
     assert not [e for e in events if e.type == "SkillContentRecorded"]
-    skill_events = [e for e in events if e.type == "ContextContentRecorded"]
-    # One pinned skill record before activation; the always-on
-    # workspace-environment resident records its own evolving entry after.
+    content_events = [e for e in events if e.type == "ContextContentRecorded"]
+    # The always-on workspace-environment resident activates pre-loop through
+    # the workspace pack's init hook (spec §4.5), so it records BEFORE the
+    # post-goal skill activation. Both are pre-loop residents; their semi_stable
+    # placement is band-ordered (skill<environment) regardless of record order.
     assert [
         (e.payload.kind, e.payload.name, e.payload.policy)
-        for e in skill_events
+        for e in content_events
     ] == [
-        ("skill", "fix-python-test", "pinned"),
         ("environment", "workspace", "evolving"),
+        ("skill", "fix-python-test", "pinned"),
     ]
     registry = load_workspace_skills(workspace)
     desc = registry.get("fix-python-test")
     assert desc is not None
     expected_hash = skill_content_hash(desc)
-    assert skill_events[0].payload.content_hash == expected_hash
+    skill_event = next(e for e in content_events if e.payload.kind == "skill")
+    assert skill_event.payload.content_hash == expected_hash
+    # The skill's provenance record still lands right before its activation
+    # patch (the mid-loop maybe_emit_provenance path is unchanged).
     skill_idx = next(
-        i for i, e in enumerate(events) if e.type == "ContextContentRecorded"
+        i
+        for i, e in enumerate(events)
+        if e.type == "ContextContentRecorded" and e.payload.kind == "skill"
     )
     patch_idx = next(
         i for i, e in enumerate(events) if e.type == "TaskStatePatched"

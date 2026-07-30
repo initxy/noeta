@@ -60,14 +60,12 @@ from noeta.execution.multi_turn import (
     NEXT_GOAL_WAKE_HANDLE,
     MultiTurnReActPolicy,
 )
-from noeta.execution.environment import record_environment
 from noeta.execution.host import ResidentHost
-from noeta.execution.instructions import record_instructions
 from noeta.execution.memory import (
     RecallGoalPrelude,
     intake_providers,
-    record_memory_index,
 )
+from noeta.execution.recorder import run_content_init
 from noeta.execution.reminders import ReminderProvider, record_intake_reminders
 from noeta.execution.resolver import agent_name_of
 from noeta.execution.subtask_drain import UnsupportedSubtaskSuspend
@@ -756,16 +754,24 @@ class InteractionDriver:
             # single-tenant host ignores it (same resolution chain).
             memory = recall_context(agent, task_id=task.task_id)
             if memory is not None:
-                recall_provider, memory_entries = memory
-                record_memory_index(
-                    host.event_log, host.content_store, task,
-                    entries=memory_entries,
-                    # The host's memoized kit (phase 2c) — the same object
-                    # the builder's registry renders from, so the recorded
-                    # fingerprint equals the composed bytes by construction.
-                    kit=host.memory_index_kit,
-                    lease_id=lease.lease_id,
-                )
+                # The index resident is recorded by the memory pack's init hook
+                # (below) — recall_context now yields only the auto-recall
+                # provider; its load-time entries snapshot is unused here.
+                recall_provider, _ = memory
+        # Pre-loop activation of every contributed resident (spec §4.5) — the
+        # generic successor of the three feature-named seed recorders. Each
+        # pack's init hook (memory index, workspace instructions + environment)
+        # records its resident through ONE SeedRecorder, in folded pack-loop
+        # order, BEFORE the goal so the residents anchor pre-loop (semi_stable,
+        # byte-identical placement). Idempotent per drive: a re-record of an
+        # already-active (kind, name) is dropped, so resume appends nothing.
+        task = run_content_init(
+            host.event_log,
+            host.content_store,
+            task,
+            init_hooks=getattr(engine, "content_init_hooks", ()),
+            lease_id=lease.lease_id,
+        )
         # Unified ``@`` mention snapshots (workspace files + MCP
         # static resources, read host-side at send time) seed FIRST, each as its
         # own ``origin="system"`` user message — so the transcript attributes the
@@ -839,38 +845,13 @@ class InteractionDriver:
                 patch=TaskStatePatch(activate_skills=list(combined_activations)),
                 lease_id=lease.lease_id,
             )
-        # Pre-loop activation of the session-level instructions + environment
-        # content channels — the SAME activation the resident
-        # ``AgentSessionRunner.prepare()`` did (skills → instructions →
-        # environment order; the memory index is recorded above, at the recall
-        # seam). Without this the server seed path emitted NO
-        # ``ContextContentRecorded(kind=environment|instructions)``, so a
-        # server-created task's request never carried the workspace dir / git /
-        # platform block nor the project AGENTS.md/NOETA.md. ``seed_start`` is the
-        # once-per-session open (the prepare() counterpart), so record here and
-        # not in ``seed_send_goal`` (per-turn goal append); both record functions
-        # are first-only/idempotent anyway, so an old task whose first interaction
-        # is a send_goal is harmless. Snapshots come from the host's
-        # ``session_content_snapshots`` (the same workspace_dir / instructions_file
-        # resolution + the same pure loaders ``build_session_inputs`` feeds the
-        # composer), so the recorded fingerprint matches the bytes this session's
-        # composer renders. ``getattr``-guarded so a host without the seam (test
-        # doubles / control-plane-only hosts) is a clean no-op.
-        snapshots = getattr(self._host, "session_content_snapshots", None)
-        if callable(snapshots):
-            environment_snapshot, instructions_snapshot = snapshots(workspace_dir)
-            record_instructions(
-                host.event_log, host.content_store, task,
-                snapshot=instructions_snapshot,
-                kit=host.instructions_kit,
-                lease_id=lease.lease_id,
-            )
-            record_environment(
-                host.event_log, host.content_store, task,
-                snapshot=environment_snapshot,
-                kit=host.environment_kit,
-                lease_id=lease.lease_id,
-            )
+        # The session-level instructions + environment residents are now
+        # activated by the workspace pack's init hooks (spec §4.5), run through
+        # the SeedRecorder above alongside the memory index — replacing the
+        # three feature-named seed recorders and the host's
+        # ``session_content_snapshots`` seam. The workspace factory captures the
+        # SAME snapshot its renderer holds, so the recorded fingerprint still
+        # equals the composed bytes by construction.
         return SeededTurn(task_id=task.task_id, lease=lease, prelude=None)
 
     def drive_seeded(self, seeded: SeededTurn) -> DriveOutcome:

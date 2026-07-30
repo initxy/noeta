@@ -1893,6 +1893,11 @@ class SdkHost(GenericEngineResolver):
             # every existing construction is byte-identical.
             content_discovery=inputs.content_discovery,
             content_preloader=inputs.content_preloader,
+            # The contributed pre-loop ``init`` hooks (spec §4.5): the driver
+            # reads them off this resolved Engine and records each pack's
+            # residents at seed time (the generic successor of the feature-named
+            # seed recorders). ``()`` when no pack activates a pre-loop resident.
+            content_init_hooks=inputs.init_hooks,
             # tool_result_transform stages (D9) for THIS agent — selected by the
             # agent's name from the per-agent map the Client resolved from the
             # activated plugin set. ``()`` for an agent that activated no
@@ -1996,6 +2001,7 @@ class SdkHost(GenericEngineResolver):
             tool_output_inline_limit=inputs.tool_output_inline_limit,
             background_runner=self._process_registry,
             file_checkpoint_registry=self._file_checkpoint,
+            content_init_hooks=inputs.init_hooks,
         )
 
     def _read_task_inputs(self, task_id: str) -> dict[str, Any]:

@@ -21,7 +21,10 @@ from pathlib import Path
 from typing import Optional, cast
 
 from noeta.builtins.memory.impl import store as _store_mod
-from noeta.builtins.memory.impl.index import build_memory_index_kit
+from noeta.builtins.memory.impl.index import (
+    build_memory_index_kit,
+    render_memory_index_text,
+)
 from noeta.builtins.memory.impl.recall import (
     append_user_message_with_recall,
     memory_reminder_provider,
@@ -36,7 +39,13 @@ from noeta.builtins.memory.impl.store import (
     build_memory_tools,
     load_memory_store,
 )
-from noeta.context.memory import MemoryEntries
+from noeta.context.memory import (
+    MEMORY_DRIFT_POLICY,
+    MEMORY_INDEX_NAME,
+    MEMORY_INDEX_VERSION,
+    MEMORY_KIND,
+    MemoryEntries,
+)
 from noeta.execution.session_pack import (
     EMPTY_CONTRIBUTION,
     EXPORT_MEMORY_ENTRIES,
@@ -44,6 +53,7 @@ from noeta.execution.session_pack import (
     ContentKindContribution,
     PackContribution,
     SessionBuildContext,
+    SessionRecorder,
 )
 from noeta.protocols.tool import Tool
 
@@ -102,15 +112,40 @@ def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
     global_memory_dir = cfg.get("global_memory_dir")
     root = memory_dir if memory_dir is not None else global_memory_dir
     store, entries, tools = build_memory_pack(root=cast(Optional[Path], root))
+    content_store = ctx.content_store
     # The index resident (kind band 200 — after skill, before instructions):
     # rendered from the SAME entries snapshot the exports carry, so the
     # composed bytes and the recorded fingerprint share one source.
     index_kit = build_memory_index_kit()
+
+    def _init(rec: SessionRecorder) -> None:
+        """Pre-loop activation of the index resident (spec §4.5).
+
+        Serialises the SAME entries the composer's renderer holds into the
+        ContentStore and records the resulting ref, so the ledger fully
+        determines the composed index (law 2): ``ref.hash`` equals the
+        rendered-index sha256 the ``evolving`` fingerprint always carried, so
+        the emitted ``ContextContentRecorded`` is byte-identical to the retired
+        ``record_memory_index`` call. Empty entries leave the ledger untouched.
+        """
+        if not entries:
+            return
+        body = render_memory_index_text(entries).encode("utf-8")
+        ref = content_store.put(body, media_type="text/markdown")
+        rec.record_content(
+            kind=MEMORY_KIND,
+            name=MEMORY_INDEX_NAME,
+            version=MEMORY_INDEX_VERSION,
+            ref=ref,
+            policy=MEMORY_DRIFT_POLICY,
+        )
+
     return PackContribution(
         tools=tools,
         content_kinds=(
             ContentKindContribution(200, index_kit.content_kind(entries)),
         ),
+        init=_init,
         exports={
             EXPORT_MEMORY_STORE: store,
             EXPORT_MEMORY_ENTRIES: entries,
