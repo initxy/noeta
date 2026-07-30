@@ -140,9 +140,11 @@ def test_fully_loaded_build_tool_and_kind_order(
         memory_enabled=True,
         instructions_enabled=True,
         allow_skill_scripts=True,
-        browser_enabled=True,
-        browser_backend=_FakeBrowserBackend(),
-        app_gateway=_FakeGateway(),
+        capability_flags={"browser": True},
+        backends={
+            "browser": _FakeBrowserBackend(),
+            "app_preview": _FakeGateway(),
+        },
         mcp_tools_override={mcp_tool.name: mcp_tool},
         custom_tools={custom_tool.name: custom_tool},
     )

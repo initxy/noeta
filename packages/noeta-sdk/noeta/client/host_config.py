@@ -25,7 +25,7 @@ import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Mapping, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Tuple
 
 from noeta.client.sandbox_provider import SandboxProvider, SandboxSpec
 from noeta.execution.background_subagent import (
@@ -44,8 +44,14 @@ from noeta.protocols.dispatcher import Dispatcher
 from noeta.protocols.event_log import EventLogFull
 from noeta.protocols.messages import StreamDelta
 from noeta.protocols.step_context import StepContext
-from noeta.runtime.app_preview import AppPreviewGateway
 from noeta.runtime.mcp import HttpPostFn, McpAnyServerSpec
+
+#: The preview gateway as SDK core sees it: an OPAQUE object (microkernel
+#: phase 3). The real shape is the app plugin's ``AppPreviewGateway``
+#: Protocol (``noeta.builtins.app.impl``) — the host drops the object into
+#: the kernel builder's ``backends`` bag under the ``"app_preview"`` name
+#: and only the app pack ever calls it.
+AppPreviewGateway = Any
 
 
 __all__ = ["HostConfig", "SandboxExecEnvConfig"]

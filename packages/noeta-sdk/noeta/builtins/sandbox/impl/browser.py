@@ -1,7 +1,7 @@
 """``AioBrowserBackend`` — the AIO Sandbox ``/mcp`` browser adapter.
 
 Microkernel M2: moved here from the old ``noeta.tools.browser._backend``
-(the :class:`~noeta.runtime.browser.BrowserBackend` Protocol — the seam the
+(the :class:`~noeta.builtins.browser.impl.BrowserBackend` Protocol — the seam the
 tool pack calls through — sank kernel-side at M3). This is the ``sandbox``
 built-in plugin's second ``sandbox_provider`` declaration; the SDK's
 ``SandboxExecEnvManager`` resolves it as its default browser factory.

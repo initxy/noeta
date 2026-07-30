@@ -5,19 +5,22 @@ Five tools — ``browser_navigate`` / ``browser_click`` / ``browser_type`` /
 description are pinned by noeta** so the model-facing contract (and therefore the
 stable-prefix KV-cache bytes) never drifts when the AIO Sandbox container image
 changes its own tool names (spec D1, CONTEXT.md Stable Prefix). Each tool's
-``invoke`` delegates to a :class:`~noeta.runtime.browser.BrowserBackend`
-(in production the AIO adapter from the ``sandbox`` built-in plugin,
+``invoke`` delegates to a :class:`BrowserBackend` (in production the AIO
+adapter from the ``sandbox`` built-in plugin,
 ``noeta.builtins.sandbox.impl.browser``) which is the single place the
 container ``/mcp`` browser wire is pinned.
 
 The pack is closure-constructed like the fs pack: :func:`build_browser_tools`
 takes one backend and returns exactly the five tools keyed by name. It is a
 per-session tool pack (mounted only in sandbox mode with a browser-capable
-agent), injected the way fs tools are — NOT an MCP connector (spec D2).
-Microkernel M3: moved here from ``noeta.tools.browser``; the kernel keeps the
-:class:`~noeta.runtime.browser.BrowserBackend` Protocol and takes this pack's
-factory injected (``build_session_inputs(browser_tools_factory=…)``, resolved
-by the SDK host through :func:`noeta.client.parts.default_browser_tools_factory`).
+agent) — NOT an MCP connector (spec D2). Microkernel phase 3: the
+:class:`BrowserBackend` Protocol lives HERE (this plugin owns the seam its
+five tools call through; the ``sandbox`` plugin implements it — a normal
+one-directional plugin dependency), and the pack enters a session as this
+plugin's ``session_pack`` manifest contribution
+(:func:`build_browser_session_pack`, band 700) reading the ``"browser"``
+entry of the kernel's backend bag — the kernel holds no browser vocabulary
+at all.
 
 Perception v1 (spec D4): the four text tools return a page snapshot (page text +
 numbered interactive elements); ``browser_screenshot`` stores the PNG as a
@@ -27,21 +30,56 @@ the model as vision (see the tool's own note on increment-2).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional, Protocol, cast, runtime_checkable
 
+from noeta.execution.session_pack import (
+    EMPTY_CONTRIBUTION,
+    PackContribution,
+    SessionBuildContext,
+)
 from noeta.protocols.tool import Tool, ToolContext, ToolResult
 from noeta.tools._limits import (
     INLINE_CONTENT_MAX_BYTES,
     fit_output_fields,
 )
 from noeta.tools._refs import ref_json
-from noeta.runtime.browser import BrowserBackend
 from noeta.protocols.resources import load_markdown
+
+
+@runtime_checkable
+class BrowserBackend(Protocol):
+    """The high-level, element-level browser surface the tool pack acts through.
+
+    This plugin's own seam (microkernel phase 3 — moved here from
+    ``noeta.runtime.browser``; the five tools and the Protocol they call
+    through live in one plugin, so the import is internal and the kernel
+    holds no browser vocabulary). Deliberately narrow (spec D4
+    perception-v1): the four text methods return a page snapshot /
+    action-outcome string (``extract`` gives page text + a numbered list of
+    interactive elements, browser-use style), and ``screenshot`` returns raw
+    PNG bytes. ``click`` / ``type`` address an element by the numeric
+    ``index`` a prior ``extract`` (or the list ``navigate`` returns inline)
+    handed the model — no pixel coordinates. The ``sandbox`` plugin's
+    ``AioBrowserBackend`` is the production implementation; a test
+    substitutes a fake to prove the tools delegate without touching a
+    container.
+    """
+
+    def navigate(self, url: str) -> str: ...
+
+    def click(self, index: int) -> str: ...
+
+    def type(self, index: int, text: str, *, submit: bool = False) -> str: ...
+
+    def extract(self) -> str: ...
+
+    def screenshot(self) -> bytes: ...
 
 
 __all__ = [
     "BROWSER_TOOL_NAMES",
     "BrowserBackend",
+    "build_browser_session_pack",
     "build_browser_tools",
 ]
 
@@ -289,3 +327,21 @@ def build_browser_tools(backend: BrowserBackend) -> dict[str, Tool]:
     merges this dict into the session tool set the same way it merges the fs pack.
     """
     return {cls.name: cls(backend) for cls in _TOOL_CLASSES}
+
+
+def build_browser_session_pack(ctx: SessionBuildContext) -> PackContribution:
+    """The browser pack as a ``session_pack`` contribution (microkernel phase 3).
+
+    The manifest-declared factory (band 700) — sandbox-only, flag-gated, NOT
+    whitelist-filtered. Applies when the session both carries a live
+    ``"browser"`` backend in the context bag (the SDK host vends one off the
+    sandbox handle) AND the agent opens the ``browser`` capability. The tool
+    schemas are noeta-owned and fixed, so a browser session's stable prefix
+    depends only on the capability flag, never on the backend or the AIO
+    image; absent backend OR flag off (resume with no sandbox / every
+    non-browser agent) ⇒ the empty contribution, byte-identical tool set.
+    """
+    backend = cast(Optional[BrowserBackend], ctx.backends.get("browser"))
+    if backend is None or not ctx.flag("browser"):
+        return EMPTY_CONTRIBUTION
+    return PackContribution(tools=build_browser_tools(backend))

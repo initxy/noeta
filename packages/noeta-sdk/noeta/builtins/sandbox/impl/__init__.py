@@ -6,7 +6,7 @@ Microkernel M2: the two retirement-slated AIO adapters moved here —
 ``LocalExecEnv``) and
 :class:`~noeta.builtins.sandbox.impl.browser.AioBrowserBackend` out of
 the old ``noeta.tools.browser._backend`` (the ``BrowserBackend``
-Protocol sank to ``noeta.runtime.browser`` at M3). The parent manifest declares both on the host-plane
+Protocol lives in the browser plugin since phase 3). The parent manifest declares both on the host-plane
 ``sandbox_provider`` surface; the SDK's ``SandboxExecEnvManager`` resolves
 them through the loader's dynamic-import doorway as its default factories.
 """

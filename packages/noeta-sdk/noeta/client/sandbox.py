@@ -51,8 +51,16 @@ from noeta.client.sandbox_provider import (
     decode_exec_env_ref,
     encode_exec_env_ref,
 )
-from noeta.runtime.browser import BrowserBackend
 from noeta.runtime.exec_env import ExecEnv
+
+#: The vended browser backend as SDK core sees it: an OPAQUE object
+#: (microkernel phase 3). The real shape is the browser plugin's
+#: ``BrowserBackend`` Protocol (``noeta.builtins.browser.impl``) — plugin
+#: vocabulary the universal "nothing statically imports noeta.builtins" ban
+#: keeps out of SDK core. The host drops the object into the kernel
+#: builder's ``backends`` bag under the ``"browser"`` name and only the
+#: browser pack ever calls it.
+BrowserBackend = Any
 
 _log = logging.getLogger(__name__)
 

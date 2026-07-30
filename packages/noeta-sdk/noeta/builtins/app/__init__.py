@@ -1,20 +1,33 @@
-"""``app`` — thin declaration for the app-preview tool (``open_app``).
+"""``app`` — the app-preview tool (``open_app``).
 
-The tool is gated on a live host preview gateway (host-wired — ``open_app``
-is only ever constructed when the product injects an
-:class:`~noeta.runtime.app_preview.AppPreviewGateway`), so the manifest
-carries no contributions — declaring it on the identity ``tool`` surface
-would merge it into an activating agent's ``AgentSpec``, which the
-gateway-gated wiring deliberately does not do. The implementation lives in
-this plugin's ``impl`` package (``noeta.builtins.app.impl`` —
-``build_app_tools`` / ``OpenAppTool``), resolved by the SDK host through
-:func:`noeta.client.parts.default_app_tools_factory` into the kernel
-builder's ``app_tools_factory`` injection (microkernel M3).
+The tool is gated on a live host preview gateway (the product's concrete
+gateway rides the kernel's backend bag as ``"app_preview"``), so the
+manifest declares no identity ``tool`` contributions — that would merge it
+into an activating agent's ``AgentSpec``, which the gateway-gated wiring
+deliberately does not do. What it does declare (microkernel phase 3) is the
+session-construction half: the ``session_pack`` factory (band 1000 — after
+the kernel's custom entry, so the host's ``open_app`` is authoritative)
+whose applicability check IS the gateway gate. The implementation AND the
+``AppPreviewGateway`` / ``AppMount`` seam types all live in this plugin's
+``impl`` package (``noeta.builtins.app.impl``) — the kernel holds no
+app-preview vocabulary.
 """
 
 from __future__ import annotations
 
+from noeta.builtins._declare import c
 from noeta.client.plugin_manifest import PluginManifest
 
 
-MANIFEST = PluginManifest(name="app", requires_noeta=">=0.4")
+MANIFEST = PluginManifest(
+    name="app",
+    requires_noeta=">=0.4",
+    contributions=(
+        c(
+            "session_pack",
+            "app",
+            "noeta.builtins.app.impl:build_app_session_pack",
+            priority=1000,
+        ),
+    ),
+)

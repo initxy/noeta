@@ -86,8 +86,6 @@ from noeta.protocols.content_store import ContentStore
 from noeta.protocols.hooks import Guard
 from noeta.protocols.policy import Policy
 from noeta.protocols.tool import Tool
-from noeta.runtime.app_preview import AppPreviewGateway
-from noeta.runtime.browser import BrowserBackend
 from noeta.runtime.exec_env import ExecEnv
 from noeta.runtime.shell_policy import ShellMode
 from noeta.runtime.workspace import FsWriteMode, WorkspaceRoot, WriteRootsResolver
@@ -263,33 +261,6 @@ class GuardsFactory(Protocol):
     ) -> HookManager: ...
 
 
-class AppToolsFactory(Protocol):
-    """Loader-resolved constructor of the app-preview pack (microkernel M3).
-
-    The kernel never imports the ``open_app`` tool: the SDK host resolves the
-    ``app`` built-in plugin's pack factory through the plugin loader and
-    injects it here. Called only when the host wired a live preview gateway.
-    Signature = ``noeta.builtins.app.impl:build_app_tools``.
-    """
-
-    def __call__(
-        self, workspace: WorkspaceRoot, gateway: AppPreviewGateway
-    ) -> dict[str, Tool]: ...
-
-
-class BrowserToolsFactory(Protocol):
-    """Loader-resolved constructor of the browser tool pack (microkernel M3).
-
-    The kernel never imports a browser tool: the SDK host resolves the
-    ``browser`` built-in plugin's pack factory through the plugin loader and
-    injects it here. Called only when the session has a live backend AND the
-    agent opens the ``browser`` capability. Signature =
-    ``noeta.builtins.browser.impl:build_browser_tools``.
-    """
-
-    def __call__(self, backend: BrowserBackend) -> dict[str, Tool]: ...
-
-
 class PolicyFactoryBuilder(Protocol):
     """Loader-resolved constructor of the default policy factory
     (microkernel phase 2b).
@@ -379,24 +350,12 @@ class _BuildSpec:
     instructions_discovery: bool
     mcp_tools_override: Optional[dict[str, Tool]]
     custom_tools: Optional[dict[str, Tool]]
-    app_gateway: Optional[AppPreviewGateway]
     #: Execution backend for the fs / shell pack. ``None`` ⇒ host
     #: (``LocalExecEnv``, byte-identical); a sandbox ``ExecEnv`` makes the pack
     #: act against a container and switches the workspace to lexical
     #: (container-path) containment. A wiring-only runtime injection, never part
     #: of session identity — the tool schemas are unchanged either way.
     exec_env: Optional[ExecEnv]
-    #: Per-session browser backend (sandbox-only). ``None`` ⇒ no browser tools
-    #: (byte-identical). A live ``AioBrowserBackend`` (built by the SDK host from
-    #: the session's sandbox handle) + ``browser_enabled`` merges the noeta-owned
-    #: browser tool pack. Wiring-only runtime injection, never session identity;
-    #: the tool schemas are noeta-owned and fixed, so the stable prefix depends
-    #: only on ``browser_enabled`` (a capability), never on the backend.
-    browser_backend: Optional[BrowserBackend]
-    #: Whether this agent's identity opens the browser capability
-    #: (``AgentSpec.capabilities.browser``). The browser pack is merged only when
-    #: this is ``True`` AND ``browser_backend`` is present.
-    browser_enabled: bool
     hooks_pre_tool_use: tuple[PreToolUseRule, ...]
     #: SDK ``Options`` extension points (T3). Custom Guards registered after
     #: the built-in guard stack; custom ContentKindSpec channels appended
@@ -432,17 +391,6 @@ class _BuildSpec:
     #: ``_stage_fs_pack``. ``None`` (kernel-alone / stub) drops neither edit
     #: tool — the documented no-catalog semantic, NOT a silent fallback.
     provider_family: Optional[str] = None
-    #: Loader-resolved browser tool pack factory (microkernel M3, D2):
-    #: ``noeta.builtins.browser.impl:build_browser_tools``, resolved by the
-    #: SDK host and injected here. ``None`` fails loudly at the browser stage
-    #: when a live backend + the capability are both present — the kernel
-    #: never imports a browser tool.
-    browser_tools_factory: Optional[BrowserToolsFactory] = None
-    #: Loader-resolved app-preview pack factory (microkernel M3, D2):
-    #: ``noeta.builtins.app.impl:build_app_tools``, resolved by the SDK host
-    #: and injected here. ``None`` fails loudly at the app stage when a live
-    #: gateway is present — the kernel never imports the tool.
-    app_tools_factory: Optional[AppToolsFactory] = None
     #: The manifest-contributed session packs (microkernel phase 3): resolved
     #: by the SDK host (``noeta.client.parts.default_session_packs`` + the
     #: external plugins' ``session_pack`` projection) and run by the generic
@@ -585,54 +533,12 @@ def _environment_pack(
     )
 
 
-def _browser_pack(spec: _BuildSpec, ctx: SessionBuildContext) -> PackContribution:
-    """browser tools — sandbox-only, flag-gated (NOT whitelist-filtered).
-
-    Merged when the session both has a live ``"browser"`` backend in the
-    context bag (the SDK host built one from the sandbox handle) AND this
-    agent opens the ``browser`` capability. The tool schemas are noeta-owned
-    and fixed, so a browser session's stable prefix depends only on the
-    capability flag, never on the backend or the AIO image. Absent backend OR
-    flag off (resume with no sandbox / every non-browser agent) ⇒ nothing
-    merged, byte-identical tool set.
-    """
-    backend = cast(Optional[BrowserBackend], ctx.backends.get("browser"))
-    if backend is None or not ctx.flag("browser"):
-        return EMPTY_CONTRIBUTION
-    if spec.browser_tools_factory is None:
-        raise RuntimeError(
-            "browser tool pack factory was not injected — the SDK host "
-            "resolves the browser built-in plugin through the plugin "
-            "loader and passes browser_tools_factory (microkernel M3); "
-            "the kernel builder imports no tool implementation"
-        )
-    return PackContribution(tools=spec.browser_tools_factory(backend))
-
-
-def _app_pack(spec: _BuildSpec, ctx: SessionBuildContext) -> PackContribution:
-    """open_app pack — gateway-injected, merged after custom_tools (band 1000)
-    so the host's open_app is authoritative.
-
-    Gated on a live ``"app_preview"`` gateway in the context bag — absent
-    (resume + every SDK/test fixture) ⇒ empty, keeping the tool set + stable
-    hash byte-identical (a resumed turn that wires no gateway rebuilds the
-    identical tool schemas).
-    """
-    gateway = cast(
-        Optional[AppPreviewGateway], ctx.backends.get("app_preview")
-    )
-    if gateway is None:
-        return EMPTY_CONTRIBUTION
-    if spec.app_tools_factory is None:
-        raise RuntimeError(
-            "app tool pack factory was not injected — the SDK host "
-            "resolves the app built-in plugin through the plugin loader "
-            "and passes app_tools_factory (microkernel M3); the kernel "
-            "builder imports no tool implementation"
-        )
-    return PackContribution(
-        tools=spec.app_tools_factory(ctx.workspace, gateway)
-    )
+# NOTE (microkernel phase 3, S3): the browser / app packs moved onto the
+# ``session_pack`` surface with their seam Protocols (``BrowserBackend`` →
+# the browser plugin, ``AppPreviewGateway`` → the app plugin;
+# ``noeta.runtime.browser`` / ``noeta.runtime.app_preview`` are deleted).
+# Their live backing objects ride the generic ``backends`` bag under the
+# plugins' own names (``"browser"`` / ``"app_preview"``).
 
 
 # ---------------------------------------------------------------------------
@@ -934,14 +840,6 @@ def build_session_inputs(
     instructions_discovery: bool = False,
     mcp_tools_override: Optional[dict[str, Tool]] = None,
     custom_tools: Optional[dict[str, Tool]] = None,
-    #: The host's live preview gateway. When set, the ``open_app``
-    #: tool (gateway-injected) is merged into the tool set so the agent can
-    #: render HTML apps in the right-side panel. ``None`` (resume + every
-    #: SDK/test fixture) ⇒ no open_app, so the tool set + stable hash stay
-    #: byte-identical (a resumed turn that wires no gateway rebuilds the
-    #: identical tool schemas); only noeta-agent's live serving
-    #: path wires a real gateway.
-    app_gateway: Optional[AppPreviewGateway] = None,
     #: Execution backend for the fs / shell pack. ``None`` (resume + every
     #: SDK/test fixture) ⇒ the host ``LocalExecEnv`` and a host ``WorkspaceRoot``
     #: — byte-identical, and the tool schemas are unchanged so the stable prefix
@@ -950,14 +848,18 @@ def build_session_inputs(
     #: pack act against that container and switches the workspace to lexical
     #: (container-path) containment. Wiring-only, never session identity.
     exec_env: Optional[ExecEnv] = None,
-    #: Per-session browser backend + the agent's browser capability flag
-    #: (sandbox-only). ``None`` backend / ``False`` flag (resume + every
-    #: SDK/test fixture + every non-browser agent) ⇒ no browser tools merged, so
-    #: the tool set + stable hash stay byte-identical. The SDK host supplies a
-    #: live ``AioBrowserBackend`` (built from the session's sandbox handle) only
-    #: when it has provisioned a container AND the agent opens ``browser``.
-    browser_backend: Optional[BrowserBackend] = None,
-    browser_enabled: bool = False,
+    #: The named backend bag (microkernel phase 3): the host's live backing
+    #: objects for capability packs, keyed by the contributing plugins' own
+    #: names (the sandbox-vended ``"browser"`` backend, the product's
+    #: ``"app_preview"`` gateway, …). An absent name means the capability has
+    #: no live backing — its pack contributes nothing, so resume + every
+    #: SDK/test fixture stay byte-identical with an empty bag.
+    backends: Optional[Mapping[str, object]] = None,
+    #: The agent's derived capability flags by name (``"browser"``, …) —
+    #: the per-agent truth capability packs self-gate on. ``"memory"`` is
+    #: still merged in from the legacy ``memory_enabled`` parameter until S4
+    #: retires it.
+    capability_flags: Optional[Mapping[str, bool]] = None,
     hooks_pre_tool_use: tuple[PreToolUseRule, ...] = (),
     repetition_threshold: int = 0,
     repetition_action: RepetitionAction = "require_approval",
@@ -1003,16 +905,6 @@ def build_session_inputs(
     #: by the edit-tool mutex. ``None`` ⇒ both edit tools stay (the documented
     #: unrecognised-model semantic — byte-identical for stub/test builds).
     provider_family: Optional[str] = None,
-    #: Loader-resolved browser tool pack factory (microkernel M3, D2): the
-    #: ``browser`` built-in plugin's ``build_browser_tools``, resolved by the
-    #: SDK host and injected here; ``None`` fails loudly only when a live
-    #: backend + the browser capability are both present.
-    browser_tools_factory: Optional[BrowserToolsFactory] = None,
-    #: Loader-resolved app-preview pack factory (microkernel M3, D2): the
-    #: ``app`` built-in plugin's ``build_app_tools``, resolved by the SDK
-    #: host and injected here; ``None`` fails loudly only when a live
-    #: preview gateway is present.
-    app_tools_factory: Optional[AppToolsFactory] = None,
     #: Loader-resolved default policy factory builder (microkernel phase 2b):
     #: the ``react`` built-in plugin's ``build_react_policy_factory``,
     #: resolved by the SDK host and injected here; ``None`` fails loudly at
@@ -1107,10 +999,7 @@ def build_session_inputs(
         instructions_discovery=instructions_discovery,
         mcp_tools_override=mcp_tools_override,
         custom_tools=custom_tools,
-        app_gateway=app_gateway,
         exec_env=exec_env,
-        browser_backend=browser_backend,
-        browser_enabled=browser_enabled,
         hooks_pre_tool_use=hooks_pre_tool_use,
         extra_guards=extra_guards,
         extra_content_kinds=extra_content_kinds,
@@ -1122,8 +1011,6 @@ def build_session_inputs(
         memory_index_kit=memory_index_kit,
         instructions_kit=instructions_kit,
         environment_kit=environment_kit,
-        browser_tools_factory=browser_tools_factory,
-        app_tools_factory=app_tools_factory,
         repetition_threshold=repetition_threshold,
         repetition_action=repetition_action,
         repetition_window=repetition_window,
@@ -1145,14 +1032,9 @@ def build_session_inputs(
         workspace = WorkspaceRoot.for_container(workspace_dir)
 
     # The generic pack context (microkernel phase 3): every session pack
-    # reads THIS, never the spec. The backend bag and capability flags are
-    # synthesized from the legacy parameters until S3/S5 replace them with
-    # generic inputs.
-    backends: dict[str, object] = {}
-    if browser_backend is not None:
-        backends["browser"] = browser_backend
-    if app_gateway is not None:
-        backends["app_preview"] = app_gateway
+    # reads THIS, never the spec. ``"memory"`` still rides in from the
+    # legacy ``memory_enabled`` parameter until S4 retires it; an explicit
+    # ``capability_flags`` entry wins.
     ctx = SessionBuildContext(
         workspace=workspace,
         workspace_dir=workspace_dir,
@@ -1161,10 +1043,10 @@ def build_session_inputs(
         model=model,
         provider_family=provider_family,
         allowed_tools=allowed_tools,
-        backends=backends,
+        backends=dict(backends) if backends else {},
         capability_flags={
             "memory": memory_enabled,
-            "browser": browser_enabled,
+            **(capability_flags or {}),
         },
         # S2-transitional synthesis: the packs read their own config entry;
         # S4 replaces the feature-named parameters with a caller-supplied
@@ -1217,10 +1099,8 @@ def build_session_inputs(
         *session_packs,
         SessionPackEntry("instructions", 400, partial(_instructions_pack, spec)),
         SessionPackEntry("environment", 500, partial(_environment_pack, spec)),
-        SessionPackEntry("browser", 700, partial(_browser_pack, spec)),
         SessionPackEntry("mcp", 800, _mcp_entry),
         SessionPackEntry("custom", 900, _custom_entry),
-        SessionPackEntry("app", 1000, partial(_app_pack, spec)),
     ]
     entries.sort(key=lambda e: (e.priority, e.name))
 

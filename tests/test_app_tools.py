@@ -14,7 +14,7 @@ from pathlib import Path
 
 from noeta.protocols.tool import ToolContext
 from noeta.builtins.app.impl import OpenAppTool, build_app_tools
-from noeta.runtime.app_preview import AppMount
+from noeta.builtins.app.impl import AppMount
 from noeta.runtime.workspace import WorkspaceRoot
 
 

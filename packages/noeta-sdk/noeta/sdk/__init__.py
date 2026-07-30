@@ -117,7 +117,9 @@ from noeta.context.content_channel import ContentKindSpec
 # execution-environment-seam ADR, "SDK-adapter export surface").
 from noeta.runtime.workspace import path_within
 from noeta.runtime.exec_env import ExecEnv
-from noeta.runtime.browser import BrowserBackend
+# ``BrowserBackend`` is re-exported LAZILY via the module ``__getattr__``
+# below: since microkernel phase 3 the Protocol lives in the ``browser``
+# built-in plugin, and nothing statically imports ``noeta.builtins``.
 from noeta.protocols.event_log import Subscriber as Observer
 from noeta.protocols.hooks import (
     Guard,
@@ -162,7 +164,9 @@ from noeta.protocols.view import View
 # gateway, live-MCP resolver). Separate from Options (which carries agent
 # identity); a product backend passes a populated HostConfig to opt into durable
 # storage / preview / MCP while still driving the engine only through noeta.sdk.
-from noeta.runtime.app_preview import AppMount, AppPreviewGateway
+# ``AppMount`` / ``AppPreviewGateway`` are re-exported LAZILY via the module
+# ``__getattr__`` below: since microkernel phase 3 the seam types live in the
+# ``app`` built-in plugin.
 from noeta.runtime.mcp import (
     HttpPostFn,
     McpAnyServerSpec,
@@ -335,4 +339,20 @@ def __getattr__(name: str) -> object:
         import importlib
 
         return importlib.import_module("noeta.builtins.memory.impl").MemoryStore
+    # The capability-seam types (microkernel phase 3): ``BrowserBackend``
+    # lives in the browser plugin (the sandbox plugin implements it), and
+    # ``AppMount`` / ``AppPreviewGateway`` live in the app plugin (a product
+    # host's concrete gateway satisfies the Protocol structurally). Exported
+    # here for implementers' typing convenience only — the kernel and SDK
+    # core treat both as opaque objects in the builder's ``backends`` bag.
+    if name == "BrowserBackend":
+        import importlib
+
+        return importlib.import_module(
+            "noeta.builtins.browser.impl"
+        ).BrowserBackend
+    if name in ("AppMount", "AppPreviewGateway"):
+        import importlib
+
+        return getattr(importlib.import_module("noeta.builtins.app.impl"), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

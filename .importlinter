@@ -123,12 +123,10 @@ forbidden_modules =
     noeta.builtins
 
 [importlinter:contract:kernel-vocabulary-diet]
-name = kernel vocabulary modules (runtime.{governance,browser,app_preview,mcp}) import only noeta.protocols (microkernel M2/M3 sinks stay pure config/protocol vocabulary)
+name = kernel vocabulary modules (runtime.{governance,mcp}) import only noeta.protocols (microkernel M2/M3 sinks stay pure config/protocol vocabulary; phase 3 moved runtime.{browser,app_preview} into their plugins)
 type = forbidden
 source_modules =
     noeta.runtime.governance
-    noeta.runtime.browser
-    noeta.runtime.app_preview
     noeta.runtime.mcp
 forbidden_modules =
     noeta.core

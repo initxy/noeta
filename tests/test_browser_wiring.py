@@ -26,7 +26,7 @@ _SYSTEM = "you are a coding agent"
 
 
 class _FakeBrowser:
-    """A structural :class:`~noeta.runtime.browser.BrowserBackend` — no socket."""
+    """A structural ``BrowserBackend`` (the browser plugin's Protocol) — no socket."""
 
     def navigate(self, url: str) -> str:
         return f"nav {url}"
@@ -60,8 +60,10 @@ def _session(
         model="stub-model",
         compaction=derive_compaction_config("stub-model"),
         budget=coding_replay_budget(None),
-        browser_backend=browser_backend,
-        browser_enabled=browser_enabled,
+        backends=(
+            {"browser": browser_backend} if browser_backend is not None else {}
+        ),
+        capability_flags={"browser": browser_enabled},
     )
 
 
