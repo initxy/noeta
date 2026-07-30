@@ -52,5 +52,14 @@ MANIFEST = PluginManifest(
             "noeta.builtins.memory.impl.recall:memory_reminder_provider",
             seams=["turn_intake"],
         ),
+        # The session-construction half (microkernel phase 3): band 300,
+        # directly after the base fs/web packs. Self-gates on the agent's
+        # ``memory`` capability flag.
+        c(
+            "session_pack",
+            "memory",
+            "noeta.builtins.memory.impl:build_memory_session_pack",
+            priority=300,
+        ),
     ),
 )

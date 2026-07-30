@@ -20,6 +20,7 @@ from typing import Any, Callable, Mapping, Optional, Protocol, cast
 from noeta.agent.spec import ComponentRef, ToolRef
 from noeta.context.reminders import ReminderSpec
 from noeta.execution.builder import CompactionConfig
+from noeta.execution.session_pack import SessionPackEntry
 from noeta.protocols.messages import Usage
 from noeta.protocols.policy import Policy
 
@@ -38,15 +39,12 @@ __all__ = [
     "default_environment_kit",
     "default_guards_factory",
     "default_instructions_kit",
-    "default_memory_factory",
     "default_memory_index_kit",
     "default_policy_factory",
     "default_reminder_specs",
+    "default_session_packs",
     "default_shell_rules",
-    "default_skills_kit_factory",
-    "default_tool_factories",
     "derive_compaction_config",
-    "edit_tool_mutex",
     "mcp_impl",
     "memory_impl",
     "provider_family",
@@ -101,19 +99,6 @@ def builtin_tool_classes() -> dict[str, type]:
     return _TOOL_CLASS_CACHE
 
 
-def default_tool_factories() -> tuple[Callable[..., Any], Callable[..., Any]]:
-    """``(fs_tools_factory, web_tools_factory)`` for the kernel builder.
-
-    Resolved from the ``fs`` / ``web`` built-in plugin bodies
-    (``noeta.builtins.<name>.impl:build_*_tools``) — the injection the
-    microkernel builder requires (its ``fs_tools_factory`` /
-    ``web_tools_factory`` params); the kernel itself imports no tool
-    implementation.
-    """
-    return (
-        _resolve_ref("noeta.builtins.fs.impl:build_fs_tools"),
-        _resolve_ref("noeta.builtins.web.impl:build_web_tools"),
-    )
 
 
 # --- providers built-in accessors (microkernel M2) -------------------------
@@ -200,17 +185,6 @@ def default_shell_rules() -> tuple[Any, ...]:
     return rules
 
 
-def edit_tool_mutex() -> Mapping[str, tuple[str, ...]]:
-    """family → edit-tool names to drop (the fs built-in's mutex table).
-
-    Phase 2c: the ``{anthropic: apply_patch, openai: edit}`` knowledge ships
-    with the fs built-in (it owns both tools); the kernel builder consumes it
-    only as the ``edit_tool_mutex`` injection.
-    """
-    table: Mapping[str, tuple[str, ...]] = _resolve_ref(
-        "noeta.builtins.fs.impl:PROVIDER_EDIT_TOOL_MUTEX"
-    )
-    return table
 
 
 def catalog_price(model: str, usage: Usage) -> float:
@@ -310,15 +284,6 @@ def memory_impl() -> Any:
     return _MEMORY_MOD
 
 
-def default_memory_factory() -> Callable[..., Any]:
-    """The memory kit factory for the kernel builder.
-
-    Resolved from the ``memory`` built-in plugin's body
-    (``noeta.builtins.memory.impl:build_memory_pack``) — the injection the
-    microkernel builder requires (its ``memory_factory`` param); the kernel
-    itself imports no memory implementation.
-    """
-    return _resolve_ref("noeta.builtins.memory.impl:build_memory_pack")
 
 
 def default_policy_factory() -> Callable[..., Any]:
@@ -381,15 +346,6 @@ def react_impl() -> ReactImpl:
     return _REACT_MOD
 
 
-def default_skills_kit_factory() -> Callable[..., Any]:
-    """The skills kit factory for the kernel builder (microkernel phase 2a).
-
-    Resolved from the ``skills`` built-in plugin's body
-    (``noeta.builtins.skills.impl:build_skills_kit``) — the injection the
-    microkernel builder requires (its ``skills_factory`` param); the kernel
-    itself imports no skills implementation.
-    """
-    return _resolve_ref("noeta.builtins.skills.impl:build_skills_kit")
 
 
 # NOTE: there was a ``skills_impl()`` module doorway here, mirroring
@@ -408,6 +364,60 @@ def default_guards_factory() -> Callable[..., Any]:
     kernel itself imports no guard implementation.
     """
     return _resolve_ref("noeta.builtins.governance.impl:build_default_guards")
+
+
+_SESSION_PACK_CACHE: dict[frozenset[str], tuple[SessionPackEntry, ...]] = {}
+
+
+def default_session_packs(
+    *, disabled: frozenset[str] = frozenset()
+) -> tuple[SessionPackEntry, ...]:
+    """The built-in ``session_pack`` entries, **loader-resolved** and ordered.
+
+    Microkernel phase 3: the built-in manifests declare their
+    session-construction factories (ref + priority); this function reads
+    those manifests (inert data), resolves each ``session_pack``
+    contribution at the sanctioned execution boundary, and returns the
+    :class:`SessionPackEntry` tuple sorted ``(priority, plugin, name)`` —
+    the ONE injection the kernel builder's generic pack loop requires
+    (replacing the per-feature factory accessors). ``disabled`` drops a
+    built-in's pack entirely (``disabled_builtins=["skills"]``), the honest
+    expression of a turned-off capability. Memoized per disabled-set — the
+    factories are pure module-level functions, import-stable for the process.
+    """
+    cached = _SESSION_PACK_CACHE.get(disabled)
+    if cached is None:
+        builtins_mod = importlib.import_module("noeta.builtins")
+        keyed: list[tuple[int, str, str, SessionPackEntry]] = []
+        for manifest in builtins_mod.builtin_manifests():
+            if manifest.name in disabled:
+                continue
+            for c in manifest.contributions:
+                if c.surface != "session_pack" or c.ref is None:
+                    continue
+                priority = c.params.get("priority")
+                if not isinstance(priority, int):
+                    raise RuntimeError(
+                        f"built-in session pack {c.name!r} declares no "
+                        f"integer priority — the manifest must carry the "
+                        f"construction order"
+                    )
+                keyed.append(
+                    (
+                        priority,
+                        manifest.name,
+                        c.name,
+                        SessionPackEntry(
+                            name=c.name,
+                            priority=priority,
+                            factory=_resolve_ref(c.ref),
+                        ),
+                    )
+                )
+        keyed.sort(key=lambda t: (t[0], t[1], t[2]))
+        cached = tuple(entry for _p, _pl, _n, entry in keyed)
+        _SESSION_PACK_CACHE[disabled] = cached
+    return cached
 
 
 _REMINDER_SPEC_CACHE: Optional[tuple[ReminderSpec, ...]] = None

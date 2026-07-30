@@ -38,6 +38,7 @@ from noeta.builtins.fs.impl.shell import (
     ShellPollTool,
     ShellRunTool,
 )
+from noeta.execution.session_pack import PackContribution, SessionBuildContext
 from noeta.protocols.tool import Tool
 from noeta.runtime.exec_env import ExecEnv, LocalExecEnv
 from noeta.builtins.fs.impl.shell_rules import DEFAULT_SHELL_RULES
@@ -63,6 +64,7 @@ __all__ = [
     "ShellRunTool",
     "WRITE_FILE_MAX_BYTES",
     "WriteFileTool",
+    "build_fs_session_pack",
     "build_fs_tools",
 ]
 
@@ -168,3 +170,35 @@ PROVIDER_EDIT_TOOL_MUTEX: Mapping[str, tuple[str, ...]] = {
     "anthropic": ("apply_patch",),
     "openai": ("edit",),
 }
+
+
+def build_fs_session_pack(ctx: SessionBuildContext) -> PackContribution:
+    """The fs pack as a ``session_pack`` contribution (microkernel phase 3).
+
+    The manifest-declared factory (band 100) the kernel builder's generic
+    loop calls. Builds the pack against the kernel-built workspace root,
+    applies this plugin's own :data:`PROVIDER_EDIT_TOOL_MUTEX` (the
+    edit↔apply_patch drop is fs knowledge — the kernel no longer carries the
+    table), then filters by the agent whitelist — the base packs (fs / web)
+    are the only ones that pass through ``allowed_tools``; capability packs
+    append past it by design.
+    """
+    pack = build_fs_tools(
+        ctx.workspace,
+        mode=ctx.write_mode,
+        shell_mode=ctx.shell_mode,
+        shell_allowlist=ctx.shell_allowlist,
+        write_path_globs=ctx.write_path_globs,
+        write_roots=ctx.write_roots,
+        exec_env=ctx.exec_env,
+    )
+    if ctx.provider_family is not None:
+        for _drop in PROVIDER_EDIT_TOOL_MUTEX.get(ctx.provider_family, ()):
+            pack.pop(_drop, None)
+    return PackContribution(
+        tools={
+            name: tool
+            for name, tool in pack.items()
+            if name in ctx.allowed_tools
+        }
+    )

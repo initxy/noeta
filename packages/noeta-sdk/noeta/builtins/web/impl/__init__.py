@@ -38,6 +38,25 @@ from noeta.builtins.web.impl.search import (
     SearchTransport,
     WebSearchTool,
 )
+from noeta.execution.session_pack import PackContribution, SessionBuildContext
+
+
+def build_web_session_pack(ctx: SessionBuildContext) -> PackContribution:
+    """The web pack as a ``session_pack`` contribution (microkernel phase 3).
+
+    The manifest-declared factory (band 200) — appends directly after the fs
+    pack, preserving the merged fs-then-web insertion order, and filters by
+    the agent whitelist exactly as the fs base pack does. Sandbox mode routes
+    webfetch / web_search egress THROUGH the container (curl via the
+    ExecEnv); ``None`` keeps the host httpx path.
+    """
+    return PackContribution(
+        tools={
+            name: tool
+            for name, tool in build_web_tools(exec_env=ctx.exec_env).items()
+            if name in ctx.allowed_tools
+        }
+    )
 
 
 __all__ = [
@@ -50,5 +69,6 @@ __all__ = [
     "SearchTransport",
     "WebFetchTool",
     "WebSearchTool",
+    "build_web_session_pack",
     "build_web_tools",
 ]

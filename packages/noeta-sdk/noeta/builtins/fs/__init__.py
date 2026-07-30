@@ -27,5 +27,14 @@ MANIFEST = PluginManifest(
         c("tool", "shell_run", "noeta.builtins.fs.impl.shell:ShellRunTool"),
         c("tool", "shell_poll", "noeta.builtins.fs.impl.shell:ShellPollTool"),
         c("tool", "shell_kill", "noeta.builtins.fs.impl.shell:ShellKillTool"),
+        # The session-construction half (microkernel phase 3): the factory
+        # the kernel builder's generic pack loop calls. Band 100 — the base
+        # pack leads the construction order.
+        c(
+            "session_pack",
+            "fs",
+            "noeta.builtins.fs.impl:build_fs_session_pack",
+            priority=100,
+        ),
     ),
 )

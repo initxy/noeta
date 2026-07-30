@@ -230,36 +230,6 @@ class SessionInputs:
 # ---------------------------------------------------------------------------
 
 
-class FsToolsFactory(Protocol):
-    """Loader-resolved constructor of the fs tool pack (microkernel M1).
-
-    The kernel never imports a tool implementation: the SDK host resolves the
-    ``fs`` built-in plugin's pack factory through the plugin loader and injects
-    it here. Signature = ``noeta.builtins.fs.impl:build_fs_tools``.
-    """
-
-    def __call__(
-        self,
-        workspace: WorkspaceRoot,
-        *,
-        mode: FsWriteMode = FsWriteMode.DRY_RUN,
-        shell_mode: ShellMode = ShellMode.ALLOWLIST,
-        shell_allowlist: Sequence[Mapping[str, Any]] = (),
-        write_path_globs: tuple[str, ...] = (),
-        write_roots: Optional[WriteRootsResolver] = None,
-        exec_env: Optional[ExecEnv] = None,
-    ) -> dict[str, Tool]: ...
-
-
-class WebToolsFactory(Protocol):
-    """Loader-resolved constructor of the web tool pack (microkernel M1).
-
-    Signature = ``noeta.builtins.web.impl:build_web_tools``.
-    """
-
-    def __call__(self, *, exec_env: Optional[ExecEnv] = None) -> dict[str, Tool]: ...
-
-
 class GuardsFactory(Protocol):
     """Loader-resolved constructor of the default guard stack (microkernel M2).
 
@@ -358,47 +328,6 @@ class PolicyFactoryBuilder(Protocol):
     ) -> Callable[[Any], Policy]: ...
 
 
-class SkillsFactory(Protocol):
-    """Loader-resolved constructor of the skills kit (microkernel phase 2a).
-
-    The kernel never imports the skill indexer, the ``run_skill_script``
-    tool, or the allowed-tools resolver: the SDK host resolves the ``skills``
-    built-in plugin's kit factory through the plugin loader and injects it
-    here. One call assembles everything the session build consumes from the
-    skill subsystem (registry, script wiring, content kind, resolved
-    grants). Signature = ``noeta.builtins.skills.impl:build_skills_kit``.
-    """
-
-    def __call__(
-        self,
-        *,
-        workspace_dir: Path,
-        override_skills_dir: Optional[Path],
-        lower_skill_dirs: Sequence[Path],
-        workspace: WorkspaceRoot,
-        scripts_enabled: bool,
-        exec_env: Optional[ExecEnv],
-    ) -> SkillsKit: ...
-
-
-class MemoryFactory(Protocol):
-    """Loader-resolved constructor of the memory kit (microkernel M3).
-
-    The kernel never imports the memory store or tools: the SDK host resolves
-    the ``memory`` built-in plugin's pack factory through the plugin loader
-    and injects it here. Returns ``(store, entries-snapshot, tools)`` — the
-    store rides through :class:`SessionInputs` as an opaque handle; the
-    entries snapshot is shared by the composer's renderer and the pre-loop
-    ``record_memory_index`` (one snapshot, one fingerprint). ``root=None``
-    means the impl's global default directory. Signature =
-    ``noeta.builtins.memory.impl:build_memory_pack``.
-    """
-
-    def __call__(
-        self, *, root: Optional[Path] = None
-    ) -> tuple[Any, MemoryEntries, dict[str, Tool]]: ...
-
-
 @dataclass(frozen=True, slots=True)
 class _BuildSpec:
     """All operator inputs to one session build, frozen.
@@ -487,10 +416,6 @@ class _BuildSpec:
     thinking: Optional[str]
     effort: Optional[str]
     tool_output_inline_limit: Optional[int]
-    #: Loader-resolved tool pack factories (microkernel M1, D2). ``None``
-    #: fails loudly at the fs stage — the kernel never imports a tool impl.
-    fs_tools_factory: Optional[FsToolsFactory] = None
-    web_tools_factory: Optional[WebToolsFactory] = None
     #: Loader-resolved built-in compose-time reminders (microkernel M2, D2):
     #: the three renders the ``reminders`` built-in plugin declares, resolved by
     #: the SDK host and injected here. ``None`` fails loudly at the reminder-
@@ -507,17 +432,6 @@ class _BuildSpec:
     #: ``_stage_fs_pack``. ``None`` (kernel-alone / stub) drops neither edit
     #: tool — the documented no-catalog semantic, NOT a silent fallback.
     provider_family: Optional[str] = None
-    #: family → edit-tool names to DROP from the freshly-built fs pack
-    #: (phase 2c): the mutex *table* is product knowledge and ships with the
-    #: fs built-in (``PROVIDER_EDIT_TOOL_MUTEX``), resolved by the SDK host
-    #: and injected here; the kernel applies it mechanically. Empty ⇒ no-op
-    #: (kernel-alone keeps both edit tools, the no-catalog semantic).
-    edit_tool_mutex: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
-    #: Loader-resolved memory kit factory (microkernel M3, D2):
-    #: ``noeta.builtins.memory.impl:build_memory_pack``, resolved by the SDK
-    #: host and injected here. ``None`` fails loudly at the memory stage when
-    #: ``memory_enabled`` — the kernel never imports the store or tools.
-    memory_factory: Optional[MemoryFactory] = None
     #: Loader-resolved browser tool pack factory (microkernel M3, D2):
     #: ``noeta.builtins.browser.impl:build_browser_tools``, resolved by the
     #: SDK host and injected here. ``None`` fails loudly at the browser stage
@@ -529,13 +443,12 @@ class _BuildSpec:
     #: and injected here. ``None`` fails loudly at the app stage when a live
     #: gateway is present — the kernel never imports the tool.
     app_tools_factory: Optional[AppToolsFactory] = None
-    #: Loader-resolved skills kit factory (microkernel phase 2a):
-    #: ``noeta.builtins.skills.impl:build_skills_kit``, resolved by the SDK
-    #: host and injected here. The kernel never imports the indexer / script
-    #: tool / grant resolver. ``None`` is a supported configuration, not a
-    #: fault: the ``skills`` built-in is optional, so the skills stage no-ops
-    #: and the session has no skills at all (see :func:`_stage_skills`).
-    skills_factory: Optional[SkillsFactory] = None
+    #: The manifest-contributed session packs (microkernel phase 3): resolved
+    #: by the SDK host (``noeta.client.parts.default_session_packs`` + the
+    #: external plugins' ``session_pack`` projection) and run by the generic
+    #: pack loop in ``(priority, name)`` order. Empty builds a session with
+    #: no pack tools at all — the kernel mandates no capability.
+    session_packs: tuple[SessionPackEntry, ...] = ()
     #: Injected memory-index kit (phase 2c):
     #: ``noeta.builtins.memory.impl:build_memory_index_kit``. Carries the
     #: index renderer/hash/kind factory. ``None`` fails loudly at registry
@@ -610,112 +523,12 @@ class _ToolAssembly:
 # ---------------------------------------------------------------------------
 
 
-def _fs_pack(spec: _BuildSpec, ctx: SessionBuildContext) -> PackContribution:
-    """fs + provider-edit mutex + the ``allowed_tools`` filter (base pack).
-
-    Builds the fs pack against the kernel-built workspace root, applies the
-    provider-mutex edit drop, then filters by the spec whitelist — the base
-    packs (fs / web) are the ONLY ones whose output passes through
-    ``allowed_tools``; every capability pack appends past the filter
-    (flag-gated tools are never whitelist-filtered, by design).
-    """
-    if spec.fs_tools_factory is None or spec.web_tools_factory is None:
-        raise RuntimeError(
-            "fs/web tool pack factories were not injected — the SDK host "
-            "resolves the fs/web built-in plugins through the plugin loader "
-            "and passes fs_tools_factory/web_tools_factory (microkernel M1); "
-            "the kernel builder imports no tool implementation"
-        )
-    full_pack = spec.fs_tools_factory(
-        ctx.workspace,
-        mode=ctx.write_mode,
-        shell_mode=ctx.shell_mode,
-        shell_allowlist=ctx.shell_allowlist,
-        write_path_globs=ctx.write_path_globs,
-        write_roots=ctx.write_roots,
-        exec_env=ctx.exec_env,
-    )
-    # The edit↔apply_patch difference is provider-specific and is
-    # absorbed HERE, at the assembly layer — not in any tool field, not in the
-    # prompt, not in the AgentSpec whitelist (so fingerprints never drift on a
-    # model swap). The bound model's vendor family keys the injected
-    # ``edit_tool_mutex`` table (phase 2c: the fs built-in owns the names);
-    # an unrecognised model (``None`` family, e.g. any kernel-alone / stub
-    # build) drops nothing (both stay → existing recordings resume byte-equal).
-    if ctx.provider_family is not None:
-        for _drop in spec.edit_tool_mutex.get(ctx.provider_family, ()):
-            full_pack.pop(_drop, None)
-    return PackContribution(
-        tools={
-            name: tool
-            for name, tool in full_pack.items()
-            if name in ctx.allowed_tools
-        }
-    )
-
-
-def _web_pack(spec: _BuildSpec, ctx: SessionBuildContext) -> PackContribution:
-    """web pack (``webfetch`` / ``web_search``) — whitelist-filtered like fs.
-
-    Appends directly after the fs pack (band 200), preserving the merged
-    fs-then-web insertion order the single fs stage produced. Sandbox mode
-    routes webfetch / web_search egress THROUGH the container (curl via the
-    ExecEnv, S9); ``None`` keeps the host httpx path.
-    """
-    if spec.web_tools_factory is None:
-        raise RuntimeError(
-            "web tool pack factory was not injected — the SDK host resolves "
-            "the web built-in plugin through the plugin loader and passes "
-            "web_tools_factory (microkernel M1); the kernel builder imports "
-            "no tool implementation"
-        )
-    return PackContribution(
-        tools={
-            name: tool
-            for name, tool in spec.web_tools_factory(
-                exec_env=ctx.exec_env
-            ).items()
-            if name in ctx.allowed_tools
-        }
-    )
-
-
-def _memory_pack(spec: _BuildSpec, ctx: SessionBuildContext) -> PackContribution:
-    """memory pack (flag-gated, NOT whitelist-filtered).
-
-    ``memory_write`` is present even for an empty store (you could never
-    write the first memory otherwise); the index snapshot is taken ONCE here
-    — the composer's renderer and the pre-loop ``record_memory_index`` share
-    it (via the exports), so the recorded fingerprint always equals what the
-    model saw.
-    """
-    if not ctx.flag("memory"):
-        return EMPTY_CONTRIBUTION
-    if spec.memory_factory is None:
-        raise RuntimeError(
-            "memory factory was not injected — the SDK host resolves the "
-            "memory built-in plugin through the plugin loader and passes "
-            "memory_factory (microkernel M3); the kernel builder imports no "
-            "memory implementation"
-        )
-    # Memory root is a FIXED global dir, not workspace-
-    # derived. Precedence: explicit ``memory_dir`` override >
-    # ``global_memory_dir`` (agent-configured) > the impl's global default
-    # (``root=None`` — the factory reads its own module default late, so a
-    # test pinning it stays hermetic). The same root resolves live + resume.
-    memory_root = (
-        spec.memory_dir
-        if spec.memory_dir is not None
-        else spec.global_memory_dir
-    )
-    store, entries, memory_tools = spec.memory_factory(root=memory_root)
-    return PackContribution(
-        tools=memory_tools,
-        exports={
-            EXPORT_MEMORY_STORE: store,
-            EXPORT_MEMORY_ENTRIES: entries,
-        },
-    )
+# NOTE (microkernel phase 3, S2): the fs / web / memory / skills packs are no
+# longer kernel-internal — their factories are ``session_pack`` manifest
+# contributions (``noeta.builtins.<name>.impl:build_<name>_session_pack``),
+# resolved by the SDK host and passed in as ``session_packs``. The kernel
+# keeps only the not-yet-migrated packs below (instructions / environment /
+# browser / app — S3/S4) plus the two kernel-owned injections (mcp / custom).
 
 
 def _instructions_pack(
@@ -770,42 +583,6 @@ def _environment_pack(
             )
         }
     )
-
-
-def _skills_pack(spec: _BuildSpec, ctx: SessionBuildContext) -> PackContribution:
-    """The skills kit — registry, script tool, content kind, grants.
-
-    Three-tier skill merge — built-in + global tiers below the
-    workspace-local pack (built-in < global < workspace, workspace wins).
-    The lower tiers default empty (SDK / test path), so existing single-dir
-    recordings stay byte-identical. Sandbox mode indexes every tier THROUGH
-    the container (``exec_env``): the dirs are container mount points and
-    the rendered base directories are container paths (D6-Skills).
-
-    No ``skills_factory`` ⇒ the pack is a NO-OP, not a fault: the ``skills``
-    built-in is optional (the host turns it off for
-    ``disabled_builtins=["skills"]``), and its empty state is well defined —
-    no registry, no skill content kind, no skill tool, and no script grants
-    exist for the session. The other skill settings (dirs,
-    ``allow_skill_scripts``) go inert with it.
-    """
-    if spec.skills_factory is None:
-        return EMPTY_CONTRIBUTION
-    lower_skill_dirs: list[Path] = list(spec.builtin_skills_dirs)
-    if spec.global_skills_dir is not None:
-        lower_skill_dirs.append(spec.global_skills_dir)
-    kit = spec.skills_factory(
-        workspace_dir=ctx.workspace_dir,
-        override_skills_dir=spec.skills_dir,
-        lower_skill_dirs=lower_skill_dirs,
-        workspace=ctx.workspace,
-        scripts_enabled=spec.allow_skill_scripts,
-        exec_env=ctx.exec_env,
-    )
-    tools: dict[str, Tool] = {}
-    if kit.script_tool is not None:
-        tools[kit.script_tool.name] = kit.script_tool
-    return PackContribution(tools=tools, exports={EXPORT_SKILLS_KIT: kit})
 
 
 def _browser_pack(spec: _BuildSpec, ctx: SessionBuildContext) -> PackContribution:
@@ -1206,12 +983,13 @@ def build_session_inputs(
     #: Per-agent-activated compose-time reminders (D8, track B). Default ``()`` so
     #: every existing caller composes the built-in three only, byte-identically.
     extra_reminders: tuple[ReminderSpec, ...] = (),
-    #: Loader-resolved tool pack factories (microkernel M1, D2): the SDK
-    #: host resolves the ``fs`` / ``web`` built-in plugins' pack factories
-    #: through the plugin loader and injects them here. The kernel builder
-    #: itself never imports a tool implementation; ``None`` fails loudly.
-    fs_tools_factory: Optional[FsToolsFactory] = None,
-    web_tools_factory: Optional[WebToolsFactory] = None,
+    #: The manifest-contributed session packs (microkernel phase 3): the SDK
+    #: host resolves every ``session_pack`` contribution (built-ins via
+    #: ``noeta.client.parts.default_session_packs``, external plugins via the
+    #: PluginSet projection) and injects the merged, priority-ordered entry
+    #: tuple here. The generic loop is the whole tool-assembly pipeline;
+    #: an empty tuple builds a session with no pack tools at all.
+    session_packs: tuple[SessionPackEntry, ...] = (),
     #: Loader-resolved built-in compose-time reminders (microkernel M2, D2):
     #: the three renders declared by the ``reminders`` built-in plugin,
     #: resolved by the SDK host and injected here; ``None`` fails loudly.
@@ -1225,14 +1003,6 @@ def build_session_inputs(
     #: by the edit-tool mutex. ``None`` ⇒ both edit tools stay (the documented
     #: unrecognised-model semantic — byte-identical for stub/test builds).
     provider_family: Optional[str] = None,
-    #: family → edit-tool names to drop (phase 2c): the fs built-in's
-    #: ``PROVIDER_EDIT_TOOL_MUTEX``, resolved by the SDK host. ``None``/empty
-    #: ⇒ no-op (kernel-alone keeps both edit tools).
-    edit_tool_mutex: Optional[Mapping[str, tuple[str, ...]]] = None,
-    #: Loader-resolved memory kit factory (microkernel M3, D2): the
-    #: ``memory`` built-in plugin's ``build_memory_pack``, resolved by the
-    #: SDK host and injected here; ``None`` fails loudly when memory is on.
-    memory_factory: Optional[MemoryFactory] = None,
     #: Loader-resolved browser tool pack factory (microkernel M3, D2): the
     #: ``browser`` built-in plugin's ``build_browser_tools``, resolved by the
     #: SDK host and injected here; ``None`` fails loudly only when a live
@@ -1243,11 +1013,6 @@ def build_session_inputs(
     #: host and injected here; ``None`` fails loudly only when a live
     #: preview gateway is present.
     app_tools_factory: Optional[AppToolsFactory] = None,
-    #: Loader-resolved skills kit factory (microkernel phase 2a): the
-    #: ``skills`` built-in plugin's ``build_skills_kit``, resolved by the SDK
-    #: host and injected here; ``None`` builds a session with no skills at all
-    #: (the built-in is optional — the skills stage no-ops).
-    skills_factory: Optional[SkillsFactory] = None,
     #: Loader-resolved default policy factory builder (microkernel phase 2b):
     #: the ``react`` built-in plugin's ``build_react_policy_factory``,
     #: resolved by the SDK host and injected here; ``None`` fails loudly at
@@ -1350,19 +1115,15 @@ def build_session_inputs(
         extra_guards=extra_guards,
         extra_content_kinds=extra_content_kinds,
         extra_reminders=extra_reminders,
-        fs_tools_factory=fs_tools_factory,
-        web_tools_factory=web_tools_factory,
+        session_packs=session_packs,
         base_reminders=base_reminders,
         guards_factory=guards_factory,
         provider_family=provider_family,
-        edit_tool_mutex=dict(edit_tool_mutex) if edit_tool_mutex else {},
-        memory_factory=memory_factory,
         memory_index_kit=memory_index_kit,
         instructions_kit=instructions_kit,
         environment_kit=environment_kit,
         browser_tools_factory=browser_tools_factory,
         app_tools_factory=app_tools_factory,
-        skills_factory=skills_factory,
         repetition_threshold=repetition_threshold,
         repetition_action=repetition_action,
         repetition_window=repetition_window,
@@ -1405,7 +1166,21 @@ def build_session_inputs(
             "memory": memory_enabled,
             "browser": browser_enabled,
         },
-        plugin_config={},
+        # S2-transitional synthesis: the packs read their own config entry;
+        # S4 replaces the feature-named parameters with a caller-supplied
+        # ``plugin_config`` and this block collapses into a passthrough.
+        plugin_config={
+            "memory": {
+                "memory_dir": memory_dir,
+                "global_memory_dir": global_memory_dir,
+            },
+            "skills": {
+                "skills_dir": skills_dir,
+                "builtin_skills_dirs": tuple(builtin_skills_dirs),
+                "global_skills_dir": global_skills_dir,
+                "allow_skill_scripts": allow_skill_scripts,
+            },
+        },
         write_mode=write_mode,
         shell_mode=shell_mode,
         shell_allowlist=shell_allowlist,
@@ -1439,12 +1214,9 @@ def build_session_inputs(
         return PackContribution(tools=spec.custom_tools)
 
     entries: list[SessionPackEntry] = [
-        SessionPackEntry("fs", 100, partial(_fs_pack, spec)),
-        SessionPackEntry("web", 200, partial(_web_pack, spec)),
-        SessionPackEntry("memory", 300, partial(_memory_pack, spec)),
+        *session_packs,
         SessionPackEntry("instructions", 400, partial(_instructions_pack, spec)),
         SessionPackEntry("environment", 500, partial(_environment_pack, spec)),
-        SessionPackEntry("skills", 600, partial(_skills_pack, spec)),
         SessionPackEntry("browser", 700, partial(_browser_pack, spec)),
         SessionPackEntry("mcp", 800, _mcp_entry),
         SessionPackEntry("custom", 900, _custom_entry),
