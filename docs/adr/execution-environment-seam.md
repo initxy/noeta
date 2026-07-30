@@ -279,7 +279,8 @@ detailed in `docs/implementation-specs/archive/2026-07-09-sandbox-browser-subsys
   / `browser_click` / `browser_type` / `browser_extract` / `browser_screenshot`)
   whose **name / schema / description are noeta's**, injected per session the way
   the fs pack is (a construction field, never `ToolContext`), gated on a new
-  `Capabilities.browser` bit. Each tool delegates through a narrow `BrowserBackend`
+  `Capabilities.browser` bit *(**current state:** now the `browser` activation in
+  `AgentSpec.plugins` — `Capabilities` was retired)*. Each tool delegates through a narrow `BrowserBackend`
   seam whose one production impl, `AioBrowserBackend`, pins the container `/mcp`
   browser wire in a single adapter + fake-transport test.
 - **Layer 4 — a `web` subagent.** An official agent identity (browser pack + a

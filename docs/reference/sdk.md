@@ -163,7 +163,8 @@ Flat child-agent recipe: `description` (required, non-empty), `prompt`
 (per-agent activation, default `()` — no `fs`/`web`; `plugins=("delegation",)`
 is how a child is granted the right to spawn), `metadata`. Cannot nest —
 children are leaves. There is no `capabilities` field: it was removed with the
-rest of the `Capabilities` authoring surface.
+rest of the `Capabilities` authoring surface, which was later deleted wholesale —
+per-agent feature gating is the `plugins` activation tuple.
 
 ### `SystemPromptPreset` — `client/options.py`
 

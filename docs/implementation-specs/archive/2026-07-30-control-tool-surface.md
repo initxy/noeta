@@ -1,11 +1,15 @@
 # The `control_tool` surface — control tools become plugin contributions; AgentSpec identity becomes the activation tuple
 
-> **Status: Active** — shaped 2026-07-30. Supersedes, by explicit owner
-> decision, two deferrals in the session-pack spec's non-goals
-> ([archive/2026-07-30-session-pack-surface.md](archive/2026-07-30-session-pack-surface.md)):
-> "control tools stay kernel-permanent" and "Capabilities stays a fixed
-> frozen dataclass". The durable decisions will land in a new ADR
-> (see S4) alongside a CONTEXT.md update.
+> **Status: Shipped** — landed on `main` as the commit series e7261bb (spec) →
+> fb10010 (S0 goldens) → 8b7cd02 (S1 mechanism) → e9cd54e (S2a built-ins) →
+> f7cab03 (S2b moves/deletions) → 26ec35c (S3 identity swap) → the S4 docs
+> commit. The durable decisions live in
+> [control-tool-contributions-and-activation-identity.md](../../adr/control-tool-contributions-and-activation-identity.md);
+> CONTEXT.md carries the vocabulary. Supersedes, by explicit owner decision, two
+> deferrals in the session-pack spec's non-goals
+> ([2026-07-30-session-pack-surface.md](2026-07-30-session-pack-surface.md)):
+> "control tools stay kernel-permanent" and "Capabilities stays a fixed frozen
+> dataclass".
 
 ## Goal
 
@@ -204,7 +208,7 @@ hardcoded if-chain (`execution/builder.py:457`
   snapshot re-pinned deliberately (hard break, reviewed diff: only the
   capabilities→plugins representation changes; `system_prompt` + tool
   bytes stay identical).
-- [ ] **S4 — docs.** New ADR (the `control_tool` surface + activation-tuple
+- [x] **S4 — docs.** New ADR (the `control_tool` surface + activation-tuple
   identity + the recorded hard break and its rationale); CONTEXT.md
   (sixteen surfaces, seventeen built-ins, control-band description
   rewrite, `Capabilities` / `ControlToggles` retired from vocabulary,
@@ -214,23 +218,23 @@ Each stage gates on `make check` before the next starts.
 
 ## Acceptance criteria
 
-- [ ] Bare `Options()` and the full-toggle matrix produce **byte-identical**
+- [x] Bare `Options()` and the full-toggle matrix produce **byte-identical**
   control schemas pre/post S1–S2 (S0 golden), and the existing prompt /
   tool-schema snapshots pass unchanged through S2.
-- [ ] All five translates are behavior-identical: the existing
+- [x] All five translates are behavior-identical: the existing
   ask/todo/spawn/skill/workflow e2e suites pass without edits through S2.
-- [ ] The runtime wheel contains no control-tool schema, description, or
+- [x] The runtime wheel contains no control-tool schema, description, or
   translate body; `noeta.policies` = mechanism only; import-linter and
   install-smoke stay green.
-- [ ] The `Options` authoring surface is unchanged:
+- [x] The `Options` authoring surface is unchanged:
   `plugins=("todo_write", ...)` compiles as before; unknown names fail
   loudly; `DEFAULT_PLUGINS` still yields a byte-identical bare session.
-- [ ] `AgentSpec` has no `Capabilities`; identity = `plugins` + `spawnable`;
+- [x] `AgentSpec` has no `Capabilities`; identity = `plugins` + `spawnable`;
   the S3 re-pin diff shows only the identity-representation change.
-- [ ] A third-party plugin can contribute a working control tool (schema
+- [x] A third-party plugin can contribute a working control tool (schema
   rendered in band, translate routed in band) with zero kernel edits —
   proven by one extension test, mirroring `test_session_pack_extension.py`.
-- [ ] `make check` green at every stage boundary; ADR + CONTEXT.md landed.
+- [x] `make check` green at every stage boundary; ADR + CONTEXT.md landed.
 
 ## Risks
 
@@ -312,3 +316,21 @@ Each stage gates on `make check` before the next starts.
   codec is the entire sanctioned break surface. Prompt-snapshot re-pin
   reviewed: diffs show only capabilities→plugins/spawnable; system_prompt
   and tool bytes untouched. `make check` 3414 passed.
+- 2026-07-30 — S4 landed (docs). New ADR
+  `docs/adr/control-tool-contributions-and-activation-identity.md` (the 16th
+  `control_tool` surface + activation-tuple identity + the recorded hard break,
+  distilling D1–D9), added to `docs/adr/index.md`. Current-state annotations
+  swept into the ten ADRs that asserted stale facts
+  (control-tools-neutral-mechanism, plugin-contribution-bundles
+  [fifteen→sixteen surfaces; `Capabilities` retired wholesale; "control tools
+  stay kernel" reversed], workflow-orchestration, tool-and-agent-catalog,
+  memory-consolidation, model-driven-skill-invocation, mcp-connectors,
+  execution-environment-seam, workspace-and-session-path,
+  unified-context-supply). CONTEXT.md rewritten (control band = translate
+  mechanism + reserved constants only; sixteen surfaces / seventeen built-ins;
+  Activation = tuple identity via `agent_activates`; new "Control tool mount"
+  term). Reference/architecture docs (overview, sdk, presets, glossary,
+  plugins, tools) + their `docs/zh/**` mirrors updated. All seven acceptance
+  criteria verified against git log / test names / grep and ticked; this spec
+  archived Shipped. `make check` 3414 passed / 129 skipped, mypy clean,
+  import-linter 10/10.

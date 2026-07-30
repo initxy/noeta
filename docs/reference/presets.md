@@ -8,14 +8,14 @@ agents go through the flat `Options.agents` dict.
 
 ## The quartet
 
-| Agent | Role | Tools | Capabilities |
+| Agent | Role | Tools | Activation |
 | --- | --- | --- | --- |
 | `main` | Default coding agent: full built-in tool surface + can spawn the three subagents + all capabilities. | Full built-in set (all fs + web + app + memory tools) | `todo_write`, `ask_user_question`, `delegation`, `skill_invocation`, `memory`, `mcp` |
 | `general-purpose` | Self-contained coding worker: full read/write/edit/shell set, no delegation. | `apply_patch`, `edit`, `glob`, `grep`, `read`, `shell_kill`, `shell_poll`, `shell_run`, `web_search`, `webfetch`, `write` | `skill_invocation`, `mcp` |
 | `explore` | Read-only scout: glob/grep/read + read-only shell, fans out to report facts, never edits. | `glob`, `grep`, `read`, `shell_kill`, `shell_poll`, `shell_run`, `webfetch` | `skill_invocation` |
 | `plan` | Read-only architect: reads the code and returns a concrete ordered implementation plan, never writes. | `glob`, `grep`, `read`, `shell_kill`, `shell_poll`, `shell_run`, `webfetch` | `ask_user_question` |
 
-## Capability flags
+## Activation flags
 
 | Flag | What it enables |
 | --- | --- |

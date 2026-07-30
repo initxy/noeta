@@ -22,7 +22,7 @@ Neither the consolidation agent nor the interactive agent can destroy a memory. 
 
 ### The toggle is host configuration, not agent identity
 
-`Capabilities.memory` remains the memory master switch (agent identity). Consolidation is a **product behavior**: the served backend gets a `memory_consolidation` config (default on when memory is on, env-off), and the SDK exposes an explicit entry point for hosts that orchestrate their own runs — the same layering as the instructions-file switch (`instructions_enabled`).
+`Capabilities.memory` remains the memory master switch (agent identity). *(**Current state:** `Capabilities` was retired; the memory master switch is now the `memory` **activation** in `AgentSpec.plugins` — still agent identity. See `control-tool-contributions-and-activation-identity.md`.)* Consolidation is a **product behavior**: the served backend gets a `memory_consolidation` config (default on when memory is on, env-off), and the SDK exposes an explicit entry point for hosts that orchestrate their own runs — the same layering as the instructions-file switch (`instructions_enabled`).
 
 ### Accepted weak consistency
 

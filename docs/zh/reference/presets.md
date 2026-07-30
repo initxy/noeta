@@ -6,14 +6,14 @@ Noeta 提供四个官方代理，与 Claude Code 的阵容对齐。
 
 ## 四元组
 
-| 代理 | 角色 | 工具 | 能力 |
+| 代理 | 角色 | 工具 | 激活 |
 | --- | --- | --- | --- |
 | `main` | 默认编码代理：完整内置工具集 + 可生成三个子代理 + 所有能力。 | 完整内置集（所有 fs + web + app + memory 工具） | `todo_write`、`ask_user_question`、`delegation`、`skill_invocation`、`memory`、`mcp` |
 | `general-purpose` | 自包含编码 Worker：完整读/写/编辑/shell 集，无委派。 | `apply_patch`、`edit`、`glob`、`grep`、`read`、`shell_kill`、`shell_poll`、`shell_run`、`web_search`、`webfetch`、`write` | `skill_invocation`、`mcp` |
 | `explore` | 只读侦察：glob/grep/read + 只读 shell，扇出以报告事实，从不编辑。 | `glob`、`grep`、`read`、`shell_kill`、`shell_poll`、`shell_run`、`webfetch` | `skill_invocation` |
 | `plan` | 只读架构师：读取代码并返回具体的有序实现计划，从不写入。 | `glob`、`grep`、`read`、`shell_kill`、`shell_poll`、`shell_run`、`webfetch` | `ask_user_question` |
 
-## 能力标志
+## 激活标志
 
 | 标志 | 启用的功能 |
 | --- | --- |

@@ -154,7 +154,7 @@ publish time.
 
 ## Surface catalog (`D3`)
 
-The standard catalog is fifteen surfaces (`surfaces.py`, `STANDARD_SURFACES`).
+The standard catalog is sixteen surfaces (`surfaces.py`, `STANDARD_SURFACES`).
 Each row is a `SurfaceSpec`: which **plane** it lives on, how its effect is
 **scoped** across agents (`D6`), its **collision key**, its **merge rule**, and
 its **ordering**. ★ = new in this redesign.
@@ -176,6 +176,7 @@ its **ordering**. ★ = new in this redesign.
 | `skills` | host | host-wired | none | append | `(plugin, name)` | resource-only (`path`) |
 | `sandbox_provider` ★ | host | host-wired | `name` | append | `(plugin, name)` | host selects one |
 | `session_pack` | wiring | per-agent | `name` | append | **priority** | session-construction factory `(SessionBuildContext) -> PackContribution` (microkernel phase 3) |
+| `control_tool` ★ | identity | per-agent | `name` | append | **priority** | control-tool-construction factory `(ControlToolBuildContext) -> ControlToolMount \| None` (control-tool-surface) |
 
 - **Collision key** `none` means the surface never collides (guards / observers
   / skill dirs). `single-valued` means at most one across the whole loaded set.
@@ -192,7 +193,7 @@ which are process-wide:
 
 | Surfaces | Rule |
 | --- | --- |
-| `tool` `agent` `content_kind` `prompt_fragment` `policy` `reminder_provider` `reminder` `tool_result_transform` | **follow per-agent activation** — feature semantics: an agent that does not activate the plugin does not get them |
+| `tool` `agent` `content_kind` `prompt_fragment` `policy` `reminder_provider` `reminder` `tool_result_transform` `session_pack` `control_tool` | **follow per-agent activation** — feature semantics: an agent that does not activate the plugin does not get them |
 | `guard` `observer` | **loaded ⇒ in force for every agent in the process.** Governance is operator authority; an agent author must not opt out of interception or audit by omitting an activation |
 | `provider` `sandbox_provider` `mcp_server` `skills` | host wiring; the host selects and binds them, never per-agent |
 
@@ -217,7 +218,7 @@ class SurfaceSpec:
 `validator` runs on a **resolved** value (after a `ref` is imported); listing and
 manifest-level collision never call it, so they stay execution-free.
 
-`standard_registry()` returns a fresh `SurfaceRegistry` seeded with the fifteen
+`standard_registry()` returns a fresh `SurfaceRegistry` seeded with the sixteen
 standard surfaces. A host registers additional **app-plane** surfaces on a
 **copy** before load — the same validation / collision / ordering pipeline runs
 over them unchanged:
@@ -359,10 +360,14 @@ client = Client(options, provider=..., workspace_dir=".", plugins=pset)
 
 An activation name must be one of:
 
-- a **built-in feature bundle** that maps onto a `Capabilities` identity flag
-  (`D5`): `memory`, `browser`, `skill_invocation`, `todo_write`,
-  `ask_user_question`, `mcp` — activating one flips the matching flag and nothing
-  else (`memory=True` becomes `plugins=["memory"]`);
+- a **built-in feature bundle** that folds into the `AgentSpec.plugins`
+  activation tuple (`D5`): `memory`, `browser`, `skill_invocation`, `todo_write`,
+  `ask_user_question`, `mcp` — activating one adds its name to the tuple and
+  nothing else (`memory=True` becomes `plugins=["memory"]`). `todo_write` /
+  `ask_user_question` / `delegation` are also **real built-in plugins** (they
+  contribute on the `control_tool` surface); `skill_invocation` is a recognized
+  non-plugin activation (it gates the `skill` control tool inside the `skills`
+  built-in);
 - `delegation` — the one *structural* capability that is also authorable. It is
   normally derived (a root with `agents` delegates; a flat child does not), and
   activating it only ever turns it **on**: it is how a child agent is granted the
@@ -382,12 +387,13 @@ so a **bare `Options()` compiles byte-identically** to the pre-redesign spec —
 parity contract. `AgentDefinition.plugins` defaults to `()` (a child's tools come
 from its own `tools` field).
 
-`Capabilities` is retired as the activation vocabulary: `Capabilities(memory=True)`
-becomes `plugins=["memory"]`, and the official presets declare their activation
-sets this way (`presets/__init__.py`). The `Options.capabilities` /
-`AgentDefinition.capabilities` authoring fields are **removed** — `plugins=` is the
-only activation path. (The compiled `AgentSpec.capabilities` stays the identity
-carrier; activation flips its flags.)
+`Capabilities` is **deleted** — not merely retired as the activation vocabulary.
+`Capabilities(memory=True)` becomes `plugins=["memory"]`, and the official presets
+declare their activation sets this way (`presets/__init__.py`). The
+`Options.capabilities` / `AgentDefinition.capabilities` authoring fields are
+**removed** — `plugins=` is the only activation path, and the compiled `AgentSpec`
+carries the resolved `plugins` tuple + `spawnable` directly: identity **is** the
+tuple, and `agent_activates(agent, plugin)` is the membership read.
 
 An unknown activation name fails compilation with a `ValueError` naming both the
 offending name and where it appeared (`Options` or the child agent), listing the
@@ -407,10 +413,12 @@ loader reaches the catalog by a **dynamic** import (`builtin_manifests()`), and
 `.importlinter`'s universal `sdk-core-not-builtins` contract keeps every band —
 kernel included — free of static edges into `noeta.builtins`.
 
-The fourteen built-ins (one directory per built-in under `noeta/builtins/` — the
+The seventeen built-ins (one directory per built-in under `noeta/builtins/` — the
 canonical worked corpus of manifest declarations): `fs`, `web`, `memory`,
 `browser`, `app`, `mcp`, `skills`, `react`, `reminders`, `governance`,
-`providers`, `sandbox`, `presets`, `workspace`. Adding a first-party capability
+`providers`, `sandbox`, `presets`, `workspace`, `todo_write`,
+`ask_user_question`, `delegation` (the last three are the control-tool built-ins
+on the `control_tool` surface). Adding a first-party capability
 is adding a directory here (plus a `SurfaceSpec` registration only when a
 genuinely new surface is needed).
 

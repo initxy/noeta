@@ -113,7 +113,7 @@ def stay_brief(view):
 
 ## Surface 目录（`D3`） {#surface-catalog-d3}
 
-标准目录有十五个 surface（`surfaces.py`，`STANDARD_SURFACES`）。每一行是一个 `SurfaceSpec`：它落在哪个**平面（plane）**上、它的效果如何在各代理间**限定作用域（scope）**（`D6`）、它的**冲突键（collision key）**、它的**合并规则（merge rule）**，以及它的**排序（ordering）**。★ = 本次重新设计新增。
+标准目录有十六个 surface（`surfaces.py`，`STANDARD_SURFACES`）。每一行是一个 `SurfaceSpec`：它落在哪个**平面（plane）**上、它的效果如何在各代理间**限定作用域（scope）**（`D6`）、它的**冲突键（collision key）**、它的**合并规则（merge rule）**，以及它的**排序（ordering）**。★ = 本次重新设计新增。
 
 | Surface | Plane | Scope（`D6`） | Collision key | Merge | Ordering | 备注 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -132,6 +132,7 @@ def stay_brief(view):
 | `skills` | host | host-wired | none | append | `(plugin, name)` | 只有资源（`path`） |
 | `sandbox_provider` ★ | host | host-wired | `name` | append | `(plugin, name)` | 宿主从中选一个 |
 | `session_pack` ★ | wiring | per-agent | `name` | append | **priority** | 会话构造工厂（microkernel phase 3）：`(SessionBuildContext) -> PackContribution`，内核 builder 的通用循环按优先级带运行 |
+| `control_tool` ★ | identity | per-agent | `name` | append | **priority** | 控制工具构造工厂：`(ControlToolBuildContext) -> ControlToolMount \| None`（control-tool-surface） |
 
 - **Collision key** 为 `none` 表示该 surface 从不冲突（guard / observer / 技能目录）。`single-valued` 表示在整个已加载集合里至多一个。
 - **Ordering** 为 `priority` 时，先按整数 `priority` 参数排序，同分再按 `(plugin, name)` 打破平手——沿用 guard-observer-hooks 的先例。其余一律按 `(plugin, name)` 排序，所以发现顺序从不改变结果。
@@ -144,7 +145,7 @@ def stay_brief(view):
 
 | Surface | 规则 |
 | --- | --- |
-| `tool` `agent` `content_kind` `prompt_fragment` `policy` `reminder_provider` `reminder` `tool_result_transform` | **跟随按代理的激活**——特性语义：一个没有激活该插件的代理不会得到它们 |
+| `tool` `agent` `content_kind` `prompt_fragment` `policy` `reminder_provider` `reminder` `tool_result_transform` `session_pack` `control_tool` | **跟随按代理的激活**——特性语义：一个没有激活该插件的代理不会得到它们 |
 | `guard` `observer` | **一旦加载 ⇒ 对进程内的每个代理都生效。** 治理是运维方的权威；代理作者不得通过省略激活来跳过拦截或审计 |
 | `provider` `sandbox_provider` `mcp_server` `skills` | 宿主接线；由宿主选择并绑定，绝不按代理 |
 
@@ -166,7 +167,7 @@ class SurfaceSpec:
 
 `validator` 在**已解析**的值上运行（在 `ref` 被导入之后）；列出和 manifest 级的冲突检查从不调用它，所以它们保持零执行。
 
-`standard_registry()` 返回一个以十五个标准 surface 播种的全新 `SurfaceRegistry`。宿主在加载前于一个**副本**上注册额外的 **app-plane** surface——同一套校验 / 冲突 / 排序流水线会原封不动地作用在它们上：
+`standard_registry()` 返回一个以十六个标准 surface 播种的全新 `SurfaceRegistry`。宿主在加载前于一个**副本**上注册额外的 **app-plane** surface——同一套校验 / 冲突 / 排序流水线会原封不动地作用在它们上：
 
 ```python
 from noeta.sdk import standard_registry, SurfaceSpec, PluginError
@@ -269,14 +270,14 @@ client = Client(options, provider=..., workspace_dir=".", plugins=pset)
 
 一个激活名必须是以下之一：
 
-- 一个映射到 `Capabilities` 身份标志（`D5`）的**内置特性 bundle**：`memory`、`browser`、`skill_invocation`、`todo_write`、`ask_user_question`、`mcp`——激活其中之一只会翻转对应的标志、别无其他（`memory=True` 变成 `plugins=["memory"]`）；
+- 一个折叠进 `AgentSpec.plugins` 激活元组（`D5`）的**内置特性 bundle**：`memory`、`browser`、`skill_invocation`、`todo_write`、`ask_user_question`、`mcp`——激活其中之一只会把它的名字加入元组、别无其他（`memory=True` 变成 `plugins=["memory"]`）。其中 `todo_write` / `ask_user_question` / `delegation` 同时是**真正的内置插件**（它们在 `control_tool` surface 上做贡献）；`skill_invocation` 是一个被识别的非插件激活（它在 `skills` 内置插件内部门控 `skill` 控制工具）；
 - `delegation`——唯一一个既是**结构性**、又可被显式编写的能力。它通常是推导出来的（带 `agents` 的根代理可以委派；扁平子代理不能），而激活它只会把它**打开**：这是给一个子代理授予 spawn 权限的方式，也就是已退役的 `AgentDefinition.capabilities` 从前做的事。`spawnable` 仍然只从 `agents` 字典推导——激活无法指名某个代理；
 - 一个**对身份无影响的内置项**，之所以被识别，是为了让打错的名字仍然大声失败、但不产生任何 compile 效果：`fs`、`web`、`skills`、`reminders`、`governance`、`providers`、`presets`、`sandbox`、`workspace`；
 - 交给 `Client` 的那个 `PluginSet` 里某个**已加载插件的名字**——它的身份平面贡献（额外的 tool / 子代理 / prompt fragment / policy）会折叠进来。
 
 `DEFAULT_PLUGINS = ("fs", "web")` 是 `Options.plugins` 的默认值；两者都对身份无影响（默认的 11 个工具集仍来自 `BUILTIN_TOOL_CLASSES`），所以一个**裸的 `Options()` 会字节级相同地编译**成重新设计之前的 spec——这就是对等契约（parity contract）。`AgentDefinition.plugins` 默认为 `()`（子代理的工具来自它自己的 `tools` 字段）。
 
-`Capabilities` 作为激活词汇表已退役：`Capabilities(memory=True)` 变成 `plugins=["memory"]`，官方 preset 也以这种方式声明它们的激活集（`presets/__init__.py`）。`Options.capabilities` / `AgentDefinition.capabilities` 这两个编写字段已被**移除**——`plugins=` 是唯一的激活路径。（编译出的 `AgentSpec.capabilities` 仍是身份载体；激活翻转它的标志。）
+`Capabilities` 已被**删除**——而不仅仅是作为激活词汇表退役。`Capabilities(memory=True)` 变成 `plugins=["memory"]`，官方 preset 也以这种方式声明它们的激活集（`presets/__init__.py`）。`Options.capabilities` / `AgentDefinition.capabilities` 这两个编写字段已被**移除**——`plugins=` 是唯一的激活路径，编译出的 `AgentSpec` 直接携带解析后的 `plugins` 元组 + `spawnable`：身份**就是**这个元组，而 `agent_activates(agent, plugin)` 就是成员判断。
 
 一个未知的激活名会让编译以 `ValueError` 失败，并点名那个惹事的名字以及它出现的位置（`Options` 或子代理），同时列出内置词汇表和已加载集合——激活前先加载它，或者改正名字。
 
@@ -284,7 +285,7 @@ client = Client(options, provider=..., workspace_dir=".", plugins=pset)
 
 noeta 把自己的能力表达为 `noeta/builtins/` 里的内置插件（栈顶那条 band，与 `noeta.presets` 并列）。自 2026-07-29 的 microkernel 迁移起，每个目录同时持有 manifest **和**实现：`__init__.py` 是零执行的 `MANIFEST`（一个 `PluginManifest`，其贡献携带 `ref` 字符串），`impl/` 是代码，`ref` 指向同目录下的 impl 模块。manifest 层不导入任何 impl，所以列出一个内置插件依然运行零能力代码。加载器通过一次**动态**导入（`builtin_manifests()`）触及目录，而 `.importlinter` 里全域生效的 `sdk-core-not-builtins` 契约保证每一条 band——包括内核——都没有通往 `noeta.builtins` 的静态边。
 
-十四个内置插件（`noeta/builtins/` 下一个内置插件一个目录——manifest 声明的权威范例集）：`fs`、`web`、`memory`、`browser`、`app`、`mcp`、`skills`、`react`、`reminders`、`governance`、`providers`、`sandbox`、`presets`、`workspace`。新增一个第一方能力就是在这里加一个目录（只有当确实需要一个全新的 surface 时，才额外注册一个 `SurfaceSpec`）。
+十七个内置插件（`noeta/builtins/` 下一个内置插件一个目录——manifest 声明的权威范例集）：`fs`、`web`、`memory`、`browser`、`app`、`mcp`、`skills`、`react`、`reminders`、`governance`、`providers`、`sandbox`、`presets`、`workspace`、`todo_write`、`ask_user_question`、`delegation`（最后三个是 `control_tool` surface 上的控制工具内置插件）。新增一个第一方能力就是在这里加一个目录（只有当确实需要一个全新的 surface 时，才额外注册一个 `SurfaceSpec`）。
 
 ## 信任存储
 

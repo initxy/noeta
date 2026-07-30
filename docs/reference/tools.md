@@ -82,7 +82,7 @@ sandbox** — `shell_run` spawns external programs in the trusted workspace.
 
 ## Memory tools
 
-Mounted only when `Capabilities.memory` is enabled (only the `main` preset
+Mounted only when the `memory` activation is enabled (only the `main` preset
 opens it).
 
 | Tool | Risk | What it does | Source |
@@ -96,7 +96,7 @@ opens it).
 
 Built by `build_browser_tools()` in the `browser` built-in plugin
 (`noeta.builtins.browser.impl`). Mounted only when
-**both** hold: the agent's spec opens `Capabilities.browser`, and the session is
+**both** hold: the agent activates `browser` (`"browser" in AgentSpec.plugins`), and the session is
 bound to a live sandbox container. Among the official presets that is the `web`
 subagent alone — `main` stays browser-free and delegates to it, so a
 non-sandbox deployment's tool set and stable prefix are unchanged.
