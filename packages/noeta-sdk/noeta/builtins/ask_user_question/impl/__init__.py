@@ -523,14 +523,14 @@ def build_ask_user_question_control_tool(
 ) -> Optional[ControlToolMount]:
     """The ``control_tool`` contribution factory (manifest ``ref`` target).
 
-    Self-gates on the effective ``ask_user_question_enabled`` flag and
+    Self-gates on the effective ``ask_user_question`` capability flag and
     reproduces the pre-migration internal ``_ask_user_question_mount`` exactly:
     routing band 100, schema band 300 (the S0 golden byte order). It also
     publishes the answer codec as the :data:`CONTROL_EXPORT_ASK_ANSWER_CODEC`
     mount export so the driver can decode a submitted answer without importing
     this built-in (D8).
     """
-    if not ctx.ask_user_question_enabled:
+    if not ctx.flag("ask_user_question"):
         return None
     return ControlToolMount(
         name=ASK_USER_QUESTION_TOOL,

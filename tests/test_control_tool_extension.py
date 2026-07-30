@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -39,6 +40,7 @@ import pytest
 from noeta.client.options import DEFAULT_PLUGINS, Options
 from noeta.client.parts import default_control_tools
 from noeta.execution.builder import _run_control_tool_mounts
+from noeta.execution.session_pack import EXPORT_SKILLS_KIT
 from noeta.execution.control_tool import (
     ControlToolBuildContext,
     ControlToolEntry,
@@ -57,7 +59,6 @@ from noeta.protocols.messages import (
     Usage,
 )
 from noeta.sdk import Client, load_plugin_set
-from noeta.storage.memory import InMemoryContentStore
 from noeta.testing.fake_llm import FakeLLMProvider
 
 
@@ -115,13 +116,13 @@ def _toy_control_tool(ctx: ControlToolBuildContext) -> ControlToolMount | None:
     Pure: it asserts the kernel handed it the real
     :class:`ControlToolBuildContext` and reads one field (a generic slot read,
     never IO), then decides for itself. The self-gate here is
-    ``ctx.delegation_enabled`` — a plausible "this tool only applies when the
+    ``ctx.flag("delegation")`` — a plausible "this tool only applies when the
     agent can delegate" rule — so ``None`` means "not applicable", exactly as a
     built-in factory opts out. Mounting IS enablement.
     """
     assert isinstance(ctx, ControlToolBuildContext)
     assert ctx.exports is not None  # the generic exports slot — never IO
-    if not ctx.delegation_enabled:
+    if not ctx.flag("delegation"):
         return None
     return ControlToolMount(
         name=_TOY_TOOL,
@@ -132,6 +133,19 @@ def _toy_control_tool(ctx: ControlToolBuildContext) -> ControlToolMount | None:
     )
 
 
+#: A minimal stand-in for the skills pack's ``EXPORT_SKILLS_KIT`` export — just
+#: enough shape (``registry.names()`` / ``registry.get(name).description``) for
+#: the skills mount to derive its one-entry ``alpha`` menu.
+_FAKE_SKILLS_KIT = SimpleNamespace(
+    registry=SimpleNamespace(
+        names=lambda: ["alpha"],
+        get=lambda name: (
+            SimpleNamespace(description="alpha desc") if name == "alpha" else None
+        ),
+    )
+)
+
+
 def _full_ctx(*, delegation_enabled: bool = True) -> ControlToolBuildContext:
     """A build context with every built-in control tool applicable.
 
@@ -139,16 +153,16 @@ def _full_ctx(*, delegation_enabled: bool = True) -> ControlToolBuildContext:
     among them (the byte-order surface the builder feeds the composer).
     """
     return ControlToolBuildContext(
-        todo_write_enabled=True,
-        ask_user_question_enabled=True,
-        delegation_enabled=delegation_enabled,
-        skill_invocation_enabled=True,
-        workflow_enabled=True,
+        capability_flags={
+            "todo_write": True,
+            "ask_user_question": True,
+            "delegation": delegation_enabled,
+            "skill_invocation": True,
+            "workflow": True,
+        },
         subtask_agent_directory=(("explore", "read-only explorer"),),
-        skill_menu=(("alpha", "alpha desc"),),
-        skill_menu_names=frozenset({"alpha"}),
         structured_output_schema={"type": "object"},
-        exports={},
+        exports={EXPORT_SKILLS_KIT: _FAKE_SKILLS_KIT},
     )
 
 

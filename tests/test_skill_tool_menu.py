@@ -140,7 +140,7 @@ def _build_composer_schemas(
         model="stub-model",
         compaction=COMPACTION_OFF,
         budget=Budget(),
-        skill_invocation_enabled=skill_invocation_enabled,
+        capability_flags={"skill_invocation": skill_invocation_enabled},
         write_mode=FsWriteMode.DRY_RUN,
         shell_mode=ShellMode.OFF,
     )
@@ -198,15 +198,18 @@ def test_flag_on_with_skills_renders_sorted_menu(tmp_path: Path) -> None:
 
 
 def test_menu_built_from_registry_not_caller(tmp_path: Path) -> None:
-    """Builder internally derives the menu from the loaded registry — callers
-    never supply a menu arg. (Regression guard: no ``skill_menu`` kwarg on
-    ``build_session_inputs`` exists per design.)
+    """The menu derives from the loaded registry (the skills mount reads its
+    own ``EXPORT_SKILLS_KIT`` pack export) — callers never supply a menu arg,
+    and the flag rides the generic ``capability_flags`` bag. (Regression guard:
+    neither a ``skill_menu`` nor a feature-named flag kwarg exists on
+    ``build_session_inputs`` per design.)
     """
     import inspect
 
     sig = inspect.signature(build_session_inputs)
     assert "skill_menu" not in sig.parameters
-    assert "skill_invocation_enabled" in sig.parameters
+    assert "skill_invocation_enabled" not in sig.parameters
+    assert "capability_flags" in sig.parameters
 
 
 # ---------------------------------------------------------------------------

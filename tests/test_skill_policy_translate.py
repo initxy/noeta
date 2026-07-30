@@ -406,7 +406,7 @@ def _build_engine_for_tests(
         model="stub-model",
         compaction=COMPACTION_OFF,
         budget=Budget(),
-        skill_invocation_enabled=skill_invocation_enabled,
+        capability_flags={"skill_invocation": skill_invocation_enabled},
     )
     provider = FakeLLMProvider(responses=list(responses))
     client = RuntimeLLMClient(
@@ -650,7 +650,7 @@ def test_engine_skill_invocation_unknown_skill_no_event_no_crash(
         model="stub-model",
         compaction=COMPACTION_OFF,
         budget=Budget(),
-        skill_invocation_enabled=True,
+        capability_flags={"skill_invocation": True},
     )
     provider = FakeLLMProvider(responses=[_skill_call("alpha"), _end("done")])
     client = RuntimeLLMClient(provider=provider, event_log=log, content_store=cs)
@@ -953,7 +953,7 @@ def test_product_flag_on_with_skills_grows_skill_tool(tmp_path: Path) -> None:
         model="stub",
         compaction=COMPACTION_OFF,
         budget=Budget(),
-        skill_invocation_enabled=True,
+        capability_flags={"skill_invocation": True},
     )
     names_with = {
         s["function"]["name"] for s in inputs_with.composer._control_action_schemas
@@ -973,7 +973,7 @@ def test_product_flag_on_with_skills_grows_skill_tool(tmp_path: Path) -> None:
         model="stub",
         compaction=COMPACTION_OFF,
         budget=Budget(),
-        skill_invocation_enabled=True,
+        capability_flags={"skill_invocation": True},
     )
     names_empty = {
         s["function"]["name"] for s in inputs_empty.composer._control_action_schemas

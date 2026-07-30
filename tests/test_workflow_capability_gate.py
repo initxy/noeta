@@ -59,9 +59,11 @@ def _build_composer_schemas(
         compaction=COMPACTION_OFF,
         budget=Budget(),
         # D3 coupling lives at the host layer; the builder receives the
-        # already-ANDed effective flag.
-        workflow_enabled=workflow_enabled and delegation_enabled,
-        delegation_enabled=delegation_enabled,
+        # already-ANDed effective flags.
+        capability_flags={
+            "workflow": workflow_enabled and delegation_enabled,
+            "delegation": delegation_enabled,
+        },
         allowed_subtask_agents=(
             frozenset({"explore", WORKFLOW_AGENT_NAME})
             if delegation_enabled

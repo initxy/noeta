@@ -255,12 +255,12 @@ def build_run_workflow_control_tool(
 ) -> Optional[ControlToolMount]:
     """The ``run_workflow`` ``control_tool`` contribution factory.
 
-    Self-gates on the effective ``workflow_enabled`` flag (mounting IS
+    Self-gates on the effective ``workflow`` capability flag (mounting IS
     enablement) and reproduces the pre-migration internal ``_run_workflow_mount``
     exactly: routing band 500, schema band 500 — the byte order the S0 golden
     pins.
     """
-    if not ctx.workflow_enabled:
+    if not ctx.flag("workflow"):
         return None
     return ControlToolMount(
         name=RUN_WORKFLOW_TOOL,

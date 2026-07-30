@@ -212,12 +212,12 @@ def build_todo_write_control_tool(
 ) -> Optional[ControlToolMount]:
     """The ``control_tool`` contribution factory (manifest ``ref`` target).
 
-    Self-gates on the effective ``todo_write_enabled`` flag (mounting IS
+    Self-gates on the effective ``todo_write`` capability flag (mounting IS
     enablement) and reproduces the pre-migration internal ``_todo_write_mount``
     exactly: routing band 200, schema band 200 — the byte-order the S0 golden
     pins.
     """
-    if not ctx.todo_write_enabled:
+    if not ctx.flag("todo_write"):
         return None
     return ControlToolMount(
         name=TODO_WRITE_TOOL,

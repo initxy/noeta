@@ -280,12 +280,12 @@ def build_delegation_control_tool(
 ) -> Optional[ControlToolMount]:
     """The ``control_tool`` contribution factory (manifest ``ref`` target).
 
-    Self-gates on the effective ``delegation_enabled`` flag and reproduces the
+    Self-gates on the effective ``delegation`` capability flag and reproduces the
     pre-migration internal ``_spawn_subagent_mount`` exactly: it renders the
     spawn directory (``ctx.subtask_agent_directory``) into the schema's ``agent``
     enum + roster, routing band 300, schema band 100 (the S0 golden byte order).
     """
-    if not ctx.delegation_enabled:
+    if not ctx.flag("delegation"):
         return None
     return ControlToolMount(
         name=SPAWN_SUBAGENT_TOOL,

@@ -28,6 +28,7 @@ from noeta.execution.control_tool import (
     ControlToolBuildContext,
     ControlToolMount,
 )
+from noeta.execution.session_pack import EXPORT_SKILLS_KIT
 from noeta.policies.control_semantics import (
     ControlTranslateContext,
     ack_patch_decision,
@@ -200,27 +201,60 @@ def make_skill_translate(
     return translate
 
 
+def _skill_menu(
+    ctx: ControlToolBuildContext,
+) -> tuple[tuple[tuple[str, str], ...], frozenset[str]]:
+    """The ``skill`` tool's ``(menu, menu_names)``, derived from this plugin's
+    own pack export.
+
+    Both are non-empty only when the ``skill_invocation`` flag is on AND the
+    skills pack exported its kit (``EXPORT_SKILLS_KIT``) AND the registry has
+    indexed skills — the single gate the old ``_build_control_action_schemas``
+    schema branch and ``_skill_menu_names`` policy branch duplicated (and
+    could, in principle, diverge). ``menu`` is the sorted
+    ``(name, description)`` tuple the schema renders; ``menu_names`` is the
+    frozenset the translate closure validates against — and the mount's gate.
+    No kit at all (the ``skills`` built-in disabled) reads the same as an empty
+    index: a capability the agent declares but the host never wired grows no
+    tool. Bytes are identical to the kernel builder's retired ``_skill_menu``.
+    """
+    if ctx.flag("skill_invocation"):
+        kit = ctx.exports.get(EXPORT_SKILLS_KIT)
+        registry = getattr(kit, "registry", None)
+        if registry is not None:
+            skill_names = registry.names()
+            if skill_names:
+                menu = tuple(
+                    (name, desc.description)
+                    for name in sorted(skill_names)
+                    if (desc := registry.get(name)) is not None
+                )
+                return menu, frozenset(skill_names)
+    return (), frozenset()
+
+
 def build_skills_control_tool(
     ctx: ControlToolBuildContext,
 ) -> Optional[ControlToolMount]:
     """The ``control_tool`` contribution factory (manifest ``ref`` target).
 
-    Self-gates on the effective ``skill_invocation_enabled`` flag AND a non-empty
-    indexed menu (``ctx.skill_menu_names``) — mounting IS enablement. It
-    reproduces the pre-migration internal ``_skill_mount`` exactly: it consumes
-    the once-computed ``skill_menu`` / ``skill_menu_names`` the kernel builder
-    placed on the context (the schema renders the sorted ``(name, description)``
-    roster; the translate closure validates against the same name set), routing
-    band 400, schema band 400 — the byte order the S0 golden pins. The rendered
-    menu tuple may be empty (descriptions absent) while the tool is still grown,
-    matching the old schema branch exactly.
+    Self-gates on the effective ``skill_invocation`` capability flag AND a
+    non-empty indexed menu — mounting IS enablement. It reproduces the
+    pre-migration internal ``_skill_mount`` exactly: the menu is derived HERE
+    from the skills pack's own ``EXPORT_SKILLS_KIT`` export (the schema renders
+    the sorted ``(name, description)`` roster; the translate closure validates
+    against the same name set), routing band 400, schema band 400 — the byte
+    order the S0 golden pins. The rendered menu tuple may be empty
+    (descriptions absent) while the tool is still grown, matching the old
+    schema branch exactly.
     """
-    if not ctx.skill_invocation_enabled or not ctx.skill_menu_names:
+    menu, menu_names = _skill_menu(ctx)
+    if not menu_names:
         return None
     return ControlToolMount(
         name=SKILL_TOOL,
-        schema=skill_tool_schema(ctx.skill_menu),
-        translate=make_skill_translate(ctx.skill_menu_names),
+        schema=skill_tool_schema(menu),
+        translate=make_skill_translate(menu_names),
         routing_priority=400,
         schema_priority=400,
     )
