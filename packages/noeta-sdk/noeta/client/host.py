@@ -79,18 +79,15 @@ from noeta.client.parts import (
     default_browser_tools_factory,
     mcp_impl,
     default_guards_factory,
-    default_memory_factory,
     default_policy_factory,
-    default_skills_kit_factory,
+    default_session_packs,
     react_impl,
     default_reminder_specs,
-    default_tool_factories,
     default_environment_kit,
     default_instructions_kit,
     default_memory_index_kit,
     default_shell_rules,
     derive_compaction_config,
-    edit_tool_mutex,
     memory_impl,
     provider_family,
 )
@@ -1680,16 +1677,12 @@ class SdkHost(GenericEngineResolver):
         # is the durable truth, and the resume path passes empty aliases.
         mcp_tools_override = self._resolve_live_mcp_tools(mcp_aliases, task_id=task_id)
         memory_override = self._memory_root_override(task_id)
-        _fs_factory, _web_factory = default_tool_factories()
         inputs = build_session_inputs(
-            fs_tools_factory=_fs_factory,
-            web_tools_factory=_web_factory,
+            session_packs=self._session_packs(),
             base_reminders=default_reminder_specs(),
             guards_factory=default_guards_factory(),
-            memory_factory=default_memory_factory(),
             browser_tools_factory=default_browser_tools_factory(),
             app_tools_factory=default_app_tools_factory(),
-            skills_factory=self._skills_factory(),
             default_policy_factory=default_policy_factory(),
             workspace_dir=workspace_dir,
             system_prompt=spec.instructions,
@@ -1697,12 +1690,10 @@ class SdkHost(GenericEngineResolver):
             content_store=self.content_store,
             model=model,
             compaction=derive_compaction_config(model),
-            # The catalog's vendor-family judgment for the edit-tool mutex
-            # (microkernel M2 — the kernel holds no model opinions), and the
-            # fs built-in's mutex table itself (phase 2c — the kernel holds
-            # no tool-name opinions either).
+            # The catalog's vendor-family judgment (microkernel M2 — the
+            # kernel holds no model opinions); the edit-tool mutex table now
+            # lives entirely inside the fs pack (phase 3).
             provider_family=provider_family(model),
-            edit_tool_mutex=edit_tool_mutex(),
             # Resident kits (phase 2c): the same memoized objects the
             # driver's recording seams use, so record == compose.
             memory_index_kit=self.memory_index_kit,
@@ -1907,14 +1898,10 @@ class SdkHost(GenericEngineResolver):
                 entries.append((n, str(child.metadata.get("description", ""))))
             if any(d for _, d in entries):
                 directory = tuple(entries)
-        _fs_factory, _web_factory = default_tool_factories()
         inputs = build_session_inputs(
-            fs_tools_factory=_fs_factory,
-            web_tools_factory=_web_factory,
+            session_packs=self._session_packs(),
             base_reminders=default_reminder_specs(),
             guards_factory=default_guards_factory(),
-            memory_factory=default_memory_factory(),
-            skills_factory=self._skills_factory(),
             default_policy_factory=default_policy_factory(),
             workspace_dir=self.workspace_dir,
             system_prompt=react_impl().WORKFLOW_SYSTEM_PROMPT,
@@ -1923,7 +1910,6 @@ class SdkHost(GenericEngineResolver):
             model=self.model,
             compaction=derive_compaction_config(self.model),
             provider_family=provider_family(self.model),
-            edit_tool_mutex=edit_tool_mutex(),
             memory_index_kit=self.memory_index_kit,
             instructions_kit=self.instructions_kit,
             environment_kit=self.environment_kit,
@@ -2150,18 +2136,20 @@ class SdkHost(GenericEngineResolver):
         default_root: Path = memory_impl().DEFAULT_GLOBAL_MEMORY_DIR
         return default_root
 
-    def _skills_factory(self) -> Optional[Callable[..., Any]]:
-        """The kernel builder's ``skills_factory`` injection, or ``None``.
+    def _session_packs(self) -> tuple[Any, ...]:
+        """The kernel builder's ``session_packs`` injection (phase 3).
 
-        ``None`` is the honest expression of a disabled ``skills`` built-in:
-        the kernel's skills stage no-ops, so no registry, no skill content
-        kind, no skill tool, and no script wiring exist for the session. Both
-        build paths (session + workflow orchestration) go through here so they
-        can never disagree about whether the capability is wired.
+        The built-in manifests' ``session_pack`` contributions, loader-
+        resolved and ``(priority, plugin, name)``-ordered. A disabled
+        ``skills`` built-in simply drops its pack — the honest expression the
+        old ``None``-factory special case routed through a kernel ``if``.
+        Both build paths (session + workflow orchestration) go through here
+        so they can never disagree about which packs are wired.
         """
-        if not self.skills_enabled:
-            return None
-        return default_skills_kit_factory()
+        disabled = (
+            frozenset() if self.skills_enabled else frozenset({"skills"})
+        )
+        return default_session_packs(disabled=disabled)
 
     def _memory_root_override(self, task_id: Optional[str]) -> Optional[Path]:
         """The per-task root the injected resolver maps ``task_id`` to, or ``None``.

@@ -17,13 +17,18 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Optional, Sequence, cast
 
 from noeta.context.composer import ThreeSegmentComposer
 from noeta.context.reminders import ReminderRegistry
 from noeta.context.content_channel import (
     ContentChannelRegistry,
     ContentKindSpec,
+)
+from noeta.execution.session_pack import (
+    EXPORT_SKILLS_KIT,
+    PackContribution,
+    SessionBuildContext,
 )
 from noeta.execution.skills import (
     SKILL_DRIFT_POLICY,
@@ -442,3 +447,41 @@ def build_skills_kit(
             extract_skill_allowed_tools_raw(registry)
         ),
     )
+
+
+def build_skills_session_pack(ctx: SessionBuildContext) -> PackContribution:
+    """The skills kit as a ``session_pack`` contribution (microkernel phase 3).
+
+    The manifest-declared factory (band 600). Reads this plugin's own config
+    entry — ``skills_dir`` (workspace override), ``builtin_skills_dirs`` +
+    ``global_skills_dir`` (the lower tiers), ``allow_skill_scripts`` — and
+    assembles the three-tier kit exactly as :func:`build_skills_kit` always
+    has. The whole kit rides the exports (the control schemas' skill menu,
+    the guard grants, and ``SessionInputs.skill_registry`` all read it); the
+    ``run_skill_script`` tool, when scripts are on and a skill ships one, is
+    the pack's only tool.
+
+    Disabling the built-in (``disabled_builtins=["skills"]``) removes this
+    pack from the session entirely — the honest expression phase 2a routed
+    through a ``None`` factory injection.
+    """
+    cfg = ctx.config("skills")
+    override_dir = cast(Optional[Path], cfg.get("skills_dir"))
+    lower_skill_dirs: list[Path] = list(
+        cast("Sequence[Path]", cfg.get("builtin_skills_dirs", ()))
+    )
+    global_dir = cast(Optional[Path], cfg.get("global_skills_dir"))
+    if global_dir is not None:
+        lower_skill_dirs.append(global_dir)
+    kit = build_skills_kit(
+        workspace_dir=ctx.workspace_dir,
+        override_skills_dir=override_dir,
+        lower_skill_dirs=lower_skill_dirs,
+        workspace=ctx.workspace,
+        scripts_enabled=bool(cfg.get("allow_skill_scripts", False)),
+        exec_env=ctx.exec_env,
+    )
+    tools: dict[str, Tool] = {}
+    if kit.script_tool is not None:
+        tools[kit.script_tool.name] = kit.script_tool
+    return PackContribution(tools=tools, exports={EXPORT_SKILLS_KIT: kit})

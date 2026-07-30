@@ -9,7 +9,8 @@ the AgentSpec whitelist. An Anthropic model's live tool set carries ``edit``
 Microkernel M2: the model→family judgment lives in the providers built-in's
 catalog and reaches the kernel pre-resolved (``provider_family=`` — mirrored
 here by ``_tool_names``); phase 2c: the FAMILY→drop-set table is the fs
-built-in's ``PROVIDER_EDIT_TOOL_MUTEX``, injected as ``edit_tool_mutex=``.
+built-in's ``PROVIDER_EDIT_TOOL_MUTEX``, applied inside its session pack
+(microkernel phase 3 — the kernel no longer carries the table).
 
 Switching the model must change only the tool set, never the agent definition
 or the system prompt.
@@ -54,7 +55,6 @@ def _tool_names(*, model: str, allowed: frozenset[str] = _FULL_EDIT_TOOLS) -> se
         # The SDK host resolves the family from the catalog and injects it
         # (microkernel M2) — mirror that wiring here.
         provider_family=provider_family(model),
-        edit_tool_mutex=PROVIDER_EDIT_TOOL_MUTEX,
         compaction=COMPACTION_OFF,
         budget=Budget(),
     )
@@ -217,7 +217,6 @@ def test_model_swap_does_not_touch_agent_definition_or_prompt() -> None:
             content_store=InMemoryContentStore(),
             model=model,
             provider_family=provider_family(model),
-            edit_tool_mutex=PROVIDER_EDIT_TOOL_MUTEX,
             compaction=COMPACTION_OFF,
             budget=Budget(),
         )

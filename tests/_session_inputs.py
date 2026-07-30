@@ -6,12 +6,10 @@ from noeta.client.parts import (
     default_environment_kit,
     default_guards_factory,
     default_instructions_kit,
-    default_memory_factory,
     default_memory_index_kit,
     default_policy_factory,
     default_reminder_specs,
-    default_skills_kit_factory,
-    default_tool_factories,
+    default_session_packs,
     derive_compaction_config,
 )
 from noeta.execution.builder import build_session_inputs
@@ -25,18 +23,15 @@ _ALIASES = {"default": "main"}
 
 def default_factory_kwargs():
     """Loader-resolved injection kwargs required by ``build_session_inputs``
-    (microkernel M1/M2) — tests that call the builder directly splat these in:
-    the fs/web tool-pack factories plus the three built-in reminders."""
-    fs_f, web_f = default_tool_factories()
+    (microkernel M1/M2; phase 3 collapses the per-feature pack factories into
+    the manifest-resolved ``session_packs``) — tests that call the builder
+    directly splat these in."""
     return {
-        "fs_tools_factory": fs_f,
-        "web_tools_factory": web_f,
+        "session_packs": default_session_packs(),
         "base_reminders": default_reminder_specs(),
         "guards_factory": default_guards_factory(),
-        "memory_factory": default_memory_factory(),
         "browser_tools_factory": default_browser_tools_factory(),
         "app_tools_factory": default_app_tools_factory(),
-        "skills_factory": default_skills_kit_factory(),
         "default_policy_factory": default_policy_factory(),
         "memory_index_kit": default_memory_index_kit(),
         "instructions_kit": default_instructions_kit(),
@@ -101,17 +96,14 @@ def build_code_replay_inputs(*, workspace_dir, agent, content_store, model, **kw
     # from the spec metadata at LIVE time, so the replay rebuild must derive the
     # SAME globs (otherwise plan's ``write`` tool schema → composed View → bytes
     # diverge). Mirrors noeta.agent.host.session._spec_write_path_globs.
-    # microkernel M1: build_session_inputs requires the tool factories; default
-    # to the SDK's builtin packs unless the caller injects its own.
-    _fs_f, _web_f = default_tool_factories()
-    kwargs.setdefault("fs_tools_factory", _fs_f)
-    kwargs.setdefault("web_tools_factory", _web_f)
+    # microkernel phase 3: build_session_inputs takes the manifest-resolved
+    # session packs; default to the SDK's builtin set unless the caller
+    # injects its own.
+    kwargs.setdefault("session_packs", default_session_packs())
     kwargs.setdefault("base_reminders", default_reminder_specs())
     kwargs.setdefault("guards_factory", default_guards_factory())
-    kwargs.setdefault("memory_factory", default_memory_factory())
     kwargs.setdefault("browser_tools_factory", default_browser_tools_factory())
     kwargs.setdefault("app_tools_factory", default_app_tools_factory())
-    kwargs.setdefault("skills_factory", default_skills_kit_factory())
     kwargs.setdefault("default_policy_factory", default_policy_factory())
     kwargs.setdefault("memory_index_kit", default_memory_index_kit())
     kwargs.setdefault("instructions_kit", default_instructions_kit())
