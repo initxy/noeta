@@ -21,7 +21,11 @@ from __future__ import annotations
 
 
 from noeta.context.composer import ThreeSegmentComposer, RenderedSkills
-from noeta.builtins.react.impl.react import ReActPolicy, _carries_tool_result
+from noeta.builtins.react.impl import ReActPolicy
+
+# ``_carries_tool_result`` is a react.py internal with no package-level door;
+# this boundary test reaches past ``impl`` on purpose.
+from noeta.builtins.react.impl.react import _carries_tool_result
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.decisions import CompactionRequestedDecision
 from noeta.protocols.messages import (

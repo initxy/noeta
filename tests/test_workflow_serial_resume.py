@@ -34,7 +34,8 @@ from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.core.wiring import wire_default_observers
 from noeta.policies.control_tools import RUN_WORKFLOW_TOOL, WORKFLOW_AGENT_NAME
-from noeta.builtins.react.impl.orchestration import OrchestrationPolicy, WORKFLOW_CALL_PREFIX
+from noeta.builtins.react.impl import OrchestrationPolicy
+from noeta.builtins.react.impl.orchestration import WORKFLOW_CALL_PREFIX
 from noeta.policies.stub import StubScriptedPolicy
 from noeta.protocols.decisions import FinishDecision
 from noeta.protocols.messages import (

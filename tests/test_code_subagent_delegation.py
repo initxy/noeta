@@ -15,10 +15,8 @@ from typing import Any
 
 from noeta.core.fold import fold
 from noeta.presets import official_specs
-from noeta.builtins.react.impl.react import (
-    ReActPolicy,
-    SPAWN_SUBAGENT_TOOL,
-)
+from noeta.builtins.react.impl import ReActPolicy
+from noeta.policies.control_tools import SPAWN_SUBAGENT_TOOL
 from noeta.protocols.decisions import (
     SpawnSubtaskDecision,
     StatePatchDecision,

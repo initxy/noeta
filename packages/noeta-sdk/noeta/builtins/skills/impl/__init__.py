@@ -32,7 +32,6 @@ from .wiring import (
     extract_skill_allowed_tools_raw,
     load_workspace_skills,
     merge_skill_registries,
-    resolve_skill_roots,
     resolve_skill_scripts,
     skill_content_kind,
 )
@@ -54,7 +53,6 @@ __all__ = [
     "load_workspace_skills",
     "merge_skill_registries",
     "resolve_skill_allowed_tools",
-    "resolve_skill_roots",
     "resolve_skill_scripts",
     "skill_content_kind",
 ]

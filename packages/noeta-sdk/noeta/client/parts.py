@@ -15,18 +15,20 @@ from __future__ import annotations
 
 import importlib
 from dataclasses import MISSING, fields
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Protocol, cast
 
 from noeta.agent.spec import ComponentRef, ToolRef
 from noeta.context.reminders import ReminderSpec
 from noeta.execution.builder import CompactionConfig
 from noeta.protocols.messages import Usage
+from noeta.protocols.policy import Policy
 
 
 __all__ = [
     "BUILTIN_TOOL_CLASSES",
     "COMPOSER_REF",
     "POLICY_REF",
+    "ReactImpl",
     "builtin_tool_classes",
     "builtin_tool_ref",
     "browser_tool_names",
@@ -45,7 +47,6 @@ __all__ = [
     "provider_family",
     "react_impl",
     "resolve_model_alias",
-    "skills_impl",
 ]
 
 
@@ -271,20 +272,49 @@ def default_policy_factory() -> Callable[..., Any]:
     return _resolve_ref("noeta.builtins.react.impl:build_react_policy_factory")
 
 
-_REACT_MOD: Optional[Any] = None
+class ReactImpl(Protocol):
+    """The typed shape of the ``react`` built-in's impl module.
+
+    A dynamic-import doorway returning ``Any`` would silently un-type every
+    call site behind it — a renamed constructor kwarg in the built-in would
+    keep mypy green and fail at runtime. Declaring the shape structurally
+    restores the check without a static import, the same discipline the
+    ``SkillsFactory`` / ``PolicyFactoryBuilder`` injections already use.
+
+    Only what SDK core actually reaches through the doorway belongs here; the
+    default policy construction goes through :func:`default_policy_factory`,
+    not this Protocol.
+    """
+
+    WORKFLOW_SYSTEM_PROMPT: str
+
+    def OrchestrationPolicy(  # noqa: N802 — mirrors the built-in's class name
+        self, *, script: str, args: dict[str, Any]
+    ) -> Policy: ...
+
+    def StructuredOutputPolicy(  # noqa: N802 — mirrors the built-in's class name
+        self, *, inner: Policy, schema: dict[str, Any]
+    ) -> Policy: ...
 
 
-def react_impl() -> Any:
+_REACT_MOD: Optional[ReactImpl] = None
+
+
+def react_impl() -> ReactImpl:
     """The ``react`` built-in's impl module, loader-resolved (memoized).
 
     SDK core reaches the decision-mapping policy implementation only through
     this doorway — ``OrchestrationPolicy`` / ``StructuredOutputPolicy`` /
     ``WORKFLOW_SYSTEM_PROMPT`` (the host's workflow path) hang off the
-    returned module.
+    returned module, typed by :class:`ReactImpl`. The cast is where the
+    dynamic import meets the static contract; ``tests/test_react_doorway.py``
+    pins the module against it so the two cannot drift apart silently.
     """
     global _REACT_MOD
     if _REACT_MOD is None:
-        _REACT_MOD = importlib.import_module("noeta.builtins.react.impl")
+        _REACT_MOD = cast(
+            ReactImpl, importlib.import_module("noeta.builtins.react.impl")
+        )
     return _REACT_MOD
 
 
@@ -299,22 +329,11 @@ def default_skills_kit_factory() -> Callable[..., Any]:
     return _resolve_ref("noeta.builtins.skills.impl:build_skills_kit")
 
 
-_SKILLS_MOD: Optional[Any] = None
-
-
-def skills_impl() -> Any:
-    """The ``skills`` built-in's impl module, loader-resolved (memoized).
-
-    SDK core reaches the skill material only through this doorway — the
-    indexer / registry types, ``load_workspace_skills``, and the
-    ``run_skill_script`` tool hang off the returned module; the kernel seams
-    (``SkillsKit`` / ``activate_skills`` / the hash helpers) stay importable
-    from :mod:`noeta.execution.skills`.
-    """
-    global _SKILLS_MOD
-    if _SKILLS_MOD is None:
-        _SKILLS_MOD = importlib.import_module("noeta.builtins.skills.impl")
-    return _SKILLS_MOD
+# NOTE: there was a ``skills_impl()`` module doorway here, mirroring
+# :func:`react_impl`. Nothing ever called it: SDK core reaches the skills
+# built-in through :func:`default_skills_kit_factory` alone — the kit is the
+# whole interface, so no consumer needs the module object. Deleted rather than
+# left exported, where it would read as the sanctioned path.
 
 
 def default_guards_factory() -> Callable[..., Any]:

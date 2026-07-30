@@ -25,7 +25,7 @@ from noeta.policies._control_translate import (
     ControlToggles,
     translate_control_tool,
 )
-from noeta.builtins.react.impl.react import ReActPolicy
+from noeta.builtins.react.impl import ReActPolicy
 from noeta.protocols.decisions import (
     SpawnSubtaskDecision,
     StatePatchDecision,

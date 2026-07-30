@@ -21,7 +21,7 @@ from typing import Any, Optional
 from noeta.context.composer import ThreeSegmentComposer
 from noeta.core.engine import Engine
 from noeta.observers.audit import AuditObserver, AuditRecord
-from noeta.builtins.react.impl.react import ReActPolicy
+from noeta.builtins.react.impl import ReActPolicy
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.events import LLMRequestStartedPayload, MessageSelection
 from noeta.protocols.messages import (

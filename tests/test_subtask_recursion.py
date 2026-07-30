@@ -23,7 +23,7 @@ from noeta.core.fold import fold
 from noeta.core.snapshot import rehydrate_task
 from noeta.builtins.governance.impl.budget import BudgetGuard
 from noeta.runtime.governance import Budget
-from noeta.builtins.react.impl.react import SPAWN_SUBAGENT_TOOL
+from noeta.policies.control_tools import SPAWN_SUBAGENT_TOOL
 from noeta.protocols.decisions import SpawnSubtaskDecision
 from noeta.protocols.events import TaskCreatedPayload
 from noeta.protocols.hooks import GuardContext, ProposedSpawnSubtask
