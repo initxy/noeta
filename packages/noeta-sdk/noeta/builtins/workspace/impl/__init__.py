@@ -11,8 +11,11 @@ built-in precedent: registry mechanism kernel-side, rendered material here.
 
 Red line (unchanged from the kernel days): every renderer is pure over a
 wiring-time snapshot — no disk, no clock at compose time — so the same
-folded state always composes the same bytes. The impure loaders stay
-kernel-side in ``noeta.execution.{environment,instructions}``.
+folded state always composes the same bytes. The impure loaders live in the
+sibling :mod:`.loaders` module (microkernel phase 3, D10 — moved out of the
+kernel), and both residents enter a session as this plugin's
+``session_pack`` contributions (:func:`build_instructions_session_pack` /
+:func:`build_environment_session_pack`).
 """
 
 from __future__ import annotations
@@ -35,17 +38,43 @@ from noeta.context.instructions import (
     INSTRUCTIONS_VERSION,
     InstructionsSnapshot,
 )
+from noeta.builtins.workspace.impl.loaders import (
+    build_instructions_discovery,
+    build_instructions_preloader,
+    discover_instructions,
+    load_environment,
+    load_instructions,
+)
 from noeta.execution.environment import EnvironmentKit
 from noeta.execution.instructions import InstructionsKit
+from noeta.execution.session_pack import (
+    ContentKindContribution,
+    EXPORT_CONTENT_DISCOVERY,
+    EXPORT_CONTENT_PRELOADER,
+    EXPORT_ENVIRONMENT_SNAPSHOT,
+    EXPORT_INSTRUCTIONS_SNAPSHOT,
+    EXPORT_INSTRUCTIONS_SNAPSHOTS,
+    PackContribution,
+    SessionBuildContext,
+)
 from noeta.protocols.messages import Message, TextBlock
+from pathlib import Path
+from typing import Optional, cast
 
 
 __all__ = [
     "DEFAULT_INSTRUCTIONS_FILENAMES",
     "build_environment_kit",
     "build_environment_renderer",
+    "build_environment_session_pack",
+    "build_instructions_discovery",
     "build_instructions_kit",
+    "build_instructions_preloader",
     "build_instructions_renderer",
+    "build_instructions_session_pack",
+    "discover_instructions",
+    "load_environment",
+    "load_instructions",
     "environment_content_hash",
     "environment_content_kind",
     "instructions_content_hash",
@@ -296,4 +325,77 @@ def build_instructions_kit() -> InstructionsKit:
         content_kind_from=instructions_content_kind_from,
         content_hash=instructions_content_hash,
         filenames=DEFAULT_INSTRUCTIONS_FILENAMES,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Session packs (microkernel phase 3) — the residents' construction halves.
+# ---------------------------------------------------------------------------
+
+
+def build_instructions_session_pack(ctx: SessionBuildContext) -> PackContribution:
+    """The instructions resident as a ``session_pack`` contribution (band 400).
+
+    Reads this plugin's own config entry (``instructions_enabled`` /
+    ``instructions_file`` / ``instructions_discovery``), loads the root
+    snapshot once, and contributes the instructions content kind (kind band
+    300 — after skill/memory, before environment) whenever a root snapshot
+    loaded OR discovery is armed (an empty mapping renders nothing until the
+    first discovered activation, zero footprint). The SHARED mutable
+    ``name → snapshot`` mapping always rides the exports — the discovery
+    hook / resume preloader (also exported here when armed) add entries to
+    the same dict at tool/step time.
+    """
+    cfg = ctx.config("workspace")
+    enabled = bool(cfg.get("instructions_enabled", False))
+    discovery = bool(cfg.get("instructions_discovery", False))
+    override = cast(Optional[Path], cfg.get("instructions_file"))
+    kit = build_instructions_kit()
+    snapshots: dict[str, InstructionsSnapshot] = {}
+    exports: dict[str, object] = {EXPORT_INSTRUCTIONS_SNAPSHOTS: snapshots}
+    if enabled:
+        snapshot = load_instructions(
+            ctx.workspace_dir,
+            filenames=kit.filenames,
+            override_path=override,
+            exec_env=ctx.exec_env,
+        )
+        if snapshot is not None:
+            # The root file lives under its basename (resident name unchanged
+            # → byte-identical rendering); discovered files join later under
+            # relative paths.
+            snapshots[snapshot.name] = snapshot
+            exports[EXPORT_INSTRUCTIONS_SNAPSHOT] = snapshot
+    kinds: tuple[ContentKindContribution, ...] = ()
+    if snapshots or discovery:
+        kinds = (
+            ContentKindContribution(300, kit.content_kind_from(snapshots)),
+        )
+    if discovery:
+        exports[EXPORT_CONTENT_DISCOVERY] = build_instructions_discovery(
+            ctx.workspace, snapshots, kit=kit, exec_env=ctx.exec_env
+        )
+        exports[EXPORT_CONTENT_PRELOADER] = build_instructions_preloader(
+            ctx.workspace_dir, snapshots, exec_env=ctx.exec_env
+        )
+    return PackContribution(content_kinds=kinds, exports=exports)
+
+
+def build_environment_session_pack(ctx: SessionBuildContext) -> PackContribution:
+    """The environment resident as a ``session_pack`` contribution (band 500).
+
+    Always on (a workspace always exists): captures the session-static
+    workspace facts once so the composer's renderer AND the pre-loop
+    ``record_environment`` share the same snapshot, and contributes the
+    environment content kind LAST of the built-in residents (kind band 400)
+    so the semi_stable byte layout is unchanged for sessions that never
+    activate it.
+    """
+    snapshot = load_environment(ctx.workspace_dir, exec_env=ctx.exec_env)
+    kit = build_environment_kit()
+    return PackContribution(
+        content_kinds=(
+            ContentKindContribution(400, kit.content_kind(snapshot)),
+        ),
+        exports={EXPORT_ENVIRONMENT_SNAPSHOT: snapshot},
     )

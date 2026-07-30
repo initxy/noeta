@@ -41,6 +41,7 @@ from noeta.execution.session_pack import (
     EMPTY_CONTRIBUTION,
     EXPORT_MEMORY_ENTRIES,
     EXPORT_MEMORY_STORE,
+    ContentKindContribution,
     PackContribution,
     SessionBuildContext,
 )
@@ -101,8 +102,15 @@ def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
     global_memory_dir = cfg.get("global_memory_dir")
     root = memory_dir if memory_dir is not None else global_memory_dir
     store, entries, tools = build_memory_pack(root=cast(Optional[Path], root))
+    # The index resident (kind band 200 — after skill, before instructions):
+    # rendered from the SAME entries snapshot the exports carry, so the
+    # composed bytes and the recorded fingerprint share one source.
+    index_kit = build_memory_index_kit()
     return PackContribution(
         tools=tools,
+        content_kinds=(
+            ContentKindContribution(200, index_kit.content_kind(entries)),
+        ),
         exports={
             EXPORT_MEMORY_STORE: store,
             EXPORT_MEMORY_ENTRIES: entries,

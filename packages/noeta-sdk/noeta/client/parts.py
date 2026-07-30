@@ -42,6 +42,7 @@ __all__ = [
     "default_reminder_specs",
     "default_session_packs",
     "default_shell_rules",
+    "workspace_impl",
     "derive_compaction_config",
     "mcp_impl",
     "memory_impl",
@@ -168,6 +169,27 @@ def default_instructions_kit() -> Any:
         "noeta.builtins.workspace.impl:build_instructions_kit"
     )
     return build()
+
+
+_WORKSPACE_MOD: Optional[Any] = None
+
+
+def workspace_impl() -> Any:
+    """The ``workspace`` built-in's impl module, loader-resolved (memoized).
+
+    SDK core reaches the workspace residents' impure loaders only through
+    this doorway (microkernel phase 3, D10) — ``load_environment`` /
+    ``load_instructions`` for the host's own record path (the compose path
+    goes through the plugin's ``session_pack`` contributions instead). The
+    kits stay reachable via :func:`default_environment_kit` /
+    :func:`default_instructions_kit`.
+    """
+    global _WORKSPACE_MOD
+    if _WORKSPACE_MOD is None:
+        _WORKSPACE_MOD = importlib.import_module(
+            "noeta.builtins.workspace.impl"
+        )
+    return _WORKSPACE_MOD
 
 
 def default_shell_rules() -> tuple[Any, ...]:

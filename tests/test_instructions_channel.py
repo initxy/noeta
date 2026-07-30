@@ -35,16 +35,14 @@ from noeta.builtins.workspace.impl import (
     build_instructions_renderer,
     instructions_content_hash,
     instructions_content_kind,
+    load_instructions,
     render_instructions_text,
 )
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.core.wiring import wire_default_observers
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
-from noeta.execution.instructions import (
-    load_instructions,
-    record_instructions,
-)
+from noeta.execution.instructions import record_instructions
 from noeta.runtime.governance import Budget
 from noeta.policies.stub import StubScriptedPolicy
 from noeta.protocols.canonical import to_canonical_bytes
@@ -343,7 +341,7 @@ def test_enabled_but_no_file_zero_footprint(tmp_path: Path) -> None:
         model="stub-model",
         compaction=COMPACTION_OFF,
         budget=Budget(),
-        instructions_enabled=True,
+        plugin_config={"workspace": {"instructions_enabled": True}},
     )
     assert inputs.instructions_snapshot is None
     assert inputs.composer._content_renderers.kinds() == (
@@ -366,8 +364,8 @@ def test_enabled_adds_kind_after_skill_and_memory(tmp_path: Path) -> None:
         model="stub-model",
         compaction=COMPACTION_OFF,
         budget=Budget(),
-        instructions_enabled=True,
-        memory_enabled=True,
+        capability_flags={"memory": True},
+        plugin_config={"workspace": {"instructions_enabled": True}},
     )
     assert inputs.composer._content_renderers.kinds() == (
         "skill",
@@ -392,8 +390,9 @@ def test_instructions_file_override_in_builder(tmp_path: Path) -> None:
         model="stub-model",
         compaction=COMPACTION_OFF,
         budget=Budget(),
-        instructions_enabled=True,
-        instructions_file=custom,
+        plugin_config={
+            "workspace": {"instructions_enabled": True, "instructions_file": custom}
+        },
     )
     assert inputs.instructions_snapshot is not None
     assert inputs.instructions_snapshot.name == "CUSTOM.md"

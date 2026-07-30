@@ -316,11 +316,12 @@ def test_default_host_byte_equal_to_direct_builder(tmp_path: Path) -> None:
         max_steps=20,
         write_mode=FsWriteMode.DRY_RUN,
         shell_mode=ShellMode.ALLOWLIST,
-        skills_dir=None,
+        # Phase 3 (S4): the skills knobs live in the skills plugin's config bag
+        # (all None/False = the pack defaults SdkHost also builds).
+        plugin_config={"skills": {"skills_dir": None, "allow_skill_scripts": False}},
         require_approval_tools=_approval_set_for("default", main_spec.tools),
         skill_tool_enforcement="off",
         delegation_enabled=False,
-        allow_skill_scripts=False,
         todo_write_enabled=False,
         ask_user_question_enabled=False,
         skill_invocation_enabled=False,

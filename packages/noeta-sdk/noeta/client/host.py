@@ -37,9 +37,7 @@ from noeta.context.instructions import InstructionsSnapshot
 from noeta.context.memory import MemoryEntries
 from noeta.context.reminders import ReminderSpec
 from noeta.execution.builder import build_session_inputs
-from noeta.execution.environment import load_environment
 from noeta.execution.host import AgentRegistryProtocol
-from noeta.execution.instructions import load_instructions
 from noeta.execution.reminders import TURN_INTAKE
 from noeta.execution.resolver import GenericEngineResolver
 from noeta.runtime.governance import (
@@ -88,6 +86,7 @@ from noeta.client.parts import (
     derive_compaction_config,
     memory_impl,
     provider_family,
+    workspace_impl,
 )
 from noeta.client.host_config import SandboxExecEnvConfig
 from noeta.client.sandbox import (
@@ -1698,11 +1697,6 @@ class SdkHost(GenericEngineResolver):
             # kernel holds no model opinions); the edit-tool mutex table now
             # lives entirely inside the fs pack (phase 3).
             provider_family=provider_family(model),
-            # Resident kits (phase 2c): the same memoized objects the
-            # driver's recording seams use, so record == compose.
-            memory_index_kit=self.memory_index_kit,
-            instructions_kit=self.instructions_kit,
-            environment_kit=self.environment_kit,
             # Session-level budget override; None uses today's spec-derived path.
             budget=self.budget
             if self.budget is not None
@@ -1717,12 +1711,8 @@ class SdkHost(GenericEngineResolver):
             # gets its ``write`` built path-restricted (e.g. plans/*.md); other specs ⇒ ().
             write_path_globs=_spec_write_path_globs(spec),
             write_roots=self.write_roots,
-            skills_dir=self.skills_dir,
-            builtin_skills_dirs=self.builtin_skills_dirs,
-            global_skills_dir=self.global_skills_dir,
             skill_tool_enforcement=self.skill_tool_enforcement,
             delegation_enabled=delegation_enabled,
-            allow_skill_scripts=self.allow_skill_scripts,
             todo_write_enabled=spec.capabilities.todo_write,
             ask_user_question_enabled=ask_user_question_enabled,
             # The SDK host treats spec.capabilities as the source of truth; the
@@ -1747,20 +1737,6 @@ class SdkHost(GenericEngineResolver):
             # ``None`` (every non-helper build) keeps the tool set + View
             # stable hash byte-identical.
             structured_output_schema=structured_output_schema,
-            memory_enabled=spec.capabilities.memory,
-            # Per-task memory root (issue #53): when the injected
-            # ``memory_root_resolver`` maps this task to a root, it rides the
-            # top-precedence ``memory_dir`` slot so the builder's tool pack +
-            # resident index target that tenant's store; ``None`` override
-            # (single-tenant / resolver fallback) keeps the host fields —
-            # byte-identical to the pre-resolver chain.
-            memory_dir=(
-                memory_override if memory_override is not None else self.memory_dir
-            ),
-            global_memory_dir=self.global_memory_dir,
-            instructions_enabled=self.instructions_enabled,
-            instructions_file=self.instructions_file,
-            instructions_discovery=self.instructions_discovery,
             # When live MCP tools were resolved for this turn, they are passed as
             # the override. ``None`` override ⇒ the builder merges no MCP tools —
             # so resume, which passes empty aliases, gets the same tool set as
@@ -1776,7 +1752,36 @@ class SdkHost(GenericEngineResolver):
             # the flag; the app pack only with a live ``"app_preview"``
             # gateway. Empty bag ⇒ tool set + stable prefix byte-identical.
             backends=session_backends,
-            capability_flags={"browser": browser_enabled},
+            capability_flags={
+                "browser": browser_enabled,
+                "memory": spec.capabilities.memory,
+            },
+            # The per-plugin config bag (phase 3): each pack parses only its
+            # own entry. The per-task memory root (issue #53) rides the
+            # top-precedence ``memory_dir`` slot so the builder's tool pack +
+            # resident index target that tenant's store; ``None`` override
+            # (single-tenant / resolver fallback) keeps the host fields.
+            plugin_config={
+                "memory": {
+                    "memory_dir": (
+                        memory_override
+                        if memory_override is not None
+                        else self.memory_dir
+                    ),
+                    "global_memory_dir": self.global_memory_dir,
+                },
+                "skills": {
+                    "skills_dir": self.skills_dir,
+                    "builtin_skills_dirs": tuple(self.builtin_skills_dirs),
+                    "global_skills_dir": self.global_skills_dir,
+                    "allow_skill_scripts": self.allow_skill_scripts,
+                },
+                "workspace": {
+                    "instructions_enabled": self.instructions_enabled,
+                    "instructions_file": self.instructions_file,
+                    "instructions_discovery": self.instructions_discovery,
+                },
+            },
             hooks_pre_tool_use=self.hooks_pre_tool_use,
             repetition_threshold=self.repetition_threshold,
             repetition_action=self.repetition_action,
@@ -1911,9 +1916,6 @@ class SdkHost(GenericEngineResolver):
             model=self.model,
             compaction=derive_compaction_config(self.model),
             provider_family=provider_family(self.model),
-            memory_index_kit=self.memory_index_kit,
-            instructions_kit=self.instructions_kit,
-            environment_kit=self.environment_kit,
             budget=self.budget
             if self.budget is not None
             else self._budget_for(BudgetSpec()),
@@ -1923,18 +1925,25 @@ class SdkHost(GenericEngineResolver):
             write_mode=self.write_mode,
             shell_mode=self.shell_mode,
             shell_allowlist=self.shell_allowlist,
-            skills_dir=self.skills_dir,
             skill_tool_enforcement=self.skill_tool_enforcement,
             delegation_enabled=True,
             workflow_enabled=False,
-            allow_skill_scripts=self.allow_skill_scripts,
             todo_write_enabled=False,
             ask_user_question_enabled=False,
             skill_invocation_enabled=False,
-            memory_enabled=False,
-            memory_dir=self.memory_dir,
-            instructions_enabled=self.instructions_enabled,
-            instructions_file=self.instructions_file,
+            # The orchestration engine runs memory off (no "memory" flag) and
+            # keeps the host's skills/instructions config through the same
+            # per-plugin bag as the session path.
+            plugin_config={
+                "skills": {
+                    "skills_dir": self.skills_dir,
+                    "allow_skill_scripts": self.allow_skill_scripts,
+                },
+                "workspace": {
+                    "instructions_enabled": self.instructions_enabled,
+                    "instructions_file": self.instructions_file,
+                },
+            },
             tool_output_inline_limit=self.tool_output_inline_limit,
         )
         policy: Policy = react_impl().OrchestrationPolicy(script=script, args=wf_args)
@@ -2008,10 +2017,11 @@ class SdkHost(GenericEngineResolver):
         never configured a project instructions file).
         """
         workspace_dir = self.workspace_dir_for(workspace)
-        environment = load_environment(workspace_dir)
+        loaders = workspace_impl()
+        environment = loaders.load_environment(workspace_dir)
         instructions: Optional[InstructionsSnapshot] = None
         if self.instructions_enabled:
-            instructions = load_instructions(
+            instructions = loaders.load_instructions(
                 workspace_dir,
                 filenames=self.instructions_kit.filenames,
                 override_path=self.instructions_file,

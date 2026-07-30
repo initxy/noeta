@@ -47,16 +47,10 @@ from noeta.context.environment import EnvironmentSnapshot
 from noeta.context.instructions import InstructionsSnapshot
 from noeta.context.memory import MemoryEntries
 from noeta.core.hooks import HookManager
-from noeta.execution.environment import EnvironmentKit, load_environment
-from noeta.execution.instructions import (
-    InstructionsKit,
-    build_instructions_discovery,
-    build_instructions_preloader,
-    load_instructions,
-)
-from noeta.execution.memory import MemoryIndexKit
 from noeta.execution.session_pack import (
     EMPTY_CONTRIBUTION,
+    EXPORT_CONTENT_DISCOVERY,
+    EXPORT_CONTENT_PRELOADER,
     EXPORT_ENVIRONMENT_SNAPSHOT,
     EXPORT_INSTRUCTIONS_SNAPSHOT,
     EXPORT_INSTRUCTIONS_SNAPSHOTS,
@@ -326,28 +320,15 @@ class _BuildSpec:
     shell_allowlist: Sequence[Mapping[str, Any]]
     write_path_globs: tuple[str, ...]
     write_roots: Optional[WriteRootsResolver]
-    skills_dir: Optional[Path]
-    builtin_skills_dirs: Sequence[Path]
-    global_skills_dir: Optional[Path]
     require_approval_tools: tuple[str, ...]
     shell_approval_predicate: Optional[Callable[[str, Mapping[str, Any]], bool]]
     skill_tool_enforcement: SkillEnforcementMode
     delegation_enabled: bool
-    allow_skill_scripts: bool
     todo_write_enabled: bool
     ask_user_question_enabled: bool
     skill_invocation_enabled: bool
     workflow_enabled: bool
     structured_output_schema: Optional[dict[str, Any]]
-    memory_enabled: bool
-    memory_dir: Optional[Path]
-    global_memory_dir: Optional[Path]
-    instructions_enabled: bool
-    instructions_file: Optional[Path]
-    #: `read`-triggered discovery of subdirectory instruction files
-    #: (docs/adr/anchored-content-placement.md). Default off — byte-identical
-    #: for every existing host. Independent of ``instructions_enabled``.
-    instructions_discovery: bool
     mcp_tools_override: Optional[dict[str, Tool]]
     custom_tools: Optional[dict[str, Tool]]
     #: Execution backend for the fs / shell pack. ``None`` ⇒ host
@@ -397,22 +378,6 @@ class _BuildSpec:
     #: pack loop in ``(priority, name)`` order. Empty builds a session with
     #: no pack tools at all — the kernel mandates no capability.
     session_packs: tuple[SessionPackEntry, ...] = ()
-    #: Injected memory-index kit (phase 2c):
-    #: ``noeta.builtins.memory.impl:build_memory_index_kit``. Carries the
-    #: index renderer/hash/kind factory. ``None`` fails loudly at registry
-    #: build when ``memory_enabled`` — the kernel ships no index prose.
-    memory_index_kit: Optional[MemoryIndexKit] = None
-    #: Injected instructions kit (phase 2c):
-    #: ``noeta.builtins.workspace.impl:build_instructions_kit``. Carries the
-    #: tag renderer/hash/kind factory + the candidate-filename convention.
-    #: ``None`` fails loudly when instructions are enabled or discovery is on.
-    instructions_kit: Optional[InstructionsKit] = None
-    #: Injected environment kit (phase 2c):
-    #: ``noeta.builtins.workspace.impl:build_environment_kit``. Carries the
-    #: env-block renderer/hash/kind factory. The environment stage is always
-    #: on (a workspace always exists), so this kit is effectively required —
-    #: ``None`` fails loudly at registry build.
-    environment_kit: Optional[EnvironmentKit] = None
 
 
 @dataclass(slots=True)
@@ -477,60 +442,6 @@ class _ToolAssembly:
 # resolved by the SDK host and passed in as ``session_packs``. The kernel
 # keeps only the not-yet-migrated packs below (instructions / environment /
 # browser / app — S3/S4) plus the two kernel-owned injections (mcp / custom).
-
-
-def _instructions_pack(
-    spec: _BuildSpec, ctx: SessionBuildContext
-) -> PackContribution:
-    """instructions snapshot load (no tools — feeds the content kind only).
-
-    Read once here at build time so the composer's renderer AND the pre-loop
-    ``record_instructions`` share the same snapshot. The shared mutable
-    ``name → snapshot`` mapping is ALWAYS exported (empty when the flag is
-    off) — the discovery hook and resume preloader add entries to the same
-    dict at tool/step time, so its identity is the contract.
-    """
-    snapshots: dict[str, InstructionsSnapshot] = {}
-    exports: dict[str, object] = {EXPORT_INSTRUCTIONS_SNAPSHOTS: snapshots}
-    if not spec.instructions_enabled:
-        return PackContribution(exports=exports)
-    if spec.instructions_kit is None:
-        raise RuntimeError(
-            "instructions_enabled=True requires an injected instructions_kit "
-            "(the workspace built-in's build_instructions_kit — phase 2c); "
-            "the kernel ships no filename convention or renderer of its own."
-        )
-    snapshot = load_instructions(
-        ctx.workspace_dir,
-        filenames=spec.instructions_kit.filenames,
-        override_path=spec.instructions_file,
-        exec_env=ctx.exec_env,
-    )
-    if snapshot is not None:
-        # Seed the shared mapping the kind renders from: the root file lives
-        # under its basename (resident name unchanged → byte-identical
-        # rendering); discovered files join later under relative paths.
-        snapshots[snapshot.name] = snapshot
-        exports[EXPORT_INSTRUCTIONS_SNAPSHOT] = snapshot
-    return PackContribution(exports=exports)
-
-
-def _environment_pack(
-    spec: _BuildSpec, ctx: SessionBuildContext
-) -> PackContribution:
-    """Workspace environment snapshot load (no tools — feeds the content kind).
-
-    Always on (a workspace always exists): capture the session-static
-    workspace facts once here at build time so the composer's renderer AND
-    the pre-loop ``record_environment`` share the same snapshot.
-    """
-    return PackContribution(
-        exports={
-            EXPORT_ENVIRONMENT_SNAPSHOT: load_environment(
-                ctx.workspace_dir, exec_env=ctx.exec_env
-            )
-        }
-    )
 
 
 # NOTE (microkernel phase 3, S3): the browser / app packs moved onto the
@@ -618,76 +529,25 @@ def _skill_menu_names(spec: _BuildSpec, asm: _ToolAssembly) -> frozenset[str]:
 
 def _build_content_registry(
     spec: _BuildSpec,
-    asm: _ToolAssembly,
     pack_kinds: tuple[ContentKindSpec, ...] = (),
 ) -> ContentChannelRegistry:
     """The content-channel registry — registration order IS semi_stable layout.
 
-    The content-channel registry is built HERE —
-    registration order IS the semi_stable layout (skill first; further
-    kinds, e.g. memory, append behind it). The same registry feeds the
-    composer's render rules AND the engine's generic content_hashes seam
-    so the rendered content and the recorded fingerprint come from one source.
+    Microkernel phase 3 (S4): every built-in resident arrives as a pack
+    contribution — the packs' content kinds are sorted upstream by
+    ``(kind priority, pack order)``, which reproduces the historical layout
+    (skill=100 → memory=200 → instructions=300 → environment=400). A pack
+    that does not apply (skills disabled, memory off, no instructions file
+    and no discovery) contributes no kind and the later kinds close up
+    behind it — correct and self-consistent, because a session built without
+    a resident is a different configuration, and a recording made WITH one
+    must be resumed with it (the host passes the same switches).
 
-    The skill kind is the first resident but no longer a required one: with
-    the ``skills`` built-in off the kit never ran, so the channel simply has
-    no skill resident and the later kinds close up behind it. That shifts the
-    semi_stable layout — which is correct and self-consistent, because a
-    session built without skills is a different configuration, and a recording
-    made WITH skills must be resumed with skills (the host passes the same
-    switch, exactly as it must for ``memory_enabled`` and the rest).
+    The same registry feeds the composer's render rules AND the engine's
+    generic content_hashes seam so the rendered content and the recorded
+    fingerprint come from one source.
     """
-    content_kinds: list[ContentKindSpec] = []
-    if asm.skill_content_kind is not None:
-        content_kinds.append(asm.skill_content_kind)
-    if spec.memory_enabled:
-        # The second resident: renders the index snapshot
-        # into semi_stable when activated; policy "evolving".
-        if spec.memory_index_kit is None:
-            raise RuntimeError(
-                "memory_enabled=True requires an injected memory_index_kit "
-                "(the memory built-in's build_memory_index_kit — phase 2c); "
-                "the kernel ships no index renderer of its own."
-            )
-        content_kinds.append(spec.memory_index_kit.content_kind(asm.memory_entries))
-    # Instructions (third resident): append AFTER memory so existing
-    # semi_stable byte layout is unchanged for memory-only sessions.
-    # Registered when a root snapshot loaded (rendering byte-identical to the
-    # single-snapshot kind — same resident name, same bytes) OR when
-    # discovery is armed (an empty mapping renders nothing until the first
-    # discovered activation, zero footprint). Neither → no kind registered,
-    # same as never adding the feature.
-    if asm.instructions_snapshots or spec.instructions_discovery:
-        if spec.instructions_kit is None:
-            raise RuntimeError(
-                "instructions require an injected instructions_kit "
-                "(the workspace built-in's build_instructions_kit — phase 2c); "
-                "the kernel ships no instructions renderer of its own."
-            )
-        content_kinds.append(
-            spec.instructions_kit.content_kind_from(asm.instructions_snapshots)
-        )
-    # Environment (fourth resident): append LAST so the semi_stable byte
-    # layout is unchanged for sessions that never activate it. Always
-    # registered (a workspace always exists); the renderer is a zero-
-    # footprint no-op until the pre-loop ``record_environment`` activates
-    # it, so existing recordings without an environment event resume
-    # byte-equal.
-    if asm.environment_snapshot is not None:
-        if spec.environment_kit is None:
-            raise RuntimeError(
-                "the environment resident requires an injected environment_kit "
-                "(the workspace built-in's build_environment_kit — phase 2c); "
-                "the kernel ships no environment renderer of its own."
-            )
-        content_kinds.append(
-            spec.environment_kit.content_kind(asm.environment_snapshot)
-        )
-    # Pack-contributed kinds (microkernel phase 3): sorted upstream by
-    # ``(priority, pack order)``, appended after the built-in residents.
-    # Empty until S4 moves the resident kits into their packs, so every
-    # existing session keeps its semi_stable byte layout.
-    content_kinds.extend(pack_kinds)
+    content_kinds: list[ContentKindSpec] = list(pack_kinds)
     # SDK ``Options.content_channels`` extension point (T3): user-registered
     # ContentKindSpec channels append LAST, after every built-in resident, so
     # existing sessions (no extra channels) keep their semi_stable byte layout
@@ -797,13 +657,6 @@ def build_session_inputs(
     #: out-of-workspace write while the task is paused), and rebuilding the
     #: tool set to take it would move the stable prefix.
     write_roots: Optional[WriteRootsResolver] = None,
-    skills_dir: Optional[Path] = None,
-    # The lower skill tiers below the workspace-local pack:
-    # built-in skills first, then the global ``~/.noeta/skills``. Both are
-    # deployment-fixed dirs the agent layer supplies (the SDK / test path
-    # leaves them empty for byte-identical single-dir behaviour).
-    builtin_skills_dirs: Sequence[Path] = (),
-    global_skills_dir: Optional[Path] = None,
     require_approval_tools: tuple[str, ...] = (),
     #: Per-call conditional approval predicate, forwarded verbatim into
     #: ``PermissionPolicy.conditional_approval``. Built by the SDK host for the
@@ -813,7 +666,6 @@ def build_session_inputs(
     ] = None,
     skill_tool_enforcement: SkillEnforcementMode = "off",
     delegation_enabled: bool = False,
-    allow_skill_scripts: bool = False,
     todo_write_enabled: bool = False,
     ask_user_question_enabled: bool = False,
     skill_invocation_enabled: bool = False,
@@ -823,21 +675,6 @@ def build_session_inputs(
     #: helper subtask whose ``agent(schema=...)`` declared a schema; the
     #: orchestration's StructuredOutputPolicy wrapper intercepts the call.
     structured_output_schema: Optional[dict[str, Any]] = None,
-    memory_enabled: bool = False,
-    memory_dir: Optional[Path] = None,
-    # The global memory root (default ``~/.noeta/memories``).
-    # ``None`` ⇒ the SDK default global dir. Memory is pinned here, never
-    # derived from the per-session workspace, so it survives workspace
-    # switches. ``memory_dir`` (the explicit override) still wins over this.
-    global_memory_dir: Optional[Path] = None,
-    instructions_enabled: bool = False,
-    instructions_file: Optional[Path] = None,
-    #: `read`-triggered discovery of subdirectory ``NOETA.md``/``AGENTS.md``
-    #: (docs/adr/anchored-content-placement.md). Default off ⇒ byte-identical
-    #: for every existing caller. When on, ``SessionInputs`` additionally
-    #: carries the ``content_discovery`` / ``content_preloader`` seams the
-    #: host wires into the Engine.
-    instructions_discovery: bool = False,
     mcp_tools_override: Optional[dict[str, Tool]] = None,
     custom_tools: Optional[dict[str, Tool]] = None,
     #: Execution backend for the fs / shell pack. ``None`` (resume + every
@@ -855,11 +692,14 @@ def build_session_inputs(
     #: no live backing — its pack contributes nothing, so resume + every
     #: SDK/test fixture stay byte-identical with an empty bag.
     backends: Optional[Mapping[str, object]] = None,
-    #: The agent's derived capability flags by name (``"browser"``, …) —
-    #: the per-agent truth capability packs self-gate on. ``"memory"`` is
-    #: still merged in from the legacy ``memory_enabled`` parameter until S4
-    #: retires it.
+    #: The agent's derived capability flags by name (``"browser"`` /
+    #: ``"memory"`` / …) — the per-agent truth capability packs self-gate on.
     capability_flags: Optional[Mapping[str, bool]] = None,
+    #: Per-plugin config bag (microkernel phase 3): ``plugin name → its own
+    #: keys`` (the memory roots, the skills dirs + script switch, the
+    #: workspace residents' instructions settings, …). Each pack parses only
+    #: its own entry; the kernel never reads a key.
+    plugin_config: Optional[Mapping[str, Mapping[str, object]]] = None,
     hooks_pre_tool_use: tuple[PreToolUseRule, ...] = (),
     repetition_threshold: int = 0,
     repetition_action: RepetitionAction = "require_approval",
@@ -911,14 +751,6 @@ def build_session_inputs(
     #: policy construction unless ``policy_factory_override`` replaces the
     #: default outright.
     default_policy_factory: Optional[PolicyFactoryBuilder] = None,
-    #: Injected resident kits (phase 2c): the memory built-in's
-    #: ``build_memory_index_kit`` and the workspace built-in's
-    #: ``build_instructions_kit`` / ``build_environment_kit``. Each fails
-    #: loudly when its resident is wired without it — the kernel ships no
-    #: resident prose, hash rule, or filename convention.
-    memory_index_kit: Optional[MemoryIndexKit] = None,
-    instructions_kit: Optional[InstructionsKit] = None,
-    environment_kit: Optional[EnvironmentKit] = None,
 ) -> SessionInputs:
     """Build the generic-session live/resume inputs from explicit
     operator-supplied pieces.
@@ -978,25 +810,15 @@ def build_session_inputs(
         shell_allowlist=shell_allowlist,
         write_path_globs=write_path_globs,
         write_roots=write_roots,
-        skills_dir=skills_dir,
-        builtin_skills_dirs=builtin_skills_dirs,
-        global_skills_dir=global_skills_dir,
         require_approval_tools=require_approval_tools,
         shell_approval_predicate=shell_approval_predicate,
         skill_tool_enforcement=skill_tool_enforcement,
         delegation_enabled=delegation_enabled,
-        allow_skill_scripts=allow_skill_scripts,
         todo_write_enabled=todo_write_enabled,
         ask_user_question_enabled=ask_user_question_enabled,
         skill_invocation_enabled=skill_invocation_enabled,
         workflow_enabled=workflow_enabled,
         structured_output_schema=structured_output_schema,
-        memory_enabled=memory_enabled,
-        memory_dir=memory_dir,
-        global_memory_dir=global_memory_dir,
-        instructions_enabled=instructions_enabled,
-        instructions_file=instructions_file,
-        instructions_discovery=instructions_discovery,
         mcp_tools_override=mcp_tools_override,
         custom_tools=custom_tools,
         exec_env=exec_env,
@@ -1008,9 +830,6 @@ def build_session_inputs(
         base_reminders=base_reminders,
         guards_factory=guards_factory,
         provider_family=provider_family,
-        memory_index_kit=memory_index_kit,
-        instructions_kit=instructions_kit,
-        environment_kit=environment_kit,
         repetition_threshold=repetition_threshold,
         repetition_action=repetition_action,
         repetition_window=repetition_window,
@@ -1032,9 +851,7 @@ def build_session_inputs(
         workspace = WorkspaceRoot.for_container(workspace_dir)
 
     # The generic pack context (microkernel phase 3): every session pack
-    # reads THIS, never the spec. ``"memory"`` still rides in from the
-    # legacy ``memory_enabled`` parameter until S4 retires it; an explicit
-    # ``capability_flags`` entry wins.
+    # reads THIS, never the spec.
     ctx = SessionBuildContext(
         workspace=workspace,
         workspace_dir=workspace_dir,
@@ -1044,25 +861,8 @@ def build_session_inputs(
         provider_family=provider_family,
         allowed_tools=allowed_tools,
         backends=dict(backends) if backends else {},
-        capability_flags={
-            "memory": memory_enabled,
-            **(capability_flags or {}),
-        },
-        # S2-transitional synthesis: the packs read their own config entry;
-        # S4 replaces the feature-named parameters with a caller-supplied
-        # ``plugin_config`` and this block collapses into a passthrough.
-        plugin_config={
-            "memory": {
-                "memory_dir": memory_dir,
-                "global_memory_dir": global_memory_dir,
-            },
-            "skills": {
-                "skills_dir": skills_dir,
-                "builtin_skills_dirs": tuple(builtin_skills_dirs),
-                "global_skills_dir": global_skills_dir,
-                "allow_skill_scripts": allow_skill_scripts,
-            },
-        },
+        capability_flags=dict(capability_flags) if capability_flags else {},
+        plugin_config=dict(plugin_config) if plugin_config else {},
         write_mode=write_mode,
         shell_mode=shell_mode,
         shell_allowlist=shell_allowlist,
@@ -1097,8 +897,6 @@ def build_session_inputs(
 
     entries: list[SessionPackEntry] = [
         *session_packs,
-        SessionPackEntry("instructions", 400, partial(_instructions_pack, spec)),
-        SessionPackEntry("environment", 500, partial(_environment_pack, spec)),
         SessionPackEntry("mcp", 800, _mcp_entry),
         SessionPackEntry("custom", 900, _custom_entry),
     ]
@@ -1154,7 +952,6 @@ def build_session_inputs(
     skill_menu_names = _skill_menu_names(spec, asm)
     content_registry = _build_content_registry(
         spec,
-        asm,
         tuple(
             kind_spec
             for _p, _s, kind_spec in sorted(
@@ -1241,28 +1038,13 @@ def build_session_inputs(
 
     hooks = _build_guards(spec, asm)
 
-    # Anchored-content seams (docs/adr/anchored-content-placement.md): armed
-    # only by ``instructions_discovery``. Both close over the SAME snapshot
-    # mapping the composer's instructions kind renders from, so a discovered
-    # (or resume-preloaded) file is renderable the moment its activation folds.
-    content_discovery = None
-    content_preloader = None
-    if instructions_discovery:
-        if instructions_kit is None:
-            raise RuntimeError(
-                "instructions_discovery=True requires an injected "
-                "instructions_kit (the workspace built-in's "
-                "build_instructions_kit — phase 2c)."
-            )
-        content_discovery = build_instructions_discovery(
-            asm.workspace,
-            asm.instructions_snapshots,
-            kit=instructions_kit,
-            exec_env=exec_env
-        )
-        content_preloader = build_instructions_preloader(
-            workspace_dir, asm.instructions_snapshots, exec_env=exec_env
-        )
+    # Anchored-content seams (docs/adr/anchored-content-placement.md):
+    # exported by the workspace plugin's instructions pack when discovery is
+    # armed — both hooks close over the SAME snapshot mapping the composer's
+    # instructions kind renders from, so a discovered (or resume-preloaded)
+    # file is renderable the moment its activation folds.
+    content_discovery = exports.get(EXPORT_CONTENT_DISCOVERY)
+    content_preloader = exports.get(EXPORT_CONTENT_PRELOADER)
 
     return SessionInputs(
         tools=tools,

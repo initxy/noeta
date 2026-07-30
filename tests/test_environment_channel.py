@@ -23,7 +23,9 @@ from pathlib import Path
 
 import pytest
 
-import noeta.execution.environment as env_exec
+# Phase 3 (D10): the impure environment loader + its git/date helpers moved
+# from the kernel to the workspace built-in; monkeypatches repoint here.
+import noeta.builtins.workspace.impl.loaders as env_exec
 from noeta.context.composer import RenderedSkills, ThreeSegmentComposer
 from noeta.context.content_channel import ContentChannelRegistry
 from noeta.context.environment import (
@@ -38,12 +40,13 @@ from noeta.builtins.workspace.impl import (
     build_environment_renderer,
     environment_content_hash,
     environment_content_kind,
+    load_environment,
     render_environment_text,
 )
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.core.wiring import wire_default_observers
-from noeta.execution.environment import load_environment, record_environment
+from noeta.execution.environment import record_environment
 from noeta.policies.stub import StubScriptedPolicy
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.decisions import FinishDecision

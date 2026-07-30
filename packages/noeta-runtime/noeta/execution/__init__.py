@@ -54,15 +54,10 @@ from noeta.execution.commands import (
 )
 from noeta.execution.environment import (
     EnvironmentKit,
-    load_environment,
     record_environment,
 )
 from noeta.execution.instructions import (
     InstructionsKit,
-    build_instructions_discovery,
-    build_instructions_preloader,
-    discover_instructions,
-    load_instructions,
     record_instructions,
 )
 # Microkernel phase 2a: the skill material (indexer / script tool / wiring)
@@ -99,8 +94,6 @@ __all__ = [
     "get_command",
     "InteractionDriver",
     "list_commands",
-    "load_environment",
-    "load_instructions",
     "ModelBindPrelude",
     "ModelSelectorError",
     "NotResumableError",
@@ -110,9 +103,6 @@ __all__ = [
     "MultiTurnReActPolicy",
     "NEXT_GOAL_WAKE_HANDLE",
     "record_environment",
-    "build_instructions_discovery",
-    "build_instructions_preloader",
-    "discover_instructions",
     "record_instructions",
     "render_help",
     "ResidentHost",

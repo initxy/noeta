@@ -27,7 +27,10 @@ from tests._builtin_skills import (
     DEFAULT_GLOBAL_SKILLS_DIR,
     load_builtin_skills,
 )
-from tests._session_inputs import default_factory_kwargs
+from tests._session_inputs import (
+    default_factory_kwargs,
+    fold_legacy_capability_kwargs,
+)
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
 from noeta.builtins.memory.impl.store import (
     DEFAULT_GLOBAL_MEMORY_DIR,
@@ -135,6 +138,9 @@ def test_no_lower_dirs_keeps_single_dir_behaviour(tmp_path: Path) -> None:
 
 
 def _inputs(ws: Path, **kwargs):
+    # Phase 3 (S4): fold the legacy per-feature kwargs (skill tiers, memory
+    # roots, memory switch) into the generic capability_flags / plugin_config.
+    fold_legacy_capability_kwargs(kwargs)
     return build_session_inputs(
         **default_factory_kwargs(),
         workspace_dir=ws,

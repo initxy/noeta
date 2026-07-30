@@ -27,6 +27,7 @@ from noeta.context.content_channel import (
 )
 from noeta.execution.session_pack import (
     EXPORT_SKILLS_KIT,
+    ContentKindContribution,
     PackContribution,
     SessionBuildContext,
 )
@@ -484,4 +485,9 @@ def build_skills_session_pack(ctx: SessionBuildContext) -> PackContribution:
     tools: dict[str, Tool] = {}
     if kit.script_tool is not None:
         tools[kit.script_tool.name] = kit.script_tool
-    return PackContribution(tools=tools, exports={EXPORT_SKILLS_KIT: kit})
+    # The skill resident leads the semi_stable layout (kind band 100).
+    return PackContribution(
+        tools=tools,
+        content_kinds=(ContentKindContribution(100, kit.content_kind),),
+        exports={EXPORT_SKILLS_KIT: kit},
+    )
