@@ -125,7 +125,7 @@ def _session(extra_reminders=()):
         model="stub-model",
         compaction=COMPACTION_OFF,
         budget=Budget(),
-        todo_write_enabled=True,
+        capability_flags={"todo_write": True},
         extra_reminders=tuple(extra_reminders),
     )
 

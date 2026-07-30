@@ -100,10 +100,10 @@ def _dynamic_suffix_payload(
         compaction=COMPACTION_OFF,
         budget=Budget(),
         allowed_subtask_agents=frozenset({"explore"}) if delegation_enabled else frozenset(),
-        delegation_enabled=delegation_enabled,
-        todo_write_enabled=True,
-        ask_user_question_enabled=False,
-        skill_invocation_enabled=False,
+        capability_flags={
+            "delegation": delegation_enabled,
+            "todo_write": True,
+        },
         subtask_agent_directory=(("explore", ""),) if delegation_enabled else (),
     )
 

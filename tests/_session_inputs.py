@@ -51,12 +51,29 @@ def fold_legacy_capability_kwargs(kwargs: dict) -> None:
     ``plugin_config`` entries win over the translated legacy knobs.
     """
     _missing = object()
-    memory_enabled = kwargs.pop("memory_enabled", _missing)
-    # capability_flags — memory folds in under the ``memory`` name, merged with
-    # any caller-supplied flags (e.g. ``browser``); the caller's entries win.
-    if memory_enabled is not _missing:
+    # capability_flags — the legacy boolean kwargs fold in under their
+    # capability names, merged with any caller-supplied flags (e.g.
+    # ``browser``); the caller's entries win. The five ``*_enabled``
+    # control-tool kwargs joined ``memory_enabled`` here when the builder
+    # signature folded them into the generic bag (control-tool surface
+    # follow-up, 2026-07-30).
+    _LEGACY_FLAG_KWARGS = {
+        "memory_enabled": "memory",
+        "delegation_enabled": "delegation",
+        "todo_write_enabled": "todo_write",
+        "ask_user_question_enabled": "ask_user_question",
+        "skill_invocation_enabled": "skill_invocation",
+        "workflow_enabled": "workflow",
+    }
+    folded_flags = {}
+    for legacy, flag_name in _LEGACY_FLAG_KWARGS.items():
+        value = kwargs.pop(legacy, _missing)
+        if value is not _missing:
+            folded_flags[flag_name] = value
+    if folded_flags:
         capability_flags = dict(kwargs.get("capability_flags") or {})
-        capability_flags.setdefault("memory", memory_enabled)
+        for flag_name, value in folded_flags.items():
+            capability_flags.setdefault(flag_name, value)
         kwargs["capability_flags"] = capability_flags
     # plugin_config — per-plugin config bags built from the legacy knobs, with
     # any caller-supplied plugin_config entries taking priority key-by-key.

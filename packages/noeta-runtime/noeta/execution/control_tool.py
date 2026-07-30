@@ -96,40 +96,38 @@ class ControlToolBuildContext:
 
     Built by :func:`~noeta.execution.builder.build_session_inputs` before the
     mount loop, AFTER tool assembly (the schemas are session-state functions —
-    the skill menu, the spawn directory, the per-helper structured-output schema
-    all exist only once the packs have run). Frozen so a factory can never
-    perturb a later factory's inputs. A factory that finds its tool inapplicable
-    returns ``None`` — self-gating is the factory's own check against this
-    context, never a kernel ``if``.
+    the spawn directory, the per-helper structured-output schema, the packs'
+    exports all exist only once the packs have run). Frozen so a factory can
+    never perturb a later factory's inputs. A factory that finds its tool
+    inapplicable returns ``None`` — self-gating is the factory's own check
+    against this context, never a kernel ``if``.
 
-    The five flags are the already-ANDed effective values (agent activation ×
-    host kill-switch), carried straight off the build spec — this stage does not
-    re-derive them (that is the resolver's job).
+    ``capability_flags`` carries the already-ANDed effective values (agent
+    activation × host kill-switch) by capability name, straight off the build
+    spec — this stage does not re-derive them (that is the resolver's job). It
+    is the same generic bag session packs read
+    (:attr:`~noeta.execution.session_pack.SessionBuildContext.capability_flags`),
+    so a third-party control tool gates on its own activation name with no
+    kernel signature change, and the kernel enumerates no control tool's flag.
     """
 
-    #: The already-ANDed effective control-tool flags (from the build spec).
-    todo_write_enabled: bool
-    ask_user_question_enabled: bool
-    delegation_enabled: bool
-    skill_invocation_enabled: bool
-    workflow_enabled: bool
+    #: The effective capability flags by name (from the build spec) — the
+    #: generic bag a mount factory self-gates on via :meth:`flag`.
+    capability_flags: Mapping[str, bool]
     #: The sorted ``(name, description)`` spawn directory the ``spawn_subagent``
     #: schema renders into its ``agent`` enum + roster.
     subtask_agent_directory: tuple[tuple[str, str], ...]
-    #: The ``skill`` menu, computed ONCE (replacing the two divergent gates the
-    #: old if-chain kept): ``skill_menu`` is the sorted ``(name, description)``
-    #: tuple the schema renders; ``skill_menu_names`` is the frozenset the
-    #: translate closure validates against AND the mount's gate (non-empty iff
-    #: skill_invocation is on AND a registry has indexed skills).
-    skill_menu: tuple[tuple[str, str], ...]
-    skill_menu_names: frozenset[str]
     #: The per-helper structured-output JSON Schema, or ``None`` (its gate is
     #: data-driven, not an activation).
     structured_output_schema: Optional[dict[str, Any]]
-    #: The session packs' named exports bag (the closed pack vocabulary). Carried
-    #: for the S2 skills mount (which will read its own ``EXPORT_SKILLS_KIT``
-    #: menu here); S1's skill factory uses the pre-computed ``skill_menu``.
+    #: The session packs' named exports bag (the closed pack vocabulary) — the
+    #: doorway a mount reads its own pack's side-state through (the skills
+    #: mount derives its menu from ``EXPORT_SKILLS_KIT`` here).
     exports: Mapping[str, object]
+
+    def flag(self, name: str) -> bool:
+        """The effective flag for capability ``name`` (absent ⇒ ``False``)."""
+        return bool(self.capability_flags.get(name, False))
 
 
 @dataclass(frozen=True, slots=True)

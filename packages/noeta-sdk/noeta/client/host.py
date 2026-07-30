@@ -1732,24 +1732,6 @@ class SdkHost(GenericEngineResolver):
             write_path_globs=_spec_write_path_globs(spec),
             write_roots=self.write_roots,
             skill_tool_enforcement=self.skill_tool_enforcement,
-            delegation_enabled=delegation_enabled,
-            todo_write_enabled=agent_activates(spec, "todo_write"),
-            ask_user_question_enabled=ask_user_question_enabled,
-            # The SDK host treats the spec's activation tuple as the source of
-            # truth; the noeta-agent product treats CodeSessionConfig as the
-            # source of truth and does not read the tuple (see apps/noeta-agent
-            # session.py), so migrating a custom spec across hosts requires
-            # aligning the two by hand.
-            skill_invocation_enabled=agent_activates(spec, "skill_invocation"),
-            # Expose run_workflow only when the host
-            # enabled workflow AND this agent can delegate. A workflow's
-            # agent()/parallel() spawn real sub-agents into the same delegation
-            # allow-list, so a non-delegating agent could never run one — gating
-            # run_workflow on delegation keeps the tool surface honest (only a
-            # delegation-capable agent ever sees it). The reserved __workflow__
-            # child is intercepted in _build_orchestration_engine, so it never
-            # reaches this builder.
-            workflow_enabled=self.workflow_allowed and delegation_enabled,
             # Per-helper structured output (port of the deleted runner's
             # ``_build_child_engine`` wiring): a workflow helper spawned via
             # ``agent(goal, schema=...)`` mounts the ``structured_output``
@@ -1767,14 +1749,30 @@ class SdkHost(GenericEngineResolver):
             # ``None`` (no host sandbox) ⇒ the builder uses ``LocalExecEnv`` and
             # the host ``WorkspaceRoot`` — byte-identical to the local path.
             exec_env=session_exec_env,
-            # The backend bag + this agent's capability flags (phase 3): the
-            # browser pack merges only with a live ``"browser"`` backend AND
-            # the flag; the app pack only with a live ``"app_preview"``
-            # gateway. Empty bag ⇒ tool set + stable prefix byte-identical.
+            # The backend bag + this agent's effective capability flags: the
+            # ONE generic bag both the session packs and the control-tool
+            # mounts self-gate on (the browser pack merges only with a live
+            # ``"browser"`` backend AND the flag; the app pack only with a live
+            # ``"app_preview"`` gateway; each control-tool mount reads its own
+            # name). The host computes every already-ANDed value here — the
+            # SDK host treats the spec's activation tuple as the source of
+            # truth (the noeta-agent product reads CodeSessionConfig instead,
+            # so migrating a custom spec across hosts requires aligning the
+            # two by hand). ``workflow`` mounts run_workflow only when the
+            # host enabled workflow AND this agent can delegate: a workflow's
+            # agent()/parallel() spawn real sub-agents into the same
+            # delegation allow-list, so gating on delegation keeps the tool
+            # surface honest. The reserved __workflow__ child is intercepted
+            # in _build_orchestration_engine, so it never reaches this builder.
             backends=session_backends,
             capability_flags={
                 "browser": browser_enabled,
                 "memory": agent_activates(spec, "memory"),
+                "delegation": delegation_enabled,
+                "todo_write": agent_activates(spec, "todo_write"),
+                "ask_user_question": ask_user_question_enabled,
+                "skill_invocation": agent_activates(spec, "skill_invocation"),
+                "workflow": self.workflow_allowed and delegation_enabled,
             },
             # The per-plugin config bag (phase 3): each pack parses only its
             # own entry. The per-task memory root (issue #53) rides the
@@ -1958,11 +1956,10 @@ class SdkHost(GenericEngineResolver):
             shell_mode=self.shell_mode,
             shell_allowlist=self.shell_allowlist,
             skill_tool_enforcement=self.skill_tool_enforcement,
-            delegation_enabled=True,
-            workflow_enabled=False,
-            todo_write_enabled=False,
-            ask_user_question_enabled=False,
-            skill_invocation_enabled=False,
+            # Delegation only: the orchestration engine spawns workers but
+            # mounts no other control tool (no nested workflows in v1, and
+            # ask/todo/skill self-gate off on their absent flags).
+            capability_flags={"delegation": True},
             # The orchestration engine runs memory off (no "memory" flag) and
             # keeps the host's skills/instructions config through the same
             # per-plugin bag as the session path.

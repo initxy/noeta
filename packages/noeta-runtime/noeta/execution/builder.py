@@ -37,7 +37,6 @@ emission) and locked by ``tests/test_session_pack_goldens.py``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Protocol, Sequence, cast
 
@@ -328,11 +327,12 @@ class _BuildSpec:
     require_approval_tools: tuple[str, ...]
     shell_approval_predicate: Optional[Callable[[str, Mapping[str, Any]], bool]]
     skill_tool_enforcement: SkillEnforcementMode
-    delegation_enabled: bool
-    todo_write_enabled: bool
-    ask_user_question_enabled: bool
-    skill_invocation_enabled: bool
-    workflow_enabled: bool
+    #: The effective capability flags by name (agent activation × host
+    #: kill-switch, already ANDed by the host) — the ONE generic bag both the
+    #: session packs (via ``SessionBuildContext``) and the control-tool mounts
+    #: (via ``ControlToolBuildContext``) self-gate on. The kernel enumerates
+    #: no capability here.
+    capability_flags: Mapping[str, bool]
     structured_output_schema: Optional[dict[str, Any]]
     mcp_tools_override: Optional[dict[str, Tool]]
     custom_tools: Optional[dict[str, Tool]]
@@ -463,34 +463,6 @@ class _ToolAssembly:
 # Post-tools phases — control schemas, content channels, composer, policy,
 # guards. Each reads from the finished assembly and the frozen spec.
 # ---------------------------------------------------------------------------
-
-
-def _skill_menu(
-    spec: _BuildSpec, asm: _ToolAssembly
-) -> tuple[tuple[tuple[str, str], ...], frozenset[str]]:
-    """The ``skill`` tool's ``(menu, menu_names)``, computed ONCE.
-
-    Both are non-empty only when ``skill_invocation_enabled`` AND a registry
-    exists AND it has indexed skills — the single gate the old
-    ``_build_control_action_schemas`` schema branch and ``_skill_menu_names``
-    policy branch duplicated (and could, in principle, diverge). ``menu`` is the
-    sorted ``(name, description)`` tuple the schema renders (single source of
-    truth so callers never pass a divergent menu); ``menu_names`` is the frozenset
-    the translate closure validates against — and the mount's gate. No registry
-    at all (the ``skills`` built-in disabled) reads the same as an empty one: a
-    capability the agent declares but the host never wired grows no tool. Bytes
-    are identical to the pre-S1 two branches.
-    """
-    if spec.skill_invocation_enabled and asm.registry is not None:
-        skill_names = asm.registry.names()
-        if skill_names:
-            menu = tuple(
-                (name, desc.description)
-                for name in sorted(skill_names)
-                if (desc := asm.registry.get(name)) is not None
-            )
-            return menu, frozenset(skill_names)
-    return (), frozenset()
 
 
 # ---------------------------------------------------------------------------
@@ -680,7 +652,9 @@ def _build_guards(spec: _BuildSpec, asm: _ToolAssembly) -> HookManager:
         skill_tool_enforcement=spec.skill_tool_enforcement,
         skill_allowed_tools=asm.skill_allowed_tools,
         allowed_subtask_agents=(
-            spec.allowed_subtask_agents if spec.delegation_enabled else None
+            spec.allowed_subtask_agents
+            if spec.capability_flags.get("delegation", False)
+            else None
         ),
         skill_script_tools=asm.skill_script_tools,
         skill_scripts=asm.skill_scripts,
@@ -727,11 +701,6 @@ def build_session_inputs(
         Callable[[str, Mapping[str, Any]], bool]
     ] = None,
     skill_tool_enforcement: SkillEnforcementMode = "off",
-    delegation_enabled: bool = False,
-    todo_write_enabled: bool = False,
-    ask_user_question_enabled: bool = False,
-    skill_invocation_enabled: bool = False,
-    workflow_enabled: bool = False,
     #: When set, expose a per-helper ``structured_output`` control
     #: schema (its ``parameters`` = this JSON Schema). Set ONLY for a workflow
     #: helper subtask whose ``agent(schema=...)`` declared a schema; the
@@ -754,8 +723,13 @@ def build_session_inputs(
     #: no live backing — its pack contributes nothing, so resume + every
     #: SDK/test fixture stay byte-identical with an empty bag.
     backends: Optional[Mapping[str, object]] = None,
-    #: The agent's derived capability flags by name (``"browser"`` /
-    #: ``"memory"`` / …) — the per-agent truth capability packs self-gate on.
+    #: The agent's effective capability flags by name (``"browser"`` /
+    #: ``"memory"`` / ``"delegation"`` / ``"todo_write"`` / …) — the ONE
+    #: per-agent truth both the session packs AND the control-tool mounts
+    #: self-gate on. The host supplies the already-ANDed values (agent
+    #: activation × host kill-switch, plus any cross-capability gates such as
+    #: workflow requiring delegation); the kernel never re-derives or
+    #: enumerates a flag.
     capability_flags: Optional[Mapping[str, bool]] = None,
     #: Per-plugin config bag (microkernel phase 3): ``plugin name → its own
     #: keys`` (the memory roots, the skills dirs + script switch, the
@@ -884,11 +858,7 @@ def build_session_inputs(
         require_approval_tools=require_approval_tools,
         shell_approval_predicate=shell_approval_predicate,
         skill_tool_enforcement=skill_tool_enforcement,
-        delegation_enabled=delegation_enabled,
-        todo_write_enabled=todo_write_enabled,
-        ask_user_question_enabled=ask_user_question_enabled,
-        skill_invocation_enabled=skill_invocation_enabled,
-        workflow_enabled=workflow_enabled,
+        capability_flags=dict(capability_flags) if capability_flags else {},
         structured_output_schema=structured_output_schema,
         mcp_tools_override=mcp_tools_override,
         custom_tools=custom_tools,
@@ -933,7 +903,7 @@ def build_session_inputs(
         provider_family=provider_family,
         allowed_tools=allowed_tools,
         backends=dict(backends) if backends else {},
-        capability_flags=dict(capability_flags) if capability_flags else {},
+        capability_flags=spec.capability_flags,
         plugin_config=dict(plugin_config) if plugin_config else {},
         write_mode=write_mode,
         shell_mode=shell_mode,
@@ -1021,26 +991,21 @@ def build_session_inputs(
         exports.get(EXPORT_ENVIRONMENT_SNAPSHOT),
     )
     # Control-tool mounts (control-tool-surface S1 → S2b): build the control-
-    # specific context (the effective flags + the once-computed skill menu + the
-    # packs' exports), then run the host-supplied ``control_tools`` (every
-    # ``control_tool`` contribution the SDK host resolves — the built-in six +
-    # any external plugin's) through the generic dual-priority mount loop. Since
-    # S2b the kernel keeps no internal control-tool table, so this tuple IS the
-    # whole input. It yields the composer's ``control_action_schemas`` (schema-band
-    # order, the S0 golden), the routing-ordered translate specs the policy
-    # factory binds, and the collected mount exports (D8 — the ask answer codec).
-    # The loop re-sorts by ``(priority, name)``; the collision check guards a
-    # third-party clash with a built-in control-tool name.
-    skill_menu, skill_menu_names = _skill_menu(spec, asm)
+    # specific context (the generic capability-flag bag + the packs' exports),
+    # then run the host-supplied ``control_tools`` (every ``control_tool``
+    # contribution the SDK host resolves — the built-in six + any external
+    # plugin's) through the generic dual-priority mount loop. Since S2b the
+    # kernel keeps no internal control-tool table, so this tuple IS the whole
+    # input; each mount self-gates on its own flag / export (the skills mount
+    # derives its menu from ``EXPORT_SKILLS_KIT``). It yields the composer's
+    # ``control_action_schemas`` (schema-band order, the S0 golden), the
+    # routing-ordered translate specs the policy factory binds, and the
+    # collected mount exports (D8 — the ask answer codec). The loop re-sorts by
+    # ``(priority, name)``; the collision check guards a third-party clash with
+    # a built-in control-tool name.
     control_ctx = ControlToolBuildContext(
-        todo_write_enabled=spec.todo_write_enabled,
-        ask_user_question_enabled=spec.ask_user_question_enabled,
-        delegation_enabled=spec.delegation_enabled,
-        skill_invocation_enabled=spec.skill_invocation_enabled,
-        workflow_enabled=spec.workflow_enabled,
+        capability_flags=spec.capability_flags,
         subtask_agent_directory=spec.subtask_agent_directory,
-        skill_menu=skill_menu,
-        skill_menu_names=skill_menu_names,
         structured_output_schema=spec.structured_output_schema,
         exports=exports,
     )

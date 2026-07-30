@@ -244,3 +244,32 @@ record and stays intact.
   `test_session_pack_extension.py`: a single-file plugin's control tool renders
   in the schema band, routes in the translate band, gates per-agent, and
   collides loudly — with zero kernel or SDK-host edits.
+
+## Addendum (2026-07-30) — the flag bag fold
+
+A follow-up review pass closed the one asymmetry this ADR shipped with: the
+kernel builder still enumerated the five control-tool enablement flags by name
+(`todo_write_enabled` / `ask_user_question_enabled` / `delegation_enabled` /
+`skill_invocation_enabled` / `workflow_enabled`) as `build_session_inputs`
+keywords and `ControlToolBuildContext` fields, while session packs read the
+generic `capability_flags` bag.
+
+- The five keywords are **deleted**; the host supplies the already-ANDed
+  effective values as entries in the same `capability_flags` mapping session
+  packs read (`"todo_write"` / `"ask_user_question"` / `"delegation"` /
+  `"skill_invocation"` / `"workflow"`, beside `"memory"` / `"browser"`).
+  `ControlToolBuildContext` carries the bag plus a `flag(name)` helper; a
+  mount self-gates with `ctx.flag("<its own activation name>")`, so a
+  third-party control tool now gates on its own activation with **zero kernel
+  signature change** — previously impossible without borrowing a built-in's
+  flag.
+- The builder's `_skill_menu` special case is **deleted**: the skills mount
+  derives its menu itself from its own pack's `EXPORT_SKILLS_KIT` export
+  (`ControlToolBuildContext.exports`), which is what the S1 design comment
+  already anticipated. The kernel builder now names no control tool and no
+  control-tool flag.
+- Bytes are unchanged — the S0 schema goldens, the composer View snapshot,
+  and the session-pack goldens all pass unmodified. The resolver↔host
+  `_build_engine` hook contract (which computes the depth-masked
+  `ask_user_question` and host-gated `delegation` effective values) is
+  unchanged; only the builder-facing carrier moved.

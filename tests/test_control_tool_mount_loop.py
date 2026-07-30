@@ -41,14 +41,8 @@ def _empty_build_ctx() -> ControlToolBuildContext:
     """A build context with every control tool inapplicable — the fake factories
     below ignore it; the real factories would all self-gate to ``None``."""
     return ControlToolBuildContext(
-        todo_write_enabled=False,
-        ask_user_question_enabled=False,
-        delegation_enabled=False,
-        skill_invocation_enabled=False,
-        workflow_enabled=False,
+        capability_flags={},
         subtask_agent_directory=(),
-        skill_menu=(),
-        skill_menu_names=frozenset(),
         structured_output_schema=None,
         exports={},
     )

@@ -106,10 +106,12 @@ def _compose_view_payload(preset: str) -> dict[str, object]:
         compaction=COMPACTION_OFF,
         budget=Budget(),
         allowed_subtask_agents=frozenset(spec.spawnable),
-        delegation_enabled=agent_activates(spec, "delegation"),
-        todo_write_enabled=agent_activates(spec, "todo_write"),
-        ask_user_question_enabled=agent_activates(spec, "ask_user_question"),
-        skill_invocation_enabled=agent_activates(spec, "skill_invocation"),
+        capability_flags={
+            "delegation": agent_activates(spec, "delegation"),
+            "todo_write": agent_activates(spec, "todo_write"),
+            "ask_user_question": agent_activates(spec, "ask_user_question"),
+            "skill_invocation": agent_activates(spec, "skill_invocation"),
+        },
         # The spawn_subagent control schema embeds the sub-agent directory
         # (name + description). Descriptions are pinned by test_prompt_snapshot;
         # here we pass empty descriptions so this golden stays focused on the

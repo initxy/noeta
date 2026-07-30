@@ -442,7 +442,7 @@ def _record_session(
             model="stub-model",
             compaction=COMPACTION_OFF,
             budget=Budget(),
-            skill_invocation_enabled=True,
+            capability_flags={"skill_invocation": True},
         )
 
     responses = [_skill_call("alpha"), _end("done")]
