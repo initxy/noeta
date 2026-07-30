@@ -239,9 +239,10 @@ Four official presets ship with deliberately trimmed surfaces:
 | `explore` | a read-only scout | read-only tools only | no |
 | `plan` | a read-only planner | read-only tools only | no — produces a plan |
 
-The trimming knife is `Capabilities`: explicit switches (todo, ask-user,
+The trimming knife is **activation**: explicit switches (todo, ask-user,
 delegate, skill invocation, memory, MCP, plus an allowlist of spawnable
-agents) written into agent identity — not runtime restrictions bolted on.
+agents) written into agent identity as the `AgentSpec.plugins` tuple +
+`spawnable` — not runtime restrictions bolted on.
 
 Cooperation takes two shapes. **Single delegation**: the parent spawns one
 Subtask, suspends, and wakes when it completes. **Fan-out**: the parent

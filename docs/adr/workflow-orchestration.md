@@ -40,6 +40,6 @@ It builds on the "workflow → compiled into Task+Policy" route (see task-as-onl
 ## Consequences
 
 - The Policy that interprets orchestration scripts lands in `noeta.policies`; the deterministic script host (compile/exec + controlled namespace + AST guard) lands in `noeta.policies._workflow_sandbox`; the orchestration API lands in `noeta.policies.orchestration`.
-- The `run_workflow` control tool → spawn-subtask translation lands in `noeta.policies.control_tools` / `noeta.policies.control_semantics`.
+- The `run_workflow` control tool → spawn-subtask translation lands in `noeta.policies.control_tools` / `noeta.policies.control_semantics`. **Current state:** the workflow interpreter, its determinism sandbox, and the `run_workflow` control tool all moved into the `react` built-in (`noeta.builtins.react.impl` — `orchestration` / `workflow_sandbox` / the `run_workflow` `control_tool` contribution); `noeta.policies` keeps only the neutral translate mechanism (see `control-tool-contributions-and-activation-identity.md`).
 - The `structured_output` tool injection and subtask drain land in `noeta.execution`, reusing `SpawnSubtasksDecision` / `SubtaskGroupCompleted` from subtask-fanout-and-durable-wake.md.
 - Follow-up note: `pipeline()` is still not done; when needed it will require wake-on-any and a per-call chain-hash stable identity; the authoritative implementation of concurrency is in subtask-parallel-execution.md.

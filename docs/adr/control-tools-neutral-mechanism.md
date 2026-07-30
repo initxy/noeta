@@ -24,7 +24,7 @@ messages_before  →  TaskStatePatched (only when there is a patch)  →  messag
 
 ### `ask_user_question` is routed through the existing neutral HITL primitive `yield_for_human`
 
-Asking a question is no longer its own Decision variant; the sdk expresses it as a `YieldForHumanDecision` carrying a `HitlRequestAnchor`. The kernel keeps `UserQuestionRequested` / `UserQuestionAnswered` + `governance.pending_questions` as **neutral HITL audit**—storing only an opaque `ContentRef` + count + id, **structurally identical to `pending_approvals`**, and never parsing the question schema. The question schema, UI limits (≤3 questions / ≤5 options / header ≤40 characters), validators, and codec all move into the sdk (`policies/control_tools.py`); `protocols/user_questions.py` is deleted.
+Asking a question is no longer its own Decision variant; the sdk expresses it as a `YieldForHumanDecision` carrying a `HitlRequestAnchor`. The kernel keeps `UserQuestionRequested` / `UserQuestionAnswered` + `governance.pending_questions` as **neutral HITL audit**—storing only an opaque `ContentRef` + count + id, **structurally identical to `pending_approvals`**, and never parsing the question schema. The question schema, UI limits (≤3 questions / ≤5 options / header ≤40 characters), validators, and codec all move into the sdk (`policies/control_tools.py`); `protocols/user_questions.py` is deleted. **Current state:** the question schema / limits / validators / codec are now a `control_tool` **plugin contribution** in the `ask_user_question` built-in (the codec rides a mount `export`), and `policies/control_tools.py` was deleted — see `control-tool-contributions-and-activation-identity.md`.
 
 ### Clean the leftover product flavor from the kernel
 
@@ -64,7 +64,7 @@ The accurate description: the union = **7 canonical neutral variants** + `SpawnS
 
 - The neutral variant lands in: the `StatePatchDecision` variant + the union description in `noeta.protocols.decisions`, and the fixed-order committing `handle_state_patch` in `noeta.core._decision_handlers`.
 
-- The product semantics migrated into the sdk land in: the todo/plan/question schema/limits/validation in `noeta.policies.control_tools` / `noeta.policies.control_semantics`, the migrated tool alias table in `noeta.policies.skill_tools`, and the policy that emits `StatePatchDecision` in `noeta.policies.react`.
+- The product semantics migrated into the sdk land in: the todo/plan/question schema/limits/validation in `noeta.policies.control_tools` / `noeta.policies.control_semantics`, the migrated tool alias table in `noeta.policies.skill_tools`, and the policy that emits `StatePatchDecision` in `noeta.policies.react`. **Current state:** these schemas / translations became `control_tool` **plugin contributions** and `ReActPolicy` moved into the `react` built-in; `noeta.policies` is now the neutral translate mechanism + a few reserved recorded-wire constants only (see `control-tool-contributions-and-activation-identity.md`). The neutral `Decision` union above is unchanged.
 
 - The host-neutral provenance default `'host'` is in `noeta.runtime.worker`.
 

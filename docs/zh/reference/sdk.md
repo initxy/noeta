@@ -90,7 +90,7 @@ Client(options, *, provider=None, workspace_dir=None, model=None,
 
 ### `AgentDefinition` — `client/options.py:121`
 
-扁平子代理配方：`description`（必填，非空）、`prompt`（必填）、`tools`（`None` ⇒ 全部内置）、`model`、`plugins`（按代理的激活，默认 `()`——没有 `fs`/`web`；`plugins=("delegation",)` 是给子代理授予 spawn 权限的方式）、`metadata`。不能嵌套——子项是叶子。没有 `capabilities` 字段：它随 `Capabilities` 编写面一并被移除了。
+扁平子代理配方：`description`（必填，非空）、`prompt`（必填）、`tools`（`None` ⇒ 全部内置）、`model`、`plugins`（按代理的激活，默认 `()`——没有 `fs`/`web`；`plugins=("delegation",)` 是给子代理授予 spawn 权限的方式）、`metadata`。不能嵌套——子项是叶子。没有 `capabilities` 字段：它随 `Capabilities` 编写面一并被移除，而后者已被整体删除——按代理的特性门控就是 `plugins` 激活元组。
 
 ### `SystemPromptPreset` — `client/options.py:101`
 

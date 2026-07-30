@@ -71,6 +71,7 @@ was to read all 40+ files and notice the contradiction.
 [tool-and-agent-catalog](tool-and-agent-catalog.md) ·
 [tool-description-canonical](tool-description-canonical.md) ·
 [control-tools-neutral-mechanism](control-tools-neutral-mechanism.md) ·
+[control-tool-contributions-and-activation-identity](control-tool-contributions-and-activation-identity.md) ·
 [agent-identity-and-provenance](agent-identity-and-provenance.md) ·
 [provider-adapters-and-multimodal](provider-adapters-and-multimodal.md) ·
 [guard-observer-hooks](guard-observer-hooks.md) ·

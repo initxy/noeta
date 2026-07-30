@@ -41,7 +41,7 @@ Both the Tool class and the `@tool` decorator get a hand-written `description`. 
 ## Consequences
 
 - Landing points: `noeta.protocols.tool` (the `Tool.description` field), `noeta.context.composer` (`_render_provider_tool_schemas` emits description conditionally).
-- Hand-written text lands in `noeta.tools.decorator` (`@tool`'s description parameter/slot), beside each built-in tool's impl in its builtin package (phase 2c), and in `noeta.policies.descriptions` for the control tools (hand-written, LLM-facing description text).
+- Hand-written text lands in `noeta.tools.decorator` (`@tool`'s description parameter/slot), beside each built-in tool's impl in its builtin package (phase 2c), and in `noeta.policies.descriptions` for the control tools (hand-written, LLM-facing description text). *(**Current state:** `noeta.policies.descriptions` was deleted; each control tool's description `.md` now ships beside its impl in its built-in — `todo_write` / `ask_user_question` / `delegation` / `skills` / `react`. See `control-tool-contributions-and-activation-identity.md`.)*
 - MCP tool descriptions are recorded verbatim in `noeta.builtins.mcp.impl.tool` (`McpToolSpec` / `parse_mcp_tool_specs`), reproduced by resume rebuilding.
 - The set-of-four preset slimming lands in `noeta.presets` (apply_patch.description absorbs replace_text's trade-off hint).
 - Note: changing a description moves the stable-prefix hash, so authors pin it by bumping the tool's `version`, guaranteeing byte-identical resume rebuilding.

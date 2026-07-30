@@ -108,7 +108,7 @@ surface name loudly (no override).
 
 ### D3 — The standard surface catalogue
 
-Fifteen surfaces, seeded by `standard_registry()`:
+Fifteen surfaces, seeded by `standard_registry()` *(**current state:** sixteen — `control_tool` joined as the sixteenth; see `control-tool-contributions-and-activation-identity.md`)*:
 
 | Surface | Plane | Scope (D6) | Cardinality | Notes |
 |---|---|---|---|---|
@@ -187,6 +187,14 @@ axis:
   (the default 11-tool set still comes from `BUILTIN_TOOL_CLASSES`), memory /
   browser stay off, and a parity golden pins the exact `AgentSpec`.
 
+  **Current state:** the `Capabilities` dataclass this D5 kept as the folded
+  identity representation was **later deleted wholesale**
+  (`control-tool-contributions-and-activation-identity.md` D6): `AgentSpec`
+  identity is now the `plugins` activation tuple + `spawnable`, which folds
+  `DEFAULT_PLUGINS` + derived delegation + plugin-forced flags into one tuple —
+  no second bool set. Everything else in D5 (load vs activate, `DEFAULT_PLUGINS`,
+  the parity golden) still holds.
+
 ### D6 — Effect scoping (the one deliberate asymmetry)
 
 How a contribution takes effect depends on its surface's `activation_scope`, not
@@ -218,7 +226,7 @@ is no static edge, and `.importlinter`'s `sdk-core-not-builtins` forbidden
 contract enforces it — universally: *every* band, kernel included, is a source.
 The catalogue currently holds fourteen built-ins — `fs`, `web`, `memory`,
 `browser`, `app`, `mcp`, `skills`, `react`, `reminders`, `governance`,
-`providers`, `sandbox`, `presets`, `workspace` — so every standard surface has a built-in declaration
+`providers`, `sandbox`, `presets`, `workspace` *(**current state:** seventeen — control-tool-surface S2 added the control-tool built-ins `todo_write` / `ask_user_question` / `delegation`)* — so every standard surface has a built-in declaration
 ridden through the identical loader / validation / merge path as any external
 plugin. Adding a first-party capability is adding a directory to the catalogue
 (plus a `SurfaceSpec` registration only when a genuinely new surface is
@@ -329,7 +337,11 @@ needed).
   **activation**, **Surface** / **SurfaceSpec**, **Built-in plugin**, and the
   three **Reminder tracks A/B/C**; the `Capabilities` *recipe* term is retired
   in favour of activation. "plugin" remains an avoided word for MCP connectors
-  (a connector is configuration, not code).
+  (a connector is configuration, not code). **Current state:** `Capabilities`
+  was later retired **wholesale** (not just the recipe term) — `AgentSpec`
+  identity is now the `plugins` activation tuple + `spawnable`, and `control_tool`
+  joined as the sixteenth surface; see
+  `control-tool-contributions-and-activation-identity.md`.
 - Whenever a new extension surface is added, deciding its `plane`,
   `activation_scope`, and whether plugins may contribute to it is part of that
   surface's design — one `SurfaceSpec` row, one D6 scope choice.
@@ -377,6 +389,13 @@ made of is a plugin, including ours*:
   (`todo_write` / `skill` / `ask_user_question`, the spawn/workflow dispatch
   vocabulary, the workflow-script validation sandbox) stay kernel permanently
   (they are renderings of kernel Decision variants, not contributions).
+  *(**Current state:** this was reversed — control tools became `control_tool`
+  **plugin contributions** on the sixteenth surface, moving into their built-ins
+  (`todo_write` / `ask_user_question` / `delegation` / `skills` / `react`);
+  `noeta.policies` keeps only the neutral translate mechanism. Being a rendering
+  of a Decision variant is not a bar to being a contribution — a translate
+  returns a neutral Decision, the same trust class as `policy`. See
+  `control-tool-contributions-and-activation-identity.md`.)*
 
 ## Addendum — 2026-07-30: the builder goes generic (microkernel phase 3)
 
@@ -389,7 +408,7 @@ kernel edit. The `session_pack` surface
 that last gap — *adding or changing a session-assembled capability is now a
 plugin contribution with zero kernel edits*:
 
-- **The catalogue is fifteen surfaces.** `session_pack` is the fifteenth
+- **The catalogue is fifteen surfaces.** *(**Current state:** sixteen since control-tool-surface S1 added `control_tool`.)* `session_pack` is the fifteenth
   (plane `wiring`, `activation_scope` per-agent, `collision_key` `name`,
   `merge_rule` `append`, ordering **`priority`** — the `reminder` /
   `tool_result_transform` precedent). It is the **session-construction half**
