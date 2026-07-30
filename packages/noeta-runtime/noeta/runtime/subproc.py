@@ -23,18 +23,18 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from noeta.runtime._proc_group import send_group_signal
-from noeta.runtime._env import scrub_env
+from noeta.runtime.env import scrub_env
 
 
 __all__ = [
-    "_RunOutcome",
+    "RunOutcome",
     "cap_stream",
     "run_argv",
     "tail_bytes",
 ]
 
 
-#: Module-local alias — the implementation now lives in ``noeta.tools._env``.
+#: Module-local alias — the implementation lives in ``noeta.runtime.env``.
 _scrub_env = scrub_env
 
 #: SIGTERM → grace → SIGKILL escalation window on timeout, mirroring the
@@ -130,7 +130,7 @@ def cap_stream(buf: bytes, cap: int) -> tuple[bytes, bool]:
 
 
 @dataclass
-class _RunOutcome:
+class RunOutcome:
     returncode: int
     duration_ms: int
     stdout: bytes
@@ -147,7 +147,7 @@ def run_argv(
     timeout_s: int,
     output_cap: int,
     runner: Optional[Callable[..., subprocess.CompletedProcess[bytes]]] = None,
-) -> _RunOutcome:
+) -> RunOutcome:
     """Spawn ``argv``, capture output, enforce timeout + scrubbed env.
 
     ``runner`` is injectable so tests don't shell out for happy-path
@@ -181,7 +181,7 @@ def run_argv(
     duration_ms = int((time.monotonic() - start) * 1000)
     stdout, stdout_truncated = cap_stream(stdout, output_cap)
     stderr, stderr_truncated = cap_stream(stderr, output_cap)
-    return _RunOutcome(
+    return RunOutcome(
         returncode=returncode,
         duration_ms=duration_ms,
         stdout=stdout,

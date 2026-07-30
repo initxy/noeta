@@ -11,7 +11,7 @@ from typing import Any
 
 
 from noeta.client.parts import default_reminder_specs
-from noeta.context.composer import RenderedSkills, ThreeSegmentComposer
+from noeta.context.composer import RenderedContent, ThreeSegmentComposer
 from noeta.context.reminders import ReminderRegistry
 from noeta.protocols.canonical import from_canonical_bytes
 from noeta.protocols.context_plan import ContextPlan
@@ -146,7 +146,7 @@ def test_changing_tools_changes_stable_prefix_hash() -> None:
 
 
 def test_changing_active_skills_changes_semi_stable_hash() -> None:
-    renderer = lambda skills: RenderedSkills(  # noqa: E731
+    renderer = lambda skills: RenderedContent(  # noqa: E731
         messages=[
             Message(role="user", content=[TextBlock(text=f"skill:{s}")])
             for s in skills
@@ -213,7 +213,7 @@ def test_provider_tool_schemas_is_populated_from_tool_input_schemas() -> None:
 
 def test_plan_ref_body_deserializes_to_context_plan_with_expected_fields() -> None:
     store = InMemoryContentStore()
-    renderer = lambda skills: RenderedSkills(  # noqa: E731
+    renderer = lambda skills: RenderedContent(  # noqa: E731
         messages=[
             Message(role="user", content=[TextBlock(text=f"skill:{s}")])
             for s in skills
@@ -256,7 +256,7 @@ def test_dynamic_suffix_content_is_task_runtime_messages_verbatim() -> None:
 
 
 def test_iter_messages_returns_semi_stable_and_dynamic_suffix() -> None:
-    renderer = lambda skills: RenderedSkills(  # noqa: E731
+    renderer = lambda skills: RenderedContent(  # noqa: E731
         messages=[
             Message(role="user", content=[TextBlock(text=f"skill:{s}")])
             for s in skills
@@ -283,7 +283,7 @@ def test_iter_messages_returns_semi_stable_and_dynamic_suffix() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_default_skill_renderer_yields_empty_semi_stable() -> None:
+def test_default_content_renderer_yields_empty_semi_stable() -> None:
     composer = _composer()  # no renderer
     task = _task_with([], active_skills=["s1"])
 

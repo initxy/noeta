@@ -25,8 +25,9 @@ from noeta.runtime.exec_env import (
     ExclusiveCreateExists,
     ExclusiveCreateWriteFailed,
     TreeSnapshot,
+    SubprocRunner,
 )
-from noeta.runtime.subproc import _RunOutcome, cap_stream
+from noeta.runtime.subproc import RunOutcome, cap_stream
 
 
 __all__ = [
@@ -437,8 +438,8 @@ class AioSandboxExecEnv:
         cwd: Path,
         timeout_s: int,
         output_cap: int,
-        runner: Optional[_SubprocRunner] = None,
-    ) -> _RunOutcome:
+        runner: Optional[SubprocRunner] = None,
+    ) -> RunOutcome:
         # ``runner`` is the local subprocess seam — irrelevant remotely, ignored.
         # cwd is expressed lexically (cd &&) rather than via an unconfirmed
         # request field; argv is shell-quoted so the remote shell re-runs the
@@ -462,7 +463,7 @@ class AioSandboxExecEnv:
             # timeout instead surfaces as AioSandboxError below (still a
             # reported failed run, not a crash).
             duration_ms = int((time.monotonic() - start) * 1000)
-            return _RunOutcome(
+            return RunOutcome(
                 returncode=-1,
                 duration_ms=duration_ms,
                 stdout=b"",
@@ -476,7 +477,7 @@ class AioSandboxExecEnv:
             # than crashing the worker, mirroring the local backend which never
             # lets a spawn fault escape run_argv.
             duration_ms = int((time.monotonic() - start) * 1000)
-            return _RunOutcome(
+            return RunOutcome(
                 returncode=-1,
                 duration_ms=duration_ms,
                 stdout=b"",
@@ -503,7 +504,7 @@ class AioSandboxExecEnv:
         else:
             output = inline
         stdout, stdout_truncated = cap_stream(output, output_cap)
-        return _RunOutcome(
+        return RunOutcome(
             returncode=int(data.get("exit_code", 0)),
             duration_ms=duration_ms,
             stdout=stdout,

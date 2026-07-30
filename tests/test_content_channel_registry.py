@@ -22,7 +22,7 @@ from __future__ import annotations
 import pytest
 
 from noeta.context.composer import (
-    RenderedSkills,
+    RenderedContent,
     ThreeSegmentComposer,
 )
 from noeta.context.content_channel import (
@@ -57,8 +57,8 @@ from noeta.storage.memory import InMemoryContentStore, InMemoryEventLog
 def _fake_renderer(prefix: str):
     """A minimal kind renderer: one user Message per name, input order."""
 
-    def _render(names: list[str]) -> RenderedSkills:
-        return RenderedSkills(
+    def _render(names: list[str]) -> RenderedContent:
+        return RenderedContent(
             messages=[
                 Message(role="user", content=[TextBlock(text=f"{prefix}:{n}")])
                 for n in names

@@ -26,7 +26,7 @@ import pytest
 # Phase 3 (D10): the impure environment loader + its git/date helpers moved
 # from the kernel to the workspace built-in; monkeypatches repoint here.
 import noeta.builtins.workspace.impl.loaders as env_exec
-from noeta.context.composer import RenderedSkills, ThreeSegmentComposer
+from noeta.context.composer import RenderedContent, ThreeSegmentComposer
 from noeta.context.content_channel import ContentChannelRegistry
 from noeta.context.environment import (
     ENVIRONMENT_DRIFT_POLICY,
@@ -247,7 +247,7 @@ def test_hash_is_stable_and_tracks_content() -> None:
 def test_renderer_renders_user_message_only_when_active() -> None:
     renderer = build_environment_renderer(_SAMPLE)
     rendered = renderer([ENVIRONMENT_NAME])
-    assert isinstance(rendered, RenderedSkills)
+    assert isinstance(rendered, RenderedContent)
     assert len(rendered.messages) == 1
     assert rendered.messages[0].role == "user"
     assert "Working directory: /work/repo" in rendered.messages[0].content[0].text

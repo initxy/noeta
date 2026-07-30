@@ -39,9 +39,9 @@ from noeta.protocols.view import View, ViewSegment
 
 __all__ = [
     "ContentRenderers",
-    "RenderedSkills",
+    "RenderedContent",
     "RetrievedResource",
-    "SkillRenderer",
+    "ContentRenderer",
     "ThreeSegmentComposer",
 ]
 
@@ -57,7 +57,7 @@ __all__ = [
 # as a trace/inspect display label (the trace page shows it); there is no longer
 # any consumer that forces a bump when the composed bytes shift — bumping it is
 # now optional bookkeeping, not a contract.
-_COMPOSER_VERSION = "three_segment.v5"
+COMPOSER_VERSION = "three_segment.v5"
 _PLAN_MEDIA_TYPE = "application/json"
 
 
@@ -112,8 +112,8 @@ class RetrievedResource:
 
 
 @dataclass(frozen=True, slots=True)
-class RenderedSkills:
-    """Output of a :data:`SkillRenderer` call.
+class RenderedContent:
+    """Output of a :data:`ContentRenderer` call.
 
     Issue 21 widens the renderer seam: a renderer must now hand back
     both the rendered ``Message`` list **and** the post-filter,
@@ -135,7 +135,7 @@ class RenderedSkills:
     retrieved_resources: list[RetrievedResource] = field(default_factory=list)
 
 
-SkillRenderer = Callable[[list[str]], RenderedSkills]
+ContentRenderer = Callable[[list[str]], RenderedContent]
 
 
 #: The content channel's resident kind for skills. The
@@ -158,7 +158,7 @@ class ContentRenderers(Protocol):
 
     def kinds(self) -> tuple[str, ...]: ...
 
-    def render(self, kind: str, names: list[str]) -> RenderedSkills: ...
+    def render(self, kind: str, names: list[str]) -> RenderedContent: ...
 
 
 class _SkillOnlyRenderers:
@@ -170,17 +170,17 @@ class _SkillOnlyRenderers:
     item). Hosts wanting more kinds pass a real registry instead.
     """
 
-    def __init__(self, renderer: SkillRenderer) -> None:
+    def __init__(self, renderer: ContentRenderer) -> None:
         self._renderer = renderer
 
     def kinds(self) -> tuple[str, ...]:
         return (_SKILL_KIND,)
 
-    def render(self, kind: str, names: list[str]) -> RenderedSkills:
+    def render(self, kind: str, names: list[str]) -> RenderedContent:
         return self._renderer(names)
 
 
-def _default_skill_renderer(_: list[str]) -> RenderedSkills:
+def _default_content_renderer(_: list[str]) -> RenderedContent:
     """Default no-op renderer.
 
     Returned when ``ThreeSegmentComposer`` is constructed without an
@@ -191,7 +191,7 @@ def _default_skill_renderer(_: list[str]) -> RenderedSkills:
     (``noeta.builtins.skills.impl``)
     (issue 21) when real Skill activation is wanted.
     """
-    return RenderedSkills(messages=[], selected_skills=[])
+    return RenderedContent(messages=[], selected_skills=[])
 
 
 def _sha256_hex(body: bytes) -> str:
@@ -216,7 +216,7 @@ class ThreeSegmentComposer:
         system_prompt: str,
         tools: dict[str, Tool],
         content_store: ContentStore,
-        skill_renderer: Optional[SkillRenderer] = None,
+        skill_renderer: Optional[ContentRenderer] = None,
         content_renderers: Optional[ContentRenderers] = None,
         reminders: Optional[ReminderRegistry] = None,
         control_action_schemas: Optional[list[dict[str, Any]]] = None,
@@ -241,7 +241,7 @@ class ThreeSegmentComposer:
         self._content_renderers: ContentRenderers = (
             content_renderers
             if content_renderers is not None
-            else _SkillOnlyRenderers(skill_renderer or _default_skill_renderer)
+            else _SkillOnlyRenderers(skill_renderer or _default_content_renderer)
         )
         # Compose-time reminder registry (D8): the dynamic-suffix-tail reminders
         # are rendered through this table, exactly as semi_stable residents render
@@ -399,7 +399,7 @@ class ThreeSegmentComposer:
         )
 
         plan = ContextPlan(
-            composer_version=_COMPOSER_VERSION,
+            composer_version=COMPOSER_VERSION,
             segment_hashes={
                 "stable_prefix": stable_hash,
                 "semi_stable": semi_hash,

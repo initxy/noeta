@@ -17,8 +17,8 @@ import pytest
 from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.runtime.tool import _encode_output
 from noeta.storage.memory import InMemoryContentStore
-from noeta.tools._limits import INLINE_CONTENT_MAX_BYTES
-from noeta.runtime.subproc import _RunOutcome
+from noeta.tools.limits import INLINE_CONTENT_MAX_BYTES
+from noeta.runtime.subproc import RunOutcome
 from noeta.builtins.web.impl import (
     ContainerCurlFetchTransport,
     HttpFetchTransport,
@@ -57,7 +57,7 @@ class FakeFetchTransport:
 class FakeExecEnv:
     """Minimal ``ExecEnv`` stand-in: only ``run_argv`` behaves (sandbox path).
 
-    Records every argv it is handed and returns a scripted ``_RunOutcome`` so a
+    Records every argv it is handed and returns a scripted ``RunOutcome`` so a
     container-transport test never shells out. Other ``ExecEnv`` methods are
     unused by the web transports and left unimplemented.
     """
@@ -76,7 +76,7 @@ class FakeExecEnv:
         self.last_cwd = cwd
         self.last_timeout_s = timeout_s
         self.last_output_cap = output_cap
-        return _RunOutcome(
+        return RunOutcome(
             returncode=self.returncode,
             duration_ms=1,
             stdout=self.stdout,
@@ -215,7 +215,7 @@ def test_webfetch_large_page_truncates_inline_keeps_full_artifact() -> None:
     assert result.output["truncated"] is True
     # inline output respects the canonical byte ceiling ...
     assert _encode_output(result.output)
-    from noeta.tools._limits import encoded_len
+    from noeta.tools.limits import encoded_len
 
     assert encoded_len(result.output) <= INLINE_CONTENT_MAX_BYTES
     # ... but the full markdown survives in the artifact, longer than inline.

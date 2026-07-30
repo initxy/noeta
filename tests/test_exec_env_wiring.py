@@ -25,7 +25,7 @@ from noeta.execution.builder import build_session_inputs
 from noeta.protocols.tool import ToolContext
 from noeta.storage.memory import InMemoryContentStore
 from noeta.builtins.fs.impl import build_fs_tools
-from noeta.runtime.subproc import _RunOutcome
+from noeta.runtime.subproc import RunOutcome
 from noeta.runtime.workspace import WorkspaceEscape, WorkspaceRoot
 from noeta.runtime.exec_env import ExecEnv, LocalExecEnv
 
@@ -133,8 +133,8 @@ class RecordingExecEnv:
     def rglob(self, base: Path, pattern: str) -> Iterable[Path]:
         return []
 
-    def run_argv(self, argv, *, cwd, timeout_s, output_cap, runner=None) -> _RunOutcome:
-        return _RunOutcome(0, 1, b"ran", b"", False, False, False)
+    def run_argv(self, argv, *, cwd, timeout_s, output_cap, runner=None) -> RunOutcome:
+        return RunOutcome(0, 1, b"ran", b"", False, False, False)
 
 
 # --------------------------------------------------------------------------- #

@@ -33,7 +33,7 @@ from typing import Any, Optional, Protocol
 import httpx
 
 from noeta.protocols.tool import Tool, ToolContext, ToolResult
-from noeta.tools._limits import (
+from noeta.tools.limits import (
     INLINE_CONTENT_MAX_BYTES,
     SUMMARY_EMBED_MAX_BYTES,
     encoded_len,

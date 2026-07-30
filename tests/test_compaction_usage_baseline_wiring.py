@@ -35,7 +35,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from noeta.context.composer import _COMPOSER_VERSION, ThreeSegmentComposer
+from noeta.context.composer import COMPOSER_VERSION, ThreeSegmentComposer
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.core.hooks import HookManager
@@ -191,7 +191,7 @@ def _run(
             max_output_tokens=_MAX_OUTPUT,
             compaction_buffer=_BUFFER,
             tail_token_budget=_TAIL,
-            composer_version=_COMPOSER_VERSION,
+            composer_version=COMPOSER_VERSION,
         ),
         tools=_tools(),
         tool_runtime=ToolRuntime(
@@ -375,7 +375,7 @@ def test_compaction_zeroes_the_baseline_in_fold() -> None:
             summary_ref=cs.put(b'"summary"', media_type="application/json"),
             boundary_count=5,
             replaced_count=5,
-            composer_version=_COMPOSER_VERSION,
+            composer_version=COMPOSER_VERSION,
         ),
     )
     # The count above describes a history the compaction just collapsed.

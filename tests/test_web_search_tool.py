@@ -19,8 +19,8 @@ import pytest
 from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.runtime.tool import _encode_output
 from noeta.storage.memory import InMemoryContentStore
-from noeta.tools._limits import INLINE_CONTENT_MAX_BYTES, encoded_len
-from noeta.runtime.subproc import _RunOutcome
+from noeta.tools.limits import INLINE_CONTENT_MAX_BYTES, encoded_len
+from noeta.runtime.subproc import RunOutcome
 from noeta.builtins.web.impl import (
     ContainerCurlSearchTransport,
     HttpSearchTransport,
@@ -68,7 +68,7 @@ class FakeSearchTransport:
 class FakeExecEnv:
     """Minimal ``ExecEnv`` stand-in: only ``run_argv`` behaves (sandbox path).
 
-    Records every argv it is handed and returns a scripted ``_RunOutcome`` so a
+    Records every argv it is handed and returns a scripted ``RunOutcome`` so a
     container-transport test never shells out.
     """
 
@@ -85,7 +85,7 @@ class FakeExecEnv:
 
     def run_argv(self, argv, *, cwd, timeout_s, output_cap, runner=None):
         self.calls.append(list(argv))
-        return _RunOutcome(
+        return RunOutcome(
             returncode=self.returncode,
             duration_ms=1,
             stdout=self.stdout,

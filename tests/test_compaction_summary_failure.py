@@ -19,7 +19,7 @@ so the summarize call is the first — and only — LLM round-trip of the step).
 
 from __future__ import annotations
 
-from noeta.context.composer import RenderedSkills, ThreeSegmentComposer
+from noeta.context.composer import RenderedContent, ThreeSegmentComposer
 from noeta.builtins.react.impl import ReActPolicy
 from noeta.protocols.decisions import CompactionRequestedDecision, FailDecision
 from noeta.protocols.messages import LLMResponse, Message, TextBlock
@@ -34,8 +34,8 @@ def _ctx() -> StepContext:
     return StepContext(task_id="t-1", lease_id="l-1", trace_id="tr-1")
 
 
-def _skill_renderer(_: list[str]) -> RenderedSkills:
-    return RenderedSkills(
+def _skill_renderer(_: list[str]) -> RenderedContent:
+    return RenderedContent(
         messages=[
             Message(role="user", content=[TextBlock(text="SKILL-BODY" * 20)])
         ],

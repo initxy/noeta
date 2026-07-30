@@ -13,7 +13,7 @@ output's full-body ref in ``ContextPlan.cleared_outputs`` (internal audit, off
 the prompt). When the task carries a Compacted summary slice, the covered
 prefix is swapped for a single summary message.
 
-Because prune changes the composed bytes, ``_COMPOSER_VERSION`` rotates to
+Because prune changes the composed bytes, ``COMPOSER_VERSION`` rotates to
 ``three_segment.v5`` — the version tag records which composer produced a
 recording, so an older recording simply carries the older tag
 (D-3e).
@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from noeta.context.composer import _COMPOSER_VERSION, ThreeSegmentComposer
+from noeta.context.composer import COMPOSER_VERSION, ThreeSegmentComposer
 from noeta.protocols.canonical import from_canonical_bytes
 from noeta.protocols.token_estimate import estimate_messages_tokens
 from noeta.protocols.context_plan import ContextPlan
@@ -89,7 +89,7 @@ def _task(messages: list[Message], *, summary_ref=None, boundary=0) -> Task:
 
 
 def test_composer_version_is_v5() -> None:
-    assert _COMPOSER_VERSION == "three_segment.v5"
+    assert COMPOSER_VERSION == "three_segment.v5"
 
 
 def test_no_budget_means_no_prune() -> None:

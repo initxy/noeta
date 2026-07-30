@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from noeta.context.composer import _COMPOSER_VERSION
+from noeta.context.composer import COMPOSER_VERSION
 from noeta.execution.builder import COMPACTION_OFF, CompactionConfig
 from noeta.protocols.messages import Usage
 
@@ -362,5 +362,5 @@ def derive_compaction_config(model: str) -> CompactionConfig:
         max_output_tokens=spec.max_output_tokens,
         compaction_buffer=_COMPACTION_BUFFER_TOKENS,
         tail_token_budget=tail,
-        composer_version=_COMPOSER_VERSION,
+        composer_version=COMPOSER_VERSION,
     )

@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from noeta.agent.spec import ComponentRef
-from noeta.context.composer import RenderedSkills
+from noeta.context.composer import RenderedContent
 from noeta.context.content_channel import ContentKindSpec
 from noeta.protocols.decisions import FinishDecision, ToolCall, ToolCallsDecision
 from noeta.protocols.hooks import ProposedToolCall, VerdictResult
@@ -94,14 +94,14 @@ class _CustomPolicyProvider:
         return _ToolThenFinishPolicy()
 
 
-def _empty_renderer(names: list[str]) -> RenderedSkills:
+def _empty_renderer(names: list[str]) -> RenderedContent:
     """A custom content channel that renders nothing until activated.
 
     The composer calls every registered kind's renderer each compose with
     that kind's active names (empty here — the channel is mounted but never
     activated), so it must return a valid empty render.
     """
-    return RenderedSkills(messages=[], selected_skills=[])
+    return RenderedContent(messages=[], selected_skills=[])
 
 
 # ---------------------------------------------------------------------------

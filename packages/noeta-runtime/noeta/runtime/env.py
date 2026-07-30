@@ -10,6 +10,7 @@ passing the parent ``os.environ`` through.
 from __future__ import annotations
 
 import os
+from typing import Iterable, Optional
 
 
 __all__ = ["ENV_ALLOWLIST", "scrub_env"]
@@ -32,7 +33,16 @@ ENV_ALLOWLIST = frozenset(
 )
 
 
-def scrub_env() -> dict[str, str]:
-    """Build a minimal env from the parent — explicit allowlist only."""
+def scrub_env(
+    allowlist: Optional[Iterable[str]] = None,
+) -> dict[str, str]:
+    """Build a minimal env from the parent — explicit allowlist only.
+
+    ``allowlist`` narrows (or replaces) the default :data:`ENV_ALLOWLIST` for
+    callers whose subprocess should inherit even less — e.g. a notify hook
+    command that has no business seeing the Python interpreter keys. ``None``
+    keeps the default set, byte-identical for every existing caller.
+    """
     parent = os.environ
-    return {key: parent[key] for key in ENV_ALLOWLIST if key in parent}
+    keys = ENV_ALLOWLIST if allowlist is None else allowlist
+    return {key: parent[key] for key in keys if key in parent}

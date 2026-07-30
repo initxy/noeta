@@ -22,9 +22,10 @@ import base64
 from typing import Any, Callable, Mapping, Optional
 
 # First-party cross-plugin edge (recorded in the migration spec): the MCP
-# HTTP client is reused as a private transport; both plugins ship in the
-# same wheel, and the model-facing browser schemas never touch this wire.
-from noeta.builtins.mcp.impl._http_client import McpHttpClient
+# HTTP client is reused as an internal transport, imported through the mcp
+# plugin's PUBLIC impl surface; both plugins ship in the same wheel, and the
+# model-facing browser schemas never touch this wire.
+from noeta.builtins.mcp.impl import McpHttpClient
 
 
 __all__ = [

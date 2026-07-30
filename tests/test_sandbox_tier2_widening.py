@@ -25,7 +25,7 @@ from noeta.builtins.skills.impl import SkillIndexer
 from noeta.builtins.workspace.impl import load_environment, load_instructions
 from noeta.protocols.tool import ToolContext
 from noeta.storage.memory import InMemoryContentStore
-from noeta.runtime.subproc import _RunOutcome
+from noeta.runtime.subproc import RunOutcome
 from noeta.runtime.workspace import WorkspaceRoot
 from noeta.runtime.shell_policy import load_project_shell_allowlist
 from noeta.builtins.skills.impl.script import RunSkillScriptTool
@@ -37,7 +37,7 @@ class FakeContainer:
     def __init__(
         self,
         files: Optional[dict[str, bytes]] = None,
-        run_results: Optional[dict[tuple[str, ...], _RunOutcome]] = None,
+        run_results: Optional[dict[tuple[str, ...], RunOutcome]] = None,
     ) -> None:
         self.files: dict[str, bytes] = dict(files or {})
         self.run_calls: list[tuple[list[str], str]] = []
@@ -89,12 +89,12 @@ class FakeContainer:
 
     def mkdir(self, path: Path) -> None: ...
 
-    def run_argv(self, argv, *, cwd, timeout_s, output_cap, runner=None) -> _RunOutcome:
+    def run_argv(self, argv, *, cwd, timeout_s, output_cap, runner=None) -> RunOutcome:
         self.run_calls.append((list(argv), str(cwd)))
         result = self._run_results.get(tuple(argv))
         if result is not None:
             return result
-        return _RunOutcome(0, 1, b"ok", b"", False, False, False)
+        return RunOutcome(0, 1, b"ok", b"", False, False, False)
 
 
 # --------------------------------------------------------------------------- #
@@ -144,7 +144,7 @@ def test_run_skill_script_reads_and_runs_in_container() -> None:
     container = FakeContainer(
         {str(root / "scripts/run.sh"): b"echo hello\n"},
         run_results={
-            ("bash", str(root / "scripts/run.sh")): _RunOutcome(
+            ("bash", str(root / "scripts/run.sh")): RunOutcome(
                 0, 5, b"hello\n", b"", False, False, False
             )
         },
@@ -202,10 +202,10 @@ def test_load_environment_probes_git_in_container() -> None:
     container = FakeContainer(
         {"/workspace/.git/HEAD": b"ref: refs/heads/main\n"},
         run_results={
-            ("git", "rev-parse", "--abbrev-ref", "HEAD"): _RunOutcome(
+            ("git", "rev-parse", "--abbrev-ref", "HEAD"): RunOutcome(
                 0, 1, b"main\n", b"", False, False, False
             ),
-            ("git", "status", "--short"): _RunOutcome(
+            ("git", "status", "--short"): RunOutcome(
                 0, 1, b" M file.py\n", b"", False, False, False
             ),
         },

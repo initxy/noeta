@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from tests._session_inputs import default_factory_kwargs
-from noeta.context.composer import RenderedSkills, ThreeSegmentComposer
+from noeta.context.composer import RenderedContent, ThreeSegmentComposer
 from noeta.context.content_channel import ContentChannelRegistry
 from noeta.context.environment import ENVIRONMENT_KIND
 from noeta.context.instructions import (
@@ -168,7 +168,7 @@ def test_hash_is_stable_and_tracks_content() -> None:
 def test_renderer_renders_user_message_when_name_active() -> None:
     renderer = build_instructions_renderer(_SAMPLE_SNAPSHOT)
     rendered = renderer(["NOETA.md"])
-    assert isinstance(rendered, RenderedSkills)
+    assert isinstance(rendered, RenderedContent)
     assert len(rendered.messages) == 1
     assert rendered.messages[0].role == "user"
     assert "Reply in Chinese" in rendered.messages[0].content[0].text

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from noeta.context.composer import RenderedSkills
+from noeta.context.composer import RenderedContent
 from noeta.builtins.skills.impl.indexer import (
     SkillDescription,
     SkillRegistry,
@@ -119,14 +119,14 @@ def test_resolve_empty_input_yields_empty_tuple() -> None:
 
 
 # ---------------------------------------------------------------------------
-# render — RenderedSkills shape, role=user, "Activated skill" prefix
+# render — RenderedContent shape, role=user, "Activated skill" prefix
 # ---------------------------------------------------------------------------
 
 
 def test_render_returns_rendered_skills_dataclass() -> None:
     registry = _registry(_desc("a"))
     result = registry.render(["a"])
-    assert isinstance(result, RenderedSkills)
+    assert isinstance(result, RenderedContent)
     assert isinstance(result.messages, list)
     assert isinstance(result.selected_skills, list)
 

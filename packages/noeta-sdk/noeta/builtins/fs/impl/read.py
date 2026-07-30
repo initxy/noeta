@@ -2,7 +2,7 @@
 
 All three tools share one ``WorkspaceRoot`` (closure-injected by
 ``FsToolPack``) and stay under the inline ``ToolResult`` budget via the
-shared ``noeta.tools._limits`` helpers. A large ``read`` body
+shared ``noeta.tools.limits`` helpers. A large ``read`` body
 offloads to the ContentStore as an artifact; the model gets a bounded
 excerpt + ref it can pass back to a second ``read`` with
 ``offset``/``limit`` to navigate the file.
@@ -31,12 +31,12 @@ from pathlib import Path
 from typing import Any, Optional
 
 from noeta.protocols.tool import ToolContext, ToolResult
-from noeta.tools._invocation import (
+from noeta.tools.invocation import (
     fit_dropping_tail,
     require_str,
     resolve_readable_file,
 )
-from noeta.tools._limits import (
+from noeta.tools.limits import (
     INLINE_CONTENT_MAX_BYTES,
     SUMMARY_EMBED_MAX_BYTES,
     encoded_len,

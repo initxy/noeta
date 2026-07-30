@@ -20,7 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tests._session_inputs import default_factory_kwargs
-from noeta.context.composer import RenderedSkills, ThreeSegmentComposer
+from noeta.context.composer import RenderedContent, ThreeSegmentComposer
 from noeta.context.content_channel import (
     ContentChannelRegistry,
     ContentKindSpec,
@@ -60,8 +60,8 @@ from noeta.runtime.workspace import WorkspaceRoot
 def _note_registry() -> ContentChannelRegistry:
     """One fake kind: renders ``note:<name>`` per name, input order."""
 
-    def _render(names: list[str]) -> RenderedSkills:
-        return RenderedSkills(
+    def _render(names: list[str]) -> RenderedContent:
+        return RenderedContent(
             messages=[
                 Message(role="user", content=[TextBlock(text=f"note:{n}")])
                 for n in names

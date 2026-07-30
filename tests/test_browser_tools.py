@@ -14,7 +14,7 @@ from typing import Any
 
 from noeta.protocols.tool import ToolContext
 from noeta.storage.memory import InMemoryContentStore
-from noeta.tools._limits import INLINE_CONTENT_MAX_BYTES
+from noeta.tools.limits import INLINE_CONTENT_MAX_BYTES
 from noeta.builtins.sandbox.impl.browser import AioBrowserError
 from noeta.builtins.browser.impl import BROWSER_TOOL_NAMES, build_browser_tools
 

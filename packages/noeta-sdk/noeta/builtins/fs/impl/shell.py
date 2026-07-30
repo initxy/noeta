@@ -38,10 +38,10 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping, Optional, Sequence
+from typing import Any, Callable, Optional
 
 from noeta.protocols.tool import ToolContext, ToolResult
-from noeta.runtime._env import scrub_env
+from noeta.runtime.env import scrub_env
 from noeta.runtime.exec_env import ExecEnv, LocalExecEnv
 from noeta.builtins.fs.impl.shell_rules import DEFAULT_SHELL_RULES
 from noeta.runtime.shell_policy import (
@@ -56,17 +56,17 @@ from noeta.runtime.shell_policy import (
     _STDERR_TAIL_BYTES,
     _STDOUT_TAIL_BYTES,
 )
-from noeta.runtime.subproc import _RunOutcome, tail_bytes
+from noeta.runtime.subproc import RunOutcome, tail_bytes
 from noeta.runtime.workspace import WorkspaceRoot
-from noeta.tools._invocation import require_str
+from noeta.tools.invocation import require_str
 from noeta.protocols.resources import load_markdown
-from noeta.tools._limits import (
+from noeta.tools.limits import (
     INLINE_CONTENT_MAX_BYTES,
     SUMMARY_EMBED_MAX_BYTES,
     fit_output_fields,
     truncate_bytes,
 )
-from noeta.tools._refs import ref_json
+from noeta.tools.refs import ref_json
 
 
 __all__ = [
@@ -247,7 +247,7 @@ def _build_shell_result(
     tool_name: str,
     *,
     command: str,
-    outcome: _RunOutcome,
+    outcome: RunOutcome,
     ctx: ToolContext,
 ) -> ToolResult:
     stdout_tail, _ = tail_bytes(outcome.stdout, _STDOUT_TAIL_BYTES)

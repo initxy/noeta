@@ -34,7 +34,7 @@ from noeta.execution.session_pack import (
 )
 from noeta.protocols.tool import Tool, ToolContext, ToolResult
 from noeta.protocols.resources import load_markdown
-from noeta.tools._invocation import require_str
+from noeta.tools.invocation import require_str
 from noeta.runtime.workspace import WorkspaceRoot, resolve_or_error, tool_error
 
 

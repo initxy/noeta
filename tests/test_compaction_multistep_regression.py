@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from noeta.context.composer import _COMPOSER_VERSION, ThreeSegmentComposer
+from noeta.context.composer import COMPOSER_VERSION, ThreeSegmentComposer
 from noeta.core.engine import Engine
 from noeta.core.hooks import HookManager
 from noeta.core.wiring import wire_default_observers
@@ -149,7 +149,7 @@ def _policy(llm: Any) -> ReActPolicy:
         max_output_tokens=100,
         compaction_buffer=100,
         tail_token_budget=150,
-        composer_version=_COMPOSER_VERSION,
+        composer_version=COMPOSER_VERSION,
     )
 
 
@@ -258,7 +258,7 @@ def test_stuck_compaction_with_no_boundary_progress_still_fails() -> None:
         # Tail budget dwarfs the window: every message is "protected", so the
         # boundary is pinned at 0 — no prefix is ever summarisable.
         tail_token_budget=100_000,
-        composer_version=_COMPOSER_VERSION,
+        composer_version=COMPOSER_VERSION,
     )
     engine = Engine(
         event_log=event_log,
