@@ -31,7 +31,7 @@ from typing import Any, Optional
 import pytest
 
 from noeta.core.fold import fold
-from noeta.policies.react import SPAWN_SUBAGENT_TOOL
+from noeta.builtins.react.impl.react import SPAWN_SUBAGENT_TOOL
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.messages import (
     LLMRequest,

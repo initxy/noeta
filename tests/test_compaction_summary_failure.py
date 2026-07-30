@@ -20,7 +20,7 @@ so the summarize call is the first — and only — LLM round-trip of the step).
 from __future__ import annotations
 
 from noeta.context.composer import RenderedSkills, ThreeSegmentComposer
-from noeta.policies.react import ReActPolicy
+from noeta.builtins.react.impl.react import ReActPolicy
 from noeta.protocols.decisions import CompactionRequestedDecision, FailDecision
 from noeta.protocols.messages import LLMResponse, Message, TextBlock
 from noeta.protocols.step_context import StepContext

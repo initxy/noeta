@@ -21,7 +21,7 @@ from __future__ import annotations
 
 
 from noeta.context.composer import ThreeSegmentComposer, RenderedSkills
-from noeta.policies.react import ReActPolicy, _carries_tool_result
+from noeta.builtins.react.impl.react import ReActPolicy, _carries_tool_result
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.decisions import CompactionRequestedDecision
 from noeta.protocols.messages import (

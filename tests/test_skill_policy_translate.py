@@ -19,7 +19,7 @@ from noeta.policies._control_translate import (
     ControlToggles,
     translate_control_tool,
 )
-from noeta.policies.react import (
+from noeta.builtins.react.impl.react import (
     SKILL_TOOL as _REACT_SKILL_TOOL,
 )
 from noeta.protocols.canonical import from_canonical_bytes

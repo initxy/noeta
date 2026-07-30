@@ -5,6 +5,7 @@ from noeta.client.parts import (
     default_browser_tools_factory,
     default_guards_factory,
     default_memory_factory,
+    default_policy_factory,
     default_reminder_specs,
     default_skills_kit_factory,
     default_tool_factories,
@@ -33,6 +34,7 @@ def default_factory_kwargs():
         "browser_tools_factory": default_browser_tools_factory(),
         "app_tools_factory": default_app_tools_factory(),
         "skills_factory": default_skills_kit_factory(),
+        "default_policy_factory": default_policy_factory(),
     }
 
 
@@ -104,6 +106,7 @@ def build_code_replay_inputs(*, workspace_dir, agent, content_store, model, **kw
     kwargs.setdefault("browser_tools_factory", default_browser_tools_factory())
     kwargs.setdefault("app_tools_factory", default_app_tools_factory())
     kwargs.setdefault("skills_factory", default_skills_kit_factory())
+    kwargs.setdefault("default_policy_factory", default_policy_factory())
     _raw_globs = agent.metadata.get("write_path_globs")
     if _raw_globs:
         kwargs.setdefault(

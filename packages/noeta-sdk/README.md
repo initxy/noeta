@@ -5,7 +5,8 @@ The thin in-process **client surface** (`noeta.sdk` facade — `query` / `Client
 [noeta-runtime](https://github.com/initxy/noeta) kernel, plus **the built-in
 plugin catalogue** (`noeta.builtins` — every official capability
 implementation: the fs/web tool packs, provider adapters, guards, reminders,
-memory, browser, app, MCP, sandbox backends) and the official presets. Like
+memory, browser, app, MCP, sandbox backends, skills, the ReAct policy) and
+the official presets. Like
 claude-agent-sdk / LangChain: `import noeta.sdk`, run an agent in-process; no
 engine internals, no HTTP server.
 

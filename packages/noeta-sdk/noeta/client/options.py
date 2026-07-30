@@ -119,6 +119,7 @@ _INERT_BUILTIN_ACTIVATIONS: frozenset[str] = frozenset(
         "governance",
         "presets",
         "providers",
+        "react",
         "reminders",
         "sandbox",
         "skills",

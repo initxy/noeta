@@ -197,20 +197,23 @@ def test_wheel_install_imports_public_surface(tmp_path: Path) -> None:
 #: The runtime-alone smoke body (microkernel acceptance 4, kernel half). Runs
 #: inside the fresh venv where ONLY the noeta-runtime wheel is installed:
 #: kernel imports work, no capability impl / SDK band / httpx is importable,
-#: and a hand-injected agent (protocol objects only — FakeTool + FakeLLMProvider
-#: + ReActPolicy over in-memory storage) runs a turn to its terminal event.
+#: and a hand-injected agent (protocol objects only — a hand-written Policy +
+#: FakeTool over in-memory storage; since microkernel phase 2b even ReActPolicy
+#: lives in the react built-in, so the kernel-alone story is a host-authored
+#: Policy against the protocol) runs a turn to its terminal event.
 _RUNTIME_ALONE_SCRIPT = """
     import importlib.util
 
     # 1. Kernel imports work (one module per kernel band). noeta.testing.profile
-    # must IMPORT runtime-alone; calling its build_runtime needs the sdk (it
-    # resolves guard classes from noeta.builtins at call time).
+    # must IMPORT runtime-alone; calling its build_runtime / build_policy_factory
+    # needs the sdk (they resolve guard/policy classes from noeta.builtins at
+    # call time). noeta.policies is the control band (schemas + translation).
     import noeta.core.engine
     import noeta.runtime.llm
     import noeta.runtime.governance
     import noeta.storage.memory
     import noeta.context.composer
-    import noeta.policies.react
+    import noeta.policies.control_tools
     import noeta.read_models.sessions
     import noeta.observers.audit
     import noeta.agent.spec
@@ -229,47 +232,49 @@ _RUNTIME_ALONE_SCRIPT = """
             f"installed alone"
         )
 
-    # 3. A hand-injected agent runs: the kernel hosts execution; every part
-    # arrives as a protocol object.
+    # 3. A hand-injected agent runs: the kernel hosts execution; every part —
+    # the Policy included — arrives as a protocol object.
     from noeta.core.engine import Engine
-    from noeta.policies.react import ReActPolicy
-    from noeta.protocols.messages import LLMResponse, TextBlock, ToolUseBlock
-    from noeta.runtime.llm import RuntimeLLMClient
+    from noeta.protocols.decisions import (
+        FinishDecision,
+        ToolCall,
+        ToolCallsDecision,
+    )
     from noeta.storage.memory import (
         InMemoryContentStore,
         InMemoryDispatcher,
         InMemoryEventLog,
     )
     from noeta.testing.composer import trivial_three_segment
-    from noeta.testing.fake_llm import FakeLLMProvider
     from noeta.tools.fake import FakeTool
+
+    class EchoOncePolicy:
+        def __init__(self):
+            self._called = False
+
+        def decide(self, ctx, view):
+            if not self._called:
+                self._called = True
+                return ToolCallsDecision(
+                    calls=[
+                        ToolCall(
+                            tool_name="echo",
+                            arguments={"text": "hi"},
+                            call_id="c-1",
+                        )
+                    ]
+                )
+            return FinishDecision(answer="done")
 
     cs = InMemoryContentStore()
     disp = InMemoryDispatcher()
     log = InMemoryEventLog(lease_validator=disp)
-    provider = FakeLLMProvider(
-        responses=[
-            LLMResponse(
-                stop_reason="tool_use",
-                content=[
-                    ToolUseBlock(
-                        call_id="c-1", tool_name="echo", arguments={"text": "hi"}
-                    )
-                ],
-            ),
-            LLMResponse(stop_reason="end_turn", content=[TextBlock(text="done")]),
-        ]
-    )
-    llm = RuntimeLLMClient(provider=provider, event_log=log, content_store=cs)
     tool = FakeTool(name="echo", script={("hi",): "echo:hi"})
-    policy = ReActPolicy(
-        llm=llm, tools={"echo": tool}, system_prompt="be brief", model="fake-model"
-    )
     engine = Engine(
         event_log=log,
         content_store=cs,
         composer=trivial_three_segment(cs),
-        policy=policy,
+        policy=EchoOncePolicy(),
         tools={"echo": tool},
     )
     task = engine.create_task(goal="say hi", policy_name="react")

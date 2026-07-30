@@ -1,13 +1,17 @@
-"""L2 policies layer.
+"""The control band (microkernel phase 2b).
 
-Houses the ``Policy`` implementations that turn a composed ``View`` into a
-neutral ``Decision``: ``ReActPolicy`` (the ReAct loop bridging LLM round-trips
-into Decisions), ``OrchestrationPolicy`` / ``StructuredOutputPolicy`` (the
-``run_workflow`` script interpreter and its per-helper structured-return
-wrapper), the control-tool vocabulary in ``control_semantics`` (schema +
-validator + response→Decision translation, one per-tool section), the skill
-``allowed-tools`` alias resolution in ``skill_tools``, and the deterministic
-test doubles in ``stub`` (``StubFinishPolicy`` / ``StubScriptedPolicy``).
+The decision-mapping policy implementations — ``ReActPolicy`` and the
+``run_workflow`` interpreter ``OrchestrationPolicy`` /
+``StructuredOutputPolicy`` — live in the ``react`` built-in plugin
+(``noeta.builtins.react.impl``); the kernel builder receives the default
+through its ``default_policy_factory`` injection. What stays here is the
+control vocabulary the kernel itself owns (phase-1 D3: control tools are
+renderings of kernel Decision variants, not contributions): the per-tool
+schema + validator + response→Decision translation in ``control_semantics``
+(re-exported via ``control_tools`` / ``_control_translate``), the
+workflow-script validation sandbox in ``_workflow_sandbox``, and the
+deterministic test doubles in ``stub`` (``StubFinishPolicy`` /
+``StubScriptedPolicy``).
 """
 
 from __future__ import annotations

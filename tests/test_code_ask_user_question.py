@@ -9,7 +9,7 @@ from typing import Any
 from tests._read_models.detail import build_code_session_detail
 from noeta.core.fold import fold
 from noeta.core.snapshot import rehydrate_task, serialize_task_state
-from noeta.policies.react import ASK_USER_QUESTION_TOOL, SPAWN_SUBAGENT_TOOL
+from noeta.builtins.react.impl.react import ASK_USER_QUESTION_TOOL, SPAWN_SUBAGENT_TOOL
 from noeta.protocols.canonical import from_canonical_bytes, to_canonical_bytes
 from noeta.protocols.events import (
     EventEnvelope,

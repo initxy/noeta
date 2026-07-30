@@ -281,7 +281,7 @@ client = Client(options, provider=..., workspace_dir=".", plugins=pset)
 
 noeta 把自己的能力表达为 `noeta/builtins/` 里的内置插件（栈顶那条 band，与 `noeta.presets` 并列）。自 2026-07-29 的 microkernel 迁移起，每个目录同时持有 manifest **和**实现：`__init__.py` 是零执行的 `MANIFEST`（一个 `PluginManifest`，其贡献携带 `ref` 字符串），`impl/` 是代码，`ref` 指向同目录下的 impl 模块。manifest 层不导入任何 impl，所以列出一个内置插件依然运行零能力代码。加载器通过一次**动态**导入（`builtin_manifests()`）触及目录，而 `.importlinter` 里全域生效的 `sdk-core-not-builtins` 契约保证每一条 band——包括内核——都没有通往 `noeta.builtins` 的静态边。
 
-十二个内置插件（`noeta/builtins/` 下一个内置插件一个目录——manifest 声明的权威范例集）：`fs`、`web`、`memory`、`browser`、`app`、`mcp`、`skills`、`reminders`、`governance`、`providers`、`sandbox`、`presets`。新增一个第一方能力就是在这里加一个目录（只有当确实需要一个全新的 surface 时，才额外注册一个 `SurfaceSpec`）。
+十三个内置插件（`noeta/builtins/` 下一个内置插件一个目录——manifest 声明的权威范例集）：`fs`、`web`、`memory`、`browser`、`app`、`mcp`、`skills`、`react`、`reminders`、`governance`、`providers`、`sandbox`、`presets`。新增一个第一方能力就是在这里加一个目录（只有当确实需要一个全新的 surface 时，才额外注册一个 `SurfaceSpec`）。
 
 ## 信任存储
 

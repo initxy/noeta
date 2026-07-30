@@ -18,7 +18,7 @@ from typing import Any
 
 from tests._read_models.detail import build_code_session_detail
 from noeta.core.fold import fold
-from noeta.policies.react import (
+from noeta.builtins.react.impl.react import (
     SPAWN_SUBAGENT_TOOL,
     TODO_WRITE_TOOL,
 )

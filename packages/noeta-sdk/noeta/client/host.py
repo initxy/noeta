@@ -42,11 +42,6 @@ from noeta.execution.host import AgentRegistryProtocol
 from noeta.execution.instructions import load_instructions
 from noeta.execution.reminders import TURN_INTAKE
 from noeta.execution.resolver import GenericEngineResolver
-from noeta.policies.orchestration import (
-    OrchestrationPolicy,
-    StructuredOutputPolicy,
-    WORKFLOW_SYSTEM_PROMPT,
-)
 from noeta.runtime.governance import (
     Budget,
     PreToolUseRule,
@@ -85,7 +80,9 @@ from noeta.client.parts import (
     mcp_impl,
     default_guards_factory,
     default_memory_factory,
+    default_policy_factory,
     default_skills_kit_factory,
+    react_impl,
     default_reminder_specs,
     default_tool_factories,
     derive_compaction_config,
@@ -1666,6 +1663,7 @@ class SdkHost(GenericEngineResolver):
             browser_tools_factory=default_browser_tools_factory(),
             app_tools_factory=default_app_tools_factory(),
             skills_factory=default_skills_kit_factory(),
+            default_policy_factory=default_policy_factory(),
             workspace_dir=workspace_dir,
             system_prompt=spec.instructions,
             allowed_tools=spec_tool_names,
@@ -1800,7 +1798,7 @@ class SdkHost(GenericEngineResolver):
         # subtask drain ever passes a schema, and a child engine never carries
         # the multi-turn ``policy_wrapper``, so the two wrappers never stack.
         if structured_output_schema is not None:
-            policy = StructuredOutputPolicy(
+            policy = react_impl().StructuredOutputPolicy(
                 inner=policy, schema=structured_output_schema
             )
         return Engine(
@@ -1882,8 +1880,9 @@ class SdkHost(GenericEngineResolver):
             guards_factory=default_guards_factory(),
             memory_factory=default_memory_factory(),
             skills_factory=default_skills_kit_factory(),
+            default_policy_factory=default_policy_factory(),
             workspace_dir=self.workspace_dir,
-            system_prompt=WORKFLOW_SYSTEM_PROMPT,
+            system_prompt=react_impl().WORKFLOW_SYSTEM_PROMPT,
             allowed_tools=frozenset(),
             content_store=self.content_store,
             model=self.model,
@@ -1912,7 +1911,7 @@ class SdkHost(GenericEngineResolver):
             instructions_file=self.instructions_file,
             tool_output_inline_limit=self.tool_output_inline_limit,
         )
-        policy: Policy = OrchestrationPolicy(script=script, args=wf_args)
+        policy: Policy = react_impl().OrchestrationPolicy(script=script, args=wf_args)
         return Engine(
             event_log=self.event_log,
             content_store=self.content_store,

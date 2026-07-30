@@ -66,12 +66,9 @@ from noeta.policies.control_tools import (
     ask_user_question_tool_schema,
     run_workflow_tool_schema,
     skill_tool_schema,
+    spawn_subagent_tool_schema,
     structured_output_tool_schema,
     todo_write_tool_schema,
-)
-from noeta.policies.react import (
-    ReActPolicy,
-    spawn_subagent_tool_schema,
 )
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.hooks import Guard
@@ -356,6 +353,44 @@ class BrowserToolsFactory(Protocol):
     """
 
     def __call__(self, backend: BrowserBackend) -> dict[str, Tool]: ...
+
+
+class PolicyFactoryBuilder(Protocol):
+    """Loader-resolved constructor of the default policy factory
+    (microkernel phase 2b).
+
+    The kernel never imports the decision-mapping policy: the SDK host
+    resolves the ``react`` built-in plugin's factory builder through the
+    plugin loader and injects it here. It takes exactly the kernel-computed
+    session facts the builder used to close over inline and returns the
+    ``(llm) -> Policy`` factory. ``Options.policy`` / the plugin ``policy``
+    surface (D10) still override the default. Signature =
+    ``noeta.builtins.react.impl:build_react_policy_factory``.
+    """
+
+    def __call__(
+        self,
+        *,
+        tools: dict[str, Tool],
+        system_prompt: str,
+        model: str,
+        max_steps: int,
+        delegation_enabled: bool,
+        todo_write_enabled: bool,
+        ask_user_question_enabled: bool,
+        skill_invocation_enabled: bool,
+        workflow_enabled: bool,
+        skill_menu_names: frozenset[str],
+        content_store: ContentStore,
+        context_window: Optional[int],
+        max_output_tokens: Optional[int],
+        compaction_buffer: Optional[int],
+        tail_token_budget: int,
+        composer_version: Optional[str],
+        output_schema: Optional[dict[str, Any]],
+        thinking: Optional[str],
+        effort: Optional[str],
+    ) -> Callable[[Any], Policy]: ...
 
 
 class SkillsFactory(Protocol):
@@ -1231,6 +1266,12 @@ def build_session_inputs(
     #: host and injected here; ``None`` fails loudly at the skills stage
     #: (the pipeline runs it unconditionally).
     skills_factory: Optional[SkillsFactory] = None,
+    #: Loader-resolved default policy factory builder (microkernel phase 2b):
+    #: the ``react`` built-in plugin's ``build_react_policy_factory``,
+    #: resolved by the SDK host and injected here; ``None`` fails loudly at
+    #: policy construction unless ``policy_factory_override`` replaces the
+    #: default outright.
+    default_policy_factory: Optional[PolicyFactoryBuilder] = None,
 ) -> SessionInputs:
     """Build the generic-session live/resume inputs from explicit
     operator-supplied pieces.
@@ -1385,9 +1426,27 @@ def build_session_inputs(
         ),
     )
 
-    def _default_react_factory(llm: Any) -> Policy:
-        return ReActPolicy(
-            llm=llm,
+    # SDK ``Options.policy`` extension point (T3): a custom decision policy
+    # factory fully replaces the default. ``None`` ⇒ the loader-resolved
+    # default (microkernel phase 2b: the ReAct construction lives in the
+    # ``react`` built-in; the injected builder receives exactly the
+    # kernel-computed facts the old inline closure captured — byte-identical
+    # prompts and schemas). Wiring-only LLM request overrides
+    # (output_schema / thinking / effort) ride through; omitted from
+    # canonical bytes when unset so legacy recordings resume byte-equal.
+    policy_factory: Callable[[Any], Policy]
+    if policy_factory_override is not None:
+        policy_factory = policy_factory_override
+    else:
+        if default_policy_factory is None:
+            raise RuntimeError(
+                "default policy factory was not injected — the SDK host "
+                "resolves the react built-in plugin through the plugin "
+                "loader and passes default_policy_factory (microkernel "
+                "phase 2b); the kernel builder imports no policy "
+                "implementation"
+            )
+        policy_factory = default_policy_factory(
             tools=tools,
             system_prompt=system_prompt,
             model=model,
@@ -1404,22 +1463,10 @@ def build_session_inputs(
             compaction_buffer=compaction.compaction_buffer,
             tail_token_budget=compaction.tail_token_budget or 0,
             composer_version=compaction.composer_version,
-            # Wiring-only LLM request overrides, carried into every
-            # LLMRequest the policy builds; omitted from canonical bytes
-            # when unset so legacy recordings resume byte-equal.
             output_schema=output_schema,
             thinking=thinking,
             effort=effort,
         )
-
-    # SDK ``Options.policy`` extension point (T3): a custom decision policy
-    # factory fully replaces the default ReActPolicy. ``None`` ⇒ the built-in
-    # ReAct path, byte-identical to before.
-    policy_factory: Callable[[Any], Policy] = (
-        policy_factory_override
-        if policy_factory_override is not None
-        else _default_react_factory
-    )
 
     hooks = _build_guards(spec, asm)
 

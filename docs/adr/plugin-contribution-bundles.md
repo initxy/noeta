@@ -215,9 +215,9 @@ built-in's contributions runs zero runtime code, and importing `noeta.builtins`
 `noeta.builtins` by a **dynamic import** from `noeta.client.plugin_set`; there
 is no static edge, and `.importlinter`'s `sdk-core-not-builtins` forbidden
 contract enforces it — universally: *every* band, kernel included, is a source.
-The catalogue currently holds twelve built-ins — `fs`, `web`, `memory`,
-`browser`, `app`, `mcp`, `skills`, `reminders`, `governance`, `providers`,
-`sandbox`, `presets` — so every standard surface has a built-in declaration
+The catalogue currently holds thirteen built-ins — `fs`, `web`, `memory`,
+`browser`, `app`, `mcp`, `skills`, `react`, `reminders`, `governance`,
+`providers`, `sandbox`, `presets` — so every standard surface has a built-in declaration
 ridden through the identical loader / validation / merge path as any external
 plugin. Adding a first-party capability is adding a directory to the catalogue
 (plus a `SurfaceSpec` registration only when a genuinely new surface is
@@ -367,7 +367,12 @@ made of is a plugin, including ours*:
   `noeta.builtins` — every band is a source; the loader's dynamic `ref`
   resolution is the only doorway. This single contract now also carries the
   provider-neutral kernel↛adapter rule.
-- **Scope**: the skills subsystem and `ReActPolicy` remain kernel-side pending
-  their own phase-2 designs; control tools (`todo_write` / `skill` /
-  `ask_user_question`) stay kernel permanently (they are renderings of kernel
-  Decision variants, not contributions).
+- **Scope**: phase 2 followed the same day under its own specs — the skills
+  subsystem moved into the `skills` built-in (phase 2a: the kernel keeps the
+  `SkillsKit` / `activate_skills` seams in `noeta.execution.skills`) and
+  `ReActPolicy` + the workflow interpreter moved into the `react` built-in
+  (phase 2b: the builder takes a `default_policy_factory` factory-builder
+  injection; `noeta.policies` is now the control band). Control tools
+  (`todo_write` / `skill` / `ask_user_question`, the spawn/workflow dispatch
+  vocabulary, the workflow-script validation sandbox) stay kernel permanently
+  (they are renderings of kernel Decision variants, not contributions).
