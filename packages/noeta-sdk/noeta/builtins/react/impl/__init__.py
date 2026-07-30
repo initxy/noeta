@@ -4,7 +4,7 @@ The official decision-mapping policy: :class:`ReActPolicy` (``react``) and the
 workflow interpreter :class:`OrchestrationPolicy` + ``StructuredOutputPolicy``
 + ``WORKFLOW_SYSTEM_PROMPT`` (``orchestration``). The kernel keeps the control
 band (``noeta.policies.control_tools`` / ``control_semantics`` /
-``_workflow_sandbox`` — the control-tool schemas, translation, and the
+``workflow_sandbox`` — the control-tool schemas, translation, and the
 workflow-script validation sandbox, per phase-1 D3) and the generic multi-turn
 wrapper (``noeta.execution.multi_turn``); nothing imports this package
 statically —

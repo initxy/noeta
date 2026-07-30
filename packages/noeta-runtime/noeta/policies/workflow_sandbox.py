@@ -17,8 +17,9 @@ Two gates:
   (``agent`` / ``log`` / ``args``) plus a safe builtin set with no ``import`` / ``open`` / ``eval`` / ``exec`` /
   ``__import__``. Even if the AST check misses something, runtime can't reach ``time`` / ``random`` / ``os``.
 
-This module depends only on the stdlib ``ast`` / ``builtins``, so both ``_control_translate`` (translation time) and
-``orchestration`` (exec time) can import it without a cycle.
+This module depends only on the stdlib ``ast`` / ``builtins``, so both ``control_semantics`` (translation time) and
+the ``react`` built-in's ``orchestration`` (exec time) can import it without a cycle. Public-named on purpose: since
+phase 2b the exec-time importer lives in the noeta-sdk wheel, so this is kernel surface the built-ins band depends on.
 """
 
 from __future__ import annotations

@@ -34,10 +34,16 @@ Scope:
 * ``_step_count`` is an instance attribute — **one Policy instance per
   Task**; a subtask uses its own Policy with its own counter.
 
-Layering: this module imports only ``noeta.protocols.*`` and
-``noeta.runtime.*``. It never imports a provider adapter (provider
-injection happens at the call site, behind a ``RuntimeLLMClient``) and
-never imports ``noeta.testing.*`` (per ``production-cannot-import-testing``).
+Layering: since phase 2b this module ships in noeta-sdk's ``react`` built-in
+and reaches the kernel across the wheel boundary — so it imports only the
+kernel's PUBLIC surface: ``noeta.protocols.*``, ``noeta.runtime.*``, and the
+control band (``noeta.policies.control_semantics`` / ``control_tools``). No
+underscore-private kernel name is imported here: a private name carries no
+compatibility contract, and a skewed ``noeta-runtime`` would then fail at
+policy construction rather than at install. It never imports a provider
+adapter (provider injection happens at the call site, behind a
+``RuntimeLLMClient``) and never imports ``noeta.testing.*`` (per
+``production-cannot-import-testing``).
 """
 
 from __future__ import annotations
@@ -45,7 +51,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional, Protocol
 
-from noeta.policies._control_translate import (
+from noeta.policies.control_semantics import (
     SKILL_TOOL,
     SPAWN_SUBAGENT_TOOL,
     ControlToggles,
@@ -103,10 +109,12 @@ __all__ = [
 ]
 
 #: ``SPAWN_SUBAGENT_TOOL`` and ``spawn_subagent_tool_schema`` are defined in
-#: ``noeta.policies._control_translate`` (the response→Decision translation
-#: seam, B3) and re-exported here so existing
-#: ``from noeta.policies.react import SPAWN_SUBAGENT_TOOL`` call sites and the
-#: runner's ``spawn_subagent_tool_schema()`` keep working unchanged.
+#: ``noeta.policies.control_semantics`` (the kernel's control band) and
+#: re-exported here for this module's own readers. They are NOT this module's
+#: public address: the supported import is
+#: ``from noeta.policies.control_tools import SPAWN_SUBAGENT_TOOL`` — control
+#: tools are kernel vocabulary, and phase 2b deleted the old
+#: ``noeta.policies.react`` path this comment used to point at.
 
 #: ``ReActPolicy._last_input_tokens_at_call`` sentinel: a compaction collapsed
 #: the history, so no recorded input count describes it any more. Distinct from
