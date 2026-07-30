@@ -179,7 +179,7 @@ hardcoded if-chain (`execution/builder.py:457`
 
 ## Plan
 
-- [ ] **S0 — golden first.** A byte snapshot of the assembled
+- [x] **S0 — golden first.** A byte snapshot of the assembled
   `control_action_schemas` list across a full-toggle matrix (roster with
   descriptions + indexed skill menu + workflow on + per-helper
   structured-output schema), plus the all-off case. This is the lock the
@@ -255,3 +255,10 @@ Each stage gates on `make check` before the next starts.
 - 2026-07-30 — shaping interview converged (surface choice; packaging by
   activation name; `structured_output` in scope; wholesale `Capabilities`
   replacement; hard break on `AgentBound`). Spec written, status Active.
+- 2026-07-30 — S0 landed: `tests/test_control_tool_schema_goldens.py` (8
+  tests, hand-recorded canonical-JSON literals) pins the schema-render
+  order and bytes through the `build_session_inputs` public seam +
+  `composer._control_action_schemas`. Constraint discovered and adopted:
+  the builder kwargs (`todo_write_enabled` … `structured_output_schema`)
+  and the composer field name are part of the golden's seam — S1/S2 keep
+  them stable. `make check`: 3399 passed / 129 skipped.
