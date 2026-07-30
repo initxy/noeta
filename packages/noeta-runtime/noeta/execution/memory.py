@@ -7,11 +7,12 @@ that touches a live ``MemoryStore`` (store construction, the recall
 provider, the store-bound intake wrapper) moved into the ``memory`` built-in
 plugin (``noeta.builtins.memory.impl``). What remains is kernel-pure:
 
-* :func:`record_memory_index` — write-side activation: emit ONE
-  ``ContextContentRecorded`` (kind ``memory``, policy ``evolving``) so
-  fold flips the index resident on in ``TaskState.active_content``.
-  Nothing here touches the runtime — the event type, its fold and the
-  ``ContentHashesFn`` seam all landed generically in issue 02.
+* :class:`MemoryIndexKit` — the compose-side bundle (the ``ContentKindSpec``
+  factory + the fingerprint rule) the ``memory`` built-in injects. Since the
+  kernel final form (spec §4.5) the write-side activation is the memory
+  built-in's generic ``init`` hook, recorded through the scoped
+  :class:`~noeta.execution.recorder.SeedRecorder` — there is no
+  feature-named ``record_memory_index`` seam anymore.
 * :func:`intake_providers` — the ONE composition rule for a turn's
   ``turn_intake`` provider list: the host-bound built-in recall provider
   (obtained through the host's ``memory_recall_context`` seam, which binds
@@ -32,31 +33,19 @@ from dataclasses import dataclass
 from typing import Any, Callable, ClassVar, Optional, Sequence
 
 from noeta.context.content_channel import ContentKindSpec
-from noeta.context.memory import (
-    MEMORY_DRIFT_POLICY,
-    MEMORY_INDEX_NAME,
-    MEMORY_INDEX_VERSION,
-    MEMORY_KIND,
-    MemoryEntries,
-)
-from noeta.core.fold import apply_event
+from noeta.context.memory import MemoryEntries
 from noeta.execution.reminders import (
     ReminderProvider,
     record_intake_reminders,
 )
-from noeta.protocols.content_store import ContentStore
 from noeta.protocols.decisions import TaskStatePatch
-from noeta.protocols.event_log import EventLogWriter
-from noeta.protocols.events import ContextContentRecordedPayload
 from noeta.protocols.messages import Block, MessageOrigin, TextBlock
-from noeta.protocols.task import Task
 
 
 __all__ = [
     "MemoryIndexKit",
     "RecallGoalPrelude",
     "intake_providers",
-    "record_memory_index",
 ]
 
 
@@ -76,53 +65,6 @@ class MemoryIndexKit:
     content_kind: Callable[[MemoryEntries], ContentKindSpec]
     #: ``entries -> sha256(rendered index bytes)`` — the recorded fingerprint.
     content_hash: Callable[[MemoryEntries], str]
-
-
-def record_memory_index(
-    event_log: EventLogWriter,
-    content_store: ContentStore,
-    task: Task,
-    *,
-    entries: MemoryEntries,
-    kit: MemoryIndexKit,
-    lease_id: Optional[str] = None,
-    trace_id: Optional[str] = None,
-) -> Task:
-    """Pre-loop activation of the index resident — write-side only.
-
-    Emits one ``ContextContentRecorded`` carrying the index fingerprint
-    (``kit.content_hash`` — the same injected kit whose ``content_kind``
-    the composer renders from, so the recorded fingerprint and the
-    composed bytes share one source of truth) and converges live state
-    through ``apply_event``, exactly like the engine-side provenance
-    helpers. Empty ``entries`` is a no-op (unconfigured memory leaves the
-    ledger untouched), and re-recording an already-active index is dropped
-    first-only, like ``emit_skill_content_recorded``.
-
-    Takes the host-owned ``event_log`` / ``content_store`` pair rather
-    than reaching into Engine privates; the emitted shape (defaults:
-    ``actor="engine"``, ``origin="engine"``) matches the engine-side
-    provenance helpers' shape for pre-loop content recordings.
-    """
-    if not entries:
-        return task
-    if MEMORY_INDEX_NAME in task.state.active_content.get(MEMORY_KIND, ()):
-        return task
-    env = event_log.emit(
-        task_id=task.task_id,
-        type="ContextContentRecorded",
-        payload=ContextContentRecordedPayload(
-            kind=MEMORY_KIND,
-            name=MEMORY_INDEX_NAME,
-            version=MEMORY_INDEX_VERSION,
-            content_hash=kit.content_hash(entries),
-            policy=MEMORY_DRIFT_POLICY,
-        ),
-        lease_id=lease_id,
-        trace_id=trace_id,
-    )
-    apply_event(task, env, content_store)
-    return task
 
 
 def intake_providers(

@@ -32,8 +32,6 @@ from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.context.content_channel import ContentKindSpec
-from noeta.context.environment import EnvironmentSnapshot
-from noeta.context.instructions import InstructionsSnapshot
 from noeta.context.memory import MemoryEntries
 from noeta.context.reminders import ReminderSpec
 from noeta.execution.builder import build_session_inputs
@@ -81,14 +79,10 @@ from noeta.client.parts import (
     default_session_packs,
     react_impl,
     default_reminder_specs,
-    default_environment_kit,
-    default_instructions_kit,
-    default_memory_index_kit,
     default_shell_rules,
     derive_compaction_config,
     memory_impl,
     provider_family,
-    workspace_impl,
 )
 from noeta.client.host_config import SandboxExecEnvConfig
 from noeta.client.sandbox import (
@@ -785,17 +779,6 @@ class SdkHost(GenericEngineResolver):
     # Per-host singleton; never written to the event log → no resume effect.
     _cancellation: CancellationRegistry = field(
         default_factory=CancellationRegistry, init=False, repr=False, compare=False
-    )
-    # Memoized resident kits (phase 2c) — resolved once per host from the
-    # memory / workspace built-ins; see the ``*_kit`` properties.
-    _memory_index_kit: Optional[Any] = field(
-        default=None, init=False, repr=False, compare=False
-    )
-    _environment_kit: Optional[Any] = field(
-        default=None, init=False, repr=False, compare=False
-    )
-    _instructions_kit: Optional[Any] = field(
-        default=None, init=False, repr=False, compare=False
     )
     # Background-shell process registry: a per-host runtime
     # accelerator (mirrors ``_cancellation``) owning live ``Popen`` handles +
@@ -2035,73 +2018,6 @@ class SdkHost(GenericEngineResolver):
         # Fallback for any residual non-absolute value: treat as host default
         # (defensive; should not happen once the per-session workspace path is fully wired).
         return self.workspace_dir
-
-    def session_content_snapshots(
-        self, workspace: Optional[str]
-    ) -> tuple[Optional[EnvironmentSnapshot], Optional[InstructionsSnapshot]]:
-        """The (environment, instructions) snapshots for a session's workspace.
-
-        The seam the :class:`~noeta.execution.driver.InteractionDriver`'s
-        ``seed_start`` reads to pre-loop-activate the environment / instructions
-        content channels (the same activation the resident
-        ``AgentSessionRunner.prepare()`` does via ``build_session_inputs``). Until
-        this existed, the server seed path appended only the goal + activated
-        skills, so server-created tasks emitted **no**
-        ``ContextContentRecorded(kind=environment|instructions)`` — the model
-        never saw the working dir / git / platform block.
-
-        Snapshots are loaded from the SAME ``(workspace_dir, instructions_file)``
-        resolution :meth:`_build_engine` feeds ``build_session_inputs``, via the
-        SAME pure loaders (:func:`load_environment` /
-        :func:`load_instructions`), so the snapshot the driver records the
-        fingerprint of is byte-equal to the one this session's composer renders
-        from. Environment is always present (a workspace always exists);
-        instructions is ``None`` when the file is missing/empty OR the host has
-        ``instructions_enabled`` off (zero footprint, byte-equal to a host that
-        never configured a project instructions file).
-        """
-        workspace_dir = self.workspace_dir_for(workspace)
-        loaders = workspace_impl()
-        environment = loaders.load_environment(workspace_dir)
-        instructions: Optional[InstructionsSnapshot] = None
-        if self.instructions_enabled:
-            instructions = loaders.load_instructions(
-                workspace_dir,
-                filenames=self.instructions_kit.filenames,
-                override_path=self.instructions_file,
-            )
-        return environment, instructions
-
-    # -- resident kits (phase 2c) ------------------------------------------
-    # The renderer prose / hash rules live in the memory and workspace
-    # built-ins; the host resolves each kit ONCE and hands the same object
-    # to the kernel builder (compose side) and to the driver/resolver
-    # recording seams (record side), so the recorded fingerprint and the
-    # composed bytes share one source by construction.
-
-    @property
-    def memory_index_kit(self) -> Any:
-        kit = self._memory_index_kit
-        if kit is None:
-            kit = default_memory_index_kit()
-            self._memory_index_kit = kit
-        return kit
-
-    @property
-    def environment_kit(self) -> Any:
-        kit = self._environment_kit
-        if kit is None:
-            kit = default_environment_kit()
-            self._environment_kit = kit
-        return kit
-
-    @property
-    def instructions_kit(self) -> Any:
-        kit = self._instructions_kit
-        if kit is None:
-            kit = default_instructions_kit()
-            self._instructions_kit = kit
-        return kit
 
     def memory_recall_context(
         self, agent: str, task_id: Optional[str] = None

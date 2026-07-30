@@ -54,11 +54,9 @@ from noeta.execution.commands import (
 )
 from noeta.execution.environment import (
     EnvironmentKit,
-    record_environment,
 )
 from noeta.execution.instructions import (
     InstructionsKit,
-    record_instructions,
 )
 # Microkernel phase 2a: the skill material (indexer / script tool / wiring)
 # moved into the ``skills`` built-in plugin (``noeta.builtins.skills.impl``);
@@ -102,8 +100,6 @@ __all__ = [
     "multi_turn_policy_wrapper",
     "MultiTurnReActPolicy",
     "NEXT_GOAL_WAKE_HANDLE",
-    "record_environment",
-    "record_instructions",
     "render_help",
     "ResidentHost",
     "resolve_command",

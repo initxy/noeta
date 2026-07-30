@@ -31,7 +31,6 @@ from noeta.context.instructions import (
 )
 from noeta.builtins.workspace.impl import (
     DEFAULT_INSTRUCTIONS_FILENAMES,
-    build_instructions_kit,
     build_instructions_renderer,
     instructions_content_hash,
     instructions_content_kind,
@@ -42,7 +41,7 @@ from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.core.wiring import wire_default_observers
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
-from noeta.execution.instructions import record_instructions
+from noeta.execution.recorder import SeedRecorder
 from noeta.runtime.governance import Budget
 from noeta.policies.stub import StubScriptedPolicy
 from noeta.protocols.canonical import to_canonical_bytes
@@ -67,9 +66,6 @@ from tests._sdk_session import (
 
 _SAMPLE_TEXT = "# Project rules\n\n* Reply in Chinese.\n* Run pytest before committing.\n"
 _SAMPLE_SNAPSHOT = InstructionsSnapshot(name="NOETA.md", text=_SAMPLE_TEXT)
-
-# The injected resident kit (phase 2c) — the record seam takes it explicitly.
-_KIT = build_instructions_kit()
 
 
 # ---------------------------------------------------------------------------
@@ -238,12 +234,35 @@ def _engine(
     )
 
 
-def test_record_instructions_emits_evolving_event_and_activates() -> None:
+def _activate_instructions(log, cs, task):
+    """Activate the instructions resident through the generic scoped recorder.
+
+    Mirrors the workspace built-in's ``init`` hook (spec §4.5): put the
+    rendered root-file bytes, record the ref through the :class:`SeedRecorder`.
+    ``ref.hash`` equals ``instructions_content_hash(_SAMPLE_SNAPSHOT)`` by
+    construction.
+    """
+    rec = SeedRecorder(log, cs, task, actor="plugin:instructions")
+    ref = cs.put(
+        render_instructions_text(_SAMPLE_SNAPSHOT).encode("utf-8"),
+        media_type="text/markdown",
+    )
+    rec.record_content(
+        kind=INSTRUCTIONS_KIND,
+        name=_SAMPLE_SNAPSHOT.name,
+        version=INSTRUCTIONS_VERSION,
+        ref=ref,
+        policy=INSTRUCTIONS_DRIFT_POLICY,
+    )
+    return rec.task
+
+
+def test_activation_emits_evolving_event_and_activates() -> None:
     log, cs, _disp = _runtime()
     engine = _engine(log, cs, _composer(cs, _SAMPLE_SNAPSHOT))
     task = engine.create_task(goal="g", policy_name="scripted")
 
-    task = record_instructions(log, cs, task, snapshot=_SAMPLE_SNAPSHOT, kit=_KIT)
+    task = _activate_instructions(log, cs, task)
 
     events = [
         e for e in log.read(task.task_id)
@@ -256,31 +275,8 @@ def test_record_instructions_emits_evolving_event_and_activates() -> None:
     assert payload.policy == "evolving"
     assert payload.content_hash == instructions_content_hash(_SAMPLE_SNAPSHOT)
     assert payload.version == INSTRUCTIONS_VERSION
+    assert events[0].actor == "plugin:instructions"
     assert task.state.active_content[INSTRUCTIONS_KIND] == ("NOETA.md",)
-
-
-def test_record_instructions_first_only_and_noop_on_none() -> None:
-    log, cs, _disp = _runtime()
-    engine = _engine(log, cs, _composer(cs, _SAMPLE_SNAPSHOT))
-    task = engine.create_task(goal="g", policy_name="scripted")
-
-    # None → no events
-    task = record_instructions(log, cs, task, snapshot=None, kit=_KIT)
-    pre_events = [
-        e for e in log.read(task.task_id)
-        if e.type == "ContextContentRecorded"
-    ]
-    assert pre_events == []
-    assert INSTRUCTIONS_KIND not in task.state.active_content
-
-    # Same snapshot twice → recorded only once
-    task = record_instructions(log, cs, task, snapshot=_SAMPLE_SNAPSHOT, kit=_KIT)
-    task = record_instructions(log, cs, task, snapshot=_SAMPLE_SNAPSHOT, kit=_KIT)
-    events = [
-        e for e in log.read(task.task_id)
-        if e.type == "ContextContentRecorded"
-    ]
-    assert len(events) == 1
 
 
 def test_compose_places_instructions_in_semi_stable_pure() -> None:
@@ -288,7 +284,7 @@ def test_compose_places_instructions_in_semi_stable_pure() -> None:
     composer = _composer(cs, _SAMPLE_SNAPSHOT)
     engine = _engine(log, cs, composer)
     task = engine.create_task(goal="g", policy_name="scripted")
-    task = record_instructions(log, cs, task, snapshot=_SAMPLE_SNAPSHOT, kit=_KIT)
+    task = _activate_instructions(log, cs, task)
 
     first = composer.compose(task)
     second = composer.compose(task)

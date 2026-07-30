@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from noeta.core.fold import fold
+from noeta.execution.recorder import run_content_init
 from noeta.policies.control_semantics import (
     RUN_WORKFLOW_TOOL,
     SPAWN_SUBAGENT_TOOL,
@@ -230,20 +231,6 @@ class DrainHost:
     #: ``None`` (no host registry, or the in-process session-runner path) ⇒ no
     #: cancellation, byte-identical to pre-cancel-cascade behaviour.
     cancel_check: Optional[Callable[[], bool]] = None
-    #: ``(child_id, child_task, lease_id) -> child_task`` — pre-loop activation
-    #: of the child's session-level instructions + environment content channels
-    #: (the SAME parity ``InteractionDriver.seed_start`` /
-    #: ``AgentSessionRunner.prepare()`` give a top-level session). Called in
-    #: :func:`_descend_to_child` right after the goal seed and before the first
-    #: ``run_one_step``, so the child's first request carries the workspace dir /
-    #: git / platform block (and the project AGENTS.md/NOETA.md when configured).
-    #: The callback owns the snapshot source (the host's
-    #: ``session_content_snapshots`` over the inherited workspace) and the
-    #: ``record_instructions`` → ``record_environment`` order; both records are
-    #: first-only/idempotent so a re-entrant descent / resume re-call is safe.
-    #: ``None`` (the in-process session-runner path, test doubles, control-plane
-    #: hosts) ⇒ no activation, byte-identical to pre-fix child recordings.
-    record_session_content: Optional[Callable[[str, Any, str], Any]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -801,19 +788,24 @@ def _descend_to_child(host: DrainHost, expected_child_id: str) -> tuple[Any, Any
                 content=[TextBlock(text=child_task.state.goal)],
                 lease_id=child_lease.lease_id,
             )
-        # Pre-loop activation of the child's instructions + environment content
-        # channels — the same parity a top-level session gets via
-        # ``InteractionDriver.seed_start`` / ``AgentSessionRunner.prepare()`` (and
-        # what Claude Code gives a subagent). Recorded AFTER the goal seed and BEFORE
-        # the first step so the child's first request carries the workspace block.
-        # The records are first-only/idempotent (so a re-entrant descent is safe) and
-        # land in semi_stable under the ``evolving`` drift policy — they never enter
-        # the stable_prefix, so adding them does not bust prompt caching. ``None``
-        # callback (in-process runner / test doubles) ⇒ no-op, byte-identical.
-        if host.record_session_content is not None:
-            child_task = host.record_session_content(
-                child_lease.task_id, child_task, child_lease.lease_id
-            )
+        # Pre-loop activation of every resident the child's activation contributes
+        # (spec §4.5) — the generic ``init`` seam, symmetric with
+        # ``InteractionDriver.seed_start``: each pack's init hook records its
+        # resident (memory index, workspace instructions + environment) through one
+        # SeedRecorder over the child engine's ``content_init_hooks``, in folded
+        # pack-loop order. Recorded AFTER the goal seed and BEFORE the first step so
+        # the child's first request carries the workspace block; the records are
+        # hash-gated/idempotent (so a re-entrant descent / resume is safe) and land
+        # in semi_stable under each resident's drift policy — never the stable_prefix,
+        # so adding them does not bust prompt caching. A test-double engine without
+        # ``content_init_hooks`` ⇒ ``()`` ⇒ no-op, byte-identical.
+        child_task = run_content_init(
+            host.event_log,
+            host.content_store,
+            child_task,
+            init_hooks=getattr(child_engine, "content_init_hooks", ()),
+            lease_id=child_lease.lease_id,
+        )
         # Keep the child's lease alive while its step runs — no resident
         # WorkerLoop heartbeats this in-request drain, so a child step longer
         # than the lease TTL would otherwise lose its lease mid-flight.
