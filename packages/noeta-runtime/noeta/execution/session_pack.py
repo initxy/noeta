@@ -57,6 +57,8 @@ __all__ = [
     "SessionPackFactory",
     "SessionPackEntry",
     "EXPORT_SKILLS_KIT",
+    "EXPORT_CONTENT_DISCOVERY",
+    "EXPORT_CONTENT_PRELOADER",
     "EXPORT_MEMORY_STORE",
     "EXPORT_MEMORY_ENTRIES",
     "EXPORT_INSTRUCTIONS_SNAPSHOT",
@@ -88,6 +90,12 @@ EXPORT_INSTRUCTIONS_SNAPSHOT = "instructions_snapshot"
 EXPORT_INSTRUCTIONS_SNAPSHOTS = "instructions_snapshots"
 #: The workspace environment snapshot → ``SessionInputs.environment_snapshot``.
 EXPORT_ENVIRONMENT_SNAPSHOT = "environment_snapshot"
+#: The post-tool content-discovery hook → ``SessionInputs.content_discovery``
+#: (wired into ``Engine(content_discovery=…)`` by the host).
+EXPORT_CONTENT_DISCOVERY = "content_discovery"
+#: The per-step resume preloader → ``SessionInputs.content_preloader``
+#: (wired into ``Engine(content_preloader=…)`` by the host).
+EXPORT_CONTENT_PRELOADER = "content_preloader"
 
 
 @dataclass(frozen=True, slots=True)

@@ -25,7 +25,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests._session_inputs import default_factory_kwargs
+from tests._session_inputs import (
+    default_factory_kwargs,
+    fold_legacy_capability_kwargs,
+)
 from noeta.context.environment import ENVIRONMENT_KIND
 from noeta.context.memory import MEMORY_KIND
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
@@ -40,6 +43,8 @@ from noeta.builtins.memory.impl.store import (
 
 
 def _inputs(ws: Path, **kwargs):
+    # Phase 3 (S4): fold legacy memory kwargs into capability_flags / plugin_config.
+    fold_legacy_capability_kwargs(kwargs)
     return build_session_inputs(
         **default_factory_kwargs(),
         workspace_dir=ws,

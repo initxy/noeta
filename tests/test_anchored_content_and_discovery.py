@@ -28,10 +28,8 @@ from noeta.context.content_channel import (
 from noeta.core.fold import fold
 from noeta.builtins.workspace.impl import (
     DEFAULT_INSTRUCTIONS_FILENAMES as _FILENAMES,
-    build_instructions_kit,
-)
-from noeta.execution.instructions import (
     build_instructions_discovery,
+    build_instructions_kit,
     discover_instructions,
 )
 from noeta.protocols.canonical import to_canonical_bytes
@@ -454,7 +452,7 @@ def _build_discovery_engine(ws: Path, responses: list[LLMResponse]):
             model="stub-model",
             compaction=COMPACTION_OFF,
             budget=Budget(),
-            instructions_discovery=True,
+            plugin_config={"workspace": {"instructions_discovery": True}},
         )
 
     inputs = _inputs()

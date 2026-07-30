@@ -22,8 +22,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from noeta.builtins.skills.impl import SkillIndexer
-from noeta.execution.environment import load_environment
-from noeta.execution.instructions import load_instructions
+from noeta.builtins.workspace.impl import load_environment, load_instructions
 from noeta.protocols.tool import ToolContext
 from noeta.storage.memory import InMemoryContentStore
 from noeta.runtime.subproc import _RunOutcome

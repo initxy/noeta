@@ -2,20 +2,23 @@
 
 The execution-layer counterpart of :mod:`noeta.context.instructions`
 (pure render + hash pieces), mirroring how
-:mod:`noeta.execution.memory` glues the memory subsystem to the Engine:
+:mod:`noeta.execution.memory` glues the memory subsystem to the Engine.
+Since microkernel phase 3 (D10) this module is record-seam only:
 
-* :func:`load_instructions` — impure pre-loop loader: read the first
-  existing, non-empty candidate of the injected kit's ``filenames``
-  search order (or an override path) into an
-  :class:`InstructionsSnapshot`. Missing / empty files are a valid
-  "no instructions" state (returns ``None``) so a default workspace
-  pays nothing.
 * :func:`record_instructions` — write-side activation: emit ONE
   ``ContextContentRecorded`` (kind ``instructions``, policy
   ``evolving``) so fold flips the resident on in
   ``TaskState.active_content``. Nothing here touches the runtime —
   the event type, its fold and the ``ContentHashesFn`` seam all
   landed generically.
+
+The impure loader half (``load_instructions`` — the ``NOETA.md`` /
+``AGENTS.md`` convention — plus the ``read``-triggered discovery walk and
+the resume preloader) is product content and lives in the ``workspace``
+built-in plugin (``noeta.builtins.workspace.impl.loaders``), reached
+through that plugin's ``session_pack`` contribution (compose side, which
+also exports the Engine's ``content_discovery`` / ``content_preloader``
+hooks) and the SDK host's doorway (record side).
 
 v1 keeps the seam as plain functions the host calls instead of an
 interface — rule of two. Product wiring is handled by the same
@@ -25,8 +28,7 @@ interface — rule of two. Product wiring is handled by the same
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable, Mapping, MutableMapping, Optional
+from typing import Callable, Mapping
 
 from noeta.context.content_channel import ContentKindSpec
 from noeta.context.instructions import (
@@ -37,21 +39,14 @@ from noeta.context.instructions import (
 )
 from noeta.core.fold import apply_event
 from noeta.protocols.content_store import ContentStore
-from noeta.protocols.decisions import ToolCall
 from noeta.protocols.event_log import EventLogWriter
 from noeta.protocols.events import ContextContentRecordedPayload
 from noeta.protocols.task import Task
-from noeta.protocols.tool import ToolResult
-from noeta.runtime.workspace import WorkspaceRoot, path_within
-from noeta.runtime.exec_env import ExecEnv
+from typing import Optional
 
 
 __all__ = [
     "InstructionsKit",
-    "build_instructions_discovery",
-    "build_instructions_preloader",
-    "discover_instructions",
-    "load_instructions",
     "record_instructions",
 ]
 
@@ -65,7 +60,7 @@ class InstructionsKit:
     search order (``NOETA.md`` / ``AGENTS.md`` — a product convention,
     not kernel vocabulary) live in the ``workspace`` built-in plugin
     (``noeta.builtins.workspace.impl:build_instructions_kit``); the
-    kernel receives them as one injected bundle so the pre-loop loader,
+    kernel receives the bundle at its record seam so the pre-loop loader,
     the mid-loop discovery hook and the compose-time renderer all share
     a single source of truth.
     """
@@ -82,210 +77,6 @@ class InstructionsKit:
     filenames: tuple[str, ...]
 
 
-def load_instructions(
-    workspace_dir: Path,
-    *,
-    filenames: tuple[str, ...],
-    override_path: Optional[Path] = None,
-    exec_env: Optional[ExecEnv] = None,
-) -> Optional[InstructionsSnapshot]:
-    """Load the workspace instructions file into a snapshot.
-
-    * ``override_path`` wins when provided — read it (or return
-      ``None`` if it does not exist or is empty after stripping).
-    * Otherwise walk ``filenames`` (the injected kit's search order —
-      phase 2c: the candidate names are product convention, kernel-free)
-      under ``workspace_dir`` in order; the first candidate that exists
-      AND whose UTF-8 content is non-empty after stripping wins.
-    * Returns ``None`` for a workspace with no instructions file —
-      the caller must short-circuit kind registration and activation
-      so the empty state has **zero** byte-footprint on the ledger.
-
-    ``exec_env`` (sandbox mode) reads the candidate THROUGH the container —
-    ``workspace_dir`` is then the container workdir, so the instructions file
-    is the one INSIDE the sandbox (this fixes the v1 bug where the loader read a
-    container path against the host filesystem). ``None`` keeps the host read
-    byte-identical.
-    """
-    if override_path is not None:
-        return _read_one(override_path, exec_env)
-    for filename in filenames:
-        candidate = workspace_dir / filename
-        snapshot = _read_one(candidate, exec_env)
-        if snapshot is not None:
-            return snapshot
-    return None
-
-
-def _read_one(
-    path: Path, exec_env: Optional[ExecEnv] = None
-) -> Optional[InstructionsSnapshot]:
-    if exec_env is not None:
-        try:
-            # A missing / non-file path surfaces as an OSError subclass
-            # (AioSandboxExecEnv maps not_found → FileNotFoundError); any read
-            # fault is treated as "no instructions", the same forgiving state
-            # as a missing host file.
-            raw = exec_env.read_text(path, encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            return None
-    else:
-        try:
-            # Any read fault (missing file, a directory in the file's place,
-            # permission denied, ...) is "no instructions" — the same
-            # forgiving state the sandbox branch above gives a container
-            # read fault, so a locked-down NOETA.md/AGENTS.md degrades
-            # gracefully instead of crashing session prep.
-            raw = path.read_text(encoding="utf-8")
-        except OSError:
-            return None
-    if not raw.strip():
-        return None
-    return InstructionsSnapshot(name=path.name, text=raw)
-
-
-def discover_instructions(
-    workspace_root: Path,
-    resolved_file: Path,
-    *,
-    filenames: tuple[str, ...],
-    active: tuple[str, ...] = (),
-    exec_env: Optional[ExecEnv] = None,
-) -> list[InstructionsSnapshot]:
-    """Instruction files between ``resolved_file``'s directory and the root.
-
-    The `read`-triggered discovery walk (docs/adr/anchored-content-placement.md):
-    for every directory strictly BELOW ``workspace_root`` on the path to
-    ``resolved_file`` — shallowest first, so a parent package's conventions
-    render before a child's — the first existing, non-empty candidate of
-    ``filenames`` (the injected kit's search order) wins, exactly the root
-    loader's precedence. The workspace root itself is excluded: the root file is the
-    pre-loop loader's job (and its resident name is the bare basename, not a
-    relative path).
-
-    Snapshot names are POSIX workspace-relative paths (``src/pkg/AGENTS.md``)
-    — unique per directory, and rendered verbatim as the
-    ``<workspace-instructions source=…>`` label. A directory either of whose
-    candidate names is already in ``active`` is skipped without probing (it
-    already contributed a resident this session). ``resolved_file`` outside
-    ``workspace_root`` yields nothing — discovery is fenced to the workspace
-    even though reads are not (write authorization is not instruction
-    authority). Read faults degrade to "no file", same as the root loader.
-    """
-    try:
-        rel = resolved_file.relative_to(workspace_root)
-    except ValueError:
-        return []
-    found: list[InstructionsSnapshot] = []
-    directory = workspace_root
-    # rel.parts[:-1] are the directories strictly below the root, shallowest
-    # first (the last part is the file itself).
-    for part in rel.parts[:-1]:
-        directory = directory / part
-        names = [
-            (directory / filename).relative_to(workspace_root).as_posix()
-            for filename in filenames
-        ]
-        if any(name in active for name in names):
-            continue
-        for filename, name in zip(filenames, names):
-            snapshot = _read_one(directory / filename, exec_env)
-            if snapshot is not None:
-                found.append(InstructionsSnapshot(name=name, text=snapshot.text))
-                break
-    return found
-
-
-def build_instructions_discovery(
-    workspace: WorkspaceRoot,
-    snapshots: MutableMapping[str, InstructionsSnapshot],
-    *,
-    kit: InstructionsKit,
-    exec_env: Optional[ExecEnv] = None,
-) -> Callable[[Task, ToolCall, ToolResult], list[ContextContentRecordedPayload]]:
-    """The post-tool content-discovery seam for the instructions kind.
-
-    Wired into the Engine as ``content_discovery`` when the host enables
-    ``instructions_discovery``. After a successful ``read`` whose path
-    resolves INSIDE the workspace (component-wise containment — the fence
-    the reads themselves deliberately do not have), it walks
-    :func:`discover_instructions`, parks each new snapshot in the shared
-    ``snapshots`` mapping (so the composer's renderer can render the name the
-    moment fold activates it), and returns the activation payloads for
-    ``handle_tool_calls`` to gate first-only and emit. Everything degrades to
-    ``[]`` — a discovery fault may only omit context, never fail the call.
-    """
-
-    def _discover(
-        task: Task, call: ToolCall, result: ToolResult
-    ) -> list[ContextContentRecordedPayload]:
-        if call.tool_name != "read" or not result.success:
-            return []
-        target = call.arguments.get("path")
-        if not isinstance(target, str) or not target:
-            return []
-        try:
-            resolved = workspace.canonicalise(target)
-        except Exception:  # noqa: BLE001 — discovery may only omit, never raise.
-            return []
-        if not path_within(resolved, workspace.root):
-            return []
-        active = task.state.active_content.get(INSTRUCTIONS_KIND, ())
-        payloads: list[ContextContentRecordedPayload] = []
-        for snapshot in discover_instructions(
-            workspace.root,
-            resolved,
-            filenames=kit.filenames,
-            active=tuple(active),
-            exec_env=exec_env,
-        ):
-            snapshots[snapshot.name] = snapshot
-            payloads.append(
-                ContextContentRecordedPayload(
-                    kind=INSTRUCTIONS_KIND,
-                    name=snapshot.name,
-                    version=INSTRUCTIONS_VERSION,
-                    content_hash=kit.content_hash(snapshot),
-                    policy=INSTRUCTIONS_DRIFT_POLICY,
-                )
-            )
-        return payloads
-
-    return _discover
-
-
-def build_instructions_preloader(
-    workspace_dir: Path,
-    snapshots: MutableMapping[str, InstructionsSnapshot],
-    *,
-    exec_env: Optional[ExecEnv] = None,
-) -> Callable[[Task], None]:
-    """The resume preload for discovered instruction files.
-
-    Wired into the Engine as ``content_preloader`` (called before each step's
-    compose — the impure band, so the composer's no-disk red line holds). A
-    fresh process resumes with only the root snapshot in the mapping; every
-    instructions name the ledger says is active but the mapping lacks is
-    re-read as ``workspace_dir / name`` (the root basename and the discovered
-    relative paths both resolve this way). A vanished or emptied file leaves
-    the name unrendered — the ``evolving`` policy tolerates drift, and a
-    degraded preload may only omit. No-op when nothing is missing, so the
-    live path pays a set-difference per step and nothing else.
-    """
-
-    def _preload(task: Task) -> None:
-        for name in task.state.active_content.get(INSTRUCTIONS_KIND, ()):
-            if name in snapshots:
-                continue
-            snapshot = _read_one(workspace_dir / name, exec_env)
-            if snapshot is not None:
-                snapshots[name] = InstructionsSnapshot(
-                    name=name, text=snapshot.text
-                )
-
-    return _preload
-
-
 def record_instructions(
     event_log: EventLogWriter,
     content_store: ContentStore,
@@ -299,7 +90,7 @@ def record_instructions(
     """Pre-loop activation of the instructions resident — write-side only.
 
     Emits one ``ContextContentRecorded`` carrying the content fingerprint
-    (``kit.content_hash`` — the same injected kit whose ``content_kind_from``
+    (``kit.content_hash`` — the same kit whose ``content_kind_from``
     the composer renders from, so the recorded fingerprint and the composed
     bytes share one source of truth) and converges live state through
     ``apply_event``, exactly like the engine-side provenance helpers.

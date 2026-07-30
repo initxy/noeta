@@ -489,8 +489,10 @@ def test_consolidation_tool_surface_is_memory_pack_only(tmp_path: Path) -> None:
         model="stub-model",
         compaction=COMPACTION_OFF,
         budget=Budget(),
-        memory_enabled=True,
-        memory_dir=tmp_path / "memories",
+        # Phase 3 (S4): the memory switch is a capability flag; the store root
+        # is the memory plugin's own config entry.
+        capability_flags={"memory": True},
+        plugin_config={"memory": {"memory_dir": tmp_path / "memories"}},
     )
     assert set(inputs.tools) == {
         MEMORY_WRITE_TOOL_NAME,
