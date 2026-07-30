@@ -72,8 +72,12 @@ def _build_composer_schemas(
         subtask_agent_directory=(
             (("explore", "read-only explorer"),) if delegation_enabled else ()
         ),
-        write_mode=FsWriteMode.DRY_RUN,
-        shell_mode=ShellMode.OFF,
+        plugin_config={
+            "fs": {
+                "write_mode": FsWriteMode.DRY_RUN,
+                "shell_mode": ShellMode.OFF,
+            },
+        },
     )
     return list(inputs.composer._control_action_schemas)
 

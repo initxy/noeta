@@ -79,8 +79,7 @@ from noeta.protocols.hooks import Guard
 from noeta.protocols.policy import Policy
 from noeta.protocols.tool import Tool
 from noeta.runtime.exec_env import ExecEnv
-from noeta.runtime.shell_policy import ShellMode
-from noeta.runtime.workspace import FsWriteMode, WorkspaceRoot, WriteRootsResolver
+from noeta.runtime.workspace import WorkspaceRoot
 from noeta.runtime.mcp import MCP_PREFIX, McpConfigError
 
 
@@ -319,11 +318,6 @@ class _BuildSpec:
     budget: Budget
     allowed_subtask_agents: frozenset[str]
     max_steps: int
-    write_mode: FsWriteMode
-    shell_mode: ShellMode
-    shell_allowlist: Sequence[Mapping[str, Any]]
-    write_path_globs: tuple[str, ...]
-    write_roots: Optional[WriteRootsResolver]
     require_approval_tools: tuple[str, ...]
     shell_approval_predicate: Optional[Callable[[str, Mapping[str, Any]], bool]]
     skill_tool_enforcement: SkillEnforcementMode
@@ -677,22 +671,11 @@ def build_session_inputs(
     budget: Budget,
     allowed_subtask_agents: frozenset[str] = frozenset(),
     max_steps: int = 20,
-    write_mode: FsWriteMode = FsWriteMode.DRY_RUN,
-    shell_mode: ShellMode = ShellMode.ALLOWLIST,
-    shell_allowlist: Sequence[Mapping[str, Any]] = (),
-    #: Injected path whitelist for the ``write`` tool. Empty
-    #: ⇒ unrestricted (default, byte-equal); non-empty ⇒ ``write`` refuses any
-    #: path outside the globs. The host derives this from the spec's
-    #: ``metadata["write_path_globs"]`` (e.g. ``plans/*.md``).
-    write_path_globs: tuple[str, ...] = (),
-    #: Host authorization for writes OUTSIDE the workspace:
-    #: ``task_id -> the extra directories that task may write``, consulted
-    #: per call by ``edit`` / ``write`` / ``apply_patch``. ``None`` (default)
-    #: keeps the single-root wall. Deliberately a resolver, not a fixed
-    #: tuple: the product grows this set mid-session (the owner approves an
-    #: out-of-workspace write while the task is paused), and rebuilding the
-    #: tool set to take it would move the stable prefix.
-    write_roots: Optional[WriteRootsResolver] = None,
+    #: The write/shell safety inputs (``write_mode`` / ``shell_mode`` /
+    #: ``shell_allowlist`` / ``write_path_globs`` / ``write_roots``) are no
+    #: longer kernel-signature parameters: they have a single consumer (the fs
+    #: pack), so the host supplies them in ``plugin_config["fs"]`` and the fs
+    #: pack parses its own entry (mechanism-slots-only context, spec §4.2).
     require_approval_tools: tuple[str, ...] = (),
     #: Per-call conditional approval predicate, forwarded verbatim into
     #: ``PermissionPolicy.conditional_approval``. Built by the SDK host for the
@@ -817,12 +800,13 @@ def build_session_inputs(
     * ``budget`` — pre-parsed session budget (caller supplies default).
     * ``allowed_subtask_agents`` — already roster-filtered set of
       delegation targets (``None``-when-disabled semantics handled here).
-    * ``write_mode`` defaults to ``DRY_RUN`` — defence in depth: even if
-      the tool were somehow ``invoke``-d during a resume, the closure would
-      refuse to write. Tests sentinel-pin the no-write property anyway.
-    * ``shell_mode`` should match the recording's mode so the rebuilt
-      ``shell_run`` tool's allow-list shape (and thus its
-      ``input_schema``) reproduces the recorded ``provider_tool_schemas`` bytes.
+    * ``plugin_config["fs"]`` — the write/shell safety inputs (``write_mode``
+      / ``shell_mode`` / ``shell_allowlist`` / ``write_path_globs`` /
+      ``write_roots``). ``write_mode`` must match the recording's mode so the
+      rebuilt ``shell_run`` tool's allow-list shape (and thus its
+      ``input_schema``) reproduces the recorded ``provider_tool_schemas``
+      bytes; the fs pack defaults an absent entry to ``DRY_RUN`` / ``ALLOWLIST``
+      (defence in depth on resume).
 
     **Live-path override**: the runner calls this same helper (single
     construction point) but passes ``mcp_tools_override`` with real
@@ -850,11 +834,6 @@ def build_session_inputs(
         budget=budget,
         allowed_subtask_agents=allowed_subtask_agents,
         max_steps=max_steps,
-        write_mode=write_mode,
-        shell_mode=shell_mode,
-        shell_allowlist=shell_allowlist,
-        write_path_globs=write_path_globs,
-        write_roots=write_roots,
         require_approval_tools=require_approval_tools,
         shell_approval_predicate=shell_approval_predicate,
         skill_tool_enforcement=skill_tool_enforcement,
@@ -905,11 +884,6 @@ def build_session_inputs(
         backends=dict(backends) if backends else {},
         capability_flags=spec.capability_flags,
         plugin_config=dict(plugin_config) if plugin_config else {},
-        write_mode=write_mode,
-        shell_mode=shell_mode,
-        shell_allowlist=shell_allowlist,
-        write_path_globs=write_path_globs,
-        write_roots=write_roots,
     )
 
     # The two kernel-owned injections (D1: pre-built objects, not packs) ride

@@ -33,12 +33,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
-    Any,
     Callable,
     Mapping,
     Optional,
     Protocol,
-    Sequence,
     runtime_checkable,
 )
 
@@ -46,8 +44,7 @@ from noeta.context.content_channel import ContentKindSpec
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.tool import Tool
 from noeta.runtime.exec_env import ExecEnv
-from noeta.runtime.shell_policy import ShellMode
-from noeta.runtime.workspace import FsWriteMode, WorkspaceRoot, WriteRootsResolver
+from noeta.runtime.workspace import WorkspaceRoot
 
 
 __all__ = [
@@ -136,14 +133,11 @@ class SessionBuildContext:
     capability_flags: Mapping[str, bool]
     #: Per-plugin config bag: ``plugin name → its own keys``. The host maps
     #: its public fields in; each pack parses only its own entry and fails
-    #: loudly on what it cannot read.
+    #: loudly on what it cannot read. Feature knobs with a single consumer live
+    #: here, never as a typed context slot — the write/shell safety inputs are
+    #: the ``"fs"`` entry (sole consumer: the fs pack); a key is promoted to a
+    #: typed slot only when a second, unrelated plugin demonstrably reads it.
     plugin_config: Mapping[str, Mapping[str, object]]
-    #: Shared write/shell safety inputs any pack may honour.
-    write_mode: FsWriteMode
-    shell_mode: ShellMode
-    shell_allowlist: Sequence[Mapping[str, Any]]
-    write_path_globs: tuple[str, ...]
-    write_roots: Optional[WriteRootsResolver]
 
     def config(self, plugin: str) -> Mapping[str, object]:
         """``plugin``'s config entry, or an empty mapping."""

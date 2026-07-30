@@ -1723,14 +1723,10 @@ class SdkHost(GenericEngineResolver):
             else self._budget_for(spec.default_budget),
             allowed_subtask_agents=allowed_subtask_agents,
             max_steps=self.max_steps,
-            write_mode=self.write_mode,
-            shell_mode=shell_mode,
-            shell_allowlist=self.shell_allowlist,
+            # The write/shell safety inputs ride ``plugin_config["fs"]`` below
+            # (mechanism-slots-only context, spec §4.2) — the fs pack is their
+            # sole consumer, so they left the kernel signature.
             shell_approval_predicate=shell_approval_predicate,
-            # A spec carrying metadata["write_path_globs"]
-            # gets its ``write`` built path-restricted (e.g. plans/*.md); other specs ⇒ ().
-            write_path_globs=_spec_write_path_globs(spec),
-            write_roots=self.write_roots,
             skill_tool_enforcement=self.skill_tool_enforcement,
             # Per-helper structured output (port of the deleted runner's
             # ``_build_child_engine`` wiring): a workflow helper spawned via
@@ -1780,6 +1776,17 @@ class SdkHost(GenericEngineResolver):
             # resident index target that tenant's store; ``None`` override
             # (single-tenant / resolver fallback) keeps the host fields.
             plugin_config={
+                # The fs pack's own write/shell safety inputs. ``shell_mode``
+                # is the permission-derived effective value; ``write_path_globs``
+                # a spec carrying metadata["write_path_globs"] gets its ``write``
+                # built path-restricted (e.g. plans/*.md), other specs ⇒ ().
+                "fs": {
+                    "write_mode": self.write_mode,
+                    "shell_mode": shell_mode,
+                    "shell_allowlist": self.shell_allowlist,
+                    "write_path_globs": _spec_write_path_globs(spec),
+                    "write_roots": self.write_roots,
+                },
                 "memory": {
                     "memory_dir": (
                         memory_override
@@ -1952,18 +1959,20 @@ class SdkHost(GenericEngineResolver):
             allowed_subtask_agents=known,
             subtask_agent_directory=directory,
             max_steps=self.max_steps,
-            write_mode=self.write_mode,
-            shell_mode=self.shell_mode,
-            shell_allowlist=self.shell_allowlist,
             skill_tool_enforcement=self.skill_tool_enforcement,
             # Delegation only: the orchestration engine spawns workers but
             # mounts no other control tool (no nested workflows in v1, and
             # ask/todo/skill self-gate off on their absent flags).
             capability_flags={"delegation": True},
             # The orchestration engine runs memory off (no "memory" flag) and
-            # keeps the host's skills/instructions config through the same
+            # keeps the host's fs/skills/instructions config through the same
             # per-plugin bag as the session path.
             plugin_config={
+                "fs": {
+                    "write_mode": self.write_mode,
+                    "shell_mode": self.shell_mode,
+                    "shell_allowlist": self.shell_allowlist,
+                },
                 "skills": {
                     "skills_dir": self.skills_dir,
                     "allow_skill_scripts": self.allow_skill_scripts,

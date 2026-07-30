@@ -22,6 +22,13 @@ _ALIASES = {"default": "main"}
 #: S4). ``memory_enabled`` is handled separately (it becomes a
 #: ``capability_flags`` entry, not a plugin_config key).
 _LEGACY_PLUGIN_CONFIG_KEYS = {
+    "fs": (
+        "write_mode",
+        "shell_mode",
+        "shell_allowlist",
+        "write_path_globs",
+        "write_roots",
+    ),
     "skills": (
         "skills_dir",
         "builtin_skills_dirs",
@@ -170,11 +177,19 @@ def build_code_replay_inputs(*, workspace_dir, agent, content_store, model, **kw
     kwargs.setdefault("builtin_skills_dirs", (BUILTIN_SKILLS_DIR,))
     kwargs.setdefault("global_skills_dir", _skills.DEFAULT_GLOBAL_SKILLS_DIR)
     kwargs.setdefault("memory_enabled", agent_activates(agent, "memory"))
-    fold_legacy_capability_kwargs(kwargs)
     # plan's restricted-write path whitelist is host-injected
     # from the spec metadata at LIVE time, so the replay rebuild must derive the
     # SAME globs (otherwise plan's ``write`` tool schema → composed View → bytes
-    # diverge). Mirrors noeta.agent.host.session._spec_write_path_globs.
+    # diverge). Mirrors noeta.agent.host.session._spec_write_path_globs. Derive
+    # it BEFORE the fold so it lands in ``plugin_config["fs"]`` (the fs knobs are
+    # no longer kernel-signature kwargs, spec §4.2).
+    _raw_globs = agent.metadata.get("write_path_globs")
+    if _raw_globs:
+        kwargs.setdefault(
+            "write_path_globs",
+            tuple(p.strip() for p in _raw_globs.split(",") if p.strip()),
+        )
+    fold_legacy_capability_kwargs(kwargs)
     # microkernel phase 3: build_session_inputs takes the manifest-resolved
     # session packs; default to the SDK's builtin set unless the caller
     # injects its own.
@@ -189,12 +204,6 @@ def build_code_replay_inputs(*, workspace_dir, agent, content_store, model, **kw
     kwargs.setdefault("base_reminders", default_reminder_specs())
     kwargs.setdefault("guards_factory", default_guards_factory())
     kwargs.setdefault("default_policy_factory", default_policy_factory())
-    _raw_globs = agent.metadata.get("write_path_globs")
-    if _raw_globs:
-        kwargs.setdefault(
-            "write_path_globs",
-            tuple(p.strip() for p in _raw_globs.split(",") if p.strip()),
-        )
     return build_session_inputs(
         workspace_dir=workspace_dir,
         system_prompt=agent.instructions,

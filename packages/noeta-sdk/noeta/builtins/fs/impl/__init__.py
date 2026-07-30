@@ -20,7 +20,7 @@ nothing imports it statically.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence, cast
 
 from noeta.builtins.fs.impl.edit import (
     WRITE_FILE_MAX_BYTES,
@@ -182,14 +182,27 @@ def build_fs_session_pack(ctx: SessionBuildContext) -> PackContribution:
     table), then filters by the agent whitelist — the base packs (fs / web)
     are the only ones that pass through ``allowed_tools``; capability packs
     append past it by design.
+
+    The write/shell safety inputs are fs's own ``plugin_config["fs"]`` entry
+    (mechanism-slots-only context, spec §4.2): the pack parses each key here,
+    defaulting an absent key to the safe closure (``DRY_RUN`` writes /
+    ``ALLOWLIST`` shell) exactly as the old builder kwargs did — the sole
+    consumer of these knobs, so they never earned a typed context slot.
     """
+    cfg = ctx.config("fs")
     pack = build_fs_tools(
         ctx.workspace,
-        mode=ctx.write_mode,
-        shell_mode=ctx.shell_mode,
-        shell_allowlist=ctx.shell_allowlist,
-        write_path_globs=ctx.write_path_globs,
-        write_roots=ctx.write_roots,
+        mode=cast(FsWriteMode, cfg.get("write_mode", FsWriteMode.DRY_RUN)),
+        shell_mode=cast(ShellMode, cfg.get("shell_mode", ShellMode.ALLOWLIST)),
+        shell_allowlist=cast(
+            "Sequence[Mapping[str, Any]]", cfg.get("shell_allowlist", ())
+        ),
+        write_path_globs=cast(
+            "tuple[str, ...]", cfg.get("write_path_globs", ())
+        ),
+        write_roots=cast(
+            "Optional[WriteRootsResolver]", cfg.get("write_roots")
+        ),
         exec_env=ctx.exec_env,
     )
     if ctx.provider_family is not None:

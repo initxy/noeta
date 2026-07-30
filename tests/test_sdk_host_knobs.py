@@ -314,11 +314,16 @@ def test_default_host_byte_equal_to_direct_builder(tmp_path: Path) -> None:
         allowed_subtask_agents=frozenset(),
         # New fields, all using build_session_inputs defaults
         max_steps=20,
-        write_mode=FsWriteMode.DRY_RUN,
-        shell_mode=ShellMode.ALLOWLIST,
-        # Phase 3 (S4): the skills knobs live in the skills plugin's config bag
-        # (all None/False = the pack defaults SdkHost also builds).
-        plugin_config={"skills": {"skills_dir": None, "allow_skill_scripts": False}},
+        # Phase 3 / spec §4.2: the fs write/shell knobs and the skills knobs
+        # both live in the per-plugin config bag (all defaults = the pack
+        # defaults SdkHost also builds).
+        plugin_config={
+            "fs": {
+                "write_mode": FsWriteMode.DRY_RUN,
+                "shell_mode": ShellMode.ALLOWLIST,
+            },
+            "skills": {"skills_dir": None, "allow_skill_scripts": False},
+        },
         require_approval_tools=_approval_set_for("default", main_spec.tools),
         skill_tool_enforcement="off",
         capability_flags={},
