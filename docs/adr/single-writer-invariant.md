@@ -32,3 +32,25 @@ Derived data (subtask_results / touched_artifacts / cost_accumulated) does not g
 
 - Where this bears weight: `noeta.core.engine` is the sole physical writer of the four slices, and every external "I want to change state" path converges here; `noeta.core._decision_handlers`, `noeta.core.fold` handle Decision → event translation and per-slice reducer routing; `noeta.policies.react`, `noeta.context.composer` express write intent only via a `Decision` / plan body and never append directly.
 - Constraint: a hook that wants to "modify" state must instead become part of some Policy or ContextComposer, not stand on its own (the Mutator hook is deprecated, see `docs/adr/guard-observer-hooks.md`). A new field must explicitly declare its owning slice and physical writer, or it doesn't pass.
+
+## Clarification (2026-07-30) — the invariant is the single *physical writer*, not a literal `actor="engine"`
+
+The Decision and Rationale above twice phrase the guarantee as "the `actor`
+field always equals the Engine." Read that as shorthand for **one physical
+writer**: exactly one component calls `event_log.emit`, so `fold(events) →
+state` cannot fork. The envelope `actor` string is a **provenance label**, and
+it has never been uniformly `"engine"` in shipped code — `llm`, `compaction`,
+`background-shell`, `interaction-driver`, `background-subagent`,
+`cancel-cascade`, and `mcp` all appear, each attributing the recording to its
+subsystem. **Fold never reads `actor`** (it dispatches on event `type`); the
+only consumer is the audit projection, which copies it through verbatim. So the
+label carries no correctness weight — the invariant lives entirely in "one
+component appends."
+
+The kernel-final-form `SessionRecorder` (`docs/implementation-specs/kernel-final-form.md`
+§4.4) uses this: a plugin's `init` hook calls `record_content`, and the
+**kernel's** recorder (`noeta.execution.recorder.SeedRecorder`) is what physically
+emits — stamping `actor="plugin:<name>"` so audit attributes the resident to the
+plugin that produced it (the `mcp` precedent). The plugin never touches a raw
+`EventLog`, so the single-physical-writer invariant holds unchanged; the
+provenance label is simply more honest than laundering the record as `"engine"`.

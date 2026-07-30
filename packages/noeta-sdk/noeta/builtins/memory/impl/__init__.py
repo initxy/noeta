@@ -125,8 +125,9 @@ def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
         ContentStore and records the resulting ref, so the ledger fully
         determines the composed index (law 2): ``ref.hash`` equals the
         rendered-index sha256 the ``evolving`` fingerprint always carried, so
-        the emitted ``ContextContentRecorded`` is byte-identical to the retired
-        ``record_memory_index`` call. Empty entries leave the ledger untouched.
+        the ``ContextContentRecorded`` payload matches the retired
+        ``record_memory_index`` call (the envelope now attributes
+        ``actor="plugin:memory"``). Empty entries leave the ledger untouched.
         """
         if not entries:
             return

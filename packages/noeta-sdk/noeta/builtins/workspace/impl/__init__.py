@@ -388,9 +388,10 @@ def build_instructions_session_pack(ctx: SessionBuildContext) -> PackContributio
 
         Records the same root snapshot the composer's kind renders from; the
         ``ref.hash`` equals the rendered-instructions sha256 the fingerprint
-        always carried, so the emitted event is byte-identical to the retired
-        ``record_instructions`` call. Discovered subtree files activate later
-        through the content-discovery hook, not here. No root file ⇒ no-op.
+        always carried, so the event payload matches the retired
+        ``record_instructions`` call (the envelope now attributes
+        ``actor="plugin:instructions"``). Discovered subtree files activate
+        later through the content-discovery hook, not here. No root file ⇒ no-op.
         """
         if root_snapshot is None:
             return
@@ -426,8 +427,8 @@ def build_environment_session_pack(ctx: SessionBuildContext) -> PackContribution
 
         Records the same snapshot the composer's kind renders from; ``ref.hash``
         equals the rendered-environment sha256 the fingerprint always carried,
-        so the emitted event is byte-identical to the retired
-        ``record_environment`` call.
+        so the event payload matches the retired ``record_environment`` call
+        (the envelope now attributes ``actor="plugin:environment"``).
         """
         body = render_environment_text(snapshot).encode("utf-8")
         ref = content_store.put(body, media_type="text/markdown")
