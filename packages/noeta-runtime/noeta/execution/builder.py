@@ -75,24 +75,15 @@ from noeta.execution.control_tool import (
     ControlToolMount,
 )
 from noeta.policies.control_semantics import (
-    ASK_USER_QUESTION_TOOL,
     RUN_WORKFLOW_TOOL,
     SKILL_TOOL,
-    SPAWN_SUBAGENT_TOOL,
     STRUCTURED_OUTPUT_TOOL,
-    TODO_WRITE_TOOL,
     ControlToolSpec,
-    ask_user_question_tool_schema,
     make_skill_translate,
     run_workflow_tool_schema,
     skill_tool_schema,
-    spawn_subagent_tool_schema,
     structured_output_tool_schema,
-    todo_write_tool_schema,
-    translate_ask_user_question,
     translate_run_workflow,
-    translate_spawn_subagent,
-    translate_todo_write,
 )
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.hooks import Guard
@@ -233,6 +224,13 @@ class SessionInputs:
     #: existing caller is byte-identical.
     content_discovery: Optional[Any] = None
     content_preloader: Optional[Any] = None
+    #: The control tools' collected mount exports (control-tool-surface S2, D8) —
+    #: a closed-vocabulary mapping the host threads to the kernel seams that
+    #: consume it. The only S2 tenant is the ``ask_user_question`` answer codec
+    #: (:data:`~noeta.execution.control_tool.CONTROL_EXPORT_ASK_ANSWER_CODEC`),
+    #: which the host puts on the session's Engine for the driver's ``answer``
+    #: path. Empty for a session that mounts no exporting control tool.
+    control_exports: Mapping[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +394,13 @@ class _BuildSpec:
     #: pack loop in ``(priority, name)`` order. Empty builds a session with
     #: no pack tools at all — the kernel mandates no capability.
     session_packs: tuple[SessionPackEntry, ...] = ()
+    #: The contributed control tools (control-tool-surface S2): resolved by the
+    #: SDK host (``noeta.client.parts.default_control_tools`` + the external
+    #: plugins' ``control_tool`` projection) and MERGED with the remaining fixed
+    #: internal entries in the dual-priority mount loop. Empty ⇒ only the internal
+    #: skill / run_workflow / structured_output mounts run (byte-identical to a
+    #: session that never contributes a control tool).
+    control_tools: tuple[ControlToolEntry, ...] = ()
 
 
 @dataclass(slots=True)
@@ -499,55 +504,23 @@ def _skill_menu(
 
 
 # ---------------------------------------------------------------------------
-# Control-tool mounts — the six fixed internal entries (control-tool-surface
-# S1). Each factory self-gates on the ``ControlToolBuildContext`` and returns a
-# ``ControlToolMount`` or ``None``, reproducing today's if-chain gating EXACTLY.
-# The two priority BANDS are the byte-order contract, locked by the S0 golden:
-# schema render order spawn=100 → todo=200 → ask=300 → skill=400 → workflow=500
-# → structured_output=600; decision routing order ask=100 → todo=200 →
-# spawn=300 → skill=400 → workflow=500. ``structured_output`` carries no
-# translate (react's StructuredOutputPolicy intercepts it) so it contributes a
-# schema but no routing spec. S2+ replaces these internal entries with the
-# built-in plugins' own ``control_tool`` manifest contributions.
+# Control-tool mounts — the remaining internal entries (control-tool-surface
+# S1 → S2). Each factory self-gates on the ``ControlToolBuildContext`` and
+# returns a ``ControlToolMount`` or ``None``, reproducing today's if-chain
+# gating EXACTLY. The two priority BANDS are the byte-order contract, locked by
+# the S0 golden: schema render order spawn=100 → todo=200 → ask=300 → skill=400
+# → workflow=500 → structured_output=600; decision routing order ask=100 →
+# todo=200 → spawn=300 → skill=400 → workflow=500. ``structured_output`` carries
+# no translate (react's StructuredOutputPolicy intercepts it) so it contributes
+# a schema but no routing spec.
+#
+# S2 moved ``spawn_subagent`` / ``todo_write`` / ``ask_user_question`` OUT of
+# this table into their built-ins (``noeta.builtins.{delegation,todo_write,
+# ask_user_question}``); they now arrive through the ``control_tools`` param the
+# SDK host resolves from the manifests + the loaded PluginSet, merged with these
+# fixed entries and run through the SAME loop. ``skill`` / ``run_workflow`` /
+# ``structured_output`` stay internal until S2b claims them for skills / react.
 # ---------------------------------------------------------------------------
-
-
-def _spawn_subagent_mount(ctx: ControlToolBuildContext) -> Optional[ControlToolMount]:
-    if not ctx.delegation_enabled:
-        return None
-    return ControlToolMount(
-        name=SPAWN_SUBAGENT_TOOL,
-        schema=spawn_subagent_tool_schema(ctx.subtask_agent_directory),
-        translate=translate_spawn_subagent,
-        routing_priority=300,
-        schema_priority=100,
-    )
-
-
-def _todo_write_mount(ctx: ControlToolBuildContext) -> Optional[ControlToolMount]:
-    if not ctx.todo_write_enabled:
-        return None
-    return ControlToolMount(
-        name=TODO_WRITE_TOOL,
-        schema=todo_write_tool_schema(),
-        translate=translate_todo_write,
-        routing_priority=200,
-        schema_priority=200,
-    )
-
-
-def _ask_user_question_mount(
-    ctx: ControlToolBuildContext,
-) -> Optional[ControlToolMount]:
-    if not ctx.ask_user_question_enabled:
-        return None
-    return ControlToolMount(
-        name=ASK_USER_QUESTION_TOOL,
-        schema=ask_user_question_tool_schema(),
-        translate=translate_ask_user_question,
-        routing_priority=100,
-        schema_priority=300,
-    )
 
 
 def _skill_mount(ctx: ControlToolBuildContext) -> Optional[ControlToolMount]:
@@ -593,35 +566,44 @@ def _structured_output_mount(
     )
 
 
-#: The fixed control-tool entries the mount loop runs. Declaration order is not
-#: load-bearing (the output orders come from each mount's own bands); it only
-#: fixes a stable, sorted iteration. Ordered by schema band for readability.
+#: The fixed internal control-tool entries the mount loop runs, MERGED with the
+#: host-supplied ``control_tools`` (the built-in + external ``control_tool``
+#: contributions, control-tool-surface S2). Declaration order is not load-bearing
+#: (the output orders come from each mount's own bands); it only fixes a stable,
+#: sorted iteration. Ordered by schema band for readability.
 _CONTROL_TOOL_ENTRIES: tuple[ControlToolEntry, ...] = (
-    ControlToolEntry(SPAWN_SUBAGENT_TOOL, 100, _spawn_subagent_mount),
-    ControlToolEntry(TODO_WRITE_TOOL, 200, _todo_write_mount),
-    ControlToolEntry(ASK_USER_QUESTION_TOOL, 300, _ask_user_question_mount),
     ControlToolEntry(SKILL_TOOL, 400, _skill_mount),
     ControlToolEntry(RUN_WORKFLOW_TOOL, 500, _run_workflow_mount),
     ControlToolEntry(STRUCTURED_OUTPUT_TOOL, 600, _structured_output_mount),
 )
 
 
-def _run_control_tool_mounts(
+def _mount_control_tools(
     entries: Sequence[ControlToolEntry],
     ctx: ControlToolBuildContext,
-) -> tuple[Optional[list[dict[str, Any]]], tuple[ControlToolSpec, ...]]:
-    """Run the control-tool entries → ``(schema_list, routing_specs)``.
+) -> tuple[
+    Optional[list[dict[str, Any]]],
+    tuple[ControlToolSpec, ...],
+    dict[str, Any],
+]:
+    """Run the control-tool entries → ``(schema_list, routing_specs, exports)``.
 
     The generic dual-priority mount loop, mirroring the session-pack loop: each
     factory self-gates on ``ctx`` and returns ``None`` to opt out (a mount IS
     enablement). Collision is loud — two mounts of one name raise a ``ValueError``
-    naming both entries, exactly as the pack loop rejects a re-export. The two
+    naming both entries, exactly as the pack loop rejects a re-export; this now
+    also guards an internal entry clashing with a host-contributed one. The two
     output orders come from each mount's OWN bands: the schema list sorts on
     ``schema_priority`` (the composer's ``control_action_schemas`` byte order —
     the S0 golden), the routing specs on ``routing_priority`` (the decision
     dispatch order), ties broken by name in both. A mount with no ``translate``
     (``structured_output``) contributes a schema but no routing spec. An empty
     schema list folds to ``None`` (the composer's "no control schemas" sentinel).
+
+    The third output collects every mount's :attr:`ControlToolMount.exports` into
+    one closed-vocabulary mapping (D8) — a mount export is single-writer across
+    the loop (a duplicate export key raises), exactly like the session-pack
+    export bag; the ask codec is the only S2 tenant.
     """
     ordered = sorted(entries, key=lambda e: (e.priority, e.name))
     mounts: list[ControlToolMount] = []
@@ -647,7 +629,30 @@ def _run_control_tool_mounts(
         if m.translate is None:
             continue
         routing_specs.append(ControlToolSpec(name=m.name, translate=m.translate))
-    return (schema_list or None, tuple(routing_specs))
+    exports: dict[str, Any] = {}
+    for m in mounts:
+        for key, value in m.exports.items():
+            if key in exports:
+                raise RuntimeError(
+                    f"control tool {m.name!r} re-exports {key!r} — mount export "
+                    f"keys are single-writer across the control-tool loop"
+                )
+            exports[key] = value
+    return (schema_list or None, tuple(routing_specs), exports)
+
+
+def _run_control_tool_mounts(
+    entries: Sequence[ControlToolEntry],
+    ctx: ControlToolBuildContext,
+) -> tuple[Optional[list[dict[str, Any]]], tuple[ControlToolSpec, ...]]:
+    """Two-output view of :func:`_mount_control_tools` (schemas + routing specs).
+
+    The mechanism seam ``tests/test_control_tool_mount_loop.py`` pins; the
+    builder itself uses :func:`_mount_control_tools`, which additionally returns
+    the collected mount exports (D8).
+    """
+    schema_list, routing_specs, _exports = _mount_control_tools(entries, ctx)
+    return schema_list, routing_specs
 
 
 def _build_content_registry(
@@ -855,6 +860,15 @@ def build_session_inputs(
     #: tuple here. The generic loop is the whole tool-assembly pipeline;
     #: an empty tuple builds a session with no pack tools at all.
     session_packs: tuple[SessionPackEntry, ...] = (),
+    #: The contributed control tools (control-tool-surface S2): the SDK host
+    #: resolves every ``control_tool`` contribution (built-ins via
+    #: ``noeta.client.parts.default_control_tools``, external plugins via the
+    #: PluginSet projection) and injects them here. They are MERGED with the
+    #: remaining fixed internal entries (skill / run_workflow / structured_output)
+    #: and run through the SAME dual-priority mount loop; a name clash between a
+    #: contributed and an internal mount raises loudly. Empty ⇒ only the internal
+    #: mounts run (byte-identical to the pre-S2 build).
+    control_tools: tuple[ControlToolEntry, ...] = (),
     #: Loader-resolved built-in compose-time reminders (microkernel M2, D2):
     #: the three renders declared by the ``reminders`` built-in plugin,
     #: resolved by the SDK host and injected here; ``None`` fails loudly.
@@ -950,6 +964,7 @@ def build_session_inputs(
         extra_content_kinds=extra_content_kinds,
         extra_reminders=extra_reminders,
         session_packs=session_packs,
+        control_tools=control_tools,
         base_reminders=base_reminders,
         guards_factory=guards_factory,
         provider_family=provider_family,
@@ -1071,12 +1086,16 @@ def build_session_inputs(
         Optional[EnvironmentSnapshot],
         exports.get(EXPORT_ENVIRONMENT_SNAPSHOT),
     )
-    # Control-tool mounts (control-tool-surface S1): build the control-specific
-    # context (the effective flags + the once-computed skill menu + the packs'
-    # exports), then run the six fixed internal entries through the generic
-    # dual-priority mount loop. It yields the composer's ``control_action_schemas``
-    # (schema-band order, the S0 golden) and the routing-ordered translate specs
-    # the policy factory binds — replacing the old if-chain + ``skill_menu_names``.
+    # Control-tool mounts (control-tool-surface S1 → S2): build the control-
+    # specific context (the effective flags + the once-computed skill menu + the
+    # packs' exports), then run the host-supplied ``control_tools`` (the built-in
+    # + external ``control_tool`` contributions the SDK host resolves) MERGED with
+    # the remaining fixed internal entries through the generic dual-priority mount
+    # loop. It yields the composer's ``control_action_schemas`` (schema-band
+    # order, the S0 golden), the routing-ordered translate specs the policy
+    # factory binds, and the collected mount exports (D8 — the ask answer codec).
+    # The merge order does not matter (the loop re-sorts by ``(priority, name)``);
+    # the collision check now guards internal-vs-contributed clashes too.
     skill_menu, skill_menu_names = _skill_menu(spec, asm)
     control_ctx = ControlToolBuildContext(
         todo_write_enabled=spec.todo_write_enabled,
@@ -1090,8 +1109,12 @@ def build_session_inputs(
         structured_output_schema=spec.structured_output_schema,
         exports=exports,
     )
-    control_action_schemas, control_translate_specs = _run_control_tool_mounts(
-        _CONTROL_TOOL_ENTRIES, control_ctx
+    (
+        control_action_schemas,
+        control_translate_specs,
+        control_exports,
+    ) = _mount_control_tools(
+        (*spec.control_tools, *_CONTROL_TOOL_ENTRIES), control_ctx
     )
     content_registry = _build_content_registry(
         spec,
@@ -1198,4 +1221,5 @@ def build_session_inputs(
         tool_output_inline_limit=tool_output_inline_limit,
         content_discovery=content_discovery,
         content_preloader=content_preloader,
+        control_exports=control_exports,
     )

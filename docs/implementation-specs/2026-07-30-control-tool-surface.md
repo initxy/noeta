@@ -275,3 +275,16 @@ Each stage gates on `make check` before the next starts.
   `PolicyFactoryBuilder` → `build_react_policy_factory` → `ReActPolicy`
   (not a `SessionInputs` field). S0 golden byte-identical; `make check`
   3405 passed / 129 skipped; import-linter 10/10.
+- 2026-07-30 — S2a landed: `todo_write/` / `ask_user_question/` /
+  `delegation/` built-ins (catalogue 14→17), descriptions git-renamed
+  byte-identical; external plumbing =
+  `parts.default_control_tools()` + `PluginSet.activation_control_tools()`
+  + `build_session_inputs(control_tools=...)`; ask answer codec rides
+  `ControlToolMount.exports` (`CONTROL_EXPORT_ASK_ANSWER_CODEC` →
+  `SessionInputs.control_exports` → `Engine(answer_codec=...)`;
+  `InteractionDriver.seed_answer` fails loudly when absent). Activation
+  coexistence pinned: the three names still fold via
+  `_ACTIVATION_CAPABILITY_FLAG` (checked first) and built-in plugins are
+  excluded from `identity_activations()`. Internal entries table down to
+  skill / run_workflow / structured_output. `make check` 3406 passed;
+  install-smoke green.

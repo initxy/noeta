@@ -21,15 +21,16 @@ from noeta.policies.control_semantics import (
     SKILL_TOOL,
     SPAWN_SUBAGENT_TOOL,
     ControlToolSpec,
-    spawn_subagent_tool_schema,
     translate_control_tool,
 )
 
 
+# ``spawn_subagent_tool_schema`` moved into the ``delegation`` built-in
+# (control-tool-surface S2); only the reserved tool NAME + the neutral
+# translate mechanism remain kernel-side and re-exportable here.
 __all__ = [
     "SKILL_TOOL",
     "SPAWN_SUBAGENT_TOOL",
-    "spawn_subagent_tool_schema",
     "ControlToolSpec",
     "translate_control_tool",
 ]

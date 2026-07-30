@@ -37,6 +37,7 @@ from noeta.context.instructions import InstructionsSnapshot
 from noeta.context.memory import MemoryEntries
 from noeta.context.reminders import ReminderSpec
 from noeta.execution.builder import build_session_inputs
+from noeta.execution.control_tool import CONTROL_EXPORT_ASK_ANSWER_CODEC
 from noeta.execution.host import AgentRegistryProtocol
 from noeta.execution.reminders import TURN_INTAKE
 from noeta.execution.resolver import GenericEngineResolver
@@ -74,6 +75,7 @@ from noeta.client.parts import (
     browser_tool_names,
     catalog_price,
     mcp_impl,
+    default_control_tools,
     default_guards_factory,
     default_policy_factory,
     default_session_packs,
@@ -624,6 +626,13 @@ class SdkHost(GenericEngineResolver):
     #: interleaved by priority in the kernel builder's generic loop. Empty ⇒
     #: byte-identical to the built-in-only session.
     activated_session_packs: Mapping[str, tuple[Any, ...]] = field(
+        default_factory=dict
+    )
+    #: Per-agent control tools contributed by activated external plugins
+    #: (control-tool-surface S2) — merged after the built-in control tools and
+    #: re-sorted by ``(priority, name)`` with the internal entries in the
+    #: builder's mount loop. Empty ⇒ byte-identical to the built-in-only session.
+    activated_control_tools: Mapping[str, tuple[Any, ...]] = field(
         default_factory=dict
     )
     # The agent-layer base pool root for **bare sessions** (no
@@ -1691,6 +1700,10 @@ class SdkHost(GenericEngineResolver):
             session_backends["app_preview"] = self.app_gateway
         inputs = build_session_inputs(
             session_packs=self._session_packs(agent.name),
+            # Control-tool-surface S2: the built-in + this agent's activated
+            # control tools, merged with the kernel's internal entries in the
+            # builder's mount loop.
+            control_tools=self._control_tools(agent.name),
             base_reminders=default_reminder_specs(),
             guards_factory=default_guards_factory(),
             default_policy_factory=default_policy_factory(),
@@ -1882,6 +1895,14 @@ class SdkHost(GenericEngineResolver):
             tool_result_transforms=tuple(
                 self.tool_result_transforms.get(agent.name, ())
             ),
+            # The ask answer codec (control-tool-surface S2, D8): read off this
+            # session's collected control-tool exports and threaded onto the
+            # Engine so the driver's ``answer`` path can decode a submitted
+            # answer. ``None`` for a session that did not mount
+            # ``ask_user_question`` — the driver then fails loudly on an answer.
+            answer_codec=inputs.control_exports.get(
+                CONTROL_EXPORT_ASK_ANSWER_CODEC
+            ),
         )
 
     def _build_orchestration_engine(
@@ -1913,6 +1934,10 @@ class SdkHost(GenericEngineResolver):
                 directory = tuple(entries)
         inputs = build_session_inputs(
             session_packs=self._session_packs(),
+            # Control-tool-surface S2: the built-in control tools (no per-agent
+            # activation on the orchestration engine); ask/todo self-gate off
+            # below, so only delegation could mount when workflow enables it.
+            control_tools=self._control_tools(),
             base_reminders=default_reminder_specs(),
             guards_factory=default_guards_factory(),
             default_policy_factory=default_policy_factory(),
@@ -2178,6 +2203,27 @@ class SdkHost(GenericEngineResolver):
                 self.activated_session_packs.get(agent_name, ())
             )
         return packs
+
+    def _control_tools(self, agent_name: Optional[str] = None) -> tuple[Any, ...]:
+        """The kernel builder's ``control_tools`` injection (control-tool-surface S2).
+
+        The built-in manifests' ``control_tool`` contributions
+        (``todo_write`` / ``ask_user_question`` / ``delegation``), loader-resolved
+        and ``(priority, plugin, name)``-ordered, plus — when ``agent_name`` is
+        given — the control tools this agent's activated external plugins
+        contribute (the Client folds them into ``activated_control_tools``). The
+        builder MERGES these with its remaining internal entries (skill /
+        run_workflow / structured_output) and re-sorts the union by
+        ``(priority, name)`` in the mount loop, so a contributed control tool
+        mounts at its declared band. Both build paths (session + workflow
+        orchestration) go through here so they can never disagree.
+        """
+        tools: tuple[Any, ...] = default_control_tools()
+        if agent_name is not None:
+            tools = tools + tuple(
+                self.activated_control_tools.get(agent_name, ())
+            )
+        return tools
 
     def _memory_root_override(self, task_id: Optional[str]) -> Optional[Path]:
         """The per-task root the injected resolver maps ``task_id`` to, or ``None``.

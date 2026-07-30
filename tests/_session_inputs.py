@@ -1,6 +1,7 @@
 import tests._builtin_skills as _skills
 from tests._builtin_skills import BUILTIN_SKILLS_DIR
 from noeta.client.parts import (
+    default_control_tools,
     default_guards_factory,
     default_policy_factory,
     default_reminder_specs,
@@ -84,6 +85,7 @@ def default_factory_kwargs():
     directly splat these in."""
     return {
         "session_packs": default_session_packs(),
+        "control_tools": default_control_tools(),
         "base_reminders": default_reminder_specs(),
         "guards_factory": default_guards_factory(),
         "default_policy_factory": default_policy_factory(),
@@ -159,6 +161,12 @@ def build_code_replay_inputs(*, workspace_dir, agent, content_store, model, **kw
     # session packs; default to the SDK's builtin set unless the caller
     # injects its own.
     kwargs.setdefault("session_packs", default_session_packs())
+    # control-tool-surface S2: the three migrated control tools (todo_write /
+    # ask_user_question / delegation) now arrive as manifest-resolved control_tool
+    # entries; the builder keeps only skill / run_workflow / structured_output
+    # internal. Wire the SDK built-in set so a directly-built session mounts the
+    # same control schemas the SdkHost live path does (the S0 golden's seam).
+    kwargs.setdefault("control_tools", default_control_tools())
     kwargs.setdefault("base_reminders", default_reminder_specs())
     kwargs.setdefault("guards_factory", default_guards_factory())
     kwargs.setdefault("default_policy_factory", default_policy_factory())

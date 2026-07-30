@@ -33,7 +33,7 @@ here, so ``policies`` need not import ``execution``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional
 
 from noeta.policies.control_semantics import ControlTranslateContext
@@ -45,7 +45,49 @@ __all__ = [
     "ControlToolMount",
     "ControlToolFactory",
     "ControlToolEntry",
+    "AskAnswerCodec",
+    "CONTROL_EXPORT_ASK_ANSWER_CODEC",
 ]
+
+
+#: The one admitted control-tool mount-export key (D8). A mount may publish
+#: named values under :attr:`ControlToolMount.exports`; the builder collects them
+#: into one mapping the host threads to the kernel seams that consume them —
+#: mirroring ``PackContribution.exports``. This vocabulary is CLOSED by the same
+#: admission rule: a key exists here ONLY because a kernel seam reads it. This
+#: one carries the ``ask_user_question`` answer codec (:class:`AskAnswerCodec`)
+#: from its built-in mount to the driver's ``answer`` path — the driver can no
+#: longer import the codec statically (it moved into the ``ask_user_question``
+#: built-in, and the kernel never imports ``noeta.builtins``). A session that
+#: never mounts ``ask_user_question`` carries no such key, and an answer arriving
+#: for it fails loudly.
+CONTROL_EXPORT_ASK_ANSWER_CODEC = "ask_answer_codec"
+
+
+@dataclass(frozen=True, slots=True)
+class AskAnswerCodec:
+    """The ``ask_user_question`` answer codec the driver's ``answer`` path reads.
+
+    A kernel-side kit type (the ``EnvironmentKit`` / ``InstructionsKit`` pattern):
+    the three answer-side functions live in the ``ask_user_question`` built-in
+    (schema + translate + codec are collocated there), and the built-in fills
+    this struct so the kernel driver can call them WITHOUT a static
+    ``noeta.builtins`` import. Delivered to the driver as the
+    :data:`CONTROL_EXPORT_ASK_ANSWER_CODEC` mount export (D8).
+
+    * ``question_handle(question_id) -> handle`` — the ``question-<id>`` wake
+      handle a suspended-on-question task waits on.
+    * ``load_questions_body(content_store, ref) -> questions`` — decode the
+      spilled pending-question body.
+    * ``normalize_answer_document(raw, questions) -> answers`` — validate a
+      submitted answer body against the pending questions.
+    """
+
+    question_handle: Callable[[str], str]
+    load_questions_body: Callable[[Any, Any], list[dict[str, Any]]]
+    normalize_answer_document: Callable[
+        [Any, list[dict[str, Any]]], dict[str, dict[str, Any]]
+    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +152,12 @@ class ControlToolMount:
     translate: Optional[Callable[[ControlTranslateContext], Optional[Decision]]]
     routing_priority: int
     schema_priority: int
+    #: Named values this mount publishes to the kernel seams that consume them
+    #: (D8), collected by the builder into one mapping — the same closed-
+    #: vocabulary pattern as ``PackContribution.exports``. Keys are drawn from the
+    #: admitted vocabulary (:data:`CONTROL_EXPORT_ASK_ANSWER_CODEC`). Empty for a
+    #: mount whose only contribution is a schema + translate (the common case).
+    exports: Mapping[str, Any] = field(default_factory=dict)
 
 
 #: The uniform factory signature every control-tool entry implements: read the

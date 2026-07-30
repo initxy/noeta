@@ -30,7 +30,9 @@ below from importing it). Only consumers import it.
 from __future__ import annotations
 
 from noeta.builtins.app import MANIFEST as _APP
+from noeta.builtins.ask_user_question import MANIFEST as _ASK_USER_QUESTION
 from noeta.builtins.browser import MANIFEST as _BROWSER
+from noeta.builtins.delegation import MANIFEST as _DELEGATION
 from noeta.builtins.fs import MANIFEST as _FS
 from noeta.builtins.governance import MANIFEST as _GOVERNANCE
 from noeta.builtins.mcp import MANIFEST as _MCP
@@ -41,6 +43,7 @@ from noeta.builtins.react import MANIFEST as _REACT
 from noeta.builtins.reminders import MANIFEST as _REMINDERS
 from noeta.builtins.sandbox import MANIFEST as _SANDBOX
 from noeta.builtins.skills import MANIFEST as _SKILLS
+from noeta.builtins.todo_write import MANIFEST as _TODO_WRITE
 from noeta.builtins.web import MANIFEST as _WEB
 from noeta.builtins.workspace import MANIFEST as _WORKSPACE
 from noeta.client.options import BUILTIN_ACTIVATIONS
@@ -71,6 +74,12 @@ _BUILTINS: tuple[PluginManifest, ...] = (
     _SANDBOX,
     _PRESETS,
     _WORKSPACE,
+    # Control-tool built-ins (control-tool-surface S2): each contributes one
+    # ``control_tool`` mount factory. ``delegation`` shares the ``spawn_subagent``
+    # tool; ``todo_write`` / ``ask_user_question`` keep their tool names.
+    _TODO_WRITE,
+    _ASK_USER_QUESTION,
+    _DELEGATION,
 )
 
 #: Every built-in plugin's name, for enable/disable bookkeeping and the

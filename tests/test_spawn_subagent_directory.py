@@ -31,11 +31,9 @@ from noeta.agent.spec import (
 )
 from noeta.client import AgentDefinition, Options, compile_options
 from noeta.client.host import SdkHost
-from noeta.policies.descriptions import load_control_tool_description
-from noeta.policies._control_translate import (
-    SPAWN_SUBAGENT_TOOL,
-    spawn_subagent_tool_schema,
-)
+from noeta.builtins.delegation.impl import spawn_subagent_tool_schema
+from noeta.policies.control_semantics import SPAWN_SUBAGENT_TOOL
+from noeta.protocols.resources import load_markdown
 from noeta.protocols.messages import Usage
 from noeta.storage.memory import (
     InMemoryContentStore,
@@ -53,7 +51,9 @@ _REFERENCE_SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
         "name": SPAWN_SUBAGENT_TOOL,
-        "description": load_control_tool_description("spawn_subagent"),
+        "description": load_markdown(
+            "noeta.builtins.delegation.impl", "spawn_subagent"
+        ),
         "parameters": {
             "type": "object",
             "properties": {

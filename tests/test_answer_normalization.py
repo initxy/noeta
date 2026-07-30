@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from noeta.policies.control_semantics import (
+from noeta.builtins.ask_user_question.impl import (
     AnswerValidationError,
     normalize_answer_document,
 )

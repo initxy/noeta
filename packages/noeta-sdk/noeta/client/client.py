@@ -24,6 +24,7 @@ from typing import Any, Callable, Mapping, Optional
 
 from noeta.agent.registry import AgentRegistry
 from noeta.context.reminders import ReminderSpec
+from noeta.execution.control_tool import ControlToolEntry
 from noeta.execution.session_pack import SessionPackEntry
 from noeta.core.wiring import wire_default_observers
 from noeta.client.otlp import make_otlp_trace_observer
@@ -376,11 +377,17 @@ class Client:
             if plugins is not None
             else empty
         )
+        control_tool_map = (
+            plugins.activation_control_tools(only=activated)
+            if plugins is not None
+            else empty
+        )
         tool_result_transforms: dict[str, tuple[Any, ...]] = {}
         extra_reminders: dict[str, tuple[ReminderSpec, ...]] = {}
         reminder_providers: dict[str, Mapping[str, tuple[Any, ...]]] = {}
         activated_content_kinds: dict[str, tuple[Any, ...]] = {}
         activated_session_packs: dict[str, tuple[Any, ...]] = {}
+        activated_control_tools: dict[str, tuple[Any, ...]] = {}
         for _agent, _activation in agent_activations.items():
             _stages = _ordered_stages(transform_map, _activation)
             if _stages:
@@ -399,6 +406,12 @@ class Client:
                 activated_session_packs[_agent] = tuple(
                     SessionPackEntry(name=_n, priority=_p, factory=_v)
                     for _p, _pl, _n, _v in _packs
+                )
+            _ctools = _ordered_stages(control_tool_map, _activation)
+            if _ctools:
+                activated_control_tools[_agent] = tuple(
+                    ControlToolEntry(name=_n, priority=_p, factory=_v)
+                    for _p, _pl, _n, _v in _ctools
                 )
             _kinds = tuple(
                 kind
@@ -512,6 +525,11 @@ class Client:
             # appended after the built-in packs and interleaved by priority in
             # the kernel builder's generic loop. Empty ⇒ byte-identical.
             activated_session_packs=activated_session_packs,
+            # Control-tool-surface S2: external plugins' control tools, per agent
+            # — merged after the built-in control tools and re-sorted with the
+            # kernel's internal entries in the builder's mount loop. Empty ⇒
+            # byte-identical to the built-in-only session.
+            activated_control_tools=activated_control_tools,
             # (D3) — host-level runtime
             # injections (NOT agent identity): the HTML-app preview gateway
             # (open_app) and the live-MCP alias resolver + transport. All default
