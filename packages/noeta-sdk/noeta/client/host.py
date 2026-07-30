@@ -466,6 +466,14 @@ class SdkHost(GenericEngineResolver):
     max_background_subagents_per_session: int = (
         DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_SESSION
     )
+    #: Whether the ``skills`` built-in is wired at all. ``False`` (the host
+    #: honouring ``load_plugins(disabled_builtins=["skills"])``) passes NO
+    #: ``skills_factory`` to the kernel builder: nothing is indexed, no skill
+    #: content kind is registered, no skill tool is grown, and the script
+    #: wiring stays empty. Unlike ``react``, skills has a defined empty state —
+    #: the agent simply has none — so the disable is real rather than refused.
+    #: The other skills fields below become inert when this is ``False``.
+    skills_enabled: bool = True
     # Skills dir overriding workspace_dir/.noeta/skills (workspace-local tier);
     # None uses the default load location.
     skills_dir: Optional[Path] = None
@@ -1662,7 +1670,7 @@ class SdkHost(GenericEngineResolver):
             memory_factory=default_memory_factory(),
             browser_tools_factory=default_browser_tools_factory(),
             app_tools_factory=default_app_tools_factory(),
-            skills_factory=default_skills_kit_factory(),
+            skills_factory=self._skills_factory(),
             default_policy_factory=default_policy_factory(),
             workspace_dir=workspace_dir,
             system_prompt=spec.instructions,
@@ -1879,7 +1887,7 @@ class SdkHost(GenericEngineResolver):
             base_reminders=default_reminder_specs(),
             guards_factory=default_guards_factory(),
             memory_factory=default_memory_factory(),
-            skills_factory=default_skills_kit_factory(),
+            skills_factory=self._skills_factory(),
             default_policy_factory=default_policy_factory(),
             workspace_dir=self.workspace_dir,
             system_prompt=react_impl().WORKFLOW_SYSTEM_PROMPT,
@@ -2077,6 +2085,19 @@ class SdkHost(GenericEngineResolver):
             return self.global_memory_dir
         default_root: Path = memory_impl().DEFAULT_GLOBAL_MEMORY_DIR
         return default_root
+
+    def _skills_factory(self) -> Optional[Callable[..., Any]]:
+        """The kernel builder's ``skills_factory`` injection, or ``None``.
+
+        ``None`` is the honest expression of a disabled ``skills`` built-in:
+        the kernel's skills stage no-ops, so no registry, no skill content
+        kind, no skill tool, and no script wiring exist for the session. Both
+        build paths (session + workflow orchestration) go through here so they
+        can never disagree about whether the capability is wired.
+        """
+        if not self.skills_enabled:
+            return None
+        return default_skills_kit_factory()
 
     def _memory_root_override(self, task_id: Optional[str]) -> Optional[Path]:
         """The per-task root the injected resolver maps ``task_id`` to, or ``None``.

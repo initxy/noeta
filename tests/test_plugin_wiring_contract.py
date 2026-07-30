@@ -20,7 +20,7 @@ from __future__ import annotations
 import dataclasses
 import textwrap
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import pytest
 
@@ -87,6 +87,14 @@ def _request_text(provider: FakeLLMProvider, index: int = 0) -> str:
         for message in request.messages
         for block in message.content
         if isinstance(block, TextBlock)
+    )
+
+
+def _request_tool_names(provider: FakeLLMProvider, index: int = 0) -> frozenset[str]:
+    """The tool names on one composed request's wire schema."""
+    return frozenset(
+        spec["function"]["name"]
+        for spec in (provider.received_requests[index].tools or ())
     )
 
 
@@ -704,6 +712,82 @@ def test_builtinless_set_keeps_the_default_capability_surface(tmp_path: Path) ->
         assert dataclasses.asdict(scoped.registry.resolve("main")) == golden
     finally:
         scoped.shutdown()
+
+
+def _skill_roster(tmp_path: Path, disabled: Sequence[str]) -> frozenset[str]:
+    """The composed tool roster of a one-skill workspace under ``disabled``."""
+    skill_dir = tmp_path / "ws" / ".noeta" / "skills" / "greet"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: greet\ndescription: say hi\n---\n\nSay hi.\n", encoding="utf-8"
+    )
+    provider = FakeLLMProvider(responses=[_end_turn()])
+    client = _client(
+        tmp_path,
+        _bare(plugins=("skill_invocation",)),
+        provider,
+        load_plugins(builtins=True, disabled_builtins=disabled),
+    )
+    try:
+        client.start(goal="hello")
+    finally:
+        client.shutdown()
+    return _request_tool_names(provider)
+
+
+def test_disabling_the_skills_builtin_actually_removes_the_capability(
+    tmp_path: Path,
+) -> None:
+    """``disabled_builtins=["skills"]`` reaches the engine, not just the listing.
+
+    The ``skills`` built-in contributes nothing per-agent (the manifest is
+    contribution-free), so before this the name was dropped from the catalogue
+    while the host injected ``default_skills_kit_factory()`` regardless — skills
+    stayed indexed and the ``skill`` control tool stayed on the wire. The
+    disable now travels: ``PluginSet`` records it, the host withholds the
+    factory, and the kernel's skills stage no-ops.
+
+    Asserted as a roster DIFFERENCE so the test pins the one intended effect —
+    everything else about the session is untouched.
+    """
+    on = _skill_roster(tmp_path, ())
+    off = _skill_roster(tmp_path, ("skills",))
+    assert "skill" in on
+    assert on - off == {"skill"}
+    assert off - on == frozenset()
+
+
+def test_a_builtinless_set_does_not_disable_skills(tmp_path: Path) -> None:
+    """Absence is not a disable — only an explicit ``disabled_builtins`` is.
+
+    ``builtins=False`` is the ordinary way to load just one's own plugin (every
+    ``examples/`` test does it), and it drops every built-in NAME. Reading the
+    host switch off membership would silently strip skills from those sessions;
+    the switch reads the recorded disable instead. Companion to
+    :func:`test_builtinless_set_keeps_the_default_capability_surface`, one layer
+    down: that one pins the compiled spec, this one pins the built engine.
+    """
+    (tmp_path / "ws").mkdir(exist_ok=True)
+    scoped = _client(
+        tmp_path, _bare(), FakeLLMProvider(responses=[_end_turn()]),
+        load_plugins(builtins=False),
+    )
+    try:
+        assert scoped._host.skills_enabled is True
+    finally:
+        scoped.shutdown()
+
+
+def test_the_react_builtin_refuses_to_be_disabled() -> None:
+    """The default policy is replaceable (D10 ``policy`` surface), not removable.
+
+    Every compiled ``AgentSpec`` pins ``POLICY_REF ("react", "1")``, so there is
+    no identity for a policy-less agent and no parity to resume. Silently
+    accepting the disable — dropping the catalogue entry while the host wired
+    ``ReActPolicy`` anyway — was the dishonest half; refusing is the honest one.
+    """
+    with pytest.raises(PluginError, match="'react' cannot be disabled"):
+        load_plugins(builtins=True, disabled_builtins=["react"])
 
 
 # ===========================================================================

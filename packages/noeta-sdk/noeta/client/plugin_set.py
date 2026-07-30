@@ -240,6 +240,13 @@ class PluginSet:
 
     plugins: tuple[LoadedPlugin, ...]
     registry: SurfaceRegistry
+    #: The built-in names the caller explicitly turned off (``load_plugins``'
+    #: ``disabled_builtins``). Recorded rather than inferred from membership:
+    #: ``builtins=False`` means "no built-in plugin *catalogue*" (the usual way
+    #: to load a single test plugin), NOT "no built-in capabilities", so an
+    #: absent name is not a disable. A host reads this to honour a disable that
+    #: no contribution can express — see ``SdkHost(skills_enabled=...)``.
+    disabled_builtins: frozenset[str] = frozenset()
     #: Memo of ``plugin name -> resolved contributions``. Resolution imports and
     #: validates a plugin's refs, and ``Client`` asks for several different
     #: projections of the same set during one build; without the memo each
@@ -614,6 +621,22 @@ def _seams(c: ManifestContribution) -> tuple[str, ...]:
 # ---------------------------------------------------------------------------
 
 
+#: Built-ins whose capability the compiled agent depends on unconditionally, so
+#: ``disabled_builtins`` cannot express a removal. Refusing loudly is the honest
+#: answer: before this the name was dropped from the catalogue while the
+#: capability stayed wired, and the disable read as effective.
+_NON_REMOVABLE_BUILTINS: dict[str, str] = {
+    "react": (
+        "built-in 'react' cannot be disabled: it supplies the DEFAULT decision "
+        "policy, and every compiled AgentSpec pins that identity as "
+        "POLICY_REF ('react', '1') — an agent with no policy has no defined "
+        "identity or parity. The default brain is REPLACEABLE, not removable: "
+        "activate a plugin contributing the 'policy' surface (D10) and its ref "
+        "takes over both the identity and the wired factory."
+    ),
+}
+
+
 @dataclass(frozen=True)
 class _Candidate:
     name: str
@@ -641,7 +664,10 @@ def load_plugins(
     ``builtins`` (source 0) is on by default and disabled per-name via
     ``disabled_builtins``; ``True`` discovers the built-in catalogue
     (``noeta.builtins``), and an iterable of manifests may be injected instead
-    as the testing seam.
+    as the testing seam. A disable is recorded on the returned set
+    (:attr:`PluginSet.disabled_builtins`) so a host can honour the ones no
+    contribution expresses — and a name in ``_NON_REMOVABLE_BUILTINS``
+    (``react``) raises rather than pretending to take effect.
     ``entry_points`` (source 1) is off unless ``True`` (real ``noeta.plugins``
     discovery) or an iterable of entry-point-like objects (each exposing ``.name``
     + ``.dist``) is passed. ``modules`` (source 2) are explicit dotted modules or
@@ -663,6 +689,8 @@ def load_plugins(
     reg = registry if registry is not None else standard_registry()
     enabled_set = set(enabled) if enabled is not None else None
     disabled = set(disabled_builtins)
+    for name in sorted(disabled & _NON_REMOVABLE_BUILTINS.keys()):
+        raise PluginError(_NON_REMOVABLE_BUILTINS[name])
     store = Path(trust_store) if trust_store is not None else DEFAULT_TRUST_STORE
 
     seen: dict[str, str] = {}
@@ -719,7 +747,11 @@ def load_plugins(
         for cand in _scan_dir(path, "workspace_dir", enabled_set):
             accept(cand)
 
-    return PluginSet(plugins=tuple(loaded), registry=reg)
+    return PluginSet(
+        plugins=tuple(loaded),
+        registry=reg,
+        disabled_builtins=frozenset(disabled),
+    )
 
 
 def _enabled_pass(enabled_set: Optional[set], name: Optional[str]) -> bool:

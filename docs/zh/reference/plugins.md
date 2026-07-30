@@ -214,7 +214,8 @@ load_plugin_set(
 ) -> PluginSet
 ```
 
-- `builtins=True` 发现内置目录（`D11`）；传入一个 `PluginManifest` 的可迭代对象可注入一套自定义集合（测试用的 seam）。`disabled_builtins` 按名丢弃内置插件。
+- `builtins=True` 发现内置目录（`D11`）；传入一个 `PluginManifest` 的可迭代对象可注入一套自定义集合（测试用的 seam）。`disabled_builtins` 按名丢弃内置插件，并且这个禁用会被**记录**在返回的集合上（`PluginSet.disabled_builtins`），这样宿主也能在没有任何 contribution 表达它的地方兑现它——`skills` 不贡献任何 per-agent contribution，所以禁用它正是 `Client` 不再注入 skills kit 的依据（不索引、没有 `skill` 工具、没有 skill content kind）。注意「不在集合里」不等于「被禁用」：`builtins=False` 限定的是*被加载的集合*，从不影响 SDK 自身的能力。
+- `react` **不能**被禁用——`disabled_builtins=["react"]` 会抛 `PluginError`。它提供默认的决策 policy，而每个编译出的 `AgentSpec` 都把这个身份钉为 `POLICY_REF ("react", "1")`；一个没有 policy 的 agent 既没有可编译的身份，也没有可 resume 的 parity。默认的大脑是*可替换*的，而不是可移除的：激活一个贡献 `policy` surface 的插件，它的 ref 就会同时接管身份与被接线的 factory。
 - `entry_points=True` 通过 `importlib.metadata` 发现 `noeta.plugins` 组；一个由类 entry-point 对象（`.name` + `.dist`）组成的可迭代对象会把它们注入进来。一个分发里没有随附 `noeta-plugin.toml` 的 entry point 会大声失败。
 - `modules` 里的条目可以是点分模块（导入它即是授权）、一个 `.py` 文件、一个目录（像来源 3/4 的目录那样扫描），或一个 `.toml` manifest。
 - `user_dirs` 无条件加载；`workspace_dirs` 仅当目录被记录在信任存储里时才加载，否则带 `UntrustedPluginDirWarning` 跳过。两者都会扫描携带 `noeta-plugin.toml` 的子目录（零执行）**以及**顶层的 `*.py` 单文件插件（会被执行——一个受信任的目录），并跳过以 `_` 开头的文件。

@@ -539,6 +539,15 @@ class Client:
             write_mode=(
                 FsWriteMode.APPLY if hc.write_mode == "apply" else FsWriteMode.DRY_RUN
             ),
+            # The one built-in disable a manifest contribution cannot express:
+            # ``skills`` supplies no per-agent contribution, so dropping its
+            # catalogue entry would otherwise leave the capability wired. Read
+            # the RECORDED disable, never membership — ``builtins=False`` (the
+            # usual "load only my own plugin" form) drops every built-in name
+            # without meaning to drop any capability.
+            skills_enabled=(
+                plugins is None or "skills" not in plugins.disabled_builtins
+            ),
         )
 
         # OTLP trace export (host config): a lifecycle-owning observer the
