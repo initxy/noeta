@@ -32,7 +32,7 @@ assembly (the Composer owns ``control_action_schemas``); it only translates
 tools were removed.
 
 Layering: imports only ``noeta.protocols.*`` and the sibling
-``noeta.policies.descriptions`` / ``noeta.policies._workflow_sandbox`` — no
+``noeta.policies.descriptions`` / ``noeta.policies.workflow_sandbox`` — no
 cross-band edge, no ``ReActPolicy`` import (so ``react`` may depend on this
 module without a cycle).
 """
@@ -45,7 +45,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from noeta.policies.descriptions import load_control_tool_description
-from noeta.policies._workflow_sandbox import check_workflow_script
+from noeta.policies.workflow_sandbox import check_workflow_script
 from noeta.protocols.canonical import from_canonical_bytes, to_canonical_bytes
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.decisions import (
@@ -1149,11 +1149,15 @@ def spawn_subagent_tool_schema(
 #: Lives here, not in ``orchestration``, so :func:`_maybe_spawn_decision` can
 #: reach it without a ``control_semantics → orchestration`` import cycle
 #: (``orchestration`` imports ``control_tools``, a re-export shim for this
-#: module); ``orchestration`` imports the helper back from here.
+#: module); ``orchestration`` imports the helper back from here — and since
+#: phase 2b that import crosses the wheel boundary (``orchestration`` ships in
+#: noeta-sdk's ``react`` built-in), which is why
+#: :func:`concurrent_fanout_enabled` is a public name: the kernel owes the
+#: built-ins band a contract, not an underscore.
 _SUBTASK_CONCURRENCY_ENV = "NOETA_SUBTASK_CONCURRENCY"
 
 
-def _concurrent_fanout_enabled() -> bool:
+def concurrent_fanout_enabled() -> bool:
     """True unless the escape valve forces a sequential group drain.
 
     Default ON: an unset (or unrecognized) ``NOETA_SUBTASK_CONCURRENCY`` means
@@ -1294,7 +1298,7 @@ def _maybe_spawn_decision(
         # this transient opt-in onto the persisted ``SubtaskGroupCompleted``
         # (``concurrent or None``), so a forced-sequential group stays
         # byte-identical to a pre-v2 recording.
-        concurrent=_concurrent_fanout_enabled(),
+        concurrent=concurrent_fanout_enabled(),
     )
 
 

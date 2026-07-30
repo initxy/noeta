@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from noeta.policies._control_translate import ControlToggles, translate_control_tool
-from noeta.policies._workflow_sandbox import SAFE_BUILTINS, check_workflow_script
+from noeta.policies.workflow_sandbox import SAFE_BUILTINS, check_workflow_script
 from noeta.policies.control_tools import RUN_WORKFLOW_TOOL
 from noeta.protocols.decisions import SpawnSubtaskDecision, StatePatchDecision
 from noeta.protocols.messages import (

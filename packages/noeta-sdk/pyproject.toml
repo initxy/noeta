@@ -23,7 +23,13 @@ dependencies = [
     # (providers, web, mcp, sandbox backends, otlp export) all ship in this
     # wheel; noeta-runtime is transport-free.
     "httpx>=0.28.1",
-    "noeta-runtime>=0.4.0",
+    # Upper-bounded on purpose. Since phase 2b the built-ins band consumes the
+    # kernel ACROSS the wheel boundary (the react built-in imports the control
+    # band; skills / memory / providers import the kernel's seams), so version
+    # skew that used to be impossible — one wheel, one release — is now
+    # installable. Under 0.x a minor bump is the breaking one, so the SDK
+    # tracks the kernel minor-for-minor rather than failing at first build.
+    "noeta-runtime>=0.4.0,<0.5.0",
 ]
 
 [project.urls]

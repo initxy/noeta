@@ -2,7 +2,7 @@
 
 One workflow run = **one Task + one Policy that interprets an orchestration script**:
 
-* The main agent calls the control tool ``run_workflow(script=...)`` → (``_control_translate``)
+* The main agent calls the control tool ``run_workflow(script=...)`` → (``control_semantics``)
   translates it into ``SpawnSubtaskDecision(agent_name=WORKFLOW_AGENT_NAME, inputs={script,args})``,
   same family as ``spawn_subagent`` and sharing its plumbing (D5).
 * The spawned subtask is not bound to a catalog agent but to :class:`OrchestrationPolicy`
@@ -39,8 +39,8 @@ import ast
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from noeta.policies._workflow_sandbox import SAFE_BUILTINS
-from noeta.policies.control_semantics import _concurrent_fanout_enabled
+from noeta.policies.workflow_sandbox import SAFE_BUILTINS
+from noeta.policies.control_semantics import concurrent_fanout_enabled
 from noeta.policies.control_tools import (
     SPAWN_SUBAGENT_TOOL,
     STRUCTURED_OUTPUT_TOOL,
@@ -108,7 +108,7 @@ _ENTRY_NAME = "__noeta_workflow__"
 #: fan-out v2 concurrency judgment is shared with the SR2 ``spawn_subagent``
 #: fan-out and lives in ``control_semantics`` (the lowest common point that
 #: avoids a ``control_semantics → orchestration`` import cycle) —
-#: ``_concurrent_fanout_enabled`` is imported above. Default ON; set
+#: ``concurrent_fanout_enabled`` is imported above. Default ON; set
 #: ``NOETA_SUBTASK_CONCURRENCY`` to ``0``/``false``/``off``/``no`` to force
 #: sequential drain.
 
@@ -314,7 +314,7 @@ class _ScriptHost:
                 # conditional fold onto the persisted ``SubtaskGroupCompleted``,
                 # so a disabled rollout (``False``) stays byte-identical to a
                 # pre-v2 sequential recording.
-                concurrent=_concurrent_fanout_enabled(),
+                concurrent=concurrent_fanout_enabled(),
             )
         )
 
