@@ -75,8 +75,6 @@ from noeta.runtime.file_checkpoint import FileCheckpointRegistry
 from noeta.client.parts import (
     browser_tool_names,
     catalog_price,
-    default_app_tools_factory,
-    default_browser_tools_factory,
     mcp_impl,
     default_guards_factory,
     default_policy_factory,
@@ -99,7 +97,7 @@ from noeta.client.sandbox import (
     provider_for_config,
 )
 from noeta.client.sandbox_provider import SandboxProvider, SandboxSpec
-from noeta.runtime.app_preview import AppPreviewGateway
+from noeta.client.host_config import AppPreviewGateway
 from noeta.runtime.llm import RuntimeLLMClient
 from noeta.runtime.exec_env import ExecEnv
 from noeta.runtime.shell_policy import ShellMode
@@ -1677,12 +1675,18 @@ class SdkHost(GenericEngineResolver):
         # is the durable truth, and the resume path passes empty aliases.
         mcp_tools_override = self._resolve_live_mcp_tools(mcp_aliases, task_id=task_id)
         memory_override = self._memory_root_override(task_id)
+        # The named backend bag (phase 3): live backing objects for the
+        # capability packs, keyed by the plugins' own names. Absent names
+        # mean "no live backing" — the pack contributes nothing.
+        session_backends: dict[str, object] = {}
+        if session_browser_backend is not None:
+            session_backends["browser"] = session_browser_backend
+        if self.app_gateway is not None:
+            session_backends["app_preview"] = self.app_gateway
         inputs = build_session_inputs(
             session_packs=self._session_packs(),
             base_reminders=default_reminder_specs(),
             guards_factory=default_guards_factory(),
-            browser_tools_factory=default_browser_tools_factory(),
-            app_tools_factory=default_app_tools_factory(),
             default_policy_factory=default_policy_factory(),
             workspace_dir=workspace_dir,
             system_prompt=spec.instructions,
@@ -1763,19 +1767,16 @@ class SdkHost(GenericEngineResolver):
             # before 0042.
             mcp_tools_override=mcp_tools_override,
             custom_tools=filtered_custom,
-            # Thread the host's live preview gateway so this engine's
-            # tool set gains ``open_app``. ``None`` (oneshot / tests / resume) ⇒
-            # no open_app, so the tool set is unchanged.
-            app_gateway=self.app_gateway,
             # The sandbox backend for this session's fs / shell tools (T5).
             # ``None`` (no host sandbox) ⇒ the builder uses ``LocalExecEnv`` and
             # the host ``WorkspaceRoot`` — byte-identical to the local path.
             exec_env=session_exec_env,
-            # The per-session browser backend + this agent's browser capability
-            # (B5). ``None`` backend / ``False`` flag ⇒ no browser tools merged,
-            # tool set + stable prefix byte-identical.
-            browser_backend=session_browser_backend,
-            browser_enabled=browser_enabled,
+            # The backend bag + this agent's capability flags (phase 3): the
+            # browser pack merges only with a live ``"browser"`` backend AND
+            # the flag; the app pack only with a live ``"app_preview"``
+            # gateway. Empty bag ⇒ tool set + stable prefix byte-identical.
+            backends=session_backends,
+            capability_flags={"browser": browser_enabled},
             hooks_pre_tool_use=self.hooks_pre_tool_use,
             repetition_threshold=self.repetition_threshold,
             repetition_action=self.repetition_action,

@@ -15,7 +15,7 @@ fixtures — passes no gateway, so the tool is absent and the tool set (hence
 the prompt's tool list) is unchanged on those paths.
 
 Microkernel M3: moved here (the ``app`` built-in plugin) from
-``noeta.tools.app``; the :class:`~noeta.runtime.app_preview.AppPreviewGateway`
+``noeta.tools.app``; the :class:`AppPreviewGateway`
 seam sank into the kernel band, and the kernel builder takes this pack's
 factory injected (``build_session_inputs(app_tools_factory=…)``, resolved by
 the SDK host through :func:`noeta.client.parts.default_app_tools_factory`).
@@ -24,16 +24,63 @@ the SDK host through :func:`noeta.client.parts.default_app_tools_factory`).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from pathlib import Path
+from typing import Any, Optional, Protocol, cast
 
+from noeta.execution.session_pack import (
+    EMPTY_CONTRIBUTION,
+    PackContribution,
+    SessionBuildContext,
+)
 from noeta.protocols.tool import Tool, ToolContext, ToolResult
-from noeta.runtime.app_preview import AppPreviewGateway
 from noeta.protocols.resources import load_markdown
 from noeta.tools._invocation import require_str
 from noeta.runtime.workspace import WorkspaceRoot, resolve_or_error, tool_error
 
 
-__all__ = ["OpenAppTool", "build_app_tools"]
+__all__ = [
+    "AppMount",
+    "AppPreviewGateway",
+    "OpenAppTool",
+    "build_app_session_pack",
+    "build_app_tools",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class AppMount:
+    """What :meth:`AppPreviewGateway.mount` returns.
+
+    ``token`` is the unguessable path segment the gateway routes on
+    (``/apps/<token>/``); ``url`` is the absolute address the right-side
+    "App" iframe loads (``http://<gateway-host>:<port>/apps/<token>/``).
+    """
+
+    token: str
+    url: str
+
+
+class AppPreviewGateway(Protocol):
+    """Structural seam: register an app mount, get its render URL.
+
+    This plugin's own seam (microkernel phase 3 — moved here from
+    ``noeta.runtime.app_preview``; the ``open_app`` tool and the Protocol it
+    calls through live in one plugin). The product host's concrete gateway
+    (a second HTTP listener + a mount registry + the same-origin ``/api``
+    proxy) satisfies this structurally and rides the kernel's backend bag
+    under the ``"app_preview"`` name. ``mount`` is the only operation the
+    tool needs; unmount/lifecycle is the host's concern (keyed on
+    ``task_id``), never the tool's.
+    """
+
+    def mount(
+        self,
+        *,
+        workspace_dir: Path,
+        app_rel: str,
+        proxy_to: str,
+        task_id: str,
+    ) -> AppMount: ...
 
 _ENTRY = "index.html"
 
@@ -106,6 +153,24 @@ def build_app_tools(
     """The app-tool pack: just ``open_app``, gateway-injected.
 
     Returned only when the host has a live preview gateway; merged into the
-    session tool set via ``build_session_inputs(app_gateway=...)``.
+    session tool set through this plugin's ``session_pack`` contribution.
     """
     return {"open_app": OpenAppTool(workspace=workspace, gateway=gateway)}
+
+
+def build_app_session_pack(ctx: SessionBuildContext) -> PackContribution:
+    """The app pack as a ``session_pack`` contribution (microkernel phase 3).
+
+    The manifest-declared factory (band 1000 — after the kernel's custom
+    entry, so the host's ``open_app`` is authoritative). Gated on a live
+    ``"app_preview"`` gateway in the context bag — absent (resume + every
+    SDK/test fixture) ⇒ the empty contribution, keeping the tool set + stable
+    hash byte-identical (a resumed turn that wires no gateway rebuilds the
+    identical tool schemas).
+    """
+    gateway = cast(
+        Optional[AppPreviewGateway], ctx.backends.get("app_preview")
+    )
+    if gateway is None:
+        return EMPTY_CONTRIBUTION
+    return PackContribution(tools=build_app_tools(ctx.workspace, gateway))

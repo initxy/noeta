@@ -34,8 +34,6 @@ __all__ = [
     "builtin_tool_ref",
     "browser_tool_names",
     "catalog_price",
-    "default_app_tools_factory",
-    "default_browser_tools_factory",
     "default_environment_kit",
     "default_guards_factory",
     "default_instructions_kit",
@@ -209,17 +207,6 @@ def resolve_model_alias(selector: str) -> str:
 # --- browser built-in accessors (microkernel M3) ---------------------------
 
 
-def default_browser_tools_factory() -> Callable[..., Any]:
-    """The browser tool pack factory for the kernel builder.
-
-    Resolved from the ``browser`` built-in plugin's body
-    (``noeta.builtins.browser.impl:build_browser_tools``) — the injection the
-    microkernel builder requires (its ``browser_tools_factory`` param); the
-    kernel itself imports no browser tool.
-    """
-    return _resolve_ref("noeta.builtins.browser.impl:build_browser_tools")
-
-
 def browser_tool_names() -> tuple[str, ...]:
     """The five noeta-owned browser tool names (loader-resolved roster).
 
@@ -235,15 +222,6 @@ def browser_tool_names() -> tuple[str, ...]:
 # --- app built-in accessor (microkernel M3) --------------------------------
 
 
-def default_app_tools_factory() -> Callable[..., Any]:
-    """The app-preview pack factory for the kernel builder.
-
-    Resolved from the ``app`` built-in plugin's body
-    (``noeta.builtins.app.impl:build_app_tools``) — the injection the
-    microkernel builder requires (its ``app_tools_factory`` param); the
-    kernel itself imports no tool implementation.
-    """
-    return _resolve_ref("noeta.builtins.app.impl:build_app_tools")
 
 
 # --- mcp built-in accessor (microkernel M3) --------------------------------

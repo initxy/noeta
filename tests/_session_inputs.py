@@ -1,8 +1,6 @@
 import tests._builtin_skills as _skills
 from tests._builtin_skills import BUILTIN_SKILLS_DIR
 from noeta.client.parts import (
-    default_app_tools_factory,
-    default_browser_tools_factory,
     default_environment_kit,
     default_guards_factory,
     default_instructions_kit,
@@ -30,8 +28,6 @@ def default_factory_kwargs():
         "session_packs": default_session_packs(),
         "base_reminders": default_reminder_specs(),
         "guards_factory": default_guards_factory(),
-        "browser_tools_factory": default_browser_tools_factory(),
-        "app_tools_factory": default_app_tools_factory(),
         "default_policy_factory": default_policy_factory(),
         "memory_index_kit": default_memory_index_kit(),
         "instructions_kit": default_instructions_kit(),
@@ -102,8 +98,6 @@ def build_code_replay_inputs(*, workspace_dir, agent, content_store, model, **kw
     kwargs.setdefault("session_packs", default_session_packs())
     kwargs.setdefault("base_reminders", default_reminder_specs())
     kwargs.setdefault("guards_factory", default_guards_factory())
-    kwargs.setdefault("browser_tools_factory", default_browser_tools_factory())
-    kwargs.setdefault("app_tools_factory", default_app_tools_factory())
     kwargs.setdefault("default_policy_factory", default_policy_factory())
     kwargs.setdefault("memory_index_kit", default_memory_index_kit())
     kwargs.setdefault("instructions_kit", default_instructions_kit())
