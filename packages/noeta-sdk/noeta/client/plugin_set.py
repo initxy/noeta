@@ -467,6 +467,23 @@ class PluginSet:
         """
         return self._activation_params("reminder", _priority, only)
 
+    def activation_session_packs(
+        self, only: Optional[Iterable[str]] = None
+    ) -> dict[str, tuple[tuple[int, str, Any], ...]]:
+        """Resolve each **external** plugin's ``session_pack`` factories
+        (microkernel phase 3).
+
+        Returns ``plugin name -> ((priority, contribution name, factory), …)``
+        for the wiring-plane, per-agent ``session_pack`` surface. The host
+        appends these after the built-in packs (which it resolves from the
+        built-in manifests) and hands the merged, ``(priority, plugin, name)``-
+        ordered entry list to the kernel builder's generic pack loop — an
+        agent that activates the plugin gets its pack's tools / content kinds
+        / exports assembled into the session. Same plane / scoping / execution
+        boundary as :meth:`activation_transforms`.
+        """
+        return self._activation_params("session_pack", _priority, only)
+
     def activation_reminder_providers(
         self, only: Optional[Iterable[str]] = None
     ) -> dict[str, tuple[tuple[tuple[str, ...], str, Any], ...]]:

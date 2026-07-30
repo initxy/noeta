@@ -90,14 +90,16 @@ def _set(*manifests: PluginManifest, registry: SurfaceRegistry | None = None) ->
 # ---------------------------------------------------------------------------
 
 
-def test_standard_registry_has_all_fourteen_surfaces():
+def test_standard_registry_has_all_fifteen_surfaces():
     reg = standard_registry()
-    assert len(reg.names()) == 14
-    assert len(STANDARD_SURFACES) == 14
+    assert len(reg.names()) == 15
+    assert len(STANDARD_SURFACES) == 15
     # A spot-check of the D3 table cells that carry mechanism meaning.
     assert reg.get("policy").collision_key == "single-valued"
     assert reg.get("provider").merge_rule == "single"
     assert reg.get("reminder").ordering == "priority"
+    assert reg.get("session_pack").ordering == "priority"
+    assert reg.get("session_pack").activation_scope == "per-agent"
     assert reg.get("guard").activation_scope == "process"
     assert reg.get("guard").collision_key == "none"
     assert reg.get("tool").plane == "identity"

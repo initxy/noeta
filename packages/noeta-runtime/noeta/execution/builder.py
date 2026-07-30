@@ -36,8 +36,9 @@ bytes changes — the stages run in the same order and do the same mutations.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
+from typing import Any, Callable, Mapping, Optional, Protocol, Sequence, cast
 
 from noeta.context.composer import ThreeSegmentComposer
 from noeta.context.content_channel import ContentChannelRegistry, ContentKindSpec
@@ -54,6 +55,18 @@ from noeta.execution.instructions import (
     load_instructions,
 )
 from noeta.execution.memory import MemoryIndexKit
+from noeta.execution.session_pack import (
+    EMPTY_CONTRIBUTION,
+    EXPORT_ENVIRONMENT_SNAPSHOT,
+    EXPORT_INSTRUCTIONS_SNAPSHOT,
+    EXPORT_INSTRUCTIONS_SNAPSHOTS,
+    EXPORT_MEMORY_ENTRIES,
+    EXPORT_MEMORY_STORE,
+    EXPORT_SKILLS_KIT,
+    PackContribution,
+    SessionBuildContext,
+    SessionPackEntry,
+)
 from noeta.execution.skills import SkillsKit
 from noeta.runtime.governance import (
     Budget,
@@ -581,29 +594,31 @@ class _ToolAssembly:
 
 
 # ---------------------------------------------------------------------------
-# Tool pipeline stages — each owns "whether to enable + how to build/filter" + its side effect.
-# The ORDER of _TOOL_PIPELINE is the construction-order contract
-# (fs → memory → script → mcp → custom → app, with the read-fence and
-# allowed_tools filter folded into the fs stage). Every stage is a
-# ``(_BuildSpec, _ToolAssembly) -> None`` that mutates ``asm`` in place.
+# Session packs — each owns "whether to enable + how to build/filter" and
+# returns a PackContribution; the generic loop in ``build_session_inputs``
+# merges them in (priority, name) order. The priority BANDS are the
+# construction-order contract (fs=100 → web=200 → memory=300 →
+# instructions=400 → environment=500 → skills=600 → browser=700 → mcp=800 →
+# custom=900 → app=1000), load-bearing for byte-equality (tool dict insertion
+# order feeds the Engine's deterministic ToolSchemaRecorded emission) and
+# locked by ``tests/test_session_pack_goldens.py``; do not renumber.
+#
+# Microkernel phase 3, S1: the packs still close over the legacy
+# ``_BuildSpec`` factory fields (loader-resolved by the SDK host exactly as
+# before); S2+ replaces each with the plugin's own manifest-contributed
+# ``session_pack`` factory reading only the SessionBuildContext.
 # ---------------------------------------------------------------------------
 
 
-def _stage_fs_pack(spec: _BuildSpec, asm: _ToolAssembly) -> None:
-    """fs + web + provider-edit + ``allowed_tools`` filter (the base pack).
+def _fs_pack(spec: _BuildSpec, ctx: SessionBuildContext) -> PackContribution:
+    """fs + provider-edit mutex + the ``allowed_tools`` filter (base pack).
 
-    Builds the full built-in pack, applies the provider-mutex edit drop, then
-    filters by the spec whitelist — the result is the ONLY stage whose output
-    passes through ``allowed_tools``; every later stage appends past the filter
+    Builds the fs pack against the kernel-built workspace root, applies the
+    provider-mutex edit drop, then filters by the spec whitelist — the base
+    packs (fs / web) are the ONLY ones whose output passes through
+    ``allowed_tools``; every capability pack appends past the filter
     (flag-gated tools are never whitelist-filtered, by design).
     """
-    # Sandbox mode (``exec_env`` set) makes ``workspace_dir`` a CONTAINER path:
-    # a host ``realpath`` / existence check is wrong (it lives in the container),
-    # so build a lexical containment root and let the ExecEnv do the remote IO.
-    if spec.exec_env is None:
-        asm.workspace = WorkspaceRoot.from_path(spec.workspace_dir)
-    else:
-        asm.workspace = WorkspaceRoot.for_container(spec.workspace_dir)
     if spec.fs_tools_factory is None or spec.web_tools_factory is None:
         raise RuntimeError(
             "fs/web tool pack factories were not injected — the SDK host "
@@ -612,56 +627,70 @@ def _stage_fs_pack(spec: _BuildSpec, asm: _ToolAssembly) -> None:
             "the kernel builder imports no tool implementation"
         )
     full_pack = spec.fs_tools_factory(
-        asm.workspace,
-        mode=spec.write_mode,
-        shell_mode=spec.shell_mode,
-        shell_allowlist=spec.shell_allowlist,
-        write_path_globs=spec.write_path_globs,
-        write_roots=spec.write_roots,
-        exec_env=spec.exec_env,
+        ctx.workspace,
+        mode=ctx.write_mode,
+        shell_mode=ctx.shell_mode,
+        shell_allowlist=ctx.shell_allowlist,
+        write_path_globs=ctx.write_path_globs,
+        write_roots=ctx.write_roots,
+        exec_env=ctx.exec_env,
     )
-    # The web pack (``webfetch``) is a built-in but not an
-    # fs tool (no WorkspaceRoot). Merge it into the full pack HERE, before the
-    # ``allowed_tools`` filter below, so it is gated by the spec whitelist like
-    # every other built-in — ``main`` (tools=None full catalog) gets it;
-    # explore / plan / general-purpose (explicit whitelists without it) do not.
-    # Sandbox mode routes webfetch / web_search egress THROUGH the container
-    # (curl via the ExecEnv, S9); ``None`` keeps the host httpx path.
-    full_pack.update(spec.web_tools_factory(exec_env=spec.exec_env))
     # The edit↔apply_patch difference is provider-specific and is
     # absorbed HERE, at the assembly layer — not in any tool field, not in the
     # prompt, not in the AgentSpec whitelist (so fingerprints never drift on a
-    # model swap). The bound model's vendor family — resolved by the SDK host
-    # from the providers built-in's catalog and injected as
-    # ``provider_family`` (microkernel M2) — keys the injected
+    # model swap). The bound model's vendor family keys the injected
     # ``edit_tool_mutex`` table (phase 2c: the fs built-in owns the names);
     # an unrecognised model (``None`` family, e.g. any kernel-alone / stub
     # build) drops nothing (both stay → existing recordings resume byte-equal).
-    if spec.provider_family is not None:
-        for _drop in spec.edit_tool_mutex.get(spec.provider_family, ()):
+    if ctx.provider_family is not None:
+        for _drop in spec.edit_tool_mutex.get(ctx.provider_family, ()):
             full_pack.pop(_drop, None)
-    asm.tools = {
-        name: tool
-        for name, tool in full_pack.items()
-        if name in spec.allowed_tools
-    }
+    return PackContribution(
+        tools={
+            name: tool
+            for name, tool in full_pack.items()
+            if name in ctx.allowed_tools
+        }
+    )
 
 
-def _stage_memory(spec: _BuildSpec, asm: _ToolAssembly) -> None:
+def _web_pack(spec: _BuildSpec, ctx: SessionBuildContext) -> PackContribution:
+    """web pack (``webfetch`` / ``web_search``) — whitelist-filtered like fs.
+
+    Appends directly after the fs pack (band 200), preserving the merged
+    fs-then-web insertion order the single fs stage produced. Sandbox mode
+    routes webfetch / web_search egress THROUGH the container (curl via the
+    ExecEnv, S9); ``None`` keeps the host httpx path.
+    """
+    if spec.web_tools_factory is None:
+        raise RuntimeError(
+            "web tool pack factory was not injected — the SDK host resolves "
+            "the web built-in plugin through the plugin loader and passes "
+            "web_tools_factory (microkernel M1); the kernel builder imports "
+            "no tool implementation"
+        )
+    return PackContribution(
+        tools={
+            name: tool
+            for name, tool in spec.web_tools_factory(
+                exec_env=ctx.exec_env
+            ).items()
+            if name in ctx.allowed_tools
+        }
+    )
+
+
+def _memory_pack(spec: _BuildSpec, ctx: SessionBuildContext) -> PackContribution:
     """memory pack (flag-gated, NOT whitelist-filtered).
 
-    Memory v1 (flag-gated like the script tool, NOT
-    filtered by ``allowed_tools``): the memory pack appends at this fixed
-    point so the construction-order contract reads
-      fs → local → memory → script → mcp → custom
-    identically live and resume. ``memory_write`` is present even for an
-    empty store (you could never write the first memory otherwise); the
-    index snapshot is taken ONCE here — the composer's renderer and the
-    pre-loop ``record_memory_index`` share it, so the recorded fingerprint
-    always equals what the model saw.
+    ``memory_write`` is present even for an empty store (you could never
+    write the first memory otherwise); the index snapshot is taken ONCE here
+    — the composer's renderer and the pre-loop ``record_memory_index`` share
+    it (via the exports), so the recorded fingerprint always equals what the
+    model saw.
     """
-    if not spec.memory_enabled:
-        return
+    if not ctx.flag("memory"):
+        return EMPTY_CONTRIBUTION
     if spec.memory_factory is None:
         raise RuntimeError(
             "memory factory was not injected — the SDK host resolves the "
@@ -679,65 +708,72 @@ def _stage_memory(spec: _BuildSpec, asm: _ToolAssembly) -> None:
         if spec.memory_dir is not None
         else spec.global_memory_dir
     )
-    asm.memory_store, asm.memory_entries, memory_tools = spec.memory_factory(
-        root=memory_root
+    store, entries, memory_tools = spec.memory_factory(root=memory_root)
+    return PackContribution(
+        tools=memory_tools,
+        exports={
+            EXPORT_MEMORY_STORE: store,
+            EXPORT_MEMORY_ENTRIES: entries,
+        },
     )
-    for _name, _tool in memory_tools.items():
-        asm.tools[_name] = _tool
 
 
-def _stage_instructions(spec: _BuildSpec, asm: _ToolAssembly) -> None:
+def _instructions_pack(
+    spec: _BuildSpec, ctx: SessionBuildContext
+) -> PackContribution:
     """instructions snapshot load (no tools — feeds the content kind only).
 
-    Instructions file v1 (flag-gated): read once here at build time
-    so the composer's renderer AND the pre-loop ``record_instructions``
-    share the same snapshot. Append the instructions kind AFTER
-    memory in the registry (contract: skill, memory, instructions) so
-    the semi_stable layout keeps existing byte-positioning.
+    Read once here at build time so the composer's renderer AND the pre-loop
+    ``record_instructions`` share the same snapshot. The shared mutable
+    ``name → snapshot`` mapping is ALWAYS exported (empty when the flag is
+    off) — the discovery hook and resume preloader add entries to the same
+    dict at tool/step time, so its identity is the contract.
     """
+    snapshots: dict[str, InstructionsSnapshot] = {}
+    exports: dict[str, object] = {EXPORT_INSTRUCTIONS_SNAPSHOTS: snapshots}
     if not spec.instructions_enabled:
-        return
+        return PackContribution(exports=exports)
     if spec.instructions_kit is None:
         raise RuntimeError(
             "instructions_enabled=True requires an injected instructions_kit "
             "(the workspace built-in's build_instructions_kit — phase 2c); "
             "the kernel ships no filename convention or renderer of its own."
         )
-    asm.instructions_snapshot = load_instructions(
-        spec.workspace_dir,
+    snapshot = load_instructions(
+        ctx.workspace_dir,
         filenames=spec.instructions_kit.filenames,
         override_path=spec.instructions_file,
-        exec_env=spec.exec_env,
+        exec_env=ctx.exec_env,
     )
-    if asm.instructions_snapshot is not None:
+    if snapshot is not None:
         # Seed the shared mapping the kind renders from: the root file lives
         # under its basename (resident name unchanged → byte-identical
         # rendering); discovered files join later under relative paths.
-        asm.instructions_snapshots[asm.instructions_snapshot.name] = (
-            asm.instructions_snapshot
-        )
+        snapshots[snapshot.name] = snapshot
+        exports[EXPORT_INSTRUCTIONS_SNAPSHOT] = snapshot
+    return PackContribution(exports=exports)
 
 
-def _stage_environment(spec: _BuildSpec, asm: _ToolAssembly) -> None:
+def _environment_pack(
+    spec: _BuildSpec, ctx: SessionBuildContext
+) -> PackContribution:
     """Workspace environment snapshot load (no tools — feeds the content kind).
 
     Always on (a workspace always exists): capture the session-static
     workspace facts once here at build time so the composer's renderer AND
-    the pre-loop ``record_environment`` share the same snapshot. Append
-    the environment kind LAST in the registry (contract: skill, memory,
-    instructions, environment) so the existing semi_stable byte layout is
-    unchanged for sessions that never activate it.
+    the pre-loop ``record_environment`` share the same snapshot.
     """
-    asm.environment_snapshot = load_environment(
-        spec.workspace_dir, exec_env=spec.exec_env
+    return PackContribution(
+        exports={
+            EXPORT_ENVIRONMENT_SNAPSHOT: load_environment(
+                ctx.workspace_dir, exec_env=ctx.exec_env
+            )
+        }
     )
 
 
-def _stage_skills(spec: _BuildSpec, asm: _ToolAssembly) -> None:
-    """The skills kit — registry, script tool, content kind, grants
-    (microkernel phase 2a: one loader-resolved factory call replaces the
-    old registry + script stages; the tool-append order is unchanged, the
-    two stages were adjacent).
+def _skills_pack(spec: _BuildSpec, ctx: SessionBuildContext) -> PackContribution:
+    """The skills kit — registry, script tool, content kind, grants.
 
     Three-tier skill merge — built-in + global tiers below the
     workspace-local pack (built-in < global < workspace, workspace wins).
@@ -746,158 +782,80 @@ def _stage_skills(spec: _BuildSpec, asm: _ToolAssembly) -> None:
     the container (``exec_env``): the dirs are container mount points and
     the rendered base directories are container paths (D6-Skills).
 
-    Issue E scripts: same single-source wiring for every construction path —
-    append run_skill_script (after the agent filter) + the guard fields, so
-    a script/approval recording resumes byte-equal. Default off.
-
-    No ``skills_factory`` ⇒ the stage is a NO-OP, not a fault: the ``skills``
+    No ``skills_factory`` ⇒ the pack is a NO-OP, not a fault: the ``skills``
     built-in is optional (the host turns it off for
     ``disabled_builtins=["skills"]``), and its empty state is well defined —
-    the assembly keeps its defaults, so no registry, no skill content kind, no
-    skill tool, and no script grants exist for the session. The other skill
-    settings on the spec (dirs, ``allow_skill_scripts``) go inert with it.
+    no registry, no skill content kind, no skill tool, and no script grants
+    exist for the session. The other skill settings (dirs,
+    ``allow_skill_scripts``) go inert with it.
     """
     if spec.skills_factory is None:
-        return
+        return EMPTY_CONTRIBUTION
     lower_skill_dirs: list[Path] = list(spec.builtin_skills_dirs)
     if spec.global_skills_dir is not None:
         lower_skill_dirs.append(spec.global_skills_dir)
     kit = spec.skills_factory(
-        workspace_dir=spec.workspace_dir,
+        workspace_dir=ctx.workspace_dir,
         override_skills_dir=spec.skills_dir,
         lower_skill_dirs=lower_skill_dirs,
-        workspace=asm.workspace,
+        workspace=ctx.workspace,
         scripts_enabled=spec.allow_skill_scripts,
-        exec_env=spec.exec_env,
+        exec_env=ctx.exec_env,
     )
-    asm.registry = kit.registry
-    asm.skill_content_kind = kit.content_kind
-    asm.skill_allowed_tools = kit.allowed_tools
-    asm.skill_script_tools = kit.skill_script_tools
-    asm.skill_scripts = kit.skill_scripts
+    tools: dict[str, Tool] = {}
     if kit.script_tool is not None:
-        asm.tools[kit.script_tool.name] = kit.script_tool
+        tools[kit.script_tool.name] = kit.script_tool
+    return PackContribution(tools=tools, exports={EXPORT_SKILLS_KIT: kit})
 
 
-# NOTE: there was a ``_stage_read_fence`` here that widened ``read``'s
-# containment fence to the skill roots, so the model could read a skill's
-# bundled references (the renderer hands it each skill's absolute base
-# directory). ``read`` is now unfenced outright — an absolute path is read
-# where it points — so the special case dissolved into the general rule and
-# the stage was removed — and with it ``resolve_skill_roots``, which existed
-# only to compute that fence. The renderer writes the base-directory line from
-# each description's own ``source_path.parent``, so nothing was left to keep.
-
-
-def _stage_browser(spec: _BuildSpec, asm: _ToolAssembly) -> None:
+def _browser_pack(spec: _BuildSpec, ctx: SessionBuildContext) -> PackContribution:
     """browser tools — sandbox-only, flag-gated (NOT whitelist-filtered).
 
-    The noeta-owned browser pack (``browser_navigate`` / ``click`` / ``type`` /
-    ``extract`` / ``screenshot``) is merged here — after the fs/skill stages and
-    BEFORE mcp/custom/app — when the session both has a browser backend (the SDK
-    host built one from the sandbox handle) AND this agent opens the ``browser``
-    capability. Like memory / open_app it appends past the ``allowed_tools``
-    filter (a capability, not a whitelist entry, gates it). The tool schemas are
-    noeta-owned and fixed, so a browser session's stable prefix depends only on
-    the capability flag, never on the backend or the AIO image. ``None`` backend
-    OR ``browser_enabled=False`` (resume with no sandbox / every non-browser
-    agent) ⇒ nothing merged, byte-identical tool set.
+    Merged when the session both has a live ``"browser"`` backend in the
+    context bag (the SDK host built one from the sandbox handle) AND this
+    agent opens the ``browser`` capability. The tool schemas are noeta-owned
+    and fixed, so a browser session's stable prefix depends only on the
+    capability flag, never on the backend or the AIO image. Absent backend OR
+    flag off (resume with no sandbox / every non-browser agent) ⇒ nothing
+    merged, byte-identical tool set.
     """
-    if spec.browser_backend is not None and spec.browser_enabled:
-        if spec.browser_tools_factory is None:
-            raise RuntimeError(
-                "browser tool pack factory was not injected — the SDK host "
-                "resolves the browser built-in plugin through the plugin "
-                "loader and passes browser_tools_factory (microkernel M3); "
-                "the kernel builder imports no tool implementation"
-            )
-        for name, tool in spec.browser_tools_factory(spec.browser_backend).items():
-            asm.tools[name] = tool
+    backend = cast(Optional[BrowserBackend], ctx.backends.get("browser"))
+    if backend is None or not ctx.flag("browser"):
+        return EMPTY_CONTRIBUTION
+    if spec.browser_tools_factory is None:
+        raise RuntimeError(
+            "browser tool pack factory was not injected — the SDK host "
+            "resolves the browser built-in plugin through the plugin "
+            "loader and passes browser_tools_factory (microkernel M3); "
+            "the kernel builder imports no tool implementation"
+        )
+    return PackContribution(tools=spec.browser_tools_factory(backend))
 
 
-def _stage_mcp(spec: _BuildSpec, asm: _ToolAssembly) -> None:
-    """MCP tools — live override (real spawned servers) only.
+def _app_pack(spec: _BuildSpec, ctx: SessionBuildContext) -> PackContribution:
+    """open_app pack — gateway-injected, merged after custom_tools (band 1000)
+    so the host's open_app is authoritative.
 
-    The live path (CodeSessionRunner.prepare) spawns real stdio MCP
-    servers and passes the discovered tools as ``mcp_tools_override``;
-    they are merged here after fs/script. When the override is ``None``
-    (e.g. a delegated child that passes no MCP servers) there are no MCP
-    entries in the tool set.
+    Gated on a live ``"app_preview"`` gateway in the context bag — absent
+    (resume + every SDK/test fixture) ⇒ empty, keeping the tool set + stable
+    hash byte-identical (a resumed turn that wires no gateway rebuilds the
+    identical tool schemas).
     """
-    if spec.mcp_tools_override is not None:
-        # Live path (CodeSessionRunner.prepare): the caller spawned real
-        # stdio MCP servers and passes the discovered tools. Enforce the
-        # reserved-prefix invariant the inline copy used to check, then
-        # merge at this position.
-        for existing in asm.tools:
-            if existing.startswith(MCP_PREFIX):
-                raise McpConfigError(
-                    f"built-in tool {existing!r} occupies the reserved "
-                    f"{MCP_PREFIX!r} namespace"
-                )
-        for name, tool in spec.mcp_tools_override.items():
-            asm.tools[name] = tool
-
-
-def _stage_custom(spec: _BuildSpec, asm: _ToolAssembly) -> None:
-    """Custom (user-supplied) tools — merged LAST so they shadow built-ins.
-
-    Custom (user-supplied) tools are merged LAST so
-    a custom tool can intentionally shadow a built-in / MCP tool of the
-    same name. Construction order is a CONTRACT:
-      fs pack → skill scripts → MCP → custom
-    so tools dict insertion order (and thus the Engine's deterministic
-    ToolSchemaRecorded emission) is stable. ``None`` default means this
-    entire block is skipped on existing call sites (zero byte-change).
-    """
-    if spec.custom_tools is not None:
-        for name, tool in spec.custom_tools.items():
-            asm.tools[name] = tool
-
-
-def _stage_app(spec: _BuildSpec, asm: _ToolAssembly) -> None:
-    """open_app pack — gateway-injected, merged after custom_tools.
-
-    The app-preview pack (``open_app``), gateway-injected, merged
-    after custom_tools so the host's open_app is authoritative. Gated on a
-    live gateway — ``None`` (resume + every SDK/test fixture) skips this
-    block, keeping the tool set + stable hash byte-identical (a resumed turn
-    that wires no gateway rebuilds the identical tool schemas). The tool needs
-    the workspace built above + the host gateway.
-    """
-    if spec.app_gateway is not None:
-        if spec.app_tools_factory is None:
-            raise RuntimeError(
-                "app tool pack factory was not injected — the SDK host "
-                "resolves the app built-in plugin through the plugin loader "
-                "and passes app_tools_factory (microkernel M3); the kernel "
-                "builder imports no tool implementation"
-            )
-        for name, tool in spec.app_tools_factory(
-            asm.workspace, spec.app_gateway
-        ).items():
-            asm.tools[name] = tool
-
-
-#: The explicit tool-assembly pipeline. Iterating this list top-to-bottom IS
-#: the construction-order contract (fs → memory → instructions-snapshot →
-#: skills-registry → script → read-fence → browser → mcp → custom → app). The
-#: order is load-bearing for byte-equality (tool dict insertion order feeds the
-#: Engine's deterministic ToolSchemaRecorded emission); do not reorder. browser
-#: sits just before mcp with the other injected packs; an unset browser backend
-#: (every non-sandbox / non-browser session) adds nothing, so the insertion is
-#: byte-identical for them regardless of position.
-_TOOL_PIPELINE: tuple[Callable[[_BuildSpec, _ToolAssembly], None], ...] = (
-    _stage_fs_pack,
-    _stage_memory,
-    _stage_instructions,
-    _stage_environment,
-    _stage_skills,
-    _stage_browser,
-    _stage_mcp,
-    _stage_custom,
-    _stage_app,
-)
+    gateway = cast(
+        Optional[AppPreviewGateway], ctx.backends.get("app_preview")
+    )
+    if gateway is None:
+        return EMPTY_CONTRIBUTION
+    if spec.app_tools_factory is None:
+        raise RuntimeError(
+            "app tool pack factory was not injected — the SDK host "
+            "resolves the app built-in plugin through the plugin loader "
+            "and passes app_tools_factory (microkernel M3); the kernel "
+            "builder imports no tool implementation"
+        )
+    return PackContribution(
+        tools=spec.app_tools_factory(ctx.workspace, gateway)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -976,7 +934,9 @@ def _skill_menu_names(spec: _BuildSpec, asm: _ToolAssembly) -> frozenset[str]:
 
 
 def _build_content_registry(
-    spec: _BuildSpec, asm: _ToolAssembly
+    spec: _BuildSpec,
+    asm: _ToolAssembly,
+    pack_kinds: tuple[ContentKindSpec, ...] = (),
 ) -> ContentChannelRegistry:
     """The content-channel registry — registration order IS semi_stable layout.
 
@@ -1040,6 +1000,11 @@ def _build_content_registry(
         content_kinds.append(
             spec.environment_kit.content_kind(asm.environment_snapshot)
         )
+    # Pack-contributed kinds (microkernel phase 3): sorted upstream by
+    # ``(priority, pack order)``, appended after the built-in residents.
+    # Empty until S4 moves the resident kits into their packs, so every
+    # existing session keeps its semi_stable byte layout.
+    content_kinds.extend(pack_kinds)
     # SDK ``Options.content_channels`` extension point (T3): user-registered
     # ContentKindSpec channels append LAST, after every built-in resident, so
     # existing sessions (no extra channels) keep their semi_stable byte layout
@@ -1408,18 +1373,143 @@ def build_session_inputs(
         tool_output_inline_limit=tool_output_inline_limit,
     )
 
-    # Explicit tool pipeline: each stage self-gates and appends into
-    # ``asm.tools`` in the construction-order contract (fs → memory →
-    # instructions-snapshot → skills-registry → script → read-fence → mcp →
-    # custom → app). The read-fence side effect lives in its own stage.
-    asm = _ToolAssembly()
-    for stage in _TOOL_PIPELINE:
-        stage(spec, asm)
+    # The kernel-built containment root (safety mechanism — packs consume it,
+    # never build their own). Sandbox mode (``exec_env`` set) makes
+    # ``workspace_dir`` a CONTAINER path: a host ``realpath`` / existence
+    # check is wrong (it lives in the container), so build a lexical
+    # containment root and let the ExecEnv do the remote IO.
+    if exec_env is None:
+        workspace = WorkspaceRoot.from_path(workspace_dir)
+    else:
+        workspace = WorkspaceRoot.for_container(workspace_dir)
 
-    tools = asm.tools
+    # The generic pack context (microkernel phase 3): every session pack
+    # reads THIS, never the spec. The backend bag and capability flags are
+    # synthesized from the legacy parameters until S3/S5 replace them with
+    # generic inputs.
+    backends: dict[str, object] = {}
+    if browser_backend is not None:
+        backends["browser"] = browser_backend
+    if app_gateway is not None:
+        backends["app_preview"] = app_gateway
+    ctx = SessionBuildContext(
+        workspace=workspace,
+        workspace_dir=workspace_dir,
+        content_store=content_store,
+        exec_env=exec_env,
+        model=model,
+        provider_family=provider_family,
+        allowed_tools=allowed_tools,
+        backends=backends,
+        capability_flags={
+            "memory": memory_enabled,
+            "browser": browser_enabled,
+        },
+        plugin_config={},
+        write_mode=write_mode,
+        shell_mode=shell_mode,
+        shell_allowlist=shell_allowlist,
+        write_path_globs=write_path_globs,
+        write_roots=write_roots,
+    )
+
+    # The two kernel-owned injections (D1: pre-built objects, not packs) ride
+    # the same loop as internal fixed-priority entries so ONE sorted iteration
+    # is the whole construction-order contract. ``_mcp_entry`` closes over the
+    # accumulating tool dict for the reserved-prefix check — by band 800 every
+    # built-in name has merged.
+    tools: dict[str, Tool] = {}
+
+    def _mcp_entry(_ctx: SessionBuildContext) -> PackContribution:
+        if spec.mcp_tools_override is None:
+            return EMPTY_CONTRIBUTION
+        for existing in tools:
+            if existing.startswith(MCP_PREFIX):
+                raise McpConfigError(
+                    f"built-in tool {existing!r} occupies the reserved "
+                    f"{MCP_PREFIX!r} namespace"
+                )
+        return PackContribution(tools=spec.mcp_tools_override)
+
+    def _custom_entry(_ctx: SessionBuildContext) -> PackContribution:
+        # Merged at band 900 so a custom tool intentionally shadows a
+        # built-in / MCP tool of the same name (later-wins merge).
+        if spec.custom_tools is None:
+            return EMPTY_CONTRIBUTION
+        return PackContribution(tools=spec.custom_tools)
+
+    entries: list[SessionPackEntry] = [
+        SessionPackEntry("fs", 100, partial(_fs_pack, spec)),
+        SessionPackEntry("web", 200, partial(_web_pack, spec)),
+        SessionPackEntry("memory", 300, partial(_memory_pack, spec)),
+        SessionPackEntry("instructions", 400, partial(_instructions_pack, spec)),
+        SessionPackEntry("environment", 500, partial(_environment_pack, spec)),
+        SessionPackEntry("skills", 600, partial(_skills_pack, spec)),
+        SessionPackEntry("browser", 700, partial(_browser_pack, spec)),
+        SessionPackEntry("mcp", 800, _mcp_entry),
+        SessionPackEntry("custom", 900, _custom_entry),
+        SessionPackEntry("app", 1000, partial(_app_pack, spec)),
+    ]
+    entries.sort(key=lambda e: (e.priority, e.name))
+
+    pack_kinds: list[tuple[int, int, ContentKindSpec]] = []
+    exports: dict[str, object] = {}
+    for seq, entry in enumerate(entries):
+        contrib = entry.factory(ctx)
+        for name, tool in contrib.tools.items():
+            tools[name] = tool
+        for ck in contrib.content_kinds:
+            pack_kinds.append((ck.priority, seq, ck.spec))
+        for key, value in contrib.exports.items():
+            if key in exports:
+                raise RuntimeError(
+                    f"session pack {entry.name!r} re-exports {key!r} — "
+                    f"export keys are single-writer across the pack loop"
+                )
+            exports[key] = value
+
+    # Populate the assembly the post-tools phases read. The exports adapter
+    # is S1-transitional: S4/S5 teach the phases to read contributions
+    # directly and this block shrinks with them.
+    asm = _ToolAssembly()
+    asm.tools = tools
+    asm.workspace = workspace
+    _kit = exports.get(EXPORT_SKILLS_KIT)
+    if _kit is not None:
+        skills_kit = cast(SkillsKit, _kit)
+        asm.registry = skills_kit.registry
+        asm.skill_content_kind = skills_kit.content_kind
+        asm.skill_allowed_tools = skills_kit.allowed_tools
+        asm.skill_script_tools = skills_kit.skill_script_tools
+        asm.skill_scripts = skills_kit.skill_scripts
+    asm.memory_store = exports.get(EXPORT_MEMORY_STORE)
+    asm.memory_entries = cast(
+        MemoryEntries, exports.get(EXPORT_MEMORY_ENTRIES, ())
+    )
+    asm.instructions_snapshot = cast(
+        Optional[InstructionsSnapshot],
+        exports.get(EXPORT_INSTRUCTIONS_SNAPSHOT),
+    )
+    asm.instructions_snapshots = cast(
+        "dict[str, InstructionsSnapshot]",
+        exports.get(EXPORT_INSTRUCTIONS_SNAPSHOTS, {}),
+    )
+    asm.environment_snapshot = cast(
+        Optional[EnvironmentSnapshot],
+        exports.get(EXPORT_ENVIRONMENT_SNAPSHOT),
+    )
     control_action_schemas = _build_control_action_schemas(spec, asm)
     skill_menu_names = _skill_menu_names(spec, asm)
-    content_registry = _build_content_registry(spec, asm)
+    content_registry = _build_content_registry(
+        spec,
+        asm,
+        tuple(
+            kind_spec
+            for _p, _s, kind_spec in sorted(
+                pack_kinds, key=lambda t: (t[0], t[1])
+            )
+        ),
+    )
     reminder_registry = _build_reminder_registry(spec)
     # Microkernel phase 2a: the composer is constructed directly — the old
     # ``build_skill_composer`` wrapper's only skill-specific behaviour was a
