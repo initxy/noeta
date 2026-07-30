@@ -106,3 +106,52 @@ def test_compile_options_is_deterministic() -> None:
         first = stable_json(_recipe_payload(factory()))
         second = stable_json(_recipe_payload(factory()))
         assert first == second
+
+
+def test_agent_spec_to_from_dict_roundtrips() -> None:
+    """``AgentSpec.to_dict`` / ``from_dict`` round-trips every compiled recipe.
+
+    The dict form emits ``plugins`` + ``spawnable`` (the activation-tuple
+    identity, D6) — no ``capabilities`` key — and rebuilds byte-for-byte equal.
+    """
+    for factory in _RECIPES.values():
+        root, descendants = compile_options(factory())
+        for spec in (root, *descendants):
+            raw = spec.to_dict()
+            assert "capabilities" not in raw
+            assert "plugins" in raw and "spawnable" in raw
+            assert AgentSpec.from_dict(raw) == spec
+
+
+def test_from_dict_hard_break_on_stale_capabilities() -> None:
+    """D7 hard break, as a *tested contract*: a recording made before the
+    activation-tuple identity swap (a ``capabilities`` key, no ``plugins``) no
+    longer decodes — the failure is loud, never a silent plugin-less default.
+
+    This is the decision record: the break is deliberate (nothing published, all
+    recordings local), so it is pinned here rather than allowed to surface as an
+    accident.
+    """
+    root, _ = compile_options(main_options())
+    fresh = root.to_dict()
+
+    # (1) a stale recording still carrying ``capabilities`` (and no ``plugins``)
+    stale = {k: v for k, v in fresh.items() if k not in ("plugins", "spawnable")}
+    stale["capabilities"] = {
+        "todo_write": True,
+        "ask_user_question": True,
+        "delegation": True,
+        "skill_invocation": True,
+        "memory": True,
+        "mcp": True,
+        "browser": False,
+        "spawnable": ["explore", "general-purpose", "plan"],
+    }
+    with pytest.raises(ValueError, match="capabilities"):
+        AgentSpec.from_dict(stale)
+
+    # (2) even without the stale key, a missing ``plugins`` must fail loudly —
+    # identity is the tuple now, so a plugin-less agent has to say so explicitly.
+    no_plugins = {k: v for k, v in fresh.items() if k != "plugins"}
+    with pytest.raises(ValueError, match="plugins"):
+        AgentSpec.from_dict(no_plugins)

@@ -11,7 +11,8 @@ Covers:
    description roster. Entries with no description render as bare names.
 4. **Sorting determinism.** Input skill-name ordering on disk does not affect
    the enum order (always sorted by name).
-5. **SdkHost integration.** ``spec.capabilities.skill_invocation=True`` flows
+5. **SdkHost integration.** activating ``skill_invocation`` (``"skill_invocation"``
+   in ``spec.plugins``) flows
    through ``_build_engine`` into the composer schema when the workspace has
    skills; ``False`` keeps it absent.
 """
@@ -30,7 +31,6 @@ from noeta.agent.registry import AgentRegistry
 from noeta.agent.spec import (
     AgentSpec,
     BudgetSpec,
-    Capabilities,
     ComponentRef,
 )
 from noeta.client.host import SdkHost
@@ -210,7 +210,7 @@ def test_menu_built_from_registry_not_caller(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# SdkHost integration — spec.capabilities.skill_invocation drives the flag
+# SdkHost integration — the "skill_invocation" activation drives the flag
 # ---------------------------------------------------------------------------
 
 
@@ -252,7 +252,7 @@ def _spec(skill_invocation: bool) -> AgentSpec:
         composer=ComponentRef("three_segment", "v3"),
         tools=(),
         default_budget=BudgetSpec(),
-        capabilities=Capabilities(skill_invocation=skill_invocation),
+        plugins=("skill_invocation",) if skill_invocation else (),
         metadata={},
     )
 
@@ -271,7 +271,7 @@ def _skill_schema_from_engine(engine: Any) -> dict[str, Any] | None:
 def test_sdkhost_capability_on_preserves_schema_with_skills(
     tmp_path: Path,
 ) -> None:
-    """spec.capabilities.skill_invocation=True + workspace skills → schema."""
+    """activating skill_invocation + workspace skills → schema."""
     ws = tmp_path / "ws"
     ws.mkdir()
     write_skill(ws, "coder", "Writes code")
@@ -302,7 +302,7 @@ def test_sdkhost_capability_on_preserves_schema_with_skills(
 def test_sdkhost_capability_off_masks_schema_even_with_skills(
     tmp_path: Path,
 ) -> None:
-    """spec.capabilities.skill_invocation=False → schema absent (no leak)."""
+    """skill_invocation not activated → schema absent (no leak)."""
     ws = tmp_path / "ws"
     ws.mkdir()
     write_skill(ws, "coder", "Writes code")

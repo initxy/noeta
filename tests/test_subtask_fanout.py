@@ -101,7 +101,7 @@ def _session(
 ):
     """A one-shot SDK host that fans out to ``delegate_to``.
 
-    ``delegate_to=(...)`` maps to ``capabilities.delegation=True`` +
+    ``delegate_to=(...)`` maps to ``plugins=("delegation", …)`` +
     ``spawnable=(...)`` on the main spec; the named children are registered
     alongside it. ``budget=None`` mirrors the old runner default
     (``coding_replay_budget(max_subtask_depth=3)``); an explicit budget is

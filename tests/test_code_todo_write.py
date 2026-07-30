@@ -91,8 +91,8 @@ def _session(
 ):
     """A one-shot SDK host that may enable ``todo_write`` and/or delegation.
 
-    ``todo_write_enabled`` maps onto ``capabilities.todo_write``; a non-empty
-    ``delegate_to`` maps onto ``delegation=True`` + ``spawnable=("main",)`` (the
+    ``todo_write_enabled`` maps onto the ``"todo_write"`` activation; a non-empty
+    ``delegate_to`` maps onto ``plugins=("delegation", …)`` + ``spawnable=("main",)`` (the
     SDK host reads delegation rights off the spec). Returns ``(host, driver,
     provider)`` — the shared ``FakeLLMProvider`` carries ``received_requests``."""
     provider = FakeLLMProvider(responses=responses)

@@ -13,6 +13,7 @@ from pathlib import Path
 from tests._skill_fixtures import write_skill
 
 from tests._session_inputs import default_factory_kwargs
+from noeta.agent.spec import agent_activates
 from noeta.core.fold import fold
 from noeta.builtins.delegation.impl import translate_spawn_subagent
 from noeta.policies.control_semantics import (
@@ -719,7 +720,7 @@ def test_e2e_presets_flag_full_chain(
     # Use the official `main` preset spec so we exercise the preset flag
     # wiring rather than a free-form AgentSpec.
     main = official_specs()["main"]
-    assert main.capabilities.skill_invocation is True, (
+    assert agent_activates(main, "skill_invocation") is True, (
         "preset must have flag on for this E2E to exercise product wiring"
     )
 
@@ -930,10 +931,10 @@ def test_product_flag_on_with_skills_grows_skill_tool(tmp_path: Path) -> None:
 
     # Mirror the product default. The deleted ``CodeSessionConfig`` carried the
     # ``skill_invocation_enabled=True`` default; the production ``SdkHost`` now
-    # reads ``spec.capabilities.skill_invocation`` instead, so the ``main``
-    # preset's capability is the canonical home of that default. A future
+    # reads the spec's ``"skill_invocation"`` activation instead, so the ``main``
+    # preset's activation is the canonical home of that default. A future
     # refactor that turns it off surfaces here.
-    assert official_specs()["main"].capabilities.skill_invocation is True, (
+    assert agent_activates(official_specs()["main"], "skill_invocation") is True, (
         "the main preset must default skill_invocation on"
     )
 

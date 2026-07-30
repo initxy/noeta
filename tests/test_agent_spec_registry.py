@@ -14,7 +14,6 @@ from noeta.agent.registry import AgentRegistry, UnknownAgentError
 from noeta.agent.spec import (
     AgentSpec,
     BudgetSpec,
-    Capabilities,
     ComponentRef,
     ToolRef,
 )
@@ -73,7 +72,8 @@ def test_identity_is_order_independent() -> None:
         lambda s: AgentSpec(**{**_kw(s), "guards": (ComponentRef("permission"),)}),
         lambda s: AgentSpec(**{**_kw(s), "observers": (ComponentRef("audit"),)}),
         lambda s: AgentSpec(**{**_kw(s), "default_budget": BudgetSpec(max_iterations=99)}),
-        lambda s: AgentSpec(**{**_kw(s), "capabilities": Capabilities(todo_write=True)}),
+        lambda s: AgentSpec(**{**_kw(s), "plugins": ("todo_write",)}),
+        lambda s: AgentSpec(**{**_kw(s), "spawnable": ("child",)}),
     ],
 )
 def test_every_identity_field_changes_identity(mutate) -> None:
@@ -95,7 +95,8 @@ def _kw(s: AgentSpec) -> dict:
         "guards": s.guards,
         "observers": s.observers,
         "default_budget": s.default_budget,
-        "capabilities": s.capabilities,
+        "plugins": s.plugins,
+        "spawnable": s.spawnable,
     }
 
 

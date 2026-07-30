@@ -38,6 +38,7 @@ from tests._read_models.result import (
     _last_selected_skills,
     _last_shell_result,
 )
+from noeta.agent.spec import agent_activates
 from noeta.client.parts import BUILTIN_TOOL_CLASSES
 from noeta.presets import official_specs
 from noeta.protocols.messages import LLMResponse, TextBlock, ToolUseBlock, Usage
@@ -281,16 +282,16 @@ def test_explore_is_read_only() -> None:
 def test_plan_whitelist_and_capabilities() -> None:
     # CC alignment: plan's whitelist is the read-mostly scout set (same as
     # explore) — read/grep/glob + shell triplet + webfetch — and NO write family
-    # at all. Capabilities opens ONLY ask_user_question (no todo_write).
+    # at all. Activation opens ONLY ask_user_question (no todo_write).
     plan_tools = _tools(PLAN_SPEC)
     for mutating in ("edit", "write", "apply_patch"):
         assert mutating not in plan_tools
     assert plan_tools == frozenset(
         {"read", "grep", "glob", "shell_run", "shell_poll", "shell_kill", "webfetch"}
     )
-    assert PLAN_SPEC.capabilities.todo_write is False
-    assert PLAN_SPEC.capabilities.ask_user_question is True
-    assert PLAN_SPEC.capabilities.skill_invocation is False
+    assert agent_activates(PLAN_SPEC, "todo_write") is False
+    assert agent_activates(PLAN_SPEC, "ask_user_question") is True
+    assert agent_activates(PLAN_SPEC, "skill_invocation") is False
 
 
 # ---------------------------------------------------------------------------

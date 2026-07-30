@@ -318,7 +318,7 @@ def test_engine_cache_scope_is_none_for_memory_off_or_fallback(
 
     spec_off = dataclasses.replace(
         spec_on,
-        capabilities=dataclasses.replace(spec_on.capabilities, memory=False),
+        plugins=tuple(p for p in spec_on.plugins if p != "memory"),
     )
     assert host._engine_cache_scope(spec_off, "t-a") is None
 

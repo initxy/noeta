@@ -1,16 +1,6 @@
 {
   "descendants": [],
   "root": {
-    "capabilities": {
-      "ask_user_question": false,
-      "browser": false,
-      "delegation": false,
-      "mcp": false,
-      "memory": false,
-      "skill_invocation": false,
-      "spawnable": [],
-      "todo_write": false
-    },
     "composer": {
       "name": "three_segment",
       "version": "v3"
@@ -28,11 +18,16 @@
     "metadata": {},
     "name": "main",
     "observers": [],
+    "plugins": [
+      "fs",
+      "web"
+    ],
     "policy": {
       "name": "react",
       "version": "1"
     },
     "skills": [],
+    "spawnable": [],
     "tools": [
       {
         "name": "apply_patch",

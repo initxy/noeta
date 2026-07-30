@@ -89,7 +89,7 @@ def _session(
 ):
     """A one-shot SDK host that may recursively delegate to ``delegate_to``.
 
-    ``delegate_to=(...)`` → ``capabilities.delegation=True`` + ``spawnable=(...)``
+    ``delegate_to=(...)`` → ``plugins=("delegation", …)`` + ``spawnable=(...)``
     on the main spec (children inherit delegation through the drain);
     ``max_subtask_depth`` rides the host Budget exactly like the old runner's
     ``coding_replay_budget(max_subtask_depth)``. Returns ``(host, driver,

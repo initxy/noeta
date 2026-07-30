@@ -13,8 +13,9 @@ their real homes:
 
 * **per-agent behaviour flags** (``todo_write`` / ``ask_user_question`` /
   ``delegation`` / ``skill_invocation`` / ``memory`` / ``mcp`` / ``spawnable``)
-  → :class:`~noeta.agent.spec.Capabilities` on the registered :class:`AgentSpec`
-  (the SDK host treats ``spec.capabilities`` as the source of truth);
+  → the ``plugins`` activation tuple + ``spawnable`` on the registered
+  :class:`AgentSpec` (the SDK host reads that tuple through
+  :func:`~noeta.agent.spec.agent_activates` as the source of truth);
 * **host knobs** (``require_approval_tools`` / ``write_mode`` / ``shell_mode`` /
   ``skill_tool_enforcement`` / ``allow_skill_scripts`` / ``repetition_*`` /
   ``hooks_pre_tool_use`` / ``mcp_server_resolver`` / ``budget`` / …) → fields on
@@ -33,7 +34,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from noeta.agent.registry import AgentRegistry
-from noeta.agent.spec import AgentSpec
+from noeta.agent.spec import AgentSpec, agent_activates
 from noeta.client.host import SdkHost
 from noeta.core.wiring import wire_default_observers
 from noeta.execution.driver import InteractionDriver, multi_turn_policy_wrapper
@@ -126,15 +127,29 @@ def preset_spec(name: str) -> AgentSpec:
     return official_specs()[name]
 
 
+#: The identity feature names an activation tuple can carry (D6). Used by
+#: :func:`runner_main_spec` to rebuild ``AgentSpec.plugins`` from a flag dict
+#: while preserving the preset's identity-inert packs (``fs`` / ``web`` …).
+_FEATURE_FLAG_NAMES = (
+    "todo_write",
+    "ask_user_question",
+    "delegation",
+    "skill_invocation",
+    "memory",
+    "mcp",
+    "browser",
+)
+
+
 def runner_main_spec(name: str = "main", **caps_overrides: Any) -> AgentSpec:
-    """An official spec whose capabilities default to the OLD ``CodeSessionConfig``
+    """An official spec whose activation defaults to the OLD ``CodeSessionConfig``
     *effective* flags, overridable per test.
 
-    The runner read its own ``CodeSessionConfig`` fields (not ``spec.capabilities``)
-    so a ``CodeSessionConfig(agent="main")`` ran with todo_write / ask_user /
-    delegation OFF even though the ``main`` preset enables them. The SDK host reads
-    ``spec.capabilities``, so to keep the same engine we replace the preset caps
-    with the runner defaults:
+    The runner read its own ``CodeSessionConfig`` fields (not the spec's
+    activation) so a ``CodeSessionConfig(agent="main")`` ran with todo_write /
+    ask_user / delegation OFF even though the ``main`` preset enables them. The
+    SDK host reads the spec's ``plugins`` tuple (D6), so to keep the same engine
+    we rebuild the tuple with the runner defaults:
 
     * ``todo_write`` / ``ask_user_question`` / ``delegation`` → False
     * ``skill_invocation`` → True (the ``CodeSessionConfig`` default)
@@ -146,19 +161,27 @@ def runner_main_spec(name: str = "main", **caps_overrides: Any) -> AgentSpec:
     spawnable=("explore",)``) to mirror a test that flipped a flag.
     """
     base = official_specs()[name]
-    caps = base.capabilities
-    defaults: dict[str, Any] = dict(
+    flags: dict[str, bool] = dict(
         todo_write=False,
         ask_user_question=False,
         delegation=False,
         skill_invocation=True,
-        memory=caps.memory,
-        mcp=caps.mcp,
-        spawnable=(),
+        memory=agent_activates(base, "memory"),
+        mcp=agent_activates(base, "mcp"),
+        browser=agent_activates(base, "browser"),
     )
-    defaults.update(caps_overrides)
+    spawnable: tuple[str, ...] = ()
+    for key, value in caps_overrides.items():
+        if key == "spawnable":
+            spawnable = tuple(value)
+        else:
+            flags[key] = bool(value)
+    # Preserve the preset's identity-inert packs (fs / web / …) and layer the
+    # effective feature flags on top; membership in the tuple is the capability.
+    carried = tuple(p for p in base.plugins if p not in _FEATURE_FLAG_NAMES)
+    enabled = tuple(f for f in _FEATURE_FLAG_NAMES if flags[f])
     return dataclasses.replace(
-        base, capabilities=dataclasses.replace(caps, **defaults)
+        base, plugins=tuple(sorted(set(carried) | set(enabled))), spawnable=spawnable
     )
 
 

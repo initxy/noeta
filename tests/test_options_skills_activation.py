@@ -8,7 +8,7 @@ declaring ``Options(skills=["x"])`` was pure identity decoration with zero
 behavior change. Real skill activation flowed only through the driver-level
 pre-loop ``activations`` selector (a slash-command mechanism ``Options``
 never fed) and the model-driven ``skill`` control tool
-(``Capabilities.skill_invocation``).
+(the ``"skill_invocation"`` activation).
 
 This module proves the fix: a declared skill now rides the SAME pre-loop
 ``TaskStatePatch(activate_skills=...)`` channel the ``activations`` selector

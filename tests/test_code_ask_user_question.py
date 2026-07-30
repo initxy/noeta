@@ -133,8 +133,9 @@ def _session(
 ):
     """A one-shot SDK host that may enable ``ask_user_question`` and/or delegation.
 
-    ``ask_user_question_enabled`` maps onto ``capabilities.ask_user_question``; a
-    non-empty ``delegate_to`` maps onto ``delegation=True`` + ``spawnable=("main",)``.
+    ``ask_user_question_enabled`` maps onto the ``"ask_user_question"``
+    activation; a non-empty ``delegate_to`` maps onto ``plugins=("delegation", …)``
+    + ``spawnable=("main",)``.
     Returns ``(host, driver, provider)`` — the shared ``FakeLLMProvider`` carries
     ``received_requests`` for the white-box schema / resume assertions."""
     provider = FakeLLMProvider(responses=responses)

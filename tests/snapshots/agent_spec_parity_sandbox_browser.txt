@@ -1,16 +1,6 @@
 {
   "descendants": [
     {
-      "capabilities": {
-        "ask_user_question": false,
-        "browser": false,
-        "delegation": false,
-        "mcp": false,
-        "memory": false,
-        "skill_invocation": true,
-        "spawnable": [],
-        "todo_write": false
-      },
       "composer": {
         "name": "three_segment",
         "version": "v3"
@@ -30,11 +20,15 @@
       },
       "name": "explore",
       "observers": [],
+      "plugins": [
+        "skill_invocation"
+      ],
       "policy": {
         "name": "react",
         "version": "1"
       },
       "skills": [],
+      "spawnable": [],
       "tools": [
         {
           "name": "glob",
@@ -74,16 +68,6 @@
       ]
     },
     {
-      "capabilities": {
-        "ask_user_question": false,
-        "browser": false,
-        "delegation": false,
-        "mcp": true,
-        "memory": false,
-        "skill_invocation": true,
-        "spawnable": [],
-        "todo_write": false
-      },
       "composer": {
         "name": "three_segment",
         "version": "v3"
@@ -103,11 +87,16 @@
       },
       "name": "general-purpose",
       "observers": [],
+      "plugins": [
+        "mcp",
+        "skill_invocation"
+      ],
       "policy": {
         "name": "react",
         "version": "1"
       },
       "skills": [],
+      "spawnable": [],
       "tools": [
         {
           "name": "apply_patch",
@@ -167,16 +156,6 @@
       ]
     },
     {
-      "capabilities": {
-        "ask_user_question": true,
-        "browser": false,
-        "delegation": false,
-        "mcp": false,
-        "memory": false,
-        "skill_invocation": false,
-        "spawnable": [],
-        "todo_write": false
-      },
       "composer": {
         "name": "three_segment",
         "version": "v3"
@@ -196,11 +175,15 @@
       },
       "name": "plan",
       "observers": [],
+      "plugins": [
+        "ask_user_question"
+      ],
       "policy": {
         "name": "react",
         "version": "1"
       },
       "skills": [],
+      "spawnable": [],
       "tools": [
         {
           "name": "glob",
@@ -240,16 +223,6 @@
       ]
     },
     {
-      "capabilities": {
-        "ask_user_question": false,
-        "browser": true,
-        "delegation": false,
-        "mcp": false,
-        "memory": false,
-        "skill_invocation": true,
-        "spawnable": [],
-        "todo_write": false
-      },
       "composer": {
         "name": "three_segment",
         "version": "v3"
@@ -269,11 +242,16 @@
       },
       "name": "web",
       "observers": [],
+      "plugins": [
+        "browser",
+        "skill_invocation"
+      ],
       "policy": {
         "name": "react",
         "version": "1"
       },
       "skills": [],
+      "spawnable": [],
       "tools": [
         {
           "name": "glob",
@@ -319,21 +297,6 @@
     }
   ],
   "root": {
-    "capabilities": {
-      "ask_user_question": true,
-      "browser": false,
-      "delegation": true,
-      "mcp": true,
-      "memory": true,
-      "skill_invocation": true,
-      "spawnable": [
-        "explore",
-        "general-purpose",
-        "plan",
-        "web"
-      ],
-      "todo_write": true
-    },
     "composer": {
       "name": "three_segment",
       "version": "v3"
@@ -351,11 +314,27 @@
     "metadata": {},
     "name": "main",
     "observers": [],
+    "plugins": [
+      "ask_user_question",
+      "delegation",
+      "fs",
+      "mcp",
+      "memory",
+      "skill_invocation",
+      "todo_write",
+      "web"
+    ],
     "policy": {
       "name": "react",
       "version": "1"
     },
     "skills": [],
+    "spawnable": [
+      "explore",
+      "general-purpose",
+      "plan",
+      "web"
+    ],
     "tools": [
       {
         "name": "apply_patch",

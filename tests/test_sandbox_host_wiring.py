@@ -35,7 +35,6 @@ from noeta.agent.registry import AgentRegistry
 from noeta.agent.spec import (
     AgentSpec,
     BudgetSpec,
-    Capabilities,
     ComponentRef,
     ToolRef,
 )
@@ -483,7 +482,7 @@ def _fs_spec() -> AgentSpec:
             ToolRef(name="write", risk_level="high", version="1"),
             ToolRef(name="shell_run", risk_level="high", version="1"),
         ),
-        capabilities=Capabilities(),
+        plugins=(),
         default_budget=BudgetSpec(max_iterations=20),
         metadata={},
     )

@@ -26,7 +26,6 @@ from typing import Any
 from noeta.agent.registry import AgentRegistry
 from noeta.agent.spec import (
     AgentSpec,
-    Capabilities,
     ComponentRef,
 )
 from noeta.client import AgentDefinition, Options, compile_options
@@ -304,7 +303,8 @@ def test_sdkhost_no_descriptions_keeps_reference_shape(tmp_path: Path) -> None:
         policy=ComponentRef("react", "1"),
         composer=ComponentRef("three_segment", "v3"),
         tools=(),
-        capabilities=Capabilities(delegation=True, spawnable=("child_a", "child_b")),
+        plugins=("delegation",),
+        spawnable=("child_a", "child_b"),
         metadata={},
     )
     child_a = AgentSpec(
@@ -313,7 +313,7 @@ def test_sdkhost_no_descriptions_keeps_reference_shape(tmp_path: Path) -> None:
         policy=ComponentRef("react", "1"),
         composer=ComponentRef("three_segment", "v3"),
         tools=(),
-        capabilities=Capabilities(),
+        plugins=(),
         metadata={},  # no description key
     )
     child_b = AgentSpec(
@@ -322,7 +322,7 @@ def test_sdkhost_no_descriptions_keeps_reference_shape(tmp_path: Path) -> None:
         policy=ComponentRef("react", "1"),
         composer=ComponentRef("three_segment", "v3"),
         tools=(),
-        capabilities=Capabilities(),
+        plugins=(),
         metadata={"description": ""},  # explicit empty
     )
     registry = AgentRegistry()
@@ -356,9 +356,8 @@ def test_sdkhost_some_descriptions_mixed(tmp_path: Path) -> None:
         policy=ComponentRef("react", "1"),
         composer=ComponentRef("three_segment", "v3"),
         tools=(),
-        capabilities=Capabilities(
-            delegation=True, spawnable=("alpha", "beta")
-        ),
+        plugins=("delegation",),
+        spawnable=("alpha", "beta"),
         metadata={},
     )
     alpha = AgentSpec(
@@ -416,7 +415,7 @@ def test_sdkhost_delegation_disabled_no_directory_leak(tmp_path: Path) -> None:
         policy=ComponentRef("react", "1"),
         composer=ComponentRef("three_segment", "v3"),
         tools=(),
-        capabilities=Capabilities(),  # delegation False
+        plugins=(),  # delegation off
         metadata={},
     )
     child = AgentSpec(
@@ -457,7 +456,8 @@ def test_sdkhost_unknown_agent_in_roster_is_skipped(tmp_path: Path) -> None:
         policy=ComponentRef("react", "1"),
         composer=ComponentRef("three_segment", "v3"),
         tools=(),
-        capabilities=Capabilities(delegation=True, spawnable=("ok",)),
+        plugins=("delegation",),
+        spawnable=("ok",),
         metadata={},
     )
     ok_spec = AgentSpec(

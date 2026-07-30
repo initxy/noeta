@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence, Tuple
 
 from noeta.agent.registry import AgentRegistry, UnknownAgentError
-from noeta.agent.spec import AgentSpec, BudgetSpec, ToolRef
+from noeta.agent.spec import AgentSpec, BudgetSpec, ToolRef, agent_activates
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.protocols.canonical import to_canonical_bytes
@@ -399,8 +399,8 @@ class SdkHost(GenericEngineResolver):
         ``AgentSpec.tools`` identity list controls which closures are
         actually included — not the dict's keyset.
     delegation_allowed:
-        Host kill-switch; when ``False`` an agent's
-        ``capabilities.delegation=True`` is masked off. Mirrors the
+        Host kill-switch; when ``False`` an agent's own ``"delegation"``
+        activation is masked off. Mirrors the
         code-product ``CodeEngineResolver`` semantics exactly.
     policy_wrapper:
         Applied to every Engine's policy. ``None`` ⇒ one-shot behaviour
@@ -489,8 +489,8 @@ class SdkHost(GenericEngineResolver):
     # Explicit memory-dir override; None uses global_memory_dir / the
     # SDK global default. Memory is pinned to one global directory
     # (it does not drift with the per-session workspace); the memory switch
-    # itself reads spec.capabilities.memory (the SDK host treats capabilities as
-    # the source of truth, same discipline as skill_invocation).
+    # itself reads the spec's ``"memory"`` activation (the SDK host treats the
+    # activation tuple as the source of truth, same discipline as skill_invocation).
     memory_dir: Optional[Path] = None
     # Global memory root (agent-layer config; defaults to the SDK's
     # ~/.noeta/memories). An explicit memory_dir override takes priority over this
@@ -506,8 +506,8 @@ class SdkHost(GenericEngineResolver):
     # for single-tenant hosts.
     memory_root_resolver: Optional[Callable[[str], Optional[Path]]] = None
     #: Project-instructions-file switch. Like memory, this is workspace
-    #: environment material (not agent identity), so Capabilities carries no
-    #: flag and SdkHost configures it directly. Default False. When True, looks
+    #: environment material (not agent identity), so the activation tuple carries
+    #: no flag and SdkHost configures it directly. Default False. When True, looks
     #: for NOETA.md → AGENTS.md in order; an explicit instructions_file override
     #: reads only that path. Missing/empty file = no accounting (no instructions
     #: event).
@@ -1583,7 +1583,7 @@ class SdkHost(GenericEngineResolver):
         # used. Gated on the capability so a non-browser session never builds it
         # (and its tool set / stable prefix are untouched); ``None`` on every
         # local / non-browser / no-sandbox path keeps the tool set byte-identical.
-        browser_enabled = bool(spec.capabilities.browser)
+        browser_enabled = agent_activates(spec, "browser")
         session_browser_backend = None
         if browser_enabled and self._sandbox is not None and session_ref:
             session_browser_backend = self._sandbox.resolve_browser(session_ref)
@@ -1733,14 +1733,14 @@ class SdkHost(GenericEngineResolver):
             write_roots=self.write_roots,
             skill_tool_enforcement=self.skill_tool_enforcement,
             delegation_enabled=delegation_enabled,
-            todo_write_enabled=spec.capabilities.todo_write,
+            todo_write_enabled=agent_activates(spec, "todo_write"),
             ask_user_question_enabled=ask_user_question_enabled,
-            # The SDK host treats spec.capabilities as the source of truth; the
-            # noeta-agent product treats CodeSessionConfig as the source of truth
-            # and does not read capabilities (see apps/noeta-agent session.py), so
-            # migrating a custom spec across hosts requires aligning the two by
-            # hand.
-            skill_invocation_enabled=spec.capabilities.skill_invocation,
+            # The SDK host treats the spec's activation tuple as the source of
+            # truth; the noeta-agent product treats CodeSessionConfig as the
+            # source of truth and does not read the tuple (see apps/noeta-agent
+            # session.py), so migrating a custom spec across hosts requires
+            # aligning the two by hand.
+            skill_invocation_enabled=agent_activates(spec, "skill_invocation"),
             # Expose run_workflow only when the host
             # enabled workflow AND this agent can delegate. A workflow's
             # agent()/parallel() spawn real sub-agents into the same delegation
@@ -1774,7 +1774,7 @@ class SdkHost(GenericEngineResolver):
             backends=session_backends,
             capability_flags={
                 "browser": browser_enabled,
-                "memory": spec.capabilities.memory,
+                "memory": agent_activates(spec, "memory"),
             },
             # The per-plugin config bag (phase 3): each pack parses only its
             # own entry. The per-task memory root (issue #53) rides the
@@ -2108,7 +2108,7 @@ class SdkHost(GenericEngineResolver):
         live store — the kernel driver composes providers and never sees a
         store.
 
-        Returns ``None`` when the agent's spec lacks ``Capabilities.memory``
+        Returns ``None`` when the agent's spec does not activate ``"memory"``
         (only the ``main`` preset enables it), so a memory-off agent's stream
         stays byte-identical to the pre-seam path. The store root resolution is
         the SAME precedence :func:`~noeta.execution.builder.build_session_inputs`
@@ -2130,7 +2130,7 @@ class SdkHost(GenericEngineResolver):
             spec = self.unnamed_fallback
         else:
             spec = self._lookup_agent(agent, task_id="<unbound>")
-        if not spec.capabilities.memory:
+        if not agent_activates(spec, "memory"):
             return None
         impl = memory_impl()
         store = impl.load_memory_store(root=self.memory_root(task_id))
@@ -2252,7 +2252,7 @@ class SdkHost(GenericEngineResolver):
         resolver, no task id, or resolver fallback) keeps the shared slot,
         byte-equal with the pre-resolver key.
         """
-        if not agent.capabilities.memory:
+        if not agent_activates(agent, "memory"):
             return None
         override = self._memory_root_override(task_id)
         return str(override) if override is not None else None

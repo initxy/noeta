@@ -198,7 +198,7 @@ hardcoded if-chain (`execution/builder.py:457`
   modules, and every moved body. S0 golden + existing e2e suites
   byte/behavior-identical; import-linter (kernel ↛ builtins) and
   install-smoke (runtime wheel impl-free) green.
-- [ ] **S3 — identity.** `AgentSpec.plugins` + `spawnable`; delete
+- [x] **S3 — identity.** `AgentSpec.plugins` + `spawnable`; delete
   `Capabilities`; options folding, resolver, host `capability_flags`,
   cache key switch to tuple reads; `AgentBound` fixtures and prompt
   snapshot re-pinned deliberately (hard break, reviewed diff: only the
@@ -300,3 +300,15 @@ Each stage gates on `make check` before the next starts.
   untouched; the S0 golden passed fully unchanged. Six docs/ files still
   reference old paths — S4 scope. `make check` 3411 passed; wheels verified
   (.md at new homes, no `policies/descriptions` anywhere).
+- 2026-07-30 — S3 landed: `Capabilities` deleted; `AgentSpec` carries
+  `plugins` (full resolved tuple — external plugin-forced
+  `capability_flags` fold in at compile time via `_activation_tuple`, so
+  the D6 union lives once, in the tuple) + `spawnable`; the one derivation
+  helper is `agent_activates(agent, plugin)` beside `AgentSpec`
+  (membership test). Hard break (D7) is a tested contract:
+  `AgentSpec.from_dict` raises on a stale `capabilities` key AND on a
+  missing `plugins` key. Discovery: `AgentBoundPayload` carries only
+  `agent_name` — no event-log fixture existed to break; the AgentSpec dict
+  codec is the entire sanctioned break surface. Prompt-snapshot re-pin
+  reviewed: diffs show only capabilities→plugins/spawnable; system_prompt
+  and tool bytes untouched. `make check` 3414 passed.
