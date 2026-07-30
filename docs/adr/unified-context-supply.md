@@ -79,3 +79,36 @@ When `tool_output_inline_limit` (host-level, default None=off) is positive, `wra
 - memory reads and writes are ordinary tools (`noeta.builtins.memory.impl.store`), and the recall injection seam is in `noeta.execution.memory`.
 - Request-level bindings are in `noeta.client.options`; the canonical `__canonical_omit_none__` is in `noeta.protocols.canonical`; tool-result truncation is carried by `wrap_tool_result_block` + `tool_output_inline_limit`.
 - How compaction cooperates with the semi-stable segment and the tail budget is covered in `docs/adr/context-compaction.md`.
+
+## Clarification (2026-07-30) — kernel final form: `active_content` carries hashes, renderers resolve
+
+The `docs/implementation-specs/kernel-final-form.md` spec (Active) advances this
+decision in two ways; the shape and phrasing above are superseded where they
+conflict.
+
+- **`active_content` is `kind → {name → content_hash}`, not `kind → tuple of names`.** The
+  hash is **last-write-wins**: re-recording a `ContextContentRecorded` with a new
+  hash is a *refresh*; an identical hash is a no-op the recorder already swallowed.
+  The activation *anchor* (placement) stays first-write-wins — refresh moves bytes,
+  never placement. This is the one place refresh semantics live, so every content
+  kind gets them for free.
+
+- **The recorded `content_hash` is load-bearing, not descriptive.** A renderer is
+  `(names, resolve) -> RenderedContent` where `resolve(kind, name)` derefs the
+  resident's *active* hash through the `ContentStore` → bytes. The composed bytes
+  are therefore a pure function of `(folded state, content store)` (law 2) — a
+  refresh yields new bytes; a mutated backing store on disk changes nothing until a
+  re-record. The append-only red line holds unchanged: resolving from the durable,
+  content-addressed `ContentStore` is ledger-side reproduction, **not** a
+  compose-time callback to a live external source. (Skills are `pinned` and render
+  from the preloaded `SkillRegistry`, ignoring `resolve`.)
+
+- **The write seam is the generic `init` hook + scoped `SessionRecorder`**, not
+  feature-named seed recorders. `PackContribution.init` runs once per build
+  (including resume) at seed time; it `put()`s its rendered bytes and records the
+  ref through the kernel-handed `SessionRecorder` (which stamps
+  `actor="plugin:<name>"` and applies the hash gate). `record_memory_index` /
+  `record_instructions` / `record_environment` and the host's
+  `session_content_snapshots` seam are gone. `ContentHashesFn((kind, name) →
+  (version, hash))` remains for mid-loop provenance emission (skills), but the
+  pre-loop residents put + record their own bytes.
