@@ -286,6 +286,6 @@ def _matches_allowlist(argv: list[str], rules: tuple[AllowRule, ...]) -> bool:
 # ---------------------------------------------------------------------------
 #
 # The run/capture/cap primitives (`run_argv` / `tail_bytes` / `cap_stream`
-# / ``_RunOutcome``) live in ``noeta.tools.fs._subprocess`` so ``shell_run``
+# / ``RunOutcome``) live in ``noeta.tools.fs._subprocess`` so ``shell_run``
 # and ``run_skill_script`` share the exact timeout / truncation boundary.
 

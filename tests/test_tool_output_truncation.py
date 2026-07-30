@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 
 from tests._session_inputs import default_factory_kwargs
-from noeta.context.composer import _COMPOSER_VERSION, ThreeSegmentComposer
+from noeta.context.composer import COMPOSER_VERSION, ThreeSegmentComposer
 from noeta.core._decision_handlers import (
     _validate_tool_output_inline_limit,
     truncate_tool_output,
@@ -154,7 +154,7 @@ def _engine_and_run(*, tool_output_inline_limit: int | None, tool_size: int = 20
             system_prompt=_SYSTEM,
             model="stub-model",
             max_steps=5,
-            composer_version=_COMPOSER_VERSION,
+            composer_version=COMPOSER_VERSION,
         )
 
     # Round 1: LLM decides to call echo. Round 2: end_turn.

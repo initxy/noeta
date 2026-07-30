@@ -1,7 +1,7 @@
 """Content-channel rendering + message-stream origin pass-through.
 
 The verify-era per-entry View source attribution (``ViewSegment.entry_sources``
-/ ``RenderedSkills.entry_names``) was retired with verify/replay. What survives
+/ ``RenderedContent.entry_names``) was retired with verify/replay. What survives
 and is exercised here:
 
 * Content-channel entries (``skill:`` / ``memory:``) render into the
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from noeta.context.composer import RenderedSkills, ThreeSegmentComposer
+from noeta.context.composer import RenderedContent, ThreeSegmentComposer
 from noeta.context.content_channel import ContentChannelRegistry, ContentKindSpec
 from noeta.builtins.skills.impl import SkillIndexer
 from noeta.protocols.decisions import TaskStatePatch
@@ -39,8 +39,8 @@ from noeta.storage.memory import InMemoryContentStore
 def _renderer(kind_tag: str):
     """Renderer: one user message per name."""
 
-    def _render(names: list[str]) -> RenderedSkills:
-        return RenderedSkills(
+    def _render(names: list[str]) -> RenderedContent:
+        return RenderedContent(
             messages=[
                 Message(
                     role="user", content=[TextBlock(text=f"{kind_tag}:{n}")]

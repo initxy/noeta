@@ -44,8 +44,8 @@ from typing import Any, Optional
 
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.tool import ToolContext, ToolResult
-from noeta.tools._limits import INLINE_OUTPUT_MAX_BYTES
-from noeta.tools._refs import ref_json
+from noeta.tools.limits import INLINE_OUTPUT_MAX_BYTES
+from noeta.tools.refs import ref_json
 from noeta.protocols.resources import load_markdown
 from noeta.builtins.fs.impl._diff import (
     DIFF_MEDIA_TYPE,

@@ -792,7 +792,7 @@ class ProcessRegistry:
 def _ref_json(ref: ContentRef) -> dict[str, Any]:
     """JSON-native ``ContentRef`` form for the tool ``output`` dict.
 
-    The same shape ``noeta.tools._refs.ref_json`` produces; spelled locally so
+    The same shape ``noeta.tools.refs.ref_json`` produces; spelled locally so
     noeta-runtime never imports a noeta-sdk (``noeta.tools``) helper (the
     import-linter layering forbids it)."""
     return {"hash": ref.hash, "size": ref.size, "media_type": ref.media_type}

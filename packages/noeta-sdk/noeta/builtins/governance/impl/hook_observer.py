@@ -12,10 +12,12 @@ callback does only lightweight matching + a non-blocking enqueue onto a
 bounded queue, and a single background worker thread runs the commands.
 A full queue drops + logs (back-pressure never blocks emit).
 
-Layer boundary: this deliberately imports only ``noeta.protocols`` + stdlib,
-so the command runner uses a **local minimal env scrub** rather than a shared
-helper. The runner is **injectable** so tests can substitute a fake (no real
-subprocess / no real sleep).
+The command runner scrubs its subprocess env through the shared
+``noeta.runtime.env.scrub_env`` seam, narrowed to this observer's own
+allowlist (the old "protocols + stdlib only" import diet applied while this
+class lived in ``noeta.observers``; as a built-in impl it may reach the
+kernel-services band). The runner is **injectable** so tests can substitute
+a fake (no real subprocess / no real sleep).
 
 This observer is **live-only**: a host wires it at its live construction
 point, and it never participates in fold / resume / state reconstruction, so
@@ -32,7 +34,6 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import os
 import queue
 import subprocess
 import threading
@@ -42,6 +43,7 @@ from typing import Callable, Optional, Protocol
 
 from noeta.protocols.event_log import EventLogSubscriber, subscribe_with_stop
 from noeta.protocols.events import EventEnvelope
+from noeta.runtime.env import scrub_env
 
 
 __all__ = [
@@ -61,9 +63,9 @@ DEFAULT_NOTIFY_TIMEOUT_S = 30.0
 _DEFAULT_QUEUE_MAX = 256
 _WORKER_POLL_S = 0.1
 
-#: Minimal env a notify command inherits. Deliberately a small local
-#: copy (not a shared helper) to keep this observer importing only
-#: ``noeta.protocols`` + stdlib.
+#: Minimal env a notify command inherits — deliberately narrower than the
+#: default ``ENV_ALLOWLIST`` (a user notify hook has no business seeing the
+#: Python interpreter keys).
 _OBS_ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR")
 
 
@@ -99,7 +101,10 @@ NotifyRunner = Callable[[tuple[str, ...]], NotifyHandle]
 
 
 def _scrub_env_local() -> dict[str, str]:
-    return {k: os.environ[k] for k in _OBS_ENV_ALLOWLIST if k in os.environ}
+    # The shared subprocess scrubber, narrowed to the observer's own allowlist
+    # (a notify command inherits even less than a tool subprocess — none of
+    # the Python interpreter keys).
+    return scrub_env(allowlist=_OBS_ENV_ALLOWLIST)
 
 
 class _NoopHandle:

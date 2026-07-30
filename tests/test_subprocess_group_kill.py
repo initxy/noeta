@@ -17,7 +17,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from noeta.runtime.subproc import _RunOutcome, run_argv
+from noeta.runtime.subproc import RunOutcome, run_argv
 
 
 def _alive(pid: int) -> bool:
@@ -37,7 +37,7 @@ def test_run_argv_happy_path_real_exec(tmp_path: Path) -> None:
         timeout_s=10,
         output_cap=4096,
     )
-    assert isinstance(outcome, _RunOutcome)
+    assert isinstance(outcome, RunOutcome)
     assert outcome.returncode == 0
     assert outcome.timed_out is False
     assert outcome.stdout == b"out\n"

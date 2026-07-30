@@ -23,11 +23,12 @@ sources at compose time. Same ledger ⇒ same bytes keeps the
 ``semi_stable`` segment cache-friendly (a stable rendering does not bust
 the provider prompt cache between steps).
 
-The renderer output reuses :class:`noeta.context.composer.RenderedSkills`
+The renderer output is :class:`noeta.context.composer.RenderedContent`
 (``messages`` + post-resolve ``selected_skills`` + optional
-``retrieved_resources``) — the shape predates the generic channel and is
-field-named after its first resident; renaming it is deferred to the
-issue-07 generation switch so this batch stays purely additive.
+``retrieved_resources``) — the ``selected_skills`` field keeps its historical
+name because it mirrors the recorded ``ContextPlan.selected_skills`` plan
+field (plan-body byte stability); the type itself is the render output of
+every content kind.
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Iterable, Optional
 
-from noeta.context.composer import RenderedSkills, SkillRenderer
+from noeta.context.composer import ContentRenderer, RenderedContent
 from noeta.protocols.events import CONTENT_DRIFT_POLICIES
 
 
@@ -45,13 +46,6 @@ __all__ = [
     "ContentKindSpec",
     "ContentRenderer",
 ]
-
-
-#: A kind renderer: post-fold active names → rendered semi_stable
-#: content. Alias of the historical ``SkillRenderer`` shape — the skill
-#: renderer was the first resident and the generic channel adopts its
-#: contract unchanged (the type only gets renamed, not reshaped, until issue 07).
-ContentRenderer = SkillRenderer
 
 #: A kind's hash resolver: name → ``(declared_version, content_hash)``,
 #: ``None`` for names the host does not know (no ``content_hash`` provenance
@@ -117,7 +111,7 @@ class ContentChannelRegistry:
     def get(self, kind: str) -> Optional[ContentKindSpec]:
         return self._items.get(kind)
 
-    def render(self, kind: str, names: list[str]) -> RenderedSkills:
+    def render(self, kind: str, names: list[str]) -> RenderedContent:
         item = self._items.get(kind)
         if item is None:
             raise KeyError(f"content kind {kind!r} is not registered")

@@ -28,14 +28,14 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from noeta.protocols.tool import ToolContext, ToolResult
-from noeta.tools._invocation import require_str
-from noeta.tools._limits import (
+from noeta.tools.invocation import require_str
+from noeta.tools.limits import (
     INLINE_OUTPUT_MAX_BYTES,
     SUMMARY_EMBED_MAX_BYTES,
     fit_output_fields,
     truncate_bytes,
 )
-from noeta.tools._refs import ref_json
+from noeta.tools.refs import ref_json
 from noeta.runtime.subproc import run_argv, tail_bytes
 from noeta.runtime.exec_env import ExecEnv
 from noeta.runtime.shell_policy import (

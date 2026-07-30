@@ -23,7 +23,7 @@ import pytest
 from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.runtime.tool import _encode_output
 from noeta.storage.memory import InMemoryContentStore
-from noeta.tools._limits import INLINE_OUTPUT_MAX_BYTES
+from noeta.tools.limits import INLINE_OUTPUT_MAX_BYTES
 from noeta.builtins.fs.impl import (
     WRITE_FILE_MAX_BYTES,
     ReadFileTool,

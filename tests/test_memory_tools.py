@@ -31,7 +31,7 @@ from noeta.storage.memory import (
     InMemoryEventLog,
 )
 from noeta.testing.composer import trivial_three_segment
-from noeta.tools._limits import INLINE_CONTENT_MAX_BYTES
+from noeta.tools.limits import INLINE_CONTENT_MAX_BYTES
 from noeta.builtins.memory.impl.store import (
     MEMORY_ARCHIVE_TOOL_NAME,
     MEMORY_READ_TOOL_NAME,

@@ -29,7 +29,7 @@ Determinism notes (rev3 G5):
   directory paths (single-machine; not a relocated copy). The path
   string is rendered as-is — no disk IO — so re-indexing the same tree
   still reproduces the same bytes.
-* :meth:`SkillRegistry.render` returns a :class:`RenderedSkills`
+* :meth:`SkillRegistry.render` returns a :class:`RenderedContent`
   (rev3 B1 seam), giving Composer the post-filter, post-sort name
   list so ``ContextPlan.selected_skills`` records what was actually
   rendered rather than the raw active list.
@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from noeta.context.composer import RenderedSkills, SkillRenderer
+from noeta.context.composer import RenderedContent, ContentRenderer
 from noeta.protocols.messages import Message, TextBlock
 
 from . import _frontmatter
@@ -438,7 +438,7 @@ class SkillRegistry:
         resolved.sort(key=lambda d: (d.priority, d.name))
         return tuple(resolved)
 
-    def render(self, active: list[str]) -> RenderedSkills:
+    def render(self, active: list[str]) -> RenderedContent:
         """Adapter consumed by :class:`ThreeSegmentComposer`.
 
         Resolves ``active`` (drop unknowns, sort by priority/name),
@@ -473,14 +473,14 @@ class SkillRegistry:
                 Message(role="user", content=[TextBlock(text=text)])
             )
             selected.append(description.name)
-        return RenderedSkills(
+        return RenderedContent(
             messages=messages,
             selected_skills=selected,
         )
 
 
-def build_skill_renderer(registry: SkillRegistry) -> SkillRenderer:
-    """Bind a :class:`SkillRegistry` to the :data:`SkillRenderer` shape.
+def build_skill_renderer(registry: SkillRegistry) -> ContentRenderer:
+    """Bind a :class:`SkillRegistry` to the :data:`ContentRenderer` shape.
 
     Callers wire the result as
     ``ThreeSegmentComposer(skill_renderer=build_skill_renderer(registry))``.

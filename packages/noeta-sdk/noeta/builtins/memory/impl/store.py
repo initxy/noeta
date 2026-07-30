@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from noeta.protocols.tool import Tool, ToolContext, ToolResult
-from noeta.tools._limits import INLINE_CONTENT_MAX_BYTES, truncate_bytes
+from noeta.tools.limits import INLINE_CONTENT_MAX_BYTES, truncate_bytes
 
 
 __all__ = [

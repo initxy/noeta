@@ -34,7 +34,7 @@ from typing import Any, Optional, Protocol
 import httpx
 
 from noeta.protocols.tool import Tool, ToolContext, ToolResult
-from noeta.tools._limits import (
+from noeta.tools.limits import (
     INLINE_CONTENT_MAX_BYTES,
     SUMMARY_EMBED_MAX_BYTES,
     encoded_len,
@@ -42,7 +42,7 @@ from noeta.tools._limits import (
     truncate_bytes,
 )
 from noeta.protocols.resources import load_markdown
-from noeta.runtime.subproc import _RunOutcome
+from noeta.runtime.subproc import RunOutcome
 from noeta.runtime.exec_env import ExecEnv
 
 
@@ -73,7 +73,7 @@ _MAX_COUNT = 20
 _CONTAINER_OUTPUT_CAP = 5 * 1024 * 1024
 
 
-def _outcome_error_text(outcome: "_RunOutcome") -> str:
+def _outcome_error_text(outcome: "RunOutcome") -> str:
     """A human cause string for a failed container ``curl`` run.
 
     Prefers ``stderr`` (where ``curl -sS`` writes its error), falling back to

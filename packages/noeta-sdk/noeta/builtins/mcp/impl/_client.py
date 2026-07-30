@@ -34,7 +34,7 @@ import subprocess
 import time
 from typing import Any, Callable, Optional
 
-from noeta.runtime._env import scrub_env
+from noeta.runtime.env import scrub_env
 from noeta.runtime.mcp import McpError
 
 

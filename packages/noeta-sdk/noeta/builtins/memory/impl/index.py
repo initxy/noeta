@@ -21,7 +21,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 
-from noeta.context.composer import RenderedSkills
+from noeta.context.composer import RenderedContent
 from noeta.context.content_channel import ContentKindSpec, ContentRenderer
 from noeta.context.memory import (
     MEMORY_DRIFT_POLICY,
@@ -124,17 +124,17 @@ def build_memory_renderer(entries: MemoryEntries) -> ContentRenderer:
     the index when the ``index`` resident is active AND the snapshot is
     non-empty; anything else renders nothing (an unconfigured memory
     host leaves the ``semi_stable`` bytes untouched — zero footprint).
-    ``selected_skills`` stays empty: that ``RenderedSkills`` field is
+    ``selected_skills`` stays empty: that ``RenderedContent`` field is
     the skill kind's plan extra, not the channel contract (renamed at
     the issue-07 generation switch).
     """
 
     index_text = render_memory_index_text(entries) if entries else ""
 
-    def _render(names: list[str]) -> RenderedSkills:
+    def _render(names: list[str]) -> RenderedContent:
         if MEMORY_INDEX_NAME not in names or not entries:
-            return RenderedSkills(messages=[], selected_skills=[])
-        return RenderedSkills(
+            return RenderedContent(messages=[], selected_skills=[])
+        return RenderedContent(
             messages=[
                 Message(role="user", content=[TextBlock(text=index_text)])
             ],

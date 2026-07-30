@@ -38,11 +38,11 @@ from noeta.execution.session_pack import (
     SessionBuildContext,
 )
 from noeta.protocols.tool import Tool, ToolContext, ToolResult
-from noeta.tools._limits import (
+from noeta.tools.limits import (
     INLINE_CONTENT_MAX_BYTES,
     fit_output_fields,
 )
-from noeta.tools._refs import ref_json
+from noeta.tools.refs import ref_json
 from noeta.protocols.resources import load_markdown
 
 
@@ -108,7 +108,7 @@ def _require_str(
 ) -> "str | ToolResult":
     """Return ``arguments[key]`` as a non-empty ``str``, or a failed ``ToolResult``.
 
-    Inlined (rather than importing ``noeta.tools._invocation.require_str``) so the
+    Inlined (rather than importing ``noeta.tools.invocation.require_str``) so the
     browser pack stays self-contained and free of the ``_invocation`` ↔
     ``noeta.runtime.exec_env`` import cycle when it is imported standalone. Same shape as
     the shared helper: the failure ``summary`` is ``"{name}: {message}"``.

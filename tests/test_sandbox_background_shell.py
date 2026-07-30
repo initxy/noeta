@@ -21,7 +21,7 @@ from noeta.protocols.tool import ToolContext
 from noeta.storage.memory import InMemoryContentStore
 from noeta.builtins.fs.impl import build_fs_tools
 from noeta.runtime.shell_policy import ShellMode
-from noeta.runtime.subproc import _RunOutcome
+from noeta.runtime.subproc import RunOutcome
 from noeta.runtime.workspace import WorkspaceRoot
 from noeta.builtins.sandbox.impl.exec_env import AioSandboxExecEnv
 from noeta.runtime.exec_env import LocalExecEnv
@@ -32,8 +32,8 @@ class _SandboxLike:
 
     supports_background = False
 
-    def run_argv(self, argv, *, cwd, timeout_s, output_cap, runner=None) -> _RunOutcome:
-        return _RunOutcome(0, 1, b"ran", b"", False, False, False)
+    def run_argv(self, argv, *, cwd, timeout_s, output_cap, runner=None) -> RunOutcome:
+        return RunOutcome(0, 1, b"ran", b"", False, False, False)
 
     # minimal remaining ExecEnv surface (unused here)
     def read_bytes(self, path: Path) -> bytes:

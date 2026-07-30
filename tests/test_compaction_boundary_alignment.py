@@ -20,7 +20,7 @@ composer applies it to exactly those messages.
 from __future__ import annotations
 
 
-from noeta.context.composer import ThreeSegmentComposer, RenderedSkills
+from noeta.context.composer import ThreeSegmentComposer, RenderedContent
 from noeta.builtins.react.impl import ReActPolicy
 
 # ``_carries_tool_result`` is a react.py internal with no package-level door;
@@ -46,10 +46,10 @@ def _ctx() -> StepContext:
     return StepContext(task_id="t-1", lease_id="l-1", trace_id="tr-1")
 
 
-def _skill_renderer(_: list[str]) -> RenderedSkills:
+def _skill_renderer(_: list[str]) -> RenderedContent:
     # A non-empty semi_stable segment: this is the prefix that made
     # iter_messages() diverge from the raw runtime history.
-    return RenderedSkills(
+    return RenderedContent(
         messages=[
             Message(role="user", content=[TextBlock(text="SKILL-BODY" * 20)])
         ],

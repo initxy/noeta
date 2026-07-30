@@ -592,7 +592,7 @@ def test_oversize_patch_accepted_not_envelope_bound(tmp_path: Path) -> None:
 
 
 def test_output_within_inline_budget(tmp_path: Path) -> None:
-    from noeta.tools._limits import INLINE_OUTPUT_MAX_BYTES
+    from noeta.tools.limits import INLINE_OUTPUT_MAX_BYTES
 
     ws = _ws(tmp_path, {f"f{i}.py": "foo\n" for i in range(4)})
     ctx, _cs = _ctx()

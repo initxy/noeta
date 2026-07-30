@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from noeta.protocols.tool import ToolResult
-from noeta.tools._limits import (
+from noeta.tools.limits import (
     INLINE_OUTPUT_MAX_BYTES,
     encoded_len,
 )

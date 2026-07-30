@@ -288,8 +288,8 @@ def test_large_body_in_view_but_not_in_persisted_records() -> None:
 
 
 def test_default_renderer_with_active_skills_writes_empty_selected_skills() -> None:
-    """``_default_skill_renderer`` returns
-    ``RenderedSkills(messages=[], selected_skills=[])``: the Composer
+    """``_default_content_renderer`` returns
+    ``RenderedContent(messages=[], selected_skills=[])``: the Composer
     writes that empty list to ``ContextPlan.selected_skills`` even
     when ``task.state.active_skills`` is non-empty — the renderer is
     the canonical source of truth for what was rendered."""

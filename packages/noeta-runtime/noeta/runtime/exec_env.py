@@ -38,11 +38,10 @@ import subprocess
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
+from typing import Callable, Optional, Protocol, runtime_checkable
 
 from noeta.runtime.subproc import (
-    _RunOutcome,
-    cap_stream,
+    RunOutcome,
     run_argv as _local_run_argv,
 )
 
@@ -120,7 +119,7 @@ class ExclusiveCreateWriteFailed(ExclusiveCreateError):
 #: The injectable subprocess runner ``shell_run`` threads through to
 #: ``run_argv`` (tests pass a fake to avoid shelling out on the happy path).
 #: A ``subprocess.run``-shaped callable; ``None`` ⇒ the default local runner.
-_SubprocRunner = Callable[..., "subprocess.CompletedProcess[bytes]"]
+SubprocRunner = Callable[..., "subprocess.CompletedProcess[bytes]"]
 
 
 @dataclass(frozen=True)
@@ -232,11 +231,11 @@ class ExecEnv(Protocol):
         cwd: Path,
         timeout_s: int,
         output_cap: int,
-        runner: Optional[_SubprocRunner] = None,
-    ) -> _RunOutcome:
+        runner: Optional[SubprocRunner] = None,
+    ) -> RunOutcome:
         """Spawn ``argv`` under ``cwd``, capture output, enforce timeout + cap.
 
-        Returns the same :class:`~noeta.runtime.subproc._RunOutcome` the
+        Returns the same :class:`~noeta.runtime.subproc.RunOutcome` the
         tools already consume.
         """
         ...
@@ -365,8 +364,8 @@ class LocalExecEnv:
         cwd: Path,
         timeout_s: int,
         output_cap: int,
-        runner: Optional[_SubprocRunner] = None,
-    ) -> _RunOutcome:
+        runner: Optional[SubprocRunner] = None,
+    ) -> RunOutcome:
         return _local_run_argv(
             argv,
             cwd=cwd,

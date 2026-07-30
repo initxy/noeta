@@ -23,7 +23,7 @@ from __future__ import annotations
 import hashlib
 from typing import Mapping
 
-from noeta.context.composer import RenderedSkills
+from noeta.context.composer import RenderedContent
 from noeta.context.content_channel import ContentKindSpec, ContentRenderer
 from noeta.context.environment import (
     ENVIRONMENT_DRIFT_POLICY,
@@ -153,10 +153,10 @@ def build_environment_renderer(
     """
     rendered_text = render_environment_text(snapshot)
 
-    def _render(names: list[str]) -> RenderedSkills:
+    def _render(names: list[str]) -> RenderedContent:
         if ENVIRONMENT_NAME not in names:
-            return RenderedSkills(messages=[], selected_skills=[])
-        return RenderedSkills(
+            return RenderedContent(messages=[], selected_skills=[])
+        return RenderedContent(
             messages=[
                 Message(role="user", content=[TextBlock(text=rendered_text)])
             ],
@@ -250,10 +250,10 @@ def build_instructions_renderer(
         render_instructions_text(snapshot) if non_empty else ""
     )
 
-    def _render(names: list[str]) -> RenderedSkills:
+    def _render(names: list[str]) -> RenderedContent:
         if active_name not in names or not non_empty:
-            return RenderedSkills(messages=[], selected_skills=[])
-        return RenderedSkills(
+            return RenderedContent(messages=[], selected_skills=[])
+        return RenderedContent(
             messages=[
                 Message(role="user", content=[TextBlock(text=rendered_text)])
             ],
@@ -291,7 +291,7 @@ def instructions_content_kind_from(
     policy already tolerates drift, and a degraded preload may only omit.
     """
 
-    def _render(names: list[str]) -> RenderedSkills:
+    def _render(names: list[str]) -> RenderedContent:
         messages: list[Message] = []
         for name in names:
             snapshot = snapshots.get(name)
@@ -303,7 +303,7 @@ def instructions_content_kind_from(
                     content=[TextBlock(text=render_instructions_text(snapshot))],
                 )
             )
-        return RenderedSkills(messages=messages, selected_skills=[])
+        return RenderedContent(messages=messages, selected_skills=[])
 
     def _hashes(name: str) -> tuple[str, str] | None:
         snapshot = snapshots.get(name)

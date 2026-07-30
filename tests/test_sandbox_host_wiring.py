@@ -57,7 +57,7 @@ from noeta.storage.memory import (
     InMemoryEventLog,
 )
 from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.runtime.subproc import _RunOutcome
+from noeta.runtime.subproc import RunOutcome
 from noeta.builtins.sandbox.impl.exec_env import AioSandboxExecEnv
 
 
@@ -110,8 +110,8 @@ class RecordingExecEnv:
     def rglob(self, base: Path, pattern: str) -> Iterable[Path]:
         return []
 
-    def run_argv(self, argv, *, cwd, timeout_s, output_cap, runner=None) -> _RunOutcome:
-        return _RunOutcome(0, 1, b"ran", b"", False, False, False)
+    def run_argv(self, argv, *, cwd, timeout_s, output_cap, runner=None) -> RunOutcome:
+        return RunOutcome(0, 1, b"ran", b"", False, False, False)
 
 
 class FakeProvider:

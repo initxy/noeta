@@ -24,12 +24,12 @@ from collections.abc import Sequence
 from typing import Union
 
 from noeta.protocols.tool import ToolContext, ToolResult
-from noeta.tools._limits import (
+from noeta.tools.limits import (
     INLINE_CONTENT_MAX_BYTES,
     fit_output_fields,
     truncate_bytes,
 )
-from noeta.tools._refs import ref_json
+from noeta.tools.refs import ref_json
 from noeta.builtins.mcp.impl._client import McpStdioClient, SpawnFn
 from noeta.builtins.mcp.impl._http_client import McpHttpClient
 from noeta.runtime.mcp import (
