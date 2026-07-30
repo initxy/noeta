@@ -20,8 +20,6 @@ from noeta.agent.registry import UnknownAgentError
 from noeta.agent.spec import agent_activates
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
-from noeta.execution.environment import record_environment
-from noeta.execution.instructions import record_instructions
 from noeta.execution.subtask_drain import (
     DrainHost,
     UnsupportedSubtaskSuspend,
@@ -923,52 +921,14 @@ class GenericEngineResolver:
                 return (inherited_model, "inherited")
             return None
 
-        # Pre-loop activation of a child's instructions + environment content
-        # channels — the same parity ``InteractionDriver.seed_start`` gives a
-        # top-level session. Snapshots come from the host's
-        # ``session_content_snapshots`` over the INHERITED workspace (the whole
-        # delegation tree runs in one fs root, so a child sees the root session's
-        # workspace block), the same source ``_build_engine`` feeds the child's
-        # composer — so the recorded fingerprint matches the bytes the child
-        # renders. ``getattr``-guarded so a generic resolver without the SdkHost
-        # seam (or a test-double host) leaves the callback ``None`` → no-op.
-        _snapshots = getattr(self, "session_content_snapshots", None)
-
-        def _record_child_session_content(
-            child_id: str, child_task: Any, lease_id: str
-        ) -> Any:
-            # The host's memoized resident kits (phase 2c) — same objects the
-            # child's composer renders from. A host that exposes the snapshot
-            # seam without the kits is a wiring fault, not a legacy mode.
-            instructions_kit = getattr(self, "instructions_kit", None)
-            environment_kit = getattr(self, "environment_kit", None)
-            if instructions_kit is None or environment_kit is None:
-                raise RuntimeError(
-                    "session_content_snapshots is wired but the resident kits "
-                    "are missing — a host exposing the snapshot seam must also "
-                    "expose instructions_kit / environment_kit (phase 2c)."
-                )
-            environment_snapshot, instructions_snapshot = _snapshots(
-                inherited_workspace
-            )
-            child_task = record_instructions(
-                self.event_log, self.content_store, child_task,
-                snapshot=instructions_snapshot,
-                kit=instructions_kit,
-                lease_id=lease_id,
-            )
-            child_task = record_environment(
-                self.event_log, self.content_store, child_task,
-                snapshot=environment_snapshot,
-                kit=environment_kit,
-                lease_id=lease_id,
-            )
-            return child_task
-
-        record_child: Optional[Callable[[str, Any, str], Any]] = (
-            _record_child_session_content if callable(_snapshots) else None
-        )
-
+        # A child's session-level residents (instructions + environment, plus a
+        # memory index when the child's activation carries it) are pre-loop
+        # activated by the drain itself, running ``run_content_init`` over the
+        # child engine's own ``content_init_hooks`` (spec §4.5) — the same generic
+        # ``init`` seam ``InteractionDriver.seed_start`` uses for a top-level
+        # session. The child engine snapshots the INHERITED workspace (the whole
+        # delegation tree runs in one fs root), the same source its composer
+        # renders from, so no host snapshot callback crosses into the drain.
         host = DrainHost(
             dispatcher=self.dispatcher,
             event_log=self.event_log,
@@ -987,7 +947,6 @@ class GenericEngineResolver:
             child_model_binding=_child_model_binding,
             child_provider=inherited_provider,
             cancel_check=cancel_check,
-            record_session_content=record_child,
         )
         return host
 

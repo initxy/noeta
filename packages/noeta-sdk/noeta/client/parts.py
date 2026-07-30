@@ -35,10 +35,7 @@ __all__ = [
     "builtin_tool_ref",
     "browser_tool_names",
     "catalog_price",
-    "default_environment_kit",
     "default_guards_factory",
-    "default_instructions_kit",
-    "default_memory_index_kit",
     "default_policy_factory",
     "default_control_tools",
     "default_reminder_specs",
@@ -141,38 +138,6 @@ def provider_family(model: str) -> Optional[str]:
     return family
 
 
-def default_memory_index_kit() -> Any:
-    """The memory built-in's index kit (phase 2c).
-
-    Renderer prose + hash rule + ``ContentKindSpec`` factory for the memory
-    index resident, injected as the kernel builder's ``memory_index_kit``
-    and consumed by the driver's pre-loop ``record_memory_index``.
-    """
-    build = _resolve_ref("noeta.builtins.memory.impl:build_memory_index_kit")
-    return build()
-
-
-def default_environment_kit() -> Any:
-    """The workspace built-in's environment kit (phase 2c)."""
-    build = _resolve_ref(
-        "noeta.builtins.workspace.impl:build_environment_kit"
-    )
-    return build()
-
-
-def default_instructions_kit() -> Any:
-    """The workspace built-in's instructions kit (phase 2c).
-
-    Carries the tag renderer / hash rule / kind factory AND the
-    ``NOETA.md``/``AGENTS.md`` filename convention the kernel loader and
-    the discovery hook walk.
-    """
-    build = _resolve_ref(
-        "noeta.builtins.workspace.impl:build_instructions_kit"
-    )
-    return build()
-
-
 _WORKSPACE_MOD: Optional[Any] = None
 
 
@@ -182,9 +147,7 @@ def workspace_impl() -> Any:
     SDK core reaches the workspace residents' impure loaders only through
     this doorway (microkernel phase 3, D10) — ``load_environment`` /
     ``load_instructions`` for the host's own record path (the compose path
-    goes through the plugin's ``session_pack`` contributions instead). The
-    kits stay reachable via :func:`default_environment_kit` /
-    :func:`default_instructions_kit`.
+    goes through the plugin's ``session_pack`` contributions instead).
     """
     global _WORKSPACE_MOD
     if _WORKSPACE_MOD is None:

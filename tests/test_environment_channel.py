@@ -36,7 +36,6 @@ from noeta.context.environment import (
     EnvironmentSnapshot,
 )
 from noeta.builtins.workspace.impl import (
-    build_environment_kit,
     build_environment_renderer,
     environment_content_hash,
     environment_content_kind,
@@ -46,7 +45,7 @@ from noeta.builtins.workspace.impl import (
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.core.wiring import wire_default_observers
-from noeta.execution.environment import record_environment
+from noeta.execution.recorder import SeedRecorder
 from noeta.policies.stub import StubScriptedPolicy
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.decisions import FinishDecision
@@ -72,9 +71,6 @@ from tests._sdk_session import (
 _SAMPLE = EnvironmentSnapshot(
     workspace_display="/work/repo", is_git_repo=True, platform="darwin"
 )
-
-# The injected resident kit (phase 2c) — the record seam takes it explicitly.
-_KIT = build_environment_kit()
 
 
 # ---------------------------------------------------------------------------
@@ -300,12 +296,36 @@ def _engine(log, cs, composer) -> Engine:
     )
 
 
-def test_record_environment_emits_evolving_event_and_activates() -> None:
+def _activate_environment(log, cs, task):
+    """Activate the environment resident through the generic scoped recorder.
+
+    The workspace built-in's ``init`` hook records the environment resident
+    exactly this way (spec §4.5) — put the rendered bytes into the content
+    store, record the ref through the :class:`SeedRecorder` — after the
+    feature-named ``record_environment`` seam was retired. The recorded
+    ``ref.hash`` equals ``environment_content_hash(_SAMPLE)`` by construction
+    (both are ``sha256(render_environment_text(_SAMPLE))``).
+    """
+    rec = SeedRecorder(log, cs, task, actor="plugin:environment")
+    ref = cs.put(
+        render_environment_text(_SAMPLE).encode("utf-8"), media_type="text/markdown"
+    )
+    rec.record_content(
+        kind=ENVIRONMENT_KIND,
+        name=ENVIRONMENT_NAME,
+        version=ENVIRONMENT_VERSION,
+        ref=ref,
+        policy=ENVIRONMENT_DRIFT_POLICY,
+    )
+    return rec.task
+
+
+def test_activation_emits_evolving_event_and_activates() -> None:
     log, cs, _disp = _runtime()
     engine = _engine(log, cs, _composer(cs))
     task = engine.create_task(goal="g", policy_name="scripted")
 
-    task = record_environment(log, cs, task, snapshot=_SAMPLE, kit=_KIT)
+    task = _activate_environment(log, cs, task)
 
     events = [e for e in log.read(task.task_id) if e.type == "ContextContentRecorded"]
     assert len(events) == 1
@@ -315,25 +335,8 @@ def test_record_environment_emits_evolving_event_and_activates() -> None:
     assert payload.policy == "evolving"
     assert payload.content_hash == environment_content_hash(_SAMPLE)
     assert payload.version == ENVIRONMENT_VERSION
+    assert events[0].actor == "plugin:environment"
     assert task.state.active_content[ENVIRONMENT_KIND] == (ENVIRONMENT_NAME,)
-
-
-def test_record_environment_first_only_and_noop_on_none() -> None:
-    log, cs, _disp = _runtime()
-    engine = _engine(log, cs, _composer(cs))
-    task = engine.create_task(goal="g", policy_name="scripted")
-
-    task = record_environment(log, cs, task, snapshot=None, kit=_KIT)
-    assert not [
-        e for e in log.read(task.task_id) if e.type == "ContextContentRecorded"
-    ]
-
-    task = record_environment(log, cs, task, snapshot=_SAMPLE, kit=_KIT)
-    task = record_environment(log, cs, task, snapshot=_SAMPLE, kit=_KIT)
-    assert (
-        len([e for e in log.read(task.task_id) if e.type == "ContextContentRecorded"])
-        == 1
-    )
 
 
 def test_compose_places_env_in_semi_stable_not_system_prompt() -> None:
@@ -347,7 +350,7 @@ def test_compose_places_env_in_semi_stable_not_system_prompt() -> None:
         s for s in composer.compose(task).segments if s.name == "stable_prefix"
     ][0].segment_hash
 
-    task = record_environment(log, cs, task, snapshot=_SAMPLE, kit=_KIT)
+    task = _activate_environment(log, cs, task)
     view = composer.compose(task)
 
     semi = [s for s in view.segments if s.name == "semi_stable"][0]

@@ -20,6 +20,7 @@ from pathlib import Path
 from noeta.context.composer import ThreeSegmentComposer
 from noeta.context.content_channel import ContentChannelRegistry
 from noeta.context.memory import (
+    MEMORY_DRIFT_POLICY,
     MEMORY_INDEX_NAME,
     MEMORY_INDEX_VERSION,
     MEMORY_KIND,
@@ -27,7 +28,6 @@ from noeta.context.memory import (
 from noeta.builtins.memory.impl.index import (
     RecallHit,
     _tokens,
-    build_memory_index_kit,
     build_memory_renderer,
     format_recall_text,
     match_memories,
@@ -46,7 +46,7 @@ from noeta.builtins.memory.impl.store import (
     DEFAULT_GLOBAL_MEMORY_DIR,
     load_memory_store,
 )
-from noeta.execution.memory import record_memory_index
+from noeta.execution.recorder import SeedRecorder
 from noeta.policies.stub import StubScriptedPolicy
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.decisions import FinishDecision
@@ -63,9 +63,6 @@ _ENTRIES = (
     ("deploy-process", "How we deploy", ""),
     ("naming-rules", "Module naming conventions", ""),
 )
-
-# The injected resident kit (phase 2c) — the record seam takes it explicitly.
-_KIT = build_memory_index_kit()
 
 
 # ---------------------------------------------------------------------------
@@ -264,16 +261,38 @@ def _engine(
 
 
 # ---------------------------------------------------------------------------
-# record_memory_index — records and activates; second tenant via 02/03 generics
+# Index activation through the generic scoped recorder (spec §4.5)
 # ---------------------------------------------------------------------------
 
 
-def test_record_memory_index_emits_evolving_event_and_activates() -> None:
+def _activate_memory_index(log, cs, task, entries=_ENTRIES):
+    """Activate the memory index resident through the generic scoped recorder.
+
+    Mirrors the memory built-in's ``init`` hook (spec §4.5): serialise the
+    entries the composer's renderer holds into the ContentStore and record the
+    ref through the :class:`SeedRecorder`. ``ref.hash`` equals
+    ``memory_index_hash(entries)`` by construction.
+    """
+    rec = SeedRecorder(log, cs, task, actor="plugin:memory")
+    ref = cs.put(
+        render_memory_index_text(entries).encode("utf-8"), media_type="text/markdown"
+    )
+    rec.record_content(
+        kind=MEMORY_KIND,
+        name=MEMORY_INDEX_NAME,
+        version=MEMORY_INDEX_VERSION,
+        ref=ref,
+        policy=MEMORY_DRIFT_POLICY,
+    )
+    return rec.task
+
+
+def test_activation_emits_evolving_event_and_activates() -> None:
     log, cs, _disp = _runtime()
     engine = _engine(log, cs, _composer(cs, _ENTRIES))
     task = engine.create_task(goal="g", policy_name="scripted")
 
-    task = record_memory_index(log, cs, task, entries=_ENTRIES, kit=_KIT)
+    task = _activate_memory_index(log, cs, task)
 
     events = [
         e for e in log.read(task.task_id)
@@ -285,24 +304,8 @@ def test_record_memory_index_emits_evolving_event_and_activates() -> None:
     assert payload.name == MEMORY_INDEX_NAME
     assert payload.policy == "evolving"
     assert payload.content_hash == memory_index_hash(_ENTRIES)
+    assert events[0].actor == "plugin:memory"
     assert task.state.active_content[MEMORY_KIND] == (MEMORY_INDEX_NAME,)
-
-
-def test_record_memory_index_is_first_only_and_skips_empty() -> None:
-    log, cs, _disp = _runtime()
-    engine = _engine(log, cs, _composer(cs, _ENTRIES))
-    task = engine.create_task(goal="g", policy_name="scripted")
-
-    task = record_memory_index(log, cs, task, entries=(), kit=_KIT)
-    assert MEMORY_KIND not in task.state.active_content  # not configured = zero footprint
-
-    task = record_memory_index(log, cs, task, entries=_ENTRIES, kit=_KIT)
-    task = record_memory_index(log, cs, task, entries=_ENTRIES, kit=_KIT)
-    events = [
-        e for e in log.read(task.task_id)
-        if e.type == "ContextContentRecorded"
-    ]
-    assert len(events) == 1
 
 
 def test_compose_places_index_in_semi_stable_and_stays_pure() -> None:
@@ -310,7 +313,7 @@ def test_compose_places_index_in_semi_stable_and_stays_pure() -> None:
     composer = _composer(cs, _ENTRIES)
     engine = _engine(log, cs, composer)
     task = engine.create_task(goal="g", policy_name="scripted")
-    task = record_memory_index(log, cs, task, entries=_ENTRIES, kit=_KIT)
+    task = _activate_memory_index(log, cs, task)
 
     first = composer.compose(task)
     second = composer.compose(task)
@@ -523,7 +526,7 @@ def test_replay_never_reruns_retrieval_bytes_equal(tmp_path: Path) -> None:
     composer = _composer(cs, entries_at_record)
     engine = _engine(log, cs, composer)
     task = engine.create_task(goal="g", policy_name="scripted")
-    task = record_memory_index(log, cs, task, entries=entries_at_record, kit=_KIT)
+    task = _activate_memory_index(log, cs, task, entries=entries_at_record)
     disp.enqueue(task.task_id)
     lease = disp.lease(worker_id="w-mem")
     assert lease is not None
