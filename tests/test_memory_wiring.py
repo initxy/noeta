@@ -276,7 +276,7 @@ def test_product_prepare_records_index_and_recalls(tmp_path: Path) -> None:
     )
     assert folded.runtime.messages[goal_index + 1].origin == "memory"
     # The index is resident as semi_stable.
-    assert folded.state.active_content.get(MEMORY_KIND) == ("index",)
+    assert tuple(folded.state.active_content.get(MEMORY_KIND, {})) == ("index",)
 
 
 def test_product_memory_disabled_zero_events(tmp_path: Path) -> None:

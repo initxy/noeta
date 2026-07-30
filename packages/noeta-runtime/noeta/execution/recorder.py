@@ -78,13 +78,14 @@ class SeedRecorder:
     ) -> None:
         """Activate the ``(kind, name)`` resident at ``ref``'s bytes.
 
-        No-ops on an empty triple or an already-active ``(kind, name)`` (the
-        first-only gate — the hash-last-write-wins refresh is a later slice);
-        otherwise emits one ``ContextContentRecorded`` and folds it in.
+        No-ops on an empty triple or when ``(kind, name)`` is already active
+        with this exact hash (spec §4.4); a new hash records a refresh (hash
+        last-write-wins, spec §3). ``init`` reruns every drive, so an unchanged
+        store appends nothing and a changed store records exactly one refresh.
         """
         if not kind or not name or not ref.hash:
             return
-        if name in self._task.state.active_content.get(kind, ()):
+        if self._task.state.active_content.get(kind, {}).get(name) == ref.hash:
             return
         env = self._event_log.emit(
             task_id=self._task.task_id,

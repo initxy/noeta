@@ -39,7 +39,7 @@ from noeta.storage.memory import InMemoryContentStore
 def _renderer(kind_tag: str):
     """Renderer: one user message per name."""
 
-    def _render(names: list[str]) -> RenderedContent:
+    def _render(names: list[str], resolve) -> RenderedContent:
         return RenderedContent(
             messages=[
                 Message(

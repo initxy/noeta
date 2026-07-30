@@ -55,9 +55,13 @@ from noeta.storage.memory import InMemoryContentStore, InMemoryEventLog
 
 
 def _fake_renderer(prefix: str):
-    """A minimal kind renderer: one user Message per name, input order."""
+    """A minimal kind renderer: one user Message per name, input order.
 
-    def _render(names: list[str]) -> RenderedContent:
+    Fabricates text from the names (not content-addressed), so it accepts the
+    §6 ``resolve`` for the uniform ``ContentRenderer`` shape and ignores it.
+    """
+
+    def _render(names: list[str], resolve) -> RenderedContent:
         return RenderedContent(
             messages=[
                 Message(role="user", content=[TextBlock(text=f"{prefix}:{n}")])
@@ -67,6 +71,11 @@ def _fake_renderer(prefix: str):
         )
 
     return _render
+
+
+def _no_resolve(kind: str, name: str) -> bytes:
+    """A §6 ``resolve`` the fake renderers never call (they fabricate text)."""
+    raise AssertionError("fake renderer must not call resolve")
 
 
 def _skill_registry() -> SkillRegistry:
@@ -196,7 +205,7 @@ def test_registry_render_dispatches_to_kind_renderer() -> None:
     registry = ContentChannelRegistry(
         [ContentKindSpec(kind="fact", renderer=_fake_renderer("FACT"))]
     )
-    rendered = registry.render("fact", ["x", "y"])
+    rendered = registry.render("fact", ["x", "y"], _no_resolve)
     assert [b.text for m in rendered.messages for b in m.content] == [
         "FACT:x",
         "FACT:y",
@@ -320,7 +329,7 @@ def test_fake_kind_full_journey() -> None:
         _content_event(kind="fact", name="x", version="7", content_hash="h-x")
     )
     task = fold(log, cs, "t1")
-    assert task.state.active_content == {"fact": ("x",)}
+    assert task.state.active_content == {"fact": {"x": "h-x"}}
 
     # 3) Render: the composer materialises the kind into semi_stable.
     composer = ThreeSegmentComposer(

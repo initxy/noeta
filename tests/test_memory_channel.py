@@ -121,20 +121,25 @@ def test_index_text_annotates_typed_entries() -> None:
     assert "- naming-rules: Module naming conventions" in text  # untyped = v1 form
 
 
+def _index_resolve(kind: str, name: str) -> bytes:
+    """A fake ``resolve`` returning the index bytes the renderer expects (spec
+    §6): the ledger's active hash would deref to exactly these bytes."""
+    return render_memory_index_text(_ENTRIES).encode("utf-8")
+
+
 def test_renderer_renders_one_user_message_when_index_active() -> None:
-    rendered = build_memory_renderer(_ENTRIES)([MEMORY_INDEX_NAME])
+    rendered = build_memory_renderer(_ENTRIES)([MEMORY_INDEX_NAME], _index_resolve)
     assert len(rendered.messages) == 1
     msg = rendered.messages[0]
     assert msg.role == "user"
     assert "deploy-process" in msg.content[0].text
 
 
-def test_renderer_renders_nothing_when_inactive_or_empty() -> None:
+def test_renderer_renders_nothing_when_index_inactive() -> None:
     renderer = build_memory_renderer(_ENTRIES)
-    assert renderer([]).messages == []
-    assert renderer(["not-the-index"]).messages == []
-    # Empty memory dir = zero footprint: nothing rendered even if the name is active.
-    assert build_memory_renderer(())([MEMORY_INDEX_NAME]).messages == []
+    # No resolve call when the index name is not active → empty, no store touch.
+    assert renderer([], _index_resolve).messages == []
+    assert renderer(["not-the-index"], _index_resolve).messages == []
 
 
 def test_memory_kind_is_evolving_and_resolves_through_generic_seam() -> None:
@@ -305,7 +310,9 @@ def test_activation_emits_evolving_event_and_activates() -> None:
     assert payload.policy == "evolving"
     assert payload.content_hash == memory_index_hash(_ENTRIES)
     assert events[0].actor == "plugin:memory"
-    assert task.state.active_content[MEMORY_KIND] == (MEMORY_INDEX_NAME,)
+    assert task.state.active_content[MEMORY_KIND] == {
+        MEMORY_INDEX_NAME: memory_index_hash(_ENTRIES)
+    }
 
 
 def test_compose_places_index_in_semi_stable_and_stays_pure() -> None:

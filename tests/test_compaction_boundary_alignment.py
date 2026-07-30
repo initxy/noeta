@@ -46,7 +46,7 @@ def _ctx() -> StepContext:
     return StepContext(task_id="t-1", lease_id="l-1", trace_id="tr-1")
 
 
-def _skill_renderer(_: list[str]) -> RenderedContent:
+def _skill_renderer(_: list[str], __=None) -> RenderedContent:
     # A non-empty semi_stable segment: this is the prefix that made
     # iter_messages() diverge from the raw runtime history.
     return RenderedContent(

@@ -64,7 +64,11 @@ def rehydrate_task(state_dict: dict[str, Any]) -> Task:
         # list. Seed the map's skill entry from it so an accelerated fold
         # rebuilds the same state a from-scratch fold derives from the
         # full stream (the sugar keeps the two in lockstep thereafter).
-        state["active_content"] = {"skill": list(state["active_skills"])}
+        # Pre-generic bodies carry no per-skill hash; "" is fine (skills are
+        # pinned — the renderer keys off the registry, not the hash).
+        state["active_content"] = {
+            "skill": {name: "" for name in state["active_skills"]}
+        }
     return Task(
         task_id=state_dict["task_id"],
         status=state_dict["status"],

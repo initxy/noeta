@@ -2112,9 +2112,11 @@ def handle_tool_calls(
             except Exception:  # noqa: BLE001 — discovery is best-effort.
                 continue
             for payload in payloads:
-                if payload.name in task.state.active_content.get(
-                    payload.kind, ()
-                ):
+                # Hash last-write-wins (spec §3): re-emit only when the
+                # discovered file's hash differs from the active one.
+                if task.state.active_content.get(payload.kind, {}).get(
+                    payload.name
+                ) == payload.content_hash:
                     continue
                 env = ctx.emit(
                     task_id=task.task_id,

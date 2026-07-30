@@ -240,16 +240,22 @@ def test_hash_is_stable_and_tracks_content() -> None:
     assert environment_content_hash(_SAMPLE) == hashlib.sha256(rendered).hexdigest()
 
 
+def _env_resolve(kind: str, name: str) -> bytes:
+    """A fake ``resolve`` returning the environment bytes the renderer expects
+    (spec §6): the ledger's active hash would deref to exactly these."""
+    return render_environment_text(_SAMPLE).encode("utf-8")
+
+
 def test_renderer_renders_user_message_only_when_active() -> None:
     renderer = build_environment_renderer(_SAMPLE)
-    rendered = renderer([ENVIRONMENT_NAME])
+    rendered = renderer([ENVIRONMENT_NAME], _env_resolve)
     assert isinstance(rendered, RenderedContent)
     assert len(rendered.messages) == 1
     assert rendered.messages[0].role == "user"
     assert "Working directory: /work/repo" in rendered.messages[0].content[0].text
-    # Not active → nothing rendered.
-    assert renderer([]).messages == []
-    assert renderer(["something-else"]).messages == []
+    # Not active → nothing rendered (resolve is never called).
+    assert renderer([], _env_resolve).messages == []
+    assert renderer(["something-else"], _env_resolve).messages == []
 
 
 def test_kind_is_evolving_and_resolves_through_generic_seam() -> None:
@@ -336,7 +342,9 @@ def test_activation_emits_evolving_event_and_activates() -> None:
     assert payload.content_hash == environment_content_hash(_SAMPLE)
     assert payload.version == ENVIRONMENT_VERSION
     assert events[0].actor == "plugin:environment"
-    assert task.state.active_content[ENVIRONMENT_KIND] == (ENVIRONMENT_NAME,)
+    assert task.state.active_content[ENVIRONMENT_KIND] == {
+        ENVIRONMENT_NAME: environment_content_hash(_SAMPLE)
+    }
 
 
 def test_compose_places_env_in_semi_stable_not_system_prompt() -> None:
@@ -434,7 +442,9 @@ def test_server_seed_start_records_environment(tmp_path: Path) -> None:
     assert env_events[0].payload.name == ENVIRONMENT_NAME
 
     folded = fold(event_log, content_store, outcome.task_id)
-    assert folded.state.active_content.get(ENVIRONMENT_KIND) == (ENVIRONMENT_NAME,)
+    assert tuple(folded.state.active_content.get(ENVIRONMENT_KIND, {})) == (
+        ENVIRONMENT_NAME,
+    )
 
 
 def test_server_seed_start_records_instructions_when_file_present(
@@ -517,7 +527,7 @@ def test_product_session_records_and_renders_environment(tmp_path: Path) -> None
     assert found[0].payload.name == ENVIRONMENT_NAME
 
     folded = fold(host.event_log, host.content_store, out.task_id)
-    assert folded.state.active_content.get(ENVIRONMENT_KIND) == (
+    assert tuple(folded.state.active_content.get(ENVIRONMENT_KIND, {})) == (
         ENVIRONMENT_NAME,
     )
     view = host.resolve_engine_for_agent(

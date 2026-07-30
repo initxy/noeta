@@ -723,7 +723,7 @@ def _on_skill_content_recorded(
     task.governance.skill_content_versions[skill_name] = str(
         getattr(env.payload, "version", "1")
     )
-    _merge_active_content(task.state, "skill", skill_name)
+    _merge_active_content(task.state, "skill", skill_name, content_hash)
     _record_content_anchor(task, "skill", skill_name)
 
 
@@ -738,18 +738,23 @@ def _on_context_content_recorded(
     # malformed stream converges deterministically instead of crashing.
     kind = str(getattr(env.payload, "kind", ""))
     name = str(getattr(env.payload, "name", ""))
-    if not kind or not name or not getattr(env.payload, "content_hash", ""):
+    content_hash = str(getattr(env.payload, "content_hash", ""))
+    if not kind or not name or not content_hash:
         return
-    _merge_active_content(task.state, kind, name)
+    _merge_active_content(task.state, kind, name, content_hash)
     _record_content_anchor(task, kind, name)
 
 
-def _merge_active_content(state: TaskState, kind: str, name: str) -> None:
-    """Append ``name`` under ``kind`` in the generic activation map
-    (order preserved, no duplicates)."""
-    names = state.active_content.get(kind, ())
-    if name not in names:
-        state.active_content[kind] = (*names, name)
+def _merge_active_content(
+    state: TaskState, kind: str, name: str, content_hash: str
+) -> None:
+    """Record ``active_content[kind][name] = content_hash`` (spec §3).
+
+    Hash last-write-wins: a re-record with a new hash refreshes the bytes;
+    an identical hash is a no-op the recorder already swallowed. Placement
+    (the anchor) is first-write-wins and lives in
+    :func:`_record_content_anchor` — refresh moves bytes, never placement."""
+    state.active_content.setdefault(kind, {})[name] = content_hash
 
 
 def _record_content_anchor(task: Task, kind: str, name: str) -> None:

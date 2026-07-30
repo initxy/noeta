@@ -31,6 +31,7 @@ from noeta.builtins.workspace.impl import (
     build_instructions_discovery,
     build_instructions_kit,
     discover_instructions,
+    render_instructions_text,
 )
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.decisions import ToolCall
@@ -47,6 +48,7 @@ from noeta.protocols.messages import (
 )
 from noeta.protocols.task import Task
 from noeta.protocols.tool import ToolResult
+from noeta.protocols.values import ContentRef
 from noeta.storage.memory import InMemoryContentStore, InMemoryEventLog
 from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.runtime.workspace import WorkspaceRoot
@@ -60,7 +62,7 @@ from noeta.runtime.workspace import WorkspaceRoot
 def _note_registry() -> ContentChannelRegistry:
     """One fake kind: renders ``note:<name>`` per name, input order."""
 
-    def _render(names: list[str]) -> RenderedContent:
+    def _render(names: list[str], resolve) -> RenderedContent:
         return RenderedContent(
             messages=[
                 Message(role="user", content=[TextBlock(text=f"note:{n}")])
@@ -354,8 +356,13 @@ def test_discovery_callable_fills_mapping_and_builds_payloads(
     ws = _ws(tmp_path)
     (ws / "src" / "AGENTS.md").write_text("src rules")
     snapshots: dict = {}
+    cs = InMemoryContentStore()
     discover = build_instructions_discovery(
-        WorkspaceRoot.from_path(ws), snapshots, kit=build_instructions_kit()
+        WorkspaceRoot.from_path(ws),
+        snapshots,
+        kit=build_instructions_kit(),
+        content_store=cs,
+        render_text=render_instructions_text,
     )
     task = Task(task_id="t1")
     call = ToolCall(tool_name="read", arguments={"path": "src/pkg/x.py"}, call_id="c")
@@ -365,6 +372,11 @@ def test_discovery_callable_fills_mapping_and_builds_payloads(
     assert payloads[0].policy == "evolving"
     assert len(payloads[0].content_hash) == 64
     assert "src/AGENTS.md" in snapshots
+    # The discovery seam put the rendered bytes so the composer can resolve
+    # them at the recorded hash (spec §6).
+    assert cs.get(
+        ContentRef(hash=payloads[0].content_hash, size=0, media_type="")
+    ) == render_instructions_text(snapshots["src/AGENTS.md"]).encode("utf-8")
 
 
 def test_discovery_callable_ignores_non_read_failures_and_outside(
@@ -377,7 +389,11 @@ def test_discovery_callable_ignores_non_read_failures_and_outside(
     (outside / "AGENTS.md").write_text("outside")
     snapshots: dict = {}
     discover = build_instructions_discovery(
-        WorkspaceRoot.from_path(ws), snapshots, kit=build_instructions_kit()
+        WorkspaceRoot.from_path(ws),
+        snapshots,
+        kit=build_instructions_kit(),
+        content_store=InMemoryContentStore(),
+        render_text=render_instructions_text,
     )
     task = Task(task_id="t1")
     read_call = ToolCall(
@@ -505,7 +521,7 @@ def test_engine_read_discovers_and_renders_anchored(tmp_path: Path) -> None:
     assert all(e.payload.kind == "instructions" for e in events)
 
     folded = fold(log, cs, tid)
-    active = folded.state.active_content.get("instructions", ())
+    active = tuple(folded.state.active_content.get("instructions", {}))
     assert active == ("src/AGENTS.md", "src/pkg/AGENTS.md")
     # Anchors land AFTER the batched tool-results message.
     tool_indices = [
@@ -560,7 +576,7 @@ def test_engine_second_read_does_not_reactivate(tmp_path: Path) -> None:
     assert [e.payload.name for e in events] == ["src/AGENTS.md"]
 
 
-def test_resume_preloader_rereads_discovered_files(tmp_path: Path) -> None:
+def test_resume_renders_discovered_files_from_store(tmp_path: Path) -> None:
     ws = _ws(tmp_path)
     (ws / "src" / "AGENTS.md").write_text("src conventions")
     (ws / "src" / "pkg" / "x.py").write_text("a\n")
@@ -572,16 +588,14 @@ def test_resume_preloader_rereads_discovered_files(tmp_path: Path) -> None:
     disp.enqueue(task.task_id)
     _run_to_terminal(engine, disp, task)
 
-    # Fresh-process resume: new inputs (empty snapshot mapping).
+    # Fresh-process resume: new inputs (empty in-memory snapshot mapping) but the
+    # SAME durable content store. Under R3 the composer resolves each active
+    # instructions name's bytes from the store at the ledger's hash (spec §6),
+    # so a discovered file renders on resume from the ledger alone — the resume
+    # preloader (still called, must not raise) is no longer what makes it render.
     resumed_inputs = _inputs()
     folded = fold(log, cs, task.task_id)
-    # Without preload the name is active but unrenderable.
-    view = resumed_inputs.composer.compose(folded)
-    assert not any(
-        "src conventions" in t for t in _texts(view.segments[2].content)
-    )
-    # Preload re-reads it from the workspace; the compose then renders it.
-    resumed_inputs.content_preloader(folded)
+    resumed_inputs.content_preloader(folded)  # must not raise
     view = resumed_inputs.composer.compose(folded)
     dyn = _texts(view.segments[2].content)
     assert any(
@@ -589,7 +603,10 @@ def test_resume_preloader_rereads_discovered_files(tmp_path: Path) -> None:
     )
 
 
-def test_preloader_degrades_when_file_vanishes(tmp_path: Path) -> None:
+def test_resume_render_unaffected_by_disk_change(tmp_path: Path) -> None:
+    """Ledger sufficiency (spec §9 prop 3): once a discovered file's bytes are
+    recorded in the store, deleting the on-disk file does not change the
+    composed output — compose reads the ledger + store, never disk."""
     ws = _ws(tmp_path)
     (ws / "src" / "AGENTS.md").write_text("src conventions")
     (ws / "src" / "pkg" / "x.py").write_text("a\n")
@@ -604,10 +621,12 @@ def test_preloader_degrades_when_file_vanishes(tmp_path: Path) -> None:
     (ws / "src" / "AGENTS.md").unlink()
     resumed_inputs = _inputs()
     folded = fold(log, cs, task.task_id)
-    resumed_inputs.content_preloader(folded)  # must not raise
+    resumed_inputs.content_preloader(folded)  # must not raise on a vanished file
     view = resumed_inputs.composer.compose(folded)
-    assert not any(
-        "src conventions" in t for t in _texts(view.segments[2].content)
+    # The recorded bytes still render — the deletion is invisible to compose.
+    assert any(
+        'source="src/AGENTS.md"' in t and "src conventions" in t
+        for t in _texts(view.segments[2].content)
     )
 
 

@@ -83,14 +83,14 @@ class TaskState:
     typed ``TaskStatePatch`` in issue 02+.
 
     ``active_content`` is the generic activation map of the
-    context content channel: kind → resident name tuple. Three fold
+    context content channel: kind → ``{name: content_hash}``. Three fold
     routes converge here — the old ``SkillContentRecorded`` event, the
     ``activate_skills`` patch sugar (both skill-specific, retained
     read-only), and the generic ``ContextContentRecorded`` event. The
-    runtime stores names only; what a kind means is SDK-registry
-    territory. Appended LAST with an empty default so an old snapshot
-    dict (missing the key) rebuilds via this default (the
-    'optional + last' byte-safe convention).
+    hash is **last-write-wins** (a re-record with a new hash is a refresh;
+    spec §3); what a kind means is SDK-registry territory. Appended LAST
+    with an empty default so an old snapshot dict (missing the key)
+    rebuilds via this default (the 'optional + last' byte-safe convention).
     """
 
     goal: str = ""
@@ -99,16 +99,16 @@ class TaskState:
     decisions: list[dict[str, Any]] = field(default_factory=list)
     next_action: Optional[str] = None
     active_skills: list[str] = field(default_factory=list)
-    active_content: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    active_content: dict[str, dict[str, str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        # Snapshot bodies serialise the name tuples as JSON lists;
-        # normalise back so a rehydrated slice is type-identical with a
-        # from-scratch fold.
+        # Snapshot bodies serialise the inner ``{name: hash}`` maps as JSON
+        # objects; normalise back to plain dicts so a rehydrated slice is
+        # type-identical with a from-scratch fold.
         if self.active_content:
             self.active_content = {
-                kind: tuple(names)
-                for kind, names in self.active_content.items()
+                kind: dict(name_hashes)
+                for kind, name_hashes in self.active_content.items()
             }
 
 
