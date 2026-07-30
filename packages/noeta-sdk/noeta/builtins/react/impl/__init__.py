@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
+from noeta.policies.control_semantics import ControlToolSpec
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.policy import Policy
 from noeta.protocols.tool import Tool
@@ -49,12 +50,7 @@ def build_react_policy_factory(
     system_prompt: str,
     model: str,
     max_steps: int,
-    delegation_enabled: bool,
-    todo_write_enabled: bool,
-    ask_user_question_enabled: bool,
-    skill_invocation_enabled: bool,
-    workflow_enabled: bool,
-    skill_menu_names: frozenset[str],
+    control_translate_specs: tuple[ControlToolSpec, ...],
     content_store: ContentStore,
     context_window: Optional[int],
     max_output_tokens: Optional[int],
@@ -72,6 +68,10 @@ def build_react_policy_factory(
     :class:`ReActPolicy` construction, byte-identical prompts and schemas.
     ``Options.policy`` / the plugin ``policy`` surface (D10) still take
     priority over this default at the builder.
+
+    Control-tool-surface S1: the policy receives the routing-ordered
+    ``control_translate_specs`` the mount loop produced, replacing the five
+    ``*_enabled`` flags + ``skill_menu_names`` — mounting IS enablement.
     """
 
     def factory(llm: Any) -> Policy:
@@ -81,12 +81,7 @@ def build_react_policy_factory(
             system_prompt=system_prompt,
             model=model,
             max_steps=max_steps,
-            delegation_enabled=delegation_enabled,
-            todo_write_enabled=todo_write_enabled,
-            ask_user_question_enabled=ask_user_question_enabled,
-            skill_invocation_enabled=skill_invocation_enabled,
-            workflow_enabled=workflow_enabled,
-            skill_menu_names=skill_menu_names,
+            control_translate_specs=control_translate_specs,
             content_store=content_store,
             context_window=context_window,
             max_output_tokens=max_output_tokens,

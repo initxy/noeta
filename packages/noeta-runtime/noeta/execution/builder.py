@@ -69,13 +69,30 @@ from noeta.runtime.governance import (
     RepetitionAction,
     SkillEnforcementMode,
 )
-from noeta.policies.control_tools import (
+from noeta.execution.control_tool import (
+    ControlToolBuildContext,
+    ControlToolEntry,
+    ControlToolMount,
+)
+from noeta.policies.control_semantics import (
+    ASK_USER_QUESTION_TOOL,
+    RUN_WORKFLOW_TOOL,
+    SKILL_TOOL,
+    SPAWN_SUBAGENT_TOOL,
+    STRUCTURED_OUTPUT_TOOL,
+    TODO_WRITE_TOOL,
+    ControlToolSpec,
     ask_user_question_tool_schema,
+    make_skill_translate,
     run_workflow_tool_schema,
     skill_tool_schema,
     spawn_subagent_tool_schema,
     structured_output_tool_schema,
     todo_write_tool_schema,
+    translate_ask_user_question,
+    translate_run_workflow,
+    translate_spawn_subagent,
+    translate_todo_write,
 )
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.hooks import Guard
@@ -276,12 +293,11 @@ class PolicyFactoryBuilder(Protocol):
         system_prompt: str,
         model: str,
         max_steps: int,
-        delegation_enabled: bool,
-        todo_write_enabled: bool,
-        ask_user_question_enabled: bool,
-        skill_invocation_enabled: bool,
-        workflow_enabled: bool,
-        skill_menu_names: frozenset[str],
+        #: The routing-ordered control-tool translate specs the mount loop
+        #: produced (control-tool-surface S1) — replaces the five ``*_enabled``
+        #: flags + ``skill_menu_names`` the policy used to rebuild toggles from.
+        #: Mounting IS enablement, so a disabled tool simply contributes no spec.
+        control_translate_specs: tuple[ControlToolSpec, ...],
         content_store: ContentStore,
         context_window: Optional[int],
         max_output_tokens: Optional[int],
@@ -454,35 +470,22 @@ class _ToolAssembly:
 # ---------------------------------------------------------------------------
 
 
-def _build_control_action_schemas(
+def _skill_menu(
     spec: _BuildSpec, asm: _ToolAssembly
-) -> Optional[list[dict[str, Any]]]:
-    """The ordered control-action schema list (the composer's extra schemas).
+) -> tuple[tuple[tuple[str, str], ...], frozenset[str]]:
+    """The ``skill`` tool's ``(menu, menu_names)``, computed ONCE.
 
-    Issue C: when delegation is enabled, the parent's composer exposes
-    the `spawn_subagent` control schema (so it lands in View.provider_tool_schemas
-    + the stable hash) and the policy translates it into a
-    SpawnSubtaskDecision. A resumed turn rebuilds the SAME schemas → the
-    View stable hash matches the recording. CW18b/CW18c: control action
-    schemas are appended in one stable order. All default off; a resuming
-    host must pass the same flags the recording used or the rebuilt View
-    stable hash no longer matches.
+    Both are non-empty only when ``skill_invocation_enabled`` AND a registry
+    exists AND it has indexed skills — the single gate the old
+    ``_build_control_action_schemas`` schema branch and ``_skill_menu_names``
+    policy branch duplicated (and could, in principle, diverge). ``menu`` is the
+    sorted ``(name, description)`` tuple the schema renders (single source of
+    truth so callers never pass a divergent menu); ``menu_names`` is the frozenset
+    the translate closure validates against — and the mount's gate. No registry
+    at all (the ``skills`` built-in disabled) reads the same as an empty one: a
+    capability the agent declares but the host never wired grows no tool. Bytes
+    are identical to the pre-S1 two branches.
     """
-    control_action_list: list[dict[str, Any]] = []
-    if spec.delegation_enabled:
-        control_action_list.append(
-            spawn_subagent_tool_schema(spec.subtask_agent_directory)
-        )
-    if spec.todo_write_enabled:
-        control_action_list.append(todo_write_tool_schema())
-    if spec.ask_user_question_enabled:
-        control_action_list.append(ask_user_question_tool_schema())
-    # Skill tool is grown only when the flag is on AND the
-    # registry contains at least one indexed skill. The sorted
-    # ``(name, description)`` menu is built here from the registry — single
-    # source of truth so callers never pass a divergent menu. No registry at
-    # all (the ``skills`` built-in disabled) reads the same as an empty one:
-    # a capability the agent declares but the host never wired grows no tool.
     if spec.skill_invocation_enabled and asm.registry is not None:
         skill_names = asm.registry.names()
         if skill_names:
@@ -491,36 +494,160 @@ def _build_control_action_schemas(
                 for name in sorted(skill_names)
                 if (desc := asm.registry.get(name)) is not None
             )
-            control_action_list.append(skill_tool_schema(menu))
-    # The run_workflow control schema is appended LAST (matching
-    # the translation routing order ask→plan→todo→spawn→skill→workflow). Off by
-    # default ⇒ View stable hash unchanged; a resuming host must pass the same flag.
-    if spec.workflow_enabled:
-        control_action_list.append(run_workflow_tool_schema())
-    # A workflow helper with a declared agent() schema exposes a
-    # per-helper structured_output control schema (appended last, opt-in). Off by
-    # default ⇒ View stable hash unchanged; the orchestration wrapper intercepts.
-    if spec.structured_output_schema is not None:
-        control_action_list.append(
-            structured_output_tool_schema(spec.structured_output_schema)
-        )
-    return control_action_list or None
+            return menu, frozenset(skill_names)
+    return (), frozenset()
 
 
-def _skill_menu_names(spec: _BuildSpec, asm: _ToolAssembly) -> frozenset[str]:
-    """The skill-tool menu names the policy factory binds (matches the schema).
+# ---------------------------------------------------------------------------
+# Control-tool mounts — the six fixed internal entries (control-tool-surface
+# S1). Each factory self-gates on the ``ControlToolBuildContext`` and returns a
+# ``ControlToolMount`` or ``None``, reproducing today's if-chain gating EXACTLY.
+# The two priority BANDS are the byte-order contract, locked by the S0 golden:
+# schema render order spawn=100 → todo=200 → ask=300 → skill=400 → workflow=500
+# → structured_output=600; decision routing order ask=100 → todo=200 →
+# spawn=300 → skill=400 → workflow=500. ``structured_output`` carries no
+# translate (react's StructuredOutputPolicy intercepts it) so it contributes a
+# schema but no routing spec. S2+ replaces these internal entries with the
+# built-in plugins' own ``control_tool`` manifest contributions.
+# ---------------------------------------------------------------------------
 
-    Mirrors the gate in :func:`_build_control_action_schemas`: non-empty only
-    when ``skill_invocation_enabled`` AND a registry exists AND it has indexed
-    skills, so the policy's ``skill_menu_names`` and the composer's skill
-    schema agree — including when the ``skills`` built-in is off and neither
-    grows anything.
+
+def _spawn_subagent_mount(ctx: ControlToolBuildContext) -> Optional[ControlToolMount]:
+    if not ctx.delegation_enabled:
+        return None
+    return ControlToolMount(
+        name=SPAWN_SUBAGENT_TOOL,
+        schema=spawn_subagent_tool_schema(ctx.subtask_agent_directory),
+        translate=translate_spawn_subagent,
+        routing_priority=300,
+        schema_priority=100,
+    )
+
+
+def _todo_write_mount(ctx: ControlToolBuildContext) -> Optional[ControlToolMount]:
+    if not ctx.todo_write_enabled:
+        return None
+    return ControlToolMount(
+        name=TODO_WRITE_TOOL,
+        schema=todo_write_tool_schema(),
+        translate=translate_todo_write,
+        routing_priority=200,
+        schema_priority=200,
+    )
+
+
+def _ask_user_question_mount(
+    ctx: ControlToolBuildContext,
+) -> Optional[ControlToolMount]:
+    if not ctx.ask_user_question_enabled:
+        return None
+    return ControlToolMount(
+        name=ASK_USER_QUESTION_TOOL,
+        schema=ask_user_question_tool_schema(),
+        translate=translate_ask_user_question,
+        routing_priority=100,
+        schema_priority=300,
+    )
+
+
+def _skill_mount(ctx: ControlToolBuildContext) -> Optional[ControlToolMount]:
+    # Gate on the menu NAMES (= skill_invocation on AND a registry has indexed
+    # skills), matching the old schema branch exactly — the rendered menu tuple
+    # may be empty (descriptions absent) while the tool is still grown.
+    if not ctx.skill_menu_names:
+        return None
+    return ControlToolMount(
+        name=SKILL_TOOL,
+        schema=skill_tool_schema(ctx.skill_menu),
+        translate=make_skill_translate(ctx.skill_menu_names),
+        routing_priority=400,
+        schema_priority=400,
+    )
+
+
+def _run_workflow_mount(ctx: ControlToolBuildContext) -> Optional[ControlToolMount]:
+    if not ctx.workflow_enabled:
+        return None
+    return ControlToolMount(
+        name=RUN_WORKFLOW_TOOL,
+        schema=run_workflow_tool_schema(),
+        translate=translate_run_workflow,
+        routing_priority=500,
+        schema_priority=500,
+    )
+
+
+def _structured_output_mount(
+    ctx: ControlToolBuildContext,
+) -> Optional[ControlToolMount]:
+    if ctx.structured_output_schema is None:
+        return None
+    return ControlToolMount(
+        name=STRUCTURED_OUTPUT_TOOL,
+        schema=structured_output_tool_schema(ctx.structured_output_schema),
+        # No translate: the orchestration's StructuredOutputPolicy intercepts the
+        # call, so this mount is excluded from the routing order.
+        translate=None,
+        routing_priority=0,
+        schema_priority=600,
+    )
+
+
+#: The fixed control-tool entries the mount loop runs. Declaration order is not
+#: load-bearing (the output orders come from each mount's own bands); it only
+#: fixes a stable, sorted iteration. Ordered by schema band for readability.
+_CONTROL_TOOL_ENTRIES: tuple[ControlToolEntry, ...] = (
+    ControlToolEntry(SPAWN_SUBAGENT_TOOL, 100, _spawn_subagent_mount),
+    ControlToolEntry(TODO_WRITE_TOOL, 200, _todo_write_mount),
+    ControlToolEntry(ASK_USER_QUESTION_TOOL, 300, _ask_user_question_mount),
+    ControlToolEntry(SKILL_TOOL, 400, _skill_mount),
+    ControlToolEntry(RUN_WORKFLOW_TOOL, 500, _run_workflow_mount),
+    ControlToolEntry(STRUCTURED_OUTPUT_TOOL, 600, _structured_output_mount),
+)
+
+
+def _run_control_tool_mounts(
+    entries: Sequence[ControlToolEntry],
+    ctx: ControlToolBuildContext,
+) -> tuple[Optional[list[dict[str, Any]]], tuple[ControlToolSpec, ...]]:
+    """Run the control-tool entries → ``(schema_list, routing_specs)``.
+
+    The generic dual-priority mount loop, mirroring the session-pack loop: each
+    factory self-gates on ``ctx`` and returns ``None`` to opt out (a mount IS
+    enablement). Collision is loud — two mounts of one name raise a ``ValueError``
+    naming both entries, exactly as the pack loop rejects a re-export. The two
+    output orders come from each mount's OWN bands: the schema list sorts on
+    ``schema_priority`` (the composer's ``control_action_schemas`` byte order —
+    the S0 golden), the routing specs on ``routing_priority`` (the decision
+    dispatch order), ties broken by name in both. A mount with no ``translate``
+    (``structured_output``) contributes a schema but no routing spec. An empty
+    schema list folds to ``None`` (the composer's "no control schemas" sentinel).
     """
-    if spec.skill_invocation_enabled and asm.registry is not None:
-        skill_names = asm.registry.names()
-        if skill_names:
-            return frozenset(skill_names)
-    return frozenset()
+    ordered = sorted(entries, key=lambda e: (e.priority, e.name))
+    mounts: list[ControlToolMount] = []
+    mounted_by: dict[str, str] = {}
+    for entry in ordered:
+        mount = entry.factory(ctx)
+        if mount is None:
+            continue
+        if mount.name in mounted_by:
+            raise ValueError(
+                f"control tool {mount.name!r} mounted twice: entries "
+                f"{mounted_by[mount.name]!r} and {entry.name!r} collide on name"
+            )
+        mounted_by[mount.name] = entry.name
+        mounts.append(mount)
+
+    schema_list = [
+        m.schema
+        for m in sorted(mounts, key=lambda m: (m.schema_priority, m.name))
+    ]
+    routing_specs: list[ControlToolSpec] = []
+    for m in sorted(mounts, key=lambda m: (m.routing_priority, m.name)):
+        if m.translate is None:
+            continue
+        routing_specs.append(ControlToolSpec(name=m.name, translate=m.translate))
+    return (schema_list or None, tuple(routing_specs))
 
 
 def _build_content_registry(
@@ -944,8 +1071,28 @@ def build_session_inputs(
         Optional[EnvironmentSnapshot],
         exports.get(EXPORT_ENVIRONMENT_SNAPSHOT),
     )
-    control_action_schemas = _build_control_action_schemas(spec, asm)
-    skill_menu_names = _skill_menu_names(spec, asm)
+    # Control-tool mounts (control-tool-surface S1): build the control-specific
+    # context (the effective flags + the once-computed skill menu + the packs'
+    # exports), then run the six fixed internal entries through the generic
+    # dual-priority mount loop. It yields the composer's ``control_action_schemas``
+    # (schema-band order, the S0 golden) and the routing-ordered translate specs
+    # the policy factory binds — replacing the old if-chain + ``skill_menu_names``.
+    skill_menu, skill_menu_names = _skill_menu(spec, asm)
+    control_ctx = ControlToolBuildContext(
+        todo_write_enabled=spec.todo_write_enabled,
+        ask_user_question_enabled=spec.ask_user_question_enabled,
+        delegation_enabled=spec.delegation_enabled,
+        skill_invocation_enabled=spec.skill_invocation_enabled,
+        workflow_enabled=spec.workflow_enabled,
+        subtask_agent_directory=spec.subtask_agent_directory,
+        skill_menu=skill_menu,
+        skill_menu_names=skill_menu_names,
+        structured_output_schema=spec.structured_output_schema,
+        exports=exports,
+    )
+    control_action_schemas, control_translate_specs = _run_control_tool_mounts(
+        _CONTROL_TOOL_ENTRIES, control_ctx
+    )
     content_registry = _build_content_registry(
         spec,
         tuple(
@@ -1015,12 +1162,7 @@ def build_session_inputs(
             system_prompt=system_prompt,
             model=model,
             max_steps=max_steps,
-            delegation_enabled=delegation_enabled,
-            todo_write_enabled=todo_write_enabled,
-            ask_user_question_enabled=ask_user_question_enabled,
-            skill_invocation_enabled=skill_invocation_enabled,
-            workflow_enabled=workflow_enabled,
-            skill_menu_names=skill_menu_names,
+            control_translate_specs=control_translate_specs,
             content_store=content_store,
             context_window=compaction.context_window,
             max_output_tokens=compaction.max_output_tokens,

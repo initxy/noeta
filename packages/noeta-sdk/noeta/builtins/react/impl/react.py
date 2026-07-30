@@ -54,7 +54,7 @@ from typing import Any, Optional, Protocol
 from noeta.policies.control_semantics import (
     SKILL_TOOL,
     SPAWN_SUBAGENT_TOOL,
-    ControlToggles,
+    ControlToolSpec,
     spawn_subagent_tool_schema,
     translate_control_tool,
 )
@@ -167,12 +167,13 @@ class ReActPolicy:
         model: str,
         max_steps: int = 50,
         max_history_messages: Optional[int] = None,
-        delegation_enabled: bool = False,
-        todo_write_enabled: bool = False,
-        ask_user_question_enabled: bool = False,
-        skill_invocation_enabled: bool = False,
-        workflow_enabled: bool = False,
-        skill_menu_names: frozenset[str] = frozenset(),
+        #: The routing-ordered control-tool translate specs (control-tool-surface
+        #: S1). Each spec's ``translate`` closure carries its own build inputs (the
+        #: skill mount captures its menu), so the policy holds no ``*_enabled``
+        #: flags or ``skill_menu_names``: mounting a spec IS enablement, and an
+        #: empty tuple means no control tool is offered. The kernel builder's mount
+        #: loop produces them; ``()`` for a bare policy (e.g. a subtask).
+        control_translate_specs: tuple[ControlToolSpec, ...] = (),
         content_store: Optional[ContentStore] = None,
         context_window: Optional[int] = None,
         max_output_tokens: int = 0,
@@ -245,28 +246,16 @@ class ReActPolicy:
         # ``ask_user_question_enabled``; the runner threads the same
         # store the recording lives in so a resumed run rebuilds identical refs.
         self._content_store = content_store
-        # Issue C: when True, a single ``spawn_subagent`` tool_use is
-        # translated into a SpawnSubtaskDecision (the schema is supplied
-        # to the provider via the Composer's control_action_schemas, not
-        # from here). Off by default — existing sessions are unchanged.
-        self._delegation_enabled = delegation_enabled
-        # CW18b: when True, a ``todo_write`` tool_use becomes a
-        # StatePatchDecision (durable TaskState.todos replace-all). Schema is
-        # supplied via the Composer's control_action_schemas. Off by default.
-        self._todo_write_enabled = todo_write_enabled
-        # CW18d: default-off structured HITL question control tool.
-        self._ask_user_question_enabled = ask_user_question_enabled
-        # D1/D4: when True, a ``skill`` tool_use activates the named
-        # skill via a StatePatchDecision (activate_skills patch). The menu
-        # names are the frozenset of skill names the workspace registry
-        # indexed — same source the schema menu is built from so the two
-        # never disagree. Off by default.
-        self._skill_invocation_enabled = skill_invocation_enabled
-        # when True, a ``run_workflow`` tool_use is translated into
-        # a SpawnSubtaskDecision spawning an OrchestrationPolicy child. Schema
-        # is supplied via the Composer's control_action_schemas. Off by default.
-        self._workflow_enabled = workflow_enabled
-        self._skill_menu_names = skill_menu_names
+        # Control-tool-surface S1: the routing-ordered translate specs the mount
+        # loop produced. Each spec's ``translate`` closure carries its own build
+        # inputs (the ``skill`` mount captures the indexed menu; ``spawn_subagent``
+        # / ``todo_write`` / ``ask_user_question`` / ``run_workflow`` carry
+        # nothing extra), so the policy holds no per-tool ``*_enabled`` flag or
+        # ``skill_menu_names`` — a spec's PRESENCE is its enablement, and its
+        # POSITION is its routing priority. The schema half rides the composer's
+        # ``control_action_schemas`` (built from the same mounts). ``()`` ⇒ no
+        # control tool offered.
+        self._control_translate_specs = control_translate_specs
         # Structured output and reasoning controls. Carried verbatim into
         # every LLMRequest so adapters can map them to their vendor wire
         # format (see providers/anthropic.py and providers/openai_compat.py).
@@ -772,17 +761,6 @@ class ReActPolicy:
     # Response translation
     # ------------------------------------------------------------------
 
-    def _control_toggles(self) -> ControlToggles:
-        """Collect the four default-off control-tool enable flags into the
-        small value object the translation seam (B3) consumes."""
-        return ControlToggles(
-            ask_user_question=self._ask_user_question_enabled,
-            todo_write=self._todo_write_enabled,
-            delegation=self._delegation_enabled,
-            skill_invocation=self._skill_invocation_enabled,
-            workflow=self._workflow_enabled,
-        )
-
     def _response_to_decision(
         self, response: LLMResponse
     ) -> Decision:
@@ -799,9 +777,8 @@ class ReActPolicy:
             control = translate_control_tool(
                 response,
                 assistant_message,
-                toggles=self._control_toggles(),
+                specs=self._control_translate_specs,
                 content_store=self._content_store,
-                skill_menu_names=self._skill_menu_names,
             )
             if control is not None:
                 return control

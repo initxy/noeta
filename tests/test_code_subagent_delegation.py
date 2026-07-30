@@ -17,6 +17,10 @@ from noeta.core.fold import fold
 from noeta.presets import official_specs
 from noeta.builtins.react.impl import ReActPolicy
 from noeta.policies.control_tools import SPAWN_SUBAGENT_TOOL
+from noeta.policies.control_semantics import (
+    ControlToolSpec,
+    translate_spawn_subagent,
+)
 from noeta.protocols.decisions import (
     SpawnSubtaskDecision,
     StatePatchDecision,
@@ -299,7 +303,10 @@ def _view() -> View:
 def test_single_spawn_translates_to_spawn_decision() -> None:
     llm = _OneShotLLM(_spawn_call(agent="explore"))
     policy = ReActPolicy(
-        llm=llm, tools={}, system_prompt="p", model="m", delegation_enabled=True
+        llm=llm, tools={}, system_prompt="p", model="m",
+        control_translate_specs=(
+            ControlToolSpec(SPAWN_SUBAGENT_TOOL, translate_spawn_subagent),
+        ),
     )
     decision = policy.decide(StepContext(task_id="t", lease_id="l", trace_id="tr"), _view())
     assert isinstance(decision, SpawnSubtaskDecision)
@@ -319,7 +326,9 @@ def test_mixed_spawn_batch_returns_recoverable_ack() -> None:
     )
     policy = ReActPolicy(
         llm=_OneShotLLM(mixed), tools={}, system_prompt="p", model="m",
-        delegation_enabled=True,
+        control_translate_specs=(
+            ControlToolSpec(SPAWN_SUBAGENT_TOOL, translate_spawn_subagent),
+        ),
     )
     decision = policy.decide(StepContext(task_id="t", lease_id="l", trace_id="tr"), _view())
     # Recoverable error ack — task continues, model may retry.
@@ -341,7 +350,7 @@ def test_mixed_spawn_batch_returns_recoverable_ack() -> None:
 def test_delegation_disabled_treats_spawn_as_normal_tool() -> None:
     policy = ReActPolicy(
         llm=_OneShotLLM(_spawn_call()), tools={}, system_prompt="p", model="m",
-        delegation_enabled=False,
+        control_translate_specs=(),  # nothing mounted → spawn is a normal tool
     )
     decision = policy.decide(StepContext(task_id="t", lease_id="l", trace_id="tr"), _view())
     # not translated — falls through to a normal ToolCallsDecision.

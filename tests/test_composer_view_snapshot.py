@@ -8,8 +8,9 @@ never runs the composer, so it cannot catch drift introduced by the
 * **control-tool schema injection** — ``spawn_subagent`` / ``todo_write`` /
   ``ask_user_question`` (and friends) are NOT executable workspace tools; the
   composer appends them to ``View.provider_tool_schemas`` after the real tools
-  (``noeta.execution.builder._build_control_action_schemas``). A flag flip or a
-  re-ordering there is invisible to the static-spec snapshot but visible here.
+  (``noeta.execution.builder._run_control_tool_mounts``, the dual-priority mount
+  loop). A flag flip or a re-ordering there is invisible to the static-spec
+  snapshot but visible here.
 * **three-segment assembly** — the system prompt becomes ``stable_prefix``, the
   content channel renders ``semi_stable``, the message stream becomes
   ``dynamic_suffix``, and each segment carries a ``segment_hash``. A change to

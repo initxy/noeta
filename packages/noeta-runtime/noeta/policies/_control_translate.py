@@ -2,7 +2,7 @@
 
 ADR deepening (C04 control-semantics): the control-tool response→neutral
 Decision translation seam (the ``_maybe_*`` family + :func:`translate_control_tool`
-+ :class:`ControlToggles` + ``spawn_subagent`` schema) was the *translate*
++ :class:`ControlToolSpec` + ``spawn_subagent`` schema) was the *translate*
 **half** of each control tool's story; its schema/validator/codec **half**
 lived in ``control_tools``. The two were merged into
 :mod:`noeta.policies.control_semantics` so each control tool's whole story —
@@ -20,7 +20,7 @@ from __future__ import annotations
 from noeta.policies.control_semantics import (
     SKILL_TOOL,
     SPAWN_SUBAGENT_TOOL,
-    ControlToggles,
+    ControlToolSpec,
     spawn_subagent_tool_schema,
     translate_control_tool,
 )
@@ -30,6 +30,6 @@ __all__ = [
     "SKILL_TOOL",
     "SPAWN_SUBAGENT_TOOL",
     "spawn_subagent_tool_schema",
-    "ControlToggles",
+    "ControlToolSpec",
     "translate_control_tool",
 ]

@@ -1,0 +1,134 @@
+"""The control-tool mount contract — the construction half of a control tool
+(control-tool-surface spec, 2026-07-30, stage S1).
+
+A *control-tool mount* is what one control tool contributes to a session build:
+a materialized provider-facing ``schema``, a response→neutral-Decision
+``translate`` closure (over its own build inputs), and TWO explicit priorities —
+one for the schema render order, one for the decision routing order. The builder
+runs every :class:`ControlToolEntry` through ONE priority-ordered loop
+(:func:`~noeta.execution.builder._run_control_tool_mounts`), mirroring the
+session-pack loop; it enumerates no control tool by name.
+
+Two orders, both from the mount's own bands (they genuinely differ — the S0
+golden pins ``spawn`` first in the schema list while ``ask`` routes first): the
+schema list sorts on ``schema_priority``, the routing specs on
+``routing_priority``. A tool that intercepts elsewhere (``structured_output`` →
+react's ``StructuredOutputPolicy``) carries ``translate=None`` and is excluded
+from the routing order.
+
+Gating is the mount's own business: a factory self-gates on the
+:class:`ControlToolBuildContext` and returns ``None`` when its tool does not
+apply — the kernel never gates for a mount, exactly as a session pack never
+gates for a tool. ``ControlToolBuildContext`` is control-tool-specific by design
+(the generic-slots red line protects :class:`~noeta.execution.session_pack.SessionBuildContext`,
+not this type).
+
+Layering (import-linter): this module sits in ``noeta.execution`` and reads only
+DOWN the stack — the decision-time ``ControlTranslateContext`` from
+``noeta.policies`` (the ``execution → policies`` edge the builder already has)
+and ``Decision`` from ``noeta.protocols``. The routing-spec TYPE the decision
+dispatcher consumes (``ControlToolSpec``) lives in ``noeta.policies``, never
+here, so ``policies`` need not import ``execution``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Callable, Mapping, Optional
+
+from noeta.policies.control_semantics import ControlTranslateContext
+from noeta.protocols.decisions import Decision
+
+
+__all__ = [
+    "ControlToolBuildContext",
+    "ControlToolMount",
+    "ControlToolFactory",
+    "ControlToolEntry",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class ControlToolBuildContext:
+    """What one session build offers every control-tool mount factory.
+
+    Built by :func:`~noeta.execution.builder.build_session_inputs` before the
+    mount loop, AFTER tool assembly (the schemas are session-state functions —
+    the skill menu, the spawn directory, the per-helper structured-output schema
+    all exist only once the packs have run). Frozen so a factory can never
+    perturb a later factory's inputs. A factory that finds its tool inapplicable
+    returns ``None`` — self-gating is the factory's own check against this
+    context, never a kernel ``if``.
+
+    The five flags are the already-ANDed effective values (agent activation ×
+    host kill-switch), carried straight off the build spec — this stage does not
+    re-derive them (that is the resolver's job).
+    """
+
+    #: The already-ANDed effective control-tool flags (from the build spec).
+    todo_write_enabled: bool
+    ask_user_question_enabled: bool
+    delegation_enabled: bool
+    skill_invocation_enabled: bool
+    workflow_enabled: bool
+    #: The sorted ``(name, description)`` spawn directory the ``spawn_subagent``
+    #: schema renders into its ``agent`` enum + roster.
+    subtask_agent_directory: tuple[tuple[str, str], ...]
+    #: The ``skill`` menu, computed ONCE (replacing the two divergent gates the
+    #: old if-chain kept): ``skill_menu`` is the sorted ``(name, description)``
+    #: tuple the schema renders; ``skill_menu_names`` is the frozenset the
+    #: translate closure validates against AND the mount's gate (non-empty iff
+    #: skill_invocation is on AND a registry has indexed skills).
+    skill_menu: tuple[tuple[str, str], ...]
+    skill_menu_names: frozenset[str]
+    #: The per-helper structured-output JSON Schema, or ``None`` (its gate is
+    #: data-driven, not an activation).
+    structured_output_schema: Optional[dict[str, Any]]
+    #: The session packs' named exports bag (the closed pack vocabulary). Carried
+    #: for the S2 skills mount (which will read its own ``EXPORT_SKILLS_KIT``
+    #: menu here); S1's skill factory uses the pre-computed ``skill_menu``.
+    exports: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class ControlToolMount:
+    """One control tool's materialized contribution to a session build.
+
+    ``schema`` is the provider-facing dict the composer appends to
+    ``View.provider_tool_schemas`` (folded into the stable-prefix hash).
+    ``translate`` is the response→neutral-Decision closure over this mount's own
+    build inputs (so the skill mount carries its menu, and the decision-time
+    ``ControlTranslateContext`` needs no feature-named field). ``translate`` is
+    ``None`` for a tool intercepted outside the dispatch loop
+    (``structured_output``); such a mount contributes a schema but no routing
+    spec. The two priorities pin the two orders — ``schema_priority`` the render
+    order (S0 golden), ``routing_priority`` the decision dispatch order.
+    """
+
+    name: str
+    schema: dict[str, Any]
+    translate: Optional[Callable[[ControlTranslateContext], Optional[Decision]]]
+    routing_priority: int
+    schema_priority: int
+
+
+#: The uniform factory signature every control-tool entry implements: read the
+#: build context, self-gate, and return a mount or ``None``.
+ControlToolFactory = Callable[[ControlToolBuildContext], Optional[ControlToolMount]]
+
+
+@dataclass(frozen=True, slots=True)
+class ControlToolEntry:
+    """One resolved control tool in the builder's loop: name + priority + factory.
+
+    Mirrors :class:`~noeta.execution.session_pack.SessionPackEntry`: ``name`` is
+    the contribution name (collision key + tie-breaker), ``priority`` is the
+    declared band the loop orders factory execution by. The output byte orders
+    come from each mount's OWN ``schema_priority`` / ``routing_priority``, so the
+    entry priority is not itself load-bearing — it only fixes a stable, sorted
+    iteration for the collision check.
+    """
+
+    name: str
+    priority: int
+    factory: ControlToolFactory

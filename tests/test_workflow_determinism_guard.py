@@ -18,7 +18,11 @@ from pathlib import Path
 
 import pytest
 
-from noeta.policies._control_translate import ControlToggles, translate_control_tool
+from noeta.policies.control_semantics import (
+    ControlToolSpec,
+    translate_control_tool,
+    translate_run_workflow,
+)
 from noeta.policies.workflow_sandbox import SAFE_BUILTINS, check_workflow_script
 from noeta.policies.control_tools import RUN_WORKFLOW_TOOL
 from noeta.protocols.decisions import SpawnSubtaskDecision, StatePatchDecision
@@ -131,7 +135,9 @@ def test_bad_script_translates_to_ack_not_spawn() -> None:
     resp = _run_workflow_response("import time\nreturn time.time()\n")
     assistant = Message(role="assistant", content=list(resp.content))
     decision = translate_control_tool(
-        resp, assistant, toggles=ControlToggles(workflow=True)
+        resp,
+        assistant,
+        specs=(ControlToolSpec("run_workflow", translate_run_workflow),),
     )
     # Recoverable ack (no patch), NOT a spawn — no orchestration subtask created.
     assert isinstance(decision, StatePatchDecision)
@@ -147,7 +153,9 @@ def test_good_script_translates_to_spawn() -> None:
     resp = _run_workflow_response('return agent("do it")\n')
     assistant = Message(role="assistant", content=list(resp.content))
     decision = translate_control_tool(
-        resp, assistant, toggles=ControlToggles(workflow=True)
+        resp,
+        assistant,
+        specs=(ControlToolSpec("run_workflow", translate_run_workflow),),
     )
     assert isinstance(decision, SpawnSubtaskDecision)
 

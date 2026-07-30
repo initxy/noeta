@@ -21,9 +21,12 @@ from noeta.context.composer import ThreeSegmentComposer
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.core.wiring import wire_default_observers
-from noeta.policies._control_translate import (
-    ControlToggles,
+from noeta.policies.control_semantics import (
+    ControlToolSpec,
+    translate_ask_user_question,
     translate_control_tool,
+    translate_spawn_subagent,
+    translate_todo_write,
 )
 from noeta.builtins.react.impl import ReActPolicy
 from noeta.protocols.decisions import (
@@ -149,7 +152,7 @@ def test_translate_control_tool_carries_thinking_on_spawn() -> None:
     decision = translate_control_tool(
         response,
         assistant_message,
-        toggles=ControlToggles(delegation=True),
+        specs=(ControlToolSpec("spawn_subagent", translate_spawn_subagent),),
     )
     assert isinstance(decision, SpawnSubtaskDecision)
     assert decision.assistant_thinking == (thinking,)
@@ -171,7 +174,7 @@ def test_translate_control_tool_carries_thinking_on_todo_write() -> None:
     decision = translate_control_tool(
         response,
         assistant_message,
-        toggles=ControlToggles(todo_write=True),
+        specs=(ControlToolSpec("todo_write", translate_todo_write),),
     )
     assert isinstance(decision, StatePatchDecision)
     assert decision.assistant_thinking == (thinking,)
@@ -197,7 +200,7 @@ def test_translate_control_tool_carries_thinking_on_ask() -> None:
     decision = translate_control_tool(
         response,
         assistant_message,
-        toggles=ControlToggles(ask_user_question=True),
+        specs=(ControlToolSpec("ask_user_question", translate_ask_user_question),),
         content_store=cs,
     )
     assert isinstance(decision, YieldForHumanDecision)
@@ -218,7 +221,7 @@ def test_translate_control_tool_thinking_empty_for_non_reasoning() -> None:
     decision = translate_control_tool(
         response,
         assistant_message,
-        toggles=ControlToggles(todo_write=True),
+        specs=(ControlToolSpec("todo_write", translate_todo_write),),
     )
     assert isinstance(decision, StatePatchDecision)
     assert decision.assistant_thinking == ()
@@ -270,7 +273,9 @@ def test_thinking_reattached_after_todo_write_control_tool() -> None:
             tools=tools,
             system_prompt="",
             model="gpt-4o",
-            todo_write_enabled=True,
+            control_translate_specs=(
+                ControlToolSpec("todo_write", translate_todo_write),
+            ),
         ),
         tools=tools,
         tool_runtime=ToolRuntime(event_log=log, content_store=cs),
