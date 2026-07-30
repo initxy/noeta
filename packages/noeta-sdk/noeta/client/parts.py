@@ -35,6 +35,7 @@ __all__ = [
     "default_browser_tools_factory",
     "default_guards_factory",
     "default_memory_factory",
+    "default_policy_factory",
     "default_reminder_specs",
     "default_skills_kit_factory",
     "default_tool_factories",
@@ -42,6 +43,7 @@ __all__ = [
     "mcp_impl",
     "memory_impl",
     "provider_family",
+    "react_impl",
     "resolve_model_alias",
     "skills_impl",
 ]
@@ -253,6 +255,37 @@ def default_memory_factory() -> Callable[..., Any]:
     itself imports no memory implementation.
     """
     return _resolve_ref("noeta.builtins.memory.impl:build_memory_pack")
+
+
+def default_policy_factory() -> Callable[..., Any]:
+    """The default policy factory builder for the kernel builder
+    (microkernel phase 2b).
+
+    Resolved from the ``react`` built-in plugin's body
+    (``noeta.builtins.react.impl:build_react_policy_factory``) — the
+    injection the microkernel builder requires (its
+    ``default_policy_factory`` param); the kernel itself imports no policy
+    implementation. ``Options.policy`` / the plugin ``policy`` surface (D10)
+    still override the default at the builder.
+    """
+    return _resolve_ref("noeta.builtins.react.impl:build_react_policy_factory")
+
+
+_REACT_MOD: Optional[Any] = None
+
+
+def react_impl() -> Any:
+    """The ``react`` built-in's impl module, loader-resolved (memoized).
+
+    SDK core reaches the decision-mapping policy implementation only through
+    this doorway — ``OrchestrationPolicy`` / ``StructuredOutputPolicy`` /
+    ``WORKFLOW_SYSTEM_PROMPT`` (the host's workflow path) hang off the
+    returned module.
+    """
+    global _REACT_MOD
+    if _REACT_MOD is None:
+        _REACT_MOD = importlib.import_module("noeta.builtins.react.impl")
+    return _REACT_MOD
 
 
 def default_skills_kit_factory() -> Callable[..., Any]:

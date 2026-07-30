@@ -41,8 +41,11 @@ from typing import Any, Optional
 
 from noeta.policies._workflow_sandbox import SAFE_BUILTINS
 from noeta.policies.control_semantics import _concurrent_fanout_enabled
-from noeta.policies.control_tools import STRUCTURED_OUTPUT_TOOL, WORKFLOW_AGENT_NAME
-from noeta.policies.react import SPAWN_SUBAGENT_TOOL
+from noeta.policies.control_tools import (
+    SPAWN_SUBAGENT_TOOL,
+    STRUCTURED_OUTPUT_TOOL,
+    WORKFLOW_AGENT_NAME,
+)
 from noeta.protocols.decisions import (
     Decision,
     FailDecision,

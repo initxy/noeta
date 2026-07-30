@@ -1,6 +1,10 @@
 # ReActPolicy moves into a `react` built-in (microkernel phase 2b)
 
-> **Status: Active**
+> **Status: Shipped** — landed in the phase-2b commit (this session,
+> after phase 2a `2373217`); the durable decisions live in the
+> [plugin-contribution-bundles.md](../../adr/plugin-contribution-bundles.md)
+> microkernel addendum (Scope bullet updated: `noeta.policies` is the
+> control band, the catalogue holds thirteen).
 
 ## Goal
 
@@ -86,14 +90,14 @@ suites are the big consumers).
 
 ## Milestones
 
-- [ ] **R1 — vocabulary + seam.** Spawn-dispatch vocabulary into
+- [x] **R1 — vocabulary + seam.** Spawn-dispatch vocabulary into
   `control_tools`; builder takes `default_policy_factory` (loud-fail);
   subtask_drain re-pointed. Gates green (no move yet — seam first, the
   phase-1 M1 discipline).
-- [ ] **R2 — the move.** react/orchestration/_workflow_sandbox into
+- [x] **R2 — the move.** react/orchestration/_workflow_sandbox into
   `noeta/builtins/react/impl/`; new `react` built-in dir; parts accessor;
   testing/profile doorway; tests swept. Parity goldens 5/5 byte-identical.
-- [ ] **R3 — docs.** CONTEXT.md catalogue count + Policy vocabulary entry;
+- [x] **R3 — docs.** CONTEXT.md catalogue count + Policy vocabulary entry;
   reference/plugins 13-name list; ADR touch-ups if any prose names
   `noeta.policies.react`; spec ticks + archive.
 
@@ -126,4 +130,43 @@ suites are the big consumers).
 
 ## Progress log
 
-(empty — nothing landed yet)
+- **2026-07-29 — R1+R2+R3 landed** (one commit, the 2a precedent). R1:
+  `SPAWN_SUBAGENT_TOOL` / `spawn_subagent_tool_schema` were ALREADY defined
+  kernel-side (`control_semantics`, re-exported via `_control_translate`) —
+  react.py only re-exported them; the sink reduced to adding them to
+  `control_tools`'s re-export and re-pointing builder / subtask_drain /
+  orchestration. R2 movers: `policies/react.py` → `builtins/react/impl/
+  react.py` (compat re-exports kept — it still re-exports the kernel
+  control names, so mixed test imports sweep with one path substitution);
+  `policies/orchestration.py` → `…/impl/orchestration.py`. **Deviation:**
+  `_workflow_sandbox` did NOT move — `control_semantics` (kernel,
+  permanent) imports its `check_workflow_script` for control validation,
+  so the script sandbox is control vocabulary; orchestration imports it
+  from the kernel. `policies/` is now the control band (control_semantics
+  / control_tools / _control_translate / descriptions / stub) and its
+  package docstring says so. Builder: inline `_default_react_factory`
+  closure replaced by the injected `default_policy_factory`
+  (`PolicyFactoryBuilder` Protocol — takes the 19 kernel-computed kwargs
+  the closure captured, returns `(llm) -> Policy`; loud-fail None;
+  `policy_factory_override` keeps priority). SDK: `parts.
+  default_policy_factory()` + `parts.react_impl()` (host's workflow path:
+  `OrchestrationPolicy` / `StructuredOutputPolicy` /
+  `WORKFLOW_SYSTEM_PROMPT` resolve through the doorway); injected at both
+  host build sites + the two `tests/_session_inputs.py` helpers.
+  `testing/profile.build_policy_factory` resolves ReActPolicy dynamically
+  at call time (M2 guards precedent). New `react` built-in dir
+  (declaration-free manifest, catalogue 13, `_INERT_BUILTIN_ACTIVATIONS`
+  += "react"). Acceptance-4 decision recorded: the runtime-alone install
+  smoke now hand-writes a protocol-level `EchoOncePolicy` — the honest
+  kernel-alone story (the kernel ships NO policy; a host injects one).
+  Tests: one-substitution sweep over 28 files + the exact-catalogue
+  assertion + 2 examples (`spawn_subtask.py` → control_tools;
+  the internal demo → the impl path). R3: CONTEXT.md (control band,
+  catalogue 13), reference/plugins en+zh (thirteen), ADR addendum scope
+  bullet, both wheel READMEs.
+
+  Gates: 3377 passed / 129 skipped (unchanged — pure moves), parity
+  goldens 5/5 + snapshots byte-identical, install smoke 2/2 (runtime-alone
+  runs the hand-written policy to TaskCompleted; react absent from the
+  kernel wheel), coverage 87.59%, mypy strict clean, import-linter 10/10
+  KEPT.

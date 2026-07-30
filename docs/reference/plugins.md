@@ -395,10 +395,10 @@ loader reaches the catalog by a **dynamic** import (`builtin_manifests()`), and
 `.importlinter`'s universal `sdk-core-not-builtins` contract keeps every band —
 kernel included — free of static edges into `noeta.builtins`.
 
-The twelve built-ins (one directory per built-in under `noeta/builtins/` — the
+The thirteen built-ins (one directory per built-in under `noeta/builtins/` — the
 canonical worked corpus of manifest declarations): `fs`, `web`, `memory`,
-`browser`, `app`, `mcp`, `skills`, `reminders`, `governance`, `providers`,
-`sandbox`, `presets`. Adding a first-party capability is adding a directory
+`browser`, `app`, `mcp`, `skills`, `react`, `reminders`, `governance`,
+`providers`, `sandbox`, `presets`. Adding a first-party capability is adding a directory
 here (plus a `SurfaceSpec` registration only when a genuinely new surface is
 needed).
 

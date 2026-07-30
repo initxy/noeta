@@ -37,6 +37,7 @@ from noeta.builtins.mcp import MANIFEST as _MCP
 from noeta.builtins.memory import MANIFEST as _MEMORY
 from noeta.builtins.presets import MANIFEST as _PRESETS
 from noeta.builtins.providers import MANIFEST as _PROVIDERS
+from noeta.builtins.react import MANIFEST as _REACT
 from noeta.builtins.reminders import MANIFEST as _REMINDERS
 from noeta.builtins.sandbox import MANIFEST as _SANDBOX
 from noeta.builtins.skills import MANIFEST as _SKILLS
@@ -62,6 +63,7 @@ _BUILTINS: tuple[PluginManifest, ...] = (
     _APP,
     _MCP,
     _SKILLS,
+    _REACT,
     _REMINDERS,
     _GOVERNANCE,
     _PROVIDERS,

@@ -24,6 +24,7 @@ from noeta.policies.control_semantics import (
     QuestionDecodeError,
     RUN_WORKFLOW_TOOL,
     SKILL_TOOL,
+    SPAWN_SUBAGENT_TOOL,
     STRUCTURED_OUTPUT_TOOL,
     TODO_WRITE_STATUSES,
     TODO_WRITE_TOOL,
@@ -39,6 +40,7 @@ from noeta.policies.control_semantics import (
     question_id_from_handle,
     run_workflow_tool_schema,
     skill_tool_schema,
+    spawn_subagent_tool_schema,
     structured_output_tool_schema,
     todo_write_tool_schema,
     validate_call_id,
@@ -76,6 +78,10 @@ __all__ = [
     # skill
     "SKILL_TOOL",
     "skill_tool_schema",
+    # spawn_subagent (microkernel phase 2b: the dispatch rendering is control
+    # vocabulary — subtask_drain and the builder are kernel consumers)
+    "SPAWN_SUBAGENT_TOOL",
+    "spawn_subagent_tool_schema",
     # run_workflow
     "RUN_WORKFLOW_TOOL",
     "WORKFLOW_AGENT_NAME",

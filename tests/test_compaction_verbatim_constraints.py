@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from noeta.policies.react import (
+from noeta.builtins.react.impl.react import (
     ReActPolicy,
     extract_safety_constraints,
     enforce_verbatim_constraints,

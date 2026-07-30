@@ -15,7 +15,7 @@ from typing import Any
 
 from noeta.core.fold import fold
 from noeta.presets import official_specs
-from noeta.policies.react import (
+from noeta.builtins.react.impl.react import (
     ReActPolicy,
     SPAWN_SUBAGENT_TOOL,
 )

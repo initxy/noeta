@@ -58,7 +58,7 @@ from noeta.storage.stacks import (
 
 if TYPE_CHECKING:
     from noeta.context.composer import ThreeSegmentComposer
-    from noeta.policies.react import ReActPolicy
+    from noeta.protocols.policy import Policy
 
 
 __all__ = [
@@ -213,16 +213,21 @@ def build_policy_factory(
     model: str,
     tools: dict[str, Tool],
     max_steps: int,
-) -> Callable[[Any], "ReActPolicy"]:
+) -> Callable[[Any], "Policy"]:
     """Return a factory that takes an LLMClient and returns a wired
     ReActPolicy. ``build_runtime`` injects a RuntimeLLMClient.
     """
-    # ``noeta.policies`` ships in noeta-runtime alongside this module; the
-    # import stays lazy for the same reason as ``build_composer`` above —
-    # keep this module's cheap helpers cheap to import.
-    from noeta.policies.react import ReActPolicy
+    # Microkernel phase 2b: ReActPolicy lives in the ``react`` built-in
+    # plugin (noeta-sdk); this test-support assembly resolves it through the
+    # loader's dynamic-import doorway at call time — the same discipline as
+    # the guards above — so ``noeta.testing`` keeps no static edge into
+    # ``noeta.builtins`` (importing this module works runtime-alone; CALLING
+    # build_policy_factory requires noeta-sdk, which every test run has).
+    import importlib
 
-    def factory(llm: Any) -> ReActPolicy:
+    ReActPolicy = importlib.import_module("noeta.builtins.react.impl").ReActPolicy
+
+    def factory(llm: Any) -> "Policy":
         return ReActPolicy(
             llm=llm,
             tools=tools,
