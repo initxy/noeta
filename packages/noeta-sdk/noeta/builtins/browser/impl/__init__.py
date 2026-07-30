@@ -36,7 +36,7 @@ from noeta.tools._limits import (
 )
 from noeta.tools._refs import ref_json
 from noeta.runtime.browser import BrowserBackend
-from noeta.tools.descriptions import load_tool_description
+from noeta.protocols.resources import load_markdown
 
 
 __all__ = [
@@ -143,7 +143,7 @@ class _BrowserTool:
 
 class BrowserNavigateTool(_BrowserTool):
     name = "browser_navigate"
-    description = load_tool_description("browser_navigate")
+    description = load_markdown(__package__, "browser_navigate")
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {"url": {"type": "string"}},
@@ -166,7 +166,7 @@ class BrowserNavigateTool(_BrowserTool):
 
 class BrowserClickTool(_BrowserTool):
     name = "browser_click"
-    description = load_tool_description("browser_click")
+    description = load_markdown(__package__, "browser_click")
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {"index": {"type": "integer"}},
@@ -189,7 +189,7 @@ class BrowserClickTool(_BrowserTool):
 
 class BrowserTypeTool(_BrowserTool):
     name = "browser_type"
-    description = load_tool_description("browser_type")
+    description = load_markdown(__package__, "browser_type")
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -221,7 +221,7 @@ class BrowserTypeTool(_BrowserTool):
 
 class BrowserExtractTool(_BrowserTool):
     name = "browser_extract"
-    description = load_tool_description("browser_extract")
+    description = load_markdown(__package__, "browser_extract")
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {},
@@ -239,7 +239,7 @@ class BrowserExtractTool(_BrowserTool):
 
 class BrowserScreenshotTool(_BrowserTool):
     name = "browser_screenshot"
-    description = load_tool_description("browser_screenshot")
+    description = load_markdown(__package__, "browser_screenshot")
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {},

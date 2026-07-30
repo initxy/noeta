@@ -28,6 +28,10 @@ from noeta.context.instructions import (
     INSTRUCTIONS_KIND,
     INSTRUCTIONS_VERSION,
     InstructionsSnapshot,
+)
+from noeta.builtins.workspace.impl import (
+    DEFAULT_INSTRUCTIONS_FILENAMES,
+    build_instructions_kit,
     build_instructions_renderer,
     instructions_content_hash,
     instructions_content_kind,
@@ -38,7 +42,6 @@ from noeta.core.fold import fold
 from noeta.core.wiring import wire_default_observers
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
 from noeta.execution.instructions import (
-    DEFAULT_INSTRUCTIONS_FILENAMES,
     load_instructions,
     record_instructions,
 )
@@ -67,6 +70,9 @@ from tests._sdk_session import (
 _SAMPLE_TEXT = "# Project rules\n\n* Reply in Chinese.\n* Run pytest before committing.\n"
 _SAMPLE_SNAPSHOT = InstructionsSnapshot(name="NOETA.md", text=_SAMPLE_TEXT)
 
+# The injected resident kit (phase 2c) — the record seam takes it explicitly.
+_KIT = build_instructions_kit()
+
 
 # ---------------------------------------------------------------------------
 # 1. Pure-function units — load_instructions file discovery
@@ -82,7 +88,7 @@ def _write(path: Path, text: str) -> Path:
 def test_load_prefers_noeta_md_over_agents_md(tmp_path: Path) -> None:
     _write(tmp_path / "NOETA.md", "# NOETA\n")
     _write(tmp_path / "AGENTS.md", "# AGENTS\n")
-    snap = load_instructions(tmp_path)
+    snap = load_instructions(tmp_path, filenames=DEFAULT_INSTRUCTIONS_FILENAMES)
     assert snap is not None
     assert snap.name == "NOETA.md"
     assert snap.text.startswith("# NOETA")
@@ -90,23 +96,23 @@ def test_load_prefers_noeta_md_over_agents_md(tmp_path: Path) -> None:
 
 def test_load_falls_back_to_agents_md(tmp_path: Path) -> None:
     _write(tmp_path / "AGENTS.md", "# Agents\n")
-    snap = load_instructions(tmp_path)
+    snap = load_instructions(tmp_path, filenames=DEFAULT_INSTRUCTIONS_FILENAMES)
     assert snap is not None
     assert snap.name == "AGENTS.md"
 
 
 def test_load_none_when_missing(tmp_path: Path) -> None:
     # Empty directory → None
-    assert load_instructions(tmp_path) is None
+    assert load_instructions(tmp_path, filenames=DEFAULT_INSTRUCTIONS_FILENAMES) is None
 
 
 def test_load_none_when_all_empty(tmp_path: Path) -> None:
     _write(tmp_path / "NOETA.md", "   \n\t  ")
     _write(tmp_path / "AGENTS.md", "\n\n")
-    assert load_instructions(tmp_path) is None
+    assert load_instructions(tmp_path, filenames=DEFAULT_INSTRUCTIONS_FILENAMES) is None
     # Empty NOETA.md is skipped, falls back to AGENTS.md
     _write(tmp_path / "AGENTS.md", "# real\n")
-    snap = load_instructions(tmp_path)
+    snap = load_instructions(tmp_path, filenames=DEFAULT_INSTRUCTIONS_FILENAMES)
     assert snap is not None
     assert snap.name == "AGENTS.md"
 
@@ -115,7 +121,7 @@ def test_load_override_path_wins(tmp_path: Path) -> None:
     _write(tmp_path / "NOETA.md", "# default\n")
     custom = tmp_path / "sub" / "MY-RULES.md"
     _write(custom, "# CUSTOM RULES\n")
-    snap = load_instructions(tmp_path, override_path=custom)
+    snap = load_instructions(tmp_path, filenames=DEFAULT_INSTRUCTIONS_FILENAMES, override_path=custom)
     assert snap is not None
     assert snap.name == "MY-RULES.md"
     assert snap.text.startswith("# CUSTOM")
@@ -124,7 +130,7 @@ def test_load_override_path_wins(tmp_path: Path) -> None:
 def test_load_override_missing_is_none(tmp_path: Path) -> None:
     _write(tmp_path / "NOETA.md", "# present\n")
     assert (
-        load_instructions(tmp_path, override_path=tmp_path / "nope.md") is None
+        load_instructions(tmp_path, filenames=DEFAULT_INSTRUCTIONS_FILENAMES, override_path=tmp_path / "nope.md") is None
     )
 
 
@@ -239,7 +245,7 @@ def test_record_instructions_emits_evolving_event_and_activates() -> None:
     engine = _engine(log, cs, _composer(cs, _SAMPLE_SNAPSHOT))
     task = engine.create_task(goal="g", policy_name="scripted")
 
-    task = record_instructions(log, cs, task, snapshot=_SAMPLE_SNAPSHOT)
+    task = record_instructions(log, cs, task, snapshot=_SAMPLE_SNAPSHOT, kit=_KIT)
 
     events = [
         e for e in log.read(task.task_id)
@@ -261,7 +267,7 @@ def test_record_instructions_first_only_and_noop_on_none() -> None:
     task = engine.create_task(goal="g", policy_name="scripted")
 
     # None → no events
-    task = record_instructions(log, cs, task, snapshot=None)
+    task = record_instructions(log, cs, task, snapshot=None, kit=_KIT)
     pre_events = [
         e for e in log.read(task.task_id)
         if e.type == "ContextContentRecorded"
@@ -270,8 +276,8 @@ def test_record_instructions_first_only_and_noop_on_none() -> None:
     assert INSTRUCTIONS_KIND not in task.state.active_content
 
     # Same snapshot twice → recorded only once
-    task = record_instructions(log, cs, task, snapshot=_SAMPLE_SNAPSHOT)
-    task = record_instructions(log, cs, task, snapshot=_SAMPLE_SNAPSHOT)
+    task = record_instructions(log, cs, task, snapshot=_SAMPLE_SNAPSHOT, kit=_KIT)
+    task = record_instructions(log, cs, task, snapshot=_SAMPLE_SNAPSHOT, kit=_KIT)
     events = [
         e for e in log.read(task.task_id)
         if e.type == "ContextContentRecorded"
@@ -284,7 +290,7 @@ def test_compose_places_instructions_in_semi_stable_pure() -> None:
     composer = _composer(cs, _SAMPLE_SNAPSHOT)
     engine = _engine(log, cs, composer)
     task = engine.create_task(goal="g", policy_name="scripted")
-    task = record_instructions(log, cs, task, snapshot=_SAMPLE_SNAPSHOT)
+    task = record_instructions(log, cs, task, snapshot=_SAMPLE_SNAPSHOT, kit=_KIT)
 
     first = composer.compose(task)
     second = composer.compose(task)

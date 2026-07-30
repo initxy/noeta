@@ -7,8 +7,8 @@ offloads to the ContentStore as an artifact; the model gets a bounded
 excerpt + ref it can pass back to a second ``read`` with
 ``offset``/``limit`` to navigate the file.
 
-Their LLM-facing descriptions are loaded from independent ``.md``
-resources via ``noeta.tools.descriptions.load_tool_description``;
+Their LLM-facing descriptions are loaded from independent in-package
+``.md`` resources via ``noeta.protocols.resources.load_markdown``;
 each carries the four-section shape (what / when / when-not / preconditions).
 
 Path arguments are user-supplied (model-generated), so every one goes
@@ -43,7 +43,7 @@ from noeta.tools._limits import (
     fit_output_fields,
     truncate_bytes,
 )
-from noeta.tools.descriptions import load_tool_description
+from noeta.protocols.resources import load_markdown
 from noeta.runtime.workspace import (
     WorkspaceRoot,
     path_within,
@@ -338,7 +338,7 @@ class ReadFileTool:
     #: skill pack's bundled reference). See ``_workspace.resolve_anywhere``.
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "read"
-    description: str = field(default=load_tool_description("read"))
+    description: str = field(default=load_markdown(__package__, "read"))
     risk_level: str = "low"
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
@@ -527,7 +527,7 @@ class GlobTool:
     workspace: WorkspaceRoot
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "glob"
-    description: str = field(default=load_tool_description("glob"))
+    description: str = field(default=load_markdown(__package__, "glob"))
     risk_level: str = "low"
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
@@ -614,7 +614,7 @@ class GrepTool:
     workspace: WorkspaceRoot
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "grep"
-    description: str = field(default=load_tool_description("grep"))
+    description: str = field(default=load_markdown(__package__, "grep"))
     risk_level: str = "low"
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {

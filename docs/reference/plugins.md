@@ -370,7 +370,7 @@ An activation name must be one of:
   agent;
 - an **identity-inert built-in** recognised so a typo still fails loudly but with
   no compile effect: `fs`, `web`, `skills`, `reminders`, `governance`,
-  `providers`, `presets`, `sandbox`;
+  `providers`, `presets`, `sandbox`, `workspace`;
 - the **name of a loaded plugin** in the `PluginSet` handed to `Client` — its
   identity-plane contributions (extra tools / child agents / prompt fragments /
   policy) fold in.
@@ -406,12 +406,12 @@ loader reaches the catalog by a **dynamic** import (`builtin_manifests()`), and
 `.importlinter`'s universal `sdk-core-not-builtins` contract keeps every band —
 kernel included — free of static edges into `noeta.builtins`.
 
-The thirteen built-ins (one directory per built-in under `noeta/builtins/` — the
+The fourteen built-ins (one directory per built-in under `noeta/builtins/` — the
 canonical worked corpus of manifest declarations): `fs`, `web`, `memory`,
 `browser`, `app`, `mcp`, `skills`, `react`, `reminders`, `governance`,
-`providers`, `sandbox`, `presets`. Adding a first-party capability is adding a directory
-here (plus a `SurfaceSpec` registration only when a genuinely new surface is
-needed).
+`providers`, `sandbox`, `presets`, `workspace`. Adding a first-party capability
+is adding a directory here (plus a `SurfaceSpec` registration only when a
+genuinely new surface is needed).
 
 ## Trust store
 

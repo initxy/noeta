@@ -1,11 +1,14 @@
-"""Shell policy — modes, the structural allowlist, and the project rules file.
+"""Shell policy — modes, the structural allowlist engine, the project rules file.
 
 Kernel-band infrastructure shared by the ``shell_run`` tool (the fs pack), the
 ``run_skill_script`` tool, and the SDK host's approval predicate
 (``command_in_allowlist``). The tool implementations live in the ``fs``
-built-in plugin; this module owns the *policy*: :class:`ShellMode`, the
-curated ``_AllowRule`` defaults, spec parsing, and the per-project
-remembered-rules file (``.noeta/shell-allowlist.json``).
+built-in plugin; this module owns the *mechanism*: :class:`ShellMode`, the
+:class:`AllowRule` matching engine, spec parsing, and the per-project
+remembered-rules file (``.noeta/shell-allowlist.json``). The *curated*
+default rule table is product policy and ships with the fs built-in
+(``noeta.builtins.fs.impl.shell_rules``, phase 2c) — callers hand it to
+:func:`build_allowlist` as ``base_rules``; the kernel curates no commands.
 """
 
 from __future__ import annotations
@@ -21,9 +24,11 @@ from noeta.runtime.exec_env import ExecEnv
 
 
 __all__ = [
+    "AllowRule",
     "DEFAULT_SHELL_OUTPUT_CAP",
     "DEFAULT_SHELL_TIMEOUT_S",
     "MAX_SHELL_TIMEOUT_MS",
+    "SHELL_META_CHARS",
     "ShellMode",
     "append_project_shell_rule",
     "build_allowlist",
@@ -51,7 +56,7 @@ DEFAULT_SHELL_OUTPUT_CAP = 256 * 1024  # 256 KB
 _STDOUT_TAIL_BYTES = 2048
 _STDERR_TAIL_BYTES = 1024
 
-_SHELL_META_CHARS = frozenset(";&|<>`$()\n\r")
+SHELL_META_CHARS = frozenset(";&|<>`$()\n\r")
 
 
 class ShellMode(str, Enum):
@@ -78,7 +83,7 @@ _ArgValidator = Callable[[list[str]], bool]
 
 
 @dataclass(frozen=True)
-class _AllowRule:
+class AllowRule:
     """One structural allowlist entry.
 
     ``program`` matches ``argv[0]`` exactly; ``subcommand`` (if set)
@@ -102,117 +107,12 @@ class _AllowRule:
         return self.validate(tail)
 
 
-def _is_safe_path_arg(arg: str) -> bool:
-    """A path-shaped arg has no shell metas and does not start with `-`.
-
-    (Top-level metachar scan already caught most cases; this is a second
-    line of defense for paths that might contain spaces or quotes.)
-    """
-    if not arg:
-        return False
-    if arg.startswith("-"):
-        return False
-    return not any(c in _SHELL_META_CHARS for c in arg)
-
-
-def _git_status_validate(tail: list[str]) -> bool:
-    return tail in ([], ["--short"], ["-s"], ["--porcelain"])
-
-
-def _git_diff_validate(tail: list[str]) -> bool:
-    # Allowed shapes: `git diff`, `git diff <path>`, `git diff -- <path>`,
-    # `git diff --stat`, `git diff <path1> <path2>` (still all paths /
-    # the path separator).
-    allowed_flags = {"--stat", "--name-only", "--"}
-    for arg in tail:
-        if arg in allowed_flags:
-            continue
-        if arg.startswith("-"):
-            return False
-        if not _is_safe_path_arg(arg):
-            return False
-    return True
-
-
-def _pytest_validate(tail: list[str]) -> bool:
-    # pytest takes arbitrary args; the shell-meta scan already
-    # disallowed the dangerous tokens. Reject only obvious red flags
-    # (``--pdb`` lands you in an interactive prompt, which would hang).
-    forbidden = {"--pdb", "--pdb-trace"}
-    return all(a not in forbidden for a in tail)
-
-
-def _uv_run_pytest_validate(tail: list[str]) -> bool:
-    # tail starts AFTER ["uv", "run"]. First element must be `pytest`,
-    # rest is pytest-tail-shaped.
-    if not tail or tail[0] != "pytest":
-        return False
-    return _pytest_validate(tail[1:])
-
-
 def _trivial_validate(_: list[str]) -> bool:
     return True
 
 
-def _grep_validate(_: list[str]) -> bool:
-    # grep cannot execute a command or write a file; the top-level
-    # metachar scan already blocks `; & | < > $` injection. Any flag /
-    # pattern / path shape is safe to search with.
-    return True
-
-
-def _rg_validate(tail: list[str]) -> bool:
-    # ripgrep is read-only EXCEPT a few flags that shell out to an
-    # external program per file. Reject those so `rg` stays a pure search.
-    for arg in tail:
-        if arg == "--hostname-bin":
-            return False
-        if arg == "--pre" or arg.startswith("--pre="):
-            return False
-        if arg == "--pre-glob" or arg.startswith("--pre-glob="):
-            return False
-    return True
-
-
-def _find_validate(tail: list[str]) -> bool:
-    # find can run commands (-exec/-execdir/-ok/-okdir), delete files
-    # (-delete), or write files (-fprint*/-fls). Reject all of those so
-    # find stays pure traversal/matching.
-    forbidden = {
-        "-exec",
-        "-execdir",
-        "-ok",
-        "-okdir",
-        "-delete",
-        "-fprint",
-        "-fprintf",
-        "-fprint0",
-        "-fls",
-    }
-    return all(a not in forbidden for a in tail)
-
-
-_DEFAULT_RULES: tuple[_AllowRule, ...] = (
-    _AllowRule("git", "status", _git_status_validate, "git_status"),
-    _AllowRule("git", "diff", _git_diff_validate, "git_diff"),
-    _AllowRule("pytest", None, _pytest_validate, "pytest"),
-    _AllowRule("uv", "run", _uv_run_pytest_validate, "uv_run_pytest"),
-    _AllowRule("npm", "test", _trivial_validate, "npm_test"),
-    _AllowRule("pnpm", "test", _trivial_validate, "pnpm_test"),
-    # read-only search / listing so an ALLOWLIST-mode agent —
-    # notably general-purpose, which has no grep/glob tool of its own —
-    # can still search the workspace via shell. All four are read-only;
-    # the validators reject the handful of flags that shell out to an
-    # external program or mutate the filesystem.
-    _AllowRule("grep", None, _grep_validate, "grep"),
-    _AllowRule("rg", None, _rg_validate, "rg"),
-    _AllowRule("find", None, _find_validate, "find"),
-    _AllowRule("ls", None, _trivial_validate, "ls"),
-)
-
-
-def _rule_from_spec(spec: Mapping[str, Any]) -> _AllowRule:
-    """Convert one JSON-serializable allowlist spec → an :class:`_AllowRule`.
+def _rule_from_spec(spec: Mapping[str, Any]) -> AllowRule:
+    """Convert one JSON-serializable allowlist spec → an :class:`AllowRule`.
 
     Spec shape (JSON-serializable, config-friendly)::
 
@@ -237,23 +137,28 @@ def _rule_from_spec(spec: Mapping[str, Any]) -> _AllowRule:
     label = spec.get("label")
     if not isinstance(label, str) or not label:
         label = program if subcommand is None else f"{program}_{subcommand}"
-    return _AllowRule(program, subcommand, _trivial_validate, label)
+    return AllowRule(program, subcommand, _trivial_validate, label)
 
 
 def build_allowlist(
     extra_specs: Sequence[Mapping[str, Any]] = (),
-) -> tuple[_AllowRule, ...]:
-    """Curated safe defaults + operator-configured extra rules (extend).
+    *,
+    base_rules: Sequence[AllowRule] = (),
+) -> tuple[AllowRule, ...]:
+    """``base_rules`` + operator-configured extra rules (extend).
 
-    :data:`_DEFAULT_RULES` (git status/diff, pytest, uv run pytest, npm/pnpm
-    test, and the read-only search/listing commands grep/rg/find/ls) are
-    always kept; ``extra_specs`` from host config are appended. An empty
-    ``extra_specs`` returns exactly the defaults.
+    Phase 2c: the *curated* rule table (git status/diff, pytest, uv run
+    pytest, npm/pnpm test, grep/rg/find/ls) is product policy and ships
+    with the fs built-in (``noeta.builtins.fs.impl.shell_rules``); callers
+    pass it as ``base_rules``. This kernel helper keeps only the mechanics:
+    the base is kept verbatim and ``extra_specs`` from host config are
+    parsed and appended. Empty base + empty extras ⇒ an empty allowlist
+    (nothing runs in ALLOWLIST mode) — the kernel curates no commands.
     """
-    return _DEFAULT_RULES + tuple(_rule_from_spec(s) for s in extra_specs)
+    return tuple(base_rules) + tuple(_rule_from_spec(s) for s in extra_specs)
 
 
-def command_in_allowlist(command: str, rules: Sequence["_AllowRule"]) -> bool:
+def command_in_allowlist(command: str, rules: Sequence["AllowRule"]) -> bool:
     """True iff ``command`` is a well-formed, metachar-free argv matching a rule.
 
     Shared by the tool's own ALLOWLIST gate and the SDK-host approval predicate
@@ -351,7 +256,7 @@ def append_project_shell_rule(
 
 
 def _has_shell_meta(command: str) -> bool:
-    return any(c in _SHELL_META_CHARS for c in command)
+    return any(c in SHELL_META_CHARS for c in command)
 
 
 def _resolve_timeout(raw: Any, default_s: int) -> int:
@@ -372,7 +277,7 @@ def _parse_argv(command: str) -> Optional[list[str]]:
         return None
 
 
-def _matches_allowlist(argv: list[str], rules: tuple[_AllowRule, ...]) -> bool:
+def _matches_allowlist(argv: list[str], rules: tuple[AllowRule, ...]) -> bool:
     return any(rule.matches(argv) for rule in rules)
 
 

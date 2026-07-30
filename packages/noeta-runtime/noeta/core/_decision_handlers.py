@@ -1513,6 +1513,11 @@ def handle_spawn_background_subtask(
         subtask_depth=task.subtask_depth + 1,
         background=True,
     )
+    # Model-visible ack prose, deliberately kernel-side (phase-2b P-D2):
+    # spawn-subagent vocabulary renders the kernel's own delegation
+    # mechanism, and this band imports only ``noeta.protocols`` — the text
+    # is recorded into the ledger as an ordinary tool result, so replay
+    # never depends on it staying byte-stable.
     _append_background_spawn_result(
         ctx, task, call_id=call_id, success=True,
         text=(

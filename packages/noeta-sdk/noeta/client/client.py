@@ -33,7 +33,7 @@ from noeta.execution import (
 )
 from noeta.client.messages import ViewItem, as_messages
 from noeta.client.parts import resolve_model_alias
-from noeta.execution.driver import DriveOutcome, STUB_MODEL_ALLOWLIST
+from noeta.execution.driver import DriveOutcome
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
 from noeta.protocols.errors import CodedError
@@ -71,6 +71,14 @@ from noeta.client.plugin_set import PluginSet
 
 
 __all__ = ["Client", "QueryFailedError", "QueryResult", "query"]
+
+
+#: Deployment model-selector allowlist the SDK applies when the host config
+#: sets no ``allowed_models``: the friendly aliases of the providers
+#: builtin's catalog (mirrors Claude Code's ``/model`` names). A product
+#: default, SDK-side since phase 2c — the kernel driver takes the allowlist
+#: purely as an injection (``None`` there means "no deployment bound").
+DEFAULT_MODEL_ALLOWLIST: frozenset[str] = frozenset({"opus", "sonnet", "haiku"})
 
 
 # ---------------------------------------------------------------------------
@@ -569,8 +577,9 @@ class Client:
         # deployment allowlist IS the authorized set (``allowed_models`` =
         # BackendConfig.models) — this lets real model ids (e.g. ``gpt-5.5``) pass
         # the driver's per-turn ``_authorize_selector`` without per-principal
-        # config. Absent it, keep the driver's STUB_MODEL_ALLOWLIST default →
-        # byte-identical to every pre-widening caller (oneshot / tests / CLI).
+        # config. Absent it, pass the SDK's DEFAULT_MODEL_ALLOWLIST (phase 2c:
+        # the triple is a product default, injected — the kernel driver holds
+        # no allowlist) → byte-identical to every pre-widening caller.
         self._driver: InteractionDriver = InteractionDriver(
             self._host,
             # Note: do not pass model_selector — let host.model become the
@@ -585,7 +594,7 @@ class Client:
             model_allowlist=(
                 frozenset(allowed_models)
                 if allowed_models is not None
-                else STUB_MODEL_ALLOWLIST
+                else DEFAULT_MODEL_ALLOWLIST
             ),
             # Microkernel M2: the kernel driver holds no model catalog; the
             # friendly-alias table lives in the providers built-in and is
@@ -704,7 +713,7 @@ class Client:
         ``agent`` defaults to the Options-compiled main spec's name
         (``"main"`` unless the recipe changed it). Passing a specific
         ``model_selector`` is subject to the deployment
-        :data:`~noeta.execution.driver.STUB_MODEL_ALLOWLIST`; to set a
+        :data:`~noeta.client.client.DEFAULT_MODEL_ALLOWLIST`; to set a
         per-Client default without the allowlist check, use the
         constructor ``model`` argument instead.
 

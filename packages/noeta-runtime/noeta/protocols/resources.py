@@ -1,12 +1,12 @@
 """Shared Markdown resource loader (generalized).
 
-Three places externalize long text into in-package ``<name>.md`` resources:
-execution-tool descriptions, control-tool descriptions, and agent prompts.
-The loading mechanism is identical (``importlib.resources`` + cache + optional
-trailing-newline strip). They live in ``noeta.tools`` / ``noeta.policies`` /
-``noeta.presets`` respectively, and import-linter forbids tools and policies (same
-layer) from depending on each other, so the shared implementation sinks to this
-L0 layer: anyone may depend on ``noeta.protocols``, which depends on nothing.
+Several places externalize long text into in-package ``<name>.md`` resources:
+control-tool descriptions (``noeta.policies``), agent prompts
+(``noeta.presets``), and each builtin tool's description (beside its impl in
+``noeta.builtins.<name>.impl`` — phase 2c). The loading mechanism is identical
+(``importlib.resources`` + cache + optional trailing-newline strip), so the
+shared implementation sinks to this L0 layer: anyone may depend on
+``noeta.protocols``, which depends on nothing.
 
 Pure stdlib (imports no in-project module), satisfying this layer's "Import-only
 dependencies are stdlib" constraint.
@@ -25,8 +25,8 @@ def load_markdown(anchor_package: str, name: str, *, strip: bool = True) -> str:
     """Read the text of the ``<name>.md`` resource inside ``anchor_package``.
 
     ``anchor_package`` is the dotted path of the package holding the resource
-    (e.g. ``"noeta.tools.descriptions"``); ``name`` is the bare name (e.g.
-    ``"read"``). Read via :mod:`importlib.resources` so it works inside a wheel
+    (e.g. ``"noeta.policies.descriptions"``); ``name`` is the bare name (e.g.
+    ``"skill"``). Read via :mod:`importlib.resources` so it works inside a wheel
     too (no reliance on ``__file__``-relative paths). The result is cached by
     ``(anchor_package, name, strip)`` — one read per resource per process. A
     missing file raises ``FileNotFoundError`` so a typo never silently mints

@@ -145,7 +145,11 @@ def test_start_validates_model_selector(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()
     host, _, _ = _host(ws, responses=[_end_turn()])
-    driver = InteractionDriver(host)
+    # The deployment allowlist is an injection (phase 2c) — a bare driver has
+    # no deployment bound, so the test wires the one it validates against.
+    driver = InteractionDriver(
+        host, model_allowlist=frozenset({"opus", "sonnet", "haiku"})
+    )
     with pytest.raises(ModelSelectorError):
         driver.start(goal="x", agent="main", model_selector="gpt-9000")
     # An allowlisted selector is accepted (and otherwise unused this slice).
@@ -647,7 +651,9 @@ def test_send_goal_rejected_selector_writes_nothing_when_closed(
     ws = tmp_path / "ws"
     ws.mkdir()
     host, _, event_log = _host(ws, responses=[_end_turn("t1")])
-    driver = InteractionDriver(host)
+    driver = InteractionDriver(
+        host, model_allowlist=frozenset({"opus", "sonnet", "haiku"})
+    )
     started = driver.start(goal="first", agent="main")
     driver.close(started.task_id, closed_by="leo")
     before = [e.type for e in event_log.read(started.task_id)]

@@ -938,16 +938,31 @@ class GenericEngineResolver:
         def _record_child_session_content(
             child_id: str, child_task: Any, lease_id: str
         ) -> Any:
+            # The host's memoized resident kits (phase 2c) — same objects the
+            # child's composer renders from. A host that exposes the snapshot
+            # seam without the kits is a wiring fault, not a legacy mode.
+            instructions_kit = getattr(self, "instructions_kit", None)
+            environment_kit = getattr(self, "environment_kit", None)
+            if instructions_kit is None or environment_kit is None:
+                raise RuntimeError(
+                    "session_content_snapshots is wired but the resident kits "
+                    "are missing — a host exposing the snapshot seam must also "
+                    "expose instructions_kit / environment_kit (phase 2c)."
+                )
             environment_snapshot, instructions_snapshot = _snapshots(
                 inherited_workspace
             )
             child_task = record_instructions(
                 self.event_log, self.content_store, child_task,
-                snapshot=instructions_snapshot, lease_id=lease_id,
+                snapshot=instructions_snapshot,
+                kit=instructions_kit,
+                lease_id=lease_id,
             )
             child_task = record_environment(
                 self.event_log, self.content_store, child_task,
-                snapshot=environment_snapshot, lease_id=lease_id,
+                snapshot=environment_snapshot,
+                kit=environment_kit,
+                lease_id=lease_id,
             )
             return child_task
 

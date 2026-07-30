@@ -85,7 +85,12 @@ from noeta.client.parts import (
     react_impl,
     default_reminder_specs,
     default_tool_factories,
+    default_environment_kit,
+    default_instructions_kit,
+    default_memory_index_kit,
+    default_shell_rules,
     derive_compaction_config,
+    edit_tool_mutex,
     memory_impl,
     provider_family,
 )
@@ -770,6 +775,17 @@ class SdkHost(GenericEngineResolver):
     # Per-host singleton; never written to the event log → no resume effect.
     _cancellation: CancellationRegistry = field(
         default_factory=CancellationRegistry, init=False, repr=False, compare=False
+    )
+    # Memoized resident kits (phase 2c) — resolved once per host from the
+    # memory / workspace built-ins; see the ``*_kit`` properties.
+    _memory_index_kit: Optional[Any] = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _environment_kit: Optional[Any] = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _instructions_kit: Optional[Any] = field(
+        default=None, init=False, repr=False, compare=False
     )
     # Background-shell process registry: a per-host runtime
     # accelerator (mirrors ``_cancellation``) owning live ``Popen`` handles +
@@ -1609,7 +1625,10 @@ class SdkHost(GenericEngineResolver):
                     # host read is byte-identical.
                     + load_project_shell_allowlist(
                         workspace_dir, exec_env=session_exec_env
-                    )
+                    ),
+                    # The curated base is the fs built-in's table (phase 2c) —
+                    # the same rules the shell_run tool enforces.
+                    base_rules=default_shell_rules(),
                 )
                 shell_approval_predicate = _make_shell_approval_predicate(
                     effective_rules
@@ -1679,8 +1698,16 @@ class SdkHost(GenericEngineResolver):
             model=model,
             compaction=derive_compaction_config(model),
             # The catalog's vendor-family judgment for the edit-tool mutex
-            # (microkernel M2 — the kernel holds no model opinions).
+            # (microkernel M2 — the kernel holds no model opinions), and the
+            # fs built-in's mutex table itself (phase 2c — the kernel holds
+            # no tool-name opinions either).
             provider_family=provider_family(model),
+            edit_tool_mutex=edit_tool_mutex(),
+            # Resident kits (phase 2c): the same memoized objects the
+            # driver's recording seams use, so record == compose.
+            memory_index_kit=self.memory_index_kit,
+            instructions_kit=self.instructions_kit,
+            environment_kit=self.environment_kit,
             # Session-level budget override; None uses today's spec-derived path.
             budget=self.budget
             if self.budget is not None
@@ -1896,6 +1923,10 @@ class SdkHost(GenericEngineResolver):
             model=self.model,
             compaction=derive_compaction_config(self.model),
             provider_family=provider_family(self.model),
+            edit_tool_mutex=edit_tool_mutex(),
+            memory_index_kit=self.memory_index_kit,
+            instructions_kit=self.instructions_kit,
+            environment_kit=self.environment_kit,
             budget=self.budget
             if self.budget is not None
             else self._budget_for(BudgetSpec()),
@@ -1994,9 +2025,42 @@ class SdkHost(GenericEngineResolver):
         instructions: Optional[InstructionsSnapshot] = None
         if self.instructions_enabled:
             instructions = load_instructions(
-                workspace_dir, override_path=self.instructions_file
+                workspace_dir,
+                filenames=self.instructions_kit.filenames,
+                override_path=self.instructions_file,
             )
         return environment, instructions
+
+    # -- resident kits (phase 2c) ------------------------------------------
+    # The renderer prose / hash rules live in the memory and workspace
+    # built-ins; the host resolves each kit ONCE and hands the same object
+    # to the kernel builder (compose side) and to the driver/resolver
+    # recording seams (record side), so the recorded fingerprint and the
+    # composed bytes share one source by construction.
+
+    @property
+    def memory_index_kit(self) -> Any:
+        kit = self._memory_index_kit
+        if kit is None:
+            kit = default_memory_index_kit()
+            self._memory_index_kit = kit
+        return kit
+
+    @property
+    def environment_kit(self) -> Any:
+        kit = self._environment_kit
+        if kit is None:
+            kit = default_environment_kit()
+            self._environment_kit = kit
+        return kit
+
+    @property
+    def instructions_kit(self) -> Any:
+        kit = self._instructions_kit
+        if kit is None:
+            kit = default_instructions_kit()
+            self._instructions_kit = kit
+        return kit
 
     def memory_recall_context(
         self, agent: str, task_id: Optional[str] = None

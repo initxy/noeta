@@ -5,8 +5,8 @@ The execution-layer counterpart of :mod:`noeta.context.instructions`
 :mod:`noeta.execution.memory` glues the memory subsystem to the Engine:
 
 * :func:`load_instructions` — impure pre-loop loader: read the first
-  existing, non-empty candidate from ``<workspace>/NOETA.md`` or
-  ``<workspace>/AGENTS.md`` (or an override path) into an
+  existing, non-empty candidate of the injected kit's ``filenames``
+  search order (or an override path) into an
   :class:`InstructionsSnapshot`. Missing / empty files are a valid
   "no instructions" state (returns ``None``) so a default workspace
   pays nothing.
@@ -24,15 +24,16 @@ interface — rule of two. Product wiring is handled by the same
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, MutableMapping, Optional
+from typing import Callable, Mapping, MutableMapping, Optional
 
+from noeta.context.content_channel import ContentKindSpec
 from noeta.context.instructions import (
     INSTRUCTIONS_DRIFT_POLICY,
     INSTRUCTIONS_KIND,
     INSTRUCTIONS_VERSION,
     InstructionsSnapshot,
-    instructions_content_hash,
 )
 from noeta.core.fold import apply_event
 from noeta.protocols.content_store import ContentStore
@@ -46,7 +47,7 @@ from noeta.runtime.exec_env import ExecEnv
 
 
 __all__ = [
-    "DEFAULT_INSTRUCTIONS_FILENAMES",
+    "InstructionsKit",
     "build_instructions_discovery",
     "build_instructions_preloader",
     "discover_instructions",
@@ -55,16 +56,36 @@ __all__ = [
 ]
 
 
-#: Workspace-root search order for the instructions file. The first
-#: existing, non-empty candidate wins. NOETA.md is canonical (the
-#: project's CLAUDE.md counterpart); AGENTS.md is a common GitHub /
-#: repo convention supported as a fallback.
-DEFAULT_INSTRUCTIONS_FILENAMES = ("NOETA.md", "AGENTS.md")
+@dataclass(frozen=True)
+class InstructionsKit:
+    """What one session build consumes from the instructions resident.
+
+    The SkillsKit pattern (phase 2c): the tag-block renderer, the hash
+    rule, the ``ContentKindSpec`` factory AND the candidate-filename
+    search order (``NOETA.md`` / ``AGENTS.md`` — a product convention,
+    not kernel vocabulary) live in the ``workspace`` built-in plugin
+    (``noeta.builtins.workspace.impl:build_instructions_kit``); the
+    kernel receives them as one injected bundle so the pre-loop loader,
+    the mid-loop discovery hook and the compose-time renderer all share
+    a single source of truth.
+    """
+
+    #: ``{name: snapshot} -> ContentKindSpec`` — the registry item factory
+    #: (the mapping is deliberately mutable and shared with discovery).
+    content_kind_from: Callable[
+        [Mapping[str, InstructionsSnapshot]], ContentKindSpec
+    ]
+    #: ``snapshot -> sha256(rendered bytes)`` — the recorded fingerprint.
+    content_hash: Callable[[InstructionsSnapshot], str]
+    #: Workspace-root search order for instruction files; the first
+    #: existing, non-empty candidate wins (per directory).
+    filenames: tuple[str, ...]
 
 
 def load_instructions(
     workspace_dir: Path,
     *,
+    filenames: tuple[str, ...],
     override_path: Optional[Path] = None,
     exec_env: Optional[ExecEnv] = None,
 ) -> Optional[InstructionsSnapshot]:
@@ -72,9 +93,10 @@ def load_instructions(
 
     * ``override_path`` wins when provided — read it (or return
       ``None`` if it does not exist or is empty after stripping).
-    * Otherwise walk :data:`DEFAULT_INSTRUCTIONS_FILENAMES` under
-      ``workspace_dir`` in order; the first candidate that exists AND
-      whose UTF-8 content is non-empty after stripping wins.
+    * Otherwise walk ``filenames`` (the injected kit's search order —
+      phase 2c: the candidate names are product convention, kernel-free)
+      under ``workspace_dir`` in order; the first candidate that exists
+      AND whose UTF-8 content is non-empty after stripping wins.
     * Returns ``None`` for a workspace with no instructions file —
       the caller must short-circuit kind registration and activation
       so the empty state has **zero** byte-footprint on the ledger.
@@ -87,7 +109,7 @@ def load_instructions(
     """
     if override_path is not None:
         return _read_one(override_path, exec_env)
-    for filename in DEFAULT_INSTRUCTIONS_FILENAMES:
+    for filename in filenames:
         candidate = workspace_dir / filename
         snapshot = _read_one(candidate, exec_env)
         if snapshot is not None:
@@ -126,6 +148,7 @@ def discover_instructions(
     workspace_root: Path,
     resolved_file: Path,
     *,
+    filenames: tuple[str, ...],
     active: tuple[str, ...] = (),
     exec_env: Optional[ExecEnv] = None,
 ) -> list[InstructionsSnapshot]:
@@ -135,8 +158,8 @@ def discover_instructions(
     for every directory strictly BELOW ``workspace_root`` on the path to
     ``resolved_file`` — shallowest first, so a parent package's conventions
     render before a child's — the first existing, non-empty candidate of
-    :data:`DEFAULT_INSTRUCTIONS_FILENAMES` wins, exactly the root loader's
-    precedence. The workspace root itself is excluded: the root file is the
+    ``filenames`` (the injected kit's search order) wins, exactly the root
+    loader's precedence. The workspace root itself is excluded: the root file is the
     pre-loop loader's job (and its resident name is the bare basename, not a
     relative path).
 
@@ -161,11 +184,11 @@ def discover_instructions(
         directory = directory / part
         names = [
             (directory / filename).relative_to(workspace_root).as_posix()
-            for filename in DEFAULT_INSTRUCTIONS_FILENAMES
+            for filename in filenames
         ]
         if any(name in active for name in names):
             continue
-        for filename, name in zip(DEFAULT_INSTRUCTIONS_FILENAMES, names):
+        for filename, name in zip(filenames, names):
             snapshot = _read_one(directory / filename, exec_env)
             if snapshot is not None:
                 found.append(InstructionsSnapshot(name=name, text=snapshot.text))
@@ -177,6 +200,7 @@ def build_instructions_discovery(
     workspace: WorkspaceRoot,
     snapshots: MutableMapping[str, InstructionsSnapshot],
     *,
+    kit: InstructionsKit,
     exec_env: Optional[ExecEnv] = None,
 ) -> Callable[[Task, ToolCall, ToolResult], list[ContextContentRecordedPayload]]:
     """The post-tool content-discovery seam for the instructions kind.
@@ -209,7 +233,11 @@ def build_instructions_discovery(
         active = task.state.active_content.get(INSTRUCTIONS_KIND, ())
         payloads: list[ContextContentRecordedPayload] = []
         for snapshot in discover_instructions(
-            workspace.root, resolved, active=tuple(active), exec_env=exec_env
+            workspace.root,
+            resolved,
+            filenames=kit.filenames,
+            active=tuple(active),
+            exec_env=exec_env,
         ):
             snapshots[snapshot.name] = snapshot
             payloads.append(
@@ -217,7 +245,7 @@ def build_instructions_discovery(
                     kind=INSTRUCTIONS_KIND,
                     name=snapshot.name,
                     version=INSTRUCTIONS_VERSION,
-                    content_hash=instructions_content_hash(snapshot),
+                    content_hash=kit.content_hash(snapshot),
                     policy=INSTRUCTIONS_DRIFT_POLICY,
                 )
             )
@@ -264,16 +292,17 @@ def record_instructions(
     task: Task,
     *,
     snapshot: Optional[InstructionsSnapshot],
+    kit: InstructionsKit,
     lease_id: Optional[str] = None,
     trace_id: Optional[str] = None,
 ) -> Task:
     """Pre-loop activation of the instructions resident — write-side only.
 
-    Emits one ``ContextContentRecorded`` carrying the content
-    fingerprint (:func:`instructions_content_hash` — same function the
-    kind spec's ``hashes`` resolver uses, so the recorded fingerprint and
-    the composed bytes share one source of truth) and converges live state
-    through ``apply_event``, exactly like the engine-side provenance helpers.
+    Emits one ``ContextContentRecorded`` carrying the content fingerprint
+    (``kit.content_hash`` — the same injected kit whose ``content_kind_from``
+    the composer renders from, so the recorded fingerprint and the composed
+    bytes share one source of truth) and converges live state through
+    ``apply_event``, exactly like the engine-side provenance helpers.
 
     ``snapshot is None`` is a no-op (unconfigured workspace leaves
     the ledger untouched), and re-recording an already-active
@@ -291,7 +320,7 @@ def record_instructions(
             kind=INSTRUCTIONS_KIND,
             name=snapshot.name,
             version=INSTRUCTIONS_VERSION,
-            content_hash=instructions_content_hash(snapshot),
+            content_hash=kit.content_hash(snapshot),
             policy=INSTRUCTIONS_DRIFT_POLICY,
         ),
         lease_id=lease_id,

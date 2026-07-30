@@ -42,19 +42,18 @@ from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
 from noeta.context.composer import ThreeSegmentComposer
 from noeta.context.content_channel import ContentChannelRegistry, ContentKindSpec
 from noeta.context.reminders import ReminderRegistry, ReminderSpec
-from noeta.context.environment import EnvironmentSnapshot, environment_content_kind
-from noeta.context.instructions import (
-    InstructionsSnapshot,
-    instructions_content_kind_from,
-)
-from noeta.context.memory import MemoryEntries, memory_content_kind
+from noeta.context.environment import EnvironmentSnapshot
+from noeta.context.instructions import InstructionsSnapshot
+from noeta.context.memory import MemoryEntries
 from noeta.core.hooks import HookManager
-from noeta.execution.environment import load_environment
+from noeta.execution.environment import EnvironmentKit, load_environment
 from noeta.execution.instructions import (
+    InstructionsKit,
     build_instructions_discovery,
     build_instructions_preloader,
     load_instructions,
 )
+from noeta.execution.memory import MemoryIndexKit
 from noeta.execution.skills import SkillsKit
 from noeta.runtime.governance import (
     Budget,
@@ -87,54 +86,7 @@ __all__ = [
     "COMPACTION_OFF",
     "SessionInputs",
     "build_session_inputs",
-    "select_provider_edit_tool",
 ]
-
-
-# ---------------------------------------------------------------------------
-# provider-mutex edit tool selection (assembly-layer only)
-# ---------------------------------------------------------------------------
-
-#: The two mutually-exclusive batch/precise edit tools whose membership is
-#: decided at assembly time by the bound model's vendor family. Both live in
-#: the built-in catalog (and in the ``main`` / ``general-purpose`` whitelist),
-#: but exactly one ever reaches a live tool set so the model sees a single,
-#: provider-appropriate editing primitive.
-_ANTHROPIC_EDIT_TOOL = "edit"
-_OPENAI_EDIT_TOOL = "apply_patch"
-
-
-def select_provider_edit_tool(family: Optional[str]) -> dict[str, None]:
-    """Return the edit-tool name(s) to **drop** for the bound model's ``family``.
-
-    The provider difference (Anthropic ships ``edit``, OpenAI /
-    GPT ships ``apply_patch``) is absorbed at the assembly layer — it is NOT a
-    tool field and NOT a prompt instruction. This helper maps the model's vendor
-    family to the set of edit tools that must be removed from the freshly-built
-    fs pack:
-
-    * an **Anthropic** model drops ``apply_patch`` (keeps ``edit``);
-    * an **OpenAI / GPT** model drops ``edit`` (keeps ``apply_patch``);
-    * an **unrecognised** model (``None`` family — test/stub sentinel,
-      uncatalogued id) drops nothing — both stay so existing recordings resume
-      byte-equal.
-
-    Microkernel M2: the model→family judgment lives in the ``providers``
-    built-in's catalog (``provider_family``); the SDK host resolves it and
-    passes the family through ``build_session_inputs(provider_family=…)`` —
-    the kernel keeps only this family→drop mapping (its own assembly-layer
-    vocabulary: the two tool names). A kernel-alone caller that injects no
-    family gets the no-op filter, which is exactly the no-catalog semantic.
-
-    The return value is a ``{name: None}`` mapping (a cheap set-with-stable-
-    iteration) the caller pops out of the tool dict; ``None`` family ⇒ empty
-    mapping ⇒ no-op filter.
-    """
-    if family == "anthropic":
-        return {_OPENAI_EDIT_TOOL: None}
-    if family == "openai":
-        return {_ANTHROPIC_EDIT_TOOL: None}
-    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -542,6 +494,12 @@ class _BuildSpec:
     #: ``_stage_fs_pack``. ``None`` (kernel-alone / stub) drops neither edit
     #: tool — the documented no-catalog semantic, NOT a silent fallback.
     provider_family: Optional[str] = None
+    #: family → edit-tool names to DROP from the freshly-built fs pack
+    #: (phase 2c): the mutex *table* is product knowledge and ships with the
+    #: fs built-in (``PROVIDER_EDIT_TOOL_MUTEX``), resolved by the SDK host
+    #: and injected here; the kernel applies it mechanically. Empty ⇒ no-op
+    #: (kernel-alone keeps both edit tools, the no-catalog semantic).
+    edit_tool_mutex: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     #: Loader-resolved memory kit factory (microkernel M3, D2):
     #: ``noeta.builtins.memory.impl:build_memory_pack``, resolved by the SDK
     #: host and injected here. ``None`` fails loudly at the memory stage when
@@ -565,6 +523,22 @@ class _BuildSpec:
     #: fault: the ``skills`` built-in is optional, so the skills stage no-ops
     #: and the session has no skills at all (see :func:`_stage_skills`).
     skills_factory: Optional[SkillsFactory] = None
+    #: Injected memory-index kit (phase 2c):
+    #: ``noeta.builtins.memory.impl:build_memory_index_kit``. Carries the
+    #: index renderer/hash/kind factory. ``None`` fails loudly at registry
+    #: build when ``memory_enabled`` — the kernel ships no index prose.
+    memory_index_kit: Optional[MemoryIndexKit] = None
+    #: Injected instructions kit (phase 2c):
+    #: ``noeta.builtins.workspace.impl:build_instructions_kit``. Carries the
+    #: tag renderer/hash/kind factory + the candidate-filename convention.
+    #: ``None`` fails loudly when instructions are enabled or discovery is on.
+    instructions_kit: Optional[InstructionsKit] = None
+    #: Injected environment kit (phase 2c):
+    #: ``noeta.builtins.workspace.impl:build_environment_kit``. Carries the
+    #: env-block renderer/hash/kind factory. The environment stage is always
+    #: on (a workspace always exists), so this kit is effectively required —
+    #: ``None`` fails loudly at registry build.
+    environment_kit: Optional[EnvironmentKit] = None
 
 
 @dataclass(slots=True)
@@ -659,12 +633,13 @@ def _stage_fs_pack(spec: _BuildSpec, asm: _ToolAssembly) -> None:
     # prompt, not in the AgentSpec whitelist (so fingerprints never drift on a
     # model swap). The bound model's vendor family — resolved by the SDK host
     # from the providers built-in's catalog and injected as
-    # ``provider_family`` (microkernel M2) — decides which of the two
-    # mutually-exclusive edit tools survives; an unrecognised model (``None``
-    # family, e.g. any kernel-alone / stub build) drops neither (both stay →
-    # existing recordings resume byte-equal).
-    for _drop in select_provider_edit_tool(spec.provider_family):
-        full_pack.pop(_drop, None)
+    # ``provider_family`` (microkernel M2) — keys the injected
+    # ``edit_tool_mutex`` table (phase 2c: the fs built-in owns the names);
+    # an unrecognised model (``None`` family, e.g. any kernel-alone / stub
+    # build) drops nothing (both stay → existing recordings resume byte-equal).
+    if spec.provider_family is not None:
+        for _drop in spec.edit_tool_mutex.get(spec.provider_family, ()):
+            full_pack.pop(_drop, None)
     asm.tools = {
         name: tool
         for name, tool in full_pack.items()
@@ -722,8 +697,15 @@ def _stage_instructions(spec: _BuildSpec, asm: _ToolAssembly) -> None:
     """
     if not spec.instructions_enabled:
         return
+    if spec.instructions_kit is None:
+        raise RuntimeError(
+            "instructions_enabled=True requires an injected instructions_kit "
+            "(the workspace built-in's build_instructions_kit — phase 2c); "
+            "the kernel ships no filename convention or renderer of its own."
+        )
     asm.instructions_snapshot = load_instructions(
         spec.workspace_dir,
+        filenames=spec.instructions_kit.filenames,
         override_path=spec.instructions_file,
         exec_env=spec.exec_env,
     )
@@ -1018,7 +1000,13 @@ def _build_content_registry(
     if spec.memory_enabled:
         # The second resident: renders the index snapshot
         # into semi_stable when activated; policy "evolving".
-        content_kinds.append(memory_content_kind(asm.memory_entries))
+        if spec.memory_index_kit is None:
+            raise RuntimeError(
+                "memory_enabled=True requires an injected memory_index_kit "
+                "(the memory built-in's build_memory_index_kit — phase 2c); "
+                "the kernel ships no index renderer of its own."
+            )
+        content_kinds.append(spec.memory_index_kit.content_kind(asm.memory_entries))
     # Instructions (third resident): append AFTER memory so existing
     # semi_stable byte layout is unchanged for memory-only sessions.
     # Registered when a root snapshot loaded (rendering byte-identical to the
@@ -1027,8 +1015,14 @@ def _build_content_registry(
     # discovered activation, zero footprint). Neither → no kind registered,
     # same as never adding the feature.
     if asm.instructions_snapshots or spec.instructions_discovery:
+        if spec.instructions_kit is None:
+            raise RuntimeError(
+                "instructions require an injected instructions_kit "
+                "(the workspace built-in's build_instructions_kit — phase 2c); "
+                "the kernel ships no instructions renderer of its own."
+            )
         content_kinds.append(
-            instructions_content_kind_from(asm.instructions_snapshots)
+            spec.instructions_kit.content_kind_from(asm.instructions_snapshots)
         )
     # Environment (fourth resident): append LAST so the semi_stable byte
     # layout is unchanged for sessions that never activate it. Always
@@ -1037,8 +1031,14 @@ def _build_content_registry(
     # it, so existing recordings without an environment event resume
     # byte-equal.
     if asm.environment_snapshot is not None:
+        if spec.environment_kit is None:
+            raise RuntimeError(
+                "the environment resident requires an injected environment_kit "
+                "(the workspace built-in's build_environment_kit — phase 2c); "
+                "the kernel ships no environment renderer of its own."
+            )
         content_kinds.append(
-            environment_content_kind(asm.environment_snapshot)
+            spec.environment_kit.content_kind(asm.environment_snapshot)
         )
     # SDK ``Options.content_channels`` extension point (T3): user-registered
     # ContentKindSpec channels append LAST, after every built-in resident, so
@@ -1260,6 +1260,10 @@ def build_session_inputs(
     #: by the edit-tool mutex. ``None`` ⇒ both edit tools stay (the documented
     #: unrecognised-model semantic — byte-identical for stub/test builds).
     provider_family: Optional[str] = None,
+    #: family → edit-tool names to drop (phase 2c): the fs built-in's
+    #: ``PROVIDER_EDIT_TOOL_MUTEX``, resolved by the SDK host. ``None``/empty
+    #: ⇒ no-op (kernel-alone keeps both edit tools).
+    edit_tool_mutex: Optional[Mapping[str, tuple[str, ...]]] = None,
     #: Loader-resolved memory kit factory (microkernel M3, D2): the
     #: ``memory`` built-in plugin's ``build_memory_pack``, resolved by the
     #: SDK host and injected here; ``None`` fails loudly when memory is on.
@@ -1285,6 +1289,14 @@ def build_session_inputs(
     #: policy construction unless ``policy_factory_override`` replaces the
     #: default outright.
     default_policy_factory: Optional[PolicyFactoryBuilder] = None,
+    #: Injected resident kits (phase 2c): the memory built-in's
+    #: ``build_memory_index_kit`` and the workspace built-in's
+    #: ``build_instructions_kit`` / ``build_environment_kit``. Each fails
+    #: loudly when its resident is wired without it — the kernel ships no
+    #: resident prose, hash rule, or filename convention.
+    memory_index_kit: Optional[MemoryIndexKit] = None,
+    instructions_kit: Optional[InstructionsKit] = None,
+    environment_kit: Optional[EnvironmentKit] = None,
 ) -> SessionInputs:
     """Build the generic-session live/resume inputs from explicit
     operator-supplied pieces.
@@ -1378,7 +1390,11 @@ def build_session_inputs(
         base_reminders=base_reminders,
         guards_factory=guards_factory,
         provider_family=provider_family,
+        edit_tool_mutex=dict(edit_tool_mutex) if edit_tool_mutex else {},
         memory_factory=memory_factory,
+        memory_index_kit=memory_index_kit,
+        instructions_kit=instructions_kit,
+        environment_kit=environment_kit,
         browser_tools_factory=browser_tools_factory,
         app_tools_factory=app_tools_factory,
         skills_factory=skills_factory,
@@ -1490,8 +1506,17 @@ def build_session_inputs(
     content_discovery = None
     content_preloader = None
     if instructions_discovery:
+        if instructions_kit is None:
+            raise RuntimeError(
+                "instructions_discovery=True requires an injected "
+                "instructions_kit (the workspace built-in's "
+                "build_instructions_kit — phase 2c)."
+            )
         content_discovery = build_instructions_discovery(
-            asm.workspace, asm.instructions_snapshots, exec_env=exec_env
+            asm.workspace,
+            asm.instructions_snapshots,
+            kit=instructions_kit,
+            exec_env=exec_env
         )
         content_preloader = build_instructions_preloader(
             workspace_dir, asm.instructions_snapshots, exec_env=exec_env

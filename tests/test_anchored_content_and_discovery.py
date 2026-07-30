@@ -26,6 +26,10 @@ from noeta.context.content_channel import (
     ContentKindSpec,
 )
 from noeta.core.fold import fold
+from noeta.builtins.workspace.impl import (
+    DEFAULT_INSTRUCTIONS_FILENAMES as _FILENAMES,
+    build_instructions_kit,
+)
 from noeta.execution.instructions import (
     build_instructions_discovery,
     discover_instructions,
@@ -295,7 +299,7 @@ def test_discovery_walks_ancestors_shallowest_first(tmp_path: Path) -> None:
     ws = _ws(tmp_path)
     (ws / "src" / "AGENTS.md").write_text("src rules")
     (ws / "src" / "pkg" / "AGENTS.md").write_text("pkg rules")
-    found = discover_instructions(ws, ws / "src" / "pkg" / "x.py")
+    found = discover_instructions(ws, ws / "src" / "pkg" / "x.py", filenames=_FILENAMES)
     assert [s.name for s in found] == ["src/AGENTS.md", "src/pkg/AGENTS.md"]
     assert found[0].text == "src rules"
 
@@ -306,7 +310,7 @@ def test_discovery_prefers_noeta_md_and_skips_empty(tmp_path: Path) -> None:
     (ws / "src" / "AGENTS.md").write_text("agents loses")
     (ws / "src" / "pkg" / "NOETA.md").write_text("   \n")  # empty → falls over
     (ws / "src" / "pkg" / "AGENTS.md").write_text("agents wins here")
-    found = discover_instructions(ws, ws / "src" / "pkg" / "x.py")
+    found = discover_instructions(ws, ws / "src" / "pkg" / "x.py", filenames=_FILENAMES)
     assert [(s.name, s.text) for s in found] == [
         ("src/NOETA.md", "noeta wins"),
         ("src/pkg/AGENTS.md", "agents wins here"),
@@ -319,7 +323,10 @@ def test_discovery_skips_active_directories_and_root(tmp_path: Path) -> None:
     (ws / "src" / "AGENTS.md").write_text("src rules")
     (ws / "src" / "pkg" / "AGENTS.md").write_text("pkg rules")
     found = discover_instructions(
-        ws, ws / "src" / "pkg" / "x.py", active=("src/AGENTS.md",)
+        ws,
+        ws / "src" / "pkg" / "x.py",
+        filenames=_FILENAMES,
+        active=("src/AGENTS.md",),
     )
     assert [s.name for s in found] == ["src/pkg/AGENTS.md"]
 
@@ -329,13 +336,13 @@ def test_discovery_outside_workspace_yields_nothing(tmp_path: Path) -> None:
     other = tmp_path / "other"
     other.mkdir()
     (other / "AGENTS.md").write_text("must not load")
-    assert discover_instructions(ws, other / "x.py") == []
+    assert discover_instructions(ws, other / "x.py", filenames=_FILENAMES) == []
 
 
 def test_discovery_root_level_file_yields_nothing(tmp_path: Path) -> None:
     ws = _ws(tmp_path)
     (ws / "AGENTS.md").write_text("root")
-    assert discover_instructions(ws, ws / "x.py") == []
+    assert discover_instructions(ws, ws / "x.py", filenames=_FILENAMES) == []
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +357,7 @@ def test_discovery_callable_fills_mapping_and_builds_payloads(
     (ws / "src" / "AGENTS.md").write_text("src rules")
     snapshots: dict = {}
     discover = build_instructions_discovery(
-        WorkspaceRoot.from_path(ws), snapshots
+        WorkspaceRoot.from_path(ws), snapshots, kit=build_instructions_kit()
     )
     task = Task(task_id="t1")
     call = ToolCall(tool_name="read", arguments={"path": "src/pkg/x.py"}, call_id="c")
@@ -372,7 +379,7 @@ def test_discovery_callable_ignores_non_read_failures_and_outside(
     (outside / "AGENTS.md").write_text("outside")
     snapshots: dict = {}
     discover = build_instructions_discovery(
-        WorkspaceRoot.from_path(ws), snapshots
+        WorkspaceRoot.from_path(ws), snapshots, kit=build_instructions_kit()
     )
     task = Task(task_id="t1")
     read_call = ToolCall(

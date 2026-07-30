@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import importlib
 from dataclasses import MISSING, fields
-from typing import Any, Callable, Optional, Protocol, cast
+from typing import Any, Callable, Mapping, Optional, Protocol, cast
 
 from noeta.agent.spec import ComponentRef, ToolRef
 from noeta.context.reminders import ReminderSpec
@@ -35,13 +35,18 @@ __all__ = [
     "catalog_price",
     "default_app_tools_factory",
     "default_browser_tools_factory",
+    "default_environment_kit",
     "default_guards_factory",
+    "default_instructions_kit",
     "default_memory_factory",
+    "default_memory_index_kit",
     "default_policy_factory",
     "default_reminder_specs",
+    "default_shell_rules",
     "default_skills_kit_factory",
     "default_tool_factories",
     "derive_compaction_config",
+    "edit_tool_mutex",
     "mcp_impl",
     "memory_impl",
     "provider_family",
@@ -148,6 +153,64 @@ def provider_family(model: str) -> Optional[str]:
     """
     family: Optional[str] = _catalog().provider_family(model)
     return family
+
+
+def default_memory_index_kit() -> Any:
+    """The memory built-in's index kit (phase 2c).
+
+    Renderer prose + hash rule + ``ContentKindSpec`` factory for the memory
+    index resident, injected as the kernel builder's ``memory_index_kit``
+    and consumed by the driver's pre-loop ``record_memory_index``.
+    """
+    build = _resolve_ref("noeta.builtins.memory.impl:build_memory_index_kit")
+    return build()
+
+
+def default_environment_kit() -> Any:
+    """The workspace built-in's environment kit (phase 2c)."""
+    build = _resolve_ref(
+        "noeta.builtins.workspace.impl:build_environment_kit"
+    )
+    return build()
+
+
+def default_instructions_kit() -> Any:
+    """The workspace built-in's instructions kit (phase 2c).
+
+    Carries the tag renderer / hash rule / kind factory AND the
+    ``NOETA.md``/``AGENTS.md`` filename convention the kernel loader and
+    the discovery hook walk.
+    """
+    build = _resolve_ref(
+        "noeta.builtins.workspace.impl:build_instructions_kit"
+    )
+    return build()
+
+
+def default_shell_rules() -> tuple[Any, ...]:
+    """The fs built-in's curated shell allowlist (phase 2c).
+
+    The host's approval predicate composes its effective allowlist from this
+    base + host config + the project's remembered rules — the same table the
+    ``shell_run`` tool enforces, so the two can never drift.
+    """
+    rules: tuple[Any, ...] = _resolve_ref(
+        "noeta.builtins.fs.impl.shell_rules:DEFAULT_SHELL_RULES"
+    )
+    return rules
+
+
+def edit_tool_mutex() -> Mapping[str, tuple[str, ...]]:
+    """family → edit-tool names to drop (the fs built-in's mutex table).
+
+    Phase 2c: the ``{anthropic: apply_patch, openai: edit}`` knowledge ships
+    with the fs built-in (it owns both tools); the kernel builder consumes it
+    only as the ``edit_tool_mutex`` injection.
+    """
+    table: Mapping[str, tuple[str, ...]] = _resolve_ref(
+        "noeta.builtins.fs.impl:PROVIDER_EDIT_TOOL_MUTEX"
+    )
+    return table
 
 
 def catalog_price(model: str, usage: Usage) -> float:

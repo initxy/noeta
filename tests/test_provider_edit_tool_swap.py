@@ -8,8 +8,8 @@ the AgentSpec whitelist. An Anthropic model's live tool set carries ``edit``
 
 Microkernel M2: the model→family judgment lives in the providers built-in's
 catalog and reaches the kernel pre-resolved (``provider_family=`` — mirrored
-here by ``_tool_names``); ``select_provider_edit_tool`` maps the FAMILY (not
-the model) to the drop set.
+here by ``_tool_names``); phase 2c: the FAMILY→drop-set table is the fs
+built-in's ``PROVIDER_EDIT_TOOL_MUTEX``, injected as ``edit_tool_mutex=``.
 
 Switching the model must change only the tool set, never the agent definition
 or the system prompt.
@@ -23,11 +23,11 @@ import pytest
 
 from tests._session_inputs import default_factory_kwargs
 from noeta.client.options import AgentDefinition, Options, compile_options
+from noeta.builtins.fs.impl import PROVIDER_EDIT_TOOL_MUTEX
 from noeta.builtins.providers.impl.catalog import provider_family
 from noeta.execution.builder import (
     COMPACTION_OFF,
     build_session_inputs,
-    select_provider_edit_tool,
 )
 from noeta.runtime.governance import Budget
 from noeta.storage.memory import InMemoryContentStore
@@ -54,6 +54,7 @@ def _tool_names(*, model: str, allowed: frozenset[str] = _FULL_EDIT_TOOLS) -> se
         # The SDK host resolves the family from the catalog and injects it
         # (microkernel M2) — mirror that wiring here.
         provider_family=provider_family(model),
+        edit_tool_mutex=PROVIDER_EDIT_TOOL_MUTEX,
         compaction=COMPACTION_OFF,
         budget=Budget(),
     )
@@ -91,28 +92,30 @@ def test_provider_family_classification(model: str, family: str | None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2. select_provider_edit_tool — which name(s) to DROP
+# 2. PROVIDER_EDIT_TOOL_MUTEX — which name(s) to DROP (fs builtin's table,
+#    phase 2c: the kernel builder consumes it only as an injection)
 # ---------------------------------------------------------------------------
 
 
-def test_select_drops_apply_patch_for_anthropic() -> None:
-    assert set(select_provider_edit_tool("anthropic")) == {"apply_patch"}
-    assert set(select_provider_edit_tool(provider_family("opus"))) == {"apply_patch"}
+def test_mutex_drops_apply_patch_for_anthropic() -> None:
+    assert PROVIDER_EDIT_TOOL_MUTEX["anthropic"] == ("apply_patch",)
+    assert PROVIDER_EDIT_TOOL_MUTEX[provider_family("opus")] == ("apply_patch",)
 
 
-def test_select_drops_edit_for_openai() -> None:
-    assert set(select_provider_edit_tool("openai")) == {"edit"}
-    assert set(
-        select_provider_edit_tool(provider_family("gpt-5.4-2026-03-05"))
-    ) == {"edit"}
+def test_mutex_drops_edit_for_openai() -> None:
+    assert PROVIDER_EDIT_TOOL_MUTEX["openai"] == ("edit",)
+    assert PROVIDER_EDIT_TOOL_MUTEX[
+        provider_family("gpt-5.4-2026-03-05")
+    ] == ("edit",)
 
 
-def test_select_drops_nothing_for_unknown_family() -> None:
-    # ``None`` family = uncatalogued model / kernel-alone build; an unknown
-    # family string is equally a no-op (the mapping only knows the two).
+def test_mutex_knows_nothing_for_unknown_family() -> None:
+    # ``None`` family = uncatalogued model / kernel-alone build; the table
+    # only knows the two families, and the builder skips the drop entirely
+    # for a ``None`` family.
     for model in ("gpt-test", "stub-model", "test-model", "claude-sonnet-4-5"):
-        assert select_provider_edit_tool(provider_family(model)) == {}
-    assert select_provider_edit_tool(None) == {}
+        assert provider_family(model) not in PROVIDER_EDIT_TOOL_MUTEX
+    assert set(PROVIDER_EDIT_TOOL_MUTEX) == {"anthropic", "openai"}
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +217,7 @@ def test_model_swap_does_not_touch_agent_definition_or_prompt() -> None:
             content_store=InMemoryContentStore(),
             model=model,
             provider_family=provider_family(model),
+            edit_tool_mutex=PROVIDER_EDIT_TOOL_MUTEX,
             compaction=COMPACTION_OFF,
             budget=Budget(),
         )
@@ -226,18 +230,20 @@ def test_model_swap_does_not_touch_agent_definition_or_prompt() -> None:
 
 
 def test_apply_patch_description_loads_from_resource() -> None:
-    from noeta.tools.descriptions import load_tool_description
+    from noeta.protocols.resources import load_markdown
     from noeta.builtins.fs.impl import ApplyPatchTool
 
-    assert ApplyPatchTool.description == load_tool_description("apply_patch")
+    assert ApplyPatchTool.description == load_markdown(
+        "noeta.builtins.fs.impl", "apply_patch"
+    )
 
 
 def test_apply_patch_description_is_cc_short_form() -> None:
     # the four-section template was dropped for Claude Code's terse
     # short-form (a one-line summary + bullets).
-    from noeta.tools.descriptions import load_tool_description
+    from noeta.protocols.resources import load_markdown
 
-    text = load_tool_description("apply_patch")
+    text = load_markdown("noeta.builtins.fs.impl", "apply_patch")
     first_line = text.strip().splitlines()[0]
     assert first_line and not first_line.startswith("#")
     assert "## What it does" not in text

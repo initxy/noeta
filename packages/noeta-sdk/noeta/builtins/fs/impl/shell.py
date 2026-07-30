@@ -43,24 +43,23 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.runtime._env import scrub_env
 from noeta.runtime.exec_env import ExecEnv, LocalExecEnv
+from noeta.builtins.fs.impl.shell_rules import DEFAULT_SHELL_RULES
 from noeta.runtime.shell_policy import (
     DEFAULT_SHELL_OUTPUT_CAP,
     DEFAULT_SHELL_TIMEOUT_S,
     ShellMode,
-    _AllowRule,
-    _DEFAULT_RULES,
+    AllowRule,
     _has_shell_meta,
     _matches_allowlist,
     _parse_argv,
     _resolve_timeout,
-    _SHELL_META_CHARS,
     _STDERR_TAIL_BYTES,
     _STDOUT_TAIL_BYTES,
 )
 from noeta.runtime.subproc import _RunOutcome, tail_bytes
 from noeta.runtime.workspace import WorkspaceRoot
 from noeta.tools._invocation import require_str
-from noeta.tools.descriptions import load_tool_description
+from noeta.protocols.resources import load_markdown
 from noeta.tools._limits import (
     INLINE_CONTENT_MAX_BYTES,
     SUMMARY_EMBED_MAX_BYTES,
@@ -108,7 +107,9 @@ class ShellRunTool:
     mode: ShellMode = ShellMode.ALLOWLIST
     timeout_s: int = DEFAULT_SHELL_TIMEOUT_S
     output_cap: int = DEFAULT_SHELL_OUTPUT_CAP
-    rules: tuple[_AllowRule, ...] = field(default_factory=lambda: _DEFAULT_RULES)
+    rules: tuple[AllowRule, ...] = field(
+        default_factory=lambda: DEFAULT_SHELL_RULES
+    )
     runner: Optional[Callable[..., subprocess.CompletedProcess[bytes]]] = None
     #: execution backend the foreground command runs through — the local
     #: host (default) or a sandbox container. Background spawns still go
@@ -117,7 +118,7 @@ class ShellRunTool:
     name: str = "shell_run"
     # description lives in an independent text resource
     # (descriptions/shell_run.md, four-section shape), not a Python string.
-    description: str = field(default=load_tool_description("shell_run"))
+    description: str = field(default=load_markdown(__package__, "shell_run"))
     # PRD D2: high-risk so PermissionGuard treats this as privileged.
     risk_level: str = "high"
     input_schema: dict[str, Any] = field(
@@ -315,7 +316,7 @@ class ShellPollTool:
     name: str = "shell_poll"
     # description lives in an independent text resource
     # (descriptions/shell_poll.md, four-section shape), not a Python string.
-    description: str = field(default=load_tool_description("shell_poll"))
+    description: str = field(default=load_markdown(__package__, "shell_poll"))
     risk_level: str = "low"
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
@@ -374,7 +375,7 @@ class ShellKillTool:
     name: str = "shell_kill"
     # description lives in an independent text resource
     # (descriptions/shell_kill.md, four-section shape), not a Python string.
-    description: str = field(default=load_tool_description("shell_kill"))
+    description: str = field(default=load_markdown(__package__, "shell_kill"))
     # high-risk so PermissionGuard treats it as privileged (an
     # operator policy can deny / gate it, same as shell_run).
     risk_level: str = "high"

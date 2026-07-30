@@ -124,6 +124,7 @@ _INERT_BUILTIN_ACTIVATIONS: frozenset[str] = frozenset(
         "sandbox",
         "skills",
         "web",
+        "workspace",
     }
 )
 

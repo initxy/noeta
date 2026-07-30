@@ -119,19 +119,9 @@ __all__ = [
     "NotResumableError",
     "ProviderSelectorError",
     "SeededTurn",
-    "STUB_MODEL_ALLOWLIST",
     "TaskAlreadyTerminalError",
     "multi_turn_policy_wrapper",
 ]
-
-
-#: Deployment model-selector allowlist (D2). The driver validates
-#: ``selector ∈ principal.allowed_models ∩ this`` before binding — the
-#: *deployment* half of "who may use which model" (the principal half is
-#: :attr:`noeta.protocols.values.Principal.allowed_models`). Mirrors Claude
-#: Code's ``/model`` names. Kept under the historical name so issue-05
-#: callers/tests keep importing it.
-STUB_MODEL_ALLOWLIST: frozenset[str] = frozenset({"opus", "sonnet", "haiku"})
 
 
 class ModelSelectorError(CodedError):
@@ -463,7 +453,7 @@ class InteractionDriver:
         worker_id: str = "noeta-interaction",
         lease_seconds: float = 600.0,
         principal: Principal = LOCAL_PRINCIPAL,
-        model_allowlist: frozenset[str] = STUB_MODEL_ALLOWLIST,
+        model_allowlist: Optional[frozenset[str]] = None,
         default_model: Optional[str] = None,
         alias_resolver: Optional[Callable[[str], str]] = None,
     ) -> None:
@@ -474,6 +464,10 @@ class InteractionDriver:
         #: D2/D3). CLI = ⊤ local principal; web = authenticated session.
         self._principal = principal
         #: Deployment allowlist — the *other* half of the selector check.
+        #: An **injection** (phase 2c): the selector-alias table is product
+        #: knowledge (the SDK client passes its default or the host's
+        #: ``allowed_models``). ``None`` ⇒ no deployment bound — selectors
+        #: are gated by the principal alone (the kernel-alone semantic).
         self._model_allowlist = model_allowlist
         #: Host-fixed model bound when no selector is given (the deployment's
         #: own choice — not caller input). Defaults to the resolver's
@@ -769,7 +763,12 @@ class InteractionDriver:
                 recall_provider, memory_entries = memory
                 record_memory_index(
                     host.event_log, host.content_store, task,
-                    entries=memory_entries, lease_id=lease.lease_id,
+                    entries=memory_entries,
+                    # The host's memoized kit (phase 2c) — the same object
+                    # the builder's registry renders from, so the recorded
+                    # fingerprint equals the composed bytes by construction.
+                    kit=host.memory_index_kit,
+                    lease_id=lease.lease_id,
                 )
         # Unified ``@`` mention snapshots (workspace files + MCP
         # static resources, read host-side at send time) seed FIRST, each as its
@@ -866,11 +865,15 @@ class InteractionDriver:
             environment_snapshot, instructions_snapshot = snapshots(workspace_dir)
             record_instructions(
                 host.event_log, host.content_store, task,
-                snapshot=instructions_snapshot, lease_id=lease.lease_id,
+                snapshot=instructions_snapshot,
+                kit=host.instructions_kit,
+                lease_id=lease.lease_id,
             )
             record_environment(
                 host.event_log, host.content_store, task,
-                snapshot=environment_snapshot, lease_id=lease.lease_id,
+                snapshot=environment_snapshot,
+                kit=host.environment_kit,
+                lease_id=lease.lease_id,
             )
         return SeededTurn(task_id=task.task_id, lease=lease, prelude=None)
 
@@ -2204,19 +2207,25 @@ class InteractionDriver:
         if selector is None:
             return self._default_model
         allowed = self._authorized_models()
-        if selector not in allowed:
+        if allowed is not None and selector not in allowed:
             raise ModelSelectorError(
                 selector=selector, allowed=sorted(allowed)
             )
         return self._resolve_alias(selector)
 
-    def _authorized_models(self) -> frozenset[str]:
+    def _authorized_models(self) -> Optional[frozenset[str]]:
         """The selectors this driver may bind = principal ∩ allowlist.
 
         A ⊤ principal (``allows_any``) contributes no upper bound, so the
         intersection collapses to the deployment allowlist; otherwise it is
-        the literal set intersection.
+        the literal set intersection. ``None`` ⇒ unbounded: no deployment
+        allowlist was injected AND the principal is ⊤ (kernel-alone — no
+        catalog, no alias table, nothing to bound selectors against).
         """
+        if self._model_allowlist is None:
+            if self._principal.allows_any:
+                return None
+            return self._principal.allowed_models
         if self._principal.allows_any:
             return self._model_allowlist
         return self._principal.allowed_models & self._model_allowlist

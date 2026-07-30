@@ -42,6 +42,7 @@ from noeta.builtins.reminders import MANIFEST as _REMINDERS
 from noeta.builtins.sandbox import MANIFEST as _SANDBOX
 from noeta.builtins.skills import MANIFEST as _SKILLS
 from noeta.builtins.web import MANIFEST as _WEB
+from noeta.builtins.workspace import MANIFEST as _WORKSPACE
 from noeta.client.options import BUILTIN_ACTIVATIONS
 from noeta.client.plugin_manifest import PluginManifest
 
@@ -69,6 +70,7 @@ _BUILTINS: tuple[PluginManifest, ...] = (
     _PROVIDERS,
     _SANDBOX,
     _PRESETS,
+    _WORKSPACE,
 )
 
 #: Every built-in plugin's name, for enable/disable bookkeeping and the
