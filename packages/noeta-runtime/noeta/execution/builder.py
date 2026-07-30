@@ -560,9 +560,10 @@ class _BuildSpec:
     app_tools_factory: Optional[AppToolsFactory] = None
     #: Loader-resolved skills kit factory (microkernel phase 2a):
     #: ``noeta.builtins.skills.impl:build_skills_kit``, resolved by the SDK
-    #: host and injected here. ``None`` fails loudly at the skills stage —
-    #: the pipeline runs it unconditionally, and the kernel never imports the
-    #: indexer / script tool / grant resolver.
+    #: host and injected here. The kernel never imports the indexer / script
+    #: tool / grant resolver. ``None`` is a supported configuration, not a
+    #: fault: the ``skills`` built-in is optional, so the skills stage no-ops
+    #: and the session has no skills at all (see :func:`_stage_skills`).
     skills_factory: Optional[SkillsFactory] = None
 
 
@@ -766,14 +767,16 @@ def _stage_skills(spec: _BuildSpec, asm: _ToolAssembly) -> None:
     Issue E scripts: same single-source wiring for every construction path —
     append run_skill_script (after the agent filter) + the guard fields, so
     a script/approval recording resumes byte-equal. Default off.
+
+    No ``skills_factory`` ⇒ the stage is a NO-OP, not a fault: the ``skills``
+    built-in is optional (the host turns it off for
+    ``disabled_builtins=["skills"]``), and its empty state is well defined —
+    the assembly keeps its defaults, so no registry, no skill content kind, no
+    skill tool, and no script grants exist for the session. The other skill
+    settings on the spec (dirs, ``allow_skill_scripts``) go inert with it.
     """
     if spec.skills_factory is None:
-        raise RuntimeError(
-            "skills factory was not injected — the SDK host resolves the "
-            "skills built-in plugin through the plugin loader and passes "
-            "skills_factory (microkernel phase 2a); the kernel builder "
-            "imports no skills implementation"
-        )
+        return
     lower_skill_dirs: list[Path] = list(spec.builtin_skills_dirs)
     if spec.global_skills_dir is not None:
         lower_skill_dirs.append(spec.global_skills_dir)
@@ -799,8 +802,9 @@ def _stage_skills(spec: _BuildSpec, asm: _ToolAssembly) -> None:
 # bundled references (the renderer hands it each skill's absolute base
 # directory). ``read`` is now unfenced outright — an absolute path is read
 # where it points — so the special case dissolved into the general rule and
-# the stage was removed. ``resolve_skill_roots`` stays: the renderer still
-# needs the base directories to write that line.
+# the stage was removed — and with it ``resolve_skill_roots``, which existed
+# only to compute that fence. The renderer writes the base-directory line from
+# each description's own ``source_path.parent``, so nothing was left to keep.
 
 
 def _stage_browser(spec: _BuildSpec, asm: _ToolAssembly) -> None:
@@ -946,8 +950,10 @@ def _build_control_action_schemas(
     # Skill tool is grown only when the flag is on AND the
     # registry contains at least one indexed skill. The sorted
     # ``(name, description)`` menu is built here from the registry — single
-    # source of truth so callers never pass a divergent menu.
-    if spec.skill_invocation_enabled:
+    # source of truth so callers never pass a divergent menu. No registry at
+    # all (the ``skills`` built-in disabled) reads the same as an empty one:
+    # a capability the agent declares but the host never wired grows no tool.
+    if spec.skill_invocation_enabled and asm.registry is not None:
         skill_names = asm.registry.names()
         if skill_names:
             menu = tuple(
@@ -975,10 +981,12 @@ def _skill_menu_names(spec: _BuildSpec, asm: _ToolAssembly) -> frozenset[str]:
     """The skill-tool menu names the policy factory binds (matches the schema).
 
     Mirrors the gate in :func:`_build_control_action_schemas`: non-empty only
-    when ``skill_invocation_enabled`` AND the registry has indexed skills, so
-    the policy's ``skill_menu_names`` and the composer's skill schema agree.
+    when ``skill_invocation_enabled`` AND a registry exists AND it has indexed
+    skills, so the policy's ``skill_menu_names`` and the composer's skill
+    schema agree — including when the ``skills`` built-in is off and neither
+    grows anything.
     """
-    if spec.skill_invocation_enabled:
+    if spec.skill_invocation_enabled and asm.registry is not None:
         skill_names = asm.registry.names()
         if skill_names:
             return frozenset(skill_names)
@@ -995,13 +1003,18 @@ def _build_content_registry(
     kinds, e.g. memory, append behind it). The same registry feeds the
     composer's render rules AND the engine's generic content_hashes seam
     so the rendered content and the recorded fingerprint come from one source.
+
+    The skill kind is the first resident but no longer a required one: with
+    the ``skills`` built-in off the kit never ran, so the channel simply has
+    no skill resident and the later kinds close up behind it. That shifts the
+    semi_stable layout — which is correct and self-consistent, because a
+    session built without skills is a different configuration, and a recording
+    made WITH skills must be resumed with skills (the host passes the same
+    switch, exactly as it must for ``memory_enabled`` and the rest).
     """
-    if asm.skill_content_kind is None:
-        raise RuntimeError(
-            "skills stage did not run — the content registry needs the "
-            "skill ContentKindSpec from the injected skills kit"
-        )
-    content_kinds: list[ContentKindSpec] = [asm.skill_content_kind]
+    content_kinds: list[ContentKindSpec] = []
+    if asm.skill_content_kind is not None:
+        content_kinds.append(asm.skill_content_kind)
     if spec.memory_enabled:
         # The second resident: renders the index snapshot
         # into semi_stable when activated; policy "evolving".
@@ -1263,8 +1276,8 @@ def build_session_inputs(
     app_tools_factory: Optional[AppToolsFactory] = None,
     #: Loader-resolved skills kit factory (microkernel phase 2a): the
     #: ``skills`` built-in plugin's ``build_skills_kit``, resolved by the SDK
-    #: host and injected here; ``None`` fails loudly at the skills stage
-    #: (the pipeline runs it unconditionally).
+    #: host and injected here; ``None`` builds a session with no skills at all
+    #: (the built-in is optional — the skills stage no-ops).
     skills_factory: Optional[SkillsFactory] = None,
     #: Loader-resolved default policy factory builder (microkernel phase 2b):
     #: the ``react`` built-in plugin's ``build_react_policy_factory``,

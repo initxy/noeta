@@ -279,7 +279,18 @@ load_plugin_set(
 
 - `builtins=True` discovers the built-in catalog (`D11`); pass an iterable of
   `PluginManifest`s to inject a custom set (the testing seam). `disabled_builtins`
-  drops built-ins by name.
+  drops built-ins by name, and the disable is **recorded** on the returned set
+  (`PluginSet.disabled_builtins`) so a host can also honour it where no
+  contribution expresses it — `skills` contributes nothing per-agent, so
+  disabling it is what makes `Client` withhold the skills kit (no indexing, no
+  `skill` tool, no skill content kind). Note that absence is not a disable:
+  `builtins=False` scopes the *loaded set*, never the SDK's own capabilities.
+- `react` **cannot** be disabled — `disabled_builtins=["react"]` raises
+  `PluginError`. It supplies the default decision policy, whose identity every
+  compiled `AgentSpec` pins as `POLICY_REF ("react", "1")`; an agent with no
+  policy has no identity to compile and no parity to resume. The default brain
+  is *replaceable*, not removable: activate a plugin contributing the `policy`
+  surface and its ref takes over both the identity and the wired factory.
 - `entry_points=True` discovers the `noeta.plugins` group via
   `importlib.metadata`; an iterable of entry-point-like objects (`.name` +
   `.dist`) injects them. An entry point whose distribution ships no

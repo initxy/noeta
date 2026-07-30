@@ -53,9 +53,9 @@ from . import _frontmatter
 # read on demand with the ordinary ``read`` tool, same as Claude Code. The
 # renderer prepends a ``Base directory for this skill: <abs dir>`` line so
 # the model can resolve the body's relative references (``references/x.md``)
-# to an absolute path and ``read`` it; the read tool's containment seam is
-# widened to the skill roots at wiring time
-# (``noeta.execution.skills.resolve_skill_roots``). No resource is inlined
+# to an absolute path and ``read`` it. No containment seam is widened for
+# this any more: ``read`` is unfenced outright, so an absolute path under the
+# skill's base directory is simply read where it points. No resource is inlined
 # and no resource bytes are read here — the only addition is the skill's
 # own absolute directory string. This retired the dedicated
 # ``read_skill_resource`` tool and its body-reference manifest.
