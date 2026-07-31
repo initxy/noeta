@@ -1,4 +1,15 @@
-# Noeta
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo/noeta-logo-dark.svg">
+    <img src="docs/assets/logo/noeta-logo-light.svg" alt="Noeta — 一条事件日志 fold 成状态" width="336">
+  </picture>
+  <p>
+    <a href="https://pypi.org/project/noeta-sdk/"><img alt="PyPI" src="https://img.shields.io/pypi/v/noeta-sdk"></a>
+    <a href="https://github.com/initxy/noeta/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/initxy/noeta/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+    <a href="https://pypi.org/project/noeta-sdk/"><img alt="Python versions" src="https://img.shields.io/pypi/pyversions/noeta-sdk"></a>
+    <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
+  </p>
+</div>
 
 **一个 Python 运行时 + SDK：agent 的整段运行就是一条可 replay 的事件账本。** Noeta 把长程 agent 托管在你自己的进程里 —— 没有 server，没有 HTTP 跳转 —— 并把每一次模型往返、每一次工具调用、每一次审批都记成事件。状态从不攥在内存里，它是 `fold(events)`，由日志重新算出来。中途杀掉进程，另一个 worker 会从它停下的那一点精确恢复，且精确一次。内核在结构上被禁止 import 任何厂商 SDK，所以 Anthropic、OpenAI 兼容、Responses 这几种模型之间只隔着一行接线。
 

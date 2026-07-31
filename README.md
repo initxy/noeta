@@ -1,4 +1,15 @@
-# Noeta
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo/noeta-logo-dark.svg">
+    <img src="docs/assets/logo/noeta-logo-light.svg" alt="Noeta — an event log folding into state" width="336">
+  </picture>
+  <p>
+    <a href="https://pypi.org/project/noeta-sdk/"><img alt="PyPI" src="https://img.shields.io/pypi/v/noeta-sdk"></a>
+    <a href="https://github.com/initxy/noeta/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/initxy/noeta/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+    <a href="https://pypi.org/project/noeta-sdk/"><img alt="Python versions" src="https://img.shields.io/pypi/pyversions/noeta-sdk"></a>
+    <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
+  </p>
+</div>
 
 **A Python runtime and SDK where an agent's entire run is a replayable event ledger.** Noeta hosts long-horizon agents inside your own process — no server, no HTTP hop — and records every model round-trip, tool call, and approval as an event. State is never held in memory; it is `fold(events)`, recomputed from the log. Kill the process mid-task and another worker resumes exactly where it stopped, exactly once. The kernel is structurally forbidden from importing a vendor SDK, so Anthropic, OpenAI-compatible, and Responses models are one line of wiring apart.
 

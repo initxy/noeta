@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 252 88" role="img" aria-label="Noeta — an event log folding into one state slice">
+  <g transform="translate(8,12)">
+    <rect x="8" y="8"  width="40" height="7" rx="3.5" fill="#10b981"/>
+    <rect x="8" y="20" width="33" height="7" rx="3.5" fill="#06b6d4"/>
+    <rect x="8" y="32" width="25" height="7" rx="3.5" fill="#8b5cf6"/>
+    <rect x="8" y="44" width="17" height="7" rx="3.5" fill="#f59e0b"/>
+    <rect x="30" y="40" width="20" height="20" rx="5" fill="#10b981"/>
+  </g>
+  <text x="86" y="59" font-size="44" font-weight="700" letter-spacing="1"
+        fill="#0f172a"
+        font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace">noeta</text>
+</svg>

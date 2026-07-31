@@ -203,6 +203,11 @@ export default defineConfig({
   // GitHub Pages subpath.
   base: '/noeta/',
 
+  // Favicon (the icon lives in docs/public/, served at the base root).
+  head: [
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/noeta/logo.svg' }],
+  ],
+
   // Dead-link checking is ON (VitePress default): a broken internal link
   // fails the build. Pages excluded from the site (see srcExclude — ADRs and
   // implementation specs) are referenced only via absolute GitHub source URLs,
@@ -220,6 +225,9 @@ export default defineConfig({
   ],
 
   themeConfig: {
+    // Brand mark in the top-left of the nav.
+    logo: '/logo.svg',
+
     // GitHub link in nav.
     nav: [
       { text: 'GitHub', link: 'https://github.com/initxy/noeta' },
