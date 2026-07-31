@@ -1,6 +1,9 @@
 # Storage backend relocation — durable backends become a built-in, the kernel keeps the SPI
 
-> **Status: Active** — designed 2026-07-30 with the owner. Per the owner's
+> **Status: Shipped** — landed on `main` 2026-07-30 (branch
+> `storage-backend-relocation`, dbe443d + 7d1ea4e, fast-forwarded; the durable
+> decisions live in the plugin-contribution-bundles / package-layout /
+> storage-protocols-l0 ADR addenda). Designed 2026-07-30 with the owner. Per the owner's
 > explicit directive this spec carries **no historical compatibility**: import
 > paths, helper names, and re-export lists change outright, with no deprecation
 > shims. Base the work on `main` after the `kernel-final-form` branch merges

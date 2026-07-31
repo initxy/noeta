@@ -461,7 +461,7 @@ plugin contribution with zero kernel edits*:
   seams `record_instructions` / `record_environment` / `record_memory_index`
   are **gone** as of the kernel final form — each resident now records through
   its plugin's generic `init` hook + the scoped `SessionRecorder`
-  (`docs/implementation-specs/kernel-final-form.md`; see the
+  (`docs/implementation-specs/archive/2026-07-30-kernel-final-form.md`; see the
   unified-context-supply Clarification 2026-07-30). The host reaches the loaders
   through the `noeta.client.parts.workspace_impl` doorway for the discovery
   hook's own path (record == compose stays true because both halves live in the
@@ -484,7 +484,7 @@ plugin contribution with zero kernel edits*:
 ## Addendum — 2026-07-30: durable storage backends ship as a declaration-only built-in
 
 The storage-backend relocation
-(`docs/implementation-specs/2026-07-30-storage-backend-relocation.md`) moved the
+(`docs/implementation-specs/archive/2026-07-30-storage-backend-relocation.md`) moved the
 durable backends out of the kernel wheel: `noeta.storage.{sqlite,postgres}`
 became `noeta.builtins.storage.impl.{sqlite,postgres}` (noeta-sdk), taking the
 `psycopg[binary]` dependency with them — the noeta-runtime wheel now carries no

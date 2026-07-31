@@ -1,6 +1,10 @@
 # Kernel and plugin final form
 
-> **Status: Active** — the from-zero target design, settled with the owner on
+> **Status: Shipped** — landed on `main` 2026-07-30 (branch
+> `kernel-final-form`, tip ec30edb, fast-forwarded; the durable decisions live
+> in the unified-context-supply / single-writer-invariant /
+> plugin-contribution-bundles ADR addenda). Originally the from-zero target
+> design, settled with the owner on
 > 2026-07-30 after reviewing an external proposal against the tree. Per the
 > owner's explicit directive this spec carries **no historical compatibility**:
 > it describes the final form as if built from scratch. Sequencing, migration,
