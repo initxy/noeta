@@ -299,6 +299,66 @@ class StepAttemptAbandonedPayload:
 
 
 @dataclass(frozen=True, slots=True)
+class TaskForkedPayload:
+    """Conversation branch: this task's inherited baseline.
+
+    A fork mints a NEW task whose history is the source conversation's, as it
+    stood at a chosen turn boundary. The source is folded through
+    ``source_seq``, its 4-slice body (the SAME body
+    :class:`TaskSnapshotPayload` points at, with ``task_id`` rewritten to the
+    fork's own) is stored, and this marker is **appended to the fork's own
+    stream** — the source stream is never written to, so branching cannot
+    perturb the conversation it branched from.
+
+    Like :class:`TaskRewoundPayload` this is a snapshot-shaped fold baseline:
+    ``find_latest_snapshot`` returns it and ``state_ref`` is the rebuild
+    baseline, which is what lets a forked task's inherited history fold at all
+    — it is not derivable from the fork's own genesis. Being a real baseline
+    (rather than inert provenance beside a plain ``TaskSnapshot``) is also what
+    keeps the from-scratch fold byte-equal to the accelerated one.
+
+    Why a fork is **not** a subtask: ``parent_task_id`` means delegation, and
+    setting it would make ``ChildLifecycleObserver`` enqueue the fork as a
+    child and wake a parent that never spawned it. Lineage lives here instead,
+    in ``source_task_id`` — discovered by scanning streams, the way subtask
+    lineage is discovered from ``TaskCreated.parent_task_id``.
+
+    ``source_seq`` is the fold-through boundary on the source stream (recorded
+    for the read model / a branch-point UI); the baseline itself is
+    ``state_ref``. Absent from any historical recording → byte-safe (the same
+    additive-event rule as ``TaskRewound`` / ``StepAttemptAbandoned``)."""
+
+    source_task_id: str
+    source_seq: int
+    state_ref: ContentRef
+
+
+@dataclass(frozen=True, slots=True)
+class TurnInterruptedPayload:
+    """A human stopped an in-flight turn, without ending the conversation.
+
+    The third member of the human-stop family, and deliberately its own event
+    type: ``TaskCancelled`` is terminal by fold and ``ConversationClosed``
+    means archived, so neither can say "this turn was stopped and the
+    conversation is still live". Written via ``system_emit`` (a control-plane
+    write, no lease) BEFORE the cancel registry is marked, the same ordering
+    ``cancel`` / ``close`` use — so the worker's re-fold at
+    ``_settle_stopped_turn`` always sees it and lands the task on its
+    next-goal suspend, reopenable by simply typing again.
+
+    It does **not** re-base the stream: the interrupted turn's events stay on
+    it as real history (the model said what it said, the tools ran what they
+    ran). Discarding them is ``TaskRewound``'s job, and the two compose.
+
+    ``reason`` is free-form operator text; ``interrupted_by`` names the actor
+    for the lifecycle audit. Absent from any historical recording → byte-safe
+    (same additive-event rule as ``TaskCancelled``)."""
+
+    reason: Optional[str] = None
+    interrupted_by: str = "user"
+
+
+@dataclass(frozen=True, slots=True)
 class ContextPlanComposedPayload:
     """Issue 14: Engine emits this per step in front of the LLM round-trip.
 

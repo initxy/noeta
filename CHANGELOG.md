@@ -10,6 +10,37 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ### Added
 
+- **`Client.fork(task_id, message_seq=…)` — branch a conversation, keep both.**
+  The fork twin of rewind: same anchor (the seq of a user-goal
+  `MessagesAppended`), same fold-through boundary, but the resulting baseline
+  lands on a **new** task's stream instead of re-basing the source. So a rewind
+  is "undo this and everything after"; a fork is "edit that message and try
+  again, keeping the original". The returned `DriveOutcome.task_id` is the
+  branch's, resting at a next-goal suspend, so `send_goal` drives it straight
+  away. The source stream is never written to — branching cannot perturb what
+  it branched from. The branch inherits the whole folded state (messages,
+  TaskState, context plan, governance including accumulated cost) plus the
+  source's agent, policy and host binding; it does **not** get its own
+  workspace, so both branches act on the same disk. Only a root task can be
+  forked, and only at a message that has a prior turn to branch from.
+- **`TaskForked` — a new fold-baseline event.** The branch's inherited history
+  is not derivable from its own genesis, so the marker is a real re-base
+  baseline (like `TaskRewound`), not inert provenance. Both durable backends
+  widen the `ix_events_snapshot` partial index for it (sqlite migration 10,
+  Postgres migration 5).
+- **`Client.interrupt(task_id)` — stop a turn, keep the conversation.** The
+  member the human-stop family was missing: `cancel` kills the conversation and
+  `close` archives it, while this halts only the in-flight turn and leaves the
+  task resting at its next-goal suspend, resumable by simply typing again — what
+  pressing Esc in an interactive client should do. Records a `TurnInterrupted`
+  marker and tags the resulting `TaskSuspended.reason` `"interrupted"`, so a
+  park reached by a human stop is distinguishable from one the model asked for.
+  The interrupted turn's events stay on the stream as real history (interrupt is
+  not a rewind; the two compose), and the stop lands at a turn boundary — it
+  cannot abort a tool call already executing. Safe to call from another thread
+  while a turn is being driven.
+- **`Client.rewind(task_id, message_seq=…)` is now exposed.** It has existed on
+  the driver all along; shipping fork without its twin was an arbitrary hole.
 - **Batch content reads — a traversal costs one query, not N.** `fold` and
   `as_messages` know every `ContentRef` they will dereference before they
   process an event (the refs sit in the payloads), so both now scan first and

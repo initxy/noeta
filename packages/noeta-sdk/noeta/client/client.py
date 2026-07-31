@@ -1067,6 +1067,30 @@ class Client:
         """Cancel a conversation (driver ``cancel``)."""
         return self._driver.cancel(task_id=task_id, reason=reason, cascade=cascade)
 
+    def interrupt(
+        self,
+        task_id: str,
+        *,
+        reason: Optional[str] = None,
+        interrupted_by: str = "user",
+    ) -> DriveOutcome:
+        """Stop an in-flight turn, keeping the conversation live (driver
+        ``interrupt``).
+
+        The middle ground between :meth:`cancel` (kills the conversation) and
+        :meth:`close` (archives it): the turn stops at its next boundary and
+        the task lands back on its next-goal suspend, so a following
+        :meth:`send_goal` just continues. The interrupted turn's events stay on
+        the stream as history — use :meth:`rewind` to discard them.
+
+        Safe to call from another thread while a turn is being driven: the
+        cancel registry it marks is thread-safe, and the Engine polls it at
+        every turn boundary.
+        """
+        return self._driver.interrupt(
+            task_id=task_id, reason=reason, interrupted_by=interrupted_by
+        )
+
     def close(
         self,
         task_id: str,
@@ -1076,6 +1100,38 @@ class Client:
     ) -> DriveOutcome:
         """Close / archive a conversation (driver ``close``)."""
         return self._driver.close(task_id=task_id, closed_by=closed_by, reason=reason)
+
+    def rewind(self, task_id: str, *, message_seq: int) -> DriveOutcome:
+        """Rewind the conversation to before the user message at ``message_seq``
+        (driver ``rewind``).
+
+        ``message_seq`` is the seq of the user-goal ``MessagesAppended`` being
+        undone — the bubble the user clicked "undo" on. That message, the
+        output it triggered and every later turn become dead history (nothing
+        is deleted: a re-base marker names a new fold baseline, append-only
+        intact), and workspace files the undone span edited are restored.
+
+        The conversation lands back at the turn boundary before that message
+        and is immediately live. See :meth:`fork` to keep both branches instead.
+        """
+        return self._driver.rewind(task_id, message_seq=message_seq)
+
+    def fork(self, task_id: str, *, message_seq: int) -> DriveOutcome:
+        """Branch the conversation into a new task at ``message_seq`` (driver
+        ``fork``).
+
+        Same anchor as :meth:`rewind`, opposite retention: instead of re-basing
+        this conversation, it mints a **new** task that inherits the history up
+        to the turn boundary before ``message_seq`` and leaves the source
+        untouched. "Edit that message and try again, keeping both."
+
+        The returned ``DriveOutcome.task_id`` is the **fork's** — it rests at a
+        next-goal suspend, so :meth:`send_goal` on it drives the new branch.
+
+        Both branches share the source's workspace: fork branches the
+        conversation, not the files on disk. Only a root task can be forked.
+        """
+        return self._driver.fork(task_id, message_seq=message_seq)
 
     def reopen(
         self,

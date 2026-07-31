@@ -1417,9 +1417,21 @@ def _note_conversation_reopened(engine: Engine, task: Task, *, reopened_by: str,
 
 
 def suspend_on_human_handle(
-    engine: Engine, task: Task, *, handle: str, lease_id: str
+    engine: Engine,
+    task: Task,
+    *,
+    handle: str,
+    lease_id: str,
+    suspend_reason: Optional[str] = None,
 ) -> Task:
     """Cooperative-stop landing: suspend ``task`` on a human ``handle``.
+
+    ``suspend_reason`` rides the A1 channel onto the recorded
+    ``TaskSuspended.reason`` (and through it the dispatcher's stored
+    ``suspend_reason``), so a rest reached by a human stop is distinguishable
+    from an ordinary ``waiting_human`` one without scanning the stream for the
+    control event that caused it. ``None`` keeps the historical default,
+    byte-identical.
 
     Reuses the exact :func:`handle_yield_for_human` machinery a normally
     finished interactive turn exits through, so the task rests in the SAME
@@ -1438,7 +1450,7 @@ def suspend_on_human_handle(
     return handle_yield_for_human(
         engine._ctx,
         task,
-        YieldForHumanDecision(prompt=handle),
+        YieldForHumanDecision(prompt=handle, suspend_reason=suspend_reason),
         lease_id=lease_id,
         trace_id=engine._latest_trace_id(task.task_id),
     )

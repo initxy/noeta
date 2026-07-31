@@ -342,6 +342,30 @@ _MIGRATION_9_RESERVED_COLUMN = (
 )
 
 
+# Migration 10: widen the fold-baseline index to include the conversation
+# branch marker.
+#
+# ``TaskForked`` is a fourth snapshot-shaped fold baseline (``state_ref``,
+# like TaskRewound) — it names the history a forked task inherited from the
+# conversation it branched off, which is the only way that history folds at
+# all (it is not derivable from the fork's own genesis). Same migration-5
+# lesson as migration 8: a partial index is only chosen when its WHERE
+# matches the query predicate exactly, so the index is re-created with the
+# widened IN-list. The list stays a frozen literal (applied migrations are
+# immutable) while the live queries render theirs from
+# ``noeta.protocols.event_log.SNAPSHOT_BASELINE_EVENT_TYPES`` —
+# ``tests/test_fix_storage.py`` pins the two in sync via the query plan.
+_MIGRATION_10_DROP_SNAPSHOT_INDEX = "DROP INDEX IF EXISTS ix_events_snapshot"
+
+_MIGRATION_10_BASELINE_INDEX = (
+    "CREATE INDEX ix_events_snapshot "
+    "ON events (task_id, seq DESC) "
+    "WHERE type IN ("
+    "'TaskSnapshot', 'TaskRewound', 'StepAttemptAbandoned', 'TaskForked'"
+    ")"
+)
+
+
 MIGRATIONS: list[Migration] = [
     Migration(
         version=1,
@@ -407,6 +431,14 @@ MIGRATIONS: list[Migration] = [
         version=9,
         description="targeted-lease-only guard (reserved) for subtask children",
         statements=(_MIGRATION_9_RESERVED_COLUMN,),
+    ),
+    Migration(
+        version=10,
+        description="widen snapshot index to include TaskForked",
+        statements=(
+            _MIGRATION_10_DROP_SNAPSHOT_INDEX,
+            _MIGRATION_10_BASELINE_INDEX,
+        ),
     ),
 ]
 
