@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Event Sourcing — state = fold(log)",
+    "subtitle": "Append-only EventLog + content-addressed ContentStore → fold → four state slices",
+    "output": "event-sourcing.html",
+    "viewBox": [1100, 720]
+  },
+  "stages": [
+    { "label": "Writers" },
+    { "label": "Append" },
+    { "label": "Store" },
+    { "label": "Fold" },
+    { "label": "State" }
+  ],
+  "nodes": [
+    { "id": "engine", "type": "backend", "label": "Engine", "sublabel": "writes RuntimeState", "stage": 0, "row": 0 },
+    { "id": "policy", "type": "backend", "label": "Policy", "sublabel": "TaskStatePatch", "stage": 0, "row": 1 },
+    { "id": "composer", "type": "backend", "label": "Composer", "sublabel": "writes ContextState", "stage": 0, "row": 2 },
+    { "id": "fold", "type": "backend", "label": "fold()", "sublabel": "writes GovernanceState", "stage": 0, "row": 3 },
+
+    { "id": "eventlog", "type": "messagebus", "label": "EventLog", "sublabel": "append-only stream", "stage": 1, "row": 1, "tag": "≤ 4 KB payload" },
+    { "id": "contentstore", "type": "database", "label": "ContentStore", "sublabel": "content-addressed", "stage": 2, "row": 1, "tag": "SHA-256 dedup" },
+
+    { "id": "foldfn", "type": "backend", "label": "fold(stream)", "sublabel": "deterministic replay", "stage": 3, "row": 1 },
+
+    { "id": "runtime", "type": "frontend", "label": "RuntimeState", "sublabel": "messages · usage", "stage": 4, "row": 0 },
+    { "id": "task", "type": "frontend", "label": "TaskState", "sublabel": "todos · active content", "stage": 4, "row": 1 },
+    { "id": "context", "type": "frontend", "label": "ContextState", "sublabel": "plan ref · compaction", "stage": 4, "row": 2 },
+    { "id": "governance", "type": "frontend", "label": "GovernanceState", "sublabel": "cost · tokens · denied", "stage": 4, "row": 3 }
+  ],
+  "flows": [
+    { "from": "engine", "to": "eventlog", "label": "envelopes", "variant": "emphasis" },
+    { "from": "policy", "to": "eventlog", "label": "state patches", "variant": "emphasis" },
+    { "from": "composer", "to": "eventlog", "label": "context plans", "variant": "emphasis" },
+    { "from": "fold", "to": "eventlog", "label": "governance", "variant": "emphasis" },
+    { "from": "eventlog", "to": "contentstore", "label": "large bodies", "variant": "dashed", "classification": "ContentRef only" },
+    { "from": "eventlog", "to": "foldfn", "label": "stream", "variant": "emphasis", "labelDy": -23 },
+    { "from": "contentstore", "to": "foldfn", "label": "derefs", "variant": "dashed" },
+    { "from": "foldfn", "to": "runtime", "label": "slice", "variant": "emphasis" },
+    { "from": "foldfn", "to": "task", "label": "slice", "variant": "emphasis" },
+    { "from": "foldfn", "to": "context", "label": "slice", "variant": "emphasis" },
+    { "from": "foldfn", "to": "governance", "label": "slice", "variant": "emphasis" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "Single-writer invariant", "items": ["Each state slice has exactly one writer", "Policy cannot assign its own memory — only patch via event", "Origin marker records which role wrote each envelope"] },
+    { "dot": "cyan", "title": "Why this works", "items": ["State is a disposable projection, the log is master", "Kill the process — fold rebuilds identical state", "Replay, audit, and UI are all the same fold operation"] }
+  ]
+}

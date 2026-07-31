@@ -705,3 +705,21 @@ def test_client_threads_provider_and_reaps_on_shutdown(
     finally:
         client.shutdown()
     assert provider.released == ["task-root"]
+
+
+def test_static_api_key_auth_header_defaults_and_overrides(monkeypatch) -> None:
+    # Default header stays byte-identical (non-breaking), but a different
+    # container gateway can override it — the header is a property of the
+    # gateway, not of this generic strategy.
+    monkeypatch.setenv("SANDBOX_API_KEY", "sekret")
+    assert StaticApiKeyAuth("SANDBOX_API_KEY").connect_headers() == {
+        "X-AIO-API-Key": "sekret"
+    }
+    assert StaticApiKeyAuth(
+        "SANDBOX_API_KEY", header_name="Authorization"
+    ).connect_headers() == {"Authorization": "sekret"}
+
+
+def test_static_api_key_auth_unset_env_yields_no_header(monkeypatch) -> None:
+    monkeypatch.delenv("SANDBOX_API_KEY", raising=False)
+    assert StaticApiKeyAuth("SANDBOX_API_KEY").connect_headers() == {}

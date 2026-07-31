@@ -32,9 +32,9 @@ respect-gitignore = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra -m 'not install_smoke'"
+addopts = "-ra -m 'not install_smoke and not live'"
 markers = [
-    "live: requires live LLM backend, skipped in CI",
+    "live: requires live LLM backend; never collected by default (a local .env would otherwise make it run) — opt in with `pytest -m live`",
     "install_smoke: spawns a fresh venv + pip install; slow (~30-60 s), opt-in via -m install_smoke",
 ]
 

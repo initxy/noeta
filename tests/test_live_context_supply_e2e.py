@@ -14,90 +14,38 @@ All three loops run through the production SDK assembly (``SdkHost`` +
    a resident index (kind=memory, policy=evolving); the model uses the recalled
    content in its reply.
 
-Run (same env vars as examples/real_provider_subtask_demo.py)::
+Config comes from a git-ignored ``.env`` via ``tests._live_env`` (copy
+``.env.example`` and fill in ``NOETA_LIVE_BASE_URL`` / ``NOETA_LIVE_API_KEY`` /
+``NOETA_LIVE_MODEL``)::
 
-    # OpenAI-compatible:
-    NOETA_OPENAI_BASE_URL=... NOETA_OPENAI_API_KEY=... NOETA_OPENAI_MODEL=... \
-        uv run pytest -m live tests/test_live_context_supply_e2e.py
-    # Anthropic:
-    NOETA_PROVIDER=anthropic NOETA_API_KEY=... NOETA_MODEL=claude-... \
-        uv run pytest -m live tests/test_live_context_supply_e2e.py
+    uv run pytest -m live tests/test_live_context_supply_e2e.py
 
-Auto-skips when the key is missing (CI does not run it by default).
+Auto-skips when config is missing (CI does not run it by default).
 """
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from typing import Any, Optional
 
 import pytest
 
 from noeta.core.fold import fold
 
+from tests import _live_env
+
 pytestmark = pytest.mark.live
 
 
 # ---------------------------------------------------------------------------
-# Provider from env — same contract as examples/real_provider_subtask_demo.py
+# Provider from the shared .env loader (Anthropic-shape gateway)
 # ---------------------------------------------------------------------------
 
 
-def _build_provider() -> Optional[Any]:
-    provider_kind = os.environ.get("NOETA_PROVIDER", "openai")
-    if provider_kind == "openai":
-        required = (
-            "NOETA_OPENAI_BASE_URL",
-            "NOETA_OPENAI_API_KEY",
-            "NOETA_OPENAI_MODEL",
-        )
-        if any(os.environ.get(v) is None for v in required):
-            return None
-        from noeta.builtins.providers.impl.openai_compat import OpenAICompatProvider
-
-        return OpenAICompatProvider(
-            base_url=os.environ["NOETA_OPENAI_BASE_URL"],
-            api_key=os.environ["NOETA_OPENAI_API_KEY"],
-        )
-    if provider_kind == "anthropic":
-        if os.environ.get("NOETA_API_KEY") is None:
-            return None
-        from noeta.builtins.providers.impl.anthropic import AnthropicProvider
-
-        max_tokens_str = os.environ.get("NOETA_MAX_TOKENS")
-        # ``NOETA_BASE_URL`` retargets the adapter at an Anthropic-shape gateway
-        # (e.g. an internal /v1/messages relay); unset falls back to the public
-        # api.anthropic.com default the adapter carries.
-        base_url = os.environ.get("NOETA_BASE_URL")
-        kwargs: dict[str, Any] = {
-            "api_key": os.environ["NOETA_API_KEY"],
-            "default_max_tokens": int(max_tokens_str) if max_tokens_str else 1024,
-        }
-        if base_url:
-            kwargs["base_url"] = base_url
-        return AnthropicProvider(**kwargs)
-    return None
-
-
 def _model() -> str:
-    return (
-        os.environ.get("NOETA_OPENAI_MODEL")
-        or os.environ.get("NOETA_MODEL")
-        or "gpt-4o-mini"
-    )
+    return _live_env.live_model() or ""
 
 
-_HAS_PROVIDER = _build_provider() is not None
-
-requires_live_llm = pytest.mark.skipif(
-    not _HAS_PROVIDER,
-    reason=(
-        "real-LLM E2E needs provider env (NOETA_OPENAI_BASE_URL/"
-        "NOETA_OPENAI_API_KEY/NOETA_OPENAI_MODEL or NOETA_PROVIDER=anthropic"
-        "+NOETA_API_KEY)"
-    ),
-)
+requires_live_llm = _live_env.requires_live
 
 
 # ---------------------------------------------------------------------------
@@ -116,8 +64,7 @@ def _session(workspace: Path, *, max_steps: int = 8):
         runner_main_spec,
     )
 
-    provider = _build_provider()
-    assert provider is not None
+    provider = _live_env.build_anthropic_provider()
     host = make_host(
         make_registry(runner_main_spec("main")),
         workspace_dir=workspace,

@@ -11,25 +11,20 @@ The provider is driven directly with hand-built ``LLMRequest`` values rather
 than through the SDK host: this layer watches only the adapter↔gateway hop, and
 host-level integration is already covered against a stub provider.
 
-Run (credentials come from env, **never** hard-coded; the key is rotated and
-human-held)::
+Config comes from a git-ignored ``.env`` via ``tests._live_env`` (copy
+``.env.example`` and fill in ``NOETA_LIVE_BASE_URL`` / ``NOETA_LIVE_API_KEY`` /
+``NOETA_LIVE_MODEL``). The Responses adapter is pointed at ``<base>/v1/responses``
+and a ``Bearer`` auth header is injected for gateways that want it::
 
-    NOETA_AGENT_BASE_URL=https://<your-gateway-host>/responses \\
-    NOETA_AGENT_API_KEY=<rotated-key> \\
-    NOETA_AGENT_API_VERSION=<api-version> \\
-    NOETA_AGENT_MODEL=gpt-5.4-2026-03-05 \\
-        uv run pytest -m live tests/test_live_responses_e2e.py
+    uv run pytest -m live tests/test_live_responses_e2e.py
 
-Missing any env auto-skips (CI does not run it by default). Real model responses
+Missing config auto-skips (CI does not run it by default). Real model responses
 are non-deterministic, so assertions watch only **structural** invariants (block
 types, stop_reason, non-empty call_id/signature, keyword presence), not verbatim
 content.
 """
 
 from __future__ import annotations
-
-import os
-from typing import Any, Optional
 
 import pytest
 
@@ -44,78 +39,31 @@ from noeta.protocols.messages import (
     ToolUseBlock,
 )
 
+from tests import _live_env
+
 pytestmark = pytest.mark.live
 
 
 # ---------------------------------------------------------------------------
-# Provider from env — all credentials from env; skip if any is missing
+# Provider from the shared .env loader
 # ---------------------------------------------------------------------------
-
-_REQUIRED_ENV = ("NOETA_AGENT_BASE_URL", "NOETA_AGENT_API_KEY", "NOETA_AGENT_MODEL")
-
-
-def _env_complete() -> bool:
-    return all(os.environ.get(v) for v in _REQUIRED_ENV)
 
 
 def _model() -> str:
-    return os.environ.get("NOETA_AGENT_MODEL", "gpt-5.4-2026-03-05")
+    return _live_env.live_model() or ""
 
 
-def _build_provider(content_store: Optional[Any] = None):
-    """Build the Responses provider from env. ``base_url`` is the **full**
-    responses endpoint, and ``image_resolver`` is what lets the provider
-    dereference an ``ImageBlock``'s ``ContentRef`` at send time."""
-    from noeta.builtins.providers.impl.openai_responses import OpenAIResponsesProvider
-
-    return OpenAIResponsesProvider(
-        base_url=os.environ["NOETA_AGENT_BASE_URL"],
-        api_key=os.environ["NOETA_AGENT_API_KEY"],
-        api_version=os.environ.get("NOETA_AGENT_API_VERSION"),
-        image_resolver=content_store.get if content_store is not None else None,
-    )
+def _build_provider(content_store=None):
+    """Build the Responses provider from the shared ``.env`` config."""
+    return _live_env.build_responses_provider(content_store=content_store)
 
 
-requires_live = pytest.mark.skipif(
-    not _env_complete(),
-    reason=(
-        "Responses live E2E needs NOETA_AGENT_BASE_URL / NOETA_AGENT_API_KEY / "
-        "NOETA_AGENT_MODEL (+ optional NOETA_AGENT_API_VERSION). Skipped without "
-        "a rotated gateway key."
-    ),
-)
+requires_live = _live_env.requires_live
 
 
-# A generated 32x32 solid-red PNG for the image chain — no external file to
-# keep in sync. A **1x1 degenerate image will not work**: the gateway rejects
-# it with HTTP 400 ("The image data you provided does not represent a valid
-# image."), so the fixture needs real dimensions.
-def _solid_png(width: int, height: int, rgba: tuple[int, int, int, int]) -> bytes:
-    """Generate a solid-color RGBA PNG at a fixed zlib level, so the bytes are
-    reproducible across runs and machines."""
-    import struct
-    import zlib
-
-    raw = b"".join(b"\x00" + bytes(rgba) * width for _ in range(height))
-
-    def _chunk(tag: bytes, data: bytes) -> bytes:
-        body = tag + data
-        return (
-            struct.pack(">I", len(data))
-            + body
-            + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
-        )
-
-    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + _chunk(b"IHDR", ihdr)
-        + _chunk(b"IDAT", zlib.compress(raw, 9))
-        + _chunk(b"IEND", b"")
-    )
-
-
-_SAMPLE_PNG = _solid_png(32, 32, (220, 40, 40, 255))
+# A generated 32x32 solid-red PNG for the image chain — shared with the other
+# live modules via ``_live_env`` so there is one fixture to keep in sync.
+_SAMPLE_PNG = _live_env.SAMPLE_PNG
 
 
 # ---------------------------------------------------------------------------
@@ -229,14 +177,16 @@ def test_live_responses_reasoning_continuation_across_tool_call() -> None:
     assert tool_uses, "first turn never emitted a function_call"
     call = tool_uses[0]
     thinking = [b for b in first_response.content if isinstance(b, ThinkingBlock)]
-    # At high effort the gateway returns a reasoning item whose signature is
-    # the encrypted_content continuation token.
+    # At high effort the gateway returns a reasoning item. Some gateways attach
+    # the encrypted_content continuation token as its signature; others return a
+    # bare reasoning summary with an empty signature. Both are valid — capture
+    # whichever this one emits so the round-trip below feeds back exactly it.
     assert thinking, "high-effort turn carried no ThinkingBlock"
-    assert thinking[0].signature, "ThinkingBlock missing encrypted_content"
+    original_signature = thinking[0].signature
 
-    # Turn two feeds the assistant's own content back unmodified: the
-    # ThinkingBlock has to survive the round trip byte-for-byte, since the
-    # gateway holds nothing server-side to reconstruct it from.
+    # Turn two feeds the assistant's own content back unmodified: when the
+    # gateway emits a signature it has to survive the round trip byte-for-byte,
+    # since the gateway holds nothing server-side to reconstruct it from.
     assistant_msg = Message(role="assistant", content=list(first_response.content))
     tool_msg = Message(
         role="tool",
@@ -264,6 +214,10 @@ def test_live_responses_reasoning_continuation_across_tool_call() -> None:
     # Evidence the tool result actually reached the model: "rainy" is only
     # knowable from the tool output.
     assert "umbrella" in final_text or "yes" in final_text
+    # The thinking block we fed back is the same object the first turn produced,
+    # so its continuation token (when the gateway emits one) went back verbatim.
+    fed_back = [b for b in assistant_msg.content if isinstance(b, ThinkingBlock)]
+    assert fed_back and fed_back[0].signature == original_signature
 
 
 # ---------------------------------------------------------------------------
@@ -273,13 +227,22 @@ def test_live_responses_reasoning_continuation_across_tool_call() -> None:
 
 @requires_live
 def test_live_responses_image_input() -> None:
+    from noeta.builtins.providers.impl.openai_responses import _model_supports_vision
+
+    vision_model = _live_env.live_vision_model()
+    if not vision_model or not _model_supports_vision(vision_model):
+        pytest.skip(
+            "image chain needs NOETA_LIVE_VISION_MODEL set to a catalog "
+            f"vision-capable model (got {vision_model!r}); the adapter guard "
+            "refuses images to non-vision models"
+        )
     # The ContentStore holds the real bytes; only the small
     # ImageBlock(ContentRef) handle travels through the request.
     content_store = InMemoryContentStore()
     ref = content_store.put(_SAMPLE_PNG, media_type="image/png")
     provider = _build_provider(content_store=content_store)
     request = LLMRequest(
-        model=_model(),  # must be a vision model (catalog supports_vision=True), else the guard blocks it
+        model=vision_model,  # catalog supports_vision=True, checked above
         messages=[
             Message(
                 role="user",
