@@ -326,11 +326,11 @@ class Engine:
         # through a ``SeedRecorder`` at seed time (the generic successor of the
         # feature-named seed recorders). ``()`` ⇒ no pre-loop residents.
         self._content_init_hooks = content_init_hooks
-        # The ask_user_question answer codec (control-tool-surface S2, D8): a
-        # duck-typed ``AskAnswerCodec`` the SDK host reads off the session's
-        # ``SessionInputs.control_exports`` and threads here, so the driver's
-        # ``answer`` path can decode a submitted answer WITHOUT importing the
-        # ``ask_user_question`` built-in (the kernel never imports noeta.builtins).
+        # The ask_user_question answer codec: a duck-typed ``AskAnswerCodec``
+        # the SDK host reads off the session's ``SessionInputs.answer_codec``
+        # (the ask mount's typed field, spec §4.3) and threads here, so the
+        # driver's ``answer`` path can decode a submitted answer WITHOUT importing
+        # the ``ask_user_question`` built-in (the kernel never imports noeta.builtins).
         # ``None`` on every engine whose session never mounted ``ask_user_question``
         # (and on every kernel-alone / hand-built engine) — an answer arriving for
         # such a session fails loudly in the driver. A public read attribute (not

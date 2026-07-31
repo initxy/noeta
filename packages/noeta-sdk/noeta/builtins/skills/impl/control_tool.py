@@ -28,7 +28,6 @@ from noeta.execution.control_tool import (
     ControlToolBuildContext,
     ControlToolMount,
 )
-from noeta.execution.session_pack import EXPORT_SKILLS_KIT
 from noeta.policies.control_semantics import (
     ControlTranslateContext,
     ack_patch_decision,
@@ -208,7 +207,7 @@ def _skill_menu(
     own pack export.
 
     Both are non-empty only when the ``skill_invocation`` flag is on AND the
-    skills pack exported its kit (``EXPORT_SKILLS_KIT``) AND the registry has
+    skills pack contributed its kit (``ctx.skills_kit``) AND the registry has
     indexed skills — the single gate the old ``_build_control_action_schemas``
     schema branch and ``_skill_menu_names`` policy branch duplicated (and
     could, in principle, diverge). ``menu`` is the sorted
@@ -219,8 +218,7 @@ def _skill_menu(
     tool. Bytes are identical to the kernel builder's retired ``_skill_menu``.
     """
     if ctx.flag("skill_invocation"):
-        kit = ctx.exports.get(EXPORT_SKILLS_KIT)
-        registry = getattr(kit, "registry", None)
+        registry = getattr(ctx.skills_kit, "registry", None)
         if registry is not None:
             skill_names = registry.names()
             if skill_names:
@@ -241,7 +239,7 @@ def build_skills_control_tool(
     Self-gates on the effective ``skill_invocation`` capability flag AND a
     non-empty indexed menu — mounting IS enablement. It reproduces the
     pre-migration internal ``_skill_mount`` exactly: the menu is derived HERE
-    from the skills pack's own ``EXPORT_SKILLS_KIT`` export (the schema renders
+    from the skills pack's own typed ``skills_kit`` contribution (the schema renders
     the sorted ``(name, description)`` roster; the translate closure validates
     against the same name set), routing band 400, schema band 400 — the byte
     order the S0 golden pins. The rendered menu tuple may be empty

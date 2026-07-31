@@ -40,7 +40,6 @@ import pytest
 from noeta.client.options import DEFAULT_PLUGINS, Options
 from noeta.client.parts import default_control_tools
 from noeta.execution.builder import _run_control_tool_mounts
-from noeta.execution.session_pack import EXPORT_SKILLS_KIT
 from noeta.execution.control_tool import (
     ControlToolBuildContext,
     ControlToolEntry,
@@ -121,7 +120,6 @@ def _toy_control_tool(ctx: ControlToolBuildContext) -> ControlToolMount | None:
     built-in factory opts out. Mounting IS enablement.
     """
     assert isinstance(ctx, ControlToolBuildContext)
-    assert ctx.exports is not None  # the generic exports slot — never IO
     if not ctx.flag("delegation"):
         return None
     return ControlToolMount(
@@ -133,9 +131,9 @@ def _toy_control_tool(ctx: ControlToolBuildContext) -> ControlToolMount | None:
     )
 
 
-#: A minimal stand-in for the skills pack's ``EXPORT_SKILLS_KIT`` export — just
-#: enough shape (``registry.names()`` / ``registry.get(name).description``) for
-#: the skills mount to derive its one-entry ``alpha`` menu.
+#: A minimal stand-in for the skills pack's typed ``skills_kit`` contribution —
+#: just enough shape (``registry.names()`` / ``registry.get(name).description``)
+#: for the skills mount to derive its one-entry ``alpha`` menu.
 _FAKE_SKILLS_KIT = SimpleNamespace(
     registry=SimpleNamespace(
         names=lambda: ["alpha"],
@@ -162,7 +160,7 @@ def _full_ctx(*, delegation_enabled: bool = True) -> ControlToolBuildContext:
         },
         subtask_agent_directory=(("explore", "read-only explorer"),),
         structured_output_schema={"type": "object"},
-        exports={EXPORT_SKILLS_KIT: _FAKE_SKILLS_KIT},
+        skills_kit=_FAKE_SKILLS_KIT,
     )
 
 
@@ -202,7 +200,6 @@ _CONTROL_TOOL_PLUGIN = """
         # the entries entirely when the agent did not activate the plugin), so the
         # factory itself mounts unconditionally here.
         assert isinstance(ctx, ControlToolBuildContext)
-        assert ctx.exports is not None
         return ControlToolMount(
             name="toy_control",
             schema={

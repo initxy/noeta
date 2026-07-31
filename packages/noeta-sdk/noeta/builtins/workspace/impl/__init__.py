@@ -50,11 +50,6 @@ from noeta.execution.environment import EnvironmentKit
 from noeta.execution.instructions import InstructionsKit
 from noeta.execution.session_pack import (
     ContentKindContribution,
-    EXPORT_CONTENT_DISCOVERY,
-    EXPORT_CONTENT_PRELOADER,
-    EXPORT_ENVIRONMENT_SNAPSHOT,
-    EXPORT_INSTRUCTIONS_SNAPSHOT,
-    EXPORT_INSTRUCTIONS_SNAPSHOTS,
     PackContribution,
     SessionBuildContext,
     SessionRecorder,
@@ -358,7 +353,6 @@ def build_instructions_session_pack(ctx: SessionBuildContext) -> PackContributio
     kit = build_instructions_kit()
     content_store = ctx.content_store
     snapshots: dict[str, InstructionsSnapshot] = {}
-    exports: dict[str, object] = {EXPORT_INSTRUCTIONS_SNAPSHOTS: snapshots}
     root_snapshot: Optional[InstructionsSnapshot] = None
     if enabled:
         snapshot = load_instructions(
@@ -372,15 +366,16 @@ def build_instructions_session_pack(ctx: SessionBuildContext) -> PackContributio
             # → byte-identical rendering); discovered files join later under
             # relative paths.
             snapshots[snapshot.name] = snapshot
-            exports[EXPORT_INSTRUCTIONS_SNAPSHOT] = snapshot
             root_snapshot = snapshot
     kinds: tuple[ContentKindContribution, ...] = ()
     if snapshots or discovery:
         kinds = (
             ContentKindContribution(300, kit.content_kind_from(snapshots)),
         )
+    content_discovery = None
+    content_preloader = None
     if discovery:
-        exports[EXPORT_CONTENT_DISCOVERY] = build_instructions_discovery(
+        content_discovery = build_instructions_discovery(
             ctx.workspace,
             snapshots,
             kit=kit,
@@ -388,7 +383,7 @@ def build_instructions_session_pack(ctx: SessionBuildContext) -> PackContributio
             render_text=render_instructions_text,
             exec_env=ctx.exec_env,
         )
-        exports[EXPORT_CONTENT_PRELOADER] = build_instructions_preloader(
+        content_preloader = build_instructions_preloader(
             ctx.workspace_dir, snapshots, exec_env=ctx.exec_env
         )
 
@@ -414,7 +409,14 @@ def build_instructions_session_pack(ctx: SessionBuildContext) -> PackContributio
             policy=INSTRUCTIONS_DRIFT_POLICY,
         )
 
-    return PackContribution(content_kinds=kinds, init=_init, exports=exports)
+    return PackContribution(
+        content_kinds=kinds,
+        init=_init,
+        content_discovery=content_discovery,
+        content_preloader=content_preloader,
+        instructions_snapshot=root_snapshot,
+        instructions_snapshots=snapshots,
+    )
 
 
 def build_environment_session_pack(ctx: SessionBuildContext) -> PackContribution:
@@ -454,5 +456,5 @@ def build_environment_session_pack(ctx: SessionBuildContext) -> PackContribution
             ContentKindContribution(400, kit.content_kind(snapshot)),
         ),
         init=_init,
-        exports={EXPORT_ENVIRONMENT_SNAPSHOT: snapshot},
+        environment_snapshot=snapshot,
     )

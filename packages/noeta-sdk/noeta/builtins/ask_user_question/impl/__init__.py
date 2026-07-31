@@ -10,9 +10,9 @@ byte-preserving (the S0 golden pins the schema bytes).
 The answer codec is kernel RESIDUE: the driver's ``answer`` path decodes a
 submitted answer body, but the kernel can no longer import the codec statically
 (it lives here now, and the kernel never imports ``noeta.builtins``). So the
-mount publishes it as the :data:`CONTROL_EXPORT_ASK_ANSWER_CODEC` mount export
-(D8) — the builder collects it, the host threads it onto the session's Engine,
-and the driver reads it there, failing loudly for a session that never mounted
+mount carries it on its typed ``answer_codec`` field (spec §4.3) — the builder
+collects it, the host threads it onto the session's Engine, and the driver
+reads it there, failing loudly for a session that never mounted
 this tool. What this impl imports back from the kernel is neutral mechanism: the
 mount + codec types (``noeta.execution.control_tool``), the decision-time
 ``ControlTranslateContext``, the shared ack builder ``ack_patch_decision``, and
@@ -28,7 +28,6 @@ import re
 from typing import Any, Optional
 
 from noeta.execution.control_tool import (
-    CONTROL_EXPORT_ASK_ANSWER_CODEC,
     AskAnswerCodec,
     ControlToolBuildContext,
     ControlToolMount,
@@ -508,9 +507,9 @@ def translate_ask_user_question(ctx: ControlTranslateContext) -> Optional[Decisi
     )
 
 
-#: The answer-side codec the kernel driver's ``answer`` path consumes (D8),
-#: delivered to the driver as the :data:`CONTROL_EXPORT_ASK_ANSWER_CODEC` mount
-#: export. Built ONCE at import (the three functions are stateless).
+#: The answer-side codec the kernel driver's ``answer`` path consumes, carried
+#: on the ask mount's typed ``answer_codec`` field (spec §4.3). Built ONCE at
+#: import (the three functions are stateless).
 ASK_ANSWER_CODEC = AskAnswerCodec(
     question_handle=question_handle,
     load_questions_body=load_questions_body,
@@ -526,9 +525,8 @@ def build_ask_user_question_control_tool(
     Self-gates on the effective ``ask_user_question`` capability flag and
     reproduces the pre-migration internal ``_ask_user_question_mount`` exactly:
     routing band 100, schema band 300 (the S0 golden byte order). It also
-    publishes the answer codec as the :data:`CONTROL_EXPORT_ASK_ANSWER_CODEC`
-    mount export so the driver can decode a submitted answer without importing
-    this built-in (D8).
+    carries the answer codec on the mount's typed ``answer_codec`` field so the
+    driver can decode a submitted answer without importing this built-in.
     """
     if not ctx.flag("ask_user_question"):
         return None
@@ -538,5 +536,5 @@ def build_ask_user_question_control_tool(
         translate=translate_ask_user_question,
         routing_priority=100,
         schema_priority=300,
-        exports={CONTROL_EXPORT_ASK_ANSWER_CODEC: ASK_ANSWER_CODEC},
+        answer_codec=ASK_ANSWER_CODEC,
     )

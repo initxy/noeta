@@ -49,14 +49,6 @@ from noeta.context.memory import MemoryEntries
 from noeta.core.hooks import HookManager
 from noeta.execution.session_pack import (
     EMPTY_CONTRIBUTION,
-    EXPORT_CONTENT_DISCOVERY,
-    EXPORT_CONTENT_PRELOADER,
-    EXPORT_ENVIRONMENT_SNAPSHOT,
-    EXPORT_INSTRUCTIONS_SNAPSHOT,
-    EXPORT_INSTRUCTIONS_SNAPSHOTS,
-    EXPORT_MEMORY_ENTRIES,
-    EXPORT_MEMORY_STORE,
-    EXPORT_SKILLS_KIT,
     InitHook,
     PackContribution,
     SessionBuildContext,
@@ -70,6 +62,7 @@ from noeta.runtime.governance import (
     SkillEnforcementMode,
 )
 from noeta.execution.control_tool import (
+    AskAnswerCodec,
     ControlToolBuildContext,
     ControlToolEntry,
     ControlToolMount,
@@ -221,13 +214,11 @@ class SessionInputs:
     #: three feature-named kernel seed recorders. Empty for a session whose
     #: packs activate no pre-loop residents.
     init_hooks: tuple[tuple[str, InitHook], ...] = ()
-    #: The control tools' collected mount exports (control-tool-surface S2, D8) —
-    #: a closed-vocabulary mapping the host threads to the kernel seams that
-    #: consume it. The only S2 tenant is the ``ask_user_question`` answer codec
-    #: (:data:`~noeta.execution.control_tool.CONTROL_EXPORT_ASK_ANSWER_CODEC`),
-    #: which the host puts on the session's Engine for the driver's ``answer``
-    #: path. Empty for a session that mounts no exporting control tool.
-    control_exports: Mapping[str, Any] = field(default_factory=dict)
+    #: The ``ask_user_question`` mount's answer codec (spec §4.3: a typed field,
+    #: not a stringly mount-export bag), which the host puts on the session's
+    #: Engine for the driver's ``answer`` path. ``None`` for a session that
+    #: mounts no ``ask_user_question``.
+    answer_codec: Optional[AskAnswerCodec] = None
 
 
 # ---------------------------------------------------------------------------
@@ -493,9 +484,9 @@ def _mount_control_tools(
 ) -> tuple[
     Optional[list[dict[str, Any]]],
     tuple[ControlToolSpec, ...],
-    dict[str, Any],
+    Optional[AskAnswerCodec],
 ]:
-    """Run the control-tool entries → ``(schema_list, routing_specs, exports)``.
+    """Run the control-tool entries → ``(schema_list, routing_specs, answer_codec)``.
 
     The generic dual-priority mount loop, mirroring the session-pack loop: each
     factory self-gates on ``ctx`` and returns ``None`` to opt out (a mount IS
@@ -509,10 +500,9 @@ def _mount_control_tools(
     (``structured_output``) contributes a schema but no routing spec. An empty
     schema list folds to ``None`` (the composer's "no control schemas" sentinel).
 
-    The third output collects every mount's :attr:`ControlToolMount.exports` into
-    one closed-vocabulary mapping (D8) — a mount export is single-writer across
-    the loop (a duplicate export key raises), exactly like the session-pack
-    export bag; the ask codec is the only S2 tenant.
+    The third output is the mounts' :attr:`ControlToolMount.answer_codec` (spec
+    §4.3: a typed field, not a stringly bag) — single-writer across the loop (a
+    second mount filling it raises); only the ``ask_user_question`` mount does.
     """
     ordered = sorted(entries, key=lambda e: (e.priority, e.name))
     mounts: list[ControlToolMount] = []
@@ -538,16 +528,17 @@ def _mount_control_tools(
         if m.translate is None:
             continue
         routing_specs.append(ControlToolSpec(name=m.name, translate=m.translate))
-    exports: dict[str, Any] = {}
+    answer_codec: Optional[AskAnswerCodec] = None
     for m in mounts:
-        for key, value in m.exports.items():
-            if key in exports:
-                raise RuntimeError(
-                    f"control tool {m.name!r} re-exports {key!r} — mount export "
-                    f"keys are single-writer across the control-tool loop"
-                )
-            exports[key] = value
-    return (schema_list or None, tuple(routing_specs), exports)
+        if m.answer_codec is None:
+            continue
+        if answer_codec is not None:
+            raise RuntimeError(
+                f"control tool {m.name!r} contributes a second answer_codec — "
+                f"it is single-writer across the control-tool loop"
+            )
+        answer_codec = m.answer_codec
+    return (schema_list or None, tuple(routing_specs), answer_codec)
 
 
 def _run_control_tool_mounts(
@@ -558,9 +549,9 @@ def _run_control_tool_mounts(
 
     The mechanism seam ``tests/test_control_tool_mount_loop.py`` pins; the
     builder itself uses :func:`_mount_control_tools`, which additionally returns
-    the collected mount exports (D8).
+    the mounts' answer codec (spec §4.3).
     """
-    schema_list, routing_specs, _exports = _mount_control_tools(entries, ctx)
+    schema_list, routing_specs, _codec = _mount_control_tools(entries, ctx)
     return schema_list, routing_specs
 
 
@@ -928,8 +919,29 @@ def build_session_inputs(
     entries.sort(key=lambda e: (e.priority, e.name))
 
     pack_kinds: list[tuple[int, int, ContentKindSpec]] = []
-    exports: dict[str, object] = {}
     init_hooks: list[tuple[str, InitHook]] = []
+    # The typed contribution side-state the builder consumes (spec §4.3): each
+    # is single-writer across the pack loop (a second contributor is a wiring
+    # fault, not a merge). ``None`` ⇒ no pack contributed it.
+    skills_kit: Optional[SkillsKit] = None
+    content_discovery: Optional[Any] = None
+    content_preloader: Optional[Any] = None
+    memory_store: Optional[Any] = None
+    memory_entries: MemoryEntries = ()
+    instructions_snapshot: Optional[InstructionsSnapshot] = None
+    instructions_snapshots: dict[str, InstructionsSnapshot] = {}
+    environment_snapshot: Optional[EnvironmentSnapshot] = None
+
+    def _claim(field_name: str, current: Any, value: Any) -> Any:
+        if value is None:
+            return current
+        if current is not None:
+            raise RuntimeError(
+                f"two session packs contributed {field_name!r} — "
+                f"typed side-state is single-writer across the pack loop"
+            )
+        return value
+
     for seq, entry in enumerate(entries):
         contrib = entry.factory(ctx)
         for name, tool in contrib.tools.items():
@@ -941,44 +953,48 @@ def build_session_inputs(
         # ``actor="plugin:<name>"`` and records residents deterministically.
         if contrib.init is not None:
             init_hooks.append((entry.name, contrib.init))
-        for key, value in contrib.exports.items():
-            if key in exports:
-                raise RuntimeError(
-                    f"session pack {entry.name!r} re-exports {key!r} — "
-                    f"export keys are single-writer across the pack loop"
-                )
-            exports[key] = value
+        skills_kit = _claim("skills_kit", skills_kit, contrib.skills_kit)
+        content_discovery = _claim(
+            "content_discovery", content_discovery, contrib.content_discovery
+        )
+        content_preloader = _claim(
+            "content_preloader", content_preloader, contrib.content_preloader
+        )
+        memory_store = _claim("memory_store", memory_store, contrib.memory_store)
+        if contrib.memory_entries:
+            memory_entries = cast(MemoryEntries, contrib.memory_entries)
+        instructions_snapshot = _claim(
+            "instructions_snapshot",
+            instructions_snapshot,
+            contrib.instructions_snapshot,
+        )
+        if contrib.instructions_snapshots:
+            instructions_snapshots = cast(
+                "dict[str, InstructionsSnapshot]", contrib.instructions_snapshots
+            )
+        environment_snapshot = _claim(
+            "environment_snapshot",
+            environment_snapshot,
+            contrib.environment_snapshot,
+        )
 
-    # Populate the assembly the post-tools phases read. The exports adapter
-    # is S1-transitional: S4/S5 teach the phases to read contributions
-    # directly and this block shrinks with them.
+    # Populate the assembly the post-tools phases read. The adapter is
+    # S1-transitional: S4/S5 teach the phases to read contributions directly and
+    # this block shrinks with them.
     asm = _ToolAssembly()
     asm.tools = tools
     asm.workspace = workspace
-    _kit = exports.get(EXPORT_SKILLS_KIT)
-    if _kit is not None:
-        skills_kit = cast(SkillsKit, _kit)
+    if skills_kit is not None:
         asm.registry = skills_kit.registry
         asm.skill_content_kind = skills_kit.content_kind
         asm.skill_allowed_tools = skills_kit.allowed_tools
         asm.skill_script_tools = skills_kit.skill_script_tools
         asm.skill_scripts = skills_kit.skill_scripts
-    asm.memory_store = exports.get(EXPORT_MEMORY_STORE)
-    asm.memory_entries = cast(
-        MemoryEntries, exports.get(EXPORT_MEMORY_ENTRIES, ())
-    )
-    asm.instructions_snapshot = cast(
-        Optional[InstructionsSnapshot],
-        exports.get(EXPORT_INSTRUCTIONS_SNAPSHOT),
-    )
-    asm.instructions_snapshots = cast(
-        "dict[str, InstructionsSnapshot]",
-        exports.get(EXPORT_INSTRUCTIONS_SNAPSHOTS, {}),
-    )
-    asm.environment_snapshot = cast(
-        Optional[EnvironmentSnapshot],
-        exports.get(EXPORT_ENVIRONMENT_SNAPSHOT),
-    )
+    asm.memory_store = memory_store
+    asm.memory_entries = memory_entries
+    asm.instructions_snapshot = instructions_snapshot
+    asm.instructions_snapshots = instructions_snapshots
+    asm.environment_snapshot = environment_snapshot
     # Control-tool mounts (control-tool-surface S1 → S2b): build the control-
     # specific context (the generic capability-flag bag + the packs' exports),
     # then run the host-supplied ``control_tools`` (every ``control_tool``
@@ -996,12 +1012,12 @@ def build_session_inputs(
         capability_flags=spec.capability_flags,
         subtask_agent_directory=spec.subtask_agent_directory,
         structured_output_schema=spec.structured_output_schema,
-        exports=exports,
+        skills_kit=skills_kit,
     )
     (
         control_action_schemas,
         control_translate_specs,
-        control_exports,
+        control_answer_codec,
     ) = _mount_control_tools(spec.control_tools, control_ctx)
     content_registry = _build_content_registry(
         spec,
@@ -1087,13 +1103,10 @@ def build_session_inputs(
     hooks = _build_guards(spec, asm)
 
     # Anchored-content seams (docs/adr/anchored-content-placement.md):
-    # exported by the workspace plugin's instructions pack when discovery is
-    # armed — both hooks close over the SAME snapshot mapping the composer's
-    # instructions kind renders from, so a discovered (or resume-preloaded)
-    # file is renderable the moment its activation folds.
-    content_discovery = exports.get(EXPORT_CONTENT_DISCOVERY)
-    content_preloader = exports.get(EXPORT_CONTENT_PRELOADER)
-
+    # ``content_discovery`` / ``content_preloader`` are the workspace plugin's
+    # instructions-pack contributions (claimed in the pack loop above when
+    # discovery is armed); both close over the SAME snapshot mapping the
+    # composer's instructions kind renders from.
     return SessionInputs(
         tools=tools,
         composer=composer,
@@ -1109,5 +1122,5 @@ def build_session_inputs(
         content_discovery=content_discovery,
         content_preloader=content_preloader,
         init_hooks=tuple(init_hooks),
-        control_exports=control_exports,
+        answer_codec=control_answer_codec,
     )

@@ -33,6 +33,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
+    Any,
     Callable,
     Mapping,
     Optional,
@@ -56,46 +57,7 @@ __all__ = [
     "PackContribution",
     "SessionPackFactory",
     "SessionPackEntry",
-    "EXPORT_SKILLS_KIT",
-    "EXPORT_CONTENT_DISCOVERY",
-    "EXPORT_CONTENT_PRELOADER",
-    "EXPORT_MEMORY_STORE",
-    "EXPORT_MEMORY_ENTRIES",
-    "EXPORT_INSTRUCTIONS_SNAPSHOT",
-    "EXPORT_INSTRUCTIONS_SNAPSHOTS",
-    "EXPORT_ENVIRONMENT_SNAPSHOT",
 ]
-
-
-# ---------------------------------------------------------------------------
-# Export keys — the closed vocabulary of pack side-state the kernel consumes.
-# Each key names an existing kernel seam: the SessionInputs field / post-tools
-# phase that reads it. A pack MAY export other keys; the kernel ignores them
-# (they still ride SessionInputs.session_exports for host-side consumers).
-# ---------------------------------------------------------------------------
-
-#: The skills kit (``noeta.execution.skills.SkillsKit``): feeds the control
-#: schemas' skill menu, the guard grants, and ``SessionInputs.skill_registry``.
-EXPORT_SKILLS_KIT = "skills_kit"
-#: The opaque memory store handle → ``SessionInputs.memory_store``.
-EXPORT_MEMORY_STORE = "memory_store"
-#: The load-time memory index snapshot → ``SessionInputs.memory_entries``
-#: (shared by the composer's renderer and the pre-loop record seam).
-EXPORT_MEMORY_ENTRIES = "memory_entries"
-#: The root instructions snapshot → ``SessionInputs.instructions_snapshot``.
-EXPORT_INSTRUCTIONS_SNAPSHOT = "instructions_snapshot"
-#: The SHARED MUTABLE ``name → snapshot`` mapping the instructions kind
-#: renders from; the discovery hook / resume preloader add entries at
-#: tool/step time, so identity (not a copy) is the contract.
-EXPORT_INSTRUCTIONS_SNAPSHOTS = "instructions_snapshots"
-#: The workspace environment snapshot → ``SessionInputs.environment_snapshot``.
-EXPORT_ENVIRONMENT_SNAPSHOT = "environment_snapshot"
-#: The post-tool content-discovery hook → ``SessionInputs.content_discovery``
-#: (wired into ``Engine(content_discovery=…)`` by the host).
-EXPORT_CONTENT_DISCOVERY = "content_discovery"
-#: The per-step resume preloader → ``SessionInputs.content_preloader``
-#: (wired into ``Engine(content_preloader=…)`` by the host).
-EXPORT_CONTENT_PRELOADER = "content_preloader"
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,7 +184,27 @@ class PackContribution:
     #: resident content items through the kernel-handed :class:`SessionRecorder`
     #: at seed time. ``None`` ⇒ the pack activates no pre-loop residents.
     init: Optional[InitHook] = None
-    exports: Mapping[str, object] = field(default_factory=dict)
+    # --- typed side-state fields (spec §4.3: typed fields, no stringly bag) ---
+    # The kernel-consumed contributions: named, typed fields, each read by a
+    # specific kernel seam. Adding one is an SPI change, reviewed as such.
+    #: The skills kit (``noeta.execution.skills.SkillsKit``): feeds the build's
+    #: skill content kind + guard grants and the ``skill`` control-tool mount's
+    #: menu (the builder threads it onto the ``ControlToolBuildContext``).
+    skills_kit: Optional[Any] = None
+    #: The post-tool content-discovery hook → ``Engine(content_discovery=…)``.
+    content_discovery: Optional[Any] = None
+    #: The per-step resume preloader → ``Engine(content_preloader=…)``.
+    content_preloader: Optional[Any] = None
+    # Build-inspection pass-throughs: a pack's own state that never crosses INTO
+    # a kernel seam — it rides ``SessionInputs`` only as a build-result
+    # inspection surface for tests. (A future purification moves these fully
+    # into the factory closures + reworks the inspecting tests, spec §4.3
+    # "closures, not exports".)
+    memory_store: Optional[Any] = None
+    memory_entries: tuple[Any, ...] = ()
+    instructions_snapshot: Optional[Any] = None
+    instructions_snapshots: Mapping[str, Any] = field(default_factory=dict)
+    environment_snapshot: Optional[Any] = None
 
 
 #: The empty contribution — the canonical "this pack does not apply" value.
