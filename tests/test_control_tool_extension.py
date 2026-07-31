@@ -131,17 +131,27 @@ def _toy_control_tool(ctx: ControlToolBuildContext) -> ControlToolMount | None:
     )
 
 
-#: A minimal stand-in for the skills pack's typed ``skills_kit`` contribution —
-#: just enough shape (``registry.names()`` / ``registry.get(name).description``)
-#: for the skills mount to derive its one-entry ``alpha`` menu.
-_FAKE_SKILLS_KIT = SimpleNamespace(
-    registry=SimpleNamespace(
-        names=lambda: ["alpha"],
-        get=lambda name: (
-            SimpleNamespace(description="alpha desc") if name == "alpha" else None
-        ),
-    )
+#: A minimal stand-in for the skills pack's merged registry — just enough
+#: shape (``names()`` / ``get(name).description``) for the skill mount's
+#: closure to derive its one-entry ``alpha`` menu.
+_FAKE_REGISTRY = SimpleNamespace(
+    names=lambda: ["alpha"],
+    get=lambda name: (
+        SimpleNamespace(description="alpha desc") if name == "alpha" else None
+    ),
 )
+
+
+def _skill_pack_entry() -> ControlToolEntry:
+    """The skill entry as the skills PACK now contributes it: a factory closed
+    over the plugin's own registry, riding ``PackContribution.control_tools``
+    into the same mount loop as the host-supplied entries (spec §5 — no kit
+    crosses into kernel code)."""
+    from noeta.builtins.skills.impl import make_skills_control_tool
+
+    return ControlToolEntry(
+        "skill", 400, make_skills_control_tool(_FAKE_REGISTRY)
+    )
 
 
 def _full_ctx(*, delegation_enabled: bool = True) -> ControlToolBuildContext:
@@ -160,7 +170,6 @@ def _full_ctx(*, delegation_enabled: bool = True) -> ControlToolBuildContext:
         },
         subtask_agent_directory=(("explore", "read-only explorer"),),
         structured_output_schema={"type": "object"},
-        skills_kit=_FAKE_SKILLS_KIT,
     )
 
 
@@ -320,7 +329,7 @@ def test_builder_renders_and_routes_the_external_control_tool_in_band() -> None:
     """
     entry = ControlToolEntry(_TOY_TOOL, _TOY_SCHEMA_BAND, _toy_control_tool)
     schemas, specs = _run_control_tool_mounts(
-        default_control_tools() + (entry,), _full_ctx()
+        default_control_tools() + (_skill_pack_entry(), entry), _full_ctx()
     )
     assert schemas is not None
 

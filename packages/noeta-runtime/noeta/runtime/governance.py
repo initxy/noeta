@@ -36,6 +36,7 @@ __all__ = [
     "RepetitionPolicy",
     "RiskLevel",
     "SkillEnforcementMode",
+    "SkillGuardFacts",
 ]
 
 
@@ -138,6 +139,30 @@ class PermissionPolicy:
     skill_scripts: frozenset[tuple[str, str]] = field(
         default_factory=frozenset
     )
+
+
+@dataclass(frozen=True, slots=True)
+class SkillGuardFacts:
+    """Skill-derived guard inputs, bundled by the skills plugin's session pack.
+
+    The producer is the skills built-in (``PackContribution.guard_facts``);
+    the consumer is the governance built-in's guards factory, which unpacks
+    the bundle into the matching :class:`PermissionPolicy` fields. The
+    execution-band builder forwards it OPAQUELY (a generic single-writer
+    contribution field) — this type lives HERE, in the runtime-governance
+    band next to the ``PermissionPolicy`` fields it feeds, so the kernel's
+    construction machinery carries no skill vocabulary.
+
+    Field semantics are exactly the ``PermissionPolicy`` fields of the same
+    names: ``tool_enforcement`` the Issue-B mode, ``allowed_tools`` the
+    resolved ``(skill, neutral-tool-grants)`` map, ``script_tools`` /
+    ``scripts`` the Issue-E script-gating facts.
+    """
+
+    tool_enforcement: SkillEnforcementMode = "off"
+    allowed_tools: tuple[tuple[str, frozenset[str]], ...] = ()
+    script_tools: frozenset[str] = frozenset()
+    scripts: frozenset[tuple[str, str]] = frozenset()
 
 
 # ---------------------------------------------------------------------------

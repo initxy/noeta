@@ -48,7 +48,7 @@ __all__ = [
     "SKILL_TOOL",
     "skill_tool_schema",
     "make_skill_translate",
-    "build_skills_control_tool",
+    "make_skills_control_tool",
 ]
 
 
@@ -201,58 +201,57 @@ def make_skill_translate(
 
 
 def _skill_menu(
-    ctx: ControlToolBuildContext,
+    registry: Any,
 ) -> tuple[tuple[tuple[str, str], ...], frozenset[str]]:
-    """The ``skill`` tool's ``(menu, menu_names)``, derived from this plugin's
-    own pack export.
+    """The ``skill`` tool's ``(menu, menu_names)``, derived from the plugin's
+    own registry.
 
-    Both are non-empty only when the ``skill_invocation`` flag is on AND the
-    skills pack contributed its kit (``ctx.skills_kit``) AND the registry has
-    indexed skills — the single gate the old ``_build_control_action_schemas``
-    schema branch and ``_skill_menu_names`` policy branch duplicated (and
-    could, in principle, diverge). ``menu`` is the sorted
-    ``(name, description)`` tuple the schema renders; ``menu_names`` is the
-    frozenset the translate closure validates against — and the mount's gate.
-    No kit at all (the ``skills`` built-in disabled) reads the same as an empty
-    index: a capability the agent declares but the host never wired grows no
-    tool. Bytes are identical to the kernel builder's retired ``_skill_menu``.
+    ``menu`` is the sorted ``(name, description)`` tuple the schema renders;
+    ``menu_names`` is the frozenset the translate closure validates against —
+    and the mount's gate. An empty index reads the same as no registry: the
+    tool is not grown. Bytes are identical to the kernel builder's retired
+    ``_skill_menu``.
     """
-    if ctx.flag("skill_invocation"):
-        registry = getattr(ctx.skills_kit, "registry", None)
-        if registry is not None:
-            skill_names = registry.names()
-            if skill_names:
-                menu = tuple(
-                    (name, desc.description)
-                    for name in sorted(skill_names)
-                    if (desc := registry.get(name)) is not None
-                )
-                return menu, frozenset(skill_names)
+    if registry is not None:
+        skill_names = registry.names()
+        if skill_names:
+            menu = tuple(
+                (name, desc.description)
+                for name in sorted(skill_names)
+                if (desc := registry.get(name)) is not None
+            )
+            return menu, frozenset(skill_names)
     return (), frozenset()
 
 
-def build_skills_control_tool(
-    ctx: ControlToolBuildContext,
-) -> Optional[ControlToolMount]:
-    """The ``control_tool`` contribution factory (manifest ``ref`` target).
+def make_skills_control_tool(
+    registry: Any,
+) -> Callable[[ControlToolBuildContext], Optional[ControlToolMount]]:
+    """Build the ``skill`` control-tool mount factory over ``registry``.
 
-    Self-gates on the effective ``skill_invocation`` capability flag AND a
-    non-empty indexed menu — mounting IS enablement. It reproduces the
-    pre-migration internal ``_skill_mount`` exactly: the menu is derived HERE
-    from the skills pack's own typed ``skills_kit`` contribution (the schema renders
-    the sorted ``(name, description)`` roster; the translate closure validates
-    against the same name set), routing band 400, schema band 400 — the byte
-    order the S0 golden pins. The rendered menu tuple may be empty
-    (descriptions absent) while the tool is still grown, matching the old
-    schema branch exactly.
+    Called by this plugin's OWN session pack (spec §4.1: translate closures
+    are session-factory outputs; spec §5: no kit, menu, or registry crosses
+    into kernel code) — the returned factory closes over the pack's merged
+    registry and rides ``PackContribution.control_tools`` into the builder's
+    generic mount loop. It self-gates on the effective ``skill_invocation``
+    capability flag AND a non-empty indexed menu — mounting IS enablement.
+    Routing band 400, schema band 400 — the byte order the S0 golden pins.
+    The rendered menu tuple may be empty (descriptions absent) while the
+    tool is still grown, matching the old schema branch exactly.
     """
-    menu, menu_names = _skill_menu(ctx)
-    if not menu_names:
-        return None
-    return ControlToolMount(
-        name=SKILL_TOOL,
-        schema=skill_tool_schema(menu),
-        translate=make_skill_translate(menu_names),
-        routing_priority=400,
-        schema_priority=400,
-    )
+
+    def factory(ctx: ControlToolBuildContext) -> Optional[ControlToolMount]:
+        if not ctx.flag("skill_invocation"):
+            return None
+        menu, menu_names = _skill_menu(registry)
+        if not menu_names:
+            return None
+        return ControlToolMount(
+            name=SKILL_TOOL,
+            schema=skill_tool_schema(menu),
+            translate=make_skill_translate(menu_names),
+            routing_priority=400,
+            schema_priority=400,
+        )
+
+    return factory

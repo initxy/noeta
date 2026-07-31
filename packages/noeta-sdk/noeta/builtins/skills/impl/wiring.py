@@ -25,6 +25,7 @@ from noeta.context.content_channel import (
     ContentChannelRegistry,
     ContentKindSpec,
 )
+from noeta.execution.control_tool import ControlToolEntry
 from noeta.execution.session_pack import (
     ContentKindContribution,
     PackContribution,
@@ -38,6 +39,7 @@ from noeta.execution.skills import (
 )
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.tool import Tool
+from noeta.runtime.governance import SkillEnforcementMode, SkillGuardFacts
 from noeta.runtime.workspace import WorkspaceRoot
 from noeta.runtime.exec_env import ExecEnv
 
@@ -454,12 +456,14 @@ def build_skills_session_pack(ctx: SessionBuildContext) -> PackContribution:
 
     The manifest-declared factory (band 600). Reads this plugin's own config
     entry — ``skills_dir`` (workspace override), ``builtin_skills_dirs`` +
-    ``global_skills_dir`` (the lower tiers), ``allow_skill_scripts`` — and
-    assembles the three-tier kit exactly as :func:`build_skills_kit` always
-    has. The whole kit rides the exports (the control schemas' skill menu,
-    the guard grants, and ``SessionInputs.skill_registry`` all read it); the
-    ``run_skill_script`` tool, when scripts are on and a skill ships one, is
-    the pack's only tool.
+    ``global_skills_dir`` (the lower tiers), ``allow_skill_scripts``,
+    ``tool_enforcement`` (the Issue-B mode) — and assembles the three-tier
+    kit exactly as :func:`build_skills_kit` always has. The kit stays INSIDE
+    this factory (spec §5: no kit crosses into kernel code): the ``skill``
+    control tool rides ``control_tools`` as a closure over the merged
+    registry, the guard inputs ride the opaque ``guard_facts`` bundle, and
+    the ``run_skill_script`` tool, when scripts are on and a skill ships
+    one, is the pack's only tool.
 
     Disabling the built-in (``disabled_builtins=["skills"]``) removes this
     pack from the session entirely — the honest expression phase 2a routed
@@ -484,9 +488,28 @@ def build_skills_session_pack(ctx: SessionBuildContext) -> PackContribution:
     tools: dict[str, Tool] = {}
     if kit.script_tool is not None:
         tools[kit.script_tool.name] = kit.script_tool
-    # The skill resident leads the semi_stable layout (kind band 100).
+    # Late import: control_tool.py imports nothing from wiring, but keeping
+    # the dependency one-way at module load mirrors the pre-move layering.
+    from .control_tool import make_skills_control_tool
+
+    # The skill resident leads the semi_stable layout (kind band 100); the
+    # ``skill`` control tool rides this contribution as a closure over the
+    # merged registry (band 400 — the S0 golden's byte order), and the guard
+    # facts travel as one opaque bundle the governance factory unpacks.
     return PackContribution(
         tools=tools,
         content_kinds=(ContentKindContribution(100, kit.content_kind),),
-        skills_kit=kit,
+        control_tools=(
+            ControlToolEntry(
+                "skill", 400, make_skills_control_tool(kit.registry)
+            ),
+        ),
+        guard_facts=SkillGuardFacts(
+            tool_enforcement=cast(
+                SkillEnforcementMode, cfg.get("tool_enforcement", "off")
+            ),
+            allowed_tools=kit.allowed_tools,
+            script_tools=kit.skill_script_tools,
+            scripts=kit.skill_scripts,
+        ),
     )

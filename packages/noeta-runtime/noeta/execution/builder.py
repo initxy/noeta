@@ -36,7 +36,7 @@ emission) and locked by ``tests/test_session_pack_goldens.py``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
 
@@ -51,12 +51,10 @@ from noeta.execution.session_pack import (
     SessionBuildContext,
     SessionPackEntry,
 )
-from noeta.execution.skills import SkillsKit
 from noeta.runtime.governance import (
     Budget,
     PreToolUseRule,
     RepetitionAction,
-    SkillEnforcementMode,
 )
 from noeta.execution.control_tool import (
     AskAnswerCodec,
@@ -202,9 +200,9 @@ class GuardsFactory(Protocol):
     The kernel never imports a guard class: the SDK host resolves the
     ``governance`` built-in plugin's factory through the plugin loader and
     injects it here. The kernel calls it with the finished tool assembly, the
-    skill-derived guard facts, and the operator passthrough fields; it returns
-    the registered :class:`~noeta.core.hooks.HookManager`. Signature =
-    ``noeta.builtins.governance.impl:build_default_guards``.
+    packs' opaque ``guard_facts`` bundle, and the operator passthrough
+    fields; it returns the registered :class:`~noeta.core.hooks.HookManager`.
+    Signature = ``noeta.builtins.governance.impl:build_default_guards``.
     """
 
     def __call__(
@@ -216,11 +214,8 @@ class GuardsFactory(Protocol):
         shell_approval_predicate: Optional[
             Callable[[str, Mapping[str, Any]], bool]
         ],
-        skill_tool_enforcement: SkillEnforcementMode,
-        skill_allowed_tools: tuple[tuple[str, frozenset[str]], ...],
+        guard_facts: Optional[Any],
         allowed_subtask_agents: Optional[frozenset[str]],
-        skill_script_tools: frozenset[str],
-        skill_scripts: frozenset[tuple[str, str]],
         repetition_threshold: int,
         repetition_action: RepetitionAction,
         repetition_window: int,
@@ -290,7 +285,6 @@ class _BuildSpec:
     max_steps: int
     require_approval_tools: tuple[str, ...]
     shell_approval_predicate: Optional[Callable[[str, Mapping[str, Any]], bool]]
-    skill_tool_enforcement: SkillEnforcementMode
     #: The effective capability flags by name (agent activation × host
     #: kill-switch, already ANDed by the host) — the ONE generic bag both the
     #: session packs (via ``SessionBuildContext``) and the control-tool mounts
@@ -355,25 +349,6 @@ class _BuildSpec:
     #: kernel keeps NO internal control-tool table, so this tuple is the whole
     #: input: empty ⇒ a session with zero control tools.
     control_tools: tuple[ControlToolEntry, ...] = ()
-
-
-@dataclass(slots=True)
-class _ToolAssembly:
-    """The mutable accumulator the tool pipeline threads through.
-
-    ``tools`` is the dict each stage mutates (the construction-order contract
-    is the ORDER stages append into it). The remaining fields are the
-    side-outputs the pack loop produces and the guards phase consumes: the
-    skill-grant / skill-script guard fields (feed the PermissionGuard).
-    """
-
-    tools: dict[str, Tool] = field(default_factory=dict)
-    #: The resolved allowed-tools grants, produced by the skills pack's kit
-    #: (microkernel phase 2a) and consumed by the guards phase.
-    skill_allowed_tools: tuple[tuple[str, frozenset[str]], ...] = ()
-    skill_script_tools: frozenset[str] = frozenset()
-    skill_scripts: frozenset[tuple[str, str]] = frozenset()
-    workspace: WorkspaceRoot = None  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -558,25 +533,26 @@ def _build_reminder_registry(spec: _BuildSpec) -> ReminderRegistry:
     return ReminderRegistry((*spec.base_reminders, *spec.extra_reminders))
 
 
-def _build_guards(spec: _BuildSpec, asm: _ToolAssembly) -> HookManager:
+def _build_guards(
+    spec: _BuildSpec,
+    tools: dict[str, Tool],
+    guard_facts: Optional[Any],
+) -> HookManager:
     """The guard HookManager in the live session's registration order.
 
     Issue A: rebuild the exact guard shape the live session ran so a resumed
     Engine reproduces guard-origin events (the approval suspend +
     ``ToolCallApprovalRequested``, or a guard deny) consistently.
 
-    Microkernel M2: the construction body moved into the ``governance``
-    built-in plugin (``build_default_guards``) — this phase pre-shapes the
-    kernel-side facts and delegates to the injected factory:
-
-    * Issue B — the raw skill ``allowed-tools`` map is extracted and
-      sdk-resolved HERE (both halves are kernel machinery) so an enforcement
-      recording reproduces byte-equal.
-    * Issue C — delegation targets are authorized only while delegation is
-      enabled; the caller has already roster-filtered the set through the same
-      single-source helper the live runner uses, so an unknown
-      ``--delegate-to`` produces the identical (empty) allow-list — live deny
-      == resume deny, no SubtaskDenied-vs-SubtaskSpawned divergence.
+    Microkernel M2: the construction body lives in the ``governance``
+    built-in plugin (``build_default_guards``) — this phase forwards the
+    finished tool assembly, the packs' opaque ``guard_facts`` bundle
+    (spec §4.3: the builder never reads inside it), and the operator
+    passthrough fields. Issue C — delegation targets are authorized only
+    while delegation is enabled; the caller has already roster-filtered the
+    set through the same single-source helper the live runner uses, so an
+    unknown ``--delegate-to`` produces the identical (empty) allow-list —
+    live deny == resume deny, no SubtaskDenied-vs-SubtaskSpawned divergence.
 
     The budget and repetition defaults are supplied by the caller (product
     layer) so this phase stays noeta.agent-agnostic.
@@ -589,19 +565,16 @@ def _build_guards(spec: _BuildSpec, asm: _ToolAssembly) -> HookManager:
             "guard implementation"
         )
     return spec.guards_factory(
-        tools=asm.tools,
+        tools=tools,
         budget=spec.budget,
         require_approval_tools=tuple(spec.require_approval_tools),
         shell_approval_predicate=spec.shell_approval_predicate,
-        skill_tool_enforcement=spec.skill_tool_enforcement,
-        skill_allowed_tools=asm.skill_allowed_tools,
+        guard_facts=guard_facts,
         allowed_subtask_agents=(
             spec.allowed_subtask_agents
             if spec.capability_flags.get("delegation", False)
             else None
         ),
-        skill_script_tools=asm.skill_script_tools,
-        skill_scripts=asm.skill_scripts,
         repetition_threshold=spec.repetition_threshold,
         repetition_action=spec.repetition_action,
         repetition_window=spec.repetition_window,
@@ -633,7 +606,6 @@ def build_session_inputs(
     shell_approval_predicate: Optional[
         Callable[[str, Mapping[str, Any]], bool]
     ] = None,
-    skill_tool_enforcement: SkillEnforcementMode = "off",
     #: When set, expose a per-helper ``structured_output`` control
     #: schema (its ``parameters`` = this JSON Schema). Set ONLY for a workflow
     #: helper subtask whose ``agent(schema=...)`` declared a schema; the
@@ -786,7 +758,6 @@ def build_session_inputs(
         max_steps=max_steps,
         require_approval_tools=require_approval_tools,
         shell_approval_predicate=shell_approval_predicate,
-        skill_tool_enforcement=skill_tool_enforcement,
         capability_flags=dict(capability_flags) if capability_flags else {},
         structured_output_schema=structured_output_schema,
         mcp_tools_override=mcp_tools_override,
@@ -870,10 +841,11 @@ def build_session_inputs(
 
     pack_kinds: list[tuple[int, int, ContentKindSpec]] = []
     init_hooks: list[tuple[str, InitHook]] = []
+    pack_control_tools: list[ControlToolEntry] = []
     # The typed contribution side-state the builder consumes (spec §4.3): each
     # is single-writer across the pack loop (a second contributor is a wiring
     # fault, not a merge). ``None`` ⇒ no pack contributed it.
-    skills_kit: Optional[SkillsKit] = None
+    guard_facts: Optional[Any] = None
     content_discovery: Optional[Any] = None
     content_preloader: Optional[Any] = None
 
@@ -898,7 +870,12 @@ def build_session_inputs(
         # ``actor="plugin:<name>"`` and records residents deterministically.
         if contrib.init is not None:
             init_hooks.append((entry.name, contrib.init))
-        skills_kit = _claim("skills_kit", skills_kit, contrib.skills_kit)
+        # Pack-contributed control-tool entries (spec §4.1 session plane:
+        # translate closures are factory outputs) — collected in pack-loop
+        # order and mounted through the SAME dual-priority loop as the
+        # host-supplied entries below.
+        pack_control_tools.extend(contrib.control_tools)
+        guard_facts = _claim("guard_facts", guard_facts, contrib.guard_facts)
         content_discovery = _claim(
             "content_discovery", content_discovery, contrib.content_discovery
         )
@@ -906,24 +883,14 @@ def build_session_inputs(
             "content_preloader", content_preloader, contrib.content_preloader
         )
 
-    # Populate the assembly the post-tools phases read. The adapter is
-    # S1-transitional: S4/S5 teach the phases to read contributions directly and
-    # this block shrinks with them.
-    asm = _ToolAssembly()
-    asm.tools = tools
-    asm.workspace = workspace
-    if skills_kit is not None:
-        asm.skill_allowed_tools = skills_kit.allowed_tools
-        asm.skill_script_tools = skills_kit.skill_script_tools
-        asm.skill_scripts = skills_kit.skill_scripts
     # Control-tool mounts (control-tool-surface S1 → S2b): build the control-
-    # specific context (the generic capability-flag bag + the packs' exports),
-    # then run the host-supplied ``control_tools`` (every ``control_tool``
-    # contribution the SDK host resolves — the built-in six + any external
-    # plugin's) through the generic dual-priority mount loop. Since S2b the
-    # kernel keeps no internal control-tool table, so this tuple IS the whole
-    # input; each mount self-gates on its own flag / export (the skills mount
-    # derives its menu from ``EXPORT_SKILLS_KIT``). It yields the composer's
+    # specific context (the generic capability-flag bag), then run the
+    # host-supplied ``control_tools`` (every ``control_tool`` contribution the
+    # SDK host resolves) PLUS the packs' contributed entries through the
+    # generic dual-priority mount loop. Since S2b the kernel keeps no internal
+    # control-tool table; each mount self-gates on its own flag / closed-over
+    # state (the skill mount carries its menu in its closure — no kit crosses
+    # into kernel code, spec §5). It yields the composer's
     # ``control_action_schemas`` (schema-band order, the S0 golden), the
     # routing-ordered translate specs the policy factory binds, and the
     # collected mount exports (D8 — the ask answer codec). The loop re-sorts by
@@ -933,13 +900,14 @@ def build_session_inputs(
         capability_flags=spec.capability_flags,
         subtask_agent_directory=spec.subtask_agent_directory,
         structured_output_schema=spec.structured_output_schema,
-        skills_kit=skills_kit,
     )
     (
         control_action_schemas,
         control_translate_specs,
         control_answer_codec,
-    ) = _mount_control_tools(spec.control_tools, control_ctx)
+    ) = _mount_control_tools(
+        (*spec.control_tools, *pack_control_tools), control_ctx
+    )
     content_registry = _build_content_registry(
         spec,
         tuple(
@@ -1021,7 +989,7 @@ def build_session_inputs(
             effort=effort,
         )
 
-    hooks = _build_guards(spec, asm)
+    hooks = _build_guards(spec, tools, guard_facts)
 
     # Anchored-content seams (docs/adr/anchored-content-placement.md):
     # ``content_discovery`` / ``content_preloader`` are the workspace plugin's

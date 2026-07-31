@@ -16,8 +16,8 @@ from __future__ import annotations
 from .allowed_tools import resolve_skill_allowed_tools
 from .control_tool import (
     SKILL_TOOL,
-    build_skills_control_tool,
     make_skill_translate,
+    make_skills_control_tool,
     skill_tool_schema,
 )
 from .indexer import (
@@ -56,13 +56,13 @@ __all__ = [
     "build_skill_composer",
     "build_skill_renderer",
     "build_skill_script_wiring",
-    "build_skills_control_tool",
     "build_skills_kit",
     "build_skills_session_pack",
     "extract_skill_allowed_tools_raw",
     "is_skill_script_resource",
     "load_workspace_skills",
     "make_skill_translate",
+    "make_skills_control_tool",
     "merge_skill_registries",
     "resolve_skill_allowed_tools",
     "resolve_skill_scripts",

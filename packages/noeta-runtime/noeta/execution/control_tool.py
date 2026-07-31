@@ -106,10 +106,6 @@ class ControlToolBuildContext:
     #: The per-helper structured-output JSON Schema, or ``None`` (its gate is
     #: data-driven, not an activation).
     structured_output_schema: Optional[dict[str, Any]]
-    #: The build's skills kit (``noeta.execution.skills.SkillsKit``), threaded
-    #: from the ``skills`` pack's typed contribution — the ``skill`` control-tool
-    #: mount derives its menu from it. ``None`` when no pack contributed one.
-    skills_kit: Optional[Any] = None
 
     def flag(self, name: str) -> bool:
         """The effective flag for capability ``name`` (absent ⇒ ``False``)."""
