@@ -8,6 +8,8 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-31
+
 ### Added
 
 - **`Client.fork(task_id, message_seq=…)` — branch a conversation, keep both.**
@@ -1091,7 +1093,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/initxy/noeta/compare/v0.3.2...v0.5.0
 [0.2.11]: https://github.com/initxy/noeta/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/initxy/noeta/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/initxy/noeta/compare/v0.2.8...v0.2.9
