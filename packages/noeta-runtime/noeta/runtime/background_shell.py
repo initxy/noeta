@@ -581,9 +581,11 @@ class ProcessRegistry:
             handle.exit_code = exit_code
             # A killed job reaches terminal too — but it records
             # ``BackgroundShellKilled`` (NOT ``Exited``); ``status`` reflects
-            # which terminal it is so a late poll reports the right one.
+            # which terminal it is so a late poll reports the right one. The
+            # flip itself happens AFTER the durable terminal event below, so a
+            # poll that observes a terminal status implies the event is
+            # already in the ledger (never the other way around).
             killed = handle.killed
-            handle.status = "killed" if killed else "exited"
             # Exactly-once: the FIRST thread to reach the reap under ``lock``
             # wins; ``notified`` then forbids a second terminal event AND a
             # second push, so a kill racing a near-simultaneous natural exit
@@ -625,6 +627,14 @@ class ProcessRegistry:
                 origin="observer",
                 trace_id=handle.trace_id,
             )
+        # Ledger-first ordering: only now may the terminal status become
+        # observable to ``poll`` — a terminal status answer implies the
+        # terminal event is already durable. (Before this ordering, a fast
+        # poll could read ``exited`` in the window between the status flip
+        # and the emit, which is exactly what the lifetime tests assert
+        # cannot happen.)
+        with handle.lock:
+            handle.status = "killed" if killed else "exited"
         # After the durable Exited, hand the completion to the host so it
         # drives a wake-and-notify turn. The ``notified`` dedup above guards
         # exactly-once (a kill and a natural exit cannot both push). The
