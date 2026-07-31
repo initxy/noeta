@@ -520,7 +520,7 @@ backend (`noeta.storage.memory`), and the public backend SPI
 ## Addendum — 2026-07-31: `merge_rule` → `activation_binding`, and the two process channels
 
 The SDK-layer cleanup
-(`docs/implementation-specs/2026-07-30-sdk-layer-cleanup.md`, D11) settled two
+(`docs/implementation-specs/archive/2026-07-30-sdk-layer-cleanup.md`, D11) settled two
 things this ADR left ambiguous about `SurfaceSpec`.
 
 - **`merge_rule` is deleted — it was decoration.** No code ever read it: the
