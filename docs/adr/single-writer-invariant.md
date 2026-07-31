@@ -47,7 +47,7 @@ only consumer is the audit projection, which copies it through verbatim. So the
 label carries no correctness weight — the invariant lives entirely in "one
 component appends."
 
-The kernel-final-form `SessionRecorder` (`docs/implementation-specs/kernel-final-form.md`
+The kernel-final-form `SessionRecorder` (`docs/implementation-specs/archive/2026-07-30-kernel-final-form.md`
 §4.4) uses this: a plugin's `init` hook calls `record_content`, and the
 **kernel's** recorder (`noeta.execution.recorder.SeedRecorder`) is what physically
 emits — stamping `actor="plugin:<name>"` so audit attributes the resident to the

@@ -82,7 +82,7 @@ When `tool_output_inline_limit` (host-level, default None=off) is positive, `wra
 
 ## Clarification (2026-07-30) — kernel final form: `active_content` carries hashes, renderers resolve
 
-The `docs/implementation-specs/kernel-final-form.md` spec (Active) advances this
+The `docs/implementation-specs/archive/2026-07-30-kernel-final-form.md` spec (Shipped) advances this
 decision in two ways; the shape and phrasing above are superseded where they
 conflict.
 
