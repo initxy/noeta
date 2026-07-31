@@ -226,7 +226,7 @@ is no static edge, and `.importlinter`'s `sdk-core-not-builtins` forbidden
 contract enforces it — universally: *every* band, kernel included, is a source.
 The catalogue currently holds fourteen built-ins — `fs`, `web`, `memory`,
 `browser`, `app`, `mcp`, `skills`, `react`, `reminders`, `governance`,
-`providers`, `sandbox`, `presets`, `workspace` *(**current state:** seventeen — control-tool-surface S2 added the control-tool built-ins `todo_write` / `ask_user_question` / `delegation`)* — so every standard surface has a built-in declaration
+`providers`, `sandbox`, `presets`, `workspace` *(**current state:** eighteen — control-tool-surface S2 added the control-tool built-ins `todo_write` / `ask_user_question` / `delegation`, and the storage-backend relocation added the declaration-only `storage`; see the 2026-07-30 storage Addendum)* — so every standard surface has a built-in declaration
 ridden through the identical loader / validation / merge path as any external
 plugin. Adding a first-party capability is adding a directory to the catalogue
 (plus a `SurfaceSpec` registration only when a genuinely new surface is
@@ -298,8 +298,9 @@ needed).
    EventLog / ContentStore / Dispatcher triple is the truth substrate every
    plugin guarantee stands on (trust bootstrapping). It is a single host
    injection with no merge semantics — the plugin mechanism adds nothing.
-   Third-party backends are ordinary packages implementing the `noeta.storage`
-   protocols, wired via `HostConfig`.
+   Third-party backends are ordinary packages implementing the `noeta.protocols`
+   storage Protocols plus the shared domain rules in `noeta.storage.spi`, wired
+   via `HostConfig`.
 6. **Control tools as contributions.** Rejected: `todo_write` / `skill` /
    `ask_user_question` / the subagent dispatch tool are renderings of kernel
    Decision variants; activation gates their *visibility*, plugins never
@@ -479,3 +480,37 @@ plugin contribution with zero kernel edits*:
   single `parts.default_session_packs()` accessor; `mcp_tools_override` /
   `custom_tools` / `exec_env` and the generically-typed `guards_factory` /
   `default_policy_factory` / `base_reminders` injections stay (D1 / Non-goals).
+
+## Addendum — 2026-07-30: durable storage backends ship as a declaration-only built-in
+
+The storage-backend relocation
+(`docs/implementation-specs/2026-07-30-storage-backend-relocation.md`) moved the
+durable backends out of the kernel wheel: `noeta.storage.{sqlite,postgres}`
+became `noeta.builtins.storage.impl.{sqlite,postgres}` (noeta-sdk), taking the
+`psycopg[binary]` dependency with them — the noeta-runtime wheel now carries no
+database driver, and the first-party durable backends are co-located under
+`noeta.builtins` like every other first-party implementation. The kernel keeps
+the storage Protocols (`noeta.protocols`, unchanged), the InMemory reference
+backend (`noeta.storage.memory`), and the public backend SPI
+(`noeta.storage.spi`) fronting the shared domain rules.
+
+- **The catalogue is eighteen built-ins.** The new `storage` built-in is a
+  **declaration-only reference manifest with zero contributions** — the
+  `providers` precedent, so the declaration-only-manifest pattern now has two
+  members (`providers`, `storage`). The manifest documents the two backend
+  `build_stack` factories for host discovery; the built-in is never activated,
+  never loaded per-agent, and never enters `AgentSpec` identity. The single
+  public doorway is `noeta.sdk.storage` (`build_storage_stack` /
+  `open_storage_stack` + lazy class re-exports, on the `noeta.sdk.providers`
+  lazy-import pattern). (The built-ins count above is updated inline.)
+- **Alternative 5 is reaffirmed, not weakened.** Storage is still **not** a
+  contribution surface: the EventLog / ContentStore / Dispatcher triple is the
+  truth substrate every plugin guarantee stands on, a single host injection
+  with no merge semantics — activation, collision, and ordering never apply to
+  it, and the surface count does not change. This was a physical move of
+  files, not trust; `HostConfig` remains the wiring path unchanged (a
+  `storage_backend` string field on it was considered and rejected). A
+  third-party backend implements the `noeta.protocols` storage Protocols plus
+  the `noeta.storage.spi` domain rules, ships a `build_stack` factory, and the
+  host injects the triple through `HostConfig` — no plugin machinery, no
+  registration.

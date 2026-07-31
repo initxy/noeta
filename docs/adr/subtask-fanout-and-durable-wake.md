@@ -48,7 +48,7 @@ Both hold one red line: **don't change the EventLog / payload**, so recorded byt
 
 - Protocol layer: the `SubtaskGroupCompleted` variant + the `matches_wake` projected by group_id land in `noeta.protocols.wake`, `SpawnSubtasksDecision` lands in `noeta.protocols.decisions`, the `release(consumed_wake_event=...)` seam lands in `noeta.protocols.dispatcher`.
 - Handling layer: the all-or-nothing `handle_spawn_subtasks` lands in `noeta.core._decision_handlers`, the group-aware fold count lands in `noeta.core.observers`, and the related fold is in `noeta.core.fold`.
-- Runtime and storage: D4's 6-case recovery state machine lands in `noeta.runtime.worker`, and D1–D6's clear timing lands in `noeta.storage.memory` and `noeta.storage.sqlite.dispatcher`.
+- Runtime and storage: D4's 6-case recovery state machine lands in `noeta.runtime.worker`, and D1–D6's clear timing lands in `noeta.storage.memory` and `noeta.builtins.storage.impl.sqlite.dispatcher`.
 - Follow-on note: this decision deliberately excludes multi-worker concurrency as a determinism boundary; true concurrent execution is taken up by subtask-parallel-execution.md, which has proven the canonical subtask_id ordering can be dropped.
 
 ## Amendment (2026-07-02): batch `spawns` form on `spawn_subagent`

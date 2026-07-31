@@ -7,6 +7,22 @@
 > (the two efforts touch disjoint modules, but doc/status references here
 > assume the final-form tree).
 
+> **Implementation status (2026-07-30, branch `storage-backend-relocation`,
+> stacked on `kernel-final-form`).** Shipped green: §4 steps 1–9 all landed;
+> `make check` 3397 passed / 129 skipped (postgres-DSN + live-LLM, unchanged),
+> mypy clean, import-linter 10 kept / 0 broken with zero contract edits (D7);
+> gates G1–G6 verified (G5's three surviving grep hits are the install smoke's
+> own negative assertions). Two notes beyond the spec text: (1) the `storage`
+> manifest also had to be registered in the catalogue plumbing —
+> `noeta.builtins._BUILTINS` + `options._INERT_BUILTIN_ACTIVATIONS` (the
+> `providers` row of each); (2) the coverage total moved 88% → 85.36% **in a
+> no-DSN environment only** because the doorway's re-export identity test now
+> imports the postgres impl, pulling ~700 previously *unmeasured* statements
+> into scope (never-imported modules under a PEP 420 namespace are invisible
+> to coverage) — a measurement-scope widening, not lost coverage; a DSN-bearing
+> run recovers it. Step 10 (release: minor bump both wheels, sdk pin advance,
+> noeta-agent sweep) remains for the maintainer.
+
 ## 1. Goal
 
 Finish the microkernel thought for storage. Today `noeta.storage`

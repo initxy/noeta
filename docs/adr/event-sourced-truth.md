@@ -32,5 +32,5 @@ Noeta splits the source of truth into two layers, and `fold(EventLog, ContentSto
 
 ## Consequences
 
-- Load-bearing landings: `noeta.protocols.content_store`, `noeta.protocols.canonical`, `noeta.protocols.event_log` are the two-layer protocol proper plus the canonical single point; `noeta.core.fold`, `noeta.core.snapshot`, `noeta.runtime.compaction` are the fold / snapshot / compaction paths; `noeta.storage.sqlite.eventlog`, `noeta.storage.memory` are the backend implementations, where the 4 KB size check and ContentStore offload land.
+- Load-bearing landings: `noeta.protocols.content_store`, `noeta.protocols.canonical`, `noeta.protocols.event_log` are the two-layer protocol proper plus the canonical single point; `noeta.core.fold`, `noeta.core.snapshot`, `noeta.runtime.compaction` are the fold / snapshot / compaction paths; `noeta.storage.memory` and `noeta.builtins.storage.impl.sqlite.eventlog` are the backend implementations, where the 4 KB size check (the `noeta.storage.spi` payload cap) and ContentStore offload land.
 - Constraint: any object over 4 KB must be offloaded, and a new typed value must register a canonical tag, or round-trip / the size check will fail—this is the two-layer model's hard requirement for every new field.
