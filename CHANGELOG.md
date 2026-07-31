@@ -109,6 +109,25 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
   compound identifier containing "session" fails unless allow-listed. This is
   what let the drift accumulate unnoticed.
 
+### Fixed
+
+- **`structured_output` payloads are checked against the schema before they
+  become an answer.** A provider's tool `parameters` only steer the model, so a
+  call that missed a required field or got a type wrong used to be accepted
+  verbatim and completed the helper — the `agent(goal, schema=...)` caller then
+  parsed a shape it never declared, raising far from the cause against a ledger
+  that recorded success. A mismatch is now answered with a failed `tool_result`
+  naming each violation by JSON path, and the assistant retries. Both failure
+  modes (never calling the tool, and calling it with a payload that missed the
+  schema) share the one `MAX_STRUCTURED_OUTPUT_NUDGES` budget; exhausting it
+  fails the helper with the violations in the reason.
+
+  The check is deliberately conservative and dependency-free: it reports only
+  what it is certain of (`type`, `required`, `properties`, `items`, `enum`,
+  `additionalProperties: false`) and stays silent on what it does not model
+  (`$ref`, `anyOf` / `oneOf` / `allOf` / `not`, numeric bounds, `format`), so it
+  can never reject a payload that was valid.
+
 ## [0.4.0] - 2026-07-26
 
 ### Added

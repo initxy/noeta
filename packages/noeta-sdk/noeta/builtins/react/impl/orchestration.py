@@ -42,10 +42,12 @@ from typing import Any, Optional
 from noeta.policies.control_semantics import (
     SPAWN_SUBAGENT_TOOL,
     WORKFLOW_AGENT_NAME,
+    ack_patch_decision,
     concurrent_fanout_enabled,
 )
 
 from .control_tool import STRUCTURED_OUTPUT_TOOL
+from .schema_check import validate_structured_payload
 from .workflow_sandbox import SAFE_BUILTINS
 from noeta.protocols.decisions import (
     Decision,
@@ -82,7 +84,8 @@ WORKFLOW_SYSTEM_PROMPT = "Workflow orchestration runtime."
 
 
 #: Max nudge count: when the assistant end_turns without calling
-#: ``structured_output``, prompt it at most twice in the conversation; still no call after two → fail it.
+#: ``structured_output`` — or calls it with a payload that does not match the schema —
+#: prompt it at most twice in the conversation; still nothing valid after two → fail it.
 MAX_STRUCTURED_OUTPUT_NUDGES = 2
 
 #: Nudge text (deterministic constant). Also serves as the "how many nudges so far" counter —
@@ -445,22 +448,57 @@ def _finish_text(answer: Any) -> str:
     return answer if isinstance(answer, str) else repr(answer)
 
 
-def _count_structured_output_nudges(view: View) -> int:
-    """Count the structured_output nudges already issued in ``view.rolling_history``.
+def _count_structured_output_retries(view: View) -> int:
+    """Count the structured-output retries already spent in ``view.rolling_history``.
 
-    A nudge is a ``role="user"`` message whose text contains :data:`STRUCTURED_OUTPUT_NUDGE`.
+    Two channels, one budget:
+
+    * a ``role="user"`` message whose text contains :data:`STRUCTURED_OUTPUT_NUDGE` — the
+      assistant end_turned instead of calling the tool;
+    * an assistant ``structured_output`` ``tool_use`` already in the history — a call whose
+      payload was rejected. A payload that *passes* finishes the subtask on the spot, so a
+      recorded call can only ever be a rejected one.
+
     Deriving the count from the conversation (rather than storing it on the Policy instance) keeps
-    the Policy stateless — rebuild = recompute, deterministic across re-runs.
+    the Policy stateless — rebuild = recompute, deterministic across re-runs. The rejected-call arm
+    reads message *structure* rather than the rejection text on purpose: a large tool result can be
+    spilled out of line, and a counter that stopped matching would loop forever.
     """
     count = 0
     for msg in view.rolling_history:
-        if msg.role != "user":
-            continue
-        for block in msg.content:
-            if isinstance(block, TextBlock) and STRUCTURED_OUTPUT_NUDGE in block.text:
-                count += 1
-                break
+        if msg.role == "user":
+            for block in msg.content:
+                if isinstance(block, TextBlock) and STRUCTURED_OUTPUT_NUDGE in block.text:
+                    count += 1
+                    break
+        elif msg.role == "assistant":
+            for block in msg.content:
+                if (
+                    isinstance(block, ToolUseBlock)
+                    and block.tool_name == STRUCTURED_OUTPUT_TOOL
+                ):
+                    count += 1
+                    break
     return count
+
+
+def _rejection_text(violations: tuple[str, ...]) -> str:
+    """The tool-result body handed back for a payload that missed the schema."""
+    listed = "\n".join(f"- {v}" for v in violations)
+    return (
+        "structured_output rejected: the arguments did not match the required "
+        f"JSON schema.\n{listed}\n"
+        "Call structured_output again with the same answer, corrected to match "
+        "the schema."
+    )
+
+
+def _rejection_fail_reason(violations: tuple[str, ...]) -> str:
+    """The terminal reason once the retry budget is spent on invalid payloads."""
+    return (
+        "structured_output arguments did not match the required JSON schema after "
+        f"{MAX_STRUCTURED_OUTPUT_NUDGES} nudges: " + "; ".join(violations)
+    )
 
 
 @dataclass
@@ -471,15 +509,26 @@ class StructuredOutputPolicy:
     has already been sent into that assistant's ``provider_tool_schemas`` via the composer (the
     host wires it from ``inputs.output_schema``). This wrapper intercepts inner decisions:
 
-    * inner emits a ``ToolCallsDecision`` containing a ``structured_output`` call → treat that call's
-      **arguments** as the assistant's final answer and turn it into a ``FinishDecision`` (the tool
-      never reaches ToolRuntime, so it is intercepted before execution);
+    * inner emits a ``ToolCallsDecision`` containing a ``structured_output`` call → check the
+      call's **arguments** against the schema. Clean → they are the assistant's final answer,
+      turned into a ``FinishDecision`` (the tool never reaches ToolRuntime, so it is intercepted
+      before execution). Not clean → reject the call the way every control tool acks a malformed
+      input (assistant tool_use + a failed tool_result naming the violations) and let the
+      assistant try again, because the provider's tool schema only *steers* the model: an
+      unchecked payload would be handed to the ``agent(goal, schema=...)`` caller as a completed
+      task and fail far from its cause;
     * inner wants a ``FinishDecision`` (the assistant end_turns without calling ``structured_output``)
       → if nudged <2 times, return a loop-continue ``StatePatchDecision`` (record this end_turn +
       append a user nudge) to make it decide again; still no call after 2 → ``FailDecision`` (D6: fail the assistant after two);
     * everything else (plain tool_calls / non-finish) → pass through unchanged.
 
-    No state of its own: the nudge count is derived from view, so live and resume decide alike (deterministic).
+    Both failure modes — no call, and a call that missed the schema — share the one
+    :data:`MAX_STRUCTURED_OUTPUT_NUDGES` budget, so a model that alternates between them cannot
+    loop for free.
+
+    No state of its own: the retry count is derived from view, so live and resume decide alike
+    (deterministic). The schema check is deterministic for the same reason — its violation text
+    lands in the recorded conversation.
     """
 
     inner: Policy
@@ -490,18 +539,57 @@ class StructuredOutputPolicy:
         if isinstance(decision, ToolCallsDecision):
             for call in decision.calls:
                 if call.tool_name == STRUCTURED_OUTPUT_TOOL:
-                    # The call arguments are the structured answer; carry that assistant turn
-                    # (with the tool_use) to record before TaskCompleted. The subtask terminates
-                    # here with no follow-on request, so leaving the tool_use without a paired
-                    # result is harmless (no "dangling function_call → gateway 400" — that only
-                    # happens on a continuation request).
-                    return FinishDecision(
-                        answer=dict(call.arguments),
-                        assistant_message=decision.assistant_message,
+                    payload = dict(call.arguments)
+                    violations = validate_structured_payload(payload, self.schema)
+                    if not violations:
+                        # The call arguments are the structured answer; carry that assistant turn
+                        # (with the tool_use) to record before TaskCompleted. The subtask terminates
+                        # here with no follow-on request, so leaving the tool_use without a paired
+                        # result is harmless (no "dangling function_call → gateway 400" — that only
+                        # happens on a continuation request).
+                        return FinishDecision(
+                            answer=payload,
+                            assistant_message=decision.assistant_message,
+                        )
+                    if (
+                        _count_structured_output_retries(view)
+                        >= MAX_STRUCTURED_OUTPUT_NUDGES
+                    ):
+                        return FailDecision(
+                            reason=_rejection_fail_reason(violations),
+                            retryable=False,
+                        )
+                    if decision.assistant_message is not None:
+                        # Unlike the finish path above there IS a follow-on request, so the
+                        # rejected tool_use must be answered — a dangling function_call is
+                        # exactly what a continuation request rejects.
+                        return ack_patch_decision(
+                            (call,),
+                            decision.assistant_message,
+                            decision.assistant_thinking,
+                            patch=None,
+                            text=_rejection_text(violations),
+                            valid=False,
+                        )
+                    # No assistant turn to record ⇒ no tool_use to answer. Fall back to the
+                    # plain user nudge, carrying the same marker so the retry still counts.
+                    return StatePatchDecision(
+                        messages_after=(
+                            Message(
+                                role="user",
+                                content=[
+                                    TextBlock(
+                                        text=STRUCTURED_OUTPUT_NUDGE
+                                        + "\n"
+                                        + _rejection_text(violations)
+                                    )
+                                ],
+                            ),
+                        ),
                     )
             return decision
         if isinstance(decision, FinishDecision):
-            nudges = _count_structured_output_nudges(view)
+            nudges = _count_structured_output_retries(view)
             if nudges < MAX_STRUCTURED_OUTPUT_NUDGES:
                 before = (
                     (decision.assistant_message,)
