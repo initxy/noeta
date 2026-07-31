@@ -32,15 +32,17 @@ from tests._session_inputs import (
 )
 from noeta.agent.spec import agent_activates
 from noeta.context.environment import ENVIRONMENT_KIND
-from noeta.context.memory import MEMORY_KIND
+from noeta.context.memory import MEMORY_INDEX_NAME, MEMORY_KIND
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
 from noeta.runtime.governance import Budget
 from noeta.presets import official_specs
+from noeta.builtins.memory.impl.index import memory_index_hash
 from noeta.builtins.memory.impl.store import (
     MEMORY_ARCHIVE_TOOL_NAME,
     MEMORY_READ_TOOL_NAME,
     MEMORY_SEARCH_TOOL_NAME,
     MEMORY_WRITE_TOOL_NAME,
+    load_memory_store,
 )
 
 
@@ -102,8 +104,8 @@ def test_memory_disabled_default_zero_change(tmp_path: Path) -> None:
     inputs = _inputs(ws)
     assert MEMORY_WRITE_TOOL_NAME not in inputs.tools
     assert MEMORY_READ_TOOL_NAME not in inputs.tools
-    assert inputs.memory_store is None
-    assert inputs.memory_entries == ()
+    # The memory kind is absent, so the generic resolver knows no index.
+    assert inputs.content_hashes(MEMORY_KIND, MEMORY_INDEX_NAME) is None
     # skill + the always-on environment resident occupy the content channel.
     assert inputs.composer._content_renderers.kinds() == ("skill", ENVIRONMENT_KIND)
 
@@ -141,10 +143,7 @@ def test_memory_enabled_registers_kind_after_skill(tmp_path: Path) -> None:
 def test_memory_entries_snapshot_shared_with_hashes(tmp_path: Path) -> None:
     """record and compose share one entries snapshot — the (version, hash)
     resolved by the generic seam must equal the index fingerprint computed from
-    the snapshot (one source of truth)."""
-    from noeta.context.memory import MEMORY_INDEX_NAME
-    from noeta.builtins.memory.impl.index import memory_index_hash
-
+    an independent load of the same directory (one source of truth)."""
     ws = tmp_path / "ws"
     ws.mkdir()
     # Memory uses a global directory (independent of workspace);
@@ -155,11 +154,11 @@ def test_memory_entries_snapshot_shared_with_hashes(tmp_path: Path) -> None:
         "# How we deploy\nSteps...\n", encoding="utf-8"
     )
     inputs = _inputs(ws, memory_enabled=True, memory_dir=mem)
-    assert inputs.memory_store is not None
-    assert [n for n, _, _ in inputs.memory_entries] == ["deploy-notes"]
+    entries = load_memory_store(root=mem).entries()
+    assert [n for n, _, _ in entries] == ["deploy-notes"]
     resolved = inputs.content_hashes(MEMORY_KIND, MEMORY_INDEX_NAME)
     assert resolved is not None
-    assert resolved[1] == memory_index_hash(inputs.memory_entries)
+    assert resolved[1] == memory_index_hash(entries)
 
 
 def test_memory_dir_override_wins(tmp_path: Path) -> None:
@@ -169,7 +168,9 @@ def test_memory_dir_override_wins(tmp_path: Path) -> None:
     alt.mkdir()
     (alt / "alpha.md").write_text("# A\n", encoding="utf-8")
     inputs = _inputs(ws, memory_enabled=True, memory_dir=alt)
-    assert [n for n, _, _ in inputs.memory_entries] == ["alpha"]
+    resolved = inputs.content_hashes(MEMORY_KIND, MEMORY_INDEX_NAME)
+    assert resolved is not None
+    assert resolved[1] == memory_index_hash(load_memory_store(root=alt).entries())
 
 
 # ---------------------------------------------------------------------------

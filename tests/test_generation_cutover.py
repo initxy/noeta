@@ -453,7 +453,11 @@ def _record_session(
         content_store=cs,
     )
     if generation == "legacy":
-        seams = {"skill_hashes": build_skill_hashes(inputs.skill_registry)}
+        from noeta.builtins.skills.impl import load_workspace_skills
+
+        seams = {
+            "skill_hashes": build_skill_hashes(load_workspace_skills(ws))
+        }
     else:
         seams = {"content_hashes": inputs.content_hashes}
     engine = Engine(

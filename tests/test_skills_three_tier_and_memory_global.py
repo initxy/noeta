@@ -18,6 +18,7 @@ Acceptance criteria covered:
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from tests._skill_fixtures import write_skill_raw
@@ -31,7 +32,9 @@ from tests._session_inputs import (
     default_factory_kwargs,
     fold_legacy_capability_kwargs,
 )
+from noeta.context.memory import MEMORY_INDEX_NAME, MEMORY_KIND
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
+from noeta.builtins.memory.impl.index import memory_index_hash
 from noeta.builtins.memory.impl.store import (
     DEFAULT_GLOBAL_MEMORY_DIR,
     load_memory_store,
@@ -167,11 +170,20 @@ def test_builder_merges_three_tiers_into_registry(tmp_path: Path) -> None:
     inputs = _inputs(
         ws, builtin_skills_dirs=(builtin,), global_skills_dir=glob
     )
-    names = set(inputs.skill_registry.names())
-    assert names == {"review", "edit"}
-    edit = inputs.skill_registry.get("edit")
-    assert edit is not None
-    assert edit.description == "WORKSPACE edit"
+    # Union across tiers: the generic resolver fingerprints both names …
+    assert inputs.content_hashes("skill", "review") is not None
+    resolved = inputs.content_hashes("skill", "edit")
+    assert resolved is not None
+    # … and the workspace tier won the same-name clash: the fingerprint is
+    # the WORKSPACE file's bytes, not the global tier's.
+    ws_hash = hashlib.sha256(
+        (ws_local / "edit" / "SKILL.md").read_bytes()
+    ).hexdigest()
+    glob_hash = hashlib.sha256(
+        (glob / "edit" / "SKILL.md").read_bytes()
+    ).hexdigest()
+    assert resolved[1] == ws_hash
+    assert resolved[1] != glob_hash
 
 
 def test_builder_no_global_tiers_unchanged(tmp_path: Path) -> None:
@@ -181,7 +193,12 @@ def test_builder_no_global_tiers_unchanged(tmp_path: Path) -> None:
     write_skill_raw(ws_local, "tidy", _skill_body("tidy", "workspace tidy"))
 
     inputs = _inputs(ws)
-    assert set(inputs.skill_registry.names()) == {"tidy"}
+    assert inputs.content_hashes("skill", "tidy") is not None
+    # No lower-tier dirs passed ⇒ no builtin skill leaks into the session.
+    assert all(
+        inputs.content_hashes("skill", name) is None
+        for name in load_builtin_skills().names()
+    )
 
 
 def test_builtin_pack_enters_execution_path(tmp_path: Path) -> None:
@@ -193,8 +210,11 @@ def test_builtin_pack_enters_execution_path(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()
     inputs = _inputs(ws, builtin_skills_dirs=(BUILTIN_SKILLS_DIR,))
-    assert set(load_builtin_skills().names()).issubset(
-        set(inputs.skill_registry.names())
+    builtin_names = set(load_builtin_skills().names())
+    assert builtin_names
+    assert all(
+        inputs.content_hashes("skill", name) is not None
+        for name in builtin_names
     )
 
 
@@ -216,11 +236,15 @@ def test_memory_root_is_global_not_workspace_derived(tmp_path: Path) -> None:
     (ws_mem / "stale.md").write_text("# Stale\n", encoding="utf-8")
 
     inputs = _inputs(ws, memory_enabled=True, global_memory_dir=glob_mem)
-    assert inputs.memory_store is not None
-    assert inputs.memory_store.root == glob_mem
-    names = [n for n, _, _ in inputs.memory_entries]
+    entries = load_memory_store(root=glob_mem).entries()
+    names = [n for n, _, _ in entries]
     assert names == ["deploy"]
     assert "stale" not in names
+    # The build's index fingerprint matches the GLOBAL directory's entries —
+    # the workspace-derived memories never entered the index.
+    resolved = inputs.content_hashes(MEMORY_KIND, MEMORY_INDEX_NAME)
+    assert resolved is not None
+    assert resolved[1] == memory_index_hash(entries)
 
 
 def test_memory_unchanged_across_workspace_switch(tmp_path: Path) -> None:
@@ -237,13 +261,15 @@ def test_memory_unchanged_across_workspace_switch(tmp_path: Path) -> None:
     inputs_a = _inputs(ws_a, memory_enabled=True, global_memory_dir=glob_mem)
     inputs_b = _inputs(ws_b, memory_enabled=True, global_memory_dir=glob_mem)
 
-    assert inputs_a.memory_store is not None and inputs_b.memory_store is not None
-    assert inputs_a.memory_store.root == inputs_b.memory_store.root == glob_mem
-    assert (
-        [n for n, _, _ in inputs_a.memory_entries]
-        == [n for n, _, _ in inputs_b.memory_entries]
-        == ["shared"]
-    )
+    entries = load_memory_store(root=glob_mem).entries()
+    assert [n for n, _, _ in entries] == ["shared"]
+    resolved_a = inputs_a.content_hashes(MEMORY_KIND, MEMORY_INDEX_NAME)
+    resolved_b = inputs_b.content_hashes(MEMORY_KIND, MEMORY_INDEX_NAME)
+    assert resolved_a is not None and resolved_b is not None
+    # Both workspaces resolve the SAME index fingerprint — the one computed
+    # from the global directory.
+    assert resolved_a == resolved_b
+    assert resolved_a[1] == memory_index_hash(entries)
 
 
 def test_memory_dir_override_beats_global(tmp_path: Path) -> None:
@@ -263,9 +289,14 @@ def test_memory_dir_override_beats_global(tmp_path: Path) -> None:
         memory_dir=override,
         global_memory_dir=glob_mem,
     )
-    assert inputs.memory_store is not None
-    assert inputs.memory_store.root == override
-    assert [n for n, _, _ in inputs.memory_entries] == ["override-one"]
+    resolved = inputs.content_hashes(MEMORY_KIND, MEMORY_INDEX_NAME)
+    assert resolved is not None
+    assert resolved[1] == memory_index_hash(
+        load_memory_store(root=override).entries()
+    )
+    assert resolved[1] != memory_index_hash(
+        load_memory_store(root=glob_mem).entries()
+    )
 
 
 def test_load_memory_store_takes_root_directly(tmp_path: Path) -> None:

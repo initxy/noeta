@@ -20,7 +20,11 @@ from noeta.policies.control_semantics import (
     ControlToolSpec,
     translate_control_tool,
 )
-from noeta.builtins.skills.impl import SKILL_TOOL, make_skill_translate
+from noeta.builtins.skills.impl import (
+    SKILL_TOOL,
+    load_workspace_skills,
+    make_skill_translate,
+)
 # Deliberately the deep module (control-tool-surface S2b: ``skill`` moved into
 # the ``skills`` built-in): this pins the deep ``control_tool`` module's constant
 # against the package door's re-export (the parity assertion below), which is
@@ -877,7 +881,7 @@ def test_e2e_preloop_skill_coexists_with_midloop_skill(
         task,
         skills=["alpha"],
         lease_id="lease-preloop-synthetic",
-        skill_registry=live_inputs.skill_registry,
+        skill_registry=load_workspace_skills(ws),
     )
     _run_to_terminal(engine, disp, task)
     tid = task.task_id
