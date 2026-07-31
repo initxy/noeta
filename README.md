@@ -93,19 +93,19 @@ Deeper: [Architecture overview](https://initxy.github.io/noeta/architecture/over
 | **Auditable** | Every model round-trip, tool call, guard verdict, and token count is an event. Compaction is a reversible overlay; the originals stay on the stream. |
 | **Extensible** | 16 manifest-declared extension surfaces. Noeta's own built-ins (fs, web, memory, browser, MCP, …) ride the same loader as yours. |
 
-### Noeta vs Cloud Agent SDK vs Pi Agent
+### Noeta vs Claude Agent SDK vs Pi Agent
 
-| | **Noeta** | **Cloud Agent SDK** | **Pi Agent** |
+| | **Noeta** | **Claude Agent SDK** | **Pi Agent** |
 |---|---|---|---|
-| **Focus** | Durable, server-ready agent runtime | Building agents on Google Cloud (Gemini) | Computer use: mouse, keyboard, screen |
+| **Focus** | Durable, server-ready agent runtime | In-process agent loop on Claude | Computer use: mouse, keyboard, screen |
 | **Deployment** | Multi-worker pool; multi-host on Postgres | Client library, single process | Desktop process |
-| **Persistence** | Event ledger — `state = fold(log)` | Conversation state, managed for you | Ephemeral, no durable execution model |
+| **Persistence** | Event ledger — `state = fold(log)` | The conversation, managed for you | Ephemeral, no durable execution model |
 | **Suspend / wake** | First class: human, timer, subtask, external event — exactly-once | Session resume | Not applicable |
-| **Model lock-in** | None — swap providers by wiring an adapter | Gemini-first | Any LLM (it is a control layer) |
-| **Extension** | 16 plugin surfaces + the single-writer rule | Tools and hooks | Computer-control primitives |
-| **Audit / replay** | Full event log, fold-reproducible | Limited | None |
+| **Model lock-in** | None — swap providers by wiring an adapter | Claude-first | Any LLM (it is a control layer) |
+| **Extension** | 16 plugin surfaces + the single-writer rule | Tools, MCP, subagents, hooks | Computer-control primitives |
+| **Audit / replay** | Full event log, fold-reproducible | Session transcript | None |
 
-**Reach for Noeta when the agent's *running* must be a ledger you can replay, audit, and scale across workers and hosts** — not just a loop you can call. Longer treatment, including LangGraph and the Claude Agent SDK: [comparison](https://initxy.github.io/noeta/reference/comparison/).
+**Reach for Noeta when the agent's *running* must be a ledger you can replay, audit, and scale across workers and hosts** — not just a loop you can call. Longer treatment, including LangGraph and Temporal: [comparison](https://initxy.github.io/noeta/reference/comparison/).
 
 ## Extend it
 
