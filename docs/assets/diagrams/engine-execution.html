@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="generator" content="archify 2.11.0">
-  <title>Engine Execution — one step Diagram</title>
+  <title>Engine — one step Diagram</title>
   <script>
     // Resolve the theme before first paint so light-preference users don't
     // see a dark flash. The toolbar script below re-applies with UI state.
@@ -35,7 +35,7 @@
   </noscript>
   <style>
     /* ==========================================================
-       THEME VARIABLES — switch by toggling [data-theme] on the html root
+       THEME VARIABLES — switch by toggling [data-theme] on <html>
        ========================================================== */
     :root,
     [data-theme="dark"] {
@@ -525,14 +525,14 @@
     <div class="header">
       <div class="header-row">
         <div class="pulse-dot"></div>
-        <h1>Engine Execution — one step</h1>
+        <h1>Engine — one step</h1>
       </div>
-      <p class="subtitle">compose → decide → dispatch; tool_calls loops, other decisions suspend or terminate</p>
+      <p class="subtitle">lease → fold → compose → decide → dispatch → append; tool_calls loops in place, anything else releases the lease</p>
     </div>
 
     <!-- Main Diagram -->
     <div class="diagram-container">
-      <svg viewBox="0 0 720 652" role="img" aria-label="Engine Execution — one step — compose → decide → dispatch; tool_calls loops, other decisions suspend or terminate (workflow diagram)">
+      <svg viewBox="0 0 720 776" role="img" aria-label="Engine — one step — lease → fold → compose → decide → dispatch → append; tool_calls loops in place, anything else releases the lease (workflow diagram)">
         <!-- Definitions -->
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -557,112 +557,121 @@
 
         <!-- Swimlanes -->
         <rect x="40" y="52" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="74" class="t-dim" font-size="10" font-weight="600">01 / Engine</text>
+        <text x="54" y="74" class="t-dim" font-size="10" font-weight="600">01 / Worker</text>
 
         <rect x="40" y="176" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="198" class="t-dim" font-size="10" font-weight="600">02 / Policy</text>
+        <text x="54" y="198" class="t-dim" font-size="10" font-weight="600">02 / Engine (locked loop)</text>
 
         <rect x="40" y="300" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="322" class="t-dim" font-size="10" font-weight="600">03 / Tools / runtime</text>
+        <text x="54" y="322" class="t-dim" font-size="10" font-weight="600">03 / Policy + LLM provider</text>
 
         <rect x="40" y="424" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <rect x="46" y="430" width="628" height="92" rx="8" class="c-security-group" stroke-width="1"/>
-        <text x="54" y="446" class="t-security" font-size="10" font-weight="600">EX / Suspend / terminal</text>
+        <text x="54" y="446" class="t-dim" font-size="10" font-weight="600">04 / Tools</text>
+
+        <rect x="40" y="548" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="570" class="t-dim" font-size="10" font-weight="600">05 / EventLog + ContentStore</text>
 
         <!-- Phase headers -->
         <line x1="42" y1="35" x2="266" y2="35" class="a-default" stroke-width="1.1"/>
         <rect x="42" y="27" width="224" height="16" rx="4" class="c-mask"/>
-        <text x="154" y="39" class="t-muted" font-size="8" font-weight="600" text-anchor="middle">Compose</text>
-        <line x1="254" y1="35" x2="476" y2="35" class="a-default" stroke-width="1.1"/>
+        <text x="154" y="39" class="t-muted" font-size="8" font-weight="600" text-anchor="middle">Take the task</text>
+        <line x1="254" y1="35" x2="476" y2="35" class="a-emphasis" stroke-width="1.1"/>
         <rect x="254" y="27" width="222" height="16" rx="4" class="c-mask"/>
-        <text x="365" y="39" class="t-muted" font-size="8" font-weight="600" text-anchor="middle">Decide</text>
-        <line x1="454" y1="35" x2="671" y2="35" class="a-default" stroke-width="1.1"/>
+        <text x="365" y="39" class="t-backend" font-size="8" font-weight="600" text-anchor="middle">Compose and decide</text>
+        <line x1="454" y1="35" x2="671" y2="35" class="a-dashed" stroke-width="1.1"/>
         <rect x="454" y="27" width="217" height="16" rx="4" class="c-mask"/>
-        <text x="562.5" y="39" class="t-muted" font-size="8" font-weight="600" text-anchor="middle">Dispatch</text>
+        <text x="562.5" y="39" class="t-messagebus" font-size="8" font-weight="600" text-anchor="middle">Act and record</text>
 
         <!-- Workflow groups -->
 
 
         <!-- Edge paths -->
-        <path d="M 134 119 L 174 119" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path d="M 266 119 L 266 166 L 254 166 L 254 243" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path d="M 346 243 L 346 290 L 384 290 L 384 367" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 476 367 L 476 228 L 454 228 L 454 119" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path d="M 546 119 L 546 228 L 579 228 L 579 367" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 625 393 L 625 425 L 220 425 L 220 145" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 500 145 L 500 290 L 500 290 L 500 465" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <path d="M 500 145 L 692 145 L 692 465 L 625 465" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 134 119 L 174 119" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 220 145 L 220 166 L 300 166 L 300 217" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 300 269 L 300 367 L 384 367" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 430 341 L 430 243 L 454 243" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 500 269 L 500 352 L 500 352 L 500 465" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 546 491 L 579 491" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 625 517 L 625 538 L 625 538 L 625 589" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 579 615 L 240 615 L 240 243 L 254 243" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <path d="M 500 217 L 500 166 L 625 166 L 625 93" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
 
         <!-- Nodes -->
         <rect x="42" y="93" width="92" height="52" rx="6" class="c-mask"/>
         <rect x="42" y="93" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="88" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">fold(stream)</text>
-        <text x="88" y="131" class="t-muted" font-size="8" text-anchor="middle">rebuild state</text>
+        <text x="88" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Lease</text>
+        <text x="88" y="131" class="t-muted" font-size="8" text-anchor="middle">Dispatcher.lease</text>
 
         <rect x="174" y="93" width="92" height="52" rx="6" class="c-mask"/>
         <rect x="174" y="93" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="220" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Compose View</text>
-        <text x="220" y="131" class="t-muted" font-size="8" text-anchor="middle">ThreeSegmentComposer</text>
+        <text x="220" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">fold(stream)</text>
+        <text x="220" y="131" class="t-muted" font-size="8" text-anchor="middle">rebuild Task state</text>
+
+        <rect x="570" y="93" width="110" height="52" rx="6" class="c-mask"/>
+        <rect x="570" y="93" width="110" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="625" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Release</text>
+        <text x="625" y="131" class="t-muted" font-size="8" text-anchor="middle">suspended | terminal</text>
 
         <rect x="254" y="217" width="92" height="52" rx="6" class="c-mask"/>
-        <rect x="254" y="217" width="92" height="52" rx="6" class="c-frontend" stroke-width="1.5"/>
-        <text x="300" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">decide(view)</text>
-        <text x="300" y="255" class="t-muted" font-size="8" text-anchor="middle">Policy → Decision</text>
+        <rect x="254" y="217" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="300" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Compose</text>
+        <text x="300" y="255" class="t-muted" font-size="8" text-anchor="middle">View: 3 segments</text>
 
-        <rect x="384" y="333" width="92" height="68" rx="6" class="c-mask"/>
-        <rect x="384" y="333" width="92" height="68" rx="6" class="c-security" stroke-width="1.5"/>
-        <text x="430" y="354" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Guard check</text>
-        <text x="430" y="371" class="t-muted" font-size="8" text-anchor="middle">allow / deny / approve</text>
-        <text x="430" y="389" class="t-security" font-size="7" text-anchor="middle">before act</text>
+        <rect x="454" y="217" width="92" height="52" rx="6" class="c-mask"/>
+        <rect x="454" y="217" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="500" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Dispatch</text>
+        <text x="500" y="255" class="t-muted" font-size="8" text-anchor="middle">route the Decision</text>
 
-        <rect x="454" y="93" width="92" height="52" rx="6" class="c-mask"/>
-        <rect x="454" y="93" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="500" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Dispatch</text>
-        <text x="500" y="131" class="t-muted" font-size="8" text-anchor="middle">route by decision</text>
-
-        <rect x="579" y="341" width="92" height="52" rx="6" class="c-mask"/>
-        <rect x="579" y="341" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="625" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Run tools</text>
-        <text x="625" y="379" class="t-muted" font-size="8" text-anchor="middle">append results</text>
+        <rect x="384" y="341" width="92" height="52" rx="6" class="c-mask"/>
+        <rect x="384" y="341" width="92" height="52" rx="6" class="c-cloud" stroke-width="1.5"/>
+        <text x="430" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">decide()</text>
+        <text x="430" y="379" class="t-muted" font-size="8" text-anchor="middle">LLM round-trip</text>
 
         <rect x="454" y="465" width="92" height="52" rx="6" class="c-mask"/>
         <rect x="454" y="465" width="92" height="52" rx="6" class="c-security" stroke-width="1.5"/>
-        <text x="500" y="486" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Suspend</text>
-        <text x="500" y="503" class="t-muted" font-size="8" text-anchor="middle">yield / wait</text>
+        <text x="500" y="486" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Guard</text>
+        <text x="500" y="503" class="t-muted" font-size="8" text-anchor="middle">allow / deny / ask</text>
 
         <rect x="579" y="465" width="92" height="52" rx="6" class="c-mask"/>
-        <rect x="579" y="465" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="625" y="486" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Terminal</text>
-        <text x="625" y="503" class="t-muted" font-size="8" text-anchor="middle">finish / fail</text>
+        <rect x="579" y="465" width="92" height="52" rx="6" class="c-messagebus" stroke-width="1.5"/>
+        <text x="625" y="486" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Run tools</text>
+        <text x="625" y="503" class="t-muted" font-size="8" text-anchor="middle">ToolRuntime.invoke</text>
+
+        <rect x="579" y="589" width="92" height="52" rx="6" class="c-mask"/>
+        <rect x="579" y="589" width="92" height="52" rx="6" class="c-database" stroke-width="1.5"/>
+        <text x="625" y="610" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Append events</text>
+        <text x="625" y="627" class="t-muted" font-size="8" text-anchor="middle">batched results</text>
 
         <!-- Edge labels -->
 
-        <rect x="245" y="146" width="30" height="14" rx="3" class="c-mask"/>
-        <text x="260" y="156" class="t-muted" font-size="8" text-anchor="middle">View</text>
-        <rect x="340.8" y="270" width="48.4" height="14" rx="3" class="c-mask"/>
-        <text x="365" y="280" class="t-backend" font-size="8" text-anchor="middle">Decision</text>
+        <rect x="231" y="146" width="58" height="14" rx="3" class="c-mask"/>
+        <text x="260" y="156" class="t-backend" font-size="8" text-anchor="middle">Task state</text>
+        <rect x="327" y="347" width="30" height="14" rx="3" class="c-mask"/>
+        <text x="342" y="357" class="t-backend" font-size="8" text-anchor="middle">View</text>
+        <rect x="405.8" y="272" width="48.4" height="14" rx="3" class="c-mask"/>
+        <text x="430" y="282" class="t-backend" font-size="8" text-anchor="middle">Decision</text>
+        <rect x="471" y="290.5" width="58" height="14" rx="3" class="c-mask"/>
+        <text x="500" y="300.5" class="t-backend" font-size="8" text-anchor="middle">tool_calls</text>
 
-        <rect x="533.5" y="208" width="58" height="14" rx="3" class="c-mask"/>
-        <text x="562.5" y="218" class="t-backend" font-size="8" text-anchor="middle">tool_calls</text>
-        <rect x="407.5" y="405" width="30" height="14" rx="3" class="c-mask"/>
-        <text x="422.5" y="415" class="t-database" font-size="8" text-anchor="middle">loop</text>
-        <rect x="466.2" y="240" width="67.6" height="14" rx="3" class="c-mask"/>
-        <text x="500" y="250" class="t-security" font-size="8" text-anchor="middle">yield / wait</text>
-        <rect x="655.8" y="315" width="72.4" height="14" rx="3" class="c-mask"/>
-        <text x="692" y="325" class="t-backend" font-size="8" text-anchor="middle">finish / fail</text>
+        <rect x="591.2" y="543.5" width="67.6" height="14" rx="3" class="c-mask"/>
+        <text x="625" y="553.5" class="t-muted" font-size="8" text-anchor="middle">tool results</text>
+        <rect x="199" y="409" width="82" height="14" rx="3" class="c-mask"/>
+        <text x="240" y="419" class="t-database" font-size="8" text-anchor="middle">loop: recompose</text>
+        <rect x="514.3" y="146" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
+        <text x="562.5" y="156" class="t-backend" font-size="8" text-anchor="middle">suspend / terminal</text>
 
         <!-- Legend -->
-        <text x="175" y="552" class="t-primary" font-size="10" font-weight="600">Legend</text>
-        <rect x="175" y="564" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
-        <text x="195" y="572" class="t-muted" font-size="7">User UI</text>
-        <rect x="260" y="564" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
-        <text x="280" y="572" class="t-muted" font-size="7">Agent logic</text>
-        <rect x="370" y="564" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
-        <text x="390" y="572" class="t-muted" font-size="7">Policy</text>
-        <rect x="455" y="564" width="14" height="9" rx="2" class="c-messagebus" stroke-width="1"/>
-        <text x="475" y="572" class="t-muted" font-size="7">Tool action</text>
-        <rect x="565" y="564" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
-        <text x="585" y="572" class="t-muted" font-size="7">Context / trace</text>
+        <text x="175" y="676" class="t-primary" font-size="10" font-weight="600">Legend</text>
+        <rect x="175" y="688" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
+        <text x="195" y="696" class="t-muted" font-size="7">User UI</text>
+        <rect x="260" y="688" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
+        <text x="280" y="696" class="t-muted" font-size="7">Agent logic</text>
+        <rect x="370" y="688" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
+        <text x="390" y="696" class="t-muted" font-size="7">Policy</text>
+        <rect x="455" y="688" width="14" height="9" rx="2" class="c-messagebus" stroke-width="1"/>
+        <text x="475" y="696" class="t-muted" font-size="7">Tool action</text>
+        <rect x="565" y="688" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
+        <text x="585" y="696" class="t-muted" font-size="7">Context / trace</text>
       </svg>
     </div>
 
@@ -671,24 +680,36 @@
       <div class="card">
         <div class="card-header">
           <div class="card-dot emerald"></div>
-          <h3>One step = one turn boundary</h3>
+          <h3>One step is one turn boundary</h3>
         </div>
         <ul>
-          <li>&bull; tool_calls keeps the loop turning in place</li>
-          <li>&bull; Any other decision ends the step at suspend or terminal</li>
-          <li>&bull; Guards rule before the act — deny or require_approval</li>
+          <li>&bull; A tool_calls Decision keeps the loop turning in place: append, recompose, ask again</li>
+          <li>&bull; Any other Decision ends the step at a suspend or a terminal</li>
+          <li>&bull; The lease covers one segment only — a Worker never holds a Task to completion</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot cyan"></div>
-          <h3>Locked main loop</h3>
+          <h3>The Engine is the only writer</h3>
         </div>
         <ul>
-          <li>&bull; Engine main loop is not an extension point</li>
-          <li>&bull; Policy decides, Engine dispatches — Policy never calls tools directly</li>
-          <li>&bull; State changes go through events, fold is the only reader</li>
+          <li>&bull; Every append carries the lease_id — that is the single-writer fence</li>
+          <li>&bull; ContextPlanComposed records what went into each LLM call and opens the attempt</li>
+          <li>&bull; N parallel tool results are batched into one MessagesAppended event</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot rose"></div>
+          <h3>Guards rule before the act</h3>
+        </div>
+        <ul>
+          <li>&bull; before_tool_call returns allow, deny or require_approval</li>
+          <li>&bull; require_approval converts the call into a yield_for_human suspend</li>
+          <li>&bull; A denial is fed back as a failed tool result, never as a missing one</li>
         </ul>
       </div>
     </div>

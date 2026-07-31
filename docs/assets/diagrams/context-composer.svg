@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 660" role="img" aria-label="Event sourcing — state = fold(log) — Events append to the EventLog, oversized bodies go to the ContentStore, fold rebuilds the four state slices (data-flow diagram)" width="1120" height="660">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 660" role="img" aria-label="Context composition &amp; prompt cache — Folded state → ThreeSegmentComposer → three segments ordered by volatility → one provider request (data-flow diagram)" width="1120" height="660">
 <style>
 @font-face { font-family: 'JetBrains Mono'; font-weight: 400; src: local('JetBrains Mono'), local('JetBrainsMono-Regular'); }
 @font-face { font-family: 'JetBrains Mono'; font-weight: 500; src: local('JetBrains Mono'), local('JetBrainsMono-Regular'); }
@@ -72,118 +72,124 @@ rect.c-bg-rect { fill: var(--bg); }
 
         <!-- Data Stages -->
         <rect x="16" y="46" width="168" height="540" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="100" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">01 / Write</text>
+        <text x="100" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">01 / Folded state</text>
 
         <rect x="231" y="46" width="168" height="540" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="315" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">02 / Ledger</text>
+        <text x="315" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">02 / Compose</text>
 
         <rect x="446" y="46" width="168" height="540" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="530" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">03 / Rebuild</text>
+        <text x="530" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">03 / Segments</text>
 
         <rect x="661" y="46" width="168" height="540" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="745" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">04 / State</text>
+        <text x="745" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">04 / Request</text>
 
         <rect x="876" y="46" width="168" height="540" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="960" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">05 / Next step</text>
+        <text x="960" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">05 / Provider</text>
 
         <!-- Flow paths -->
-        <path d="M 168 391 L 207.5 391 L 207.5 277 L 247 277" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 168 391 L 207.5 391 L 207.5 505 L 247 505" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 383 277 L 422.5 277 L 422.5 391 L 462 391" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 383 505 L 422.5 505 L 422.5 391 L 462 391" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 598 391 L 637.5 391 L 637.5 163 L 677 163" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path d="M 598 391 L 637.5 391 L 637.5 277 L 677 277" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path d="M 598 391 L 677 391" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 598 391 L 637.5 391 L 637.5 505 L 677 505" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path d="M 813 163 L 852.5 163 L 852.5 391 L 892 391" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path d="M 813 277 L 852.5 277 L 852.5 391 L 892 391" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path d="M 813 391 L 892 391" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 813 505 L 852.5 505 L 852.5 391 L 892 391" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 159 163 L 204.5 163 L 204.5 277 L 250 277" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 159 277 L 250 277" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 159 391 L 204.5 391 L 204.5 277 L 250 277" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 380 277 L 425.5 277 L 425.5 163 L 471 163" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 380 277 L 471 277" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 380 277 L 425.5 277 L 425.5 391 L 471 391" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 380 277 L 425.5 277 L 425.5 499 L 471 499" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <path d="M 589 163 L 637.5 163 L 637.5 277 L 686 277" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 589 277 L 686 277" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 589 391 L 637.5 391 L 637.5 277 L 686 277" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 804 277 L 901 277" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
 
         <!-- Nodes -->
-        <rect x="32" y="356" width="136" height="70" rx="6" class="c-mask"/>
-        <rect x="32" y="356" width="136" height="70" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="100" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Engine</text>
-        <text x="100" y="393" class="t-muted" font-size="7" text-anchor="middle">run_one_step</text>
-        <text x="100" y="415" class="t-backend" font-size="7" text-anchor="middle">sole appender</text>
+        <rect x="41" y="128" width="118" height="70" rx="6" class="c-mask"/>
+        <rect x="41" y="128" width="118" height="70" rx="6" class="c-frontend" stroke-width="1.5"/>
+        <text x="100" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Prompt + tools</text>
+        <text x="100" y="165" class="t-muted" font-size="7" text-anchor="middle">session identity</text>
+        <text x="100" y="187" class="t-frontend" font-size="7" text-anchor="middle">changes only on rebuild</text>
 
-        <rect x="247" y="242" width="136" height="70" rx="6" class="c-mask"/>
-        <rect x="247" y="242" width="136" height="70" rx="6" class="c-messagebus" stroke-width="1.5"/>
-        <text x="315" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">EventLog</text>
-        <text x="315" y="279" class="t-muted" font-size="7" text-anchor="middle">append-only stream</text>
-        <text x="315" y="301" class="t-messagebus" font-size="7" text-anchor="middle">seq on append</text>
+        <rect x="41" y="242" width="118" height="70" rx="6" class="c-mask"/>
+        <rect x="41" y="242" width="118" height="70" rx="6" class="c-database" stroke-width="1.5"/>
+        <text x="100" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">active_content</text>
+        <text x="100" y="279" class="t-muted" font-size="7" text-anchor="middle">recorded activations</text>
+        <text x="100" y="301" class="t-database" font-size="7" text-anchor="middle">resident bytes by hash</text>
 
-        <rect x="247" y="470" width="136" height="70" rx="6" class="c-mask"/>
-        <rect x="247" y="470" width="136" height="70" rx="6" class="c-database" stroke-width="1.5"/>
-        <text x="315" y="491" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">ContentStore</text>
-        <text x="315" y="507" class="t-muted" font-size="7" text-anchor="middle">content-addressed</text>
-        <text x="315" y="529" class="t-database" font-size="7" text-anchor="middle">SHA-256 dedup</text>
+        <rect x="41" y="356" width="118" height="70" rx="6" class="c-mask"/>
+        <rect x="41" y="356" width="118" height="70" rx="6" class="c-messagebus" stroke-width="1.5"/>
+        <text x="100" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">runtime.messages</text>
+        <text x="100" y="393" class="t-muted" font-size="7" text-anchor="middle">rolling history</text>
+        <text x="100" y="415" class="t-messagebus" font-size="7" text-anchor="middle">+ compaction summary</text>
 
-        <rect x="462" y="356" width="136" height="70" rx="6" class="c-mask"/>
-        <rect x="462" y="356" width="136" height="70" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="530" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">fold()</text>
-        <text x="530" y="393" class="t-muted" font-size="7" text-anchor="middle">replay in seq order</text>
-        <text x="530" y="415" class="t-backend" font-size="7" text-anchor="middle">snapshot-accelerated</text>
+        <rect x="250" y="242" width="130" height="70" rx="6" class="c-mask"/>
+        <rect x="250" y="242" width="130" height="70" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="315" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">ThreeSegmentComposer</text>
+        <text x="315" y="279" class="t-muted" font-size="7" text-anchor="middle">pure: state → View</text>
+        <text x="315" y="301" class="t-backend" font-size="7" text-anchor="middle">no clock, no network</text>
 
-        <rect x="677" y="128" width="136" height="70" rx="6" class="c-mask"/>
-        <rect x="677" y="128" width="136" height="70" rx="6" class="c-frontend" stroke-width="1.5"/>
-        <text x="745" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">RuntimeState</text>
-        <text x="745" y="165" class="t-muted" font-size="7" text-anchor="middle">messages · usage</text>
-        <text x="745" y="187" class="t-frontend" font-size="7" text-anchor="middle">writer: Engine</text>
+        <rect x="471" y="128" width="118" height="70" rx="6" class="c-mask"/>
+        <rect x="471" y="128" width="118" height="70" rx="6" class="c-cloud" stroke-width="1.5"/>
+        <text x="530" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">stable_prefix</text>
+        <text x="530" y="165" class="t-muted" font-size="7" text-anchor="middle">prompt + tool schemas</text>
+        <text x="530" y="187" class="t-cloud" font-size="7" text-anchor="middle">sha256, byte-stable</text>
 
-        <rect x="677" y="242" width="136" height="70" rx="6" class="c-mask"/>
-        <rect x="677" y="242" width="136" height="70" rx="6" class="c-frontend" stroke-width="1.5"/>
-        <text x="745" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">TaskState</text>
-        <text x="745" y="279" class="t-muted" font-size="7" text-anchor="middle">goal · phase · todos</text>
-        <text x="745" y="301" class="t-frontend" font-size="7" text-anchor="middle">writer: Policy patch</text>
+        <rect x="471" y="242" width="118" height="70" rx="6" class="c-mask"/>
+        <rect x="471" y="242" width="118" height="70" rx="6" class="c-cloud" stroke-width="1.5"/>
+        <text x="530" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">semi_stable</text>
+        <text x="530" y="279" class="t-muted" font-size="7" text-anchor="middle">pre-loop residents</text>
+        <text x="530" y="301" class="t-cloud" font-size="7" text-anchor="middle">skill · memory · env</text>
 
-        <rect x="677" y="356" width="136" height="70" rx="6" class="c-mask"/>
-        <rect x="677" y="356" width="136" height="70" rx="6" class="c-frontend" stroke-width="1.5"/>
-        <text x="745" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">ContextState</text>
-        <text x="745" y="393" class="t-muted" font-size="7" text-anchor="middle">plan_ref · summary</text>
-        <text x="745" y="415" class="t-frontend" font-size="7" text-anchor="middle">writer: fold</text>
+        <rect x="471" y="356" width="118" height="70" rx="6" class="c-mask"/>
+        <rect x="471" y="356" width="118" height="70" rx="6" class="c-frontend" stroke-width="1.5"/>
+        <text x="530" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">dynamic_suffix</text>
+        <text x="530" y="393" class="t-muted" font-size="7" text-anchor="middle">history + reminders</text>
+        <text x="530" y="415" class="t-frontend" font-size="7" text-anchor="middle">rewritten every turn</text>
 
-        <rect x="677" y="470" width="136" height="70" rx="6" class="c-mask"/>
-        <rect x="677" y="470" width="136" height="70" rx="6" class="c-frontend" stroke-width="1.5"/>
-        <text x="745" y="491" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">GovernanceState</text>
-        <text x="745" y="507" class="t-muted" font-size="7" text-anchor="middle">cost · tokens · denied</text>
-        <text x="745" y="529" class="t-frontend" font-size="7" text-anchor="middle">writer: fold</text>
+        <rect x="471" y="470" width="118" height="58" rx="6" class="c-mask"/>
+        <rect x="471" y="470" width="118" height="58" rx="6" class="c-database" stroke-width="1.5"/>
+        <text x="530" y="491" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">ContextPlan</text>
+        <text x="530" y="507" class="t-muted" font-size="7" text-anchor="middle">→ ContentStore</text>
 
-        <rect x="892" y="356" width="136" height="70" rx="6" class="c-mask"/>
-        <rect x="892" y="356" width="136" height="70" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="960" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Next decision</text>
-        <text x="960" y="393" class="t-muted" font-size="7" text-anchor="middle">compose → decide</text>
-        <text x="960" y="415" class="t-backend" font-size="7" text-anchor="middle">the loop repeats</text>
+        <rect x="686" y="242" width="118" height="70" rx="6" class="c-mask"/>
+        <rect x="686" y="242" width="118" height="70" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="745" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">LLMRequest</text>
+        <text x="745" y="279" class="t-muted" font-size="7" text-anchor="middle">segments in order</text>
+        <text x="745" y="301" class="t-backend" font-size="7" text-anchor="middle">one per compose</text>
+
+        <rect x="901" y="242" width="118" height="70" rx="6" class="c-mask"/>
+        <rect x="901" y="242" width="118" height="70" rx="6" class="c-external" stroke-width="1.5"/>
+        <text x="960" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Provider adapter</text>
+        <text x="960" y="279" class="t-muted" font-size="7" text-anchor="middle">vendor wire</text>
+        <text x="960" y="301" class="t-external" font-size="7" text-anchor="middle">KV cache by prefix</text>
 
         <!-- Flow labels -->
-        <rect x="164.75" y="313" width="85.5" height="27" rx="4" class="c-mask"/>
-        <text x="207.5" y="324" class="t-backend" font-size="8" text-anchor="middle">event envelopes</text>
-        <text x="207.5" y="335" class="t-dim" font-size="7" text-anchor="middle">payload ≤ 4 KB</text>
-        <rect x="135.35" y="427" width="144.3" height="27" rx="4" class="c-mask"/>
-        <text x="207.5" y="438" class="t-messagebus" font-size="8" text-anchor="middle">oversized bodies</text>
-        <text x="207.5" y="449" class="t-dim" font-size="7" text-anchor="middle">envelope keeps a ContentRef</text>
-        <rect x="387.1" y="313" width="70.80000000000001" height="27" rx="4" class="c-mask"/>
-        <text x="422.5" y="324" class="t-backend" font-size="8" text-anchor="middle">event stream</text>
-        <text x="422.5" y="335" class="t-dim" font-size="7" text-anchor="middle">one per Task</text>
-        <rect x="384.65" y="427" width="75.7" height="27" rx="4" class="c-mask"/>
-        <text x="422.5" y="438" class="t-messagebus" font-size="8" text-anchor="middle">deref by hash</text>
-        <text x="422.5" y="449" class="t-dim" font-size="7" text-anchor="middle">batched</text>
-        <rect x="602.6" y="209" width="70.80000000000001" height="16" rx="4" class="c-mask"/>
-        <text x="638" y="220" class="t-muted" font-size="8" text-anchor="middle">conversation</text>
-        <rect x="605.05" y="307" width="65.9" height="16" rx="4" class="c-mask"/>
-        <text x="638" y="318" class="t-muted" font-size="8" text-anchor="middle">task memory</text>
-        <rect x="599.15" y="369" width="75.7" height="16" rx="4" class="c-mask"/>
-        <text x="637" y="380" class="t-backend" font-size="8" text-anchor="middle">context slice</text>
-        <rect x="612.4" y="545" width="51.2" height="16" rx="4" class="c-mask"/>
-        <text x="638" y="556" class="t-muted" font-size="8" text-anchor="middle">counters</text>
-        <rect x="810.25" y="204" width="85.5" height="16" rx="4" class="c-mask"/>
-        <text x="853" y="215" class="t-muted" font-size="8" text-anchor="middle">message history</text>
-        <rect x="817.6" y="319" width="70.80000000000001" height="16" rx="4" class="c-mask"/>
-        <text x="853" y="330" class="t-muted" font-size="8" text-anchor="middle">goal + todos</text>
-        <rect x="805.35" y="441" width="95.30000000000001" height="16" rx="4" class="c-mask"/>
-        <text x="853" y="452" class="t-backend" font-size="8" text-anchor="middle">summary + anchors</text>
-        <rect x="810.25" y="545" width="85.5" height="16" rx="4" class="c-mask"/>
-        <text x="853" y="556" class="t-muted" font-size="8" text-anchor="middle">budget counters</text>
+        <rect x="158.8" y="209" width="90.4" height="16" rx="4" class="c-mask"/>
+        <text x="204" y="220" class="t-muted" font-size="8" text-anchor="middle">session identity</text>
+        <rect x="163.7" y="255" width="80.60000000000001" height="16" rx="4" class="c-mask"/>
+        <text x="204" y="266" class="t-muted" font-size="8" text-anchor="middle">resident bytes</text>
+        <rect x="168.6" y="323" width="70.80000000000001" height="16" rx="4" class="c-mask"/>
+        <text x="204" y="334" class="t-muted" font-size="8" text-anchor="middle">conversation</text>
+        <rect x="379.8" y="209" width="90.4" height="27" rx="4" class="c-mask"/>
+        <text x="425" y="220" class="t-backend" font-size="8" text-anchor="middle">prompt + schemas</text>
+        <text x="425" y="231" class="t-dim" font-size="7" text-anchor="middle">cache anchor</text>
+        <rect x="374.9" y="323" width="100.2" height="27" rx="4" class="c-mask"/>
+        <text x="425" y="334" class="t-backend" font-size="8" text-anchor="middle">resident content</text>
+        <text x="425" y="345" class="t-dim" font-size="7" text-anchor="middle">registration order</text>
+        <rect x="389.6" y="437" width="70.80000000000001" height="27" rx="4" class="c-mask"/>
+        <text x="425" y="448" class="t-backend" font-size="8" text-anchor="middle">rolling tail</text>
+        <text x="425" y="459" class="t-dim" font-size="7" text-anchor="middle">re-encoded</text>
+        <rect x="394.5" y="546" width="61" height="27" rx="4" class="c-mask"/>
+        <text x="425" y="557" class="t-messagebus" font-size="8" text-anchor="middle">plan body</text>
+        <text x="425" y="568" class="t-dim" font-size="7" text-anchor="middle">audit only</text>
+        <rect x="591.8" y="209" width="90.4" height="27" rx="4" class="c-mask"/>
+        <text x="637" y="220" class="t-backend" font-size="8" text-anchor="middle">cache hit</text>
+        <text x="637" y="231" class="t-dim" font-size="7" text-anchor="middle">identical prefix</text>
+        <rect x="584.45" y="323" width="105.10000000000001" height="27" rx="4" class="c-mask"/>
+        <text x="637" y="334" class="t-muted" font-size="8" text-anchor="middle">cache hit</text>
+        <text x="637" y="345" class="t-dim" font-size="7" text-anchor="middle">residents unchanged</text>
+        <rect x="606.5" y="437" width="61" height="27" rx="4" class="c-mask"/>
+        <text x="637" y="448" class="t-muted" font-size="8" text-anchor="middle">cache miss</text>
+        <text x="637" y="459" class="t-dim" font-size="7" text-anchor="middle">by design</text>
+        <rect x="799.45" y="209" width="105.10000000000001" height="27" rx="4" class="c-mask"/>
+        <text x="852" y="220" class="t-backend" font-size="8" text-anchor="middle">one LLM call</text>
+        <text x="852" y="231" class="t-dim" font-size="7" text-anchor="middle">prefix cache lookup</text>
 
         <!-- Legend -->
         <text x="214" y="604" class="t-primary" font-size="10" font-weight="600">Legend</text>

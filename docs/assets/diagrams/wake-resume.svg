@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 776" role="img" aria-label="Engine — one step — lease → fold → compose → decide → dispatch → append; tool_calls loops in place, anything else releases the lease (workflow diagram)" width="720" height="776">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 776" role="img" aria-label="Wake and resume — a Task suspends on a typed condition; whatever produces the wake goes through one verb, one match, one durable TaskWoken (workflow diagram)" width="720" height="776">
 <style>
 @font-face { font-family: 'JetBrains Mono'; font-weight: 400; src: local('JetBrains Mono'), local('JetBrainsMono-Regular'); }
 @font-face { font-family: 'JetBrains Mono'; font-weight: 500; src: local('JetBrains Mono'), local('JetBrainsMono-Regular'); }
@@ -72,108 +72,123 @@ rect.c-bg-rect { fill: var(--bg); }
 
         <!-- Swimlanes -->
         <rect x="40" y="52" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="74" class="t-dim" font-size="10" font-weight="600">01 / Worker</text>
+        <text x="54" y="74" class="t-dim" font-size="10" font-weight="600">01 / Task (Engine)</text>
 
         <rect x="40" y="176" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="198" class="t-dim" font-size="10" font-weight="600">02 / Engine (locked loop)</text>
+        <text x="54" y="198" class="t-dim" font-size="10" font-weight="600">02 / Dispatcher (durable)</text>
 
         <rect x="40" y="300" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="322" class="t-dim" font-size="10" font-weight="600">03 / Policy + LLM provider</text>
+        <text x="54" y="322" class="t-dim" font-size="10" font-weight="600">03 / Wake producers</text>
 
         <rect x="40" y="424" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="446" class="t-dim" font-size="10" font-weight="600">04 / Tools</text>
+        <text x="54" y="446" class="t-dim" font-size="10" font-weight="600">04 / Worker</text>
 
         <rect x="40" y="548" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="570" class="t-dim" font-size="10" font-weight="600">05 / EventLog + ContentStore</text>
+        <rect x="46" y="554" width="628" height="92" rx="8" class="c-security-group" stroke-width="1"/>
+        <text x="54" y="570" class="t-security" font-size="10" font-weight="600">EX / If the Worker crashes first</text>
 
         <!-- Phase headers -->
         <line x1="42" y1="35" x2="266" y2="35" class="a-default" stroke-width="1.1"/>
         <rect x="42" y="27" width="224" height="16" rx="4" class="c-mask"/>
-        <text x="154" y="39" class="t-muted" font-size="8" font-weight="600" text-anchor="middle">Take the task</text>
+        <text x="154" y="39" class="t-muted" font-size="8" font-weight="600" text-anchor="middle">Suspend and wait</text>
         <line x1="254" y1="35" x2="476" y2="35" class="a-emphasis" stroke-width="1.1"/>
         <rect x="254" y="27" width="222" height="16" rx="4" class="c-mask"/>
-        <text x="365" y="39" class="t-backend" font-size="8" font-weight="600" text-anchor="middle">Compose and decide</text>
-        <line x1="454" y1="35" x2="671" y2="35" class="a-dashed" stroke-width="1.1"/>
+        <text x="365" y="39" class="t-backend" font-size="8" font-weight="600" text-anchor="middle">A wake arrives</text>
+        <line x1="454" y1="35" x2="671" y2="35" class="a-default" stroke-width="1.1"/>
         <rect x="454" y="27" width="217" height="16" rx="4" class="c-mask"/>
-        <text x="562.5" y="39" class="t-messagebus" font-size="8" font-weight="600" text-anchor="middle">Act and record</text>
+        <text x="562.5" y="39" class="t-muted" font-size="8" font-weight="600" text-anchor="middle">Lease, wake, resume</text>
 
         <!-- Workflow groups -->
 
 
         <!-- Edge paths -->
-        <path d="M 134 119 L 174 119" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 220 145 L 220 166 L 300 166 L 300 217" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 300 269 L 300 367 L 384 367" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 430 341 L 430 243 L 454 243" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 500 269 L 500 352 L 500 352 L 500 465" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 546 491 L 579 491" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 625 517 L 625 538 L 625 538 L 625 589" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path d="M 579 615 L 240 615 L 240 243 L 254 243" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 500 217 L 500 166 L 625 166 L 625 93" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 88 145 L 88 166 L 220 166 L 220 209" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 302 243 L 384 243" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 88 341 L 88 290 L 430 290 L 430 269" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 220 341 L 220 290 L 430 290 L 430 269" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 300 341 L 300 290 L 430 290 L 430 269" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 430 269 L 430 352 L 500 352 L 500 465" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 500 465 L 500 290 L 500 290 L 500 145" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 546 119 L 579 119" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 625 145 L 625 166 L 625 166 L 625 217" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 500 517 L 500 538 L 625 538 L 625 589" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <path d="M 570 615 L 426 615 L 426 491 L 454 491" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Nodes -->
         <rect x="42" y="93" width="92" height="52" rx="6" class="c-mask"/>
         <rect x="42" y="93" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="88" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Lease</text>
-        <text x="88" y="131" class="t-muted" font-size="8" text-anchor="middle">Dispatcher.lease</text>
+        <text x="88" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Suspend</text>
+        <text x="88" y="131" class="t-muted" font-size="8" text-anchor="middle">TaskSuspended</text>
 
-        <rect x="174" y="93" width="92" height="52" rx="6" class="c-mask"/>
-        <rect x="174" y="93" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="220" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">fold(stream)</text>
-        <text x="220" y="131" class="t-muted" font-size="8" text-anchor="middle">rebuild Task state</text>
+        <rect x="454" y="93" width="92" height="52" rx="6" class="c-mask"/>
+        <rect x="454" y="93" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="500" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">TaskWoken</text>
+        <text x="500" y="131" class="t-muted" font-size="8" text-anchor="middle">written first</text>
 
-        <rect x="570" y="93" width="110" height="52" rx="6" class="c-mask"/>
-        <rect x="570" y="93" width="110" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="625" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Release</text>
-        <text x="625" y="131" class="t-muted" font-size="8" text-anchor="middle">suspended | terminal</text>
+        <rect x="579" y="93" width="92" height="52" rx="6" class="c-mask"/>
+        <rect x="579" y="93" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="625" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Resume</text>
+        <text x="625" y="131" class="t-muted" font-size="8" text-anchor="middle">run_one_step</text>
 
-        <rect x="254" y="217" width="92" height="52" rx="6" class="c-mask"/>
-        <rect x="254" y="217" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="300" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Compose</text>
-        <text x="300" y="255" class="t-muted" font-size="8" text-anchor="middle">View: 3 segments</text>
+        <rect x="138" y="209" width="164" height="68" rx="6" class="c-mask"/>
+        <rect x="138" y="209" width="164" height="68" rx="6" class="c-database" stroke-width="1.5"/>
+        <text x="220" y="230" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">wake_on</text>
+        <text x="220" y="247" class="t-muted" font-size="8" text-anchor="middle">typed condition</text>
+        <text x="220" y="265" class="t-database" font-size="7" text-anchor="middle">human / timer / subtask / external</text>
 
-        <rect x="454" y="217" width="92" height="52" rx="6" class="c-mask"/>
-        <rect x="454" y="217" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="500" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Dispatch</text>
-        <text x="500" y="255" class="t-muted" font-size="8" text-anchor="middle">route the Decision</text>
+        <rect x="384" y="217" width="92" height="52" rx="6" class="c-mask"/>
+        <rect x="384" y="217" width="92" height="52" rx="6" class="c-database" stroke-width="1.5"/>
+        <text x="430" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">matches_wake</text>
+        <text x="430" y="255" class="t-muted" font-size="8" text-anchor="middle">identity fields</text>
 
-        <rect x="384" y="341" width="92" height="52" rx="6" class="c-mask"/>
-        <rect x="384" y="341" width="92" height="52" rx="6" class="c-cloud" stroke-width="1.5"/>
-        <text x="430" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">decide()</text>
-        <text x="430" y="379" class="t-muted" font-size="8" text-anchor="middle">LLM round-trip</text>
+        <rect x="579" y="217" width="92" height="52" rx="6" class="c-mask"/>
+        <rect x="579" y="217" width="92" height="52" rx="6" class="c-database" stroke-width="1.5"/>
+        <text x="625" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Clear wake</text>
+        <text x="625" y="255" class="t-muted" font-size="8" text-anchor="middle">after TaskWoken</text>
+
+        <rect x="53" y="341" width="70" height="52" rx="6" class="c-mask"/>
+        <rect x="53" y="341" width="70" height="52" rx="6" class="c-external" stroke-width="1.5"/>
+        <text x="88" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Human</text>
+        <text x="88" y="379" class="t-muted" font-size="8" text-anchor="middle">host answer</text>
+
+        <rect x="185" y="341" width="70" height="52" rx="6" class="c-mask"/>
+        <rect x="185" y="341" width="70" height="52" rx="6" class="c-external" stroke-width="1.5"/>
+        <text x="220" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Timer</text>
+        <text x="220" y="379" class="t-muted" font-size="8" text-anchor="middle">timer poll</text>
+
+        <rect x="265" y="341" width="70" height="52" rx="6" class="c-mask"/>
+        <rect x="265" y="341" width="70" height="52" rx="6" class="c-external" stroke-width="1.5"/>
+        <text x="300" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Subtask</text>
+        <text x="300" y="379" class="t-muted" font-size="8" text-anchor="middle">child done</text>
 
         <rect x="454" y="465" width="92" height="52" rx="6" class="c-mask"/>
-        <rect x="454" y="465" width="92" height="52" rx="6" class="c-security" stroke-width="1.5"/>
-        <text x="500" y="486" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Guard</text>
-        <text x="500" y="503" class="t-muted" font-size="8" text-anchor="middle">allow / deny / ask</text>
+        <rect x="454" y="465" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="500" y="486" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Lease</text>
+        <text x="500" y="503" class="t-muted" font-size="8" text-anchor="middle">wake rides along</text>
 
-        <rect x="579" y="465" width="92" height="52" rx="6" class="c-mask"/>
-        <rect x="579" y="465" width="92" height="52" rx="6" class="c-messagebus" stroke-width="1.5"/>
-        <text x="625" y="486" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Run tools</text>
-        <text x="625" y="503" class="t-muted" font-size="8" text-anchor="middle">ToolRuntime.invoke</text>
-
-        <rect x="579" y="589" width="92" height="52" rx="6" class="c-mask"/>
-        <rect x="579" y="589" width="92" height="52" rx="6" class="c-database" stroke-width="1.5"/>
-        <text x="625" y="610" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Append events</text>
-        <text x="625" y="627" class="t-muted" font-size="8" text-anchor="middle">batched results</text>
+        <rect x="570" y="589" width="110" height="52" rx="6" class="c-mask"/>
+        <rect x="570" y="589" width="110" height="52" rx="6" class="c-security" stroke-width="1.5"/>
+        <text x="625" y="610" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Re-deliver</text>
+        <text x="625" y="627" class="t-muted" font-size="8" text-anchor="middle">wake survives</text>
 
         <!-- Edge labels -->
 
-        <rect x="231" y="146" width="58" height="14" rx="3" class="c-mask"/>
-        <text x="260" y="156" class="t-backend" font-size="8" text-anchor="middle">Task state</text>
-        <rect x="327" y="347" width="30" height="14" rx="3" class="c-mask"/>
-        <text x="342" y="357" class="t-backend" font-size="8" text-anchor="middle">View</text>
-        <rect x="405.8" y="272" width="48.4" height="14" rx="3" class="c-mask"/>
-        <text x="430" y="282" class="t-backend" font-size="8" text-anchor="middle">Decision</text>
-        <rect x="471" y="290.5" width="58" height="14" rx="3" class="c-mask"/>
-        <text x="500" y="300.5" class="t-backend" font-size="8" text-anchor="middle">tool_calls</text>
 
-        <rect x="591.2" y="543.5" width="67.6" height="14" rx="3" class="c-mask"/>
-        <text x="625" y="553.5" class="t-muted" font-size="8" text-anchor="middle">tool results</text>
-        <rect x="199" y="409" width="82" height="14" rx="3" class="c-mask"/>
-        <text x="240" y="419" class="t-database" font-size="8" text-anchor="middle">loop: recompose</text>
-        <rect x="514.3" y="146" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
-        <text x="562.5" y="156" class="t-backend" font-size="8" text-anchor="middle">suspend / terminal</text>
+
+
+        <rect x="324" y="270" width="82" height="14" rx="3" class="c-mask"/>
+        <text x="365" y="280" class="t-muted" font-size="8" text-anchor="middle">Dispatcher.wake</text>
+        <rect x="433.6" y="332" width="62.8" height="14" rx="3" class="c-mask"/>
+        <text x="465" y="342" class="t-backend" font-size="8" text-anchor="middle">ready queue</text>
+        <rect x="456.6" y="357.5" width="86.8" height="14" rx="3" class="c-mask"/>
+        <text x="500" y="367.5" class="t-backend" font-size="8" text-anchor="middle">lease carries it</text>
+
+        <rect x="600.8" y="171.5" width="48.4" height="14" rx="3" class="c-mask"/>
+        <text x="625" y="181.5" class="t-muted" font-size="8" text-anchor="middle">consumed</text>
+        <rect x="531.1" y="518" width="62.8" height="14" rx="3" class="c-mask"/>
+        <text x="562.5" y="528" class="t-security" font-size="8" text-anchor="middle">crash first</text>
+        <rect x="370.6" y="533" width="110.8" height="14" rx="3" class="c-mask"/>
+        <text x="426" y="543" class="t-database" font-size="8" text-anchor="middle">same wake, next lease</text>
 
         <!-- Legend -->
         <text x="175" y="676" class="t-primary" font-size="10" font-weight="600">Legend</text>

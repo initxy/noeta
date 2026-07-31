@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Context composition & prompt cache",
+    "subtitle": "Folded state → ThreeSegmentComposer → three segments ordered by volatility → one provider request",
+    "output": "context-composer.html",
+    "viewBox": [1120, 660]
+  },
+  "stages": [
+    { "label": "Folded state" },
+    { "label": "Compose" },
+    { "label": "Segments" },
+    { "label": "Request" },
+    { "label": "Provider" }
+  ],
+  "nodes": [
+    { "id": "spec", "type": "frontend", "label": "Prompt + tools", "sublabel": "session identity", "stage": 0, "row": 0, "width": 118, "height": 70, "tag": "changes only on rebuild" },
+    { "id": "content", "type": "database", "label": "active_content", "sublabel": "recorded activations", "stage": 0, "row": 1, "width": 118, "height": 70, "tag": "resident bytes by hash" },
+    { "id": "history", "type": "messagebus", "label": "runtime.messages", "sublabel": "rolling history", "stage": 0, "row": 2, "width": 118, "height": 70, "tag": "+ compaction summary" },
+
+    { "id": "composer", "type": "backend", "label": "ThreeSegmentComposer", "sublabel": "pure: state → View", "stage": 1, "row": 1, "width": 130, "height": 70, "tag": "no clock, no network" },
+
+    { "id": "stable", "type": "cloud", "label": "stable_prefix", "sublabel": "prompt + tool schemas", "stage": 2, "row": 0, "width": 118, "height": 70, "tag": "sha256, byte-stable" },
+    { "id": "semi", "type": "cloud", "label": "semi_stable", "sublabel": "pre-loop residents", "stage": 2, "row": 1, "width": 118, "height": 70, "tag": "skill · memory · env" },
+    { "id": "dynamic", "type": "frontend", "label": "dynamic_suffix", "sublabel": "history + reminders", "stage": 2, "row": 2, "width": 118, "height": 70, "tag": "rewritten every turn" },
+    { "id": "plan", "type": "database", "label": "ContextPlan", "sublabel": "→ ContentStore", "stage": 2, "row": 3, "width": 118, "height": 58 },
+
+    { "id": "request", "type": "backend", "label": "LLMRequest", "sublabel": "segments in order", "stage": 3, "row": 1, "width": 118, "height": 70, "tag": "one per compose" },
+
+    { "id": "provider", "type": "external", "label": "Provider adapter", "sublabel": "vendor wire", "stage": 4, "row": 1, "width": 118, "height": 70, "tag": "KV cache by prefix" }
+  ],
+  "flows": [
+    { "from": "spec", "to": "composer", "label": "session identity", "labelAt": [204, 220] },
+    { "from": "content", "to": "composer", "label": "resident bytes", "labelAt": [204, 266] },
+    { "from": "history", "to": "composer", "label": "conversation", "labelAt": [204, 334] },
+
+    { "from": "composer", "to": "stable", "label": "prompt + schemas", "classification": "cache anchor", "variant": "emphasis", "labelAt": [425, 220] },
+    { "from": "composer", "to": "semi", "label": "resident content", "classification": "registration order", "variant": "emphasis", "labelAt": [425, 334] },
+    { "from": "composer", "to": "dynamic", "label": "rolling tail", "classification": "re-encoded", "variant": "emphasis", "labelAt": [425, 448] },
+    { "from": "composer", "to": "plan", "label": "plan body", "classification": "audit only", "variant": "dashed", "labelAt": [425, 557] },
+
+    { "from": "stable", "to": "request", "label": "cache hit", "classification": "identical prefix", "variant": "emphasis", "labelAt": [637, 220] },
+    { "from": "semi", "to": "request", "label": "cache hit", "classification": "residents unchanged", "labelAt": [637, 334] },
+    { "from": "dynamic", "to": "request", "label": "cache miss", "classification": "by design", "labelAt": [637, 448] },
+
+    { "from": "request", "to": "provider", "label": "one LLM call", "classification": "prefix cache lookup", "variant": "emphasis", "labelAt": [852, 220] }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Cut by volatility",
+      "items": [
+        "Providers cache KV state by prefix: an unchanged prefix is reused instead of re-encoded and re-billed",
+        "So everything stable goes to the front and stays byte-stable — sorted schema keys, no timestamps, fixed field order",
+        "Tool schemas are hashed alongside the system prompt, so swapping a tool rotates the prefix hash even when the text is identical"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "A pure function of folded state",
+      "items": [
+        "No clock, no randomness, no network — the same state assembles the same View",
+        "The one side effect is writing the ContextPlan body so the Engine has a ref to attach",
+        "ContextState.plan_ref is fold-derived, so the composer never writes task.context directly"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Placement follows the activation anchor",
+      "items": [
+        "Activated pre-loop (anchor at or before the first assistant message) → renders in semi_stable",
+        "Activated mid-task → renders inside dynamic_suffix at its anchor, so the cached head is never rewritten",
+        "Insertion slides forward past role=tool messages, so content can never split a tool round-trip"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Tail-only mechanisms",
+      "items": [
+        "Compaction swaps the covered prefix for one summary message; the originals stay on the log",
+        "Tail pruning clears tool outputs older than a token budget to a marker, keeping every ref in the plan",
+        "Compose-time reminders render at the very end, are never recorded, and cannot churn the cached head"
+      ]
+    }
+  ]
+}

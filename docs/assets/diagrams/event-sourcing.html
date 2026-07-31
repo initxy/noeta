@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="generator" content="archify 2.11.0">
-  <title>Event Sourcing — state = fold(log) Diagram</title>
+  <title>Event sourcing — state = fold(log) Diagram</title>
   <script>
     // Resolve the theme before first paint so light-preference users don't
     // see a dark flash. The toolbar script below re-applies with UI state.
@@ -35,7 +35,7 @@
   </noscript>
   <style>
     /* ==========================================================
-       THEME VARIABLES — switch by toggling [data-theme] on the html root
+       THEME VARIABLES — switch by toggling [data-theme] on <html>
        ========================================================== */
     :root,
     [data-theme="dark"] {
@@ -525,14 +525,14 @@
     <div class="header">
       <div class="header-row">
         <div class="pulse-dot"></div>
-        <h1>Event Sourcing — state = fold(log)</h1>
+        <h1>Event sourcing — state = fold(log)</h1>
       </div>
-      <p class="subtitle">Append-only EventLog + content-addressed ContentStore → fold → four state slices</p>
+      <p class="subtitle">Events append to the EventLog, oversized bodies go to the ContentStore, fold rebuilds the four state slices</p>
     </div>
 
     <!-- Main Diagram -->
     <div class="diagram-container">
-      <svg viewBox="0 0 1100 720" role="img" aria-label="Event Sourcing — state = fold(log) — Append-only EventLog + content-addressed ContentStore → fold → four state slices (data-flow diagram)">
+      <svg viewBox="0 0 1120 660" role="img" aria-label="Event sourcing — state = fold(log) — Events append to the EventLog, oversized bodies go to the ContentStore, fold rebuilds the four state slices (data-flow diagram)">
         <!-- Definitions -->
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -556,127 +556,130 @@
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Data Stages -->
-        <rect x="16" y="46" width="168" height="600" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="100" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">01 / Writers</text>
+        <rect x="16" y="46" width="168" height="540" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="100" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">01 / Write</text>
 
-        <rect x="231" y="46" width="168" height="600" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="315" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">02 / Append</text>
+        <rect x="231" y="46" width="168" height="540" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="315" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">02 / Ledger</text>
 
-        <rect x="446" y="46" width="168" height="600" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="530" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">03 / Store</text>
+        <rect x="446" y="46" width="168" height="540" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="530" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">03 / Rebuild</text>
 
-        <rect x="661" y="46" width="168" height="600" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="745" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">04 / Fold</text>
+        <rect x="661" y="46" width="168" height="540" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="745" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">04 / State</text>
 
-        <rect x="876" y="46" width="168" height="600" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="960" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">05 / State</text>
+        <rect x="876" y="46" width="168" height="540" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="960" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">05 / Next step</text>
 
         <!-- Flow paths -->
-        <path d="M 156 157 L 207.5 157 L 207.5 271 L 259 271" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 156 271 L 259 271" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 156 385 L 207.5 385 L 207.5 271 L 259 271" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 156 499 L 207.5 499 L 207.5 271 L 259 271" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 371 271 L 474 271" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 371 271 L 689 271" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 586 271 L 689 271" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 801 271 L 852.5 271 L 852.5 157 L 904 157" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 801 271 L 904 271" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 801 271 L 852.5 271 L 852.5 385 L 904 385" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 801 271 L 852.5 271 L 852.5 499 L 904 499" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 168 391 L 207.5 391 L 207.5 277 L 247 277" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 168 391 L 207.5 391 L 207.5 505 L 247 505" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <path d="M 383 277 L 422.5 277 L 422.5 391 L 462 391" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 383 505 L 422.5 505 L 422.5 391 L 462 391" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <path d="M 598 391 L 637.5 391 L 637.5 163 L 677 163" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 598 391 L 637.5 391 L 637.5 277 L 677 277" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 598 391 L 677 391" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 598 391 L 637.5 391 L 637.5 505 L 677 505" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 813 163 L 852.5 163 L 852.5 391 L 892 391" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 813 277 L 852.5 277 L 852.5 391 L 892 391" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 813 391 L 892 391" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 813 505 L 852.5 505 L 852.5 391 L 892 391" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
 
         <!-- Nodes -->
-        <rect x="44" y="128" width="112" height="58" rx="6" class="c-mask"/>
-        <rect x="44" y="128" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="100" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Engine</text>
-        <text x="100" y="165" class="t-muted" font-size="7" text-anchor="middle">writes RuntimeState</text>
+        <rect x="32" y="356" width="136" height="70" rx="6" class="c-mask"/>
+        <rect x="32" y="356" width="136" height="70" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="100" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Engine</text>
+        <text x="100" y="393" class="t-muted" font-size="7" text-anchor="middle">run_one_step</text>
+        <text x="100" y="415" class="t-backend" font-size="7" text-anchor="middle">sole appender</text>
 
-        <rect x="44" y="242" width="112" height="58" rx="6" class="c-mask"/>
-        <rect x="44" y="242" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="100" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Policy</text>
-        <text x="100" y="279" class="t-muted" font-size="7" text-anchor="middle">TaskStatePatch</text>
-
-        <rect x="44" y="356" width="112" height="58" rx="6" class="c-mask"/>
-        <rect x="44" y="356" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="100" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Composer</text>
-        <text x="100" y="393" class="t-muted" font-size="7" text-anchor="middle">writes ContextState</text>
-
-        <rect x="44" y="470" width="112" height="58" rx="6" class="c-mask"/>
-        <rect x="44" y="470" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="100" y="491" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">fold()</text>
-        <text x="100" y="507" class="t-muted" font-size="7" text-anchor="middle">writes GovernanceState</text>
-
-        <rect x="259" y="242" width="112" height="58" rx="6" class="c-mask"/>
-        <rect x="259" y="242" width="112" height="58" rx="6" class="c-messagebus" stroke-width="1.5"/>
+        <rect x="247" y="242" width="136" height="70" rx="6" class="c-mask"/>
+        <rect x="247" y="242" width="136" height="70" rx="6" class="c-messagebus" stroke-width="1.5"/>
         <text x="315" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">EventLog</text>
         <text x="315" y="279" class="t-muted" font-size="7" text-anchor="middle">append-only stream</text>
-        <text x="315" y="289" class="t-messagebus" font-size="7" text-anchor="middle">≤ 4 KB payload</text>
+        <text x="315" y="301" class="t-messagebus" font-size="7" text-anchor="middle">seq on append</text>
 
-        <rect x="474" y="242" width="112" height="58" rx="6" class="c-mask"/>
-        <rect x="474" y="242" width="112" height="58" rx="6" class="c-database" stroke-width="1.5"/>
-        <text x="530" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">ContentStore</text>
-        <text x="530" y="279" class="t-muted" font-size="7" text-anchor="middle">content-addressed</text>
-        <text x="530" y="289" class="t-database" font-size="7" text-anchor="middle">SHA-256 dedup</text>
+        <rect x="247" y="470" width="136" height="70" rx="6" class="c-mask"/>
+        <rect x="247" y="470" width="136" height="70" rx="6" class="c-database" stroke-width="1.5"/>
+        <text x="315" y="491" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">ContentStore</text>
+        <text x="315" y="507" class="t-muted" font-size="7" text-anchor="middle">content-addressed</text>
+        <text x="315" y="529" class="t-database" font-size="7" text-anchor="middle">SHA-256 dedup</text>
 
-        <rect x="689" y="242" width="112" height="58" rx="6" class="c-mask"/>
-        <rect x="689" y="242" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="745" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">fold(stream)</text>
-        <text x="745" y="279" class="t-muted" font-size="7" text-anchor="middle">deterministic replay</text>
+        <rect x="462" y="356" width="136" height="70" rx="6" class="c-mask"/>
+        <rect x="462" y="356" width="136" height="70" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="530" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">fold()</text>
+        <text x="530" y="393" class="t-muted" font-size="7" text-anchor="middle">replay in seq order</text>
+        <text x="530" y="415" class="t-backend" font-size="7" text-anchor="middle">snapshot-accelerated</text>
 
-        <rect x="904" y="128" width="112" height="58" rx="6" class="c-mask"/>
-        <rect x="904" y="128" width="112" height="58" rx="6" class="c-frontend" stroke-width="1.5"/>
-        <text x="960" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">RuntimeState</text>
-        <text x="960" y="165" class="t-muted" font-size="7" text-anchor="middle">messages · usage</text>
+        <rect x="677" y="128" width="136" height="70" rx="6" class="c-mask"/>
+        <rect x="677" y="128" width="136" height="70" rx="6" class="c-frontend" stroke-width="1.5"/>
+        <text x="745" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">RuntimeState</text>
+        <text x="745" y="165" class="t-muted" font-size="7" text-anchor="middle">messages · usage</text>
+        <text x="745" y="187" class="t-frontend" font-size="7" text-anchor="middle">writer: Engine</text>
 
-        <rect x="904" y="242" width="112" height="58" rx="6" class="c-mask"/>
-        <rect x="904" y="242" width="112" height="58" rx="6" class="c-frontend" stroke-width="1.5"/>
-        <text x="960" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">TaskState</text>
-        <text x="960" y="279" class="t-muted" font-size="7" text-anchor="middle">todos · active content</text>
+        <rect x="677" y="242" width="136" height="70" rx="6" class="c-mask"/>
+        <rect x="677" y="242" width="136" height="70" rx="6" class="c-frontend" stroke-width="1.5"/>
+        <text x="745" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">TaskState</text>
+        <text x="745" y="279" class="t-muted" font-size="7" text-anchor="middle">goal · phase · todos</text>
+        <text x="745" y="301" class="t-frontend" font-size="7" text-anchor="middle">writer: Policy patch</text>
 
-        <rect x="904" y="356" width="112" height="58" rx="6" class="c-mask"/>
-        <rect x="904" y="356" width="112" height="58" rx="6" class="c-frontend" stroke-width="1.5"/>
-        <text x="960" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">ContextState</text>
-        <text x="960" y="393" class="t-muted" font-size="7" text-anchor="middle">plan ref · compaction</text>
+        <rect x="677" y="356" width="136" height="70" rx="6" class="c-mask"/>
+        <rect x="677" y="356" width="136" height="70" rx="6" class="c-frontend" stroke-width="1.5"/>
+        <text x="745" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">ContextState</text>
+        <text x="745" y="393" class="t-muted" font-size="7" text-anchor="middle">plan_ref · summary</text>
+        <text x="745" y="415" class="t-frontend" font-size="7" text-anchor="middle">writer: fold</text>
 
-        <rect x="904" y="470" width="112" height="58" rx="6" class="c-mask"/>
-        <rect x="904" y="470" width="112" height="58" rx="6" class="c-frontend" stroke-width="1.5"/>
-        <text x="960" y="491" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">GovernanceState</text>
-        <text x="960" y="507" class="t-muted" font-size="7" text-anchor="middle">cost · tokens · denied</text>
+        <rect x="677" y="470" width="136" height="70" rx="6" class="c-mask"/>
+        <rect x="677" y="470" width="136" height="70" rx="6" class="c-frontend" stroke-width="1.5"/>
+        <text x="745" y="491" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">GovernanceState</text>
+        <text x="745" y="507" class="t-muted" font-size="7" text-anchor="middle">cost · tokens · denied</text>
+        <text x="745" y="529" class="t-frontend" font-size="7" text-anchor="middle">writer: fold</text>
+
+        <rect x="892" y="356" width="136" height="70" rx="6" class="c-mask"/>
+        <rect x="892" y="356" width="136" height="70" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="960" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Next decision</text>
+        <text x="960" y="393" class="t-muted" font-size="7" text-anchor="middle">compose → decide</text>
+        <text x="960" y="415" class="t-backend" font-size="7" text-anchor="middle">the loop repeats</text>
 
         <!-- Flow labels -->
-        <rect x="179.45" y="193" width="56.1" height="16" rx="4" class="c-mask"/>
-        <text x="207.5" y="204" class="t-backend" font-size="8" text-anchor="middle">envelopes</text>
-        <rect x="169.65" y="250" width="75.7" height="16" rx="4" class="c-mask"/>
-        <text x="207.5" y="261" class="t-backend" font-size="8" text-anchor="middle">state patches</text>
-        <rect x="169.65" y="307" width="75.7" height="16" rx="4" class="c-mask"/>
-        <text x="207.5" y="318" class="t-backend" font-size="8" text-anchor="middle">context plans</text>
-        <rect x="177" y="364" width="61" height="16" rx="4" class="c-mask"/>
-        <text x="207.5" y="375" class="t-backend" font-size="8" text-anchor="middle">governance</text>
-        <rect x="379.75" y="250" width="85.5" height="27" rx="4" class="c-mask"/>
-        <text x="422.5" y="261" class="t-messagebus" font-size="8" text-anchor="middle">large bodies</text>
-        <text x="422.5" y="272" class="t-dim" font-size="7" text-anchor="middle">ContentRef only</text>
-        <rect x="509.3" y="227" width="41.400000000000006" height="16" rx="4" class="c-mask"/>
-        <text x="530" y="238" class="t-backend" font-size="8" text-anchor="middle">stream</text>
-        <rect x="616.8" y="250" width="41.400000000000006" height="16" rx="4" class="c-mask"/>
-        <text x="637.5" y="261" class="t-messagebus" font-size="8" text-anchor="middle">derefs</text>
-        <rect x="834.25" y="193" width="36.5" height="16" rx="4" class="c-mask"/>
-        <text x="852.5" y="204" class="t-backend" font-size="8" text-anchor="middle">slice</text>
-        <rect x="834.25" y="250" width="36.5" height="16" rx="4" class="c-mask"/>
-        <text x="852.5" y="261" class="t-backend" font-size="8" text-anchor="middle">slice</text>
-        <rect x="834.25" y="307" width="36.5" height="16" rx="4" class="c-mask"/>
-        <text x="852.5" y="318" class="t-backend" font-size="8" text-anchor="middle">slice</text>
-        <rect x="834.25" y="364" width="36.5" height="16" rx="4" class="c-mask"/>
-        <text x="852.5" y="375" class="t-backend" font-size="8" text-anchor="middle">slice</text>
+        <rect x="164.75" y="313" width="85.5" height="27" rx="4" class="c-mask"/>
+        <text x="207.5" y="324" class="t-backend" font-size="8" text-anchor="middle">event envelopes</text>
+        <text x="207.5" y="335" class="t-dim" font-size="7" text-anchor="middle">payload ≤ 4 KB</text>
+        <rect x="135.35" y="427" width="144.3" height="27" rx="4" class="c-mask"/>
+        <text x="207.5" y="438" class="t-messagebus" font-size="8" text-anchor="middle">oversized bodies</text>
+        <text x="207.5" y="449" class="t-dim" font-size="7" text-anchor="middle">envelope keeps a ContentRef</text>
+        <rect x="387.1" y="313" width="70.80000000000001" height="27" rx="4" class="c-mask"/>
+        <text x="422.5" y="324" class="t-backend" font-size="8" text-anchor="middle">event stream</text>
+        <text x="422.5" y="335" class="t-dim" font-size="7" text-anchor="middle">one per Task</text>
+        <rect x="384.65" y="427" width="75.7" height="27" rx="4" class="c-mask"/>
+        <text x="422.5" y="438" class="t-messagebus" font-size="8" text-anchor="middle">deref by hash</text>
+        <text x="422.5" y="449" class="t-dim" font-size="7" text-anchor="middle">batched</text>
+        <rect x="602.6" y="209" width="70.80000000000001" height="16" rx="4" class="c-mask"/>
+        <text x="638" y="220" class="t-muted" font-size="8" text-anchor="middle">conversation</text>
+        <rect x="605.05" y="307" width="65.9" height="16" rx="4" class="c-mask"/>
+        <text x="638" y="318" class="t-muted" font-size="8" text-anchor="middle">task memory</text>
+        <rect x="599.15" y="369" width="75.7" height="16" rx="4" class="c-mask"/>
+        <text x="637" y="380" class="t-backend" font-size="8" text-anchor="middle">context slice</text>
+        <rect x="612.4" y="545" width="51.2" height="16" rx="4" class="c-mask"/>
+        <text x="638" y="556" class="t-muted" font-size="8" text-anchor="middle">counters</text>
+        <rect x="810.25" y="204" width="85.5" height="16" rx="4" class="c-mask"/>
+        <text x="853" y="215" class="t-muted" font-size="8" text-anchor="middle">message history</text>
+        <rect x="817.6" y="319" width="70.80000000000001" height="16" rx="4" class="c-mask"/>
+        <text x="853" y="330" class="t-muted" font-size="8" text-anchor="middle">goal + todos</text>
+        <rect x="805.35" y="441" width="95.30000000000001" height="16" rx="4" class="c-mask"/>
+        <text x="853" y="452" class="t-backend" font-size="8" text-anchor="middle">summary + anchors</text>
+        <rect x="810.25" y="545" width="85.5" height="16" rx="4" class="c-mask"/>
+        <text x="853" y="556" class="t-muted" font-size="8" text-anchor="middle">budget counters</text>
 
         <!-- Legend -->
-        <text x="214" y="664" class="t-primary" font-size="10" font-weight="600">Legend</text>
-        <path d="M 214 684 L 248 684" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <text x="257" y="687" class="t-muted" font-size="8">primary data</text>
-        <path d="M 340 684 L 374 684" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <text x="383" y="687" class="t-muted" font-size="8">policy / PII</text>
-        <path d="M 480 684 L 514 684" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <text x="523" y="687" class="t-muted" font-size="8">async batch</text>
-        <rect x="625" y="676" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
-        <text x="646" y="684" class="t-muted" font-size="8">data store</text>
+        <text x="214" y="604" class="t-primary" font-size="10" font-weight="600">Legend</text>
+        <path d="M 214 624 L 248 624" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <text x="257" y="627" class="t-muted" font-size="8">primary data</text>
+        <path d="M 340 624 L 374 624" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <text x="383" y="627" class="t-muted" font-size="8">policy / PII</text>
+        <path d="M 480 624 L 514 624" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <text x="523" y="627" class="t-muted" font-size="8">async batch</text>
+        <rect x="625" y="616" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
+        <text x="646" y="624" class="t-muted" font-size="8">data store</text>
       </svg>
     </div>
 
@@ -685,24 +688,36 @@
       <div class="card">
         <div class="card-header">
           <div class="card-dot emerald"></div>
-          <h3>Single-writer invariant</h3>
+          <h3>The log is the master copy</h3>
         </div>
         <ul>
-          <li>&bull; Each state slice has exactly one writer</li>
-          <li>&bull; Policy cannot assign its own memory — only patch via event</li>
-          <li>&bull; Origin marker records which role wrote each envelope</li>
+          <li>&bull; There is no task table — every state change is an envelope with a monotonic seq</li>
+          <li>&bull; Kill the process mid-task and fold rebuilds byte-identical state on any machine</li>
+          <li>&bull; Recovering, auditing, and rendering a task in a UI are all the same fold</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot cyan"></div>
-          <h3>Why this works</h3>
+          <h3>Single writer per slice</h3>
         </div>
         <ul>
-          <li>&bull; State is a disposable projection, the log is master</li>
-          <li>&bull; Kill the process — fold rebuilds identical state</li>
-          <li>&bull; Replay, audit, and UI are all the same fold operation</li>
+          <li>&bull; The Policy cannot assign to its own memory: it attaches a TaskStatePatch to the Decision, the Engine lands it as an event, and fold writes it back</li>
+          <li>&bull; Every emit presents the Worker&#39;s lease_id, so exactly one writer can be appending</li>
+          <li>&bull; A snapshot is an ordinary event whose payload is a state_ref — an accelerator, never a second truth</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot amber"></div>
+          <h3>Small records, big bodies</h3>
+        </div>
+        <ul>
+          <li>&bull; EVENT_PAYLOAD_MAX_BYTES caps inline payloads at 4 KB; a write over it raises PayloadTooLarge</li>
+          <li>&bull; LLM bodies, large tool outputs, compaction summaries, and oversized goals go to the ContentStore</li>
+          <li>&bull; Content is immutable and addressed by hash, so a read cache needs no invalidation rule</li>
         </ul>
       </div>
     </div>

@@ -2,49 +2,77 @@
   "schema_version": 1,
   "diagram_type": "dataflow",
   "meta": {
-    "title": "Event Sourcing — state = fold(log)",
-    "subtitle": "Append-only EventLog + content-addressed ContentStore → fold → four state slices",
+    "title": "Event sourcing — state = fold(log)",
+    "subtitle": "Events append to the EventLog, oversized bodies go to the ContentStore, fold rebuilds the four state slices",
     "output": "event-sourcing.html",
-    "viewBox": [1100, 720]
+    "viewBox": [1120, 660]
   },
   "stages": [
-    { "label": "Writers" },
-    { "label": "Append" },
-    { "label": "Store" },
-    { "label": "Fold" },
-    { "label": "State" }
+    { "label": "Write" },
+    { "label": "Ledger" },
+    { "label": "Rebuild" },
+    { "label": "State" },
+    { "label": "Next step" }
   ],
   "nodes": [
-    { "id": "engine", "type": "backend", "label": "Engine", "sublabel": "writes RuntimeState", "stage": 0, "row": 0 },
-    { "id": "policy", "type": "backend", "label": "Policy", "sublabel": "TaskStatePatch", "stage": 0, "row": 1 },
-    { "id": "composer", "type": "backend", "label": "Composer", "sublabel": "writes ContextState", "stage": 0, "row": 2 },
-    { "id": "fold", "type": "backend", "label": "fold()", "sublabel": "writes GovernanceState", "stage": 0, "row": 3 },
+    { "id": "engine", "type": "backend", "label": "Engine", "sublabel": "run_one_step", "stage": 0, "row": 2, "width": 136, "height": 70, "tag": "sole appender" },
 
-    { "id": "eventlog", "type": "messagebus", "label": "EventLog", "sublabel": "append-only stream", "stage": 1, "row": 1, "tag": "≤ 4 KB payload" },
-    { "id": "contentstore", "type": "database", "label": "ContentStore", "sublabel": "content-addressed", "stage": 2, "row": 1, "tag": "SHA-256 dedup" },
+    { "id": "eventlog", "type": "messagebus", "label": "EventLog", "sublabel": "append-only stream", "stage": 1, "row": 1, "width": 136, "height": 70, "tag": "seq on append" },
+    { "id": "contentstore", "type": "database", "label": "ContentStore", "sublabel": "content-addressed", "stage": 1, "row": 3, "width": 136, "height": 70, "tag": "SHA-256 dedup" },
 
-    { "id": "foldfn", "type": "backend", "label": "fold(stream)", "sublabel": "deterministic replay", "stage": 3, "row": 1 },
+    { "id": "fold", "type": "backend", "label": "fold()", "sublabel": "replay in seq order", "stage": 2, "row": 2, "width": 136, "height": 70, "tag": "snapshot-accelerated" },
 
-    { "id": "runtime", "type": "frontend", "label": "RuntimeState", "sublabel": "messages · usage", "stage": 4, "row": 0 },
-    { "id": "task", "type": "frontend", "label": "TaskState", "sublabel": "todos · active content", "stage": 4, "row": 1 },
-    { "id": "context", "type": "frontend", "label": "ContextState", "sublabel": "plan ref · compaction", "stage": 4, "row": 2 },
-    { "id": "governance", "type": "frontend", "label": "GovernanceState", "sublabel": "cost · tokens · denied", "stage": 4, "row": 3 }
+    { "id": "rtstate", "type": "frontend", "label": "RuntimeState", "sublabel": "messages · usage", "stage": 3, "row": 0, "width": 136, "height": 70, "tag": "writer: Engine" },
+    { "id": "tkstate", "type": "frontend", "label": "TaskState", "sublabel": "goal · phase · todos", "stage": 3, "row": 1, "width": 136, "height": 70, "tag": "writer: Policy patch" },
+    { "id": "ctxstate", "type": "frontend", "label": "ContextState", "sublabel": "plan_ref · summary", "stage": 3, "row": 2, "width": 136, "height": 70, "tag": "writer: fold" },
+    { "id": "govstate", "type": "frontend", "label": "GovernanceState", "sublabel": "cost · tokens · denied", "stage": 3, "row": 3, "width": 136, "height": 70, "tag": "writer: fold" },
+
+    { "id": "view", "type": "backend", "label": "Next decision", "sublabel": "compose → decide", "stage": 4, "row": 2, "width": 136, "height": 70, "tag": "the loop repeats" }
   ],
   "flows": [
-    { "from": "engine", "to": "eventlog", "label": "envelopes", "variant": "emphasis" },
-    { "from": "policy", "to": "eventlog", "label": "state patches", "variant": "emphasis" },
-    { "from": "composer", "to": "eventlog", "label": "context plans", "variant": "emphasis" },
-    { "from": "fold", "to": "eventlog", "label": "governance", "variant": "emphasis" },
-    { "from": "eventlog", "to": "contentstore", "label": "large bodies", "variant": "dashed", "classification": "ContentRef only" },
-    { "from": "eventlog", "to": "foldfn", "label": "stream", "variant": "emphasis", "labelDy": -23 },
-    { "from": "contentstore", "to": "foldfn", "label": "derefs", "variant": "dashed" },
-    { "from": "foldfn", "to": "runtime", "label": "slice", "variant": "emphasis" },
-    { "from": "foldfn", "to": "task", "label": "slice", "variant": "emphasis" },
-    { "from": "foldfn", "to": "context", "label": "slice", "variant": "emphasis" },
-    { "from": "foldfn", "to": "governance", "label": "slice", "variant": "emphasis" }
+    { "from": "engine", "to": "eventlog", "label": "event envelopes", "classification": "payload ≤ 4 KB", "variant": "emphasis" },
+    { "from": "engine", "to": "contentstore", "label": "oversized bodies", "classification": "envelope keeps a ContentRef", "variant": "dashed" },
+
+    { "from": "eventlog", "to": "fold", "label": "event stream", "classification": "one per Task", "variant": "emphasis" },
+    { "from": "contentstore", "to": "fold", "label": "deref by hash", "classification": "batched", "variant": "dashed" },
+
+    { "from": "fold", "to": "rtstate", "label": "conversation", "labelAt": [638, 220] },
+    { "from": "fold", "to": "tkstate", "label": "task memory", "labelAt": [638, 318] },
+    { "from": "fold", "to": "ctxstate", "label": "context slice", "variant": "emphasis", "labelAt": [637, 380] },
+    { "from": "fold", "to": "govstate", "label": "counters", "labelAt": [638, 556] },
+
+    { "from": "rtstate", "to": "view", "label": "message history", "labelAt": [853, 215] },
+    { "from": "tkstate", "to": "view", "label": "goal + todos", "labelAt": [853, 330] },
+    { "from": "ctxstate", "to": "view", "label": "summary + anchors", "variant": "emphasis", "labelAt": [853, 452] },
+    { "from": "govstate", "to": "view", "label": "budget counters", "labelAt": [853, 556] }
   ],
   "cards": [
-    { "dot": "emerald", "title": "Single-writer invariant", "items": ["Each state slice has exactly one writer", "Policy cannot assign its own memory — only patch via event", "Origin marker records which role wrote each envelope"] },
-    { "dot": "cyan", "title": "Why this works", "items": ["State is a disposable projection, the log is master", "Kill the process — fold rebuilds identical state", "Replay, audit, and UI are all the same fold operation"] }
+    {
+      "dot": "emerald",
+      "title": "The log is the master copy",
+      "items": [
+        "There is no task table — every state change is an envelope with a monotonic seq",
+        "Kill the process mid-task and fold rebuilds byte-identical state on any machine",
+        "Recovering, auditing, and rendering a task in a UI are all the same fold"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Single writer per slice",
+      "items": [
+        "The Policy cannot assign to its own memory: it attaches a TaskStatePatch to the Decision, the Engine lands it as an event, and fold writes it back",
+        "Every emit presents the Worker's lease_id, so exactly one writer can be appending",
+        "A snapshot is an ordinary event whose payload is a state_ref — an accelerator, never a second truth"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Small records, big bodies",
+      "items": [
+        "EVENT_PAYLOAD_MAX_BYTES caps inline payloads at 4 KB; a write over it raises PayloadTooLarge",
+        "LLM bodies, large tool outputs, compaction summaries, and oversized goals go to the ContentStore",
+        "Content is immutable and addressed by hash, so a read cache needs no invalidation rule"
+      ]
+    }
   ]
 }

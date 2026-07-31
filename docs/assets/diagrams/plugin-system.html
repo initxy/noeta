@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="generator" content="archify 2.11.0">
-  <title>Plugin System — 16 surfaces, 3 planes Diagram</title>
+  <title>Plugin System Diagram</title>
   <script>
     // Resolve the theme before first paint so light-preference users don't
     // see a dark flash. The toolbar script below re-applies with UI state.
@@ -35,7 +35,7 @@
   </noscript>
   <style>
     /* ==========================================================
-       THEME VARIABLES — switch by toggling [data-theme] on the html root
+       THEME VARIABLES — switch by toggling [data-theme] on <html>
        ========================================================== */
     :root,
     [data-theme="dark"] {
@@ -525,14 +525,14 @@
     <div class="header">
       <div class="header-row">
         <div class="pulse-dot"></div>
-        <h1>Plugin System — 16 surfaces, 3 planes</h1>
+        <h1>Plugin System</h1>
       </div>
-      <p class="subtitle">Manifest → loader → activation; Noeta&#39;s own builtins ride the same path</p>
+      <p class="subtitle">Manifest → loader → surface registry → per-agent activation; 16 surfaces across three planes</p>
     </div>
 
     <!-- Main Diagram -->
     <div class="diagram-container">
-      <svg viewBox="0 0 1050 560" role="img" aria-label="Plugin System — 16 surfaces, 3 planes — Manifest → loader → activation; Noeta&#39;s own builtins ride the same path (architecture diagram)">
+      <svg viewBox="0 0 1315 540" role="img" aria-label="Plugin System — Manifest → loader → surface registry → per-agent activation; 16 surfaces across three planes (architecture diagram)">
         <!-- Definitions -->
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -556,101 +556,101 @@
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Boundaries (behind everything) -->
-        <rect x="610" y="40" width="240" height="312" rx="12" class="c-region" stroke-width="1"/>
-        <text x="618" y="58" class="t-cloud" font-size="9" font-weight="600">Identity plane (per-agent, enters identity)</text>
-
-        <rect x="610" y="110" width="240" height="312" rx="12" class="c-region" stroke-width="1"/>
-        <text x="618" y="128" class="t-cloud" font-size="9" font-weight="600">Wiring plane (process-wide, out of identity)</text>
-
-        <rect x="610" y="180" width="230" height="312" rx="12" class="c-region" stroke-width="1"/>
-        <text x="618" y="198" class="t-cloud" font-size="9" font-weight="600">Host plane (host-wired resources)</text>
+        <rect x="775" y="120" width="260" height="350" rx="12" class="c-region" stroke-width="1"/>
+        <text x="783" y="138" class="t-cloud" font-size="9" font-weight="600">Extension surfaces</text>
 
         <!-- Connection paths (before components for correct z-order) -->
-        <path d="M 180 290 L 230 290" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 380 290 L 430 290" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 580 290 L 602 290 Q 610 290 610 282 L 610 104 Q 610 96 618 96 L 640 96" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 580 290 L 602 290 Q 610 290 610 282 L 610 174 Q 610 166 618 166 L 640 166" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 580 290 L 602 290 Q 610 290 610 282 L 610 244 Q 610 236 618 236 L 640 236" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 810 96 L 827 96 Q 835 96 835 104 L 835 282 Q 835 290 843 290 L 860 290" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 810 166 L 827 166 Q 835 166 835 174 L 835 282 Q 835 290 843 290 L 860 290" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path d="M 230 236 L 257 236 Q 265 236 265 244 L 265 292 Q 265 300 273 300 L 300 300" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 230 366 L 257 366 Q 265 366 265 358 L 265 308 Q 265 300 273 300 L 300 300" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 490 300 L 555 300" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 395 336 L 395 400" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path d="M 745 300 L 805 300" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 745 300 L 754 300 Q 762 300 762 292 L 762 194 Q 762 186 770 186 L 805 186" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path d="M 745 300 L 754 300 Q 762 300 762 308 L 762 406 Q 762 414 770 414 L 805 414" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path d="M 1005 300 L 1085 300" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
 
         <!-- Components -->
-        <rect x="40" y="260" width="140" height="60" rx="6" class="c-mask"/>
-        <rect x="40" y="260" width="140" height="60" rx="6" class="c-external" stroke-width="1.5"/>
-        <text x="110" y="288" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Plugin manifest</text>
-        <text x="110" y="304" class="t-muted" font-size="9" text-anchor="middle">static TOML / PluginBuilder</text>
+        <rect x="40" y="200" width="190" height="72" rx="6" class="c-mask"/>
+        <rect x="40" y="200" width="190" height="72" rx="6" class="c-external" stroke-width="1.5"/>
+        <text x="135" y="234" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Your plugin</text>
+        <text x="135" y="250" class="t-muted" font-size="9" text-anchor="middle">[tool.noeta] · PluginBuilder</text>
+        <text x="135" y="264" class="t-external" font-size="7" text-anchor="middle">static manifest</text>
 
-        <rect x="230" y="260" width="150" height="60" rx="6" class="c-mask"/>
-        <rect x="230" y="260" width="150" height="60" rx="6" class="c-messagebus" stroke-width="1.5"/>
-        <text x="305" y="288" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">load_plugins()</text>
-        <text x="305" y="304" class="t-muted" font-size="9" text-anchor="middle">manifest-only, no code import</text>
+        <rect x="40" y="330" width="190" height="72" rx="6" class="c-mask"/>
+        <rect x="40" y="330" width="190" height="72" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="135" y="364" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">noeta.builtins</text>
+        <text x="135" y="380" class="t-muted" font-size="9" text-anchor="middle">18 built-in plugins</text>
+        <text x="135" y="394" class="t-backend" font-size="7" text-anchor="middle">identical path</text>
 
-        <rect x="430" y="260" width="150" height="60" rx="6" class="c-mask"/>
-        <rect x="430" y="260" width="150" height="60" rx="6" class="c-messagebus" stroke-width="1.5"/>
-        <text x="505" y="288" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">SurfaceRegistry</text>
-        <text x="505" y="304" class="t-muted" font-size="9" text-anchor="middle">16 surfaces</text>
+        <rect x="300" y="264" width="190" height="72" rx="6" class="c-mask"/>
+        <rect x="300" y="264" width="190" height="72" rx="6" class="c-messagebus" stroke-width="1.5"/>
+        <text x="395" y="298" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">load_plugins()</text>
+        <text x="395" y="314" class="t-muted" font-size="9" text-anchor="middle">five gated sources</text>
+        <text x="395" y="328" class="t-messagebus" font-size="7" text-anchor="middle">reads manifests, imports nothing</text>
 
-        <rect x="640" y="70" width="170" height="52" rx="6" class="c-mask"/>
-        <rect x="640" y="70" width="170" height="52" rx="6" class="c-security" stroke-width="1.5"/>
-        <text x="725" y="94" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Identity plane</text>
-        <text x="725" y="110" class="t-muted" font-size="9" text-anchor="middle">enters AgentSpec</text>
+        <rect x="300" y="400" width="190" height="72" rx="6" class="c-mask"/>
+        <rect x="300" y="400" width="190" height="72" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="395" y="434" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">PluginSet.resolve()</text>
+        <text x="395" y="450" class="t-muted" font-size="9" text-anchor="middle">the single import boundary</text>
+        <text x="395" y="464" class="t-backend" font-size="7" text-anchor="middle">at client build, never per turn</text>
 
-        <rect x="640" y="140" width="170" height="52" rx="6" class="c-mask"/>
-        <rect x="640" y="140" width="170" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="725" y="164" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Wiring plane</text>
-        <text x="725" y="180" class="t-muted" font-size="9" text-anchor="middle">mounts on host</text>
+        <rect x="555" y="264" width="190" height="72" rx="6" class="c-mask"/>
+        <rect x="555" y="264" width="190" height="72" rx="6" class="c-security" stroke-width="1.5"/>
+        <text x="650" y="298" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">SurfaceRegistry</text>
+        <text x="650" y="314" class="t-muted" font-size="9" text-anchor="middle">16 SurfaceSpecs</text>
+        <text x="650" y="328" class="t-security" font-size="7" text-anchor="middle">the loader is surface-agnostic</text>
 
-        <rect x="640" y="210" width="170" height="52" rx="6" class="c-mask"/>
-        <rect x="640" y="210" width="170" height="52" rx="6" class="c-cloud" stroke-width="1.5"/>
-        <text x="725" y="234" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Host plane</text>
-        <text x="725" y="250" class="t-muted" font-size="9" text-anchor="middle">host-wired</text>
+        <rect x="805" y="150" width="200" height="72" rx="6" class="c-mask"/>
+        <rect x="805" y="150" width="200" height="72" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="905" y="184" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Wiring plane</text>
+        <text x="905" y="200" class="t-muted" font-size="9" text-anchor="middle">7 surfaces</text>
+        <text x="905" y="214" class="t-backend" font-size="7" text-anchor="middle">process or per-agent</text>
 
-        <rect x="640" y="280" width="180" height="52" rx="6" class="c-mask"/>
-        <rect x="640" y="280" width="180" height="52" rx="6" class="c-frontend" stroke-width="1.5"/>
-        <text x="730" y="304" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">tool · agent · content_kind</text>
-        <text x="730" y="320" class="t-muted" font-size="9" text-anchor="middle">prompt_fragment · policy · control_tool</text>
+        <rect x="805" y="264" width="200" height="72" rx="6" class="c-mask"/>
+        <rect x="805" y="264" width="200" height="72" rx="6" class="c-frontend" stroke-width="1.5"/>
+        <text x="905" y="298" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Identity plane</text>
+        <text x="905" y="314" class="t-muted" font-size="9" text-anchor="middle">6 surfaces</text>
+        <text x="905" y="328" class="t-frontend" font-size="7" text-anchor="middle">enters AgentSpec</text>
 
-        <rect x="640" y="350" width="180" height="52" rx="6" class="c-mask"/>
-        <rect x="640" y="350" width="180" height="52" rx="6" class="c-frontend" stroke-width="1.5"/>
-        <text x="730" y="374" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">guard · observer · provider</text>
-        <text x="730" y="390" class="t-muted" font-size="9" text-anchor="middle">reminder · session_pack · transform</text>
+        <rect x="805" y="378" width="200" height="72" rx="6" class="c-mask"/>
+        <rect x="805" y="378" width="200" height="72" rx="6" class="c-cloud" stroke-width="1.5"/>
+        <text x="905" y="412" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Host plane</text>
+        <text x="905" y="428" class="t-muted" font-size="9" text-anchor="middle">3 surfaces</text>
+        <text x="905" y="442" class="t-cloud" font-size="7" text-anchor="middle">host-wired</text>
 
-        <rect x="640" y="420" width="170" height="52" rx="6" class="c-mask"/>
-        <rect x="640" y="420" width="170" height="52" rx="6" class="c-frontend" stroke-width="1.5"/>
-        <text x="725" y="444" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">mcp_server · skills</text>
-        <text x="725" y="460" class="t-muted" font-size="9" text-anchor="middle">sandbox_provider</text>
-
-        <rect x="860" y="260" width="150" height="60" rx="6" class="c-mask"/>
-        <rect x="860" y="260" width="150" height="60" rx="6" class="c-security" stroke-width="1.5"/>
-        <text x="935" y="288" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Activation</text>
-        <text x="935" y="304" class="t-muted" font-size="9" text-anchor="middle">Options.plugins tuple</text>
+        <rect x="1085" y="264" width="190" height="72" rx="6" class="c-mask"/>
+        <rect x="1085" y="264" width="190" height="72" rx="6" class="c-security" stroke-width="1.5"/>
+        <text x="1180" y="298" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Activation</text>
+        <text x="1180" y="314" class="t-muted" font-size="9" text-anchor="middle">Options.plugins tuple</text>
+        <text x="1180" y="328" class="t-security" font-size="7" text-anchor="middle">membership is the flag</text>
 
         <!-- Connection labels -->
-        <rect x="180.8" y="270" width="48.4" height="14" rx="3" class="c-mask"/>
-        <text x="205" y="280" class="t-backend" font-size="8" text-anchor="middle">declares</text>
-        <rect x="368.8" y="246" width="72.4" height="14" rx="3" class="c-mask"/>
-        <text x="405" y="256" class="t-backend" font-size="8" text-anchor="middle">resolves refs</text>
+        <rect x="227.8" y="182" width="48.4" height="14" rx="3" class="c-mask"/>
+        <text x="252" y="192" class="t-backend" font-size="8" text-anchor="middle">declares</text>
+
+        <rect x="495.9" y="280" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
+        <text x="522.5" y="290" class="t-backend" font-size="8" text-anchor="middle">validates</text>
 
 
 
-        <rect x="808.4" y="173" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
-        <text x="835" y="183" class="t-backend" font-size="8" text-anchor="middle">per-agent</text>
 
+        <rect x="1004" y="246" width="82" height="14" rx="3" class="c-mask"/>
+        <text x="1045" y="256" class="t-backend" font-size="8" text-anchor="middle">enters identity</text>
 
         <!-- Legend -->
-        <text x="40" y="531" class="t-primary" font-size="9" font-weight="600">Legend</text>
-        <rect x="40" y="536" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
-        <text x="60" y="544" class="t-muted" font-size="8">External</text>
-        <rect x="138" y="536" width="14" height="9" rx="2" class="c-messagebus" stroke-width="1"/>
-        <text x="158" y="544" class="t-muted" font-size="8">Message bus</text>
-        <rect x="251" y="536" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
-        <text x="271" y="544" class="t-muted" font-size="8">Security</text>
-        <rect x="349" y="536" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
-        <text x="369" y="544" class="t-muted" font-size="8">Backend</text>
-        <rect x="442" y="536" width="14" height="9" rx="2" class="c-cloud" stroke-width="1"/>
-        <text x="462" y="544" class="t-muted" font-size="8">Cloud</text>
-        <rect x="525" y="536" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
-        <text x="545" y="544" class="t-muted" font-size="8">Frontend</text>
+        <text x="40" y="511" class="t-primary" font-size="9" font-weight="600">Legend</text>
+        <rect x="40" y="516" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
+        <text x="60" y="524" class="t-muted" font-size="8">External</text>
+        <rect x="138" y="516" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
+        <text x="158" y="524" class="t-muted" font-size="8">Backend</text>
+        <rect x="231" y="516" width="14" height="9" rx="2" class="c-messagebus" stroke-width="1"/>
+        <text x="251" y="524" class="t-muted" font-size="8">Message bus</text>
+        <rect x="344" y="516" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
+        <text x="364" y="524" class="t-muted" font-size="8">Security</text>
+        <rect x="442" y="516" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
+        <text x="462" y="524" class="t-muted" font-size="8">Frontend</text>
+        <rect x="540" y="516" width="14" height="9" rx="2" class="c-cloud" stroke-width="1"/>
+        <text x="560" y="524" class="t-muted" font-size="8">Cloud</text>
       </svg>
     </div>
 
@@ -658,25 +658,49 @@
     <div class="cards">
       <div class="card">
         <div class="card-header">
-          <div class="card-dot emerald"></div>
-          <h3>Manifest is inert data</h3>
+          <div class="card-dot cyan"></div>
+          <h3>Identity plane — 6 surfaces</h3>
         </div>
         <ul>
-          <li>&bull; Contributions listable before any code runs</li>
-          <li>&bull; Collision-checked by name, no silent override</li>
-          <li>&bull; Builtins ride the identical loader as external plugins</li>
+          <li>&bull; tool · agent · content_kind · prompt_fragment · policy · control_tool</li>
+          <li>&bull; Contributions fold into the AgentSpec.plugins tuple, so activation is identity</li>
+          <li>&bull; Selected per agent through Options.plugins / AgentDefinition.plugins</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
-          <div class="card-dot cyan"></div>
-          <h3>Activation is identity</h3>
+          <div class="card-dot emerald"></div>
+          <h3>Wiring plane — 7 surfaces</h3>
         </div>
         <ul>
-          <li>&bull; Options.plugins folds into AgentSpec.plugins</li>
-          <li>&bull; Membership is the capability flag — agent_activates()</li>
-          <li>&bull; guards/observers are process-wide once loaded</li>
+          <li>&bull; guard · observer · provider · reminder_provider · reminder · tool_result_transform · session_pack</li>
+          <li>&bull; guard and observer are the only two process-wide channels — in force once loaded</li>
+          <li>&bull; The rest are per-agent or host-wired and never enter identity</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot amber"></div>
+          <h3>Host plane — 3 surfaces</h3>
+        </div>
+        <ul>
+          <li>&bull; mcp_server · skills · sandbox_provider</li>
+          <li>&bull; Resolved by the host; never part of AgentSpec identity</li>
+          <li>&bull; A host adds its own surface by registering a SurfaceSpec on a copy() of standard_registry()</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot rose"></div>
+          <h3>Merge rules</h3>
+        </div>
+        <ul>
+          <li>&bull; Contributions merge deterministically by (plugin, name), or by integer priority where the surface declares one</li>
+          <li>&bull; A collision names both sides and there is no override</li>
+          <li>&bull; An unrecognised activation name fails compilation loudly</li>
         </ul>
       </div>
     </div>

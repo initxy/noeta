@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="generator" content="archify 2.11.0">
-  <title>Noeta Architecture Diagram</title>
+  <title>Context composition &amp; prompt cache Diagram</title>
   <script>
     // Resolve the theme before first paint so light-preference users don't
     // see a dark flash. The toolbar script below re-applies with UI state.
@@ -525,14 +525,14 @@
     <div class="header">
       <div class="header-row">
         <div class="pulse-dot"></div>
-        <h1>Noeta Architecture</h1>
+        <h1>Context composition &amp; prompt cache</h1>
       </div>
-      <p class="subtitle">Your code → noeta.sdk → Engine → storage; capabilities reach the kernel only through the plugin loader</p>
+      <p class="subtitle">Folded state → ThreeSegmentComposer → three segments ordered by volatility → one provider request</p>
     </div>
 
     <!-- Main Diagram -->
     <div class="diagram-container">
-      <svg viewBox="0 0 1215 676" role="img" aria-label="Noeta Architecture — Your code → noeta.sdk → Engine → storage; capabilities reach the kernel only through the plugin loader (architecture diagram)">
+      <svg viewBox="0 0 1120 660" role="img" aria-label="Context composition &amp; prompt cache — Folded state → ThreeSegmentComposer → three segments ordered by volatility → one provider request (data-flow diagram)">
         <!-- Definitions -->
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -555,119 +555,137 @@
         <!-- Background Grid -->
         <rect width="100%" height="100%" fill="url(#grid)" />
 
-        <!-- Boundaries (behind everything) -->
-        <rect x="185" y="74" width="460" height="354" rx="12" class="c-region" stroke-width="1"/>
-        <text x="193" y="92" class="t-cloud" font-size="9" font-weight="600">noeta-sdk — the wheel you install</text>
+        <!-- Data Stages -->
+        <rect x="16" y="46" width="168" height="540" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="100" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">01 / Folded state</text>
 
-        <rect x="670" y="70" width="260" height="538" rx="8" class="c-security-group" stroke-width="1"/>
-        <text x="678" y="88" class="t-security" font-size="9" font-weight="600">noeta-runtime — the pure kernel</text>
+        <rect x="231" y="46" width="168" height="540" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="315" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">02 / Compose</text>
 
-        <!-- Connection paths (before components for correct z-order) -->
-        <path d="M 170 250 L 215 250" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 390 250 L 700 250" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 900 250 L 1000 250" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 800 218 L 800 168" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 302.5 214 L 302.5 166" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 302.5 286 L 302.5 336" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 390 372 L 440 372" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 615 372 L 792 372 Q 800 372 800 364 L 800 282" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path d="M 1087.5 286 L 1087.5 336" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <rect x="446" y="46" width="168" height="540" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="530" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">03 / Segments</text>
 
-        <!-- Components -->
-        <rect x="30" y="219" width="140" height="62" rx="6" class="c-mask"/>
-        <rect x="30" y="219" width="140" height="62" rx="6" class="c-external" stroke-width="1.5"/>
-        <text x="100" y="248" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Your code</text>
-        <text x="100" y="264" class="t-muted" font-size="9" text-anchor="middle">import noeta.sdk</text>
+        <rect x="661" y="46" width="168" height="540" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="745" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">04 / Request</text>
 
-        <rect x="215" y="104" width="175" height="62" rx="6" class="c-mask"/>
-        <rect x="215" y="104" width="175" height="62" rx="6" class="c-frontend" stroke-width="1.5"/>
-        <text x="302.5" y="133" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">noeta.presets</text>
-        <text x="302.5" y="149" class="t-muted" font-size="9" text-anchor="middle">the four official agents</text>
+        <rect x="876" y="46" width="168" height="540" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="960" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">05 / Provider</text>
 
-        <rect x="215" y="214" width="175" height="72" rx="6" class="c-mask"/>
-        <rect x="215" y="214" width="175" height="72" rx="6" class="c-frontend" stroke-width="1.5"/>
-        <text x="302.5" y="248" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">noeta.sdk</text>
-        <text x="302.5" y="264" class="t-muted" font-size="9" text-anchor="middle">query · Client · Options</text>
-        <text x="302.5" y="278" class="t-frontend" font-size="7" text-anchor="middle">the only public surface</text>
+        <!-- Flow paths -->
+        <path d="M 159 163 L 204.5 163 L 204.5 277 L 250 277" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 159 277 L 250 277" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 159 391 L 204.5 391 L 204.5 277 L 250 277" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 380 277 L 425.5 277 L 425.5 163 L 471 163" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 380 277 L 471 277" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 380 277 L 425.5 277 L 425.5 391 L 471 391" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 380 277 L 425.5 277 L 425.5 499 L 471 499" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <path d="M 589 163 L 637.5 163 L 637.5 277 L 686 277" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 589 277 L 686 277" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 589 391 L 637.5 391 L 637.5 277 L 686 277" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 804 277 L 901 277" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
 
-        <rect x="215" y="336" width="175" height="72" rx="6" class="c-mask"/>
-        <rect x="215" y="336" width="175" height="72" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="302.5" y="370" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">noeta.builtins</text>
-        <text x="302.5" y="386" class="t-muted" font-size="9" text-anchor="middle">18 capability plugins</text>
-        <text x="302.5" y="400" class="t-backend" font-size="7" text-anchor="middle">fs · web · memory · …</text>
+        <!-- Nodes -->
+        <rect x="41" y="128" width="118" height="70" rx="6" class="c-mask"/>
+        <rect x="41" y="128" width="118" height="70" rx="6" class="c-frontend" stroke-width="1.5"/>
+        <text x="100" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Prompt + tools</text>
+        <text x="100" y="165" class="t-muted" font-size="7" text-anchor="middle">session identity</text>
+        <text x="100" y="187" class="t-frontend" font-size="7" text-anchor="middle">changes only on rebuild</text>
 
-        <rect x="440" y="336" width="175" height="72" rx="6" class="c-mask"/>
-        <rect x="440" y="336" width="175" height="72" rx="6" class="c-messagebus" stroke-width="1.5"/>
-        <text x="527.5" y="370" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Plugin loader</text>
-        <text x="527.5" y="386" class="t-muted" font-size="9" text-anchor="middle">dynamic ref resolution</text>
-        <text x="527.5" y="400" class="t-messagebus" font-size="7" text-anchor="middle">the only doorway</text>
+        <rect x="41" y="242" width="118" height="70" rx="6" class="c-mask"/>
+        <rect x="41" y="242" width="118" height="70" rx="6" class="c-database" stroke-width="1.5"/>
+        <text x="100" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">active_content</text>
+        <text x="100" y="279" class="t-muted" font-size="7" text-anchor="middle">recorded activations</text>
+        <text x="100" y="301" class="t-database" font-size="7" text-anchor="middle">resident bytes by hash</text>
 
-        <rect x="700" y="100" width="200" height="68" rx="6" class="c-mask"/>
-        <rect x="700" y="100" width="200" height="68" rx="6" class="c-security" stroke-width="1.5"/>
-        <text x="800" y="132" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">protocols</text>
-        <text x="800" y="148" class="t-muted" font-size="9" text-anchor="middle">the typed boundary</text>
-        <text x="800" y="160" class="t-security" font-size="7" text-anchor="middle">imports nothing in-project</text>
+        <rect x="41" y="356" width="118" height="70" rx="6" class="c-mask"/>
+        <rect x="41" y="356" width="118" height="70" rx="6" class="c-messagebus" stroke-width="1.5"/>
+        <text x="100" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">runtime.messages</text>
+        <text x="100" y="393" class="t-muted" font-size="7" text-anchor="middle">rolling history</text>
+        <text x="100" y="415" class="t-messagebus" font-size="7" text-anchor="middle">+ compaction summary</text>
 
-        <rect x="700" y="218" width="200" height="64" rx="6" class="c-mask"/>
-        <rect x="700" y="218" width="200" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="800" y="248" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">core</text>
-        <text x="800" y="264" class="t-muted" font-size="9" text-anchor="middle">Engine · fold · snapshot</text>
+        <rect x="250" y="242" width="130" height="70" rx="6" class="c-mask"/>
+        <rect x="250" y="242" width="130" height="70" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="315" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">ThreeSegmentComposer</text>
+        <text x="315" y="279" class="t-muted" font-size="7" text-anchor="middle">pure: state → View</text>
+        <text x="315" y="301" class="t-backend" font-size="7" text-anchor="middle">no clock, no network</text>
 
-        <rect x="700" y="402" width="200" height="68" rx="6" class="c-mask"/>
-        <rect x="700" y="402" width="200" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="800" y="434" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">runtime</text>
-        <text x="800" y="450" class="t-muted" font-size="9" text-anchor="middle">Worker · Dispatcher · Lease</text>
-        <text x="800" y="462" class="t-backend" font-size="7" text-anchor="middle">drives the Engine</text>
+        <rect x="471" y="128" width="118" height="70" rx="6" class="c-mask"/>
+        <rect x="471" y="128" width="118" height="70" rx="6" class="c-cloud" stroke-width="1.5"/>
+        <text x="530" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">stable_prefix</text>
+        <text x="530" y="165" class="t-muted" font-size="7" text-anchor="middle">prompt + tool schemas</text>
+        <text x="530" y="187" class="t-cloud" font-size="7" text-anchor="middle">sha256, byte-stable</text>
 
-        <rect x="700" y="520" width="200" height="68" rx="6" class="c-mask"/>
-        <rect x="700" y="520" width="200" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="800" y="552" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">context</text>
-        <text x="800" y="568" class="t-muted" font-size="9" text-anchor="middle">ThreeSegmentComposer</text>
-        <text x="800" y="580" class="t-backend" font-size="7" text-anchor="middle">injected, never replaced</text>
+        <rect x="471" y="242" width="118" height="70" rx="6" class="c-mask"/>
+        <rect x="471" y="242" width="118" height="70" rx="6" class="c-cloud" stroke-width="1.5"/>
+        <text x="530" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">semi_stable</text>
+        <text x="530" y="279" class="t-muted" font-size="7" text-anchor="middle">pre-loop residents</text>
+        <text x="530" y="301" class="t-cloud" font-size="7" text-anchor="middle">skill · memory · env</text>
 
-        <rect x="1000" y="214" width="175" height="72" rx="6" class="c-mask"/>
-        <rect x="1000" y="214" width="175" height="72" rx="6" class="c-database" stroke-width="1.5"/>
-        <text x="1087.5" y="248" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Storage backends</text>
-        <text x="1087.5" y="264" class="t-muted" font-size="9" text-anchor="middle">EventLog · ContentStore</text>
-        <text x="1087.5" y="278" class="t-database" font-size="7" text-anchor="middle">+ Dispatcher, via HostConfig</text>
+        <rect x="471" y="356" width="118" height="70" rx="6" class="c-mask"/>
+        <rect x="471" y="356" width="118" height="70" rx="6" class="c-frontend" stroke-width="1.5"/>
+        <text x="530" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">dynamic_suffix</text>
+        <text x="530" y="393" class="t-muted" font-size="7" text-anchor="middle">history + reminders</text>
+        <text x="530" y="415" class="t-frontend" font-size="7" text-anchor="middle">rewritten every turn</text>
 
-        <rect x="1000" y="336" width="175" height="62" rx="6" class="c-mask"/>
-        <rect x="1000" y="336" width="175" height="62" rx="6" class="c-cloud" stroke-width="1.5"/>
-        <text x="1087.5" y="365" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Implementations</text>
-        <text x="1087.5" y="381" class="t-muted" font-size="9" text-anchor="middle">InMemory · SQLite · Postgres</text>
+        <rect x="471" y="470" width="118" height="58" rx="6" class="c-mask"/>
+        <rect x="471" y="470" width="118" height="58" rx="6" class="c-database" stroke-width="1.5"/>
+        <text x="530" y="491" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">ContextPlan</text>
+        <text x="530" y="507" class="t-muted" font-size="7" text-anchor="middle">→ ContentStore</text>
 
-        <!-- Connection labels -->
-        <rect x="173.1" y="230" width="38.8" height="14" rx="3" class="c-mask"/>
-        <text x="192.5" y="240" class="t-backend" font-size="8" text-anchor="middle">import</text>
-        <rect x="501.6" y="230" width="86.8" height="14" rx="3" class="c-mask"/>
-        <text x="545" y="240" class="t-backend" font-size="8" text-anchor="middle">builds + injects</text>
-        <rect x="913.8" y="230" width="72.4" height="14" rx="3" class="c-mask"/>
-        <text x="950" y="240" class="t-backend" font-size="8" text-anchor="middle">append · read</text>
+        <rect x="686" y="242" width="118" height="70" rx="6" class="c-mask"/>
+        <rect x="686" y="242" width="118" height="70" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="745" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">LLMRequest</text>
+        <text x="745" y="279" class="t-muted" font-size="7" text-anchor="middle">segments in order</text>
+        <text x="745" y="301" class="t-backend" font-size="7" text-anchor="middle">one per compose</text>
 
+        <rect x="901" y="242" width="118" height="70" rx="6" class="c-mask"/>
+        <rect x="901" y="242" width="118" height="70" rx="6" class="c-external" stroke-width="1.5"/>
+        <text x="960" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Provider adapter</text>
+        <text x="960" y="279" class="t-muted" font-size="7" text-anchor="middle">vendor wire</text>
+        <text x="960" y="301" class="t-external" font-size="7" text-anchor="middle">KV cache by prefix</text>
 
-
-        <rect x="381.2" y="316" width="67.6" height="14" rx="3" class="c-mask"/>
-        <text x="415" y="326" class="t-backend" font-size="8" text-anchor="middle">manifest ref</text>
-        <rect x="644.6" y="350" width="62.8" height="14" rx="3" class="c-mask"/>
-        <text x="676" y="360" class="t-security" font-size="8" text-anchor="middle">resolve ref</text>
-
+        <!-- Flow labels -->
+        <rect x="158.8" y="209" width="90.4" height="16" rx="4" class="c-mask"/>
+        <text x="204" y="220" class="t-muted" font-size="8" text-anchor="middle">session identity</text>
+        <rect x="163.7" y="255" width="80.60000000000001" height="16" rx="4" class="c-mask"/>
+        <text x="204" y="266" class="t-muted" font-size="8" text-anchor="middle">resident bytes</text>
+        <rect x="168.6" y="323" width="70.80000000000001" height="16" rx="4" class="c-mask"/>
+        <text x="204" y="334" class="t-muted" font-size="8" text-anchor="middle">conversation</text>
+        <rect x="379.8" y="209" width="90.4" height="27" rx="4" class="c-mask"/>
+        <text x="425" y="220" class="t-backend" font-size="8" text-anchor="middle">prompt + schemas</text>
+        <text x="425" y="231" class="t-dim" font-size="7" text-anchor="middle">cache anchor</text>
+        <rect x="374.9" y="323" width="100.2" height="27" rx="4" class="c-mask"/>
+        <text x="425" y="334" class="t-backend" font-size="8" text-anchor="middle">resident content</text>
+        <text x="425" y="345" class="t-dim" font-size="7" text-anchor="middle">registration order</text>
+        <rect x="389.6" y="437" width="70.80000000000001" height="27" rx="4" class="c-mask"/>
+        <text x="425" y="448" class="t-backend" font-size="8" text-anchor="middle">rolling tail</text>
+        <text x="425" y="459" class="t-dim" font-size="7" text-anchor="middle">re-encoded</text>
+        <rect x="394.5" y="546" width="61" height="27" rx="4" class="c-mask"/>
+        <text x="425" y="557" class="t-messagebus" font-size="8" text-anchor="middle">plan body</text>
+        <text x="425" y="568" class="t-dim" font-size="7" text-anchor="middle">audit only</text>
+        <rect x="591.8" y="209" width="90.4" height="27" rx="4" class="c-mask"/>
+        <text x="637" y="220" class="t-backend" font-size="8" text-anchor="middle">cache hit</text>
+        <text x="637" y="231" class="t-dim" font-size="7" text-anchor="middle">identical prefix</text>
+        <rect x="584.45" y="323" width="105.10000000000001" height="27" rx="4" class="c-mask"/>
+        <text x="637" y="334" class="t-muted" font-size="8" text-anchor="middle">cache hit</text>
+        <text x="637" y="345" class="t-dim" font-size="7" text-anchor="middle">residents unchanged</text>
+        <rect x="606.5" y="437" width="61" height="27" rx="4" class="c-mask"/>
+        <text x="637" y="448" class="t-muted" font-size="8" text-anchor="middle">cache miss</text>
+        <text x="637" y="459" class="t-dim" font-size="7" text-anchor="middle">by design</text>
+        <rect x="799.45" y="209" width="105.10000000000001" height="27" rx="4" class="c-mask"/>
+        <text x="852" y="220" class="t-backend" font-size="8" text-anchor="middle">one LLM call</text>
+        <text x="852" y="231" class="t-dim" font-size="7" text-anchor="middle">prefix cache lookup</text>
 
         <!-- Legend -->
-        <text x="40" y="647" class="t-primary" font-size="9" font-weight="600">Legend</text>
-        <rect x="40" y="652" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
-        <text x="60" y="660" class="t-muted" font-size="8">External</text>
-        <rect x="138" y="652" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
-        <text x="158" y="660" class="t-muted" font-size="8">Frontend</text>
-        <rect x="236" y="652" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
-        <text x="256" y="660" class="t-muted" font-size="8">Backend</text>
-        <rect x="329" y="652" width="14" height="9" rx="2" class="c-messagebus" stroke-width="1"/>
-        <text x="349" y="660" class="t-muted" font-size="8">Message bus</text>
-        <rect x="442" y="652" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
-        <text x="462" y="660" class="t-muted" font-size="8">Security</text>
-        <rect x="540" y="652" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
-        <text x="560" y="660" class="t-muted" font-size="8">Database</text>
-        <rect x="638" y="652" width="14" height="9" rx="2" class="c-cloud" stroke-width="1"/>
-        <text x="658" y="660" class="t-muted" font-size="8">Cloud</text>
+        <text x="214" y="604" class="t-primary" font-size="10" font-weight="600">Legend</text>
+        <path d="M 214 624 L 248 624" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <text x="257" y="627" class="t-muted" font-size="8">primary data</text>
+        <path d="M 340 624 L 374 624" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <text x="383" y="627" class="t-muted" font-size="8">policy / PII</text>
+        <path d="M 480 624 L 514 624" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <text x="523" y="627" class="t-muted" font-size="8">async batch</text>
+        <rect x="625" y="616" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
+        <text x="646" y="624" class="t-muted" font-size="8">data store</text>
       </svg>
     </div>
 
@@ -676,43 +694,55 @@
       <div class="card">
         <div class="card-header">
           <div class="card-dot cyan"></div>
-          <h3>One import surface</h3>
+          <h3>Cut by volatility</h3>
         </div>
         <ul>
-          <li>&bull; You import noeta.sdk; noeta-runtime rides along as a transitive dependency</li>
-          <li>&bull; noeta.sdk.providers and noeta.sdk.storage are the two lazy wiring doorways</li>
-          <li>&bull; noeta-runtime declares zero dependencies — httpx and psycopg ship in noeta-sdk</li>
+          <li>&bull; Providers cache KV state by prefix: an unchanged prefix is reused instead of re-encoded and re-billed</li>
+          <li>&bull; So everything stable goes to the front and stays byte-stable — sorted schema keys, no timestamps, fixed field order</li>
+          <li>&bull; Tool schemas are hashed alongside the system prompt, so swapping a tool rotates the prefix hash even when the text is identical</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot emerald"></div>
-          <h3>The kernel carries no capability</h3>
+          <h3>A pure function of folded state</h3>
         </div>
         <ul>
-          <li>&bull; Every official capability is a built-in plugin: fs, web, memory, browser, mcp, skills, sandbox, storage, …</li>
-          <li>&bull; The loader&#39;s dynamic ref resolution is the only doorway into noeta.builtins</li>
-          <li>&bull; .importlinter&#39;s sdk-core-not-builtins contract rejects every static import</li>
+          <li>&bull; No clock, no randomness, no network — the same state assembles the same View</li>
+          <li>&bull; The one side effect is writing the ContextPlan body so the Engine has a ref to attach</li>
+          <li>&bull; ContextState.plan_ref is fold-derived, so the composer never writes task.context directly</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot amber"></div>
-          <h3>The rest of the kernel</h3>
+          <h3>Placement follows the activation anchor</h3>
         </div>
         <ul>
-          <li>&bull; Also in noeta-runtime: agent, execution, policies, observers, read_models, storage, testing, tools</li>
-          <li>&bull; Locked: the Engine main loop, the Worker / Dispatcher / lease protocol, the ContextComposer</li>
-          <li>&bull; Storage backends arrive through HostConfig — never as a plugin surface</li>
+          <li>&bull; Activated pre-loop (anchor at or before the first assistant message) → renders in semi_stable</li>
+          <li>&bull; Activated mid-task → renders inside dynamic_suffix at its anchor, so the cached head is never rewritten</li>
+          <li>&bull; Insertion slides forward past role=tool messages, so content can never split a tool round-trip</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot rose"></div>
+          <h3>Tail-only mechanisms</h3>
+        </div>
+        <ul>
+          <li>&bull; Compaction swaps the covered prefix for one summary message; the originals stay on the log</li>
+          <li>&bull; Tail pruning clears tool outputs older than a token budget to a marker, keeping every ref in the plan</li>
+          <li>&bull; Compose-time reminders render at the very end, are never recorded, and cannot churn the cached head</li>
         </ul>
       </div>
     </div>
 
     <!-- Footer -->
     <p class="footer">
-      Architecture diagram &bull; Built with Archify<span class="no-print"> &bull; Press <kbd>T</kbd> for theme and <kbd>E</kbd> for export</span>
+      Data-flow diagram &bull; Built with Archify<span class="no-print"> &bull; Press <kbd>T</kbd> for theme and <kbd>E</kbd> for export</span>
     </p>
   </div>
 

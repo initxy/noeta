@@ -2,45 +2,76 @@
   "schema_version": 1,
   "diagram_type": "workflow",
   "meta": {
-    "title": "Engine Execution — one step",
-    "subtitle": "compose → decide → dispatch; tool_calls loops, other decisions suspend or terminate",
+    "title": "Engine — one step",
+    "subtitle": "lease → fold → compose → decide → dispatch → append; tool_calls loops in place, anything else releases the lease",
     "output": "engine-execution.html"
   },
   "lanes": [
-    { "id": "engine", "label": "Engine" },
-    { "id": "policy", "label": "Policy" },
-    { "id": "tools", "label": "Tools / runtime" },
-    { "id": "exceptions", "label": "Suspend / terminal", "variant": "exception" }
+    { "id": "worker", "label": "Worker" },
+    { "id": "engine", "label": "Engine (locked loop)" },
+    { "id": "policy", "label": "Policy + LLM provider" },
+    { "id": "tools", "label": "Tools" },
+    { "id": "log", "label": "EventLog + ContentStore" }
   ],
   "phases": [
-    { "id": "compose", "label": "Compose", "fromCol": 0, "toCol": 1 },
-    { "id": "decide", "label": "Decide", "fromCol": 2, "toCol": 3 },
-    { "id": "dispatch", "label": "Dispatch", "fromCol": 4, "toCol": 5 }
+    { "id": "take", "label": "Take the task", "fromCol": 0, "toCol": 1 },
+    { "id": "think", "label": "Compose and decide", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "act", "label": "Act and record", "fromCol": 4, "toCol": 5, "variant": "dashed" }
   ],
-  "mainPath": ["fold", "compose", "decide", "guard", "dispatch"],
+  "mainPath": ["lease", "fold", "compose", "decide", "dispatch"],
   "nodes": [
-    { "id": "fold", "lane": "engine", "col": 0, "type": "backend", "label": "fold(stream)", "sublabel": "rebuild state" },
-    { "id": "compose", "lane": "engine", "col": 1, "type": "backend", "label": "Compose View", "sublabel": "ThreeSegmentComposer" },
-    { "id": "decide", "lane": "policy", "col": 2, "type": "frontend", "label": "decide(view)", "sublabel": "Policy → Decision" },
-    { "id": "guard", "lane": "tools", "col": 3, "type": "security", "label": "Guard check", "sublabel": "allow / deny / approve", "tag": "before act" },
-    { "id": "dispatch", "lane": "engine", "col": 4, "type": "backend", "label": "Dispatch", "sublabel": "route by decision" },
-    { "id": "toolcall", "lane": "tools", "col": 5, "type": "backend", "label": "Run tools", "sublabel": "append results" },
+    { "id": "lease", "lane": "worker", "col": 0, "type": "backend", "label": "Lease", "sublabel": "Dispatcher.lease" },
+    { "id": "fold", "lane": "worker", "col": 1, "type": "backend", "label": "fold(stream)", "sublabel": "rebuild Task state" },
+    { "id": "release", "lane": "worker", "col": 5, "type": "backend", "label": "Release", "sublabel": "suspended | terminal", "width": 110 },
 
-    { "id": "suspend", "lane": "exceptions", "col": 4, "type": "security", "label": "Suspend", "sublabel": "yield / wait" },
-    { "id": "terminal", "lane": "exceptions", "col": 5, "type": "backend", "label": "Terminal", "sublabel": "finish / fail" }
+    { "id": "compose", "lane": "engine", "col": 2, "type": "backend", "label": "Compose", "sublabel": "View: 3 segments" },
+    { "id": "dispatch", "lane": "engine", "col": 4, "type": "backend", "label": "Dispatch", "sublabel": "route the Decision" },
+
+    { "id": "decide", "lane": "policy", "col": 3, "type": "cloud", "label": "decide()", "sublabel": "LLM round-trip" },
+
+    { "id": "guard", "lane": "tools", "col": 4, "type": "security", "label": "Guard", "sublabel": "allow / deny / ask" },
+    { "id": "run", "lane": "tools", "col": 5, "type": "messagebus", "label": "Run tools", "sublabel": "ToolRuntime.invoke" },
+
+    { "id": "append", "lane": "log", "col": 5, "type": "database", "label": "Append events", "sublabel": "batched results" }
   ],
   "edges": [
-    { "from": "fold", "to": "compose" },
-    { "from": "compose", "to": "decide", "label": "View" },
-    { "from": "decide", "to": "guard", "label": "Decision", "variant": "emphasis" },
-    { "from": "guard", "to": "dispatch" },
-    { "from": "dispatch", "to": "toolcall", "label": "tool_calls", "variant": "emphasis" },
-    { "from": "toolcall", "to": "compose", "label": "loop", "variant": "dashed", "fromSide": "bottom", "toSide": "bottom", "route": "bottom-channel" },
-    { "from": "dispatch", "to": "suspend", "label": "yield / wait", "variant": "security", "fromSide": "bottom", "toSide": "top", "labelDy": -30 },
-    { "from": "dispatch", "to": "terminal", "label": "finish / fail", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "outside-right", "labelDy": 30 }
+    { "from": "lease", "to": "fold", "variant": "emphasis", "route": "straight", "fromSide": "right", "toSide": "left" },
+    { "from": "fold", "to": "compose", "label": "Task state", "variant": "emphasis", "route": "drop", "fromSide": "bottom", "toSide": "top", "labelSegment": 1 },
+    { "from": "compose", "to": "decide", "label": "View", "variant": "emphasis", "fromSide": "bottom", "toSide": "left", "via": [[300, 367]], "labelSegment": 1 },
+    { "from": "decide", "to": "dispatch", "label": "Decision", "variant": "emphasis", "fromSide": "top", "toSide": "left", "via": [[430, 243]], "labelSegment": 0 },
+    { "from": "dispatch", "to": "guard", "label": "tool_calls", "variant": "emphasis", "route": "drop", "fromSide": "bottom", "toSide": "top", "labelSegment": 0 },
+    { "from": "guard", "to": "run", "variant": "emphasis", "route": "straight", "fromSide": "right", "toSide": "left" },
+    { "from": "run", "to": "append", "label": "tool results", "route": "drop", "fromSide": "bottom", "toSide": "top", "labelSegment": 2 },
+    { "from": "append", "to": "compose", "label": "loop: recompose", "variant": "dashed", "role": "return", "route": "return-left", "channelX": 240, "fromSide": "left", "toSide": "left", "labelSegment": 1 },
+    { "from": "dispatch", "to": "release", "label": "suspend / terminal", "variant": "emphasis", "role": "return", "fromSide": "top", "toSide": "top", "via": [[500, 166], [625, 166]], "labelSegment": 1 }
   ],
   "cards": [
-    { "dot": "emerald", "title": "One step = one turn boundary", "items": ["tool_calls keeps the loop turning in place", "Any other decision ends the step at suspend or terminal", "Guards rule before the act — deny or require_approval"] },
-    { "dot": "cyan", "title": "Locked main loop", "items": ["Engine main loop is not an extension point", "Policy decides, Engine dispatches — Policy never calls tools directly", "State changes go through events, fold is the only reader"] }
+    {
+      "dot": "emerald",
+      "title": "One step is one turn boundary",
+      "items": [
+        "A tool_calls Decision keeps the loop turning in place: append, recompose, ask again",
+        "Any other Decision ends the step at a suspend or a terminal",
+        "The lease covers one segment only — a Worker never holds a Task to completion"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "The Engine is the only writer",
+      "items": [
+        "Every append carries the lease_id — that is the single-writer fence",
+        "ContextPlanComposed records what went into each LLM call and opens the attempt",
+        "N parallel tool results are batched into one MessagesAppended event"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Guards rule before the act",
+      "items": [
+        "before_tool_call returns allow, deny or require_approval",
+        "require_approval converts the call into a yield_for_human suspend",
+        "A denial is fed back as a failed tool result, never as a missing one"
+      ]
+    }
   ]
 }

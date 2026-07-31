@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="generator" content="archify 2.11.0">
-  <title>Noeta Architecture Diagram</title>
+  <title>Provider Neutrality Diagram</title>
   <script>
     // Resolve the theme before first paint so light-preference users don't
     // see a dark flash. The toolbar script below re-applies with UI state.
@@ -525,14 +525,14 @@
     <div class="header">
       <div class="header-row">
         <div class="pulse-dot"></div>
-        <h1>Noeta Architecture</h1>
+        <h1>Provider Neutrality</h1>
       </div>
-      <p class="subtitle">Your code → noeta.sdk → Engine → storage; capabilities reach the kernel only through the plugin loader</p>
+      <p class="subtitle">Engine → one internal LLM protocol → three adapters; the kernel cannot import a vendor SDK</p>
     </div>
 
     <!-- Main Diagram -->
     <div class="diagram-container">
-      <svg viewBox="0 0 1215 676" role="img" aria-label="Noeta Architecture — Your code → noeta.sdk → Engine → storage; capabilities reach the kernel only through the plugin loader (architecture diagram)">
+      <svg viewBox="0 0 1330 578" role="img" aria-label="Provider Neutrality — Engine → one internal LLM protocol → three adapters; the kernel cannot import a vendor SDK (architecture diagram)">
         <!-- Definitions -->
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -556,118 +556,95 @@
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Boundaries (behind everything) -->
-        <rect x="185" y="74" width="460" height="354" rx="12" class="c-region" stroke-width="1"/>
-        <text x="193" y="92" class="t-cloud" font-size="9" font-weight="600">noeta-sdk — the wheel you install</text>
+        <rect x="10" y="274" width="730" height="122" rx="8" class="c-security-group" stroke-width="1"/>
+        <text x="18" y="292" class="t-security" font-size="9" font-weight="600">noeta-runtime — no vendor SDK, no httpx, stdlib only</text>
 
-        <rect x="670" y="70" width="260" height="538" rx="8" class="c-security-group" stroke-width="1"/>
-        <text x="678" y="88" class="t-security" font-size="9" font-weight="600">noeta-runtime — the pure kernel</text>
+        <rect x="800" y="160" width="270" height="350" rx="12" class="c-region" stroke-width="1"/>
+        <text x="808" y="178" class="t-cloud" font-size="9" font-weight="600">noeta.builtins.providers — reached only by dynamic ref</text>
 
         <!-- Connection paths (before components for correct z-order) -->
-        <path d="M 170 250 L 215 250" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 390 250 L 700 250" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 900 250 L 1000 250" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 800 218 L 800 168" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 302.5 214 L 302.5 166" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 302.5 286 L 302.5 336" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 390 372 L 440 372" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 615 372 L 792 372 Q 800 372 800 364 L 800 282" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path d="M 1087.5 286 L 1087.5 336" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path d="M 200 340 L 260 340" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 460 340 L 520 340" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 710 340 L 830 340" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 615 304 L 615 234 Q 615 226 623 226 L 830 226" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path d="M 615 376 L 615 446 Q 615 454 623 454 L 830 454" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path d="M 1040 226 L 1120 226" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path d="M 1040 340 L 1120 340" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path d="M 1040 454 L 1120 454" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Components -->
-        <rect x="30" y="219" width="140" height="62" rx="6" class="c-mask"/>
-        <rect x="30" y="219" width="140" height="62" rx="6" class="c-external" stroke-width="1.5"/>
-        <text x="100" y="248" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Your code</text>
-        <text x="100" y="264" class="t-muted" font-size="9" text-anchor="middle">import noeta.sdk</text>
+        <rect x="40" y="304" width="160" height="72" rx="6" class="c-mask"/>
+        <rect x="40" y="304" width="160" height="72" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="120" y="338" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Engine</text>
+        <text x="120" y="354" class="t-muted" font-size="9" text-anchor="middle">core · run_one_step</text>
+        <text x="120" y="368" class="t-backend" font-size="7" text-anchor="middle">builds an LLMRequest</text>
 
-        <rect x="215" y="104" width="175" height="62" rx="6" class="c-mask"/>
-        <rect x="215" y="104" width="175" height="62" rx="6" class="c-frontend" stroke-width="1.5"/>
-        <text x="302.5" y="133" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">noeta.presets</text>
-        <text x="302.5" y="149" class="t-muted" font-size="9" text-anchor="middle">the four official agents</text>
+        <rect x="260" y="304" width="200" height="72" rx="6" class="c-mask"/>
+        <rect x="260" y="304" width="200" height="72" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="360" y="338" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">RuntimeLLMClient</text>
+        <text x="360" y="354" class="t-muted" font-size="9" text-anchor="middle">records the round-trip</text>
+        <text x="360" y="368" class="t-backend" font-size="7" text-anchor="middle">three events per call</text>
 
-        <rect x="215" y="214" width="175" height="72" rx="6" class="c-mask"/>
-        <rect x="215" y="214" width="175" height="72" rx="6" class="c-frontend" stroke-width="1.5"/>
-        <text x="302.5" y="248" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">noeta.sdk</text>
-        <text x="302.5" y="264" class="t-muted" font-size="9" text-anchor="middle">query · Client · Options</text>
-        <text x="302.5" y="278" class="t-frontend" font-size="7" text-anchor="middle">the only public surface</text>
+        <rect x="520" y="304" width="190" height="72" rx="6" class="c-mask"/>
+        <rect x="520" y="304" width="190" height="72" rx="6" class="c-security" stroke-width="1.5"/>
+        <text x="615" y="338" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">LLMProvider</text>
+        <text x="615" y="354" class="t-muted" font-size="9" text-anchor="middle">complete() → LLMResponse</text>
+        <text x="615" y="368" class="t-security" font-size="7" text-anchor="middle">noeta.protocols.messages</text>
 
-        <rect x="215" y="336" width="175" height="72" rx="6" class="c-mask"/>
-        <rect x="215" y="336" width="175" height="72" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="302.5" y="370" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">noeta.builtins</text>
-        <text x="302.5" y="386" class="t-muted" font-size="9" text-anchor="middle">18 capability plugins</text>
-        <text x="302.5" y="400" class="t-backend" font-size="7" text-anchor="middle">fs · web · memory · …</text>
+        <rect x="830" y="190" width="210" height="72" rx="6" class="c-mask"/>
+        <rect x="830" y="190" width="210" height="72" rx="6" class="c-cloud" stroke-width="1.5"/>
+        <text x="935" y="224" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">AnthropicProvider</text>
+        <text x="935" y="240" class="t-muted" font-size="9" text-anchor="middle">Messages API + SSE</text>
+        <text x="935" y="254" class="t-cloud" font-size="7" text-anchor="middle">system-reminder wrapping</text>
 
-        <rect x="440" y="336" width="175" height="72" rx="6" class="c-mask"/>
-        <rect x="440" y="336" width="175" height="72" rx="6" class="c-messagebus" stroke-width="1.5"/>
-        <text x="527.5" y="370" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Plugin loader</text>
-        <text x="527.5" y="386" class="t-muted" font-size="9" text-anchor="middle">dynamic ref resolution</text>
-        <text x="527.5" y="400" class="t-messagebus" font-size="7" text-anchor="middle">the only doorway</text>
+        <rect x="830" y="304" width="210" height="72" rx="6" class="c-mask"/>
+        <rect x="830" y="304" width="210" height="72" rx="6" class="c-cloud" stroke-width="1.5"/>
+        <text x="935" y="338" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">OpenAICompatProvider</text>
+        <text x="935" y="354" class="t-muted" font-size="9" text-anchor="middle">chat completions</text>
+        <text x="935" y="368" class="t-cloud" font-size="7" text-anchor="middle">gateways + local models</text>
 
-        <rect x="700" y="100" width="200" height="68" rx="6" class="c-mask"/>
-        <rect x="700" y="100" width="200" height="68" rx="6" class="c-security" stroke-width="1.5"/>
-        <text x="800" y="132" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">protocols</text>
-        <text x="800" y="148" class="t-muted" font-size="9" text-anchor="middle">the typed boundary</text>
-        <text x="800" y="160" class="t-security" font-size="7" text-anchor="middle">imports nothing in-project</text>
+        <rect x="830" y="418" width="210" height="72" rx="6" class="c-mask"/>
+        <rect x="830" y="418" width="210" height="72" rx="6" class="c-cloud" stroke-width="1.5"/>
+        <text x="935" y="452" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">OpenAIResponsesProvider</text>
+        <text x="935" y="468" class="t-muted" font-size="9" text-anchor="middle">Responses API</text>
+        <text x="935" y="482" class="t-cloud" font-size="7" text-anchor="middle">reasoning models</text>
 
-        <rect x="700" y="218" width="200" height="64" rx="6" class="c-mask"/>
-        <rect x="700" y="218" width="200" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="800" y="248" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">core</text>
-        <text x="800" y="264" class="t-muted" font-size="9" text-anchor="middle">Engine · fold · snapshot</text>
+        <rect x="1120" y="195" width="170" height="62" rx="6" class="c-mask"/>
+        <rect x="1120" y="195" width="170" height="62" rx="6" class="c-external" stroke-width="1.5"/>
+        <text x="1205" y="224" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Anthropic</text>
+        <text x="1205" y="240" class="t-muted" font-size="9" text-anchor="middle">/v1/messages</text>
 
-        <rect x="700" y="402" width="200" height="68" rx="6" class="c-mask"/>
-        <rect x="700" y="402" width="200" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="800" y="434" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">runtime</text>
-        <text x="800" y="450" class="t-muted" font-size="9" text-anchor="middle">Worker · Dispatcher · Lease</text>
-        <text x="800" y="462" class="t-backend" font-size="7" text-anchor="middle">drives the Engine</text>
+        <rect x="1120" y="309" width="170" height="62" rx="6" class="c-mask"/>
+        <rect x="1120" y="309" width="170" height="62" rx="6" class="c-external" stroke-width="1.5"/>
+        <text x="1205" y="338" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">OpenAI-compatible</text>
+        <text x="1205" y="354" class="t-muted" font-size="9" text-anchor="middle">/v1/chat/completions</text>
 
-        <rect x="700" y="520" width="200" height="68" rx="6" class="c-mask"/>
-        <rect x="700" y="520" width="200" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="800" y="552" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">context</text>
-        <text x="800" y="568" class="t-muted" font-size="9" text-anchor="middle">ThreeSegmentComposer</text>
-        <text x="800" y="580" class="t-backend" font-size="7" text-anchor="middle">injected, never replaced</text>
-
-        <rect x="1000" y="214" width="175" height="72" rx="6" class="c-mask"/>
-        <rect x="1000" y="214" width="175" height="72" rx="6" class="c-database" stroke-width="1.5"/>
-        <text x="1087.5" y="248" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Storage backends</text>
-        <text x="1087.5" y="264" class="t-muted" font-size="9" text-anchor="middle">EventLog · ContentStore</text>
-        <text x="1087.5" y="278" class="t-database" font-size="7" text-anchor="middle">+ Dispatcher, via HostConfig</text>
-
-        <rect x="1000" y="336" width="175" height="62" rx="6" class="c-mask"/>
-        <rect x="1000" y="336" width="175" height="62" rx="6" class="c-cloud" stroke-width="1.5"/>
-        <text x="1087.5" y="365" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Implementations</text>
-        <text x="1087.5" y="381" class="t-muted" font-size="9" text-anchor="middle">InMemory · SQLite · Postgres</text>
+        <rect x="1120" y="423" width="170" height="62" rx="6" class="c-mask"/>
+        <rect x="1120" y="423" width="170" height="62" rx="6" class="c-external" stroke-width="1.5"/>
+        <text x="1205" y="452" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">OpenAI Responses</text>
+        <text x="1205" y="468" class="t-muted" font-size="9" text-anchor="middle">/v1/responses</text>
 
         <!-- Connection labels -->
-        <rect x="173.1" y="230" width="38.8" height="14" rx="3" class="c-mask"/>
-        <text x="192.5" y="240" class="t-backend" font-size="8" text-anchor="middle">import</text>
-        <rect x="501.6" y="230" width="86.8" height="14" rx="3" class="c-mask"/>
-        <text x="545" y="240" class="t-backend" font-size="8" text-anchor="middle">builds + injects</text>
-        <rect x="913.8" y="230" width="72.4" height="14" rx="3" class="c-mask"/>
-        <text x="950" y="240" class="t-backend" font-size="8" text-anchor="middle">append · read</text>
+
+
+        <rect x="726.6" y="290" width="86.8" height="14" rx="3" class="c-mask"/>
+        <text x="770" y="300" class="t-backend" font-size="8" text-anchor="middle">host injects one</text>
 
 
 
-        <rect x="381.2" y="316" width="67.6" height="14" rx="3" class="c-mask"/>
-        <text x="415" y="326" class="t-backend" font-size="8" text-anchor="middle">manifest ref</text>
-        <rect x="644.6" y="350" width="62.8" height="14" rx="3" class="c-mask"/>
-        <text x="676" y="360" class="t-security" font-size="8" text-anchor="middle">resolve ref</text>
+
 
 
         <!-- Legend -->
-        <text x="40" y="647" class="t-primary" font-size="9" font-weight="600">Legend</text>
-        <rect x="40" y="652" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
-        <text x="60" y="660" class="t-muted" font-size="8">External</text>
-        <rect x="138" y="652" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
-        <text x="158" y="660" class="t-muted" font-size="8">Frontend</text>
-        <rect x="236" y="652" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
-        <text x="256" y="660" class="t-muted" font-size="8">Backend</text>
-        <rect x="329" y="652" width="14" height="9" rx="2" class="c-messagebus" stroke-width="1"/>
-        <text x="349" y="660" class="t-muted" font-size="8">Message bus</text>
-        <rect x="442" y="652" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
-        <text x="462" y="660" class="t-muted" font-size="8">Security</text>
-        <rect x="540" y="652" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
-        <text x="560" y="660" class="t-muted" font-size="8">Database</text>
-        <rect x="638" y="652" width="14" height="9" rx="2" class="c-cloud" stroke-width="1"/>
-        <text x="658" y="660" class="t-muted" font-size="8">Cloud</text>
+        <text x="40" y="549" class="t-primary" font-size="9" font-weight="600">Legend</text>
+        <rect x="40" y="554" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
+        <text x="60" y="562" class="t-muted" font-size="8">Backend</text>
+        <rect x="133" y="554" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
+        <text x="153" y="562" class="t-muted" font-size="8">Security</text>
+        <rect x="231" y="554" width="14" height="9" rx="2" class="c-cloud" stroke-width="1"/>
+        <text x="251" y="562" class="t-muted" font-size="8">Cloud</text>
+        <rect x="314" y="554" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
+        <text x="334" y="562" class="t-muted" font-size="8">External</text>
       </svg>
     </div>
 
@@ -675,37 +652,49 @@
     <div class="cards">
       <div class="card">
         <div class="card-header">
-          <div class="card-dot cyan"></div>
-          <h3>One import surface</h3>
+          <div class="card-dot rose"></div>
+          <h3>The boundary is structural</h3>
         </div>
         <ul>
-          <li>&bull; You import noeta.sdk; noeta-runtime rides along as a transitive dependency</li>
-          <li>&bull; noeta.sdk.providers and noeta.sdk.storage are the two lazy wiring doorways</li>
-          <li>&bull; noeta-runtime declares zero dependencies — httpx and psycopg ship in noeta-sdk</li>
+          <li>&bull; noeta-runtime declares zero dependencies — no httpx, no vendor SDK, stdlib only</li>
+          <li>&bull; .importlinter&#39;s sdk-core-not-builtins contract forbids every static import of noeta.builtins</li>
+          <li>&bull; Every adapter lives in the providers built-in, so the kernel cannot reach one even by accident</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot cyan"></div>
+          <h3>One protocol</h3>
+        </div>
+        <ul>
+          <li>&bull; LLMProvider is a single pure method: complete(LLMRequest) -&gt; LLMResponse</li>
+          <li>&bull; Adapters never write the EventLog, never see a StepContext, and know nothing about resume</li>
+          <li>&bull; RuntimeLLMClient records LLMRequestStarted / LLMResponseRecorded / LLMRequestFinished, error path included</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot emerald"></div>
-          <h3>The kernel carries no capability</h3>
+          <h3>Swapping is wiring, not identity</h3>
         </div>
         <ul>
-          <li>&bull; Every official capability is a built-in plugin: fs, web, memory, browser, mcp, skills, sandbox, storage, …</li>
-          <li>&bull; The loader&#39;s dynamic ref resolution is the only doorway into noeta.builtins</li>
-          <li>&bull; .importlinter&#39;s sdk-core-not-builtins contract rejects every static import</li>
+          <li>&bull; Options.provider or Client(provider=…) — excluded from AgentSpec identity and from equality</li>
+          <li>&bull; Import path: noeta.sdk.providers, a lazy re-export so only a network host pays for httpx</li>
+          <li>&bull; CATALOG carries each model&#39;s context window, output cap, and pricing</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot amber"></div>
-          <h3>The rest of the kernel</h3>
+          <h3>What an adapter owns</h3>
         </div>
         <ul>
-          <li>&bull; Also in noeta-runtime: agent, execution, policies, observers, read_models, storage, testing, tools</li>
-          <li>&bull; Locked: the Engine main loop, the Worker / Dispatcher / lease protocol, the ContextComposer</li>
-          <li>&bull; Storage backends arrive through HostConfig — never as a plugin surface</li>
+          <li>&bull; Translating the noeta-shape Message / Block vocabulary to and from the vendor wire</li>
+          <li>&bull; Host injections: Anthropic wraps them in system-reminder tags, openai_compat renders mid-history system turns</li>
+          <li>&bull; Streaming, retry classification, usage accounting, and context-overflow detection</li>
         </ul>
       </div>
     </div>

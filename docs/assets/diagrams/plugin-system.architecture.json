@@ -2,41 +2,74 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "Plugin System — 16 surfaces, 3 planes",
-    "subtitle": "Manifest → loader → activation; Noeta's own builtins ride the same path",
+    "title": "Plugin System",
+    "subtitle": "Manifest → loader → surface registry → per-agent activation; 16 surfaces across three planes",
     "output": "plugin-system.html"
   },
   "components": [
-    { "id": "manifest", "type": "external", "label": "Plugin manifest", "sublabel": "static TOML / PluginBuilder", "pos": [40, 260], "size": [140, 60] },
-    { "id": "loader", "type": "messagebus", "label": "load_plugins()", "sublabel": "manifest-only, no code import", "pos": [230, 260], "size": [150, 60] },
-    { "id": "registry", "type": "messagebus", "label": "SurfaceRegistry", "sublabel": "16 surfaces", "pos": [430, 260], "size": [150, 60] },
+    { "id": "manifest", "type": "external", "label": "Your plugin", "sublabel": "[tool.noeta] · PluginBuilder", "pos": [40, 200], "size": [190, 72], "tag": "static manifest" },
+    { "id": "builtins", "type": "backend", "label": "noeta.builtins", "sublabel": "18 built-in plugins", "pos": [40, 330], "size": [190, 72], "tag": "identical path" },
 
-    { "id": "identity", "type": "security", "label": "Identity plane", "sublabel": "enters AgentSpec", "pos": [640, 70], "size": [170, 52] },
-    { "id": "wiring", "type": "backend", "label": "Wiring plane", "sublabel": "mounts on host", "pos": [640, 140], "size": [170, 52] },
-    { "id": "host", "type": "cloud", "label": "Host plane", "sublabel": "host-wired", "pos": [640, 210], "size": [170, 52] },
+    { "id": "loader", "type": "messagebus", "label": "load_plugins()", "sublabel": "five gated sources", "pos": [300, 264], "size": [190, 72], "tag": "reads manifests, imports nothing" },
+    { "id": "resolve", "type": "backend", "label": "PluginSet.resolve()", "sublabel": "the single import boundary", "pos": [300, 400], "size": [190, 72], "tag": "at client build, never per turn" },
 
-    { "id": "identity-items", "type": "frontend", "label": "tool · agent · content_kind", "sublabel": "prompt_fragment · policy · control_tool", "pos": [640, 280], "size": [180, 52] },
-    { "id": "wiring-items", "type": "frontend", "label": "guard · observer · provider", "sublabel": "reminder · session_pack · transform", "pos": [640, 350], "size": [180, 52] },
-    { "id": "host-items", "type": "frontend", "label": "mcp_server · skills", "sublabel": "sandbox_provider", "pos": [640, 420], "size": [170, 52] },
+    { "id": "registry", "type": "security", "label": "SurfaceRegistry", "sublabel": "16 SurfaceSpecs", "pos": [555, 264], "size": [190, 72], "tag": "the loader is surface-agnostic" },
 
-    { "id": "activation", "type": "security", "label": "Activation", "sublabel": "Options.plugins tuple", "pos": [860, 260], "size": [150, 60] }
+    { "id": "wiring", "type": "backend", "label": "Wiring plane", "sublabel": "7 surfaces", "pos": [805, 150], "size": [200, 72], "tag": "process or per-agent" },
+    { "id": "identity", "type": "frontend", "label": "Identity plane", "sublabel": "6 surfaces", "pos": [805, 264], "size": [200, 72], "tag": "enters AgentSpec" },
+    { "id": "host", "type": "cloud", "label": "Host plane", "sublabel": "3 surfaces", "pos": [805, 378], "size": [200, 72], "tag": "host-wired" },
+
+    { "id": "activation", "type": "security", "label": "Activation", "sublabel": "Options.plugins tuple", "pos": [1085, 264], "size": [190, 72], "tag": "membership is the flag" }
   ],
   "boundaries": [
-    { "kind": "region", "label": "Identity plane (per-agent, enters identity)", "wraps": ["identity", "identity-items"] },
-    { "kind": "region", "label": "Wiring plane (process-wide, out of identity)", "wraps": ["wiring", "wiring-items"] },
-    { "kind": "region", "label": "Host plane (host-wired resources)", "wraps": ["host", "host-items"] }
+    { "kind": "region", "label": "Extension surfaces", "wraps": ["wiring", "identity", "host"] }
   ],
   "connections": [
-    { "from": "manifest", "to": "loader", "label": "declares", "variant": "emphasis" },
-    { "from": "loader", "to": "registry", "label": "resolves refs", "variant": "emphasis", "labelDy": -24 },
-    { "from": "registry", "to": "identity", "variant": "dashed" },
-    { "from": "registry", "to": "wiring", "variant": "dashed" },
-    { "from": "registry", "to": "host", "variant": "dashed" },
-    { "from": "identity", "to": "activation", "label": "per-agent", "variant": "emphasis" },
-    { "from": "wiring", "to": "activation", "variant": "dashed" }
+    { "from": "manifest", "to": "loader", "label": "declares", "variant": "emphasis", "fromSide": "right", "toSide": "left", "via": [[265, 236], [265, 300]], "labelAt": [252, 192] },
+    { "from": "builtins", "to": "loader", "variant": "emphasis", "fromSide": "right", "toSide": "left", "via": [[265, 366], [265, 300]] },
+    { "from": "loader", "to": "registry", "label": "validates", "variant": "emphasis" },
+    { "from": "loader", "to": "resolve", "variant": "dashed", "fromSide": "bottom", "toSide": "top" },
+    { "from": "registry", "to": "identity", "variant": "emphasis" },
+    { "from": "registry", "to": "wiring", "variant": "dashed", "fromSide": "right", "toSide": "left", "via": [[762, 300], [762, 186]] },
+    { "from": "registry", "to": "host", "variant": "dashed", "fromSide": "right", "toSide": "left", "via": [[762, 300], [762, 414]] },
+    { "from": "identity", "to": "activation", "label": "enters identity", "variant": "emphasis", "labelDy": -34 }
   ],
   "cards": [
-    { "dot": "emerald", "title": "Manifest is inert data", "items": ["Contributions listable before any code runs", "Collision-checked by name, no silent override", "Builtins ride the identical loader as external plugins"] },
-    { "dot": "cyan", "title": "Activation is identity", "items": ["Options.plugins folds into AgentSpec.plugins", "Membership is the capability flag — agent_activates()", "guards/observers are process-wide once loaded"] }
+    {
+      "dot": "cyan",
+      "title": "Identity plane — 6 surfaces",
+      "items": [
+        "tool · agent · content_kind · prompt_fragment · policy · control_tool",
+        "Contributions fold into the AgentSpec.plugins tuple, so activation is identity",
+        "Selected per agent through Options.plugins / AgentDefinition.plugins"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Wiring plane — 7 surfaces",
+      "items": [
+        "guard · observer · provider · reminder_provider · reminder · tool_result_transform · session_pack",
+        "guard and observer are the only two process-wide channels — in force once loaded",
+        "The rest are per-agent or host-wired and never enter identity"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Host plane — 3 surfaces",
+      "items": [
+        "mcp_server · skills · sandbox_provider",
+        "Resolved by the host; never part of AgentSpec identity",
+        "A host adds its own surface by registering a SurfaceSpec on a copy() of standard_registry()"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Merge rules",
+      "items": [
+        "Contributions merge deterministically by (plugin, name), or by integer priority where the surface declares one",
+        "A collision names both sides and there is no override",
+        "An unrecognised activation name fails compilation loudly"
+      ]
+    }
   ]
 }

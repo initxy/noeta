@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="generator" content="archify 2.11.0">
-  <title>Noeta Architecture Diagram</title>
+  <title>Wake and resume Diagram</title>
   <script>
     // Resolve the theme before first paint so light-preference users don't
     // see a dark flash. The toolbar script below re-applies with UI state.
@@ -525,14 +525,14 @@
     <div class="header">
       <div class="header-row">
         <div class="pulse-dot"></div>
-        <h1>Noeta Architecture</h1>
+        <h1>Wake and resume</h1>
       </div>
-      <p class="subtitle">Your code → noeta.sdk → Engine → storage; capabilities reach the kernel only through the plugin loader</p>
+      <p class="subtitle">a Task suspends on a typed condition; whatever produces the wake goes through one verb, one match, one durable TaskWoken</p>
     </div>
 
     <!-- Main Diagram -->
     <div class="diagram-container">
-      <svg viewBox="0 0 1215 676" role="img" aria-label="Noeta Architecture — Your code → noeta.sdk → Engine → storage; capabilities reach the kernel only through the plugin loader (architecture diagram)">
+      <svg viewBox="0 0 720 776" role="img" aria-label="Wake and resume — a Task suspends on a typed condition; whatever produces the wake goes through one verb, one match, one durable TaskWoken (workflow diagram)">
         <!-- Definitions -->
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -555,119 +555,138 @@
         <!-- Background Grid -->
         <rect width="100%" height="100%" fill="url(#grid)" />
 
-        <!-- Boundaries (behind everything) -->
-        <rect x="185" y="74" width="460" height="354" rx="12" class="c-region" stroke-width="1"/>
-        <text x="193" y="92" class="t-cloud" font-size="9" font-weight="600">noeta-sdk — the wheel you install</text>
+        <!-- Swimlanes -->
+        <rect x="40" y="52" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="74" class="t-dim" font-size="10" font-weight="600">01 / Task (Engine)</text>
 
-        <rect x="670" y="70" width="260" height="538" rx="8" class="c-security-group" stroke-width="1"/>
-        <text x="678" y="88" class="t-security" font-size="9" font-weight="600">noeta-runtime — the pure kernel</text>
+        <rect x="40" y="176" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="198" class="t-dim" font-size="10" font-weight="600">02 / Dispatcher (durable)</text>
 
-        <!-- Connection paths (before components for correct z-order) -->
-        <path d="M 170 250 L 215 250" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 390 250 L 700 250" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 900 250 L 1000 250" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 800 218 L 800 168" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 302.5 214 L 302.5 166" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 302.5 286 L 302.5 336" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 390 372 L 440 372" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 615 372 L 792 372 Q 800 372 800 364 L 800 282" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path d="M 1087.5 286 L 1087.5 336" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <rect x="40" y="300" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="322" class="t-dim" font-size="10" font-weight="600">03 / Wake producers</text>
 
-        <!-- Components -->
-        <rect x="30" y="219" width="140" height="62" rx="6" class="c-mask"/>
-        <rect x="30" y="219" width="140" height="62" rx="6" class="c-external" stroke-width="1.5"/>
-        <text x="100" y="248" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Your code</text>
-        <text x="100" y="264" class="t-muted" font-size="9" text-anchor="middle">import noeta.sdk</text>
+        <rect x="40" y="424" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="446" class="t-dim" font-size="10" font-weight="600">04 / Worker</text>
 
-        <rect x="215" y="104" width="175" height="62" rx="6" class="c-mask"/>
-        <rect x="215" y="104" width="175" height="62" rx="6" class="c-frontend" stroke-width="1.5"/>
-        <text x="302.5" y="133" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">noeta.presets</text>
-        <text x="302.5" y="149" class="t-muted" font-size="9" text-anchor="middle">the four official agents</text>
+        <rect x="40" y="548" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <rect x="46" y="554" width="628" height="92" rx="8" class="c-security-group" stroke-width="1"/>
+        <text x="54" y="570" class="t-security" font-size="10" font-weight="600">EX / If the Worker crashes first</text>
 
-        <rect x="215" y="214" width="175" height="72" rx="6" class="c-mask"/>
-        <rect x="215" y="214" width="175" height="72" rx="6" class="c-frontend" stroke-width="1.5"/>
-        <text x="302.5" y="248" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">noeta.sdk</text>
-        <text x="302.5" y="264" class="t-muted" font-size="9" text-anchor="middle">query · Client · Options</text>
-        <text x="302.5" y="278" class="t-frontend" font-size="7" text-anchor="middle">the only public surface</text>
+        <!-- Phase headers -->
+        <line x1="42" y1="35" x2="266" y2="35" class="a-default" stroke-width="1.1"/>
+        <rect x="42" y="27" width="224" height="16" rx="4" class="c-mask"/>
+        <text x="154" y="39" class="t-muted" font-size="8" font-weight="600" text-anchor="middle">Suspend and wait</text>
+        <line x1="254" y1="35" x2="476" y2="35" class="a-emphasis" stroke-width="1.1"/>
+        <rect x="254" y="27" width="222" height="16" rx="4" class="c-mask"/>
+        <text x="365" y="39" class="t-backend" font-size="8" font-weight="600" text-anchor="middle">A wake arrives</text>
+        <line x1="454" y1="35" x2="671" y2="35" class="a-default" stroke-width="1.1"/>
+        <rect x="454" y="27" width="217" height="16" rx="4" class="c-mask"/>
+        <text x="562.5" y="39" class="t-muted" font-size="8" font-weight="600" text-anchor="middle">Lease, wake, resume</text>
 
-        <rect x="215" y="336" width="175" height="72" rx="6" class="c-mask"/>
-        <rect x="215" y="336" width="175" height="72" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="302.5" y="370" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">noeta.builtins</text>
-        <text x="302.5" y="386" class="t-muted" font-size="9" text-anchor="middle">18 capability plugins</text>
-        <text x="302.5" y="400" class="t-backend" font-size="7" text-anchor="middle">fs · web · memory · …</text>
-
-        <rect x="440" y="336" width="175" height="72" rx="6" class="c-mask"/>
-        <rect x="440" y="336" width="175" height="72" rx="6" class="c-messagebus" stroke-width="1.5"/>
-        <text x="527.5" y="370" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Plugin loader</text>
-        <text x="527.5" y="386" class="t-muted" font-size="9" text-anchor="middle">dynamic ref resolution</text>
-        <text x="527.5" y="400" class="t-messagebus" font-size="7" text-anchor="middle">the only doorway</text>
-
-        <rect x="700" y="100" width="200" height="68" rx="6" class="c-mask"/>
-        <rect x="700" y="100" width="200" height="68" rx="6" class="c-security" stroke-width="1.5"/>
-        <text x="800" y="132" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">protocols</text>
-        <text x="800" y="148" class="t-muted" font-size="9" text-anchor="middle">the typed boundary</text>
-        <text x="800" y="160" class="t-security" font-size="7" text-anchor="middle">imports nothing in-project</text>
-
-        <rect x="700" y="218" width="200" height="64" rx="6" class="c-mask"/>
-        <rect x="700" y="218" width="200" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="800" y="248" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">core</text>
-        <text x="800" y="264" class="t-muted" font-size="9" text-anchor="middle">Engine · fold · snapshot</text>
-
-        <rect x="700" y="402" width="200" height="68" rx="6" class="c-mask"/>
-        <rect x="700" y="402" width="200" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="800" y="434" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">runtime</text>
-        <text x="800" y="450" class="t-muted" font-size="9" text-anchor="middle">Worker · Dispatcher · Lease</text>
-        <text x="800" y="462" class="t-backend" font-size="7" text-anchor="middle">drives the Engine</text>
-
-        <rect x="700" y="520" width="200" height="68" rx="6" class="c-mask"/>
-        <rect x="700" y="520" width="200" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="800" y="552" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">context</text>
-        <text x="800" y="568" class="t-muted" font-size="9" text-anchor="middle">ThreeSegmentComposer</text>
-        <text x="800" y="580" class="t-backend" font-size="7" text-anchor="middle">injected, never replaced</text>
-
-        <rect x="1000" y="214" width="175" height="72" rx="6" class="c-mask"/>
-        <rect x="1000" y="214" width="175" height="72" rx="6" class="c-database" stroke-width="1.5"/>
-        <text x="1087.5" y="248" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Storage backends</text>
-        <text x="1087.5" y="264" class="t-muted" font-size="9" text-anchor="middle">EventLog · ContentStore</text>
-        <text x="1087.5" y="278" class="t-database" font-size="7" text-anchor="middle">+ Dispatcher, via HostConfig</text>
-
-        <rect x="1000" y="336" width="175" height="62" rx="6" class="c-mask"/>
-        <rect x="1000" y="336" width="175" height="62" rx="6" class="c-cloud" stroke-width="1.5"/>
-        <text x="1087.5" y="365" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Implementations</text>
-        <text x="1087.5" y="381" class="t-muted" font-size="9" text-anchor="middle">InMemory · SQLite · Postgres</text>
-
-        <!-- Connection labels -->
-        <rect x="173.1" y="230" width="38.8" height="14" rx="3" class="c-mask"/>
-        <text x="192.5" y="240" class="t-backend" font-size="8" text-anchor="middle">import</text>
-        <rect x="501.6" y="230" width="86.8" height="14" rx="3" class="c-mask"/>
-        <text x="545" y="240" class="t-backend" font-size="8" text-anchor="middle">builds + injects</text>
-        <rect x="913.8" y="230" width="72.4" height="14" rx="3" class="c-mask"/>
-        <text x="950" y="240" class="t-backend" font-size="8" text-anchor="middle">append · read</text>
+        <!-- Workflow groups -->
 
 
+        <!-- Edge paths -->
+        <path d="M 88 145 L 88 166 L 220 166 L 220 209" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 302 243 L 384 243" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 88 341 L 88 290 L 430 290 L 430 269" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 220 341 L 220 290 L 430 290 L 430 269" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 300 341 L 300 290 L 430 290 L 430 269" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 430 269 L 430 352 L 500 352 L 500 465" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 500 465 L 500 290 L 500 290 L 500 145" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 546 119 L 579 119" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 625 145 L 625 166 L 625 166 L 625 217" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 500 517 L 500 538 L 625 538 L 625 589" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <path d="M 570 615 L 426 615 L 426 491 L 454 491" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
 
-        <rect x="381.2" y="316" width="67.6" height="14" rx="3" class="c-mask"/>
-        <text x="415" y="326" class="t-backend" font-size="8" text-anchor="middle">manifest ref</text>
-        <rect x="644.6" y="350" width="62.8" height="14" rx="3" class="c-mask"/>
-        <text x="676" y="360" class="t-security" font-size="8" text-anchor="middle">resolve ref</text>
+        <!-- Nodes -->
+        <rect x="42" y="93" width="92" height="52" rx="6" class="c-mask"/>
+        <rect x="42" y="93" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="88" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Suspend</text>
+        <text x="88" y="131" class="t-muted" font-size="8" text-anchor="middle">TaskSuspended</text>
 
+        <rect x="454" y="93" width="92" height="52" rx="6" class="c-mask"/>
+        <rect x="454" y="93" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="500" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">TaskWoken</text>
+        <text x="500" y="131" class="t-muted" font-size="8" text-anchor="middle">written first</text>
+
+        <rect x="579" y="93" width="92" height="52" rx="6" class="c-mask"/>
+        <rect x="579" y="93" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="625" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Resume</text>
+        <text x="625" y="131" class="t-muted" font-size="8" text-anchor="middle">run_one_step</text>
+
+        <rect x="138" y="209" width="164" height="68" rx="6" class="c-mask"/>
+        <rect x="138" y="209" width="164" height="68" rx="6" class="c-database" stroke-width="1.5"/>
+        <text x="220" y="230" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">wake_on</text>
+        <text x="220" y="247" class="t-muted" font-size="8" text-anchor="middle">typed condition</text>
+        <text x="220" y="265" class="t-database" font-size="7" text-anchor="middle">human / timer / subtask / external</text>
+
+        <rect x="384" y="217" width="92" height="52" rx="6" class="c-mask"/>
+        <rect x="384" y="217" width="92" height="52" rx="6" class="c-database" stroke-width="1.5"/>
+        <text x="430" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">matches_wake</text>
+        <text x="430" y="255" class="t-muted" font-size="8" text-anchor="middle">identity fields</text>
+
+        <rect x="579" y="217" width="92" height="52" rx="6" class="c-mask"/>
+        <rect x="579" y="217" width="92" height="52" rx="6" class="c-database" stroke-width="1.5"/>
+        <text x="625" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Clear wake</text>
+        <text x="625" y="255" class="t-muted" font-size="8" text-anchor="middle">after TaskWoken</text>
+
+        <rect x="53" y="341" width="70" height="52" rx="6" class="c-mask"/>
+        <rect x="53" y="341" width="70" height="52" rx="6" class="c-external" stroke-width="1.5"/>
+        <text x="88" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Human</text>
+        <text x="88" y="379" class="t-muted" font-size="8" text-anchor="middle">host answer</text>
+
+        <rect x="185" y="341" width="70" height="52" rx="6" class="c-mask"/>
+        <rect x="185" y="341" width="70" height="52" rx="6" class="c-external" stroke-width="1.5"/>
+        <text x="220" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Timer</text>
+        <text x="220" y="379" class="t-muted" font-size="8" text-anchor="middle">timer poll</text>
+
+        <rect x="265" y="341" width="70" height="52" rx="6" class="c-mask"/>
+        <rect x="265" y="341" width="70" height="52" rx="6" class="c-external" stroke-width="1.5"/>
+        <text x="300" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Subtask</text>
+        <text x="300" y="379" class="t-muted" font-size="8" text-anchor="middle">child done</text>
+
+        <rect x="454" y="465" width="92" height="52" rx="6" class="c-mask"/>
+        <rect x="454" y="465" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="500" y="486" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Lease</text>
+        <text x="500" y="503" class="t-muted" font-size="8" text-anchor="middle">wake rides along</text>
+
+        <rect x="570" y="589" width="110" height="52" rx="6" class="c-mask"/>
+        <rect x="570" y="589" width="110" height="52" rx="6" class="c-security" stroke-width="1.5"/>
+        <text x="625" y="610" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Re-deliver</text>
+        <text x="625" y="627" class="t-muted" font-size="8" text-anchor="middle">wake survives</text>
+
+        <!-- Edge labels -->
+
+
+
+
+        <rect x="324" y="270" width="82" height="14" rx="3" class="c-mask"/>
+        <text x="365" y="280" class="t-muted" font-size="8" text-anchor="middle">Dispatcher.wake</text>
+        <rect x="433.6" y="332" width="62.8" height="14" rx="3" class="c-mask"/>
+        <text x="465" y="342" class="t-backend" font-size="8" text-anchor="middle">ready queue</text>
+        <rect x="456.6" y="357.5" width="86.8" height="14" rx="3" class="c-mask"/>
+        <text x="500" y="367.5" class="t-backend" font-size="8" text-anchor="middle">lease carries it</text>
+
+        <rect x="600.8" y="171.5" width="48.4" height="14" rx="3" class="c-mask"/>
+        <text x="625" y="181.5" class="t-muted" font-size="8" text-anchor="middle">consumed</text>
+        <rect x="531.1" y="518" width="62.8" height="14" rx="3" class="c-mask"/>
+        <text x="562.5" y="528" class="t-security" font-size="8" text-anchor="middle">crash first</text>
+        <rect x="370.6" y="533" width="110.8" height="14" rx="3" class="c-mask"/>
+        <text x="426" y="543" class="t-database" font-size="8" text-anchor="middle">same wake, next lease</text>
 
         <!-- Legend -->
-        <text x="40" y="647" class="t-primary" font-size="9" font-weight="600">Legend</text>
-        <rect x="40" y="652" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
-        <text x="60" y="660" class="t-muted" font-size="8">External</text>
-        <rect x="138" y="652" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
-        <text x="158" y="660" class="t-muted" font-size="8">Frontend</text>
-        <rect x="236" y="652" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
-        <text x="256" y="660" class="t-muted" font-size="8">Backend</text>
-        <rect x="329" y="652" width="14" height="9" rx="2" class="c-messagebus" stroke-width="1"/>
-        <text x="349" y="660" class="t-muted" font-size="8">Message bus</text>
-        <rect x="442" y="652" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
-        <text x="462" y="660" class="t-muted" font-size="8">Security</text>
-        <rect x="540" y="652" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
-        <text x="560" y="660" class="t-muted" font-size="8">Database</text>
-        <rect x="638" y="652" width="14" height="9" rx="2" class="c-cloud" stroke-width="1"/>
-        <text x="658" y="660" class="t-muted" font-size="8">Cloud</text>
+        <text x="175" y="676" class="t-primary" font-size="10" font-weight="600">Legend</text>
+        <rect x="175" y="688" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
+        <text x="195" y="696" class="t-muted" font-size="7">User UI</text>
+        <rect x="260" y="688" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
+        <text x="280" y="696" class="t-muted" font-size="7">Agent logic</text>
+        <rect x="370" y="688" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
+        <text x="390" y="696" class="t-muted" font-size="7">Policy</text>
+        <rect x="455" y="688" width="14" height="9" rx="2" class="c-messagebus" stroke-width="1"/>
+        <text x="475" y="696" class="t-muted" font-size="7">Tool action</text>
+        <rect x="565" y="688" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
+        <text x="585" y="696" class="t-muted" font-size="7">Context / trace</text>
       </svg>
     </div>
 
@@ -676,43 +695,44 @@
       <div class="card">
         <div class="card-header">
           <div class="card-dot cyan"></div>
-          <h3>One import surface</h3>
+          <h3>One suspend, one wake verb</h3>
         </div>
         <ul>
-          <li>&bull; You import noeta.sdk; noeta-runtime rides along as a transitive dependency</li>
-          <li>&bull; noeta.sdk.providers and noeta.sdk.storage are the two lazy wiring doorways</li>
-          <li>&bull; noeta-runtime declares zero dependencies — httpx and psycopg ship in noeta-sdk</li>
+          <li>&bull; Waiting on a human, a timer, a subtask or an external source is one status</li>
+          <li>&bull; Dispatcher.wake(task_id, wake_event) is the single delivery verb</li>
+          <li>&bull; matches_wake projects on identity fields only; payloads ride along unread</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot emerald"></div>
-          <h3>The kernel carries no capability</h3>
+          <h3>Durable exactly-once</h3>
         </div>
         <ul>
-          <li>&bull; Every official capability is a built-in plugin: fs, web, memory, browser, mcp, skills, sandbox, storage, …</li>
-          <li>&bull; The loader&#39;s dynamic ref resolution is the only doorway into noeta.builtins</li>
-          <li>&bull; .importlinter&#39;s sdk-core-not-builtins contract rejects every static import</li>
+          <li>&bull; Leasing does not consume the wake — it outlives the lease</li>
+          <li>&bull; release(consumed_wake_event=...) clears it after TaskWoken is durable</li>
+          <li>&bull; At-least-once delivery plus idempotent consumption is exactly-once</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot amber"></div>
-          <h3>The rest of the kernel</h3>
+          <h3>Producers and timing</h3>
         </div>
         <ul>
-          <li>&bull; Also in noeta-runtime: agent, execution, policies, observers, read_models, storage, testing, tools</li>
-          <li>&bull; Locked: the Engine main loop, the Worker / Dispatcher / lease protocol, the ContextComposer</li>
-          <li>&bull; Storage backends arrive through HostConfig — never as a plugin surface</li>
+          <li>&bull; HumanResponseReceived arrives through the host&#39;s answer or approve verb</li>
+          <li>&bull; TimerFired comes from the Worker&#39;s fire_due_timers poll on the recorded deadline</li>
+          <li>&bull; SubtaskCompleted and SubtaskGroupCompleted come from ChildLifecycleObserver</li>
+          <li>&bull; A wake that arrives before the suspend is buffered and drained at the suspend</li>
         </ul>
       </div>
     </div>
 
     <!-- Footer -->
     <p class="footer">
-      Architecture diagram &bull; Built with Archify<span class="no-print"> &bull; Press <kbd>T</kbd> for theme and <kbd>E</kbd> for export</span>
+      Workflow diagram &bull; Built with Archify<span class="no-print"> &bull; Press <kbd>T</kbd> for theme and <kbd>E</kbd> for export</span>
     </p>
   </div>
 

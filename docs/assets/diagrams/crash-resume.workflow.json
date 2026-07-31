@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Crash and resume",
+    "subtitle": "Worker A is killed mid-step; its lease expires, Worker B folds the log, seals the interrupted attempt and resumes exactly once",
+    "output": "crash-resume.html"
+  },
+  "lanes": [
+    { "id": "a", "label": "Worker A" },
+    { "id": "store", "label": "EventLog + Dispatcher" },
+    { "id": "b", "label": "Worker B" },
+    { "id": "park", "label": "Recovery park", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "crash", "label": "Worker A dies mid-step", "fromCol": 0, "toCol": 3, "variant": "security" },
+    { "id": "recover", "label": "Worker B reclaims and resumes", "fromCol": 4, "toCol": 5, "variant": "emphasis" }
+  ],
+  "mainPath": ["a_lease", "a_step", "a_kill", "s_expire", "b_claim", "b_scan"],
+  "nodes": [
+    { "id": "a_lease", "lane": "a", "col": 0, "type": "backend", "label": "Lease T", "sublabel": "+ heartbeat" },
+    { "id": "a_step", "lane": "a", "col": 1, "type": "backend", "label": "Run a step", "sublabel": "plan, tool calls" },
+    { "id": "a_kill", "lane": "a", "col": 3, "type": "security", "label": "kill -9", "sublabel": "process dies" },
+
+    { "id": "s_partial", "lane": "store", "col": 2, "type": "database", "label": "Partial step", "sublabel": "already durable" },
+    { "id": "s_expire", "lane": "store", "col": 3, "type": "database", "label": "Lease expires", "sublabel": "requeue_stale()", "tag": "old lease_id invalid" },
+    { "id": "s_seal", "lane": "store", "col": 5, "type": "database", "label": "Seal marker", "sublabel": "StepAttemptAbandoned", "width": 110 },
+
+    { "id": "b_claim", "lane": "b", "col": 4, "type": "backend", "label": "Claim + fold", "sublabel": "status: running" },
+    { "id": "b_scan", "lane": "b", "col": 5, "type": "backend", "label": "Seal + re-drive", "sublabel": "exactly once", "tag": "under Worker B's lease", "width": 100 },
+
+    { "id": "p_park", "lane": "park", "col": 5, "type": "security", "label": "Park", "sublabel": "stopped conversation", "width": 110 }
+  ],
+  "edges": [
+    { "from": "a_lease", "to": "a_step", "variant": "emphasis", "route": "straight", "fromSide": "right", "toSide": "left" },
+    { "from": "a_step", "to": "s_partial", "label": "append events", "route": "drop", "fromSide": "bottom", "toSide": "top", "labelSegment": 1 },
+    { "from": "a_step", "to": "a_kill", "label": "mid-step", "variant": "security", "route": "straight", "fromSide": "right", "toSide": "left" },
+    { "from": "a_kill", "to": "s_expire", "label": "no heartbeat", "variant": "security", "route": "drop", "fromSide": "bottom", "toSide": "top", "labelSegment": 2 },
+    { "from": "s_expire", "to": "b_claim", "label": "requeued ready", "variant": "emphasis", "route": "drop", "fromSide": "bottom", "toSide": "top", "labelSegment": 1, "labelDy": 12 },
+    { "from": "b_claim", "to": "b_scan", "variant": "emphasis", "route": "straight", "fromSide": "right", "toSide": "left" },
+    { "from": "b_scan", "to": "s_seal", "label": "seal", "variant": "emphasis", "route": "drop", "fromSide": "top", "toSide": "bottom", "labelSegment": 0 },
+    { "from": "b_scan", "to": "p_park", "label": "not provably safe", "variant": "security", "role": "error", "route": "drop", "fromSide": "bottom", "toSide": "top", "labelSegment": 2 }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "The lease is the fence",
+      "items": [
+        "Every EventLog append carries the writer's lease_id",
+        "A zombie write from the dead Worker A is rejected with InvalidLease",
+        "requeue_stale reclaims a task only after its lease deadline has passed"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Recovery is classified, never guessed",
+      "items": [
+        "The interrupted attempt is anchored on its ContextPlanComposed seq",
+        "Safe means every recorded tool call still passes the live guard chain",
+        "Safe seals and re-drives; unsafe seals and parks the Task for a human"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Nothing is deleted",
+      "items": [
+        "StepAttemptAbandoned re-bases the fold; the dead tail stays auditable",
+        "Attempts that finished before the crash remain live history",
+        "Three seals in one wake window force a park, so a crash loop cannot spin"
+      ]
+    }
+  ]
+}
