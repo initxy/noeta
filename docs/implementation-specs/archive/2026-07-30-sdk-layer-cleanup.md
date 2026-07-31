@@ -1,8 +1,13 @@
 # SDK-layer cleanup (2026-07-30)
 
-Status: Implemented (2026-07-31) — `make check` green: 3423 passed / 129
-skipped, coverage 85.55% (gate 85%), mypy --strict 24 files clean, ruff clean,
-import-linter 10/10 contracts kept.
+> **Status: Shipped** — landed on `main` 2026-07-31 (9516c03 + the review
+> follow-up 3a7d78a; the durable decisions live in the
+> plugin-contribution-bundles ADR addendum "`merge_rule` →
+> `activation_binding`, and the two process channels"). Unreleased at archive
+> time: it rides the next release together with the rest of the 0.4.0 backlog.
+> `make check` green at 3a7d78a: 3423 passed / 129 skipped, coverage 85.55%
+> (gate 85%), mypy --strict 24 files clean, ruff clean, import-linter 10/10
+> contracts kept.
 
 ## Review follow-up (2026-07-31)
 

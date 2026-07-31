@@ -25,9 +25,15 @@ Key contracts (issue 22 design doc §"Anthropic Messages API translation rules")
   ``ToolResultBlock`` inside ``role='user'`` and non-ToolResultBlock
   inside ``role='tool'`` raise ``ValueError`` — wire-shape placement
   is adapter responsibility, ID alignment stays with Engine.
-* Extended thinking (rev2 B1): adapter-unit round-trip only.
-  End-to-end signature continuation needs upstream ReActPolicy /
-  Composer / RuntimeLLMClient changes and is a follow-up.
+* Extended thinking (rev2 B1) round-trips end to end, not just within
+  this adapter. Inbound ``thinking`` keeps its ``signature`` and
+  ``redacted_thinking`` keeps its opaque ``data``; outbound both are
+  re-emitted verbatim ahead of the turn's text / tool_use blocks; the
+  streaming path accumulates ``signature_delta`` into the same shape.
+  Upstream carries the blocks out of band — the turn's ThinkingBlocks
+  are recorded per ``tool_use`` call id and the Composer re-attaches
+  them on the continuation request — so a signed reasoning turn stays
+  valid across steps.
 * Tools schema is OpenAI-shape on the way in (Composer emits OpenAI
   shape); adapter unpacks to Anthropic shape. Missing function /
   parameters / name raise.
