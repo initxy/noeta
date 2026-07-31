@@ -414,8 +414,6 @@ def build_instructions_session_pack(ctx: SessionBuildContext) -> PackContributio
         init=_init,
         content_discovery=content_discovery,
         content_preloader=content_preloader,
-        instructions_snapshot=root_snapshot,
-        instructions_snapshots=snapshots,
     )
 
 
@@ -456,5 +454,4 @@ def build_environment_session_pack(ctx: SessionBuildContext) -> PackContribution
             ContentKindContribution(400, kit.content_kind(snapshot)),
         ),
         init=_init,
-        environment_snapshot=snapshot,
     )

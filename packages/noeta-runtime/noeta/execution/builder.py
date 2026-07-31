@@ -38,14 +38,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional, Protocol, Sequence, cast
+from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
 
 from noeta.context.composer import ThreeSegmentComposer
 from noeta.context.content_channel import ContentChannelRegistry, ContentKindSpec
 from noeta.context.reminders import ReminderRegistry, ReminderSpec
-from noeta.context.environment import EnvironmentSnapshot
-from noeta.context.instructions import InstructionsSnapshot
-from noeta.context.memory import MemoryEntries
 from noeta.core.hooks import HookManager
 from noeta.execution.session_pack import (
     EMPTY_CONTRIBUTION,
@@ -136,13 +133,13 @@ class SessionInputs:
     """Composer + Policy factory + tools bundle for a generic agent
     session (live run or resume).
 
-    Returned by :func:`build_session_inputs`. Carries the five pieces an
+    Returned by :func:`build_session_inputs`. Carries the pieces an
     Engine needs: the filtered-and-ordered tool dict, the composer (with
-    skill rendering and control-action schemas wired in), the policy factory
-    bound to the same ``(tools, model, compaction)`` triple, the guard
-    HookManager (budget / permission / repetition / hook in the same
-    deterministic order the live session registered them), and the loaded
-    skill registry (for pre-loop activation + provenance).
+    content-kind rendering and control-action schemas wired in), the policy
+    factory bound to the same ``(tools, model, compaction)`` triple, the
+    guard HookManager (budget / permission / repetition / hook in the same
+    deterministic order the live session registered them), and the generic
+    content-fingerprint resolver.
     """
 
     tools: dict[str, Tool]
@@ -157,12 +154,6 @@ class SessionInputs:
     #: set). A session recording that suspended for approval (or that a
     #: guard denied) carries its guard-origin events.
     hooks: HookManager
-    #: Exposed to the runner for the pre-loop :func:`activate_skills`
-    #: call and for content provenance. The three-tier merge: built-in
-    #: + global tiers under the workspace-local pack
-    #: (``skills_dir`` override or ``<workspace>/.noeta/skills``), workspace
-    #: wins — the same registry both live and resume wire into the composer.
-    skill_registry: Any
     #: The generic ``(kind, name) → (version, hash)``
     #: resolver derived from the content-channel registry the composer
     #: renders from (one source of truth). Hosts wire this into
@@ -170,27 +161,6 @@ class SessionInputs:
     #: generic ``ContextContentRecorded`` with the same fingerprints the
     #: composer's kinds declare.
     content_hashes: Callable[[str, str], Optional[tuple[str, str]]]
-    #: Memory v1 wiring surface. ``memory_store`` is
-    #: the session's file store as an OPAQUE handle (microkernel M3: the
-    #: concrete ``MemoryStore`` lives in the memory built-in; the kernel
-    #: passes it through, never calls it) — ``None`` when ``memory_enabled``
-    #: was off; ``memory_entries`` is the load-time index snapshot the
-    #: composer's renderer AND the pre-loop ``record_memory_index`` must
-    #: share (one snapshot, one fingerprint — record time equals compose
-    #: time by construction).
-    memory_store: Optional[Any] = None
-    memory_entries: MemoryEntries = ()
-    #: Instructions file wiring surface. ``instructions_snapshot`` is the
-    #: load-time snapshot (``None`` when ``instructions_enabled`` is off
-    #: or no instructions file exists) shared by the composer's renderer
-    #: AND the pre-loop ``record_instructions`` call — one snapshot, one
-    #: fingerprint.
-    instructions_snapshot: Optional[InstructionsSnapshot] = None
-    #: Workspace environment wiring surface. ``environment_snapshot`` is
-    #: the load-time snapshot (always present — a workspace always exists)
-    #: shared by the composer's renderer AND the pre-loop
-    #: ``record_environment`` call — one snapshot, one fingerprint.
-    environment_snapshot: Optional[EnvironmentSnapshot] = None
     #: microcompact — host-level inline char cap for tool
     #: results before they are appended as messages. ``None`` ⇒ no
     #: truncation (default, backward-compatible). The value is forwarded
@@ -392,35 +362,15 @@ class _ToolAssembly:
     """The mutable accumulator the tool pipeline threads through.
 
     ``tools`` is the dict each stage mutates (the construction-order contract
-    is the ORDER stages append into it). The other fields are the side-outputs
-    that one stage produces and a LATER stage (or a post-tools phase) consumes:
-    the skill ``registry`` (feeds script / read-fence / menu / content kinds),
-    the memory ``store`` + ``entries`` (feed the memory tools + content kind),
-    the ``instructions_snapshot`` (feeds its content kind), and the skill-
-    script guard fields (feed the PermissionGuard). Capturing them on the
-    accumulator is what lets each pipeline stage stay a small self-contained
-    ``(spec, asm) -> None``.
+    is the ORDER stages append into it). The remaining fields are the
+    side-outputs the pack loop produces and the guards phase consumes: the
+    skill-grant / skill-script guard fields (feed the PermissionGuard).
     """
 
     tools: dict[str, Tool] = field(default_factory=dict)
-    registry: Any = None
-    #: The skill kind's ContentKindSpec + the resolved allowed-tools grants,
-    #: produced by the skills stage's kit (microkernel phase 2a) and consumed
-    #: by the content-registry phase / the guards phase.
-    skill_content_kind: Optional[ContentKindSpec] = None
+    #: The resolved allowed-tools grants, produced by the skills pack's kit
+    #: (microkernel phase 2a) and consumed by the guards phase.
     skill_allowed_tools: tuple[tuple[str, frozenset[str]], ...] = ()
-    memory_store: Optional[Any] = None
-    memory_entries: MemoryEntries = ()
-    instructions_snapshot: Optional[InstructionsSnapshot] = None
-    #: The shared name → snapshot mapping the instructions kind renders from
-    #: (root file under its basename; discovered subdirectory files under
-    #: their workspace-relative paths). Deliberately MUTABLE and shared with
-    #: the discovery hook + resume preloader, which add entries at tool/step
-    #: time — the renderer itself only ever looks up in memory.
-    instructions_snapshots: dict[str, InstructionsSnapshot] = field(
-        default_factory=dict
-    )
-    environment_snapshot: Optional[EnvironmentSnapshot] = None
     skill_script_tools: frozenset[str] = frozenset()
     skill_scripts: frozenset[tuple[str, str]] = frozenset()
     workspace: WorkspaceRoot = None  # type: ignore[assignment]
@@ -926,11 +876,6 @@ def build_session_inputs(
     skills_kit: Optional[SkillsKit] = None
     content_discovery: Optional[Any] = None
     content_preloader: Optional[Any] = None
-    memory_store: Optional[Any] = None
-    memory_entries: MemoryEntries = ()
-    instructions_snapshot: Optional[InstructionsSnapshot] = None
-    instructions_snapshots: dict[str, InstructionsSnapshot] = {}
-    environment_snapshot: Optional[EnvironmentSnapshot] = None
 
     def _claim(field_name: str, current: Any, value: Any) -> Any:
         if value is None:
@@ -960,23 +905,6 @@ def build_session_inputs(
         content_preloader = _claim(
             "content_preloader", content_preloader, contrib.content_preloader
         )
-        memory_store = _claim("memory_store", memory_store, contrib.memory_store)
-        if contrib.memory_entries:
-            memory_entries = cast(MemoryEntries, contrib.memory_entries)
-        instructions_snapshot = _claim(
-            "instructions_snapshot",
-            instructions_snapshot,
-            contrib.instructions_snapshot,
-        )
-        if contrib.instructions_snapshots:
-            instructions_snapshots = cast(
-                "dict[str, InstructionsSnapshot]", contrib.instructions_snapshots
-            )
-        environment_snapshot = _claim(
-            "environment_snapshot",
-            environment_snapshot,
-            contrib.environment_snapshot,
-        )
 
     # Populate the assembly the post-tools phases read. The adapter is
     # S1-transitional: S4/S5 teach the phases to read contributions directly and
@@ -985,16 +913,9 @@ def build_session_inputs(
     asm.tools = tools
     asm.workspace = workspace
     if skills_kit is not None:
-        asm.registry = skills_kit.registry
-        asm.skill_content_kind = skills_kit.content_kind
         asm.skill_allowed_tools = skills_kit.allowed_tools
         asm.skill_script_tools = skills_kit.skill_script_tools
         asm.skill_scripts = skills_kit.skill_scripts
-    asm.memory_store = memory_store
-    asm.memory_entries = memory_entries
-    asm.instructions_snapshot = instructions_snapshot
-    asm.instructions_snapshots = instructions_snapshots
-    asm.environment_snapshot = environment_snapshot
     # Control-tool mounts (control-tool-surface S1 → S2b): build the control-
     # specific context (the generic capability-flag bag + the packs' exports),
     # then run the host-supplied ``control_tools`` (every ``control_tool``
@@ -1112,12 +1033,7 @@ def build_session_inputs(
         composer=composer,
         policy_factory=policy_factory,
         hooks=hooks,
-        skill_registry=asm.registry,
         content_hashes=content_registry.content_hashes(),
-        memory_store=asm.memory_store,
-        memory_entries=asm.memory_entries,
-        instructions_snapshot=asm.instructions_snapshot,
-        environment_snapshot=asm.environment_snapshot,
         tool_output_inline_limit=tool_output_inline_limit,
         content_discovery=content_discovery,
         content_preloader=content_preloader,

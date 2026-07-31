@@ -21,11 +21,11 @@ independent of the tool priority: the two orders genuinely differ (the skill
 kind renders first in semi_stable while the script tool appends fifth), so a
 single per-pack integer cannot express both.
 
-``exports`` is the named side-state a pack hands the kernel's existing seams
-(and, through :class:`~noeta.execution.builder.SessionInputs`, the host). A
-key is admitted only when an existing kernel seam consumes it — the
-:data:`EXPORT_*` constants below are that closed vocabulary; new needs go
-through a spec, not a new key.
+Side-state a pack hands the kernel is a **typed field** on
+:class:`PackContribution`, each read by a specific kernel seam (spec §4.3);
+adding one is an SPI change, reviewed as such. Pack-internal state stays
+inside the factory closure — nothing rides the contribution for
+inspection's sake.
 """
 
 from __future__ import annotations
@@ -195,16 +195,6 @@ class PackContribution:
     content_discovery: Optional[Any] = None
     #: The per-step resume preloader → ``Engine(content_preloader=…)``.
     content_preloader: Optional[Any] = None
-    # Build-inspection pass-throughs: a pack's own state that never crosses INTO
-    # a kernel seam — it rides ``SessionInputs`` only as a build-result
-    # inspection surface for tests. (A future purification moves these fully
-    # into the factory closures + reworks the inspecting tests, spec §4.3
-    # "closures, not exports".)
-    memory_store: Optional[Any] = None
-    memory_entries: tuple[Any, ...] = ()
-    instructions_snapshot: Optional[Any] = None
-    instructions_snapshots: Mapping[str, Any] = field(default_factory=dict)
-    environment_snapshot: Optional[Any] = None
 
 
 #: The empty contribution — the canonical "this pack does not apply" value.
