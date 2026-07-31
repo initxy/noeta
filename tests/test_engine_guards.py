@@ -1,9 +1,9 @@
-"""Engine + Guard integration: the three action points run real Guards
-and respond to the three Verdict outcomes.
+"""Engine + Guard integration: three action points, three Verdict outcomes.
 
-These tests cover the issue 05 acceptance criteria as observable
-behaviour on EventLog + Task status — never on HookManager call counts
-or any internal dispatch path.
+Everything is asserted as observable behaviour on the EventLog and the Task
+status, never on HookManager call counts or an internal dispatch path — a
+Guard's effect is what the ledger records, so that is the only thing worth
+pinning.
 """
 
 from __future__ import annotations
@@ -449,7 +449,7 @@ def test_finish_deny_fails_the_task() -> None:
 
 
 def test_finish_require_approval_suspends_not_terminal() -> None:
-    """Per issue 05: require_approval on finish goes to suspended,
+    """require_approval on finish goes to suspended,
     NOT terminal — the human still has to approve."""
     policy = StubScriptedPolicy([FinishDecision(answer="answer-pending")])
     hooks = HookManager()
@@ -499,9 +499,9 @@ def test_fold_after_require_approval_restores_human_wake_on() -> None:
     """A suspended-on-approval Task must survive a fold so that a worker
     re-leasing it sees the same ``HumanResponseReceived`` wake_on.
 
-    The serialize/rehydrate path for ``HumanResponseReceived`` is the
-    only new wake-condition shape Phase 0 ships; without round-trip
-    coverage, a serialization bug would only surface in Phase 2 HITL.
+    The serialize/rehydrate path for ``HumanResponseReceived`` is a
+    distinct wake-condition shape; without round-trip coverage, a
+    serialization bug would only surface in live HITL.
     """
     from noeta.core.fold import fold
 

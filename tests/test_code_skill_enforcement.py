@@ -1,12 +1,10 @@
-"""Phase 4.5 Issue B — skill `allowed-tools` enforcement through the
-`noeta code` harness.
+"""A skill's ``allowed-tools`` grant is enforced on the tool call itself.
 
-A workspace skill that declares `allowed-tools: [Read]` is activated;
-the agent then proposes a `write` call (outside the grant):
-
-* `skill_tool_enforcement="approval"` → the call suspends for approval
-  (reusing the Issue A path); approve runs it, deny refuses it;
-* `skill_tool_enforcement="deny"` → the call is denied outright.
+A workspace skill declaring ``allowed-tools: [Read]`` is activated and the
+agent then proposes a ``write`` — outside the grant. ``skill_tool_enforcement``
+decides the consequence: ``"approval"`` routes the call through the human
+gate, ``"deny"`` refuses it outright. Without enforcement the grant would be
+advisory text in a prompt, which a model is free to ignore.
 """
 
 from __future__ import annotations
@@ -68,10 +66,9 @@ def _responses() -> list[LLMResponse]:
 def _session(ws: Path, *, mode: str):
     """A one-shot SDK host that enforces a skill's ``allowed-tools`` grant.
 
-    ``skill_tool_enforcement=mode`` is the host knob; ``extra_skills=("guarded",)``
-    maps to the driver's pre-loop ``activations``. ``require_approval_tools=()``
-    keeps the SDK host's default permission_mode from also gating ``write``, so
-    only the skill-grant enforcement governs (matching the old config)."""
+    ``require_approval_tools=()`` is load-bearing: it stops the host's default
+    ``permission_mode`` from gating ``write`` as well, so the skill-grant
+    enforcement is the only thing under test."""
     host = make_host(
         make_registry(runner_main_spec("main")),
         workspace_dir=ws,
@@ -90,10 +87,9 @@ def test_approval_mode_gates_out_of_grant_write(tmp_path: Path) -> None:
     ws = _make_ws_with_skill(tmp_path)
     host, driver = _session(ws, mode="approval")
     out = driver.start(goal="write a file", agent="main", activations=("guarded",))
-    # write is outside the skill grant ([Read]) → suspended.
+    # write is outside the skill's [Read] grant → gated, not executed.
     assert out.status == "suspended"
     assert not (ws / "new.py").exists()
-    # approve → the write runs, session finishes.
     result = driver.approve(out.task_id, call_id=WRITE_CALL_ID)
     assert result.status == "terminal"
     assert (ws / "new.py").read_text() == "x=1\n"
@@ -114,7 +110,7 @@ def test_deny_mode_denies_out_of_grant_write(tmp_path: Path) -> None:
     ws = _make_ws_with_skill(tmp_path)
     host, driver = _session(ws, mode="deny")
     out = driver.start(goal="write a file", agent="main", activations=("guarded",))
-    # hard deny: the call never runs, the loop continues to terminal.
+    # Hard deny: the call never runs and the loop still reaches terminal.
     assert out.status == "terminal"
     assert not (ws / "new.py").exists()
     types = [e.type for e in host.event_log.read(out.task_id)]

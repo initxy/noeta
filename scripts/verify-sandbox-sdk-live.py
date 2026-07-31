@@ -1,31 +1,34 @@
 #!/usr/bin/env python3
-"""Live probes for the two sandbox-sdk-adapters open questions.
+"""Probe a live AIO Sandbox container through the ``agent-sandbox`` client.
 
-Run against a live AIO Sandbox container (both deployed images are worth a
-pass: ``…:1.11.0`` and the running ``1.0.0.156``)::
+The ``sandbox`` built-in reaches a container over its own hand-written wire —
+``AioSandboxExecEnv`` on ``/v1/file/*`` and ``/v1/shell/exec``,
+``AioBrowserBackend`` on ``/mcp`` — and both adapters lean on container
+behaviour that the generated ``agent-sandbox`` client spells differently. A
+host swapping in client-backed backends needs those two answers from a real
+image; neither is knowable from the fake transports the contract tests use,
+hence a script rather than a test.
+
+Probe 1 asks whether ``browser_page.fill`` replaces a field's value or appends
+to it. ``AioBrowserBackend.type`` buys replacement by sending ``clear: true``
+on ``browser_form_input_fill``, and the client's ``fill`` takes no such
+argument — so on "appends", a client-backed backend has to clear the field
+itself.
+
+Probe 2 asks which channel a file fault arrives on. ``AioSandboxExecEnv``
+refines in-band ``200 + success:false`` (keyed by ``data.error_type``) into the
+stdlib ``OSError`` subclass a local backend would raise, whereas the client
+raises only on a non-2xx status. A backend reading the wrong channel reports a
+missing file as a success.
+
+Requires ``agent-sandbox`` importable. Nothing on the host is touched, and the
+only container write is one attempt at a path that cannot exist.
+
+Usage::
 
     NOETA_TEST_AIO_SANDBOX_URL=http://127.0.0.1:8080 \
         uv run python scripts/verify-sandbox-sdk-live.py
     # or: uv run python scripts/verify-sandbox-sdk-live.py http://127.0.0.1:8080
-
-Probe 1 — **fill clear semantics**. The old MCP wire sent ``clear: true`` on
-``browser_form_input_fill`` (replace any existing value). The SDK's
-``browser_page.fill`` has no ``clear`` parameter; this probe fills the same
-input twice and reads the live value back via ``evaluate``:
-
-- value == second text  → fill REPLACES (old semantics preserved; no action)
-- value == concatenation → fill APPENDS (regression: ``SdkBrowserBackend.type``
-  must clear the field first, e.g. select-all + fill or an evaluate reset)
-
-Probe 2 — **file fault channel**. The urllib adapter treated in-band
-``200 + success:false`` (+ ``data.error_type``) as the primary failure channel;
-the Fern client only raises on non-2xx. The SDK adapter now handles BOTH; this
-probe reads a missing file and writes to an impossible path to report which
-channel the image actually exercises (so error-message fidelity can be
-eyeballed).
-
-Read-only apart from one write attempt to an impossible path and a scratch file
-under ``/tmp`` in the CONTAINER; nothing on the host is touched.
 """
 
 from __future__ import annotations
@@ -37,8 +40,8 @@ import httpx
 from agent_sandbox import Sandbox
 from agent_sandbox.core.api_error import ApiError
 
-#: Page with an input that mirrors its live value into the DOM attribute, so
-#: the value is also visible to attribute-level reads if evaluate is missing.
+#: The input mirrors its live value into the DOM attribute, so an image whose
+#: ``evaluate`` is unavailable can still be read at the attribute level.
 _FILL_PAGE = (
     "data:text/html,<input id='probe' "
     "oninput=\"this.setAttribute('value', this.value)\">"
@@ -111,9 +114,8 @@ def probe_file_fault_channel(client: Sandbox) -> None:
         "write impossible path  ",
         lambda: client.file.write_file(file="/proc/version/x.txt", content="x"),
     )
-    # download_file streams raw bytes (no JSON envelope) — faults can only be
-    # HTTP-status; confirm the status a missing file yields (adapter maps
-    # 404 → FileNotFoundError).
+    # download_file streams raw bytes with no JSON envelope, so it has no
+    # in-band channel to answer on — only the HTTP status is left to classify.
     try:
         b"".join(client.file.download_file(path="/no/such/file/anywhere.txt"))
         print("  download missing file  : unexpectedly succeeded")

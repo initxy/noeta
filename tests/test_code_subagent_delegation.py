@@ -1,8 +1,8 @@
-"""Phase 4.5 Issue C — typed sub-agent delegation through `noeta code`.
+"""Typed sub-agent delegation in a coding session.
 
 A coding parent calls the model-visible `spawn_subagent(agent, goal)`
 control tool; `ReActPolicy` translates it into a `SpawnSubtaskDecision`;
-the runner drives a child built from the **named agent's own** config
+the child is built from the **named agent's own** config
 (isolated system prompt / tools / context), and the result folds back as
 a paired `role="tool"` message.
 """
@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-
 
 from noeta.core.fold import fold
 from noeta.presets import official_specs

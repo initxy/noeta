@@ -1,16 +1,11 @@
 """``PostgresContentStore`` — psycopg-backed adapter for the L0 ContentStore.
 
-Behaviour pinned by :class:`noeta.storage.memory.InMemoryContentStore`
-(same contract as the sqlite adapter): content-addressed via SHA-256,
-immutable, **hash-only** dedup; the ``media_type`` carried on the
-returned :class:`ContentRef` is the value passed to the current ``put``
-call, not whatever was recorded on the stored row.
-
-Single psycopg connection + :class:`threading.Lock`, mirroring the
-EventLog adapter's concurrency model. Each ``put`` is a single
-``INSERT ... ON CONFLICT (hash) DO NOTHING`` (atomic first-write-wins
-dedup, no explicit transaction needed under autocommit). Each ``get``
-is a single SELECT under the same lock.
+Content-addressed via SHA-256, immutable, **hash-only** dedup: a stored row
+is never updated, and the ``media_type`` on a returned :class:`ContentRef` is
+the value passed to that ``put`` call rather than whatever the row recorded.
+A single connection guarded by a :class:`threading.Lock` carries every
+statement, so ``put`` is one ``INSERT ... ON CONFLICT (hash) DO NOTHING`` —
+first-write-wins dedup stays atomic without an explicit transaction.
 """
 
 from __future__ import annotations
@@ -32,9 +27,8 @@ __all__ = ["PostgresContentStore"]
 class PostgresContentStore:
     """psycopg implementation of the ``ContentStore`` L0 Protocol.
 
-    Public surface is exactly the Protocol (``put`` + ``get``) plus
-    lifecycle helpers (``close`` + context manager) that the L0
-    contract does not enumerate.
+    Beyond the Protocol it exposes only lifecycle helpers (``close`` and the
+    context manager), which the L0 contract does not enumerate.
     """
 
     def __init__(self, dsn: str) -> None:
@@ -43,18 +37,10 @@ class PostgresContentStore:
         self._lock = threading.Lock()
         self._closed = False
 
-    # -- ContentStore Protocol ------------------------------------------
-
     def put(self, body: bytes, *, media_type: str) -> ContentRef:
         digest = hashlib.sha256(body).hexdigest()
         size = len(body)
         with self._lock:
-            # ``ON CONFLICT DO NOTHING`` keeps the first-write-wins
-            # semantics the InMemory adapter has (``setdefault``-style):
-            # if a row for this hash already exists, the body and
-            # recorded media_type are left untouched. The returned
-            # ContentRef always carries the caller's ``media_type``
-            # (hash-only storage identity, descriptive metadata).
             self._conn.execute(
                 "INSERT INTO content ("
                 " hash, size, media_type, body"
@@ -76,17 +62,13 @@ class PostgresContentStore:
     def get_many(self, refs: Iterable[ContentRef]) -> dict[str, bytes]:
         """One ``hash = ANY(...)`` round-trip instead of one SELECT per ref.
 
-        This is the backend the batch read exists for: every ``get`` here is a
-        network round-trip *and* it serialises on the adapter's single
-        connection lock, so a fold tail or a message projection that used to
-        hold the lock N times now holds it once.
-
-        ``= ANY(array)`` rather than ``IN (...)`` deliberately — the hash list
-        binds as one array parameter, so there is no host-parameter ceiling to
-        chunk around and the statement text is identical for every batch size
-        (one prepared-statement shape for the server to reuse).
-
-        Missing hashes are omitted per the Protocol contract.
+        Each single ``get`` costs a network round-trip *and* an acquisition of
+        the adapter's one connection lock, so a caller reading a whole fold
+        tail holds that lock once here instead of N times. ``= ANY(array)``
+        rather than ``IN (...)``: the hash list binds as a single array
+        parameter, so no host-parameter ceiling has to be chunked around and
+        every batch size shares one statement shape. Missing hashes are
+        omitted per the Protocol contract.
         """
         hashes = list(dict.fromkeys(ref.hash for ref in refs))
         if not hashes:
@@ -97,8 +79,6 @@ class PostgresContentStore:
                 (hashes,),
             ).fetchall()
         return {str(row["hash"]): bytes(row["body"]) for row in rows}
-
-    # -- lifecycle (adapter-only, not on Protocol) ----------------------
 
     def close(self) -> None:
         if self._closed:

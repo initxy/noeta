@@ -1,19 +1,20 @@
-"""Regression: a resident WorkerLoop must not steal a task out of the
-wake->lease window of a seed-after-wake resume and drive it without the
-command's input.
+"""A resident WorkerLoop must not steal a task out of the wake->lease window of
+a resume and drive it without the command's input.
 
-``InteractionDriver._seed_wake_common`` (the send_goal / answer / deliver_event
-/ approve / deny resume path) wakes the suspended task — flipping it to ``ready``
+``InteractionDriver._seed_woken`` (the send_goal / answer / deliver_event /
+approve / deny resume path) wakes the suspended task — flipping it to ``ready``
 — then targeted-leases it, and only THEN appends the command's message. Between
-the wake and the claim the task is ready but the new message is not yet durable:
-an untargeted ``lease(task_id=None)`` poll landing there would lease the task and
-re-drive the turn WITHOUT the command's input (dropping the user's message), and
-the resume's own targeted lease would then find nothing and raise
-NotResumableError — which the product misreads as "task not resumable" and
-restarts the session fresh, stranding its history.
+the wake and the claim the task is ready but the new message is not yet durable.
+An untargeted ``lease(task_id=None)`` poll landing there leases the task and
+re-drives the turn WITHOUT the command's input (dropping the user's message),
+and the resume's own targeted lease then finds nothing and raises
+NotResumableError — which a host reads as "task not resumable" and answers by
+restarting the session fresh, stranding its history. The wake's ``reserved=True``
+is what closes the window.
 
-Same hazard as seed_start's enqueue->lease window (test_resident_worker_seed_
-race.py); the resume path reaches it through ``wake`` instead of ``enqueue``.
+Same hazard as seed_start's enqueue->lease window
+(tests/test_resident_worker_seed_race.py); the resume path reaches it through
+``wake`` instead of ``enqueue``.
 """
 
 from __future__ import annotations
@@ -144,14 +145,15 @@ def _wait(pred, *, timeout: float = 10.0) -> bool:
 def test_send_goal_under_a_real_resident_worker_keeps_the_users_message(
     tmp_path: Path,
 ) -> None:
-    """End-to-end with the served product's actual WorkerLoop pool: a second
-    turn's message must survive and be the one the turn is driven on. The wake
-    window is widened with a small sleep so the real worker's poll deterministically
-    races into it (the production window is microseconds); the reservation is what
-    keeps the poll off the woken task."""
+    """End-to-end against a real WorkerLoop pool: a second turn's message must
+    survive and be the one the turn is driven on. The wake window is widened
+    with a small sleep so the worker's poll deterministically races into it (in
+    a live host the window is microseconds); the reservation is what keeps the
+    poll off the woken task."""
     host, driver, requests = _host(tmp_path)
 
-    # The resident pool runs for the WHOLE session, exactly like production.
+    # The resident pool runs for the WHOLE session, the way a host that calls
+    # start_workers keeps its workers up across turns.
     loop = WorkerLoop(
         host,
         worker_id="resident-0",

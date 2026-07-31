@@ -1,19 +1,15 @@
-"""LLMRequest new optional fields + canonical byte-omit regression guard.
+"""Unset optional LLMRequest fields must stay out of the canonical bytes.
 
-Three optional fields (``output_schema``/``thinking``/``effort``) were added
-to :class:`LLMRequest` AFTER a large library of recordings and golden
-canary tests already pinned the canonical byte shape. The omit_none
-mechanism (``__canonical_omit_none__``) guarantees that a request built
-*without* these fields serializes byte-for-byte identical to the pre-
-addition shape — the whole point of the frozenset declaration. This test
-pins that guarantee with the exact bytes observed *before* the fields
-were added. If this assertion ever fails, re-check:
+``__canonical_omit_none__`` keeps ``output_schema`` / ``thinking`` /
+``effort`` out of the serialized request when the caller left them unset,
+so a request that ignores them hashes identically to the byte shape every
+recording and golden pins. An unset field leaking in — even as ``null`` —
+invalidates that whole library at once, so the exact bytes are asserted
+here. When this assertion breaks, check in order:
 
-1. Did ``__canonical_omit_none__`` on ``LLMRequest`` get removed or
-   renamed?
+1. Is ``__canonical_omit_none__`` declared on ``LLMRequest``?
 2. Did ``to_canonical`` semantics change in ``canonical.py``?
-3. Was a DIFFERENT new optional field added WITHOUT the omit_none
-   frozenset entry?
+3. Does some other optional field lack its omit_none frozenset entry?
 """
 
 from __future__ import annotations
@@ -23,13 +19,12 @@ from noeta.protocols.messages import LLMRequest, Message, TextBlock
 
 
 def test_llmrequest_default_new_fields_omitted_canonical_bytes_pinned() -> None:
-    """Default output_schema/thinking/effort stay out of canonical bytes — bytes pinned.
+    """Unset output_schema/thinking/effort stay out of the canonical bytes.
 
-    Build an LLMRequest that sets every field EXCEPT the three new ones:
-    model/messages/tools/temperature/max_tokens/metadata explicit, system as
-    an explicit Message. The canonical bytes must match the pre-three-fields
-    shape exactly — the new fields never appear in the byte stream, not even
-    as ``null``.
+    Every other field is set explicitly — model/messages/tools/temperature/
+    max_tokens/metadata, plus ``system`` as a real Message — so the pinned
+    bytes cover a fully populated request and the only thing missing is the
+    three omit_none fields, which must not appear even as ``null``.
     """
     req = LLMRequest(
         model="claude-sonnet-4-20250514",
@@ -43,8 +38,8 @@ def test_llmrequest_default_new_fields_omitted_canonical_bytes_pinned() -> None:
         metadata={"k": "v"},
     )
     body = to_canonical_bytes(req)
-    # Golden bytes captured BEFORE output_schema / thinking / effort were
-    # added to LLMRequest (2026-06-11 baseline).
+    # Golden bytes — the exact wire shape recordings and replay comparisons
+    # are pinned against.
     assert body == (
         b'{"max_tokens":1024,'
         b'"messages":[{"__canonical_tag__":"message",'
@@ -61,7 +56,7 @@ def test_llmrequest_default_new_fields_omitted_canonical_bytes_pinned() -> None:
 
 
 def test_llmrequest_set_fields_appear_in_canonical() -> None:
-    """Set the three new fields → they must appear in canonical bytes (else the feature is dead)."""
+    """Set the three fields → they must appear; omit_none must not swallow a value the caller supplied."""
     req = LLMRequest(
         model="m",
         messages=[Message(role="user", content=[TextBlock(text="hi")])],

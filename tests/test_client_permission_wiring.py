@@ -1,25 +1,10 @@
-"""Tests for the library-SDK wiring: Options.permission_mode,
-Options.can_use_tool, Options.cwd.
+"""``permission_mode``, ``can_use_tool``, and ``cwd`` wiring.
 
-Covers every combination the spec requires (three modes, plan removed):
-
-* ``_approval_set_for`` pure-function mapping (three permission modes,
-  mix of built-in + custom tool refs).
-* End-to-end via ``Client`` / ``query`` + ``FakeLLMProvider`` scripted
-  responses:
-  - ``default`` — high-risk tool suspends with
-    ``ToolCallApprovalRequested``; manual ``approve`` resumes and runs
-    the tool.
-  - ``bypassPermissions`` — same tool script runs to terminal with no
-    approval event.
-  - ``acceptEdits`` — ``write`` runs without approval, the pure
-    function still gates ``shell_run``.
-  - ``can_use_tool`` callback auto-approves → task completes with a
-    ``ToolCallApprovalResolved(approved=True, resolver="can_use_tool")``;
-    callback auto-denies → same event shape with ``approved=False`` and
-    the tool never ran.
-* ``Client`` + ``query`` ``workspace_dir`` resolution: explicit kwarg
-  wins, ``Options.cwd`` fallback works, neither set → ``ValueError``.
+The permission mode decides which tool calls suspend for human approval, and
+that decision is the only thing between a scripted model and an arbitrary write
+or shell command — so both the pure ``_approval_set_for`` mapping and the
+end-to-end suspend/approve path are pinned here. ``cwd`` and ``can_use_tool``
+are wiring: they steer a run without entering agent identity.
 """
 
 from __future__ import annotations
@@ -109,14 +94,14 @@ def _builtin_refs(names=None):
 def test_approval_set_default_gates_high_risk_only():
     refs = _builtin_refs()
     got = _approval_set_for("default", refs)
-    # All and only the four "high risk" built-ins.
+    # The high-risk built-ins, and only those.
     assert set(got) == {"write", "edit", "apply_patch", "shell_run"}
 
 
 def test_approval_set_accept_edits_exempts_three_editors():
     refs = _builtin_refs()
     got = _approval_set_for("acceptEdits", refs)
-    # Edit-class tools are exempted; shell_run is still high-risk and gated.
+    # Edit-class tools are exempted; shell_run stays gated.
     assert set(got) == {"shell_run"}
 
 
@@ -126,7 +111,6 @@ def test_approval_set_bypass_empty():
 
 
 def test_approval_set_honours_custom_tool_risk_level():
-    # A custom tool declared high-risk should be gated in default mode.
     refs = _builtin_refs(["read"]) + [
         ToolRef(name="delete_db", version="1", risk_level="high"),
         ToolRef(name="check_status", version="1", risk_level="low"),
@@ -164,14 +148,12 @@ def test_default_mode_write_suspends_then_approve_runs(tmp_path: Path):
                     model="stub-model", multi_turn=False)
     try:
         outcome = client.start(goal="create new.txt")
-        # Suspended on the approval handle.
         assert outcome.status == "suspended"
         assert outcome.wake_handle == "approval-w1"
         types = _types(client.events(outcome.task_id))
         assert "ToolCallApprovalRequested" in types
         assert "ToolResultRecorded" not in types
 
-        # Approve → task completes, tool ran.
         outcome2 = client.approve(outcome.task_id, call_id="w1")
         assert outcome2.status == "terminal"
         types2 = _types(client.events(outcome.task_id))
@@ -241,7 +223,6 @@ def test_accept_edits_write_runs_without_approval(tmp_path: Path):
     types = _types(envelopes)
     assert "ToolCallApprovalRequested" not in types
     assert "TaskCompleted" in types
-    # write actually ran.
     started = [e for e in envelopes if e.type == "ToolCallStarted"]
     assert any(e.payload.tool_name == "write" for e in started
                if hasattr(e.payload, "tool_name"))
@@ -306,9 +287,7 @@ def test_can_use_tool_allow_completes_and_records_resolver(tmp_path: Path):
         model="stub-model",
     )
     types = _types(envelopes)
-    # Callback saw the call.
     assert calls == [("write", {"path": "new.txt", "content": "hi\n"})]
-    # Resolver recorded with correct metadata.
     resolved = [
         e.payload for e in envelopes
         if e.type == "ToolCallApprovalResolved"
@@ -320,7 +299,6 @@ def test_can_use_tool_allow_completes_and_records_resolver(tmp_path: Path):
     assert r.resolver == "can_use_tool"
     assert r.call_id == "w1"
     assert r.tool_name == "write"
-    # The tool actually ran and the task finished.
     assert "ToolResultRecorded" in types
     assert "TaskCompleted" in types
 
@@ -351,7 +329,6 @@ def test_can_use_tool_deny_records_and_tool_never_runs(tmp_path: Path):
         model="stub-model",
     )
     types = _types(envelopes)
-    # Deny resolution was recorded.
     resolved = [
         e.payload for e in envelopes
         if e.type == "ToolCallApprovalResolved"
@@ -360,10 +337,9 @@ def test_can_use_tool_deny_records_and_tool_never_runs(tmp_path: Path):
     assert len(resolved) == 1
     assert resolved[0].approved is False
     assert resolved[0].resolver == "can_use_tool"
-    # Tool never ran.
     assert "ToolResultRecorded" not in types
-    # But the loop still finished (model emitted a second response after
-    # receiving the deny feedback).
+    # A denial is feedback, not a failure: the model gets a second turn, which
+    # is why the script carries a trailing end_turn response.
     assert "TaskCompleted" in types
 
 
@@ -419,7 +395,6 @@ def test_cwd_uses_options_cwd_when_kwarg_missing(tmp_path: Path):
         permission_mode="bypassPermissions",
         cwd=str(ws),  # str is wrapped by Path()
     )
-    # No workspace_dir= kwarg → should use Options.cwd.
     client = Client(options, provider=provider, model="stub-model")
     try:
         assert client._host.workspace_dir == ws
@@ -430,10 +405,9 @@ def test_cwd_uses_options_cwd_when_kwarg_missing(tmp_path: Path):
 def test_cwd_missing_everywhere_falls_back_to_the_process_cwd(tmp_path: Path):
     """No ``workspace_dir`` and no ``Options.cwd`` ⇒ the process working directory.
 
-    This used to raise. ``SdkHost.workspace_dir`` has always defaulted to
-    ``Path.cwd()``, so the hard error was the two layers disagreeing about
-    whether a default exists — and it made an agent that never touches the
-    filesystem still demand a directory before it could answer anything.
+    ``SdkHost.workspace_dir`` defaults to ``Path.cwd()``, and the two layers
+    have to agree: an agent that never touches the filesystem must not have to
+    name a directory before it can answer anything.
     """
     provider = FakeLLMProvider(responses=[_end("hi")])
     options = Options(
@@ -482,7 +456,6 @@ def test_query_uses_options_cwd(tmp_path: Path):
         permission_mode="bypassPermissions",
         cwd=ws,
     )
-    # No workspace_dir kwarg → should not raise and complete cleanly.
     envelopes = query(options, goal="hi", provider=provider, model="stub-model")
     assert "TaskCompleted" in _types(envelopes)
 
@@ -511,9 +484,9 @@ def test_identity_invariant_to_cwd_and_can_use_tool():
 
 
 # ---------------------------------------------------------------------------
-# Shell permission model: allowlist-or-approve under default; bypass = no gate
-# (per-command conditional approval; the allowlist is external governance, the
-# engine/event/replay path is untouched).
+# Shell permission model: allowlist-or-approve under default, no gate under
+# bypass. Approval is conditional per command, not per tool — the allowlist is
+# external governance and never reaches the engine/event/replay path.
 # ---------------------------------------------------------------------------
 
 
@@ -539,9 +512,8 @@ def test_default_mode_allowlisted_shell_runs_without_approval(tmp_path: Path):
 
 
 def test_default_mode_unlisted_shell_suspends_then_approve_runs(tmp_path: Path):
-    """A command NOT in the allowlist (``echo``) suspends for approval under
-    ``default``; approving resumes and runs it (reuses the Issue A HITL path —
-    no new event types)."""
+    """A command outside the allowlist (``echo``) suspends for approval under
+    ``default``; approving resumes and runs it."""
     ws = _ws(tmp_path)
     provider = FakeLLMProvider(
         responses=[_tooluse("s1", "shell_run", {"command": "echo hi"}), _end()]

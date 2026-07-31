@@ -1,9 +1,10 @@
-"""CW5a Phase 1 — `noeta.read_models.tasks` list projection.
+"""``noeta.read_models.tasks`` — the one task-list projection hosts read.
 
-Pins the shared session/task read-model that the management CLI, code CLI, and
-Web surfaces consume (extracted from the former `server._list_tasks`). It
-enumerates via the `EventLogTaskIndex` capability and folds each task for
-`status` / `closed` — no adapter privates. Parametrized over both real adapters.
+Enumeration goes through the ``EventLogTaskIndex`` capability and every field
+is folded from the task's own stream, so a row can never disagree with the
+stream it summarises and no adapter private leaks into the projection. Run
+against both real adapters, because the row shape is a host-facing contract
+and must not vary with the backend behind it.
 """
 
 from __future__ import annotations
@@ -36,8 +37,8 @@ def _ref(tag: str) -> ContentRef:
 def stack(
     request: Any,
 ) -> Iterator[Callable[..., tuple[Any, Any]]]:
-    """Yield a builder for ``(event_log, content_store)`` over each real adapter,
-    with an injectable clock so ordering is deterministic."""
+    """Build ``(event_log, content_store)`` per adapter, with an injectable
+    clock so recency ordering is deterministic rather than wall-clock racy."""
     closers: list[Any] = []
 
     def _make(clock: Callable[[], float] | None = None) -> tuple[Any, Any]:
@@ -96,10 +97,9 @@ def test_summary_shape_status_and_closed(
     # A root conversation has no spawning parent.
     assert row["parent_task_id"] is None
     assert row["agent_name"] == "unnamed"  # genesis TaskCreated default
-    # a session with no TaskHostBound (no welded workspace) groups
-    # as ungrouped — its workspace_dir is None.
+    # No TaskHostBound means no welded workspace, which a host renders as
+    # ungrouped rather than guessing a directory.
     assert row["workspace_dir"] is None
-    # A session with no background-shell events lists no jobs.
     assert row["background_jobs"] == []
     # No terminal was synthesized; folding a bare TaskCreated stream is "pending".
     assert row["status"] in {"pending", "running", "suspended"}
@@ -108,8 +108,8 @@ def test_summary_shape_status_and_closed(
 def test_row_carries_welded_workspace_dir(
     stack: Callable[..., tuple[Any, Any]],
 ) -> None:
-    # a session whose TaskHostBound welded a workspace_dir surfaces
-    # that ABSOLUTE PATH on the row so the Web session list can group by it.
+    # The path is surfaced ABSOLUTE so a host can group sessions by workspace
+    # without resolving anything itself.
     log, cs = stack()
     log.emit(
         task_id="t1",
@@ -131,8 +131,8 @@ def test_row_carries_welded_workspace_dir(
 def test_subtask_row_carries_parent_task_id(
     stack: Callable[..., tuple[Any, Any]],
 ) -> None:
-    # A subtask's TaskCreated names its spawning parent; the row must surface it
-    # so the Web session list can filter subtasks out (follow-on).
+    # The row carries the parent so a host can tell conversations apart from
+    # the subtasks they spawned and list only the former.
     log, cs = stack()
     log.emit(
         task_id="root",
@@ -168,8 +168,8 @@ def test_summary_carries_created_time_for_tree_order(
             goal="sub", policy_name="p", parent_task_id="parent"
         ),
     )
-    # A later parent update must not overwrite the creation bookmark the Web
-    # task tree uses for stable sibling ordering.
+    # A later update on the parent must not overwrite its creation bookmark —
+    # that timestamp is what keeps sibling ordering stable in a task tree.
     log.emit(
         task_id="parent",
         type="TaskStarted",
@@ -213,7 +213,6 @@ def test_empty_store_returns_empty_list(
 def test_running_background_job_listed_in_session_row(
     stack: Callable[..., tuple[Any, Any]],
 ) -> None:
-    # The read model lists running background jobs per session (job_id / command / status / spawned_by).
     log, cs = stack()
     log.emit(
         task_id="root",
@@ -244,7 +243,6 @@ def test_running_background_job_listed_in_session_row(
 def test_exited_background_job_updates_status_and_exit_code(
     stack: Callable[..., tuple[Any, Any]],
 ) -> None:
-    # After the process exits, the displayed status updates + carries exit_code + ref points at the final snapshot.
     log, cs = stack()
     log.emit(
         task_id="root",
@@ -268,7 +266,8 @@ def test_exited_background_job_updates_status_and_exit_code(
     )
     rows = {r["task_id"]: r for r in list_task_summaries(log, log, cs)}
     jobs = rows["root"]["background_jobs"]
-    # Audit trail: still exactly one entry, not deleted.
+    # An exited job stays on the row, updated in place — the list is an audit
+    # trail of what ran, not a live process table.
     assert len(jobs) == 1
     assert jobs[0]["status"] == "exited"
     assert jobs[0]["exit_code"] == 0
@@ -278,7 +277,6 @@ def test_exited_background_job_updates_status_and_exit_code(
 def test_killed_background_job_updates_status_and_signal(
     stack: Callable[..., tuple[Any, Any]],
 ) -> None:
-    # After being killed, status -> killed + carries signal.
     log, cs = stack()
     log.emit(
         task_id="root",
@@ -308,7 +306,8 @@ def test_killed_background_job_updates_status_and_signal(
 def test_poll_advances_background_job_ref(
     stack: Callable[..., tuple[Any, Any]],
 ) -> None:
-    # poll advances ref to the latest snapshot, so a drill-in derefs the latest output.
+    # The ref advances to the newest snapshot so a drill-in dereferences the
+    # latest output rather than whatever the job printed at startup.
     log, cs = stack()
     log.emit(
         task_id="root",
@@ -338,8 +337,8 @@ def test_poll_advances_background_job_ref(
 def test_subtask_spawned_job_shows_under_root_session(
     stack: Callable[..., tuple[Any, Any]],
 ) -> None:
-    # Events go on the session root stream: even a background job spawned by a
-    # subtask (spawned_by=subtask) lands on the ROOT row when the root stream is folded.
+    # Background-shell events are emitted on the session root stream whoever
+    # spawns them, so folding the root is enough to see every job.
     log, cs = stack()
     log.emit(
         task_id="root",
@@ -353,7 +352,7 @@ def test_subtask_spawned_job_shows_under_root_session(
             goal="sub", policy_name="p", parent_task_id="root", subtask_depth=1
         ),
     )
-    # Emitted on the SESSION ROOT stream even though a subtask spawned it.
+    # Emitted on the root stream, attributed to the subtask that spawned it.
     log.emit(
         task_id="root",
         type="BackgroundShellStarted",

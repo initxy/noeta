@@ -1,13 +1,10 @@
-"""Tests for ``Options.provider`` + ``Client`` provider fallback.
+"""Provider resolution and per-agent model binding.
 
-Covers:
-
-1. Provider is **not** part of identity: two Options differing only in
-   ``provider`` compile to structurally equal specs.
-2. ``Client`` accepts a provider via ``Options.provider`` and runs a happy-path
-   query (no explicit ``provider=`` kwarg).
-3. ``Client(provider=...)`` kwarg takes precedence over ``Options.provider``.
-4. Both missing → ``ValueError``.
+A provider is wiring, never identity: swapping it must leave the compiled spec
+byte-equal, or two agents that differ only in who serves their tokens would get
+different fingerprints. Model binding is the opposite and has to be explicit at
+every hop — a child's declared default beats a binding inherited from the
+parent's session, and neither may leak into the parent's own binding.
 """
 
 from __future__ import annotations
@@ -51,7 +48,7 @@ def _make_ws(tmp_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Case 1 — provider excluded from identity
+# provider excluded from identity
 # ---------------------------------------------------------------------------
 
 
@@ -71,7 +68,7 @@ def test_provider_excluded_from_identity(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Case 2 — Options.provider fallback runs happy path
+# Options.provider fallback runs the happy path
 # ---------------------------------------------------------------------------
 
 
@@ -94,7 +91,7 @@ def test_options_provider_fallback_runs_query(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Case 3 — Client(provider=...) kwarg takes precedence
+# Client(provider=...) kwarg takes precedence
 # ---------------------------------------------------------------------------
 
 
@@ -123,7 +120,7 @@ def test_client_provider_kwarg_takes_precedence(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Case 4 — both missing → ValueError
+# both missing → ValueError
 # ---------------------------------------------------------------------------
 
 
@@ -214,8 +211,8 @@ def test_subagent_default_model_binds_child(tmp_path: Path) -> None:
 def test_subagent_without_default_model_gets_no_extra_binding(
     tmp_path: Path,
 ) -> None:
-    """No declared default → no ModelBound on the child (old behaviour,
-    byte-identical recordings); the child runs on the host model."""
+    """No declared default → no ModelBound on the child; it runs on the host
+    model."""
     ws = _make_ws(tmp_path)
     main = Options(
         system_prompt="delegate",
@@ -338,7 +335,7 @@ def test_subagent_declared_default_beats_inherited_binding(
 
 
 # ---------------------------------------------------------------------------
-# Case 6 — output_schema / thinking / effort injection chain + structured-answer parsing
+# output_schema / thinking / effort injection chain + structured-answer parsing
 # ---------------------------------------------------------------------------
 
 
@@ -365,7 +362,6 @@ def test_output_schema_e2e_valid_json_parsed_to_dict(tmp_path: Path) -> None:
     assert len(completed) == 1
     payload = completed[0].payload
     assert isinstance(payload, TaskCompletedPayload)
-    # answer has been parsed into a Python object
     assert payload.answer == {
         "city": "Shenzhen",
         "temp_c": 28.5,

@@ -1,10 +1,9 @@
-"""Tool protocol, ToolResult value object, and ToolContext.
+"""The Tool protocol, its ToolResult value object, and the per-call ToolContext.
 
-The EventLog payload is capped at 4 KB; tool outputs larger
-than that ceiling MUST go into the ContentStore as artifacts. Tools talk
-to the store through ``ToolContext.artifact_store`` so the runtime can
-inject any compatible store (in-memory in Phase 0; filesystem / S3 in
-later Phases).
+The EventLog payload is capped at 4 KB, so any tool output larger than that
+ceiling MUST go to the ContentStore as an artifact. Tools reach the store only
+through ``ToolContext.artifact_store``, which keeps them independent of which
+store the host injected.
 """
 
 from __future__ import annotations
@@ -19,56 +18,43 @@ from noeta.protocols.values import ContentRef
 class ToolResult:
     """A Tool's return value.
 
-    Big ``output`` belongs in ``artifacts`` (ContentStore-backed); the
-    inline ``output`` field is reserved for small structured results
-    (e.g. numeric answers, short strings, status dicts) that fit under
-    the 4-KB EventLog payload ceiling.
-
-    ``output_ref`` is populated **post-hoc** by :class:`ToolRuntime`
-    after the body has been offloaded to the
-    ContentStore (the runtime uses ``object.__setattr__`` because this
-    dataclass is frozen). Tools never set it; it is a runtime-side
-    companion used for truncation markers and audit cross-references.
+    Inline ``output`` is only for small structured results that fit under the
+    4-KB EventLog payload ceiling; anything bigger belongs in ``artifacts``.
+    ``output_ref`` is a runtime-side companion for truncation markers and audit
+    cross-references — the ToolRuntime writes it post-hoc via
+    ``object.__setattr__`` once it has offloaded the body, and tools never set
+    it themselves.
     """
 
     success: bool
     output: Any = None
     summary: str = ""
     artifacts: list[ContentRef] = field(default_factory=list)
-    #: Images the tool surfaces for a vision model to *see* (the ``read`` tool
-    #: reading an image file). Each ``ContentRef`` points at the image bytes in
-    #: the ContentStore (put via ``ToolContext.artifact_store``). The projection
-    #: (``wrap_tool_result_block``) wraps these into ``ToolResultBlock.images``;
-    #: the bound adapter deref→inlines them into the provider's tool-result
-    #: image slot when the model is vision-capable, else degrades to text. Empty
-    #: for every non-image tool ⇒ behavior is byte-identical to a pre-image
-    #: ToolResult.
+    #: Images the tool surfaces for a vision model to *see*, each a
+    #: ``ContentRef`` to the bytes in the ContentStore. ``wrap_tool_result_block``
+    #: moves them into ``ToolResultBlock.images``, and the bound adapter derefs
+    #: and inlines them into the provider's tool-result image slot when the model
+    #: is vision-capable, degrading to text otherwise.
     images: list[ContentRef] = field(default_factory=list)
     side_effects: list[dict[str, Any]] = field(default_factory=list)
-    #: Populated by the ToolRuntime after offload (frozen-slot, runtime-assigned).
+    #: Assigned by the ToolRuntime after offload, not by the tool.
     output_ref: Optional[ContentRef] = None
-    #: File-checkpoint capture. A write-side fs tool (``edit`` /
-    #: ``write`` / ``apply_patch``) that actually mutated the workspace surfaces
-    #: the touched files here so the ToolRuntime can stash each one's PRE-edit
+    #: A write-side fs tool that actually mutated the workspace surfaces the
+    #: touched files here so the ToolRuntime can stash each one's PRE-edit
     #: content as the turn's rewind baseline. Each entry is
-    #: ``{"path": <workspace-relative str>, "before": <bytes | None>}`` —
-    #: ``before=None`` means the file did NOT exist before (AI created it, so a
-    #: rewind deletes it). ``None`` (every non-mutating / non-fs tool, and every
-    #: dry-run) ⇒ no capture, byte-identical to a pre-0043 ToolResult. NOT
-    #: serialized into any event — the runtime reads it, records the dedup'd
-    #: baseline ref onto ``ToolResultRecorded``, and drops it (transient).
+    #: ``{"path": <workspace-relative str>, "before": <bytes | None>}``, where
+    #: ``before=None`` means the file did not exist, so a rewind deletes it.
+    #: Transient: never serialized into an event — the runtime reads it, records
+    #: the dedup'd baseline ref onto ``ToolResultRecorded``, and drops it.
     file_changes: Optional[list[dict[str, Any]]] = None
 
 
 class _ArtifactStore(Protocol):
-    """Subset of ContentStore that tools may use.
+    """The subset of ContentStore that tools may use.
 
-    ``put`` offloads large outputs; ``get`` reads an artifact back so a
-    tool can verify against earlier content (e.g. a citation tool checking
-    that a quote came from a fetched page). Deliberately narrow — tools
-    get neither the EventLog nor the Engine, only this content seam. A
-    real :class:`noeta.protocols.content_store.ContentStore` satisfies it
-    structurally.
+    Deliberately narrow: a tool gets neither the EventLog nor the Engine, only
+    this content seam. A real :class:`noeta.protocols.content_store.ContentStore`
+    satisfies it structurally.
     """
 
     def put(self, body: bytes, *, media_type: str) -> ContentRef: ...
@@ -77,15 +63,15 @@ class _ArtifactStore(Protocol):
 
 
 class BackgroundRunner(Protocol):
-    """Narrow seam a tool uses to launch / poll a background process.
+    """The seam a tool uses to launch, poll and kill a background process.
 
-    Deliberately tiny — a tool gets neither the EventLog nor the
-    ``ProcessRegistry`` type, only this spawn/poll/kill surface. The host's
-    :class:`noeta.runtime.background_shell.ProcessRegistry` satisfies it
-    structurally; ``None`` on :class:`ToolContext` means the host did not
-    enable background execution and the tool refuses cleanly. ``kill`` (issue
-    03) requests a SIGTERM→SIGKILL teardown of one job and returns promptly
-    (the watcher reaps + records ``BackgroundShellKilled``).
+    Deliberately tiny: a tool gets this spawn/poll/kill surface and not the
+    ``ProcessRegistry`` type behind it, which
+    :class:`noeta.runtime.background_shell.ProcessRegistry` satisfies
+    structurally. ``None`` on :class:`ToolContext` means the host did not enable
+    background execution, so the tool refuses cleanly. ``kill`` only *requests*
+    a SIGTERM→SIGKILL teardown and returns promptly; the watcher reaps the job
+    and records ``BackgroundShellKilled``.
     """
 
     def spawn(
@@ -108,20 +94,11 @@ class BackgroundRunner(Protocol):
 class ToolContext:
     """Per-call context handed to ``Tool.invoke``.
 
-    Tools never see the EventLog or the Engine directly. They only get
-    the ``artifact_store`` so large outputs can be offloaded (and earlier
-    artifacts read back), plus a free-form ``metadata`` bag for future
-    fields (trace_id, principal, etc.) that later Phases will start
-    populating.
-
-    ``background_runner`` is the optional host-supplied seam a
-    tool uses to launch / poll a background process; ``None`` (the default,
-    every earlier construction) means background execution is not
-    available — keeping all existing ``ToolContext`` constructions
-    byte-identical. The current ``task_id`` / ``trace_id`` are threaded in via
-    the ``metadata`` bag (so the tool can attribute a spawn to its task) —
-    ``ToolRuntime.invoke`` populates ``metadata={"task_id": ..., "trace_id":
-    ...}`` when it builds the context; a tool reads them with ``ctx.metadata.get``.
+    Tools never see the EventLog or the Engine — only the ``artifact_store``,
+    an optional ``background_runner``, and a free-form ``metadata`` bag.
+    ``ToolRuntime.invoke`` threads the current ``task_id`` / ``trace_id``
+    through that bag rather than as fields, so a tool can attribute a spawn to
+    its task without the context growing a dependency on task identity.
     """
 
     artifact_store: _ArtifactStore

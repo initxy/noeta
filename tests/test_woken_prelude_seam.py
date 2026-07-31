@@ -1,23 +1,15 @@
-"""The woken-command-prelude seam on ``run_leased_task``.
+"""The woken-command prelude seam on ``run_leased_task``.
 
-``run_leased_task`` is the single drive primitive for every surface (daemon
-worker loop, ``noeta resume``, the in-process ``AgentSessionRunner``). Its
-woken branch is ``note_woken → run_one_step``; the real product commands
-inject a step **between** the two — ``send_goal`` appends the new turn's
-user message, an approval resolution runs/denies the pending tool call.
-
-These tests pin the seam's three states directly on the primitive:
-
-* ``None``                    — daemon worker-loop plain woken branch:
-                                no extra step between note_woken and run.
-* ``AppendMessagePrelude``    — ``send_goal``: append_user_message lands
-                                AFTER TaskWoken, BEFORE the step.
-* ``ResolveApprovalPrelude``  — approval: resolve_tool_approval runs in the
-                                same window.
-
-Each asserts ordering (the prelude's events sit between ``TaskWoken`` and
-the step's events) and the H2 ``consumed_wake_event`` release discipline
-(exactly one ``TaskWoken``; the wake is consumed, not re-delivered).
+``run_leased_task`` is the single drive primitive behind every surface — the
+daemon worker loop and each ``InteractionDriver`` command — and its woken
+branch is just ``note_woken → run_one_step``. Real commands need one step
+*between* the two: ``send_goal`` appends the new turn's user message, an
+approval resolution runs or denies the pending tool call. Keeping that the
+only per-command variation is what stops the resume machine from forking, so
+these pin the seam's three states directly on the primitive, asserting both
+ordering (the prelude's events sit between ``TaskWoken`` and the step's) and
+the release discipline (exactly one ``TaskWoken``; the wake is consumed, not
+re-delivered).
 """
 
 from __future__ import annotations
@@ -106,7 +98,7 @@ def _types(log: Any, tid: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# State 1 — None: plain daemon woken branch (no prelude step)
+# State 1 — None: the plain daemon woken branch (no prelude step)
 # ---------------------------------------------------------------------------
 
 
@@ -119,13 +111,12 @@ def test_prelude_none_no_step_between_woken_and_run() -> None:
     outcome = run_leased_task(_RT(engine, log, cs, dispatcher), lease)
     assert outcome == "woken"
     types = _types(log, tid)
-    # Exactly one TaskWoken; H2 consumed the wake (not re-delivered).
+    # Exactly one TaskWoken, and the wake was consumed (not re-delivered).
     assert types.count("TaskWoken") == 1
     assert dispatcher.wake(tid, HumanResponseReceived(handle=handle)) is False
-    # The step ran (TaskCompleted). With no prelude, the woken window is
-    # exactly the step: TaskWoken is IMMEDIATELY followed by the step's
-    # ContextPlanComposed — no append-message lands before the compose (an
-    # AppendMessagePrelude would, see the next test).
+    # With no prelude the woken window is exactly the step: TaskWoken is
+    # IMMEDIATELY followed by the step's ContextPlanComposed, with nothing
+    # landing in between (an AppendMessagePrelude would — see the next test).
     window = types[len(pre):]
     assert window[0] == "TaskWoken"
     assert window[1] == "ContextPlanComposed"
@@ -151,11 +142,11 @@ def test_append_message_prelude_lands_between_woken_and_step() -> None:
     assert outcome == "woken"
     types = _types(log, tid)
     assert types.count("TaskWoken") == 1
-    # H2: the wake was consumed by this resume (no stale matched left).
+    # The wake was consumed by this resume (no stale matched left).
     assert dispatcher.wake(tid, HumanResponseReceived(handle=handle)) is False
     # Ordering: in this wake's window, the prelude's MessagesAppended sits
     # AFTER TaskWoken and BEFORE the step's compose (ContextPlanComposed) —
-    # i.e. note_woken → append → run_one_step, exactly the old inline path.
+    # i.e. note_woken → append → run_one_step.
     window = types[pre_len:]
     assert window[0] == "TaskWoken"
     appended = window.index("MessagesAppended")
@@ -216,9 +207,8 @@ class _FakeEngine:
     def run_one_step(
         self, task: Any, *, lease_id: str, cancelled: Any = None
     ) -> Any:
-        # ``cancelled`` is the cooperative-stop poll ``run_leased_task`` now
-        # threads in (top-level turn parity with the delegation drain); this
-        # fake never trips it.
+        # ``cancelled`` is the cooperative-stop poll ``run_leased_task``
+        # threads in; this fake never trips it.
         self.calls.append(("run_one_step", {"lease_id": lease_id}))
         return _FakeWokenTask("terminal", None)
 
@@ -310,15 +300,14 @@ def test_resolve_approval_prelude_runs_between_woken_and_step(
         "resolver": "host",
         "lease_id": "L1",
     }
-    # H2: the consuming release presents the wake.
+    # The consuming release presents the wake.
     assert dispatcher.released[-1]["consumed_wake_event"] is wake
 
 
 def test_append_message_prelude_runs_between_woken_and_step_fake(
     monkeypatch: Any,
 ) -> None:
-    """Same ordering proof for the append-message prelude at the seam: the
-    prelude is the only per-command variation on the one machine."""
+    """The same ordering proof for the append-message prelude."""
     wake = HumanResponseReceived(handle="noeta-code-next-goal")
 
     class _AppendEngine(_FakeEngine):
@@ -351,18 +340,18 @@ def test_append_message_prelude_runs_between_woken_and_step_fake(
     assert engine.calls[1][1] == {
         "content": [TextBlock(text="next")],
         "lease_id": "L1",
-        # send_goal stays byte-identical — origin defaults
-        # to None (only the background completion-push passes "system").
+        # send_goal leaves origin unset; only the background
+        # completion-push passes "system".
         "origin": None,
     }
     assert dispatcher.released[-1]["consumed_wake_event"] is wake
 
 
 def test_prelude_not_run_on_redelivered_wake(monkeypatch: Any) -> None:
-    """H2 cases 2–4: a re-delivered wake whose TaskWoken is already durable
-    reconciles by folded status and MUST NOT re-run the prelude (the
-    command's bytes are already recorded). Here the fold reports terminal
-    (case 3) and the log already has a matching TaskWoken."""
+    """A re-delivered wake whose TaskWoken is already durable reconciles by
+    folded status and MUST NOT re-run the prelude — the command's bytes are
+    already recorded. Here the fold reports terminal and the log already
+    carries a matching TaskWoken."""
     wake = HumanResponseReceived(handle="approval-c1")
     log = _FakeLog(
         [
@@ -393,21 +382,18 @@ def test_prelude_not_run_on_redelivered_wake(monkeypatch: Any) -> None:
 def test_case2_crash_after_taskwoken_runs_bare_step_dropping_prelude(
     monkeypatch: Any,
 ) -> None:
-    """H2 case 2 — crash *after* ``TaskWoken`` is durable but
-    *before* the prelude/step. The re-delivered wake folds to ``running`` with
-    ``TaskWoken`` as the LAST event, so ``run_leased_task`` runs the bare
-    ``run_one_step`` and does NOT re-run the prelude.
+    """A crash *after* ``TaskWoken`` is durable but *before* the prelude/step.
+    The re-delivered wake folds to ``running`` with ``TaskWoken`` as the LAST
+    event, so ``run_leased_task`` drives the bare ``run_one_step`` and does NOT
+    re-run the prelude.
 
-    This pins the documented contract limitation: the
-    woken-command prelude is durable-safe only inside the synchronous
-    first-consume call. Across a crash in that window, prelude-less
-    re-delivery — the daemon / ``noeta resume`` always pass ``prelude=None`` —
-    drives the bare step, so a pending ``send_goal`` / approval whose prelude
-    never reached durability is LOST. Case 2 is also the *legitimate* recovery
-    path for non-command wakes (timer / subtask-completion), where the bare
-    step is exactly right; it cannot tell the two apart without durable command
-    intent. Full crash-safety needs that (tracked separately) — until then the
-    loss is conscious and tested, not accidental.
+    This pins a contract limitation. The woken-command prelude is durable-safe
+    only inside the synchronous first-consume call; re-delivery carries
+    ``prelude=None``, so a pending ``send_goal`` / approval whose prelude never
+    reached durability is LOST. The same branch is the *legitimate* recovery
+    path for non-command wakes (timer / subtask completion), where the bare
+    step is exactly right, and it cannot tell the two apart without durable
+    command intent. The loss is conscious and tested, not accidental.
     """
     wake = HumanResponseReceived(handle="approval-c1")
     log = _FakeLog(
@@ -450,10 +436,9 @@ def test_prelude_protocol_accepts_dataclass_preludes() -> None:
 
 
 def test_prelude_provenance_defaults_are_host_neutral() -> None:
-    """The operator CLI was deleted, so the neutral default
-    provenance label is ``"host"`` (not the stale ``"cli"``) on both
-    woken preludes — and it flows verbatim into the recorded
-    resolver / answered_by audit fields."""
+    """The neutral default provenance label is ``"host"`` on both woken
+    preludes — and it flows verbatim into the recorded resolver /
+    answered_by audit fields."""
     assert ResolveApprovalPrelude(call_id="c1", approved=True).resolver == "host"
     assert (
         AnswerUserQuestionPrelude(question_id="q1", answers={}).answered_by

@@ -1,19 +1,11 @@
-"""``governance`` built-in — the default guard stack + hook observer (impl).
+"""The four enforcement guards and the live-only hook observer.
 
-Microkernel M2: the four enforcement guards (budget / permission / repetition
-/ hook) and the live-only ``HookObserver`` moved here from ``noeta.guards.*``
-/ ``noeta.observers.hook``. Their *configuration* vocabulary (``Budget``,
-``PermissionPolicy``, ``RepetitionPolicy``, ``PreToolUseRule``, the ``Literal``
-enums) sank into :mod:`noeta.runtime.governance` — the kernel's builder
-signature and the SDK host both speak it, so it cannot live behind the loader
-doorway.
-
-:func:`build_default_guards` is the **guards factory** the kernel builder
-requires (``build_session_inputs(guards_factory=…)``): the SDK host resolves it
-through the plugin loader (:func:`noeta.client.parts.default_guards_factory`)
-and the kernel calls it with the assembly outputs (the built tool dict + the
-skill-derived guard facts) plus the operator passthrough fields. The kernel
-never imports a guard class.
+Their *configuration* vocabulary (``Budget``, ``PermissionPolicy``,
+``RepetitionPolicy``, ``PreToolUseRule``) lives in
+:mod:`noeta.runtime.governance` instead: the kernel's builder signature and
+the SDK host both speak it, so it cannot sit behind the plugin loader's
+doorway. :func:`build_default_guards` is the guards factory the kernel builder
+calls with the assembly outputs, so the kernel never imports a guard class.
 """
 
 from __future__ import annotations
@@ -70,19 +62,16 @@ def build_default_guards(
     hooks_pre_tool_use: tuple[PreToolUseRule, ...],
     extra_guards: tuple[Guard, ...],
 ) -> HookManager:
-    """The default guard HookManager in the live session's registration order.
+    """The default guard HookManager, in registration order.
 
-    The moved body of the kernel builder's former ``_build_guards`` (Issue A):
-    rebuild the exact guard shape the live session ran so a resumed Engine
-    reproduces guard-origin events (the approval suspend +
-    ``ToolCallApprovalRequested``, or a guard deny) consistently. Registration
-    order mirrors the live runner. Every input arrives pre-shaped: ``tools``
-    is the finished assembly, ``allowed_subtask_agents`` is already
-    delegation-gated (``None`` when delegation is off, Issue C), and
+    Registration order is load-bearing: a resumed Engine rebuilds the guard
+    shape from this one function, so guard-origin events (an approval suspend,
+    a deny) only reproduce if the order matches. Every input arrives
+    pre-shaped — ``tools`` is the finished assembly,
+    ``allowed_subtask_agents`` is already delegation-gated, and
     ``guard_facts`` is the skills pack's :class:`SkillGuardFacts` bundle
-    (Issues B + E — grants already sdk-resolved), forwarded opaquely by the
-    kernel builder; ``None`` (no skills pack in the session) means every
-    skill-derived field keeps its off/empty default.
+    forwarded opaquely; ``None`` means every skill-derived field keeps its
+    off/empty default.
     """
     facts = guard_facts if guard_facts is not None else SkillGuardFacts()
     hooks = HookManager()
@@ -104,10 +93,6 @@ def build_default_guards(
             tools=tools,
         )
     )
-    # Work item ④: same anti-loop RepetitionGuard the live session wired
-    # (same threshold/action/window, registered after Permission), so a
-    # recording whose guard tripped reproduces its require_approval suspend /
-    # deny byte-equal. Default threshold 0 ⇒ not registered (matches live).
     if repetition_threshold > 0:
         hooks.register(
             RepetitionGuard(
@@ -118,19 +103,13 @@ def build_default_guards(
                 )
             )
         )
-    # F3: rebuild the deterministic PreToolUse HookGuard from the same
-    # rules the live session used (same priority-after-built-ins), so a
-    # recording with hook-origin deny/approval events reproduces
-    # byte-equal. The operator must pass the same --hooks-file at resume;
-    # omitting it leaves the guard unbuilt and the recording diverges
-    # (we never recover hooks config from the recording). The HookObserver
-    # is intentionally NOT rebuilt (live-only side-effect).
+    # Hook rules are never recovered from the ledger: a resume that omits them
+    # rebuilds no HookGuard and diverges from the recorded verdicts. The
+    # HookObserver is deliberately not rebuilt — it is a live-only side-effect.
     if hooks_pre_tool_use:
         hooks.register(HookGuard(hooks_pre_tool_use))
-    # SDK ``Options.guards`` extension point (T3): user-supplied Guards
-    # register AFTER the built-in stack, in the order given (the caller owns
-    # ordering via each Guard's own ``priority``). Empty ⇒ byte-identical to
-    # the built-in-only path.
+    # User guards go after the built-in stack; ordering among themselves is the
+    # caller's own, via each Guard's ``priority``.
     for guard in extra_guards:
         hooks.register(guard)
     return hooks

@@ -1,16 +1,12 @@
-"""Issue 14 §F: ReActPolicy consumes view.iter_messages() + view.provider_tool_schemas.
+"""ReActPolicy builds its ``LLMRequest`` from the View, not from its own
+constructor arguments.
 
-PRD §F: when the View comes from :class:`ThreeSegmentComposer`,
-ReActPolicy must build its ``LLMRequest`` from the View's segments
-(not from its own constructor copies of system_prompt / tools). The
-Composer is the SoT for prompt material — Composer's ``provider_tool_schemas``
-becomes ``LLMRequest.tools`` verbatim; ``iter_messages()`` becomes
-``LLMRequest.messages``; the stable_prefix's first system Message
-becomes ``LLMRequest.system``.
-
-Until ``MinimalComposer`` is deleted in the cleanup slice, the
-legacy ``view.messages`` + constructor system_prompt path also stays
-valid for backwards compatibility.
+:class:`ThreeSegmentComposer` is the single source of truth for prompt
+material, so ``provider_tool_schemas`` becomes ``LLMRequest.tools`` verbatim,
+``iter_messages()`` becomes ``LLMRequest.messages``, and the stable prefix's
+first system Message becomes ``LLMRequest.system``. The policy is deliberately
+constructed with a different tool set and a placeholder system prompt, so any
+fallback to the constructor copies fails these assertions loudly.
 """
 
 from __future__ import annotations
@@ -69,8 +65,7 @@ def _setup(
     llm = RuntimeLLMClient(
         provider=provider, event_log=InMemoryEventLog(), content_store=cs
     )
-    # ReActPolicy still takes legacy constructor args (system_prompt /
-    # tools); the new path lets the View override.
+    # Deliberately mismatched constructor material — the View must win.
     policy = ReActPolicy(
         llm=llm,
         tools={"echo": _FakeTool("echo")},

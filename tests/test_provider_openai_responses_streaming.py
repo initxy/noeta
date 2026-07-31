@@ -1,13 +1,14 @@
-"""Streaming test matrix for
+"""Streaming path of
 :meth:`noeta.builtins.providers.impl.openai_responses.OpenAIResponsesProvider.complete_streaming`.
 
-Token streaming (Slice 5a): the streamed path POSTs the same body as the
-batch path plus ``stream:true``, emits ephemeral ``StreamDelta``s for text /
-reasoning-summary fragments, swallows function-call-arguments fragments, and
-feeds the terminal ``response.completed`` object through the same batch
-parser — so the streamed ``LLMResponse`` is shape-identical to ``complete()``.
-All HTTP traffic goes through a ``respx`` mock; the suite makes zero real
-network calls.
+The streamed path POSTs the same body as the batch path plus ``stream:true``,
+emits ephemeral ``StreamDelta``s for text / reasoning-summary fragments,
+swallows function-call-arguments fragments, and feeds the terminal
+``response.completed`` object through the same batch parser — so the streamed
+``LLMResponse`` is shape-identical to ``complete()``. That identity is what
+lets a host switch streaming on without changing anything downstream, and it
+is easy to break silently, hence the case-by-case pinning here. All HTTP
+traffic goes through a ``respx`` mock; the suite makes zero real network calls.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ from noeta.protocols.messages import (
 from noeta.builtins.providers.impl.openai_responses import OpenAIResponsesProvider
 
 
-# Same endpoint convention as the batch test matrix: base_url IS the complete
+# Same endpoint convention as the batch suite: base_url IS the complete
 # responses endpoint (the provider POSTs it verbatim, adding only the
 # ?api-version query).
 BASE_URL = "https://gateway.test/api/modelhub/online/responses"
@@ -165,13 +166,13 @@ class _ExplodingStream(httpx.SyncByteStream):
 
 
 # ---------------------------------------------------------------------------
-# 1. Text-only stream: deltas in order + final response identical to batch
+# Text-only stream: deltas in order + final response identical to batch
 # ---------------------------------------------------------------------------
 
 
 @respx.mock
 def test_text_stream_deltas_in_order_and_final_equals_batch() -> None:
-    """The KEY reuse pin: the response.completed object goes through the same
+    """The core reuse pin: the response.completed object goes through the same
     _parse_response as the batch path, so feeding the equivalent payload to
     complete() yields an equal LLMResponse — and the streamed request body is
     the batch body plus stream:true, nothing else."""
@@ -224,8 +225,8 @@ def test_text_stream_deltas_in_order_and_final_equals_batch() -> None:
         ("text", "hello ", 0),
         ("text", "world", 0),
     ]
-    # Shape-identity with the batch parse of the same response object —
-    # stop_reason, content, usage, and raw all compare equal.
+    # Shape identity reaches every field, ``raw`` included — the whole point
+    # of feeding the terminal object to the batch parser.
     assert streamed == batch
     assert streamed.stop_reason == "end_turn"
     assert streamed.content == [TextBlock(text="hello world")]
@@ -265,7 +266,7 @@ def test_streaming_uses_same_endpoint_params_and_merged_headers() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2. function_call stream: argument deltas swallowed, final ToolUseBlock
+# function_call stream: argument deltas swallowed, final ToolUseBlock
 # ---------------------------------------------------------------------------
 
 
@@ -340,7 +341,7 @@ def test_function_call_arguments_deltas_never_emitted_final_tool_use() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. Reasoning stream: summary deltas → kind="thinking", final ThinkingBlock
+# Reasoning stream: summary deltas → kind="thinking", final ThinkingBlock
 # ---------------------------------------------------------------------------
 
 
@@ -409,7 +410,7 @@ def test_reasoning_summary_deltas_are_thinking_and_final_block_keeps_signature()
 
 
 # ---------------------------------------------------------------------------
-# 4. Usage mapping from response.completed
+# Usage mapping from response.completed
 # ---------------------------------------------------------------------------
 
 
@@ -443,7 +444,7 @@ def test_usage_from_terminal_event_maps_like_batch() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. Errors: mid-stream transport, HTTP status on open, in-stream error events
+# Errors: mid-stream transport, HTTP status on open, in-stream error events
 # ---------------------------------------------------------------------------
 
 
@@ -561,7 +562,7 @@ def test_response_failed_without_code_maps_to_transient() -> None:
 @respx.mock
 def test_response_incomplete_max_output_tokens_maps_to_max_tokens() -> None:
     """The terminal response.incomplete object still goes through
-    _parse_response, so the batch stop_reason inference applies unchanged."""
+    _parse_response, so the batch stop_reason inference applies as-is."""
     final = _final_payload(
         output=[_message_output("partial")],
         status="incomplete",
@@ -597,7 +598,7 @@ def test_stream_without_terminal_event_maps_to_transient() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6. invalid_encrypted_content 400 → one streamed retry with stripped reasoning
+# invalid_encrypted_content 400 → one streamed retry with stripped reasoning
 # ---------------------------------------------------------------------------
 
 
@@ -684,7 +685,7 @@ def test_invalid_encrypted_content_without_reasoning_stays_fatal_streamed() -> N
 
 
 # ---------------------------------------------------------------------------
-# 7. Unknown events skipped
+# Unknown events skipped
 # ---------------------------------------------------------------------------
 
 

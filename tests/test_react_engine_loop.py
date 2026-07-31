@@ -1,21 +1,13 @@
-"""Issue 13: end-to-end ReActPolicy + Engine loop integration.
+"""End-to-end ReActPolicy + Engine loop over the production hot path.
 
 Drives ``Engine.run_one_step`` with a real :class:`ReActPolicy` wired to
-:class:`RuntimeLLMClient` + :class:`FakeLLMProvider` + :class:`FakeTool`,
-mirroring the production hot path. Asserts:
-
-* The Engine reaches ``terminal`` in one ``run_one_step`` after the
-  scripted ``tool_use → tool_use → end_turn`` cycle.
-* Each LLM round produces exactly 3 LLM events
-  (``LLMRequestStarted`` / ``LLMResponseRecorded`` / ``LLMRequestFinished``)
-  on the stream.
-* ``MessagesAppended`` payloads are typed :class:`Message` instances
-  (Phase 1 contract).
-* The Decision-derived ``assistant_message`` carrying mixed Block
-  content (Text + ToolUse) round-trips intact into the recorded
-  event payload.
-* The terminal ``TaskCompleted.answer`` matches the joined TextBlocks
-  from the final ``end_turn`` LLMResponse.
+:class:`RuntimeLLMClient` + :class:`FakeLLMProvider` + :class:`FakeTool`, so a
+whole ``tool_use → tool_use → end_turn`` cycle has to complete inside one step.
+The recorded stream is the contract: exactly three LLM events per round,
+``MessagesAppended`` payloads carrying typed :class:`Message` instances rather
+than plain dicts, an assistant message whose mixed Text + ToolUse blocks
+round-trip intact, and a terminal answer joined from the final ``end_turn``
+TextBlocks.
 """
 
 from __future__ import annotations
@@ -146,9 +138,8 @@ def test_each_llm_round_emits_three_llm_events() -> None:
 
 
 def test_messages_appended_payloads_are_typed_message_instances() -> None:
-    """Every ``MessagesAppended`` event's payload carries a list of
-    :class:`Message` typed dataclasses (Phase 1 contract — no plain
-    dicts)."""
+    """Every ``MessagesAppended`` payload carries typed :class:`Message`
+    dataclasses, never plain dicts."""
     log, _cs, task_id, _provider = _build_engine_and_run()
     appended = [
         e for e in log.read(task_id) if e.type == "MessagesAppended"
@@ -162,9 +153,9 @@ def test_messages_appended_payloads_are_typed_message_instances() -> None:
 
 
 def test_first_assistant_messages_appended_preserves_text_and_tool_use_blocks() -> None:
-    """The first ``MessagesAppended`` event (assistant_message from
-    Decision 1) preserves mixed ``TextBlock + ToolUseBlock`` content
-    in order — the Phase 1 thinking-not-lost contract."""
+    """The assistant_message from the first Decision preserves mixed
+    ``TextBlock + ToolUseBlock`` content in order, so the model's reasoning text
+    is never dropped alongside the tool call."""
     log, _cs, task_id, _provider = _build_engine_and_run()
     first_appended = next(
         e for e in log.read(task_id) if e.type == "MessagesAppended"

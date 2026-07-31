@@ -1,14 +1,12 @@
-"""Memory v2 phase 3 — the SDK consolidation module (T5 + T6).
+"""Host-side memory curation: ``noeta.client.consolidation`` and its preset agent.
 
-``noeta.client.consolidation`` is the host-side half of the background
-curation pass (``docs/adr/memory-consolidation.md``): the debounce marker
-(``.consolidation-state.json`` in the memory root, written at ENQUEUE time),
-the session-activity digest builder (roots only, newest first, capped with the
-caps STATED in the digest — no silent truncation), and ``run_consolidation``
-(decision #11's explicit host-callable, which seeds the ``__consolidation__``
-root task through the background seed path). The preset half
-(``noeta.presets.CONSOLIDATION_AGENT``) is covered here too: reserved name,
-memory-pack-only tool surface, and zero impact on main's spawnable roster.
+Curation runs in the background, so the debounce marker is written at ENQUEUE
+time rather than at completion — otherwise a pass that is slow, or never driven,
+re-enqueues forever. The activity digest states its own caps instead of
+truncating silently, because a curator that quietly loses the sessions it was
+meant to read produces confidently wrong memories. The reserved
+``__consolidation__`` agent must stay invisible to ``main``: registering it may
+not perturb the spawnable set or the stable prefix.
 """
 
 from __future__ import annotations
@@ -116,15 +114,14 @@ def test_marker_roundtrip_and_due_threshold(tmp_path: Path) -> None:
 
     write_consolidation_marker(root, now=NOW)
     assert read_consolidation_marker(root) == NOW
-    # Inside the debounce window ⇒ not due; at/after the threshold ⇒ due.
     assert consolidation_due(root, now=NOW + timedelta(hours=23)) is False
     assert consolidation_due(root, now=NOW + timedelta(hours=24)) is True
-    # The threshold is configurable.
     assert (
         consolidation_due(root, now=NOW + timedelta(hours=2), debounce_hours=1.0)
         is True
     )
-    # The stored shape is the documented one-key JSON (ISO-8601 UTC).
+    # The on-disk shape is a contract for hosts that inspect it: one ISO-8601
+    # UTC key, nothing else.
     data = json.loads(
         (root / CONSOLIDATION_MARKER_FILENAME).read_text(encoding="utf-8")
     )
@@ -418,7 +415,7 @@ def test_run_consolidation_window_rides_the_marker(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. The preset half (T6a) — reserved name, memory-pack-only surface
+# 4. The preset agent — reserved name, memory-pack-only surface
 # ---------------------------------------------------------------------------
 
 
@@ -490,7 +487,7 @@ def test_consolidation_tool_surface_is_memory_pack_only(tmp_path: Path) -> None:
         model="stub-model",
         compaction=COMPACTION_OFF,
         budget=Budget(),
-        # Phase 3 (S4): the memory switch is a capability flag; the store root
+        # The memory switch is a capability flag; the store root
         # is the memory plugin's own config entry.
         capability_flags={"memory": True},
         plugin_config={"memory": {"memory_dir": tmp_path / "memories"}},

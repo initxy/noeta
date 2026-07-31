@@ -17,9 +17,9 @@ export default defineConfig({
   base: '/noeta/',
 
   // Dead-link checking is ON (VitePress default): a broken internal link
-  // fails the build. Pages excluded from the site (see srcExclude — ADRs,
-  // implementation specs, drafts) are referenced only via absolute GitHub
-  // source URLs, so nothing internal points at a non-published page.
+  // fails the build. Pages excluded from the site (see srcExclude — ADRs and
+  // implementation specs) are referenced only via absolute GitHub source URLs,
+  // so nothing internal points at a non-published page.
   ignoreDeadLinks: false,
 
   // Ignore internal docs from the build — they stay in the repo for
@@ -28,7 +28,6 @@ export default defineConfig({
     '**/adr/**',
     '**/implementation-specs/**',
     '**/reference/api/**',
-    '**/_drafts/**',
     'releasing.md',
     'releasing.zh.md',
   ],

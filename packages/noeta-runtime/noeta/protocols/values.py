@@ -15,12 +15,6 @@ from noeta.protocols.canonical import register
 # large-body special cases. This is an **EventLog-side** ceiling.
 # ContentStore has *no* equivalent cap — bodies larger than this must
 # be put into ContentStore and referenced through :class:`ContentRef`.
-#
-# Adapter modules (``noeta.storage.memory``,
-# ``noeta.builtins.storage.impl.sqlite.eventlog``) may re-export a local
-# alias for backward compatibility, but the L0
-# protocol surface uses only this precise name to keep the meaning
-# unambiguous.
 EVENT_PAYLOAD_MAX_BYTES = 4096
 
 
@@ -65,12 +59,7 @@ class Principal:
     """Who is acting, and which models they may select (L0).
 
     The **minimal** authorization value: an ``identity`` string and the
-    ``allowed_models`` set the identity is sanctioned to bind. Issue 06
-    keeps this deliberately small — capabilities / allowed_side_effects /
-    delegation chains are **deferred** (the same "more fields land
-    alongside their consumers" discipline as
-    :class:`noeta.protocols.events.TaskCreatedPayload`), so nothing here
-    pre-commits a richer authorization model.
+    ``allowed_models`` set the identity is sanctioned to bind.
 
     ``allowed_models`` is the authorization half of model selection: the
     driver/server validates ``selector ∈ principal.allowed_models ∩
@@ -110,6 +99,4 @@ class Principal:
 
 #: The CLI's local principal: ``⊤`` (no trust boundary). The
 #: user's own machine + credentials, so every model selector is permitted.
-#: Old recordings (no ``ModelBound``) fold to this principal — byte-equal,
-#: no drift.
 LOCAL_PRINCIPAL = Principal(identity="local", allows_any=True)

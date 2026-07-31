@@ -1,17 +1,12 @@
 """``SqliteDispatcher`` — sqlite3-backed adapter for ``Dispatcher`` + ``LeaseRegistry``.
 
-Issue 17. Third persistent backend on the same sqlite file that
-``SqliteEventLog`` (issue 15) and ``SqliteContentStore`` (issue 16)
-share. Migration 3 owns ``dispatcher_tasks`` (single row per task,
-carrying state + lease + suspend metadata, CHECK constraints
-physicalising three state-machine invariants) and
-``dispatcher_pending_wakes`` (per-task FIFO of wake events, **no
-FK** so ``wake(unknown, ...)`` can legitimately arrive before any
-``enqueue`` creates the task row).
-
-Public surface is exactly the ``Dispatcher`` + ``LeaseRegistry`` L0
-Protocols plus the same lifecycle helpers (``close`` + context
-manager) the other sqlite adapters expose. Behaviour is pinned by
+Shares the sqlite file the sibling adapters open. Migration 3 owns
+``dispatcher_tasks`` (one row per task carrying status + lease + suspend
+metadata, with CHECK constraints physicalising the state-machine invariants so
+a direct write bypassing this class is rejected) and
+``dispatcher_pending_wakes`` (per-task FIFO of wake events, deliberately with
+**no FK**, because ``wake(unknown, ...)`` may legitimately arrive before any
+``enqueue`` creates the task row). Behaviour is pinned by
 :class:`noeta.storage.memory.InMemoryDispatcher`.
 """
 
@@ -70,11 +65,11 @@ def _deserialize_wake(blob: Optional[bytes]) -> Any:
 class SqliteDispatcher:
     """sqlite3 implementation of ``Dispatcher`` + ``LeaseRegistry``.
 
-    Public surface matches the Protocols (plus the standard adapter
-    lifecycle helpers). Debug introspection — task_status, wake_on
-    inspection, pending-wake-event enumeration — is deliberately
-    NOT part of this surface; tests reach into ``_conn`` directly
-    when they need the underlying rows.
+    Beyond the two Protocols the surface holds only the maintenance seams a
+    host genuinely needs (status probes, ``restore_task``, ``purge_task``) plus
+    lifecycle helpers. Finer-grained introspection — ``wake_on`` decoding,
+    pending-wake enumeration — is deliberately absent; tests that need the
+    underlying rows read ``_conn`` directly.
     """
 
     def __init__(
@@ -100,21 +95,18 @@ class SqliteDispatcher:
         self._max_fail_attempts = max_fail_attempts
         self._reclaim_max = reclaim_max
         self._lock = threading.Lock()
-        # ``is_lease_valid`` is on the EventLog write path: every
-        # ``emit(... lease_id=...)`` calls it from **inside** the
-        # EventLog's own ``BEGIN IMMEDIATE``. If the validator routed
-        # through ``self._conn`` + ``self._lock`` it would dead-bind:
-        # an EventLog thread holding the file's SQLite writer lock
-        # would wait on ``self._lock`` (held by another thread that
-        # is itself blocked acquiring the writer lock for its
-        # dispatcher lifecycle method). Give file-backed dispatchers
-        # a separate read-only connection + lock so validation runs
-        # under WAL's concurrent-reader semantics, independent of the
-        # writer lock. ``:memory:`` databases can't have a second
-        # connection (each ``sqlite3.connect(":memory:")`` opens a
-        # fresh empty DB), so they share the single connection — the
-        # deadlock scenario doesn't exist there anyway because
-        # ``:memory:`` has no file-level writer lock contention.
+        # ``is_lease_valid`` sits on the EventLog write path: every
+        # ``emit(... lease_id=...)`` calls it from **inside** the EventLog's own
+        # ``BEGIN IMMEDIATE``. Routing the validator through ``self._conn`` +
+        # ``self._lock`` would deadlock — an EventLog thread holding the file's
+        # writer lock waits on ``self._lock``, held by a thread itself blocked
+        # acquiring that same writer lock for a dispatcher lifecycle method.
+        # A separate read connection + lock runs validation under WAL's
+        # concurrent-reader semantics instead, independent of the writer lock.
+        # ``:memory:`` cannot have a second connection (each
+        # ``sqlite3.connect(":memory:")`` opens a fresh empty DB), so it shares
+        # the one connection; the deadlock cannot arise there anyway, as there
+        # is no file-level writer lock to contend for.
         if target == ":memory:":
             self._read_conn: sqlite3.Connection = self._conn
             self._read_lock: threading.Lock = self._lock
@@ -158,12 +150,9 @@ class SqliteDispatcher:
     def _drain_first_matching_pending(
         self, task_id: str, wake_on: Any
     ) -> Optional[bytes]:
-        """If a buffered wake event matches ``wake_on``, delete it and
-        return its canonical bytes so the caller can persist them on
-        the task row as ``matched_wake_event_canonical``. Returns
-        ``None`` when no buffered event matches. Caller is responsible
-        for transitioning the task row to ``ready`` and clearing wake
-        metadata."""
+        """Delete the first buffered wake matching ``wake_on`` and return its
+        canonical bytes, or ``None`` when none matches. The caller owns
+        transitioning the task row to ``ready`` and clearing wake metadata."""
         if wake_on is None:
             return None
         for row in self._conn.execute(
@@ -191,9 +180,9 @@ class SqliteDispatcher:
         Three paths matching the Protocol's idempotency promise:
 
         * No row → INSERT with a fresh ``ready_order``.
-        * Existing row already in ``ready`` → no-op (preserve original
-          ``ready_order`` — and its existing ``reserved`` flag — so FIFO
-          is not reshuffled, issue 17 B3).
+        * Existing row already in ``ready`` → no-op, preserving both the
+          original ``ready_order`` and the existing ``reserved`` flag so FIFO
+          is not reshuffled.
         * Existing row in any non-ready status → transition to ready,
           clearing all non-ready columns and assigning a fresh
           ``ready_order``.
@@ -218,16 +207,14 @@ class SqliteDispatcher:
                         (task_id, order, reserved_val),
                     )
                 elif row["status"] == "ready":
-                    # No-op; FIFO must not be reshuffled (B3).
+                    # No-op; FIFO must not be reshuffled.
                     pass
                 else:
-                    # Non-ready → ready transition: clear every
-                    # state-specific field of the prior state in
-                    # lockstep with the status flip, including
-                    # ``matched_wake_event_canonical``. A stale matched
-                    # wake surviving a force-enqueue would let the next
-                    # lease deliver a wake_event the caller did not
-                    # request (B1 invariant — see InMemory.enqueue).
+                    # Clear every field belonging to the prior state in lockstep
+                    # with the status flip, ``matched_wake_event_canonical``
+                    # included: a stale matched wake surviving a force-enqueue
+                    # would make the next lease deliver a wake_event nobody
+                    # asked for.
                     order = self._next_ready_order()
                     self._conn.execute(
                         "UPDATE dispatcher_tasks SET "
@@ -260,26 +247,21 @@ class SqliteDispatcher:
         """Lease a ready task — FIFO when ``task_id is None``, targeted
         otherwise.
 
-        Targeted-lease semantics (``task_id=<id>``): returns ``None`` if
-        the task does not exist or is not currently in the ``ready``
-        state. Never raises — diagnosis ("does this task exist? is it
-        suspended? terminal?") is the caller's job (see the CLI resume
-        path's ``_diagnose_unleasable_target``).
+        Targeted-lease semantics (``task_id=<id>``): returns ``None`` if the
+        task does not exist or is not currently ``ready``. Never raises —
+        diagnosing which of those it was is the caller's job.
 
-        On success, any ``matched_wake_event_canonical`` queued by a
-        prior :meth:`wake` or release-drain is read and handed back on
-        :attr:`Lease.wake_event`. H2: it is **NOT** cleared at
-        lease time — it survives the lease and is cleared only by a
-        consuming ``release(consumed_wake_event=...)``, otherwise
-        re-delivered by :meth:`requeue_stale` (at-least-once delivery +
-        idempotent consumption = exactly-once).
+        On success, any ``matched_wake_event_canonical`` queued by a prior
+        :meth:`wake` or release-drain is handed back on
+        :attr:`Lease.wake_event` but **NOT** cleared: it survives the lease and
+        is cleared only by a consuming ``release(consumed_wake_event=...)``,
+        otherwise re-delivered by :meth:`requeue_stale`. At-least-once delivery
+        plus idempotent consumption is what makes it effectively exactly-once.
         """
-        # sqlite (like in-memory) is single-host by design (see
-        # multi-host-lease-fencing.md), so there is exactly one worker pool
-        # per store and no cross-host lease audit question to answer here.
-        # worker_id is intentionally not recorded on this row — it is not a
-        # gap to be filled later. Postgres, which is multi-host, does record
-        # it per lease (migration 3) for that reason.
+        # sqlite is single-host by design (ADR ``multi-host-lease-fencing``):
+        # one worker pool per store, so there is no cross-host lease audit to
+        # answer and ``worker_id`` is deliberately not recorded — not a gap to
+        # fill later. Postgres is multi-host and does record it per lease.
         del worker_id
         with self._lock:
             _begin_immediate_with_retry(self._conn)
@@ -308,11 +290,10 @@ class SqliteDispatcher:
                 matched_blob = row["matched_wake_event_canonical"]
                 lease_id = f"lease-{uuid.uuid4().hex}"
                 expires_at = self._now() + lease_seconds
-                # H2: lease does NOT clear
-                # matched_wake_event_canonical — the matched wake survives
-                # the lease ("matched-in-flight") so a crash before the
-                # durable TaskWoken does not lose it; it is cleared only by
-                # a consuming release (D2) and otherwise re-delivered (D3).
+                # ``matched_wake_event_canonical`` is deliberately left in
+                # place: the matched wake stays in flight across the lease so a
+                # crash before the durable TaskWoken cannot lose it. Only a
+                # consuming release clears it; anything else re-delivers it.
                 self._conn.execute(
                     "UPDATE dispatcher_tasks SET "
                     " status = 'leased',"
@@ -351,12 +332,11 @@ class SqliteDispatcher:
                     raise InvalidLease(lease_id)
                 if int(row["heartbeat_count"]) >= self._heartbeat_max:
                     # Cap exceeded — force release in the same transaction.
-                    # H2: the matched wake is NOT consumed here
-                    # (no TaskWoken proof), so it must be PRESERVED and
-                    # re-delivered, not stranded. If a matched is in-flight
-                    # the task goes back to **ready** (re-deliverable, same
-                    # as a non-consuming release); otherwise it suspends on
-                    # its preserved wake_on.
+                    # There is no TaskWoken proof here, so a matched wake is
+                    # NOT consumed: it must be preserved and re-delivered
+                    # rather than stranded. With one in flight the task returns
+                    # to **ready** (re-deliverable, like a non-consuming
+                    # release); otherwise it suspends on its preserved wake_on.
                     if row["matched_wake_event_canonical"] is not None:
                         self._conn.execute(
                             "UPDATE dispatcher_tasks SET "
@@ -387,8 +367,8 @@ class SqliteDispatcher:
                     self._conn.execute("COMMIT")
                     raise InvalidLease(lease_id)
                 expires_at = self._now() + lease_seconds
-                # A successful heartbeat is the leased-task progress
-                # signal: reset the stale-reclaim counter (kernel #3).
+                # A successful heartbeat is the leased-task progress signal, so
+                # it resets the stale-reclaim counter.
                 self._conn.execute(
                     "UPDATE dispatcher_tasks SET "
                     " heartbeat_count = heartbeat_count + 1,"
@@ -425,9 +405,9 @@ class SqliteDispatcher:
                     raise InvalidLease(lease_id)
                 task_id = row["task_id"]
 
-                # --- H2 step 1: validate + clear the OLD
-                # matched iff a consuming release presents the exact wake.
-                # Mismatch / no-matched → raise + ROLLBACK (commit nothing).
+                # Clear the old matched wake only when a consuming release
+                # presents the exact same wake. A mismatch (or none stored)
+                # raises and rolls back, committing nothing.
                 clear_matched = False
                 if consumed_wake_event is not None:
                     stored = row["matched_wake_event_canonical"]
@@ -463,9 +443,9 @@ class SqliteDispatcher:
                         "WHERE task_id = ?",
                         (suspend_reason, task_id),
                     )
-                    # Kernel #8: terminal is forever — buffered wakes
-                    # that never matched can never drain; GC them. The
-                    # matched wake (H2 handoff) is deliberately kept.
+                    # Terminal is forever, so buffered wakes that never matched
+                    # can never drain — GC them. The matched wake is kept: it
+                    # is still owed to whoever consumes it.
                     self._conn.execute(
                         "DELETE FROM dispatcher_pending_wakes WHERE task_id = ?",
                         (task_id,),
@@ -486,15 +466,14 @@ class SqliteDispatcher:
                         "WHERE task_id = ?",
                         (wake_blob, suspend_reason, _timer_deadline(wake_on), task_id),
                     )
-                    # H2: the OLD matched was cleared above iff consuming.
                     matched_present = (
                         not clear_matched
                         and row["matched_wake_event_canonical"] is not None
                     )
                     if matched_present:
-                        # D5: an un-consumed matched is PRESERVED and means a
-                        # delivery is pending → the task goes back to **ready**
-                        # (re-deliverable), not stuck-suspended.
+                        # An un-consumed matched wake means a delivery is still
+                        # pending, so the task goes back to **ready** where it
+                        # can be re-delivered, not into a stuck suspend.
                         order = self._next_ready_order()
                         self._conn.execute(
                             "UPDATE dispatcher_tasks SET "
@@ -507,9 +486,9 @@ class SqliteDispatcher:
                             (order, task_id),
                         )
                     else:
-                        # No matched: install the NEW wake_on (already set
-                        # above) and drain a single matching pending wake →
-                        # a possible NEW matched (D4 case 4).
+                        # Nothing matched yet: the new wake_on is already
+                        # installed above, so drain one matching buffered wake,
+                        # which may itself become the new matched wake.
                         drained = self._drain_first_matching_pending(task_id, wake_on)
                         if drained is not None:
                             order = self._next_ready_order()
@@ -624,8 +603,8 @@ class SqliteDispatcher:
                         "WHERE task_id = ?",
                         (1 if retryable else 0, final_reason, task_id),
                     )
-                    # Kernel #8: GC never-matching buffered wakes on the
-                    # terminal transition (same as release-terminal).
+                    # Terminal transition GCs buffered wakes that can never
+                    # drain, same as release-terminal.
                     self._conn.execute(
                         "DELETE FROM dispatcher_pending_wakes WHERE task_id = ?",
                         (task_id,),
@@ -644,14 +623,12 @@ class SqliteDispatcher:
                 row = self._fetch_task(task_id)
 
                 if row is None:
-                    # Wake-before-enqueue (issue 17 B1): record the
-                    # event in pending_wakes only. No dispatcher_tasks
-                    # row is created — the CHECK constraints would
-                    # require either ready+ready_order or some other
-                    # consistent state, and we don't want to make this
-                    # task leaseable yet. enqueue() will materialise
-                    # the row later; release(suspended, wake_on=match)
-                    # will drain the buffered event.
+                    # Wake-before-enqueue: buffer the event and create no
+                    # ``dispatcher_tasks`` row. Any row the CHECK constraints
+                    # would accept implies a consistent state (ready +
+                    # ready_order, say), which would make the task leaseable
+                    # before it exists. ``enqueue`` materialises the row later
+                    # and ``release(suspended, wake_on=...)`` drains this.
                     arrival_seq = self._next_arrival_seq(task_id)
                     self._conn.execute(
                         "INSERT INTO dispatcher_pending_wakes ("
@@ -676,9 +653,8 @@ class SqliteDispatcher:
                             " fire_at = NULL,"
                             " ready_order = ?,"
                             # Targeted-lease-only guard for a seed-after-wake
-                            # resume (one-shot; the owning driver's targeted
-                            # lease clears it). ``reserved=False`` writes 0, the
-                            # historical value.
+                            # resume; one-shot, cleared by the owning driver's
+                            # targeted lease.
                             " reserved = ? "
                             "WHERE task_id = ?",
                             (matched_blob, order, 1 if reserved else 0, task_id),
@@ -702,10 +678,11 @@ class SqliteDispatcher:
     def requeue_stale(self) -> list[str]:
         """Sweep expired leases back to ready; return the requeued ids.
 
-        Kernel #3: each reclaim increments ``reclaim_count``; at
-        ``reclaim_max`` consecutive no-progress reclaims the task drops
-        to ``terminal`` (``stale_reclaim_exceeded``) instead of
-        requeueing. Terminal-by-cap tasks are NOT in the returned list.
+        Each reclaim increments ``reclaim_count``, and at ``reclaim_max``
+        consecutive no-progress reclaims the task drops to ``terminal``
+        (``stale_reclaim_exceeded``) instead of requeueing — otherwise a task
+        that kills its worker every time loops forever. Terminal-by-cap tasks
+        are NOT in the returned list.
         """
         now = self._now()
         requeued: list[str] = []
@@ -737,7 +714,7 @@ class SqliteDispatcher:
                             "WHERE task_id = ?",
                             (task_id,),
                         )
-                        # Kernel #8: terminal transition GCs buffered wakes.
+                        # Terminal transition GCs buffered wakes.
                         self._conn.execute(
                             "DELETE FROM dispatcher_pending_wakes WHERE task_id = ?",
                             (task_id,),
@@ -767,18 +744,18 @@ class SqliteDispatcher:
 
         ``now`` is a wall-clock epoch timestamp supplied by the caller
         (the same base the Engine used to compute ``fire_at``); the
-        delivered wake is the **recorded deadline** blob so H2 re-delivery
+        delivered wake is the **recorded deadline** blob so timer re-delivery
         stays byte-identical.
 
         The due set is selected straight off the indexed ``fire_at`` column
         (migration 7) — ``fire_at`` mirrors each suspended timer's deadline
         and is NULL for every non-timer / non-suspended row, so the partial
-        index turns the old O(all-suspends) full scan into an O(due) range
-        hit. A read-only probe on the concurrent-reader connection runs
-        FIRST: when nothing is due (the common ~1s poll) it returns without
-        opening ``BEGIN IMMEDIATE`` at all, so an idle poll never takes the
-        write lock. The probe/commit race is benign — a timer that comes due
-        in the gap is caught by the next poll.
+        index makes the sweep an O(due) range hit rather than an
+        O(all-suspends) full scan. A read-only probe on the concurrent-reader
+        connection runs FIRST: when nothing is due (the common ~1s poll) it
+        returns without opening ``BEGIN IMMEDIATE`` at all, so an idle poll
+        never takes the write lock. The probe/commit race is benign — a timer
+        that comes due in the gap is caught by the next poll.
         """
         with self._read_lock:
             due = self._read_conn.execute(
@@ -985,7 +962,7 @@ class SqliteDispatcher:
                         " ready_order = NULL",
                         (task_id, wake_blob, suspend_reason, _timer_deadline(wake_on)),
                     )
-                    # No buffered-wake redelivery here: line 688 above already
+                    # No buffered-wake redelivery here: the DELETE above already
                     # cleared every pending wake for this task, so any drain
                     # would query an empty table and never re-ready the task.
                 self._conn.execute("COMMIT")

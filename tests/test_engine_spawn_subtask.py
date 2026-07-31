@@ -1,7 +1,7 @@
 """Engine ``spawn_subtask`` branch: parent emits the 7-step sequence and
 the child receives an independent ``TaskCreated`` on its own stream.
 
-Issue 03 acceptance (parent half):
+Parent-half acceptance:
 
 * ``SubtaskSpawned`` is appended to the parent stream.
 * A ``TaskCreated`` event is appended to the *child* stream (independent),

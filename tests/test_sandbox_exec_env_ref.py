@@ -1,22 +1,13 @@
-"""Durable ``exec_env_ref`` weld/fold + per-session provision / reconnect / reap.
+"""Durable ``exec_env_ref`` — per-session container provision, reconnect, reap.
 
-A host provisions a per-session container at ``seed_start`` and records "which
-container" (``"{base_url}#{sandbox_id}"``) on ``TaskHostBound`` so a resumed /
-**reclaimed** session — possibly on another host whose config differs —
-reconnects to the SAME container via ``provider.attach``. The mechanism mirrors
-``workspace_dir``: welded at session open, folded into ``governance.exec_env_ref``,
-read by the resolver, threaded into the Engine cache key + build. Covered:
-
-* the payload / fold round-trip (byte-equal when ``None``);
-* ``seed_start`` eagerly allocates a container (keyed by the pre-minted root id)
-  and welds its encoded ref into ``TaskHostBound``;
-* two sessions get DISTINCT containers (per-session isolation);
-* the acceptance criterion — a task folded on ANOTHER host (different provider)
-  resolves an Engine whose fs backend targets the RECORDED address, via attach;
-* the cache-key dimension — two sessions on different containers never share an
-  Engine;
-* a non-sandbox session records no ref (byte-equal) and stays local;
-* a ROOT task reaching a terminal releases its container (D4 lifecycle).
+A host provisions a per-session container at ``seed_start`` and records which
+one (``"{base_url}#{sandbox_id}"``) on ``TaskHostBound``, so a task reclaimed by
+a different host — whose own sandbox config points somewhere else — reconnects
+to the SAME container through ``provider.attach`` instead of provisioning a
+fresh one and stranding the session's files. The ref rides the same route as
+``workspace_dir``: welded at session open, folded into
+``governance.exec_env_ref``, read by the resolver, and keyed into the Engine
+cache so two sessions on different containers can never share an Engine.
 
 No socket is opened: a fake provider mints handles and a fake backend factory
 records the base_url each backend targets.
@@ -228,7 +219,7 @@ def test_two_sessions_get_distinct_containers(
 
 
 # --------------------------------------------------------------------------- #
-# multi-machine reconnect (the acceptance criterion)
+# multi-machine reconnect
 # --------------------------------------------------------------------------- #
 
 
@@ -250,8 +241,8 @@ def test_reclaim_on_another_host_reconnects_to_recorded_container(
     assert seen_a == ["http://A-1:8080"]
 
     # Another process/host (SAME event log, DIFFERENT provider) folds the task
-    # and re-resolves — it must reconnect to the RECORDED container A via attach,
-    # not provision its own.
+    # and re-resolves. It must attach to the RECORDED container A: provisioning
+    # its own would hand the resumed task an empty workspace.
     seen_b: list[str] = []
     monkeypatch.setattr(
         sandbox_mod, "_default_backend_factory", _recording_factory(seen_b)
@@ -288,7 +279,7 @@ def test_exec_env_ref_keys_the_engine_cache(
 
 
 # --------------------------------------------------------------------------- #
-# lifecycle — release at root terminal (D4)
+# lifecycle — release at root terminal
 # --------------------------------------------------------------------------- #
 
 

@@ -1,25 +1,15 @@
-"""⑤ Background sub-agent — ``spawn_subagent(background=true)``.
+"""Background sub-agents — ``spawn_subagent(background=true)``.
 
-docs/adr/background-subagent.md.
+A background spawn must not suspend the parent on a ``SubtaskCompleted``
+barrier: the parent takes a "started" tool_result, keeps its turn, and the
+child's result arrives at the parent's next turn boundary as a
+``BackgroundSubagentDelivered`` anchor plus an ``origin="system"`` notice. The
+child's genesis carries ``background=True`` so the ``ChildLifecycleObserver``
+skips it — otherwise a background child would wake a parent that never blocked.
 
-A parent calls ``spawn_subagent(agent, goal, background=true)``. Unlike a
-foreground spawn (suspend on a ``SubtaskCompleted`` barrier), the parent gets a
-"started" tool_result and KEEPS its turn; the sub-agent runs concurrently on the
-shared executor and its result is delivered at the parent's next turn boundary
-via Mechanism C (a ``BackgroundSubagentDelivered`` anchor + an ``origin="system"``
-notice). The child is invisible to the ``ChildLifecycleObserver`` (its genesis
-is ``background=True``).
-
-Two test styles:
-
-* **deterministic** (a recording launcher stub, no executor) locks the
-  engine-side contract: Started event / child genesis / started receipt / parent
-  continues / launch seam called / governance audit / cap rejection / observer
-  invisibility.
-* **integration** (the real registry + executor + Mechanism-C delivery, a
-  content ``responder`` so the concurrent child does not race the cursor) proves
-  the end-to-end: the background child runs, finishes, and proactively wakes the
-  idle parent with its result.
+The deterministic tests pin the engine-side contract with a recording launcher
+(no executor, no delivery timing); the integration tests drive the real
+registry + executor to prove the result actually reaches an idle parent.
 """
 
 from __future__ import annotations
@@ -66,7 +56,7 @@ NOTICE_TAG = "<background-subagent "
 
 
 # ---------------------------------------------------------------------------
-# scripted responses
+# scripted responses + fixtures
 # ---------------------------------------------------------------------------
 
 
@@ -117,18 +107,19 @@ def _host(ws: Path, provider: FakeLLMProvider, **knobs: Any):
         **knobs,
     )
     driver = make_driver(host)
-    # The Client wires this in production; a bare host+driver test must too, or
-    # Mechanism-C delivery is a no-op (the durable record stands either way).
+    # The Client wires the notifier; a bare host+driver assembly must do it by
+    # hand or delivery silently no-ops (the durable record stands either way).
     host.set_background_notifier(driver)
     return host, driver
 
 
 class _RecordingLauncher:
-    """A stub background-sub-agent launcher: records launches, never drives.
+    """A launcher that records launches and never drives the child.
 
-    Lets the deterministic tests assert the ENGINE-side contract (events, child
-    genesis, started receipt, parent continuation) without the executor /
-    delivery timing. ``capacity`` returns ``reject`` to exercise the cap path."""
+    Isolates the engine-side contract (events, child genesis, started receipt,
+    parent continuation) from executor and delivery timing. It also leaves the
+    child in exactly the durable state a crash produces: Started, no Delivered,
+    child non-terminal. ``reject`` drives the capacity-cap path."""
 
     def __init__(self, reject: Optional[str] = None) -> None:
         self.launched: list[tuple[str, str]] = []
@@ -144,8 +135,8 @@ class _RecordingLauncher:
 
 
 def _install_stub(host: Any, stub: _RecordingLauncher) -> None:
-    # Swap the real registry for the recorder BEFORE the first engine is built
-    # (engines are built lazily on the first resolve).
+    # Must happen BEFORE the first engine is built: engines are built lazily on
+    # the first resolve and capture the registry they see.
     object.__setattr__(host, "_background_subagents", stub)
 
 
@@ -236,8 +227,9 @@ def test_background_child_genesis_is_marked_and_observer_skips_it(
 
 
 def test_foreground_child_genesis_omits_background_key(tmp_path: Path) -> None:
-    """A normal (foreground) spawn's TaskCreated folds background→None and its
-    canonical bytes never carry the key (byte-equal to pre-feature recordings)."""
+    """A foreground spawn's ``TaskCreated`` folds ``background`` to None and the
+    key never enters its canonical bytes, so foreground genesis stays
+    byte-stable across replay and hashing."""
     from noeta.protocols.events import TaskCreatedPayload
 
     fg = TaskCreatedPayload(goal="g", policy_name="scripted", agent_name="explore")
@@ -279,8 +271,8 @@ def test_background_spawn_over_cap_is_rejected_without_durable_trace(
 
 
 def test_resume_reproduces_background_audit(tmp_path: Path) -> None:
-    """fold is the single writer: re-folding the parent stream rebuilds the
-    same ``background_subagents`` audit (deterministic, EventLog-reconstructable)."""
+    """fold is the single writer: the ``background_subagents`` audit is derived
+    purely from the EventLog, so re-folding rebuilds it identically."""
     provider = FakeLLMProvider(responses=[_spawn_bg(), _end("ok")])
     host, driver = _host(_make_ws(tmp_path), provider)
     stub = _RecordingLauncher()
@@ -294,7 +286,7 @@ def test_resume_reproduces_background_audit(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# integration: real registry + executor + Mechanism-C delivery
+# integration: real registry + executor + delivery
 # ---------------------------------------------------------------------------
 
 
@@ -315,12 +307,15 @@ def _req_text(req: LLMRequest) -> str:
 
 
 def _bg_responder(req: LLMRequest) -> LLMResponse:
+    """Route by request content, not by a response cursor.
+
+    The background child runs concurrently with the parent, so a positional
+    ``responses`` list would be consumed in a nondeterministic order.
+    """
     text = _req_text(req)
-    # the isolated child sees only its own goal.
+    # The isolated child sees only its own goal.
     if CHILD_GOAL in text and PARENT_GOAL not in text:
         return _end(CHILD_RESULT)
-    # parent: notice turn (Mechanism C) → finish; started receipt present →
-    # finish the spawning turn; fresh goal → spawn in the background.
     if NOTICE_TAG in text:
         return _end("Background research came back; wrapping up.")
     if STARTED_MARKER in text:
@@ -342,11 +337,9 @@ def test_background_subagent_end_to_end_delivers_result(tmp_path: Path) -> None:
     host, driver = _host(_make_ws(tmp_path), provider)
 
     out = driver.start(goal=PARENT_GOAL, agent="main")
-    # Parent did NOT suspend on a foreground subtask barrier — background spawn
-    # keeps the parent's turn. The status may be "suspended" (parent idle) or
-    # "running" (Mechanism-C delivery already seeded the notice turn on the
-    # parent stream before _outcome folded) — both are valid; the real
-    # post-condition is the notice arriving below.
+    # Both statuses are legitimate here: "suspended" (parent idle) and "running"
+    # (delivery already seeded the notice turn before ``_outcome`` folded). The
+    # real post-condition is the notice arriving below.
     parent = fold(host.event_log, host.content_store, out.task_id)
     assert not isinstance(parent.wake_on, SubtaskCompleted), (
         "parent must not block on a foreground subtask barrier "
@@ -354,13 +347,11 @@ def test_background_subagent_end_to_end_delivers_result(tmp_path: Path) -> None:
     )
     assert out.status in ("suspended", "running")
 
-    # The background child + Mechanism-C delivery happen asynchronously on the
-    # executor / a daemon drive thread. The delivery anchor
-    # (``BackgroundSubagentDelivered``) is written BEFORE the notice turn that
-    # appends the parent-visible notice message (driver.seed_notify_background_
-    # subagent_exit: anchor first, THEN the seeded turn's MessagesAppended), so
-    # waiting on the anchor alone races that later write. Wait for the notice
-    # itself — the real post-condition, which implies the anchor landed too.
+    # Delivery runs asynchronously on the executor / a daemon drive thread, and
+    # ``seed_notify_background_subagent_exit`` writes the
+    # ``BackgroundSubagentDelivered`` anchor BEFORE the seeded turn's
+    # MessagesAppended. Waiting on the anchor would therefore race the notice
+    # write; wait on the notice, which implies the anchor landed too.
     def _parent_notice() -> list:
         parent = fold(host.event_log, host.content_store, out.task_id)
         return [
@@ -405,32 +396,28 @@ def test_background_subagent_end_to_end_delivers_result(tmp_path: Path) -> None:
 
 
 def test_background_delivery_anchor_is_exactly_once(tmp_path: Path) -> None:
-    """The ``BackgroundSubagentDelivered`` anchor is written once; a re-fold
-    never re-injects, and the audit flips running→completed exactly once."""
+    """Delivery is not idempotent, so the anchor must be written exactly once —
+    a second one would re-inject the notice and double-flip the audit."""
     provider = FakeLLMProvider(responder=_bg_responder)
     host, driver = _host(_make_ws(tmp_path), provider)
     out = driver.start(goal=PARENT_GOAL, agent="main")
     assert _wait_for(
         lambda: "BackgroundSubagentDelivered" in _events(host, out.task_id)
     )
-    # exactly one Started and one Delivered on the parent stream.
     types = _events(host, out.task_id)
     assert types.count("BackgroundSubagentStarted") == 1
     assert types.count("BackgroundSubagentDelivered") == 1
 
 
 def test_recover_redrives_undelivered_background_subagent(tmp_path: Path) -> None:
-    """Crash recovery: a Started-without-Delivered child whose stream is
-    non-terminal (the host died mid-flight) is re-enqueued + re-driven from its
-    own EventLog at startup, then delivered."""
+    """A host that dies mid-flight leaves a Started-without-Delivered child on a
+    non-terminal stream. Startup recovery must re-enqueue it, re-drive it from
+    its own EventLog and deliver — otherwise the parent waits forever."""
     from noeta.execution.background_subagent import BackgroundSubagentRegistry
 
     ws = _make_ws(tmp_path)
     provider = FakeLLMProvider(responder=_bg_responder)
     host, driver = _host(ws, provider)
-    # Phase 1 — a launcher stub creates the child (background genesis) but never
-    # drives it: exactly the durable state a crash leaves (Started, no Delivered,
-    # child non-terminal).
     stub = _RecordingLauncher()
     _install_stub(host, stub)
     out = driver.start(goal=PARENT_GOAL, agent="main")
@@ -439,7 +426,7 @@ def test_recover_redrives_undelivered_background_subagent(tmp_path: Path) -> Non
     child = fold(host.event_log, host.content_store, child_id)
     assert child.status != "terminal"
 
-    # Phase 2 — "restart": swap the stub for the REAL registry and recover.
+    # The restart: swap the stub for the real registry and recover.
     real = BackgroundSubagentRegistry(
         event_log=host.event_log,
         content_store=host.content_store,
@@ -460,18 +447,17 @@ def test_recover_redrives_undelivered_background_subagent(tmp_path: Path) -> Non
 
 
 def test_cancelled_background_subagent_is_marked_terminal(tmp_path: Path) -> None:
-    """A background child whose drive is aborted by the session cancel/close
-    cascade (``cancel_check`` → ``TaskCancellationRequested``) is marked
-    ``TaskCancelled`` on its OWN stream — not left a non-terminal orphan — and
-    its result is NOT delivered.
+    """A background child aborted by the session cancel/close cascade must be
+    marked ``TaskCancelled`` on its OWN stream and must not be delivered. A
+    cancelled child left non-terminal reads as "still in flight" to a later
+    crash-recovery scan (``_child_is_terminal`` → False), which would re-drive
+    it to completion after the session is gone.
 
-    White-box on the executor done-callback: the cancel cascade makes
-    ``_drive_member_to_terminal`` raise ``TaskCancellationRequested``, which the
-    executor captures on the future and hands to ``_on_done``. We reproduce that
-    exact hand-off deterministically (the real cancel→drive race is not
-    reproducible under the serial FakeLLM cursor). Without the fix the child
-    stays non-terminal, so a later crash-recovery scan (``_child_is_terminal`` →
-    False) would re-drive a cancelled child to completion."""
+    White-box on the executor done-callback: the cascade makes
+    ``_drive_member_to_terminal`` raise ``TaskCancellationRequested``, the
+    executor captures it on the future and hands it to ``_on_done``. That
+    hand-off is reproduced directly because the real cancel-versus-drive race
+    is not reproducible under the serial FakeLLM cursor."""
     from concurrent.futures import Future
 
     from noeta.execution.background_subagent import BackgroundSubagentRegistry
@@ -480,9 +466,8 @@ def test_cancelled_background_subagent_is_marked_terminal(tmp_path: Path) -> Non
     ws = _make_ws(tmp_path)
     provider = FakeLLMProvider(responses=[_spawn_bg(), _end("chatting")])
     host, driver = _host(ws, provider)
-    # Spawn via the recorder so the child gets genesis (Started + child
-    # TaskCreated) but is never driven — the durable state present when the
-    # cancel cascade aborts an in-flight drive.
+    # Genesis without a drive is the durable state present when the cancel
+    # cascade aborts an in-flight child.
     stub = _RecordingLauncher()
     _install_stub(host, stub)
     out = driver.start(goal=PARENT_GOAL, agent="main")
@@ -501,27 +486,25 @@ def test_cancelled_background_subagent_is_marked_terminal(tmp_path: Path) -> Non
     future.set_exception(TaskCancellationRequested(child_id))
     registry._on_done(future, out.task_id, child_id)
 
-    # The child is now terminal via its OWN TaskCancelled...
     assert "TaskCancelled" in _events(host, child_id)
     assert fold(host.event_log, host.content_store, child_id).status == "terminal"
-    # ...so a recovery scan classifies it terminal and never re-drives it.
+    # Terminal to a recovery scan, so it is never re-driven.
     assert registry._child_is_terminal(child_id) is True
-    # ...and a cancelled child is NOT delivered (session is being torn down).
+    # The session is being torn down: nothing to deliver a result to.
     assert delivered == []
     assert "BackgroundSubagentDelivered" not in _events(host, out.task_id)
 
 
 def test_delivery_gives_up_when_parent_never_settles(tmp_path: Path) -> None:
-    """The bounded retry-until-idle give-up branch: if the parent never settles
-    to a next-goal suspend before the deadline, delivery returns WITHOUT writing
-    a ``BackgroundSubagentDelivered`` anchor (the documented v1 drop — no
-    duplicate, may lose). Exercised with a notifier that always raises (a parent
-    perpetually mid-turn) + a clamped deadline."""
+    """Delivery waits for the parent to settle, but the wait is bounded. When
+    the deadline passes, it returns WITHOUT writing a
+    ``BackgroundSubagentDelivered`` anchor: the contract is may-lose rather than
+    may-duplicate, since a stray anchor would suppress a later real delivery."""
     from noeta.protocols.events import TaskCreatedPayload
 
     ws = _make_ws(tmp_path)
-    # A parent that just rests idle: suspended on next-goal, NON-terminal, so the
-    # delivery loop keeps retrying rather than dropping on a terminal parent.
+    # The parent must rest NON-terminal (suspended on next-goal): delivery drops
+    # immediately on a terminal parent and would never enter the retry loop.
     provider = FakeLLMProvider(responses=[_end("idle")])
     host, driver = _host(ws, provider)
     out = driver.start(goal="just chat", agent="main")
@@ -553,11 +536,10 @@ def test_delivery_gives_up_when_parent_never_settles(tmp_path: Path) -> None:
         def notify_background_subagent_exit(self, *args: Any, **kw: Any) -> None:
             raise RuntimeError("parent still mid-turn")
 
-    # Build the delivery plan the way the host's exit hook does: project the
-    # stuck child into a notice, then a notify closure that always raises (a
-    # parent perpetually mid-turn). The bounded retry lives in the shared
-    # BackgroundDelivery seam; pass a clamped deadline directly (no more
-    # class-constant monkeypatching).
+    # Build the delivery plan the way the host's exit hook does, then hand it a
+    # notifier that always raises — a parent perpetually mid-turn. The bounded
+    # retry lives in the BackgroundDelivery seam, which takes the deadline as an
+    # argument, so the test clamps it instead of patching a class constant.
     result = host._background_subagent_result(child_id)  # noqa: SLF001
     assert result is not None  # a genesis-only child projects to a "stuck" notice
     status, ref, summary = result
@@ -585,13 +567,12 @@ def test_delivery_gives_up_when_parent_never_settles(tmp_path: Path) -> None:
 
 
 def test_deref_failure_writes_no_delivery_anchor(tmp_path: Path) -> None:
-    """The result deref runs BEFORE the non-idempotent delivery anchor.
+    """The result deref must run BEFORE the non-idempotent delivery anchor.
 
-    A missing / evicted result ref makes the deref raise; because it precedes
-    the ``BackgroundSubagentDelivered`` emit, no anchor is written — so the
-    caller's retry loop stays idempotent instead of stacking a duplicate anchor
-    per attempt and then dropping. If the deref were placed after the anchor
-    (the pre-fix order), the anchor below would already be in the log."""
+    A missing or evicted result ref makes the deref raise. With the deref first,
+    no anchor is written and the caller's retry loop stays idempotent; with the
+    anchor first, every failed attempt would stack another anchor and then
+    drop."""
     from noeta.protocols.values import ContentRef
 
     provider = FakeLLMProvider(responses=[_end("idle")])

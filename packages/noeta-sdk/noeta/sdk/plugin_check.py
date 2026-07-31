@@ -1,27 +1,19 @@
-"""``python -m noeta.sdk.plugin_check`` — the manifest packaging verifier (spec D1).
+"""``python -m noeta.sdk.plugin_check`` — the manifest packaging verifier.
 
-A single-file plugin declares its contributions with decorator sugar
-(``@plugin.tool`` / ``@plugin.reminder(...)`` / ...); a **distributed** plugin
-must *also* ship a static manifest (``[tool.noeta]`` in ``pyproject.toml``,
-mirrored to ``noeta-plugin.toml`` package data) so the loader can read a plugin's
-identity + contributions **without importing any plugin code** (D1). This tool
-keeps the two in sync: it derives the canonical manifest from the decorators and
-verifies the shipped static manifest matches — the publish-time check the spec
-calls for. It is deliberately **not** a console script (CONTEXT.md: "there is no
-operator CLI"); it runs only as ``python -m noeta.sdk.plugin_check``.
-
-Usage::
+A distributed plugin must ship a static manifest (``[tool.noeta]`` in
+``pyproject.toml``, mirrored to ``noeta-plugin.toml`` package data) alongside
+the decorator sugar that declares its contributions, so the loader can read the
+plugin's identity and contributions **without importing any plugin code**; this
+tool is the publish-time check that the two agree. Deliberately not a console
+script — there is no operator CLI::
 
     python -m noeta.sdk.plugin_check PATH [PATH ...]     # verify (default)
     python -m noeta.sdk.plugin_check --emit PATH         # print derived TOML
 
 ``PATH`` is a single-file plugin (``plugin.py``) or a directory containing one.
-Verification compares, per contribution, the **surface**, **name**, **params**,
-**path**, and the ``ref``'s *attribute* (the part after ``:`` / the final dotted
-component) — the module portion of a ``ref`` is an install-layout concern
-resolved at import time, so the tool normalizes it away. The manifest ``name`` and
-``requires-noeta`` are compared exactly; ``config-schema`` is advisory and not
-compared. Exit status is ``0`` when every path is consistent, ``1`` otherwise.
+Comparison normalizes the module portion of a ``ref`` away — it is an
+install-layout concern resolved at import time — and treats ``config-schema`` as
+advisory. Exit status is ``0`` when every path is consistent, ``1`` otherwise.
 """
 
 from __future__ import annotations
@@ -55,35 +47,24 @@ __all__ = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# Deriving the canonical manifest from a single-file plugin's decorators.
-# ---------------------------------------------------------------------------
-
-
 def derive_manifest(plugin_py: Path) -> PluginManifest:
     """Execute ``plugin_py`` and return the manifest its ``PluginBuilder`` declares.
 
-    This is the one step that runs plugin code — acceptable because
-    ``plugin_check`` is an author-side publish tool over a trusted local file
-    (the same trust class the single-file loader assumes). A missing / duplicate
-    ``PluginBuilder`` raises :class:`PluginError`, naming the file.
+    The one step that runs plugin code, acceptable because ``plugin_check`` is an
+    author-side publish tool over a trusted local file — the same trust class the
+    single-file loader assumes. A missing or duplicate ``PluginBuilder`` raises
+    :class:`PluginError`, naming the file.
     """
     module = exec_plugin_file(plugin_py, module_prefix="_noeta_plugin_check_")
     builder = find_builder(module, plugin_py)
     return builder.manifest()
 
 
-# ---------------------------------------------------------------------------
-# Locating the shipped static manifest.
-# ---------------------------------------------------------------------------
-
-
 def find_shipped_manifest(directory: Path) -> Optional[tuple[PluginManifest, Path]]:
     """The distributed manifest shipped beside a plugin, or ``None``.
 
-    Looks for ``noeta-plugin.toml`` first (the wheel package-data form), then a
-    ``pyproject.toml`` carrying ``[tool.noeta]``. Returns the parsed manifest and
-    the file it came from.
+    ``noeta-plugin.toml`` — the wheel package-data form, and what an installed
+    plugin actually carries — wins over a ``pyproject.toml`` ``[tool.noeta]``.
     """
     packaged = directory / MANIFEST_BASENAME
     if packaged.is_file():
@@ -97,7 +78,8 @@ def find_shipped_manifest(directory: Path) -> Optional[tuple[PluginManifest, Pat
 
 
 # ---------------------------------------------------------------------------
-# Comparison — normalized so an install-layout ref module never fails the check.
+# Comparison — normalized so an install-layout ``ref`` module never fails the
+# check, and so an omitted param never differs from its explicit default.
 # ---------------------------------------------------------------------------
 
 
@@ -105,15 +87,15 @@ def _norm_scalar(value: Any) -> Any:
     return list(value) if isinstance(value, (list, tuple)) else value
 
 
-#: Ordering / binding params the **loader** defaults when a manifest omits
-#: them, paired with the value that omission means. A hand-written
-#: ``noeta-plugin.toml`` that leaves ``priority`` out is byte-identical in
-#: runtime effect to one that writes ``priority = 0`` — the decorators always
-#: stamp the explicit value — so comparing them raw reported drift for two
-#: manifests that behave identically. Normalizing to "absent" on BOTH sides
-#: keeps the verifier honest about what actually differs.
+#: Ordering / binding params the **loader** defaults when a manifest omits them,
+#: paired with the value that omission means. A hand-written
+#: ``noeta-plugin.toml`` that leaves ``priority`` out has identical runtime
+#: effect to one writing ``priority = 0``, yet the decorators always stamp the
+#: explicit value — comparing raw would report drift between two manifests that
+#: behave the same. Normalizing to "absent" on BOTH sides keeps the verifier
+#: honest about what actually differs.
 #:
-#: The values mirror ``plugin_set._priority`` / ``plugin_set._seams``; a change
+#: These values mirror ``plugin_set._priority`` / ``plugin_set._seams``; a change
 #: there must be reflected here (the pair is small and pinned by a test).
 _DEFAULTED_PARAMS: Mapping[str, Any] = {
     "priority": 0,
@@ -144,10 +126,9 @@ def _norm_contribution(c: ManifestContribution) -> dict[str, Any]:
 def diff_manifests(derived: PluginManifest, shipped: PluginManifest) -> list[str]:
     """Human-readable differences between a derived and a shipped manifest.
 
-    Empty ⇒ the two are consistent. Compares ``name`` / ``requires-noeta``
-    exactly and every contribution by ``(surface, name)`` with a normalized
-    ``ref`` attribute, ``path``, and ``params`` (``config-schema`` is advisory,
-    not compared).
+    Empty ⇒ consistent. ``name`` / ``requires-noeta`` are compared exactly,
+    contributions by ``(surface, name)`` with a normalized ``ref`` attribute;
+    ``config-schema`` is advisory and not compared at all.
     """
     diffs: list[str] = []
     if derived.name != shipped.name:
@@ -177,13 +158,14 @@ def diff_manifests(derived: PluginManifest, shipped: PluginManifest) -> list[str
 
 
 # ---------------------------------------------------------------------------
-# Emitting canonical TOML (so an author can generate the manifest to ship).
+# Emitting canonical TOML, so an author generates the manifest to ship rather
+# than hand-writing one that then drifts.
 # ---------------------------------------------------------------------------
 
 
 #: Characters a TOML *basic string* cannot carry literally. A literal-valued
 #: contribution (a ``prompt_fragment``'s text) is routinely multi-line, so
-#: emitting these raw would produce a manifest that no longer parses.
+#: emitting these raw would produce a manifest that does not parse.
 _TOML_ESCAPES = (
     ("\\", "\\\\"),
     ('"', '\\"'),
@@ -209,14 +191,13 @@ def _toml_scalar(value: Any) -> str:
 def manifest_to_toml(manifest: PluginManifest) -> str:
     """Render ``manifest`` as the canonical ``noeta-plugin.toml`` text.
 
-    The output an author pastes into ``pyproject.toml`` (under ``[tool.noeta]``)
-    or ships as ``noeta-plugin.toml``. Deterministic: contributions keep their
-    declared order; each ``[[contributions]]`` table lists ``surface`` / ``name``
-    / ``ref`` / ``path`` then its params in sorted key order.
+    Deterministic, so re-emitting an unchanged plugin produces byte-identical
+    output: contributions keep their declared order and each table's params are
+    sorted by key.
 
     A contribution whose value is a **literal** rather than an importable object
     (``prompt_fragment``) carries that literal as an ordinary param
-    (:data:`~noeta.client.plugin_manifest.LITERAL_PARAM`), so it round-trips
+    (:data:`~noeta.client.plugin_manifest.LITERAL_PARAM`) so it round-trips
     through this emitter — an installed package has no builder cache to fall back
     on and nothing to import.
     """
@@ -248,8 +229,6 @@ def manifest_to_toml(manifest: PluginManifest) -> str:
 
 @dataclass(frozen=True)
 class CheckResult:
-    """The outcome of checking one plugin path."""
-
     plugin_py: Path
     ok: bool
     messages: tuple[str, ...] = ()
@@ -262,12 +241,7 @@ def _resolve_plugin_py(path: Path) -> Path:
 
 
 def check_plugin(path: Path) -> CheckResult:
-    """Verify a plugin's shipped manifest matches its decorators.
-
-    ``path`` is a ``plugin.py`` or a directory containing one. A missing plugin
-    file, a missing shipped manifest, or any drift is a failure with a naming
-    message; a match reports ``ok``.
-    """
+    """Verify a plugin's shipped manifest matches its decorators."""
     plugin_py = _resolve_plugin_py(path)
     if not plugin_py.is_file():
         return CheckResult(plugin_py, False, (f"no plugin.py at {plugin_py}",))
@@ -307,7 +281,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m noeta.sdk.plugin_check",
         description="Verify a single-file plugin's shipped manifest matches its "
-        "decorators (spec D1).",
+        "decorators.",
     )
     parser.add_argument(
         "paths", nargs="+", metavar="PATH",

@@ -1,21 +1,12 @@
-"""`parallel()` batch fan-out
-(reuses the subtask fan-out group barrier).
+"""``parallel()`` batch fan-out over the subtask group barrier.
 
-``parallel([...])`` in a script lays out a batch of workers at once -> one
-N-way ``SpawnSubtasksDecision`` (group all-of
-barrier) -> wake once all members terminate, results returned to
-the script **in spawn order**.
-
-Proves:
-* ``parallel([a,b,c])`` spawns a 3-member group on the orchestration subtask,
-  results ordered by spawn;
-* a single ``agent()`` and ``parallel()`` mixed in one script don't interfere;
-* a partial member failure still completes the group (wait-all-terminate); a
-  failed member **halts the whole workflow loudly**, and a script may ``try/except``
-  to tolerate it.
-
-v1 drains sequentially (not wall-clock parallel -- true concurrency is a
-follow-on, see ADR D7/D8).
+One ``parallel([...])`` lays out a whole batch of workers as a single N-way
+``SpawnSubtasksDecision`` with an all-of barrier that wakes once every member
+terminates. The results must come back to the script **in spawn order**, which
+is the load-bearing guarantee here because the drain is sequential and its order
+is an implementation detail. A failed member still completes the group
+(wait-all-terminate) but halts the workflow loudly rather than flowing an empty
+value into the script, unless the script catches it.
 """
 
 from __future__ import annotations
@@ -174,8 +165,8 @@ def test_single_and_parallel_mixed(tmp_path: Path) -> None:
 
 def test_parallel_member_failure_halts_workflow(tmp_path: Path) -> None:
     # Member b fails (stop_reason=error). The group still waits-all-terminate
-    # (all three spawn), but a failed member now HALTS the workflow loudly
-    # instead of flowing an empty value back into the script.
+    # (all three spawn), but a failed member HALTS the workflow loudly rather
+    # than flowing an empty value back into the script.
     script = (
         'rs = parallel(["a", "b", "c"], agent="explore")\n'
         'return "|".join(rs)\n'

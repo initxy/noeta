@@ -1,11 +1,11 @@
-"""``build_browser_tools`` — the noeta-owned browser tool pack (spec layer 3).
+"""``build_browser_tools`` — the noeta-owned browser tool pack.
 
-The pack's model-facing contract is noeta's, not the container's: these assert
-the exact roster, schemas, risk level, and descriptions (the stable-prefix
-bytes), then that each tool delegates to the injected backend and maps a backend
-fault to ``ToolResult(success=False, ...)`` without raising. The stable-prefix
-guarantee (spec acceptance #2) is exercised by ``FakeBackend`` renaming the AIO
-wire freely — the tool schema below never moves.
+The pack's model-facing contract is noeta's, not the container's: the roster,
+schemas, risk level and descriptions are pinned here because they are
+stable-prefix bytes the provider caches on. ``FakeBackend`` is free to rename
+the AIO wire underneath — the schemas below must not move with it. Each tool
+must also map a backend fault to ``ToolResult(success=False, ...)`` rather than
+raising into the worker.
 """
 
 from __future__ import annotations
@@ -214,7 +214,7 @@ def test_click_non_integer_index_is_a_failed_result() -> None:
     assert backend.calls == []
 
 
-# -- screenshot v1: artifact, NOT vision ------------------------------------ #
+# -- screenshot: artifact, NOT vision --------------------------------------- #
 
 
 def test_screenshot_puts_png_in_artifacts_not_images() -> None:
@@ -222,12 +222,13 @@ def test_screenshot_puts_png_in_artifacts_not_images() -> None:
     ctx, store = _ctx()
     result = build_browser_tools(backend)["browser_screenshot"].invoke({}, ctx)
     assert result.success is True
-    # v1: the PNG rides in ``artifacts`` (file panel), NEVER ``images`` (vision).
+    # The PNG rides in ``artifacts`` (the file panel), NEVER in ``images``:
+    # ``images`` feeds the vision channel and would spend tokens on every turn.
     assert len(result.artifacts) == 1
     assert result.images == []
     assert store.get(result.artifacts[0]) == b"\x89PNGscreenshot"
     assert result.artifacts[0].media_type == "image/png"
-    # v1: output is None — the ref rides artifacts only. The model has no
+    # ``output`` is None — the ref rides artifacts only. The model has no
     # ref-deref tool, so a hash in the prompt would be dead token weight.
     assert result.output is None
 

@@ -1,13 +1,14 @@
-"""Code-agnostic per-task agent→Engine resolver skeleton.
+"""Per-task agent→Engine resolver skeleton.
 
-Hoisted verbatim from :class:`noeta.agent.execution.resolver.CodeEngineResolver`.
-The three domain seams (agent lookup, spawnable-set parsing, engine build) are
-left as abstract hooks; a coding-product subclass (``CodeEngineResolver``) and
-any future product-specific resolver fill them in.
-
-Code-agnostic by contract: this module imports only ``noeta.protocols`` /
-``noeta.core`` / ``noeta.agent`` — never ``noeta.agent`` (enforced by the
-import-linter ``execution-not-code`` contract).
+Three domain seams (agent lookup, spawnable-set parsing, engine build) are left
+as abstract hooks; a concrete subclass fills them in while the skeleton owns the
+shared resolution logic — the Engine cache key, the ask_user_question masks, and
+the delegation/spawnable inheritance rule. The cache key must reproduce the same
+Engine for a resumed turn, so every binding dimension a session can vary (model,
+workspace, provider, sandbox container, permission mode, MCP aliases, effort)
+extends a flat key tuple. Declared as a plain class rather than a ``@dataclass``
+so a dataclass subclass supplies the real field storage and ``__init__`` while
+keeping its field table byte-identical.
 """
 
 from __future__ import annotations
@@ -40,7 +41,7 @@ __all__ = [
     "agent_name_of",
 ]
 
-#: #13 — upper bound on the in-process Engine cache. Mirrors the constant in
+#: Upper bound on the in-process Engine cache. Mirrors the constant in
 #: ``noeta.client.host`` so both sides of the resolver hierarchy use the same cap.
 _MAX_CACHED_ENGINES: int = 256
 
@@ -89,20 +90,14 @@ def _subtask_output_schema(
 
 
 class GenericEngineResolver:
-    """Hoisted per-task agent→Engine resolver skeleton.
+    """Per-task agent→Engine resolver skeleton.
 
-    The common engine-resolution logic lives here; concrete subclasses (e.g.
-    :class:`~noeta.agent.execution.resolver.CodeEngineResolver`) implement the
-    three abstract seams below. Designed as a **plain class** (not a
+    The common engine-resolution logic lives here; concrete subclasses implement
+    the three abstract seams below. Designed as a **plain class** (not a
     ``@dataclass``) so a dataclass subclass can keep its full field table
     **byte-identical** — fields are declared here as pure annotations for
     type-checker visibility, and the subclass's ``@dataclass`` machinery
     supplies the real storage + ``__init__``.
-
-    Semantics preserved byte-for-byte from the original
-    ``CodeEngineResolver``: the cache key, the ask_user_question masks, the
-    delegation/spawnable inheritance rule, and the
-    :func:`drive_pending_subtasks` shape are all lifted without change.
     """
 
     # --- field annotations (storage supplied by the @dataclass subclass) ---
@@ -117,12 +112,12 @@ class GenericEngineResolver:
     workflow_allowed: bool
     policy_wrapper: Optional[Callable[[Policy], Policy]]
     unnamed_fallback: Optional[Any]
-    # D3 (I4): the cache key gained TWO session-scoped
-    # dimensions — ``workspace`` (per-session fs-root name) then ``provider``
-    # (bound provider name) — each ``None`` for the host-fixed default. The key
-    # stays a flat tuple so both extend it without a structural change.
-    # #13: bounded LRU via OrderedDict (cap = _MAX_CACHED_ENGINES) + a threading
-    # Lock to serialise get-or-build-put under ThreadingHTTPServer concurrency.
+    # The cache key carries two session-scoped dimensions — ``workspace``
+    # (per-session fs-root name) then ``provider`` (bound provider name) — each
+    # ``None`` for the host-fixed default. The key stays a flat tuple so both
+    # extend it without a structural change. Bounded LRU via OrderedDict
+    # (cap = _MAX_CACHED_ENGINES) + a threading Lock to serialise
+    # get-or-build-put under ThreadingHTTPServer concurrency.
     _engines: OrderedDict[
         tuple[
             str, str, bool, Optional[str], Optional[str], Optional[str],
@@ -131,12 +126,11 @@ class GenericEngineResolver:
         Engine,
     ]
     _engines_lock: threading.Lock
-    #: item 3 — per-key Engine-build locks. ``_engines_lock`` used to be
-    #: held for the FULL ``_build_engine`` (including a live MCP connect),
-    #: serialising every session's Engine build behind one slow/hanging
-    #: connector. Builds now run outside the global lock, one-per-key via
-    #: these locks (storage supplied by the @dataclass subclass; lazily
-    #: created in ``_engine_for_agent`` for older test doubles).
+    #: Per-key Engine-build locks: the global ``_engines_lock`` guards only the
+    #: cache map, while a build (including a live MCP connect) runs outside it,
+    #: one-per-key via these locks, so a slow/hanging connector cannot serialise
+    #: every session's Engine build. Storage supplied by the @dataclass subclass;
+    #: lazily created in ``_engine_for_agent`` for older test doubles.
     _engine_builds: dict[Any, threading.Lock]
     # per-turn, NON-durable permission_mode carrier
     # keyed by task_id (storage supplied by the @dataclass subclass — see
@@ -147,11 +141,10 @@ class GenericEngineResolver:
     #: per-turn, NON-durable enabled-MCP-alias carrier keyed by
     #: task_id (storage supplied by the @dataclass subclass — see
     #: ``SdkHost._turn_mcp_aliases``). The frontend sends the alias clean list
-    #: each turn (NO url / token — those live host-side, D3); the driver records
+    #: each turn (NO url / token — those live host-side); the driver records
     #: it here via :meth:`note_turn_mcp` before resolution, read in
     #: :meth:`resolve_engine` to thread the aliases into the cache key + build.
-    #: ``()`` (default / no enabled servers / every pre-0042 path) ⇒ no live MCP
-    #: tools, byte-identical to before.
+    #: ``()`` (default / no enabled servers) ⇒ no live MCP tools.
     _turn_mcp_aliases: dict[str, tuple[str, ...]]
     #: Per-turn, NON-durable reasoning-effort carrier keyed by task_id. Mirrors
     #: permission/MCP: set before Engine resolution, read into the cache key +
@@ -174,7 +167,6 @@ class GenericEngineResolver:
             :func:`~noeta.agent.spec.agent_activates` — ``"todo_write"`` /
             ``"ask_user_question"`` / ``"delegation"`` / ``"mcp"`` membership),
             and a ``.spawnable`` member parseable by :meth:`_spawnable_set`.
-            (``plan_mode`` was removed)
           * An unknown ``name`` **must** raise ``UnknownAgentError`` carrying
             the supplied ``task_id``, the bad ``name``, and a sorted
             ``available`` list of legal names.
@@ -241,7 +233,7 @@ class GenericEngineResolver:
         ``exec_env_ref`` is the per-session sandbox container ``base_url``
         (``None`` ⇒ the local host / the host-default sandbox config). An
         implementation resolves it to a live sandbox backend the Engine's fs /
-        shell tools run their IO against — a resumed / reclaimed session (T6)
+        shell tools run their IO against — a resumed / reclaimed session
         reconnects to THIS container by its address; the generic skeleton only
         threads it through the cache key.
 
@@ -252,8 +244,8 @@ class GenericEngineResolver:
         ``structured_output`` control schema (its ``parameters`` = this
         schema) AND wraps the built policy in ``StructuredOutputPolicy`` so
         the helper's call becomes its final answer. ``None`` (every other
-        build, including every cached :meth:`_engine_for_agent` path) must be
-        byte-identical to before the parameter existed.
+        build, including every cached :meth:`_engine_for_agent` path) leaves
+        the build unchanged.
         """
         raise NotImplementedError
 
@@ -271,8 +263,7 @@ class GenericEngineResolver:
         never serve another scope's task via the cache. Must be cheap, total,
         and deterministic for a given ``(agent, task_id)`` — it runs on every
         engine resolve. ``None`` (this default — every host without
-        task-varying material) keeps the shared slot, byte-equal with the
-        pre-scope key semantics.
+        task-varying material) keeps the shared slot.
         """
         return None
 
@@ -282,7 +273,7 @@ class GenericEngineResolver:
         """Build the reserved ``__workflow__`` child's Engine.
 
         Routed from :meth:`drive_pending_subtasks` when a child's recorded
-        ``agent_name`` is :data:`WORKFLOW_AGENT_NAME` (not a roster agent). The
+        ``agent_name`` is :data:`WORKFLOW_AGENT_NAME` (not a named agent). The
         implementation reads the child's script/args from its durable
         ``TaskCreated.inputs`` and builds an Engine whose Policy is the
         orchestration interpreter (``OrchestrationPolicy``); ``allowed_subtask_agents``
@@ -298,8 +289,6 @@ class GenericEngineResolver:
         """The single-Engine fallback (Protocol requirement): the default
         Agent's Engine. A resident host normally drives via
         :meth:`resolve_engine`; this is the degenerate single-Agent view.
-
-        (hoisted from ``CodeEngineResolver.engine``.)
         """
         return self._engine_for_agent(self._lookup_agent("default", task_id="<default-engine>"))
 
@@ -312,11 +301,11 @@ class GenericEngineResolver:
         records it here (keyed by ``task_id``) before the Engine is resolved, so
         both the synchronous seed-time resolve AND the later background-thread
         drive (async transport) read the SAME mode. ``None`` means "no per-turn
-        selection" → :meth:`_build_engine` falls back to the host-fixed default,
-        byte-identical to every pre-#4 path. Never written to the event log
-        (resume re-derives nothing from it — the recorded approval decisions are
-        resumed directly). Overwritten each turn, never evicted, so a turn that
-        suspends on approval resolves the same mode on resume.
+        selection" → :meth:`_build_engine` falls back to the host-fixed default.
+        Never written to the event log (resume re-derives nothing from it — the
+        recorded approval decisions are resumed directly). Overwritten each turn,
+        never evicted, so a turn that suspends on approval resolves the same mode
+        on resume.
         """
         self._turn_permission_mode[str(task_id)] = permission_mode
 
@@ -333,15 +322,14 @@ class GenericEngineResolver:
 
         The frontend sends the enabled server **aliases** each turn (a clean
         list like ``("github", "notion")`` — never url / token, which live
-        host-side, D3); the driver records them here keyed by ``task_id`` before
+        host-side); the driver records them here keyed by ``task_id`` before
         the Engine is resolved so both the synchronous seed-time resolve AND the
         later background-thread drive read the SAME set. ``()`` means "no enabled
-        MCP servers" → :meth:`_build_engine` builds no live MCP tools,
-        byte-identical to every pre-0042 path. Never written to the event log
-        (the recorded tool schema — R-1 — is the durable truth; the alias list is
-        only the runtime selector that decides which servers to connect this
-        turn). Overwritten each turn; a turn that suspends on approval resolves
-        the same set on resume."""
+        MCP servers" → :meth:`_build_engine` builds no live MCP tools.
+        Never written to the event log (the recorded tool schema is the durable
+        truth; the alias list is only the runtime selector that decides which
+        servers to connect this turn). Overwritten each turn; a turn that
+        suspends on approval resolves the same set on resume."""
         carrier = getattr(self, "_turn_mcp_aliases", None)
         if carrier is not None:
             carrier[str(task_id)] = tuple(aliases)
@@ -392,7 +380,7 @@ class GenericEngineResolver:
             reg.discard(task_id)
 
     def resolve_engine(self, task: Any) -> Engine:
-        """Hoisted Engine resolver.
+        """Resolve the Engine driving ``task`` by its folded state.
 
         Folds the Task's ``TaskCreated.agent_name`` → :meth:`_lookup_agent` →
         cached :meth:`_build_engine`. An unknown ``agent_name`` is a hard
@@ -400,20 +388,20 @@ class GenericEngineResolver:
         no-op. ``"unnamed"`` resolves to ``unnamed_fallback`` when one was
         supplied, else also hard-errors.
 
-        Issue 06: the resolver key is the full
+        The resolver key is the full
         ``(agent_name, model binding, ask_user_question_enabled)``. The bound
         model is read from the Task's latest ``ModelBound`` fold
-        (``governance.model_binding``); an old recording with **no**
+        (``governance.model_binding``); a recording with **no**
         ``ModelBound`` folds to ``None`` → the host-fixed default
         :attr:`model` is used, so resume re-records the same
-        ``LLMRequestStartedPayload.model`` and stays byte-equal. A per-turn
-        switch (a later ``ModelBound`` with a different model) resolves a
-        distinct Engine for that model.
+        ``LLMRequestStartedPayload.model``. A per-turn switch (a later
+        ``ModelBound`` with a different model) resolves a distinct Engine for
+        that model.
         """
         task_id = str(getattr(task, "task_id", ""))
         name = agent_name_of(self.event_log, task_id)
         # A ``__workflow__`` child recorded on the stream is the orchestration
-        # interpreter, NOT a roster agent — route it (with the task_id, so its
+        # interpreter, NOT a named agent — route it (with the task_id, so its
         # script is read off its stream) BEFORE the registry lookup that would
         # otherwise raise ``UnknownAgentError`` for the reserved name. Mirrors
         # the drain's ``_build_subtask_engine`` (gate above its ``_lookup_agent``);
@@ -421,7 +409,7 @@ class GenericEngineResolver:
         # untargeted ``tick()`` (rather than the drain's targeted descent) hits
         # ``_lookup_agent("__workflow__")`` and hard-errors. The inherited
         # spawnable set comes from the child's DIRECT parent agent (the one that
-        # called ``run_workflow``) — byte-equal to what the drain threads at the
+        # called ``run_workflow``) — equal to what the drain threads at the
         # same tree layer. Returns uncached, exactly as the drain path does.
         if name == WORKFLOW_AGENT_NAME:
             parent_id = getattr(task, "parent_task_id", None)
@@ -434,27 +422,26 @@ class GenericEngineResolver:
                 task_id, allowed_subtask_agents=inherited
             )
         model = self._bound_model_for(task)
-        # the per-session workspace absolute path is welded into the durable record,
+        # the per-session workspace absolute path welded into the durable record,
         # folded from the Task's ``TaskHostBound`` (``governance.workspace``);
-        # ``None`` on an old / non-session recording → the host-fixed default
-        # dir, byte-equal.
+        # ``None`` on a non-session recording → the host-fixed default dir.
         workspace = self._bound_workspace_for(task)
         # the per-session provider name folded from the latest
-        # ``ModelBound`` (``governance.provider_binding``); ``None`` on an old /
-        # pre-I4 recording → the host default provider, byte-equal.
+        # ``ModelBound`` (``governance.provider_binding``); ``None`` on a
+        # recording that never bound a provider → the host default provider.
         provider = self._bound_provider_for(task)
         # the per-session sandbox container base_url folded from
         # ``TaskHostBound`` (``governance.exec_env_ref``); ``None`` on every
-        # local / non-sandbox recording → the local host, byte-equal. When set,
+        # local / non-sandbox recording → the local host. When set,
         # a resumed / reclaimed task reconnects to THIS container.
         exec_env_ref = self._bound_exec_env_ref_for(task)
         # the per-turn, NON-durable permission_mode the
         # driver stashed for this task. ``None`` (no per-turn selection — resume /
-        # daemon / CLI / every pre-#4 path) ⇒ the host-fixed default, byte-equal.
+        # daemon / CLI) ⇒ the host-fixed default.
         permission_mode = self._turn_permission_mode.get(task_id)
         # the per-turn, NON-durable enabled-MCP-alias list the driver
         # stashed for this task. ``()`` (no enabled servers — resume / daemon /
-        # CLI / every pre-0042 path) ⇒ no live MCP tools, byte-equal.
+        # CLI) ⇒ no live MCP tools.
         mcp_aliases = getattr(self, "_turn_mcp_aliases", {}).get(task_id, ())
         effort = getattr(self, "_turn_effort", {}).get(task_id)
         # The multi-turn wrapper is a TOP-LEVEL-session concern only. A delegated
@@ -512,9 +499,8 @@ class GenericEngineResolver:
                 policy_wrapper=subtask_wrapper,
             )
         agent = self._lookup_agent(name, task_id=task_id)
-        # S1: ask_user_question comes from agent identity, masked to depth-0
-        # root tasks (a delegated child never inherits it). Preserves the exact
-        # root/parent/subtask_depth gate; only the source of the bool changed.
+        # ask_user_question comes from agent identity, masked to depth-0
+        # root tasks (a delegated child never inherits it).
         return self._engine_for_agent(
             agent,
             model=model,
@@ -534,14 +520,12 @@ class GenericEngineResolver:
         )
 
     def _bound_model_for(self, task: Any) -> str:
-        """Hoisted model-binding reader.
+        """The model binding the Task resolves on.
 
         The latest ``ModelBound`` the Engine folded into
-        ``GovernanceState.model_binding``; ``None`` (no ``ModelBound`` —
-        e.g. an old recording or a CLI session that never switched) falls
-        back to the host-fixed default :attr:`model` so the recorded
-        ``LLMRequestStartedPayload.model`` is unchanged and resume is
-        byte-equal.
+        ``GovernanceState.model_binding``; ``None`` (a recording that never
+        switched) falls back to the host-fixed default :attr:`model` so the
+        recorded ``LLMRequestStartedPayload.model`` is unchanged.
         """
         bound = getattr(getattr(task, "governance", None), "model_binding", None)
         return bound if isinstance(bound, str) and bound else self.model
@@ -550,11 +534,10 @@ class GenericEngineResolver:
         """The per-session workspace **absolute path** the Task is bound to.
 
         Read from the ``TaskHostBound`` fold (``governance.workspace``, which
-        now stores the absolute path welded into the durable record); ``None``
-        (no binding — an old / non-session recording, or the legacy name-style
-        records that fold to None per the D7 clean break) means
-        "use the host-fixed default dir", so the recorded fs root is unchanged
-        and resume is byte-equal.
+        stores the absolute path welded into the durable record); ``None``
+        (no binding — a non-session recording, or a name-style record that
+        folds to None) means "use the host-fixed default dir", so the recorded
+        fs root is unchanged.
         """
         bound = getattr(getattr(task, "governance", None), "workspace", None)
         return bound if isinstance(bound, str) and bound else None
@@ -563,24 +546,23 @@ class GenericEngineResolver:
         """The per-session provider name the Task is bound to.
 
         Read from the latest ``ModelBound`` fold
-        (``governance.provider_binding``); ``None`` (no binding — an old /
-        pre-I4 recording, or a session that only ever bound a model) means "use
-        the host default provider", so the recorded provider is unchanged and
-        resume is byte-equal.
+        (``governance.provider_binding``); ``None`` (no binding — a session
+        that only ever bound a model) means "use the host default provider",
+        so the recorded provider is unchanged.
         """
         bound = getattr(getattr(task, "governance", None), "provider_binding", None)
         return bound if isinstance(bound, str) and bound else None
 
     def _bound_exec_env_ref_for(self, task: Any) -> Optional[str]:
-        """The sandbox container ``base_url`` the Task is bound to (T6).
+        """The sandbox container ``base_url`` the Task is bound to.
 
         Read from the ``TaskHostBound`` fold (``governance.exec_env_ref``);
         ``None`` (every local / non-sandbox recording) means "use the local host
-        / the host-default sandbox config", so a resumed non-sandbox session is
-        byte-equal. When present, a resumed / **reclaimed** session — possibly on
-        another host — reconnects to THIS container address rather than the
-        folding host's own config (the multi-machine reconnect criterion). The
-        API key is not here (D5); the reconnecting host re-reads it from its env.
+        / the host-default sandbox config". When present, a resumed /
+        **reclaimed** session — possibly on another host — reconnects to THIS
+        container address rather than the folding host's own config (the
+        multi-machine reconnect criterion). The API key is not here; the
+        reconnecting host re-reads it from its env.
         """
         bound = getattr(getattr(task, "governance", None), "exec_env_ref", None)
         return bound if isinstance(bound, str) and bound else None
@@ -597,7 +579,7 @@ class GenericEngineResolver:
         effort: Optional[str] = None,
         exec_env_ref: Optional[str] = None,
     ) -> Engine:
-        """Hoisted by-name Engine resolver.
+        """Resolve a (cached) Engine **by agent name** — for Task creation.
 
         The :class:`InteractionDriver` (or equivalent task-creating surface)
         needs the seed Engine that writes ``TaskCreated`` *before* a Task
@@ -609,7 +591,7 @@ class GenericEngineResolver:
         Task naming an unresolvable Agent. ``"unnamed"`` resolves to
         ``unnamed_fallback`` when supplied, else also hard-errors.
 
-        ``model`` (issue 06) overrides the host-fixed default for the seed
+        ``model`` overrides the host-fixed default for the seed
         Engine, so a session opened with a model selector seeds and drives
         the first turn on the bound model; ``None`` keeps the host default.
 
@@ -642,7 +624,7 @@ class GenericEngineResolver:
                 exec_env_ref=exec_env_ref,
             )
         agent = self._lookup_agent(agent_name, task_id="<unbound>")
-        # S1: the seed engine is a root resident session — ask_user_question is
+        # the seed engine is a root resident session — ask_user_question is
         # the agent's own capability (no parent/depth to mask against yet).
         return self._engine_for_agent(
             agent,
@@ -657,18 +639,16 @@ class GenericEngineResolver:
         )
 
     def drive_pending_subtasks(self, parent_task: Any) -> Any:
-        """Hoisted server-side delegation drain.
+        """Server-side delegation drain.
 
-        The server mirror of the session-runner's drain: a parent turn that
-        suspended on a ``SubtaskCompleted`` / ``SubtaskGroupCompleted`` wake
-        is driven to its resumed terminal via the SHARED
-        :func:`drive_pending_subtasks` state machine.
+        A parent turn that suspended on a ``SubtaskCompleted`` /
+        ``SubtaskGroupCompleted`` wake is driven to its resumed terminal via
+        the SHARED :func:`drive_pending_subtasks` state machine.
 
-        Child inheritance (BYTE-EQUAL gate, mirroring
-        the product runner's child-engine build): every child Engine is built
-        with delegation INHERITED — ``delegation_enabled=True`` + the **root
-        parent's** ``spawnable`` set + the same depth-capped Budget — NOT
-        sourced from the leaf child agent's own (possibly delegation-free)
+        Child inheritance (mirroring the child-engine build): every child
+        Engine is built with delegation INHERITED — ``delegation_enabled=True``
+        + the **root parent's** ``spawnable`` set + the same depth-capped Budget
+        — NOT sourced from the leaf child agent's own (possibly delegation-free)
         identity. Recursion is bounded by the depth-capped Budget
         (``BudgetGuard.max_subtask_depth``), never by the absence of a child
         spawn schema, so the child's recorded ``spawn_subagent`` schema matches
@@ -756,8 +736,8 @@ class GenericEngineResolver:
     def _build_drain_host(self, parent_task: Any) -> DrainHost:
         """Build the :class:`DrainHost` for a parent's delegation tree.
 
-        Extracted from :meth:`drive_pending_subtasks` so the background-subagent
-        driver (docs/adr/background-subagent.md) builds the SAME host — same
+        The background-subagent driver
+        (docs/adr/background-subagent.md) builds the SAME host — same
         child-engine builder, inherited workspace / provider / permission / MCP,
         cancel predicate, and child-session-content activation — to drive a
         single background child on the shared executor. The only difference at
@@ -776,27 +756,25 @@ class GenericEngineResolver:
         # children share the root session's fs root — the
         # delegation tree runs in ONE workspace (the root parent's absolute path
         # binding), not each child's host default. ``None`` parent workspace ⇒
-        # host default, byte-identical to the pre-decision single-workspace path.
+        # host default.
         inherited_workspace = self._bound_workspace_for(parent_task)
         # children likewise run in the root session's SANDBOX container — a
-        # delegation tree shares ONE container (D4: subtasks share the parent's
+        # delegation tree shares ONE container (subtasks share the parent's
         # cwd/disk), so a child inherits the root's bound ``exec_env_ref``
         # (subtasks carry no ``TaskHostBound`` of their own; the fold leaves
-        # their ``governance.exec_env_ref`` None). ``None`` ⇒ the local host,
-        # byte-identical to the non-sandbox path.
+        # their ``governance.exec_env_ref`` None). ``None`` ⇒ the local host.
         inherited_exec_env_ref = self._bound_exec_env_ref_for(parent_task)
         # children likewise run on the root session's bound
         # provider — the whole delegation tree shares ONE provider (the root
         # parent's binding), not each child's host default. ``None`` ⇒ host
-        # default, byte-identical to the pre-I4 single-provider path.
+        # default.
         inherited_provider = self._bound_provider_for(parent_task)
         # the whole delegation tree also shares the root session's bound
         # MODEL: a child without its own declared default_model inherits the
         # root parent's ``ModelBound`` binding instead of silently dropping
         # to the host default. Gated to a binding that DIFFERS from the host
         # default — the driver binds every session at open, so a root on the
-        # default model keeps children unbound, byte-identical to the
-        # pre-inheritance path.
+        # default model keeps children unbound.
         bound = getattr(
             getattr(parent_task, "governance", None), "model_binding", None
         )
@@ -808,7 +786,7 @@ class GenericEngineResolver:
         # the whole delegation tree shares the root
         # session's per-turn permission_mode — read from the parent's NON-durable
         # carrier (set by the driver for the spawning turn). ``None`` ⇒ host
-        # default, byte-identical to the pre-#4 path.
+        # default.
         inherited_permission = self._turn_permission_mode.get(
             str(parent_task.task_id)
         )
@@ -817,10 +795,9 @@ class GenericEngineResolver:
         # set ONLY when its own spec opens the ``mcp`` capability (per-spec
         # opt-in); a child without it gets ``()`` (no MCP tools). The opt-in
         # child connects its OWN independent server sessions (independent
-        # recording, R-1 records its own specs — a resume reads them back, never
+        # recording — a resume reads its own recorded specs back, never
         # reconnects).
-        # ``()`` parent aliases ⇒ no child ever gets MCP, byte-identical to
-        # the pre-0042 path.
+        # ``()`` parent aliases ⇒ no child ever gets MCP.
         inherited_mcp = getattr(self, "_turn_mcp_aliases", {}).get(
             str(parent_task.task_id), ()
         )
@@ -828,15 +805,15 @@ class GenericEngineResolver:
         # reasoning-effort override — read from the parent's NON-durable carrier
         # (set by the driver for the spawning turn), same pattern as
         # permission_mode. Without it a child falls back to effort None, which
-        # on the Responses provider used to also drop the reasoning-ciphertext
-        # include and broke the child's prompt-cache prefix. ``None`` ⇒ host
-        # default, byte-identical to the pre-inheritance path.
+        # on the Responses provider also drops the reasoning-ciphertext
+        # include and breaks the child's prompt-cache prefix. ``None`` ⇒ host
+        # default.
         inherited_effort = getattr(self, "_turn_effort", {}).get(
             str(parent_task.task_id)
         )
 
         def _child_mcp_aliases(child_agent: Any) -> tuple[str, ...]:
-            # D8 gate: inherit the parent's enabled aliases only when the child
+            # inherit the parent's enabled aliases only when the child
             # spec opts in. ``agent_activates`` tolerates a spec without the
             # ``mcp`` activation (or a non-AgentSpec like __workflow__ carrying no
             # ``plugins``) — both stay MCP-free.
@@ -844,7 +821,7 @@ class GenericEngineResolver:
 
         def _build_subtask_engine(task_id: str) -> Engine:
             # a child recorded as __workflow__ is the orchestration
-            # interpreter, not a roster agent — route it (with the task_id, so the
+            # interpreter, not a named agent — route it (with the task_id, so the
             # script can be read off its stream) BEFORE the registry lookup that
             # would raise UnknownAgentError for the reserved name.
             if agent_name_of(self.event_log, task_id) == WORKFLOW_AGENT_NAME:
@@ -853,18 +830,17 @@ class GenericEngineResolver:
                 )
             # The child's own agent (its tools / system prompt / read-only
             # allowlist) — but delegation is INHERITED from the root, not read
-            # from this leaf agent's identity (gate #2). No policy_wrapper:
-            # children are one-shot, never multi-turn wrapped, exactly as
-            # the product runner's child-engine build. ``ask_user_question``
-            # is OFF for children (depth>0), mirroring the resolve_engine mask.
+            # from this leaf agent's identity. No policy_wrapper:
+            # children are one-shot, never multi-turn wrapped.
+            # ``ask_user_question`` is OFF for children (depth>0), mirroring
+            # the resolve_engine mask.
             # the child runs on its agent's declared
             # default model when one exists, else the root session's inherited
             # bound model, else the host default (each non-default choice is
             # recorded as the child's opening ModelBound by the drain, so a
-            # cold resume rebuilds the same binding). CodingAgent carries no
+            # cold resume rebuilds the same binding). An agent carrying no
             # ``default_model`` attribute → getattr None; an unbound /
-            # default-bound root leaves ``inherited_model`` None → host model,
-            # byte-identical to the pre-inheritance behaviour.
+            # default-bound root leaves ``inherited_model`` None → host model.
             child_agent = self._lookup_agent(
                 agent_name_of(self.event_log, task_id), task_id=task_id
             )
@@ -890,13 +866,12 @@ class GenericEngineResolver:
                 mcp_aliases=_child_mcp_aliases(child_agent),
                 effort=inherited_effort,
                 task_id=task_id,
-                # Per-helper structured output (port of the deleted runner's
-                # ``_build_child_engine``): a workflow helper spawned via
+                # Per-helper structured output: a workflow helper spawned via
                 # ``agent(goal, schema=...)`` carries the declared JSON Schema
                 # in its durable ``TaskCreated.inputs.output_schema`` — thread
                 # it so the child mounts the ``structured_output`` control
                 # schema + the ``StructuredOutputPolicy`` receipt wrapper.
-                # ``None`` (every plain child) is byte-identical to before.
+                # ``None`` (every plain child) leaves the build unchanged.
                 # Built uncached (this direct ``_build_engine`` call never
                 # goes through ``_engine_for_agent``), so the schema-shaped
                 # engine can never leak to a sibling via the cache key.
@@ -906,7 +881,7 @@ class GenericEngineResolver:
             )
 
         def _child_model_binding(task_id: str) -> Optional[tuple[str, str]]:
-            # __workflow__ has no roster spec / declared model → no binding
+            # __workflow__ has no agent spec / declared model → no binding
             # (the orchestration interpreter makes no LLM calls of its own;
             # the workers it spawns inherit through this same callback).
             if agent_name_of(self.event_log, task_id) == WORKFLOW_AGENT_NAME:
@@ -924,7 +899,7 @@ class GenericEngineResolver:
         # A child's session-level residents (instructions + environment, plus a
         # memory index when the child's activation carries it) are pre-loop
         # activated by the drain itself, running ``run_content_init`` over the
-        # child engine's own ``content_init_hooks`` (spec §4.5) — the same generic
+        # child engine's own ``content_init_hooks`` — the same generic
         # ``init`` seam ``InteractionDriver.seed_start`` uses for a top-level
         # session. The child engine snapshots the INHERITED workspace (the whole
         # delegation tree runs in one fs root), the same source its composer
@@ -965,47 +940,33 @@ class GenericEngineResolver:
         exec_env_ref: Optional[str] = None,
         policy_wrapper: Any = _POLICY_WRAPPER_UNSET,
     ) -> Engine:
-        """Hoisted per-agent Engine builder + cache.
+        """Per-agent Engine builder + cache.
 
-        Issue 06: the cache key is
+        The cache key is
         ``(agent_name, model, ask_user_question_enabled, workspace, provider)``
         — the model is part of the binding (a per-turn switch resolves a
         distinct Engine), ``workspace`` is the per-session fs-root **absolute path**
         so two concurrent sessions on different directories never share an Engine
         (and their files never cross), and ``provider`` is the per-session
         provider name so two sessions on different providers never share an Engine.
-        ``None`` workspace / provider ⇒ the host-fixed defaults, keeping the key
-        byte-equal with the single-workspace/single-provider path.
+        ``None`` workspace / provider ⇒ the host-fixed defaults.
 
-        S1: ``todo_write`` / ``ask_user_question`` are AGENT identity, not host
-        config (``plan_mode`` was removed). ``effective_ask`` is
-        the (already depth-masked) value the caller passed; when unspecified it
-        falls back to the agent's own capability.
+        ``todo_write`` / ``ask_user_question`` are AGENT identity, not host
+        config. ``effective_ask`` is the (already depth-masked) value the caller
+        passed; when unspecified it falls back to the agent's own capability.
 
-        S3b: delegation is AGENT identity too, gated by the host kill-switch.
+        Delegation is AGENT identity too, gated by the host kill-switch.
         The authorized sub-agent set comes from the agent's own
         ``spawnable`` (filtered to known agents) — never a host
         input. When delegation is off (agent declares none, or the deployment
         disabled it) the set is empty so no spawn_subagent schema is exposed.
         """
-        # Issue 06: the cache key is ``(agent_name, model)`` —
-        # the model is now part of the binding, so a per-turn switch resolves
-        # a distinct Engine rather than reusing the opening one.
         resolved_model = model if model else self.model
-        # S1: todo_write / ask_user_question are AGENT identity, not host config
-        # (plan_mode was removed). ``effective_ask`` is the
-        # (already depth-masked) value the caller passed; when unspecified it
-        # falls back to the agent's own capability.
         effective_ask = (
             agent_activates(agent, "ask_user_question")
             if ask_user_question_enabled is None
             else ask_user_question_enabled
         )
-        # S3b: delegation is AGENT identity too, gated by the host kill-switch.
-        # The authorized sub-agent set comes from the agent's own
-        # ``spawnable`` (filtered to known agents) — never a host
-        # input. When delegation is off (agent declares none, or the deployment
-        # disabled it) the set is empty so no spawn_subagent schema is exposed.
         eff_delegation = (
             agent_activates(agent, "delegation") and self.delegation_allowed
         )
@@ -1016,33 +977,29 @@ class GenericEngineResolver:
         )
         # when the host enables workflow, run_workflow may spawn the
         # reserved __workflow__ orchestration child, so it must be in the
-        # PermissionGuard allow-list. It is NEVER a roster agent, so it is filtered
+        # PermissionGuard allow-list. It is NEVER a named agent, so it is filtered
         # out of the model-facing spawn_subagent directory by ``_build_engine``
         # (registry.resolve raises → skipped).
         if self.workflow_allowed:
             eff_subtask_agents = eff_subtask_agents | {WORKFLOW_AGENT_NAME}
         # Delegation is a pure function of (agent, delegation_allowed) and the
         # kill-switch is resolver-fixed, so ``agent.name`` already keys it
-        # uniquely — no need to widen the cache key with it. ``workspace`` (D2)
-        # and ``provider`` (D3) ARE part of the key: a different session fs-root
+        # uniquely — no need to widen the cache key with it. ``workspace``
+        # and ``provider`` ARE part of the key: a different session fs-root
         # / provider must resolve a distinct Engine so concurrent sessions never
         # share fs tools or LLM adapter.
-        # ``permission_mode`` is the 6th dimension — a
+        # ``permission_mode`` is a
         # per-turn, NON-durable knob that drives ``require_approval_tools``, so two
         # turns on different permission modes must NOT share a cached Engine.
-        # ``None`` (no per-turn selection) keeps the key byte-equal with the pre-#4
-        # 5-tuple semantics (the host-fixed default gating).
-        # ``mcp_aliases`` is the 7th dimension — a per-turn,
+        # ``mcp_aliases`` is a per-turn,
         # NON-durable enabled-server-alias tuple. Two turns enabling different MCP
         # servers must NOT share a cached Engine (their live tool sets differ), so
-        # the alias tuple keys the build. ``()`` (no enabled servers) keeps the key
-        # byte-equal with the pre-0042 6-tuple semantics.
-        # ``exec_env_ref`` is the 9th dimension (T6) — the per-session
+        # the alias tuple keys the build.
+        # ``exec_env_ref`` is the per-session
         # sandbox container base_url. Two sessions bound to different containers
         # must NOT share a cached Engine (their fs / shell tools target different
-        # backends). ``None`` (every local / non-sandbox session) keeps the key
-        # byte-equal with the pre-T6 8-tuple semantics.
-        # ``policy_wrapper`` is the 10th dimension — the multi-turn wrapper is a
+        # backends).
+        # ``policy_wrapper``: the multi-turn wrapper is a
         # TOP-LEVEL-session concern (it turns a ``FinishDecision`` into a
         # next-goal suspend for ``noeta code chat``). A delegated child is
         # one-shot and must finish with a real ``TaskCompleted``; the resident
@@ -1051,22 +1008,22 @@ class GenericEngineResolver:
         # root keeps ``self.policy_wrapper``. Keying on ``wrapper is None`` keeps
         # a wrapped root Engine and an unwrapped child Engine (same agent + model
         # + workspace + ask — the common explorer case) in SEPARATE cache slots,
-        # so the root's wrapper never leaks to a child via the cache and the
-        # subtask fix is not silently masked. The ``_POLICY_WRAPPER_UNSET``
-        # sentinel distinguishes "caller did not pass it" (⇒ ``self.policy_wrapper``)
-        # from "caller passed ``None``" (⇒ build unwrapped); a plain ``None``
-        # default would conflate the two and re-wrap an explicit-unwrapped child.
+        # so the root's wrapper never leaks to a child via the cache. The
+        # ``_POLICY_WRAPPER_UNSET`` sentinel distinguishes "caller did not pass
+        # it" (⇒ ``self.policy_wrapper``) from "caller passed ``None``" (⇒ build
+        # unwrapped); a plain ``None`` default would conflate the two and re-wrap
+        # an explicit-unwrapped child.
         effective_wrapper = (
             self.policy_wrapper
             if policy_wrapper is _POLICY_WRAPPER_UNSET
             else policy_wrapper
         )
-        # ``_engine_cache_scope`` is the 11th dimension — a host-defined
+        # ``_engine_cache_scope`` is a host-defined
         # partition for engine material that varies per TASK beyond the
         # standard dimensions (e.g. the SdkHost's per-tenant memory root, whose
         # store is baked into the built Engine's tool closures). ``None`` (the
-        # base default, every single-tenant host) keeps the shared slot,
-        # byte-equal with the pre-scope key semantics; the cache is in-memory
+        # base default, every single-tenant host) keeps the shared slot;
+        # the cache is in-memory
         # only (never durable), so widening the tuple has no resume effect.
         key = (
             agent.name, resolved_model, effective_ask, workspace, provider,
@@ -1074,12 +1031,12 @@ class GenericEngineResolver:
             effective_wrapper is None,
             self._engine_cache_scope(agent, task_id),
         )
-        # #13 / item 3: the global lock guards only the cache map. The build
+        # the global lock guards only the cache map. The build
         # itself runs OUTSIDE it, guarded by a PER-KEY build lock — one build
         # per key (so the live MCP connect + its McpServerSkipped/observer
-        # events still fire exactly once), while builds for DIFFERENT keys run
-        # concurrently. Holding the global lock across ``_build_engine`` used
-        # to serialise every session behind one slow/hanging MCP connector —
+        # events fire exactly once), while builds for DIFFERENT keys run
+        # concurrently. Holding the global lock across ``_build_engine`` would
+        # serialise every session behind one slow/hanging MCP connector —
         # a delegated child could not even build its Engine until an
         # unrelated session's connect finished.
         with self._engines_lock:

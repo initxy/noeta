@@ -1,10 +1,9 @@
 """``build_stack`` — the Postgres backend's stack factory.
 
 Every storage backend ships one ``build_stack(**config)`` returning the
-``(EventLogFull, ContentStore, Dispatcher)`` triple, wiring the triple's
-one internal invariant itself: the event log takes the dispatcher as
-``lease_validator``. The host injects the result through ``HostConfig``;
-the public doorway is :mod:`noeta.sdk.storage`.
+``(EventLogFull, ContentStore, Dispatcher)`` triple and wires the triple's one
+internal invariant itself: the event log takes the dispatcher as its
+``lease_validator``.
 """
 
 from __future__ import annotations

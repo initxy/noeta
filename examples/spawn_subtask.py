@@ -2,24 +2,21 @@
 
 Demonstrated SDK capability
 ---------------------------
-Sub-agent delegation. Declare child agents in ``Options.agents`` as
-:class:`noeta.client.AgentDefinition` recipes and open the parent's
-``delegation`` capability; the SDK exposes a model-visible
-``spawn_subagent(agent, goal)`` control surface. When the parent model
-calls it, the runtime spawns a child Task built from the named child's
-*own* config (its own prompt, tools, model), runs it to terminal, folds
-its result back, and resumes the parent — all on one in-process stack.
+Sub-agent delegation. Naming child recipes in ``Options.agents`` is the whole
+opt-in: a non-empty roster makes the compiler derive the parent's
+``delegation`` activation, which mounts the model-visible
+``spawn_subagent(agent, goal)`` control tool. A spawn builds a child Task from
+the named :class:`noeta.sdk.AgentDefinition`'s own prompt, tools and model,
+runs it to terminal, folds the result back and resumes the parent, all on one
+in-process stack.
 
-This example uses a multi-turn :class:`noeta.client.Client` (it needs the
-parent's task id to find the spawned child) and a scripted offline
-provider whose turns are: parent spawns ``researcher`` → child finishes →
-parent finishes. It then proves a distinct child Task stream exists.
+The roster is flat — a deep tree is expressed by declaring every agent at the
+top level, not by nesting. The child is its own Task stream, which is why this
+uses :class:`Client` rather than :func:`query`: the parent's task id is what
+the ``SubtaskSpawned`` envelope is read from.
 
-Running it
-----------
-Offline by default (:class:`FakeLLMProvider`, no API key). Against a real
-model you would not script the spawn — the live model decides when to
-delegate. Swap the provider as shown in ``minimal_agent.py``.
+The provider is scripted so the example needs no API key; a real model is
+handed the same control tool and decides for itself when to delegate.
 
     python examples/spawn_subtask.py
 """
@@ -41,16 +38,15 @@ from noeta.sdk import (
 )
 from noeta.sdk.testing import FakeLLMProvider
 
-# The one deep import in this file: ``spawn_subagent`` is a CONTROL tool, whose
-# wire name is runtime vocabulary rather than part of the recipe surface, so it
-# has no ``noeta.sdk`` home. Only a script that fakes a model's tool call needs
-# it — a real agent never names it, the runtime mounts it. Importing the
-# constant beats hardcoding the string, which would drift silently on a rename.
+# The one import outside ``noeta.sdk``: ``spawn_subagent`` is a control tool
+# whose wire name is runtime vocabulary, not recipe surface, so it has no
+# ``noeta.sdk`` home. Only a script faking a model's tool call needs the name
+# at all, and importing the constant beats a hardcoded string that would drift
+# silently.
 from noeta.policies.control_semantics import SPAWN_SUBAGENT_TOOL
 
 
 def _spawn_call(agent: str, goal: str) -> LLMResponse:
-    """A parent turn that calls the ``spawn_subagent`` control surface."""
     return LLMResponse(
         stop_reason="tool_use",
         content=[
@@ -73,10 +69,10 @@ def _finish(text: str) -> LLMResponse:
 
 
 def _demo_provider() -> FakeLLMProvider:
-    """Scripted three-turn flow: spawn → child finishes → parent finishes.
+    """A network-free provider: parent spawns, child finishes, parent finishes.
 
-    A real model is handed the same ``spawn_subagent`` surface and decides
-    on its own when to delegate.
+    Three responses, not two: the child Task consumes one of its own, so the
+    parent's closing turn is the third.
     """
     return FakeLLMProvider(
         responses=[
@@ -93,6 +89,9 @@ def run(*, provider=None, workspace_dir: Path, model: str = "stub-model"):
         system_prompt="Delegate research to your sub-agent, then summarise.",
         name="main",
         agents={
+            # ``description`` is required and cannot be blank: it is the child's
+            # advertised purpose, so an unnamed capability is a compile error
+            # rather than an agent nobody knows when to call.
             "researcher": AgentDefinition(
                 description="Read-only researcher that returns a finding.",
                 prompt="You are a researcher. Investigate and report back.",

@@ -1,16 +1,10 @@
-"""Shared ``ContentRef`` → JSON helper for the tool packs.
+"""The single canonical ``ContentRef`` → JSON encoder for tools.
 
 The ToolRuntime encodes ``ToolResult.output`` with stdlib ``json.dumps``
 (``noeta.runtime.tool._encode_output``), which cannot serialise a
-:class:`~noeta.protocols.values.ContentRef` dataclass. So tools put the
-``{hash, size, media_type}`` JSON form into ``output`` (and accept it as
-an argument), keeping the real ``ContentRef`` only in
-``ToolResult.artifacts`` or restoring it internally before a store read.
-
-This is the single canonical encoder; the fs / mcp / research packs all
-import it instead of each carrying a local copy. It is a ``noeta.tools``
-helper, so ``noeta.tools.mcp`` may import it under the
-``mcp-tools-boundary`` import-linter contract.
+:class:`~noeta.protocols.values.ContentRef` dataclass — so a tool puts the
+``{hash, size, media_type}`` form into ``output`` and keeps the real
+``ContentRef`` in ``ToolResult.artifacts`` or restores it before a store read.
 """
 
 from __future__ import annotations

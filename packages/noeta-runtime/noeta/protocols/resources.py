@@ -1,15 +1,9 @@
-"""Shared Markdown resource loader (generalized).
+"""Shared loader for long text externalized into in-package ``<name>.md`` files.
 
-Several places externalize long text into in-package ``<name>.md`` resources:
-control-tool descriptions (``noeta.policies``), agent prompts
-(``noeta.presets``), and each builtin tool's description (beside its impl in
-``noeta.builtins.<name>.impl`` — phase 2c). The loading mechanism is identical
-(``importlib.resources`` + cache + optional trailing-newline strip), so the
-shared implementation sinks to this L0 layer: anyone may depend on
-``noeta.protocols``, which depends on nothing.
-
-Pure stdlib (imports no in-project module), satisfying this layer's "Import-only
-dependencies are stdlib" constraint.
+Agent prompts (``noeta.presets.prompts``) and every builtin tool's description
+(beside its impl in ``noeta.builtins.<name>.impl``) load through here. It sits
+at L0 and imports only stdlib so any layer may depend on it, since
+``noeta.protocols`` itself depends on nothing.
 """
 from __future__ import annotations
 
@@ -24,24 +18,17 @@ __all__ = ["load_markdown"]
 def load_markdown(anchor_package: str, name: str, *, strip: bool = True) -> str:
     """Read the text of the ``<name>.md`` resource inside ``anchor_package``.
 
-    ``anchor_package`` is the dotted path of the package holding the resource
-    (e.g. ``"noeta.builtins.skills.impl"``); ``name`` is the bare name (e.g.
-    ``"skill"``). Read via :mod:`importlib.resources` so it works inside a wheel
-    too (no reliance on ``__file__``-relative paths). The result is cached by
+    Reads via :mod:`importlib.resources` rather than ``__file__``-relative
+    paths so it works inside a wheel, and caches by
     ``(anchor_package, name, strip)`` — one read per resource per process. A
-    missing file raises ``FileNotFoundError`` so a typo never silently mints
-    empty text (which would quietly strip the model's only source of tool/role
-    semantics).
+    missing file raises ``FileNotFoundError``: a typo must never silently mint
+    empty text, which would strip the model's only source of tool/role
+    semantics.
 
-    ``strip`` controls trailing-newline handling:
-
-    * **Description** files are written as Markdown (a trailing blank line by
-      convention); strip the trailing newline before consuming them as schema
-      strings, hence the ``True`` default.
-    * **Prompt** files must be byte-for-byte equal to the Python constant they
-      replace — ``AgentSpec`` hashes the *content* of its instructions, so
-      one extra/missing newline changes the hash — hence pass ``strip=False`` for
-      exact fidelity.
+    ``strip=True`` (the default) suits description files, written as Markdown
+    with a trailing blank line and consumed as schema strings. Pass
+    ``strip=False`` for prompts: ``AgentSpec`` hashes the content of its
+    instructions, so one extra newline changes the hash.
     """
     resource = files(anchor_package).joinpath(f"{name}.md")
     text = resource.read_text(encoding="utf-8")

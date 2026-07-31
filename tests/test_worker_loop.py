@@ -1,13 +1,12 @@
-"""3A-I1 — L2 worker loop + 3-state machine sink + exception policy.
+"""The worker loop: one leased task per tick, and never dying on one.
 
-Covers `noeta.runtime.worker`: `run_leased_task` (the 3-state machine
-moved down from CLI resume), `WorkerLoop.tick` / `run_forever`, and the
-worker exception policy (D7) — a daemon must never crash on a poisoned
-task.
-
-CLI byte-identical reuse is covered by the existing resume tests
-(test_cli_commands / test_cli_resume_targeted), which now import
-`run_leased_task` from L2.
+Covers ``noeta.runtime.worker`` — ``run_leased_task`` routing a lease by
+the folded task's state, and ``WorkerLoop.tick`` / ``run_forever``
+draining the queue. The exception policy is the load-bearing half: a
+daemon that crashes on a poisoned task takes every other task down with
+it, so an unexpected error must fail the lease retryable, an
+``InvalidLease`` must not be failed at all (another worker owns it), and
+even a dispatcher that throws from ``fail()`` must leave the loop alive.
 """
 
 from __future__ import annotations
@@ -83,8 +82,8 @@ def _build_bundle(sqlite_path: str = ":memory:") -> Any:
 
 
 def test_runtime_bundle_satisfies_worker_runtime_protocol() -> None:
-    """RuntimeBundle (L4) must satisfy the L2 WorkerRuntime Protocol
-    structurally — without L2 importing the bundle type."""
+    """``RuntimeBundle`` satisfies the ``WorkerRuntime`` Protocol
+    structurally, so the worker never imports the bundle type."""
     bundle = _build_bundle()
     try:
         for attr in ("engine", "event_log", "content_store", "dispatcher"):
@@ -94,7 +93,7 @@ def test_runtime_bundle_satisfies_worker_runtime_protocol() -> None:
 
 
 # ---------------------------------------------------------------------------
-# run_leased_task — the 3-state machine
+# run_leased_task — lease routing
 # ---------------------------------------------------------------------------
 
 
@@ -186,7 +185,6 @@ def test_worker_loop_drains_multiple_tasks_continuously() -> None:
         while loop.tick():
             processed += 1
         assert processed == 3
-        # All three reached terminal.
         for tid in ids:
             folded = __import__(
                 "noeta.core.fold", fromlist=["fold"]
@@ -226,7 +224,7 @@ def test_worker_loop_run_forever_stops_via_injected_sleep() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Worker exception policy (D7)
+# Worker exception policy
 # ---------------------------------------------------------------------------
 
 
@@ -338,7 +336,7 @@ def test_exception_policy_fail_itself_raising_is_swallowed() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3A-I2 — heartbeat side-thread + stale-sweep timer (injected clock)
+# Heartbeat side-thread + stale-sweep timer (injected clock)
 # ---------------------------------------------------------------------------
 
 
@@ -442,10 +440,8 @@ def test_maybe_sweep_runs_on_interval_with_injected_clock() -> None:
         clock=lambda: now["t"],
         heartbeat_interval=0,
     )
-    # Not enough time elapsed yet.
     assert loop.maybe_sweep() is False
     assert disp.sweeps == 0
-    # Jump past the interval.
     now["t"] = 111.0
     assert loop.maybe_sweep() is True
     assert disp.sweeps == 1

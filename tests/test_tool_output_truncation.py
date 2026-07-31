@@ -1,12 +1,11 @@
-"""Microcompact — truncate oversized tool results on the way into the log (noeta shape).
+"""Truncate an oversized tool result on the way into the log, without losing it.
 
-Test classes covering the design contract:
-  1. truncate_tool_output pure-function unit tests
-  2. Config validation (Engine / CodeSessionConfig: 0 / negative -> ValueError)
-  3. Default-off, zero impact — matches current behavior (no limit set, same scenario, dict/str passed through unchanged)
-  4. End-to-end with limit on — (a) truncated form in the message stream; (b) ToolResultRecorded.output_ref holds the full original;
-     (c) the model's next LLMRequest also sees the truncated form
-  6. Product-layer pass-through — CodeSessionConfig.tool_output_inline_limit reaches the engine
+When ``tool_output_inline_limit`` is set, the model-facing inline output is
+clipped to the limit with a lean ASCII marker (no ContentStore hash, which the
+model cannot deref), while ``ToolResultRecorded.output_ref`` still holds the
+full original for resume and audit. The limit is off by default (``None`` leaves
+output untouched), must be positive, and threads from ``build_session_inputs``
+through ``SessionInputs`` into the ``Engine`` unchanged.
 """
 
 from __future__ import annotations
@@ -50,7 +49,7 @@ from noeta.tools.fake import FakeTool
 from tests._sdk_session import coding_replay_budget
 
 # ---------------------------------------------------------------------------
-# 1. Pure-function unit tests
+# Pure-function unit tests
 # ---------------------------------------------------------------------------
 
 
@@ -93,7 +92,7 @@ def test_truncate_handles_unicode() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2. Config validation
+# Config validation
 # ---------------------------------------------------------------------------
 
 
@@ -208,12 +207,12 @@ def _engine_and_run(*, tool_output_inline_limit: int | None, tool_size: int = 20
 
 
 # ---------------------------------------------------------------------------
-# 3. Default off, zero impact
+# Default off, zero impact
 # ---------------------------------------------------------------------------
 
 
 def test_default_no_limit_keeps_dict_and_full_string() -> None:
-    """None = behavior unchanged across the board — dict output stays dict, string stays full."""
+    """None leaves output untouched — dict output stays dict, string stays full."""
     task, engine, event_log, content_store, _ = _engine_and_run(
         tool_output_inline_limit=None, tool_size=2000
     )
@@ -221,14 +220,14 @@ def test_default_no_limit_keeps_dict_and_full_string() -> None:
     folded = fold(event_log, content_store, task.task_id)
     tool_msg = [m for m in folded.runtime.messages if m.role == "tool"][0]
     block: ToolResultBlock = tool_msg.content[0]  # type: ignore[assignment]
-    # Default off: skips _coerce_inline_output -> string passed through (matches baseline)
+    # Default off: no _coerce_inline_output, so the string passes through whole.
     assert isinstance(block.output, str)
     assert block.output == "~" * 2000
     assert "tool output truncated" not in block.output
 
 
 # ---------------------------------------------------------------------------
-# 4. End-to-end with limit on — truncated message / full recording / model request sees truncation
+# End-to-end with limit on — truncated message / full recording / model request sees truncation
 # ---------------------------------------------------------------------------
 
 
@@ -291,7 +290,7 @@ def _llm_request_bodies(events: list[EventEnvelope], cs) -> list[dict[str, Any]]
 
 
 # ---------------------------------------------------------------------------
-# 6. Product-layer pass-through — CodeSessionConfig -> Engine takes effect
+# Product-layer pass-through — build_session_inputs -> Engine takes effect
 # ---------------------------------------------------------------------------
 
 
@@ -320,9 +319,8 @@ def _tool_resp(call_id: str, tool_name: str = "echo") -> LLMResponse:
 def test_product_limit_propagates_to_handler_via_custom_echo(tmp_path: Path) -> None:
     """tool_output_inline_limit -> engine -> handler takes effect.
 
-    Approach: test three-layer pass-through via the isomorphic chain
-    build_session_inputs -> SessionInputs -> Engine, the same construction
-    the production ``SdkHost`` runs (byte-identical to the product layer)."""
+    Drives the pass-through the production ``SdkHost`` runs:
+    build_session_inputs -> SessionInputs -> Engine."""
     from noeta.client.parts import derive_compaction_config
     from noeta.execution.builder import build_session_inputs
 
@@ -348,7 +346,7 @@ def test_product_limit_propagates_to_handler_via_custom_echo(tmp_path: Path) -> 
         tool_output_inline_limit=limit,
     )
     assert inputs.tool_output_inline_limit == limit
-    # SessionInputs -> Engine is isomorphic to the Engine() at line 726 of CodeSessionConfig.prepare()
+    # SessionInputs -> Engine mirrors how SdkHost constructs the Engine.
     tools_d = dict(inputs.tools)
     dispatcher = InMemoryDispatcher()
     el = InMemoryEventLog(lease_validator=dispatcher)
@@ -422,7 +420,7 @@ def test_product_default_none_zero_impact(tmp_path: Path) -> None:
         compaction=derive_compaction_config("stub-model"),
         budget=coding_replay_budget(None),
         custom_tools={"echo": big_echo},
-        # <- Explicitly omitted, equivalent to the CodeSessionConfig default of None
+        # <- Explicitly omitted, so the limit defaults to None
     )
     assert inputs.tool_output_inline_limit is None
 

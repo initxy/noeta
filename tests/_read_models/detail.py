@@ -1,17 +1,14 @@
-"""read_models.detail — `noeta code inspect <task-id>` detail projection (pure read).
+"""Detail projection for a single code session (pure read).
 
-Folds one code session into a :class:`CodeSessionDetail` for ``noeta code
-inspect``. Also home to the shared genesis reader ``task_created_header`` (used
-by the catalog and context-view read models too).
+Folds one session's EventLog into a :class:`CodeSessionDetail`; also home to the
+shared genesis reader ``task_created_header`` that the catalog and context-view
+projections reuse.
 
-No longer imports
-``noeta.agent.roster.agents.AGENTS``; uses :mod:`noeta.presets` + legacy aliases to
-decide whether a stream is a code session.
-
-Read-only and deliberately **light** (CW5b watchpoint): imports only the narrow
-``EventLogReader`` / ``ContentStore`` Protocols, ``fold``, ``official_specs``,
-and the typed wake-handle constants — NEVER ``noeta.agent.execution.resolver`` /
-``Engine`` / provider / storage.
+Deliberately **light**: it imports only the narrow ``EventLogReader`` /
+``ContentStore`` Protocols, ``fold``, ``official_specs``, and the typed
+wake-handle constants. Reaching for the Engine, a provider, or storage here
+would make observing a session as expensive — and as side-effecting — as
+running one.
 """
 
 from __future__ import annotations
@@ -49,19 +46,17 @@ __all__ = [
 ]
 
 
-#: D1: legacy recording aliases.
+#: Recording aliases: an ``agent_name`` a stream may carry → its canonical name.
 _ALIASES: dict[str, str] = {"default": "main"}
 
-#: Module-level snapshot: the canonical agent-name set (for code-session checks).
+#: Snapshot of the canonical agent-name set, taken once per import.
 _CANONICAL_NAMES: frozenset[str] = frozenset(official_specs())
 
 
 def _is_code_agent_name(name: str) -> bool:
-    """True if ``agent_name`` is a known code agent (legacy aliases included)."""
     return _ALIASES.get(name, name) in _CANONICAL_NAMES
 
-#: Default count for the ``recent_*`` slices of a session detail (CW6 OQ4 —
-#: fixed, no ``--limit`` flag yet).
+#: How many entries each ``recent_*`` slice of a session detail keeps.
 _DEFAULT_RECENT = 5
 
 
@@ -74,10 +69,11 @@ class _Header:
 def task_created_header(
     event_log: EventLogReader, task_id: str
 ) -> Optional[_Header]:
-    """Read the genesis ``TaskCreated`` (``agent_name`` + ``goal``) via the
-    narrow reader. ``None`` for a stream with no ``TaskCreated`` (malformed →
-    the caller skips it). Depends only on ``EventLogReader`` + the event payload
-    — NOT ``noeta.agent.execution.resolver`` (CW5b P1.1)."""
+    """Read the genesis ``TaskCreated`` (``agent_name`` + ``goal``).
+
+    ``None`` for a stream with no ``TaskCreated`` — malformed, and the caller
+    skips it rather than guessing.
+    """
     for env in event_log.read(task_id):
         if env.type == "TaskCreated":
             payload = env.payload
@@ -86,11 +82,6 @@ def task_created_header(
                 goal=str(getattr(payload, "goal", "")),
             )
     return None
-
-
-# ---------------------------------------------------------------------------
-# CW6 — `noeta code inspect <task-id>` detail projection (code-specific, pure read)
-# ---------------------------------------------------------------------------
 
 
 def _wake_kind_and_handle(
@@ -120,13 +111,11 @@ def _wake_kind_and_handle(
 
 @dataclass(frozen=True, slots=True)
 class CodeSessionDetail:
-    """Read-only summary of one code session for ``noeta code inspect``.
+    """Read-only summary of one code session, every field folded from the log.
 
-    Folded from the EventLog; every field is derived (no writes). The
-    approval fields (``wake_kind`` / ``wake_handle`` / ``approval_call_id``)
-    exist so the observation→action path is visible: a session ``awaiting
-    approval`` exposes the exact ``call_id`` a future ``noeta code approve``
-    (CW7) consumes."""
+    The approval fields (``wake_kind`` / ``wake_handle`` / ``approval_call_id``)
+    make the observation→action path usable: a session ``awaiting approval``
+    exposes the exact ``call_id`` the resume call has to quote."""
 
     task_id: str
     agent: str
@@ -153,7 +142,6 @@ class CodeSessionDetail:
     recent_question_answers: tuple[dict[str, Any], ...]
     recent_denials: tuple[dict[str, Any], ...]
     files_changed: tuple[str, ...]
-    # CW18a — plan/todo read-model surface (folded TaskState; pure read).
     # ``todos`` / ``decisions`` are JSON-plainified (see ``_plainify``) so a
     # downstream ``json.dumps`` can never crash on a non-native value.
     phase: Optional[str]
@@ -166,12 +154,11 @@ class CodeSessionDetail:
 
 
 def _plainify(value: Any) -> Any:
-    """Recursively coerce a folded value to JSON-native types (CW18a W5).
+    """Recursively coerce a folded value to JSON-native types.
 
-    ``dict``/``list``/``tuple`` recurse; ``str``/``int``/``float``/``bool``/
-    ``None`` pass through; anything else (a ContentRef, a dataclass, …) is
-    ``str()``-ified — so emitting ``todos``/``decisions`` can never raise in
-    ``json.dumps`` even if a policy stashed a non-native value."""
+    Anything exotic (a ContentRef, a dataclass, …) is ``str()``-ified, so
+    emitting ``todos`` / ``decisions`` can never raise in ``json.dumps`` even
+    when a Policy stashed a non-native value in TaskState."""
     if isinstance(value, dict):
         return {str(k): _plainify(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
@@ -182,9 +169,10 @@ def _plainify(value: Any) -> Any:
 
 
 def _extract_changed_path(side_effect: Any) -> Optional[str]:
-    """Defensive path-like extraction from a ``ToolResultRecorded`` side-effect
-    (CW6 OQ2 — we do NOT pin the fs side-effect schema). Returns the first of a
-    few common keys, or ``None`` when nothing path-like is present."""
+    """Best-effort path extraction from a ``ToolResultRecorded`` side-effect.
+
+    The fs side-effect schema is deliberately not pinned here, so this probes a
+    few common keys and returns ``None`` when nothing path-like is present."""
     if not isinstance(side_effect, dict):
         return None
     for key in ("path", "target", "file"):
@@ -204,14 +192,9 @@ def build_code_session_detail(
     """Fold one code session into a :class:`CodeSessionDetail` (pure read).
 
     Returns ``None`` when the stream is empty, has no ``TaskCreated`` genesis,
-    or its ``agent_name`` is not a registered coding Agent (the caller turns
-    ``None`` into a clean "not a code session" error). Unlike ``noeta code
-    resume``'s preflight, MCP / delegation sessions are **observable** — there
-    is no refusal here, only a fold.
-
-    Imports nothing beyond the narrow ``EventLogReader`` / ``ContentStore``
-    Protocols + ``fold`` + ``AGENTS`` (CW5b watchpoint — no resolver / Engine /
-    provider / storage)."""
+    or its ``agent_name`` is not a registered coding Agent — the caller turns
+    that into a clean "not a code session" error. Observation never refuses:
+    MCP and delegation sessions fold like any other."""
     from tests._read_models.catalog import _status_text
     from tests._read_models.context_view import (
         _ref_summary,

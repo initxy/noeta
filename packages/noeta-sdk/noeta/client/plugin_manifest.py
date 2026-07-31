@@ -1,30 +1,14 @@
-"""Plugin manifest schema + zero-execution reader (spec D1).
+"""Plugin manifest schema and its zero-execution reader.
 
-A **Plugin** is a package (or a single ``.py`` file for local/dev use) carrying
-a **static manifest**. Two forms:
-
-* **Distributed** — ``[tool.noeta]`` in ``pyproject.toml``, mirrored into the
-  wheel as package data ``noeta-plugin.toml`` located via the distribution
-  metadata. :func:`read_distribution_manifest` reads it **without importing any
-  plugin code** — the D1 guarantee, exercised in both regular and editable
-  installs (spec Risk 2): the RECORD-listed file is read directly, and the
-  editable fallback resolves the package's on-disk location with
-  :func:`importlib.util.find_spec`, which locates a top-level package **without
-  executing its body**.
-
-* **Single-file** (local dirs only) — a :class:`PluginBuilder` with decorator
-  sugar (``@plugin.tool``, ``@plugin.reminder(...)``) *is* the manifest. Reading
-  it executes the file; acceptable because local files pass an explicit trust
-  gate anyway (D1). A publish-time packaging check (``plugin_check``, M5) derives
-  and verifies the TOML from the decorators.
-
-The manifest is intentionally *inert data*: a name, a compatibility range, an
-optional config schema, and a list of contributions, each a ``surface`` + a
-``ref`` (import string) or ``path`` (resource) + surface-specific params. The
-``ref`` is a **string**; nothing here imports it. Resolution — importing the ref
-and validating the value per its :class:`~noeta.client.surfaces.SurfaceSpec` — is
-a separate, later step (:mod:`noeta.client.plugin_set`), so listing and
-manifest-level collision detection run with zero plugin execution.
+A plugin is a package carrying a static manifest — ``[tool.noeta]`` in
+``pyproject.toml``, mirrored into the wheel as package data
+``noeta-plugin.toml`` — or, for local development, a single ``.py`` file whose
+:class:`PluginBuilder` decorators *are* the manifest. The manifest is inert
+data: a ``ref`` is a **string** and nothing here imports it, so listing and
+manifest-level collision detection run with zero plugin execution (resolution is
+a separate, later step in :mod:`noeta.client.plugin_set`). Reading a single-file
+plugin does execute it, which is why local directories pass an explicit trust
+gate first.
 """
 
 from __future__ import annotations
@@ -57,15 +41,15 @@ __all__ = [
 ]
 
 
-#: The package-data filename the wheel mirror carries the manifest under (D1).
+#: The package-data filename the wheel mirror carries the manifest under.
 MANIFEST_BASENAME = "noeta-plugin.toml"
 
 #: The param a **literal-valued** contribution carries its value under.
-#: ``prompt_fragment`` is the only such surface today: its value is a string the
-#: author wrote inline, not something a ``ref`` can import. Carrying it as an
-#: ordinary param is what lets the static TOML form round-trip — without it the
-#: emitted manifest would have neither a ``ref`` nor a ``path`` and would fail to
-#: resolve once installed as a package.
+#: ``prompt_fragment`` is the only such surface: its value is a string the author
+#: wrote inline, not something a ``ref`` can import. Carrying it as an ordinary
+#: param is what lets the static TOML form round-trip — without it the emitted
+#: manifest would have neither a ``ref`` nor a ``path`` and would fail to resolve
+#: once installed as a package.
 LITERAL_PARAM = "text"
 
 
@@ -75,7 +59,7 @@ class ManifestContribution:
 
     ``name`` is the collision / ordering key **and** the listing label. It is
     declared in the manifest (or derived from ``ref`` / ``path`` when omitted),
-    so both listing and collision detection are decidable *without* importing
+    so both listing and collision detection stay decidable *without* importing
     the ``ref``. ``params`` holds surface-specific fields (``priority``,
     ``seams``, ``alias``, …) verbatim.
     """
@@ -89,8 +73,6 @@ class ManifestContribution:
 
 @dataclass(frozen=True)
 class PluginManifest:
-    """A plugin's whole static manifest — its identity and its contributions."""
-
     name: str
     requires_noeta: Optional[str] = None
     config_schema: Optional[Mapping[str, Any]] = None
@@ -105,10 +87,9 @@ class PluginManifest:
 def parse_manifest_text(text: str, *, origin: str = "<manifest>") -> PluginManifest:
     """Parse a manifest from TOML text.
 
-    Accepts three shapes, in priority order: ``[tool.noeta]`` (a ``pyproject.toml``
-    that also carries the plugin), ``[noeta]``, and bare top-level keys (the
-    mirrored ``noeta-plugin.toml``). ``origin`` names the source in error
-    messages.
+    Three shapes are accepted, in priority order: ``[tool.noeta]`` (a
+    ``pyproject.toml`` that also carries the plugin), ``[noeta]``, and bare
+    top-level keys (the mirrored ``noeta-plugin.toml``).
     """
     try:
         data = tomllib.loads(text)
@@ -126,7 +107,6 @@ def parse_manifest_text(text: str, *, origin: str = "<manifest>") -> PluginManif
 
 
 def read_manifest_file(path: Any, *, origin: Optional[str] = None) -> PluginManifest:
-    """Read + parse a manifest file (``noeta-plugin.toml`` or a ``pyproject.toml``)."""
     p = Path(path)
     origin = origin or f"manifest {str(p)!r}"
     try:
@@ -156,13 +136,11 @@ def _manifest_from_table(table: Mapping[str, Any], origin: str) -> PluginManifes
     contributions = tuple(
         _contribution_from(raw, origin, i) for i, raw in enumerate(raw_contribs)
     )
-    # ``(surface, name)`` is the collision / ordering key the whole mechanism
-    # is built on, so a manifest declaring it twice is malformed — the second
-    # entry would shadow the first in every by-key projection. ``PluginBuilder``
-    # has always rejected this for the single-file form; the TOML form used to
-    # accept it silently, which let a *distributed* plugin ship a duplicate the
-    # same plugin's single-file form would have refused (a manifest/loader
-    # drift the whole static-manifest guarantee depends on not having).
+    # ``(surface, name)`` is the collision / ordering key the whole mechanism is
+    # built on, so a manifest declaring it twice is malformed: the second entry
+    # would shadow the first in every by-key projection. ``PluginBuilder``
+    # rejects the same duplicate for the single-file form, so the two forms of
+    # one plugin can never disagree about what it contributes.
     seen: dict[tuple[str, str], int] = {}
     for index, c in enumerate(contributions):
         key = (c.surface, c.name)
@@ -214,9 +192,8 @@ def _contribution_from(raw: Any, origin: str, index: int) -> ManifestContributio
 def split_ref(ref: str) -> tuple[Optional[str], tuple[str, ...]]:
     """Split a manifest ``ref`` into its module half and attribute path.
 
-    The **one** place the two ref spellings are parsed (previously
-    reimplemented in three modules, whose docstrings had to promise by hand
-    that they stayed in agreement):
+    The **one** place the two ref spellings are parsed — the loader, the
+    name-derivation here, and the verifier all route through it:
 
     * ``pkg.mod:attr.sub`` — the explicit form. Everything left of ``:`` is
       the module; returns ``("pkg.mod", ("attr", "sub"))``.
@@ -226,8 +203,8 @@ def split_ref(ref: str) -> tuple[Optional[str], tuple[str, ...]]:
       (:meth:`LoadedPlugin._import_ref`) resolves the boundary by backing off
       one component at a time.
 
-    Empty components are dropped, so a stray ``"pkg.mod:"`` yields no
-    attribute path rather than an empty-string component.
+    Empty components are dropped, so a stray ``"pkg.mod:"`` yields no attribute
+    path rather than an empty-string component.
     """
     module, sep, attr = ref.partition(":")
     if sep:
@@ -250,7 +227,6 @@ def ref_attr_name(ref: Optional[str]) -> Optional[str]:
 
 
 def _derive_name(ref: Optional[str], path: Optional[str]) -> Optional[str]:
-    """Derive a contribution name from its ``ref`` attribute or ``path`` basename."""
     candidate = ref_attr_name(ref)
     if candidate:
         return candidate
@@ -262,19 +238,19 @@ def _derive_name(ref: Optional[str], path: Optional[str]) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Distribution reader — the zero-execution package form (D1, Risk 2)
+# Distribution reader — the zero-execution package form
 # ---------------------------------------------------------------------------
 
 
 def read_distribution_manifest(dist: Any) -> Optional[PluginManifest]:
     """Read a distribution's ``noeta-plugin.toml`` **without importing its code**.
 
-    Returns ``None`` when the distribution ships no manifest (so a caller can
-    attribute the miss). Works for both a regular install (the file is listed in
-    the distribution's RECORD and read straight off disk) and an editable
-    install (RECORD may omit package data, so the package's on-disk directory is
-    resolved via :func:`importlib.util.find_spec`, which locates a top-level
-    package without executing it).
+    Returns ``None`` when the distribution ships no manifest, so a caller can
+    attribute the miss. Both install shapes are covered: a regular install lists
+    the file in its RECORD and it is read straight off disk, while an editable
+    install may omit package data from RECORD, so the package's on-disk
+    directory is resolved with :func:`importlib.util.find_spec`, which locates a
+    top-level package without executing it.
     """
     text = _distribution_manifest_text(dist)
     if text is None:
@@ -283,7 +259,7 @@ def read_distribution_manifest(dist: Any) -> Optional[PluginManifest]:
 
 
 def _distribution_manifest_text(dist: Any) -> Optional[str]:
-    # 1. RECORD-listed package data (the regular-install path).
+    # RECORD-listed package data — the regular-install path.
     try:
         files = dist.files
     except Exception:  # noqa: BLE001 — a malformed dist must not crash discovery
@@ -295,8 +271,8 @@ def _distribution_manifest_text(dist: Any) -> Optional[str]:
             except OSError:
                 continue
 
-    # 2. Editable fallback: resolve each top-level package's directory and look
-    #    for the manifest beside it. ``find_spec`` locates without executing.
+    # Editable fallback: resolve each top-level package's directory and look for
+    # the manifest beside it. ``find_spec`` locates without executing.
     for pkg in _dist_top_level(dist):
         located = _package_data_path(pkg, MANIFEST_BASENAME)
         if located is not None:
@@ -333,7 +309,7 @@ def _package_data_path(pkg: str, basename: str) -> Optional[Path]:
     """The path to ``pkg``'s ``basename`` package-data file, or ``None``.
 
     Uses :func:`importlib.util.find_spec`, which locates a top-level package
-    without executing its ``__init__`` — the editable-install path that keeps the
+    without executing its ``__init__`` — how the editable-install path keeps the
     zero-execution guarantee.
     """
     import importlib.util
@@ -371,7 +347,7 @@ def declared_plugin_name(path: Any) -> Optional[str]:
         plugin = PluginBuilder("the-name")
 
     Returns ``None`` when neither literal is present (or the file cannot be
-    parsed) — the loader then falls back to executing the trusted file.
+    parsed); the loader then falls back to executing the trusted file.
     """
     try:
         tree = ast.parse(Path(path).read_text(encoding="utf-8"), filename=str(path))
@@ -428,7 +404,7 @@ def _builder_literal_name(value: Optional[ast.expr]) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Single-file decorator sugar (D1)
+# Single-file decorator sugar
 # ---------------------------------------------------------------------------
 
 
@@ -448,7 +424,7 @@ class PluginBuilder:
     decorated objects are also kept (:attr:`resolved_objects`) so the loader can
     resolve a single-file plugin's contributions without a second import. Every
     decorator maps to the generic :meth:`contribute`, so the same builder covers
-    surfaces without a dedicated method.
+    surfaces that have no dedicated method.
     """
 
     def __init__(
@@ -529,13 +505,13 @@ class PluginBuilder:
         return deco
 
     def tool(self, fn: Any = None, *, name: Optional[str] = None) -> Any:
-        """Contribute a ``tool`` (decorator or direct call)."""
+        """Contribute a ``tool``, as a decorator or a direct call."""
         if fn is None:
             return self._decorator("tool", name=name)
         return self.contribute("tool", fn, name=name)
 
     def reminder(self, fn: Any = None, *, name: Optional[str] = None, priority: int = 0) -> Any:
-        """Contribute a compose-time ``reminder`` (track B; carries ``priority``)."""
+        """Contribute a compose-time ``reminder`` render."""
         if fn is None:
             return self._decorator("reminder", name=name, priority=priority)
         return self.contribute("reminder", fn, name=name, priority=priority)
@@ -543,29 +519,29 @@ class PluginBuilder:
     def reminder_provider(
         self, fn: Any = None, *, name: Optional[str] = None, seams: Sequence[str] = ()
     ) -> Any:
-        """Contribute a recorded ``reminder_provider`` (track A; carries ``seams``)."""
+        """Contribute a ``reminder_provider`` bound to the named recording seams."""
         if fn is None:
             return self._decorator("reminder_provider", name=name, seams=tuple(seams))
         return self.contribute("reminder_provider", fn, name=name, seams=tuple(seams))
 
     def guard(self, obj: Any = None, *, name: Optional[str] = None) -> Any:
-        """Contribute a ``guard`` (governance; process-scoped)."""
+        """Contribute a process-scoped governance ``guard``."""
         if obj is None:
             return self._decorator("guard", name=name)
         return self.contribute("guard", obj, name=name)
 
     def observer(self, fn: Any = None, *, name: Optional[str] = None) -> Any:
-        """Contribute an ``observer`` (governance; process-scoped)."""
+        """Contribute a process-scoped governance ``observer``."""
         if fn is None:
             return self._decorator("observer", name=name)
         return self.contribute("observer", fn, name=name)
 
     def prompt_fragment(self, text: str, *, name: str) -> Any:
-        """Contribute a ``prompt_fragment`` (a literal string, keyed by ``name``).
+        """Contribute a ``prompt_fragment`` — a literal string keyed by ``name``.
 
         The text is recorded as the :data:`LITERAL_PARAM` param as well as being
         cached for single-file resolution, so ``plugin_check --emit`` produces a
-        manifest that still carries the fragment — a distributed install has no
+        manifest that still carries the fragment: a distributed install has no
         ``resolved_objects`` cache and no ``ref`` to import for a literal.
         """
         return self.contribute(
@@ -575,7 +551,7 @@ class PluginBuilder:
     def tool_result_transform(
         self, fn: Any = None, *, name: Optional[str] = None, priority: int = 0
     ) -> Any:
-        """Contribute a ``tool_result_transform`` (D9; carries ``priority``).
+        """Contribute a ``tool_result_transform``.
 
         A pure ``ToolResult -> ToolResult`` stage applied inside the ToolRuntime
         boundary before recording. Ordered like a ``reminder``: integer
@@ -586,7 +562,7 @@ class PluginBuilder:
         return self.contribute("tool_result_transform", fn, name=name, priority=priority)
 
     def policy(self, factory: Any = None, *, name: Optional[str] = None) -> Any:
-        """Contribute the agent's decision ``policy`` (D10; single-valued).
+        """Contribute the agent's decision ``policy`` — single-valued.
 
         ``factory`` is a ``(llm) -> Policy`` callable carrying a ``.ref``
         property (its identity). A single agent may activate at most one policy;
@@ -598,7 +574,7 @@ class PluginBuilder:
         return self.contribute("policy", factory, name=name)
 
     def sandbox_provider(self, obj: Any = None, *, name: Optional[str] = None) -> Any:
-        """Contribute a ``sandbox_provider`` (D10; host-plane, host selects one)."""
+        """Contribute a host-plane ``sandbox_provider``; the host selects one."""
         if obj is None:
             return self._decorator("sandbox_provider", name=name)
         return self.contribute("sandbox_provider", obj, name=name)
@@ -606,7 +582,7 @@ class PluginBuilder:
     def session_pack(
         self, factory: Any = None, *, name: Optional[str] = None, priority: int = 0
     ) -> Any:
-        """Contribute a ``session_pack`` (microkernel phase 3; carries ``priority``).
+        """Contribute a ``session_pack``.
 
         ``factory`` is a ``(SessionBuildContext) -> PackContribution`` callable
         the kernel builder's generic loop runs when an agent activates this
@@ -623,7 +599,7 @@ class PluginBuilder:
     def control_tool(
         self, factory: Any = None, *, name: Optional[str] = None, priority: int = 0
     ) -> Any:
-        """Contribute a ``control_tool`` (control-tool-surface S2; carries ``priority``).
+        """Contribute a ``control_tool``.
 
         ``factory`` is a ``(ControlToolBuildContext) -> ControlToolMount | None``
         callable the kernel builder's dual-priority mount loop runs when an agent
@@ -640,7 +616,6 @@ class PluginBuilder:
         return self.contribute("control_tool", factory, name=name, priority=priority)
 
     def manifest(self) -> PluginManifest:
-        """The static :class:`PluginManifest` this builder describes."""
         return PluginManifest(
             name=self._name,
             requires_noeta=self._requires_noeta,
@@ -657,12 +632,11 @@ class PluginBuilder:
 def exec_plugin_file(path: Path, *, module_prefix: str) -> ModuleType:
     """Execute a single-file plugin and return its module object.
 
-    The one implementation of "run a ``plugin.py`` and hand back the module",
-    shared by the loader (:mod:`noeta.client.plugin_set`) and the manifest
-    verifier (:mod:`noeta.sdk.plugin_check`). They differ only in the synthetic
-    module name they register under, which is what ``module_prefix`` carries —
-    the verifier must not collide with a module the loader already executed in
-    the same process.
+    Shared by the loader (:mod:`noeta.client.plugin_set`) and the manifest
+    verifier (:mod:`noeta.sdk.plugin_check`), which differ only in the synthetic
+    module name they register under — that is what ``module_prefix`` carries, so
+    the verifier cannot collide with a module the loader already executed in the
+    same process.
 
     Any import fault inside the file surfaces as a named :class:`PluginError`
     rather than an opaque traceback: a plugin that cannot be imported is a
@@ -685,9 +659,9 @@ def find_builder(module: ModuleType, origin: Union[str, Path]) -> PluginBuilder:
     """The module-level :class:`PluginBuilder` a single-file plugin exposes.
 
     Prefers the conventional ``plugin`` name; falls back to a unique
-    module-level builder. Zero builders and two-or-more builders are both
-    errors naming ``origin`` (a path or a module label) — guessing which of two
-    builders the author meant would silently ship half a plugin.
+    module-level builder. Zero builders and two-or-more builders are both errors
+    naming ``origin`` — guessing which of two builders the author meant would
+    silently ship half a plugin.
 
     Shared by the loader and the verifier so the discovery rule cannot drift
     between "what gets loaded" and "what gets verified".

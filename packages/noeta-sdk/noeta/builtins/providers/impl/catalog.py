@@ -1,32 +1,13 @@
-"""Provider-neutral model spec catalog + pricing (catalog work item, D-C1..D-C4).
+"""Provider-neutral model catalog: one :class:`ModelSpec` per model, the
+pricing built on it, and the compaction knobs derived from it.
 
-A single Noeta-shape :class:`ModelSpec` describes one model regardless of
-vendor: real model-id, context window, output cap, per-MTok prices (with
-cache read/write priced distinctly per Foundation-A's split), and a reasoning
-flag. Cost accounting consumes :func:`price` (typed :class:`Usage` → USD);
-context management consumes :func:`spec_for` for ``context_window`` /
-``max_output_tokens``.
-
-Provider neutrality: both Anthropic and OpenAI rows live in the
-**same** dataclass; no vendor wire key (``cache_creation_input_tokens`` /
-``total_tokens`` / ``prompt_tokens``) is ever a field name here. Each
-adapter already maps its wire usage into the neutral :class:`Usage`
-(Foundation-A); the catalog only prices that neutral shape.
-
-Layering (microkernel M2): this module lives in the ``providers`` built-in
-plugin. The kernel must NOT import it — pricing reaches ``RuntimeLLMClient``
-as an injected callback, the model-alias resolver reaches the
-``InteractionDriver`` as an injected callable, and the edit-tool family +
-compaction knobs reach ``build_session_inputs`` pre-resolved
-(``provider_family=`` / ``compaction=``) — all wired by the SDK host through
-:mod:`noeta.client.parts`.
-
-Pricing provenance (D-C2): all public-model rows (Anthropic + OpenAI) were
-verified against the vendors' official pricing/model pages on 2026-07-05;
-each row cites its source. The two internal-gateway models (``gpt-5.4-*`` /
-``gpt-5.5-*``) have NO published pricing — their rates are 0.0 and cost
-accounting reports $0 for them; treat those two rows as unverified until the
-gateway publishes numbers. Prices are USD per 1,000,000 tokens.
+Anthropic and OpenAI rows share the same dataclass and no vendor wire key
+(``cache_creation_input_tokens`` / ``prompt_tokens`` / ``total_tokens``) is
+ever a field name here — each adapter has already mapped its wire usage into
+the neutral :class:`Usage` that :func:`price` charges. The kernel does not
+import this module: pricing, alias resolution, the edit-tool family and the
+compaction knobs all reach it as injected callbacks or pre-resolved values.
+Prices are USD per 1,000,000 tokens.
 """
 
 from __future__ import annotations
@@ -52,13 +33,12 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class ModelSpec:
-    """Noeta-shape, provider-neutral description of one model.
+    """Provider-neutral description of one model; prices are USD per 1M tokens.
 
-    Prices are USD per 1,000,000 tokens. ``cache_read`` is cheaper than
-    fresh ``input`` and ``cache_write`` is more expensive — the three are
-    kept distinct because Foundation-A splits the token buckets and Anthropic
-    bills them at different rates. OpenAI rows (no cache tier) set the
-    cache prices equal to the input price so the math degrades cleanly.
+    ``cache_read`` (cheaper) and ``cache_write`` (dearer) stay distinct from
+    fresh ``input`` because Anthropic bills the three buckets at different
+    rates. An OpenAI row, having no cache-write tier, sets the cache prices so
+    the same arithmetic degrades cleanly.
     """
 
     real_model_id: str
@@ -69,34 +49,28 @@ class ModelSpec:
     cache_read_price_per_mtok: float
     cache_write_price_per_mtok: float
     is_reasoning: bool = False
-    #: Vision-capability flag (same nature as
-    #: ``is_reasoning``). Defaults to False: any model not explicitly marked
-    #: as vision-capable is treated as text-only, so an ``ImageBlock`` request
-    #: hitting it is blocked up front by the Responses adapter's vision guard
-    #: (don't send images to a model that can't read them).
+    #: Defaults to False so a model nobody marked as vision-capable is treated
+    #: as text-only and an ``ImageBlock`` bound for it is refused up front by
+    #: the adapters' vision guard, rather than sent to a model that cannot
+    #: read it.
     supports_vision: bool = False
 
 
 # ---------------------------------------------------------------------------
-# Catalog data — FACTUAL; public rows verified 2026-07-05 (sources per row).
+# Catalog data. Every public row is a transcription of a vendor page, so treat
+# the numbers as facts to re-check, not as knobs to tune.
+#
+# Anthropic prices/IDs: platform.claude.com/docs/en/about-claude/pricing and
+# /models/overview. Cache write = 1.25x input (5-min TTL), cache read = 0.1x
+# input — the derived numbers below match the published per-model columns.
+#
+# OpenAI prices/IDs: the per-model pages under developers.openai.com/api/docs/
+# models/ (the main pricing table omits the 4o generation). OpenAI has no
+# separate cache-write tier; cached input = 0.5x input.
 # ---------------------------------------------------------------------------
-#
-# Anthropic prices/IDs: platform.claude.com/docs/en/about-claude/pricing
-# (docs.claude.com redirects there), verified 2026-07-05. Cache write =
-# 1.25x input (5-min TTL), cache read = 0.1x input — the derived numbers
-# below match the published per-model cache columns exactly.
-#
-# OpenAI prices/IDs: developers.openai.com/api/docs/models/gpt-4o and
-# /gpt-4o-mini (platform.openai.com/docs/pricing redirects to
-# developers.openai.com, whose main table no longer lists 4o-generation
-# models — the per-model pages carry the prices), verified 2026-07-05.
-# OpenAI has no separate cache-write tier; cached input = 0.5x input.
 
 CATALOG: dict[str, ModelSpec] = {
     # --- Anthropic ---------------------------------------------------------
-    # verified 2026-07-05 against platform.claude.com/docs/en/about-claude/pricing
-    # ($5 in / $25 out / $0.50 cache read / $6.25 5m cache write) and
-    # /models/overview (1M context, 128k max output)
     "claude-opus-4-8": ModelSpec(
         real_model_id="claude-opus-4-8",
         context_window=1_000_000,
@@ -108,9 +82,6 @@ CATALOG: dict[str, ModelSpec] = {
         is_reasoning=True,
         supports_vision=True,
     ),
-    # verified 2026-07-05 against platform.claude.com/docs/en/about-claude/pricing
-    # ($3 in / $15 out / $0.30 cache read / $3.75 5m cache write) and
-    # /models/overview (1M context, 128k max output — was wrongly 64k here)
     "claude-sonnet-4-6": ModelSpec(
         real_model_id="claude-sonnet-4-6",
         context_window=1_000_000,
@@ -122,9 +93,6 @@ CATALOG: dict[str, ModelSpec] = {
         is_reasoning=True,
         supports_vision=True,
     ),
-    # verified 2026-07-05 against platform.claude.com/docs/en/about-claude/pricing
-    # ($1 in / $5 out / $0.10 cache read / $1.25 5m cache write) and
-    # /models/overview (200k context, 64k max output)
     "claude-haiku-4-5": ModelSpec(
         real_model_id="claude-haiku-4-5",
         context_window=200_000,
@@ -136,9 +104,7 @@ CATALOG: dict[str, ModelSpec] = {
         is_reasoning=False,
         supports_vision=True,
     ),
-    # --- OpenAI (proves the dataclass is provider-neutral) -----------------
-    # verified 2026-07-05 against developers.openai.com/api/docs/models/gpt-4o
-    # ($2.50 in / $10 out / $1.25 cached input; 128k context, 16,384 max output)
+    # --- OpenAI ------------------------------------------------------------
     "gpt-4o": ModelSpec(
         real_model_id="gpt-4o",
         context_window=128_000,
@@ -149,8 +115,6 @@ CATALOG: dict[str, ModelSpec] = {
         cache_write_price_per_mtok=2.50,  # OpenAI has no write tier → = input
         is_reasoning=False,
     ),
-    # verified 2026-07-05 against developers.openai.com/api/docs/models/gpt-4o-mini
-    # ($0.15 in / $0.60 out / $0.075 cached input; 128k context, 16,384 max output)
     "gpt-4o-mini": ModelSpec(
         real_model_id="gpt-4o-mini",
         context_window=128_000,
@@ -162,50 +126,41 @@ CATALOG: dict[str, ModelSpec] = {
         is_reasoning=False,
     ),
     # --- OpenAI Responses gateway models (reasoning + vision) ---------------
-    # Reasoning + vision models served over an OpenAI Responses-API gateway.
-    # Probed evidence: high effort really emits reasoning (encrypted_content
-    # ~21.6KB), and both base64 image-input forms return HTTP 200 with the
-    # model actually seeing the image (probe evidence).
+    # These are served by an internal gateway that publishes no pricing, so
+    # every rate is 0.0 and cost accounting reports $0 for them: ModelSpec has
+    # no "unknown price" representation and price() multiplies the rates as
+    # given. They are catalogued anyway, because a row is what stops price()
+    # from raising KeyError and what lets the vision guard admit an image.
+    # Anything marked "placeholder" below is a guess the gateway has not
+    # confirmed; a context window guessed too small starves the verbatim tail
+    # and forces the model to re-read files through tools.
     "gpt-5.4-2026-03-05": ModelSpec(
         real_model_id="gpt-5.4-2026-03-05",
-        # Internal-gateway model: pricing unpublished — all rates are 0.0, so
-        # cost accounting reports $0 for this model (ModelSpec has no
-        # unknown-price representation; price() multiplies the rates as-is).
-        # context_window / max_output_tokens are gateway placeholders
-        # (128k / 16k) — unconfirmed; the gateway has not published limits.
-        context_window=128_000,  # placeholder — unconfirmed by gateway
-        max_output_tokens=16_384,  # placeholder — unconfirmed by gateway
-        input_price_per_mtok=0.0,  # unpublished — reports $0
-        output_price_per_mtok=0.0,  # unpublished — reports $0
-        cache_read_price_per_mtok=0.0,  # unpublished — reports $0
-        cache_write_price_per_mtok=0.0,  # unpublished — reports $0
+        context_window=128_000,  # placeholder
+        max_output_tokens=16_384,  # placeholder
+        input_price_per_mtok=0.0,
+        output_price_per_mtok=0.0,
+        cache_read_price_per_mtok=0.0,
+        cache_write_price_per_mtok=0.0,
         is_reasoning=True,
         supports_vision=True,
     ),
-    # The next-gen GPT (gpt-5.5) on the same aidp Responses gateway. Like
-    # gpt-5.4, pricing is unpublished — all rates are 0.0 and cost accounting
-    # reports $0 for this model. Registering it in the catalog is what keeps
-    # price() from raising KeyError and lets the vision guard recognise it can
-    # read images (otherwise text-only would run but image chains would be
-    # blocked). ``context_window`` confirmed 200k per the gateway — drives the
-    # compaction window + tail budget (a placeholder that is too small starves
-    # the verbatim window and forces tool re-reads).
     "gpt-5.5-2026-04-24": ModelSpec(
         real_model_id="gpt-5.5-2026-04-24",
-        context_window=200_000,
-        max_output_tokens=16_384,  # placeholder — unconfirmed by gateway
-        input_price_per_mtok=0.0,  # unpublished — reports $0
-        output_price_per_mtok=0.0,  # unpublished — reports $0
-        cache_read_price_per_mtok=0.0,  # unpublished — reports $0
-        cache_write_price_per_mtok=0.0,  # unpublished — reports $0
+        context_window=200_000,  # confirmed by the gateway
+        max_output_tokens=16_384,  # placeholder
+        input_price_per_mtok=0.0,
+        output_price_per_mtok=0.0,
+        cache_read_price_per_mtok=0.0,
+        cache_write_price_per_mtok=0.0,
         is_reasoning=True,
         supports_vision=True,
     ),
 }
 
 
-# Alias → real model-id (D-C3). The driver/runner allowlist still gates which
-# selectors a principal may bind; this table only translates the friendly name.
+# Alias → real model-id. Translation only: which selectors a principal may
+# bind is the driver's allowlist decision, not this table's.
 ALIASES: dict[str, str] = {
     "opus": "claude-opus-4-8",
     "sonnet": "claude-sonnet-4-6",
@@ -214,56 +169,36 @@ ALIASES: dict[str, str] = {
 
 
 def resolve_alias(selector: str) -> str:
-    """Map a friendly alias (``opus``/``sonnet``/``haiku``) to its real
-    model-id; pass any non-alias value through unchanged.
+    """Map a friendly alias to its real model-id, passing anything else through.
 
-    Pass-through is deliberate: a real model-id, or the test-only
-    ``stub-model``, stays as-is so the stub path and per-turn switches to
-    concrete ids keep working. Authorisation (allowlist ∩ principal) is the
-    driver's job, not this table's.
+    Pass-through is deliberate: a real model-id and the test-only
+    ``stub-model`` must survive unchanged, so callers may hand either form to
+    every catalog function.
     """
     return ALIASES.get(selector, selector)
 
 
 def spec_for(model_id: str) -> ModelSpec:
-    """Return the :class:`ModelSpec` for a **real** model-id.
+    """Look up a model's spec, by real id or alias.
 
-    Raises :class:`KeyError` for an unknown id (fixed semantics) so a mis-typed or
-    unpriced model surfaces loudly rather than silently costing $0. A friendly
-    alias is resolved first (like ``provider_family``), so callers may pass
-    either a real id or an alias.
+    Raises :class:`KeyError` for an unknown id so a mis-typed or unpriced model
+    surfaces loudly instead of silently costing $0.
     """
     return CATALOG[resolve_alias(model_id)]
 
 
 def provider_family(model: str) -> str | None:
-    """Classify a model selector into a vendor *family* — ``"anthropic"``,
-    ``"openai"``, or ``None`` for anything not recognised.
+    """Classify a model selector as ``"anthropic"``, ``"openai"`` or ``None``.
 
-    This is the **only** model→family judgment in the codebase; the
-    assembly layer (``noeta.execution.builder``) consults it to pick the
-    provider-appropriate edit tool (``edit`` for Anthropic,
-    ``apply_patch`` for OpenAI/GPT) WITHOUT writing the difference into any
-    tool field or prompt. Provider-neutral by construction: the family is
-    derived from the **catalogued** model's real-id prefix (after
-    ``resolve_alias``), not from a vendor wire key or a tool attribute.
+    The only model→family judgment in the codebase: the assembly layer uses it
+    to pick the provider-appropriate edit tool without writing the vendor
+    difference into any tool field or prompt. The family comes from a
+    **catalogued** model's real-id prefix, so only a registered model can
+    switch the tool set.
 
-    The classification is gated on **catalog membership** so only a real,
-    registered model ever switches the tool set:
-
-    * a catalogued model whose real id starts with ``claude`` →
-      ``"anthropic"``;
-    * a catalogued model whose real id starts with ``gpt`` → ``"openai"``;
-    * anything not in the catalog (or a catalogued id with neither prefix)
-      → ``None``.
-
-    Returning ``None`` for an unrecognised selector is load-bearing: every
-    test/stub sentinel (``gpt-test``, ``stub-model``, ``test-model``,
-    uncatalogued ``claude-sonnet-4-5``) is NOT in the catalog, so it
-    classifies ``None``. Callers treat ``None`` as "do not filter" — both
-    edit variants stay in the tool set, so an uncatalogued selector never
-    loses a tool and the prompt's tool list stays unchanged for existing
-    sessions.
+    ``None`` — an uncatalogued selector, including every test sentinel — means
+    "do not filter": callers keep both edit variants, so an unknown model never
+    silently loses a tool.
     """
     real = resolve_alias(model)
     spec = CATALOG.get(real)
@@ -277,16 +212,12 @@ def provider_family(model: str) -> str | None:
 
 
 def price(model_id: str, usage: Usage) -> float:
-    """Cost in USD for one round-trip's typed :class:`Usage` on ``model_id``.
+    """Cost in USD for one round-trip's :class:`Usage` on ``model_id``.
 
-    Each token bucket is multiplied by its own per-MTok rate: fresh input
-    (``uncached``), cache read, cache write, and output are priced
-    independently (the cache buckets differ from fresh input — Foundation-A's
-    split is what makes this possible). ``reasoning_tokens`` are already part of
-    ``output`` (they are hidden completion tokens billed at the output
-    rate), so they are not added again. A friendly alias is resolved first
-    (like ``provider_family``), so callers may price by either a real id or an
-    alias. Raises :class:`KeyError` for an unknown model.
+    Each token bucket carries its own per-MTok rate. ``reasoning_tokens`` are
+    deliberately absent from the sum: they are hidden completion tokens already
+    counted in ``output`` and billed at the output rate, so adding them would
+    double-charge. Raises :class:`KeyError` for an unknown model.
     """
     spec = CATALOG[resolve_alias(model_id)]
     return (
@@ -298,50 +229,34 @@ def price(model_id: str, usage: Usage) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Compaction knobs derived from the catalog (moved out of the kernel builder
-# at microkernel M2 — the kernel keeps the CompactionConfig TYPE and takes the
-# derived knobs pre-resolved through ``build_session_inputs(compaction=…)``).
+# Compaction knobs derived from the catalog
 # ---------------------------------------------------------------------------
 
-#: Fixed headroom (estimated tokens) reserved under the context window beyond
-#: the output cap, so the available history window leaves slack for the system
-#: prompt + provider tool schemas + the next response. Deterministic constant (D-3d):
-#: the same value on live + resume.
+#: Headroom reserved under the context window beyond the output cap, so the
+#: history window still leaves slack for the system prompt, the tool schemas
+#: and the next response. A constant, not a measurement: live and resume must
+#: derive the same number.
 _COMPACTION_BUFFER_TOKENS = 2_000
 
-#: Fraction of the usable window kept as the verbatim recent tail, expressed as
-#: a denominator (``tail = available // N``). Compaction keeps
-#: a verbatim tail because noeta cannot re-read disk during compose (resume
-#: determinism) — but half the window (the original ``N=2``) is heavier than
-#: needed: the summary keeps file paths and the model re-reads with ``read``, so
-#: a smaller tail frees window at the cost of less recent verbatim fidelity.
-#: ``N=3`` (a third) is the conservative first step toward Claude's much leaner
-#: stance (near-zero verbatim tail). Smaller tail ⇒ compaction fires LESS often
-#: (more headroom after each) and each summary covers a bigger prefix.
-#: Deterministic constant: same value on live + resume.
+#: Denominator for the verbatim recent tail (``tail = available // N``). A
+#: verbatim tail exists at all because compose cannot re-read disk (resume
+#: determinism must hold), but it is expensive window: the summary keeps file
+#: paths and the model can re-read with ``read``. A smaller tail trades recent
+#: verbatim fidelity for headroom, so compaction fires less often and each
+#: summary covers a longer prefix. Constant for the same live/resume reason.
 _TAIL_FRACTION_DENOM = 3
 
 
 def derive_compaction_config(model: str) -> CompactionConfig:
-    """Derive the compaction knobs for ``model`` from the sdk catalog.
+    """Derive the compaction knobs for ``model``, or ``COMPACTION_OFF``.
 
-    ``model`` may be a friendly ALIAS (``opus`` / ``sonnet`` / ``haiku``) or a
-    real catalog id; it is resolved via :func:`resolve_alias` BEFORE the catalog
-    lookup. Without that resolution an alias (the common selector a host passes)
-    misses ``spec_for`` with ``KeyError`` and silently disables compaction
-    (fix B). ``resolve_alias`` passes a non-alias value through unchanged, so a
-    real id and the test-only ``stub-model`` are unaffected.
+    The alias is resolved before the lookup: an unresolved alias — the common
+    selector a host passes — would miss the catalog and silently disable
+    compaction. An uncatalogued model likewise turns compaction off rather than
+    guessing a window.
 
-    Returns :data:`~noeta.execution.builder.COMPACTION_OFF` for any model the
-    catalog does not describe after resolution (so ``stub-model`` keeps legacy
-    behaviour and existing recordings stay byte-equal). For a catalogued model
-    the available window is ``context_window - max_output_tokens - buffer`` and
-    the protected tail is ``available // _TAIL_FRACTION_DENOM`` (a third — see
-    the constant's note for the trade-off; always strictly smaller than the
-    window, so a misconfiguration that would otherwise leave nothing to
-    summarise cannot arise). All numbers are deterministic functions of the
-    spec, and live + resume resolve the SAME ``model`` string here, so both
-    paths derive identical knobs.
+    Every number is a deterministic function of the spec and live and resume
+    resolve the same ``model`` string, so both paths derive identical knobs.
     """
     try:
         spec = spec_for(resolve_alias(model))
@@ -353,9 +268,8 @@ def derive_compaction_config(model: str) -> CompactionConfig:
         - spec.max_output_tokens
         - _COMPACTION_BUFFER_TOKENS,
     )
-    # Protect a third of the available window as the recent tail. Strictly < the
-    # available window so summarising always has a non-empty prefix to collapse
-    # when the trigger fires.
+    # Strictly smaller than the available window, so summarising always has a
+    # non-empty prefix to collapse when the trigger fires.
     tail = available // _TAIL_FRACTION_DENOM
     return CompactionConfig(
         context_window=spec.context_window,

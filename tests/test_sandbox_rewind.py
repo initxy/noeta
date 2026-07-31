@@ -1,19 +1,13 @@
-"""T7 — rewind restore routes through the sandbox container's ExecEnv.
+"""Rewind restores files through the session's ExecEnv, not raw host pathlib.
 
-The capture half already flows through the container: an ``edit`` / ``write``
-reads its pre-edit bytes via its own (sandbox) ExecEnv and surfaces them on
-``file_changes`` — the ToolRuntime just persists those bytes, unchanged. The
-RESTORE half — ``InteractionDriver._restore_files`` writing baselines back to
-"disk" — used raw host pathlib; under a sandbox that disk is the CONTAINER, so
-T7 routes the write-back through the session's ExecEnv (the recorded
-``exec_env_ref``, T6) rooted at the container workdir. A local session keeps the
-byte-identical host path. Covered:
-
-* ``SdkHost.exec_env_for_ref`` resolves a sandbox session → (backend, root),
-  and returns ``None`` for a local session / ``None`` ref / no host sandbox;
-* ``_restore_files`` writes a restored baseline into the container backend,
-  re-creating its parent dir, and deletes an AI-created file there;
-* a local (no-ref) rewind still writes the host filesystem, untouched.
+Capture already flows through the container: an ``edit`` / ``write`` reads its
+pre-edit bytes via its own ExecEnv and surfaces them on ``file_changes``. The
+restore half has to match, because under a sandbox the "disk" holding those
+files is the CONTAINER — so ``InteractionDriver._restore_files`` writes
+baselines back through the ExecEnv named by the session's recorded
+``exec_env_ref``, rooted at the container workdir. A session with no ref keeps
+the byte-identical host path; getting that split wrong silently rewinds the
+wrong machine.
 
 No socket opens: the backend is a recording fake injected via the factory.
 """
@@ -219,8 +213,8 @@ def test_restore_writes_baseline_into_container(
 
     InteractionDriver._restore_files(host, events, keep_through=1, baseline_task=task)
 
-    # the restore wrote the baseline back INTO the container, re-creating the dir,
-    # and never touched the host filesystem.
+    # The parent dir is re-created too: a rewind that removed the directory
+    # would otherwise leave the write with nowhere to land.
     assert fake.writes == ["/c/ws/pkg/mod.py"]
     assert fake.mkdirs == ["/c/ws/pkg"]
     assert fake.files["/c/ws/pkg/mod.py"] == b"pre-edit bytes"
@@ -229,8 +223,8 @@ def test_restore_writes_baseline_into_container(
 def test_restore_deletes_ai_created_file_in_container(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # content_ref=None → the AI created the file this turn → rewind DELETES it,
-    # in the container.
+    # content_ref=None encodes "no pre-edit bytes existed", i.e. the AI created
+    # the file this turn — so rewinding it means deleting it, in the container.
     fake = FakeContainerFs("http://A:1111", files={"/c/ws/new.txt": b"created"})
     monkeypatch.setattr(sandbox_mod, "_default_backend_factory", lambda handle, preamble=None: fake)
     host = _host(
@@ -249,9 +243,9 @@ def test_restore_deletes_ai_created_file_in_container(
 def test_local_rewind_still_writes_host_fs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A sandbox-configured host, but a session with NO recorded ref (local):
-    # exec_env_for_ref → None → the byte-identical host-FS path runs, and the
-    # container backend is never touched.
+    # A sandbox-configured host serving a session with NO recorded ref: the
+    # session is local, so the host-FS path must run and the container backend
+    # must stay untouched. Host config alone must not redirect the restore.
     fake = FakeContainerFs("http://A:1111")
     monkeypatch.setattr(sandbox_mod, "_default_backend_factory", lambda handle, preamble=None: fake)
     host = _host(tmp_path, exec_env=SandboxExecEnvConfig(base_url="http://A:1111"))

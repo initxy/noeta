@@ -1,20 +1,13 @@
-"""Phase 4 I4 — coding session end-to-end with a scripted FakeLLM.
+"""A one-shot coding session, and the closures that keep it safe by default.
 
-Drives the production SDK assembly (``SdkHost`` + ``InteractionDriver``) — the
-same engine the shipping ``noeta.agent`` backend builds:
-
-* a session drives ``Engine.run_one_step`` end-to-end with the agent's tool
-  subset + the workspace skill registry + a pre-loop durable activation; the
-  projected ``CodeSessionResult`` carries ``files_changed`` and
-  ``selected_skills``.
-* dry-run mode does not write the workspace (default safe closure).
-* apply mode actually edits + the EventLog captures it.
-* shell-tool gating per agent / ShellMode happens at construction (an agent
-  with ``ShellMode.OFF`` cannot call shell_run because it is absent from the
-  pack).
-* ``resolve_write_mode`` / ``resolve_shell_mode`` honour the documented
-  precedence (read-only > allow-write+yes > dry-run; allow-shell ⇒ arbitrary,
-  otherwise allowlist; explicit OFF wins).
+Drives the production assembly (``SdkHost`` + ``InteractionDriver``) with a
+scripted provider. Every closure here is enforced at construction rather than
+by a runtime refusal: dry-run leaves the workspace untouched while still
+recording the proposed diff, an agent's tool list filters the pack before the
+Engine sees it, and ``ShellMode.OFF`` removes shell from the pack outright.
+``resolve_write_mode`` / ``resolve_shell_mode`` pin the flag precedence that
+picks those modes, since a wrong answer there is what would let a read-only
+request write.
 """
 
 from __future__ import annotations
@@ -136,16 +129,10 @@ def test_resolve_shell_mode_precedence(
 
 
 def test_default_agent_exposes_full_fs_pack() -> None:
-    """The Phase-4 default agent allows every built-in tool.
+    """``main`` allows every built-in tool.
 
-    The background shell triplet (shell_run/shell_poll/
-    shell_kill) is part of the full pack now that shell_poll/shell_kill are
-    registered in builtin_tool_classes().
-    (phase 2): ``webfetch`` joined the built-in catalog (a web
-    tool, not an fs tool), so main's tools=None full set now includes it.
-    ``web_search`` (the noeta-executed search tool) likewise joined the catalog,
-    so it is always in main's whitelist; the runtime pack only materialises it
-    when a search API key is configured.
+    ``web_search`` is always in the whitelist; the runtime pack only
+    materialises it when a search API key is configured.
     """
     expected = {
         "read",

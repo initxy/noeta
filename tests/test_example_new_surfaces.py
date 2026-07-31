@@ -1,15 +1,14 @@
-"""Tests for the three new-surface example manifest plugins (M5).
+"""Tests for the three new-surface example manifest plugins.
 
-One exemplar per new extension surface opened by the SDK-extensibility redesign
-(``docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md``):
+One exemplar per extension surface:
 
-* ``redaction``          — a ``tool_result_transform`` (D9): pure ``ToolResult
+* ``redaction``          — a ``tool_result_transform``: pure ``ToolResult
   -> ToolResult``, applied inside the ToolRuntime before recording, so the
-  secret never lands in the ledger or content store (acceptance 10).
-* ``checklist-reminder`` — a compose-time ``reminder`` (track B / D8): a pure
+  secret never lands in the ledger or content store.
+* ``checklist-reminder`` — a compose-time ``reminder`` (track B): a pure
   function of the composer's ``ReminderView`` projection, rendered at the
   dynamic-suffix tail.
-* ``memory-recall``      — a RAG-style ``reminder_provider`` (track A / D7): an
+* ``memory-recall``      — a RAG-style ``reminder_provider`` (track A): an
   impure (recorded) provider at the ``turn_intake`` seam, with a stub retriever.
 
 Each is checked at the manifest boundary (loads / lists / resolves through

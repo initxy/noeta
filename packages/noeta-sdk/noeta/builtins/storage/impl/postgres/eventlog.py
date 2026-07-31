@@ -1,36 +1,10 @@
 """``PostgresEventLog`` — psycopg-backed adapter for the L0 EventLog Protocols.
 
-Second persistent EventLog backend; behaviour pinned by
-:class:`noeta.storage.memory.InMemoryEventLog` and the
-storage-backend-neutral contract suite, mirroring
-:class:`noeta.builtins.storage.impl.sqlite.eventlog.SqliteEventLog` structure-for-structure.
-
-The same concurrency layers on :meth:`emit`:
-
-1. **Idempotency** — same ``(task_id, lease_id, idempotency_key)`` twice
-   returns the originally-assigned envelope without writing a new one.
-2. **4-KB payload cap** — canonical bytes computed once and re-used for
-   the INSERT, so the cap check and the persisted bytes share the same
-   single-source serialisation path.
-3. **Optimistic ``expected_seq``** — caller asserts the next slot they
-   intend to claim. Mismatch raises :class:`StaleSequence`.
-4. **Lease validity** — when ``lease_id`` is provided and a
-   ``LeaseRegistry`` was injected, the lease must check out. Unlike
-   the other adapters this one probes ``dispatcher_tasks`` first with
-   an in-tx ``SELECT ... FOR SHARE`` (the multi-host fence: the
-   row-share lock holds off any concurrent lease-clearing UPDATE until
-   this emit commits, closing the zombie-append window — see ADR
-   multi-host-lease-fencing.md D1); only when the probe finds no row
-   is the registry consulted (mixed wirings keep registry semantics).
-
-Where sqlite wraps every write in the file-wide ``BEGIN IMMEDIATE``
-lock, Postgres is MVCC: each write transaction takes a per-task-stream
-``pg_advisory_xact_lock`` first, so two writers cannot race on
-``MAX(seq)`` within a stream while appends to different streams stay
-concurrent. Subscribers fire **after** ``COMMIT`` and **outside** the
-adapter lock; subscriber callbacks are free to issue further
-``emit / system_emit`` calls (the ``ChildLifecycleObserver`` pattern)
-because the original transaction is already durable by then.
+Every write transaction takes a per-task-stream ``pg_advisory_xact_lock``
+before allocating ``MAX(seq)+1``, so two writers cannot race within a stream
+while appends to different streams stay concurrent. Subscribers fire **after**
+``COMMIT`` and **outside** the adapter lock, which is what makes it safe for a
+subscriber callback to issue further ``emit`` / ``system_emit`` calls.
 """
 
 from __future__ import annotations
@@ -66,9 +40,9 @@ from noeta.builtins.storage.impl.postgres._connection import (
 from noeta.builtins.storage.impl.postgres.migrations import apply_migrations
 
 # The ``find_latest_snapshot`` predicate, rendered once from the protocol
-# constant so the query can never drift from the contract set (the
-# ``ix_events_snapshot`` partial index must keep matching it textually —
-# see the migration notes).
+# constant so the query can never drift from the contract set. The
+# ``ix_events_snapshot`` partial index must keep matching it textually, so
+# widening the constant means writing a new migration.
 _BASELINE_TYPES_SQL = "(" + ", ".join(
     f"'{t}'" for t in SNAPSHOT_BASELINE_EVENT_TYPES
 ) + ")"
@@ -77,8 +51,8 @@ _BASELINE_TYPES_SQL = "(" + ", ".join(
 __all__ = ["MAX_PAYLOAD_BYTES", "PostgresEventLog"]
 
 
-# Adapter-local alias mirroring the sqlite module; the canonical L0 name
-# is :data:`noeta.protocols.values.EVENT_PAYLOAD_MAX_BYTES`.
+# Adapter-local alias; the canonical L0 name is
+# :data:`noeta.protocols.values.EVENT_PAYLOAD_MAX_BYTES`.
 MAX_PAYLOAD_BYTES = EVENT_PAYLOAD_MAX_BYTES
 
 
@@ -92,11 +66,8 @@ def _default_id_factory() -> str:
 class PostgresEventLog:
     """psycopg implementation of ``EventLog`` + ``EventLogSubscriber``.
 
-    Public surface deliberately equals the L0 Protocols (``emit``,
-    ``system_emit``, ``read``, ``find_latest_snapshot``, ``subscribe``)
-    plus :meth:`bind_lease_registry` (mirroring InMemory) and
-    :meth:`close` (adapter-level resource release; not on the Protocol,
-    callers that wire PostgresEventLog know to call it).
+    Beyond the Protocols it exposes only :meth:`bind_lease_registry` and the
+    lifecycle helpers; wiring that constructs this adapter owns closing it.
     """
 
     def __init__(
@@ -112,10 +83,10 @@ class PostgresEventLog:
         self._conn = _open_connection(dsn)
         apply_migrations(self._conn)
         self._lease_validator = lease_validator
-        # No injected ``clock`` (production) → the in-tx fence probe's
-        # expiry predicate runs on the database clock, matching the
-        # dispatcher's D2 clock base; an injected clock keeps the
-        # deterministic client-side comparison for tests.
+        # Without an injected ``clock`` the fence probe's expiry predicate
+        # runs on the database clock, the one clock every host shares with
+        # the dispatcher; an injected clock keeps the deterministic
+        # client-side comparison tests need.
         self._db_clock = clock is None
         self._clock = clock or time.time
         # Test-only seam: invoked between the fence probe and the event
@@ -126,17 +97,15 @@ class PostgresEventLog:
         self._id_factory = id_factory or _default_id_factory
         self._schema_version = schema_version
         self._subscribers: list[Subscriber] = []
-        # ``threading.Lock`` (not RLock) — same-thread re-entry into
-        # ``emit`` deadlocks rather than corrupting the seq counter.
-        # Subscriber-driven re-emit is safe because callbacks run
-        # *after* lock release; see ``_notify`` below.
+        # ``threading.Lock``, not RLock: same-thread re-entry into ``emit``
+        # must deadlock rather than corrupt the seq counter. Subscriber-driven
+        # re-emit is safe because callbacks run *after* lock release.
         self._lock = threading.Lock()
         self._closed = False
 
     # -- wiring ----------------------------------------------------------
 
     def bind_lease_registry(self, registry: LeaseRegistry) -> None:
-        """Late-bind a :class:`LeaseRegistry` (mirrors the other adapters)."""
         self._lease_validator = registry
 
     # -- writes ----------------------------------------------------------
@@ -209,10 +178,9 @@ class PostgresEventLog:
     def _lock_stream(self, task_id: str) -> None:
         """Serialise writers of one task stream for the open transaction.
 
-        ``hashtext`` maps the task id onto the advisory objid; a hash
-        collision between two task ids only over-serialises those two
-        streams (correctness is unaffected). Auto-released at COMMIT /
-        ROLLBACK.
+        ``hashtext`` maps the task id onto the advisory objid, so a hash
+        collision between two task ids costs only over-serialisation of those
+        two streams. The lock auto-releases at COMMIT / ROLLBACK.
         """
         self._conn.execute(
             "SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
@@ -228,9 +196,9 @@ class PostgresEventLog:
         idempotency_key: Optional[str],
         require_lease: bool,
     ) -> EventEnvelope:
-        # Serialise once: the same canonical bytes feed both the 4-KB
-        # cap check and the BYTEA INSERT, so the persisted payload is
-        # byte-identical to what the cap saw (single canonical path).
+        # Serialise once: the same canonical bytes feed both the payload cap
+        # check and the BYTEA INSERT, so what is persisted is byte-identical
+        # to what the cap measured.
         body = to_canonical_bytes(envelope.payload)
 
         stamped: EventEnvelope
@@ -238,8 +206,8 @@ class PostgresEventLog:
             self._conn.execute("BEGIN")
             try:
                 self._lock_stream(envelope.task_id)
-                # Idempotency dedup (runs before the seq check so a
-                # retry doesn't accidentally trip StaleSequence).
+                # Runs before the seq check so a retry returns the original
+                # envelope instead of tripping StaleSequence.
                 if lease_id is not None and idempotency_key is not None:
                     cached = self._conn.execute(
                         "SELECT seq FROM idempotency "
@@ -279,16 +247,16 @@ class PostgresEventLog:
                     and lease_id is not None
                     and self._lease_validator is not None
                 ):
-                    # In-tx fence probe (ADR multi-host-lease-fencing.md
-                    # D1): select the dispatcher row FOR SHARE so a
-                    # concurrent reclaim / release / heartbeat-cap
-                    # UPDATE blocks until this emit commits or rolls
-                    # back — no zombie write can land after a new lease
-                    # generation started. A returned row proves the
-                    # lease current in THIS database; zero rows fall
-                    # back to the bound registry, which keeps mixed
-                    # wirings (e.g. an InMemoryDispatcher validating
-                    # this log) on their exact registry semantics.
+                    # In-transaction fence (see ADR
+                    # multi-host-lease-fencing.md): selecting the dispatcher
+                    # row FOR SHARE makes a concurrent reclaim / release /
+                    # heartbeat-cap UPDATE block until this emit commits or
+                    # rolls back, so no zombie write can land after a new
+                    # lease generation started. A returned row proves the
+                    # lease current in THIS database; zero rows fall back to
+                    # the bound registry, which keeps a mixed wiring (say an
+                    # InMemoryDispatcher validating this log) on its own
+                    # registry semantics.
                     if self._db_clock:
                         held = self._conn.execute(
                             "SELECT 1 FROM dispatcher_tasks "
@@ -356,10 +324,8 @@ class PostgresEventLog:
                 self._conn.execute("ROLLBACK")
                 raise
 
-        # Notify subscribers outside the lock and after COMMIT so a
-        # subscriber that re-enters ``emit`` (e.g. the cross-stream
-        # ChildLifecycleObserver pattern) opens its own transaction
-        # cleanly. Subscriber exceptions are swallowed.
+        # Outside the lock and after COMMIT, so a subscriber that re-enters
+        # ``emit`` opens its own transaction cleanly instead of deadlocking.
         self._notify(stamped)
         return stamped
 
@@ -368,9 +334,9 @@ class PostgresEventLog:
     def read(
         self, task_id: str, *, after_seq: Optional[int] = None
     ) -> list[EventEnvelope]:
-        # Reads share the single connection with writers, so they must
-        # take the same lock — the connection carries per-transaction
-        # state that a concurrent writer would otherwise interleave.
+        # Reads share the single connection with writers, so they must take
+        # the same lock: the connection carries per-transaction state a
+        # concurrent writer would otherwise interleave with.
         with self._lock:
             if after_seq is None:
                 rows = self._conn.execute(
@@ -387,11 +353,10 @@ class PostgresEventLog:
 
     def find_latest_snapshot(self, task_id: str) -> Optional[EventEnvelope]:
         with self._lock:
-            # TaskRewound / StepAttemptAbandoned are snapshot-shaped fold
-            # baselines (``state_ref`` too) — take whichever of the three
-            # has the higher seq so a rewind / attempt seal re-bases fold
-            # from the same lookup. ``ix_events_snapshot`` is partial on
-            # exactly this predicate (migration 2).
+            # Every type in the baseline set carries a ``state_ref`` and
+            # re-bases the fold, so the highest seq among them wins whichever
+            # type it is. ``ix_events_snapshot`` is partial on exactly this
+            # predicate.
             row = self._conn.execute(
                 "SELECT * FROM events "
                 f"WHERE task_id = %s AND type IN {_BASELINE_TYPES_SQL} "
@@ -405,10 +370,8 @@ class PostgresEventLog:
     def list_task_streams(self) -> list[TaskStreamSummary]:
         """Enumerate task streams, most-recent-update first.
 
-        One ``GROUP BY task_id`` pass; ``MAX(occurred_at) DESC, task_id
-        ASC`` gives a deterministic tie-break so equal timestamps never
-        reorder flakily. A row only exists when the task has ≥1 event,
-        so empty streams are naturally absent.
+        ``task_id ASC`` is the tie-break, so equal timestamps cannot reorder
+        between calls. A stream with no events has no row and is absent.
         """
         with self._lock:
             rows = self._conn.execute(
@@ -427,16 +390,15 @@ class PostgresEventLog:
         ]
 
     def _fetch_envelope(self, task_id: str, seq: int) -> EventEnvelope:
-        # Callers already hold ``self._lock`` (only ``_append`` invokes
-        # this, from inside its transaction). No nested acquire — that
-        # would deadlock on a non-reentrant Lock.
+        # The caller already holds ``self._lock`` and an open transaction.
+        # A nested acquire would deadlock on the non-reentrant Lock.
         row = self._conn.execute(
             "SELECT * FROM events WHERE task_id = %s AND seq = %s",
             (task_id, seq),
         ).fetchone()
         if row is None:
-            # Should never happen: idempotency table points at a row
-            # we just verified exists; surface loudly if it does.
+            # Unreachable unless the idempotency table and the events table
+            # have diverged; fail loudly rather than fabricate an envelope.
             raise RuntimeError(
                 f"idempotency cache references missing event "
                 f"task_id={task_id}, seq={seq}"
@@ -468,13 +430,10 @@ class PostgresEventLog:
     def purge_task(self, task_id: str) -> bool:
         """Hard-delete every row this task owns (events + idempotency).
 
-        A GC/maintenance affordance backing the agent product's "delete
-        session" command — deliberately NOT on the L0 ``EventLog``
-        Protocols (the record/fold path is append-only and never
-        deletes). ``content`` blobs are intentionally left untouched:
-        that table is addressed by hash and shared across tasks.
-
-        Returns ``True`` iff at least one ``events`` row was removed.
+        A maintenance affordance deliberately kept off the L0 ``EventLog``
+        Protocols, whose record/fold path is append-only. ``content`` blobs
+        are left untouched because that table is addressed by hash and shared
+        across tasks. Returns ``True`` iff at least one event row was removed.
         """
         with self._lock:
             self._conn.execute("BEGIN")
@@ -496,12 +455,7 @@ class PostgresEventLog:
     # -- lifecycle -------------------------------------------------------
 
     def close(self) -> None:
-        """Close the underlying psycopg connection.
-
-        Idempotent. Not part of the L0 Protocols — application wiring
-        that constructs a :class:`PostgresEventLog` is responsible for
-        calling this at shutdown.
-        """
+        """Close the underlying psycopg connection. Idempotent."""
         if self._closed:
             return
         try:
@@ -522,8 +476,8 @@ class PostgresEventLog:
 
 
 def _row_to_envelope(row: Mapping[str, Any]) -> EventEnvelope:
-    # psycopg may hand BYTEA back as ``memoryview``; normalise to bytes
-    # before the canonical decode.
+    # psycopg may hand BYTEA back as ``memoryview``, which the canonical
+    # decoder does not accept.
     canonical_body = from_canonical_bytes(bytes(row["payload_canonical"]))
     payload = restore_payload(row["type"], canonical_body)
     return EventEnvelope(

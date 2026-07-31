@@ -1,13 +1,11 @@
 """Content-channel rendering + message-stream origin pass-through.
 
-The verify-era per-entry View source attribution (``ViewSegment.entry_sources``
-/ ``RenderedContent.entry_names``) was retired with verify/replay. What survives
-and is exercised here:
+Covered here:
 
 * Content-channel entries (``skill:`` / ``memory:``) render into the
   ``semi_stable`` segment; a skill renders its body plus an absolute
   base-directory line into ONE message, without force-inlining resources.
-* Message-stream entries pass through D4's ``origin`` (neither the thinking
+* Message-stream entries pass through their ``origin`` (neither the thinking
   re-attach nor the tail-prune transform path loses origin).
 """
 

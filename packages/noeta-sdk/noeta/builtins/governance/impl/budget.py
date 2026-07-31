@@ -1,41 +1,13 @@
-"""``BudgetGuard`` — resource caps on a Task's consumption.
+"""``BudgetGuard`` — per-instance resource caps on a Task's consumption.
 
-Issue 18. Reads the ``GovernanceState`` snapshot folded by the Engine
-(see :meth:`noeta.core.engine.Engine._guard`) and refuses further
-actions once any configured cap has been reached. Caps are
-**per-instance** in Phase 1 (no per-task ``Budget`` field on
-``TaskCreated`` yet); Phase 2 will read budgets off a Task ``Principal``
-or ``Contract``.
-
-Action-specific caps matrix (issue 18 sign-off):
-
-* ``ProposedToolCall``: check all four caps (iterations / cost_usd /
-  tool_calls / spawned_subtasks).
-* ``ProposedSpawnSubtask``: iterations / cost_usd / spawned_subtasks.
-  ``tool_calls`` is not relevant — spawning does not consume a tool
-  slot.
-* ``ProposedFinish``: iterations / cost_usd only. ``tool_calls`` and
-  ``spawned_subtasks`` are consumption caps; finish does not consume
-  them, so it stays admissible even at those caps. ``iterations`` and
-  ``cost_usd`` are historical accumulators — if the task has
-  overspent there, even finish is blocked.
-
-Comparison operator choice:
-
-* ``iterations`` uses ``>`` (strict). ``ContextPlanComposed`` for the
-  current step is emitted **before** the guard fires, so
-  ``g.iterations`` already counts the in-flight iteration. We want
-  ``max_iterations=1`` to allow exactly one full step.
-* ``tool_calls`` / ``spawned_subtasks`` use ``>=`` because they
-  represent counts already consumed **before** the proposed action;
-  ``>=`` lets the next action push the count to ``cap+1`` only if
-  it's still below.
-* ``cost_usd`` uses ``>=`` — the cost has already been incurred; once
-  at the cap the task should not continue.
-
-Microkernel M2: the class moved here from ``noeta.guards.budget``; its
-:class:`~noeta.runtime.governance.Budget` configuration type sank into the
-kernel vocabulary module.
+The comparison asymmetry is deliberate: ``iterations`` uses strict ``>``
+because ``ContextPlanComposed`` for the current step is emitted before the
+guard fires, so the in-flight iteration is already counted and
+``max_iterations=1`` must still allow exactly one full step; ``cost_usd`` /
+``tool_calls`` / ``spawned_subtasks`` use ``>=`` because they count what has
+already been consumed. ``ProposedFinish`` is checked against the historical
+accumulators only — finish consumes neither a tool slot nor a subtask, so a
+task sitting at those caps may still terminate.
 """
 
 from __future__ import annotations
@@ -55,8 +27,7 @@ __all__ = ["BudgetGuard"]
 
 
 class BudgetGuard:
-    """Synchronous resource-cap Guard. Returns ``DENY`` once any
-    configured cap is reached; otherwise ``ALLOW``."""
+    """Synchronous resource-cap Guard over the Engine-folded governance state."""
 
     name = "budget"
     priority = 10
@@ -102,11 +73,11 @@ class BudgetGuard:
                 return VerdictResult.deny(
                     f"max_spawned_subtasks={b.max_spawned_subtasks} reached"
                 )
-            # SR1: depth cap. ``ctx.subtask_depth`` is THIS task's depth; a
-            # spawn would create a child at depth+1, so deny once the
-            # current depth has reached the cap (root=0; max=1 allows
-            # root→child, denies child→grandchild). Deny here happens
-            # before any subtask_id / SubtaskSpawned / child TaskCreated.
+            # ``ctx.subtask_depth`` is THIS task's depth and a spawn creates a
+            # child at depth+1, so the cap trips once the current depth has
+            # reached it (root=0; max=1 allows root→child, denies
+            # child→grandchild). Denying here precedes any subtask_id,
+            # SubtaskSpawned or child TaskCreated.
             if (
                 b.max_subtask_depth is not None
                 and ctx.subtask_depth >= b.max_subtask_depth
@@ -114,7 +85,7 @@ class BudgetGuard:
                 return VerdictResult.deny(
                     f"max_subtask_depth={b.max_subtask_depth} reached"
                 )
-        # ProposedFinish: only the iterations / cost caps above apply.
-        _ = isinstance(action, ProposedFinish)  # documents the branch
+        # ProposedFinish is bound by the iterations / cost caps above only.
+        _ = isinstance(action, ProposedFinish)  # a no-op that keeps the branch visible
 
         return VerdictResult.allow()

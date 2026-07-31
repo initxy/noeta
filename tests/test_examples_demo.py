@@ -1,21 +1,13 @@
-"""Tests for the real-provider subtask demo.
+"""``examples/_internal/real_provider_subtask_demo.py`` — the spawn / suspend /
+wake-resume flow the example advertises actually holds.
 
-The example script ``examples/_internal/real_provider_subtask_demo.py`` is the
-headline demonstration of Noeta's value proposition — it composes two
-Engines, drives a child task via a real LLM, and exercises the
-wake-resume path.
-
-Two test surfaces here:
-
-1. **Smoke** — replicates the demo's golden flow with a deterministic
-   scripted provider so CI exercises the relative-ordering invariants
-   without an API key.
-2. **Skip-when-env-missing** — verifies the example script exits 0
-   with ``skipped: ...`` when no real provider is configured.
-
-The real-provider branch of the demo is exercised manually by humans
-running the example with their own API key; CI never burns provider
-credit.
+The demo's own run needs a real provider, so the flow is replayed here against
+a deterministic in-process provider: an example that only works with a human's
+API key rots silently. What is pinned is the event ORDER a parent must observe
+(spawn before suspend before the child's completion before the wake), plus the
+demo's provider wiring, since its docstring promises the Anthropic path works
+without setting a ``max_tokens`` variable. The script's no-credentials branch
+is run for real, so the example stays runnable without burning provider credit.
 """
 
 from __future__ import annotations
@@ -54,10 +46,9 @@ from noeta.tools.fake import FakeTool
 
 
 class _DeterministicProvider:
-    """Stand-in for OpenAI/Anthropic in CI. **Stateless** — turn is
-    decided by inspecting the request's message history for a prior
-    ToolResultBlock. First turn → tool_use(echo); second turn (after
-    tool result) → end_turn."""
+    """Stand-in for OpenAI/Anthropic. Deliberately **stateless**: the turn is
+    decided by looking for a prior ToolResultBlock in the request, so a retry
+    or a re-fold cannot desynchronise it from a call counter."""
 
     def complete(self, request: LLMRequest) -> LLMResponse:
         has_tool_result = any(
@@ -98,10 +89,8 @@ def _build_echo_tool() -> Any:
 
 
 def test_demo_golden_path_invariants_with_deterministic_provider() -> None:
-    """Drive the demo's parent+child flow with an in-process
-    deterministic provider; assert the same relative-ordering
-    invariants the example asserts in its teardown.
-    """
+    """Drive the demo's parent+child flow and assert the same relative-ordering
+    invariants the example asserts in its teardown."""
     dispatcher = InMemoryDispatcher()
     event_log = InMemoryEventLog(lease_validator=dispatcher)
     content_store = InMemoryContentStore()
@@ -216,7 +205,7 @@ def test_demo_golden_path_invariants_with_deterministic_provider() -> None:
     )
     assert woken_parent.status == "terminal"
 
-    # ---- Assert the I1 invariants (parent + child) ----
+    # ---- Ordering invariants (parent + child) ----
     parent_envs = event_log.read(parent_task.task_id)
     parent_types = [e.type for e in parent_envs]
     assert parent_envs[0].type == "TaskCreated"
@@ -254,11 +243,11 @@ def test_demo_golden_path_invariants_with_deterministic_provider() -> None:
 def test_example_anthropic_provider_carries_default_max_tokens(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """B3 regression — Anthropic adapter fail-fasts when neither the
-    request nor the provider carries ``max_tokens``. The demo docstring
-    promises ``NOETA_PROVIDER=anthropic NOETA_API_KEY=... NOETA_MODEL=...``
-    works without an extra env var, so ``_build_provider()`` must
-    supply an explicit default (1024) when ``NOETA_MAX_TOKENS`` is unset.
+    """The Anthropic adapter fail-fasts when neither the request nor the
+    provider carries ``max_tokens``. The demo docstring promises
+    ``NOETA_PROVIDER=anthropic NOETA_API_KEY=... NOETA_MODEL=...`` is enough,
+    so ``_build_provider()`` has to supply a default when
+    ``NOETA_MAX_TOKENS`` is unset — otherwise the advertised command crashes.
     """
     import importlib.util
 
@@ -316,8 +305,8 @@ def test_example_script_skips_cleanly_when_env_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Running the example with no provider env should print ``skipped:
-    ...`` and exit 0. CI runs this branch to keep the example honest."""
+    """With no provider env the example must print ``skipped: ...`` and exit
+    0 — an example that exits non-zero on a clean checkout reads as broken."""
     monkeypatch.delenv("NOETA_OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("NOETA_OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("NOETA_OPENAI_MODEL", raising=False)

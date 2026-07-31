@@ -8,14 +8,14 @@ and BOTH ride the SAME content channel — read
 at send time, snapshotted into an ordinary recorded message tagged
 ``origin="system"`` (resume reads the snapshot, never re-reads).
 
-The Noeta commitments held verbatim from D4 / D10:
+The Noeta commitments:
 
 * **request-response subset only** — one ``resources/list`` / ``resources/read``
   POST, one JSON-RPC response; never a server-push stream;
 * **v1 static clip-list only** — what ``resources/list`` enumerates; resource
   *templates* (parameterised URIs) are out of scope (they need extra fill-in);
 * **user-driven only** — there is NO tool / channel that lets the model pull a
-  resource; the model takes information through tools (D10's resource=read-material
+  resource; the model takes information through tools (the resource=read-material
   / tool=do-action boundary). These two helpers are reached ONLY from the host's
   ``@``-mention handling, never from the tool set.
 
@@ -63,7 +63,7 @@ def make_mcp_resource_ref(alias: str, uri: str) -> str:
 
     The front-end ``@`` selector lists this verbatim and the request body carries
     it back (``{alias, uri}``); the host resolves the alias to its host-side spec
-    (no url / token rides the request, D3) and reads the URI at send time."""
+    (no url / token rides the request) and reads the URI at send time."""
     return f"{alias}:{uri}"
 
 
@@ -75,7 +75,7 @@ def flatten_resource_contents(result: dict[str, Any]) -> str:
     blank lines (binary ``blob`` contents — images / archives — are out of scope
     for the v1 text snapshot and are skipped). Snapshotting the text (not the URI)
     at send time is what makes resume deterministic: a later edit to the resource
-    cannot drift an already-recorded message (D10)."""
+    cannot drift an already-recorded message."""
     contents = result.get("contents")
     parts: list[str] = []
     if isinstance(contents, list):
@@ -142,7 +142,7 @@ def read_resource(
     spawn: Optional[SpawnFn] = None,
     http_post: Optional[HttpPostFn] = None,
 ) -> str:
-    """Connect ``spec``, ``resources/read`` the URI, flatten its text (D10).
+    """Connect ``spec``, ``resources/read`` the URI, flatten its text.
 
     Returns the plain-text snapshot the host records as that turn's ``@``-mention
     content (an ``origin="system"`` message; resume reads it back, never

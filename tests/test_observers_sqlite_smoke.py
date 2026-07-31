@@ -1,4 +1,9 @@
-"""Sqlite EventLog wiring smoke for AuditObserver + MetricsObserver."""
+"""Observers wired to a sqlite EventLog see live emissions, not history.
+
+Subscription is process-local: an observer attached to a reopened log must
+receive only what is emitted after it wires in, so restarting a host cannot
+flood a fresh audit sink or metrics counter with the whole stored trail.
+"""
 
 from __future__ import annotations
 
@@ -40,10 +45,8 @@ def test_audit_and_metrics_observers_subscribe_to_sqlite_eventlog(tmp_path) -> N
 def test_reopened_sqlite_does_not_replay_historical_events_to_observers(
     tmp_path,
 ) -> None:
-    """Subscribers are process-local: a fresh observer wired against a
-    reopened SqliteEventLog sees only events emitted **after** wiring,
-    not the historical prefix. This pins the sync-subscriber semantics
-    the Phase 1 design relies on."""
+    """A fresh observer wired against a reopened SqliteEventLog sees only
+    events emitted **after** wiring, never the stored prefix."""
     db = tmp_path / "noeta.db"
     log = SqliteEventLog(db)
     try:
@@ -71,7 +74,6 @@ def test_reopened_sqlite_does_not_replay_historical_events_to_observers(
         metrics.stop()
         log2.close()
 
-    # Only the post-wire emit reached the observers.
     assert [rec.task_id for rec in audit_records] == ["new"]
     assert snap.by_type == {"TaskCreated": 1}
     assert snap.by_task_type == {("new", "TaskCreated"): 1}

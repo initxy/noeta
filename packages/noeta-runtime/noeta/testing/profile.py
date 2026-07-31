@@ -1,31 +1,13 @@
-"""Default runtime profile — test-support assembly helpers.
+"""Test-support assembly: a whole runtime — storage stack, engine, governance
+guards, built-in Observers — from one call.
 
-Single-file wiring of all five built-in hooks
-(``BudgetGuard / PermissionGuard / AuditObserver / MetricsObserver /
-EventFanout``) plus :func:`noeta.core.wiring.wire_default_observers`
-for ``ChildLifecycleObserver``.
-
-This used to live in ``noeta.cli.profile`` and back the operator CLI; the
-operator command suite was removed, so its only remaining consumers are the test
-suite (the official backend wires its own storage/observers inline — see
-:func:`noeta.agent.backend.lifecycle.serve_backend`). It is therefore test-support and
-lives under ``noeta.testing``; it is cli-free, so production layers never reach it
-(the ``production-cannot-import-testing`` contract still forbids importing
-``noeta.testing``).
-
-Three shared builders — ``build_tools`` / ``build_composer`` /
-``build_policy_factory`` — keep a recording and its later resume on the same
-prompt source so the rebuilt prompt prefix stays stable (which is what the
-provider's stable-prefix prompt cache keys on). Also re-homes the reusable
-defaults from the old ``noeta.cli._common`` (``default_budget`` /
-``permission_policy_for`` / ``default_permission_policy``).
-
-Storage wiring is inline in :func:`build_runtime`: the InMemory reference
-backend is a static ``noeta.storage.memory`` import, while the durable
-backends resolve through a call-time dynamic import of the ``storage``
-built-in's ``stack`` modules (the same discipline as the governance
-guards). Hosts and tests that need the stack builders themselves use
-:mod:`noeta.sdk.storage`.
+The shared ``build_*`` helpers exist so that a recording and its later resume
+compose from the same prompt source, keeping the stable prefix (which the
+provider's prompt cache keys on) byte-identical. Durable storage backends and
+the guard / policy classes live in built-in plugins and resolve through
+call-time dynamic imports, so this module imports with noeta-runtime alone while
+calling :func:`build_runtime` requires noeta-sdk. Hosts assemble through
+``noeta.sdk`` instead; this shape only serves tests.
 """
 
 from __future__ import annotations
@@ -70,14 +52,9 @@ __all__ = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# Default budget / permission policy (re-homed from noeta.cli._common, TL6)
-# ---------------------------------------------------------------------------
-
-
 def default_budget() -> Budget:
-    """Minimal budget: caps that won't trip in normal demos but give
-    BudgetGuard real values to evaluate."""
+    """Caps high enough not to trip a normal demo, but real enough that
+    BudgetGuard has something to evaluate."""
     return Budget(
         max_iterations=20,
         max_tool_calls=40,
@@ -87,9 +64,9 @@ def default_budget() -> Budget:
 
 
 def permission_policy_for(allowed_tools: frozenset[str]) -> PermissionPolicy:
-    """A permission policy allowing exactly ``allowed_tools`` (and any
-    subtask agent). Used to widen the policy to a resolved tool pack so the
-    pack's tools are not denied at runtime."""
+    """Allow exactly ``allowed_tools`` and any subtask agent — how a caller
+    widens the policy to a resolved tool pack so the pack's own tools are not
+    denied."""
     return PermissionPolicy(
         allowed_tools=allowed_tools,
         denied_tools=frozenset(),
@@ -99,7 +76,6 @@ def permission_policy_for(allowed_tools: frozenset[str]) -> PermissionPolicy:
 
 
 def default_permission_policy() -> PermissionPolicy:
-    """Minimal permission policy: allow the built-in echo tool."""
     return permission_policy_for(frozenset({"echo"}))
 
 
@@ -114,9 +90,8 @@ _log = logging.getLogger(__name__)
 class RuntimeBundle:
     """Wired runtime returned by :func:`build_runtime`.
 
-    Stays open until ``shutdown()`` is called — the test suite invokes
-    it in a ``finally`` block so observers + ChildLifecycleObserver
-    unsubscribe cleanly.
+    Holds live subscriptions until ``shutdown()`` runs, so a caller that skips
+    it leaks Observers into the next test; call it from a ``finally``.
     """
 
     engine: Engine
@@ -128,18 +103,9 @@ class RuntimeBundle:
     shutdown: Callable[[], None]
 
 
-# ---------------------------------------------------------------------------
-# Shared builders (rev3 B6)
-# ---------------------------------------------------------------------------
-
-
 def build_tools() -> dict[str, Tool]:
-    """Minimal tool registry: only the in-tree ``echo`` FakeTool is wired."""
-    # ``noeta.tools`` ships in noeta-runtime alongside this module, so the
-    # lazy import isn't about install boundaries; it keeps importing
-    # ``noeta.testing.profile`` cheap for callers who only need one of the
-    # other build_* helpers (or the re-exported storage-stack helpers),
-    # not the FakeTool machinery.
+    # Lazy purely to keep importing this module cheap for callers who want one
+    # of the other build_* helpers rather than the FakeTool machinery.
     from noeta.tools.fake import FakeTool
 
     return {
@@ -156,21 +122,11 @@ def build_tools() -> dict[str, Tool]:
     }
 
 
-# ---------------------------------------------------------------------------
-# Tool packs
-# ---------------------------------------------------------------------------
-
-
 def resolve_tool_pack(
     name: str,
 ) -> tuple[dict[str, Tool], frozenset[str]]:
-    """Resolve a tool-pack name to ``(tools, allowed_tool_names)``.
-
-    The single source of truth for what tools a run wires.
-
-    Returns ``(tools, allowed_tool_names)`` for the given pack name.
-    Currently only "none" (built-in echo tool) is supported.
-    """
+    """Resolve a pack name to ``(tools, allowed_tool_names)`` — the single
+    source of truth for what tools a run wires."""
     if name == "none":
         tools = build_tools()
         return tools, frozenset(tools)
@@ -185,9 +141,8 @@ def build_composer(
     tools: dict[str, Tool],
     content_store: ContentStore,
 ) -> "ThreeSegmentComposer":
-    # ``noeta.context`` ships in noeta-runtime alongside this module; the
-    # import stays lazy so importing ``noeta.testing.profile`` for a
-    # single unrelated helper doesn't also pull in ThreeSegmentComposer.
+    # Lazy for the same reason as build_tools: cheap import for callers who
+    # never touch a Composer.
     from noeta.context.composer import ThreeSegmentComposer
 
     return ThreeSegmentComposer(
@@ -207,12 +162,9 @@ def build_policy_factory(
     """Return a factory that takes an LLMClient and returns a wired
     ReActPolicy. ``build_runtime`` injects a RuntimeLLMClient.
     """
-    # Microkernel phase 2b: ReActPolicy lives in the ``react`` built-in
-    # plugin (noeta-sdk); this test-support assembly resolves it through the
-    # loader's dynamic-import doorway at call time — the same discipline as
-    # the guards above — so ``noeta.testing`` keeps no static edge into
-    # ``noeta.builtins`` (importing this module works runtime-alone; CALLING
-    # build_policy_factory requires noeta-sdk, which every test run has).
+    # ReActPolicy lives in the ``react`` built-in plugin: resolved through the
+    # loader's dynamic-import doorway so this module keeps no static edge into
+    # ``noeta.builtins``.
     import importlib
 
     ReActPolicy = importlib.import_module("noeta.builtins.react.impl").ReActPolicy
@@ -229,11 +181,6 @@ def build_policy_factory(
     return factory
 
 
-# ---------------------------------------------------------------------------
-# Build everything
-# ---------------------------------------------------------------------------
-
-
 def build_runtime(
     *,
     provider: LLMProvider,
@@ -247,16 +194,10 @@ def build_runtime(
     budget: Budget,
     trace_file: Optional["Path"] = None,
 ) -> RuntimeBundle:
-    # Storage relocation: the durable backends live in the ``storage``
-    # built-in plugin (noeta-sdk); this test-support assembly resolves their
-    # ``build_stack`` factories through a call-time dynamic import — the same
-    # discipline as the governance guards below — so ``noeta.testing`` keeps
-    # no static edge into ``noeta.builtins`` (only the InMemory reference
-    # backend is a static kernel import; calling ``build_runtime`` with a
-    # durable path requires noeta-sdk, which every test run has).
-    # ``sqlite_path`` keeps its historical value shape: ``None`` /
-    # ``":memory:"`` → memory, ``postgresql://`` DSN → postgres, anything
-    # else → a sqlite file path.
+    # ``sqlite_path`` doubles as the backend selector: ``None`` / ``":memory:"``
+    # → memory, a ``postgresql://`` DSN → postgres, anything else → a sqlite
+    # file. Only the InMemory backend is a static kernel import; the durable
+    # ones live in the ``storage`` built-in and resolve dynamically.
     if sqlite_path is None or sqlite_path == ":memory:":
         event_log, content_store, dispatcher = _build_memory_stack()
     else:
@@ -286,13 +227,8 @@ def build_runtime(
     )
     policy = policy_factory(llm)
 
-    # rev2 B2: real HookManager + register guards + pass to Engine.
-    # Microkernel M2: the guard classes live in the ``governance`` built-in
-    # plugin (noeta-sdk); this test-support assembly resolves them through the
-    # loader's dynamic-import doorway at call time — the same discipline as
-    # ``noeta.client.parts`` — so ``noeta.testing`` keeps no static edge into
-    # ``noeta.builtins`` (and the runtime wheel stays importable without it;
-    # calling ``build_runtime`` requires noeta-sdk, which every test run has).
+    # The guard classes live in the ``governance`` built-in; same dynamic-import
+    # discipline as the storage backends above.
     import importlib
 
     _governance = importlib.import_module("noeta.builtins.governance.impl")
@@ -311,11 +247,8 @@ def build_runtime(
         hooks=hook_manager,
     )
 
-    # rev2 B2: wire ChildLifecycleObserver so spawn-subtask works in the
-    # assembled runtime. ``event_log`` is typed ``EventLogFull`` (read + write +
-    # subscribe), which is exactly what ``wire_default_observers``
-    # needs and trivially narrows to ``EventLogSubscriber`` for the
-    # individual Observer constructors (issue A / C1 cleanup).
+    # ChildLifecycleObserver is what makes spawn-subtask work at all in an
+    # assembled runtime.
     unsubscribe_child = wire_default_observers(event_log, dispatcher)
 
     audit = AuditObserver(event_log=event_log)
@@ -326,8 +259,6 @@ def build_runtime(
         fanout = EventFanout(event_log=event_log, broadcaster=sse_broadcaster)
         observer_list.append(fanout)
 
-    # T1: external trace export — a live-only lifecycle-owning observer
-    # (JSONL sink behind a non-blocking async worker). Default off.
     if trace_file is not None:
         from noeta.observers.trace_export import make_jsonl_trace_observer
 

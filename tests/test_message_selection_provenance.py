@@ -1,15 +1,12 @@
-"""MS1 — message-selection provenance.
+"""Message-selection provenance: which history the policy kept is auditable.
 
-Covers: the policy helper (`_build_request_and_selection` — always
-records a summary, `dropped=0` when under the limit; correct counts on
-truncation); the crown-jewel boundary (`LLMRequest` canonical bytes /
-`request_ref` hash unchanged — selection is event-only, never on the
-request); provider/fake/stub `complete(request)` signatures unchanged
-while the runtime client takes the `selection` kwarg; `RuntimeLLMClient`
-is the persister; the explicit sqlite restorer (missing / typed /
-plain-dict / malformed); a fresh truncating recording records
-`dropped>0`; an old-shape payload with no selection persists/restores as
-`None`; and the audit/trace projection of the 5 scalar fields.
+The selection summary is event metadata on ``LLMRequestStarted`` and nothing
+else. It must never reach the ``LLMRequest``, whose canonical bytes and
+``request_ref`` hash are the replay identity of a call — two calls that ask
+the model the same thing have to hash the same regardless of how the history
+was trimmed. The rest pins the round trip end to end: the policy's tail-window
+counts, the sqlite restorer's typed rehydration, and the five scalar fields
+the audit projection exposes.
 """
 
 from __future__ import annotations
@@ -89,7 +86,7 @@ def _policy(llm: Any, *, max_history_messages: int = 50) -> ReActPolicy:
 
 
 # ---------------------------------------------------------------------------
-# 1. Policy helper (B4): direct assertions on counts + presence semantics
+# 1. Policy helper: counts + presence semantics
 # ---------------------------------------------------------------------------
 
 
@@ -98,7 +95,7 @@ def test_build_request_and_selection_no_truncation_still_records_dropped_zero() 
     policy = _policy(object(), max_history_messages=50)
     req, sel = policy._build_request_and_selection(view)
     n = len(view.iter_messages())
-    assert len(req.messages) == n          # nothing dropped
+    assert len(req.messages) == n
     assert sel.strategy == "tail_window"
     assert sel.candidates == n
     assert sel.selected == n
@@ -109,14 +106,13 @@ def test_build_request_and_selection_no_truncation_still_records_dropped_zero() 
 def test_default_max_history_none_no_truncation_no_selection() -> None:
     """The count-based tail-window guard is DEFAULT-OFF.
 
-    With ``max_history_messages`` left at its (new) ``None`` default, even a
-    long history is passed through whole and NO ``tail_window``
-    ``MessageSelection`` is produced — its absence is the signal that no
-    count-based truncation happened (pure token compaction is the only gate
-    now)."""
+    With ``max_history_messages`` at its ``None`` default even a long history
+    is passed through whole and NO ``tail_window`` ``MessageSelection`` is
+    produced — its absence is the signal that no count-based truncation
+    happened, which is what token compaction alone must look like."""
     view = _view_with_history(120)
-    # Construct directly so we exercise ReActPolicy's OWN default (``None``),
-    # not the test-helper's legacy ``50`` default.
+    # Constructed directly: the ``_policy`` helper forces a limit, and this
+    # case is about ReActPolicy's own default.
     policy = ReActPolicy(
         llm=object(),
         tools={"echo": _FakeTool("echo")},
@@ -126,8 +122,8 @@ def test_default_max_history_none_no_truncation_no_selection() -> None:
     req, sel = policy._build_request_and_selection(view)
     n = len(view.iter_messages())
     assert n == 120
-    assert len(req.messages) == n          # nothing dropped, whole history kept
-    assert sel is None                     # no count-based selection emitted
+    assert len(req.messages) == n
+    assert sel is None
 
 
 def test_build_request_and_selection_truncation_counts_match_request() -> None:
@@ -136,12 +132,11 @@ def test_build_request_and_selection_truncation_counts_match_request() -> None:
     assert candidates > 2
     policy = _policy(object(), max_history_messages=2)
     req, sel = policy._build_request_and_selection(view)
-    assert len(req.messages) == 2          # request actually truncated
+    assert len(req.messages) == 2
     assert sel.candidates == candidates
     assert sel.selected == 2
-    assert sel.dropped == candidates - 2   # dropped > 0 == truncation happened
+    assert sel.dropped == candidates - 2
     assert sel.limit == 2
-    # the kept messages are the tail
     assert req.messages == view.iter_messages()[-2:]
 
 
@@ -165,9 +160,9 @@ def test_llm_request_canonical_bytes_carry_no_selection() -> None:
 
 
 def test_request_ref_hash_identical_with_and_without_selection() -> None:
-    """The recorded ``request_ref`` for one request is byte-identical
-    whether or not a selection is passed to ``complete`` — selection never
-    reaches ``_put_request``."""
+    """The recorded ``request_ref`` is byte-identical whether or not a
+    selection is passed to ``complete`` — selection never reaches
+    ``_put_request``."""
     req = _one_shot_request()
     sel = MessageSelection(
         strategy="tail_window", candidates=4, selected=4, dropped=0, limit=50
@@ -189,11 +184,11 @@ def test_request_ref_hash_identical_with_and_without_selection() -> None:
         ref: ContentRef = started.payload.request_ref
         return ref
 
-    assert _run(sel) == _run(None)         # request_ref independent of selection
+    assert _run(sel) == _run(None)
 
 
 # ---------------------------------------------------------------------------
-# 3. Signatures: providers/fakes unchanged; runtime clients take the kwarg
+# 3. Signatures: the kwarg stops at the runtime client, providers stay narrow
 # ---------------------------------------------------------------------------
 
 
@@ -221,7 +216,7 @@ def test_runtime_client_takes_selection_kwarg() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. sqlite restorer (B2): missing / typed / plain-dict / malformed
+# 4. sqlite restorer: missing / typed / plain-dict / malformed
 # ---------------------------------------------------------------------------
 
 
@@ -278,7 +273,7 @@ def test_restorer_unexpected_shape_fails_loud() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. old-shape (no selection) persists + restores as None through sqlite
+# 5. sqlite round trip: absent selection stays absent, present stays typed
 # ---------------------------------------------------------------------------
 
 
@@ -293,7 +288,6 @@ def test_sqlite_roundtrip_no_selection_restores_none(tmp_path: Path) -> None:
                 request_ref=ContentRef(
                     hash="a" * 64, size=3, media_type="application/json"
                 ),
-                # no selection → old-shape
             ),
         )
         env = [e for e in log.read("t1") if e.type == "LLMRequestStarted"][0]
@@ -320,14 +314,16 @@ def test_sqlite_roundtrip_with_selection_restores_typed(tmp_path: Path) -> None:
             ),
         )
         env = [e for e in log.read("t1") if e.type == "LLMRequestStarted"][0]
-        assert env.payload.selection == sel       # tagged → auto-rehydrated typed
+        # The canonical tag drives rehydration: a typed value comes back, not
+        # the plain dict sqlite actually stored.
+        assert env.payload.selection == sel
         assert isinstance(env.payload.selection, MessageSelection)
     finally:
         log.close()
 
 
 # ---------------------------------------------------------------------------
-# 6. End-to-end: a truncating recording records dropped>0
+# 6. End-to-end: a truncating run records dropped>0
 # ---------------------------------------------------------------------------
 
 
@@ -397,16 +393,16 @@ def _record_truncating_loop() -> tuple[InMemoryEventLog, InMemoryContentStore, s
 def test_truncating_recording_records_dropped() -> None:
     log, cs, task_id = _record_truncating_loop()
     started = [e for e in log.read(task_id) if e.type == "LLMRequestStarted"]
-    assert started, "recording captured no LLM request"
+    assert started, "run captured no LLM request"
     sels = [e.payload.selection for e in started]
     assert all(s is not None for s in sels)
     assert all(s.strategy == "tail_window" and s.limit == 1 for s in sels)
-    # at least one round-trip truncated (history grew past the limit of 1)
+    # Only the later round-trips have a history long enough to truncate.
     assert any(s.dropped > 0 for s in sels)
 
 
 # ---------------------------------------------------------------------------
-# 7. Audit / trace projection of the 5 scalar fields (B6)
+# 7. Audit / trace projection of the five scalar fields
 # ---------------------------------------------------------------------------
 
 
@@ -436,5 +432,6 @@ def test_audit_projects_selection_as_five_scalar_fields() -> None:
         "strategy": "tail_window", "candidates": 9, "selected": 2,
         "dropped": 7, "limit": 2,
     }
-    # request_ref still flattened to its metadata only; no message bodies.
+    # request_ref is flattened to metadata only — an audit sink must never see
+    # message bodies.
     assert set(rec.payload_summary["request_ref"]) == {"hash", "size", "media_type"}

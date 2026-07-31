@@ -1,6 +1,7 @@
-"""Tests for ``noeta.builtins.storage.impl.sqlite.migrations`` (issue 15).
+"""Schema migrations for the sqlite storage backend
+(``noeta.builtins.storage.impl.sqlite.migrations``).
 
-Pins the two behaviours the architect explicitly called out:
+Pins the two behaviours that keep reopen and retry safe:
 
 * re-running ``apply_migrations`` on an already-migrated database is
   a no-op (idempotent on reopen),
@@ -134,7 +135,7 @@ def test_partial_failure_rolls_back_within_a_single_migration(tmp_path, monkeypa
 
 
 def test_migration_2_creates_content_table(tmp_path):
-    """Issue 16 migration 2 must add a ``content`` table to a fresh DB."""
+    """Migration 2 must add a ``content`` table to a fresh DB."""
     db = tmp_path / "noeta.db"
     conn = _open_connection(db)
     try:
@@ -146,10 +147,9 @@ def test_migration_2_creates_content_table(tmp_path):
             ).fetchall()
         }
         assert "content" in names
-        # user_version reaches whatever SCHEMA_VERSION is at runtime
-        # — every issue that lands a new migration bumps it. The
-        # invariant is that the content table exists, not that the
-        # head version equals 2.
+        # user_version reaches whatever SCHEMA_VERSION is at runtime;
+        # every new migration bumps it. The invariant is that the
+        # content table exists, not that the head version equals 2.
         assert _user_version(conn) == SCHEMA_VERSION
     finally:
         conn.close()
@@ -160,10 +160,10 @@ def test_migration_v1_db_upgrades_to_v2_preserving_data(tmp_path, monkeypatch):
     upgrade cleanly to v2 without losing the rows that already live on
     the v1 tables.
 
-    Simulates the real-world upgrade story: issue 15 ships, a process
-    runs, persists some events, exits. Issue 16 lands; on next start
-    the v2 migration runs against the v1 file and the new ``content``
-    table appears without touching any of the v1 data.
+    Mirrors the real upgrade path: a process runs against a v1 file,
+    persists events, exits; on next start the v2 migration runs against
+    that file and the ``content`` table appears without touching any of
+    the v1 data.
     """
     db = tmp_path / "noeta.db"
 
@@ -231,7 +231,7 @@ def test_migration_v1_db_upgrades_to_v2_preserving_data(tmp_path, monkeypatch):
 
 
 def test_migration_3_creates_dispatcher_tables(tmp_path):
-    """Issue 17 migration 3 must add dispatcher_tasks and
+    """Migration 3 must add dispatcher_tasks and
     dispatcher_pending_wakes tables to a fresh DB."""
     db = tmp_path / "noeta.db"
     conn = _open_connection(db)
@@ -244,7 +244,7 @@ def test_migration_3_creates_dispatcher_tables(tmp_path):
             ).fetchall()
         }
         assert {"dispatcher_tasks", "dispatcher_pending_wakes"}.issubset(names)
-        # No FK on pending_wakes (issue 17 B1).
+        # pending_wakes deliberately carries no FK.
         fk_rows = conn.execute(
             "PRAGMA foreign_key_list(dispatcher_pending_wakes)"
         ).fetchall()
@@ -349,12 +349,11 @@ def test_concurrent_apply_migrations_safe(tmp_path):
     empty database must both succeed and converge on the final schema
     without raising ``table already exists`` or stalling.
 
-    This is the regression test for issue 16 B1: pre-fix, both
-    connections read ``user_version=0`` outside the lock, the loser
-    of the BEGIN IMMEDIATE race then re-ran v1 DDL with stale state
-    and crashed. Post-fix, the loser re-reads ``user_version`` inside
-    its own write lock and exits cleanly because the winner has
-    already bumped past it.
+    The hazard: both connections read ``user_version=0`` outside the
+    lock; the loser of the BEGIN IMMEDIATE race must re-read
+    ``user_version`` inside its own write lock and exit cleanly because
+    the winner has already bumped past it, rather than re-run v1 DDL on
+    stale state.
     """
     db = tmp_path / "noeta.db"
 

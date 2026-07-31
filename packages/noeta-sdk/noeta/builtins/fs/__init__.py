@@ -1,11 +1,10 @@
-"""``fs`` — the default filesystem / shell tool pack.
+"""``fs`` — the default filesystem / shell tool pack, declared as a manifest.
 
-The 9 fs tool classes; the refs point at the real tool classes so
-``resolve()`` yields callable tool objects. NB: the *default* tool set of a
-bare ``Options`` still comes from ``builtin_tool_classes()`` in the compile path
-(byte-identity), so activating ``fs`` is identity-inert — this declaration is
-the reference manifest and the listing surface, not a second source of the
-default tools.
+Each ``tool`` ref points at the concrete tool class so ``resolve()`` yields
+callable tool objects. A bare ``Options`` draws its default tools from
+``builtin_tool_classes()``, so activating ``fs`` is identity-inert: this
+declaration is the reference manifest and the listing surface, not a second
+source of the default tools.
 """
 
 from __future__ import annotations
@@ -27,9 +26,8 @@ MANIFEST = PluginManifest(
         c("tool", "shell_run", "noeta.builtins.fs.impl.shell:ShellRunTool"),
         c("tool", "shell_poll", "noeta.builtins.fs.impl.shell:ShellPollTool"),
         c("tool", "shell_kill", "noeta.builtins.fs.impl.shell:ShellKillTool"),
-        # The session-construction half (microkernel phase 3): the factory
-        # the kernel builder's generic pack loop calls. Band 100 — the base
-        # pack leads the construction order.
+        # Band 100 sorts first, so this base pack is constructed before any
+        # capability pack that appends to it.
         c(
             "session_pack",
             "fs",

@@ -1,18 +1,12 @@
 """Golden snapshot of every built-in tool's model-visible schema.
 
-For each tool in ``builtin_tool_classes()`` (read / glob / grep / edit / write /
-apply_patch / shell_run / shell_poll / shell_kill / webfetch) this pins the
-exact metadata the LLM adapter advertises to the model:
-
-* ``name``
-* ``description`` — the hand-written, LLM-facing semantics (the canonical tool
-  description: the single source of truth for a tool's model-visible meaning)
-* ``input_schema`` — the JSON-Schema-shaped argument contract
-* ``risk_level`` — the approval-gating tier
-
-A refactor that changes a tool description or its schema (the kind of drift the
-old fingerprint / tool_versions manifest guarded) fails the single all-tools
-golden with a human-readable text diff.
+For each tool in ``builtin_tool_classes()`` this pins the exact metadata the LLM
+adapter advertises: ``name``, ``description`` (the hand-written, LLM-facing
+semantics — the single source of truth for what a tool means to the model),
+``input_schema``, and ``risk_level`` (the approval-gating tier). Any edit to a
+description or a schema changes what the model sees and invalidates the cached
+stable prefix, so it must surface as a human-readable diff against one
+all-tools golden rather than as a behaviour change nobody reviewed.
 
 Metadata is read off each tool class' **static dataclass-field defaults** — the
 same values ``builtin_tool_ref`` reads — so no live tool needs to be wired
@@ -85,11 +79,11 @@ def test_builtin_tool_schemas_snapshot() -> None:
 
 
 def test_snapshot_covers_all_builtin_tools() -> None:
-    """Guard: the golden carries exactly the current built-in tool set.
+    """The golden carries exactly the built-in tool set, no more and no less.
 
-    Catches a tool added to (or removed from) ``builtin_tool_classes()`` that the
-    snapshot author forgot to re-pin — the count/name set is asserted directly
-    so a drift in coverage is loud, not silent.
+    Asserting the name set directly is what makes a coverage gap loud: a tool
+    the snapshot never captured could change its schema freely without failing
+    the golden above.
     """
     captured = {entry["name"] for entry in _tool_schema_view()}
     assert captured == set(builtin_tool_classes())

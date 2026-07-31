@@ -1,30 +1,22 @@
-"""Five-source loader, deterministic merge, and ``PluginSet`` (spec D4 / D5).
+"""The plugin loader, its deterministic merge, and :class:`PluginSet`.
 
 The loader is **surface-agnostic**: it reads static manifests
-(:mod:`noeta.client.plugin_manifest`) from five sources, gates them, dedups
-plugin names, and returns a :class:`PluginSet` — the loaded, host-level set that
-is **listable and collision-checkable without executing plugin code**. Merge and
-collision detection run over the :class:`~noeta.client.surfaces.SurfaceRegistry`,
-so discovery order never affects the result (only error attribution).
+(:mod:`noeta.client.plugin_manifest`) from five gated sources, dedups plugin
+names, and returns a :class:`PluginSet` that is listable and collision-checkable
+**without executing plugin code**. Merge and collision run over the
+:class:`~noeta.client.surfaces.SurfaceRegistry`, so discovery order affects only
+error attribution, never the result; :meth:`PluginSet.resolve` is the single
+import boundary, where plugin code finally runs. Collisions — including a
+duplicate plugin name across sources — are errors naming both sides, never an
+override.
 
-Five sources (D4), each with its own gate::
+The five sources, each with its own gate::
 
     0  built-in plugins        on by default; a host may disable individually
     1  entry points            enabled allow-list, applied BEFORE any import
     2  explicit modules/files  caller-specified = authorized
     3  ~/.noeta/plugins        the user's own machine = trusted
     4  workspace .noeta/plugins trust store (untrusted dir -> warn + skip)
-
-The pipeline for every candidate: read manifest (zero code execution for the
-package / ``.toml`` forms) → ``enabled`` gate **before any import** → trust gate
-(source 4) → collision check → deterministic merge sorted by ``(plugin,
-contribution)``. Collisions — including cross-source duplicate plugin names —
-are **errors naming both sides; there is no override**.
-
-This is the mechanism core. The 0.4.0 contribution-bundle path it replaced is
-gone; ``noeta.client.plugins`` retains only the trust store (which this module
-reuses) and the shared error surface. Activation is wired into
-``compile_options`` and ``Capabilities`` is retired.
 """
 
 from __future__ import annotations
@@ -144,16 +136,10 @@ class LoadedPlugin:
     def _import_ref(self, ref: str) -> tuple[ModuleType, tuple[str, ...]]:
         """Import ``ref``'s module half and return it with the attribute path.
 
-        The **spelling** is parsed by the shared
-        :func:`~noeta.client.plugin_manifest.split_ref` (one implementation for
-        the loader, the manifest name-derivation, and the verifier); what lives
-        here is the part only an importer can do — resolving the dotted form's
-        module boundary:
-
-        * ``pkg.mod:attr.sub`` — the explicit form; ``split_ref`` already told
-          us which half is the module.
-        * ``pkg.mod.attr`` — the dotted form; the longest importable prefix is
-          the module and the rest is the attribute path.
+        The spelling is parsed by the shared
+        :func:`~noeta.client.plugin_manifest.split_ref`; what lives here is the
+        part only an importer can do — resolving the dotted form's module
+        boundary by taking the longest importable prefix as the module.
 
         The dotted form backs off one component at a time, but only for a
         ``ModuleNotFoundError`` naming the prefix it just tried. An import fault
@@ -208,8 +194,6 @@ class ResolvedContribution:
 
 @dataclass(frozen=True)
 class MergedEntry:
-    """One contribution's place in a surface's merged, ordered list."""
-
     plugin: str
     contribution: ManifestContribution
 
@@ -234,12 +218,11 @@ class MergedContributions:
 
 @dataclass(frozen=True)
 class PluginSet:
-    """The loaded, host-level set — listable / auditable without executing code (D5).
+    """The loaded, host-level set — listable and auditable without executing code.
 
     Holds the discovered plugins and the surface registry they were loaded
-    against. :meth:`contributions` and :meth:`merged` read only static
-    manifests; :meth:`resolve` is the boundary that imports plugin code (used at
-    compile time in M2).
+    against. :meth:`contributions` and :meth:`merged` read only static manifests;
+    :meth:`resolve` is the boundary that imports plugin code.
     """
 
     plugins: tuple[LoadedPlugin, ...]
@@ -283,9 +266,8 @@ class PluginSet:
     ) -> tuple[tuple[str, ManifestContribution], ...]:
         """Every contribution as ``(plugin name, contribution)`` — **zero execution**.
 
-        Optionally filtered to one ``surface``. This is the D5 / acceptance-2
-        listing: a caller sees what an installed plugin contributes without any
-        of its code running.
+        Optionally filtered to one ``surface``. A caller sees what an installed
+        plugin contributes without any of its code running.
         """
         out: list[tuple[str, ManifestContribution]] = []
         for p in self.plugins:
@@ -380,7 +362,7 @@ class PluginSet:
         """Wiring surfaces whose effect is process-wide (governance authority).
 
         Derived from the registry rather than hardcoded, so :meth:`process_hooks`
-        collects a host-registered process-scoped surface too (D11).
+        collects a host-registered process-scoped surface too.
         """
         return frozenset(
             name
@@ -392,24 +374,21 @@ class PluginSet:
     def identity_activations(
         self, only: Optional[Iterable[str]] = None
     ) -> dict[str, "PluginActivation"]:
-        """Resolve each **external** plugin's identity-plane contributions (D5).
+        """Resolve each **external** plugin's identity-plane contributions.
 
         Keyed by plugin name, the map ``Client`` passes to
         :func:`~noeta.client.options.compile_options`: an agent that names one of
         these in its ``plugins`` list pulls in that plugin's tools / child agents
-        / content kinds / prompt fragments (D6 — feature surfaces follow
-        activation). Built-in plugins are excluded (their feature effect is the
+        / content kinds / prompt fragments — feature surfaces follow activation.
+        Built-in plugins are excluded (their feature effect is the
         capability-flag vocabulary compile handles by name); ``only`` restricts
         resolution to the activated names (see :meth:`_external`).
 
-        The per-surface routing is **table-driven** (D11): each identity surface
+        The per-surface routing is **table-driven**: each identity surface
         declares an ``activation_binding`` naming the ``PluginActivation``
-        channel it feeds, so a host-registered identity surface projects
-        without editing this method. ``SurfaceSpec`` refuses an identity
-        surface that declares no binding at registration, which is where the
-        old "``identity_activations()`` must learn to carry it" failure moved
-        to — the ``content_kind``-went-missing lesson is now enforced one step
-        earlier, before any plugin is even loaded.
+        channel it feeds, so a host-registered identity surface projects without
+        editing this method, and ``SurfaceSpec`` refuses an unbound identity
+        surface at registration — before any plugin is even loaded.
 
         This executes plugin code (resolve imports the refs) — the Client build
         boundary, never a mid-session turn.
@@ -459,7 +438,7 @@ class PluginSet:
                     bucket.append((rc.name, rc.value))
             # Single-valued surface: at most one per plugin (the merge would
             # already reject two). Cross-plugin collisions with the base
-            # ``Options.policy`` / another active plugin are caught at compile (D10).
+            # ``Options.policy`` / another active plugin are caught at compile.
             policies = bound["policy"]
             out[p.name] = PluginActivation(
                 tools=tuple(bound["tool"]),
@@ -475,7 +454,7 @@ class PluginSet:
     def activation_transforms(
         self, only: Optional[Iterable[str]] = None
     ) -> dict[str, tuple[tuple[int, str, Any], ...]]:
-        """Resolve each **external** plugin's ``tool_result_transform`` stages (D9).
+        """Resolve each **external** plugin's ``tool_result_transform`` stages.
 
         Returns ``plugin name -> ((priority, contribution name, fn), …)`` for the
         wiring-plane, per-agent ``tool_result_transform`` surface. ``Client`` folds
@@ -491,7 +470,7 @@ class PluginSet:
     def activation_reminders(
         self, only: Optional[Iterable[str]] = None
     ) -> dict[str, tuple[tuple[int, str, Any], ...]]:
-        """Resolve each **external** plugin's compose-time ``reminder`` renders (track B, D8).
+        """Resolve each **external** plugin's compose-time ``reminder`` renders.
 
         Returns ``plugin name -> ((priority, contribution name, render), …)``.
         ``Client`` turns these into
@@ -505,8 +484,7 @@ class PluginSet:
     def activation_session_packs(
         self, only: Optional[Iterable[str]] = None
     ) -> dict[str, tuple[tuple[int, str, Any], ...]]:
-        """Resolve each **external** plugin's ``session_pack`` factories
-        (microkernel phase 3).
+        """Resolve each **external** plugin's ``session_pack`` factories.
 
         Returns ``plugin name -> ((priority, contribution name, factory), …)``
         for the wiring-plane, per-agent ``session_pack`` surface. The host
@@ -522,8 +500,7 @@ class PluginSet:
     def activation_control_tools(
         self, only: Optional[Iterable[str]] = None
     ) -> dict[str, tuple[tuple[int, str, Any], ...]]:
-        """Resolve each **external** plugin's ``control_tool`` factories
-        (control-tool-surface S2).
+        """Resolve each **external** plugin's ``control_tool`` factories.
 
         Returns ``plugin name -> ((priority, contribution name, factory), …)``
         for the ``control_tool`` surface. The host merges these — after the
@@ -531,8 +508,8 @@ class PluginSet:
         kernel's remaining internal entries and hands the union to the builder's
         dual-priority mount loop, so an agent that activates the plugin gets its
         control tool mounted (schema rendered in band, translate routed in band).
-        The ``control_tool`` surface is declared identity-plane (it enters durable
-        identity in S3), but it is RESOLVED here the SAME wiring way as
+        The ``control_tool`` surface is declared identity-plane because it enters
+        durable identity, but it is RESOLVED here the SAME wiring way as
         :meth:`activation_session_packs` (a per-agent projection, ordered
         ``(priority, plugin, name)``); :meth:`identity_activations` deliberately
         skips it. Same scoping / execution boundary as
@@ -543,7 +520,7 @@ class PluginSet:
     def activation_reminder_providers(
         self, only: Optional[Iterable[str]] = None
     ) -> dict[str, tuple[tuple[tuple[str, ...], str, Any], ...]]:
-        """Resolve each **external** plugin's recorded ``reminder_provider`` s (track A, D7).
+        """Resolve each **external** plugin's recorded ``reminder_provider`` s.
 
         Returns ``plugin name -> ((seams, contribution name, provider), …)``,
         where ``seams`` is the manifest's declared seam list (defaulting to
@@ -585,32 +562,28 @@ class PluginSet:
         return out
 
     def process_hooks(self) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
-        """Resolve every loaded **external** plugin's guard + observer values (D6).
+        """Resolve every loaded **external** plugin's guard + observer values.
 
         Governance surfaces do **not** follow per-agent activation: a loaded
-        guard / observer is in force for every agent in the process. This returns
-        ``(guards, observers)`` in deterministic ``(plugin, name)`` order, which
-        ``Client`` folds into its process-wide guard stack + observer
-        subscriptions regardless of which plugins any agent activates. Built-in
-        governance guards are the engine's own default stack (wired elsewhere),
-        so they are excluded here.
+        guard / observer is in force for every agent in the process, because one
+        that applied only after some agent opted in would not be governance
+        authority. This returns ``(guards, observers)`` in deterministic
+        ``(plugin, name)`` order for ``Client`` to fold into its process-wide
+        guard stack and observer subscriptions. Built-in governance guards are
+        the engine's own default stack, wired elsewhere, so they are excluded;
+        resolution is still limited to plugins whose static manifest *declares* a
+        guard or observer, so a plugin that governs nothing is never imported to
+        discover that.
 
-        Unlike the activation-scoped projections above this deliberately ignores
-        activation: a guard that only applied once some agent opted in would not
-        be governance authority. It is still limited to the plugins whose static
-        manifest *declares* a guard or observer, so a loaded plugin that governs
-        nothing is not imported to discover that.
-
-        The governance set is **derived from the registry** (D11): every wiring
-        surface scoped ``"process"`` is process-wide authority by definition, so
-        a host that registers one is *seen* here without editing this method.
-        It is not silently absorbed, though: the returned pair has exactly two
-        buckets because ``Client`` wires guards and observers into two different
-        runtime seams, so a third process surface has nowhere to go and is
-        **refused loudly**. Routing it into ``guards`` by default — the shape
-        this method briefly had — hands the engine a value that is not a
-        ``Guard`` and turns a build-time configuration error into a crash on the
-        first tool call.
+        The governance set is **derived from the registry** — every wiring
+        surface scoped ``"process"`` is process-wide authority by definition — so
+        a host that registers one is seen here without editing this method. It is
+        not silently absorbed, though: the returned pair has exactly two buckets
+        because ``Client`` wires guards and observers into two different runtime
+        seams, so a third process surface has nowhere to go and is **refused
+        loudly**. Routing it into ``guards`` by default would hand the engine a
+        value that is not a ``Guard``, turning a build-time configuration error
+        into a crash on the first tool call.
         """
         guards: list[Any] = []
         observers: list[Any] = []
@@ -694,7 +667,7 @@ DEFAULT_REMINDER_SEAM = "turn_intake"
 
 
 def _seams(c: ManifestContribution) -> tuple[str, ...]:
-    """A ``reminder_provider``'s declared recording seams (D7).
+    """A ``reminder_provider``'s declared recording seams.
 
     ``seams`` may arrive as a TOML array or a single string; an entry that
     declares none binds to :data:`DEFAULT_REMINDER_SEAM`, the seam every goal /
@@ -717,15 +690,15 @@ def _seams(c: ManifestContribution) -> tuple[str, ...]:
 
 #: Built-ins whose capability the compiled agent depends on unconditionally, so
 #: ``disabled_builtins`` cannot express a removal. Refusing loudly is the honest
-#: answer: before this the name was dropped from the catalogue while the
-#: capability stayed wired, and the disable read as effective.
+#: answer: silently dropping the name from the catalogue while the capability
+#: stays wired would make the disable read as effective.
 _NON_REMOVABLE_BUILTINS: dict[str, str] = {
     "react": (
         "built-in 'react' cannot be disabled: it supplies the DEFAULT decision "
         "policy, and every compiled AgentSpec pins that identity as "
         "POLICY_REF ('react', '1') — an agent with no policy has no defined "
         "identity or parity. The default brain is REPLACEABLE, not removable: "
-        "activate a plugin contributing the 'policy' surface (D10) and its ref "
+        "activate a plugin contributing the 'policy' surface and its ref "
         "takes over both the identity and the wired factory."
     ),
 }
@@ -849,7 +822,6 @@ def load_plugins(
 
 
 def _enabled_pass(enabled_set: Optional[set], name: Optional[str]) -> bool:
-    """Whether a candidate named ``name`` passes the allow-list."""
     return enabled_set is None or (name is not None and name in enabled_set)
 
 
@@ -879,12 +851,12 @@ def _read_builtins(
 
 
 def _discover_builtins() -> tuple[PluginManifest, ...]:
-    """The built-in plugin catalogue (spec D11), read via a **dynamic** import.
+    """The built-in plugin catalogue, read via a **dynamic** import.
 
-    ``noeta.builtins`` is the top-of-stack band; the loader sits below it, so the
-    import must not be a static edge (import-linter would reject it). Importing
-    the catalogue module runs no runtime capability code — it only builds the
-    inert static manifests — so the zero-execution guarantee holds.
+    ``noeta.builtins`` is the top-of-stack band and the loader sits below it, so
+    the import must not be a static edge (import-linter rejects one). Importing
+    the catalogue module runs no capability code — it only builds the inert
+    static manifests — so the zero-execution guarantee holds.
     """
     module = importlib.import_module("noeta.builtins")
     return tuple(module.builtin_manifests())
@@ -948,7 +920,7 @@ def _read_explicit(spec: str, enabled_set: Optional[set]) -> Iterator[_Candidate
         if cand is not None:
             yield cand
         return
-    # A dotted module: importing it is authorized (explicit source, D4 gate).
+    # A dotted module: naming it explicitly is what authorizes the import.
     module = _import_module(spec)
     builder = find_builder(module, spec)
     manifest = builder.manifest()
@@ -992,9 +964,9 @@ def _scan_dir(
 def _load_py_file(
     path: Path, source: str, enabled_set: Optional[set]
 ) -> Optional[_Candidate]:
-    # Gate on a statically declared name BEFORE executing the file. When the
-    # file declares no static name, executing a trusted file to read its
-    # manifest is acceptable (D1); the real name is gated after.
+    # Gate on a statically declared name BEFORE executing the file. When the file
+    # declares no static name, executing a trusted file to read its manifest is
+    # acceptable; the real name is gated after.
     declared = declared_plugin_name(path)
     if declared is not None and not _enabled_pass(enabled_set, declared):
         return None
@@ -1010,12 +982,6 @@ def _load_py_file(
         source,
         dict(builder.resolved_objects),
     )
-
-
-# NOTE: builder discovery and single-file execution live in
-# :mod:`noeta.client.plugin_manifest` (``find_builder`` / ``exec_plugin_file``),
-# shared with ``noeta.sdk.plugin_check`` so the loader and the verifier can
-# never disagree about which builder a plugin file exposes.
 
 
 def _looks_like_path(spec: str) -> bool:

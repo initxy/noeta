@@ -1,16 +1,13 @@
-"""H2 — durable exactly-once wake.
+"""Durable exactly-once wake.
 
-Covers: the dispatcher contract (D1 lease does not consume matched; D2
-consuming release clears it; D6 mismatch/no-matched raises + rolls back;
-D5 non-consuming release preserves matched), parametrized over
-InMemory + SQLite; the P1.2 suspend-window boundary helper
-(`_find_matching_woken_index`, incl. the recurring-handle gate 5b); and
-the worker D4 recovery state machine end-to-end (first-consume /
-terminal-reconcile / re-suspend-reconcile / bare re-drive) — each crash
-window simulated by dropping the in-flight lease + `requeue_stale` + a
-fresh lease, asserting exactly-once. The old case 5 (H1 partial-step
-orphan → typed error) is replaced by the attempt-recovery machine —
-covered in tests/test_attempt_recovery.py.
+A wake must reach exactly one lease and be consumed exactly once. Leasing on
+its own does not consume the matched event (so a crash re-delivers it); a
+consuming release clears it; a consuming release naming the wrong event — or
+none at all — raises and rolls the durable row back untouched. These drive
+that contract over both the in-memory and SQLite dispatchers, the
+suspend-window search that decides whether a wake was already consumed, and
+the worker's recovery machine across every crash window, each simulated by
+dropping the in-flight lease, requeueing, and re-leasing.
 """
 
 from __future__ import annotations
@@ -75,9 +72,9 @@ def test_d2_consuming_release_clears_matched(disp: Any) -> None:
     _suspend_with_matched(disp, "t1", ev)
     lease = disp.lease(worker_id="w", task_id="t1")
     assert lease is not None and lease.wake_event == ev
-    # consume it (terminal) → matched cleared.
+    # Consuming release on the way to terminal: matched clears, so there is
+    # nothing left to lease and nothing further to assert.
     disp.release(lease.lease_id, next_state="terminal", consumed_wake_event=ev)
-    # task is terminal now; nothing further to lease.
 
 
 def _sqlite_row(disp: Any, task_id: str) -> Any:
@@ -97,7 +94,7 @@ def test_d6_mismatch_raises_and_rolls_back(disp: Any) -> None:
     before = _sqlite_row(disp, "t1") if isinstance(disp, SqliteDispatcher) else None
     with pytest.raises(WakeConsumeMismatch):
         disp.release(lease.lease_id, next_state="terminal", consumed_wake_event=other)
-    # P1.4: rollback committed NOTHING — the durable row is byte-for-byte
+    # The rollback committed NOTHING — the durable row is byte-for-byte
     # unchanged (status / lease_id / matched / ready_order).
     if isinstance(disp, SqliteDispatcher):
         after = _sqlite_row(disp, "t1")
@@ -122,17 +119,16 @@ def test_d5_non_consuming_release_preserves_matched(disp: Any) -> None:
     _suspend_with_matched(disp, "t1", ev)
     lease = disp.lease(worker_id="w", task_id="t1")
     assert lease is not None and lease.wake_event == ev
-    # release WITHOUT consumed_wake_event (e.g. heartbeat-cap / skipped) →
-    # matched preserved → re-lease re-delivers it.
+    # A release WITHOUT consumed_wake_event (heartbeat cap, skipped turn) must
+    # preserve matched even though it re-suspends the task, so the next lease
+    # re-delivers the wake rather than losing it.
     disp.release(lease.lease_id, next_state="suspended", wake_on=ev)
-    # the release(suspended) re-suspends; but matched was preserved, so the
-    # task is ready again (drain) OR matched still set. Re-lease re-delivers.
     relead = disp.lease(worker_id="w", task_id="t1")
     assert relead is not None and relead.wake_event == ev
 
 
 # ---------------------------------------------------------------------------
-# P1.2 — suspend-window boundary helper (incl. recurring-handle gate 5b)
+# Suspend-window boundary helper — was this wake already consumed?
 # ---------------------------------------------------------------------------
 
 
@@ -176,9 +172,9 @@ def test_boundary_no_woken_after_suspend_is_none() -> None:
 
 
 def test_recurring_handle_round2_ignores_round1_woken() -> None:
-    """Gate 5b — the same handle reused across two rounds: in round 2 the
-    matching search is bounded to AFTER round 2's TaskSuspended, so round
-    1's TaskWoken is NOT mistaken for round 2's consumption."""
+    """The same handle is reused across rounds, so the matching search must be
+    bounded to AFTER the latest TaskSuspended — otherwise round 1's TaskWoken
+    is mistaken for round 2's consumption."""
     ev = HumanResponseReceived(handle="noeta-code-next-goal")
     events = [
         _Env("TaskSuspended", _Susp(ev)),   # round 1 suspend
@@ -191,14 +187,13 @@ def test_recurring_handle_round2_ignores_round1_woken() -> None:
 
 
 def test_rewind_after_failed_turn_does_not_strand_woken() -> None:
-    """Regression — a conversation ``rewind`` that undoes
-    a turn which already woke from a next-goal suspend must NOT leave that
-    turn's ``TaskWoken`` stranded as a phantom consumption. Without honouring
-    the rewind re-base, the next genuine wake matched the dead round-1
-    ``TaskWoken`` (idx 1), reconciled as an already-consumed duplicate (case
-    4), and silently dropped the new goal — the session looked resumable but
-    swallowed every message. The window must open AFTER the latest rewind, so
-    the next wake is a fresh first-consume (``None`` → case 1)."""
+    """A ``rewind`` that undoes a turn which already woke from a next-goal
+    suspend must NOT leave that turn's ``TaskWoken`` stranded as a phantom
+    consumption. Ignore the rewind re-base and the next genuine wake matches
+    the dead ``TaskWoken`` at index 1, reconciles as an already-consumed
+    duplicate, and silently drops the goal — the conversation looks resumable
+    but swallows every message. The window must open AFTER the latest rewind so
+    the next wake is a fresh first-consume."""
     ev = HumanResponseReceived(handle="noeta-code-next-goal")
     events = [
         _Env("TaskSuspended", _Susp(ev)),   # the next-goal suspend
@@ -210,15 +205,15 @@ def test_rewind_after_failed_turn_does_not_strand_woken() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Worker D4 recovery machine — SQLite-primary + InMemory, all crash windows
+# Worker recovery machine — SQLite + in-memory, every crash window
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(params=["sqlite", "memory"])
 def stack(request: Any, tmp_path: Any) -> Any:
-    """A clock-injectable storage stack (event_log, content_store,
-    dispatcher, clock). SQLite is the **primary** acceptance surface; the
-    clock lets us drive lease expiry deterministically to simulate a crash."""
+    """A clock-injectable storage stack (event_log, content_store, dispatcher,
+    clock). SQLite is the primary surface here; the injected clock is what lets
+    lease expiry — and therefore a crash — be driven deterministically."""
     clock = [1000.0]
 
     def now() -> float:
@@ -281,7 +276,7 @@ def _wake_and_lease(stack: Any, tid: str, handle: str) -> Any:
 
 def _crash_then_release(stack: Any, tid: str) -> Any:
     """Simulate a crash before release: expire the in-flight lease, requeue
-    (matched preserved, D3), and re-lease (matched re-delivered, D1)."""
+    (matched preserved), and re-lease (matched re-delivered)."""
     event_log, content_store, dispatcher, clock = stack
     clock[0] += 100_000.0
     assert tid in dispatcher.requeue_stale()
@@ -316,7 +311,7 @@ def test_d4_case2_crash_after_woken_before_step(stack: Any) -> None:
     release = _crash_then_release(stack, tid)
     outcome = run_leased_task(_RT(engine, log, cs, dispatcher), release)
     assert outcome == "woken"
-    assert _woken_count(log, tid) == 1               # NO second TaskWoken (case 2)
+    assert _woken_count(log, tid) == 1               # NO second TaskWoken
     assert any(e.type == "TaskCompleted" for e in log.read(tid))
 
 
@@ -334,7 +329,7 @@ def test_d4_case3_terminal_reconcile_after_crash(stack: Any) -> None:
     release = _crash_then_release(stack, tid)
     outcome = run_leased_task(_RT(engine, log, cs, dispatcher), release)
     assert outcome == "woken"
-    assert _woken_count(log, tid) == 1               # NO second TaskWoken (case 3)
+    assert _woken_count(log, tid) == 1               # NO second TaskWoken
 
 
 def test_d4_case4_resuspend_reconcile_after_crash(stack: Any) -> None:
@@ -353,16 +348,15 @@ def test_d4_case4_resuspend_reconcile_after_crash(stack: Any) -> None:
     release = _crash_then_release(stack, tid)
     outcome = run_leased_task(_RT(engine, log, cs, dispatcher), release)
     assert outcome == "woken"
-    assert _woken_count(log, tid) == 1               # NO second TaskWoken (case 4)
+    assert _woken_count(log, tid) == 1               # NO second TaskWoken
     # the NEW wake_on ("second") was installed → a wake for it matches.
     assert dispatcher.wake(tid, HumanResponseReceived(handle="second")) is True
 
 
 def test_d4_case2prime_prelude_only_tail_runs_bare_step(stack: Any) -> None:
-    """Case 2′ — TaskWoken + durable prelude appends (a seed-written user
-    message), no ``ContextPlanComposed``, still running → the bare step runs
-    on top of the durable prelude (D6: nothing is lost, nothing re-runs; the
-    old case 5 typed error no longer exists for this window)."""
+    """TaskWoken plus a durable prelude append (a seed-written user message)
+    but no ``ContextPlanComposed``, still running: the bare step runs on top of
+    the durable prelude. Nothing is lost and nothing re-runs."""
     engine, tid, handle = _human_engine(
         stack, decisions=[YieldForHumanDecision(prompt="a"), FinishDecision(answer="done")]
     )
@@ -382,7 +376,7 @@ def test_d4_case2prime_prelude_only_tail_runs_bare_step(stack: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# P1.1 — every `noeta code` wake consumer explicitly consumes (matched clears)
+# Every wake consumer explicitly consumes its wake (matched clears)
 # ---------------------------------------------------------------------------
 
 
@@ -390,7 +384,7 @@ def _coding_session(
     ws: Any, responses: list[Any], *, multi_turn: bool = False, **host_knobs: Any
 ) -> Any:
     """A production ``SdkHost`` + ``InteractionDriver`` over an in-memory L0
-    triple (the shipping SDK assembly the deleted runner is replaced by)."""
+    triple — the shipping SDK assembly."""
     from noeta.testing.fake_llm import FakeLLMProvider
     from noeta.runtime.shell_policy import ShellMode
     from noeta.runtime.workspace import FsWriteMode
@@ -425,13 +419,12 @@ def _end_turn(text: str) -> Any:
 
 
 def test_multi_turn_same_handle_consumes_wake_each_round(tmp_path: Any) -> None:
-    """P1.1 — `send_goal` reuses the SAME next-goal handle every round; each
-    resume must CONSUME its wake (clear matched), else the next re-suspend (D5
-    matched-present) would wrongly re-ready the task. Drive 3 rounds; after the
-    round-2 resume the task must be **suspended** (not ready) — proof the
-    round-1+2 wakes were consumed. With the interactive SDK path every
-    normally-finishing turn rests at a trailing next-goal suspend
-    ("no synthesized terminal"), so round 3 is likewise a suspend."""
+    """``send_goal`` reuses the SAME next-goal handle every round, so each
+    resume must CONSUME its wake — otherwise the next re-suspend finds matched
+    still set and wrongly re-readies the task. Three rounds: after the round-2
+    resume the task must be **suspended**, not ready, which is the proof both
+    earlier wakes were consumed. Every normally-finishing interactive turn
+    rests at a trailing next-goal suspend, so round 3 suspends too."""
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / "x.py").write_text("foo\n")
@@ -443,8 +436,8 @@ def test_multi_turn_same_handle_consumes_wake_each_round(tmp_path: Any) -> None:
     assert out.status == "suspended"
     tid = out.task_id
     assert driver.send_goal(tid, goal="again").status == "suspended"  # round 2
-    # H2: round-2 resume consumed its wake → the re-suspend did NOT find a
-    # stale matched, so the task is SUSPENDED (not spuriously re-readied).
+    # The round-2 resume consumed its wake, so the re-suspend found no stale
+    # matched and the task is SUSPENDED rather than spuriously re-readied.
     assert dispatcher.task_status(tid) == "suspended"
     third = driver.send_goal(tid, goal="finish")               # round 3
     assert third.status == "suspended"
@@ -455,9 +448,9 @@ def test_multi_turn_same_handle_consumes_wake_each_round(tmp_path: Any) -> None:
 
 
 def test_approval_resume_consumes_wake(tmp_path: Any) -> None:
-    """P1.1 — `driver.approve` must consume the approval wake. After
-    approve-resume the task progresses and the dispatcher holds no stale
-    matched (it is terminal / suspended on its own next wake, not re-readied)."""
+    """``driver.approve`` must consume the approval wake: after the resume the
+    task progresses and the dispatcher holds no stale matched, so it rests
+    terminal instead of being re-readied."""
     from noeta.protocols.messages import LLMResponse, ToolUseBlock, Usage
 
     def _tool(call_id: str) -> Any:

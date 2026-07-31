@@ -1,19 +1,17 @@
 """Provider-mutex edit tool selection at the assembly layer.
 
-The edit↔apply_patch difference is absorbed in ``noeta.execution.builder`` by the
-bound model's vendor family — NOT in any tool field, NOT in the prompt, NOT in
-the AgentSpec whitelist. An Anthropic model's live tool set carries ``edit``
+The edit↔apply_patch difference is absorbed in ``noeta.execution.builder`` by
+the bound model's vendor family — not by a tool field, not by the prompt, not
+by the AgentSpec whitelist. An Anthropic model's live tool set carries ``edit``
 (no ``apply_patch``); an OpenAI/GPT model's carries ``apply_patch`` (no
-``edit``); an unrecognised test/stub model keeps both (byte-equal legacy).
+``edit``); an uncatalogued test model keeps both.
 
-Microkernel M2: the model→family judgment lives in the providers built-in's
-catalog and reaches the kernel pre-resolved (``provider_family=`` — mirrored
-here by ``_tool_names``); phase 2c: the FAMILY→drop-set table is the fs
-built-in's ``PROVIDER_EDIT_TOOL_MUTEX``, applied inside its session pack
-(microkernel phase 3 — the kernel no longer carries the table).
-
-Switching the model must change only the tool set, never the agent definition
-or the system prompt.
+The judgment is split across two owners, and both halves are pinned here: the
+model→family call lives in the providers built-in's catalog and reaches the
+kernel pre-resolved (``provider_family=``), while the family→drop-set table is
+the fs built-in's ``PROVIDER_EDIT_TOOL_MUTEX``, applied inside its session
+pack. Switching the model must change only the tool set, never the agent
+definition or the system prompt.
 """
 
 from __future__ import annotations
@@ -35,10 +33,7 @@ from noeta.storage.memory import InMemoryContentStore
 
 
 # A whitelist carrying BOTH edit candidates (edit + apply_patch) so the
-# assembly-layer mutex actually has both to choose between. main carries the
-# full built-in set (incl. apply_patch); general-purpose was narrowed to
-# read/write/edit + shell (no apply_patch), so this fixture
-# is the catch-all main shape, not gp's.
+# assembly-layer mutex actually has both to choose between.
 _FULL_EDIT_TOOLS = frozenset(
     {"read", "glob", "grep", "edit", "write", "apply_patch", "shell_run"}
 )
@@ -52,8 +47,8 @@ def _tool_names(*, model: str, allowed: frozenset[str] = _FULL_EDIT_TOOLS) -> se
         allowed_tools=allowed,
         content_store=InMemoryContentStore(),
         model=model,
-        # The SDK host resolves the family from the catalog and injects it
-        # (microkernel M2) — mirror that wiring here.
+        # The SDK host resolves the family from the catalog and injects it;
+        # mirror that wiring here.
         provider_family=provider_family(model),
         compaction=COMPACTION_OFF,
         budget=Budget(),
@@ -62,7 +57,7 @@ def _tool_names(*, model: str, allowed: frozenset[str] = _FULL_EDIT_TOOLS) -> se
 
 
 # ---------------------------------------------------------------------------
-# 1. provider_family classification (catalog-membership gated)
+# provider_family classification (catalog-membership gated)
 # ---------------------------------------------------------------------------
 
 
@@ -92,8 +87,8 @@ def test_provider_family_classification(model: str, family: str | None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2. PROVIDER_EDIT_TOOL_MUTEX — which name(s) to DROP (fs builtin's table,
-#    phase 2c: the kernel builder consumes it only as an injection)
+# PROVIDER_EDIT_TOOL_MUTEX — which name(s) to drop (the fs built-in's table;
+# the kernel builder consumes it only as an injection)
 # ---------------------------------------------------------------------------
 
 
@@ -119,7 +114,7 @@ def test_mutex_knows_nothing_for_unknown_family() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. Assembly layer — the live tool set is provider-mutex
+# Assembly layer — the live tool set is provider-mutex
 # ---------------------------------------------------------------------------
 
 
@@ -142,8 +137,8 @@ def test_alias_resolves_to_anthropic_edit() -> None:
 
 
 def test_unknown_model_keeps_both_edit_variants() -> None:
-    # The test/stub sentinel path must keep BOTH so existing recordings and
-    # the apply_patch session tests (which run on ``gpt-test``) stay green.
+    # The test/stub sentinel keeps BOTH: recordings and the apply_patch tests
+    # run on ``gpt-test`` and need either tool reachable.
     names = _tool_names(model="gpt-test")
     assert "edit" in names
     assert "apply_patch" in names
@@ -168,12 +163,11 @@ def test_readonly_whitelist_never_grows_an_edit_tool() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. Switching the model changes the tool set but NOT the agent / prompt
+# Switching the model changes the tool set but NOT the agent / prompt
 # ---------------------------------------------------------------------------
 
 
 def test_model_swap_does_not_touch_agent_definition_or_prompt() -> None:
-    # One agent definition with both edit tools whitelisted; compile it once.
     opts = Options(
         system_prompt="You are a careful coding assistant.",
         name="main",
@@ -201,8 +195,7 @@ def test_model_swap_does_not_touch_agent_definition_or_prompt() -> None:
     # Same agent, same prompt, same whitelist — only the live tool set differs.
     assert "edit" in anth and "apply_patch" not in anth
     assert "apply_patch" in oai and "edit" not in oai
-    # Agent identity is model-independent (provider selection happens at
-    # assembly, not compile): recompiling yields an equal worker spec.
+    # Agent identity is model-independent: recompiling yields an equal spec.
     assert worker == next(
         k for k in compile_options(opts)[1] if k.name == "worker"
     )
@@ -224,7 +217,7 @@ def test_model_swap_does_not_touch_agent_definition_or_prompt() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. apply_patch description lives in an independent text resource
+# apply_patch description lives in an independent text resource
 # ---------------------------------------------------------------------------
 
 
@@ -238,8 +231,8 @@ def test_apply_patch_description_loads_from_resource() -> None:
 
 
 def test_apply_patch_description_is_cc_short_form() -> None:
-    # the four-section template was dropped for Claude Code's terse
-    # short-form (a one-line summary + bullets).
+    # The description is terse short form — a one-line summary plus bullets,
+    # with no section headings for a model to skim past.
     from noeta.protocols.resources import load_markdown
 
     text = load_markdown("noeta.builtins.fs.impl", "apply_patch")

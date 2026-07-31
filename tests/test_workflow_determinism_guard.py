@@ -1,15 +1,13 @@
-"""Determinism guard for orchestration scripts (controlled namespace + AST ban on non-determinism).
+"""Determinism guard for orchestration scripts: a controlled namespace plus an
+AST ban on non-determinism.
 
-Proves:
-* Scripts using time/random/datetime, importing a blacklisted module, or doing
-  external IO are rejected by the AST guard, with the error pointing at the
-  offending line;
-* A pure deterministic script passes;
-* The run namespace's controlled builtins (SAFE_BUILTINS) exclude
-  open/eval/exec/__import__ and include the common deterministic builtins;
-* The guard runs at workflow startup (translation time): an offending script is
-  turned back by an ack right at ``run_workflow`` translation, producing **no
-  SpawnSubtaskDecision / no half-run subtask**.
+An orchestration script has to replay identically, so time/random/datetime,
+blacklisted imports, reflection escapes and external IO are rejected with an
+error naming the offending line, and ``SAFE_BUILTINS`` withholds
+open/eval/exec/__import__ while keeping the ordinary deterministic helpers. The
+guard runs at ``run_workflow`` translation time rather than inside the script,
+so an offending script is turned back by a recoverable ack and no half-run
+orchestration subtask is ever created.
 """
 
 from __future__ import annotations

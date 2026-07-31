@@ -1,11 +1,8 @@
-"""Test-only helpers for downstream Noeta users.
+"""Test doubles and assembly helpers for downstream Noeta users.
 
-This package is the home of test doubles (``FakeLLMProvider``, future
-``FakeContentStore`` / ``FakeDispatcher``). Production layers
-(``noeta.core / noeta.runtime / noeta.policies / noeta.tools / noeta.context /
-noeta.storage``) must **not** import from
-here; import-linter enforces the rule. Tests, examples, and user code
-under ``tests/`` may import freely.
+Everything here exists to be substituted for a real component in a test, so
+nothing shipped may import it; tests, examples, and user code may import it
+freely.
 """
 
 from __future__ import annotations

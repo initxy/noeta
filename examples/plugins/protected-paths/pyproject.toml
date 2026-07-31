@@ -1,14 +1,12 @@
-# Illustrative packaging for the ``protected-paths`` manifest plugin.
+# Illustrative packaging for the ``protected-paths`` plugin. Not built here — the
+# tests load ``plugin.py`` by explicit path — so this file exists to show the two
+# things that make a distribution discoverable:
 #
-# This file is NOT built or tested by the repo — the tests load ``plugin.py`` by
-# explicit path (see tests/test_example_protected_paths.py). It shows the TWO
-# things that turn a module into a discoverable Noeta manifest plugin (spec D1):
-#
-#   1. ``[tool.noeta]`` — the static manifest, mirrored into the wheel as the
-#      ``noeta-plugin.toml`` package data the loader reads WITHOUT importing any
-#      plugin code (kept in sync with ``plugin.py`` by ``plugin_check``).
-#   2. an entry point in the SDK-owned ``noeta.plugins`` group, so a host started
-#      with ``load_plugins(entry_points=True)`` discovers the distribution.
+#   1. ``[tool.noeta]`` — the static manifest, mirrored into the wheel as
+#      ``noeta-plugin.toml`` package data, which is what lets the loader read
+#      identity and contributions without importing any plugin code.
+#   2. an entry point in the SDK-owned ``noeta.plugins`` group, so a host running
+#      ``load_plugins(entry_points=True)`` discovers the distribution.
 
 [build-system]
 requires = ["hatchling"]
@@ -21,9 +19,9 @@ description = "A path-containment Guard for Noeta, packaged as a manifest plugin
 requires-python = ">=3.11"
 dependencies = ["noeta-sdk>=0.4.0"]
 
-# The static manifest (D1). A real distribution ships ``plugin.py`` inside an
-# importable package (``protected_paths/``), so ``ref`` reads
-# ``protected_paths:GUARD``.
+# Packaged for real, this directory becomes the importable ``protected_paths``
+# package — dashes are illegal in a Python module name — which is why the ``ref``
+# below reads ``protected_paths:GUARD`` and not ``plugin:GUARD``.
 [tool.noeta]
 name = "protected-paths"
 requires-noeta = ">=0.4"
@@ -37,9 +35,9 @@ surface = "guard"
 name = "protected_paths"
 ref = "protected_paths:GUARD"
 
-# The discovery hook. The distribution ships its manifest as package data; the
-# entry point only needs to exist so ``entry_points=True`` finds the
-# distribution (its VALUE is not a factory in the manifest mechanism).
+# Discovery only. The value is not a factory — the manifest is read from package
+# data — so the entry point exists purely to make the distribution visible to
+# ``load_plugins(entry_points=True)``.
 [project.entry-points."noeta.plugins"]
 protected-paths = "protected_paths"
 

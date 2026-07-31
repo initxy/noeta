@@ -1,15 +1,15 @@
-"""Regression: a resident WorkerLoop must not steal a ROOT task out of its own
-seed window and drive it unseeded.
+"""A resident WorkerLoop must not steal a ROOT task out of its own seed window
+and drive it unseeded.
 
 ``InteractionDriver.seed_start`` enqueues the freshly created task, then claims
 it with a targeted lease, and only THEN writes ``ModelBound`` + the opening user
 message carrying the goal. Between the enqueue and that claim the task is ready
-but unseeded — with the served product's resident worker pool running, an
-untargeted FIFO ``lease(task_id=None)`` poll could land in that window, steal the
-task, and drive it with an empty message history (which the provider rejects with
-a "no user message" 400).
+but unseeded — with a resident worker pool running, an untargeted FIFO
+``lease(task_id=None)`` poll can land in that window, steal the task, and drive
+it with an empty message history (which the provider rejects with a "no user
+message" 400).
 
-This is the same hazard ``BackgroundSubagentRegistry._submit`` guards with
+Same hazard ``BackgroundSubagentRegistry._submit`` guards with
 ``enqueue(reserved=True)`` (see tests/test_resident_worker_subagent.py); the root
 task reaches it through the seed path instead.
 """

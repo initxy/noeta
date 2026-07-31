@@ -1,30 +1,13 @@
-"""noeta.builtins — noeta's own capabilities, re-expressed as built-in plugins.
+"""The catalogue of noeta's own capabilities, each expressed as a built-in plugin.
 
-The **top-of-stack band** beside :mod:`noeta.presets` (spec D11): **one
-directory per built-in**, each a thin manifest declaration (its ``MANIFEST``)
-whose contributions carry ``ref`` strings into runtime implementations that
-stay untouched in their own import-linter bands. Nothing here imports those
-implementations: a manifest is inert data, and the loader
-(:mod:`noeta.client.plugin_set`) resolves a ``ref`` only at its execution
-boundary (:meth:`~noeta.client.plugin_set.LoadedPlugin.resolve`). So listing a
-built-in's contributions — the D5 / acceptance-2 guarantee — runs **zero**
-runtime code.
-
-noeta is its own first plugin author: every standard surface (D3) has a
-built-in reference declaration here, ridden through the identical loader /
-validation / merge path as any external plugin. **Adding a first-party
-capability = adding a directory here** (plus a ``SurfaceSpec`` registration
-only when a genuinely new surface is needed).
-
-The declarations are deliberately programmatic rather than shipped
-``noeta-plugin.toml`` files: a built-in is *inside* the SDK wheel, so there is
-no third-party trust boundary to read across and no package-data discovery to
-perform — the thin declaration is the manifest.
-
-The plugin loader reaches this package by ``ref`` string / a dynamic import
-from :mod:`noeta.client.plugin_set` — there is **no static import edge** from
-the loader up into ``noeta.builtins`` (the import-linter band forbids anything
-below from importing it). Only consumers import it.
+One directory per built-in, each a manifest declaration whose contributions carry
+``ref`` strings the loader (:mod:`noeta.client.plugin_set`) resolves only at its
+execution boundary — so listing a built-in's contributions runs **zero** capability
+code, and nothing here imports an implementation. noeta is its own first plugin
+author: a first-party capability is a directory here, ridden through the identical
+loader / validation / merge path as any external plugin. Declarations are
+programmatic rather than shipped ``noeta-plugin.toml`` files because a built-in is
+*inside* the SDK wheel — no third-party trust boundary, no package-data discovery.
 """
 
 from __future__ import annotations
@@ -58,8 +41,8 @@ __all__ = [
 ]
 
 
-#: Catalogue order — the loader's source-0 discovery order (stable; merge is
-#: ``(plugin, name)``-deterministic downstream, so this order is presentational).
+#: Catalogue order — the loader's discovery order. Presentational only: the
+#: downstream merge is ``(plugin, name)``-deterministic regardless.
 _BUILTINS: tuple[PluginManifest, ...] = (
     _FS,
     _WEB,
@@ -75,38 +58,31 @@ _BUILTINS: tuple[PluginManifest, ...] = (
     _SANDBOX,
     _PRESETS,
     _WORKSPACE,
-    # Declaration-only (the ``providers`` precedent): zero contributions —
-    # storage is not a surface (ADR plugin-contribution-bundles, Alternative 5).
-    # The durable backend impls it houses are reached via ``noeta.sdk.storage``.
+    # Declaration-only: zero contributions, because storage is not a surface.
+    # The directory exists to house the durable backend impls, which are reached
+    # via ``noeta.sdk.storage``.
     _STORAGE,
-    # Control-tool built-ins (control-tool-surface S2): each contributes one
-    # ``control_tool`` mount factory. ``delegation`` shares the ``spawn_subagent``
-    # tool; ``todo_write`` / ``ask_user_question`` keep their tool names.
     _TODO_WRITE,
     _ASK_USER_QUESTION,
     _DELEGATION,
 )
 
-#: Every built-in plugin's name, for enable/disable bookkeeping and the
-#: activation vocabulary check (no execution to learn them).
+#: Every built-in plugin's name — learnable without executing anything.
 BUILTIN_PLUGIN_NAMES: frozenset[str] = frozenset(m.name for m in _BUILTINS)
 
 
 def assert_activation_vocabulary() -> None:
     """Fail loudly when a built-in exists that no agent could activate.
 
-    ``compile_options`` validates an activation name against
-    :data:`~noeta.client.options.BUILTIN_ACTIVATIONS`, a constant that must
-    duplicate this catalogue's names because ``noeta.client`` sits *below*
-    ``noeta.builtins`` in the import bands and cannot read them. That makes drift
-    possible in exactly one direction — adding a built-in directory here without
-    adding the name there — and the symptom is baffling: the plugin loads fine,
-    lists its contributions fine, and then ``Options(plugins=("newthing",))``
-    reports it as an *unknown activation*.
-
-    So the containment is checked here, at the one import where both sides are in
-    scope. The reverse direction is not an error: the vocabulary legitimately
-    carries capability flags with no catalogue entry (``todo_write``, ``mcp``, …).
+    :data:`~noeta.client.options.BUILTIN_ACTIVATIONS` must duplicate this
+    catalogue's names because ``noeta.client`` sits *below* ``noeta.builtins``
+    and cannot read them. Drift is therefore possible in one direction — a
+    directory added here but not named there — and its symptom is baffling: the
+    plugin loads and lists contributions fine, then
+    ``Options(plugins=("newthing",))`` calls it an *unknown activation*. This
+    import is the one place both sides are in scope. The reverse direction is
+    legitimate: the vocabulary also carries capability flags with no catalogue
+    entry.
     """
     missing = sorted(BUILTIN_PLUGIN_NAMES - BUILTIN_ACTIVATIONS)
     if missing:
@@ -122,9 +98,5 @@ assert_activation_vocabulary()
 
 
 def builtin_manifests() -> tuple[PluginManifest, ...]:
-    """The built-in plugin catalogue as static manifests — zero execution.
-
-    Called by the loader's source-0 discovery. Returns fresh references to the
-    module-level immutable manifests (safe to share; they carry no live code).
-    """
+    """The built-in catalogue as static manifests — safe to share, zero execution."""
     return _BUILTINS

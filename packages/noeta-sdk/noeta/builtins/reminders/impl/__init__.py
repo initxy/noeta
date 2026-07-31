@@ -1,21 +1,10 @@
-"""``reminders`` built-in — the three compose-time reminder renders (impl).
-
-Microkernel M2: the three built-in renderers moved here from
-``noeta.context.reminders``, which keeps only the registry *mechanism*
-(:class:`~noeta.context.reminders.ReminderSpec` /
-:class:`~noeta.context.reminders.ReminderRegistry`) the locked composer
-consults. The manifest in the parent package declares these renders by ``ref``;
-the SDK client build resolves them through the ordinary loader path
-(:func:`noeta.client.parts.default_reminder_specs`) and injects them into the
-kernel builder (``build_session_inputs(base_reminders=…)``) — the kernel never
-imports a renderer.
+"""The three built-in compose-time reminder renders.
 
 Each render is a pure function of the narrow
-:class:`~noeta.context.reminders.ReminderView` projection (no clock, no
-randomness, no external fetch — the module red line over there). The text bytes
-are copied word-for-word from the pre-migration composer methods so the
-composed dynamic suffix stays byte-identical (D8 / acceptance 2); the
-priorities keep the composed order todo -> delegation -> read.
+:class:`~noeta.context.reminders.ReminderView` projection — no clock, no
+randomness, no external fetch — so recomposing a turn yields the same bytes.
+The registry *mechanism* stays in ``noeta.context.reminders``; the parent
+manifest declares these renders by ``ref``, and the kernel never imports one.
 """
 
 from __future__ import annotations
@@ -38,9 +27,8 @@ def todo_reminder(view: ReminderView) -> Optional[str]:
     """List the *unfinished* todos so the model does not go blind on its plan.
 
     ``TaskState.todos`` is folded state the model writes through ``todo_write``
-    but otherwise never sees again. Surface only the items not ``completed``; an
-    empty or all-completed list renders nothing (a finished checklist must not
-    nag). Migrated verbatim from ``ThreeSegmentComposer._append_todo_reminder``.
+    but otherwise never sees again. An empty or all-completed list renders
+    nothing — a finished checklist must not nag.
     """
     unfinished = [
         t
@@ -64,9 +52,8 @@ def todo_reminder(view: ReminderView) -> Optional[str]:
 def delegation_reminder(view: ReminderView) -> Optional[str]:
     """Just-in-time fan-out nudge while delegation is offered and unused.
 
-    Live only while ``delegation_enabled`` AND no ``spawn_subagent`` has landed
-    yet — self-limiting once the first sub-agent is spawned. Migrated verbatim
-    from ``ThreeSegmentComposer._append_concurrency_reminder``.
+    Live only while ``delegation_enabled`` and no ``spawn_subagent`` has landed
+    yet, so it stops nudging the moment the first sub-agent is spawned.
     """
     if not view.delegation_enabled or view.already_spawned:
         return None
@@ -81,8 +68,7 @@ def delegation_reminder(view: ReminderView) -> Optional[str]:
 def read_suggestion_reminder(view: ReminderView) -> Optional[str]:
     """Suggest a different read strategy while compaction is thrashing.
 
-    Live only while ``ContextState.compaction_thrashing`` is latched. Migrated
-    verbatim from ``ThreeSegmentComposer._append_compaction_thrashing_reminder``.
+    Live only while ``ContextState.compaction_thrashing`` is latched.
     """
     if not view.compaction_thrashing:
         return None
@@ -96,10 +82,9 @@ def read_suggestion_reminder(view: ReminderView) -> Optional[str]:
     )
 
 
-#: The built-in reminders' names -> priority. Chosen so the composed order is
-#: todo -> delegation -> read, byte-identical to the pre-migration append order.
-#: Spread by 100 to leave room for third-party reminders to interleave. The
-#: manifest declarations carry the same numbers (the listing surface).
+#: Name -> priority, chosen so the composed order is todo -> delegation ->
+#: read and spread by 100 so third-party reminders can interleave. The manifest
+#: declarations must carry the same numbers.
 BUILTIN_REMINDER_PRIORITIES: dict[str, int] = {
     "unfinished-todos": 100,
     "delegation-nudge": 200,
@@ -108,12 +93,8 @@ BUILTIN_REMINDER_PRIORITIES: dict[str, int] = {
 
 
 def default_reminder_specs() -> tuple[ReminderSpec, ...]:
-    """The three built-in reminders as specs, in declaration order.
-
-    The injection value for the kernel builder's ``base_reminders`` parameter.
-    The SDK path resolves the same three through the manifest
-    (:func:`noeta.client.parts.default_reminder_specs`); this direct constructor
-    is the impl-side equivalent for callers already holding the impl.
+    """The three built-in reminders as specs — the impl-side equivalent of
+    resolving the manifest, for a caller that already holds this module.
     """
     return (
         ReminderSpec(

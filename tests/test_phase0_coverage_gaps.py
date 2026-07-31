@@ -1,20 +1,10 @@
-"""Phase-0 coverage backfill (issue 09).
+"""Branches of ``engine`` / ``fold`` / ``snapshot`` that integration runs never trip.
 
-PRD requires these modules at >= 90% coverage:
-
-* ``noeta.core.engine``
-* ``noeta.core.fold``
-* ``noeta.core.snapshot``
-* ``noeta.storage.memory``
-
-Earlier issues already cover the happy paths; these tests target the
-small set of branches that integration tests never trip — the lazy
-default wiring, defensive ``raise`` statements, the snapshot
-serialization helpers for every WakeCondition shape, and the fold
-reducers for state-changing events. They are pure white-box behaviour
-checks: a Task with the right event stream must produce the right
-Task-state after fold; a Snapshot body must round-trip every typed
-value the Engine can emit.
+Lazy wiring, defensive ``raise`` statements, one fold reducer per
+state-changing event, and a serialization round-trip for every typed value
+the Engine can emit. A bug in any of these surfaces only on resume — long
+after the step that wrote the bad bytes — so each shape is pinned here
+directly.
 """
 
 from __future__ import annotations
@@ -115,17 +105,12 @@ def test_engine_without_policy_raises_runtime_error() -> None:
 
 
 def test_engine_requires_composer_but_lazily_wires_tool_runtime() -> None:
-    """``composer`` is a required injection (no implicit
-    default), but ``tool_runtime`` is still lazily wired when ``tools``
-    is passed without an explicit runtime.
+    """``composer`` is a required injection; ``tool_runtime`` is not.
 
-    The retired behaviour — Engine auto-creating a ``ThreeSegmentComposer``
-    when ``composer`` was omitted — is gone: omitting ``composer`` now
-    raises ``TypeError``. The zero-opinion fallback is
-    ``noeta.core.composer.PassthroughComposer``, which composes every Task
-    to the empty ``View()`` (no segments, ``plan_ref`` is None; the Engine
-    still emits its per-step ``ContextPlanComposed`` with a ``None``
-    ``plan_ref`` — core #2).
+    The Engine never guesses a context strategy, so omitting ``composer``
+    raises ``TypeError`` rather than silently composing something. A host
+    that genuinely wants no context passes ``PassthroughComposer``, which
+    yields the empty ``View()``.
     """
     from noeta.core.composer import PassthroughComposer
     from noeta.protocols.task import Task
@@ -133,7 +118,6 @@ def test_engine_requires_composer_but_lazily_wires_tool_runtime() -> None:
 
     tool = FakeTool(name="echo", script={(): "ok"})
 
-    # composer is required: omitting it raises TypeError.
     with pytest.raises(TypeError):
         Engine(
             event_log=InMemoryEventLog(),
@@ -142,14 +126,11 @@ def test_engine_requires_composer_but_lazily_wires_tool_runtime() -> None:
             tools={"echo": tool},
         )
 
-    # PassthroughComposer is the documented zero-opinion fallback: it
-    # composes every Task to the empty View (no segments, plan_ref None).
     view = PassthroughComposer().compose(Task(task_id="t-pass", status="running"))
     assert view == View()
     assert view.segments == ()
     assert view.plan_ref is None
 
-    # tool_runtime is still lazily wired when tools is passed without one.
     store = InMemoryContentStore()
     engine = Engine(
         event_log=InMemoryEventLog(),
@@ -184,12 +165,11 @@ def test_engine_state_patch_is_written_and_applied() -> None:
 
 
 def test_task_state_patch_from_dict_unknown_field_raises() -> None:
-    """Replay payloads with unknown keys are rejected by from_dict.
+    """Replay payloads with unknown keys are rejected by ``from_dict``.
 
-    Replaces the pre-typed ``_apply_state_patch`` test: now that the
-    patch shape is closed (PRD §"protocol shape"), the only path that needs
-    runtime validation is rehydration from a possibly-stale event
-    payload.
+    The patch shape is closed, so rehydration from a stale event payload is
+    the one path that still needs runtime validation — silently dropping an
+    unknown key would resume the task with the wrong state.
     """
     from noeta.protocols.decisions import TaskStatePatch
 
@@ -227,8 +207,8 @@ def test_engine_wait_timer_decision_suspends_with_timer_fired_wake() -> None:
     assert result.status == "suspended"
     assert isinstance(result.wake_on, TimerFired)
     assert result.wake_on.fire_at == 1_030.0
-    # The PRD pseudocode requires a snapshot directly before the
-    # TaskSuspended event so a suspended task can resume from here.
+    # A snapshot must sit directly before TaskSuspended, otherwise the
+    # suspended task has no point to resume from.
     types = [e.type for e in log.read(task.task_id)]
     suspend_idx = types.index("TaskSuspended")
     assert types[suspend_idx - 1] == "TaskSnapshot"
@@ -277,17 +257,6 @@ def test_engine_resolve_tool_unknown_raises() -> None:
     lease_id = _lease_for(dispatcher, task.task_id)
     with pytest.raises(KeyError, match="unknown tool"):
         engine.run_one_step(task, lease_id=lease_id)
-
-
-# NOTE: Phase 0 used to ship two tests asserting that Engine itself
-# raised RuntimeError when a spawn_subtask / child-terminal Decision ran
-# without a Dispatcher wired in. That validation moved out of Engine in
-# candidate A (CONTEXT.md: "the Engine has no knowledge of the dispatcher");
-# the responsibility now belongs to the runtime owner (Worker / test fixture)
-# calling
-# ``wire_default_observers``. A no-observer run silently fails to enqueue
-# the child — a caller bug, not an Engine invariant — so there is nothing
-# left for Engine to assert and these two tests have been removed.
 
 
 def test_engine_tool_call_denied_emits_no_messages_appended() -> None:
@@ -386,10 +355,10 @@ class _StubEventLog:
         return None
 
 
-# Issue 14: tests that fold a stream with MessagesAppended need a
-# real ContentStore body to dereference. ``_messages_ref_for`` builds
-# the ref and stashes the canonical body in this module-global dict
-# which ``_StubContentStore`` is initialised with at test time.
+# Folding a stream with MessagesAppended dereferences the body, so a test
+# that includes that event needs a real ContentStore blob. ``_messages_ref_for``
+# builds the ref and stashes the canonical body here; ``_StubContentStore`` is
+# then constructed from this dict.
 _PRELOADED_MESSAGES_BODIES: dict[str, bytes] = {}
 
 
@@ -406,10 +375,10 @@ def _messages_ref_for(messages):
 
 
 class _StubContentStore:
-    """Phase 0 stub. Issue 14: MessagesAppended fold now dereferences
-    ``messages_ref`` so tests that include that event must supply a
-    real bytes-keyed store. The constructor accepts an optional dict
-    so call sites pre-load the bodies they expect fold to dereference.
+    """Bytes-keyed stand-in for a ContentStore.
+
+    The constructor takes an optional blob dict so a call site can pre-load
+    exactly the bodies it expects fold to dereference.
     """
 
     def __init__(self, blobs: dict[str, bytes] | None = None) -> None:
@@ -479,8 +448,8 @@ def test_fold_replays_full_lifecycle_events() -> None:
             tid, 3, "TaskStatePatched",
             TaskStatePatchedPayload(patch={"set_goal": "patched"}),
         ),
-        # Issue 14: MessagesAppended carries a ref + count; the body
-        # lives in ContentStore. ``cs`` is pre-loaded below.
+        # MessagesAppended carries a ref + count; the body lives in the
+        # ContentStore, which ``cs`` below is pre-loaded with.
         _envelope(
             tid, 4, "MessagesAppended",
             MessagesAppendedPayload(

@@ -1,28 +1,13 @@
 """``SqliteEventLog`` — sqlite3-backed adapter for the L0 EventLog Protocols.
 
-Issue 15. First real persistent EventLog backend; behaviour pinned by
-:class:`noeta.storage.memory.InMemoryEventLog` (which remains the
-reference implementation for unit / Engine integration tests, untouched
-by this issue).
-
-Three concurrency layers on :meth:`emit` match the InMemory adapter:
-
-1. **Idempotency** — same ``(task_id, lease_id, idempotency_key)`` twice
-   returns the originally-assigned envelope without writing a new one.
-2. **4-KB payload cap** — canonical bytes computed once and
-   re-used for the INSERT, so the cap check and the persisted bytes
-   share the same single-source serialisation path.
-3. **Optimistic ``expected_seq``** — caller asserts the next slot they
-   intend to claim. Mismatch raises :class:`StaleSequence`.
-4. **Lease validity** — when ``lease_id`` is provided and a
-   ``LeaseRegistry`` was injected, the registry must approve the
-   ``(task_id, lease_id)`` pair.
-
-Every write runs inside ``BEGIN IMMEDIATE`` so two writers cannot race
-on ``MAX(seq)``. Subscribers fire **after** ``COMMIT`` and **outside**
-the adapter lock; subscriber callbacks are free to issue further
-``emit / system_emit`` calls (the ``ChildLifecycleObserver`` pattern)
-because the original transaction is already durable by then.
+Behaviour is pinned by :class:`noeta.storage.memory.InMemoryEventLog`, the
+reference implementation: idempotent replay keyed on
+``(task_id, lease_id, idempotency_key)``, the payload cap, optimistic
+``expected_seq``, and lease validation must all reproduce its semantics.
+Every write runs inside ``BEGIN IMMEDIATE`` so two writers cannot race on
+``MAX(seq)``; subscribers fire **after** ``COMMIT`` and **outside** the adapter
+lock, which is what lets a callback issue further ``emit`` / ``system_emit``
+calls — the originating transaction is already durable by then.
 """
 
 from __future__ import annotations
@@ -56,9 +41,9 @@ from noeta.builtins.storage.impl.sqlite._connection import _open_connection
 from noeta.builtins.storage.impl.sqlite.migrations import apply_migrations
 
 # The ``find_latest_snapshot`` predicate, rendered once from the protocol
-# constant so the query can never drift from the contract set (the
-# ``ix_events_snapshot`` partial index must keep matching it textually —
-# see the migration notes).
+# constant so the query cannot drift from the contract set. The
+# ``ix_events_snapshot`` partial index must keep matching this text exactly or
+# sqlite stops choosing it — see the migration notes.
 _BASELINE_TYPES_SQL = "(" + ", ".join(
     f"'{t}'" for t in SNAPSHOT_BASELINE_EVENT_TYPES
 ) + ")"
@@ -68,11 +53,9 @@ _BASELINE_TYPES_SQL = "(" + ", ".join(
 __all__ = ["MAX_PAYLOAD_BYTES", "SqliteEventLog"]
 
 
-# Adapter-local alias preserved so existing call sites and tests can
-# keep importing ``MAX_PAYLOAD_BYTES`` from this module. The canonical
-# L0 name is :data:`noeta.protocols.values.EVENT_PAYLOAD_MAX_BYTES`
-# (issue 16 sign-off pinned the precise event-payload naming to avoid
-# confusion with the unrelated absence of any cap on ContentStore).
+# Adapter-local alias for the L0 constant. The canonical name
+# :data:`noeta.protocols.values.EVENT_PAYLOAD_MAX_BYTES` says "event payload"
+# explicitly, since the ContentStore has no cap at all.
 MAX_PAYLOAD_BYTES = EVENT_PAYLOAD_MAX_BYTES
 
 
@@ -92,11 +75,10 @@ def _default_id_factory() -> str:
 class SqliteEventLog:
     """sqlite3-backed implementation of ``EventLog`` + ``EventLogSubscriber``.
 
-    Public surface deliberately equals the L0 Protocols (``emit``,
-    ``system_emit``, ``read``, ``find_latest_snapshot``, ``subscribe``)
-    plus :meth:`bind_lease_registry` (mirroring InMemory) and
-    :meth:`close` (adapter-level resource release; not on the
-    Protocol, callers that wire SqliteEventLog know to call it).
+    The public surface equals the L0 Protocols plus
+    :meth:`bind_lease_registry` and :meth:`close` — adapter-level resource
+    release the Protocol does not enumerate, so whoever wires the adapter owns
+    calling it.
     """
 
     def __init__(
@@ -115,11 +97,11 @@ class SqliteEventLog:
         self._id_factory = id_factory or _default_id_factory
         self._schema_version = schema_version
         self._subscribers: list[Subscriber] = []
-        # ``threading.Lock`` (not RLock) — same-thread re-entry into
-        # ``emit`` (e.g. an application bug calling emit from inside
-        # emit) deadlocks rather than corrupting the seq counter.
-        # Subscriber-driven re-emit is safe because callbacks run
-        # *after* lock release; see ``_notify`` below.
+        # ``threading.Lock`` (not RLock) on purpose — same-thread re-entry into
+        # ``emit`` (an application bug calling emit from inside emit) then
+        # deadlocks instead of silently corrupting the seq counter.
+        # Subscriber-driven re-emit is safe because callbacks run *after* the
+        # lock is released; see ``_notify`` below.
         self._lock = threading.Lock()
         self._closed = False
 
@@ -128,9 +110,8 @@ class SqliteEventLog:
     def bind_lease_registry(self, registry: LeaseRegistry) -> None:
         """Late-bind a :class:`LeaseRegistry`.
 
-        Mirrors the InMemory adapter so wiring helpers that previously
-        constructed an EventLog without the Dispatcher and patched it
-        in later keep working without backend-specific branches.
+        Mirrors the InMemory adapter so wiring that constructs the event log
+        before the dispatcher needs no backend-specific branch.
         """
         self._lease_validator = registry
 
@@ -210,17 +191,17 @@ class SqliteEventLog:
         idempotency_key: Optional[str],
         require_lease: bool,
     ) -> EventEnvelope:
-        # Serialise once: the same canonical bytes feed both the 4-KB
-        # cap check and the BLOB INSERT, so the persisted payload is
-        # byte-identical to what the cap saw (single canonical path).
+        # Serialise once: the same canonical bytes feed the cap check and the
+        # BLOB INSERT, so the persisted payload is byte-identical to what the
+        # cap measured.
         body = to_canonical_bytes(envelope.payload)
 
         stamped: EventEnvelope
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
-                # Idempotency dedup (runs before the seq check so a
-                # retry doesn't accidentally trip StaleSequence).
+                # Before the seq check on purpose: a retry must return the
+                # original envelope, not trip StaleSequence.
                 if lease_id is not None and idempotency_key is not None:
                     cached = self._conn.execute(
                         "SELECT seq FROM idempotency "
@@ -301,10 +282,9 @@ class SqliteEventLog:
                 self._conn.execute("ROLLBACK")
                 raise
 
-        # Notify subscribers outside the lock and after COMMIT so a
-        # subscriber that re-enters ``emit`` (e.g. the cross-stream
-        # ChildLifecycleObserver pattern) opens its own transaction
-        # cleanly. Subscriber exceptions are swallowed.
+        # Outside the lock and after COMMIT so a subscriber that re-enters
+        # ``emit`` (cross-stream observers do) opens its own transaction
+        # cleanly instead of deadlocking on the non-reentrant lock.
         self._notify(stamped)
         return stamped
 
@@ -313,10 +293,10 @@ class SqliteEventLog:
     def read(
         self, task_id: str, *, after_seq: Optional[int] = None
     ) -> list[EventEnvelope]:
-        # Reads share the single connection with writers, so they must
-        # take the same lock: otherwise a reader could interleave with
-        # a writer's ``BEGIN IMMEDIATE`` block and either see uncommitted
-        # state or race the sqlite3 driver's per-connection state.
+        # Reads share the single connection with writers, so they must take the
+        # same lock: otherwise a reader interleaves with a writer's
+        # ``BEGIN IMMEDIATE`` block and either sees uncommitted state or races
+        # the sqlite3 driver's per-connection state.
         with self._lock:
             if after_seq is None:
                 rows = self._conn.execute(
@@ -333,14 +313,13 @@ class SqliteEventLog:
 
     def find_latest_snapshot(self, task_id: str) -> Optional[EventEnvelope]:
         with self._lock:
-            # TaskRewound and StepAttemptAbandoned are snapshot-shaped fold
-            # baselines (``state_ref`` too) — take whichever of the three
-            # has the higher seq so a rewind / attempt seal re-bases fold
-            # from the same lookup. The ``ix_events_snapshot`` partial index
-            # (migration 8) is keyed on exactly this ``type IN (...)``
-            # predicate, so this lookup is an indexed single-row hit rather
-            # than a reverse PRIMARY KEY walk whose cost grew with the tail
-            # since the last baseline.
+            # Every type in ``SNAPSHOT_BASELINE_EVENT_TYPES`` is a
+            # snapshot-shaped fold baseline (they all carry ``state_ref``), so
+            # the highest-seq one of any type re-bases the fold. The
+            # ``ix_events_snapshot`` partial index is keyed on exactly this
+            # ``type IN (...)`` predicate; widen the constant without a
+            # matching migration and sqlite silently drops back to a reverse
+            # PRIMARY KEY walk costing O(tail since the last baseline).
             row = self._conn.execute(
                 "SELECT * FROM events "
                 f"WHERE task_id = ? AND type IN {_BASELINE_TYPES_SQL} "
@@ -352,12 +331,11 @@ class SqliteEventLog:
             return _row_to_envelope(row)
 
     def list_task_streams(self) -> list[TaskStreamSummary]:
-        """Enumerate task streams, most-recent-update first (CW5a).
+        """Enumerate task streams, most-recent-update first.
 
-        One ``GROUP BY task_id`` pass over the events table. The
-        ``MAX(occurred_at) DESC, task_id ASC`` ordering gives a deterministic
-        tie-break so equal timestamps never reorder flakily. A row only exists
-        when the task has ≥1 event, so empty streams are naturally absent.
+        The ``task_id ASC`` secondary sort is a deterministic tie-break so
+        equal timestamps never reorder between calls. A group only exists when
+        the task has ≥1 event, so empty streams are naturally absent.
         """
         with self._lock:
             rows = self._conn.execute(
@@ -376,16 +354,16 @@ class SqliteEventLog:
         ]
 
     def _fetch_envelope(self, task_id: str, seq: int) -> EventEnvelope:
-        # Callers already hold ``self._lock`` (only ``_append`` invokes
-        # this, from inside its BEGIN IMMEDIATE block). No nested
-        # acquire — that would deadlock on a non-reentrant Lock.
+        # Caller already holds ``self._lock`` (only ``_append`` invokes this,
+        # from inside its BEGIN IMMEDIATE block). Acquiring it again would
+        # deadlock on the non-reentrant Lock.
         row = self._conn.execute(
             "SELECT * FROM events WHERE task_id = ? AND seq = ?",
             (task_id, seq),
         ).fetchone()
         if row is None:
-            # Should never happen: idempotency table points at a row
-            # we just verified exists; surface loudly if it does.
+            # Unreachable unless the idempotency table has outlived the events
+            # it points at — a corrupt store, so fail loudly.
             raise RuntimeError(
                 f"idempotency cache references missing event "
                 f"task_id={task_id}, seq={seq}"
@@ -417,12 +395,12 @@ class SqliteEventLog:
     def purge_task(self, task_id: str) -> bool:
         """Hard-delete every row this task owns (events + idempotency).
 
-        A GC/maintenance affordance backing the agent product's "delete
-        session" command — deliberately NOT on the L0 ``EventLog`` Protocols
-        (the record/fold path is append-only and never deletes). ``content`` blobs the events
-        referenced are intentionally left untouched: that table is addressed
-        by hash and shared across tasks, so reclaiming orphaned blobs is a
-        separate offline GC concern (see the ``ContentStore`` Protocol).
+        A maintenance affordance behind the Client's conversation-delete path,
+        deliberately NOT on the L0 ``EventLog`` Protocols: the record/fold path
+        is append-only and never deletes. ``content`` blobs the events
+        referenced are left untouched because that table is addressed by hash
+        and shared across tasks, so reclaiming orphans is a separate offline GC
+        concern.
 
         Returns ``True`` iff at least one ``events`` row was removed.
         """
@@ -447,9 +425,8 @@ class SqliteEventLog:
     def close(self) -> None:
         """Close the underlying sqlite3 connection.
 
-        Idempotent. Not part of the L0 Protocols — application wiring
-        that constructs a :class:`SqliteEventLog` is responsible for
-        calling this at shutdown (or using ``with contextlib.closing(...)``).
+        Idempotent. Not part of the L0 Protocols — whoever constructs the
+        adapter owns calling it at shutdown.
         """
         if self._closed:
             return

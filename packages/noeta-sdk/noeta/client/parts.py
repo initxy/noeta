@@ -1,14 +1,10 @@
-"""SDK built-in parts table.
+"""The SDK's parts table: built-in identity constants and loader doorways.
 
-This module is the **single source** for the built-in tool-name → class
-mapping and the policy/composer ComponentRefs (roster removed; there is no
-``noeta.agent.roster.specs`` mirror). The SDK owns these identity constants;
-the product side consumes the compiled output via :mod:`noeta.client.options`
-+ :mod:`noeta.presets`, with no second copy.
-
-Keeping the table in ``noeta.client`` (rather than importing from ``noeta.agent``)
-makes ``noeta-sdk`` self-contained so library users do not pull in the coding-agent
-product package.
+Single source for the built-in tool-name → class mapping, the policy/composer
+ComponentRefs, and every accessor that reaches a built-in plugin. Each of those
+accessors resolves its target by dynamic import — SDK core holds no static edge
+into the builtins band, so a host pays only for the capabilities it uses and a
+built-in's internals never become part of the compile surface.
 """
 
 from __future__ import annotations
@@ -51,11 +47,10 @@ __all__ = [
 
 
 def _resolve_ref(ref: str) -> Any:
-    """Resolve an explicit ``pkg.mod:attr`` manifest ref (microkernel M1).
+    """Resolve an explicit ``pkg.mod:attr`` manifest ref.
 
-    The same doorway the plugin loader uses — a dynamic import at the
-    sanctioned execution boundary. SDK core keeps **no static edge** into the
-    builtins band.
+    The same doorway the plugin loader uses: a dynamic import at the sanctioned
+    execution boundary, keeping SDK core free of static edges into builtins.
     """
     module_name, _, attr = ref.partition(":")
     obj: Any = importlib.import_module(module_name)
@@ -70,13 +65,11 @@ _TOOL_CLASS_CACHE: Optional[dict[str, type]] = None
 def builtin_tool_classes() -> dict[str, type]:
     """name → class for the default built-in tools, **loader-resolved**.
 
-    Microkernel M1 (D2): SDK core holds no static tool table. The ``fs`` /
-    ``web`` built-in plugin manifests declare the default 11 tools; this
-    function reads those manifests (inert data) and resolves each ``tool``
-    contribution's ref at the sanctioned execution boundary (client build /
-    compile). Memoized — the classes are import-stable for the process.
+    Read from the ``fs`` / ``web`` manifests (inert data) and resolved at the
+    sanctioned execution boundary, so there is no static tool table to drift
+    from what the plugins actually declare. Memoized: import-stable per process.
 
-    ``web_search`` is listed like every other name, but the *runtime pack*
+    ``web_search`` appears here like every other name, but the runtime pack
     constructs it only when ``NOETA_WEB_SEARCH_API_KEY`` is set — the
     whitelist's intersection with the built pack drops it otherwise, so the
     model never sees a search tool it cannot use.
@@ -98,11 +91,8 @@ def builtin_tool_classes() -> dict[str, type]:
 
 
 
-# --- providers built-in accessors (microkernel M2) -------------------------
-# The model catalog lives in the ``providers`` built-in plugin
-# (``noeta.builtins.providers.impl.catalog``); SDK core reaches it only
-# through the loader's dynamic-import doorway. The catalog module is
-# import-stable for the process, so the resolution is memoized.
+# The model catalog lives in the ``providers`` built-in; the resolution is
+# memoized because the module is import-stable for the process.
 
 _CATALOG_MOD: Optional[Any] = None
 
@@ -117,21 +107,20 @@ def _catalog() -> Any:
 
 
 def derive_compaction_config(model: str) -> CompactionConfig:
-    """Catalog-derived compaction knobs for ``model`` (loader-resolved).
+    """Catalog-derived compaction knobs for ``model``, loader-resolved.
 
-    The SDK-side accessor for the ``providers`` built-in's
-    ``derive_compaction_config`` — the value the kernel builder takes
-    pre-resolved through ``build_session_inputs(compaction=…)``.
+    The kernel builder takes this pre-resolved via
+    ``build_session_inputs(compaction=…)``; it reads no catalog itself.
     """
     config: CompactionConfig = _catalog().derive_compaction_config(model)
     return config
 
 
 def provider_family(model: str) -> Optional[str]:
-    """The bound model's vendor family (loader-resolved catalog judgment).
+    """The bound model's vendor family; ``None`` for an uncatalogued selector.
 
     Injected into ``build_session_inputs(provider_family=…)`` for the
-    edit↔apply_patch assembly mutex; ``None`` for any uncatalogued selector.
+    edit↔apply_patch assembly mutex.
     """
     family: Optional[str] = _catalog().provider_family(model)
     return family
@@ -143,10 +132,9 @@ _WORKSPACE_MOD: Optional[Any] = None
 def workspace_impl() -> Any:
     """The ``workspace`` built-in's impl module, loader-resolved (memoized).
 
-    SDK core reaches the workspace residents' impure loaders only through
-    this doorway (microkernel phase 3, D10) — ``load_environment`` /
-    ``load_instructions`` for the host's own record path (the compose path
-    goes through the plugin's ``session_pack`` contributions instead).
+    The doorway for the host's own record path (``load_environment`` /
+    ``load_instructions``); the compose path goes through the plugin's
+    ``session_pack`` contributions instead.
     """
     global _WORKSPACE_MOD
     if _WORKSPACE_MOD is None:
@@ -157,11 +145,11 @@ def workspace_impl() -> Any:
 
 
 def default_shell_rules() -> tuple[Any, ...]:
-    """The fs built-in's curated shell allowlist (phase 2c).
+    """The ``fs`` built-in's curated shell allowlist.
 
     The host's approval predicate composes its effective allowlist from this
-    base + host config + the project's remembered rules — the same table the
-    ``shell_run`` tool enforces, so the two can never drift.
+    base plus host config plus the project's remembered rules — the same table
+    the ``shell_run`` tool enforces, so the two can never drift.
     """
     rules: tuple[Any, ...] = _resolve_ref(
         "noeta.builtins.fs.impl.shell_rules:DEFAULT_SHELL_RULES"
@@ -172,32 +160,22 @@ def default_shell_rules() -> tuple[Any, ...]:
 
 
 def catalog_price(model: str, usage: Usage) -> float:
-    """USD for one round-trip's ``Usage`` (loader-resolved catalog pricing).
-
-    The pricing callback the SDK host injects into ``RuntimeLLMClient``.
-    """
+    """USD for one round-trip's ``Usage``; injected into ``RuntimeLLMClient``."""
     cost: float = _catalog().price(model, usage)
     return cost
 
 
 def resolve_model_alias(selector: str) -> str:
-    """Friendly alias → real model-id (loader-resolved catalog table).
-
-    The alias resolver the SDK client injects into the
-    ``InteractionDriver`` (identity for any non-alias selector).
-    """
+    """Friendly alias → real model id; identity for any non-alias selector."""
     resolved: str = _catalog().resolve_alias(selector)
     return resolved
 
 
-# --- browser built-in accessors (microkernel M3) ---------------------------
-
-
 def browser_tool_names() -> tuple[str, ...]:
-    """The five noeta-owned browser tool names (loader-resolved roster).
+    """The browser built-in's tool names, for the host's approval gating.
 
-    The host's approval gating needs the fixed roster; it lives beside the
-    pack in the browser built-in and is resolved through the same doorway.
+    The list lives beside the pack that builds those tools, so gating and
+    construction cannot disagree about what the browser owns.
     """
     names: tuple[str, ...] = _resolve_ref(
         "noeta.builtins.browser.impl:BROWSER_TOOL_NAMES"
@@ -205,23 +183,15 @@ def browser_tool_names() -> tuple[str, ...]:
     return names
 
 
-# --- app built-in accessor (microkernel M3) --------------------------------
-
-
-
-
-# --- mcp built-in accessor (microkernel M3) --------------------------------
-
 _MCP_MOD: Optional[Any] = None
 
 
 def mcp_impl() -> Any:
     """The ``mcp`` built-in's impl module, loader-resolved (memoized).
 
-    SDK core reaches the connector implementation only through this doorway —
-    ``build_mcp_tools`` / ``mcp_provenance_from_specs`` (the host's live-MCP
-    path) hang off the returned module; the vocabulary (specs, errors,
-    ``MCP_PREFIX``) is kernel-side in :mod:`noeta.runtime.mcp`.
+    Carries the connector implementation (``build_mcp_tools`` /
+    ``mcp_provenance_from_specs``); the vocabulary — specs, errors,
+    ``MCP_PREFIX`` — is kernel-side in :mod:`noeta.runtime.mcp`.
     """
     global _MCP_MOD
     if _MCP_MOD is None:
@@ -229,18 +199,15 @@ def mcp_impl() -> Any:
     return _MCP_MOD
 
 
-# --- memory built-in accessors (microkernel M3) ----------------------------
-
 _MEMORY_MOD: Optional[Any] = None
 
 
 def memory_impl() -> Any:
     """The ``memory`` built-in's impl module, loader-resolved (memoized).
 
-    SDK core reaches the store / recall implementation only through this
-    doorway — ``build_memory_pack`` / ``load_memory_store`` /
-    ``memory_reminder_provider`` / the late-read
-    ``DEFAULT_GLOBAL_MEMORY_DIR`` all hang off the returned module.
+    Carries the store and recall implementation: ``build_memory_pack``,
+    ``load_memory_store``, ``memory_reminder_provider``, and the late-read
+    ``DEFAULT_GLOBAL_MEMORY_DIR``.
     """
     global _MEMORY_MOD
     if _MEMORY_MOD is None:
@@ -251,15 +218,11 @@ def memory_impl() -> Any:
 
 
 def default_policy_factory() -> Callable[..., Any]:
-    """The default policy factory builder for the kernel builder
-    (microkernel phase 2b).
+    """The default policy factory builder the kernel builder requires.
 
-    Resolved from the ``react`` built-in plugin's body
-    (``noeta.builtins.react.impl:build_react_policy_factory``) — the
-    injection the microkernel builder requires (its
-    ``default_policy_factory`` param); the kernel itself imports no policy
-    implementation. ``Options.policy`` / the plugin ``policy`` surface (D10)
-    still override the default at the builder.
+    Resolved from the ``react`` built-in so the kernel imports no policy
+    implementation of its own. ``Options.policy`` and the plugin ``policy``
+    surface override it at the builder.
     """
     return _resolve_ref("noeta.builtins.react.impl:build_react_policy_factory")
 
@@ -267,15 +230,12 @@ def default_policy_factory() -> Callable[..., Any]:
 class ReactImpl(Protocol):
     """The typed shape of the ``react`` built-in's impl module.
 
-    A dynamic-import doorway returning ``Any`` would silently un-type every
-    call site behind it — a renamed constructor kwarg in the built-in would
-    keep mypy green and fail at runtime. Declaring the shape structurally
-    restores the check without a static import, the same discipline the
-    ``SkillsFactory`` / ``PolicyFactoryBuilder`` injections already use.
-
-    Only what SDK core actually reaches through the doorway belongs here; the
-    default policy construction goes through :func:`default_policy_factory`,
-    not this Protocol.
+    A doorway returning ``Any`` would silently un-type every call site behind
+    it: a changed constructor kwarg in the built-in would keep mypy green and
+    fail at runtime. Declaring the shape structurally restores the check
+    without a static import. Only what SDK core reaches through the doorway
+    belongs here — default policy construction goes through
+    :func:`default_policy_factory` instead.
     """
 
     WORKFLOW_SYSTEM_PROMPT: str
@@ -295,12 +255,9 @@ _REACT_MOD: Optional[ReactImpl] = None
 def react_impl() -> ReactImpl:
     """The ``react`` built-in's impl module, loader-resolved (memoized).
 
-    SDK core reaches the decision-mapping policy implementation only through
-    this doorway — ``OrchestrationPolicy`` / ``StructuredOutputPolicy`` /
-    ``WORKFLOW_SYSTEM_PROMPT`` (the host's workflow path) hang off the
-    returned module, typed by :class:`ReactImpl`. The cast is where the
-    dynamic import meets the static contract; ``tests/test_react_doorway.py``
-    pins the module against it so the two cannot drift apart silently.
+    The cast is where the dynamic import meets the static contract;
+    ``tests/test_react_doorway.py`` pins the real module against
+    :class:`ReactImpl` so the two cannot drift apart silently.
     """
     global _REACT_MOD
     if _REACT_MOD is None:
@@ -310,22 +267,11 @@ def react_impl() -> ReactImpl:
     return _REACT_MOD
 
 
-
-
-# NOTE: there was a ``skills_impl()`` module doorway here, mirroring
-# :func:`react_impl`. Nothing ever called it: SDK core reaches the skills
-# built-in through :func:`default_skills_kit_factory` alone — the kit is the
-# whole interface, so no consumer needs the module object. Deleted rather than
-# left exported, where it would read as the sanctioned path.
-
-
 def default_guards_factory() -> Callable[..., Any]:
-    """The default guard-stack factory for the kernel builder.
+    """The default guard-stack factory the kernel builder requires.
 
-    Resolved from the ``governance`` built-in plugin's body
-    (``noeta.builtins.governance.impl:build_default_guards``) — the injection
-    the microkernel builder requires (its ``guards_factory`` param); the
-    kernel itself imports no guard implementation.
+    Resolved from the ``governance`` built-in so the kernel imports no guard
+    implementation of its own.
     """
     return _resolve_ref("noeta.builtins.governance.impl:build_default_guards")
 
@@ -338,16 +284,12 @@ def default_session_packs(
 ) -> tuple[SessionPackEntry, ...]:
     """The built-in ``session_pack`` entries, **loader-resolved** and ordered.
 
-    Microkernel phase 3: the built-in manifests declare their
-    session-construction factories (ref + priority); this function reads
-    those manifests (inert data), resolves each ``session_pack``
-    contribution at the sanctioned execution boundary, and returns the
-    :class:`SessionPackEntry` tuple sorted ``(priority, plugin, name)`` —
-    the ONE injection the kernel builder's generic pack loop requires
-    (replacing the per-feature factory accessors). ``disabled`` drops a
-    built-in's pack entirely (``disabled_builtins=["skills"]``), the honest
-    expression of a turned-off capability. Memoized per disabled-set — the
-    factories are pure module-level functions, import-stable for the process.
+    The one injection the kernel builder's generic pack loop takes: each
+    manifest declares a factory ref plus a priority, and the tuple comes back
+    sorted ``(priority, plugin, name)`` so construction order is a manifest
+    fact rather than a call-site one. ``disabled`` drops a built-in's pack
+    entirely — the honest expression of a turned-off capability. Memoized per
+    disabled-set; the factories are import-stable module-level functions.
     """
     cached = _SESSION_PACK_CACHE.get(disabled)
     if cached is None:
@@ -392,16 +334,12 @@ def default_control_tools(
 ) -> tuple[ControlToolEntry, ...]:
     """The built-in ``control_tool`` entries, **loader-resolved** and ordered.
 
-    Control-tool-surface S2: the mirror of :func:`default_session_packs` for the
-    ``control_tool`` surface. The built-in manifests
-    (``noeta.builtins.{todo_write,ask_user_question,delegation}``) declare their
-    control-tool factories (ref + priority); this function reads those manifests
-    (inert data), resolves each ``control_tool`` contribution's ref at the
-    sanctioned execution boundary, and returns the :class:`ControlToolEntry`
-    tuple sorted ``(priority, plugin, name)`` — the built-in half of the kernel
-    builder's ``control_tools`` injection. ``disabled`` drops a built-in's entry
-    entirely. Memoized per disabled-set — the factories are pure module-level
-    functions, import-stable for the process.
+    The mirror of :func:`default_session_packs` for the ``control_tool``
+    surface: each manifest declares a factory ref plus a priority, and the tuple
+    comes back sorted ``(priority, plugin, name)`` so the mount loop's iteration
+    order is a manifest fact rather than a call-site one. ``disabled`` drops a
+    built-in's entry entirely. Memoized per disabled-set; the factories are
+    import-stable module-level functions.
     """
     cached = _CONTROL_TOOL_CACHE.get(disabled)
     if cached is None:
@@ -442,14 +380,12 @@ _REMINDER_SPEC_CACHE: Optional[tuple[ReminderSpec, ...]] = None
 
 
 def default_reminder_specs() -> tuple[ReminderSpec, ...]:
-    """The three built-in compose-time reminders, **loader-resolved**.
+    """The built-in compose-time reminders, **loader-resolved**.
 
-    Microkernel M2 (D2): the ``reminders`` built-in plugin's manifest declares
-    the three renders (ref + priority); this function reads that manifest
-    (inert data) and resolves each ``reminder`` contribution at the sanctioned
-    execution boundary, returning the :class:`ReminderSpec` tuple the kernel
-    builder requires as its ``base_reminders`` injection. Memoized — the
-    renders are pure module-level functions, import-stable for the process.
+    The ``reminders`` manifest declares each render (ref + priority) as inert
+    data; resolving it here at the sanctioned execution boundary gives the
+    kernel builder its ``base_reminders`` injection without a static edge into
+    builtins. Memoized; the renders are import-stable module-level functions.
     """
     global _REMINDER_SPEC_CACHE
     if _REMINDER_SPEC_CACHE is None:
@@ -478,28 +414,17 @@ def default_reminder_specs() -> tuple[ReminderSpec, ...]:
     return _REMINDER_SPEC_CACHE
 
 
-# NOTE: a module ``__getattr__`` used to vend ``BUILTIN_TOOL_CLASSES`` as a
-# lazy attribute alias for :func:`builtin_tool_classes`. It was a
-# back-compat shim for the pre-microkernel static table; every caller now
-# calls the function (which is the honest shape — the table is resolved from
-# the built-in manifests, not a constant), so the alias is gone.
-
-
-#: ReAct decision-mapping behaviour version — SDK single source
-#: (``roster.specs._REACT_POLICY`` removed).
+#: ReAct decision-mapping behaviour version.
 POLICY_REF = ComponentRef("react", "1")
-#: Three-segment context composer version — SDK single source
-#: (``roster.specs._THREE_SEGMENT_COMPOSER`` removed).
+#: Three-segment context composer version.
 COMPOSER_REF = ComponentRef("three_segment", "v3")
 
 
 def _field_default(cls: type, field_name: str) -> Any:
     """Return the static dataclass-field default of ``cls.field_name``.
 
-    SDK single implementation (``roster.specs._field_default`` removed).
-    Raises ``TypeError`` if the field has no static default (callers would
-    otherwise silently get a ``MISSING`` sentinel into the AgentSpec identity,
-    which is the bug this guard prevents).
+    Raises ``TypeError`` when the field has no static default: the alternative
+    is a ``MISSING`` sentinel travelling silently into the AgentSpec identity.
     """
     for f in fields(cls):
         if f.name == field_name:

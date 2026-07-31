@@ -1,21 +1,17 @@
-"""Byte-order goldens for the control-tool schema surface (control-tool-surface
-spec, 2026-07-30, stage S0).
+"""Byte-order goldens for the control-tool schema surface.
 
 These literals pin the assembled ``control_action_schemas`` list — the control
 tool schemas the composer appends after the executable tools in
 ``View.provider_tool_schemas`` and folds into the stable-prefix hash — across a
-config matrix. This is the lock the whole ``control_tool`` migration is verified
-against: S1 turns the builder if-chain into a generic priority-ordered mount
-loop, and S2 moves the schema sources into built-in plugins; this golden must
-pass UNCHANGED through both. It fixes the schema render order (``spawn_subagent``
+config matrix. It fixes the schema render order (``spawn_subagent``
 -> ``todo_write`` -> ``ask_user_question`` -> ``skill`` -> ``run_workflow`` ->
 ``structured_output``) and the byte content of every schema.
 
-Recorded pre-migration (S0) and MUST NOT be regenerated until stage S3, where
-the identity re-pin lands under deliberate review — matching the discipline of
-``tests/test_session_pack_goldens.py``: the expected literals are hand-recorded,
-never derived from the code under test, so the golden can never follow the
-regression it exists to catch.
+The expected literals are hand-recorded, never derived from the code under
+test, so the golden can never follow the regression it exists to catch —
+matching the discipline of ``tests/test_session_pack_goldens.py``. Do not
+regenerate them without deliberate review: the stable-prefix prompt cache only
+hits when this byte order holds.
 
 Construction is implementation-agnostic — sessions are built through the same
 public ``build_code_replay_inputs`` seam ``test_session_pack_goldens.py`` uses,

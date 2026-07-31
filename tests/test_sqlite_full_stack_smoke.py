@@ -1,16 +1,14 @@
 """Full-stack smoke: SqliteEventLog + SqliteContentStore wired together.
 
-Issue 16 architect Q4: cheap end-to-end test that the two persistent
-adapters cooperate in the canonical "large body lives in ContentStore,
-EventLog references it" pattern that the event-sourcing / replay model codifies.
+Proves the two persistent adapters cooperate in the canonical "large body lives
+in ContentStore, EventLog references it" pattern that the event-sourcing / replay
+model codifies.
 
 Walks the typical flow: put a payload body into ContentStore, emit a
 ``MessagesAppended`` envelope carrying the returned :class:`ContentRef`
 into EventLog, read the envelope back via ``log.read``, dereference
 the ref via ``cs.get``, assert byte-equal recovery. This proves the
-two adapters share a single DB file. A future smoke can wire the real
-``fold`` to cover the full Engine round-trip; this one focuses on the
-adapter-pair contract.
+two adapters share a single DB file.
 """
 
 from __future__ import annotations
@@ -61,11 +59,11 @@ def test_eventlog_and_contentstore_share_one_sqlite_file(tmp_path) -> None:
 
 
 def test_eventlog_contentstore_dispatcher_spawn_subtask_end_to_end(tmp_path) -> None:
-    """Full Phase 1 sqlite stack: EL + CS + Dispatcher running a real
+    """The full sqlite stack: EL + CS + Dispatcher running a real
     parent → child → wake parent → finish loop. Proves the three
     persistent adapters cooperate with the Engine, fold, and
     ChildLifecycleObserver wiring without any InMemory backend in the
-    runtime stack (issue 17 architect Q7).
+    runtime stack.
     """
     db = tmp_path / "noeta.db"
 
@@ -164,7 +162,7 @@ def test_eventlog_contentstore_dispatcher_spawn_subtask_end_to_end(tmp_path) -> 
         assert disp.is_lease_valid(parent.task_id, p_lease_2.lease_id) is False
 
         # Fold-side: parent's GovernanceState should carry the child's
-        # completed SubtaskResult (issue 17 acceptance).
+        # completed SubtaskResult.
         final_parent = fold(log, cs, parent.task_id)
         results = final_parent.governance.subtask_results
         assert len(results) == 1

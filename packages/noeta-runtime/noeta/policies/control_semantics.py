@@ -1,41 +1,12 @@
-"""The neutral control-tool MECHANISM — the kernel's whole remaining share.
+"""The neutral control-tool mechanism: shared primitives, the translate
+dispatcher, and the reserved recorded-wire names.
 
-A coding agent's model-visible **control** tools (``skill`` / ``run_workflow`` /
-``structured_output`` / ``todo_write`` / ``ask_user_question`` /
-``spawn_subagent``) are SDK product **material** (mechanism-vs-material; demoted
-from the kernel). Control-tool-surface S2/S2b finished emptying every schema,
-description, and translate body out of this module into the built-ins that own
-them (``noeta.builtins.{todo_write,ask_user_question,delegation}`` for the first
-three; ``skills`` for ``skill``; ``react`` for ``run_workflow`` /
-``structured_output`` — the last two rode ``workflow_sandbox`` out with them).
-The move is byte-preserving (the S0 golden pins every schema byte).
-
-What STAYS here is the neutral mechanism the built-ins build on and the kernel
-seams route on — zero schemas, zero descriptions, zero product translate bodies:
-
-* the shared neutral primitives every control tool reuses
-  (:func:`validate_required_string` / :func:`enum_roster_prop` /
-  :func:`ack_patch_decision`);
-* the decision-time :class:`ControlTranslateContext` + the routing
-  :class:`ControlToolSpec` + the :func:`translate_control_tool` dispatcher (the
-  mechanism the mount loop feeds and the policy iterates);
-* the reserved recorded-wire NAMES the drain / resolver route on
-  (:data:`SPAWN_SUBAGENT_TOOL` / :data:`RUN_WORKFLOW_TOOL` /
-  :data:`WORKFLOW_AGENT_NAME`, D8) and the shared fan-out switch
-  :func:`concurrent_fanout_enabled` (read by two different plugins).
-
-The kernel sees only neutral Decisions: a
-:class:`~noeta.protocols.decisions.StatePatchDecision` applies caller-built
-messages + a typed patch, a
-:class:`~noeta.protocols.decisions.YieldForHumanDecision` carries an opaque
-:class:`~noeta.protocols.decisions.HitlRequestAnchor`, a
-:class:`~noeta.protocols.decisions.SpawnSubtaskDecision` delegates. The
-translation seam does NOT participate in stable-prefix schema assembly (the
-Composer owns ``control_action_schemas``); it only translates *responses*.
-
-Layering: imports only ``noeta.protocols.*`` — no cross-band edge, no
-``ReActPolicy`` / built-ins import (so ``react`` / ``skills`` may depend on this
-module without a cycle, and the kernel keeps zero ``noeta.builtins`` edge).
+Control tools themselves are plugin material, so this module carries zero
+schema, description, or translate body — the kernel only ever sees the neutral
+Decisions a translate returns, and it never assembles the provider schemas (the
+Composer owns ``control_action_schemas``; this seam translates *responses*
+only). It imports ``noeta.protocols`` alone, which is what lets built-ins depend
+on it without a cycle and keeps the kernel free of any ``noeta.builtins`` edge.
 """
 
 from __future__ import annotations
@@ -57,20 +28,15 @@ from noeta.protocols.messages import (
 )
 
 
+# Every name here is imported back by built-in control tools across the wheel
+# boundary, so it is the kernel's public contract to the built-ins band.
 __all__ = [
-    # shared NEUTRAL control-tool primitives — the migrated built-in control
-    # tools import these back across the wheel boundary, so they are the
-    # kernel's public contract to the built-ins band (a contract, not an
-    # underscore).
     "validate_required_string",
     "enum_roster_prop",
     "ack_patch_decision",
-    # translation seam — the mechanism the dispatcher consumes.
     "ControlTranslateContext",
     "ControlToolSpec",
     "translate_control_tool",
-    # reserved recorded-wire vocabulary — the tool NAMES the drain / resolver
-    # route on (D8), plus the shared fan-out switch two plugins read.
     "SPAWN_SUBAGENT_TOOL",
     "RUN_WORKFLOW_TOOL",
     "WORKFLOW_AGENT_NAME",
@@ -94,13 +60,7 @@ def validate_required_string(
 
 
 def enum_roster_prop(base_description: str, items) -> dict[str, Any]:
-    """Build a string property with an enum constraint and a roster description; with empty ``items`` it is just the bare description.
-
-    A NEUTRAL schema helper shared across control tools that render a roster
-    (``skill`` in the ``skills`` built-in, ``spawn_subagent`` in the
-    ``delegation`` built-in), so it stays kernel-side and is public — the
-    built-ins import it back.
-    """
+    """Build a string property with an enum constraint and a roster description; with empty ``items`` it is just the bare description."""
     prop: dict[str, Any] = {"type": "string", "description": base_description}
     if items:
         prop["enum"] = [name for name, _ in items]
@@ -120,12 +80,7 @@ def ack_patch_decision(
     text: str,
     valid: bool,
 ) -> StatePatchDecision:
-    """Shared ack builder for control tools: one ToolResultBlock per tool_use, wrapped in a StatePatchDecision.
-
-    A NEUTRAL builder shared across control tools that ack + optionally patch
-    (todo_write / ask_user_question / skill / spawn_subagent / run_workflow), so
-    it stays kernel-side and is public — the migrated built-ins import it back.
-    """
+    """Shared ack builder for control tools: one ToolResultBlock per tool_use, wrapped in a StatePatchDecision."""
     ack = Message(
         role="tool",
         content=[
@@ -155,14 +110,11 @@ def ack_patch_decision(
 class ControlTranslateContext:
     """The per-turn inputs a control tool's translate step reads.
 
-    Assembled once by :func:`translate_control_tool`: the LLM ``response``, the
-    Policy's assistant :class:`Message`, and the out-of-band ``ThinkingBlock`` s
-    extracted once (threaded into every control Decision so a reasoning-model
-    turn keeps its signature), plus ``content_store`` for ``ask_user_question``'s
-    spilled question body. This context carries NO feature-named field: a
-    translate that needs build-time state (the ``skill`` menu) captures it in its
-    closure (see the ``skills`` built-in's ``make_skill_translate``), so the
-    mechanism stays neutral. A spec ignores the fields it does not need.
+    Assembled once by :func:`translate_control_tool`, including the out-of-band
+    ``ThinkingBlock`` s that must be threaded into every control Decision so a
+    reasoning-model turn keeps its signature. The context carries NO
+    feature-named field — a translate needing build-time state captures it in
+    its closure — so the mechanism stays neutral.
     """
 
     response: LLMResponse
@@ -175,14 +127,12 @@ class ControlTranslateContext:
 class ControlToolSpec:
     """One control tool's decision-time routing entry: name + translate step.
 
-    The dispatcher :func:`translate_control_tool` consumes an ORDERED tuple of
-    these (the builder mounts them in routing-priority order); a spec's position
-    IS its routing priority when several control tools co-occur in one turn.
-    Mounting a spec IS enablement — there is no ``enabled`` predicate, because a
-    disabled tool contributes no mount and therefore no spec. This is the type
-    the dispatcher consumes (D9): it lives in ``noeta.policies`` so the mount
-    loop (``noeta.execution``) can build it without ``policies`` importing
-    ``execution``.
+    A spec's position in the dispatcher's ORDERED tuple IS its routing priority
+    when several control tools co-occur in one turn. Mounting a spec IS
+    enablement — there is no ``enabled`` predicate, because a disabled tool
+    contributes no mount and therefore no spec. The type lives in
+    ``noeta.policies`` so the mount loop in ``noeta.execution`` can build it
+    without ``policies`` importing ``execution``.
     """
 
     #: Model-visible control-tool name (readability / debug; not routing input).
@@ -201,28 +151,17 @@ def translate_control_tool(
 ) -> Decision | None:
     """Translate a control-tool ``tool_use`` turn into a neutral Decision.
 
-    Walks the caller-supplied ``specs`` in order (the builder mounts them in
-    routing-priority order) and returns the first spec whose ``translate`` yields
-    a Decision; ``None`` when no mounted control tool is present (the caller then
-    falls through to the normal ``tool_calls`` path). Order matters when several
-    control tools co-occur in one turn. Mounting IS enablement: a disabled tool
-    contributes no spec, so there is no per-spec ``enabled`` gate here — the
-    routing order (ask → todo → spawn → skill → workflow) is the mount loop's
-    ``routing_priority`` sort, byte-identical to the original nested ``_maybe_*``
-    dispatch.
-
-    Extended-thinking end-to-end (Slice B): the LLM's ThinkingBlocks are extracted
-    ONCE from ``response.content`` here and threaded (via
-    :class:`ControlTranslateContext`) into every control Decision the specs
-    build, matching the parallel ``ToolCallsDecision`` path in ``react.py`` so a
-    reasoning-model turn that emits thinking + a control tool_use still carries its
-    signature.
+    Returns the first spec whose ``translate`` yields a Decision, or ``None``
+    when the turn carries no mounted control tool (the caller then falls through
+    to the normal ``tool_calls`` path). Spec order is the mount loop's
+    ``routing_priority`` sort, and it decides the winner when several control
+    tools co-occur in one turn.
     """
     ctx = ControlTranslateContext(
         response=response,
         assistant_message=assistant_message,
-        # Extract out-of-band thinking once so every spec reuses the same tuple
-        # (non-reasoning models → empty tuple, no-op, byte-safe).
+        # Extracted once so every Decision a spec builds carries the same
+        # thinking tuple — a reasoning-model turn must keep its signature.
         assistant_thinking=tuple(
             b for b in response.content if isinstance(b, ThinkingBlock)
         ),
@@ -236,27 +175,27 @@ def translate_control_tool(
 
 
 # ===========================================================================
-# Reserved recorded-wire vocabulary (D8)
+# Reserved recorded-wire vocabulary
 #
 # These three constants are the kernel's reserved control-tool NAMES: the schema
-# + translate that USE them all moved into their built-ins, but the drain
+# + translate that USE them live in their built-ins, but the drain
 # (``execution.subtask_drain``) and resolver (``execution.resolver``) are
 # mechanism that must route on the recorded tool name — a byte written on the
-# EventLog long before this migration — so the NAME cannot live in a plugin (the
-# kernel would then depend on ``noeta.builtins``). Same acknowledged residue class
-# as the ``POLICY_REF ("react", "1")`` pin: the kernel names the default wire
-# vocabulary it cannot avoid touching. ``concurrent_fanout_enabled`` stays here
-# for the same reason — its two readers live in DIFFERENT plugins (delegation +
-# react), so the shared neutral switch is the kernel's, not either plugin's.
+# EventLog — so the NAME cannot live in a plugin (the kernel would then depend on
+# ``noeta.builtins``). Same residue class as the ``POLICY_REF ("react", "1")``
+# pin: the kernel names the default wire vocabulary it cannot avoid touching.
+# ``concurrent_fanout_enabled`` stays here for the same reason — its two readers
+# live in DIFFERENT plugins (delegation + react), so the shared neutral switch is
+# the kernel's, not either plugin's.
 # ===========================================================================
 
-#: Phase 4.5 Issue C — the model-visible **control** tool name a coding
-#: parent calls to delegate to a named sub-agent. It is NOT an executable
-#: workspace tool: the ``delegation`` built-in's translation seam turns a single
-#: ``ToolUseBlock(tool_name=SPAWN_SUBAGENT_TOOL)`` into a
-#: ``SpawnSubtaskDecision`` and the ToolRuntime never invokes it. The name stays
-#: kernel-side because ``execution.subtask_drain`` routes on it (D8): the drain
-#: is mechanism that must match the recorded tool name.
+#: The model-visible **control** tool name a coding parent calls to delegate to a
+#: named sub-agent. It is NOT an executable workspace tool: the ``delegation``
+#: built-in's translation seam turns a single
+#: ``ToolUseBlock(tool_name=SPAWN_SUBAGENT_TOOL)`` into a ``SpawnSubtaskDecision``
+#: and the ToolRuntime never invokes it. The name stays kernel-side because
+#: ``execution.subtask_drain`` routes on it: the drain is mechanism that must
+#: match the recorded tool name.
 SPAWN_SUBAGENT_TOOL = "spawn_subagent"
 
 #: Model-visible **control** tool name: launch a model-authored orchestration
@@ -264,7 +203,7 @@ SPAWN_SUBAGENT_TOOL = "spawn_subagent"
 #: ``control_tool`` translate turns it into a ``SpawnSubtaskDecision`` whose child
 #: carries the orchestration interpreter Policy — same family / plumbing as
 #: ``spawn_subagent``. The NAME stays kernel-side because
-#: ``execution.subtask_drain`` routes on it (D8).
+#: ``execution.subtask_drain`` routes on it.
 RUN_WORKFLOW_TOOL = "run_workflow"
 
 #: Reserved ``agent_name`` carried by the ``run_workflow`` → ``SpawnSubtaskDecision``
@@ -274,18 +213,18 @@ RUN_WORKFLOW_TOOL = "run_workflow"
 #: to the PermissionGuard ``allowed_subtask_agents`` allow-list (so the
 #: orchestration spawn passes) but NOT to the model-facing ``spawn_subagent``
 #: directory — the model reaches a workflow only through ``run_workflow``. Stays
-#: kernel-side because ``execution.resolver`` routes on it (D8), and naming it
-#: here lets the translation seam reference it without importing ``orchestration``
+#: kernel-side because ``execution.resolver`` routes on it, and naming it here
+#: lets the translation seam reference it without importing ``orchestration``
 #: (which would cycle through ``react``).
 WORKFLOW_AGENT_NAME = "__workflow__"
 
 
-#: fan-out v2 master switch — now **default ON**.
+#: fan-out master switch — **default ON**.
 #: Both the ``spawn_subagent`` fan-out (in the ``delegation`` built-in's
 #: ``_maybe_spawn_decision``) and the workflow ``parallel()``
 #: (``orchestration.parallel``) read this one judgment, so a single env var is
 #: the escape valve: set ``NOETA_SUBTASK_CONCURRENCY`` to
-#: ``0``/``false``/``off``/``no`` to force the legacy sequential drain. Unset (or
+#: ``0``/``false``/``off``/``no`` to force a sequential drain. Unset (or
 #: anything unrecognized) ⇒ concurrent.
 #:
 #: Stays kernel-side (not in either plugin) precisely because the two consumers
@@ -301,9 +240,9 @@ def concurrent_fanout_enabled() -> bool:
 
     Default ON: an unset (or unrecognized) ``NOETA_SUBTASK_CONCURRENCY`` means
     concurrent; only an explicit ``0``/``false``/``off``/``no`` (case-insensitive,
-    whitespace-trimmed) forces the legacy sequential drain. A sequential group's
+    whitespace-trimmed) forces a sequential drain. A sequential group's
     ``SubtaskGroupCompleted`` carries no ``concurrent`` field (conditionally
-    folded in the Engine), so it stays byte-identical to a pre-v2 recording.
+    folded in the Engine), so it stays byte-identical to a sequential recording.
     """
     return os.environ.get(_SUBTASK_CONCURRENCY_ENV, "").strip().lower() not in {
         "0", "false", "off", "no",

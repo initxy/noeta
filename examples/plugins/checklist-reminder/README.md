@@ -1,43 +1,75 @@
-# `checklist-reminder` — a compose-time reminder (track B)
+# `checklist-reminder` — nudge the agent when its checklist gets long
 
-A first-party example [manifest plugin](../../../docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md)
-demonstrating the new **`reminder`** surface — **track B** (spec D8): a
-compose-time, **pure** reminder. A `reminder` is `(name, priority, render)` where
-`render` is a *pure function of a narrow folded-state projection* returning
-`str | None`, rendered at the **tail of the dynamic suffix** (the composer wraps
-a non-`None` string in one `<system-reminder>` message). The stable prefix is
-untouched by construction.
+An example manifest plugin that contributes one render on the **`reminder`**
+surface. It exists to show the cheapest way to steer an agent's behaviour: a few
+lines of pure Python that append a sentence to the composed request when — and
+only when — a condition in the folded state holds.
 
-Purity is the contract (the same trust class as a `ContentKindSpec` renderer): no
-clock, no randomness, no external fetch — so the same folded state always
-composes the same bytes, and replay / the KV-cache prefix stay reproducible.
+Here the condition is a checklist with more than five unfinished items, and the
+sentence suggests delegating the independent ones to sub-agents instead of
+grinding the whole list in one long context.
 
-## What it renders
+## What a reminder is
 
-When the agent's checklist grows past `THRESHOLD` unfinished items, it appends a
-scope-hygiene nudge — a pure function of the projection's `todos`. A short or
-finished list renders nothing (self-limiting, never nags). Its `priority=400`
-places it **after** the three built-in reminders (`unfinished-todos` 100,
-`delegation-nudge` 200, `read-suggestion` 300).
+`(name, priority, render)`, where `render` maps a narrow projection of folded
+state to `str | None`. A non-`None` string is wrapped in one
+`<system-reminder>` message at the **tail of the dynamic suffix**, so the stable
+prefix is untouched by construction.
 
-The `render` reads the composer's narrow `ReminderView` projection by duck typing
-(only `view.todos`), so the example stays on the `noeta.sdk` public surface.
+Purity is the contract — no clock, no randomness, no external fetch. The same
+folded state must compose the same bytes, or replay diverges and the cached
+stable prefix stops holding. A reminder that genuinely needs the outside world
+belongs on `reminder_provider`, where the output is recorded once and folded
+back from the ledger on resume.
 
-## Note on wiring
+Returning `None` renders nothing, which is what keeps this reminder
+self-limiting: a short or finished list is silent, so the nudge cannot decay
+into noise the model learns to skip.
 
-`reminder` is a **per-agent activation** surface (spec D6): the Client folds an
-activated plugin's renders into that agent's composer reminder registry, and an
-agent that did not activate the plugin renders none of them. Name your plugin in
-`Options.plugins` (or an `AgentDefinition.plugins`) to switch it on — the
-[reference host](../../reference-host/README.md) does exactly that.
+`priority=400` places it after the three built-in reminders (`unfinished-todos`
+100, `delegation-nudge` 200, `read-suggestion` 300) — an advisory note should
+not displace the ones the agent acts on.
 
-Unit-tested against the runtime `ReminderRegistry` in
-[`tests/test_example_new_surfaces.py`](../../../tests/test_example_new_surfaces.py);
-the end-to-end path (activate → the text ships in the composed request) is pinned
-by [`tests/test_plugin_wiring_contract.py`](../../../tests/test_plugin_wiring_contract.py).
-The built-in reminders already ride this surface (the `reminders` built-in plugin).
+The render reads the projection by duck typing (`view.todos` only), which keeps
+this example dependent on nothing outside `noeta.sdk`.
 
-## Verify the shipped manifest
+## Loading and activating it
+
+`reminder` is a **per-agent** surface: loading the plugin is not enough, an agent
+must also activate it by name. An agent that does not activate the plugin
+renders none of its reminders.
+
+```python
+import dataclasses
+from noeta.sdk import Client, load_plugins, presets
+
+pset = load_plugins(builtins=False, modules=["examples/plugins/checklist-reminder/plugin.py"])
+base = presets.main_options()
+options = dataclasses.replace(base, plugins=tuple(base.plugins) + ("checklist-reminder",))
+client = Client(options, plugins=pset)
+```
+
+The activation key is the builder name — `PluginBuilder("checklist-reminder")` —
+not the filename. The [reference host](../../reference-host/README.md) activates
+its plugins the same way.
+
+A real distribution ships the `[tool.noeta]` manifest mirrored into
+[`noeta-plugin.toml`](./noeta-plugin.toml) as wheel package data, plus an entry
+point in the `noeta.plugins` group (see [`pyproject.toml`](./pyproject.toml));
+a host then discovers it with `load_plugins(entry_points=True)`.
+
+The built-in reminders ride this same surface — they are contributions of the
+`reminders` built-in plugin, not a privileged path.
+
+## Files
+
+- [`plugin.py`](./plugin.py) — the render and the single-file `PluginBuilder`
+  manifest.
+- [`noeta-plugin.toml`](./noeta-plugin.toml) — the shipped static manifest the
+  loader reads without importing plugin code.
+- [`pyproject.toml`](./pyproject.toml) — the packaging convention (not built here).
+
+Keep the two manifests in agreement with:
 
 ```bash
 python -m noeta.sdk.plugin_check examples/plugins/checklist-reminder

@@ -1,12 +1,12 @@
-"""Test matrix for :class:`noeta.builtins.providers.impl.openai_responses.OpenAIResponsesProvider`.
+"""Guards :class:`noeta.builtins.providers.impl.openai_responses.OpenAIResponsesProvider`
+against the Responses wire shape: request assembly, the stop_reason priority
+table, usage accounting, error classification, reasoning continuation, and image
+inlining.
 
-Adapter foundation (text part):
-a tracer bullet of text in, text out. All HTTP traffic goes through a ``respx`` mock;
-the suite makes zero real network calls.
-
-Tools (03), reasoning (04), and images (05) are out of scope here, but the full
-stop_reason priority table is covered (including tool_use priority, even though the
-text path never triggers it).
+The Responses shape diverges from Chat Completions in ways that are easy to get
+subtly wrong (top-level ``function_call`` items, echoed encrypted reasoning,
+data-URI images), so every adapter rule gets a dedicated case. All HTTP traffic
+goes through a ``respx`` mock; the suite makes zero real network calls.
 """
 
 from __future__ import annotations
@@ -39,11 +39,9 @@ from noeta.protocols.values import ContentRef
 from noeta.builtins.providers.impl.openai_responses import OpenAIResponsesProvider
 
 
-# base_url IS the complete responses endpoint
-# (re-probed and corrected 2026-06-12): the provider POSTs directly to that URL, adding only the
-# ?api-version query, and does NOT append a /openai/responses path (in practice, appending the path
-# fails, whereas POSTing the URL as-is returns 200). So ENDPOINT and BASE_URL are the same URL, and
-# the endpoint path already contains .../responses.
+# base_url IS the complete responses endpoint: the provider POSTs to that URL as-is, adding only the
+# ?api-version query. Appending a /openai/responses path would produce a doubled segment that a real
+# gateway rejects, so ENDPOINT and BASE_URL are deliberately the same string.
 BASE_URL = "https://gateway.test/api/modelhub/online/responses"
 ENDPOINT = BASE_URL
 
@@ -87,11 +85,12 @@ def _responses_payload(
     extra_output: list[dict[str, Any]] | None = None,
     usage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a Responses-style response.
+    """Build a Responses-style response body.
 
     ``texts`` → one ``message`` item whose ``content[]`` holds that many
-    ``output_text`` segments (None → no message item). ``extra_output`` is appended
-    to the end of the output array (e.g. inserting a function_call item to test priority).
+    ``output_text`` segments (None → no message item at all). ``extra_output`` is
+    appended after it, which is how a ``function_call`` item gets placed to exercise
+    the stop_reason priority table.
     """
     output: list[dict[str, Any]] = []
     if texts is not None:
@@ -282,8 +281,8 @@ def test_temperature_and_max_output_tokens_wired() -> None:
 
 @respx.mock
 def test_default_max_tokens_used_when_request_has_none() -> None:
-    # A host-configured default fills in max_output_tokens so a request without
-    # its own cap no longer inherits the gateway's (small) default and truncates.
+    # A host-configured default fills in max_output_tokens so a request without its own
+    # cap does not silently inherit the gateway's small default and truncate.
     route = respx.post(ENDPOINT).mock(
         return_value=httpx.Response(200, json=_responses_payload(texts=["ok"]))
     )
@@ -369,19 +368,16 @@ def test_api_version_appended_as_query_param() -> None:
 
     req = route.calls[0].request
     assert req.url.params["api-version"] == "2026-03-01-preview"
-    # base_url IS the full endpoint: the POST path is the endpoint path itself, with NO extra
-    # /openai/responses segment (re-probed).
+    # The POST path is base_url's own path, with no extra /openai/responses segment.
     assert req.url.path == "/api/modelhub/online/responses"
 
 
 @respx.mock
 def test_endpoint_path_is_base_url_unchanged_no_doubled_segment() -> None:
-    """The provider POSTs base_url directly and does NOT append a /openai/responses path.
+    """base_url is already the full responses endpoint, so the POST path must equal it exactly.
 
-    Re-probed evidence: in the real gateway, base_url is already the full responses endpoint;
-    appending the path fails, whereas POSTing as-is returns 200
-    (corrected 2026-06-12). This pins the
-    endpoint path to exactly base_url's path, with no duplicated .../responses/openai/responses segment.
+    Appending /openai/responses yields .../responses/openai/responses, which a real gateway
+    rejects; this pins the path against that mistake.
     """
     route = respx.post(ENDPOINT).mock(
         return_value=httpx.Response(200, json=_responses_payload(texts=["ok"]))
@@ -417,7 +413,7 @@ def test_trailing_slash_in_base_url_is_normalised() -> None:
 
 def test_default_timeout_is_300_seconds() -> None:
     provider = _make_provider()
-    # High-effort reasoning routinely takes ~80s, so the default must allow a full 300s (probed).
+    # High-effort reasoning routinely takes ~80s, so the default must allow a full 300s.
     assert provider._client.timeout.read == 300.0
 
 
@@ -474,7 +470,7 @@ def test_incomplete_max_output_tokens_maps_to_max_tokens() -> None:
 
 @respx.mock
 def test_incomplete_max_output_tokens_beats_partial_function_call() -> None:
-    """max_tokens wins over a partial function_call (consistent with Chat's length precedent)."""
+    """A truncated turn reports max_tokens even when it also carries a partial function_call."""
     payload = _responses_payload(
         texts=None,
         status="incomplete",
@@ -1081,7 +1077,7 @@ def test_inbound_function_call_maps_to_tool_use_block() -> None:
 
 @respx.mock
 def test_inbound_call_id_taken_from_call_id_not_internal_id() -> None:
-    """The pairing id comes from the call_id field, NOT the internal id (probing shows both coexist)."""
+    """A function_call item carries both ``id`` and ``call_id``; only ``call_id`` pairs with the result."""
     payload = _responses_payload(
         texts=None,
         status="completed",
@@ -1130,11 +1126,11 @@ def test_inbound_text_and_function_call_both_in_content() -> None:
 
 @respx.mock
 def test_inbound_invalid_json_arguments_raises_value_error() -> None:
-    """Invalid JSON arguments → MalformedToolArgumentsError.
+    """Invalid JSON arguments raise ``MalformedToolArgumentsError``.
 
-    Still a ``ValueError`` (so this wording/type contract is unchanged), but
-    additionally a ``TransientError`` so RuntimeLLMClient retries a truncated
-    tool-call stream on its transient budget instead of failing the task fatally.
+    It is deliberately both a ``ValueError`` and a ``TransientError``: a truncated
+    tool-call stream deserves a retry on RuntimeLLMClient's transient budget instead
+    of failing the task fatally.
     """
     from noeta.protocols.errors import MalformedToolArgumentsError, TransientError
 
@@ -1422,8 +1418,7 @@ def test_inbound_reasoning_maps_to_thinking_block() -> None:
             )
         ],
     )
-    # The reasoning item should come before the message (probing shows reasoning precedes the
-    # answer), so put it first in the array.
+    # The gateway emits the reasoning item ahead of the answer, so mirror that order here.
     payload["output"] = [payload["output"][-1], payload["output"][0]]
     respx.post(ENDPOINT).mock(return_value=httpx.Response(200, json=payload))
     response = _make_provider().complete(_basic_request())
@@ -1502,7 +1497,6 @@ def test_outbound_thinking_block_becomes_reasoning_item_default_on() -> None:
         "role": "user",
         "content": [{"type": "input_text", "text": "hard problem"}],
     }
-    # reasoning item sent back, summary segment refilled from block.text, encrypted_content=signature.
     assert body["input"][1] == {
         "type": "reasoning",
         "encrypted_content": enc,
@@ -1517,9 +1511,8 @@ def test_outbound_thinking_block_becomes_reasoning_item_default_on() -> None:
 
 @respx.mock
 def test_outbound_reasoning_item_placed_before_function_call() -> None:
-    """The reasoning item comes before this turn's function_call (per the 0033 re-attach: the
-    thinking chain is re-attached into the View before tool_use, and the provider serializes in
-    appearance order)."""
+    """The reasoning item precedes this turn's function_call: the thinking chain sits before
+    tool_use in the View, and the provider serializes in appearance order."""
     route = respx.post(ENDPOINT).mock(
         return_value=httpx.Response(200, json=_responses_payload(texts=["ok"]))
     )
@@ -1552,7 +1545,7 @@ def test_outbound_reasoning_item_placed_before_function_call() -> None:
 
 @respx.mock
 def test_outbound_thinking_block_dropped_when_continuation_off() -> None:
-    """reasoning_continuation="off" → no reasoning item sent back (symmetric with Chat's default off)."""
+    """reasoning_continuation="off" → the ThinkingBlock is not echoed back at all."""
     route = respx.post(ENDPOINT).mock(
         return_value=httpx.Response(200, json=_responses_payload(texts=["ok"]))
     )
@@ -1572,7 +1565,6 @@ def test_outbound_thinking_block_dropped_when_continuation_off() -> None:
     body = json.loads(route.calls[0].request.content)
     types = [item["type"] for item in body["input"]]
     assert "reasoning" not in types
-    # Text still becomes a message item as usual.
     assert body["input"] == [
         {
             "type": "message",
@@ -1608,7 +1600,6 @@ def test_outbound_thinking_block_without_signature_not_echoed() -> None:
     body = json.loads(route.calls[0].request.content)
     types = [item["type"] for item in body["input"]]
     assert "reasoning" not in types
-    # The rest of the assistant turn is unaffected.
     assert {
         "type": "message",
         "role": "assistant",
@@ -1617,16 +1608,14 @@ def test_outbound_thinking_block_without_signature_not_echoed() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 14. Images go live: ImageBlock → input_image data URI + image_resolver (issue 05)
+# 14. Images: ImageBlock → input_image data URI + image_resolver
 # ---------------------------------------------------------------------------
 #
-# In the ledger, an ImageBlock carries only a small ContentRef handle. At wire-assembly time the
-# provider derefs it with the injected narrow resolver (ContentRef→bytes), base64-encodes it, and
-# inlines it as {type:input_image,image_url:"data:<media>;base64,<…>"}. The base64 appears ONLY in
-# the outgoing wire body and is never written back to the ledger/ContentStore
-# (red line). The inline primitive is general:
-# it walks ImageBlocks at ANY message position (not just the last user turn), paving the way at zero
-# cost for future pull (an image-reading tool returning images).
+# An ImageBlock carries only a small ContentRef handle. At wire-assembly time the provider derefs it
+# through the injected resolver (ContentRef→bytes), base64-encodes it, and inlines it as
+# {type:input_image,image_url:"data:<media>;base64,<…>"}. The base64 exists only in the outgoing
+# wire body and is never written back to the ContentStore. Inlining walks ImageBlocks at ANY message
+# position, not just the last user turn, so a tool that returns images needs no extra plumbing.
 
 
 # Real bytes of a 1x1 transparent PNG (small enough, unambiguous media type), content-addressed into a ContentRef.
@@ -1648,10 +1637,10 @@ _VISION_MODEL = "gpt-5.4-2026-03-05"
 
 
 def _fake_resolver(known: dict[ContentRef, bytes]):
-    """Build a narrow resolver: look up bytes by ContentRef (simulating content_store.get).
+    """Look up bytes by ContentRef, standing in for ``content_store.get``.
 
-    Note the provider only receives this Callable; it does NOT hold a ContentStore, keeping it pure
-    (red line).
+    The provider is handed only this Callable and never a ContentStore, which is what keeps
+    it a pure translation layer.
     """
 
     def _resolve(ref: ContentRef) -> bytes:
@@ -1731,8 +1720,8 @@ def test_image_data_uri_prefix_and_base64_payload_correct() -> None:
 
 @respx.mock
 def test_image_block_in_historical_non_last_message_is_inlined() -> None:
-    """The inline primitive walks ANY message position: an ImageBlock in history (not the last
-    turn) is also inlined, paving the way at zero cost for future pull (a tool returning images)."""
+    """Inlining walks ANY message position: an ImageBlock in history, not just in the last
+    turn, is inlined too."""
     route = respx.post(ENDPOINT).mock(
         return_value=httpx.Response(200, json=_responses_payload(texts=["ok"]))
     )
@@ -1742,20 +1731,17 @@ def test_image_block_in_historical_non_last_message_is_inlined() -> None:
     request = _basic_request(
         model=_VISION_MODEL,
         messages=[
-            # First user turn in history with an image (not the last message).
             Message(
                 role="user",
                 content=[TextBlock(text="look at this"), ImageBlock(source=_PNG_REF)],
             ),
             Message(role="assistant", content=[TextBlock(text="got it")]),
-            # Last user turn, plain text.
             _user_message("one more question"),
         ],
     )
     provider.complete(request)
 
     body = json.loads(route.calls[0].request.content)
-    # The image in the first historical user turn is inlined.
     assert body["input"][0]["content"] == [
         {"type": "input_text", "text": "look at this"},
         {
@@ -1763,7 +1749,6 @@ def test_image_block_in_historical_non_last_message_is_inlined() -> None:
             "image_url": _data_uri("image/png", _PNG_BYTES),
         },
     ]
-    # The last plain-text user turn stays a single input_text (bytes unchanged).
     assert body["input"][2] == {
         "type": "message",
         "role": "user",
@@ -1773,9 +1758,7 @@ def test_image_block_in_historical_non_last_message_is_inlined() -> None:
 
 @respx.mock
 def test_image_block_in_assistant_message_is_inlined() -> None:
-    """An ImageBlock in an assistant turn also goes through the inline primitive (general
-    push/pull, not bound to user turns), paving the way for images returned by a future
-    image-reading tool down the assistant/tool path."""
+    """Inlining is not bound to user turns: an ImageBlock in an assistant turn is inlined too."""
     route = respx.post(ENDPOINT).mock(
         return_value=httpx.Response(200, json=_responses_payload(texts=["ok"]))
     )
@@ -1864,11 +1847,10 @@ def test_image_block_without_resolver_raises_clear_error() -> None:
 
 
 def test_provider_holds_only_resolver_not_content_store() -> None:
-    """The provider is pure (red line): it holds only the narrow resolver Callable, NOT a
-    ContentStore / StepContext."""
+    """The provider stays pure: it holds the resolver Callable and nothing wider, so it can
+    never reach into a ContentStore or a StepContext on its own."""
     resolver = _fake_resolver({_PNG_REF: _PNG_BYTES})
     provider = _make_provider(image_resolver=resolver)
-    # It holds exactly the injected resolver; no content store on any other instance attribute.
     assert provider._image_resolver is resolver
     for name, value in vars(provider).items():
         type_name = type(value).__name__
@@ -1882,8 +1864,7 @@ def test_provider_holds_only_resolver_not_content_store() -> None:
 
 @respx.mock
 def test_text_only_message_unchanged_when_resolver_present() -> None:
-    """Resolver present but no image in the message → the plain-text path's bytes are unchanged
-    (a single input_text; red line: the old serialization is untouched)."""
+    """A configured resolver must not perturb the plain-text path: still a single input_text."""
     route = respx.post(ENDPOINT).mock(
         return_value=httpx.Response(200, json=_responses_payload(texts=["ok"]))
     )
@@ -1904,10 +1885,9 @@ def test_text_only_message_unchanged_when_resolver_present() -> None:
 
 @respx.mock
 def test_image_bytes_not_written_back_resolver_called_per_request() -> None:
-    """Red-line check: base64 appears only once in the wire body, while the account side stays a
-    ContentRef (the ImageBlock is not rewritten); the resolver is called to deref on each wire
-    assembly, and the ledger never caches base64. Reusing the same request twice and seeing the
-    resolver called each time is indirect evidence that the deref is transient and not written back."""
+    """Deref is transient: the resolver runs once per wire assembly and the ImageBlock keeps its
+    ContentRef, so base64 never leaks into recorded state. Sending the same request twice and
+    counting resolver calls is what makes a write-back visible if one ever creeps in."""
     respx.post(ENDPOINT).mock(
         return_value=httpx.Response(200, json=_responses_payload(texts=["ok"]))
     )
@@ -1926,9 +1906,8 @@ def test_image_bytes_not_written_back_resolver_called_per_request() -> None:
     provider.complete(request)
     provider.complete(request)
 
-    # Each of the two requests derefs once (no caching written back to the ledger/ContentStore).
+    # Two sends, two derefs: nothing was cached back onto the block.
     assert calls == [_PNG_REF, _PNG_REF]
-    # The account-side ImageBlock still carries only a ContentRef, not rewritten into a base64 form.
     assert request.messages[0].content[0] == ImageBlock(source=_PNG_REF)
     assert request.messages[0].content[0].source is _PNG_REF
 
@@ -1937,11 +1916,10 @@ def test_image_bytes_not_written_back_resolver_called_per_request() -> None:
 # 15. Vision capability guard
 # ---------------------------------------------------------------------------
 #
-# A safety net once ImageBlock joined the union type: a request with an image but a non-vision
-# target model → FatalError before going on the wire, so we don't blindly send images to a model
-# that can't read them. The guard looks up request.model in catalog.CATALOG (after alias
-# resolution); a missing model or supports_vision False counts as non-vision. The guard runs BEFORE
-# wire assembly: a non-vision model with an image shouldn't emit even one HTTP request.
+# A request carrying an image whose target model cannot read images fails with FatalError before
+# anything goes on the wire, instead of burning a call the model would answer blind. The guard
+# resolves request.model against catalog.CATALOG (after alias resolution); an unknown model or
+# supports_vision False counts as non-vision.
 
 
 @respx.mock
@@ -2029,8 +2007,8 @@ def test_image_with_vision_model_passes_guard_and_sends() -> None:
 
 @respx.mock
 def test_text_only_request_with_non_vision_model_passes_guard() -> None:
-    """The guard checks the catalog only when an image is actually present: a plain-text request +
-    non-vision model passes as usual (the old path is unaffected, zero overhead)."""
+    """The guard consults the catalog only when an image is present, so a plain-text request to a
+    non-vision model still goes through."""
     route = respx.post(ENDPOINT).mock(
         return_value=httpx.Response(200, json=_responses_payload(texts=["ok"]))
     )
@@ -2041,9 +2019,8 @@ def test_text_only_request_with_non_vision_model_passes_guard() -> None:
 
 @respx.mock
 def test_text_only_request_with_unregistered_model_passes_guard() -> None:
-    """Plain text + unregistered model also passes as usual: the guard doesn't check the catalog
-    for plain-text requests (many existing text/tool tests use gpt-5.4, which is outside the
-    catalog, and must not be caught by the guard)."""
+    """Plain text + an unregistered model passes too: most text/tool cases here use gpt-5.4, which
+    is outside the catalog, and the guard must not catch them."""
     route = respx.post(ENDPOINT).mock(
         return_value=httpx.Response(200, json=_responses_payload(texts=["ok"]))
     )
@@ -2056,13 +2033,12 @@ def test_text_only_request_with_unregistered_model_passes_guard() -> None:
 # 16. Tool-result images: ToolResultBlock.images → function_call_output array
 # ---------------------------------------------------------------------------
 #
-# The read tool reading a .png surfaces the image on ToolResultBlock.images. When the bound model is
-# vision-capable, the provider deref→base64-inlines each image and turns the function_call_output's
-# output from a plain string into a content-part array: [{input_text}, {input_image}, ...] (probed
-# against a real gateway: HTTP 200 + the model actually sees the image). A non-vision model (or a
-# missing resolver) degrades to the plain string output with a note appended — never crashing. A
-# tool-result image rides inside ToolResultBlock.images, NOT a top-level ImageBlock, so it is
-# invisible to _guard_vision_capability; the degrade is the dedicated gate.
+# The read tool opening a .png surfaces the image on ToolResultBlock.images. For a vision-capable
+# model the provider deref→base64-inlines each image and the function_call_output's output becomes a
+# content-part array [{input_text}, {input_image}, ...] instead of a plain string. A non-vision model
+# or a missing resolver degrades to the plain string with a note appended, never a crash. These
+# images ride inside ToolResultBlock.images rather than as top-level ImageBlocks, so
+# _guard_vision_capability cannot see them and the degrade path is their only gate.
 
 
 def _tool_message_with_image(
@@ -2197,8 +2173,8 @@ def test_tool_result_image_without_resolver_degrades_to_string() -> None:
 
 @respx.mock
 def test_tool_result_without_images_output_unchanged_string() -> None:
-    """Regression: a ToolResultBlock with NO images keeps the plain string output, byte-for-byte
-    (the text-only tool path is untouched even with a vision model + resolver present)."""
+    """A ToolResultBlock with no images keeps its plain string output even when a vision model
+    and a resolver are both in play."""
     route = respx.post(ENDPOINT).mock(
         return_value=httpx.Response(200, json=_responses_payload(texts=["ok"]))
     )

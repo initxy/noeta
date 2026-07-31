@@ -1,24 +1,23 @@
-"""Issue 46 — skill indexing batches container IO into one tree snapshot.
+"""Skill indexing batches all container IO into one tree snapshot.
 
-Sandbox-mode ``SkillIndexer`` used one container round-trip per file
-(``rglob`` / ``is_file`` / ``read_text``), so ``seed_start`` scaled linearly
-with the number of files under the skill mounts (~minutes at a few dozen
-skills). ``load_workspace_skills`` now takes ONE ``ExecEnv.tree_snapshot``
-spanning every tier and hands it to each per-tier indexer.
+A per-file walk (``rglob`` / ``is_file`` / ``read_text``) makes ``seed_start``
+scale linearly with the number of files under the skill mounts — minutes at a
+few dozen skills when each call is a sandbox round-trip. ``load_workspace_skills``
+takes ONE ``ExecEnv.tree_snapshot`` spanning every tier and hands it to each
+per-tier indexer.
 
 Pinned here:
 
 * ``LocalExecEnv.tree_snapshot`` — the host reference semantics of the batch
   primitive (regular files only, missing roots skipped, named contents inlined
   byte-exact).
-* The prefetched indexer path produces a registry **equal** to the legacy
-  per-file container path (same descriptions — source_path, resources,
-  metadata — so the rendered ``semi_stable`` bytes cannot drift).
+* The prefetched indexer path produces a registry **equal** to the per-file
+  container path (same descriptions — source_path, resources, metadata — so the
+  rendered ``semi_stable`` bytes cannot drift).
 * ``load_workspace_skills`` performs exactly one snapshot call spanning all
   tiers and NO per-file container IO when the backend supports it.
-* Fallbacks: an ExecEnv without ``tree_snapshot`` (duck-typed fakes / older
-  backends) or a snapshot that raises falls back to the legacy per-file path —
-  correctness over speed.
+* An ExecEnv without ``tree_snapshot`` (duck-typed fakes) or a snapshot that
+  raises falls back to the per-file path — correctness over speed.
 """
 
 from __future__ import annotations
@@ -40,7 +39,7 @@ _TIDY = b"---\nname: tidy\ndescription: workspace tidy\n---\n\nTidy body.\n"
 
 
 class CountingContainer:
-    """In-memory container fs exposing the legacy per-file ExecEnv surface,
+    """In-memory container fs exposing the per-file ExecEnv surface,
     counting every call so tests can assert which path the indexer took."""
 
     def __init__(self, files: dict[str, bytes]) -> None:
@@ -173,7 +172,7 @@ def test_local_tree_snapshot_follows_dir_symlinks_without_looping(
 
 
 # --------------------------------------------------------------------------- #
-# prefetched indexer path ≡ legacy per-file container path
+# prefetched indexer path ≡ per-file container path
 # --------------------------------------------------------------------------- #
 
 
@@ -228,8 +227,8 @@ def test_load_workspace_skills_takes_one_snapshot_and_no_per_file_io() -> None:
 
 
 def test_load_workspace_skills_falls_back_without_tree_snapshot() -> None:
-    # A duck-typed ExecEnv without the batch primitive (older backends, test
-    # fakes) keeps working on the legacy per-file path.
+    # A duck-typed ExecEnv without the batch primitive (test fakes) keeps
+    # working on the per-file path.
     container = CountingContainer(_TIER_FILES)
     registry = load_workspace_skills(
         Path("/workspace"),

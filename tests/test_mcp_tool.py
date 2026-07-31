@@ -1,8 +1,10 @@
-"""Phase 4.5 F2 — MCP name mapping, wrapper result mapping, spec extraction.
+"""MCP tool naming, result mapping, and request-side spec extraction.
 
-Pure-unit coverage of the provider-safe name mapping + collision
-fail-fast, the `McpTool.invoke` result mapping, and the R-1 spec
-extraction (filter + order).
+A remote tool name is rewritten into a provider-safe ``mcp__<alias>__<tool>``
+form, so the collision and length rules have to fail fast at build time rather
+than hand the model two tools answering to one name. The result mapping
+(including the offload of an oversized body) and the extraction that filters
+MCP specs out of a request in order are pinned alongside it.
 """
 
 from __future__ import annotations
@@ -106,7 +108,7 @@ def test_build_empty_is_noop() -> None:
     assert tools == {} and clients == []
 
 
-# -- per-server tool subset (issue 02) -------------------------
+# -- per-server tool subset -------------------------------------------------
 
 
 def _multi_spec(
@@ -154,8 +156,8 @@ def test_build_subset_empty_keeps_nothing() -> None:
 
 
 def test_build_subset_unknown_name_is_silently_dropped() -> None:
-    # A ticked name the server no longer advertises just yields no tool —
-    # never a fail-fast (the live world may have dropped it).
+    # A ticked name the server does not advertise just yields no tool, never a
+    # fail-fast: the subset is a wish list against a server we do not control.
     tools, clients, _skipped = build_mcp_tools((_multi_spec(subset=("alpha", "ghost")),))
     try:
         assert set(tools) == {"mcp__fake__alpha"}
@@ -218,7 +220,7 @@ def test_result_mapping_counts_non_text() -> None:
     assert res.output.get("non_text_blocks") == 1
 
 
-# -- R-1 extraction ---------------------------------------------------------
+# -- request-side spec extraction -------------------------------------------
 
 
 def _req_tools(*names: str) -> list[dict[str, Any]]:

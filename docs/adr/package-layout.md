@@ -1,38 +1,40 @@
-# Packages split by consumer role + layered import topology enforced by import-linter
+# Two distributions over one PEP 420 namespace, with the layer topology enforced by import-linter on import paths
 
 ## Context
 
-How to draw package boundaries is a recurring question: splitting by physical layer turns a single cross-package dataclass change into a painful multi-package coordination exercise; not splitting at all forces a remote caller to drag in the entire runtime dependency set. This decision settles on "split packages by consumer role, and let import-linter enforce the layered topology."
-
-The number and naming of physical packages later evolved into the three-layer runtime/sdk/product model; the final form is in `docs/adr/library-sdk-architecture.md`. The splitting criteria, layered import topology, placement of the storage seam at L0, and on-demand dependency installation described below all still hold.
+Boundaries have to bind mechanically, or they are decoration. Three constraints shape how they are drawn: a cross-cutting dataclass change must not become a multi-package coordination exercise; an embedder must not inherit dependencies for machinery it does not use; and the storage backend must be replaceable without touching call sites.
 
 ## Decision
 
-Package boundaries are **drawn by "who consumes it,"** not by physical layer. The current state is three core packages sharing the `noeta.` top level (PEP 420 namespace): `noeta-runtime` (the kernel: protocols / core / context / runtime / storage / providers / guards / observers), `noeta-sdk` (AgentSpec / registry / policies / tools / execution), and the product shell (the HTTP/SSE host in `apps/noeta-agent`).
+Two distributions, `noeta-runtime` and `noeta-sdk`, both contribute subpackages to the shared PEP 420 `noeta.` namespace. `noeta-runtime` is dependency-free — stdlib only, no HTTP client and no database driver. Every third-party dependency rides `noeta-sdk`, alongside the capability implementations that need it.
 
-- **The L0..L3 import topology is enforced by `.importlinter`, not by physically splitting packages.** L0 depends on nothing else in the project; upper layers may only depend downward; constraints like "no import edges within a layer" are written as forbidden contracts (the `layers` topology governs only up/down).
-- **A downstream remote caller installs only the layer it needs**: a pure remote client should not be forced to drag in runtime dependencies like sqlite / anthropic / fastapi. A replaceable backend goes through an optional dependency (installed on demand).
-- **The typed boundary of the storage seam lives at L0**: the `EventLog` / `ContentStore` / `Dispatcher` / `LeaseRegistry` Protocols live in `noeta.protocols`, and the concrete adapters (InMemory / Sqlite) live in `noeta.storage`. Production code sees only the Protocols; the `.importlinter` `storage-adapters-isolated` contract forbids any kernel layer from importing `noeta.storage` (details in `docs/adr/storage-protocols-l0.md`).
+Layering is an **import constraint**, not a package carve-up. `.importlinter` enforces it against import paths, which stay invariant regardless of which wheel ships a module:
+
+- The `layers` contract stacks `noeta.protocols` (L0, importing nothing else in the project), `noeta.core`, `noeta.agent.spec`, `noeta.agent.registry`, the kernel-services band (`runtime` / `storage` / `observers` / `read_models`), the materials band (`context` / `policies` / `tools`), `noeta.execution`, `noeta.client`, `noeta.builtins` with `noeta.presets`, and `noeta.sdk` on top. Upper layers may depend downward only.
+- What a layer stack cannot express is written as `forbidden` contracts: `noeta.protocols` importing no in-project module, `noeta.core` reaching only `noeta.protocols`, the kernel vocabulary modules staying on protocols, `noeta.observers` and `noeta.read_models` isolated, and SDK core barred from `noeta.presets`.
+- `sdk-core-not-builtins` forbids every band from statically importing `noeta.builtins`. The plugin loader's dynamic `ref` resolution is the only doorway into a built-in, and the lazy re-export modules `noeta.sdk.storage` and `noeta.sdk.providers` are how a host reaches an implementation by name.
+
+The typed storage boundary sits at L0: the `EventLog`, `ContentStore`, `Dispatcher`, and `LeaseRegistry` Protocols live in `noeta.protocols`. The kernel wheel holds the InMemory reference backend in `noeta.storage.memory` plus the shared domain rules every backend routes through in `noeta.storage.spi`; the durable sqlite and Postgres adapters are the `storage` built-in, reached through `noeta.sdk.storage`. Production code sees only the Protocols — `storage-adapters-isolated` forbids the kernel bands from importing `noeta.storage` at all.
 
 ## Rationale
 
-- **The splitting criterion is the consumer, not tidiness.** The number of packages serves the installer: a remote caller should not have to install the entire runtime backend just to use a typed client. Splitting by consumer role means each consumer can "install one package and get to work," which fits Python-ecosystem convention.
-- **Layering via import-linter rather than physical package splits saves maintenance.** Strictly carving L0-L3 into 16 packages would turn a single cross-package dataclass change into a painful multi-package coordination exercise; import-linter mechanically enforces the topology within a single monorepo, delivering all the binding force of layering without paying the multi-package tax. CI must run this contract, so any breach of the layering fails immediately.
-- **The storage seam lands at L0, so the backend is replaceable.** Pinning the three storage Protocols at L0 and having production code use only the Protocols means a new Sqlite/Postgres backend adapter also lands in `noeta.storage` with zero changes at the call sites.
+- **Import contracts give layering its binding force without the multi-package tax.** Carving the layers into their own distributions would turn a single cross-layer dataclass change into a release-ordering problem. A checker in the verification gate delivers the same discipline inside one repository, and a breach fails immediately rather than at review time.
+- **Path-based contracts survive re-homing.** Because the constraints name import paths and PEP 420 keeps those paths stable across distributions, which wheel ships a module is a packaging decision no contract has to re-litigate.
+- **A dependency-free kernel is what "install only what you need" actually means.** The driver ships with the adapter that needs it, and the lazy doorway means a host that picks sqlite never imports the Postgres driver, even though the wheel carries it.
+- **Storage Protocols at L0 make the backend genuinely swappable.** A new backend implements the Protocols, routes the shared rules through the SPI, and exposes a stack factory; nothing at a call site changes.
+- **Banning static imports of `noeta.builtins` keeps the kernel free of capability implementations.** With one dynamic doorway, a capability cannot quietly become a kernel dependency, and the doorway is the single place to enforce trust and configuration.
 
 ## Alternatives considered
 
-1. **16 fine-grained packages** (one module per package, strictly by L0-L3). Rejected: high maintenance cost, painful cross-package dataclass changes, and having to manage 16 `pyproject.toml` files before there is any real need.
-2. **One big package, everything stuffed into `noeta`.** Rejected: a remote caller is forced to install runtime dependencies like sqlite / anthropic / fastapi, violating "on demand."
-3. **Physically splitting into four packages by L0-L3** (`noeta-protocols` / `noeta-core` / `noeta-services` / `noeta-deployment`). Rejected: a single consumer has to install multiple packages just to get to work, which doesn't fit ecosystem convention — layering is an import constraint, not a burden the consumer has to assemble layer by layer.
+1. **One distribution per module or per layer.** Rejected: a dozen-plus `pyproject.toml` files to keep in sync, and cross-package changes become painful long before any consumer benefits.
+2. **One big package holding everything.** Rejected: every consumer inherits the full third-party dependency set, and there is no distribution boundary to hang a public surface on.
+3. **Physically splitting by layer into protocols / core / services / deployment distributions.** Rejected: a single consumer would have to install several packages to get started. Layering is a constraint the project enforces, not an assembly job pushed onto the user.
+4. **A registry of named storage backends inside the SDK.** Rejected: a third-party backend that implements the Protocols and ships a stack factory needs no entry anywhere, and a registry would only add a place to forget.
+5. **Depending on bare `psycopg` and leaving libpq to the user.** Rejected in favour of the binary distribution: zero-setup Postgres is worth more here than the flexibility, since the adapter loads only when a host chooses it.
 
 ## Consequences
 
-- The mechanical enforcement point is `.importlinter`: the `layers` topology plus forbidden contracts like `storage-adapters-isolated`.
-- L0's typed boundary (including the storage seam's Protocols) lives in `noeta.protocols.*`.
-- The one and only home for concrete storage adapters is `noeta.storage`, isolated by a forbidden contract.
-- The later evolution of package count/naming (the three layers runtime/sdk/app) is in `docs/adr/runtime-sdk-app-restructure.md`, which explains the relationship between shifting wheel membership and unchanged import paths.
-
-## Addendum — 2026-07-30: the durable storage adapters moved to the noeta-sdk wheel
-
-The storage-backend relocation re-drew "the one and only home for concrete storage adapters": the durable adapters now ship in **noeta-sdk** as `noeta.builtins.storage.impl.{sqlite,postgres}` (the declaration-only `storage` built-in; the public doorway is `noeta.sdk.storage`), while the kernel wheel keeps the InMemory reference backend (`noeta.storage.memory`) and the public backend SPI (`noeta.storage.spi`). The `psycopg[binary]` dependency moved with the postgres adapter, so the noeta-runtime wheel carries no database driver — exactly the "a consumer installs only what it needs" criterion this decision set. The rest holds: the storage Protocols stay at L0 in `noeta.protocols`, and `storage-adapters-isolated` still fences the kernel off `noeta.storage` (now the memory backend + SPI). One deliberate exception to "re-layering moves the distribution, not the import path": `noeta.storage.{sqlite,postgres,stacks}` are **hard breaks** (the owner waived compatibility) — the replacements are `noeta.sdk.storage` and the built-in impl modules, not PEP 420 re-homes.
+- The enforcement point is `.importlinter` — the `layers` contract plus the `forbidden` contracts named above — and it runs in the verification gate alongside the tests, type check, and naming lint.
+- The one typed boundary for storage, and for the project as a whole, is `noeta.protocols`.
+- The kernel wheel carries no database driver and no HTTP client, so an embedder of the engine alone inherits neither.
+- Import contracts stop at the repository edge; the half of the public surface that says user code imports only `noeta.sdk` is carried by wheel packaging (see `library-sdk-architecture.md`).

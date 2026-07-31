@@ -1,24 +1,22 @@
 """Memory consolidation — the host-side half of the background curation pass.
 
-Memory v2 phase 3 (spec: ``docs/implementation-specs/2026-07-10-memory-v2.md``;
-architecture: ``docs/adr/memory-consolidation.md``). Consolidation itself is an
-ordinary agent (``noeta.presets.CONSOLIDATION_AGENT``) driven as an ordinary
-root task on the resident worker pool; this module supplies everything the
-host needs around it:
+Consolidation itself is an ordinary agent (``noeta.presets.CONSOLIDATION_AGENT``)
+driven as an ordinary root task on the resident worker pool; this module supplies
+everything the host needs around it:
 
 * the **debounce marker** (``.consolidation-state.json`` in the memory root) —
   read/write helpers plus the pure :func:`consolidation_due` guard;
 * the **digest builder** (:func:`build_consolidation_digest`) — recent root
   sessions' conversational text, capped and tail-truncated, with the window and
   the caps stated in a header (no silent truncation);
-* the **run entry** (:func:`run_consolidation`) — decision #11's explicit
-  host-callable: debounce-check, build the digest, write the marker at enqueue
-  time, and seed the ``__consolidation__`` root task onto the ready queue.
+* the **run entry** (:func:`run_consolidation`) — the host-callable that
+  debounce-checks, builds the digest, writes the marker at enqueue time, and
+  seeds the ``__consolidation__`` root task onto the ready queue.
 
 Deep module, small surface: hosts call :func:`run_consolidation`; the helpers
-are exported for hosts that orchestrate their own schedule (and for tests).
-The runtime is untouched — everything here reads the public event stream and
-writes one dot-file next to the memory store.
+are exported for hosts that orchestrate their own schedule (and for tests). The
+runtime is untouched — everything here reads the public event stream and writes
+one dot-file next to the memory store.
 """
 
 from __future__ import annotations
@@ -37,10 +35,8 @@ from noeta.protocols.messages import TextBlock
 class _ConsolidationHost(Protocol):
     """The slice of ``Client`` this module drives — named, not duck-typed.
 
-    Everything here used to be reached through ``client: Any`` plus
-    ``getattr(obj, "attr", default)``, which meant a renamed accessor degraded
-    into "the digest is silently empty" instead of a type error, and nothing
-    told a future caller what a valid ``client`` even is.
+    Naming the slice keeps a renamed accessor a type error rather than a silently
+    empty digest, and tells a caller what a valid ``client`` is.
 
     The two private members are deliberate, documented couplings rather than
     accidents, so they are declared here instead of being reached for behind a
@@ -98,9 +94,8 @@ CONSOLIDATION_MARKER_FILENAME = ".consolidation-state.json"
 #: Default debounce threshold between consolidation runs.
 DEFAULT_DEBOUNCE_HOURS = 24.0
 
-#: Digest caps (spec risk note: conservative initial values). Both are stated
-#: inside the digest itself so the consolidation agent never mistakes the
-#: window for the whole history.
+#: Digest caps. Both are stated inside the digest itself so the consolidation
+#: agent never mistakes the window for the whole history.
 DEFAULT_MAX_ROOT_TASKS = 10
 DEFAULT_MAX_CHARS_PER_ROOT_TASK = 16_000
 
@@ -187,9 +182,8 @@ def consolidation_due(
 def _genesis_payload(envelopes: list[Any]) -> Optional[Any]:
     """The stream's genesis ``TaskCreated`` payload (``None`` if malformed).
 
-    Genesis is always seq 0 (the same invariant the backend's root filter
-    relies on); the defensive scan keeps a legacy/malformed stream from being
-    silently mis-classified.
+    Genesis is always seq 0; the defensive scan keeps a malformed stream from
+    being silently mis-classified.
     """
     for env in envelopes:
         if getattr(env, "type", None) == "TaskCreated":
@@ -258,19 +252,18 @@ def build_consolidation_digest(
     conversational text are skipped without consuming (or overflowing) the
     cap, so the dropped count is exact.
 
-    ``include_task`` is the host-side digest scope (issue #53): a predicate
-    over ROOT session task ids; sessions it rejects are out of the digest's
-    universe entirely — they neither consume the cap nor count as omitted,
-    exactly like a subtask. A multi-tenant host runs one curation pass per
-    tenant by filtering to that tenant's root sessions (and pointing
-    ``memory_root`` at that tenant's store, whose per-root marker then gives
-    per-tenant debounce). ``None`` (default) ⇒ the whole-ledger digest,
-    byte-identical to today. The header states the scoping so the
-    consolidation agent never mistakes a tenant's slice for the whole ledger.
+    ``include_task`` is the host-side digest scope: a predicate over ROOT session
+    task ids; sessions it rejects are out of the digest's universe entirely — they
+    neither consume the cap nor count as omitted, exactly like a subtask. A
+    multi-tenant host runs one curation pass per tenant by filtering to that
+    tenant's root sessions (and pointing ``memory_root`` at that tenant's store,
+    whose per-root marker then gives per-tenant debounce). ``None`` (default) ⇒
+    the whole-ledger digest. The header states the scoping so the consolidation
+    agent never mistakes a tenant's slice for the whole ledger.
 
-    The header states the window, the session count, how many digestible
-    sessions the cap dropped, and the per-session character cap — the spec's
-    "no silent caps" rule.
+    The header states the window, the session count, how many digestible sessions
+    the cap dropped, and the per-session character cap — the "no silent caps"
+    rule.
 
     Reads the PUBLIC client surface (``task_streams`` for the wall-clock
     activity bound, ``events`` for the per-stream envelopes); the one host
@@ -343,7 +336,7 @@ def build_consolidation_digest(
 
 
 # ---------------------------------------------------------------------------
-# Run entry (decision #11's explicit host-callable)
+# Run entry
 # ---------------------------------------------------------------------------
 
 
@@ -375,8 +368,8 @@ def run_consolidation(
     :func:`build_consolidation_digest`) so a multi-tenant host runs one
     curation pass per tenant: filter to that tenant's root sessions and point
     ``memory_root`` at that tenant's directory — the per-root marker then
-    debounces each tenant independently. ``None`` (default) ⇒ the
-    whole-ledger digest, byte-identical to today.
+    debounces each tenant independently. ``None`` (default) ⇒ the whole-ledger
+    digest.
 
     ``on_seeded`` receives the seeded ``__consolidation__`` root task id after
     the task is durably created (its seed lease still held — no worker can
@@ -386,7 +379,7 @@ def run_consolidation(
     tools — resolves the SAME tenant store the digest and marker were scoped
     to. The callback must not raise: a raise propagates after the marker
     write and the durable seed, leaving a leased task that is never yielded.
-    ``None`` (default, single-tenant) ⇒ no callback, unchanged behaviour.
+    ``None`` (default, single-tenant) ⇒ no callback.
 
     ``now`` is injectable for tests; ``None`` ⇒ the wall clock. There is no
     per-seed budget/contract parameter on ``seed_start`` (a task's budget is

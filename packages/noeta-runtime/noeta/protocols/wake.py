@@ -4,16 +4,9 @@ A ``WakeCondition`` describes what a suspended Task is waiting on. A
 matching ``WakeEvent`` (same dataclass shape) delivered through
 ``Dispatcher.wake`` flips the Task back to ``ready``.
 
-Phase 0 shipped three variants: ``SubtaskCompleted`` (issue 03),
-``HumanResponseReceived`` (issue 05 — also used by ``yield_for_human``
-and ``require_approval``), and ``TimerFired`` (the
-``wait_timer`` Decision branch). ``ExternalEvent`` (the
-``wait_external`` Decision branch) landed with the timer poller.
-
 ``SubtaskResult`` is the typed payload carried by a ``SubtaskCompleted``
 wake event and folded into the parent's ``GovernanceState`` so the
-parent Policy can read previously-spawned child outcomes on its next
-decide.
+parent Policy can read spawned child outcomes on its next decide.
 """
 
 from __future__ import annotations
@@ -31,18 +24,13 @@ from noeta.protocols.canonical import register
 #: and the crash-recovery park suspends on it so a later ``send_goal``
 #: resumes the parked conversation. Home is the protocols layer (the
 #: typed wake boundary) so L2 hosting code can use it without importing
-#: the execution machine; ``noeta.execution.multi_turn`` re-exports it
-#: for its established importers.
+#: the execution machine.
 NEXT_GOAL_WAKE_HANDLE = "noeta-code-next-goal"
 
 
 @dataclass(frozen=True, slots=True)
 class SubtaskResult:
-    """Outcome of a subtask, as seen by its parent.
-
-    Phase 0 surfaces only the two terminal kinds (``completed`` /
-    ``failed``). The richer envelope (cost, artifacts) lands later.
-    """
+    """Outcome of a subtask, as seen by its parent."""
 
     status: Literal["completed", "failed"]
     output: Any = None
@@ -93,9 +81,7 @@ class HumanResponseReceived:
     There is no separate ``ApprovalRequested`` event type:
     approval-required Verdicts and direct ``yield_for_human`` decisions
     both suspend on this same wake condition. The ``handle`` is the
-    opaque identifier the human-facing channel will use to wake the
-    Task (issue 05 ships the carrier shape; the wake-on-handle UI is
-    Phase 2).
+    opaque identifier the human-facing channel uses to wake the Task.
     """
 
     handle: str
@@ -109,9 +95,7 @@ class TimerFired:
 
     Produced by the ``wait_timer`` Decision branch. ``fire_at`` is the
     wall-clock time (epoch seconds) at which the Dispatcher should
-    requeue the Task. Phase 0 records the intent; the actual timer
-    Worker that delivers the wake event lands with the daemonized
-    Worker in Phase 1.
+    requeue the Task.
     """
 
     fire_at: float
@@ -139,7 +123,7 @@ class ExternalEvent:
 
 @dataclass(frozen=True, slots=True)
 class SubtaskGroupCompleted:
-    """SR2 — N-way fan-out join (all-of barrier). A parent that spawns a
+    """N-way fan-out join (all-of barrier). A parent that spawns a
     **group** of N sub-agents in one turn suspends on this condition and is
     woken only when the **distinct member set** has all terminated
     (completed OR failed — wait-all-terminate).
@@ -160,15 +144,14 @@ class SubtaskGroupCompleted:
     so it costs no extra ``id_factory`` call and recomputes identically in
     resume.
 
-    ``concurrent`` (fan-out v2) is the
-    **per-group opt-in** the drain reads off the folded suspend condition to
-    decide whether to run the N members on the wall-clock executor (``True``)
-    or the legacy one-at-a-time sequential drain (``None`` = default). It is a
-    pure scheduling hint — matching still projects on ``group_id`` only — and
-    is **conditionally folded**: ``__canonical_omit_none__`` drops it whenever
-    it is ``None``, so every pre-v2 recording and every sequential group keeps
-    byte-identical canonical bytes; only an opt-in concurrent group writes the
-    one extra ``"concurrent":true`` key.
+    ``concurrent`` is the **per-group opt-in** the drain reads off the folded
+    suspend condition to decide whether to run the N members on the wall-clock
+    executor (``True``) or the one-at-a-time sequential drain (``None`` =
+    default). It is a pure scheduling hint — matching still projects on
+    ``group_id`` only — and is **conditionally folded**:
+    ``__canonical_omit_none__`` drops it whenever it is ``None``, so a
+    sequential group keeps byte-identical canonical bytes; only an opt-in
+    concurrent group writes the one extra ``"concurrent":true`` key.
     """
 
     group_id: str
@@ -194,7 +177,7 @@ def _restore_subtask_group_completed(fields: dict[str, Any]) -> "SubtaskGroupCom
     return SubtaskGroupCompleted(
         group_id=fields["group_id"],
         subtask_ids=tuple(fields["subtask_ids"]),
-        # ``.get`` so a pre-v2 body (no ``concurrent`` key, the omit-none
+        # ``.get`` so a body with no ``concurrent`` key (the omit-none
         # default) restores to ``None`` = sequential.
         concurrent=fields.get("concurrent"),
     )
@@ -204,8 +187,6 @@ register("subtask_group_completed", _restore_subtask_group_completed)
 
 
 def _restore_subtask_completed(fields: dict[str, Any]) -> "SubtaskCompleted":
-    """Canonical restorer that handles both legacy (no ``result``) and
-    new shapes for :class:`SubtaskCompleted`."""
     return SubtaskCompleted(
         subtask_id=fields["subtask_id"],
         result=fields.get("result"),
@@ -218,9 +199,7 @@ register("timer_fired", lambda f: TimerFired(**f))
 register("external_event", lambda f: ExternalEvent(**f))
 
 
-# WakeCondition is open to growth; Phase 0 shipped three variants. Typed as
-# a Union so callers can write ``isinstance(wc, SubtaskCompleted)``
-# today without breaking when a later phase adds more.
+# Typed as a Union so callers can write ``isinstance(wc, SubtaskCompleted)``.
 WakeCondition = Union[
     SubtaskCompleted,
     SubtaskGroupCompleted,
@@ -244,7 +223,7 @@ def matches_wake(condition: WakeCondition, event: WakeEvent) -> bool:
     * :class:`SubtaskCompleted` — projects to ``subtask_id``;
       ``result`` is informational and does not affect matching.
     * :class:`SubtaskGroupCompleted` — projects to ``group_id``;
-      ``subtask_ids`` is informational and does not affect matching (SR2).
+      ``subtask_ids`` is informational and does not affect matching.
     * :class:`HumanResponseReceived` — projects to ``handle``.
     * :class:`ExternalEvent` — projects to ``event_kind``.
     * :class:`TimerFired` — temporal threshold:
@@ -258,7 +237,7 @@ def matches_wake(condition: WakeCondition, event: WakeEvent) -> bool:
     if isinstance(condition, SubtaskCompleted) and isinstance(event, SubtaskCompleted):
         return condition.subtask_id == event.subtask_id
     if isinstance(condition, SubtaskGroupCompleted) and isinstance(event, SubtaskGroupCompleted):
-        # SR2: project on group_id; subtask_ids is informational.
+        # Project on group_id; subtask_ids is informational.
         return condition.group_id == event.group_id
     if isinstance(condition, HumanResponseReceived) and isinstance(event, HumanResponseReceived):
         return condition.handle == event.handle

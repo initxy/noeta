@@ -1,32 +1,15 @@
-"""Per-Decision handler functions extracted from Engine.
+"""Per-Decision branch logic as module-level functions taking a typed
+:class:`HandlerContext`.
 
-Each Decision variant's branch logic — previously `Engine._tool_calls /
-_spawn_subtask / _finish / _fail / _wait_timer / _yield_for_human` —
-moves here as module-level functions taking a typed
-:class:`HandlerContext`. ``Engine.run_one_step`` keeps the compose →
-decide loop, the ``ToolCallsDecision`` special case, the
-state_patch / assistant_message helpers, and the controlled
-callables (``_emit`` / ``_guard`` / ``_write_snapshot`` /
-``_resolve_tool`` / ``_create_child_task``). The result: Engine
-class body shrinks well under its 500-line budget, future
-Decision variants get headroom, and per-Decision logic is now
-unit-testable with a stub ``HandlerContext``.
-
-Design contract:
-
-* No raw ``EventLog`` exposure — handlers reach the log only through
-  ``ctx.emit`` (business write, lease-checked) and
-  ``ctx.create_child_task`` (the one narrow cross-stream system write
-  needed for subtask genesis).
-* No HookManager exposure — handlers call ``ctx.guard``.
-* No raw Engine reference — handlers take ``HandlerContext``, not
-  ``Engine``. AST regression test in CI enforces this.
-* No ``# type: ignore`` — every callable in ``HandlerContext`` is a
-  typed Protocol with the exact signature its Engine-bound
-  implementation uses.
-* Any genuinely unmapped Decision still raises Engine's pre-refactor
-  ``NotImplementedError("Unknown decision type: <name>")`` byte-equal
-  (``WaitExternalDecision`` is now routed like every other exit).
+``Engine.run_one_step`` keeps the compose → decide loop and the controlled
+callable seams; every exit and loop-continuing Decision variant is handled
+here. The contract that shapes the module: a handler reaches the EventLog only
+through ``ctx.emit`` (lease-checked business write) and ``ctx.create_child_task``
+(the one narrow cross-stream system write for subtask genesis), and the
+HookManager only through ``ctx.guard`` — it never holds a raw ``EventLog``,
+``HookManager``, or ``Engine`` reference, so it cannot bypass the single-writer
+invariant. An AST regression test enforces the no-``Engine`` rule. An unmapped
+Decision raises ``NotImplementedError("Unknown decision type: <name>")``.
 """
 
 from __future__ import annotations
@@ -171,10 +154,10 @@ class EmitFn(Protocol):
 class CreateChildTaskFn(Protocol):
     """Engine-bound cross-stream child-task creation.
 
-    The only cross-stream system write any handler currently needs is
-    the child's ``TaskCreated`` envelope. Wrapping that single write
-    as a narrow callable keeps the cross-stream seam visible without
-    re-exposing the general ``system_emit`` shape.
+    The only cross-stream system write any handler needs is the child's
+    ``TaskCreated`` envelope. Wrapping that single write as a narrow callable
+    keeps the cross-stream seam visible without re-exposing the general
+    ``system_emit`` shape.
     """
 
     def __call__(
@@ -193,16 +176,16 @@ class CreateChildTaskFn(Protocol):
 
 class LaunchBackgroundSubagentFn(Protocol):
     """Engine-injected hook that hands a freshly-created background sub-agent
-    to the executor-driven background-subagent driver (Mechanism C).
+    to the executor-driven background-subagent driver.
 
-    docs/adr/background-subagent.md. Called by
-    :func:`handle_spawn_background_subtask` AFTER the child's ``TaskCreated``
-    (``background=True``) and the parent's "started" tool_result are written —
-    it submits the child subtree to the shared executor so it runs CONCURRENTLY
-    with the parent's continuing turn, and arranges turn-boundary delivery of
-    its result. ``None`` (oneshot / lifecycle / a child engine / resume) ⇒ the
-    background branch is never taken — the spawn degrades to a foreground barrier
-    spawn — so fold / resume never launch and nested background never recurses.
+    Called by :func:`handle_spawn_background_subtask` AFTER the child's
+    ``TaskCreated`` (``background=True``) and the parent's "started" tool_result
+    are written — it submits the child subtree to the shared executor so it runs
+    CONCURRENTLY with the parent's continuing turn, and arranges turn-boundary
+    delivery of its result. ``None`` (oneshot / lifecycle / a child engine /
+    resume) ⇒ the background branch is never taken — the spawn degrades to a
+    foreground barrier spawn — so fold / resume never launch and nested
+    background never recurses.
     """
 
     def __call__(self, *, parent_task_id: str, child_task_id: str) -> None: ...
@@ -211,12 +194,13 @@ class LaunchBackgroundSubagentFn(Protocol):
 class BackgroundSubagentCapacityFn(Protocol):
     """Pre-flight per-session concurrency check for a background spawn.
 
-    docs/adr/background-subagent.md. Given the spawning (session-root) task id,
-    returns a rejection reason string when the session is already at its
-    background-sub-agent cap, or ``None`` when there is room. Checked BEFORE the
-    handler writes any ``BackgroundSubagentStarted`` / child genesis, so an
-    over-cap launch is invisible to the durable record (reject = no event, the
-    same discipline as the background-shell job cap). ``None`` seam ⇒ no cap."""
+    Given the spawning (session-root) task id, returns a rejection reason string
+    when the session is already at its background-sub-agent cap, or ``None`` when
+    there is room. Checked BEFORE the handler writes any
+    ``BackgroundSubagentStarted`` / child genesis, so an over-cap launch is
+    invisible to the durable record (reject = no event, the same discipline as
+    the background-shell job cap). ``None`` seam ⇒ no cap.
+    """
 
     def __call__(self, parent_task_id: str) -> Optional[str]: ...
 
@@ -233,13 +217,13 @@ class WriteSnapshotFn(Protocol):
 class GuardFn(Protocol):
     """Engine-bound Guard runner (mirrors ``Engine._guard``).
 
-    SR2 (B2): ``spawned_subtasks_override`` simulates the
-    ``GovernanceState.spawned_subtasks`` counter for batch fan-out
-    admission — the i-th spec in a `SpawnSubtasksDecision` is checked
-    against ``current + i`` so a batch cannot overshoot
-    ``max_spawned_subtasks``. ONLY that counter is overridden; everything
-    else (``subtask_depth``, ``active_skills``, …) stays from the fresh
-    fold, so PermissionGuard / skill guards are unaffected."""
+    ``spawned_subtasks_override`` simulates the
+    ``GovernanceState.spawned_subtasks`` counter for batch fan-out admission —
+    the i-th spec in a `SpawnSubtasksDecision` is checked against ``current + i``
+    so a batch cannot overshoot ``max_spawned_subtasks``. ONLY that counter is
+    overridden; everything else (``subtask_depth``, ``active_skills``, …) stays
+    from the fresh fold, so PermissionGuard / skill guards are unaffected.
+    """
 
     def __call__(
         self,
@@ -269,9 +253,9 @@ class ToolInvoker(Protocol):
     ``ToolRuntime`` exposes
     ``invoke(tool, call, *, task_id, lease_id, trace_id) -> ToolResult``,
     writing the tool-side three-event trio (``ToolCallStarted`` /
-    ``ToolResultRecorded`` / ``ToolCallFinished``) onto the EventLog
-    as a side effect. Declaring a narrow Protocol keeps the handler
-    module free of the L2 ``ToolRuntime`` import.
+    ``ToolResultRecorded`` / ``ToolCallFinished``) onto the EventLog as a side
+    effect. A narrow Protocol keeps the handler module free of the
+    ``ToolRuntime`` import.
     """
 
     def invoke(
@@ -286,16 +270,13 @@ class ToolInvoker(Protocol):
 
 
 class SkillHashesFn(Protocol):
-    """Resolve a skill's declared version + current content hash (issue
-    04).
+    """Resolve a skill's declared version + current content hash.
 
-    Consulted right *before* a ``TaskStatePatched(activate_skills=…)``
-    that first activates the skill. Returns ``(version, content_hash)``
-    for skills the host knows, ``None`` for unknown skills — ``None``
-    skips the ``SkillContentRecorded`` emission. Both strings are opaque
-    to the kernel (the hash is
-    computed host-side, e.g. via the skills built-in's ``skill_content_hash``),
-    so noeta-runtime never imports noeta-sdk.
+    Consulted right *before* a ``TaskStatePatched(activate_skills=…)`` that first
+    activates the skill. Returns ``(version, content_hash)`` for skills the host
+    knows, ``None`` for unknown skills — ``None`` skips the
+    ``SkillContentRecorded`` emission. Both strings are opaque to the kernel (the
+    hash is computed host-side), so noeta-runtime never imports noeta-sdk.
     """
 
     def __call__(self, skill_name: str) -> Optional[tuple[str, str]]: ...
@@ -305,12 +286,11 @@ class ContentHashesFn(Protocol):
     """Resolve a content item's declared version + current hash by
     ``(kind, name)``.
 
-    The generic successor of :class:`SkillHashesFn`: one resolver for
-    every content-channel kind — the skill-specific seam is subsumed as
-    its ``kind="skill"`` resident. Returns ``(version, content_hash)``
-    for items the host knows, ``None`` for unknown ones — ``None`` skips
-    the provenance emission. Both strings stay opaque to the kernel, so
-    noeta-runtime never imports noeta-sdk.
+    One resolver for every content-channel kind — the skill-specific seam is
+    subsumed as its ``kind="skill"`` resident. Returns ``(version,
+    content_hash)`` for items the host knows, ``None`` for unknown ones —
+    ``None`` skips the provenance emission. Both strings stay opaque to the
+    kernel, so noeta-runtime never imports noeta-sdk.
     """
 
     def __call__(self, kind: str, name: str) -> Optional[tuple[str, str]]: ...
@@ -355,45 +335,41 @@ class HandlerContext:
     clock: Callable[[], float]
     actor: str
 
-    # ─ LEGACY per-skill content-hash seam ──
-    #: After the generic content-channel generation switch this seam exists for OLD-recording
-    #: resume only: when wired the mid-loop skill path re-emits the old
-    #: ``SkillContentRecorded`` byte-equal from the recording's own hashes.
-    #: Live hosts wire ``content_hashes`` instead.
-    #: ``None`` (with no generic seam either) ⇒ no provenance events.
+    # ─ per-skill content-hash seam (recording-resume) ──
+    #: Used on resume of a recording whose skill path emitted the per-skill
+    #: ``SkillContentRecorded``: when wired the mid-loop skill path re-emits it
+    #: from the recording's own hashes. Live hosts wire ``content_hashes``
+    #: instead. ``None`` (with no generic seam either) ⇒ no provenance events.
     skill_hashes: Optional[SkillHashesFn] = None
 
     # ─ generic (kind, name) content-hash resolver seam ─
-    #: What live hosts wire (the registry's ``content_hashes()``); the
-    #: skill sugar path emits the generic ``ContextContentRecorded``
-    #: (kind="skill", policy="pinned") through it. Keep this field LAST —
-    #: every field without a default above is positional public surface.
+    #: What live hosts wire (the registry's ``content_hashes()``); the skill
+    #: sugar path emits the generic ``ContextContentRecorded`` (kind="skill",
+    #: policy="pinned") through it. Keep this field LAST — every field without a
+    #: default above is positional public surface.
     content_hashes: Optional[ContentHashesFn] = None
-    #: inline char cap for ``ToolResultBlock.output``.
-    #: ``None`` ⇒ never truncate (zero behaviour change for existing hosts).
-    #: When a tool's inline output is longer than this limit we keep the
-    #: first N chars plus a deterministic truncated-marker suffix that
-    #: references the full bytes via ``ToolResultRecorded.output_ref``.
-    #: The full audit body always lives in the ContentStore; truncation
-    #: applies only to the messages-stream shape. For byte-equivalent
-    #: resume the recording's host must wire the same value.
+    #: inline char cap for ``ToolResultBlock.output``. ``None`` ⇒ never truncate.
+    #: When a tool's inline output is longer than this limit, keep the first N
+    #: chars plus a deterministic truncated-marker suffix that references the
+    #: full bytes via ``ToolResultRecorded.output_ref``. The full audit body
+    #: always lives in the ContentStore; truncation applies only to the
+    #: messages-stream shape. For byte-equivalent resume the recording's host
+    #: must wire the same value.
     tool_output_inline_limit: Optional[int] = None
-    #: background sub-agent launch hook (docs/adr/background-subagent.md).
-    #: Wired only on a top-level interactive Engine; ``None`` everywhere else
-    #: (oneshot / child engines / resume) so a ``spawn_subagent(background=True)``
-    #: degrades to the ordinary foreground barrier spawn. Keep these two LAST.
+    #: background sub-agent launch hook. Wired only on a top-level interactive
+    #: Engine; ``None`` everywhere else (oneshot / child engines / resume) so a
+    #: ``spawn_subagent(background=True)`` degrades to the ordinary foreground
+    #: barrier spawn. Keep these two LAST.
     launch_background_subagent: Optional[LaunchBackgroundSubagentFn] = None
     #: background sub-agent per-session cap pre-check (paired with the launch
     #: hook; wired iff that is). ``None`` ⇒ no cap.
     background_subagent_capacity: Optional[BackgroundSubagentCapacityFn] = None
-    #: post-tool content discovery (docs/adr/anchored-content-placement.md):
-    #: ``(task, call, result) → activation payloads`` consulted by
-    #: ``handle_tool_calls`` AFTER the turn's batched tool-result message is
-    #: appended, so the fold-time anchor — and the rendered content — lands
-    #: right after the triggering results. The runtime stays kind-neutral:
-    #: what gets discovered (today: workspace instruction files on ``read``)
-    #: is decided by whatever callable the host wires. ``None`` (default,
-    #: every existing construction) ⇒ no discovery, byte-identical streams.
+    #: post-tool content discovery: ``(task, call, result) → activation
+    #: payloads`` consulted by ``handle_tool_calls`` AFTER the turn's batched
+    #: tool-result message is appended, so the fold-time anchor — and the
+    #: rendered content — lands right after the triggering results. The runtime
+    #: stays kind-neutral: what gets discovered is decided by whatever callable
+    #: the host wires. ``None`` (default) ⇒ no discovery.
     content_discovery: Optional[
         Callable[
             [Task, ToolCall, ToolResult], list[ContextContentRecordedPayload]
@@ -444,10 +420,9 @@ def strip_message_origin(message: Message) -> Message:
     (``Engine.append_user_message``). Messages handed in via the Decision
     channel (``assistant_message`` / a state-patch's ``messages_before`` /
     ``messages_after``) are stripped to ``None`` before they land, so a fake
-    ``<system-reminder>`` tag in model/tool output text is always just text,
-    and the origin value in the ledger is always attributable to the engine
-    seam (D3 audit depends on this). The content is untouched — only the tag
-    field is stripped.
+    ``<system-reminder>`` tag in model/tool output text is always just text, and
+    the origin value in the ledger is always attributable to the engine seam.
+    The content is untouched — only the tag field is stripped.
     """
     if message.origin is None:
         return message
@@ -464,24 +439,20 @@ def wrap_tool_result_block(
 
     ``call_id`` pairs back to the original
     :class:`noeta.protocols.decisions.ToolCall.call_id` (also the
-    ``ToolUseBlock.call_id`` the LLM emitted). The block keeps the
-    inline ``output`` value when the Tool kept it small (4-KB envelope)
-    and surfaces ``success`` / ``error`` so the next compose
-    can show the model what happened.
+    ``ToolUseBlock.call_id`` the LLM emitted). The block keeps the inline
+    ``output`` value when the Tool kept it small (4-KB envelope) and surfaces
+    ``success`` / ``error`` so the next compose can show the model what happened.
 
-    **Truncation:** when
-    ``tool_output_inline_limit`` is a positive int, the output is
-    stringified (via :func:`_coerce_inline_output`) and capped to the
-    first ``limit`` characters, with a deterministic ``…[tool output
-    truncated: …]`` suffix. The full body is NOT named in that suffix — it is
-    recorded independently as ``ToolResultRecorded.output_ref`` (populated by
+    **Truncation:** when ``tool_output_inline_limit`` is a positive int, the
+    output is stringified (via :func:`_coerce_inline_output`) and capped to the
+    first ``limit`` characters, with a deterministic ``…[tool output truncated:
+    …]`` suffix. The full body is NOT named in that suffix — it is recorded
+    independently as ``ToolResultRecorded.output_ref`` (populated by
     :class:`ToolRuntime` after offload), which is where audit derefs it; the
     model has no ref-deref tool, so a hash in the prompt would be dead weight.
-    When the limit is
-    ``None`` (the default, host-unspecified) the raw ``result.output``
-    is passed through **unchanged** so dict / list / ContentRef shapes
-    the tools return stay typed and the 2600-test baseline keeps
-    byte-identical behaviour.
+    When the limit is ``None`` (the default, host-unspecified) the raw
+    ``result.output`` is passed through **unchanged** so dict / list / ContentRef
+    shapes the tools return stay typed.
     """
     error: Optional[str] = None
     if not result.success:
@@ -489,8 +460,8 @@ def wrap_tool_result_block(
     raw_output = result.output if result.output is not None else ""
 
     if tool_output_inline_limit is None:
-        # Default path: zero behaviour change. Keep whatever type the
-        # tool returned (str / dict / list / ContentRef / bytes).
+        # Keep whatever type the tool returned (str / dict / list / ContentRef /
+        # bytes).
         inline = raw_output
     else:
         inline = _coerce_inline_output(raw_output)
@@ -499,8 +470,7 @@ def wrap_tool_result_block(
     # Image content the tool surfaced (e.g. ``read`` on a .png) rides into the
     # canonical message stream as ``ToolResultBlock.images``; the adapter
     # deref→inlines it at wire time (vision model) or degrades to text (non-
-    # vision). Empty ⇒ ``None`` so the canonical form is byte-identical to a
-    # pre-image recording (``__canonical_omit_none__``).
+    # vision). Empty ⇒ ``None`` (``__canonical_omit_none__``).
     images = (
         [ImageBlock(source=ref) for ref in result.images]
         if result.images
@@ -580,8 +550,7 @@ def _validate_tool_output_inline_limit(
 ) -> None:
     """Raise ``ValueError`` if ``limit`` is non-``None`` and not positive.
 
-    Centralised so Engine, SdkHost, and the agent product's own config all share the
-    same check + message.
+    Centralised so every construction path shares the same check + message.
     """
     if limit is not None and limit <= 0:
         raise ValueError(
@@ -598,15 +567,12 @@ def emit_step_transition(
     trace_id: str,
     attempt: int = 0,
 ) -> Task:
-    """Foundation B (D-B6): emit one ``StepTransitionMarked`` and fold it.
+    """Emit one ``StepTransitionMarked`` and fold it.
 
-    Module-level so the Engine body stays under its ≤500-line budget — the
-    Engine only adds a single call line. Only **non-default** continuations
-    should call this (``approval_resume`` today; ②/③ add the retry/overflow/
-    compaction reasons); the implicit ``next_turn`` default must never be
-    emitted (D-B2). Uses only the typed ``ctx`` callables (``ctx.emit`` +
-    ``ctx.apply_event``) so the handler-module AST guard (no Engine /
-    EventLog / ToolRuntime imports) keeps holding.
+    Only **non-default** continuations call this (e.g. ``approval_resume``); the
+    implicit ``next_turn`` default must never be emitted. Uses only the typed
+    ``ctx`` callables (``ctx.emit`` + ``ctx.apply_event``) so the handler-module
+    AST guard (no Engine / EventLog / ToolRuntime imports) keeps holding.
     """
     env = ctx.emit(
         task_id=task.task_id,
@@ -628,21 +594,19 @@ def record_assistant_thinking(
     lease_id: str,
     trace_id: str,
 ) -> None:
-    """Extended-thinking end-to-end (Slice B): persist an assistant turn's
-    out-of-band thinking into ``ContextState.thinking_by_call_id``.
+    """Persist an assistant turn's out-of-band extended thinking into
+    ``ContextState.thinking_by_call_id``.
 
-    Module-level so the Engine body stays under its ≤500-line budget — the
-    Engine only adds a single call line. The Policy carries the LLM's
-    ThinkingBlocks on the Decision, NOT in ``msg`` (the persisted history
-    stays thinking-free so its non-deterministic signature never perturbs
-    the stable prompt prefix). We key them by the turn's FIRST ``tool_use``
-    ``call_id`` (the stable per-turn identity the Composer re-attaches
-    against), stash the blocks in the ContentStore (under the 4 KB cap), then
-    emit one ``AssistantThinkingRecorded`` and fold it — so the live task and
-    a from-scratch resume write the slice through the SAME handler (single
-    writer), exactly like ``ContextPlanComposed``. Decisions without
-    thinking (non-reasoning models, ``Finish`` / ``Fail``) no-op. Uses only
-    the typed ``ctx`` callables so the handler-module AST guard holds.
+    The Policy carries the LLM's ThinkingBlocks on the Decision, NOT in ``msg``
+    (the persisted history stays thinking-free so its non-deterministic
+    signature never perturbs the stable prompt prefix). They are keyed by the
+    turn's FIRST ``tool_use`` ``call_id`` (the stable per-turn identity the
+    Composer re-attaches against), stashed in the ContentStore (under the 4 KB
+    cap), then one ``AssistantThinkingRecorded`` is emitted and folded — so the
+    live task and a from-scratch resume write the slice through the SAME handler
+    (single writer), exactly like ``ContextPlanComposed``. Decisions without
+    thinking (non-reasoning models, ``Finish`` / ``Fail``) no-op. Uses only the
+    typed ``ctx`` callables so the handler-module AST guard holds.
     """
     thinking = getattr(decision, "assistant_thinking", ())
     if not thinking:
@@ -679,16 +643,14 @@ def invoke_approved_tool_call(
     lease_id: str,
     trace_id: str,
 ) -> Task:
-    """Run an already-approved tool call, **bypassing the guard**
-    (Phase 4.5 Issue A).
+    """Run an already-approved tool call, **bypassing the guard**.
 
-    Mirrors the per-call body + tail of :func:`handle_tool_calls` for a
-    single call, minus the guard check — the human already approved, so
-    re-running the guard (which returned ``require_approval``) would just
-    re-suspend. Emits the normal ``ToolCallStarted → ToolResultRecorded
-    → ToolCallFinished`` (via the ToolRuntime) plus one ``MessagesAppended``
-    carrying the ``role="tool"`` result, so the byte shape matches a
-    normally-allowed single call.
+    Mirrors the per-call body + tail of :func:`handle_tool_calls` for a single
+    call, minus the guard check — the human already approved, so re-running the
+    guard (which returned ``require_approval``) would just re-suspend. Emits the
+    normal ``ToolCallStarted → ToolResultRecorded → ToolCallFinished`` (via the
+    ToolRuntime) plus one ``MessagesAppended`` carrying the ``role="tool"``
+    result, so the byte shape matches a normally-allowed single call.
     """
     if ctx.tool_invoker is None:
         raise RuntimeError("Engine got approved tool_call but no ToolRuntime.")
@@ -734,8 +696,7 @@ def maybe_emit_provenance(
     the name is already recorded, or resolution fails.
 
     ``recorded`` is the fold-owned container the emitted event type writes into
-    (legacy: the governance hash dict; generic: the activation-map name
-    tuple) — gating against fold keeps re-entrant paths single-emission.
+    — gating against fold keeps re-entrant paths single-emission.
     """
     if resolver is None:
         return
@@ -755,11 +716,8 @@ def maybe_emit_provenance(
     apply_event(task, env)
 
 
-#: The activate_skills patch sugar is the skill kind's
-#: dedicated write bridge (retained by design), so its generic emissions
-#: carry the skill kind's drift policy: the policy flags a SKILL.md edit
-#: without a version bump (a drift-comparison consumer would treat it as the
-#: human-error case; that consumer has since been removed).
+#: The activate_skills patch sugar is the skill kind's dedicated write bridge,
+#: so its generic emissions carry the skill kind's drift policy.
 _SKILL_SUGAR_KIND = "skill"
 _SKILL_SUGAR_POLICY = "pinned"
 
@@ -774,31 +732,25 @@ def maybe_emit_skill_content_recorded(
 ) -> None:
     """Emit first-only content provenance for one ``activate_skills`` name.
 
-    Generation switch: which event TYPE gets
-    emitted is keyed on which resolver seam the host wired —
+    Which event TYPE gets emitted is keyed on which resolver seam the host wired:
 
-    * ``ctx.skill_hashes`` (the retained LEGACY seam) → the old
-      ``SkillContentRecorded``, byte-identical to pre-cutover hosts. Its
-      only remaining writer is the resume of a pre-cutover
-      recording (``_historical_skill_hashes``), which must re-emit the
-      recorded type for the captured stream to stay byte-equal. Gate:
-      fold's authoritative ``governance.skill_content_hashes`` (what the
-      old event folds into), preserving old-recording emission points
-      exactly.
-    * ``ctx.content_hashes`` (the generic seam, what live hosts wire) →
-      the generic ``ContextContentRecorded`` with kind="skill",
-      policy="pinned" — new recordings carry only the generic shape.
-      Gate: the generic activation map ``TaskState.active_content``
-      (what the generic event folds into).
-    * Neither wired (kernel tests / stub demos / old hosts) → no event,
-      old byte shapes preserved. Resolver returning ``None`` (unknown
-      skill) → no event.
+    * ``ctx.skill_hashes`` → the per-skill ``SkillContentRecorded``. Its writer
+      is the resume of a recording whose skill path emitted this type, which
+      must re-emit it for the captured stream to stay byte-equal. Gate: fold's
+      authoritative ``governance.skill_content_hashes`` (what the event folds
+      into).
+    * ``ctx.content_hashes`` (the generic seam, what live hosts wire) → the
+      generic ``ContextContentRecorded`` with kind="skill", policy="pinned".
+      Gate: the generic activation map ``TaskState.active_content`` (what the
+      generic event folds into).
+    * Neither wired (kernel tests / stub demos) → no event. Resolver returning
+      ``None`` (unknown skill) → no event.
 
-    Placed right *before* the ``TaskStatePatched(activate_skills=…)`` that
-    first activates the skill, matching the pre-loop helper's causal order
+    Placed right *before* the ``TaskStatePatched(activate_skills=…)`` that first
+    activates the skill, matching the pre-loop helper's causal order
     (:func:`noeta.core.engine.emit_context_content_recorded` fires before
-    ``Engine.apply_state_patch``, lands the name in ``active_content``, so
-    this seam sees it present and skips — one event per (task, skill)).
+    ``Engine.apply_state_patch``, lands the name in ``active_content``, so this
+    seam sees it present and skips — one event per (task, skill)).
     """
     if ctx.skill_hashes is not None:
         maybe_emit_provenance(
@@ -863,17 +815,15 @@ def append_tool_denial_feedback(
     lease_id: str,
     trace_id: str,
 ) -> Task:
-    """Append a ``role="tool"`` denial-feedback message for a human-denied
-    call (Phase 4.5 Issue A — conversation continuity, not a governance
-    event).
+    """Append a ``role="tool"`` denial-feedback message for a human-denied call
+    (conversation continuity, not a governance event).
 
-    The resumed loop must not continue with a dangling assistant
-    ``tool_call`` and no matching tool result. This emits one
-    ``MessagesAppended`` carrying a ``ToolResultBlock`` with the same
-    ``call_id``, ``success=False``, and the human denial ``reason`` as
-    the error — so the next compose gives the model deterministic
-    feedback that the call was refused. **No tool is invoked**; there is
-    no ``ToolCallStarted/ToolResultRecorded/ToolCallFinished``.
+    The resumed loop must not continue with a dangling assistant ``tool_call``
+    and no matching tool result. This emits one ``MessagesAppended`` carrying a
+    ``ToolResultBlock`` with the same ``call_id``, ``success=False``, and the
+    human denial ``reason`` as the error — so the next compose gives the model
+    deterministic feedback that the call was refused. **No tool is invoked**;
+    there is no ``ToolCallStarted/ToolResultRecorded/ToolCallFinished``.
     """
     block = ToolResultBlock(
         call_id=call_id, output="", success=False, error=reason
@@ -891,8 +841,7 @@ def append_tool_denial_feedback(
 
 
 # ---------------------------------------------------------------------------
-# Shared suspend / terminate helpers (moved from Engine; used by per-Decision
-# handlers; not exposed as public API)
+# Shared suspend / terminate helpers (used by per-Decision handlers; not public)
 # ---------------------------------------------------------------------------
 
 
@@ -999,8 +948,7 @@ def handle_yield_for_human(
             lease_id=lease_id,
             trace_id=trace_id,
         )
-    # Byte-equal preservation: pre-refactor used ``uuid.uuid4().hex``
-    # for the fallback handle (engine.py:397), not ctx.id_factory.
+    # The fallback handle uses ``uuid.uuid4().hex``, not ctx.id_factory.
     handle = decision.prompt or f"yield-{uuid.uuid4().hex}"
     return _suspend(
         ctx,
@@ -1054,18 +1002,14 @@ def _guard_and_route(
 
     * **DENY** → call ``on_deny(verdict.reason)`` and return its terminal
       ``Task``. The raw ``verdict.reason`` (possibly ``None``) is passed
-      through **unchanged** so each caller keeps its own byte-equal deny
-      shape: ``handle_finish`` interpolates it raw
-      (``f"finish denied: {reason}"``), ``handle_spawn_subtask`` applies
-      its own ``reason or "denied"`` fallback before emitting
-      ``SubtaskDenied`` + failing.
+      through **unchanged** so each caller keeps its own deny shape:
+      ``handle_finish`` interpolates it raw (``f"finish denied: {reason}"``),
+      ``handle_spawn_subtask`` applies its own ``reason or "denied"`` fallback
+      before emitting ``SubtaskDenied`` + failing.
     * **REQUIRE_APPROVAL** → suspend through :func:`_yield_for_approval`
       with the caller's ``approval_handle`` (``approval-finish-…`` /
       ``approval-spawn-…``).
     * **ALLOW** → return ``None``; the caller proceeds with its pure body.
-
-    The emitted event sequence / payloads are byte-identical to the
-    inlined branches this replaces.
     """
     verdict = ctx.guard(action, task)
     if verdict.verdict is Verdict.DENY:
@@ -1091,8 +1035,7 @@ def handle_wait_timer(
 ) -> Task:
     """Snapshot + TaskSuspended with a ``TimerFired`` wake.
 
-    ``fire_at`` follows the pre-refactor formula
-    ``ctx.clock() + decision.seconds`` (engine.py:426) byte-equal.
+    ``fire_at`` is ``ctx.clock() + decision.seconds``.
     """
     return _suspend(
         ctx,
@@ -1174,14 +1117,12 @@ def handle_finish(
     )
     if routed is not None:
         return routed
-    # Phase 1 fallback: when the Policy did not attach its own
-    # ``assistant_message`` (Stub policies don't), the Engine
-    # synthesises a minimal assistant Message from ``decision.answer``
-    # so RuntimeState still surfaces the final answer in the
-    # conversation log. A Policy that already attached an
-    # assistant_message has had it appended at the top of
-    # ``run_one_step`` via ``_apply_decision_assistant_message`` —
-    # no duplicate emission here.
+    # Fallback: when the Policy did not attach its own ``assistant_message``
+    # (Stub policies don't), synthesise a minimal assistant Message from
+    # ``decision.answer`` so RuntimeState still surfaces the final answer in the
+    # conversation log. A Policy that already attached an assistant_message has
+    # had it appended at the top of ``run_one_step`` via
+    # ``_apply_decision_assistant_message`` — no duplicate emission here.
     if decision.assistant_message is None:
         msg = Message(
             role="assistant",
@@ -1240,11 +1181,10 @@ def handle_spawn_subtask(
 ) -> Task:
     """Suspend parent on a typed wake condition; bootstrap the child.
 
-    The order matters and is fixed by the issue 03 spec:
-    ``SubtaskSpawned`` (parent) → ``TaskCreated`` (child stream) →
-    ``TaskSnapshot`` (parent) → ``TaskSuspended`` (parent). Then we
-    return parent in ``suspended`` status; the worker releases the
-    lease. The ``dispatcher.enqueue`` for the child runs in
+    The order is fixed: ``SubtaskSpawned`` (parent) → ``TaskCreated`` (child
+    stream) → ``TaskSnapshot`` (parent) → ``TaskSuspended`` (parent). Then
+    parent is returned in ``suspended`` status; the worker releases the lease.
+    The ``dispatcher.enqueue`` for the child runs in
     :class:`noeta.core.observers.ChildLifecycleObserver`.
     """
     def _on_deny(raw_reason: Optional[str]) -> Task:
@@ -1297,11 +1237,9 @@ def handle_spawn_subtask(
         lease_id=lease_id,
         trace_id=trace_id,
     )
-    # Child gets its own stream; trace_id propagates so observers can
-    # cross-link the two streams. The narrow ``create_child_task``
-    # seam (Engine._create_child_task) preserves the byte-equal
-    # ``policy_name="scripted"`` literal from the pre-refactor
-    # ``engine.py:723`` inline write.
+    # Child gets its own stream; trace_id propagates so observers can cross-link
+    # the two streams. The narrow ``create_child_task`` seam locks the
+    # ``policy_name="scripted"`` literal for engine-created children.
     ctx.create_child_task(
         child_task_id=subtask_id,
         parent_task_id=task.task_id,
@@ -1309,7 +1247,7 @@ def handle_spawn_subtask(
         goal=decision.goal,
         inputs=dict(decision.inputs),
         trace_id=trace_id,
-        subtask_depth=task.subtask_depth + 1,  # SR1: child is one deeper
+        subtask_depth=task.subtask_depth + 1,  # child is one deeper
     )
     return _suspend(
         ctx,
@@ -1377,7 +1315,8 @@ def _append_background_spawn_result(
     ``MessagesAppended`` pairs the dangling ``spawn_subagent`` tool_use so the
     next compose has a matching tool_result and the parent keeps deciding. The
     eventual RESULT of a launched background sub-agent never reuses this slot —
-    it arrives later as a Mechanism-C turn-boundary notice."""
+    it arrives later as a turn-boundary notice.
+    """
     block = ToolResultBlock(
         call_id=call_id,
         output=text if success else "",
@@ -1405,8 +1344,8 @@ def handle_spawn_background_subtask(
 ) -> Optional[Task]:
     """Launch a sub-agent in the background — non-blocking (no barrier).
 
-    docs/adr/background-subagent.md. Unlike :func:`handle_spawn_subtask` (which
-    suspends the parent on a ``SubtaskCompleted`` barrier), this:
+    Unlike :func:`handle_spawn_subtask` (which suspends the parent on a
+    ``SubtaskCompleted`` barrier), this:
 
     1. runs the SAME admission guard (Permission allow-list + Budget);
     2. emits ``BackgroundSubagentStarted`` on the parent stream (the durable
@@ -1416,9 +1355,9 @@ def handle_spawn_background_subtask(
        ``ChildLifecycleObserver`` skips it — the driver owns its lifecycle);
     4. appends a "started #N" tool_result paired to the originating
        ``spawn_subagent`` call so the parent's turn CONTINUES (loop-back);
-    5. hands the child to ``ctx.launch_background_subagent`` — the executor-driven
-       background driver that runs it concurrently and delivers its result at a
-       turn boundary (Mechanism C).
+    5. hands the child to ``ctx.launch_background_subagent`` — the
+       executor-driven background driver that runs it concurrently and delivers
+       its result at a turn boundary.
 
     Returns ``None`` to continue the parent's turn (the common path), or a
     terminal/suspended ``Task`` when the guard denies (graceful: a denial
@@ -1463,10 +1402,10 @@ def handle_spawn_background_subtask(
         )
         return None
     if verdict.verdict is Verdict.REQUIRE_APPROVAL:
-        # v1 does not support mid-turn approval for a background launch (no
-        # partial-launch + approval-resume); route to the SAME approval suspend
-        # the foreground spawn uses, so a human can approve and the model
-        # re-issues the spawn on resume.
+        # A background launch has no mid-turn approval (no partial-launch +
+        # approval-resume); route to the SAME approval suspend the foreground
+        # spawn uses, so a human can approve and the model re-issues the spawn
+        # on resume.
         return _yield_for_approval(
             ctx,
             task,
@@ -1519,11 +1458,11 @@ def handle_spawn_background_subtask(
         subtask_depth=task.subtask_depth + 1,
         background=True,
     )
-    # Model-visible ack prose, deliberately kernel-side (phase-2b P-D2):
-    # spawn-subagent vocabulary renders the kernel's own delegation
-    # mechanism, and this band imports only ``noeta.protocols`` — the text
-    # is recorded into the ledger as an ordinary tool result, so replay
-    # never depends on it staying byte-stable.
+    # Model-visible ack prose, deliberately kernel-side: spawn-subagent
+    # vocabulary renders the kernel's own delegation mechanism, and this band
+    # imports only ``noeta.protocols`` — the text is recorded into the ledger as
+    # an ordinary tool result, so replay never depends on it staying
+    # byte-stable.
     _append_background_spawn_result(
         ctx, task, call_id=call_id, success=True,
         text=(
@@ -1538,8 +1477,8 @@ def handle_spawn_background_subtask(
         ),
         lease_id=lease_id, trace_id=trace_id,
     )
-    # Hand off to the executor-driven background driver (Mechanism C). Guarded
-    # against a missing seam (defensive — the engine only routes here when wired).
+    # Hand off to the executor-driven background driver. Guarded against a
+    # missing seam (defensive — the engine only routes here when wired).
     if ctx.launch_background_subagent is not None:
         ctx.launch_background_subagent(
             parent_task_id=task.task_id, child_task_id=subtask_id
@@ -1547,9 +1486,9 @@ def handle_spawn_background_subtask(
     return None
 
 
-#: SR2 — max children a single fan-out batch may create.
-#: Keeps ``SubtaskGroupCompleted.subtask_ids`` (carried in TaskSuspended /
-#: snapshot ``wake_on``) well under the 4 KB envelope.
+#: Max children a single fan-out batch may create. Keeps
+#: ``SubtaskGroupCompleted.subtask_ids`` (carried in TaskSuspended / snapshot
+#: ``wake_on``) well under the 4 KB envelope.
 MAX_FANOUT = 16
 
 
@@ -1563,15 +1502,15 @@ def _spec_as_single(spec: SpawnSubtaskSpec) -> SpawnSubtaskDecision:
 
 
 def _valid_fanout_call_layout(specs: tuple[SpawnSubtaskSpec, ...]) -> bool:
-    """SR2 batch admission — is the specs' (call_id, member_index) layout the
-    one the resume pairing can reproduce from the assistant message?
+    """Batch admission — is the specs' (call_id, member_index) layout the one
+    the resume pairing can reproduce from the assistant message?
 
     Valid layout: specs group into contiguous same-``call_id`` runs, each run
-    numbered ``member_index`` 0..k-1 (one run per originating tool_use — a
-    batch call's ``spawns`` array yields k>1), and no ``call_id`` appears in
-    two runs. A duplicated tool_use id (the pre-batch failure mode) shows up
-    as two runs with the same id — or one run whose indices restart at 0 —
-    and is rejected exactly as before."""
+    numbered ``member_index`` 0..k-1 (one run per originating tool_use — a batch
+    call's ``spawns`` array yields k>1), and no ``call_id`` appears in two runs.
+    A duplicated tool_use id shows up as two runs with the same id — or one run
+    whose indices restart at 0 — and is rejected.
+    """
     seen_runs: set[str] = set()
     current_id: Optional[str] = None
     expected_index = 0
@@ -1598,9 +1537,10 @@ def _deny_fanout_batch(
     lease_id: str,
     trace_id: str,
 ) -> Task:
-    """SR2 (B3/B6) — all-or-none deny: emit one ``SubtaskDenied`` (the
-    failing spec for a per-spec deny, the first spec for a global one) +
-    fail the parent. **Zero** ``SubtaskSpawned`` / child ``TaskCreated``."""
+    """All-or-none deny: emit one ``SubtaskDenied`` (the failing spec for a
+    per-spec deny, the first spec for a global one) + fail the parent. **Zero**
+    ``SubtaskSpawned`` / child ``TaskCreated``.
+    """
     goal_inline, goal_ref = spill_goal(ctx.content_store, spec.goal)
     ctx.emit(
         task_id=task.task_id,
@@ -1629,13 +1569,14 @@ def handle_spawn_subtasks(
     lease_id: str,
     trace_id: str,
 ) -> Task:
-    """SR2 — fan out N sub-agents and suspend on an all-of group join.
-    **All-or-none admission** (B3): preflight every spec
-    (size + duplicate call_id + per-spec guard with simulated
-    ``spawned_subtasks = current + i``); on any deny / require_approval the
-    whole batch denies (parent fail, zero child). Only after all pass are
-    the N ``SubtaskSpawned`` + N child ``TaskCreated`` emitted (member
-    order) and the parent suspended on ``SubtaskGroupCompleted``."""
+    """Fan out N sub-agents and suspend on an all-of group join.
+
+    **All-or-none admission**: preflight every spec (size + duplicate call_id +
+    per-spec guard with simulated ``spawned_subtasks = current + i``); on any
+    deny / require_approval the whole batch denies (parent fail, zero child).
+    Only after all pass are the N ``SubtaskSpawned`` + N child ``TaskCreated``
+    emitted (member order) and the parent suspended on ``SubtaskGroupCompleted``.
+    """
     specs = decision.specs
     if not specs:
         # The policy only emits this for >=2 spawns, so an empty batch is a
@@ -1651,20 +1592,19 @@ def handle_spawn_subtasks(
             reason=f"fanout_batch_size:{n}>{MAX_FANOUT}",
             lease_id=lease_id, trace_id=trace_id,
         )
-    # Batch-form layout check (replaces bare call_id uniqueness): members of
-    # ONE batch call legitimately share its call_id — they must be contiguous
-    # and numbered 0..k-1, and a call_id must not reappear in a later run.
-    # This still catches what the old check caught (two distinct tool_uses
-    # with a duplicated id → both members carry member_index 0) while
-    # admitting the one-call ``spawns`` array, and it is exactly the layout
-    # the resume pairing reproduces positionally from the assistant message.
+    # Batch-form layout check: members of ONE batch call legitimately share its
+    # call_id — they must be contiguous and numbered 0..k-1, and a call_id must
+    # not reappear in a later run. This catches two distinct tool_uses with a
+    # duplicated id (both members carry member_index 0) while admitting the
+    # one-call ``spawns`` array, and it is exactly the layout the resume pairing
+    # reproduces positionally from the assistant message.
     if not _valid_fanout_call_layout(specs):
         return _deny_fanout_batch(
             ctx, task, specs[0], reason="fanout_batch_duplicate_call_id",
             lease_id=lease_id, trace_id=trace_id,
         )
 
-    # --- per-spec guard preflight, simulated spawned_subtasks (B2) ---
+    # --- per-spec guard preflight, simulated spawned_subtasks ---
     sim_spawned = task.governance.spawned_subtasks
     for spec in specs:
         verdict = ctx.guard(
@@ -1678,8 +1618,8 @@ def handle_spawn_subtasks(
                 lease_id=lease_id, trace_id=trace_id,
             )
         if verdict.verdict is Verdict.REQUIRE_APPROVAL:
-            # Approval is unsupported inside a fan-out batch in
-            # v1 (no partial create, no per-spec approval-resume) → deny.
+            # Approval is unsupported inside a fan-out batch (no partial create,
+            # no per-spec approval-resume) → deny.
             return _deny_fanout_batch(
                 ctx, task, spec, reason="approval_unsupported_in_fanout",
                 lease_id=lease_id, trace_id=trace_id,
@@ -1688,17 +1628,15 @@ def handle_spawn_subtasks(
 
     # --- all passed → mint N ids + group_id, emit in member order ---
     subtask_ids = tuple(ctx.id_factory() for _ in specs)
-    if len(set(subtask_ids)) != n:  # defensive (B1)
+    if len(set(subtask_ids)) != n:  # defensive
         return _deny_fanout_batch(
             ctx, task, specs[0], reason="fanout_batch_duplicate_subtask_id",
             lease_id=lease_id, trace_id=trace_id,
         )
     group_id = derive_group_id(subtask_ids)
     for spec, sid in zip(specs, subtask_ids):
-        # SubtaskSpawnedPayload is UNCHANGED (no call_id field) — the
-        # result↔call pairing is positional from the assistant message
-        # Canonical bytes of SubtaskSpawned are
-        # identical to the SR1 single-child path.
+        # SubtaskSpawnedPayload carries no call_id field — the result↔call
+        # pairing is positional from the assistant message.
         goal_inline, goal_ref = spill_goal(ctx.content_store, spec.goal)
         ctx.emit(
             task_id=task.task_id,
@@ -1720,15 +1658,14 @@ def handle_spawn_subtasks(
             goal=spec.goal,
             inputs=dict(spec.inputs),
             trace_id=trace_id,
-            subtask_depth=task.subtask_depth + 1,  # SR1 depth, uniform
+            subtask_depth=task.subtask_depth + 1,  # uniform child depth
         )
     return _suspend(
         ctx,
         task,
-        # fan-out v2: copy the Policy's
-        # transient opt-in onto the persisted suspend condition. ``or None`` so
-        # a sequential (``False``) group keeps the conditionally-folded field
-        # absent → byte-identical to every pre-v2 recording.
+        # Copy the Policy's transient concurrency opt-in onto the persisted
+        # suspend condition. ``or None`` so a sequential (``False``) group keeps
+        # the conditionally-folded field absent.
         wake_on=SubtaskGroupCompleted(
             group_id=group_id,
             subtask_ids=subtask_ids,
@@ -1777,14 +1714,13 @@ def handle_state_patch(
             lease_id=lease_id,
             trace_id=trace_id,
         )
-        # Slice B: a StatePatchDecision carries its out-of-band thinking on
-        # the decision itself (mirroring ToolCallsDecision). The Engine's
-        # ``_append_assistant_message`` never sees this message (it only
-        # handles decisions with a top-level ``assistant_message`` attr),
-        # so we record the thinking here against the assistant tool_use msg.
-        # A single decision has a single assistant turn → only the FIRST
-        # assistant message (role="assistant") is the anchor; any later
-        # ones (none produced by the current seam) are ignored.
+        # A StatePatchDecision carries its out-of-band thinking on the decision
+        # itself (mirroring ToolCallsDecision). The Engine's
+        # ``_append_assistant_message`` never sees this message (it only handles
+        # decisions with a top-level ``assistant_message`` attr), so record the
+        # thinking here against the assistant tool_use msg. A single decision has
+        # a single assistant turn → only the FIRST assistant message
+        # (role="assistant") is the anchor.
         if msg.role == "assistant":
             record_assistant_thinking(
                 ctx,
@@ -1796,15 +1732,12 @@ def handle_state_patch(
             )
     if decision.patch is not None:
         # Mid-loop skill activation needs the same
-        # SkillContentRecorded→TaskStatePatched causal order pre-loop
-        # helpers already produce. Emit per-skill provenance right here
-        # (first-only, fold-guarded). All four activation entry points
-        # (pre-loop SDK helper, Engine.apply_state_patch,
-        # _apply_decision_state_patch, and this handler) converge on
-        # exactly one event per (task, skill) because every path
-        # gates against fold's authoritative
-        # governance.skill_content_hashes dict — no engine-level gate
-        # or path-exclusion check is required.
+        # SkillContentRecorded→TaskStatePatched causal order the pre-loop
+        # helpers produce. Emit per-skill provenance here (first-only,
+        # fold-guarded). Every activation entry point converges on exactly one
+        # event per (task, skill) because each gates against fold's
+        # authoritative governance.skill_content_hashes dict — no engine-level
+        # gate or path-exclusion check is required.
         emit_skill_provenance_for_patch(
             ctx, task, decision.patch, lease_id=lease_id, trace_id=trace_id
         )
@@ -1829,7 +1762,7 @@ def handle_state_patch(
         )
 
 
-#: ③ — media type for the persisted summary body (D-3c).
+#: Media type for the persisted summary body.
 _SUMMARY_MEDIA_TYPE = "application/json"
 
 
@@ -1841,47 +1774,35 @@ def handle_compaction_requested(
     lease_id: str,
     trace_id: str,
 ) -> Optional[Task]:
-    """③ (D-3 / D-3b): handle one compaction step in the run loop.
+    """Handle one compaction step in the run loop.
 
-    The prune (deterministic, Composer-side) and the summarize LLM
-    round-trip (recorded via the Policy's ``RuntimeLLMClient.complete``)
-    already happened in the Policy before this decision was returned; this
-    handler only writes the durable kernel state for the step:
+    The prune (deterministic, Composer-side) and the summarize LLM round-trip
+    (recorded via the Policy's ``RuntimeLLMClient.complete``) already happened
+    in the Policy before this decision was returned; this handler only writes
+    the durable kernel state for the step:
 
-    1. **anti-spiral** (D-B3, finding 3): escalate to a non-retryable
-       ``TaskFailed`` instead of compacting forever — but the judgement is
-       **boundary progress**, not a sticky continuation tag. The previous
-       ``Compacted`` advanced ``ContextState.summary_boundary`` to the prefix
-       it collapsed; this step is only making progress when it would advance
-       it further. So we escalate iff the boundary this step is about to write
-       does **not** advance past what is already collapsed:
+    1. **anti-spiral**: escalate to a non-retryable ``TaskFailed`` instead of
+       compacting forever — judged by **boundary progress**, not a continuation
+       tag. The previous ``Compacted`` advanced ``ContextState.summary_boundary``
+       to the prefix it collapsed; this step is making progress only when it
+       would advance it further. So escalate iff the boundary this step is about
+       to write does **not** advance past what is already collapsed:
 
            ``decision.boundary_count <= task.context.summary_boundary``
 
        (``<= 0`` is the degenerate subset — nothing summarisable at all.)
-
-       This deliberately *replaces* the old
-       ``last_transition == "compaction_retry"/"overflow_recovery"`` check,
-       which was the false-kill root cause: those tags are written via
-       ``StepTransitionMarked`` only on compaction steps and folded
-       last-write-wins (``fold._on_step_transition_marked``); a normal
-       tool/turn step never re-marks, so the tag stayed sticky across real
-       work. A long session that compacts, then does real tool work (raw
-       history grows → a *larger* boundary becomes summarisable), then
-       legitimately compacts again was being killed even though the second
-       compaction strictly advanced the boundary. Reading the durable
-       ``summary_boundary`` instead means real progress (history growth →
-       boundary growth) is never mistaken for a spiral, while a genuinely
-       stuck compaction (boundary cannot move) still terminates.
+       Reading the durable ``summary_boundary`` means real progress (history
+       growth → boundary growth) is never mistaken for a spiral, while a
+       genuinely stuck compaction (boundary cannot move) still terminates.
 
        Under a good Policy this kernel arm is pure defence: the Policy's own
-       self-termination already refuses to emit a ``CompactionRequested``
-       whose boundary would not advance (it returns
-       ``FailDecision(reason="compaction_no_progress")`` instead). This arm
-       only fires if a Policy bypasses that guarantee.
+       self-termination already refuses to emit a ``CompactionRequested`` whose
+       boundary would not advance (it returns
+       ``FailDecision(reason="compaction_no_progress")`` instead). This arm only
+       fires if a Policy bypasses that guarantee.
     2. emit the continuation tag (``overflow_recovery`` passive /
        ``compaction_retry`` proactive) so observers/inspect can see the
-       continuation kind (no longer load-bearing for anti-spiral).
+       continuation kind.
     3. emit ``CompactionRequested`` (observability anchor).
     4. emit ``Compacted`` (only when the policy produced a ``summary``):
        persist the summary body, carry the boundary; fold writes the
@@ -1890,17 +1811,17 @@ def handle_compaction_requested(
        compacted history.
     """
     passive = decision.reason == "overflow"
-    # 1. anti-spiral via boundary progress (NOT sticky tags). A repeated
-    # SUMMARIZING compaction that does not push ``summary_boundary`` forward
-    # made no progress and would loop forever; escalate. ``summary_boundary``
-    # is the cumulative raw-history prefix already collapsed by the previous
-    # ``Compacted`` (fold writes it), so a summary whose boundary fails to
-    # exceed it cannot shrink the request. ``boundary_count <= 0`` (nothing
-    # summarisable) is the degenerate subset of this check. The guard is
-    # scoped to ``summary is not None``: a prune-only step (``summary is None``,
-    # ``boundary_count == 0``) is the Composer's deterministic tail-prune
-    # bringing the estimate under the window — that IS progress and carries no
-    # summary boundary to advance, so it must never escalate (D-B3, finding 3).
+    # anti-spiral via boundary progress. A repeated SUMMARIZING compaction that
+    # does not push ``summary_boundary`` forward made no progress and would loop
+    # forever; escalate. ``summary_boundary`` is the cumulative raw-history
+    # prefix already collapsed by the previous ``Compacted`` (fold writes it),
+    # so a summary whose boundary fails to exceed it cannot shrink the request.
+    # ``boundary_count <= 0`` (nothing summarisable) is the degenerate subset.
+    # The guard is scoped to ``summary is not None``: a prune-only step
+    # (``summary is None``, ``boundary_count == 0``) is the Composer's
+    # deterministic tail-prune bringing the estimate under the window — that IS
+    # progress and carries no summary boundary to advance, so it must never
+    # escalate.
     if (
         decision.summary is not None
         and decision.boundary_count <= task.context.summary_boundary
@@ -1916,10 +1837,10 @@ def handle_compaction_requested(
             trace_id=trace_id,
         )
 
-    # 2. continuation tag (passive = overflow_recovery, proactive =
-    # compaction_retry) — observability only now; folded onto last_transition
-    # so inspect can see the continuation kind. NO longer read by the
-    # anti-spiral check above (that reads the durable ``summary_boundary``).
+    # continuation tag (passive = overflow_recovery, proactive =
+    # compaction_retry) — observability only; folded onto last_transition so
+    # inspect can see the continuation kind. Not read by the anti-spiral check
+    # above (that reads the durable ``summary_boundary``).
     reason: TransitionReason = (
         "overflow_recovery" if passive else "compaction_retry"
     )
@@ -1927,7 +1848,7 @@ def handle_compaction_requested(
         ctx, task, reason=reason, lease_id=lease_id, trace_id=trace_id
     )
 
-    # 3. observability anchor for *why* this compaction step ran.
+    # observability anchor for *why* this compaction step ran.
     ctx.emit(
         task_id=task.task_id,
         type_="CompactionRequested",
@@ -1939,8 +1860,8 @@ def handle_compaction_requested(
         trace_id=trace_id,
     )
 
-    # 4. durable result — only when the policy summarized (prune alone may
-    # have sufficed → no Compacted event, no summary slice change).
+    # durable result — only when the policy summarized (prune alone may have
+    # sufficed → no Compacted event, no summary slice change).
     if decision.summary is not None:
         summary_ref = ctx.content_store.put(
             to_canonical_bytes(decision.summary),
@@ -2104,13 +2025,12 @@ def handle_tool_calls(
         lease_id=lease_id,
         trace_id=trace_id,
     )
-    # Post-tool content discovery (docs/adr/anchored-content-placement.md):
-    # consulted AFTER the batched results message is appended+folded, so the
-    # activation's fold-time anchor — and therefore the rendered content —
-    # lands right after the results that triggered it (and can never split a
-    # tool_use from its results). First-only gated against the activation
-    # map, mirroring ``maybe_emit_provenance``; a discovery fault may only
-    # omit context, never fail the turn.
+    # Post-tool content discovery: consulted AFTER the batched results message
+    # is appended+folded, so the activation's fold-time anchor — and therefore
+    # the rendered content — lands right after the results that triggered it
+    # (and can never split a tool_use from its results). First-only gated
+    # against the activation map, mirroring ``maybe_emit_provenance``; a
+    # discovery fault may only omit context, never fail the turn.
     if ctx.content_discovery is not None:
         for call, result in executed:
             try:
@@ -2118,8 +2038,8 @@ def handle_tool_calls(
             except Exception:  # noqa: BLE001 — discovery is best-effort.
                 continue
             for payload in payloads:
-                # Hash last-write-wins (spec §3): re-emit only when the
-                # discovered file's hash differs from the active one.
+                # Hash last-write-wins: re-emit only when the discovered file's
+                # hash differs from the active one.
                 if task.state.active_content.get(payload.kind, {}).get(
                     payload.name
                 ) == payload.content_hash:
@@ -2183,9 +2103,8 @@ def dispatch_exit(
         return handle_yield_for_human(
             ctx, task, decision, lease_id=lease_id, trace_id=trace_id
         )
-    # Byte-equal preservation: Engine.py:405-406 raised this exact
-    # message for any unmapped Decision.
-    # Do NOT rephrase — acceptance test pins the full string.
+    # The acceptance test pins this exact string for any unmapped Decision —
+    # do NOT rephrase.
     raise NotImplementedError(
         f"Unknown decision type: {type(decision).__name__}"
     )

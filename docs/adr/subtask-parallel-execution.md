@@ -1,53 +1,130 @@
-# Subtask fanout is opt-in per group; real wall-clock parallelism only on the live drain
+# Group members run concurrently on one shared bounded pool, and only on the live drain
 
 ## Context
 
-`subtask-fanout-and-durable-wake.md` laid out the skeleton for an N-way join (one parent task fans out several subtasks and rejoins at a group barrier), and `workflow-orchestration.md` gave the model the ability to write its own orchestration script that dispatches multiple agents. Both decisions explicitly deferred "concurrency" to a v2 follow-up: v1 only wired the group-join skeleton onto a single worker's **serial** drain. This decision delivers the "bounded concurrent executor + lease relaxation" that those two promised, and it is **opt-in per group**.
+A fan-out group joins N subtasks on an all-of barrier (see
+subtask-fanout-and-durable-wake.md), and the orchestration interpreter's
+`parallel()` builds such a group from a script. The barrier constrains ordering,
+not timing, so the group's wall-clock cost is a separate question: driven one at
+a time, a group costs the sum of its members rather than its slowest member.
+
+The payoff is latency on the live path only, and it must not cost determinism:
+fold and resume have to re-derive the same parent state from a recording no
+matter how the members interleaved.
 
 ## Decision
 
-- **Concurrency is opt-in per group, and the intent rides on the suspend condition.** `SubtaskGroupCompleted` gains a `concurrent: Optional[bool]` field with **conditional folding** (`__canonical_omit_none__`): `None`/serial does not appear in the canonical bytes, so every pre-v2 recording and every serial group stays byte-for-byte identical; only an opt-in concurrent group writes the extra `"concurrent":true` key. The intent is first expressed on the transient `SpawnSubtasksDecision.concurrent`, and the Engine's `handle_spawn_subtasks` copies it (`or None`) onto the persisted condition.
+- **The intent rides the suspend condition.** `SubtaskGroupCompleted` carries an
+  optional `concurrent` flag that is conditionally folded — absent whenever it is
+  unset, so a sequential group's condition carries no scheduling hint at all. The
+  intent starts on the transient spawn decision, and the Engine's spawn handler
+  copies it onto the persisted condition. A fan-out of two or more members, and
+  every `parallel()` group, asks for concurrency by default; setting
+  `NOETA_SUBTASK_CONCURRENCY` to `0`/`false`/`off`/`no` forces the sequential
+  drain.
 
-- **The executor lives inside the in-process live drain (`noeta.execution.subtask_drain`), not in a new worker pool.** A concurrent group submits each member subtree to a **process-global, bounded `ThreadPoolExecutor`** whose **`max_workers` is the concurrency ceiling** (`NOETA_MAX_SUBTASK_CONCURRENCY`, default `min(8, cpu)`) — there is no separate semaphore. The parent stays suspended (its lease released) until the group barrier fires, then resumes in one shot. A **nested** concurrent group (a member that itself fans out) drains **serially** within its own worker (`allow_concurrent=False`), so a pool worker never resubmits to the pool — and that is exactly what keeps the single shared pool deadlock-free (a worker never blocks waiting on a saturated pool that can never schedule the sub-job). As a result, no matter how deep the nesting goes, `max_workers` caps the total number of members in flight; nested **concurrency** itself is intentionally not offered (the v2 payoff is overlapping top-level groups). Neither the Engine nor the Dispatcher protocol changed — the lease relaxation is purely "the drain may hold N member leases at once for an opt-in group" (the dispatcher already leases out different tasks concurrently under its own lock; it was the drain that serialized them).
+- **The executor lives inside the in-process live drain**
+  (`noeta.execution.subtask_drain`), not in a worker pool. A concurrent group
+  submits each member subtree to a process-global, bounded thread pool whose
+  `max_workers` *is* the concurrency ceiling (`NOETA_MAX_SUBTASK_CONCURRENCY`,
+  default `min(8, cpu)`) — there is no separate semaphore. The parent stays
+  suspended with its lease released until the barrier fires, then resumes in one
+  shot. A group of zero or one member drives inline, without spinning the pool
+  up.
 
-- **Concurrency is behavior that only exists during live timing, and that falls out for free.** The concurrent executor runs only while the group is **live**; everything downstream reads recordings, not the executor. The N `SubtaskCompleted` observer events land on the parent's EventLog in a fixed recorded order, so a later `fold` (on resume or inspection) re-derives the same parent state regardless of how the subtasks interleaved in wall-clock time. No mode flag has to be threaded through: the drain's executor exists only on the live path.
+- **A nested group drains sequentially inside its own worker.** A member that
+  fans out further drains its own subtree one at a time, so a pool worker never
+  resubmits to the pool. That is what keeps a single shared pool deadlock-free:
+  no worker blocks waiting on a saturated pool that cannot schedule the job it is
+  waiting for. Consequently `max_workers` caps the total members in flight at any
+  nesting depth, and nested *concurrency* is not offered — the payoff is
+  overlapping top-level groups.
 
-- **No determinism normalization is needed — the recorded order is authoritative.** `SubtaskCompleted` events are written to the parent's EventLog in arrival order (a fixed order), so a later `fold` always re-derives state from that same recorded order — wall-clock interleaving never reaches the recording layer. The parent's **use** of the results is itself spawn-order deterministic (`engine._render_subagent_group_result` rebuilds them by member id). The "canonical sort by subtask_id" that an earlier decision envisioned is therefore **redundant**: once arrival order is committed to the log, fold/resume reproduces it for free — ordering only matters when state is re-derived by re-executing the subtasks live, and Noeta does not do that.
+- **Concurrency is confined to the drain.** Neither the Engine nor the Dispatcher
+  protocol carries it: the dispatcher hands out leases for distinct tasks
+  concurrently under its own lock, and the only relaxation is that the drain
+  holds N member leases at once for a concurrent group. The concurrent join
+  collects every future even when one raises, then re-raises the first, so no
+  member is left mid-flight holding a lease.
 
-- **Storage needed no rework.** `SqliteEventLog`/`SqliteDispatcher` were already built for concurrent threads (`check_same_thread=False`, WAL, `busy_timeout`, `BEGIN IMMEDIATE` retries; subscribers fire after commit and outside the writer lock — this is precisely the "cross-stream `ChildLifecycleObserver` pattern"). Writes are serialized through a per-adapter lock; the wall-clock win comes from **overlapping LLM/tool I/O**, not from parallel DB writes.
+- **The recorded order is authoritative.** Each `SubtaskCompleted` is written to
+  the parent's EventLog on arrival, and every non-live path — fold, resume,
+  inspection — reads that recording rather than the executor, so no mode flag has
+  to be threaded anywhere. The parent's *use* of the results is spawn-order
+  deterministic: they are rebuilt by member id.
 
-- **The observer is the only component that needed concurrency hardening.** `ChildLifecycleObserver` now serializes both its lineage mutations and its "read count — decide — wake" critical section under a single lock, and uses a `_group_woken` set keyed by `group_id` to guarantee each group barrier is claimed exactly once, so when N siblings finish on N threads the group wake fires exactly once and never races the lineage dict. The `SubtaskCompleted` emit stays **outside** that lock (it notifies subscribers synchronously, and would otherwise self-deadlock a non-reentrant lock).
+- **Storage requires no relaxation.** The SQLite adapters open connections with
+  same-thread checking off, WAL journaling, a busy timeout and `BEGIN IMMEDIATE`
+  write transactions, and subscribers fire after commit and outside the writer
+  lock. Writes serialize through a per-adapter lock; the wall-clock win comes
+  from overlapping LLM and tool I/O, not from parallel database writes.
 
-- **Still all-of only.** any-of / k-of-n / fail-fast are still not supported (they need subtask cancellation + dynamic group size). Concurrency for `pipeline()` is still deferred (see `workflow-orchestration.md`).
+- **The observer carries the concurrency hardening.** `ChildLifecycleObserver`
+  serializes both its lineage mutations and its read-count / decide / wake
+  critical section under one lock, and claims each barrier exactly once through a
+  set keyed by `group_id`, so N siblings finishing on N threads fire the group
+  wake once and never race the lineage table. The `SubtaskCompleted` emit stays
+  outside that lock — it notifies subscribers synchronously and would otherwise
+  self-deadlock a non-reentrant lock.
+
+- **The barrier stays all-of.** any-of, k-of-n and fail-fast need subtask
+  cancellation and a dynamic group size, and are not offered.
 
 ## Rationale
 
-- **Live latency is the only payoff, so pay only the live cost.** resume reads recorded results back from the EventLog and gains nothing from concurrency; running the executor only on the live drain guarantees that every non-live path (fold / resume / inspection) is naturally single-threaded and naturally deterministic.
+- **Live latency is the only payoff, so pay only the live cost.** A resume reads
+  recorded results back out of the EventLog and gains nothing from concurrency.
+  Running the executor only on the live drain guarantees that every non-live path
+  is single-threaded and deterministic without extra machinery.
 
-- **Opt-in per group + conditional folding = zero blast radius.** The default behavior, all existing recordings, and every serial group are byte-for-byte unchanged; concurrency is something a `parallel()` group actively asks for, gated by the `NOETA_SUBTASK_CONCURRENCY` environment variable (read via `_concurrent_fanout_enabled()`, default ON — only `0`/`false`/`off`/`no` forces the serial drain).
+- **Committing arrival order to the log is what makes determinism free.** Each
+  completion is persisted as it arrives, so the recording is self-consistent
+  whatever order produced it. The guarantee is "fold and resume reproduce *that*
+  recorded order", not "two live runs are byte-identical" — and the former is
+  untouched by concurrency. Ordering would only matter if state were re-derived
+  by re-executing subtasks live, which nothing does.
 
-- **Committing arrival order to the log makes determinism far simpler than the earlier decisions assumed.** Those decisions reasoned as if some downstream path re-derived completion order by re-running the subtasks (in which case arrival-order non-determinism would be fatal). Noeta does not re-run subtasks: each `SubtaskCompleted` is persisted on arrival, so the recording is self-consistent no matter what order it was produced in. The honest boundary is "fold/resume reproduces **that** recorded order," not "two live runs are byte-identical" — and the former is unaffected by concurrency.
+- **A per-group flag with conditional folding keeps the blast radius at zero.**
+  Concurrency is something a group actively asks for, and a group that does not
+  ask carries no trace of the question in its canonical bytes.
 
-- **Putting the executor in the drain rather than a worker pool keeps the change local.** The product's entire execution model is a synchronous inline drain; turning it into a standing multi-worker pool would rewrite the cancel/resume seams wholesale for no added capability.
+- **Putting the executor in the drain keeps the change local.** The execution
+  model is a synchronous inline drain; a standing multi-worker pool would rewrite
+  the cancel and resume seams wholesale for no added capability.
 
 ## Alternatives considered
 
-1. **Canonical-sort the group's `SubtaskCompleted` sequence (plus multiset normalization of `subtask_results`).** Implemented first, then removed: each completion is persisted on arrival and fold reads it back in that same recorded order, so nothing needs re-normalizing — the sort was dead defensive code, contrary to the repo's "no speculative seams" principle.
-
-2. **A real worker pool + multi-lease dispatcher to drive subtasks.** Rejected: far more re-architecture than the capability needs; the inline drain already has delegation.
-
-3. **Normalize on write (buffer all of a group's completions, sort at the barrier, then emit).** Rejected: it would defer each completion's durable record to the barrier moment, regressing `subtask-fanout-and-durable-wake.md`'s "durable exactly-once wake" (a mid-group crash would lose the records of members that already finished). Incremental emit is kept.
-
-4. **Use a `concurrent: bool = False` (non-optional) field.** Rejected: `False` is not `None` and would always serialize, drifting every recording. The field is `Optional[bool]` under `__canonical_omit_none__`.
-
-5. **A per-group `ThreadPoolExecutor`.** Rejected: nested fanout would multiply pools and threads. Instead a single process-global pool bounds the total members in flight via `max_workers`; nested groups drain serially in their own worker and never re-enter the pool (which is exactly why the shared pool is deadlock-free — no separate semaphore needed).
+1. **Canonically sort a group's completion sequence, and normalize the result
+   multiset, so any two live runs record identical bytes.** Rejected: each
+   completion is persisted on arrival and fold reads it back in that same
+   recorded order, so there is nothing to re-normalize. The sort would be dead
+   defensive code guarding a property nothing depends on.
+2. **A real worker pool plus a multi-lease dispatcher to drive subtasks.**
+   Rejected: far more re-architecture than the capability needs; the inline drain
+   carries delegation on its own.
+3. **Normalize on write — buffer a group's completions, sort at the barrier, then
+   emit.** Rejected: it defers each completion's durable record to the barrier
+   moment, so a mid-group crash loses the records of members that finished,
+   contradicting the exactly-once wake guarantee.
+4. **A non-optional `concurrent: bool = False` field.** Rejected: `False` is not
+   absent, so the flag would serialize into every group's condition, writing a
+   scheduling hint into the canonical bytes of groups that never use it.
+5. **A per-group thread pool.** Rejected: nested fan-out would multiply pools and
+   threads. One process-global pool bounds total members in flight through
+   `max_workers`, and nested groups drain sequentially in their own worker rather
+   than re-entering it — which is also what makes the shared pool deadlock-free
+   without a separate semaphore.
 
 ## Consequences
 
-- Field naming is uniform: the intent is `SpawnSubtasksDecision.concurrent` on the transient side and `SubtaskGroupCompleted.concurrent` (`__canonical_omit_none__`) on the persisted side, bridged by `handle_spawn_subtasks`. The `parallel()` orchestration strategy sets `concurrent=True`.
-
-- The concurrency ceiling is capped at a single point by the process-global pool's `max_workers` (`NOETA_MAX_SUBTASK_CONCURRENCY`); nesting does not amplify it. To turn concurrency off entirely and revert to the serial drain, use `NOETA_SUBTASK_CONCURRENCY`.
-
-- Remember the honest determinism boundary: what is guaranteed is "fold/resume reproduces that recorded order," not "two live runs are byte-identical." Any future change that introduces "re-derive state by re-running subtasks" would break this free determinism and must re-evaluate the ordering question.
-
-- The only component that must be hardened as concurrency evolves is `ChildLifecycleObserver`; the new cross-thread invariants (lineage mutations serialized, group wake made exactly-once via `_group_woken`, `SubtaskCompleted` emit kept outside the lock) must be preserved whenever this area is touched.
+- Field naming is uniform: the transient spawn decision carries the intent, the
+  persisted `SubtaskGroupCompleted` carries the conditionally folded flag, and
+  the spawn handler bridges them.
+- The concurrency ceiling is capped at a single point by the process-global
+  pool's `max_workers`; nesting does not amplify it.
+- The determinism guarantee is that fold and resume reproduce the recorded order.
+  Any change that re-derives state by re-running subtasks breaks that and must
+  revisit the ordering question.
+- `ChildLifecycleObserver` is the component that must stay hardened as
+  concurrency evolves: lineage mutations serialized, the group wake claimed
+  exactly once, and the completion emit kept outside the lock.

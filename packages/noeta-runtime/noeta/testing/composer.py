@@ -1,15 +1,6 @@
-"""Composer helpers for tests.
-
-Issue 14 deleted ``MinimalComposer``: ``ThreeSegmentComposer`` is the
-single in-tree Composer implementation. Test fixtures that don't care
-about prompt content but need a Composer instance just want one
-configured with empty defaults — :func:`trivial_three_segment` is
-that fixture.
-
-Policy unit tests that exercise ``Policy.decide`` with a synthetic
-View (no real Composer involved) build one through :func:`fake_view`
-— View now requires the three-segment shape (``View.messages``
-legacy field was deleted in this slice).
+"""Composer fixtures: an empty-but-valid ``ThreeSegmentComposer`` for tests that
+need an instance rather than prompt content, and a synthetic three-segment
+``View`` for Policy tests that never build a Composer at all.
 """
 
 from __future__ import annotations
@@ -29,13 +20,10 @@ __all__ = ["trivial_three_segment", "fake_view"]
 
 
 def trivial_three_segment(content_store: ContentStore) -> "ThreeSegmentComposer":
-    """Empty-prompt, empty-tools Composer for tests that just need a
-    valid Composer instance (the full three-segment behaviour is
-    exercised in dedicated tests; here it's wiring infrastructure).
-
-    ``noeta.context`` ships in noeta-runtime alongside this module; the
-    import stays lazy so importing ``noeta.testing.composer`` for
-    :func:`fake_view` alone doesn't also pull in ``ThreeSegmentComposer``."""
+    """Empty-prompt, empty-tools Composer — wiring infrastructure, not a
+    subject: three-segment behaviour has its own tests."""
+    # Lazy so that importing this module for :func:`fake_view` alone does not
+    # drag in ``ThreeSegmentComposer``.
     from noeta.context.composer import ThreeSegmentComposer
 
     return ThreeSegmentComposer(
@@ -53,18 +41,12 @@ def fake_view(
 ) -> View:
     """Synthetic three-segment View for Policy unit tests.
 
-    Skips real ContentStore / hashing: ``segment_hash`` and ``plan_ref``
-    are filler values, valid in shape but not byte-meaningful. Use
-    this when the test cares about Policy behaviour given a View, not
-    about Composer semantics.
-
-    ``rolling_history`` mirrors ``messages`` so a compaction-aware Policy
-    (which computes its summarise boundary against the RAW history the real
-    Composer exposes — finding 2) sees a non-empty raw history in unit tests
-    just as it would in production. In ``fake_view`` ``semi_stable`` is empty
-    and no prior summary exists, so ``iter_messages()`` and ``rolling_history``
-    coincide here — the divergence the fix guards against only appears with a
-    real Composer (non-empty ``semi_stable`` / a prior summary).
+    No ContentStore and no hashing: ``segment_hash`` and ``plan_ref`` are
+    filler, shape-valid but not byte-meaningful. ``rolling_history`` mirrors
+    ``messages`` so that a compaction-aware Policy — which measures its
+    summarise boundary against the raw history — sees the same non-empty
+    history here as in production; with ``semi_stable`` empty and no prior
+    summary the two coincide, and only a real Composer makes them diverge.
     """
     msgs = list(messages or [])
     return View(

@@ -1,30 +1,21 @@
-"""Seam regression — the real-usage compaction baseline must survive a
-multi-step tool loop, not just a lease boundary.
+"""The compaction trigger's real-usage baseline must stay live across a whole
+multi-step tool loop, not only at a lease boundary.
 
 ``ReActPolicy._trigger_estimate`` mixes the provider's REAL recorded input
 count with a chars/4 estimate of what was appended since. That real baseline is
-the only defence against the chars/4 heuristic under-counting a payload: CJK
-text, JSON structure, base64 thinking signatures and tool schemas all tokenise
-far denser than the 4-chars-per-token rule of thumb assumes, and a production
-session was measured at ~1.2 chars/token — a ~4x under-read, enough to sail
-past a 200k window with the trigger still reading ~54k.
+the only defence against the heuristic under-counting a payload: CJK text, JSON
+structure, base64 thinking signatures and tool schemas all tokenise far denser
+than 4 chars per token, and a measured session ran ~1.2 chars/token — a ~4x
+under-read, enough to sail past a 200k window with the trigger still reading
+~54k.
 
-Both sides of the seam were already covered in isolation:
-
-* ``test_governance_fold_counters`` asserts ``fold`` writes
-  ``RuntimeState.last_input_tokens`` from ``Usage.input``;
-* ``test_react_policy_prune_summarize`` asserts the mix, injecting
-  ``last_input_tokens`` straight into a hand-built ``StepContext``.
-
-Neither exercised the WIRE between them, and the wire was broken. ``Engine``
-rebuilds ``StepContext`` each turn from ``task.runtime.last_input_tokens``, but
-that field is only ever written by ``fold`` — and the ``LLMRequestFinished``
-the LLM client emits mid tool-loop is appended straight to the EventLog without
-being applied to the in-memory ``task`` (``Engine._emit`` emits; it does not
-``apply_event``). So inside one ``Engine.run_one_step`` the ctx baseline stayed
-frozen at the entry value (``0`` on a first turn) and the trigger silently
-degraded to the pure estimate for the WHOLE turn, however long the tool loop
-ran — precisely where an under-counting estimate is most dangerous.
+The baseline travels ``LLMRequestFinished`` → ``fold`` →
+``RuntimeState.last_input_tokens`` → ``StepContext``. The fragile link is the
+tool loop: the LLM client appends its ``LLMRequestFinished`` straight to the
+EventLog, so unless that emit also reaches the in-memory task the ctx baseline
+stays frozen at the turn's entry value (``0`` on a first turn) and the trigger
+degrades to the pure estimate for the WHOLE turn — precisely where an
+under-counting estimate is most dangerous.
 
 The provider here models the real shape: it reports an input count
 ``_DENSITY``x the chars/4 estimate of the request it was handed, so reported
@@ -214,13 +205,10 @@ def _run(
 
 
 def test_real_usage_crosses_window_mid_tool_loop_and_compacts() -> None:
-    """The core regression: within ONE ``run_one_step``, a history whose REAL
-    token count crosses the window must compact — even though the chars/4
-    estimate stays far below it.
-
-    Pre-fix the baseline froze at ``0`` for the whole turn, the trigger fell
-    back to the pure estimate, and nothing ever compacted while the real
-    context sailed past the window.
+    """Within ONE ``run_one_step``, a history whose REAL token count crosses
+    the window must compact — even though the chars/4 estimate stays far below
+    it. A baseline frozen at the turn's entry value leaves the trigger reading
+    the pure estimate and nothing compacts while the real context overflows.
     """
     task_id, log, provider = _run(seed_turns=14, tool_turns=6)
     types = [e.type for e in log.read(task_id)]
@@ -275,16 +263,16 @@ def test_recorded_usage_is_durable_in_the_event_log() -> None:
 
 
 def test_llm_emits_reach_the_in_memory_task_mid_loop() -> None:
-    """The wire itself: an ``LLMRequestFinished`` emitted INSIDE the tool loop
-    must land on the in-memory task, not just in the EventLog.
+    """An ``LLMRequestFinished`` emitted INSIDE the tool loop must land on the
+    in-memory task, not only in the EventLog.
 
     ``fold(events) → state == runtime state`` is the equation ADR
-    single-writer-invariant rests on, and mid-loop it did not hold: the client
-    appends straight to the log and the Engine folds only its OWN emits, so
-    ``RuntimeState.last_input_tokens`` sat at the entry value for the whole
-    turn. Asserted on the task object rather than through a downstream
-    consumer, so a future reader of the baseline inherits the guarantee instead
-    of re-discovering the gap.
+    single-writer-invariant rests on, and the tool loop is where it is easiest
+    to break: the client appends straight to the log, so an Engine that folds
+    only its OWN emits would leave ``RuntimeState.last_input_tokens`` at the
+    turn's entry value. Asserted on the task object rather than through a
+    downstream consumer, so every reader of the baseline inherits the
+    guarantee.
     """
     dispatcher = InMemoryDispatcher()
     event_log = InMemoryEventLog(lease_validator=dispatcher)

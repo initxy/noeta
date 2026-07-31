@@ -1,25 +1,25 @@
-"""The extension proof for the session-pack seam (microkernel phase 3, S5).
+"""The extension proof for the session-pack seam.
 
-Phase 3 landed ``session_pack`` as the 15th standard surface — the single
-generic seam through which a *capability* is constructed into a session (a
-factory ``(SessionBuildContext) -> PackContribution`` the kernel builder runs in
-one priority-ordered loop, enumerating no capability by name). The whole point
-of that seam is that a **third party** can add a capability without editing the
-kernel or the SDK host: author a single-file plugin, contribute a
-``session_pack``, activate it, and its tools appear in a built session.
+``session_pack`` is the single generic seam through which a *capability* is
+constructed into a session (a factory ``(SessionBuildContext) ->
+PackContribution`` the kernel builder runs in one priority-ordered loop,
+enumerating no capability by name). The point of that seam is that a **third
+party** can add a capability without editing the kernel or the SDK host:
+author a single-file plugin, contribute a ``session_pack``, activate it, and
+its tools appear in a built session.
 
 This file is that proof. It touches no production code; every test authors a
 third-party-shaped plugin (or a bare :class:`SessionPackEntry`) and asserts the
 seam carries it end to end:
 
 * the loader **projection** surfaces an external plugin's pack as the
-  ``(priority, name, factory)`` triple the Client folds (S5 unit);
+  ``(priority, name, factory)`` triple the Client folds;
 * the kernel **builder** runs an injected pack in its generic loop — appending
   past every built-in tool at a high band, and *interleaving* between built-in
-  bands at a low one — with the built-in golden order preserved (S5 builder);
+  bands at a low one — with the built-in golden order preserved;
 * the full **Client** path assembles an activated plugin's pack tool into the
-  session it builds, and scopes it to the agent that activated it (S5
-  acceptance 5 — the zero-kernel-edit proof).
+  session it builds, and scopes it to the agent that activated it (the
+  zero-kernel-edit proof).
 
 The factory a pack contributes is a pure function of its
 :class:`~noeta.execution.session_pack.SessionBuildContext`: it reads a generic
@@ -256,7 +256,7 @@ def test_builder_interleaves_a_pack_between_priority_bands(
 
 # ===========================================================================
 # 3. End-to-end — an activated plugin's pack tool reaches a built session
-#    (S5 acceptance 5: zero kernel / SDK-host edits)
+#    (zero kernel / SDK-host edits)
 # ===========================================================================
 
 

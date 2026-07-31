@@ -1,6 +1,8 @@
-"""Tests for spawn_subagent agent-directory schema enhancement.
+"""The spawn_subagent schema advertises the available sub-agents.
 
-Covers:
+The ``spawn_subagent`` tool schema must reflect exactly which sub-agents a
+parent may delegate to, so the model picks from a real roster instead of
+guessing a name:
 
 1. **No-roster shape**: ``spawn_subagent_tool_schema()`` with no args / empty
    directory matches a hand-written reference exactly — the function-level

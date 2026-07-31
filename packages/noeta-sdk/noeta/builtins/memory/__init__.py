@@ -1,10 +1,9 @@
-"""``memory`` — tool pack + policy prompt fragment + recorded auto-recall.
+"""``memory`` — tool pack, policy prompt fragment, recorded auto-recall.
 
-Tool pack plus the policy prompt fragment (D10: ``MEMORY_POLICY_PROMPT``
-migrates onto the ``prompt_fragment`` surface). The memory index
-content-channel resident is built per-store by a factory, so it stays
-host-wired; the two durable, identity-plane pieces (tools + policy prompt) are
-declared here.
+Only the durable identity-plane pieces can be declared here; the index
+resident and the recall provider are built per-store by a factory, so their
+manifest entries name the factory and the live store binding stays host
+wiring.
 """
 
 from __future__ import annotations
@@ -42,19 +41,16 @@ MANIFEST = PluginManifest(
             "memory-policy",
             "noeta.presets:MEMORY_POLICY_PROMPT",
         ),
-        # Track A (D7): the memory auto-recall re-expressed as a recorded
-        # ``reminder_provider`` on the ``turn_intake`` seam. The ref points at the
-        # factory (bound to a live store at wiring time, like the memory tools);
-        # this declaration is the listing / reference surface.
+        # The ref points at the factory, not a provider: the host binds it to
+        # a live store at wiring time, so this entry is the listing surface.
         c(
             "reminder_provider",
             "memory-recall",
             "noeta.builtins.memory.impl.recall:memory_reminder_provider",
             seams=["turn_intake"],
         ),
-        # The session-construction half (microkernel phase 3): band 300,
-        # directly after the base fs/web packs. Self-gates on the agent's
-        # ``memory`` capability flag.
+        # Band 300 places the pack directly after the base fs/web packs; it
+        # self-gates on the agent's ``memory`` capability flag.
         c(
             "session_pack",
             "memory",

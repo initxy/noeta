@@ -1,15 +1,16 @@
-"""SR1 — bounded recursive delegation.
+"""Bounded recursive delegation.
 
-Covers the spec gates: depth-scalar recording + old-shape→0 restore
-(TaskCreatedPayload / fold genesis / snapshot / sqlite); the BudgetGuard
-``max_subtask_depth`` semantics; an end-to-end nested
-``root → child → grandchild`` ``noeta code`` run with correct depths;
-a depth-cap deny landing *before*
-child creation with a deterministic event sequence; B1 child delegation
-inheritance (the child actually spawns a grandchild); B2 targeted child
-lease (a decoy ready task is never driven); and B3 unsupported child
-suspend releasing the lease and settling the command as a clean suspend
-(item 3 — plus the approve-the-child-resumes-the-parent loop).
+A sub-agent may itself delegate, so depth must be tracked and capped: each
+``TaskCreated`` records its ``subtask_depth``, and the ``BudgetGuard`` denies a
+spawn at ``max_subtask_depth`` BEFORE the child is created (the deny lands as
+``SubtaskDenied`` then ``TaskFailed``, never a half-created grandchild). The
+end-to-end ``root → child → grandchild`` run pins the inherited delegation
+capability and the correct depths; a targeted child lease must ignore an
+unrelated ready task so a decoy never perturbs the run; and a child that
+suspends for approval must release its lease and settle the parent as a clean
+subtask-wake suspend (not a stranded parent), with approving the child resuming
+the parent out-of-band. ``subtask_depth`` is state metadata only — it must
+never leak into an LLMRequest.
 """
 
 from __future__ import annotations
@@ -91,8 +92,7 @@ def _session(
 
     ``delegate_to=(...)`` → ``plugins=("delegation", …)`` + ``spawnable=(...)``
     on the main spec (children inherit delegation through the drain);
-    ``max_subtask_depth`` rides the host Budget exactly like the old runner's
-    ``coding_replay_budget(max_subtask_depth)``. Returns ``(host, driver,
+    ``max_subtask_depth`` rides the host Budget. Returns ``(host, driver,
     provider)`` — the shared ``FakeLLMProvider`` carries ``received_requests``.
     """
     provider = FakeLLMProvider(responses=responses)
@@ -112,7 +112,7 @@ def _session(
 
 
 # ---------------------------------------------------------------------------
-# 1. depth scalar: old-shape restores to 0 (gate 1)
+# 1. depth scalar: a genesis without the key restores to 0
 # ---------------------------------------------------------------------------
 
 
@@ -131,7 +131,7 @@ def test_fold_genesis_without_depth_is_zero() -> None:
 
 
 def test_snapshot_roundtrip_without_depth_is_zero() -> None:
-    # an old snapshot body has no subtask_depth key → rehydrate to 0
+    # a snapshot body with no subtask_depth key → rehydrate to 0
     task = rehydrate_task({
         "task_id": "t1", "status": "running", "parent_task_id": None,
         "runtime": {"messages": []}, "state": {}, "context": {},
@@ -153,7 +153,7 @@ def test_sqlite_roundtrip_taskcreated_depth(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2. BudgetGuard depth semantics (gate 8)
+# 2. BudgetGuard depth semantics
 # ---------------------------------------------------------------------------
 
 
@@ -183,7 +183,7 @@ def test_depth_guard_none_is_unlimited() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. end-to-end nested: root → child → grandchild (gates 2, 7)
+# 3. end-to-end nested: root → child → grandchild
 # ---------------------------------------------------------------------------
 
 
@@ -216,7 +216,7 @@ def test_nested_delegation_records_depths(tmp_path: Path) -> None:
     child_id = _spawned_child(host, root_id)
     grandchild_id = _spawned_child(host, child_id)
 
-    # gate 7 — depths recorded on each TaskCreated.
+    # depths recorded on each TaskCreated.
     assert _depth_of(host, root_id) == 0
     assert _depth_of(host, child_id) == 1
     assert _depth_of(host, grandchild_id) == 2
@@ -225,7 +225,7 @@ def test_nested_delegation_records_depths(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. depth cap denies grandchild BEFORE creation (gate 3)
+# 4. depth cap denies grandchild BEFORE creation
 # ---------------------------------------------------------------------------
 
 
@@ -257,13 +257,13 @@ def test_depth_cap_denies_grandchild_before_creation(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. B1 — child inherits delegation capability (gate 9)
+# 5. child inherits delegation capability
 # ---------------------------------------------------------------------------
 
 
 def test_child_inherits_delegation_and_can_spawn(tmp_path: Path) -> None:
     """The nested run only completes because the CHILD engine was built
-    WITH the spawn_subagent schema (B1). A grandchild stream existing is
+    WITH the spawn_subagent schema. A grandchild stream existing is
     direct proof the child could delegate."""
     ws = _ws(tmp_path)
     host, driver, _ = _session(ws, [
@@ -285,7 +285,7 @@ def test_child_inherits_delegation_and_can_spawn(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6. B2 — targeted child lease never grabs a decoy ready task (gate 10)
+# 6. targeted child lease never grabs a decoy ready task
 # ---------------------------------------------------------------------------
 
 
@@ -317,8 +317,8 @@ def test_targeted_child_lease_ignores_decoy_ready_task(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 7. B3 — unsupported child suspend releases the lease; the command settles
-#    as a legitimate suspend (item 3: no more 409 + stranded parent)
+# 7. unsupported child suspend releases the lease; the command settles
+#    as a legitimate suspend
 # ---------------------------------------------------------------------------
 
 
@@ -350,7 +350,7 @@ def test_unsupported_child_suspend_settles_as_clean_suspend(
         engine = real_build_engine(agent, model, **kw)
         # Wrap ONLY the delegated child engine; the root ``main`` engine (already
         # cached by the seed) drives the spawn normally. Forcing the child to a
-        # human suspend is exactly what the drain used to reject with a raise.
+        # human suspend is the case the drain must settle as a clean suspend.
         if agent.name != "main":
             return _SuspendingEngine(engine)
         return engine
@@ -358,9 +358,9 @@ def test_unsupported_child_suspend_settles_as_clean_suspend(
     monkeypatch.setattr(host, "_build_engine", _suspending_build)
 
     seeded = driver.seed_start(goal="root goal", agent="main")
-    # item 3: drive_seeded no longer propagates UnsupportedSubtaskSuspend —
-    # the command settles as a legitimate suspend (the SSE tree surfaces the
-    # child's own wait; approve/deny/answer on the child resumes the tree).
+    # drive_seeded does not propagate UnsupportedSubtaskSuspend — the command
+    # settles as a legitimate suspend (the SSE tree surfaces the child's own
+    # wait; approve/deny/answer on the child resumes the tree).
     out = driver.drive_seeded(seeded)
     assert out.status == "suspended"
     assert out.wake_handle is None  # a subtask wake, not a human handle
@@ -374,7 +374,7 @@ def test_unsupported_child_suspend_settles_as_clean_suspend(
     assert root.status == "suspended"
     assert isinstance(root.wake_on, SubtaskCompleted)
 
-    # B3 (unchanged): the child lease was RELEASED (suspended state) before
+    # The child lease was RELEASED (suspended state) before
     # the drain unwound — NOT leaked/held. Proof: a freshly-leased
     # ``task_id`` for a still-held lease would fail; here, waking the
     # released-suspended child makes it ready and it leases cleanly.
@@ -386,7 +386,7 @@ def test_unsupported_child_suspend_settles_as_clean_suspend(
 def test_child_approval_resolution_resumes_stranded_parent(
     tmp_path: Path,
 ) -> None:
-    """The full item-3 loop: parent delegates → child's gated tool suspends
+    """The full loop: parent delegates → child's gated tool suspends
     the child for approval (parent left suspended on its subtask wake) →
     the user approves the CHILD (its own command turn) → the child finishes,
     the ChildLifecycleObserver wakes the parent, and the driver's
@@ -439,7 +439,7 @@ def test_child_approval_resolution_resumes_stranded_parent(
     assert child_out.status == "terminal"
     assert (ws / "new.py").read_text() == "print('hi')\n"
 
-    # …and the previously-stranded parent resumed out-of-band to terminal.
+    # …and the parent resumed out-of-band to terminal.
     root = fold(host.event_log, host.content_store, root_id)
     assert root.status == "terminal"
     assert root.governance.subtask_results[-1].status == "completed"
@@ -448,7 +448,7 @@ def test_child_approval_resolution_resumes_stranded_parent(
 
 
 # ---------------------------------------------------------------------------
-# 8. no cross-task request coupling: depth never enters an LLMRequest (gate 6)
+# 8. no cross-task request coupling: depth never enters an LLMRequest
 # ---------------------------------------------------------------------------
 
 

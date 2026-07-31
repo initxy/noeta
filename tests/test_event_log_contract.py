@@ -1,15 +1,11 @@
 """Storage-backend-neutral EventLog contract.
 
-Issue 15 introduces the second EventLog adapter (``SqliteEventLog``)
-on top of the existing ``InMemoryEventLog``. This module runs the
-behavioural contract — three concurrency layers, payload cap, snapshot
-lookup, typed-payload restore, subscriber semantics — against **both**
-backends so any adapter that satisfies the L0 Protocols continues to
-behave identically from a caller's perspective.
-
-Existing ``test_event_log.py`` / ``test_event_log_strict.py`` keep
-exercising InMemory-specific call patterns; this suite adds the
-behavioural contract guarantees that every adapter has to honour.
+Every test runs against every EventLog adapter, so an adapter that
+satisfies the L0 Protocols is indistinguishable from a caller's
+perspective. The contract covers the three concurrency layers, the
+payload cap, snapshot lookup, typed-payload restore and subscriber
+semantics — the guarantees a caller may rely on without knowing which
+backend it holds.
 """
 
 from __future__ import annotations
@@ -58,7 +54,7 @@ from tests._pg import isolated_schema_dsn, postgres_param
 
 
 # ---------------------------------------------------------------------------
-# Adapter fixture: parametrise every test over InMemory + Sqlite
+# Adapter fixture: parametrise every test over every backend
 # ---------------------------------------------------------------------------
 
 
@@ -851,10 +847,9 @@ def test_payload_restorer_covers_all_known_payload_types() -> None:
     """Every ``*Payload`` class in :mod:`noeta.protocols.events` must
     have a corresponding entry in ``_PAYLOAD_RESTORERS``.
 
-    Without this guard, adding a new event type to ``events.py``
-    without registering the restorer would silently fall through to
-    the forward-compat dict path and break fold-side attribute access
-    on Sqlite at runtime. We catch that drift at test time instead.
+    An event type declared without its restorer falls through to the
+    forward-compat dict path and breaks fold-side attribute access on a
+    durable backend at runtime. This catches that drift at test time.
     """
     import noeta.protocols.events as events_module
 
@@ -877,7 +872,7 @@ def test_payload_restorer_covers_all_known_payload_types() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CW5a — EventLogTaskIndex catalog capability (list_task_streams)
+# EventLogTaskIndex catalog capability (list_task_streams)
 # ---------------------------------------------------------------------------
 
 

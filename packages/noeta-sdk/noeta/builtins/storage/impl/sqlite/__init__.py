@@ -1,20 +1,14 @@
-"""sqlite storage adapters — the ``storage`` built-in's file-backed backend.
+"""sqlite3 adapters for the L0 storage Protocols — the file-backed backend.
 
-This sub-package houses the sqlite3-backed adapters for the L0 storage
-Protocols defined in ``noeta.protocols``: ``SqliteEventLog``,
-``SqliteContentStore``, and ``SqliteDispatcher`` share the **same** sqlite
-file and the migration sequence in
+``SqliteEventLog``, ``SqliteContentStore`` and ``SqliteDispatcher`` share the
+**same** sqlite file and the one migration sequence in
 :mod:`noeta.builtins.storage.impl.sqlite.migrations`;
-:mod:`~noeta.builtins.storage.impl.sqlite.stack` wires the triple. The
-shared backend domain rules come from :mod:`noeta.storage.spi` — this
-package imports only ``noeta.protocols`` and that SPI, standing in for a
-third-party backend author.
-
-Production code must depend on the L0 Protocols only; the universal
-``sdk-core-not-builtins`` import-linter contract keeps every static import
-path out of ``noeta.builtins``. The only doorway is :mod:`noeta.sdk.storage`
-(lazy re-exports + stack builders); the host injects the built triple
-through ``HostConfig``.
+:mod:`~noeta.builtins.storage.impl.sqlite.stack` wires the triple. The package
+imports only ``noeta.protocols`` and the shared domain rules in
+:mod:`noeta.storage.spi`, standing in for a third-party backend author.
+Nothing static may import it back: production code depends on the L0 Protocols
+and reaches an implementation through :mod:`noeta.sdk.storage`, which the host
+injects via ``HostConfig``.
 """
 
 from __future__ import annotations

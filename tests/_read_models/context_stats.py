@@ -1,8 +1,9 @@
-"""Read-only context-size statistics for code sessions (CW18e).
+"""Read-only context-size statistics for code sessions.
 
-This module intentionally works over the CW17 projection objects instead of
-EventLog/runtime internals. It reports only recorded refs/counts; it never reads
-prompt bodies, estimates tokens, runs the composer, or constructs a provider.
+Works over the :mod:`tests._read_models.context_view` projections rather than
+EventLog or runtime internals, and reports only recorded refs and counts: it
+never reads prompt bodies, estimates tokens, runs the composer, or constructs a
+provider. Sizing a session's context must stay cheap and side-effect-free.
 """
 
 from __future__ import annotations

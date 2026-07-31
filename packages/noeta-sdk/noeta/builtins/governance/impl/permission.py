@@ -1,34 +1,15 @@
-"""``PermissionGuard`` — tool / agent allowlists with fail-closed
-risk-level handling.
+"""``PermissionGuard`` — tool / agent allowlists with fail-closed risk handling.
 
-Issue 18. Routes ``ProposedToolCall`` through allowlist / denylist /
-risk-level checks and ``ProposedSpawnSubtask`` through an agent
-allowlist. ``ProposedFinish`` is never blocked — permission is about
-gating *side-effecting* actions, not termination.
+Permission is a security boundary, so an unknown configuration denies: with
+``max_risk_level`` set, an unregistered tool name (no metadata to consult) or
+an unrecognised ``risk_level`` string is a ``DENY``, never an ``ALLOW``.
+``ProposedFinish`` is never blocked — permission gates *side-effecting*
+actions, not termination.
 
-**Fail-closed semantics** (issue 18 B4): when ``max_risk_level`` is
-configured, any of the following return ``DENY`` rather than silently
-allowing:
-
-* the tool name is not registered with the injected ``tools`` mapping
-  (no metadata to consult);
-* the tool's ``risk_level`` string is not one of the known levels
-  (``low`` < ``medium`` < ``high`` — the project-wide canonical neutral
-  scale; every production tool declares one of these).
-
-Permission is a security boundary; an unknown configuration is a
-``DENY``, not an ``ALLOW``.
-
-The guard operates only on **neutral** Noeta tool names: any product
-vocabulary (e.g. a Claude→Noeta ``allowed-tools`` alias map) is resolved
-**above** the guard, in noeta-sdk, and the resolved neutral grants are
-injected via ``PermissionPolicy.skill_allowed_tools``. The guard knows
-both vocabularies for neither.
-
-Microkernel M2: the class moved here from ``noeta.guards.permission``; its
-:class:`~noeta.runtime.governance.PermissionPolicy` configuration type (and
-the ``RiskLevel`` / ``SkillEnforcementMode`` vocabulary) sank into the kernel
-vocabulary module.
+The guard speaks only neutral Noeta tool names. Any product vocabulary (a
+Claude→Noeta ``allowed-tools`` alias map, say) is resolved above it and
+injected already-resolved through ``PermissionPolicy.skill_allowed_tools``,
+so the guard needs to know neither vocabulary.
 """
 
 from __future__ import annotations
@@ -61,12 +42,10 @@ class PermissionGuard:
     ) -> None:
         self._policy = policy
         self._tools = tools
-        # Issue B: the skill->allowed-tools grants arrive already parsed
-        # and alias-resolved (neutral Noeta tool names) from noeta-sdk; the
-        # guard just stores the resolved map. A declaring skill always
-        # appears in ``_declared_grants`` — a resolution that failed safe
-        # maps to the empty frozenset (enforcement stays ON for that skill
-        # and it grants nothing), never to "all tools".
+        # A declaring skill always appears in ``_declared_grants``: a grant
+        # that failed to resolve maps to the empty frozenset (enforcement
+        # stays ON for that skill and it grants nothing), never to "all
+        # tools".
         self._declared_grants: dict[str, frozenset[str]] = {
             skill: grant for skill, grant in policy.skill_allowed_tools
         }
@@ -78,7 +57,7 @@ class PermissionGuard:
             return self._check_tool(action, ctx)
         if isinstance(action, ProposedSpawnSubtask):
             return self._check_spawn(action, ctx)
-        # ProposedFinish: never blocked by permission policy.
+        # ProposedFinish is never blocked by permission policy.
         return VerdictResult.allow()
 
     def _check_tool(
@@ -97,7 +76,7 @@ class PermissionGuard:
             if tool is None:
                 return VerdictResult.deny(
                     f"tool {name!r} has no metadata registered with "
-                    "PermissionGuard; fail-closed (issue 18 B4)"
+                    "PermissionGuard; fail-closed"
                 )
             risk = tool.risk_level
             if risk not in KNOWN_RISK_LEVELS:
@@ -112,31 +91,27 @@ class PermissionGuard:
                     f"tool {name!r} risk_level {risk!r} exceeds max "
                     f"{self._policy.max_risk_level!r}"
                 )
-        # Issue E: skill-script executors are gated by a guard-level
-        # invariant BEFORE the ordinary Issue A gate. A
-        # ``skill_script_tools`` call can only ever resolve to ``deny``
-        # (fail-closed precheck) or ``require_approval`` — NEVER ``allow``,
-        # and NOT dependent on ``require_approval_tools`` wiring.
+        # Skill-script executors are gated ahead of the ordinary approval set:
+        # such a call may only resolve to ``deny`` or ``require_approval``,
+        # never ``allow``, and never depends on ``require_approval_tools``
+        # wiring.
         if name in self._policy.skill_script_tools:
             return self._check_skill_script(action, ctx)
-        # Issue A: an otherwise-allowed tool may still need human sign-off.
         if name in self._policy.require_approval_tools:
             return VerdictResult.require_approval(
                 f"tool {name!r} requires human approval"
             )
-        # Per-call conditional gate (e.g. shell_run command not in the effective
-        # allowlist). Consulted AFTER the static set so a tool already gated
-        # there is not double-checked. The predicate sees the call arguments;
-        # returning True routes through the same Issue A approval suspend.
+        # Per-call conditional gate (e.g. a ``shell_run`` command outside the
+        # effective allowlist), consulted after the static set so a tool
+        # already gated there is not double-checked.
         if self._policy.conditional_approval is not None and (
             self._policy.conditional_approval(name, action.call.arguments)
         ):
             return VerdictResult.require_approval(
                 f"tool {name!r} call requires human approval"
             )
-        # Issue B: skill `allowed-tools` enforcement, AFTER the explicit
-        # Issue A gate (architect-pinned check order). Based only on the
-        # *active* declaring skills (fold-derived ``ctx.active_skills``).
+        # Skill ``allowed-tools`` enforcement runs last: an explicit approval
+        # requirement must not be downgraded by a skill grant.
         skill_verdict = self._check_skill_allowed_tools(name, ctx)
         if skill_verdict is not None:
             return skill_verdict
@@ -145,13 +120,12 @@ class PermissionGuard:
     def _check_skill_script(
         self, action: ProposedToolCall, ctx: GuardContext
     ) -> VerdictResult:
-        """Issue E fail-closed precheck for a skill-script executor.
+        """Fail-closed precheck for a skill-script executor.
 
-        Returns ``deny`` on any precheck failure (malformed args, the
-        target skill not active, or an undiscovered ``(skill, relpath)``)
-        — **no** approval suspend, **no** subprocess. Returns
-        ``require_approval`` only when the call targets a discovered
-        script of a currently-active skill. There is **no allow path**.
+        Any precheck failure (malformed args, the target skill not active, an
+        undiscovered ``(skill, relpath)``) is a ``deny`` — no approval
+        suspend, no subprocess. A discovered script of an active skill is
+        ``require_approval``. There is no allow path.
         """
         args = action.call.arguments
         skill = args.get("skill")
@@ -179,13 +153,13 @@ class PermissionGuard:
     def _check_skill_allowed_tools(
         self, name: str, ctx: GuardContext
     ) -> Optional[VerdictResult]:
-        """Issue B enforcement; ``None`` means "no skill opinion → allow".
+        """Skill ``allowed-tools`` enforcement; ``None`` means "no opinion".
 
-        Enforcement is OFF unless the mode is on AND at least one
-        **active** skill declares ``allowed-tools``. When on, the
-        pre-approval set is the union of the active declaring skills'
-        granted Noeta tools; a call outside it is gated by mode
-        (``approval`` → HITL via Issue A; ``deny`` → fail closed).
+        Enforcement stays OFF unless the mode is on AND at least one
+        **active** skill declares ``allowed-tools`` — gating every tool when
+        nothing declared would break ordinary sessions. When on, the granted
+        set is the union over the active declaring skills; a call outside it
+        is gated by mode.
         """
         if self._policy.skill_tool_enforcement == "off":
             return None
@@ -193,9 +167,6 @@ class PermissionGuard:
             s for s in ctx.active_skills if s in self._declared_grants
         ]
         if not active_declaring:
-            # No active skill opted into allowed-tools → enforcement OFF
-            # (gating every tool when nothing declared would break
-            # ordinary sessions).
             return None
         granted: frozenset[str] = frozenset().union(
             *(self._declared_grants[s] for s in active_declaring)

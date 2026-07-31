@@ -1,56 +1,33 @@
-# Single-writer invariant: each state slice has exactly one physical writer, and it is always the Engine
+# Single-writer invariant: a Task's state slices are mutated in exactly one place, and every change reaches them as a folded event
 
 ## Context
 
-Noeta's core promise is that the result of `fold(events) → state` must equal the runtime state — this equation is the very foundation of "rebuilding Task state purely from the EventLog" (resume, snapshot rebuild). A Task has multiple mutable state slices, and if several components could each append events to the EventLog on their own, the writer shape fold sees would fork, and the equation would no longer hold.
+`fold(events) → state` must equal the live runtime state. That equation is what makes resume and snapshot rebuild possible at all. A Task carries four mutable slices — `RuntimeState`, `TaskState`, `ContextState`, `GovernanceState` — and if more than one code path could assign to a slice, the live state and the folded state would drift apart, with the drift surfacing only at resume, far from whatever caused it.
 
 ## Decision
 
-Each mutable state slice of a Task has **exactly one physical writer** (the component that actually emits the event), and the physical writer of all four slices is the **Engine**:
+**No component assigns to a state slice.** The only code that mutates the four slices is the reducer set in `noeta.core.fold`, and the live path re-enters those same reducers through `apply_event` right after a write. A snapshot taken mid-step therefore captures exactly what a fold over the same prefix rebuilds.
 
-- `RuntimeState`: written by the Engine.
-- `TaskState`: written by the Engine (on behalf of the Policy, via `Decision.state_patch`).
-- `ContextState`: written by the Engine (obtained by folding `ContextPlanComposed` events — the Composer computes the plan body but does **not** write the EventLog, staying a pure function).
-- `GovernanceState`: written by the Engine (folded from events).
+**State changes reach the log through the Engine.** Policies, guards, tools, composers and providers cannot append a state change of their own. A Policy expresses write intent as a typed `Decision` — a `TaskStatePatch`, an assistant message — and the Engine translates it into a typed event when it dispatches the step. A Guard returns a `VerdictResult` and is forbidden from mutating either of its arguments. The Composer computes the context-plan body and writes it into the ContentStore, but the ref reaches `ContextState` only because the Engine records `ContextPlanComposed` and fold reduces it; the Composer never touches the slice.
 
-Other components (Policy, hooks, tools, providers) **cannot append events directly**. A Policy expresses write intent via a `Decision` typed payload (`state_patch` / `assistant_message` / ...), and the Engine translates it into a typed event when it dispatches in `run_one_step`. This guarantees that the event envelope's `actor` field always equals the Engine, that fold sees a single actor shape, and that no branch for "Policy appends directly" is needed.
+Slice ownership follows from that: `RuntimeState` is Engine-owned; `TaskState` is Policy-authored through `Decision.state_patch`, the one shape allowed to mutate it; `ContextState` is Composer-derived; `GovernanceState` is entirely fold-accumulated. Derived data — subtask outcomes, cost and per-token accounting, the background-job and background-subagent ledgers — never enters `TaskState`; it accumulates in `GovernanceState` from the stream. Any new field declares which slice it belongs to and which event fills it.
 
-Derived data (subtask_results / touched_artifacts / cost_accumulated) does not go into TaskState; it is folded from the EventLog into GovernanceState or a separate view. Any new field must declare which slice it belongs to and who its physical writer is, or it doesn't pass.
+**Subsystems that record their own lifecycle do so as events, never as state writes.** The LLM client, the tool runtime, compaction, the background-shell and background-subagent runners, the child-lifecycle observer and the plugin content recorder each append events; every envelope carries an `actor` and an `origin` naming the subsystem that produced it. Those two fields are provenance for the audit projection — fold dispatches on the event type and never reads `actor`, so no attribution string can influence rebuilt state. A plugin's `init` hook holds a kernel-owned recorder rather than an EventLog: the recorder emits on its behalf, stamping the plugin's name as the actor.
 
 ## Rationale
 
-- **This invariant is the foundation of fold/resume correctness.** The result of `fold(events) → state` must equal the runtime state; this equation is exactly what "rebuilding Task state purely from the EventLog" (resume, snapshot rebuild) depends on. A second writer that appends around the Engine would fork `fold(events) → state` from the runtime state, so the state resume rebuilds would be wrong.
-- **`actor` is always the Engine, keeping the fold branching clean.** Every write goes through Engine dispatch translation, so the fold reducer sees only one writer shape and never has to case-split on "who wrote it."
-- **State pollution is boxed in.** Multiple writers plus a generic `ExtensionState` dict would let any component implicitly do `run.extension["x"]=y`, bypassing the type checker and making debugging and state rebuild uncontrollable.
+- **This is what makes fold and resume correct.** A second path that assigned to a slice, or appended around the Engine, would fork `fold(events) → state` from the live state, and every rebuild after that point would be wrong.
+- **One mutation site keeps live and replay honest by construction.** Sharing a single reducer set means there is no second code path to keep in step, and no class of bug where a live step writes a field the reducer forgets — or vice versa.
+- **A typed patch boxes in state pollution.** Free-form access — a generic extension dictionary any component could write into — bypasses the type checker and makes both debugging and rebuild uncontrollable. One patch shape with one apply method keeps the mutation surface enumerable.
 
 ## Alternatives considered
 
-1. **Multiple writers + one generic `ExtensionState` dict** (any component can read/write Task state). Rejected: state pollution, hard debugging, uncontrollable state rebuild, and `run.extension["x"]=y` bypasses the type checker.
-2. **A fully immutable Task, generating a new Task each step.** Rejected: reallocating four large slices each step adds GC pressure, and both event fold and state update logic would have to be rewritten twice over.
+1. **Multiple writers plus a generic extension dictionary on the Task**, readable and writable by any component. Weighed and rejected: state pollution, unreadable debugging, uncontrollable rebuild, and an untyped write path the checker cannot see.
+2. **A fully immutable Task, rebuilt fresh each step.** Rejected: reallocating four large slices per step adds GC pressure for no correctness gain, and both the fold reducers and the update path would have to carry the same logic twice.
+3. **Enforcing the invariant as a literal attribution rule** — requiring every recorded envelope to claim the Engine as its actor. Rejected: it would launder an LLM, compaction or plugin recording as Engine-authored, destroying the audit trail's only useful signal, and it buys nothing, because fold never reads the field. The property that matters is that nothing else mutates a slice.
 
 ## Consequences
 
-- Where this bears weight: `noeta.core.engine` is the sole physical writer of the four slices, and every external "I want to change state" path converges here; `noeta.core._decision_handlers`, `noeta.core.fold` handle Decision → event translation and per-slice reducer routing; `noeta.policies.react`, `noeta.context.composer` express write intent only via a `Decision` / plan body and never append directly.
-- Constraint: a hook that wants to "modify" state must instead become part of some Policy or ContextComposer, not stand on its own (the Mutator hook is deprecated, see `docs/adr/guard-observer-hooks.md`). A new field must explicitly declare its owning slice and physical writer, or it doesn't pass.
-
-## Clarification (2026-07-30) — the invariant is the single *physical writer*, not a literal `actor="engine"`
-
-The Decision and Rationale above twice phrase the guarantee as "the `actor`
-field always equals the Engine." Read that as shorthand for **one physical
-writer**: exactly one component calls `event_log.emit`, so `fold(events) →
-state` cannot fork. The envelope `actor` string is a **provenance label**, and
-it has never been uniformly `"engine"` in shipped code — `llm`, `compaction`,
-`background-shell`, `interaction-driver`, `background-subagent`,
-`cancel-cascade`, and `mcp` all appear, each attributing the recording to its
-subsystem. **Fold never reads `actor`** (it dispatches on event `type`); the
-only consumer is the audit projection, which copies it through verbatim. So the
-label carries no correctness weight — the invariant lives entirely in "one
-component appends."
-
-The kernel-final-form `SessionRecorder` (`docs/implementation-specs/archive/2026-07-30-kernel-final-form.md`
-§4.4) uses this: a plugin's `init` hook calls `record_content`, and the
-**kernel's** recorder (`noeta.execution.recorder.SeedRecorder`) is what physically
-emits — stamping `actor="plugin:<name>"` so audit attributes the resident to the
-plugin that produced it (the `mcp` precedent). The plugin never touches a raw
-`EventLog`, so the single-physical-writer invariant holds unchanged; the
-provenance label is simply more honest than laundering the record as `"engine"`.
+- `noeta.core.fold` is the sole mutation site for the four slices; `noeta.core.engine` and `noeta.core._decision_handlers` carry the Decision-to-event translation and the per-slice reducer routing; `noeta.context.composer` and the ReAct policy express intent only, and never append.
+- A hook has no route to change state, by design. Only two hook roles exist — Guard, a synchronous verdict, and Observer, an EventLog subscriber — and neither can write; logic that needs to mutate belongs to a Policy or the Composer.
+- Every new state field must name its slice and the event that fills it, or it has no writer.

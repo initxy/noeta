@@ -1,18 +1,10 @@
-"""Tests for the M1 manifest-plugin mechanism core (spec D1-D5).
+"""The manifest-plugin mechanism: surface registry, manifest reading, merge.
 
-The mechanism is built additively in three new ``noeta.client`` modules:
-
-* :mod:`noeta.client.surfaces` — the ``SurfaceSpec`` registry (D2/D3).
-* :mod:`noeta.client.plugin_manifest` — manifest schema + zero-execution reader
-  and single-file decorator sugar (D1).
-* :mod:`noeta.client.plugin_set` — the five-source loader, deterministic merge,
-  and ``PluginSet`` (D4/D5).
-
-Coverage maps to the spec's acceptance criteria and the task's required tests:
-registry extension, zero-execution listing (import-sentinel), the enabled gate
-applied before import, every collision class, determinism under shuffled
-discovery order, and trust gating. The distribution reader is exercised for both
-a regular and an editable install layout (spec Risk 2).
+Discovery must stay zero-execution — a plugin's code runs only when one of its
+contributions is resolved, never when it is listed or merged — because that is
+what lets a host audit and gate a plugin before trusting it. The merge on top
+must be deterministic under any discovery order and must refuse a collision
+rather than let one plugin silently override another.
 """
 
 from __future__ import annotations
@@ -86,7 +78,7 @@ def _set(*manifests: PluginManifest, registry: SurfaceRegistry | None = None) ->
 
 
 # ---------------------------------------------------------------------------
-# 1. Surface registry (D2/D3) + host extension
+# 1. Surface registry + host extension
 # ---------------------------------------------------------------------------
 
 
@@ -94,14 +86,12 @@ def test_standard_registry_has_all_sixteen_surfaces():
     reg = standard_registry()
     assert len(reg.names()) == 16
     assert len(STANDARD_SURFACES) == 16
-    # A spot-check of the D3 table cells that carry mechanism meaning.
+    # Spot-check the table cells that carry mechanism meaning.
     assert reg.get("policy").collision_key == "single-valued"
     assert reg.get("provider").collision_key == "single-valued"
     assert reg.get("reminder").ordering == "priority"
     assert reg.get("session_pack").ordering == "priority"
     assert reg.get("session_pack").activation_scope == "per-agent"
-    # control_tool (control-tool-surface S1): identity plane, per-agent,
-    # collision on name, priority-ordered (the dual-priority mount loop).
     assert reg.get("control_tool").plane == "identity"
     assert reg.get("control_tool").activation_scope == "per-agent"
     assert reg.get("control_tool").collision_key == "name"
@@ -110,9 +100,9 @@ def test_standard_registry_has_all_sixteen_surfaces():
     assert reg.get("guard").collision_key == "none"
     assert reg.get("tool").plane == "identity"
     assert reg.get("mcp_server").collision_key == "alias"
-    # D11: every identity surface names the PluginActivation channel it feeds,
-    # which is what makes ``identity_activations`` table-driven. ``control_tool``
-    # is identity-plane but carried by its own per-agent projection.
+    # Every identity surface names the PluginActivation channel it feeds, which
+    # is what makes ``identity_activations`` table-driven. ``control_tool`` is
+    # identity-plane but carried by its own per-agent projection.
     assert reg.get("tool").activation_binding == "tool"
     assert reg.get("content_kind").activation_binding == "content_kind"
     assert reg.get("policy").activation_binding == "policy"
@@ -139,11 +129,10 @@ def test_registry_rejects_duplicate_surface_and_bad_type():
 
 
 def test_identity_surface_must_declare_an_activation_binding():
-    """D11: the binding is mandatory at construction, not discovered at projection.
+    """The binding is mandatory at construction, not discovered at projection.
 
-    An identity contribution with no binding would be dropped between resolve
-    and compile — how ``content_kind`` once went missing. ``SurfaceSpec``
-    refuses it before any plugin is loaded.
+    An identity contribution with no binding is dropped on the floor between
+    resolve and compile, so ``SurfaceSpec`` refuses it before any plugin loads.
     """
     with pytest.raises(PluginError, match="declares no activation_binding"):
         SurfaceSpec("gizmo", "identity", "per-agent", lambda v: None, "name")
@@ -183,7 +172,7 @@ def test_merge_over_unknown_surface_fails_naming_plugin():
 
 
 # ---------------------------------------------------------------------------
-# 2. Manifest schema + parsing (D1)
+# 2. Manifest schema + parsing
 # ---------------------------------------------------------------------------
 
 
@@ -256,7 +245,7 @@ def test_read_manifest_file_and_missing_file(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 3. Single-file decorator sugar (D1)
+# 3. Single-file decorator sugar
 # ---------------------------------------------------------------------------
 
 
@@ -313,7 +302,7 @@ def test_declared_plugin_name_reads_both_literal_forms(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 4. Collisions — every class, naming both sides, no override (D4)
+# 4. Collisions — every class, naming both sides, no override
 # ---------------------------------------------------------------------------
 
 
@@ -388,7 +377,7 @@ def test_cross_source_duplicate_plugin_name_raises():
 
 
 # ---------------------------------------------------------------------------
-# 5. Determinism under shuffled discovery order (D4)
+# 5. Determinism under shuffled discovery order
 # ---------------------------------------------------------------------------
 
 
@@ -413,7 +402,7 @@ def test_merge_is_invariant_under_discovery_order():
 
 
 # ---------------------------------------------------------------------------
-# 6. Trust gating of workspace directories (D4 source 4)
+# 6. Trust gating of workspace directories
 # ---------------------------------------------------------------------------
 
 
@@ -457,7 +446,7 @@ def test_user_dir_loads_unconditionally(tmp_path):
 
 
 def test_grant_trust_is_idempotent(tmp_path):
-    """Granting the same directory twice records it once (ported from M1)."""
+    """Granting the same directory twice records it once."""
     import json
 
     store = tmp_path / "trust.json"
@@ -474,7 +463,7 @@ def test_trust_survives_a_different_spelling_of_the_same_dir(tmp_path):
     Both sides canonicalise (``~`` expansion + absolute + resolve), so a
     workspace path carrying a ``..`` segment — the shape a host composes when it
     joins a workspace root with ``.noeta/plugins`` — is not a second, untrusted
-    directory (ported from M1).
+    directory.
     """
     store = tmp_path / "trust.json"
     ws = tmp_path / "ws" / "plugins"
@@ -492,7 +481,7 @@ def test_trust_survives_a_different_spelling_of_the_same_dir(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 7. The enabled allow-list gates BEFORE import (D4, acceptance 3)
+# 7. The enabled allow-list gates BEFORE import
 # ---------------------------------------------------------------------------
 
 
@@ -541,9 +530,7 @@ def test_builtins_default_on_and_disable_individually():
     assert set(load_plugins(builtins=[a, b]).names()) == {"fs", "web"}
     assert load_plugins(builtins=[a, b], disabled_builtins=["web"]).names() == ("fs",)
     assert load_plugins(builtins=False).names() == ()
-    # Real discovery reads the noeta.builtins catalogue (M2; control-tool-surface
-    # S2 adds the three control-tool built-ins → 17; the storage-backend
-    # relocation adds the declaration-only `storage` built-in → 18).
+    # Real discovery reads the noeta.builtins catalogue — all eighteen of them.
     assert set(load_plugins(builtins=True).names()) == {
         "app", "ask_user_question", "browser", "delegation", "fs", "governance",
         "mcp", "memory", "presets", "providers", "react", "reminders", "sandbox",
@@ -552,8 +539,8 @@ def test_builtins_default_on_and_disable_individually():
 
 
 # ---------------------------------------------------------------------------
-# 8. Zero-execution listing + the distribution reader (D1/D5, acceptance 2,
-#    Risk 2: both regular and editable install layouts)
+# 8. Zero-execution listing + the distribution reader (regular + editable
+#    install layouts)
 # ---------------------------------------------------------------------------
 
 
@@ -676,7 +663,7 @@ def test_distribution_without_manifest_returns_none(tmp_path):
 def test_pluginset_lists_contributions_without_executing_then_resolve_imports(
     tmp_path, monkeypatch
 ):
-    """Acceptance 2: list every contribution with zero execution; resolve imports."""
+    """Every contribution lists with zero execution; resolution is what imports."""
     src = tmp_path / "src"
     pkg_dir = _make_sentinel_package(src, "listpkg")
     monkeypatch.syspath_prepend(str(src))
@@ -697,19 +684,18 @@ def test_pluginset_lists_contributions_without_executing_then_resolve_imports(
     assert ps.merged().for_surface("prompt_fragment")[0].contribution.name == "frag"
     assert not (pkg_dir / "EXECUTED").exists()
 
-    # resolve() is the boundary that imports — now the package runs.
+    # resolve() is the boundary that imports: the package body runs here.
     resolved = ps.resolve()
     assert resolved[0].value == "resolved-fragment"
     assert (pkg_dir / "EXECUTED").exists()
 
 
 def test_storage_builtin_is_declaration_only_and_lists_without_impl_import():
-    """The ``storage`` built-in is the second declaration-only member after
-    ``providers`` (storage-backend-relocation G3): its manifest carries zero
-    contributions — the durable backends are host-wired via
-    ``noeta.sdk.storage``, never merged — and discovering + listing it imports
-    no backend impl module. The manifest layer stays inert; the psycopg half
-    of the same gate is pinned on a clean interpreter by the install smoke.
+    """The ``storage`` built-in is declaration-only: its manifest carries zero
+    contributions — the durable backends are host-wired through
+    ``noeta.sdk.storage``, never merged — so discovering and listing it must
+    import no backend impl module. That is what keeps the optional driver
+    dependencies off the default import path.
     """
     impl_prefix = "noeta.builtins.storage.impl"
     # Other tests may legitimately have imported the backends; forget them so
@@ -738,7 +724,7 @@ def test_storage_builtin_is_declaration_only_and_lists_without_impl_import():
 
 
 # ---------------------------------------------------------------------------
-# 9. Resolution + per-surface validation (D2 validator, D4 pipeline)
+# 9. Resolution + per-surface validation
 # ---------------------------------------------------------------------------
 
 
@@ -940,12 +926,10 @@ def test_import_error_in_dotted_module_fails_loudly():
 
 
 def test_resolve_resource_only_and_bare_module_ref():
-    # path-only contribution resolves to its path string.
     reg = standard_registry()
     lp = _loaded(_manifest("r", ManifestContribution(surface="skills", name="pack", path="/skills/pack")))
     assert PluginSet(plugins=(lp,), registry=reg).resolve()[0].value == "/skills/pack"
 
-    # a ref with no attribute resolves to the module object.
     lp2 = _loaded(_manifest("m", _contrib("provider", "p", ref="noeta.client.plugin_set")))
     resolved = PluginSet(plugins=(lp2,), registry=reg).resolve()[0]
     assert resolved.value.__name__ == "noeta.client.plugin_set"

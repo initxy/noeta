@@ -1,20 +1,10 @@
-"""Multi-turn coding-session policy wrapper for the `noeta code chat` path.
+"""The multi-turn conversation wrapper: on a non-final turn it rewrites a
+terminal ``Decision`` into a suspend that parks the task for the next human
+message, reusing the wake-resume primitive rather than adding an event type.
 
-:class:`MultiTurnReActPolicy` (Phase 4.5 I3) wraps any ``Policy`` so that on
-non-final turns a ``FinishDecision`` — or a ``FailDecision``, so one bad turn
-does not seal the conversation — becomes a
-``YieldForHumanDecision`` whose handler emits
-``TaskSuspended(wake_on=HumanResponseReceived(handle="…"))`` — the
-existing Phase-1 wake-resume primitive. The wrapped policy never
-sees the substitution; the Engine + fold never see a new event type.
-Its ``final`` flag is **mutable** via :meth:`set_final` so the same
-wrapper instance carries across turns of a single chat without
-rebuilding the Engine / Policy / Composer (per the architect's review
-note in #noeta:e6e863bb msg 67102bd3).
-
-Layer: hoisted to ``noeta.execution``; imports only
-``noeta.protocols`` (Decision shapes + Policy protocol). No imports from
-``noeta.agent`` / ``noeta.core`` / ``noeta.runtime``.
+The wrapped policy never sees the substitution, and the Engine and fold see
+nothing new. ``final`` is mutable so one wrapper instance carries across every
+turn of a conversation without rebuilding the Engine / Policy / Composer.
 """
 
 from __future__ import annotations
@@ -47,46 +37,32 @@ TURN_FAILED_SUSPEND_TAG = "turn_failed"
 
 
 class MultiTurnReActPolicy:
-    """Wrap a coding-session ``Policy`` for the multi-turn chat path.
+    """Wrap a ``Policy`` for the multi-turn conversation path.
 
-    * ``final=True`` — pass every ``Decision`` straight through.
-      ``FinishDecision`` produces a real ``TaskCompleted`` event.
-    * ``final=False`` — a ``FinishDecision`` becomes a
-      ``YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE,
-      state_patch=finish.state_patch,
-      assistant_message=finish.assistant_message)``, and a
-      ``FailDecision`` becomes the same suspend carrying
-      ``suspend_reason="turn_failed: <reason>"``. Every other Decision shape
-      (tool_calls / yield_for_human / wait_timer / spawn_subtask) is untouched.
+    With ``final=False`` a ``FinishDecision`` and a ``FailDecision`` both become
+    the next-goal suspend (the failure carrying
+    ``suspend_reason="turn_failed: <reason>"``); every other Decision shape
+    passes through untouched. With ``final=True`` everything passes through,
+    because there is no next human turn to park for.
 
-    **Why a failed turn suspends rather than terminates.** ``TaskFailed`` is a
-    terminal event: it seals the ledger, so one transient fault — a provider
-    5xx, a tool crash escalated to fail, a structured-output nudge budget spent
-    — would throw away the whole conversation and every bit of context the human
-    built up in it. For a chat-shaped product the correct reading of a failed
-    turn is "*this turn* did not work, here is why, the task is parked until you
-    decide what to do", which is exactly the suspend the wrapper already
-    performs between ordinary turns. The human's next message resumes the same
-    task; nothing else in the conversation is lost.
+    **Why a failed turn suspends rather than terminates.** ``TaskFailed`` seals
+    the ledger, so one transient fault — a provider 5xx, a tool crash escalated
+    to fail, a spent structured-output nudge budget — would throw away the whole
+    conversation and every bit of context the human built up in it. The correct
+    reading of a failed turn is "*this turn* did not work, here is why, the task
+    is parked until you decide what to do": the human's next message resumes the
+    same task and nothing else is lost.
 
-    **``retryable`` is deliberately not the gate.** The flag answers "would
-    re-driving this same step help?", which is a question about the terminal
-    path — and it is ``False`` for precisely the failures a human *can* rescue
-    (``llm_error`` covers the transient provider 5xx; ``llm_empty_response``,
-    ``react_max_steps_exceeded`` and a spent nudge budget all clear up when the
-    person rephrases). Gating on it would keep terminating the motivating case.
-    Once a turn is parked, the next input is a *new* turn rather than a re-drive,
-    so the flag has no consumer on this path and is not carried forward; its
-    reason text is, in ``TaskSuspended.reason``.
+    **``retryable`` is deliberately not the gate.** It answers "would re-driving
+    this same step help?", and it is ``False`` for precisely the failures a human
+    *can* rescue (``llm_error``, ``llm_empty_response``,
+    ``react_max_steps_exceeded``, a spent nudge budget — all of which clear up
+    when the person rephrases). Once a turn is parked the next input is a *new*
+    turn rather than a re-drive, so the flag has no consumer here; its reason
+    text survives in ``TaskSuspended.reason``.
 
-    ``final=True`` still terminates, because there is no next human turn to park
-    for.
-
-    The runner flips ``final`` via :meth:`set_final` BEFORE driving
-    the final turn so the wrapper stays a singleton across the
-    chat. Never re-construct it mid-session — the Composer + Engine
-    cache state that depends on the policy instance the way the
-    architect's note #67102bd3 spells out.
+    Never re-construct the wrapper mid-conversation: the Composer and Engine
+    cache state keyed to the policy instance. Flip :meth:`set_final` instead.
     """
 
     def __init__(
@@ -105,9 +81,8 @@ class MultiTurnReActPolicy:
         return self._final
 
     def set_final(self, final: bool) -> None:
-        """Toggle whether the next ``decide()`` returns
-        ``FinishDecision`` verbatim (``True``) or translates it to a
-        suspend (``False``). The runner flips this between turns."""
+        """Toggle terminal-Decision pass-through; flipped between turns, and set
+        before driving the last turn of a conversation."""
         self._final = bool(final)
 
     def decide(self, ctx: StepContext, view: View) -> Decision:
@@ -129,8 +104,7 @@ class MultiTurnReActPolicy:
             )
         return result
 
-    # Forwarders so the wrapper passes structural ``Policy`` checks
-    # and any attribute the inner policy exposes (e.g. tools) still
-    # works from a debug perspective.
+    # Forwarding keeps the wrapper passing structural ``Policy`` checks and
+    # keeps any attribute the inner policy exposes reachable through it.
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)

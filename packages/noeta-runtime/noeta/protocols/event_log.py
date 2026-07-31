@@ -1,23 +1,10 @@
-"""EventLog Protocol — L0 typed boundary for the append-only task stream.
+"""EventLog Protocol — the append-only task stream, Noeta's source of truth for
+decisions and causality.
 
-The EventLog is Noeta's source of truth for "decisions and
-causality"; its typed boundary sits at L0, split by
-capability into three Protocols:
-
-* :class:`EventLogReader`     — read / find_latest_snapshot; used by fold /
-                                 the LLM cursor
-* :class:`EventLogWriter`     — emit (business write, lease-checked) +
-                                 system_emit (cross-stream system write, no
-                                 lease check; replaces the old
-                                 ``bypass_lease=True`` flag)
-* :class:`EventLogSubscriber` — subscribe / unsubscribe; used by the Observer
-                                 framework
-
-Splitting by capability lets a callsite's type hint state its intent directly
-("I only read / only write / only subscribe"); import-linter's forbidden
-contract can also lock down reverse coupling precisely. InMemory / Shadow /
-Phase 2 Sqlite&Postgres are adapters — one concrete class may implement one or
-more Protocols (InMemory implements all three, Shadow only Reader+Writer).
+The boundary is split by capability (read, write, subscribe, task-index) so a
+callsite's type hint states its intent — "I only read" — and import-linter can
+lock reverse coupling down precisely. One adapter class may implement several
+of these Protocols; callers should still ask for the narrowest one they need.
 """
 
 from __future__ import annotations
@@ -49,16 +36,13 @@ __all__ = [
 #: ``state_ref`` rehydration body and re-bases the fold: ``TaskSnapshot``
 #: (acceleration), ``TaskRewound`` (conversation rewind),
 #: ``StepAttemptAbandoned`` (crash-recovery seal) and ``TaskForked`` (the
-#: history a branched conversation inherits). This is the single
-#: source of truth for the :meth:`EventLogReader.find_latest_snapshot`
-#: contract; every adapter's lookup filters on exactly this set. The SQL
-#: adapters' partial index (``ix_events_snapshot``) must ALSO list exactly
-#: these types in its ``WHERE`` predicate — a partial index is only chosen
-#: when its predicate matches the live query — so growing this tuple
-#: requires a new migration re-widening the index (see
-#: ``storage/sqlite/migrations.py`` migration 10 /
-#: ``storage/postgres/migrations.py`` migration 5), pinned by
-#: ``tests/test_fix_storage.py``.
+#: history a branched conversation inherits). This is the single source of
+#: truth for the :meth:`EventLogReader.find_latest_snapshot` contract; every
+#: adapter's lookup filters on exactly this set. The SQL adapters' partial
+#: index (``ix_events_snapshot``) must ALSO list exactly these types in its
+#: ``WHERE`` predicate — a partial index is only chosen when its predicate
+#: matches the live query — so growing this tuple requires a migration that
+#: re-widens the index.
 SNAPSHOT_BASELINE_EVENT_TYPES: tuple[str, ...] = (
     "TaskSnapshot",
     "TaskRewound",
@@ -74,25 +58,14 @@ Unsubscribe = Callable[[], None]
 class StopHandle:
     """Idempotent handle wrapping an :data:`Unsubscribe` callable.
 
-    Callers that subscribe to an :class:`EventLogSubscriber` typically
-    need exactly two pieces of bookkeeping after the
-    ``subscribe(callback)`` call: a reference to the returned
-    :data:`Unsubscribe` callable and a stopped flag so subsequent
-    teardown is idempotent. ``StopHandle`` collapses both into one
-    object — callers' ``stop()`` becomes a one-line delegate
-    (``self._handle.stop()``).
+    It collapses the two things every subscriber ends up tracking — the
+    unsubscribe callable and a stopped flag — into one object, so teardown
+    paths that may fire twice stay safe.
 
-    Thread safety: :meth:`stop` is exactly-once even under concurrent
-    calls. The check-and-flag step runs under an internal
-    :class:`threading.Lock`; the underlying :data:`Unsubscribe` is
-    called outside the lock so it cannot block other ``stop()`` /
-    ``stopped`` readers. The first thread to enter the critical
-    section wins and runs the unsubscribe; every subsequent call
-    short-circuits.
-
-    No subscriber base class / mixin / Protocol is introduced — this
-    is a lifecycle utility paired with the existing ``Unsubscribe``
-    shape, nothing more.
+    :meth:`stop` is exactly-once even under concurrent calls: the
+    check-and-flag step runs under an internal :class:`threading.Lock`, while
+    the underlying :data:`Unsubscribe` is called outside it so a slow teardown
+    cannot block other ``stop()`` / ``stopped`` callers.
     """
 
     __slots__ = ("_unsubscribe", "_stopped", "_lock")
@@ -107,13 +80,7 @@ class StopHandle:
         return self._stopped
 
     def stop(self) -> None:
-        """Call the underlying ``Unsubscribe`` exactly once.
-
-        Safe under concurrent calls — the first thread runs the
-        unsubscribe, the rest short-circuit. The unsubscribe call
-        itself runs outside the internal lock so a slow teardown
-        cannot starve other ``stop()`` callers.
-        """
+        """Call the underlying ``Unsubscribe`` exactly once."""
         with self._lock:
             if self._stopped:
                 return
@@ -126,13 +93,7 @@ def subscribe_with_stop(
     subscriber: "EventLogSubscriber", callback: Subscriber
 ) -> StopHandle:
     """Wrap ``subscriber.subscribe(callback)`` in an idempotent
-    :class:`StopHandle`.
-
-    Returns a handle whose ``stop()`` is safe to call multiple times
-    from any thread — useful for any application shutdown / repeated
-    teardown path that may try to stop the same subscription more
-    than once.
-    """
+    :class:`StopHandle`."""
     return StopHandle(subscriber.subscribe(callback))
 
 
@@ -157,18 +118,11 @@ class EventLogReader(Protocol):
     def find_latest_snapshot(self, task_id: str) -> Optional[EventEnvelope]:
         """Return the most recent fold-baseline envelope, or ``None``.
 
-        Snapshot is a first-class EventLog event; fold
-        acceleration depends on this lookup being fast enough to call
-        every Engine step. In-memory backends MAY reverse-scan; SQL
-        backends SHOULD index the snapshot type.
-
-        Rewind and the crash-recovery seal generalise this to "the latest
-        fold baseline": every type in
-        :data:`SNAPSHOT_BASELINE_EVENT_TYPES` carries a ``state_ref``
-        rehydration body and re-bases fold through the SAME accelerated
-        lookup. Implementations return whichever member of that set has
-        the highest seq (a stream with neither marker keeps the original
-        behaviour).
+        A baseline is any member of :data:`SNAPSHOT_BASELINE_EVENT_TYPES`;
+        implementations return whichever has the highest seq. Fold acceleration
+        depends on this lookup being cheap enough to call every Engine step, so
+        in-memory backends MAY reverse-scan while SQL backends SHOULD index
+        those types.
         """
         ...
 
@@ -184,12 +138,11 @@ class EventLogWriter(Protocol):
       and retry dedup.
     * :meth:`system_emit` is the cross-stream system write — used when
       an Observer writes onto a stream it does not hold the lease for
-      (Phase 0: ``ChildLifecycleObserver`` appending ``SubtaskCompleted``
-      to the parent stream). No lease check, no idempotency, no
-      ``expected_seq``. Callers MUST set ``actor`` so the recorded
-      envelope is attributable, and ``origin`` so its live readers — the
-      ``AuditObserver`` (which writes ``AuditRecord.origin``) and the
-      http_json events API — can classify the writer.
+      (``ChildLifecycleObserver`` appending ``SubtaskCompleted`` to the
+      parent stream). No lease check, no idempotency, no ``expected_seq``.
+      Callers MUST set ``actor`` so the recorded envelope is attributable,
+      and ``origin`` so readers such as ``AuditObserver`` (which writes
+      ``AuditRecord.origin``) can classify the writer.
     """
 
     def emit(
@@ -235,12 +188,10 @@ class EventLogWriter(Protocol):
     ) -> EventEnvelope:
         """Append one cross-stream system event.
 
-        No lease check, no idempotency dedup, no ``expected_seq``.
-        Used by Observer-style writers.
-        ``actor`` carries the system writer's identity
-        (``child_observer``, ``llm``, etc.); ``origin`` names the Noeta
-        role (engine / llm / observer / tool / system) and is what the live
-        readers (``AuditObserver`` + the http_json events API) key on.
+        No lease check, no idempotency dedup, no ``expected_seq``. ``actor``
+        carries the system writer's identity (``child_observer``, ``llm``, …);
+        ``origin`` names the Noeta role (engine / llm / observer / tool /
+        system) that readers such as ``AuditObserver`` key on.
         """
         ...
 
@@ -261,7 +212,7 @@ class EventLogSubscriber(Protocol):
       only ever see envelopes that the EventLog itself has accepted.
     * **Outside the adapter writer lock.** Notification fires after
       the adapter has released its writer lock / committed its
-      ``BEGIN IMMEDIATE`` transaction (issues 15/16/17). Concurrent
+      ``BEGIN IMMEDIATE`` transaction. Concurrent
       writers from different threads can therefore enter the same
       observer callback at the same time — observers are responsible
       for their own thread-safety. No global ordering of callbacks
@@ -279,13 +230,13 @@ class EventLogSubscriber(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class TaskStreamSummary:
-    """One row of the task catalog (CW5a).
+    """One row of the task catalog.
 
-    The minimal, transport-neutral enumeration shape the task list
-    needs — ``task_id`` plus the stream-tail bookmarks used for ordering. Pure
-    stdlib types (no storage-adapter types leak through this seam); the richer
-    lifecycle fields (status / closed / …) are derived by ``noeta.read_models``
-    via :func:`noeta.core.fold.fold`, not carried here.
+    The minimal, transport-neutral enumeration shape a task list needs —
+    ``task_id`` plus the stream-tail bookmarks it orders by. Pure stdlib types,
+    so no storage-adapter type leaks through this seam; richer lifecycle fields
+    (status / closed / …) are derived by ``noeta.read_models`` through
+    :func:`noeta.core.fold.fold` rather than carried here.
     """
 
     task_id: str
@@ -294,15 +245,13 @@ class TaskStreamSummary:
 
 
 class EventLogTaskIndex(Protocol):
-    """Enumerate the task streams a real storage-backed event log holds (CW5a).
+    """Enumerate the task streams a storage-backed event log holds.
 
     A **separate capability** from :class:`EventLogReader` on purpose: reading a
-    *single* task's stream (fold / the LLM cursor) must NOT imply the
-    ability to enumerate *every* task. Only genuine storage-backed logs (the
-    InMemory / Sqlite adapters) implement this; the narrow per-task readers
-    deliberately do not.
-    :func:`noeta.read_models` consumes this to build the task list without
-    reaching into adapter internals.
+    *single* task's stream (fold, the LLM cursor) must NOT imply the ability to
+    enumerate *every* task, so the narrow per-task readers do not implement it.
+    ``noeta.read_models`` consumes this to build a task list without reaching
+    into adapter internals.
     """
 
     def list_task_streams(self) -> list[TaskStreamSummary]:
@@ -315,17 +264,13 @@ class EventLogTaskIndex(Protocol):
         ...
 
 
-# Combined Protocol for callsites that genuinely need read + write
-# (Engine, RuntimeLLMClient). Two Protocols intersected
-# by inheritance — concrete implementations satisfy both naturally.
 class EventLog(EventLogReader, EventLogWriter, Protocol):
     """Read + write combined.
 
-    Engine uses this because it both writes new events and reads the
-    stream (for ``_latest_trace_id``). RuntimeLLMClient uses this
-    because Normal writes the LLM trio and Resume reads the
-    historical cursor. Most callsites should prefer the narrower
-    :class:`EventLogReader` or :class:`EventLogWriter`.
+    For the few callsites that genuinely do both — the Engine writes events and
+    reads the stream for its trace id; ``RuntimeLLMClient`` writes the LLM trio
+    live and reads the historical cursor on resume. Everywhere else, prefer the
+    narrower :class:`EventLogReader` or :class:`EventLogWriter`.
     """
 
 
@@ -336,16 +281,12 @@ class EventLogFull(
     EventLogTaskIndex,
     Protocol,
 ):
-    """Read + write + subscribe + task-index — full live-adapter shape.
+    """Read + write + subscribe + task-index — the full live-adapter shape.
 
-    Issue A (post-Phase-1 cleanup). Reserved for callsites that genuinely
-    need every capability at the same wiring seam — concretely
-    :func:`noeta.core.wiring.wire_default_observers`,
-    :class:`noeta.core.observers.ChildLifecycleObserver`, and the live
-    runtime bundle in :mod:`noeta.testing.profile`. The narrow
-    :class:`EventLogReader` / :class:`EventLogWriter` /
-    :class:`EventLogSubscriber` protocols are the right type at every
-    other callsite (single-capability intent stays explicit there);
-    don't widen them to :class:`EventLogFull` just because the concrete
-    adapter satisfies it.
+    Reserved for callsites that genuinely need every capability at the same
+    wiring seam: :func:`noeta.core.wiring.wire_default_observers`,
+    :class:`noeta.core.observers.ChildLifecycleObserver`, and the live runtime
+    bundle in :mod:`noeta.testing.profile`. Do not widen a narrow annotation to
+    this one just because the concrete adapter satisfies it — the narrow
+    Protocols are what keeps single-capability intent explicit.
     """

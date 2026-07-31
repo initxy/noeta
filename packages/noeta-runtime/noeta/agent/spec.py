@@ -1,14 +1,12 @@
 """``AgentSpec`` — the serializable Agent identity object.
 
-An ``AgentSpec`` is *only identity*: declared, canonical-serializable fields,
-no ``Callable``\\s. Runtime wiring (how a ``policy`` ref becomes a live
-``Policy``, a ``ToolRef`` a live ``Tool``) is kept in a separate builder keyed
-by the same ``(name, version)`` refs — ``noeta.agent`` for coding agents, the
-future agent-sdk for official batteries. Keeping closures off the spec is what
-keeps identity declarative: component lists are normalised to sorted tuples at
-construction, so two specs that differ only in author ordering are ``==``.
-Identity comparison is plain frozen-dataclass structural equality (an
-earlier ``fingerprint`` digest was retired in favour of it).
+An ``AgentSpec`` carries *only identity*: declared, canonical-serializable
+fields and no ``Callable``\\s. Runtime wiring — turning a ``policy`` ref into a
+live ``Policy``, a ``ToolRef`` into a live ``Tool`` — belongs to a separate
+builder keyed by the same ``(name, version)`` refs, because a spec holding
+closures could neither be recorded durably nor compared. Identity comparison is
+plain frozen-dataclass structural equality, which works only because component
+lists are normalised to sorted tuples at construction.
 """
 
 from __future__ import annotations
@@ -31,10 +29,10 @@ class ComponentRef:
     """A versioned reference to a wired component (policy / composer / skill /
     guard / observer).
 
-    ``version`` is the **behaviour** version, not a release tag:
-    it MUST bump whenever the component's behaviour changes, because that is the
-    only behaviour signal the spec's structural identity carries. ``order=True``
-    makes refs sort deterministically by ``(name, version)`` for normalisation.
+    ``version`` is the **behaviour** version, not a release tag: it MUST bump
+    whenever the component's behaviour changes, because it is the only behaviour
+    signal the spec's structural identity carries. ``order=True`` is what makes
+    the containing spec's normalisation deterministic.
     """
 
     name: str
@@ -43,11 +41,8 @@ class ComponentRef:
 
 @dataclass(frozen=True, slots=True, order=True)
 class ToolRef:
-    """A versioned reference to a tool, plus the metadata the runtime keys on
-    (``risk_level`` gates approval).
-
-    ``order=True`` sorts by ``(name, version, risk_level)``.
-    """
+    """A versioned reference to a tool. ``risk_level`` gates approval, so it is
+    part of the tool's identity rather than wiring metadata."""
 
     name: str
     version: str = "1"
@@ -57,8 +52,8 @@ class ToolRef:
 @dataclass(frozen=True, slots=True)
 class BudgetSpec:
     """Declared default budget caps. Mirrors ``noeta.runtime.governance.Budget``
-    1:1 so a host can build the live guard straight from the spec. ``None`` ⇒ no
-    cap for that dimension."""
+    1:1 so a host can build the live guard straight from the spec, and the two
+    must stay in step. ``None`` ⇒ no cap for that dimension."""
 
     max_iterations: int | None = None
     max_tool_calls: int | None = None
@@ -69,12 +64,12 @@ class BudgetSpec:
 
 @dataclass(frozen=True, slots=True)
 class AgentSpec:
-    """A named Agent's serializable identity.
+    """A named Agent's serializable identity, recorded durably via
+    ``AgentBound``.
 
-    Resolve target for the server/worker; recorded durably via ``AgentBound``.
-    Component lists are normalised to sorted tuples on construction so two specs
-    that differ only in author ordering are ``==`` (structural equality is the
-    identity comparison).
+    Component lists are normalised to sorted tuples on construction, so two
+    specs differing only in author ordering compare equal and a recording's
+    identity does not depend on how its author happened to list things.
     """
 
     name: str
@@ -86,7 +81,7 @@ class AgentSpec:
     guards: tuple[ComponentRef, ...] = ()
     observers: tuple[ComponentRef, ...] = ()
     default_budget: BudgetSpec = field(default_factory=BudgetSpec)
-    #: **Activation tuple — the behaviour-shaping identity (D6).** The full
+    #: **Activation tuple — the behaviour-shaping identity.** The full
     #: resolved activation of this agent, sorted: the built-in feature bundles it
     #: opens (``todo_write`` / ``ask_user_question`` / ``skill_invocation`` /
     #: ``memory`` / ``mcp`` / ``browser`` / ``delegation``) plus the identity-inert
@@ -94,8 +89,8 @@ class AgentSpec:
     #: gating reads this tuple through :func:`agent_activates` — membership *is*
     #: the capability. The structural ``delegation`` derivation (a root with
     #: children delegates) and any external-plugin forced flags are folded in at
-    #: compile time, so the tuple alone carries what the retired ``Capabilities``
-    #: dataclass carried. A change here is a real identity change.
+    #: compile time, so the tuple alone carries the full activation. A change here
+    #: is a real identity change.
     plugins: tuple[str, ...] = ()
     #: The **names** of the subtask agents this Agent may delegate to (stable
     #: identity strings, normalised to a sorted tuple). Structural — derived from
@@ -124,8 +119,7 @@ class AgentSpec:
         """Canonical dict form (every field, recursively).
 
         Emits ``plugins`` + ``spawnable`` as the identity-carrying activation
-        representation — there is **no** ``capabilities`` key (D6/D7: the
-        ``Capabilities`` dataclass was retired). Inverse of :meth:`from_dict`.
+        representation. Inverse of :meth:`from_dict`.
         """
         from dataclasses import asdict
 
@@ -135,22 +129,21 @@ class AgentSpec:
     def from_dict(cls, raw: Mapping[str, Any]) -> "AgentSpec":
         """Rebuild an ``AgentSpec`` from :meth:`to_dict` output.
 
-        **D7 hard break.** A recording made before the activation-tuple identity
-        swap carries a ``capabilities`` key and no ``plugins``; it no longer
-        decodes. The failure is loud (``ValueError`` naming the stale/missing
-        key), never a silent default, so a stale fixture cannot slip through as a
-        plugin-less agent.
+        A body carrying a ``capabilities`` key, or one missing ``plugins``,
+        is rejected loud (``ValueError`` naming the offending key), never
+        silently defaulted — a plugin-less agent must say so explicitly
+        (``plugins=[]``), so a malformed body cannot slip through as one.
         """
         if "capabilities" in raw:
             raise ValueError(
-                "AgentSpec.from_dict: stale 'capabilities' key — the Capabilities "
-                "dataclass was retired (D6/D7); re-record with a 'plugins' "
-                "activation tuple. Pre-swap recordings do not decode."
+                "AgentSpec.from_dict: unknown 'capabilities' key — identity is "
+                "the 'plugins' activation tuple; re-record with one. A recording "
+                "carrying 'capabilities' does not decode."
             )
         if "plugins" not in raw:
             raise ValueError(
                 "AgentSpec.from_dict: missing required 'plugins' key — identity is "
-                "the activation tuple now (D6); a plugin-less agent must still say "
+                "the activation tuple; a plugin-less agent must still say "
                 "so explicitly (plugins=[]), never default silently."
             )
         return cls(
@@ -202,7 +195,7 @@ def _budget_spec(raw: Any) -> BudgetSpec:
 
 
 def agent_activates(agent: Any, plugin: str) -> bool:
-    """The single derivation rule (D6): does ``agent`` activate ``plugin``?
+    """The single derivation rule: does ``agent`` activate ``plugin``?
 
     Identity is the ``plugins`` tuple alone, so a feature is active **iff** its
     name is a member of that tuple: built-in feature bundles (``todo_write`` /

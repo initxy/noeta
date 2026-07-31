@@ -1,6 +1,6 @@
-"""ReActPolicy — Phase 1 first-slice ReAct loop policy.
+"""ReActPolicy — the ReAct loop policy.
 
-The first real ``Policy`` shipped with Noeta: bridges a typed
+Bridges a typed
 ``LLMRequest / LLMResponse`` round-trip into the typed ``Decision``
 surface the Engine consumes. The hot path is::
 
@@ -23,18 +23,15 @@ whatever the provider returned) round-trips through
 
 Scope:
 
-* Only three Decision variants are produced —
-  ``ToolCallsDecision / FinishDecision / FailDecision``. Spawn-subtask /
-  yield-for-human / wait-timer translation is explicitly Out of Scope and
-  lands in Phase 1 second-slice.
-* ``model`` is a constant per Policy instance. Future upgrade to a
-  ``Callable[[View], str]`` is pure addition.
-* History truncation is a trivial tail window; the real three-segment
-  ContextComposer arrives in issue 14.
+* Beyond the three core variants
+  (``ToolCallsDecision / FinishDecision / FailDecision``), control-tool calls
+  translate into their neutral decisions (spawn-subtask, yield-for-human,
+  wait-timer) via ``translate_control_tool``.
+* ``model`` is a constant per Policy instance.
 * ``_step_count`` is an instance attribute — **one Policy instance per
   Task**; a subtask uses its own Policy with its own counter.
 
-Layering: since phase 2b this module ships in noeta-sdk's ``react`` built-in
+Layering: this module ships in noeta-sdk's ``react`` built-in
 and reaches the kernel across the wheel boundary — so it imports only the
 kernel's PUBLIC surface: ``noeta.protocols.*``, ``noeta.runtime.*``, and the
 control mechanism band (``noeta.policies.control_semantics``). No
@@ -93,11 +90,10 @@ __all__ = [
 #: ``SPAWN_SUBAGENT_TOOL`` is defined in ``noeta.policies.control_semantics``
 #: (the kernel's reserved control vocabulary) and re-exported here for this
 #: module's own readers. It is NOT this module's public address: control tools
-#: are kernel vocabulary. Every control-tool SCHEMA function moved into its
-#: built-in — ``todo_write`` / ``ask_user_question`` / ``spawn_subagent``
-#: (control-tool-surface S2), then ``skill`` (skills) + ``run_workflow`` /
-#: ``structured_output`` (this built-in's ``control_tool`` module, S2b); react
-#: never used them (they were dead re-exports), so they are gone here.
+#: are kernel vocabulary. Each control-tool SCHEMA function lives in its own
+#: built-in — ``todo_write`` / ``ask_user_question`` / ``spawn_subagent``,
+#: ``skill`` (skills), and ``run_workflow`` / ``structured_output`` (this
+#: built-in's ``control_tool`` module).
 
 #: ``ReActPolicy._last_input_tokens_at_call`` sentinel: a compaction collapsed
 #: the history, so no recorded input count describes it any more. Distinct from
@@ -150,8 +146,8 @@ class ReActPolicy:
         model: str,
         max_steps: int = 50,
         max_history_messages: Optional[int] = None,
-        #: The routing-ordered control-tool translate specs (control-tool-surface
-        #: S1). Each spec's ``translate`` closure carries its own build inputs (the
+        #: The routing-ordered control-tool translate specs.
+        #: Each spec's ``translate`` closure carries its own build inputs (the
         #: skill mount captures its menu), so the policy holds no ``*_enabled``
         #: flags or ``skill_menu_names``: mounting a spec IS enablement, and an
         #: empty tuple means no control tool is offered. The kernel builder's mount
@@ -165,8 +161,8 @@ class ReActPolicy:
         composer_version: str = "",
         # Wiring-only LLM request overrides. Omitted from canonical bytes
         # on the wire when ``None`` (LLMRequest.__canonical_omit_none__),
-        # so a host that leaves them unset keeps the same stable prompt
-        # prefix legacy sessions had (prefix-cache friendly).
+        # so a host that leaves them unset keeps a stable prompt
+        # prefix (prefix-cache friendly).
         output_schema: Optional[dict[str, Any]] = None,
         thinking: Optional[str] = None,
         effort: Optional[str] = None,
@@ -206,13 +202,13 @@ class ReActPolicy:
         # the real count DROPS, and a max would pin the trigger to a stale
         # pre-compaction high and re-fire forever.
         self._last_input_tokens_at_call = 0
-        # ③ (D-3): compaction trigger configuration. When ``context_window``
-        # is None compaction is OFF (legacy behaviour — no proactive trigger,
+        # ③ compaction trigger configuration. When ``context_window``
+        # is None compaction is OFF (no proactive trigger,
         # an overflow error stays a FailDecision). When set, the available
         # window is ``context_window - max_output_tokens - compaction_buffer``
         # and BOTH triggers (proactive estimate / passive overflow) return a
         # ``CompactionRequestedDecision``. The window/output/buffer come from
-        # the catalog ModelSpec (D-C1) but are INJECTED here — react.py never
+        # the catalog ModelSpec but are INJECTED here — react.py never
         # imports the providers built-in (provider neutrality). The
         # ``tail_token_budget`` is the protected tail window the summarize
         # boundary is computed against; ``composer_version`` is recorded on
@@ -229,7 +225,7 @@ class ReActPolicy:
         # ``ask_user_question_enabled``; the runner threads the same
         # store the recording lives in so a resumed run rebuilds identical refs.
         self._content_store = content_store
-        # Control-tool-surface S1: the routing-ordered translate specs the mount
+        # The routing-ordered translate specs the mount
         # loop produced. Each spec's ``translate`` closure carries its own build
         # inputs (the ``skill`` mount captures the indexed menu; ``spawn_subagent``
         # / ``todo_write`` / ``ask_user_question`` / ``run_workflow`` carry
@@ -260,7 +256,7 @@ class ReActPolicy:
         # ③ (D-3a) proactive trigger. The trigger size is no
         # longer a pure chars/4 estimate of the whole request — that
         # systematically under-counts cache / structured blocks / images, and
-        # since D1 removed the message-count gate the token gate is the ONLY entry, so its
+        # the token gate is the ONLY compaction entry, so its
         # precision matters. We mix the REAL recorded usage of the previous
         # round-trip (``ctx.last_input_tokens``) with a chars/4 estimate of only
         # what was appended since (see ``_trigger_estimate``). The bare chars/4
@@ -381,19 +377,19 @@ class ReActPolicy:
     def _summary_prompt_request(
         self, history: list[Message]
     ) -> LLMRequest:
-        """Build the deterministic summarize round-trip request (D-3c).
+        """Build the deterministic summarize round-trip request.
 
         A fixed structured-section instruction over the
         history-to-be-collapsed. The sections are adopted from Claude Code's
         compaction template but trimmed to a durable subset: Noeta only ever
         summarises the OLD PREFIX (everything before the protected verbatim tail
-        window, D3), so the recent state already sits verbatim in that tail.
+        window), so the recent state already sits verbatim in that tail.
         Asking the summary to also restate Current Work / Next Step would make
         the model re-narrate text already present word-for-word — wasteful and
         prone to disagree with the tail — so those two sections are deliberately
         DROPPED (left to the tail).
 
-        D6: the "Files & Code" section keeps a PATH LIST only, never the file
+        The "Files & Code" section keeps a PATH LIST only, never the file
         bodies. Re-injecting bodies is a false need here: re-reading disk breaks
         determinism, and a ContentStore snapshot would be a STALE copy for an
         agent that is actively editing — so we record the relevant paths and let
@@ -471,7 +467,7 @@ class ReActPolicy:
             # empty-summary guard below then (correctly) turns into a
             # ``compaction_summary_failed`` FailDecision — killing the task on
             # every proactive compaction. ``0`` (host didn't inject) ⇒ ``None`` ⇒
-            # omitted from canonical bytes, so a legacy session's summarize prompt
+            # omitted from canonical bytes, so a session's summarize prompt
             # prefix is byte-identical and the request stays deterministic on
             # resume.
             max_tokens=self._max_output_tokens or None,
@@ -534,7 +530,7 @@ class ReActPolicy:
         if boundary <= view.summary_boundary:
             # No NEW prefix beyond what is already collapsed — compaction would
             # re-summarise the same prefix and spin forever. Fail closed; this
-            # subsumes the old ``boundary <= 0`` fast-fail (finding 3).
+            # also covers the ``boundary <= 0`` case.
             return FailDecision(
                 reason="compaction_no_progress", retryable=False
             )
@@ -684,21 +680,21 @@ class ReActPolicy:
     def _build_request_and_selection(
         self, view: View
     ) -> tuple[LLMRequest, Optional[MessageSelection]]:
-        # Issue 14 §F: Composer is the SoT for prompt material —
+        # Composer is the SoT for prompt material —
         # ReActPolicy pulls system / tools / messages from the View's
         # three segments.
         #
-        # the legacy message-count tail-window truncation is now
-        # DEFAULT-OFF (``max_history_messages=None``). It was a guard that
-        # dropped the oldest messages once the count crossed 50 — and because
-        # it was decoupled from tokens it fired far earlier than the token
+        # The message-count tail-window truncation is
+        # DEFAULT-OFF (``max_history_messages=None``): a guard that
+        # drops the oldest messages once the count crosses a limit would be
+        # decoupled from tokens and fire far earlier than the token
         # compaction gate, bluntly dropping early context before the summariser
-        # ever ran. Pure token compaction (③ D-3, ``_compaction_triggered``) is
-        # now the only gate; the protected tail is sized by ``tail_token_budget``,
+        # ran. Pure token compaction (③ ``_compaction_triggered``) is
+        # the only gate; the protected tail is sized by ``tail_token_budget``,
         # not a message count. The parameter is KEPT as an escape hatch: pass a
-        # positive int and the old behaviour is restored verbatim.
+        # positive int to enable count-based tail truncation.
         #
-        # MS1: this is the one place message selection happens, so it is the
+        # This is the one place message selection happens, so it is the
         # single source of the ``MessageSelection`` provenance — but only when
         # the escape hatch is engaged. With the hatch off (``None``) we drop
         # nothing and emit NO ``tail_window`` selection (its absence is the
@@ -729,7 +725,7 @@ class ReActPolicy:
             # the client sends none) doesn't truncate the answer — react would otherwise
             # treat that truncation as an llm_truncated failure. ``0`` (host didn't inject)
             # ⇒ ``None`` ⇒ omitted from canonical bytes, keeping the prompt
-            # prefix identical to legacy sessions that never set it.
+            # prefix identical whether or not it is set.
             max_tokens=self._max_output_tokens or None,
             # These three are omitted from canonical bytes when None
             # (LLMRequest.__canonical_omit_none__) so the prompt prefix is
@@ -899,9 +895,8 @@ def _strip_thinking(content: list[Block]) -> list[Block]:
     require ``reasoning_content`` echoed back, so dropping is safe.
 
     Anthropic extended-thinking signature round-trip is not handled
-    here — the Anthropic adapter and ContextComposer three-segment work
-    (Phase 1 second slice, issue 14) own that path. First slice records
-    this as a documented limitation.
+    here — the Anthropic adapter and ContextComposer three-segment path
+    own it.
     """
     return [b for b in content if not isinstance(b, ThinkingBlock)]
 

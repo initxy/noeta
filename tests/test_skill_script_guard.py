@@ -1,9 +1,9 @@
-"""Phase 4.5 Issue E — `run_skill_script` always-approval guard invariant.
+"""`run_skill_script` always-approval guard invariant.
 
-Proves the `PermissionGuard` E precheck: a ``skill_script_tools`` call can
+Proves the `PermissionGuard` precheck: a ``skill_script_tools`` call can
 only ever resolve to ``deny`` (fail-closed) or ``require_approval`` —
 **never** ``allow`` — and that this does **not** depend on
-``require_approval_tools`` wiring (the architect's central requirement).
+``require_approval_tools`` wiring.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ def test_active_discovered_requires_approval() -> None:
 
 
 def test_require_approval_even_with_empty_require_approval_tools() -> None:
-    # The always-approval invariant is the E precheck, NOT require_approval_tools.
+    # The always-approval invariant is the script precheck, NOT require_approval_tools.
     g = _guard(require_approval_tools=frozenset())
     assert _verdict(g, skill="s", relpath="scripts/x.sh", active=("s",)) is Verdict.REQUIRE_APPROVAL
 
@@ -87,14 +87,14 @@ def test_script_tool_never_returns_allow() -> None:
 
 
 def test_skill_script_independent_of_b_allowed_tools() -> None:
-    """`run_skill_script` is gated only by the E precheck (active skill +
+    """`run_skill_script` is gated only by the script precheck (active skill +
     discovered + approval) — it is NOT allowed/denied by a skill's
-    `allowed-tools` (Issue B). Two separate lines."""
+    `allowed-tools`. Two separate lines."""
     guard = PermissionGuard(
         PermissionPolicy(
             skill_script_tools=frozenset({"run_skill_script"}),
             skill_scripts=frozenset({SCRIPT}),
-            # B enforcement ON, active skill grants only [Read]:
+            # allowed-tools enforcement ON, active skill grants only [Read]:
             skill_tool_enforcement="approval",
             skill_allowed_tools=(("s", frozenset({"read_file"})),),
         ),
@@ -108,9 +108,9 @@ def test_skill_script_independent_of_b_allowed_tools() -> None:
             ctx,
         ).verdict
 
-    # run_skill_script → E require_approval, unaffected by B's [Read] grant.
+    # run_skill_script → script-precheck require_approval, unaffected by the [Read] grant.
     assert _v("run_skill_script", {"skill": "s", "relpath": "scripts/x.sh"}) is Verdict.REQUIRE_APPROVAL
-    # B still governs ordinary tools: read_file granted, write gated.
+    # allowed-tools still governs ordinary tools: read_file granted, write gated.
     assert _v("read_file", {"path": "x"}) is Verdict.ALLOW
     assert _v("write", {"path": "x"}) is Verdict.REQUIRE_APPROVAL
 

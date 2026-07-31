@@ -1,26 +1,17 @@
-"""``noeta.sdk.providers`` — the official LLM provider adapters, re-exported.
+"""``noeta.sdk.providers`` — the official LLM provider adapters and model catalog.
 
-The app layer (and the new backend) is provider-neutral but must construct ONE
-concrete provider to inject (``Client(provider=…)`` / ``serve_backend``). The
-adapters live in the ``providers`` built-in plugin
-(``noeta.builtins.providers.impl`` — microkernel M2); routing the import
-through ``noeta.sdk`` keeps the encapsulation weld intact — the backend
-reaches the engine only through ``noeta.sdk``.
-
-Kept in this submodule (not the ``noeta.sdk`` root) so importing the SDK stays
-light: only callers that actually build a network provider pull ``httpx`` in.
-The re-export is **lazy** (PEP 562 module ``__getattr__``): the universal
-microkernel rule says nothing statically imports ``noeta.builtins`` — the
-loader's dynamic-import doorway is the only path — so the adapter modules load
-on first attribute access, exactly when a caller builds one.
+A host is provider-neutral but must construct ONE concrete provider to inject
+(``Client(provider=…)``), and ``CATALOG`` carries the ``ModelSpec`` row (context
+window, output cap, pricing) for each model it may offer::
 
     from noeta.sdk.providers import OpenAICompatProvider      # chat-completions gateways
     from noeta.sdk.providers import OpenAIResponsesProvider   # responses-API gateways
     from noeta.sdk.providers import AnthropicProvider
 
-The model catalog (``ModelSpec`` rows keyed by model id in ``CATALOG``) is the
-read-only companion surface: a product that lets users pick models needs the
-specs (context window, output cap, pricing) for the models it wires up.
+The adapters live in the ``providers`` built-in and are re-exported **lazily**
+(PEP 562 module ``__getattr__``) so nothing statically imports ``noeta.builtins``
+and only a caller that actually builds a network provider pays for ``httpx``.
+Hence a submodule rather than the ``noeta.sdk`` root, keeping SDK import light.
 """
 
 from __future__ import annotations
@@ -39,7 +30,6 @@ __all__ = [
 
 _IMPL = "noeta.builtins.providers.impl"
 
-#: Public name → the impl module (under ``_IMPL``) that defines it.
 _EXPORTS = {
     "AnthropicProvider": "anthropic",
     "OpenAICompatProvider": "openai_compat",

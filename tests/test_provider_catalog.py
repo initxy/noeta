@@ -1,12 +1,12 @@
 """Provider-neutral model spec catalog + pricing.
 
-Covers the Noeta-shape :class:`ModelSpec` (real model-id / context window /
-output cap / per-MTok prices / reasoning flag), the ``price(model_id,
-usage)`` pure function that turns a typed :class:`Usage` into USD, and the
-alias->real-id table. The catalog is provider-neutral: one dataclass holds both Anthropic and
-OpenAI rows, and **no** vendor wire key
-(``cache_creation_input_tokens`` / ``total_tokens`` / ``prompt_tokens``)
-appears as a field name.
+Covers the :class:`ModelSpec` shape (real model-id / context window / output
+cap / per-MTok prices / capability flags), the pure ``price(model_id, usage)``
+function that turns a typed :class:`Usage` into USD, and the alias→real-id
+table. Neutrality is the invariant worth guarding: one dataclass holds both
+Anthropic and OpenAI rows, and **no** vendor wire key
+(``cache_creation_input_tokens`` / ``total_tokens`` / ``prompt_tokens``) may
+leak in as a field name, or the cost math would fork per vendor.
 """
 
 from __future__ import annotations
@@ -84,10 +84,9 @@ def test_catalog_holds_both_anthropic_and_openai_rows() -> None:
 
 
 def test_supports_vision_defaults_to_false() -> None:
-    """``supports_vision``
-    is an opt-in capability flag (same nature as ``is_reasoning``), default
-    False. A model not explicitly marked as vision is treated as non-vision; an
-    image request hitting it must trip the flag (the vision guard relies on it)."""
+    """``supports_vision`` is opt-in (same nature as ``is_reasoning``): an
+    unmarked model must read as non-vision so the adapter's vision guard blocks
+    an image request rather than shipping it to a text-only model."""
     spec = ModelSpec(
         real_model_id="x",
         context_window=1,
@@ -101,9 +100,7 @@ def test_supports_vision_defaults_to_false() -> None:
 
 
 def test_existing_text_only_rows_are_not_vision() -> None:
-    """Text-only rows (gpt-4o / gpt-4o-mini) aren't marked vision ->
-    supports_vision False. Adding the field must not change a non-vision row's
-    semantics (red line: zero impact on old recordings)."""
+    """The text-only rows must stay on the non-vision side of the guard."""
     for model_id in ("gpt-4o", "gpt-4o-mini"):
         assert spec_for(model_id).supports_vision is False
 
@@ -117,9 +114,9 @@ def test_claude_rows_are_vision_capable() -> None:
 
 
 def test_gpt_5_4_2026_03_05_entry_present_with_vision_and_reasoning() -> None:
-    """New model
-    gpt-5.4-2026-03-05 is registered in the catalog with is_reasoning=True /
-    supports_vision=True and positive window and output cap."""
+    """A reasoning + vision row: both flags set, window and output cap
+    positive, so the guards and the budget math have real numbers to work
+    with."""
     spec = spec_for("gpt-5.4-2026-03-05")
     assert spec.real_model_id == "gpt-5.4-2026-03-05"
     assert spec.is_reasoning is True
@@ -141,8 +138,9 @@ def test_aliases_cover_opus_sonnet_haiku() -> None:
 
 
 def test_resolve_alias_passes_through_unknown_value() -> None:
-    """A value that is not an alias is returned unchanged — so a real
-    model-id or the stub model is left alone (driver allowlist still gates)."""
+    """A value that is not an alias is returned unchanged, so a real model-id
+    or the stub model passes through; the driver allowlist gates it
+    separately."""
     assert resolve_alias("claude-opus-4-8") == "claude-opus-4-8"
     assert resolve_alias("stub-model") == "stub-model"
 
@@ -175,9 +173,9 @@ def test_price_mixed_usage_sums_each_component() -> None:
 
 
 def test_price_cache_read_and_write_priced_distinctly() -> None:
-    """Cache read is cheaper than uncached input; cache write is more
-    expensive -- the GovernanceState split must produce different cost for the
-    same token count placed in different cache buckets."""
+    """Cache read is cheaper than uncached input and cache write is more
+    expensive, so the same token count must cost differently depending on which
+    bucket the GovernanceState split put it in."""
     spec = spec_for("claude-opus-4-8")
     read_cost = price("claude-opus-4-8", Usage(cache_read=1_000_000))
     write_cost = price("claude-opus-4-8", Usage(cache_write=1_000_000))
@@ -201,16 +199,16 @@ def test_price_unknown_model_raises_keyerror() -> None:
 
 
 # ---------------------------------------------------------------------------
-# import-linter invariant (catalog may only import noeta.protocols + stdlib)
+# Import diet — what the catalog is allowed to reach for
 # ---------------------------------------------------------------------------
 
 
 def test_catalog_module_import_diet() -> None:
-    """The catalog keeps a narrow diet: protocols, plus (microkernel M2) the
-    two kernel modules ``derive_compaction_config`` reaches DOWNWARD —
-    ``noeta.execution.builder`` for the ``CompactionConfig`` type and
-    ``noeta.context.composer`` for the composer version. Builtins→kernel is
-    the allowed direction; anything else appearing here is a smell."""
+    """The catalog keeps a narrow diet: protocols, plus the two kernel modules
+    ``derive_compaction_config`` reaches downward for — ``noeta.execution.builder``
+    for the ``CompactionConfig`` type and ``noeta.context.composer`` for the
+    composer version. Built-in→kernel is the allowed direction; anything else
+    appearing here is a smell."""
     import noeta.builtins.providers.impl.catalog as catalog_mod
 
     allowed = (

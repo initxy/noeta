@@ -1,14 +1,8 @@
-"""``skills`` built-in — implementation package (microkernel phase 2a).
+"""``skills`` built-in — implementation package.
 
-The skill subsystem's material: the SKILL.md indexer and registry
-(``indexer``), the frontmatter parser (``_frontmatter``), the
-``run_skill_script`` tool (``script``), the ``allowed-tools`` grant resolver
-(``allowed_tools``), the kit bundle + fingerprint/activation helpers
-(``kit`` — kernel final form: the kernel keeps NO skills module), and the
-session wiring + the ``session_pack`` contribution body (``wiring`` —
-microkernel phase 3). Nothing imports this package statically — the SDK
-resolves :func:`build_skills_session_pack` from the manifest at client
-build.
+Nothing imports this package statically: the SDK resolves
+:func:`build_skills_session_pack` from the manifest at client build, so this
+module's re-exports are the whole doorway into the skill subsystem.
 """
 
 from __future__ import annotations

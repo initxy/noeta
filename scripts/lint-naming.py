@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-"""Grep lint: forbidden Noeta naming.
+"""Grep lint: names that collide with the project's core vocabulary.
 
-CONTEXT.md `Flagged ambiguities` locks the project's core
-vocabulary on **Task** and ban a small set of synonyms that the pre-Phase-0
-design draft introduced (``Run`` / ``Workflow`` / ``Session`` /
-``Mutator`` / ``Pattern``) plus several compound names (``WorkflowRunner`` /
-``WorkflowPolicy`` / ``WorkflowSpec`` / ``SessionStore`` /
-``ConversationManager``).
-
-This script walks a root directory and reports every project source/doc
-file that mentions any banned name. Spec files that explicitly list the
-bans as bans themselves (``CONTEXT.md`` / ``docs/adr/`` / ``docs/design/`` /
-``.scratch/``) are exempted to keep the negative examples alive.
+Task is the only entity type the engine has, so ``Run`` / ``Workflow`` /
+``Session`` / ``Mutator`` / ``Pattern`` and compounds like ``WorkflowRunner``
+or ``SessionStore`` each duplicate something the domain already names, and
+admitting one forks the vocabulary between the code and the prose about it.
+CONTEXT.md (`Flagged ambiguities`) pins that vocabulary; this script enforces
+it, down to the narrower session-as-identity rule below. Files that catalogue
+the bans as bans are exempt, so the negative examples survive their own rule.
 
 Exit code:
     0 — clean
@@ -30,11 +26,8 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
-# Each ban is a ``(display, regex)`` pair. ``display`` is the human-
-# readable forbidden string used in error output. ``regex`` matches the
-# violation but with word boundaries so legitimate identifiers that
-# merely share a prefix (``class RuntimeState`` / ``class PatternMatcher``)
-# do not trip the lint.
+# Word boundaries keep identifiers that merely share a prefix with a banned
+# name — ``class RuntimeState``, ``class PatternMatcher`` — out of the results.
 _BANNED_CLASSES = (
     "Run",
     "Workflow",
@@ -58,19 +51,18 @@ BANNED: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
 )
 
 # ---------------------------------------------------------------------------
-# Session-as-identity ban (CONTEXT.md `Flagged ambiguities` -> "Session").
+# Session as identity (CONTEXT.md `Flagged ambiguities` -> "Session").
 #
-# The bare word "session" is fine in prose: CONTEXT.md itself says "per-session
-# workspace" when it means "for the lifetime of one root-task tree". What is
-# banned is naming an *identity* after it -- a `session_id`, a sessions list, a
-# session-keyed cap -- because the engine knows only Tasks and the concept
-# already has a name (`task_id` / `root_task_id`).
+# The bare word is fine in prose: "per-session workspace" reads well and means
+# "for the lifetime of one root-task tree". Naming an *identity* after it is
+# not -- a `session_id`, a sessions list, a session-keyed cap -- because the
+# engine knows only Tasks and the thing being named already has a name
+# (`task_id` / `root_task_id`).
 #
-# So this rule fires only on COMPOUND tokens (an identifier joined by `_` or a
-# camelCase hump), never on a standalone `session` / `sessions` word. The
-# allow-list below is the construction-scope vocabulary CONTEXT.md promoted to
-# real terms in microkernel phase 3 -- a "session pack" builds one task's tool
-# set, which is a scope, not an identity.
+# Hence the rule fires only on COMPOUND tokens (an identifier joined by `_` or
+# a camelCase hump), never on a standalone `session` / `sessions` word, and the
+# allow-list below carves out construction-scope vocabulary: a session pack
+# builds one task's tool set, which is a scope, not an identity.
 _SESSION_ALLOWED_EXACT: frozenset[str] = frozenset(
     {
         "SessionBuildContext",
@@ -79,7 +71,7 @@ _SESSION_ALLOWED_EXACT: frozenset[str] = frozenset(
         "SessionRecorder",
         "SessionInputs",
         "build_session_inputs",
-        # subprocess.Popen's own keyword -- stdlib, not ours to rename.
+        # subprocess.Popen's own keyword -- stdlib spelling, not ours to pick.
         "start_new_session",
     }
 )
@@ -89,11 +81,10 @@ _SESSION_ALLOWED_SUBSTRING = "session_pack"
 
 _SESSION_TOKEN = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 
-#: Where the session-as-identity ban applies. CONTEXT.md scopes it to
-#: "engine/SDK code ... below-app identifiers" — i.e. the shipped wheels and the
-#: reference host. ``tests/`` is deliberately OUT: a test harness stands in for
-#: a host (``tests/_sdk_session`` builds a client and drives turns), and a host
-#: is exactly the layer CONTEXT.md says may own the concept.
+#: Where the ban applies: the shipped wheels and the reference host. ``tests/``
+#: is deliberately OUT — a test harness stands in for a host (``tests/_sdk_session``
+#: builds a client and drives turns), and a host is exactly the layer CONTEXT.md
+#: lets own the concept.
 SESSION_RULE_REL_DIRS: tuple[tuple[str, ...], ...] = (
     ("packages",),
     ("examples",),
@@ -123,27 +114,28 @@ def session_identity_violations(line: str) -> list[str]:
         found.append(token)
     return found
 
-# Files / directories that are *allowed* to mention the banned names
-# because they catalogue the bans themselves (CONTEXT.md, ADRs, the
-# Phase 0 PRD/issues, the SDD).
+# Files allowed to mention the banned names because stating a ban requires
+# spelling it out.
 EXEMPT_FILE_NAMES: frozenset[str] = frozenset(
     {
         "CONTEXT.md",
-        # The lint script itself catalogues the bans, as does its test.
+        # The working agreement states the ban and the glossary mirrors
+        # CONTEXT.md's flagged-ambiguities list; both must spell the names out.
+        "AGENTS.md",
+        "glossary.md",
         "lint-naming.py",
         "test_lint_naming.py",
-        # Released history: an entry records the name that actually shipped at
-        # that version, so renaming it would falsify the record. The rename is
-        # recorded as a new breaking-change entry instead.
+        # A changelog entry says what a given version shipped under; editing it
+        # to satisfy the current vocabulary would falsify that record. A name
+        # change is a new breaking-change entry instead.
         "CHANGELOG.md",
     }
 )
 EXEMPT_DIR_PARTS: frozenset[str] = frozenset(
     {
         ".scratch",
-        # Tooling state, not source: agent worktrees / snapshots of other
-        # branches live here and may legitimately quote banned names in
-        # their own ADRs/docs. Never part of the checked-out source tree.
+        # Tooling state rather than source: agent worktrees and branch
+        # snapshots land here and may quote banned names in their own docs.
         ".claude",
         ".git",
         ".venv",
@@ -158,27 +150,18 @@ EXEMPT_DIR_PARTS: frozenset[str] = frozenset(
         ".ruff_cache",
     }
 )
-# Spec / design docs under docs/ that legitimately reference the bans.
-# ``docs/adr/`` holds the topic decisions and catalogues the bans
-# (e.g. task-as-only-primitive names the rejected ``WorkflowRunner`` to keep it
-# rejected), so it gets an exemption.
 EXEMPT_REL_DIRS: tuple[tuple[str, ...], ...] = (
+    # An ADR records what was rejected as well as what was chosen, and
+    # task-as-only-primitive keeps ``WorkflowRunner`` rejected by naming it.
     ("docs", "adr"),
-    ("docs", "design"),
-    # Archived specs are a historical record of what was built at the time —
-    # rewriting their vocabulary would falsify them (same reason as CHANGELOG).
-    ("docs", "implementation-specs", "archive"),
-    # An APP-LAYER fixture: a vendored mirror of the agent product's read-model
-    # layer (a separate repo). CONTEXT.md puts "session" squarely inside a
-    # host's own vocabulary — "a host that groups turns into a user-visible
-    # session owns that concept itself" — so these names are correct where they
-    # live, and renaming them would only make the mirror diverge from the code
-    # it mirrors. The ban is on ENGINE/SDK identifiers, which this is not.
+    # An app-layer fixture: a mirror of a host product's read-model layer, which
+    # lives in its own repo. A host may own the session concept, so these names
+    # are correct where they live and editing them would only make the mirror
+    # diverge from what it mirrors.
     ("tests", "_read_models"),
 )
 
-# Suffixes worth scanning. We deliberately stay narrow so binary
-# artefacts and lock files never trip the grep.
+# Deliberately narrow, so binary artefacts and lock files never trip the grep.
 SCAN_SUFFIXES: frozenset[str] = frozenset(
     {".py", ".md", ".toml", ".yaml", ".yml", ".cfg", ".ini"}
 )

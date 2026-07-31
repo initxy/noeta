@@ -1,9 +1,10 @@
-"""`webfetch` (phase two): fetch a public URL, render to Markdown.
+"""``webfetch`` — fetch a public URL and render it to Markdown.
 
-The tool is driven through a fake fetch transport (no live network); the real
-``HttpFetchTransport`` is exercised through ``httpx.MockTransport``. Every
-``ToolResult.output`` is checked against ``runtime.tool._encode_output`` for the
-B1 invariant (no raw ``ContentRef`` leaked inline).
+Nothing here touches the network: the tool runs against a fake transport, and
+the real ``HttpFetchTransport`` is driven through ``httpx.MockTransport``. Every
+``ToolResult.output`` is re-encoded through ``runtime.tool._encode_output`` to
+prove no raw ``ContentRef`` leaks inline — the model must only ever see refs the
+adapter knows how to serialise.
 """
 
 from __future__ import annotations
@@ -129,17 +130,16 @@ def test_webfetch_renders_markdown_and_offloads() -> None:
     assert result.output["url"] == "https://x"
     assert result.output["title"] == "Cats & Kittens"  # entity unescaped
     md = result.output["content"]
-    # heading marker, link rendered as markdown, list items as bullets.
     assert "# About cats" in md
     assert "[cute](https://example.com/cute)" in md
     assert "- soft" in md
     assert "- small" in md
-    # script / style content is gone.
+    # Script and style bodies are stripped: they are pure token cost to a model
+    # and a place for a page to smuggle instructions.
     assert "track()" not in md
     assert "color:red" not in md
     _assert_output_json_safe(result)
 
-    # full markdown is the artifact; content_ref points at it.
     assert len(result.artifacts) == 1
     ref = result.artifacts[0]
     assert result.output["content_ref"]["hash"] == ref.hash
@@ -183,8 +183,8 @@ def test_webfetch_degrades_on_transport_failure() -> None:
 
 
 def test_webfetch_private_url_failure_names_the_cause() -> None:
-    # A private / authenticated URL answers 401/403; httpx raises and the tool
-    # surfaces a message that names the cause (the limitation in the description).
+    # A private / authenticated URL answers 401/403. The summary has to name the
+    # cause, or the model retries the same fetch instead of asking for access.
     err = httpx.HTTPStatusError(
         "401 Unauthorized",
         request=httpx.Request("GET", "https://private/secret"),
@@ -213,12 +213,12 @@ def test_webfetch_large_page_truncates_inline_keeps_full_artifact() -> None:
     result = WebFetchTool(transport=transport).invoke({"url": "https://big"}, ctx)
     assert result.success is True
     assert result.output["truncated"] is True
-    # inline output respects the canonical byte ceiling ...
     assert _encode_output(result.output)
     from noeta.tools.limits import encoded_len
 
+    # Inline output stays under the ceiling, but nothing is lost — the full
+    # markdown survives in the artifact for a follow-up read.
     assert encoded_len(result.output) <= INLINE_CONTENT_MAX_BYTES
-    # ... but the full markdown survives in the artifact, longer than inline.
     ref = result.artifacts[0]
     assert len(store.get(ref)) > len(result.output["content"].encode("utf-8"))
 
@@ -307,14 +307,14 @@ def test_container_fetch_runs_curl_and_renders_markdown() -> None:
 
     result = tool.invoke({"url": "https://x"}, ctx)
     assert result.success is True
-    # the request went out as `curl ... <url>` inside the container
     assert fake.calls, "run_argv was not invoked"
     argv = fake.calls[0]
     assert argv[0] == "curl"
     assert argv[-1] == "https://x"
     assert "-A" in argv  # user-agent forwarded
-    # P2a: --fail makes a 4xx/5xx a nonzero exit (parity with httpx
-    # raise_for_status) instead of returning the error page as a success body.
+    # ``--fail`` turns a 4xx/5xx into a nonzero exit (parity with httpx
+    # raise_for_status); without it curl hands back the error page as a success
+    # body and the model reads a 403 notice as page content.
     assert "--fail" in argv
     # the scripted HTML is rendered by the SAME html_to_markdown as the httpx path
     md = result.output["content"]
@@ -326,8 +326,8 @@ def test_container_fetch_runs_curl_and_renders_markdown() -> None:
 
 
 def test_container_fetch_nonzero_exit_degrades() -> None:
-    # A private / authenticated URL: curl exits nonzero and the tool degrades to
-    # ToolResult(success=False), exactly like the httpx 401/403 path.
+    # The container path must degrade exactly like the httpx 401/403 path — the
+    # transport in use is invisible to the model.
     fake = FakeExecEnv(
         stdout=b"", returncode=22, stderr=b"curl: (22) 403 Forbidden"
     )

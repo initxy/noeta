@@ -1,11 +1,11 @@
 """``AioBrowserBackend`` — the AIO Sandbox ``/mcp`` browser wire contract.
 
-These pin the wire the backend is coded against: given a fake ``McpHttpClient``,
-every :class:`BrowserBackend` method must issue the exact ``call_tool(name,
-args)`` and parse the documented ``tools/call`` result shape. They never open a
-socket — the live-container round-trip is a separate, gated e2e (B8) that
-re-pins the AIO tool-name constants. If the live wire differs, this file is what
-re-pins the one-file backend change (mirrors ``test_aio_sandbox_exec_env.py``).
+Given a fake ``McpHttpClient``, every :class:`BrowserBackend` method must issue
+the exact ``call_tool(name, args)`` the container expects and parse the
+documented ``tools/call`` result shape. No socket opens here; the live-container
+round-trip is a separate gated e2e. If the container's wire differs, this file
+is the one place the backend has to be re-pinned (its sibling for the exec
+surface is ``test_aio_sandbox_exec_env.py``).
 """
 
 from __future__ import annotations

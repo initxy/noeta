@@ -122,17 +122,6 @@ def test_docs_adr_dir_is_exempted(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_docs_design_dir_is_exempted(tmp_path: Path) -> None:
-    design = tmp_path / "docs" / "design"
-    design.mkdir(parents=True)
-    (design / "sdd.md").write_text("Avoid: WorkflowRunner.\n")
-    pkg = tmp_path / "packages" / "noeta" / "noeta"
-    pkg.mkdir(parents=True)
-    (pkg / "ok.py").write_text("# clean\n")
-    result = _run(tmp_path)
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
 def test_context_md_is_exempted(tmp_path: Path) -> None:
     (tmp_path / "CONTEXT.md").write_text(
         "Flagged ambiguities: WorkflowSpec / SessionStore.\n"
@@ -191,7 +180,7 @@ def test_session_identity_names_are_rejected(tmp_path: Path, name: str) -> None:
 @pytest.mark.parametrize(
     "name",
     [
-        # The construction-scope vocabulary phase 3 promoted to core terms.
+        # Construction-scope vocabulary — core terms, not banned identities.
         "session_pack",
         "default_session_packs",
         "build_fs_session_pack",
@@ -244,13 +233,5 @@ def test_changelog_is_exempt_as_released_history(tmp_path: Path) -> None:
     (tmp_path / "CHANGELOG.md").write_text(
         "## [0.3.2]\n- `HostConfig.sandbox_session_policy` added.\n"
     )
-    result = _run(tmp_path)
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_archived_specs_are_exempt(tmp_path: Path) -> None:
-    archive = tmp_path / "docs" / "implementation-specs" / "archive"
-    archive.mkdir(parents=True)
-    (archive / "old.md").write_text("The `session_root_id` seam shipped here.\n")
     result = _run(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr

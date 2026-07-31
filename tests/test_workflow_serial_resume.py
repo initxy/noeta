@@ -1,28 +1,13 @@
-"""Serial agent() calls + reactive branching + crash-restart resume.
+"""Serial ``agent()`` calls, reactive branching, and cold-restart resume.
 
-Acceptance criteria covered:
-
-1. **Serial fan-out (>=3 sequential agent()) + each spawned exactly once** (AC1 + AC3):
-   ``test_three_serial_agents_each_spawned_once`` — E2E run of a three-step script
-   via the SDK host (SdkHost + InteractionDriver); asserts the orchestration
-   subtask has exactly 3 SubtaskSpawned (no duplicates) and the final answer is correct.
-
-2. **Reactive branching (if/else on the previous result)** (AC2):
-   ``test_reactive_branch_taken`` — worker1 returns a string containing "bug" -> triggers a second agent().
-   ``test_reactive_branch_skipped`` — worker1 returns no "bug" -> only 1 worker spawned.
-
-3. **Cold-restart resume (recover from EventLog; completed agent() not re-run)** (AC4):
-   ``test_cold_restart_resume_no_redispatch`` — manual stepping; after the first worker
-   finishes, discard all in-memory objects and keep driving with a fresh
-   OrchestrationPolicy instance + fresh Engine. Asserts: no duplicate
-   SubtaskSpawned after restart, and correct final completion.
-
-LLM call order (shared global FakeLLMProvider, three-step script):
-  1. main agent -> run_workflow tool_use
-  2. worker(explore) -> end_turn, emits step-a result
-  3. worker(explore) -> end_turn, emits step-b result
-  4. worker(explore) -> end_turn, emits step-c result
-  5. main agent -> end_turn wrap-up
+A workflow script drives sub-agents from a positional cursor, so the two ways
+it can break are both silent and expensive: spawning an ``agent()`` call twice
+(duplicate work, duplicate cost), or losing the mapping between a call's
+position and the result it gets back. These tests pin exactly-once spawning,
+branch decisions taken from the result recorded in the EventLog, and — the
+crux — a restart that discards every in-memory object and rebuilds from the
+EventLog alone, where an already-completed ``agent()`` must pass instantly
+rather than re-dispatch.
 """
 
 from __future__ import annotations
@@ -94,11 +79,10 @@ WORKFLOW_CALL_ID = "wf-call"
 
 
 # ---------------------------------------------------------------------------
-# Shared helpers (aligned with test_workflow_run_tool_e2e.py)
+# Shared helpers
 # ---------------------------------------------------------------------------
 
 def _run_workflow_call(script: str) -> LLMResponse:
-    """LLM response for the main agent calling run_workflow."""
     return LLMResponse(
         stop_reason="tool_use",
         content=[
@@ -114,7 +98,6 @@ def _run_workflow_call(script: str) -> LLMResponse:
 
 
 def _end(text: str) -> LLMResponse:
-    """An end_turn LLM response."""
     return LLMResponse(
         stop_reason="end_turn",
         content=[TextBlock(text=text)],
@@ -155,7 +138,7 @@ def _events_of(host, task_id: str) -> list[str]:
 
 
 def _child_ids(host, parent_id: str) -> list[str]:
-    """Return the subtask_id list of every SubtaskSpawned under parent_id (ordered)."""
+    """Every SubtaskSpawned subtask_id under ``parent_id``, in emission order."""
     return [
         str(e.payload.subtask_id)
         for e in host.event_log.read(parent_id)
@@ -164,7 +147,7 @@ def _child_ids(host, parent_id: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Low-level helpers for manual stepping (aligned with test_workflow_orchestration_policy.py)
+# Low-level helpers for manual stepping
 # ---------------------------------------------------------------------------
 
 def _make_runtime() -> tuple[InMemoryEventLog, InMemoryContentStore, InMemoryDispatcher]:
@@ -221,9 +204,11 @@ def _resume_orch(
     child_id: str,
     call_index: int,
 ) -> Any:
-    """After the child completes, the observer wakes the orchestration task; re-lease + fold + note_woken + append + step.
+    """Replay by hand what the driver does once the observer wakes the
+    orchestration task: re-lease, fold, note_woken, append the result, step.
 
-    Returns the new orch Task object (either suspended or terminal).
+    ``call_index`` must match the script position the result belongs to — that
+    positional pairing is what keeps a resumed script on the same cursor.
     """
     o_lease = disp.lease(worker_id="w1")
     assert o_lease is not None and o_lease.task_id == orch_task_id
@@ -254,13 +239,11 @@ def _resume_orch(
 
 
 # ===========================================================================
-# Test 1: three serial steps + each spawned exactly once (AC1 + AC3)
+# Three serial steps + each spawned exactly once
 # ===========================================================================
 
 def test_three_serial_agents_each_spawned_once(tmp_path: Path) -> None:
     """Each agent() call in the three-step serial script is spawned exactly once; final answer concatenated in order.
-
-    Covers AC1 (>=3 sequential agent(), each subtask spawned exactly once) + AC3 (stable positional mapping).
 
     LLM call order: run_workflow_call -> end(A) -> end(B) -> end(C) -> end(final),
     5 calls total. The orchestration Policy itself makes 0 LLM calls.
@@ -326,13 +309,13 @@ def test_three_serial_agents_each_spawned_once(tmp_path: Path) -> None:
 
 
 # ===========================================================================
-# Test 2a: reactive branch — bug path taken (AC2)
+# Reactive branch — bug path taken
 # ===========================================================================
 
 def test_reactive_branch_taken(tmp_path: Path) -> None:
     """worker1 returns a string containing 'bug' -> if branch holds -> spawn a second agent().
 
-    Covers AC2 (the branch follows the real result recorded in the EventLog).
+    The branch follows the real result recorded in the EventLog.
 
     LLM call order: run_workflow -> end("found a bug here") -> end("fixed") -> end(final)
     """
@@ -374,13 +357,13 @@ def test_reactive_branch_taken(tmp_path: Path) -> None:
 
 
 # ===========================================================================
-# Test 2b: reactive branch — bug path not taken (AC2)
+# Reactive branch — bug path not taken
 # ===========================================================================
 
 def test_reactive_branch_skipped(tmp_path: Path) -> None:
     """worker1 returns a string with no 'bug' -> if branch fails -> only 1 agent() spawned, answer='no action'.
 
-    Covers AC2 (the branch follows the real result recorded in the EventLog: negative case).
+    The branch follows the real result recorded in the EventLog (negative case).
 
     LLM call order: run_workflow -> end("all looks clean") -> end(final)
     """
@@ -420,7 +403,7 @@ def test_reactive_branch_skipped(tmp_path: Path) -> None:
 
 
 # ===========================================================================
-# Test 3: cold-restart resume — completed agent() not re-run (AC4)
+# Cold-restart resume — completed agent() not re-run
 # ===========================================================================
 
 def test_cold_restart_resume_no_redispatch() -> None:
@@ -432,7 +415,6 @@ def test_cold_restart_resume_no_redispatch() -> None:
     - No duplicate SubtaskSpawned after restart (the first agent() is not re-spawned).
     - The orchestration task completes correctly with the right answer.
 
-    Covers AC4 (cold-restart resume from EventLog; completed agent() passes instantly).
     The crux: the Policy is stateless — all state lives in the EventLog.
     """
     # --- Phase 1: set up the runtime; run the orchestration task until the first worker finishes ---
@@ -478,8 +460,8 @@ def test_cold_restart_resume_no_redispatch() -> None:
     )
 
     # --- Phase 2: simulate the process restart ---
-    # Discard all in-memory engine and task objects (orch, orch_engine_1 no longer used).
-    # The EventLog and ContentStore stay alive (representing persistent storage).
+    # Discard the in-memory engine and task objects; the EventLog and
+    # ContentStore stay alive, standing in for persistent storage.
     del orch, orch_engine_1
 
     # Use a fresh OrchestrationPolicy instance + fresh Engine (simulating reconstruction after restart).

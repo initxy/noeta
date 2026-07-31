@@ -14,11 +14,6 @@ from datetime import datetime, timezone
 from noeta.builtins.providers.impl.codecs import parse_retry_after
 
 
-# ---------------------------------------------------------------------------
-# delta-seconds form
-# ---------------------------------------------------------------------------
-
-
 def test_integer_seconds() -> None:
     assert parse_retry_after("3") == 3.0
 
@@ -32,11 +27,6 @@ def test_negative_seconds_clamped_to_zero() -> None:
     assert parse_retry_after("-5") == 0.0
 
 
-# ---------------------------------------------------------------------------
-# HTTP-date form (the branch the old per-adapter stubs left as a TODO)
-# ---------------------------------------------------------------------------
-
-
 def test_http_date_future_returns_delta_seconds() -> None:
     now = datetime(2026, 10, 21, 7, 28, 0, tzinfo=timezone.utc)
     # 120s in the future.
@@ -48,11 +38,6 @@ def test_http_date_in_past_clamped_to_zero() -> None:
     now = datetime(2026, 10, 21, 7, 28, 0, tzinfo=timezone.utc)
     delay = parse_retry_after("Wed, 21 Oct 2026 07:00:00 GMT", now=now)
     assert delay == 0.0
-
-
-# ---------------------------------------------------------------------------
-# absent / unparseable → None (backoff takes over)
-# ---------------------------------------------------------------------------
 
 
 def test_none_header() -> None:

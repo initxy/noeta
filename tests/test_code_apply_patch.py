@@ -1,5 +1,8 @@
-"""M1 — `apply_patch` end-to-end through a coding session: batch apply
-and one-approval HITL.
+"""``apply_patch`` end-to-end: a multi-file batch is one call, one approval.
+
+The whole edit batch is a single ``ToolCallStarted`` and a single approval
+handle, so a human approves a coherent change set instead of file-by-file —
+and a denial leaves every file in the batch untouched, never half-applied.
 """
 
 from __future__ import annotations
@@ -58,10 +61,9 @@ def _session(
 ):
     """A one-shot SDK host + driver for the apply_patch batch.
 
-    ``require_approval_tools=("apply_patch",)`` is the host-level gate (mirroring
-    the old ``CodeSessionConfig`` knob); ``()`` keeps the batch applying without
-    approval (the SDK host's default permission_mode would otherwise gate the
-    write family)."""
+    ``require_approval_tools=("apply_patch",)`` is the host-level gate; the
+    empty tuple is load-bearing on the ungated path, since the host's default
+    ``permission_mode`` would otherwise gate the whole write family."""
     host = make_host(
         make_registry(runner_main_spec("main")),
         workspace_dir=_ws(tmp_path),

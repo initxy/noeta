@@ -1,35 +1,17 @@
-"""Recorded reminder-provider seams — track A of the redesign (D7).
+"""Recorded reminder-provider seams: at a named seam a provider reads a narrow
+:class:`RecallView` and returns :class:`Reminder` s that the seam records through
+the Engine's sole origin-writer verb.
 
-A **reminder_provider** is an *impure* contribution at a named recording seam:
-given a narrow read-only :class:`RecallView`, it returns zero or more
-:class:`Reminder` s that the seam records through the Engine's sole origin-writer
-verb (``append_user_message``). Because the output is **recorded**, a provider
-may be impure — query a vector DB, an external system, the memory store — and
-resume/replay folds the reminder back **from the ledger, never re-invoking the
-provider**. This is the seam that both re-expresses noeta's built-in memory
-auto-recall and opens RAG-backed memory plugins; one design closes both (D7).
+Because the output is **recorded**, a provider may be impure — query a vector DB,
+an external system, the memory store — and resume/replay folds the reminder back
+from the ledger instead of re-invoking the provider. The load-bearing contract:
+providers run *before* the incoming message enters the ledger (so they may read
+live state) while their reminders are recorded *after* it, several providers on
+one seam run in ``(plugin, name)`` order, and a provider that raises fails the
+turn loudly — one that prefers degradation catches internally.
 
-Two seams in v1 (``task_wake`` / ``subtask_result`` are deferred until a real
-tenant demands them):
-
-* :data:`TURN_INTAKE` — a user message being recorded (the goal / follow-up turn).
-* :data:`TASK_SEED` — task creation (the opening seed of a new task).
-
-Contract, load-bearing and pinned by the characterization goldens
-(``tests/test_recall_intake_order_characterization.py``):
-
-* Providers run **before** the incoming message enters the ledger (they are
-  allowed to read live state), but their reminders are recorded **after** the
-  incoming turn, so the transcript reads *message then reminder(s)*.
-* Multiple providers on one seam run in ``(plugin, name)`` order.
-* A provider **raise fails the turn loudly** — no silent skip. A provider that
-  prefers degradation catches internally.
-* ``origin ∈ {system, memory}``; the reminder rides the user channel and each
-  adapter renders it (Anthropic wraps host injections in ``<system-reminder>``).
-
-The seam is deliberately a small set of plain functions rather than an
-"injector" interface — the same rule-of-two restraint the earlier memory seam
-kept: the abstraction hardens when the second/third seam grows real providers.
+The seam is a small set of plain functions rather than an "injector" interface;
+the abstraction earns its keep once a second and third seam grow real providers.
 """
 
 from __future__ import annotations
@@ -62,23 +44,23 @@ __all__ = [
 TURN_INTAKE = "turn_intake"
 #: The task-creation seam (the opening seed of a new task).
 TASK_SEED = "task_seed"
-#: The v1 seam catalogue. Widening it (``task_wake`` / ``subtask_result``) is a
-#: matter of adding a constant and a recording call site, not a mechanism change.
+#: The seam catalogue. Widening it costs a constant and a recording call site,
+#: not a mechanism change.
 REMINDER_SEAMS: tuple[str, ...] = (TURN_INTAKE, TASK_SEED)
 
-#: The origins a recorded reminder may carry (D7). ``system`` = host-injected
+#: The origins a recorded reminder may carry. ``system`` = host-injected
 #: context; ``memory`` = cross-task recall. Anything else is a forged tag.
 _REMINDER_ORIGINS: frozenset[str] = frozenset({"system", "memory"})
 
 
 @dataclass(frozen=True, slots=True)
 class Reminder:
-    """One recorded reminder: ``text`` recorded through the origin-writer seam.
+    """One reminder to record through the origin-writer seam.
 
-    ``origin`` must be ``system`` or ``memory`` — the recording path is the
-    single writer of ``Message.origin`` (a forged marker in model/tool output is
-    just text), and a reminder that is neither host-system nor recalled-memory
-    has no legitimate author tag.
+    ``origin`` must be ``system`` or ``memory``: the recording path is the single
+    writer of ``Message.origin`` (a forged marker in model or tool output is just
+    text), and a reminder that is neither host-system nor recalled-memory has no
+    legitimate author tag.
     """
 
     text: str
@@ -96,21 +78,17 @@ class Reminder:
 class RecallView:
     """Narrow, read-only projection a reminder provider sees at a seam.
 
-    Deliberately small: the task id, the incoming message blocks, a
-    ``TaskState`` projection, and the workspace path — enough for recall /
-    retrieval, nothing that lets a provider reach into the Engine. A provider is
-    impure over *external* systems (that is the point) but reads only these
-    fields of the task.
+    Deliberately small — enough for recall and retrieval, nothing that lets a
+    provider reach into the Engine. A provider is impure over *external* systems
+    (that is the point) but reads only these fields of the task.
     """
 
-    #: The task's id (``None`` when the seam fires before a task id exists).
+    #: ``None`` when the seam fires before a task id exists.
     task_id: Optional[str]
-    #: The incoming user message's content blocks (goal / follow-up turn).
     message: tuple[Block, ...]
-    #: A ``TaskState`` projection (the folded narrow-sense task state), or
-    #: ``None`` when unavailable at this seam.
+    #: The folded narrow-sense task state, or ``None`` when this seam cannot
+    #: supply it.
     task_state: Optional[Any]
-    #: The session workspace path, or ``None``.
     workspace_path: Optional[Path]
 
     @property
@@ -118,7 +96,7 @@ class RecallView:
         """The incoming message's concatenated ``TextBlock`` text — the recall key.
 
         Newline-joined in block order; images ride the message but never drive
-        retrieval (the same rule the memory recall key has always used).
+        retrieval.
         """
         return "\n".join(b.text for b in self.message if isinstance(b, TextBlock))
 
@@ -141,9 +119,8 @@ class ReminderProviderRegistry:
     """Seam name -> the providers to run, ordered ``(plugin, name)``.
 
     Built once at session construction from the activated plugins' resolved
-    ``reminder_provider`` contributions. The composer-side reminder registry
-    (track B) is its compose-time sibling; this one is the recording-time seam
-    table. Unknown seams resolve to an empty tuple (no providers, no crash).
+    ``reminder_provider`` contributions. An unknown seam resolves to an empty
+    tuple — no providers, no crash.
     """
 
     def __init__(self, providers_by_seam: Mapping[str, Sequence[SeamProvider]]) -> None:
@@ -169,9 +146,9 @@ def build_recall_view(
 ) -> RecallView:
     """Project ``task`` + the incoming ``content`` into a :class:`RecallView`.
 
-    Reads the task defensively (``getattr``) so a caller that has only an opaque
-    task handle — e.g. before the full task is materialised — still gets a legal
-    view; a provider that needs a field the seam could not supply sees ``None``.
+    Reads the task defensively so a caller holding only an opaque task handle —
+    before the full task is materialised, say — still gets a legal view; a
+    provider that needs a field the seam could not supply sees ``None``.
     """
     return RecallView(
         task_id=getattr(task, "task_id", None),
@@ -186,9 +163,9 @@ def run_reminder_providers(
 ) -> list[Reminder]:
     """Run every provider in the given order, concatenating their reminders.
 
-    Providers are impure by contract; a raise **propagates** (fails the turn
-    loudly — no silent skip). The order is the caller's (already sorted
-    ``(plugin, name)`` when it comes from a :class:`ReminderProviderRegistry`).
+    A raise **propagates** and fails the turn — no silent skip. The order is the
+    caller's, already ``(plugin, name)``-sorted when it comes from a
+    :class:`ReminderProviderRegistry`.
     """
     out: list[Reminder] = []
     for provider in providers:
@@ -209,18 +186,13 @@ def record_intake_reminders(
 ) -> Any:
     """Record an incoming user turn plus every provider's reminders, in order.
 
-    The load-bearing sequence (pinned by the recall-intake characterization
-    goldens): build the view, run the providers **first** (impure, before the
-    ledger is touched), then record the incoming turn with the caller's
-    ``origin``, then record each reminder as its own follow-up turn tagged with
-    the reminder's ``origin`` — through ``engine.append_user_message``, the
-    Engine's sole origin-writer seam.
-
-    No providers (or providers that all return nothing) ⇒ exactly the plain
-    ``append_user_message`` ledger bytes, so a session with no reminder providers
-    is byte-identical to a bare append. Resume folds the recorded reminders back
-    from the ledger and **never** re-enters this function — the providers run
-    once, at the live turn boundary, and never again.
+    The sequence is load-bearing and pinned by goldens: run the providers first
+    (impure, before the ledger is touched), record the incoming turn, then record
+    each reminder as its own follow-up turn tagged with the reminder's
+    ``origin``. Providers that all return nothing leave exactly the plain
+    ``append_user_message`` bytes, so a session without reminder providers is
+    byte-identical to a bare append. Resume folds the recorded reminders back
+    from the ledger and never re-enters this function.
     """
     view = build_recall_view(task, content, workspace_path=workspace_path)
     reminders = run_reminder_providers(view, providers)
@@ -242,22 +214,18 @@ def record_intake_reminders(
 class IntakeGoalPrelude:
     """``send_goal`` prelude routing the goal through the ``turn_intake`` seam.
 
-    Drop-in sibling of :class:`noeta.runtime.worker.AppendMessagePrelude` for
-    a session with any ``turn_intake`` providers: a follow-up goal enters the
-    ledger through :func:`record_intake_reminders`, so resume turns get the
-    same intake the opening turn got. A goal whose providers all return
-    nothing ledgers exactly the plain-prelude bytes.
+    Drop-in sibling of :class:`noeta.runtime.worker.AppendMessagePrelude` for a
+    session with ``turn_intake`` providers, so a resumed turn gets the same
+    intake the opening turn got; a goal whose providers all return nothing
+    ledgers exactly the plain-prelude bytes.
 
-    ``origin`` / ``attachment_texts`` / ``activate_skills`` mirror
-    ``AppendMessagePrelude`` field-for-field (attachments seed BEFORE the goal
-    as their own ``origin="system"`` messages and never feed the recall key;
-    the skill-activation patch lands AFTER, goal-then-patch order) — only the
-    goal append itself is routed through the recording seam.
+    The field order is load-bearing: attachments seed BEFORE the goal as their
+    own ``origin="system"`` messages and never feed the recall key, and the
+    skill-activation patch lands AFTER it. Only the goal append itself is routed
+    through the recording seam.
 
     ``providers`` is the FULL composed tuple for this turn — the host owns the
-    composition rule (its built-in recall first, then the activated plugins'
-    providers, the order the characterization goldens pin); the kernel never
-    distinguishes one provider from another.
+    composition rule; the kernel never distinguishes one provider from another.
     """
 
     content: list[Block]
@@ -266,7 +234,7 @@ class IntakeGoalPrelude:
     attachment_texts: tuple[str, ...] = ()
     activate_skills: tuple[str, ...] = ()
 
-    #: Providers read live state then append — seed-time safe (D6).
+    #: Providers read live state then append, which is safe at seed time.
     durable_at_seed: ClassVar[bool] = True
 
     def __call__(self, engine: Any, task: Any, *, lease_id: str) -> Any:

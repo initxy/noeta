@@ -1,12 +1,12 @@
-"""SR2 — parallel fan-out / N-way subtask-group join.
+"""Parallel fan-out and the N-way subtask-group join.
 
-Covers the spec gates: fan-out happy path + member-order results; the
-`SubtaskGroupCompleted` wake variant + group_id derivation; distinct-
-membership join (group wake fires only on the last member); depth compose;
-all-or-none batch admission (size cap / duplicate call_id / budget k-th
-fail / approval-unsupported → zero child); the typed guard simulated-
-increment seam; positional call_id pairing (incl. a prior paired single
-spawn); and SR1 zero-regression (single spawn stays SpawnSubtaskDecision).
+A one-turn spawn of several sub-agents must fan out to N concurrent children,
+suspend the parent on a single group barrier that fires only after the LAST
+member finishes, and pair each result back to its member by position. Batch
+admission is all-or-none: a size overrun, a duplicate call_id, or a budget cap
+hit on any member denies the whole batch and creates ZERO children, so a
+partially-admitted fan-out can never strand the parent. A single spawn still
+takes the plain single-subtask path.
 """
 
 from __future__ import annotations
@@ -103,8 +103,8 @@ def _session(
 
     ``delegate_to=(...)`` maps to ``plugins=("delegation", …)`` +
     ``spawnable=(...)`` on the main spec; the named children are registered
-    alongside it. ``budget=None`` mirrors the old runner default
-    (``coding_replay_budget(max_subtask_depth=3)``); an explicit budget is
+    alongside it. ``budget=None`` defaults to
+    ``coding_replay_budget(max_subtask_depth=3)``; an explicit budget is
     authoritative. Returns ``(host, driver)``.
     """
     main = runner_main_spec("main", delegation=True, spawnable=delegate_to)
@@ -156,7 +156,7 @@ def test_matches_wake_projects_on_group_id() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2. policy routing: 1 → single, >=2 → batch, mixed → fail (SR1 zero-regress)
+# 2. policy routing: 1 → single, >=2 → batch, mixed → fail
 # ---------------------------------------------------------------------------
 
 
@@ -194,7 +194,7 @@ def _decide(resp: LLMResponse) -> Any:
 
 def test_single_spawn_routes_to_spawn_subtask_decision() -> None:
     d = _decide(_spawn_pair(("a", "explore", "g")))
-    assert isinstance(d, SpawnSubtaskDecision)  # SR1 path, zero-regression
+    assert isinstance(d, SpawnSubtaskDecision)  # a single spawn stays single
 
 
 def test_two_spawns_route_to_batch_decision_member_order() -> None:
@@ -247,7 +247,7 @@ def test_spawn_mixed_with_nonspawn_returns_recoverable_ack() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. typed guard simulated-increment seam (B2)
+# 3. typed guard simulated-increment seam
 # ---------------------------------------------------------------------------
 
 
@@ -267,7 +267,7 @@ def test_budget_guard_uses_spawned_subtasks_override() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. end-to-end fan-out happy path + member-order results + depth (gates 1,5)
+# 4. end-to-end fan-out happy path + member-order results + depth
 # ---------------------------------------------------------------------------
 
 
@@ -300,7 +300,7 @@ def test_fanout_happy_path_member_order_results_and_depth(tmp_path: Path) -> Non
 
 
 def test_group_wake_fires_only_after_last_member(tmp_path: Path) -> None:
-    """Distinct membership (B1): exactly one TaskWoken on the parent, and it
+    """Exactly one TaskWoken on the parent, and it
     follows BOTH members' SubtaskCompleted (the join is an all-of barrier)."""
     ws = _ws(tmp_path)
     host, driver = _session(ws, [
@@ -317,7 +317,7 @@ def test_group_wake_fires_only_after_last_member(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. all-or-none admission (B3, B6): duplicate call_id / size / budget
+# 5. all-or-none admission: duplicate call_id / size / budget
 # ---------------------------------------------------------------------------
 
 
@@ -366,17 +366,17 @@ def test_budget_kth_failure_denies_whole_batch(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6. positional pairing with a PRIOR paired single spawn (gate 14)
+# 6. positional pairing with a PRIOR paired single spawn
 # ---------------------------------------------------------------------------
 
 
 def test_pairing_unaffected_by_prior_paired_single_spawn(tmp_path: Path) -> None:
-    """A parent that first does a single spawn (SR1, gets its tool_result),
+    """A parent that first does a single spawn (gets its tool_result),
     then fans out N: the group's N tool_results pair only to the group's
     call_ids, never to the older (already-paired) single-spawn call_id."""
     ws = _ws(tmp_path)
     host, driver = _session(ws, [
-        _spawn_pair(("single", "explore", "first")),   # 1 → SR1 single
+        _spawn_pair(("single", "explore", "first")),   # 1 → single spawn
         _end("single done"),                                  # child of single
         _spawn_pair(("a", "explore", "A"), ("b", "general-purpose", "B")),  # then fan-out
         _end("A done"), _end("B done"),

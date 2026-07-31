@@ -1,6 +1,6 @@
 """Minimal synchronous stdio JSON-RPC client for a local MCP server.
 
-Phase 4.5 F2. The Model Context Protocol stdio transport is
+The Model Context Protocol stdio transport is
 newline-delimited JSON-RPC 2.0 (one JSON object per line on stdin /
 stdout; the server's logs go to stderr). Noeta's runtime is synchronous
 and single-threaded, so this is a deliberately tiny **sync** client — no
@@ -19,8 +19,8 @@ in ``noeta.runtime.shell_policy``:
 
 Request-response subset: ``initialize`` +
 ``notifications/initialized`` + ``tools/list`` + ``tools/call`` +
-``prompts/list`` + ``prompts/get`` (D9) + ``resources/list`` +
-``resources/read`` (D10). No streaming, no server→client requests (we
+``prompts/list`` + ``prompts/get`` + ``resources/list`` +
+``resources/read``. No streaming, no server→client requests (we
 advertise no sampling/roots capability), no server-push half
 (``list_changed`` / ``sampling`` / ``elicitation``).
 """

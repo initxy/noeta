@@ -1,12 +1,9 @@
-"""End-to-end: a Task whose Policy returns finish on its first decide.
+"""End-to-end: a Task whose Policy finishes on its first decide.
 
-Verifies Acceptance criteria from issue 01:
-* run_one_step drives the task to terminal
-* core EventLog sequence is present (TaskCreated, TaskStarted, TaskSnapshot,
-  TaskCompleted)
-* TaskSnapshot.state_ref body deserializes equal to runtime task state
-* fold(event_log, content_store, task_id) returns a Task byte-equal to the
-  runtime task
+The narrowest complete recording — ``TaskCreated`` → ``TaskStarted`` →
+``TaskSnapshot`` → ``TaskCompleted`` — and the property every other guarantee
+rests on: folding that recording reproduces the live Task exactly, whether or
+not the snapshot is used to accelerate.
 """
 
 from __future__ import annotations
@@ -61,13 +58,11 @@ def test_event_sequence_contains_core_four_events_in_order() -> None:
     engine.run_one_step(task, lease_id=lease_id)
 
     types = [e.type for e in event_log.read(task.task_id)]
-    # Core required events must appear in this relative order.
     required = ["TaskCreated", "TaskStarted", "TaskSnapshot", "TaskCompleted"]
     positions = [types.index(t) for t in required]
     assert positions == sorted(positions), (
         f"required events out of order: {types}"
     )
-    # And there's exactly one of each.
     for t in required:
         assert types.count(t) == 1, f"expected exactly one {t}, got {types}"
 

@@ -1,20 +1,12 @@
-"""Read-only fs tools: read / glob / grep.
+"""Read-only fs tools: ``read`` / ``glob`` / ``grep``.
 
-All three tools share one ``WorkspaceRoot`` (closure-injected by
-``FsToolPack``) and stay under the inline ``ToolResult`` budget via the
-shared ``noeta.tools.limits`` helpers. A large ``read`` body
-offloads to the ContentStore as an artifact; the model gets a bounded
-excerpt + ref it can pass back to a second ``read`` with
-``offset``/``limit`` to navigate the file.
-
-Their LLM-facing descriptions are loaded from independent in-package
-``.md`` resources via ``noeta.protocols.resources.load_markdown``;
-each carries the four-section shape (what / when / when-not / preconditions).
-
-Path arguments are user-supplied (model-generated), so every one goes
-through ``WorkspaceRoot.resolve`` — absolute / ``..`` / symlink escapes
-fail before any IO. Errors degrade to ``ToolResult(success=False, ...)``
-so a malformed argument or a missing file does not crash the worker.
+A read is observation, not mutation, so paths resolve **unfenced**: a relative
+path is anchored on the shared ``WorkspaceRoot``, an absolute one is read where
+it points. Every failure degrades to ``ToolResult(success=False, …)`` so a
+malformed argument or a missing file cannot crash the worker, and results stay
+inside the inline budget — a large ``read`` body is offloaded to the
+ContentStore and the model gets a bounded excerpt plus a ref it can navigate
+with ``offset`` / ``limit``.
 """
 
 from __future__ import annotations
@@ -60,9 +52,8 @@ __all__ = [
 ]
 
 
-# Read-side display caps. The model only ever sees a bounded number of
-# matches inline; a longer underlying result is recorded as
-# ``truncated=True`` so the model knows to narrow its query.
+# Display caps: a longer underlying result is reported as ``truncated=True``
+# so the model knows to narrow its query.
 _MAX_GLOB_MATCHES = 200
 _MAX_GREP_MATCHES = 50
 _MAX_GREP_LINE_BYTES = 400
@@ -71,9 +62,9 @@ _MAX_GREP_LINE_BYTES = 400
 #: case so a single very long line can't dominate a scan.
 _MAX_GREP_SCAN_LINE_BYTES = 8192
 _DEFAULT_READ_LIMIT = 2000  # lines
-#: Per-line visible-char cap (mirrors Claude Code's Read). A minified file can
-#: be one multi-MB line; without this, a single line would dominate the inline
-#: budget. The full untouched body is always the ``content_ref`` artifact.
+#: Per-line visible-char cap. A minified file can be one multi-MB line, which
+#: would otherwise dominate the whole inline budget; the untouched body is
+#: always available as the ``content_ref`` artifact.
 _MAX_READ_LINE_CHARS = 2000
 _LINE_TRUNC_MARKER = " … [line truncated]"
 _READ_FILE_MEDIA_TYPE = "text/plain"
@@ -87,30 +78,18 @@ _BACKTRACKING_REPEATS = frozenset(
 _MAXREPEAT = getattr(_re_parser, "MAXREPEAT", 4294967295)
 
 
-# ---------------------------------------------------------------------------
-# Image / PDF detection
-#
-# A ``read`` of an image the model meant to *look at* now surfaces the image
-# bytes as a ``ToolResult.images`` ContentRef (T1 wired the carrying chain:
-# ``wrap_tool_result_block`` → ``ToolResultBlock.images`` → adapter). read does
-# NOT know whether the bound model is vision-capable (``supports_vision`` lives
-# on the catalog ``ModelSpec``, consulted only inside the adapters at wire time;
-# ``ToolContext`` carries only ``task_id`` / ``trace_id``), so it ALWAYS emits
-# the image — the vision gate lives in the adapter, which degrades to text when
-# the model can't see images.
-#
-# Two cases still DEGRADE to ``ToolResult(success=False, …)`` with an
-# actionable message instead of emitting an image:
-#   * PDFs — a document is a separate wire shape (Strategy B), out of scope here.
-#   * Images over ``IMAGE_MAX_BYTES`` — no image library / auto-resize in v1, so
-#     a too-large image asks the model to crop/resize first.
-# A non-image binary still falls through to the generic "not utf-8" error below.
-# ---------------------------------------------------------------------------
+# ``read`` cannot know whether the bound model is vision-capable —
+# ``supports_vision`` lives on the catalog ``ModelSpec`` and is consulted inside
+# the adapters at wire time, while ``ToolContext`` carries only task / trace ids
+# — so it ALWAYS emits a detected image and lets the adapter degrade to text.
+# PDFs (a separate wire shape) and images over ``IMAGE_MAX_BYTES`` instead fail
+# with an actionable message; any other binary falls through to the generic
+# "not utf-8" error below.
 
 #: Leading magic bytes → a human-facing media label. Detection is by content,
 #: not extension, so a mis-named or extension-less image is still caught.
-#: Each entry is ``(prefix_bytes, label)``; ``webp`` needs a second check
-#: (RIFF container + ``WEBP`` fourcc) handled in ``_detect_visual_media``.
+#: ``webp`` needs a second check (RIFF container + ``WEBP`` fourcc) handled in
+#: ``_detect_visual_media``.
 _VISUAL_MAGIC: tuple[tuple[bytes, str], ...] = (
     (b"\x89PNG\r\n\x1a\n", "PNG image"),
     (b"\xff\xd8\xff", "JPEG image"),
@@ -119,11 +98,8 @@ _VISUAL_MAGIC: tuple[tuple[bytes, str], ...] = (
     (b"%PDF-", "PDF document"),
 )
 
-#: Leading magic bytes → standard image media type, for the bytes that
-#: ``read`` surfaces to a vision model. Mirrors ``_VISUAL_MAGIC`` but maps to
-#: a wire media type instead of a human label, and deliberately excludes PDF
-#: (not an inline image). ``webp`` needs the RIFF + ``WEBP`` fourcc double-check
-#: handled in ``_detect_image_media_type``.
+#: Leading magic bytes → wire media type for the bytes ``read`` surfaces to a
+#: vision model. Deliberately excludes PDF, which is not an inline image.
 _IMAGE_MAGIC_MEDIA_TYPE: tuple[tuple[bytes, str], ...] = (
     (b"\x89PNG\r\n\x1a\n", "image/png"),
     (b"\xff\xd8\xff", "image/jpeg"),
@@ -131,9 +107,9 @@ _IMAGE_MAGIC_MEDIA_TYPE: tuple[tuple[bytes, str], ...] = (
     (b"GIF89a", "image/gif"),
 )
 
-#: Single-image inline ceiling (mirrors the chat-attachment limit). A larger
-#: image degrades to text asking the model to crop/resize, rather than blow the
-#: payload — v1 has no image library to auto-downscale.
+#: Single-image inline ceiling. There is no image library to auto-downscale, so
+#: a larger image degrades to text asking the model to crop or resize it rather
+#: than blowing up the payload.
 IMAGE_MAX_BYTES = 5 * 1024 * 1024
 
 
@@ -141,10 +117,9 @@ def _detect_visual_media(raw: bytes) -> Optional[str]:
     """Return a media label if ``raw`` is an image (png/jpg/gif/webp) or a
     PDF, else ``None``.
 
-    Content-sniffing by leading magic bytes — independent of the file
-    extension, so a ``.png`` renamed to ``.dat`` (or vice-versa) is still
-    classified correctly. ``webp`` is a RIFF container, so it needs the
-    ``WEBP`` fourcc at offset 8 in addition to the ``RIFF`` prefix.
+    Sniffing by magic bytes rather than extension, so a ``.png`` renamed to
+    ``.dat`` is still classified correctly. ``webp`` is a RIFF container, hence
+    the extra ``WEBP`` fourcc check at offset 8.
     """
     for prefix, label in _VISUAL_MAGIC:
         if raw.startswith(prefix):
@@ -158,10 +133,8 @@ def _detect_image_media_type(raw: bytes) -> Optional[str]:
     """Return the standard image media type (``image/png`` …) if ``raw`` is a
     supported image (png/jpeg/gif/webp), else ``None``.
 
-    ``None`` for a PDF (visual but not an inline image) or any non-image,
-    so the caller routes PDFs to the degrade path. Content-sniffing by leading
-    magic bytes, independent of the extension; ``webp`` needs the ``WEBP``
-    fourcc at offset 8 in addition to the ``RIFF`` prefix.
+    A PDF is visual but not an inline image, so it yields ``None`` and the
+    caller routes it to the degrade path.
     """
     for prefix, media_type in _IMAGE_MAGIC_MEDIA_TYPE:
         if raw.startswith(prefix):
@@ -218,10 +191,10 @@ def _find_branches(node: Any) -> list[list]:
 def _leading_literal_and_nullable(alt: Any) -> tuple[Optional[int], bool]:
     """``(fixed leading literal or None, nullable)`` for one alternation branch.
 
-    Walks past zero-width anchors and optional (min-zero) leading elements. A
-    fixed leading ``LITERAL`` yields its charcode; anything wilder (char class /
-    any / group / a repeat with a positive minimum) yields ``None``. Running out
-    of tokens means the branch matches the empty string (``nullable``)."""
+    Only a fixed leading ``LITERAL`` can prove two branches start differently,
+    so anything wilder — char class, any, group, a repeat with a positive
+    minimum — yields ``None``. Running out of tokens means the branch matches
+    the empty string (``nullable``)."""
     if not isinstance(alt, (list, _re_parser.SubPattern)):
         return (None, False)
     for op, args in alt:
@@ -245,7 +218,7 @@ def _alternation_is_overlap_prone(alternatives: list) -> bool:
 
     CPython's parser factors a shared prefix out of an alternation, so the
     classic "one alternative is a prefix of another" case (``a|ab``, ``aa|a``)
-    surfaces here as a branch with an EMPTY (nullable) alternative."""
+    reaches this check as a branch with an EMPTY (nullable) alternative."""
     leading: list[int] = []
     for alt in alternatives:
         lit, nullable = _leading_literal_and_nullable(alt)
@@ -289,10 +262,10 @@ def _pattern_is_redos_prone(pattern: str) -> bool:
 
     grep runs in-process on the engine worker thread and CPython's ``re`` holds
     the GIL for the whole match, so a pathological pattern would freeze the
-    entire process with no possible timeout (a separate thread can't preempt a
-    GIL-holding C match). Refusing the pattern up front is the only GIL-safe
-    guard. Conservative by design: it also rejects some safe shapes like
-    ``(a+b)+`` / ``(foo|bar|)*`` — the model is told to flatten the pattern.
+    entire process with no possible timeout — a separate thread cannot preempt a
+    GIL-holding C match. Refusing the pattern up front is the only GIL-safe
+    guard, and it is deliberately conservative: safe shapes like ``(a+b)+`` are
+    rejected too, and the model is told to flatten the pattern.
     """
     try:
         parsed = _re_parser.parse(pattern)
@@ -304,9 +277,8 @@ def _pattern_is_redos_prone(pattern: str) -> bool:
 def _clip_line(line: str) -> tuple[str, bool]:
     """Cap one line's visible chars, preserving its trailing CR/LF.
 
-    Returns ``(possibly_clipped_line, was_clipped)``. ``splitlines(keepends=True)``
-    keeps the line ending on ``line``; the marker lands before it so the line
-    count and re-join stay intact.
+    The marker lands before the line ending so the line count and the re-join
+    stay intact.
     """
     body = line.rstrip("\r\n")
     if len(body) <= _MAX_READ_LINE_CHARS:
@@ -319,23 +291,17 @@ def _clip_line(line: str) -> tuple[str, bool]:
 class ReadFileTool:
     """Read a file's contents, optionally line-sliced.
 
-    ``offset`` is 1-based (matching common editor conventions); ``limit``
-    is the number of lines to return. Both are optional; the default
-    behavior reads the whole file. Any single line longer than
-    ``_MAX_READ_LINE_CHARS`` is clipped (with a marker) so a minified file
-    can't dominate the inline budget. When the inline ``output`` would still
-    exceed ``INLINE_CONTENT_MAX_BYTES``, the full body is offloaded as a
-    ContentStore artifact and the model gets
-    ``{path, content_ref, excerpt, truncated}`` so it can re-read with a
-    narrower slice.
+    ``offset`` is 1-based, matching common editor conventions. The full body is
+    always offloaded as a ContentStore artifact, so an inline ``output`` that
+    would exceed ``INLINE_CONTENT_MAX_BYTES`` can shrink to an excerpt plus a
+    ref the model re-reads through with a narrower slice.
     """
 
     workspace: WorkspaceRoot
-    #: execution backend for the file read (local host by default, or a
-    #: sandbox container). Path *resolution* stays on ``workspace``, which
-    #: for ``read`` only anchors relative paths — reads are unfenced, so an
-    #: absolute path is read where it points (a neighbouring checkout, a
-    #: skill pack's bundled reference). See ``_workspace.resolve_anywhere``.
+    #: Backend for the file read (local host or a sandbox container). Path
+    #: *resolution* stays on ``workspace``, which for ``read`` only anchors
+    #: relative paths — reads are unfenced, so an absolute path is read where it
+    #: points: a neighbouring checkout, a skill pack's bundled reference.
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "read"
     description: str = field(default=load_markdown(__package__, "read"))
@@ -385,16 +351,12 @@ class ReadFileTool:
         except OSError as exc:
             return tool_error(self.name, f"read failed: {exc}")
 
-        # an image / PDF can't be decoded as text. A supported image is
-        # surfaced as a ``ToolResult.images`` ref so a vision model can see it
-        # (the adapter gates on vision; read always emits — see module note).
-        # A PDF or an over-limit image still degrades with a precise message
-        # instead of the misleading generic "not utf-8 text" error below.
+        # A PDF or an over-limit image degrades with a precise message instead
+        # of the misleading generic "not utf-8 text" error below.
         media_label = _detect_visual_media(raw)
         if media_label is not None:
             image_media_type = _detect_image_media_type(raw)
             if image_media_type is None:
-                # PDF (or any visual-but-not-inline-image): keep degrading.
                 return tool_error(
                     self.name,
                     f"{path!r} is a {media_label}, not text — reading PDFs "
@@ -433,10 +395,9 @@ class ReadFileTool:
             full_text = raw.decode("utf-8", errors="replace")
             bytes_replaced = True
 
-        # The artifact is always the FULL file body, independent of the
-        # sliced view returned inline. That way the model can pass the
-        # ref through to other tools (e.g. a future source_quote-style
-        # check) and the recorded artifact hash stays stable.
+        # The artifact is always the FULL file body, independent of the sliced
+        # view returned inline, so the ref stays passable to other tools and the
+        # recorded artifact hash stays stable across different slices.
         ref = ctx.artifact_store.put(raw, media_type=_READ_FILE_MEDIA_TYPE)
 
         lines = full_text.splitlines(keepends=True)
@@ -466,10 +427,9 @@ class ReadFileTool:
             "total_lines": total_lines,
             "truncated": slice_truncated,
         }
-        # Hard canonical byte ceiling: if `content` does not fit, shrink it
-        # to an excerpt and mark truncated. The full body is the artifact;
-        # the model uses ``offset``/``limit`` to re-read or `grep` to
-        # navigate.
+        # Hard canonical byte ceiling: the full body is already the artifact, so
+        # oversize ``content`` shrinks to an excerpt and the model navigates
+        # with ``offset`` / ``limit`` or ``grep``.
         if encoded_len(output) > INLINE_CONTENT_MAX_BYTES:
             output["truncated"] = True
             output = fit_output_fields(
@@ -515,13 +475,10 @@ class GlobTool:
     """Match a glob pattern under one directory (``Path.glob`` semantics).
 
     Optional ``path`` chooses the tree to search — workspace-relative, or
-    absolute to search outside it, resolved unfenced exactly like ``grep``'s
-    (reads are observation; see ``_workspace.resolve_anywhere``). ``pattern``
-    stays relative to that root, which is what keeps every walk bounded.
-
-    Results are POSIX strings (workspace-relative when inside it, absolute
-    when not), sorted for determinism, capped to ``_MAX_GLOB_MATCHES``. ``**``
-    is supported.
+    absolute to search outside it, resolved unfenced like ``grep``'s.
+    ``pattern`` stays relative to that root, which is what keeps every walk
+    bounded. Results are POSIX strings sorted for determinism and capped to
+    ``_MAX_GLOB_MATCHES``.
     """
 
     workspace: WorkspaceRoot
@@ -571,11 +528,10 @@ class GlobTool:
 
         relpaths: list[str] = []
         for match in raw_matches:
-            # Containment safety: the searched tree may contain symlinks; a
-            # match whose real path escapes the tree that was asked about is
-            # dropped. Checked against the search root rather than the
-            # workspace, so the property generalises to an out-of-workspace
-            # search instead of discarding every result of one.
+            # The searched tree may contain symlinks, so a match whose real path
+            # escapes the tree that was asked about is dropped. Checked against
+            # the search root rather than the workspace, or an out-of-workspace
+            # search would discard every result.
             resolved = self.workspace.canonicalise(os.fspath(match))
             if not path_within(resolved, root):
                 continue
@@ -603,12 +559,10 @@ class GlobTool:
 class GrepTool:
     """Regex search across the workspace (or a sub-directory / file).
 
-    ``pattern`` is a Python ``re`` regex. Optional ``path`` scopes to a
-    file or directory (default: whole workspace). Optional ``glob``
-    filters which files are searched (default: every regular file). Each
-    match is ``{path, line_number, line}``; long lines are truncated for
-    inline display and the count is capped at ``_MAX_GREP_MATCHES``.
-    Binary files are skipped silently.
+    ``pattern`` is a Python ``re`` regex, screened for catastrophic
+    backtracking before it runs. Long lines are truncated for inline display,
+    the match count is capped at ``_MAX_GREP_MATCHES``, and unreadable or
+    binary files are skipped silently rather than failing the whole search.
     """
 
     workspace: WorkspaceRoot
@@ -712,16 +666,16 @@ class GrepTool:
         files: list[Path] = []
         for entry in it:
             try:
-                # Symlinks are skipped: the walk stays within one physical
-                # tree, so a link cannot make the same file appear twice (or
-                # send an rglob around a cycle). Reads are unfenced, so this
-                # is a traversal rule, not a containment one — a caller who
-                # wants the link's target greps the target directly.
+                # Skipping symlinks keeps the walk inside one physical tree, so
+                # a link cannot make the same file appear twice or send an
+                # rglob around a cycle. Reads are unfenced, so this is a
+                # traversal rule, not a containment one — a caller who wants
+                # the link's target greps the target directly.
                 if self.exec_env.is_file(entry) and not self.exec_env.is_symlink(entry):
                     files.append(entry)
             except OSError:
                 continue
-        # Deterministic order: sorted by workspace-relative POSIX path
-        # (absolute POSIX for a search rooted outside the workspace).
+        # Deterministic order, so a repeated search returns the same prefix
+        # once the match cap bites.
         files.sort(key=lambda p: self.workspace.relative(p))
         return files

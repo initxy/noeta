@@ -1,11 +1,11 @@
-"""Phase 4.5 F3 — `HookObserver` async bounded worker + exactly-once.
+"""HookObserver runs user commands off the emit path, exactly once per result.
 
-Uses an injectable runner returning cancellable fake handles (no real
-subprocess / no real sleep): the subscriber callback must NOT block on a
-slow command, PostToolUse fires once on `ToolResultRecorded` (not
-`ToolCallFinished`), Notification fires on `ToolCallApprovalRequested`, a
-full queue drops, a failing runner is swallowed, and `stop()` is bounded
-**and cancels the in-flight command** (F3 P1).
+A user hook is arbitrary code of unbounded duration, so it must never be able to
+stall an EventLog write, wedge shutdown, or outlive the session: the queue drops
+under pressure rather than applying backpressure, a raising runner is swallowed,
+and ``stop()`` is bounded and cancels the in-flight command. The injectable
+runner here returns cancellable fake handles, keeping every case free of real
+subprocesses and real sleeps.
 """
 
 from __future__ import annotations
@@ -122,7 +122,9 @@ def test_post_tool_use_fires_once_on_result_not_finished() -> None:
     try:
         log.cb(_env("ToolCallStarted", call_id="c1", tool_name="write"))
         log.cb(_env("ToolResultRecorded", call_id="c1", success=True))
-        log.cb(_env("ToolCallFinished", call_id="c1"))  # must NOT fire again
+        # ToolCallFinished follows the result for the same call; firing on both
+        # would run the user's hook twice per tool call.
+        log.cb(_env("ToolCallFinished", call_id="c1"))
         assert _wait_until(lambda: len(runner.calls) == 1)
         time.sleep(0.1)
         assert runner.calls == [("n",)]  # still exactly once
@@ -197,8 +199,8 @@ def test_failing_runner_is_swallowed() -> None:
 
 
 def test_stop_cancels_in_flight_and_skips_queued() -> None:
-    """F3 P1: stop() must cancel the in-flight command (no user hook left
-    running after the session exits) and not run further queued jobs."""
+    """``stop()`` cancels the in-flight command so no user hook outlives the
+    session, and drains without running anything still queued."""
     runner = _Runner(_BlockingHandle)
     obs, log = _observer(
         post=(PostToolUseRule(match_tool="*", command=("n",)),),

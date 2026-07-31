@@ -1,16 +1,13 @@
-"""ToolRuntime wrapper.
+"""ToolRuntime — records every tool call as a three-event envelope::
 
-The normal recording flow records each call as a three-event envelope.
+    ToolCallStarted → ToolResultRecorded(output_ref, summary, artifacts,
+                                         side_effects) → ToolCallFinished
 
-Recording protocol:
-
-    ToolCallStarted  → ToolResultRecorded(output_ref, summary, artifacts,
-                                          side_effects)
-                    → ToolCallFinished
-
-Each event is appended via the EventLog under the active ``lease_id``;
-the body of the tool's output is offloaded to ContentStore so the
-inline ``output_ref`` keeps the payload under the 4-KB ceiling.
+The envelope is the invariant: whatever the tool does — return, raise, or
+blow up a transform stage — all three events are appended under the active
+``lease_id``, so an assistant ``tool_use`` is never left without its paired
+``tool_result``. Output bodies go to the ContentStore, keeping the inline
+``output_ref`` under the event payload ceiling.
 """
 
 from __future__ import annotations
@@ -32,19 +29,16 @@ from noeta.protocols.tool_args import build_tool_call_started_payload
 
 _OUTPUT_MEDIA_TYPE = "application/json"
 
-#: the media type the PRE-edit baseline bytes are offloaded
-#: under. Deliberately ``text/plain`` to MATCH what ``read`` offloads file
-#: bodies as (``noeta.builtins.fs.impl.read._READ_FILE_MEDIA_TYPE``), so a file the AI
-#: read before editing dedups to ONE ContentStore blob (the baseline ref and
-#: the read-precondition ref are the same content-addressed key).
+#: Media type the PRE-edit baseline bytes are offloaded under. Deliberately
+#: matches what ``read`` offloads file bodies as, so a file the model read
+#: before editing dedups to ONE ContentStore blob (the baseline ref and the
+#: read-precondition ref are then the same content-addressed key).
 _BASELINE_MEDIA_TYPE = "text/plain"
 
-#: single-file ceiling for a rewind baseline. A pre-edit blob
-#: larger than this (or one detected binary — see ``_capture_file_baselines``)
-#: is NOT stashed: rewind cannot cover it (accepted, matching how Claude Code
-#: excludes large files). Only the ContentStore blobs grow with checkpoints; ordinary source
-#: edits are tiny, so the cap exists solely to fence off a runaway large/binary
-#: file. Created files (no pre-edit bytes) are exempt from the check.
+#: Single-file ceiling for a rewind baseline. A larger (or binary) pre-edit
+#: blob is not stashed, so rewind cannot cover it — accepted, because
+#: ordinary source edits are tiny and the cap exists solely to fence off a
+#: runaway large/binary file. Created files have no pre-edit bytes to weigh.
 _BASELINE_MAX_BYTES = 1_048_576  # 1 MiB
 
 
@@ -64,33 +58,23 @@ class ToolRuntime:
         self._event_log = event_log
         self._content_store = content_store
         self._actor = actor
-        # Pure ``ToolResult -> ToolResult`` stages (spec D9) applied INSIDE this
-        # boundary, before recording — so the transformed result is the one that
-        # reaches the ledger + ContentStore (a redaction stage keeps the secret
-        # out of both). Already ordered ``(priority, plugin, name)`` by the
-        # loader; ``()`` (every non-plugin construction) is byte-identical to the
-        # pre-transform recording.
+        # Applied INSIDE this boundary, before recording, so the transformed
+        # result is the one that reaches the ledger + ContentStore — that is
+        # what lets a redaction stage keep a secret out of both. Ordering is
+        # the loader's job; this end just runs them in sequence.
         self._tool_result_transforms: tuple[
             Callable[[ToolResult], ToolResult], ...
         ] = tuple(tool_result_transforms)
-        # the host's ProcessRegistry (structurally a
-        # ``noeta.protocols.tool.BackgroundRunner``). ``None`` ⇒ background
-        # execution disabled; the ToolContext carries ``None`` and the
-        # background tools refuse cleanly. Threaded into every ToolContext.
+        # ``None`` ⇒ background execution disabled; the ToolContext carries
+        # ``None`` and the background tools refuse cleanly.
         self._background_runner = background_runner
-        # the host's per-turn file-checkpoint gate (a
-        # ``noeta.runtime.file_checkpoint.FileCheckpointRegistry``). ``None`` ⇒
-        # rewind file-checkpoint is off (every pre-0043 construction);
-        # the tool still surfaces ``file_changes`` but no baseline is stashed and
-        # no ``file_baselines`` are recorded — byte-identical to a pre-0043
-        # ToolResultRecorded.
+        # The host's per-turn file-checkpoint gate. ``None`` ⇒ rewind
+        # file-checkpoint is off: the tool still surfaces ``file_changes``,
+        # but no baseline is stashed and no ``file_baselines`` are recorded.
         self._file_checkpoint_registry = file_checkpoint_registry
-        # memo of editing-task → root-task id (immutable
-        # durable parent graph). Lets the per-turn gate key a whole delegation
-        # tree under ONE root (see ``_root_task_id``). Live-only capture path.
+        # Memo of editing-task → root-task id, safe to cache because the
+        # parent graph is immutable durable data.
         self._root_cache: dict[str, str] = {}
-
-    # -- normal-mode invoke ----------------------------------------------
 
     def invoke(
         self,
@@ -119,38 +103,21 @@ class ToolRuntime:
         try:
             result = tool.invoke(call.arguments, ctx)
         except Exception as exc:  # noqa: BLE001 — see below
-            # A tool that RAISES must not strand the conversation: the assistant
-            # ``tool_use`` and this call's ``ToolCallStarted`` are already
-            # committed, so bailing here would leave the ``tool_use`` with no
-            # matching ``tool_result`` — on the next compose→decide the provider
-            # rejects the dangling function call with a fatal 400 (and a resume
-            # replays the same stranded state). Builtin tools are internally
-            # defensive (they return ``success=False``); this closes the same
-            # gap for any raising tool (notably user-authored ``@tool``s). We
-            # synthesise a failed result so the normal trio still records and
-            # the model sees a paired, informative ``tool_result``.
+            # A tool that RAISES must not strand the conversation: the
+            # assistant ``tool_use`` and this call's ``ToolCallStarted`` are
+            # already committed, so bailing here would leave the ``tool_use``
+            # with no matching ``tool_result``, and the next compose→decide
+            # would take a fatal provider 400 that a resume replays forever.
+            # Synthesise a failed result instead, so the trio still records.
             result = ToolResult(
                 success=False,
                 summary=f"tool {call.tool_name!r} raised — {_fault_message(exc)}",
             )
 
-        # tool_result_transform stages (D9): run BEFORE any recording, so the
-        # transformed result is the only thing that reaches the ledger and the
-        # ContentStore. A stage that raises, or returns a non-``ToolResult`` (the
-        # boundary must stay typed), is an author error — but it must NOT escape
-        # ``invoke``: ``ToolCallStarted`` is already committed, so bailing here
-        # would strand the assistant ``tool_use`` with no matching ``tool_result``
-        # and the next compose→decide would take a fatal provider 400 (the same
-        # trap the raising-tool branch above closes). We therefore substitute a
-        # failed result carrying ONLY the fault message — the untransformed
-        # payload is discarded, so a broken redaction stage still leaks nothing
-        # durable — and let the normal trio record it.
         result = self._apply_transforms(result, call)
 
-        # stash this turn's rewind baseline for each file this
-        # call edited for the FIRST time this turn. The per-turn gate dedups
-        # repeats; the recorded ``file_baselines`` are the AUTHORITATIVE record
-        # (fold reads them, the live restore writes them back).
+        # The recorded ``file_baselines`` are the AUTHORITATIVE rewind record:
+        # fold reads them back and the live restore writes them out.
         file_baselines = self._capture_file_baselines(task_id, result)
 
         output_body = _encode_output(result.output)
@@ -185,9 +152,9 @@ class ToolRuntime:
             origin="tool",
         )
 
-        # Populate the post-hoc output_ref on the frozen ToolResult so
-        # downstream handlers (e.g. inline truncation markers) can
-        # cross-reference the full-audit ContentRef without re-encoding.
+        # Populate the output_ref on the frozen ToolResult so downstream
+        # handlers (e.g. inline truncation markers) can cross-reference the
+        # full-audit ContentRef without re-encoding the payload.
         object.__setattr__(result, "output_ref", output_ref)
         return result
 
@@ -196,7 +163,7 @@ class ToolRuntime:
 
         A stage that raises or returns a non-``ToolResult`` collapses the whole
         call to a failed :class:`ToolResult` naming the offending stage. Two
-        properties matter and both are load-bearing:
+        properties are load-bearing:
 
         * the fault never propagates out of :meth:`invoke`, so the three-event
           envelope still records and the ``tool_use`` keeps its ``tool_result``;
@@ -232,27 +199,17 @@ class ToolRuntime:
     def _capture_file_baselines(
         self, task_id: str, result: ToolResult
     ) -> Optional[list[FileBaseline]]:
-        """Turn the tool's ``file_changes`` into recorded
-        baselines.
+        """Turn the tool's ``file_changes`` into recorded baselines.
 
-        For each file the call mutated (surfaced on ``result.file_changes`` by
-        the write-side fs tools), ask the per-turn gate whether this is the
-        FIRST edit of that path this turn; only then stash a baseline. The gate
-        is keyed by the ROOT-TASK (``_root_task_id``) so a whole delegation
-        tree shares ONE gate (D8): a parent that edited X then a subtask that
-        edits the same X must not stash a SECOND (mid-turn, dirty) baseline. For
-        a top-level turn the editing task IS the root, so this is byte-identical
-        to issue 02.
+        Only the FIRST edit of a path within a turn is stashed — that is the
+        state a rewind must restore. The per-turn gate is keyed by the
+        ROOT-task, so a whole delegation tree shares ONE gate: a parent that
+        edited X followed by a subtask editing the same X must not stash a
+        second, already-dirty baseline.
 
-        D7 — a pre-edit blob over :data:`_BASELINE_MAX_BYTES`, or one containing
-        a NUL byte (binary), is NOT checkpointed: rewind cannot cover it
-        (accepted). The path is still MARKED so a later same-turn edit does not
-        re-evaluate it — the turn-start state was the oversize/binary one and is
-        simply left out. Created files (``before is None``) skip the size/binary
-        check (no pre-edit bytes to weigh).
-
-        The ``None`` return (no gate, or nothing stashable this call) keeps the
-        recording byte-identical to a pre-0043 one."""
+        An oversize or binary pre-edit blob is not stashed (rewind cannot
+        cover it) but its path IS still marked, so a later same-turn edit does
+        not re-evaluate it and stash a mid-turn state instead."""
         registry = self._file_checkpoint_registry
         changes = result.file_changes
         if registry is None or not changes:
@@ -262,17 +219,17 @@ class ToolRuntime:
         for change in changes:
             path = change["path"]
             if not registry.mark_if_first(root, path):
-                # Already baselined this turn — the first edit pinned the turn's
-                # starting state; later edits add nothing (D6 "stash on first touch").
+                # The first edit already pinned the turn's starting state;
+                # later edits add nothing.
                 continue
             before = change.get("before")
             if before is None:
-                # AI created the file this turn → baseline is the "did not exist"
-                # marker (content_ref=None), so a rewind DELETES it.
+                # Created this turn → the baseline is a "did not exist" marker
+                # (content_ref=None), so a rewind DELETES the file.
                 baselines.append(FileBaseline(path=path))
                 continue
             before_bytes = bytes(before)
-            # D7 — oversize / binary: skip the stash (path already marked above).
+            # Oversize / binary: skip the stash; the path is marked above.
             if (
                 len(before_bytes) > _BASELINE_MAX_BYTES
                 or b"\x00" in before_bytes
@@ -285,16 +242,13 @@ class ToolRuntime:
         return baselines or None
 
     def _root_task_id(self, task_id: str) -> str:
-        """The root-task id of the (possibly subtask)
-        editing task, so a whole delegation tree shares ONE per-turn gate.
+        """The root-task id of the editing task, so a whole delegation tree
+        shares ONE per-turn gate.
 
-        Walks ``TaskCreated.parent_task_id`` up to the root (``parent_task_id``
-        falsy), memoised because the parent graph is immutable durable data. A
-        top-level editing task has no parent and resolves to itself
-        (byte-identical to issue 02). Degrades gracefully — if the event_log
-        exposes no ``read`` (some test doubles) or a stream lacks
-        ``TaskCreated``, it falls back to ``task_id`` itself, which is still the
-        correct key for the common single-task case. Live-only."""
+        Walks ``TaskCreated.parent_task_id`` up to the root, memoised because
+        the parent graph is immutable durable data. Degrades to ``task_id``
+        itself when the event_log exposes no ``read`` or the stream lacks a
+        ``TaskCreated`` — still the correct key for a single-task turn."""
         cached = self._root_cache.get(task_id)
         if cached is not None:
             return cached
@@ -325,9 +279,9 @@ def _fault_message(exc: BaseException) -> str:
 def _encode_output(output: Any) -> bytes:
     """Canonical bytes for ``output`` so its ContentRef hash is stable.
 
-    ``None`` is encoded as the JSON literal ``null`` (4 bytes), preserving
-    a non-empty ContentRef even when the tool offloaded everything into
-    ``artifacts`` and left ``output`` unset.
+    ``None`` encodes as the JSON literal ``null``, which keeps a non-empty
+    ContentRef even when a tool offloaded everything into ``artifacts`` and
+    left ``output`` unset.
     """
     if isinstance(output, (bytes, bytearray)):
         return bytes(output)

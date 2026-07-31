@@ -1,18 +1,14 @@
-"""Storage-backend resolution: named backend + value-shape dispatch.
+"""Storage-backend resolution: named backend, plus value-shape dispatch.
 
-The **implementation** behind :mod:`noeta.sdk.storage` (which re-exports every
-name here — that module stays the documented public doorway). It lives in
-``noeta.client`` because ``HostConfig.storage_path`` resolves through it, and
-``noeta.sdk`` sits *above* ``noeta.client`` in the import bands: keeping the
-implementation here is what lets one host-config field share the loader every
-other caller uses instead of growing a second copy of the dispatch.
+The implementation behind :mod:`noeta.sdk.storage`, which re-exports every name
+here and stays the documented doorway. It lives in ``noeta.client`` because
+``HostConfig.storage_path`` resolves through it and ``noeta.sdk`` sits above
+``noeta.client`` in the import bands, so one host-config field shares the loader
+every other caller uses instead of growing a second copy of the dispatch.
 
-Nothing here statically imports a backend. The concrete adapters live in the
-``storage`` built-in (``noeta.builtins.storage.impl``) and are reached through
-:func:`importlib.import_module`, the sanctioned microkernel doorway — so a host
-that chose sqlite never pays for ``psycopg``. (``noeta.storage.cached`` is not
-a backend — it is the Protocol-level read cache this module wraps the durable
-ones in, and it imports nothing but the Protocols.)
+Nothing here statically imports a backend: the concrete adapters live in the
+``storage`` built-in and are reached through :func:`importlib.import_module`,
+so a host that chose sqlite never pays for ``psycopg``.
 """
 
 from __future__ import annotations
@@ -36,7 +32,7 @@ __all__ = [
 
 #: Backend name → the module whose ``build_stack(**config)`` builds its triple.
 _BACKENDS = {
-    "memory": "noeta.storage.memory",  # runtime wheel — the reference backend
+    "memory": "noeta.storage.memory",  # the runtime's own reference backend
     "sqlite": "noeta.builtins.storage.impl.sqlite.stack",
     "postgres": "noeta.builtins.storage.impl.postgres.stack",
 }
@@ -55,19 +51,16 @@ def build_storage_stack(
 ) -> tuple[EventLogFull, ContentStore, Dispatcher]:
     """Build the named backend's triple via its ``build_stack`` factory.
 
-    ``config`` is passed through to the factory (``memory``: none;
-    ``sqlite``: ``path=``; ``postgres``: ``dsn=``). The one internal
-    invariant — the event log takes the dispatcher as ``lease_validator``
-    — is wired by the factory itself. Unknown names raise ``ValueError``
-    naming the known set.
+    ``config`` passes through to the factory (``memory``: none; ``sqlite``:
+    ``path=``; ``postgres``: ``dsn=``); the factory itself wires the event log's
+    ``lease_validator`` to the dispatcher. Unknown names raise ``ValueError``.
 
-    A durable backend's ContentStore comes back wrapped in
-    :class:`~noeta.storage.cached.CachedContentStore`. Every read path above
-    this line — compose-time resident deref, fold, the message projection —
-    re-reads the same immutable hashes many times over a session, and this is
-    the one place all three get the stack from, so the wrap belongs here rather
-    than at each of them. ``memory`` is left bare: it is already an in-process
-    dict, and caching it would hold every body twice.
+    A durable backend's ContentStore comes back wrapped in a
+    :class:`~noeta.storage.cached.CachedContentStore`: every read path above
+    this line — compose-time deref, fold, the message projection — re-reads the
+    same immutable hashes many times, and this is the one place all of them get
+    a stack from. ``memory`` stays bare; it is already an in-process dict, and
+    caching it would hold every body twice.
     """
     module_name = _BACKENDS.get(backend)
     if module_name is None:
@@ -104,18 +97,15 @@ def open_storage_stack(
     """Value-shape dispatch over :func:`build_storage_stack`.
 
     ``storage_path`` is ``None`` / ``":memory:"`` for the InMemory stack, a
-    ``postgresql://`` DSN for the Postgres stack, and otherwise a file path for
-    the sqlite stack (the parameter's historical meaning). A convenience over
-    :func:`build_storage_stack` — not a second mechanism — collapsing the
-    branch its hosts (``HostConfig.storage_path``, the reference-host example,
-    storage-URL configs) would otherwise repeat.
+    ``postgresql://`` DSN for Postgres, and otherwise a sqlite file path. A
+    convenience over :func:`build_storage_stack`, not a second mechanism: it
+    collapses the branch every caller would otherwise repeat.
 
     A value that *looks* like a URL but carries an unrecognised scheme
-    (``postgres1://``, ``mysql://``, a typo'd ``postgesql://``) raises
-    ``ValueError`` naming the accepted schemes. It used to fall through to the
-    sqlite branch, which silently created a database file **named after the
-    DSN** — a misconfiguration that surfaced much later as a confusing empty
-    store. Only a scheme-less string is a file path.
+    (``mysql://``, a typo'd ``postgesql://``) raises ``ValueError`` naming the
+    accepted schemes. Falling through to sqlite would silently create a database
+    file **named after the DSN**, a misconfiguration that surfaces much later as
+    a confusing empty store. Only a scheme-less string is a file path.
     """
     if is_memory_path(storage_path):
         return build_storage_stack("memory")

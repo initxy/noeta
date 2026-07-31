@@ -1,25 +1,13 @@
-"""``ask_user_question`` — the structured-HITL control tool, as a built-in plugin.
+"""``ask_user_question`` — the structured-HITL control tool: schema, argument
+validation, decision translation, and the answer-side codec.
 
-Control-tool-surface S2 (D3 + D8): ``ask_user_question``'s whole story moved out
-of the kernel's control band into this built-in — its provider-visible schema,
-its argument validators, its response→neutral-Decision translate body, its
-``.md`` description, AND its answer-side codec (``question_handle`` /
-``load_questions_body`` / ``normalize_answer_document``). The move is
-byte-preserving (the S0 golden pins the schema bytes).
-
-The answer codec is kernel RESIDUE: the driver's ``answer`` path decodes a
-submitted answer body, but the kernel can no longer import the codec statically
-(it lives here now, and the kernel never imports ``noeta.builtins``). So the
-mount carries it on its typed ``answer_codec`` field (spec §4.3) — the builder
-collects it, the host threads it onto the session's Engine, and the driver
-reads it there, failing loudly for a session that never mounted
-this tool. What this impl imports back from the kernel is neutral mechanism: the
-mount + codec types (``noeta.execution.control_tool``), the decision-time
-``ControlTranslateContext``, the shared ack builder ``ack_patch_decision``, and
-the canonical-bytes codec.
-
-Reached only through the plugin loader's ``ref`` resolution; nothing imports it
-statically.
+A valid call suspends the task on a neutral :class:`YieldForHumanDecision`
+carrying an opaque anchor, so the kernel never decodes this schema and the
+whole question vocabulary stays here. The driver's ``answer`` path does have to
+decode a submitted reply, yet the kernel never imports ``noeta.builtins`` —
+hence the codec rides the mount's typed ``answer_codec`` field, collected by
+the builder and threaded onto the Engine. Reached only through the plugin
+loader's ``ref`` resolution; nothing imports it statically.
 """
 
 from __future__ import annotations
@@ -360,18 +348,15 @@ def normalize_answer_document(
         raw_answer = answers_raw[qid]
         if not isinstance(raw_answer, dict):
             raise AnswerValidationError(f"answer {qid!r} must be an object")
-        # B17 / U6 — a chosen option and a freeform note may COEXIST (product
-        # direction ①): validate each field independently and require AT LEAST
-        # one. A missing/blank text is treated as absent, so "pick a choice and
-        # leave the other box empty" is just the choice. The normalized shape is
-        # unchanged ({choice_id, text} with None for the absent field), so older
-        # single-field recordings stay byte-identical and replay-safe; the rule
-        # only loosens (anything valid before is still valid).
+        # A chosen option and a freeform note may COEXIST: validate each field
+        # independently and require AT LEAST one. A missing or blank text counts
+        # as absent, so "pick a choice and leave the other box empty" is just the
+        # choice; the normalized shape is always {choice_id, text} with None for
+        # the absent field.
         raw_choice = raw_answer.get("choice_id")
         raw_text = raw_answer.get("text")
-        # P2 hardening — a present but non-string text is malformed, not absent;
-        # reject it explicitly (consistent with validating each field on its own).
-        # None and a blank string are still treated as "no text given".
+        # A present but non-string text is malformed, not absent; reject it
+        # explicitly. None and a blank string still mean "no text given".
         if raw_text is not None and not isinstance(raw_text, str):
             raise AnswerValidationError(f"answer {qid!r} text must be a string")
         has_choice = raw_choice is not None
@@ -421,20 +406,15 @@ def _maybe_ask_user_question_decision(
     content_store: Optional[ContentStore],
     assistant_thinking: tuple[ThinkingBlock, ...] = (),
 ) -> Decision | None:
-    """CW18d: translate `ask_user_question` into the neutral HITL
-    primitive.
+    """Translate an ``ask_user_question`` call into the neutral HITL primitive.
 
-    A valid call becomes a :class:`YieldForHumanDecision` carrying an
-    opaque :class:`HitlRequestAnchor` (the SDK builds the
-    ContentStore-backed ``questions_ref`` + the ``question-<id>`` handle):
-    the kernel writes the neutral ``UserQuestionRequested`` audit anchor
-    and suspends, never decoding the schema. A mixed/malformed call becomes
-    a recoverable :class:`StatePatchDecision` (assistant tool_use +
-    error ack, no patch, no suspend).
-
-    The ask branch owns the whole turn before other control/tool routing;
-    a valid call suspends and therefore intentionally has no immediate
-    tool-result ack.
+    A valid call becomes a :class:`YieldForHumanDecision` carrying an opaque
+    :class:`HitlRequestAnchor` (the ContentStore-backed ``questions_ref`` plus
+    the ``question-<id>`` handle): the kernel writes the audit anchor and
+    suspends without decoding the schema, so a valid call deliberately has no
+    immediate tool-result ack. A mixed or malformed call becomes a recoverable
+    :class:`StatePatchDecision` — assistant tool_use plus an error ack, no
+    patch, no suspend — so the model can retry.
     """
     tool_uses = [b for b in response.content if isinstance(b, ToolUseBlock)]
     ask_blocks = [
@@ -508,8 +488,8 @@ def translate_ask_user_question(ctx: ControlTranslateContext) -> Optional[Decisi
 
 
 #: The answer-side codec the kernel driver's ``answer`` path consumes, carried
-#: on the ask mount's typed ``answer_codec`` field (spec §4.3). Built ONCE at
-#: import (the three functions are stateless).
+#: on the ask mount's typed ``answer_codec`` field. Built once at import — the
+#: three functions are stateless.
 ASK_ANSWER_CODEC = AskAnswerCodec(
     question_handle=question_handle,
     load_questions_body=load_questions_body,
@@ -522,11 +502,9 @@ def build_ask_user_question_control_tool(
 ) -> Optional[ControlToolMount]:
     """The ``control_tool`` contribution factory (manifest ``ref`` target).
 
-    Self-gates on the effective ``ask_user_question`` capability flag and
-    reproduces the pre-migration internal ``_ask_user_question_mount`` exactly:
-    routing band 100, schema band 300 (the S0 golden byte order). It also
-    carries the answer codec on the mount's typed ``answer_codec`` field so the
-    driver can decode a submitted answer without importing this built-in.
+    Self-gates on the effective ``ask_user_question`` capability flag: mounting
+    is enablement. Routing band 100 and schema band 300 are the byte-order
+    contract the control-tool schema goldens pin — do not renumber.
     """
     if not ctx.flag("ask_user_question"):
         return None

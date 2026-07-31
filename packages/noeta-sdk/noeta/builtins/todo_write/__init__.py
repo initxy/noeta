@@ -1,14 +1,10 @@
-"""``todo_write`` — the durable-checklist control tool as a built-in plugin.
+"""``todo_write`` — the durable-checklist control tool.
 
-Control-tool-surface S2, D3: a control tool is a ``control_tool`` surface
-contribution. The manifest declares one factory
-``(ControlToolBuildContext) -> ControlToolMount | None`` (band 200 — matching
-the pre-migration internal schema band); the kernel builder's post-tools mount
-loop runs it. ``todo_write`` also stays a recognized activation name
-(``_ACTIVATION_CAPABILITY_FLAG``), so ``plugins=("todo_write",)`` still lands
-``"todo_write"`` in the compiled ``AgentSpec.plugins`` identity tuple — naming
-the plugin the same does not change activation semantics (the feature-flag
-branch resolves first).
+The manifest declares one ``control_tool`` factory at band 200, which fixes
+this tool's slot in the builder's mount loop so the cross-plugin collision
+check iterates in a stable order; the schema and routing byte-orders come from
+the mount's own bands. The plugin name doubles as a capability-flag activation
+name, and the factory self-gates on that flag — mounting is enablement.
 """
 
 from __future__ import annotations

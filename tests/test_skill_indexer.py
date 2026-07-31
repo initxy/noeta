@@ -1,16 +1,10 @@
-"""SkillIndexer scan / parse / invalid-handling tests (issue 21).
+"""SkillIndexer turns a directory tree of SKILL.md files into a registry.
 
-Behaviour covered:
-* Happy-path scan of a temporary tree with multiple SKILL.md files.
-* Invalid SKILL.md files (bad frontmatter, missing required fields,
-  unknown key, invalid name format) are skipped with a WARNING log
-  rather than aborting the whole index.
-* Determinism — duplicate-name first-wins resolution is driven by
-  POSIX-normalised sort order, not by raw directory iteration order
-  (rev3 B2).
-* Default field values populate when optional keys are omitted.
-* Symlinked skill directories are traversed without looping on
-  symlink cycles.
+One malformed file must never cost a user their whole skill set, so invalid
+entries are skipped with a warning instead of aborting the scan. Duplicate
+names resolve by POSIX-normalised sort order rather than raw directory
+iteration, so the same tree indexes identically on every machine — the
+alternative is a registry that silently differs between checkouts.
 """
 
 from __future__ import annotations
@@ -199,10 +193,10 @@ def test_invalid_priority_skipped(
 def test_typo_of_known_key_skipped_for_missing_required(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """4.5-I5 (inverted): a ``descrption:`` typo no longer errors on the
-    unknown key — it is tolerated as metadata. The file is still skipped,
-    but now because the *required* ``description`` is missing. That is the
-    documented trade-off of accepting real public skills."""
+    """A ``descrption:`` typo is tolerated as metadata, so the file is skipped
+    for the *missing* required ``description`` rather than for the unknown
+    key — the price of accepting third-party skills that carry arbitrary
+    frontmatter."""
     _write(
         tmp_path / "tp" / "SKILL.md",
         "---\nname: tp\ndescrption: typo\n---\nbody\n",
@@ -219,9 +213,8 @@ def test_typo_of_known_key_skipped_for_missing_required(
 def test_unknown_frontmatter_key_loads_as_metadata(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """4.5-I5 (inverted): an unknown key (``extra_field``) no longer skips
-    the file — the skill loads and the key is captured as opaque
-    metadata, sorted by raw key name (no normalisation)."""
+    """An unknown key does not disqualify the skill: it is captured as opaque
+    metadata, sorted by raw key name so the tuple is order-stable."""
     _write(
         tmp_path / "ef" / "SKILL.md",
         "---\nname: ef\ndescription: d\nextra_field: bar\n"
@@ -232,7 +225,7 @@ def test_unknown_frontmatter_key_loads_as_metadata(
     assert "ef" in registry.names()
     desc = registry.get("ef")
     assert desc is not None
-    # opaque, sorted by raw key; inline list kept verbatim as a string
+    # Inline lists stay verbatim strings — nothing here is YAML-parsed.
     assert desc.metadata == (
         ("allowed-tools", "[Read, Bash]"),
         ("extra_field", "bar"),
@@ -337,24 +330,20 @@ def test_invalid_skill_does_not_break_index_of_valid_siblings(
 def test_duplicate_name_first_wins_by_sorted_posix_path(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """rev3 B2: scan order is normalised POSIX relative path ascending,
-    so duplicate-name conflict resolution is deterministic across
-    platforms / file systems regardless of disk creation order or
-    ``Path.rglob`` natural ordering.
+    """Scan order is the normalised POSIX relative path ascending, so which
+    of two same-named skills wins does not depend on disk creation order or
+    on ``Path.rglob``'s natural ordering.
 
-    Sort is asserted on ``as_posix()`` relative paths, NOT on raw
-    ``Path`` ordering — so this test gives the same answer on
-    POSIX and Windows file systems (architect watchpoint).
+    The sort is asserted on ``as_posix()`` relative paths rather than raw
+    ``Path`` ordering, which is what makes the answer identical on POSIX and
+    Windows file systems.
     """
-    # Create in 'reverse' order so creation order is z then a; expect
-    # winner is `a-dir/SKILL.md` because the POSIX sort puts a < z.
+    # Created z-then-a so creation order contradicts the expected winner.
     z_path = tmp_path / "z-dir" / "SKILL.md"
     a_path = tmp_path / "a-dir" / "SKILL.md"
     _write(z_path, _skill_doc("dup", "z body", "Z\n"))
     _write(a_path, _skill_doc("dup", "a body", "A\n"))
 
-    # Confirm POSIX-sorted order independently — this is the
-    # property the Indexer must respect regardless of OS.
     posix_sorted = sorted(
         [a_path.relative_to(tmp_path).as_posix(), z_path.relative_to(tmp_path).as_posix()]
     )
@@ -367,18 +356,16 @@ def test_duplicate_name_first_wins_by_sorted_posix_path(
     assert dup is not None
     assert dup.description == "a body"
     assert dup.body == "A\n"
-    # The losing duplicate is logged
+    # The loser is logged so a shadowed skill is diagnosable.
     assert any(
         "duplicate name 'dup'" in r.getMessage() for r in caplog.records
     )
 
 
 def test_scan_order_is_posix_relative_path_ascending(tmp_path: Path) -> None:
-    """Sort key is ``rel.as_posix()`` — verified by checking the
-    sequence of candidates the indexer enumerates. We can't observe
-    the internal list directly, so we use the duplicate-name
-    first-wins outcome to probe ordering across 3+ siblings: every
-    SKILL.md but the POSIX-first winner is skipped + logged.
+    """The enumeration order is not observable directly, so duplicate-name
+    first-wins across three siblings is used to probe it: only the
+    POSIX-first candidate can survive.
     """
     _write(tmp_path / "m" / "SKILL.md", _skill_doc("multi", "m"))
     _write(tmp_path / "a" / "SKILL.md", _skill_doc("multi", "a"))
@@ -387,13 +374,12 @@ def test_scan_order_is_posix_relative_path_ascending(tmp_path: Path) -> None:
     registry = SkillIndexer(tmp_path).index()
     multi = registry.get("multi")
     assert multi is not None
-    # POSIX-first wins: a < m < z
     assert multi.description == "a"
 
 
 def test_repeated_index_calls_produce_equal_registry(tmp_path: Path) -> None:
-    """Same disk state → byte-equal SkillDescription instances (default
-    dataclass equality, rev2 NB1 — source_path participates)."""
+    """Indexing is a pure function of disk state: the same tree yields equal
+    SkillDescription instances, ``source_path`` included."""
     _write(tmp_path / "a" / "SKILL.md", _skill_doc("a", "a"))
     _write(tmp_path / "b" / "SKILL.md", _skill_doc("b", "b"))
     r1 = SkillIndexer(tmp_path).index()
@@ -404,14 +390,13 @@ def test_repeated_index_calls_produce_equal_registry(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# NB2: CRLF body normalisation
+# CRLF body normalisation
 # ---------------------------------------------------------------------------
 
 
 def test_crlf_skill_md_produces_lf_body(tmp_path: Path) -> None:
-    """rev2 NB2: SKILL.md with CRLF line endings yields an LF-normalised
-    body so cross-OS checkouts of the same disk content render byte-equal
-    Messages."""
+    """CRLF line endings normalise to LF, so a checkout on Windows and one on
+    Linux render byte-equal Messages from the same SKILL.md."""
     path = tmp_path / "win" / "SKILL.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(

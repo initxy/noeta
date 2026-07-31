@@ -1,31 +1,16 @@
-"""The session-pack contract — one generic seam for session-assembled
-capability packs (microkernel phase 3).
-
-A *session pack* is the construction half of a capability: the factory a
-plugin contributes (manifest surface ``session_pack``) that receives the
+"""The session-pack contract: the construction half of a capability. A plugin
+contributes a factory (manifest surface ``session_pack``) that reads the
 kernel-built :class:`SessionBuildContext` and returns a
-:class:`PackContribution` — tools, content kinds, and named session exports.
-The builder (:mod:`noeta.execution.builder`) runs every pack through ONE
-priority-ordered loop; it enumerates no capability by name.
+:class:`PackContribution`; the builder runs every pack through one
+priority-ordered loop and enumerates no capability by name.
 
-Ordering is the ``reminder`` / ``tool_result_transform`` precedent: integer
-``priority`` ascending, ties broken by ``(plugin, name)`` upstream in the
-plugin merge. Tool dict insertion order feeds the Engine's deterministic
-``ToolSchemaRecorded`` emission and the stable-prefix hash, so a pack's
-priority is part of its byte-order contract — the built-in bands are pinned
-in :data:`~noeta.execution.builder._TOOL_PIPELINE`'s successor table and
-locked by the ``tests/test_session_pack_goldens.py`` goldens.
-
-Content kinds order on their OWN priority (:class:`ContentKindContribution`),
-independent of the tool priority: the two orders genuinely differ (the skill
-kind renders first in semi_stable while the script tool appends fifth), so a
-single per-pack integer cannot express both.
-
-Side-state a pack hands the kernel is a **typed field** on
-:class:`PackContribution`, each read by a specific kernel seam (spec §4.3);
-adding one is an SPI change, reviewed as such. Pack-internal state stays
-inside the factory closure — nothing rides the contribution for
-inspection's sake.
+Priority is a byte-order contract, not a hint: tool dict insertion order feeds
+the Engine's ``ToolSchemaRecorded`` emission and the stable-prefix hash. Content
+kinds order on their OWN priority because the tool order and the semi_stable
+render order genuinely differ, and one per-pack integer cannot express both.
+Side-state a pack hands the kernel is a typed field on
+:class:`PackContribution`, so adding one is an SPI change; pack-internal state
+stays inside the factory closure.
 """
 
 from __future__ import annotations
@@ -64,17 +49,14 @@ __all__ = [
 class SessionBuildContext:
     """What one session build offers every pack — generic slots only.
 
-    Built by :func:`~noeta.execution.builder.build_session_inputs` before the
-    pack loop; frozen so a pack can never perturb a later pack's inputs. A
-    pack that finds itself inapplicable (its backend absent, its capability
-    flag off, its config missing) returns the empty :class:`PackContribution`
-    — applicability is the pack's own check against this context, never a
-    kernel ``if``.
+    Frozen, so a pack can never perturb a later pack's inputs. A pack that finds
+    itself inapplicable (backend absent, capability flag off, config missing)
+    returns the empty :class:`PackContribution` — applicability is the pack's own
+    check against this context, never a kernel ``if``.
     """
 
-    #: The kernel-built containment root (host ``from_path`` or lexical
-    #: ``for_container`` under a sandbox ``exec_env``) — packs consume it,
-    #: never build their own.
+    #: The kernel-built containment root — packs consume it, never build their
+    #: own.
     workspace: WorkspaceRoot
     workspace_dir: Path
     content_store: ContentStore
@@ -82,26 +64,22 @@ class SessionBuildContext:
     #: the session's container.
     exec_env: Optional[ExecEnv]
     model: str
-    #: The bound model's vendor family (providers-catalog judgment); ``None``
-    #: for any uncatalogued selector.
+    #: The bound model's vendor family; ``None`` for an uncatalogued selector.
     provider_family: Optional[str]
-    #: The agent's tool whitelist. Only the base pack (fs/web) filters by it;
-    #: capability packs append past it by design.
+    #: The agent's tool whitelist. Only the base pack filters by it; capability
+    #: packs append past it by design.
     allowed_tools: frozenset[str]
-    #: Named backend bag — host-populated, feature-agnostic. Well-known names
-    #: are the contributing plugins' vocabulary (e.g. the sandbox provider's
-    #: ``"browser"``, the product gateway's ``"app_preview"``), never the
-    #: kernel's. An absent name means the capability has no live backing.
+    #: Named backend bag — host-populated, feature-agnostic. The names belong to
+    #: the contributing plugins (``"browser"``, ``"app_preview"``), never to the
+    #: kernel. An absent name means the capability has no live backing.
     backends: Mapping[str, object]
-    #: The agent's derived capability flags by name (``"memory"``,
-    #: ``"browser"``, …) — the per-agent activation truth a pack self-gates on.
+    #: The agent's derived capability flags by name — the per-agent activation
+    #: truth a pack self-gates on.
     capability_flags: Mapping[str, bool]
-    #: Per-plugin config bag: ``plugin name → its own keys``. The host maps
-    #: its public fields in; each pack parses only its own entry and fails
-    #: loudly on what it cannot read. Feature knobs with a single consumer live
-    #: here, never as a typed context slot — the write/shell safety inputs are
-    #: the ``"fs"`` entry (sole consumer: the fs pack); a key is promoted to a
-    #: typed slot only when a second, unrelated plugin demonstrably reads it.
+    #: Per-plugin config bag: ``plugin name → its own keys``. Each pack parses
+    #: only its own entry and fails loudly on what it cannot read. A knob with a
+    #: single consumer lives here rather than as a typed context slot, and is
+    #: promoted only when a second, unrelated plugin demonstrably reads it.
     plugin_config: Mapping[str, Mapping[str, object]]
 
     def config(self, plugin: str) -> Mapping[str, object]:
@@ -115,17 +93,15 @@ class SessionBuildContext:
 
 @runtime_checkable
 class SessionRecorder(Protocol):
-    """The one scoped write verb a plugin gets (spec §4.4).
+    """The one scoped write verb a plugin gets, handed to its ``init`` hook at
+    session seed time.
 
-    Handed by the kernel to a contribution's ``init`` hook at session seed
-    time. ``record_content`` activates (or refreshes) a resident content item:
-    the kernel stamps the envelope and emits one ``ContextContentRecorded``
+    The kernel stamps the envelope and emits the ``ContextContentRecorded``
     through its single-writer path, so a plugin never touches a raw
-    ``EventLog``. This is not a security fence (in-process Python has none) —
-    it is invariant preservation by construction: lifecycle events, message
-    origin, and slice ownership cannot be corrupted by a buggy plugin, and the
-    well-typed path is the easy path. The verb no-ops when ``(kind, name)`` is
-    already active with an identical hash and records a refresh otherwise.
+    ``EventLog``. Not a security fence (in-process Python has none) — invariant
+    preservation by construction: lifecycle events, message origin, and slice
+    ownership cannot be corrupted by a buggy plugin, and the well-typed path is
+    the easy path.
     """
 
     def record_content(
@@ -141,12 +117,9 @@ class SessionRecorder(Protocol):
         ...
 
 
-#: A contribution's pre-loop activation hook: ``(SessionRecorder) -> None``.
-#: Run once per session build (including resume) at seed time; its recording
-#: side effects are gated by the recorder's no-op-on-unchanged-hash rule, so
-#: it is idempotent per drive (spec §6). The generic successor of the three
-#: feature-named kernel seed recorders — third-party packs record their own
-#: resident kinds through the same seam, with zero kernel edits.
+#: A contribution's pre-loop activation hook, run once per session build
+#: (including resume) at seed time. The recorder's no-op-on-unchanged-hash rule
+#: is what makes it idempotent per drive.
 InitHook = Callable[[SessionRecorder], None]
 
 
@@ -154,12 +127,10 @@ InitHook = Callable[[SessionRecorder], None]
 class ContentKindContribution:
     """One content kind + its registration priority.
 
-    Registration order IS the semi_stable layout
-    (:class:`~noeta.context.content_channel.ContentChannelRegistry`), and it
-    differs from the tool order, so kinds sort on their own integer —
-    ascending, ties broken by the pack loop order. Built-in bands: skill=100,
-    memory=200, instructions=300, environment=400; host/extension kinds
-    append after every built-in resident.
+    Registration order IS the semi_stable layout, and it differs from the tool
+    order, so kinds sort on their own integer — ascending, ties broken by the
+    pack loop order. Built-in bands: skill=100, memory=200, instructions=300,
+    environment=400; extension kinds append after every built-in resident.
     """
 
     priority: int
@@ -171,38 +142,28 @@ class PackContribution:
     """What one pack hands back to the builder. All fields optional; the
     empty contribution is the universal "not applicable" answer.
 
-    ``tools`` merge in loop order with later-wins semantics — the existing
-    construction-order contract (a later pack may deliberately shadow an
-    earlier name, exactly as ``custom_tools`` always has). Cross-plugin
-    accidental collisions are caught upstream at the manifest merge
-    (``session_pack`` collides on ``name``), not here.
+    ``tools`` merge in loop order with later-wins semantics, so a later pack may
+    deliberately shadow an earlier name. Accidental cross-plugin collisions are
+    caught upstream at the manifest merge, not here.
     """
 
     tools: Mapping[str, Tool] = field(default_factory=dict)
     content_kinds: tuple[ContentKindContribution, ...] = ()
-    #: Pre-loop activation hook (spec §4.5): a closure that records this pack's
-    #: resident content items through the kernel-handed :class:`SessionRecorder`
-    #: at seed time. ``None`` ⇒ the pack activates no pre-loop residents.
+    #: Records this pack's resident content items at seed time. ``None`` ⇒ the
+    #: pack activates no pre-loop residents.
     init: Optional[InitHook] = None
-    # --- typed side-state fields (spec §4.3: typed fields, no stringly bag) ---
-    # The kernel-consumed contributions: named, typed fields, each read by a
-    # specific kernel seam. Adding one is an SPI change, reviewed as such.
-    #: Control-tool entries this pack contributes (spec §4.1 session plane:
-    #: translate closures are factory outputs). Each factory typically closes
-    #: over the pack's own build state (e.g. the skill mount's menu over its
-    #: registry) — no kit crosses into kernel code (spec §5). The builder runs
-    #: them through the SAME dual-priority mount loop as the host-supplied
-    #: entries; name collisions across the two sources stay loud.
+    # Typed side-state below: each field is read by one specific kernel seam,
+    # so adding one is an SPI change, reviewed as such.
+    #: Control-tool entries. Each factory typically closes over the pack's own
+    #: build state, keeping pack-specific types out of kernel code. The builder
+    #: runs them through the SAME mount loop as host-supplied entries; name
+    #: collisions across the two sources stay loud.
     control_tools: tuple[Any, ...] = ()
-    #: Opaque guard-input bundle → the injected guards factory
-    #: (``GuardsFactory(guard_facts=…)``). Single-writer across the pack loop;
-    #: its shape is a producer/consumer-plugin contract
-    #: (:class:`noeta.runtime.governance.SkillGuardFacts` for the built-ins) —
+    #: Opaque guard-input bundle for the injected guards factory. Single-writer
+    #: across the pack loop; its shape is a producer/consumer-plugin contract and
     #: the builder never reads inside it.
     guard_facts: Optional[Any] = None
-    #: The post-tool content-discovery hook → ``Engine(content_discovery=…)``.
     content_discovery: Optional[Any] = None
-    #: The per-step resume preloader → ``Engine(content_preloader=…)``.
     content_preloader: Optional[Any] = None
 
 
@@ -219,12 +180,10 @@ class SessionPackFactory(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class SessionPackEntry:
-    """One resolved pack in the builder's loop: name + priority + factory.
+    """One resolved pack in the builder's loop.
 
-    ``name`` is the contribution name (collision key + tie-breaker);
-    ``priority`` is the manifest's declared integer band. The builder sorts
-    entries by ``(priority, name)`` — the plugin merge has already resolved
-    cross-plugin ties by ``(priority, plugin, name)`` upstream.
+    The builder sorts entries by ``(priority, name)``; the plugin merge has
+    already resolved cross-plugin ties by ``(priority, plugin, name)`` upstream.
     """
 
     name: str

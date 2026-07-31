@@ -1,12 +1,11 @@
-"""``delegation`` — the ``spawn_subagent`` control tool as a built-in plugin.
+"""``delegation`` — the ``spawn_subagent`` control tool.
 
-Control-tool-surface S2, D3: the manifest declares one ``control_tool`` factory
-(band 100 — the pre-migration schema band; ``spawn_subagent`` renders FIRST in
-the schema list). The contribution NAME is the tool name ``spawn_subagent``
-(collision key), while the plugin NAME is ``delegation`` (the activation name
-that lands ``"delegation"`` in the identity tuple). ``plugins=("delegation",)``
-still folds delegation ON — the feature-flag branch resolves before the loaded
-plugin set, so the plugin sharing the activation name is inert to folding.
+The manifest declares one ``control_tool`` factory at band 100, which fixes
+this tool's slot in the builder's mount loop so the cross-plugin collision
+check iterates in a stable order; the schema and routing byte-orders come from
+the mount's own bands. The contribution name is the TOOL name
+``spawn_subagent`` — that name is the collision key across plugins — while the
+plugin name is the activation name ``delegation``.
 """
 
 from __future__ import annotations

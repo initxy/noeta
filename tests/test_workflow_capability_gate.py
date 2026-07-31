@@ -1,22 +1,15 @@
 """``run_workflow`` capability gating.
 
-``run_workflow`` is a **control-layer orchestration tool**: it goes through
-``SpawnSubtaskDecision`` → ``OrchestrationPolicy``, not ToolRuntime (unlike
-ordinary ``read`` / ``edit`` tools). Two things gate its availability:
-
-1. ``workflow_enabled`` (host-level kill-switch, ``HostConfig.workflow_enabled``);
-2. ``delegation`` (whether this agent may spawn sub-agents).
-
-A workflow's ``agent()`` / ``parallel()`` spawns real sub-agents into the same
-``allowed_subtask_agents`` allow-list — so an agent that **cannot delegate**
-can't run a workflow even when the host enables it. This test pins down: "only a
-delegation-enabled agent gets run_workflow" — of the four (workflow, delegation)
-combinations, only both-on exposes the tool.
-
-The description source is pinned too: ``run_workflow``'s description loads from
-an independent text resource beside the ``react`` built-in
-(``noeta/builtins/react/impl/run_workflow.md``, four sections) covering what /
-when / when-not / preconditions.
+``run_workflow`` is a control-layer orchestration tool — it goes through
+``SpawnSubtaskDecision`` → ``OrchestrationPolicy``, not ToolRuntime the way
+``read`` / ``edit`` do — and two independent flags gate it: the host kill-switch
+(``HostConfig.workflow_allowed``) and whether this agent may delegate. Because a
+workflow's ``agent()`` / ``parallel()`` spawns real sub-agents through the same
+``allowed_subtask_agents`` allow-list, an agent that cannot delegate could never
+run a workflow, so of the four flag combinations only both-on may expose the
+tool. The description is pinned to its text resource
+(``noeta/builtins/react/impl/run_workflow.md``) so editing that file is what
+edits the model-facing semantics.
 """
 
 from __future__ import annotations
@@ -43,10 +36,9 @@ def _build_composer_schemas(
 ) -> list[dict[str, Any]]:
     """Call ``build_session_inputs`` and return the composer control schemas.
 
-    Mirrors the production wiring's D3 coupling: the caller passes a
-    ``workflow_enabled`` that is already ANDed with delegation (the host
-    layers — ``SdkHost._build_engine`` and the noeta-agent session — do that
-    AND before they reach the builder).
+    Mirrors the production wiring: the caller passes a ``workflow_enabled`` that
+    is already ANDed with delegation, because the host layer does that AND
+    before it reaches the builder.
     """
     content_store = InMemoryContentStore()
     inputs = build_session_inputs(
@@ -58,7 +50,7 @@ def _build_composer_schemas(
         model="stub-model",
         compaction=COMPACTION_OFF,
         budget=Budget(),
-        # D3 coupling lives at the host layer; the builder receives the
+        # The coupling lives at the host layer; the builder receives the
         # already-ANDed effective flags.
         capability_flags={
             "workflow": workflow_enabled and delegation_enabled,
@@ -72,7 +64,7 @@ def _build_composer_schemas(
         subtask_agent_directory=(
             (("explore", "read-only explorer"),) if delegation_enabled else ()
         ),
-        # The fs write/shell knobs ride plugin_config["fs"] (spec §4.2).
+        # The fs write/shell knobs ride plugin_config["fs"].
         plugin_config={
             "fs": {"write_mode": FsWriteMode.DRY_RUN, "shell_mode": ShellMode.OFF},
         },
@@ -156,6 +148,5 @@ def test_run_workflow_description_has_four_sections() -> None:
         "## Preconditions",
     ):
         assert heading in text, f"missing section: {heading}"
-    # The determinism precondition (the load-bearing hard constraint) survives
-    # the migration into the resource file.
+    # Determinism is the load-bearing precondition — it must reach the model.
     assert "deterministic" in text

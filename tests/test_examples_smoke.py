@@ -1,13 +1,12 @@
-"""Smoke tests for the SDK-facing examples in ``examples/`` (issue 09).
+"""Smoke tests for the SDK-facing examples in ``examples/``.
 
 Each example under ``examples/`` (the task-oriented SDK examples — NOT the
 contributor-facing kernel demos under ``examples/_internal/``, which have
-their own coverage in ``tests/test_examples_demo.py`` and the CI phase0
-run) gets a smoke test here: import the module and drive its minimal path
-with the offline :class:`FakeLLMProvider` the example ships with. The
-point is rot-detection — if the SDK public surface drifts and an example
-stops importing or stops reaching a terminal answer, CI goes red before a
-user hits it.
+their own coverage in ``tests/test_examples_demo.py``) gets a smoke test
+here: import the module and drive its minimal path with the offline
+:class:`FakeLLMProvider` the example ships with. The point is rot-detection
+— if the SDK public surface drifts and an example stops importing or stops
+reaching a terminal answer, CI goes red before a user hits it.
 
 The examples are parametrised by module name so adding a new
 ``examples/<name>.py`` with a top-level ``run(...)`` automatically widens

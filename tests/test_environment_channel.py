@@ -1,18 +1,11 @@
-"""Workspace environment block — the always-on fourth content-channel tenant.
+"""Workspace environment block — the always-on content channel.
 
-Reuses the generic content-channel mechanism,
-adds kind="environment", policy=evolving, mirroring the instructions channel's
-structure (both live in the workspace built-in). Unlike
-instructions/memory it is ALWAYS registered + activated (a workspace always
-exists), and it lives in semi_stable — NOT the system prompt — so its absolute
-path never rotates the stable_prefix hash / busts prompt caching.
-
-Coverage:
-
-* Pure-function units — load_environment facts, renderer, hash.
-* Channel E2E — record/activation, semi_stable rendering, View source label.
-* Stable prefix untouched — the env block is semi_stable, not system prompt.
-* Product wiring — the SDK host/driver records + renders the block by default.
+Unlike the instructions and memory channels this one is registered and
+activated for every task (a workspace always exists), and it renders into
+``semi_stable`` rather than the system prompt: the block carries an absolute
+workspace path, so putting it in the prompt would rotate the ``stable_prefix``
+hash per host and bust prompt caching. These pin the fact capture, the
+rendering, and that a task opened through the SDK driver carries the block.
 """
 
 from __future__ import annotations
@@ -23,8 +16,7 @@ from pathlib import Path
 
 import pytest
 
-# Phase 3 (D10): the impure environment loader + its git/date helpers moved
-# from the kernel to the workspace built-in; monkeypatches repoint here.
+# Monkeypatch target: the impure git/date helpers the loader closes over.
 import noeta.builtins.workspace.impl.loaders as env_exec
 from noeta.context.composer import RenderedContent, ThreeSegmentComposer
 from noeta.context.content_channel import ContentChannelRegistry
@@ -184,7 +176,7 @@ def test_render_includes_branch_status_date_when_present() -> None:
 
 
 def test_render_omits_empty_git_lines() -> None:
-    # Non-git / capture-failed snapshot: the new lines must NOT render.
+    # Non-git / capture-failed snapshot: the git lines must NOT render.
     snap = EnvironmentSnapshot(
         workspace_display="/w", is_git_repo=False, platform="linux"
     )
@@ -239,8 +231,7 @@ def test_hash_is_stable_and_tracks_content() -> None:
 
 
 def _env_resolve(kind: str, name: str) -> bytes:
-    """A fake ``resolve`` returning the environment bytes the renderer expects
-    (spec §6): the ledger's active hash would deref to exactly these."""
+    """A fake ``resolve``: the ledger's active hash derefs to exactly these."""
     return render_environment_text(_SAMPLE).encode("utf-8")
 
 
@@ -271,7 +262,7 @@ def test_kind_is_evolving_and_resolves_through_generic_seam() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. Channel E2E — record/activate, semi_stable render, source label, stable prefix
+# 3. Channel end-to-end — record/activate, semi_stable render, stable prefix
 # ---------------------------------------------------------------------------
 
 
@@ -301,14 +292,11 @@ def _engine(log, cs, composer) -> Engine:
 
 
 def _activate_environment(log, cs, task):
-    """Activate the environment resident through the generic scoped recorder.
-
-    The workspace built-in's ``init`` hook records the environment resident
-    exactly this way (spec §4.5) — put the rendered bytes into the content
-    store, record the ref through the :class:`SeedRecorder` — after the
-    feature-named ``record_environment`` seam was retired. The recorded
-    ``ref.hash`` equals ``environment_content_hash(_SAMPLE)`` by construction
-    (both are ``sha256(render_environment_text(_SAMPLE))``).
+    """Activate the environment resident exactly as the workspace built-in's
+    ``init`` hook does: rendered bytes into the content store, the ref recorded
+    through the :class:`SeedRecorder`. The recorded ``ref.hash`` therefore
+    equals ``environment_content_hash(_SAMPLE)`` by construction — both are
+    ``sha256(render_environment_text(_SAMPLE))``.
     """
     rec = SeedRecorder(log, cs, task, actor="plugin:environment")
     ref = cs.put(
@@ -389,9 +377,8 @@ def _end_response() -> LLMResponse:
 
 
 def _server_host(ws: Path, *, instructions_enabled: bool = False):
-    """A real ``SdkHost`` over an in-memory runtime — the resident host the
-    HTTP server's ``InteractionDriver`` drives (server task creation goes through
-    ``driver.seed_start``, NOT a product runner ``prepare()``)."""
+    """A real ``SdkHost`` over an in-memory runtime, driven through
+    ``InteractionDriver`` — task creation goes via ``driver.start``."""
     from noeta.client import SdkHost
     from noeta.execution.driver import multi_turn_policy_wrapper
 
@@ -416,9 +403,8 @@ def _server_host(ws: Path, *, instructions_enabled: bool = False):
 
 
 def test_server_seed_start_records_environment(tmp_path: Path) -> None:
-    # docs: the HTTP server's seed path (driver.seed_start) must record the
-    # environment channel as part of the once-per-session open — a
-    # server-created task previously emitted NO environment block.
+    # The seed path must record the environment channel as part of the
+    # once-per-session open, not on the first tool call.
     from noeta.execution.driver import InteractionDriver
 
     ws = tmp_path / "ws"
@@ -448,8 +434,8 @@ def test_server_seed_start_records_environment(tmp_path: Path) -> None:
 def test_server_seed_start_records_instructions_when_file_present(
     tmp_path: Path,
 ) -> None:
-    # With instructions enabled and an AGENTS.md present, the same server seed
-    # path must also record the instructions channel (parity with prepare()).
+    # With instructions enabled and an AGENTS.md present, the same seed path
+    # must also record the instructions channel.
     from noeta.builtins.workspace.impl import INSTRUCTIONS_KIND
     from noeta.execution.driver import InteractionDriver
 
@@ -475,9 +461,8 @@ def test_server_seed_start_records_instructions_when_file_present(
 
 
 def test_server_seed_start_skips_instructions_when_disabled(tmp_path: Path) -> None:
-    # instructions_enabled off → no instructions event even if AGENTS.md exists
-    # (byte-equal to a host that never configured a project instructions file),
-    # while the always-on environment block still records.
+    # instructions_enabled off → no instructions event even though AGENTS.md
+    # exists, while the always-on environment block still records.
     from noeta.builtins.workspace.impl import INSTRUCTIONS_KIND
     from noeta.execution.driver import InteractionDriver
 

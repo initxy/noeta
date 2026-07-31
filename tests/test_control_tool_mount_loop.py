@@ -1,4 +1,4 @@
-"""Mechanism tests for the control-tool mount loop (control-tool-surface S1).
+"""Mechanism tests for the control-tool mount loop.
 
 Covers the loop MECHANISM only — the byte-order contract and per-tool behaviour
 are pinned elsewhere (``test_control_tool_schema_goldens.py`` + the ask / todo /
@@ -11,7 +11,7 @@ spawn / skill / workflow e2e suites). Here we prove:
   no routing spec;
 * a duplicate mount name raises loudly, naming BOTH colliding entries;
 * the ``skill`` translate closure validates against its CAPTURED menu, so the
-  neutral ``ControlTranslateContext`` no longer carries any menu state (D2).
+  neutral ``ControlTranslateContext`` carries no menu state.
 """
 
 from __future__ import annotations
@@ -175,7 +175,7 @@ def _skill_ctx(name: str) -> ControlTranslateContext:
 
 def test_skill_translate_closure_captures_its_menu() -> None:
     """The skill closure validates against the menu it captured, WITHOUT the
-    neutral context carrying any menu field — the D2 point of the migration."""
+    neutral context carrying any menu field."""
     # The neutral context sheds its feature-named field entirely.
     field_names = {f.name for f in dataclasses.fields(ControlTranslateContext)}
     assert "skill_menu_names" not in field_names

@@ -1,15 +1,9 @@
-"""Shared wake-matching helper for the storage adapters.
+"""The single wake-match predicate every Dispatcher adapter routes through.
 
-All three Dispatcher adapters (:class:`noeta.storage.memory.InMemoryDispatcher`,
-:class:`noeta.builtins.storage.impl.sqlite.dispatcher.SqliteDispatcher`, and
-``noeta.builtins.storage.impl.postgres.dispatcher.PostgresDispatcher``) need to
-decide whether a pending wake event satisfies a task's ``wake_on``
-condition. That decision is the projection-matching invariant and it
-lives in :mod:`noeta.protocols.wake`; the adapters MUST NOT carry their
-own match logic. This module is the single predicate all adapters route
-through — publicly as ``wake_matches`` on :mod:`noeta.storage.spi` — so
-contract-suite parametrisation across the backends cannot drift, and so
-a future adapter cannot silently diverge.
+Whether a pending wake event satisfies a task's ``wake_on`` condition is the
+projection-matching invariant, a domain rule owned by
+:mod:`noeta.protocols.wake`. An adapter MUST NOT carry its own copy of that
+logic, or the backends diverge under one shared contract suite.
 """
 
 from __future__ import annotations
@@ -23,16 +17,7 @@ __all__ = ["_matches"]
 
 
 def _matches(wake_on: Any, event: Any) -> bool:
-    """Wake matching delegates to the L0 ``matches_wake`` helper.
-
-    Adapter implementations MUST NOT carry their own match logic — the
-    projection-matching invariant (SubtaskCompleted on subtask_id;
-    SubtaskGroupCompleted on group_id; HumanResponseReceived on handle;
-    TimerFired on ``event.fire_at >= condition.fire_at``) is a domain
-    rule and lives in :mod:`noeta.protocols.wake`. The wake-resume issue
-    tightened this: every Dispatcher routes through ``matches_wake`` so a
-    future adapter cannot silently diverge.
-    """
+    """A missing condition or a missing event never matches; the rest is L0."""
     if wake_on is None or event is None:
         return False
     return matches_wake(wake_on, event)

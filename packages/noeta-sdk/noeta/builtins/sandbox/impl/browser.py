@@ -1,19 +1,11 @@
-"""``AioBrowserBackend`` — the AIO Sandbox ``/mcp`` browser adapter.
+"""``AioBrowserBackend`` — the AIO Sandbox ``/mcp`` browser adapter, and the
+implementation the SDK resolves as its default browser factory.
 
-Microkernel M2: moved here from the old ``noeta.tools.browser._backend``
-(the :class:`~noeta.builtins.browser.impl.BrowserBackend` Protocol — the seam the
-tool pack calls through — sank kernel-side at M3). This is the ``sandbox``
-built-in plugin's second ``sandbox_provider`` declaration; the SDK's
-``SandboxExecEnvManager`` resolves it as its default browser factory.
-
-Mirrors :class:`~noeta.builtins.sandbox.impl.exec_env.AioSandboxExecEnv`:
-base_url + an optional per-call auth-header factory + an injectable transport
-(the internal :class:`~noeta.builtins.mcp.impl._http_client.McpHttpClient`), with the
-AIO tool names / argument shapes captured as module-level constants so a wire
-drift is a one-constant change caught by the fake-transport contract test —
-the model-facing schema stays byte-identical. The MCP client is used purely as
-an **internal transport** here; the browser tools are NOT an MCP connector
-(they never enter ``mcp_registry`` / take an alias — spec D2).
+The container's tool names and argument shapes are captured as module-level
+constants, so a wire drift is a one-constant change caught by the
+fake-transport contract test and the model-facing schema never moves. The MCP
+HTTP client is used purely as an internal transport here: the browser tools are
+NOT an MCP connector and never enter ``mcp_registry`` or take an alias.
 """
 
 from __future__ import annotations
@@ -21,10 +13,10 @@ from __future__ import annotations
 import base64
 from typing import Any, Callable, Mapping, Optional
 
-# First-party cross-plugin edge (recorded in the migration spec): the MCP
-# HTTP client is reused as an internal transport, imported through the mcp
-# plugin's PUBLIC impl surface; both plugins ship in the same wheel, and the
-# model-facing browser schemas never touch this wire.
+# A first-party cross-plugin edge: the MCP HTTP client is reused as an internal
+# transport, imported through the mcp plugin's PUBLIC impl surface. Both plugins
+# ship in the same wheel, and the model-facing browser schemas never touch this
+# wire.
 from noeta.builtins.mcp.impl import McpHttpClient
 
 
@@ -38,15 +30,15 @@ __all__ = [
 # AIO Sandbox browser MCP wire (pinned against the published server source)
 # --------------------------------------------------------------------------- #
 #
-# These name the container ``/mcp`` browser-server tools + their argument shapes.
-# They are the ONE place the AIO browser wire is pinned; the noeta model-facing
-# schema (the ``.md``-described browser_* tools) never moves when these change.
+# These name the container ``/mcp`` browser-server tools and their argument
+# shapes. They are the ONE place the AIO browser wire is pinned; the noeta
+# model-facing schema never moves when these change.
 #
-# Pinned from the authoritative source of the server AIO Sandbox bundles,
+# Pinned against the server the AIO Sandbox bundles,
 # ``@agent-infra/mcp-server-browser`` (bytedance/UI-TARS-desktop, at
 # ``packages/agent-infra/mcp-servers/browser/src/{server,tools}.ts``). Two
 # noeta-owned tools have NO single container counterpart and fan out to the real
-# element-level primitives here — this is exactly the seam D1 buys us:
+# element-level primitives here:
 #   * ``browser_type``    → ``browser_form_input_fill`` (+ ``browser_press_key``
 #                            "Enter" when ``submit``).
 #   * ``browser_extract`` → ``browser_get_markdown`` (page text) followed by
@@ -54,10 +46,9 @@ __all__ = [
 #                            interactive-element list).
 # The server keys every element by a numeric ``index`` from a prior
 # ``browser_get_clickable_elements`` (or the list ``browser_navigate`` returns
-# inline) — NOT a string ref. A live-container e2e (B8) still confirms the
-# runtime *return shapes* (it cannot change these names); the fake-transport
-# contract test asserts exactly what we send, so a wire drift fails loudly here
-# rather than perturbing the model.
+# inline) — NOT a string ref. The fake-transport contract test asserts exactly
+# what we send, so a wire drift fails loudly here rather than perturbing the
+# model.
 _AIO_NAVIGATE = "browser_navigate"  # args: {"url": url}; returns clickable list inline
 _AIO_CLICK = "browser_click"  # args: {"index": index}
 _AIO_FORM_INPUT_FILL = "browser_form_input_fill"  # args: {"index", "value", "clear"}
@@ -76,8 +67,8 @@ _AIO_INDEX_KEY = "index"
 _AIO_ENTER_KEY = "Enter"
 
 #: Header prefixed to the numbered element list in an ``extract`` snapshot so the
-#: model can tell the page text from the actionable element indices (spec R3
-#: sanctions this backend-side shaping — the model-facing schema is untouched).
+#: model can tell the page text from the actionable element indices. Shaping the
+#: snapshot here leaves the model-facing schema untouched.
 _INTERACTIVE_ELEMENTS_HEADER = "# Interactive elements"
 
 
@@ -86,9 +77,8 @@ class AioBrowserError(OSError):
 
     Subclasses :class:`OSError` so the browser tools' ``except OSError`` sites
     treat a remote browser fault exactly like any other IO failure — the tool's
-    ``invoke`` maps it to ``ToolResult(success=False, ...)`` uniformly and never
-    lets it escape to crash the worker (mirrors
-    :class:`~noeta.runtime.exec_env.AioSandboxError`).
+    ``invoke`` maps it to ``ToolResult(success=False, ...)`` and never lets it
+    escape to crash the worker.
     """
 
 
@@ -97,20 +87,17 @@ class AioBrowserBackend:
     browser server over HTTP.
 
     Every browser action is a ``tools/call`` against the container's aggregated
-    ``/mcp`` endpoint via a synchronous :class:`~noeta.builtins.mcp.impl._http_client.
-    McpHttpClient` (the same single-threaded, stdlib-only transport the MCP
-    connectors use — reused here as a private transport, not as a connector).
-    The AIO wire contract — which ``browser_*`` tools, their argument keys, and
-    the returned ``content`` block shape — is captured *only here* and pinned by
-    fake-transport tests; a contract drift is a one-file change.
+    ``/mcp`` endpoint over the same single-threaded, stdlib-only transport the
+    MCP connectors use. The whole AIO wire contract — which ``browser_*`` tools,
+    their argument keys, and the returned ``content`` block shape — is captured
+    only here, so a contract drift is a one-file change.
 
-    Auth (spec D8): when an ``auth_headers`` factory is supplied it is invoked
-    **once at construction** and its headers become the client's static headers
-    (the ``McpHttpClient`` holds static headers, unlike the per-call minting the
-    file/shell backend does). The backend is rebuilt per session at engine-build
-    time, so the credential is fresh for that session; a short-lived-token
-    refresh mid-session is a later concern. The key rides only on the wire —
-    never recorded (D5). The handshake (``start``) is lazy and runs at most once.
+    An ``auth_headers`` factory is invoked **once at construction** and its
+    headers become the client's static headers, unlike the per-call minting the
+    file/shell backend does; the backend is rebuilt per session, so a
+    session-lifetime credential is fresh but one expiring mid-session is not
+    refreshed. The credential rides only on the wire and is never recorded. The
+    handshake is lazy and runs at most once.
     """
 
     def __init__(
@@ -123,10 +110,8 @@ class AioBrowserBackend:
     ) -> None:
         if not base_url:
             raise AioBrowserError("aio browser base_url is empty")
-        # An explicit ``client`` is injected by tests (a fake exposing
-        # ``start()`` / ``call_tool(name, args) -> dict``); production builds the
-        # real MCP HTTP transport aimed at the container's ``/mcp`` endpoint,
-        # folding the (once-resolved) auth headers in as static headers.
+        # An explicit ``client`` is the test seam — a fake exposing ``start()``
+        # and ``call_tool(name, args) -> dict``.
         self._client = client or McpHttpClient(
             url=base_url.rstrip("/") + "/mcp",
             headers=dict(auth_headers()) if auth_headers is not None else {},
@@ -174,11 +159,8 @@ class AioBrowserBackend:
     def _text(result: dict[str, Any]) -> str:
         """Concatenate the text ``content`` blocks of a ``tools/call`` result.
 
-        Mirrors :func:`~noeta.builtins.mcp.impl.tool._result_to_tool_result`'s parsing:
-        text blocks are joined with newlines; non-text blocks are ignored. This
-        is the text the text methods return — a page snapshot (``extract``), the
-        inline element list (``navigate``), or an action outcome (``click`` /
-        ``type``).
+        Text blocks are joined with newlines and non-text blocks are ignored,
+        matching how the MCP tool adapter parses the same shape.
         """
         content = result.get("content")
         parts: list[str] = []

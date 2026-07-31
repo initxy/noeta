@@ -1,10 +1,9 @@
-"""Shared subprocess environment scrubbing for tool packs.
+"""Subprocess environment scrubbing shared by every tool that spawns a child.
 
-Promoted out of ``noeta.tools.fs.shell`` (Phase 4.5 F2) so the MCP stdio
-client and the shell tool build a launched subprocess's environment from
-the **same** explicit allowlist — no duplicated, drifting copies. Tools
-that spawn a child process should use :func:`scrub_env` rather than
-passing the parent ``os.environ`` through.
+The MCP stdio client and the shell tools build a launched subprocess's
+environment from the **same** explicit allowlist, so a spawned child cannot
+inherit the host's credentials by accident. A tool that spawns a process
+calls :func:`scrub_env` rather than passing the parent ``os.environ`` through.
 """
 
 from __future__ import annotations
@@ -38,10 +37,9 @@ def scrub_env(
 ) -> dict[str, str]:
     """Build a minimal env from the parent — explicit allowlist only.
 
-    ``allowlist`` narrows (or replaces) the default :data:`ENV_ALLOWLIST` for
-    callers whose subprocess should inherit even less — e.g. a notify hook
-    command that has no business seeing the Python interpreter keys. ``None``
-    keeps the default set, byte-identical for every existing caller.
+    ``allowlist`` narrows (or replaces) :data:`ENV_ALLOWLIST` for callers whose
+    subprocess should inherit even less — e.g. a notify hook command that has
+    no business seeing the Python interpreter keys.
     """
     parent = os.environ
     keys = ENV_ALLOWLIST if allowlist is None else allowlist

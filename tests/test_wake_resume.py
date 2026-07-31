@@ -1,11 +1,11 @@
-"""Acceptance tests for wake-resume + task-id resume (issue 26).
+"""What a suspended task wakes on, and that it wakes exactly once.
 
-Covers the design doc's W1–W6 watchpoints, the projection-matching
-invariant, the at-most-once-loss / crash-then-requeue path, and the
-sqlite migration's NULL backfill.
-
-Pure-L0 / storage-layer tests live here; CLI-level coverage is in
-``test_cli_commands.py`` and ``test_cli_resume_targeted.py``.
+Pins ``matches_wake`` — a condition matches by shape, so a subtask's
+result never decides whether its parent wakes — and the Dispatcher's
+wake → targeted-lease handoff across both the InMemory and SQLite
+backends. The delicate invariant is at-least-once delivery: ``lease()``
+must not consume the matched wake, or a worker dying mid-step would strand
+the task waiting forever on an event that was already handed out.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def make_dispatcher(request, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# matches_wake — L0 truth table (projection invariant + temporal >=)
+# matches_wake — truth table (projection invariant + temporal >=)
 # ---------------------------------------------------------------------------
 
 
@@ -131,7 +131,7 @@ def test_matches_wake_cross_variant_never_matches() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Targeted lease — W3 watchpoint
+# Targeted lease
 # ---------------------------------------------------------------------------
 
 
@@ -203,7 +203,7 @@ def test_targeted_lease_terminal_task_returns_none(make_dispatcher) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Wake-event lease handoff (W1 / W5)
+# Wake-event lease handoff
 # ---------------------------------------------------------------------------
 
 
@@ -262,12 +262,12 @@ def test_lease_after_release_drain_carries_pending_wake_event(
 def test_lease_does_not_consume_requeue_redelivers_wake_event(
     make_dispatcher,
 ) -> None:
-    """H2 — exactly-once via at-least-once re-delivery:
-    ``lease()`` does NOT clear ``matched_wake_event``; if the worker crashes
-    (simulated by not calling release) and the lease expires,
-    ``requeue_stale`` brings the task back to ready WITH the matched wake
-    preserved, so the next ``lease()`` **re-delivers** the same wake_event.
-    (Pre-H2 this was an at-most-once loss; H2 inverts it.)"""
+    """Exactly-once built on at-least-once re-delivery: ``lease()`` does NOT
+    clear ``matched_wake_event``, so a worker crash (simulated by never
+    calling release) plus lease expiry lets ``requeue_stale`` bring the task
+    back to ready with the matched wake intact and the next ``lease()``
+    re-delivers it. Consuming at lease time would instead lose the wake and
+    hang the task."""
     disp = make_dispatcher()
     if isinstance(disp, SqliteDispatcher):
         # Force a deterministic clock so we can drive lease expiry below.
@@ -312,27 +312,24 @@ def test_lease_does_not_consume_requeue_redelivers_wake_event(
         "H2: lease must NOT consume matched_wake_event; requeue_stale must "
         "preserve it so the next lease re-delivers it (at-least-once)"
     )
-    # And a consuming release now clears it (D2): after re-delivery, release
-    # with consumed_wake_event drops matched; a further requeue re-leases
-    # with no wake.
+    # A consuming release closes the loop: release with consumed_wake_event
+    # drops the matched wake, so a further requeue re-leases with no wake.
     disp.release(
         redelivered.lease_id, next_state="terminal", consumed_wake_event=event
     )
 
 
 # ---------------------------------------------------------------------------
-# B1 regression — enqueue(non-ready) must clear matched_wake_event
+# enqueue(non-ready) must clear matched_wake_event
 # ---------------------------------------------------------------------------
 
 
 def test_enqueue_clears_matched_wake_on_non_ready_row(make_dispatcher) -> None:
-    """``enqueue(task_id)`` is a force-reset of the row's lifecycle
-    fields when the row is currently non-ready. Any stale
-    ``matched_wake_event`` (e.g. from a future code path or a partial
-    failure leaving a suspended row with the field still set) must be
-    cleared so the next ``lease()`` does not deliver a wake_event the
-    caller never asked for. B1 invariant: matched wake_event is owned
-    by the single wake → lease handoff that produced it."""
+    """``enqueue(task_id)`` force-resets a non-ready row's lifecycle fields.
+    A stale ``matched_wake_event`` (a partial failure can leave a suspended
+    row with the field still set) must be cleared, or the next ``lease()``
+    delivers a wake nobody asked for: a matched wake belongs only to the
+    single wake → lease handoff that produced it."""
     disp = make_dispatcher()
     disp.enqueue("t1")
     lease1 = disp.lease(worker_id="w", task_id="t1")
@@ -343,8 +340,8 @@ def test_enqueue_clears_matched_wake_on_non_ready_row(make_dispatcher) -> None:
         wake_on=SubtaskCompleted(subtask_id="x"),
     )
 
-    # Stamp matched_wake directly on the suspended row to simulate
-    # the "stale matched state" the B1 fix defends against.
+    # Stamp matched_wake directly on the suspended row — the stale-matched
+    # state this clearing rule defends against.
     event = SubtaskCompleted(
         subtask_id="x", result=SubtaskResult(status="completed", output="stale")
     )
@@ -371,14 +368,13 @@ def test_enqueue_clears_matched_wake_on_non_ready_row(make_dispatcher) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Sqlite migration — NULL backfill (Q8)
+# Sqlite migration — NULL backfill
 # ---------------------------------------------------------------------------
 
 
 def test_sqlite_migration_adds_matched_wake_column(tmp_path: Path) -> None:
-    """A fresh dispatcher creates the column at the current schema
-    version; rows pre-existing the migration would see NULL backfill.
-    """
+    """A fresh dispatcher creates the matched-wake column and lands at or
+    beyond the schema version that carries it."""
     db_path = tmp_path / "wake_resume_migration.sqlite"
     disp = SqliteDispatcher(str(db_path))
     try:
@@ -399,10 +395,10 @@ def test_sqlite_migration_adds_matched_wake_column(tmp_path: Path) -> None:
 def test_sqlite_migration_null_backfill_on_pre_migration_rows(
     tmp_path: Path,
 ) -> None:
-    """Construct a database at schema version 3 (pre-wake-resume),
-    insert a row, then open it again so migration 4 runs against
-    existing rows. The new column must be NULL on the pre-existing row
-    (sqlite ALTER TABLE ADD COLUMN default-fill behaviour)."""
+    """Open a database built at schema version 3 so migration 4 runs against
+    rows that already exist. The added column must land NULL on them
+    (sqlite ALTER TABLE ADD COLUMN default-fill behaviour) and the row must
+    stay usable."""
     db_path = tmp_path / "wake_resume_backfill.sqlite"
 
     # Manually create a version-3 DB to simulate an upgrade scenario.
@@ -463,7 +459,7 @@ def test_sqlite_migration_null_backfill_on_pre_migration_rows(
         ).fetchone()
         assert row is not None
         assert row["matched_wake_event_canonical"] is None
-        # The legacy task still exists at status='ready' and can be leased.
+        # The pre-existing row is still at status='ready' and can be leased.
         lease = disp.lease(worker_id="w", task_id="legacy-task")
         assert lease is not None
         assert lease.wake_event is None
@@ -472,7 +468,7 @@ def test_sqlite_migration_null_backfill_on_pre_migration_rows(
 
 
 # ---------------------------------------------------------------------------
-# Lease.wake_event default + dataclass shape (W2)
+# Lease.wake_event default + dataclass shape
 # ---------------------------------------------------------------------------
 
 

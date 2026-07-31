@@ -17,10 +17,10 @@ from tests._sdk_session import default_coding_budget
 
 _ALIASES = {"default": "main"}
 
-#: The deleted per-feature ``build_session_inputs`` kwargs, grouped by the
-#: plugin whose ``plugin_config`` entry now carries them (microkernel phase 3,
-#: S4). ``memory_enabled`` is handled separately (it becomes a
-#: ``capability_flags`` entry, not a plugin_config key).
+#: The per-feature ``build_session_inputs`` kwargs, grouped by the
+#: plugin whose ``plugin_config`` entry carries them. ``memory_enabled`` is
+#: handled separately (it becomes a ``capability_flags`` entry, not a
+#: plugin_config key).
 _LEGACY_PLUGIN_CONFIG_KEYS = {
     "fs": (
         "write_mode",
@@ -45,25 +45,20 @@ _LEGACY_PLUGIN_CONFIG_KEYS = {
 
 
 def fold_legacy_capability_kwargs(kwargs: dict) -> None:
-    """Translate the deleted per-feature ``build_session_inputs`` kwargs into
+    """Translate the per-feature ``build_session_inputs`` kwargs into
     the generic ``capability_flags`` / ``plugin_config`` bags, in place.
 
-    Phase 3 (S4) collapsed the builder's per-feature knobs (``memory_enabled``,
-    the skill tiers, the memory roots, the workspace-instructions switches) into
-    two generic bags the capability packs self-gate + configure on. Direct
-    callers keep passing the legacy names; this helper pops each one actually
-    present and folds it under the right key. Only keys the caller passed are
-    folded, so any pack whose knob is omitted applies its own default (which
-    equals the old builder default). Caller-supplied ``capability_flags`` /
-    ``plugin_config`` entries win over the translated legacy knobs.
+    The builder takes two generic bags the capability packs self-gate and
+    configure on. Direct callers keep passing the per-feature names; this
+    helper pops each one actually present and folds it under the right key.
+    Only keys the caller passed are folded, so any pack whose knob is omitted
+    applies its own default. Caller-supplied ``capability_flags`` /
+    ``plugin_config`` entries win over the translated knobs.
     """
     _missing = object()
-    # capability_flags — the legacy boolean kwargs fold in under their
-    # capability names, merged with any caller-supplied flags (e.g.
-    # ``browser``); the caller's entries win. The five ``*_enabled``
-    # control-tool kwargs joined ``memory_enabled`` here when the builder
-    # signature folded them into the generic bag (control-tool surface
-    # follow-up, 2026-07-30).
+    # capability_flags — the boolean kwargs fold in under their capability
+    # names, merged with any caller-supplied flags (e.g. ``browser``); the
+    # caller's entries win.
     _LEGACY_FLAG_KWARGS = {
         "memory_enabled": "memory",
         "delegation_enabled": "delegation",
@@ -82,8 +77,8 @@ def fold_legacy_capability_kwargs(kwargs: dict) -> None:
         for flag_name, value in folded_flags.items():
             capability_flags.setdefault(flag_name, value)
         kwargs["capability_flags"] = capability_flags
-    # plugin_config — per-plugin config bags built from the legacy knobs, with
-    # any caller-supplied plugin_config entries taking priority key-by-key.
+    # plugin_config — per-plugin config bags built from the per-feature knobs,
+    # with any caller-supplied plugin_config entries taking priority key-by-key.
     caller_config = {
         name: dict(cfg) for name, cfg in (kwargs.get("plugin_config") or {}).items()
     }
@@ -105,8 +100,7 @@ def fold_legacy_capability_kwargs(kwargs: dict) -> None:
 
 def default_factory_kwargs():
     """Loader-resolved injection kwargs required by ``build_session_inputs``
-    (microkernel M1/M2; phase 3 collapses the per-feature pack factories into
-    the manifest-resolved ``session_packs``) — tests that call the builder
+    (the manifest-resolved ``session_packs``) — tests that call the builder
     directly splat these in."""
     return {
         "session_packs": default_session_packs(),
@@ -156,12 +150,12 @@ def build_code_replay_inputs(*, workspace_dir, agent, content_store, model, **kw
     # Default matches product CodeSessionConfig.skill_invocation_enabled (True),
     # so a session builds the same View product live does. Caller may override.
     kwargs.setdefault("skill_invocation_enabled", True)
-    # microkernel phase 3 (S4): build_session_inputs no longer takes the
-    # per-feature low-level kwargs — they are folded into the generic
-    # ``capability_flags`` / ``plugin_config`` bags the capability packs
-    # self-gate + configure on. This funnel TRANSLATES the legacy names so its
-    # ~20 callers stay unchanged. Pre-seed the always-defaulted knobs (the old
-    # setdefault contract) so ``fold_legacy_capability_kwargs`` folds them in:
+    # build_session_inputs does not take the per-feature low-level kwargs —
+    # they are folded into the generic ``capability_flags`` / ``plugin_config``
+    # bags the capability packs self-gate + configure on. This funnel
+    # TRANSLATES the per-feature names so its ~20 callers stay unchanged.
+    # Pre-seed the always-defaulted knobs so
+    # ``fold_legacy_capability_kwargs`` folds them in:
     #
     # * the three skill tiers (builtin < global < workspace) — wire the same
     #   low-level dirs the product live path does so the composed View matches.
@@ -190,16 +184,15 @@ def build_code_replay_inputs(*, workspace_dir, agent, content_store, model, **kw
             tuple(p.strip() for p in _raw_globs.split(",") if p.strip()),
         )
     fold_legacy_capability_kwargs(kwargs)
-    # microkernel phase 3: build_session_inputs takes the manifest-resolved
+    # build_session_inputs takes the manifest-resolved
     # session packs; default to the SDK's builtin set unless the caller
     # injects its own.
     kwargs.setdefault("session_packs", default_session_packs())
-    # control-tool-surface S2/S2b: every control tool (todo_write /
-    # ask_user_question / delegation / skill / run_workflow / structured_output)
-    # now arrives as a manifest-resolved control_tool entry; the builder keeps no
-    # internal control-tool table. Wire the SDK built-in set so a directly-built
-    # session mounts the same control schemas the SdkHost live path does (the S0
-    # golden's seam).
+    # Every control tool (todo_write / ask_user_question / delegation / skill /
+    # run_workflow / structured_output) arrives as a manifest-resolved
+    # control_tool entry; the builder keeps no internal control-tool table.
+    # Wire the SDK built-in set so a directly-built session mounts the same
+    # control schemas the SdkHost live path does.
     kwargs.setdefault("control_tools", default_control_tools())
     kwargs.setdefault("base_reminders", default_reminder_specs())
     kwargs.setdefault("guards_factory", default_guards_factory())

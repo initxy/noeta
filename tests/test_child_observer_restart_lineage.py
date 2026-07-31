@@ -1,23 +1,19 @@
-"""ChildLifecycleObserver must survive a process restart (issue #57).
+"""ChildLifecycleObserver must survive a process restart.
 
-The observer builds its ``_lineage`` (``child_id -> parent_id``) only from
-live ``TaskCreated`` events as they are emitted. When a child is created
-*before* a process restart but reaches its terminal *after* the restart, the
-restarted-process observer has no entry for that child, so its
-``TaskCompleted`` / ``TaskFailed`` / ``TaskCancelled`` is a no-op in
-``_on_terminal``: the parent stream never gets ``SubtaskCompleted`` and the
-parent suspended on ``SubtaskCompleted`` / ``SubtaskGroupCompleted`` waits
-forever.
+The observer builds its ``_lineage`` (``child_id -> parent_id``) from live
+``TaskCreated`` events, so a child created before a restart that reaches
+terminal after it would have no lineage entry: its ``TaskCompleted`` /
+``TaskFailed`` / ``TaskCancelled`` would be a no-op in ``_on_terminal``, the
+parent stream would never get ``SubtaskCompleted``, and a parent suspended on
+``SubtaskCompleted`` / ``SubtaskGroupCompleted`` would wait forever. At
+construction the observer therefore replays the persisted event log (via
+``list_task_streams`` + ``read``) to seed ``_lineage`` for every
+not-yet-terminal, non-background child.
 
-The fix: at construction the observer replays the persisted EventLog (via
-``list_task_streams`` + ``read``) to seed ``_lineage`` for any not-yet-terminal,
-non-background child. These tests simulate a restart by dropping the
-pre-restart observer and constructing a fresh one on the *same* log, then
-driving the post-restart terminal event and asserting the parent is notified.
-
-Parametrized over InMemory + SQLite (both implement ``list_task_streams`` /
-``read``) so the replay contract is pinned on the real storage backends, not
-just the in-memory reference adapter.
+A restart is simulated by dropping the first observer and constructing a fresh
+one on the *same* log. Parametrized over InMemory and SQLite so the replay
+contract is pinned on a real storage backend, not only the in-memory reference
+adapter.
 """
 
 from __future__ import annotations

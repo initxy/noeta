@@ -1,18 +1,15 @@
-"""Engine child-completion observer (Phase 0 inline).
+"""Engine child-completion observer.
 
-Issue 03: when the Engine writes a ``TaskCompleted`` / ``TaskFailed``
-to a child stream (a task whose ``parent_task_id`` is non-None), it
-must also:
+When the Engine writes a ``TaskCompleted`` / ``TaskFailed`` to a child stream
+(a task whose ``parent_task_id`` is non-None), it must also:
 
 1. Append ``SubtaskCompleted(subtask_id, result)`` to the *parent*
    stream.
 2. Call ``dispatcher.wake(parent_task_id, SubtaskCompleted(...))`` so
    the parent (currently suspended) re-queues.
 
-The observer is built into the Engine for Phase 0 — there is no
-general-purpose Observer framework yet (that's Phase 1). Failures of
-this wake are not silently swallowed: a missing Dispatcher when a
-child Task is terminating is a programmer error.
+A missing Dispatcher when a child Task is terminating is a programmer error,
+not a silently-swallowed wake.
 """
 
 from __future__ import annotations
@@ -114,7 +111,7 @@ def test_child_finish_wakes_parent_in_dispatcher() -> None:
 
 
 def test_child_finish_lease_after_wake_carries_subtask_result_round_trip() -> None:
-    """End-to-end wake-resume chain (issue 26): observer fires
+    """End-to-end wake-resume chain: observer fires
     ``dispatcher.wake(parent, SubtaskCompleted(subtask_id=X, result=R))``
     after child terminates → the next ``dispatcher.lease(task_id=parent)``
     delivers ``Lease.wake_event=SubtaskCompleted(subtask_id=X, result=R)``.
@@ -169,8 +166,8 @@ def test_child_fail_appends_failed_subtask_result_to_parent_stream() -> None:
 
 
 def _all_streams(log: InMemoryEventLog) -> list[str]:
-    # Pull from the private stream dict for test introspection — fine for
-    # Phase 0 since the InMemory backend is the test fixture.
+    # Pull from the private stream dict for test introspection — fine
+    # because the InMemory backend is the test fixture.
     return list(log._streams.keys())  # type: ignore[attr-defined]
 
 

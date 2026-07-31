@@ -1,13 +1,11 @@
-"""ReActPolicy unit tests.
+"""``ReActPolicy`` — translating a provider response into a ``Decision``.
 
-Drives ``decide(ctx, view) -> Decision`` against a scripted
-:class:`noeta.testing.fake_llm.FakeLLMProvider` so the path is fully
-deterministic and offline. Each case isolates one behavior of the policy.
-
-The policy is wrapped in a :class:`noeta.runtime.llm.RuntimeLLMClient`
-because that is the production wiring: Policy talks to the wrapper,
-wrapper talks to the provider. We assert on the Decision shape, the
-LLMRequest the provider received, and the per-call event count.
+Every ``stop_reason`` the provider can return has to land on exactly one
+Decision shape, and the assistant turn the policy hands back is what gets
+persisted — a wrong shape there poisons the *next* request's history. Cases
+drive ``decide(ctx, view)`` through a :class:`noeta.runtime.llm.RuntimeLLMClient`
+over a scripted ``FakeLLMProvider``, which is the production wiring and keeps
+the path deterministic and offline.
 """
 
 from __future__ import annotations
@@ -94,7 +92,7 @@ def _make_policy(
 
 
 def test_end_turn_response_becomes_finish_decision_with_text_joined() -> None:
-    """Two TextBlocks → single answer joined by ``\n`` + assistant_message."""
+    """Two TextBlocks join into one answer separated by a newline."""
     resp = LLMResponse(
         stop_reason="end_turn",
         content=[TextBlock(text="hello"), TextBlock(text="world")],
@@ -111,10 +109,9 @@ def test_end_turn_response_becomes_finish_decision_with_text_joined() -> None:
 
 
 def test_empty_end_turn_fails_instead_of_recording_empty_message() -> None:
-    """An ``end_turn`` with no renderable content (e.g. a safety-classifier
-    ``refusal`` now mapped to ``end_turn`` that came back with an empty content
-    array) must NOT record a ``Message(content=[])`` — Anthropic 400s on
-    ``{"role":"assistant","content":[]}`` on the next request. It fails cleanly
+    """An ``end_turn`` with no renderable content (a safety-classifier refusal
+    arrives this way) must NOT record a ``Message(content=[])`` — Anthropic 400s
+    on ``{"role":"assistant","content":[]}`` in the next request. Fail cleanly
     instead, leaving history unpolluted."""
     resp = LLMResponse(stop_reason="end_turn", content=[])
     policy, _ = _make_policy([resp])
@@ -128,8 +125,7 @@ def test_empty_end_turn_fails_instead_of_recording_empty_message() -> None:
 
 
 def test_tool_use_response_becomes_tool_calls_decision_one_call() -> None:
-    """Single ToolUseBlock → ToolCallsDecision with one ToolCall preserving
-    call_id / tool_name / arguments verbatim."""
+    """call_id / tool_name / arguments survive the translation verbatim."""
     block = ToolUseBlock(
         call_id="call-xyz", tool_name="echo", arguments={"text": "hi"}
     )
@@ -150,7 +146,6 @@ def test_tool_use_response_becomes_tool_calls_decision_one_call() -> None:
 
 
 def test_tool_use_response_preserves_three_tool_use_blocks_in_order() -> None:
-    """3 parallel ToolUseBlocks → 3 ToolCalls in original order."""
     blocks = [
         ToolUseBlock(call_id=f"c-{i}", tool_name="echo", arguments={"i": i})
         for i in range(3)
@@ -170,12 +165,10 @@ def test_tool_use_response_preserves_three_tool_use_blocks_in_order() -> None:
 
 
 def test_tool_use_with_mixed_text_and_thinking_blocks_drops_thinking() -> None:
-    """``stop_reason=tool_use`` with mixed Thinking/Text/ToolUse content:
-    ToolCall is extracted from the ToolUse block; the assistant_message
-    that lands in RuntimeState.messages **drops** ThinkingBlock so the
-    history stays deterministic across Verify runs (reasoning trace is
-    non-deterministic even at temperature=0). TextBlock + ToolUseBlock
-    are preserved in order."""
+    """The assistant_message that lands in RuntimeState.messages **drops**
+    ThinkingBlock, so the persisted history stays deterministic across replays
+    (a reasoning trace varies even at temperature=0). TextBlock and
+    ToolUseBlock keep their order."""
     blocks: list[Any] = [
         ThinkingBlock(text="let me think", signature="sig-abc"),
         TextBlock(text="I'll call echo"),
@@ -200,11 +193,11 @@ def test_tool_use_with_mixed_text_and_thinking_blocks_drops_thinking() -> None:
 
 
 def test_tool_use_carries_thinking_out_of_band_on_decision() -> None:
-    """Extended-thinking end-to-end (Slice B): the ThinkingBlock the LLM
-    emitted ahead of its ``tool_use`` is stripped from ``assistant_message``
-    (the persisted, verify-stable history) but PRESERVED out-of-band on
-    ``ToolCallsDecision.assistant_thinking`` — so the Engine can record it
-    and the Composer can replay the signature on an Anthropic continuation.
+    """The ThinkingBlock the LLM emitted ahead of its ``tool_use`` is stripped
+    from ``assistant_message`` (the persisted, replay-stable history) but
+    PRESERVED out-of-band on ``ToolCallsDecision.assistant_thinking`` — so the
+    Engine can record it and the Composer can replay the signature on an
+    Anthropic continuation.
     """
     thinking = ThinkingBlock(text="let me think", signature="sig-abc")
     resp = LLMResponse(
@@ -230,10 +223,9 @@ def test_tool_use_carries_thinking_out_of_band_on_decision() -> None:
 
 
 def test_thinking_only_response_yields_empty_history_content() -> None:
-    """A response that is *only* a ThinkingBlock + a behaviour block
-    (no other text) still drops the thinking from the history, keeping
-    just the behaviour-bearing piece. Guards against accidental
-    "keep thinking when content shrinks" regression."""
+    """Thinking is dropped even when it is most of the response: the history
+    keeps only the behaviour-bearing block, and it never leaks into
+    ``FinishDecision.answer`` either."""
     resp = LLMResponse(
         stop_reason="end_turn",
         content=[
@@ -250,14 +242,11 @@ def test_thinking_only_response_yields_empty_history_content() -> None:
     assert decision.assistant_message.content == [
         TextBlock(text="final answer")
     ]
-    # Answer is still the user-visible TextBlock — thinking does not
-    # leak into the FinishDecision.answer either.
     assert decision.answer == "final answer"
 
 
 def test_max_tokens_response_becomes_retryable_fail_decision() -> None:
-    """``stop_reason=max_tokens`` → ``FailDecision(reason="llm_truncated",
-    retryable=True, assistant_message=...)``."""
+    """A truncated turn is retryable, and its partial text is still recorded."""
     resp = LLMResponse(
         stop_reason="max_tokens",
         content=[TextBlock(text="partial...")],
@@ -275,15 +264,12 @@ def test_max_tokens_response_becomes_retryable_fail_decision() -> None:
 
 
 def test_max_tokens_response_all_thinking_fails_instead_of_recording_empty_message() -> None:
-    """Mirrors ``test_empty_end_turn_fails_instead_of_recording_empty_message``:
-    a reasoning model that spends its whole output budget on ThinkingBlock(s)
-    before any text/tool_use leaves ``history_content`` empty on
-    ``max_tokens`` too (thinking is stripped by ``_strip_thinking``).
-    Recording ``Message(content=[])`` here would reproduce the Anthropic 400
-    on the next request — and since this branch is normally retryable, a
-    retry would resend the very history a poisoned turn just wrote. Guard
-    identically to the end_turn branch instead: fail non-retryable with no
-    assistant_message."""
+    """A reasoning model can spend its whole output budget on ThinkingBlock(s),
+    which ``_strip_thinking`` removes — leaving ``history_content`` empty on
+    ``max_tokens`` too. Recording ``Message(content=[])`` here is worse than on
+    ``end_turn``: this branch is normally retryable, so the retry would resend
+    the very history the poisoned turn just wrote. Fail non-retryable with no
+    assistant_message instead."""
     resp = LLMResponse(
         stop_reason="max_tokens",
         content=[ThinkingBlock(text="still reasoning...")],
@@ -299,11 +285,9 @@ def test_max_tokens_response_all_thinking_fails_instead_of_recording_empty_messa
 
 
 def test_error_response_becomes_non_retryable_fail_with_none_message() -> None:
-    """``stop_reason=error`` (no category) → ``FailDecision(reason=
-    "llm_error", retryable=False, assistant_message=None)``. Engine sees no
-    assistant_message so the rolling history is not contaminated by an
-    empty / error response. Old recordings whose error ``raw`` has no
-    ``category`` key keep this behaviour (backward compatible)."""
+    """An uncategorised ``error`` is non-retryable and carries no
+    assistant_message, so the Engine never contaminates the rolling history
+    with an empty / error response."""
     resp = LLMResponse(stop_reason="error", content=[], raw={"error": "boom"})
     policy, _ = _make_policy([resp])
 
@@ -316,9 +300,7 @@ def test_error_response_becomes_non_retryable_fail_with_none_message() -> None:
 
 
 def test_fatal_category_error_becomes_non_retryable_fail() -> None:
-    """② error recovery: ``raw['category'] == 'fatal'`` →
-    ``FailDecision(reason="llm_error", retryable=False)``. A fatal class
-    (auth / malformed request) is not worth retrying."""
+    """A ``fatal`` class (auth / malformed request) is not worth retrying."""
     resp = LLMResponse(
         stop_reason="error",
         content=[],
@@ -335,12 +317,11 @@ def test_fatal_category_error_becomes_non_retryable_fail() -> None:
 
 
 def test_transient_category_does_not_reach_policy_but_is_handled_as_fail() -> None:
-    """Transient errors are consumed inside the runtime LLM client and
-    never surface to Policy. Should one ever arrive (defensive), it must
-    NOT loop forever — Policy treats an unrecognised / transient error
-    response the same as a plain error: a non-retryable FailDecision (the
-    runtime already exhausted its retry budget before stamping the
-    category)."""
+    """Transient errors are consumed inside the runtime LLM client and never
+    surface to Policy. Should one arrive anyway it must NOT loop forever: the
+    runtime already exhausted its retry budget before stamping the category, so
+    Policy treats it exactly like a plain error — a non-retryable
+    FailDecision."""
     resp = LLMResponse(
         stop_reason="error",
         content=[],
@@ -361,9 +342,8 @@ def test_transient_category_does_not_reach_policy_but_is_handled_as_fail() -> No
 
 
 def test_three_step_scripted_react_produces_expected_decision_sequence() -> None:
-    """A canonical ReAct run: two tool_use steps then end_turn. Decisions
-    come out in the expected order and each carries its own
-    assistant_message."""
+    """Two tool_use steps then end_turn: each Decision carries its own
+    assistant_message, never one reused from the previous round."""
     r1 = LLMResponse(
         stop_reason="tool_use",
         content=[
@@ -389,8 +369,6 @@ def test_three_step_scripted_react_produces_expected_decision_sequence() -> None
     assert isinstance(d2, ToolCallsDecision)
     assert isinstance(d3, FinishDecision)
     assert d3.answer == "all done"
-    # Each Decision rebrandished its own assistant_message — never None,
-    # never reused from the previous round.
     assert d1.assistant_message is not None
     assert d2.assistant_message is not None
     assert d3.assistant_message is not None
@@ -404,10 +382,10 @@ def test_three_step_scripted_react_produces_expected_decision_sequence() -> None
 
 
 def test_request_system_field_carries_view_stable_prefix() -> None:
-    """Issue 14: ``LLMRequest.system`` comes from the View's
-    stable_prefix segment (Composer is the SoT for prompt material),
-    not from ReActPolicy's constructor. ``LLMRequest.messages`` still
-    contains no ``role="system"`` Message — system flows separately."""
+    """``LLMRequest.system`` comes from the View's stable_prefix segment — the
+    Composer owns prompt material, not ReActPolicy's constructor — and
+    ``LLMRequest.messages`` carries no ``role="system"`` Message, because
+    system flows on its own field."""
     resp = LLMResponse(stop_reason="end_turn", content=[TextBlock(text="ok")])
     policy, provider = _make_policy(
         [resp], system_prompt="constructor-supplied (ignored when View has segments)"
@@ -434,9 +412,8 @@ def test_request_model_field_is_constructor_value() -> None:
 
 
 def test_request_tools_field_mirrors_view_provider_tool_schemas() -> None:
-    """Issue 14: ``LLMRequest.tools`` comes from ``view.provider_tool_schemas``
-    (the Composer is the SoT for the tool roster), not from
-    ReActPolicy's constructor tools dict."""
+    """``LLMRequest.tools`` comes from ``view.provider_tool_schemas`` — the
+    Composer owns the tool roster, not ReActPolicy's constructor tools dict."""
     resp = LLMResponse(stop_reason="end_turn", content=[TextBlock(text="ok")])
     schema_a = {
         "type": "object",
@@ -465,9 +442,8 @@ def test_request_tools_field_mirrors_view_provider_tool_schemas() -> None:
 
 
 def test_history_truncation_keeps_only_last_n_messages() -> None:
-    """``max_history_messages=10`` + 200 messages in the view → the
-    outgoing ``LLMRequest.messages`` is the tail-most 10. ``system`` is
-    not counted (lives on its own field)."""
+    """Truncation keeps the tail, not the head; ``system`` is not counted
+    against the budget because it rides its own field."""
     resp = LLMResponse(stop_reason="end_turn", content=[TextBlock(text="ok")])
     policy, provider = _make_policy([resp], max_history_messages=10)
     big_history = [
@@ -488,10 +464,8 @@ def test_history_truncation_keeps_only_last_n_messages() -> None:
 
 
 def test_max_steps_ceiling_fails_after_n_calls_without_calling_provider() -> None:
-    """A 51-long tool_use script + ``max_steps=50``: the 51st ``decide``
-    returns ``FailDecision(reason="react_max_steps_exceeded",
-    retryable=False)`` and the FakeLLMProvider was called exactly 50
-    times."""
+    """The ceiling trips before the provider is called again — a runaway loop
+    costs exactly ``max_steps`` requests, not one more."""
     tool_use = LLMResponse(
         stop_reason="tool_use",
         content=[

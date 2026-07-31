@@ -1,31 +1,58 @@
-# EventEnvelope.origin: a typed write-origin role marker
+# `EventEnvelope.origin` is a typed write-origin role marker, orthogonal to `actor`
 
 ## Context
 
-`EventEnvelope` needs a field that answers "which emission-point role in Noeta appended this event." The field was originally introduced to feed the canonical slicer input of verify's cross-stream injection replay. The verify/replay test machinery was later removed, and that consumer disappeared with it. `origin` is **kept** as "write-origin provenance": the audit trail (`AuditObserver` → `AuditRecord.origin`) and the events HTTP/JSON API both expose it, so the read model and the frontend can show which Noeta role wrote each event. The decisions below preserve the field's shape and rationale; the verify-slicer details no longer apply.
+Every envelope on an EventLog stream needs an answer to "which Noeta role
+appended this?" — separate from "who is the subject of it". Audit and any read
+model over the log want to classify writers without parsing an identity string.
 
 ## Decision
 
-`EventEnvelope` carries a typed field `origin: Literal["engine", "llm", "observer", "tool", "system"]`—the Noeta emission-point role that appended the event.
+`EventEnvelope` carries `origin: Literal["engine", "llm", "observer", "tool",
+"system"]` — the emission-point role that appended the event.
 
-- `EventLogWriter.emit` defaults `origin` to `"engine"`; `system_emit` requires `origin` to be given explicitly (a system writer must declare its own role). Each write point declares it explicitly: Engine→`"engine"`, LLMClient→`"llm"`, ToolRuntime→`"tool"`, observers→`"observer"`, and system writes such as driver / snapshot→`"system"`.
-- The `actor` field is kept, but its meaning is stripped apart: **`actor` answers "who is the subject of this event"** (the writer instance may be `child_observer`, `tool_runtime`, or a future `user_id`); **`origin` answers "which Noeta emission-point role"** (5 enum values). The two are orthogonal.
-- `origin` lives in L0 (`noeta.protocols.events`) and introduces no new cross-layer dependency.
+The business write path defaults `origin` to `"engine"`. The cross-stream system
+write requires it explicitly: a writer appending onto a stream it does not hold
+the lease for must declare its own role. The Engine writes `engine`, the LLM
+client `llm`, the tool runtime `tool`, observers `observer`, and driver- or
+snapshot-level system writes `system`.
+
+`actor` is kept, with its meaning cleanly separated: **`actor` answers "who is
+the subject"** — a writer instance label, and the place a user or worker
+identity can land — while **`origin` answers "which role"** over a closed
+five-value enum. The two are orthogonal.
+
+`origin` lives in the protocols layer and introduces no cross-layer dependency;
+the durable event-log backends persist it as a column and restore it on read.
 
 ## Rationale
 
-- **A typed `Literal` beats a bare string unrelated to the emission point.** mypy strict checks every incoming literal and rejects a typo like `"engin"`.
-- **`actor` and `origin` being orthogonal leaves `actor` room to evolve.** Splitting "identity" and "role" into two fields lets `actor` freely evolve finer identity slots (`user_id`, `agent_instance_id`, `worker_id`) without disturbing the role marker.
-- **The role is descriptive provenance worth keeping.** Even with verify gone, "which role wrote this event" is still readable audit / observability metadata, and both the audit trail and the events API expose it.
+A typed `Literal` beats a bare string: strict type checking rejects a typo at
+the write site instead of letting a misspelled role reach the log, where it is
+permanent.
+
+Keeping the two orthogonal leaves `actor` room to grow finer identity slots
+without disturbing the role vocabulary, and lets the role vocabulary stay closed.
+
+The role is descriptive provenance worth carrying on every envelope: the audit
+projection reads it straight onto its record, so "which role wrote this"
+survives into the audit trail and any read model built over it.
 
 ## Alternatives considered
 
-1. **Stuff a prefix into the `actor` string** (`"observer:child_lifecycle"`). Rejected: parsing it back out is a magic string in disguise, and it breaks `actor`'s "identity" contract.
-2. **Use `Optional[EventOrigin]` for a gradual migration.** Rejected: it would drag two codepaths along forever, and there is no legitimate "cannot backfill" burden here.
+1. **Encode the role as a prefix inside the `actor` string** (`observer:...`).
+   Weighed and rejected: parsing it back out is a magic string in disguise, and
+   it breaks `actor`'s identity contract.
+2. **Make the field optional so writers can adopt it gradually.** Rejected: it
+   would carry two codepaths, and no writer has a legitimate reason to be unable
+   to state its own role.
 
 ## Consequences
 
-- The field definition lives in `noeta.protocols.events` (`EventEnvelope.origin` + the `EventOrigin` Literal), in L0.
-- Each write point declares its own origin: `noeta.core.engine`, `noeta.runtime.llm`, `noeta.runtime.tool`, the observers, and the driver.
-- `noeta.observers.audit` projects it into `AuditRecord.origin`; the events HTTP/JSON serializer exposes it.
-- Cross-stream system writes go through `system_emit` (see `docs/adr/storage-protocols-l0.md`; origin is required there).
+- The field and its `Literal` live in `noeta.protocols.events`; the write
+  contract, including the explicit-origin requirement on system writes, is
+  stated on the event-log protocol (see `storage-protocols-l0.md`).
+- Every write point declares its own origin: the Engine, the LLM runtime, the
+  tool runtime, the observers, and the driver.
+- The audit observer projects it onto its record; the SQLite and Postgres
+  event-log backends persist and restore it.

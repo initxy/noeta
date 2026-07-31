@@ -1,5 +1,4 @@
-"""Phase 4.5 Issue A — interactive tool-call approval (HITL) at the
-runtime layer.
+"""Interactive tool-call approval (human-in-the-loop) at the runtime layer.
 
 Exercises the full approve/deny resume contract on the generic Engine:
 
@@ -7,17 +6,14 @@ Exercises the full approve/deny resume contract on the generic Engine:
   `require_approval`;
 * the suspend emits the durable `ToolCallApprovalRequested` anchor and
   populates `governance.pending_approvals`;
-* `Engine.resolve_tool_approval` (the public seam the worker/runner calls
-  after `note_woken`) emits the single authoritative
-  `ToolCallApprovalResolved` and either invokes the recovered call
-  (approve) or appends a `role="tool"` denial-feedback message (deny);
+* `Engine.resolve_tool_approval` (the public seam the worker calls after
+  `note_woken`) emits the single authoritative `ToolCallApprovalResolved`
+  and either invokes the recovered call (approve) or appends a `role="tool"`
+  denial-feedback message (deny);
 * a stale/duplicate resolution raises `ApprovalNotPending` and emits
   nothing;
 * the pending anchor survives a fresh fold (process-restart robustness),
   including through SQLite.
-
-These are runtime-layer tests; the `noeta code` end-to-end slices live
-separately.
 """
 
 from __future__ import annotations
@@ -154,9 +150,9 @@ def test_require_approval_emits_anchor_and_populates_pending() -> None:
 
 
 def test_oversized_approval_arguments_are_offloaded_and_recovered() -> None:
-    # A gated call whose arguments exceed the 4-KB envelope ceiling: before
-    # the offload, emitting the ToolCallApprovalRequested anchor raised
-    # PayloadTooLarge and the suspend never happened.
+    # A gated call whose arguments exceed the 4-KB envelope ceiling: the
+    # ToolCallApprovalRequested anchor must offload them by reference so
+    # emitting it does not raise PayloadTooLarge and the suspend can happen.
     big_args = {"k": "x", "blob": "y" * (EVENT_PAYLOAD_MAX_BYTES + 1000)}
     big_call = ToolCall(tool_name="bar", arguments=big_args, call_id=CALL_ID)
     engine, log, _cs, _disp, lease_id, task = _build(first=big_call)
@@ -318,7 +314,8 @@ def test_duplicate_resolution_raises_and_emits_no_second_event() -> None:
 def test_restart_fold_recovers_pending_and_approves(tmp_path: Path) -> None:
     """Drop the in-memory task; rebuild purely from the EventLog (+
     snapshot) and resolve — proving the approved call is recoverable
-    after a process restart, not just from runner memory (watchpoint #2)."""
+    from durable state alone after a process restart, not just from
+    in-process memory."""
     db = str(tmp_path / "approval.sqlite")
     engine, log, cs, disp, lease_id, task = _build(
         db=db, second=FinishDecision(answer="done")
@@ -341,7 +338,7 @@ def test_restart_fold_recovers_pending_and_approves(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# SQLite typed-payload round-trip for the two new events
+# SQLite typed-payload round-trip for the approval events
 # ---------------------------------------------------------------------------
 
 

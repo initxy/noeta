@@ -314,7 +314,7 @@ def test_default_host_byte_equal_to_direct_builder(tmp_path: Path) -> None:
         allowed_subtask_agents=frozenset(),
         # New fields, all using build_session_inputs defaults
         max_steps=20,
-        # Phase 3 / spec §4.2: the fs write/shell knobs and the skills knobs
+        # The fs write/shell knobs and the skills knobs
         # both live in the per-plugin config bag (all defaults = the pack
         # defaults SdkHost also builds).
         plugin_config={

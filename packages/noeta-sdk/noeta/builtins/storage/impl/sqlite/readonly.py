@@ -1,20 +1,17 @@
-"""Read-only sqlite reader for list / inspect projections (CW5b P1).
+"""Strictly read-only sqlite reader for list / inspect projections.
 
-`noeta code list` (and any future read-only consumer) must NEVER create,
-migrate, or otherwise mutate the sqlite file. The live adapters cannot give
-that guarantee: ``_open_connection`` issues ``PRAGMA journal_mode = WAL`` (a
-header write even on a current-version DB) and the adapter constructors run
-``apply_migrations`` (forward-migrating an older store).
-
-:class:`SqliteReadOnlyStore` opens the file strictly read-only — a ``mode=ro``
-URI connection, no ``journal_mode`` / ``synchronous`` writes, no migrations —
-and verifies ``PRAGMA user_version == SCHEMA_VERSION`` **before** any read. An
-older / newer schema is a typed :class:`SqliteSchemaVersionError` (never silently
-read, never migrated). It satisfies ``EventLogReader`` + ``EventLogTaskIndex`` +
+A read-only consumer must NEVER create, migrate, or otherwise mutate the
+sqlite file, and the live adapters cannot promise that: ``_open_connection``
+issues ``PRAGMA journal_mode = WAL`` — a header write even on an up-to-date
+file — and every adapter constructor runs ``apply_migrations``. This module's
+store therefore opens a ``mode=ro`` URI connection, writes no PRAGMAs, runs no
+migrations, and checks ``PRAGMA user_version == SCHEMA_VERSION`` **before** any
+read, so a mismatched schema surfaces as a typed
+:class:`SqliteSchemaVersionError` instead of a silent read or an implicit
+upgrade. It satisfies ``EventLogReader`` + ``EventLogTaskIndex`` +
 ``ContentStore`` through plain ``SELECT``s, reusing the live adapter's
-:func:`noeta.builtins.storage.impl.sqlite.eventlog._row_to_envelope` so the read shape cannot
-drift. The adapter is selected at the CLI wiring layer only — ``noeta.read_models``
-and ``noeta.agent.sessions`` depend on the Protocols, never on this class.
+:func:`noeta.builtins.storage.impl.sqlite.eventlog._row_to_envelope` so the
+read shape cannot drift from it.
 """
 
 from __future__ import annotations
@@ -35,9 +32,9 @@ from noeta.builtins.storage.impl.sqlite.eventlog import _row_to_envelope
 from noeta.builtins.storage.impl.sqlite.migrations import SCHEMA_VERSION
 
 # The ``find_latest_snapshot`` predicate, rendered once from the protocol
-# constant so the query can never drift from the contract set (the
-# ``ix_events_snapshot`` partial index must keep matching it textually —
-# see the migration notes).
+# constant so the query cannot drift from the contract set. The
+# ``ix_events_snapshot`` partial index must keep matching this text exactly or
+# sqlite stops choosing it — see the migration notes.
 _BASELINE_TYPES_SQL = "(" + ", ".join(
     f"'{t}'" for t in SNAPSHOT_BASELINE_EVENT_TYPES
 ) + ")"
@@ -54,9 +51,8 @@ __all__ = [
 class SqliteSchemaVersionError(NoetaError):
     """The store's ``PRAGMA user_version`` is not the version this build reads.
 
-    Raised up front by :class:`SqliteReadOnlyStore` so a read-only command
-    surfaces a clear "different Noeta schema version" error instead of silently
-    reading an unknown shape or (the live adapters' behaviour) migrating it.
+    Raised before the first read so a read-only caller gets a clear
+    schema-version error rather than rows of an unknown shape.
     """
 
     def __init__(self, *, path: str, found: int, expected: int) -> None:
@@ -82,16 +78,12 @@ class SqliteReadOnlyStore:
     """
 
     def __init__(self, path: str) -> None:
-        # mode=ro: the connection physically cannot write — no journal_mode /
-        # synchronous PRAGMA writes, no migrations, no file creation.
-        #
         # The path is spliced into a ``file:`` URI, so it must be
-        # percent-encoded first: an unescaped ``?``, ``#``, or ``%`` in the
-        # path would otherwise be parsed as the query-string delimiter,
-        # fragment delimiter, or a broken escape — silently changing which
-        # file is opened (or how) and defeating the read-only guarantee this
-        # class exists for. ``quote(..., safe="/")`` escapes everything but
-        # the path separators, which sqlite's URI filename parser expects.
+        # percent-encoded first: an unescaped ``?``, ``#``, or ``%`` would be
+        # parsed as the query-string delimiter, the fragment delimiter, or a
+        # broken escape — silently changing which file is opened, or with which
+        # flags, and defeating the read-only guarantee this class exists for.
+        # ``safe="/"`` leaves the path separators sqlite's URI parser expects.
         self._conn = sqlite3.connect(f"file:{quote(path, safe='/')}?mode=ro", uri=True)
         self._conn.row_factory = sqlite3.Row
         found = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
@@ -120,8 +112,8 @@ class SqliteReadOnlyStore:
         return [_row_to_envelope(row) for row in rows]
 
     def find_latest_snapshot(self, task_id: str) -> Optional[EventEnvelope]:
-        # TaskRewound / StepAttemptAbandoned are snapshot-shaped fold
-        # baselines too — take whichever of the three has the higher seq.
+        # Every baseline type is snapshot-shaped, so the highest-seq row of any
+        # of them re-bases the fold.
         row = self._conn.execute(
             "SELECT * FROM events WHERE task_id = ? "
             f"AND type IN {_BASELINE_TYPES_SQL} "

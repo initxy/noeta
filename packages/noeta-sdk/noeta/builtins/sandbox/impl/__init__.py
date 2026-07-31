@@ -1,14 +1,10 @@
-"""``sandbox`` built-in — the AIO execution adapters (impl).
+"""The two AIO container adapters: an ``ExecEnv`` for files and processes, and
+a ``BrowserBackend`` for the container's browser.
 
-Microkernel M2: the two retirement-slated AIO adapters moved here —
-:class:`~noeta.builtins.sandbox.impl.exec_env.AioSandboxExecEnv` out of
-``noeta.runtime.exec_env`` (which keeps the ``ExecEnv`` Protocol +
-``LocalExecEnv``) and
-:class:`~noeta.builtins.sandbox.impl.browser.AioBrowserBackend` out of
-the old ``noeta.tools.browser._backend`` (the ``BrowserBackend``
-Protocol lives in the browser plugin since phase 3). The parent manifest declares both on the host-plane
-``sandbox_provider`` surface; the SDK's ``SandboxExecEnvManager`` resolves
-them through the loader's dynamic-import doorway as its default factories.
+Each implements a Protocol owned elsewhere (``noeta.runtime.exec_env`` and the
+``browser`` plugin respectively), and the SDK's ``SandboxExecEnvManager``
+reaches them through the loader's dynamic-import doorway as its default
+factories.
 """
 
 from __future__ import annotations

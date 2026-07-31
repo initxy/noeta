@@ -1,25 +1,20 @@
 """Pin the kernel ``Decision`` union to the neutral set.
 
-CONTEXT.md pin the runtime to exactly the 7 neutral Decision
-kinds — ``tool_calls`` / ``spawn_subtask`` / ``yield_for_human`` /
-``wait_timer`` / ``wait_external`` / ``finish`` / ``fail`` — plus three
-neutral generalizations that carry NO product meaning:
+The kernel knows seven neutral Decision kinds — ``tool_calls`` /
+``spawn_subtask`` / ``yield_for_human`` / ``wait_timer`` / ``wait_external`` /
+``finish`` / ``fail`` — plus three generalizations that carry no product
+meaning: ``SpawnSubtasksDecision`` (the fan-out of ``spawn_subtask``),
+``StatePatchDecision`` (the loop-continuing state write) and
+``CompactionRequestedDecision`` (the loop-continuing memory management).
+Compaction qualifies because it is a mechanism — prune plus summarize a long
+history — where the Policy authors *when* and the summary, and the kernel
+only prunes and records.
 
-* ``SpawnSubtasksDecision`` — the fan-out of ``spawn_subtask``.
-* ``StatePatchDecision`` — the loop-continuing state-write member of the
-  ``tool_calls`` family.
-* ``CompactionRequestedDecision`` — ③ (README D-3): the loop-continuing
-  memory-management member. Compaction is a neutral MECHANISM (prune +
-  summarize a long history), not a Claude-Code product control tool, so it
-  belongs in the kernel union (mechanism-vs-material). The policy
-  authors WHEN to compact + the summary; the kernel mechanically prunes /
-  records the result.
-
-No Claude-Code product control-tool Decision (TodoWrite / PlanMode /
-AskUserQuestion) may live in the kernel (mechanism-vs-material):
-those effects are re-expressed by noeta-sdk through the neutral channels
-(``StatePatchDecision`` + ``state_patch`` for todo/plan, ``yield_for_human``
-for ask).
+Product control tools (TodoWrite / PlanMode / AskUserQuestion) must never
+leak in: they are material, and noeta-sdk re-expresses their effects through
+the neutral channels (``StatePatchDecision`` + ``state_patch`` for todo/plan,
+``yield_for_human`` for ask). Every extra kind widens what every Policy
+author must handle, so the union is pinned rather than left to drift.
 """
 
 from __future__ import annotations

@@ -1,4 +1,11 @@
-"""AuditObserver: sink projection + classification guard + thread safety."""
+"""AuditObserver projection: metadata leaves the EventLog, values never do.
+
+The observer is the doorway by which event payloads reach an external sink, so
+every payload type must be explicitly classified as value-allowlisted or
+type-only — an unclassified one would slide into the forward-compat fallback and
+carry unreviewed fields out. It also runs on the emit path of a log written from
+many threads, so the sink must see every record and never break a write.
+"""
 
 from __future__ import annotations
 
@@ -34,7 +41,7 @@ def _ref(tag: str, size: int = 10) -> ContentRef:
 
 
 # ---------------------------------------------------------------------------
-# Classification guard (issue 19 B2 hard gate)
+# Classification guard
 # ---------------------------------------------------------------------------
 
 
@@ -232,9 +239,9 @@ def test_summarize_unknown_event_type_falls_back_to_typename_only() -> None:
 
 
 def test_audit_observer_invokes_sink_with_full_envelope_metadata() -> None:
-    """AuditRecord (B3) must carry the full EventEnvelope metadata
-    footprint so external sinks can dedup / trace causality without
-    re-querying the EventLog."""
+    """AuditRecord carries the full EventEnvelope metadata footprint so an
+    external sink can dedup and trace causality without re-querying the
+    EventLog."""
     log = InMemoryEventLog()
     captured: list[AuditRecord] = []
     obs = AuditObserver(event_log=log, sink=captured.append)
@@ -327,10 +334,9 @@ def test_audit_observer_stop_idempotent_and_silences_callbacks() -> None:
 
 
 def test_audit_observer_thread_safe_under_concurrent_writes() -> None:
-    """Issue 19 B1 stress: concurrent EventLog writes from multiple
-    threads must reach the sink without dropping records. We do not
-    assert order — only that every emit produces a record and that
-    the ``(task_id, seq)`` set matches the emits."""
+    """Concurrent EventLog writes from multiple threads must all reach the
+    sink. Order is not part of the contract, so the assertion is on the
+    ``(task_id, seq)`` set being exhaustive and unique."""
     log = InMemoryEventLog()
     captured: list[AuditRecord] = []
     obs = AuditObserver(event_log=log, sink=captured.append)

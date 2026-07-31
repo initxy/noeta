@@ -1,14 +1,11 @@
 """Storage-backend-neutral ContentStore contract.
 
-Issue 16 introduces the second ContentStore adapter (`SqliteContentStore`)
-on top of the existing `InMemoryContentStore`. This module runs the
-behavioural contract — content-addressed put, hash-only dedup,
-``media_type`` returned from caller, ``get`` hash-only lookup,
-``ContentNotFound`` — against **both** backends.
-
-Existing `test_content_store.py` keeps its InMemory-specific case
-coverage; this suite adds the behavioural contract that every adapter
-satisfies.
+Every adapter — in-memory, sqlite, postgres — must agree on the same
+observable behaviour: content-addressed put, hash-only dedup, the caller's
+``media_type`` on the returned ref, hash-only ``get``, ``ContentNotFound``, and
+the batch semantics of ``get_many``. Running one parametrized suite over all
+three is what keeps a backend from quietly diverging; adapter-private details
+(sqlite CHECK constraints, the stored row) get their own cases at the end.
 """
 
 from __future__ import annotations
@@ -117,9 +114,10 @@ def test_put_same_bytes_twice_dedupes_to_same_hash(make_store) -> None:
 def test_put_same_bytes_different_media_type_returns_caller_media_type(
     make_store,
 ) -> None:
-    """Architecturally-pinned (issue 16 §11): dedup keys on hash only;
-    the returned :class:`ContentRef` always carries the caller's
-    ``media_type`` even though storage stores the first put's value.
+    """Dedup keys on hash only, so storage keeps the first put's
+    ``media_type`` — but the returned :class:`ContentRef` always carries the
+    caller's, otherwise a second caller would silently get someone else's
+    content type.
     """
     store = make_store()
     body = b"X"

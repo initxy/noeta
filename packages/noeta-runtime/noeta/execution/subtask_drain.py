@@ -1,22 +1,14 @@
-"""Host-neutral in-process sub-agent delegation drain (Issue C / SR1/SR2).
-
-Extracted verbatim from the agent product's in-process runner
-(Part B slice S3a) so a later slice (S3b) can drive the same delegation tree
-on the server path. **Pure, behaviour-preserving refactor** — the moved state
-machine is byte-identical to the runner method it came from; the only change is
-that ``self._prepared`` storage/lease access is parameterised through the
-:class:`DrainHost` seam, and the runner's child-engine builder is injected as a
-callback.
+"""Host-neutral in-process sub-agent delegation drain.
 
 The drain owns no lifecycle: it takes a :class:`DrainHost` carrying the
 storage/lease seam (``dispatcher`` / ``event_log`` / ``content_store``), a
 ``build_child_engine(child_id) -> Engine`` callback, a ``parent_engine(parent_id,
 *, is_root) -> Engine`` callback (root uses the prepared engine; a non-root
 parent rebuilds its own agent engine), and an ``on_root_release(lease_id)``
-callback the loop fires at the single point the root parent is re-leased — the
-runner uses it to keep its own ``p.lease_id`` in sync (the one mutation of
-runner state that used to live inside this loop). The entry point is
-:func:`drive_pending_subtasks`.
+callback the loop fires at the single point the root parent is re-leased — so the
+same state machine drives a delegation tree regardless of who owns the runtime.
+The entry point is :func:`drive_pending_subtasks`; the load-bearing invariant is
+that at most one lease is checked out at a time across the whole tree.
 """
 
 from __future__ import annotations
@@ -54,8 +46,8 @@ __all__ = [
 
 
 #: The control-tool tool_use names that spawn a subtask whose result must be
-#: paired back as a tool_result. ``spawn_subagent`` delegates to a
-#: roster agent; ``run_workflow`` spawns an orchestration-Policy
+#: paired back as a tool_result. ``spawn_subagent`` delegates to another
+#: agent; ``run_workflow`` spawns an orchestration-Policy
 #: child. Both suspend the parent on a ``SubtaskCompleted`` and resume by
 #: rendering one paired ``tool_result`` against the originating call_id, so the
 #: result-pairing scan treats them identically.
@@ -63,7 +55,7 @@ _SPAWN_TOOL_NAMES = frozenset({SPAWN_SUBAGENT_TOOL, RUN_WORKFLOW_TOOL})
 
 
 # ---------------------------------------------------------------------------
-# fan-out v2: bounded concurrent group
+# Bounded concurrent group
 # ---------------------------------------------------------------------------
 
 #: Process-global cap on simultaneously-in-flight group members. Read once,
@@ -104,8 +96,7 @@ def _global_executor() -> ThreadPoolExecutor:
 
 def _frame_is_concurrent(frame: "_DelegationFrame") -> bool:
     """True iff this frame is an opt-in concurrent group.
-    A single-child (SR1) frame —
-    ``group_wake is None`` — is never concurrent."""
+    A single-child frame — ``group_wake is None`` — is never concurrent."""
     gw = frame.group_wake
     return isinstance(gw, SubtaskGroupCompleted) and bool(gw.concurrent)
 
@@ -121,24 +112,23 @@ class _ChildNotReady(Exception):
     children get that one-shot claim guard; see ``Dispatcher.enqueue``).
 
     No lease is held at any ``_descend_to_child`` call site when this fires
-    — every caller has already released its prior active lease before
+    — every caller has released its prior active lease before
     descending into the next one (the loop invariant :func:`drive_pending_subtasks`
     documents) — so there is nothing to clean up. :func:`drive_pending_subtasks`
     / :func:`resume_woken_parent` catch this and degrade to returning the
     current durable fold, the same "not resumable right now" shape
-    :func:`resume_woken_parent` already gives its OWN analogous parent-lease
+    :func:`resume_woken_parent` gives its OWN analogous parent-lease
     race (``parent_lease is None -> return None``). The other driver's
     in-flight drain (or the ``ChildLifecycleObserver`` once the child
     terminates) completes the handoff and wakes the ancestor chain normally.
 
-    KNOWN GAP — not closed here: this only stops the race from crashing the
-    in-request caller; it does not prevent the steal. A full fix would
-    reserve foreground children the same way background ones are
+    KNOWN GAP: this only stops the race from crashing the in-request caller;
+    it does not prevent the steal. A full fix would reserve foreground
+    children the same way background ones are
     (``Dispatcher.enqueue(..., reserved=True)``) and drive them via the
     shared executor, uniformly with the background path — a larger,
-    cross-cutting follow-up (touches ``ChildLifecycleObserver`` and the
-    handful of low-level tests that untargeted-lease foreground children
-    today). Flagging for review rather than guessing at that larger change.
+    cross-cutting change (touches ``ChildLifecycleObserver`` and the
+    handful of low-level tests that untargeted-lease foreground children).
     """
 
     def __init__(self, child_id: str) -> None:
@@ -150,13 +140,12 @@ class _ChildNotReady(Exception):
 
 
 class UnsupportedSubtaskSuspend(CodedError):
-    """SR1 — a driven sub-agent child suspended on a wake condition the
+    """A driven sub-agent child suspended on a wake condition the
     recursive delegation driver does not support (anything other than a
     ``SubtaskCompleted`` — i.e. approval / human / timer). Recursive
-    *delegation* is supported; mid-child HITL/approval/timer is a
-    documented later slice. The driver releases the child's lease (in its
-    true ``suspended`` state) **before** raising, so the lease is never
-    leaked."""
+    *delegation* is supported; mid-child HITL/approval/timer is not. The
+    driver releases the child's lease (in its true ``suspended`` state)
+    **before** raising, so the lease is never leaked."""
 
     code = "unsupported_subtask_suspend"
 
@@ -172,7 +161,7 @@ class UnsupportedSubtaskSuspend(CodedError):
 
 @dataclass
 class _DelegationFrame:
-    """SR1/SR2 — a suspended parent awaiting its delegated member(s). Its
+    """A suspended parent awaiting its delegated member(s). Its
     lease is RELEASED while it waits; ``remaining`` members are driven one
     at a time (member order). Single child → ``remaining`` has 1 id,
     ``group_wake`` None; fan-out group → ``remaining`` has N ids,
@@ -190,8 +179,7 @@ class DrainHost:
     """Host-neutral seam for :func:`drive_pending_subtasks`.
 
     Carries the storage/lease seam plus the engine-construction callbacks the
-    drain needs. Keeps the drain ignorant of *who* owns the runtime (the
-    in-process product runner today; the server worker in S3b), so the
+    drain needs. Keeps the drain ignorant of *who* owns the runtime, so the
     same state machine drives delegation on either path.
     """
 
@@ -202,7 +190,7 @@ class DrainHost:
     build_child_engine: Callable[[str], EngineProtocol]
     #: ``(parent_id, *, is_root) -> EngineProtocol`` — the engine that resumes a
     #: parent: the prepared engine for the root, a rebuilt agent engine for a
-    #: non-root parent (SR1 fix).
+    #: non-root parent.
     parent_engine: Callable[..., EngineProtocol]
     #: Fired with the root parent's fresh lease id at the single point the
     #: root is re-leased + resumed, so the in-process host can keep its own
@@ -215,31 +203,31 @@ class DrainHost:
     #: the choice: the child agent's declared default model (identity
     #: ``"agent-default"``) wins, else the root session's non-default bound
     #: model (identity ``"inherited"``). ``None`` return (host-default model)
-    #: or ``None`` field (the default, and the base-runner path) ⇒ no event,
-    #: existing recordings byte-identical.
+    #: or ``None`` field (the base-runner path) ⇒ no event,
+    #: recordings byte-identical.
     child_model_binding: Optional[
         Callable[[str], Optional[tuple[str, str]]]
     ] = None
     #: The root session's bound provider name, inherited by
     #: all child sub-agents so the whole delegation tree runs on ONE provider.
-    #: ``None`` ⇒ host default provider, byte-identical to pre-I4 recordings.
+    #: ``None`` ⇒ host default provider.
     child_provider: Optional[str] = None
     #: cancel-cascade — a per-tree cooperative-cancel predicate (bound by the
     #: resolver to ``is_cancelled(root_id)``). Threaded into every child's
     #: ``run_one_step`` so a mid-flight child abandons its result, AND polled
     #: between children so the drain stops descending into not-yet-run members.
     #: ``None`` (no host registry, or the in-process session-runner path) ⇒ no
-    #: cancellation, byte-identical to pre-cancel-cascade behaviour.
+    #: cancellation.
     cancel_check: Optional[Callable[[], bool]] = None
 
 
 # ---------------------------------------------------------------------------
-# Issue C: typed sub-agent delegation drain
+# Typed sub-agent delegation drain
 # ---------------------------------------------------------------------------
 
 
 def drive_pending_subtasks(host: DrainHost, parent: Any) -> Any:
-    """SR1 — drive a (possibly **nested**) delegation tree to terminal
+    """Drive a (possibly **nested**) delegation tree to terminal
     and resume the root parent.
 
     Iterative (an explicit ``waiters`` stack — never Python call
@@ -257,10 +245,10 @@ def drive_pending_subtasks(host: DrainHost, parent: Any) -> Any:
     cap must stop it).
 
     A driven **child** that suspends on a non-``SubtaskCompleted`` wake
-    (approval / human / timer) is out of scope for SR1: the driver
+    (approval / human / timer) is out of scope: the driver
     releases its lease then raises :class:`UnsupportedSubtaskSuspend`.
     The **root** parent suspending on its own wake (multi-turn
-    next-goal / tool approval) is the normal Issue-A/I3 resume seam —
+    next-goal / tool approval) is the normal resume seam —
     released and returned, not an error.
     """
     if not (
@@ -279,7 +267,7 @@ def drive_pending_subtasks(host: DrainHost, parent: Any) -> Any:
     # (a child's run_one_step). The loop ALSO handles a between-children cancel
     # inline; both paths converge on _abort_cancelled_drain. No cancel_check
     # (the in-process session-runner path) ⇒ the loop never raises and this is
-    # a plain pass-through, byte-identical to before.
+    # a plain pass-through.
     try:
         return _run_delegation_loop(host, root_id, waiters)
     except TaskCancellationRequested:
@@ -384,7 +372,7 @@ def _run_delegation_loop(
     self-released that child's lease) and propagates to the caller's
     except. Both converge on :func:`_abort_cancelled_drain`.
 
-    fan-out v2: the same loop drives
+    The same loop drives
     both the top-level tree (``is_top_level=True``) and an individual concurrent
     group member's subtree (``is_top_level=False``, from an executor worker via
     :func:`_drive_member_to_terminal`). For ``is_top_level=False`` the *local*
@@ -450,7 +438,7 @@ def _drive_loop(
                 # more members of this SEQUENTIAL frame → drive the next one.
                 # (A concurrent frame is never seen here with members left: it
                 # is drained whole in _enter_frame.) The parent is NOT touched
-                # until the whole group is done (B1) — the observer fires the
+                # until the whole group is done — the observer fires the
                 # group wake only on the last distinct member.
                 active, active_lease = _descend_to_child(host, frame.remaining[0])
                 active_consumed = None
@@ -458,7 +446,7 @@ def _drive_loop(
             # all members driven → the observer has fired the parent's
             # (single or group) wake. Resume the parent ONCE, with ITS OWN
             # engine (top-level root uses the prepared engine; any other parent
-            # rebuilds its own agent engine, SR1 fix).
+            # rebuilds its own agent engine).
             active, active_lease, active_consumed = _resume_top_frame(
                 host, waiters, root_id, is_top_level=is_top_level
             )
@@ -469,7 +457,7 @@ def _drive_loop(
             # `active` itself delegated (single or fan-out) → release it
             # (suspended, consuming any prior wake) and push its own
             # sub-frame; drive its first member. Parent waiter NOT
-            # re-pushed (B1).
+            # re-pushed.
             host.dispatcher.release(
                 active_lease.lease_id,
                 next_state="suspended",
@@ -498,7 +486,7 @@ def _drive_loop(
             )
             return active
         if status == "suspended":
-            # B3: a DESCENDANT suspended on a non-delegation wake — release
+            # a DESCENDANT suspended on a non-delegation wake — release
             # the lease in its true state FIRST, then raise a named typed
             # error (never leak the lease).
             host.dispatcher.release(
@@ -728,7 +716,7 @@ def _frame_for(parent: Any) -> "_DelegationFrame":
 
 
 def _descend_to_child(host: DrainHost, expected_child_id: str) -> tuple[Any, Any]:
-    """B2 — targeted-lease the named child (never the non-targeted
+    """Targeted-lease the named child (never the non-targeted
     "next ready" task), build its own runtime, seed only its goal, and
     advance one engine pass. Returns ``(child_task, child_lease)``."""
     child_lease = host.dispatcher.lease(
@@ -750,7 +738,7 @@ def _descend_to_child(host: DrainHost, expected_child_id: str) -> tuple[Any, Any
     # (engine build, fold, model-binding note, goal seed, session-content
     # activation, and the step itself) in one try/except so ANY exception
     # (not just a cancellation raised deep inside run_one_step) releases the
-    # lease before propagating. An unguarded gap here used to leak the lease
+    # lease before propagating. An unguarded gap here leaks the lease
     # on e.g. an UnknownAgentError from build_child_engine.
     try:
         child_engine = host.build_child_engine(child_lease.task_id)
@@ -789,7 +777,7 @@ def _descend_to_child(host: DrainHost, expected_child_id: str) -> tuple[Any, Any
                 lease_id=child_lease.lease_id,
             )
         # Pre-loop activation of every resident the child's activation contributes
-        # (spec §4.5) — the generic ``init`` seam, symmetric with
+        # — the generic ``init`` seam, symmetric with
         # ``InteractionDriver.seed_start``: each pack's init hook records its
         # resident (memory index, workspace instructions + environment) through one
         # SeedRecorder over the child engine's ``content_init_hooks``, in folded
@@ -798,7 +786,7 @@ def _descend_to_child(host: DrainHost, expected_child_id: str) -> tuple[Any, Any
         # hash-gated/idempotent (so a re-entrant descent / resume is safe) and land
         # in semi_stable under each resident's drift policy — never the stable_prefix,
         # so adding them does not bust prompt caching. A test-double engine without
-        # ``content_init_hooks`` ⇒ ``()`` ⇒ no-op, byte-identical.
+        # ``content_init_hooks`` ⇒ ``()`` ⇒ no-op.
         child_task = run_content_init(
             host.event_log,
             host.content_store,
@@ -845,8 +833,7 @@ def _resume_parent(
     parent's own engine**.
     Returns ``(parent_task, lease, consumed_wake_event)`` — the consumed
     wake the caller must pass to the eventual ``release`` so the
-    dispatcher clears the matched event (H2 D2; lease no longer clears
-    it)."""
+    dispatcher clears the matched event (the lease does not clear it)."""
     parent_lease = host.dispatcher.lease(
         worker_id="noeta-code", lease_seconds=600.0, task_id=frame.parent_id
     )
@@ -877,7 +864,7 @@ def _resume_parent_leased(
             parent, lease_id=parent_lease.lease_id, wake_event=parent_lease.wake_event
         )
         if frame.group_wake is None:
-            # SR1 single child: one paired tool_result.
+            # single child: one paired tool_result.
             result = parent.governance.subtask_results[-1]
             call_id = _pending_spawn_call_id(parent)
             parent = engine.append_subagent_result_message(
@@ -889,9 +876,9 @@ def _resume_parent_leased(
                 lease_id=parent_lease.lease_id,
             )
         else:
-            # SR2 fan-out: N paired tool_results in member order, keyed from
+            # fan-out: N paired tool_results in member order, keyed from
             # the parent stream; call_ids positional from the assistant msg.
-            wake_event = parent_lease.wake_event  # SubtaskGroupCompleted (B4)
+            wake_event = parent_lease.wake_event  # SubtaskGroupCompleted
             call_ids = _pending_spawn_call_ids(
                 parent, len(wake_event.subtask_ids)
             )
@@ -929,7 +916,7 @@ def _resume_parent_leased(
 def _pending_spawn_call_id(parent: Any) -> str:
     """The ``call_id`` of the most recent parent ``spawn_subagent``
     ``ToolUseBlock`` that has no paired tool result yet — the pairing
-    key for the child result message (Issue C)."""
+    key for the child result message."""
     resolved: set[str] = set()
 
     for msg in parent.runtime.messages:
@@ -954,10 +941,10 @@ def _pending_spawn_call_id(parent: Any) -> str:
 
 def _spawn_member_count(block: Any) -> int:
     """How many fan-out members one spawn tool_use carries: the length of a
-    well-formed batch ``spawns`` array, else 1 (the legacy single form, every
-    pre-batch recording, and ``run_workflow``). Mirrors the translate seam's
-    member expansion so the positional pairing below stays aligned with the
-    specs the handler admitted."""
+    well-formed batch ``spawns`` array, else 1 (the single form and
+    ``run_workflow``). Mirrors the translate seam's member expansion so the
+    positional pairing below stays aligned with the specs the handler
+    admitted."""
     arguments = getattr(block, "arguments", None)
     if isinstance(arguments, dict):
         raw = arguments.get("spawns")
@@ -967,7 +954,7 @@ def _spawn_member_count(block: Any) -> int:
 
 
 def _pending_spawn_call_ids(parent: Any, n: int) -> list[str]:
-    """SR2 — the ``n`` unpaired spawn member call_ids on the parent, in
+    """The ``n`` unpaired spawn member call_ids on the parent, in
     **member order** (assistant tool_use order, then entry order within a
     batch call — a tool_use carrying a ``spawns`` array contributes its
     call_id once per entry), for positional pairing with a group's

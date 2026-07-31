@@ -1,23 +1,13 @@
-"""``skill`` — the model-driven skill-invocation control tool, as part of the
-``skills`` built-in (control-tool-surface S2b).
+"""``skill`` — the model-driven skill-invocation control tool.
 
-The ``skill`` control tool's whole story — its provider-visible schema, its
-menu-name validator, its response→neutral-Decision translate body, and its
-``skill.md`` description — moved out of the kernel's control band
-(``noeta.policies.control_semantics``) into the ``skills`` built-in, joining the
-rest of the skill subsystem (indexer / registry / script tool / session pack).
-The move is byte-preserving (the S0 golden pins the schema bytes).
-
-What this module imports back from the kernel is the neutral MECHANISM the tool
-builds on: the control-tool mount types (``noeta.execution.control_tool``), the
-decision-time ``ControlTranslateContext``, and the shared neutral helpers
-``enum_roster_prop`` / ``ack_patch_decision`` / ``validate_required_string`` (used
-by control tools in several plugins, so they stay kernel-side). The description
-loads from the sibling ``skill.md`` via the shared L0 resource loader, exactly as
-the fs tools load theirs.
-
-Reached only through the plugin loader's ``ref`` resolution (the ``skills``
-manifest's ``control_tool`` contribution); nothing imports it statically.
+A control tool, not an Engine/ToolRuntime tool: a ``skill`` call activates a
+named skill via a ``StatePatchDecision``, the same channel pre-loop activations
+use. This module owns the tool's whole story — provider schema, menu-name
+validator, response→neutral-Decision translate body, and its ``skill.md``
+description. It builds on kernel-side neutral mechanism only (the control-tool
+mount types, ``ControlTranslateContext``, and shared helpers like
+``enum_roster_prop`` that several plugins reuse), and is reached solely through
+the plugin loader's ``ref`` resolution.
 """
 
 from __future__ import annotations
@@ -64,17 +54,15 @@ def skill_tool_schema(
 ) -> dict[str, Any]:
     """Provider-visible schema for :data:`SKILL_TOOL`.
 
-    A **control** tool (never an Engine/ToolRuntime tool): a ``skill`` call
+    A control tool (never an Engine/ToolRuntime tool): a ``skill`` call
     activates a named skill via a ``StatePatchDecision`` (``activate_skills``
-    patch), same channel pre-loop activations use. Added to the Composer's
-    ``control_action_schemas`` only when ``skill_invocation_enabled`` AND
-    the workspace has at least one indexed skill.
+    patch), the same channel pre-loop activations use. Added to the Composer's
+    ``control_action_schemas`` only when ``skill_invocation_enabled`` AND the
+    workspace has at least one indexed skill.
 
-    ``menu`` is a sorted sequence of ``(name, description)`` pairs. The name
-    is rendered into the ``skill`` property's ``enum``; the description is
-    appended to its description as a human-readable roster, mirroring the
-    ``spawn_subagent`` agent_directory pattern. A single required
-    ``skill`` string parameter — no ``args``, no ``reason`` (D4).
+    ``menu`` is a sorted sequence of ``(name, description)`` pairs. The name is
+    rendered into the ``skill`` property's ``enum``; the description is appended
+    as a human-readable roster. A single required ``skill`` string parameter.
     """
     skill_prop = enum_roster_prop("Name of the skill to activate.", menu)
     return {
@@ -106,23 +94,18 @@ def _maybe_skill_decision(
     menu_names: frozenset[str],
     assistant_thinking: tuple[ThinkingBlock, ...] = (),
 ) -> Decision | None:
-    """D1/D4: translate a `skill` control-tool call into a neutral
-    :class:`StatePatchDecision`, or ``None`` when no `skill` is present.
+    """Translate a ``skill`` control-tool call into a neutral
+    :class:`StatePatchDecision`, or ``None`` when no ``skill`` is present.
 
-    Rules mirror the sibling control tools: the `skill` call must be
-    the **sole** tool call in the turn (mixed with any other tool →
-    recoverable error ack, no state write). The ``skill`` argument is
-    validated against the sorted menu set: a known name becomes a
-    ``StatePatchDecision(activate_skills=[name])`` whose ack confirms the
-    skill is loaded and will appear from the next turn; an unknown name
-    becomes an error ack listing the available names so the model can retry.
+    The ``skill`` call must be the **sole** tool call in the turn (mixed with
+    any other tool → recoverable error ack, no state write). The ``skill``
+    argument is validated against the menu set: a known name becomes a
+    ``StatePatchDecision(activate_skills=[name])``; an unknown name becomes an
+    error ack listing the available names so the model can retry.
 
-    Duplicate activation (the name is already in ``active_skills``) is NOT
-    special-cased here: the same success ack is returned and the state
-    merge de-duplicates (``TaskStatePatch.apply`` unions ``activate_skills``
-    with ``state.active_skills`` order-preserving). The kernel emits
-    ``messages_before`` → ``TaskStatePatched`` → ``messages_after``, same
-    sequence as ``todo_write``.
+    Duplicate activation is not special-cased — the success ack is returned and
+    ``TaskStatePatch.apply`` unions ``activate_skills`` with
+    ``state.active_skills`` order-preserving, so it de-duplicates.
     """
     tool_uses = [b for b in response.content if isinstance(b, ToolUseBlock)]
     skill_blocks = [b for b in tool_uses if b.tool_name == SKILL_TOOL]
@@ -181,12 +164,12 @@ def _maybe_skill_decision(
 def make_skill_translate(
     menu_names: frozenset[str],
 ) -> Callable[[ControlTranslateContext], Optional[Decision]]:
-    """Build the ``skill`` translate closure over its indexed menu names (D2).
+    """Build the ``skill`` translate closure over its indexed menu names.
 
     The closure captures ``menu_names`` so :func:`_maybe_skill_decision`
     validates an ordered skill against the same set the schema's enum was built
-    from — WITHOUT the neutral :class:`ControlTranslateContext` carrying a
-    feature-named ``skill_menu_names`` field.
+    from, without the neutral :class:`ControlTranslateContext` carrying a
+    feature-named field.
     """
 
     def translate(ctx: ControlTranslateContext) -> Optional[Decision]:
@@ -209,8 +192,7 @@ def _skill_menu(
     ``menu`` is the sorted ``(name, description)`` tuple the schema renders;
     ``menu_names`` is the frozenset the translate closure validates against —
     and the mount's gate. An empty index reads the same as no registry: the
-    tool is not grown. Bytes are identical to the kernel builder's retired
-    ``_skill_menu``.
+    tool is not grown.
     """
     if registry is not None:
         skill_names = registry.names()
@@ -229,15 +211,11 @@ def make_skills_control_tool(
 ) -> Callable[[ControlToolBuildContext], Optional[ControlToolMount]]:
     """Build the ``skill`` control-tool mount factory over ``registry``.
 
-    Called by this plugin's OWN session pack (spec §4.1: translate closures
-    are session-factory outputs; spec §5: no kit, menu, or registry crosses
-    into kernel code) — the returned factory closes over the pack's merged
-    registry and rides ``PackContribution.control_tools`` into the builder's
-    generic mount loop. It self-gates on the effective ``skill_invocation``
-    capability flag AND a non-empty indexed menu — mounting IS enablement.
-    Routing band 400, schema band 400 — the byte order the S0 golden pins.
-    The rendered menu tuple may be empty (descriptions absent) while the
-    tool is still grown, matching the old schema branch exactly.
+    The returned factory closes over the pack's merged registry and rides
+    ``PackContribution.control_tools`` into the builder's generic mount loop. It
+    self-gates on the effective ``skill_invocation`` capability flag AND a
+    non-empty indexed menu — mounting IS enablement. The rendered menu tuple may
+    be empty (descriptions absent) while the tool is still grown.
     """
 
     def factory(ctx: ControlToolBuildContext) -> Optional[ControlToolMount]:

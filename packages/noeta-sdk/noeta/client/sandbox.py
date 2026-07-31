@@ -1,36 +1,26 @@
 """``SandboxExecEnvManager`` — the SDK-side lifecycle over a ``SandboxProvider``.
 
-This is the seam that turns a :class:`~noeta.client.sandbox_provider.SandboxProvider`
-(the agent layer's "who provisions the container", D1) into live
+Turns a :class:`~noeta.client.sandbox_provider.SandboxProvider` into live
 :class:`~noeta.runtime.exec_env.ExecEnv` backends and owns their lifetime,
-**keyed per session root** (v2, D4). The concrete AIO adapters live in the
-``sandbox`` built-in plugin (microkernel M2) and are resolved through the
-loader's dynamic-import doorway on first use; ``SdkHost`` holds this manager
-directly (like ``_process_registry``) instead of threading a callable down
-from the product.
+**keyed per session root**. The concrete AIO adapters live in the ``sandbox``
+built-in plugin and are resolved through the loader's dynamic-import doorway on
+first use, so a host that never provisions a sandbox never imports them.
 
-**v1 → v2.** v1 addressed ONE external container by ``base_url`` and cached a
-single backend keyed by that URL — every session on the host shared it. v2 makes
-the container **per root-task tree**:
-
-* :meth:`allocate` provisions a fresh container for a ``root_task_id``
-  (eagerly, at ``driver.seed_start``) and returns the durable ``exec_env_ref``
-  (``"{base_url}#{sandbox_id}"``) welded onto ``TaskHostBound``.
+* :meth:`allocate` provisions a fresh container for a ``root_task_id`` (eagerly,
+  at ``driver.seed_start``) and returns the durable ``exec_env_ref`` welded onto
+  ``TaskHostBound``.
 * :meth:`resolve` builds (and caches) the ``ExecEnv`` backend for a recorded
-  ``exec_env_ref`` — the reconnect path: a handle allocated on THIS host is
-  cached; a ref only seen on the durable record (resume / reclaim, possibly
-  another host) is reconnected via ``provider.attach``.
+  ``exec_env_ref``: a handle allocated on THIS host is reused; a ref seen only on
+  the durable record (resume / reclaim, possibly another host) is reconnected via
+  ``provider.attach``.
 * :meth:`release` tears one session's container down at its root-task terminal;
   :meth:`teardown` reaps everything left as a process-shutdown backstop.
 
-**Attach-one-container back-compat.** The v1 ``HostConfig.exec_env``
-(:class:`~noeta.client.host_config.SandboxExecEnvConfig`) deployment — a single
-pre-existing container addressed by ``base_url`` — is preserved by
-:class:`_ConfigAttachProvider`, a degenerate provider that *attaches* the one
-configured container (``allocate`` == attach, ``release`` a no-op) and mints no
-``sandbox_id`` (so the ref stays a bare ``base_url``, byte-identical to v1). The
-manager itself has ONE code path (provider-based); only how the provider is
-supplied differs.
+A :class:`SandboxExecEnvConfig` deployment — a single pre-existing container
+addressed by ``base_url`` — is adapted by :class:`_ConfigAttachProvider`, a
+degenerate provider that *attaches* the one configured container (``allocate`` ==
+attach, ``release`` a no-op) and mints no ``sandbox_id``. The manager itself has
+ONE code path (provider-based); only how the provider is supplied differs.
 """
 
 from __future__ import annotations
@@ -53,13 +43,12 @@ from noeta.client.sandbox_provider import (
 )
 from noeta.runtime.exec_env import ExecEnv
 
-#: The vended browser backend as SDK core sees it: an OPAQUE object
-#: (microkernel phase 3). The real shape is the browser plugin's
-#: ``BrowserBackend`` Protocol (``noeta.builtins.browser.impl``) — plugin
-#: vocabulary the universal "nothing statically imports noeta.builtins" ban
-#: keeps out of SDK core. The host drops the object into the kernel
-#: builder's ``backends`` bag under the ``"browser"`` name and only the
-#: browser pack ever calls it.
+#: The vended browser backend as SDK core sees it: an OPAQUE object. The real
+#: shape is the browser plugin's ``BrowserBackend`` Protocol
+#: (``noeta.builtins.browser.impl``) — plugin vocabulary the "nothing statically
+#: imports noeta.builtins" ban keeps out of SDK core. The host drops the object
+#: into the kernel builder's ``backends`` bag under the ``"browser"`` name and
+#: only the browser pack ever calls it.
 BrowserBackend = Any
 
 _log = logging.getLogger(__name__)
@@ -90,34 +79,31 @@ ExecPreamble = Callable[[str, Sequence[str]], str]
 #: Builds a live backend from an allocated / attached handle (+ the session's
 #: bound preamble, or ``None``). Injected by tests (a fake that opens no socket);
 #: production uses :func:`_default_backend_factory`. The auth strategy is passed
-#: as a per-call header factory (D8) so a short-lived credential is minted fresh
-#: each request; the addressing came off the handle.
+#: as a per-call header factory so a short-lived credential is minted fresh each
+#: request; the addressing came off the handle.
 BackendFactory = Callable[[SandboxHandle, Optional[BoundPreamble]], ExecEnv]
 
 
 #: Builds a live browser backend from a session's sandbox handle. Injected by
-#: tests (a fake that opens no socket) or by the product (an alternative wire —
-#: e.g. the official-SDK adapter); production defaults to
-#: :func:`_default_browser_factory`. The return type is the OPAQUE
-#: :data:`BrowserBackend` alias (``Any``) — conceptually the browser
-#: built-in's ``BrowserBackend`` Protocol (``noeta.builtins.browser.impl``),
-#: which SDK core cannot name statically (the microkernel import ban above),
-#: so a factory's return value is checked only where the browser pack consumes
-#: it. The container browser is addressed off the handle's ``base_url``
-#: (built inside the adapter) and authed with the handle's live
-#: :class:`SandboxAuth` as a per-call header factory (D8) — the same
-#: secret-on-the-wire discipline the ExecEnv backend uses.
+#: tests (a fake that opens no socket) or by the product (an alternative wire);
+#: production defaults to :func:`_default_browser_factory`. The return type is
+#: the OPAQUE :data:`BrowserBackend` alias (``Any``) — conceptually the browser
+#: built-in's ``BrowserBackend`` Protocol, which SDK core cannot name statically
+#: (the import ban above), so a factory's return value is checked only where the
+#: browser pack consumes it. The container browser is addressed off the handle's
+#: ``base_url`` and authed with the handle's live :class:`SandboxAuth` as a
+#: per-call header factory — the same secret-on-the-wire discipline the ExecEnv
+#: backend uses.
 BrowserBackendFactory = Callable[[SandboxHandle], BrowserBackend]
 
 
 def _resolve_aio(attr: str) -> Any:
     """Resolve one AIO adapter class from the ``sandbox`` built-in plugin.
 
-    Microkernel M2: the concrete adapters live in
-    ``noeta.builtins.sandbox.impl`` and SDK core reaches them only through the
-    loader's dynamic-import doorway (the same discipline as
-    ``noeta.client.parts``) — deferred to first use so a host that never
-    provisions a sandbox never imports the adapter modules.
+    The concrete adapters live in ``noeta.builtins.sandbox.impl`` and SDK core
+    reaches them only through the loader's dynamic-import doorway — deferred to
+    first use so a host that never provisions a sandbox never imports the adapter
+    modules.
     """
     import importlib
 
@@ -127,11 +113,10 @@ def _resolve_aio(attr: str) -> Any:
 def _default_browser_factory(handle: SandboxHandle) -> BrowserBackend:
     """Build the real AIO browser adapter for a container handle.
 
-    Mirrors :func:`_default_backend_factory`: the handle's live
-    :class:`SandboxAuth` is wired in as the adapter's per-call header factory
-    (D8) so a short-lived credential is minted fresh each request and never held
-    on a durable object (D5). The adapter builds its own ``McpHttpClient`` to
-    ``base_url + "/mcp"`` internally — noeta owns the browser tool schemas, so
+    The handle's live :class:`SandboxAuth` is wired in as the adapter's per-call
+    header factory so a short-lived credential is minted fresh each request and
+    never held on a durable object. The adapter builds its own ``McpHttpClient``
+    to ``base_url + "/mcp"`` internally — noeta owns the browser tool schemas, so
     the AIO browser wire is isolated in the adapter and never reaches the model.
     """
     backend: BrowserBackend = _resolve_aio("AioBrowserBackend")(
@@ -146,13 +131,10 @@ def _default_backend_factory(
     """Build the real AIO adapter for a container handle.
 
     ``auth_headers`` wires the handle's live :class:`SandboxAuth` in as the
-    adapter's **per-call** header factory (D8): the secret is fetched on the wire
-    each request, never held on a durable object (D5). ``preamble`` is the
-    process twin — a per-call shell-setup factory bound to this session (see
-    :meth:`SandboxExecEnvManager.resolve`); ``None`` leaves the command wire
-    byte-identical. ``fence_token`` stays at its v1 placeholder (``None``) —
-    cross-generation fencing is v2 orchestration (D7), and the seam already
-    carries the field.
+    adapter's **per-call** header factory: the secret is fetched on the wire each
+    request, never held on a durable object. ``preamble`` is the process twin — a
+    per-call shell-setup factory bound to this session (see
+    :meth:`SandboxExecEnvManager.resolve`).
     """
     backend: ExecEnv = _resolve_aio("AioSandboxExecEnv")(
         base_url=handle.base_url,
@@ -165,13 +147,12 @@ def _default_backend_factory(
 class _ConfigAttachProvider:
     """A degenerate :class:`SandboxProvider` that ATTACHES one existing container.
 
-    Wraps the v1 :class:`SandboxExecEnvConfig`: it never provisions — ``allocate``
-    just returns a handle for the single configured ``base_url`` and ``release``
-    is a no-op (it does not own the container, so a stop here would break a peer
-    that reconnected to the same address). ``sandbox_id`` is empty so the ref
-    encodes to a bare ``base_url`` — byte-identical to a v1 recording. This keeps
-    the "attach one shared container" deployment (and its gated e2e) working
-    through the v2 provider seam with no product change.
+    Wraps a :class:`SandboxExecEnvConfig`: it never provisions — ``allocate`` just
+    returns a handle for the single configured ``base_url`` and ``release`` is a
+    no-op (it does not own the container, so a stop here would break a peer that
+    reconnected to the same address). ``sandbox_id`` is empty so the ref encodes
+    to a bare ``base_url``. This carries the "attach one shared container"
+    deployment through the provider seam with no product change.
     """
 
     __slots__ = ("_config",)
@@ -195,16 +176,16 @@ class _ConfigAttachProvider:
         del root_task_id  # never owns the container
 
     def attach(self, exec_env_ref: str) -> SandboxHandle:
-        # Reconnect to the RECORDED address (multi-machine criterion): a task
-        # reclaimed on another host reads its own base_url off the ref, not this
-        # host's config default. Falls back to the config default for an empty
-        # ref. Credentials come from THIS host's env (D5), never the ref.
+        # Reconnect to the RECORDED address: a task reclaimed on another host
+        # reads its own base_url off the ref, not this host's config default.
+        # Falls back to the config default for an empty ref. Credentials come
+        # from THIS host's env, never the ref.
         base_url, _ = decode_exec_env_ref(exec_env_ref)
         return self._handle(base_url or self._config.base_url)
 
 
 def provider_for_config(config: SandboxExecEnvConfig) -> SandboxProvider:
-    """Adapt a v1 ``SandboxExecEnvConfig`` into the v2 ``SandboxProvider`` seam."""
+    """Adapt a ``SandboxExecEnvConfig`` into the ``SandboxProvider`` seam."""
     return _ConfigAttachProvider(config)
 
 
@@ -246,9 +227,9 @@ class SandboxExecEnvManager:
         #: (e.g. per-user credentials that expire mid-session).
         self._exec_preamble = exec_preamble
         #: The container a build with NO session-welded ref falls back to — the
-        #: attach path's single shared container (v1 back-compat). ``None`` on the
-        #: per-session provisioning path, where every real build carries the ref
-        #: the driver allocated and there is no "default container".
+        #: attach path's single shared container. ``None`` on the per-session
+        #: provisioning path, where every real build carries the ref the driver
+        #: allocated and there is no "default container".
         self.default_ref = default_ref
         self._factory: BackendFactory = backend_factory or _default_backend_factory
         self._browser_factory: BrowserBackendFactory = (
@@ -291,7 +272,7 @@ class SandboxExecEnvManager:
         """
         self._lifecycle_listeners.append((on_allocate, on_release))
 
-    # -- provisioning (D4) ------------------------------------------------- #
+    # -- provisioning ------------------------------------------------------ #
 
     def allocate(
         self, root_task_id: str, *, host_workspace: Optional[str] = None
@@ -346,7 +327,7 @@ class SandboxExecEnvManager:
         allocated is reused directly; a ref seen only on the durable record
         (resume / reclaim, possibly another host) is reconnected via
         ``provider.attach`` — the reconnect path. The API key always comes from
-        this host's env (D5), never the ref.
+        this host's env, never the ref.
         """
         with self._lock:
             backend = self._backends_by_ref.get(exec_env_ref)
@@ -361,8 +342,8 @@ class SandboxExecEnvManager:
             handle = self._provider.attach(exec_env_ref)
         # Curry the durable ref into the host preamble source so the backend gets
         # a :data:`BoundPreamble` over argv; the product maps the ref back to its
-        # session/user. ``None`` ⇒ no preamble (byte-identical wire). Bind through
-        # a local so the not-None narrowing reaches the closure.
+        # session/user. Bind through a local so the not-None narrowing reaches
+        # the closure.
         src = self._exec_preamble
         preamble: Optional[BoundPreamble] = (
             (lambda argv: src(exec_env_ref, argv)) if src is not None else None
@@ -381,9 +362,9 @@ class SandboxExecEnvManager:
         reuses its cached handle; a ref seen only on the durable record is
         reconnected via ``provider.attach``. The container's MCP browser server
         is addressed off the handle's ``base_url``; auth comes from this host's
-        env (D5), never the ref. Called by ``_build_engine`` only when the
-        session has a sandbox AND the agent opens the ``browser`` capability, so
-        a non-browser session never pays the build.
+        env, never the ref. Called by ``_build_engine`` only when the session has
+        a sandbox AND the agent opens the ``browser`` capability, so a
+        non-browser session never pays the build.
         """
         with self._lock:
             browser = self._browser_by_ref.get(exec_env_ref)
@@ -402,7 +383,7 @@ class SandboxExecEnvManager:
             self._browser_by_ref[exec_env_ref] = browser
         return browser
 
-    # -- lifecycle (D4) ---------------------------------------------------- #
+    # -- lifecycle --------------------------------------------------------- #
 
     def release(self, root_task_id: str) -> None:
         """Tear down one session's container (idempotent — unknown id is a no-op).

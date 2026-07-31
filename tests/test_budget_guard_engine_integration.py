@@ -1,8 +1,8 @@
-"""Engine-integration tests for ``BudgetGuard`` (issue 18).
+"""BudgetGuard over a real Engine: deny paths must materialise as events.
 
-Wires BudgetGuard onto a real Engine + InMemory storage and verifies
-the deny path materialises as ``ToolCallDenied`` / ``SubtaskDenied``
-/ ``TaskFailed`` events on the live EventLog.
+Wires BudgetGuard onto a real Engine + InMemory storage and verifies each cap's
+refusal surfaces on the live EventLog as ``ToolCallDenied`` / ``SubtaskDenied``
+/ ``TaskFailed``, not as an exception escaping the worker.
 """
 
 from __future__ import annotations

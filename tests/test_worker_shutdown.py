@@ -1,14 +1,12 @@
-"""3A-I3 — graceful shutdown + signal handling (best-effort).
+"""Graceful shutdown: stop leasing, let the in-flight step finish, exit 0.
 
-`install_stop_signals` wires SIGTERM/SIGINT to `WorkerLoop.stop`
-(main-thread only) and restores prior handlers. The boundary (B5):
-Noeta only promises stop-leasing + the current synchronous step finishes
-+ clean exit 0 — NO in-process interrupt, NO hard deadline. The
-subprocess test asserts "step finished + exit 0", NOT a fixed deadline.
-
-Per the architect note, the signal handler lands as an L2-callable
-helper here; the subprocess harness is inline (does NOT depend on the
-I4 `noeta serve` command).
+``install_stop_signals`` wires SIGTERM/SIGINT to ``WorkerLoop.stop`` on
+the main thread only, and hands back a restore callable so an embedding
+host gets its own handlers back. The promise is deliberately narrow — no
+in-process interrupt, no hard deadline — which is why the subprocess case
+asserts "the step still finished and the process exited 0" and never a
+shutdown duration: a timing assertion here would be flaky and would also
+over-promise.
 """
 
 from __future__ import annotations
@@ -87,7 +85,7 @@ def test_install_stop_signals_off_main_thread_is_noop() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Subprocess best-effort shutdown (inline harness, no I4 dependency)
+# Subprocess best-effort shutdown (inline harness)
 # ---------------------------------------------------------------------------
 
 
@@ -136,9 +134,9 @@ if __name__ == "__main__":
 
 
 def test_sigterm_during_step_finishes_step_then_exits_clean(tmp_path: Any) -> None:
-    """B5 boundary: SIGTERM mid-step → the current step still finishes
-    (task reaches terminal), the process exits 0. The test asserts the
-    step completed + clean exit, NOT a fixed shutdown deadline."""
+    """SIGTERM mid-step → the current step still finishes (task reaches
+    terminal) and the process exits 0. Asserts the step completed and the
+    exit was clean, never a fixed shutdown deadline."""
     harness = tmp_path / "harness.py"
     harness.write_text(_HARNESS)
     db = tmp_path / "shutdown.sqlite"

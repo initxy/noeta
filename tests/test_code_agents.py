@@ -1,25 +1,12 @@
-"""Phase 4 I6 — named coding-Agents + deterministic general-purpose full loop.
+"""The named agent presets, and what each one is physically able to do.
 
-Two acceptance layers wired here:
-
-* **Read-only Agents are provably write-free** —
-  ``test_read_only_agent_runner_drops_write_tools_from_pack`` packs the
-  ``explore``/``plan`` agents through the runner with a goal that
-  explicitly tempts a write tool. The runner filters the pack
-  (defence layer 1) AND the PermissionGuard denies anything the
-  filter would somehow miss (defence layer 2). Both layers must hold.
-
-* **Deterministic fake-LLM general-purpose full loop** — copies the
-  ``tests/fixtures/bugfix_repo/`` tree into ``tmp_path``, drives the
-  ``general-purpose`` agent through a scripted FakeLLM that mimics the
-  Skill-guided plan (pytest → grep → read → edit →
-  pytest), asserts the workspace edit lands AND the skill body
-  reached ``ContextPlan.selected_skills``.
-
-The real-LLM acceptance gate (gpt-5.5) is the env-gated live suite
-(``tests/test_live_context_supply_e2e.py``) and the shipping backend
-(``NOETA_AGENT_CONFIG=… python -m noeta.agent``); it is intentionally
-**not** in this file because it depends on the live endpoint.
+``explore`` and ``plan`` are read-only by construction, and two independent
+layers have to hold: the host filters the write family out of the pack before
+the Engine sees it, and the PermissionGuard denies anything the filter would
+miss. A goal that explicitly tempts a write tool must therefore leave the
+workspace byte-identical. The scripted bug-fixer loop pins the other end — a
+whole pytest → grep → read → edit → pytest run over the fixture repo lands its
+edit and records the activated skill.
 """
 
 from __future__ import annotations
@@ -53,9 +40,8 @@ _FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "bugfix_repo"
 
 
 def _result(host, out) -> CodeSessionResult:
-    """Project the deleted ``CodeSessionRunner._build_result`` shape off the
-    durable EventLog of a one-shot ``driver.start`` outcome — the same read-model
-    helpers the noeta-agent backend uses for its CLI render."""
+    """Project the ``CodeSessionResult`` read model off the durable EventLog of
+    a one-shot ``driver.start`` outcome."""
     events = host.event_log.read(out.task_id)
     cs = host.content_store
     return CodeSessionResult(
@@ -75,7 +61,6 @@ EXPLORE_SPEC = _SPECS["explore"]
 PLAN_SPEC = _SPECS["plan"]
 GENERAL_PURPOSE_SPEC = _SPECS["general-purpose"]
 
-# Helper: tools frozenset from spec
 def _tools(spec):
     return frozenset(r.name for r in spec.tools)
 
@@ -93,10 +78,9 @@ def test_named_agents_resolve(name: str) -> None:
     spec = _SPECS[name]
     # provider-safe lowercase + hyphen
     assert name == name.lower()
-    # instructions carry the role + workflow rules; the tool catalog now lives
-    # in each tool's structured description, not restated here.
-    # (plan uses a "Process:" workflow heading after the CC alignment; the
-    # others use "Rules:".)
+    # Instructions carry the role and the workflow rules; the tool catalog
+    # lives in each tool's structured description, not restated here. `plan`
+    # heads its workflow "Process:", the others "Rules:".
     assert spec.instructions.strip()
     assert "Rules:" in spec.instructions or "Process:" in spec.instructions
 
@@ -119,11 +103,11 @@ def test_official_specs_has_exact_four_canonical() -> None:
 def test_explore_runner_drops_write_tools_from_pack(
     tmp_path: Path,
 ) -> None:
-    """Even with APPLY + ARBITRARY shell modes, explore's live pack physically
-    excludes the WRITE FAMILY (edit/write/apply_patch). The SDK host filters the
-    pack via the spec's tool list BEFORE the Engine sees it. After the CC
-    alignment explore DOES carry read-only shell (shell_run); its read-only
-    guarantee is prompt-enforced, not by removing shell."""
+    """Even with APPLY + ARBITRARY modes, explore's live pack physically
+    excludes the write family (edit/write/apply_patch): the host filters the
+    pack against the spec's tool list before the Engine sees it. Explore does
+    carry ``shell_run`` — read-only there is prompt-enforced, not achieved by
+    taking the tool away."""
     workspace = tmp_path / "ws"
     workspace.mkdir()
     host = make_host(
@@ -137,7 +121,6 @@ def test_explore_runner_drops_write_tools_from_pack(
     )
     # The Engine's tool dict is filtered to the agent's allow-list.
     engine_tools = host.resolve_engine_for_agent("explore", model="gpt-test")._tools  # type: ignore[union-attr]
-    # The write family is physically absent.
     assert "edit" not in engine_tools
     assert "write" not in engine_tools
     assert "apply_patch" not in engine_tools
@@ -149,10 +132,9 @@ def test_explore_runner_drops_write_tools_from_pack(
 def test_plan_runner_pack_is_readonly_scout_no_write(
     tmp_path: Path,
 ) -> None:
-    """CC alignment: plan's live pack is the same read-mostly scout set as
-    explore — read/grep/glob + shell triplet + webfetch — and NO write family
-    at all. The old restricted plans/*.md write was dropped; plan returns the
-    plan as its message. Physical isolation: plan can never call any editor."""
+    """``plan`` gets the same read-mostly scout set as explore — read/grep/glob
+    + the shell triplet + webfetch — and no write family at all. It returns its
+    plan as a message, so physically it can never reach an editor."""
     workspace = tmp_path / "ws"
     workspace.mkdir()
     host = make_host(
@@ -165,7 +147,6 @@ def test_plan_runner_pack_is_readonly_scout_no_write(
         shell_mode=ShellMode.ARBITRARY,
     )
     engine_tools = host.resolve_engine_for_agent("plan", model="gpt-test")._tools  # type: ignore[union-attr]
-    # The whole write family is physically absent — including write.
     for absent in ("edit", "write", "apply_patch"):
         assert absent not in engine_tools
     # The scout tools (incl. read-only shell + webfetch) are present.
@@ -254,25 +235,22 @@ def _end_turn_immediately() -> list[LLMResponse]:
 
 
 def test_general_purpose_has_full_builtin_set() -> None:
-    """CC alignment: general-purpose mirrors CC's general-purpose agent — the
-    full built-in tool surface (same as main), so grep/glob/apply_patch/webfetch
-    are present rather than dropped."""
+    """``general-purpose`` carries the whole built-in tool surface."""
     gp_tools = _tools(GENERAL_PURPOSE_SPEC)
     assert gp_tools == frozenset(builtin_tool_classes())
-    # The previously-dropped search/patch/web tools are now present.
     assert {"grep", "glob", "apply_patch", "webfetch"} <= gp_tools
 
 
 def test_main_and_general_purpose_tools_now_equal() -> None:
-    """CC alignment: general-purpose's tool surface now equals main's — both
-    are the full built-in catalog (gp is no longer a strict subset)."""
+    """``general-purpose`` and ``main`` share one surface: the full built-in
+    catalog."""
     assert _tools(GENERAL_PURPOSE_SPEC) == _tools(MAIN_SPEC)
     assert _tools(MAIN_SPEC) == frozenset(builtin_tool_classes())
 
 
 def test_explore_is_read_only() -> None:
-    # CC alignment: explore physically excludes the write family; shell_run is
-    # now present (prompt-restricted to read-only commands).
+    # Explore excludes the write family; shell_run stays, prompt-restricted to
+    # read-only commands.
     ex_tools = _tools(EXPLORE_SPEC)
     for mutating in ("edit", "write", "apply_patch"):
         assert mutating not in ex_tools
@@ -280,9 +258,9 @@ def test_explore_is_read_only() -> None:
 
 
 def test_plan_whitelist_and_capabilities() -> None:
-    # CC alignment: plan's whitelist is the read-mostly scout set (same as
-    # explore) — read/grep/glob + shell triplet + webfetch — and NO write family
-    # at all. Activation opens ONLY ask_user_question (no todo_write).
+    # Plan's whitelist is the read-mostly scout set (same as explore) —
+    # read/grep/glob + shell triplet + webfetch — and NO write family at all.
+    # Activation opens ONLY ask_user_question (no todo_write).
     plan_tools = _tools(PLAN_SPEC)
     for mutating in ("edit", "write", "apply_patch"):
         assert mutating not in plan_tools
@@ -315,7 +293,8 @@ _PYTEST_PASS_TAIL = b"==================== 2 passed in 0.04s ===================
 
 
 def _bug_fixer_script() -> list[LLMResponse]:
-    """The 5-turn fake-LLM script that mirrors the Skill body."""
+    """The scripted turns that mirror the skill body: pytest → grep → read →
+    edit → pytest → summary."""
     return [
         # Turn 1: run pytest (sees the failure)
         LLMResponse(
@@ -330,10 +309,9 @@ def _bug_fixer_script() -> list[LLMResponse]:
             usage=Usage(uncached=1, output=1),
             raw={"id": "bf-1"},
         ),
-        # Turn 2: search for the offending function. (general-purpose now also
-        # has the grep/glob tools after the CC alignment, but this scripted run
-        # searches via shell_run grep — still in its whitelist — to keep the
-        # recording stable.)
+        # Turn 2: search for the offending function. The script goes through
+        # `shell_run grep` rather than the `grep` tool to keep the recording
+        # stable.
         LLMResponse(
             stop_reason="tool_use",
             content=[
@@ -447,8 +425,8 @@ def _copy_fixture(dst_root: Path) -> Path:
 def test_bug_fixer_fake_llm_full_loop_fixes_failing_test(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Tier-1 CI gate: deterministic fake-LLM run flips the workspace
-    bug + passes pytest + activates the workspace skill."""
+    """A deterministic scripted run flips the workspace bug, turns pytest
+    green, and activates the workspace skill."""
     workspace = _copy_fixture(tmp_path)
     target = workspace / "src" / "math_ops.py"
     assert "return a - b" in target.read_text()
@@ -465,9 +443,8 @@ def test_bug_fixer_fake_llm_full_loop_fixes_failing_test(
         multi_turn=False,
         write_mode=FsWriteMode.APPLY,
         shell_mode=ShellMode.ALLOWLIST,
-        # The old CodeSessionConfig applied edits without approval; the SDK host
-        # default permission_mode="default" gates the write family, so disable it
-        # explicitly to keep the byte-for-byte one-shot apply behaviour.
+        # The host's default permission mode gates the write family; disable
+        # approval so the scripted edit applies in one shot.
         require_approval_tools=(),
     )
     out = make_driver(host).start(
@@ -489,8 +466,7 @@ def test_bug_fixer_fake_llm_full_loop_fixes_failing_test(
     assert result.last_shell is not None
     assert result.last_shell["returncode"] == 0
     assert result.last_shell["command"].startswith("pytest")
-    # The workspace skill was activated (B17 durable) and the
-    # ContextPlan recorded it.
+    # The workspace skill was activated durably and the ContextPlan recorded it.
     assert "fix-python-test" in result.selected_skills
 
 
@@ -500,8 +476,8 @@ def test_bug_fixer_fake_llm_full_loop_fixes_failing_test(
 
 
 def test_fixture_starts_with_known_failure(tmp_path: Path) -> None:
-    """A meta-regression: if someone accidentally fixes the fixture
-    the I6 bug-fixer test becomes a no-op. Pin the bug bytes."""
+    """A meta-regression: if someone accidentally fixes the fixture, the
+    bug-fixer test above silently becomes a no-op. Pin the bug bytes."""
     src = (_FIXTURE_ROOT / "src" / "math_ops.py").read_text()
     assert "return a - b" in src
     skill = (

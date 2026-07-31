@@ -1,4 +1,5 @@
-"""L2 context layer: Composer and (Phase 1+) compaction / skills."""
+"""Context materials band: the locked Composer plus its content-kind and
+reminder registries."""
 
 from __future__ import annotations
 

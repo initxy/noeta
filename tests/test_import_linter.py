@@ -1,16 +1,11 @@
-"""Run import-linter against the .importlinter config in the repo root.
+"""Run import-linter against the ``.importlinter`` config in the repo root.
 
-Phase 0 enforces an L0-L3 import topology:
-
-* L0 ``noeta.protocols`` — typed boundaries, must not import any
-  other in-project module.
-* L1 ``noeta.core`` — may import L0 only.
-* L2 ``noeta.runtime`` / ``noeta.context`` / ``noeta.storage`` /
-  ``noeta.policies`` / ``noeta.tools`` — may import L0 / L1; cross-L2
-  edges only where unavoidable.
-
-This test shells out to ``lint-imports`` so the same path CI runs is
-exercised.
+The layering contracts are the architecture's only mechanical enforcement:
+``noeta.protocols`` is the typed boundary that may import nothing in-project,
+``noeta.core`` sees only ``noeta.protocols``, and nothing statically imports
+``noeta.builtins`` — the plugin loader's dynamic ``ref`` resolution is the
+sole doorway. Shelling out to ``lint-imports`` exercises the same path CI
+runs, so a contract cannot pass here and fail there.
 """
 
 from __future__ import annotations
@@ -26,12 +21,11 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG = REPO_ROOT / ".importlinter"
 
-# We skip only when import-linter itself is not installed in this Python
-# environment — that means the dev extra is missing and there's nothing
-# to run. We do not key the skip on ``shutil.which("lint-imports")``
-# because the binary may live next to ``sys.executable`` (a venv) without
-# being on the user's shell PATH; using ``importlib.util.find_spec``
-# makes the check independent of shell state.
+# Skip only when import-linter itself is absent (the dev extra is missing and
+# there is nothing to run). The skip is deliberately NOT keyed on
+# ``shutil.which("lint-imports")``: the binary may live next to
+# ``sys.executable`` in a venv without being on the shell PATH, so
+# ``find_spec`` keeps the check independent of shell state.
 pytestmark = pytest.mark.skipif(
     importlib.util.find_spec("importlinter") is None,
     reason="import-linter (dev extra) not installed",

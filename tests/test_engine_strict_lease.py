@@ -1,10 +1,9 @@
-"""Engine end-to-end under strict lease validation (issue 06 #9).
+"""Engine end-to-end under strict lease validation.
 
-Issue 06 hardens the InMemory backend so EventLog actually rejects
-writes from invalid leases. This test file wires Engine, EventLog,
-and Dispatcher together in strict mode and exercises the same
-scenarios issues 01–05 covered — Phase 0's regression net for "the
-kernel still works when the concurrency guards are turned on".
+In strict mode the InMemory EventLog rejects writes from invalid leases.
+This file wires Engine, EventLog, and Dispatcher together in strict mode and
+exercises the ordinary drive scenarios — the regression net for "the kernel
+still works when the concurrency guards are turned on".
 """
 
 from __future__ import annotations
@@ -132,7 +131,7 @@ def test_snapshot_write_with_stale_lease_also_blocked() -> None:
 
 
 def test_parent_child_subtask_full_loop_under_strict_lease() -> None:
-    """Issue 03's full spawn → child finish → parent wake closes under
+    """The full spawn → child finish → parent wake cycle closes under
     strict lease validation. Catches regressions in the cross-stream
     system_append path.
     """

@@ -1,7 +1,8 @@
-"""EventFanout unit tests (issue 23).
+"""EventFanout unit tests — the Observer → Broadcaster glue.
 
-Tests the Observer → Broadcaster glue. Uses a fake broadcaster so the
-test stays pure to the L2 boundary (no HTTP).
+Uses a fake broadcaster so the test stays pure (no HTTP). The load-bearing
+invariant: a broadcaster that raises must not propagate back to the EventLog
+writer, since observer callbacks fire off the writer's critical path.
 """
 
 from __future__ import annotations

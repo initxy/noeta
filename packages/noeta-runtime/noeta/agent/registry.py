@@ -1,8 +1,8 @@
 """``AgentRegistry`` — name → :class:`AgentSpec` resolve target.
 
-The single entry point the server and worker use to resolve an Agent by name.
-Resolution of an unknown name is a **hard error** (``UnknownAgentError``), never
-a silent no-op now that ``agent_name`` is load-bearing.
+``agent_name`` is load-bearing: a task's recorded name decides which Agent
+resumes it. So an unresolvable name is a hard :class:`UnknownAgentError`, never
+a silent fallback to some default Agent.
 """
 
 from __future__ import annotations
@@ -19,10 +19,9 @@ __all__ = [
 class UnknownAgentError(Exception):
     """A name was resolved that no registered Agent answers to.
 
-    Generic over the resolution context: ``task_id`` is supplied when the
-    lookup is driven by a leased Task (``noeta.agent.resolver``), and omitted for
-    a bare registry lookup. This is the agent-layer home for the error;
-    ``noeta.agent.resolver`` re-exports it (task #5).
+    Generic over the resolution context: ``task_id`` is supplied when the lookup
+    is driven by a leased Task and omitted for a bare registry lookup, so one
+    error type covers both without the caller having to translate.
     """
 
     def __init__(
@@ -49,7 +48,6 @@ class AgentRegistry:
         self._specs: dict[str, AgentSpec] = {}
 
     def add(self, spec: AgentSpec) -> None:
-        """Register ``spec``. A name already present is an error."""
         if spec.name in self._specs:
             raise ValueError(
                 f"agent {spec.name!r} already registered; names must be unique"
@@ -57,7 +55,6 @@ class AgentRegistry:
         self._specs[spec.name] = spec
 
     def resolve(self, name: str) -> AgentSpec:
-        """Return the ``AgentSpec`` named ``name``; unknown ⇒ ``UnknownAgentError``."""
         spec = self._specs.get(name)
         if spec is None:
             raise UnknownAgentError(agent_name=name, available=self.names())

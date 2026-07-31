@@ -176,7 +176,7 @@ _CC_STYLE_TOOLS = (
     "shell_kill",
     "webfetch",
 )
-# Each description .md ships beside its tool's impl (phase 2c) — the
+# Each description .md ships beside its tool's impl — the
 # builtin package that owns the tool owns the text.
 _DESCRIPTION_PACKAGE = {
     name: "noeta.builtins.fs.impl" for name in _CC_STYLE_TOOLS[:-1]

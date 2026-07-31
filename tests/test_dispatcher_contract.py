@@ -1,15 +1,9 @@
 """Storage-backend-neutral Dispatcher contract.
 
-Issue 17 introduces the second Dispatcher adapter (`SqliteDispatcher`)
-on top of the existing `InMemoryDispatcher`. This module exercises the
-behavioural contract — lease lifecycle, heartbeat cap, release with
-wake_on round-trip, fail with retry budget, wake before suspend,
-requeue_stale, is_lease_valid, enqueue idempotency — against **both**
-backends.
-
-Existing ``test_dispatcher*.py`` files continue exercising the
-InMemory-specific paths (introspection helpers, monotonic clock); this
-suite enforces the cross-backend behavioural contract.
+Every test runs against every Dispatcher adapter: lease lifecycle,
+heartbeat cap, release with wake_on round-trip, fail with retry budget,
+wake before suspend, requeue_stale, is_lease_valid and enqueue
+idempotency must behave identically whichever backend a host wires in.
 """
 
 from __future__ import annotations
@@ -218,7 +212,7 @@ def test_lease_consumes_ready_queue_fifo(make_dispatcher) -> None:
 
 
 # ---------------------------------------------------------------------------
-# enqueue idempotency (issue 17 B3)
+# enqueue idempotency
 # ---------------------------------------------------------------------------
 
 
@@ -238,7 +232,6 @@ def test_enqueue_existing_terminal_task_resets_to_ready(make_dispatcher) -> None
     disp.enqueue("t1")
     lease = disp.lease(worker_id="w")
     disp.release(lease.lease_id, next_state="terminal")
-    # Now re-enqueue terminal task; it should come back as leaseable.
     disp.enqueue("t1")
     new_lease = disp.lease(worker_id="w")
     assert new_lease is not None and new_lease.task_id == "t1"
@@ -270,9 +263,8 @@ def test_release_suspended_then_matching_wake_requeues(make_dispatcher) -> None:
     lease = disp.lease(worker_id="w")
     wake_on = SubtaskCompleted(subtask_id="t-child")
     disp.release(lease.lease_id, next_state="suspended", wake_on=wake_on)
-    # No matching wake yet → still not leaseable.
+    # No matching wake yet → not leaseable.
     assert disp.lease(worker_id="w") is None
-    # Matching wake → requeue True.
     assert disp.wake("t1", SubtaskCompleted(subtask_id="t-child")) is True
     new_lease = disp.lease(worker_id="w")
     assert new_lease is not None and new_lease.task_id == "t1"
@@ -314,10 +306,10 @@ def test_wake_before_suspend_buffers_event_and_drains_on_match(make_dispatcher) 
 def test_wake_before_enqueue_buffers_event_and_later_release_drains(
     make_dispatcher,
 ) -> None:
-    """Issue 17 B1: ``wake(unknown_task, X)`` is legal; the event is
-    buffered, the task remains non-leaseable until ``enqueue`` creates
-    it, and a subsequent ``release(suspended, wake_on=X)`` drains the
-    buffered wake in the same transaction.
+    """``wake(unknown_task, X)`` is legal: the event is buffered, the
+    task remains non-leaseable until ``enqueue`` creates it, and a
+    subsequent ``release(suspended, wake_on=X)`` drains the buffered
+    wake in the same transaction.
     """
     disp = make_dispatcher()
     # Wake arrives for a task that has never been enqueued.
@@ -620,7 +612,7 @@ def test_sqlite_dispatcher_check_rejects_leased_without_lease_id() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Contention — multi-worker CAS (round 3a single-host-multi-worker)
+# Contention — multi-worker CAS
 # ---------------------------------------------------------------------------
 
 
@@ -694,15 +686,9 @@ def test_release_yield_preserves_pending_wake(make_dispatcher) -> None:
     # wake + lease delivers it normally.
     disp.release_yield(lease.lease_id)
     disp.wake("t1", HumanResponseReceived(handle="next-goal"))
-    # The task is 'ready' so wake buffers; release on a later
-    # (suspended→ready) transition would drain it. Since we never
-    # suspended, the wake stays buffered; here we simply enqueue-suspend
-    # manually to exercise the drain: enqueue then lease-with-targeted-suspend
-    # is overkill; the key contract is that release_yield did not destroy
-    # pending state.
-    #
-    # Verify the pending wake is still present: suspend the task via
-    # release(suspended, wake_on=next-goal) from a fresh lease.
+    # The task is ready, so the wake only buffers. Suspending it from a
+    # fresh lease with the matching wake_on drains that buffer — which is
+    # how we see whether release_yield destroyed the pending state.
     lease2 = disp.lease(worker_id="resolver")
     assert lease2 is not None
     # Release as suspended with the matching wake_on drains the buffer → matched.

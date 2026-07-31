@@ -1,18 +1,19 @@
-"""Regression: a leased step that outlives its lease must keep that lease
-alive, and if it still loses it must converge to a durable terminal.
+"""A leased step that outlives its lease must keep it alive, and if the lease
+is still lost the task must converge to a durable terminal.
 
-Diagnosed root cause: the noeta-agent HTTP transport drives a turn synchronously
-with **no resident** ``WorkerLoop``, so nothing heartbeated a long
-``run_one_step``. A step longer than the 600 s lease TTL (a slow LLM round-trip
-retried to its budget ≈ 1500 s) lost its lease mid-flight; the step's own
-terminal write was then rejected by ``is_lease_valid`` (``InvalidLease``) and the
-task hung forever in ``running`` — the UI could neither resume it (not at a
-next-goal suspend) nor delete it (the dispatcher still read an active lease).
+When a turn is driven synchronously with no resident ``WorkerLoop``, nothing
+heartbeats a long ``run_one_step``. A step longer than the lease TTL (a slow
+LLM round-trip retried to its budget) loses its lease mid-flight; the step's
+own terminal write is then rejected by ``is_lease_valid`` (``InvalidLease``),
+and the task can hang forever in ``running`` — neither resumable (not at a
+next-goal suspend) nor deletable (the dispatcher still reads an active lease).
 
-* P0-2 — :func:`noeta.runtime.worker.keep_lease_alive` renews the lease for the
-  duration of the step (the heartbeat the WorkerLoop path already had).
-* P0-1 — if the lease is still lost, ``InteractionDriver`` converges the task to
-  a lease-free control-plane ``TaskFailed`` so fold always reaches terminal.
+Two guarantees close that hole:
+
+* :func:`noeta.runtime.worker.keep_lease_alive` renews the lease for the
+  duration of the step (the heartbeat the WorkerLoop path has resident).
+* If the lease is still lost, ``InteractionDriver`` converges the task to a
+  lease-free control-plane ``TaskFailed`` so fold always reaches terminal.
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ from noeta.runtime.workspace import FsWriteMode
 
 
 # ---------------------------------------------------------------------------
-# P0-2 — keep_lease_alive renews the lease while a synchronous step runs
+# keep_lease_alive renews the lease while a synchronous step runs
 # ---------------------------------------------------------------------------
 
 
@@ -86,11 +87,11 @@ def test_keep_lease_alive_noop_when_interval_nonpositive() -> None:
     disp = _RecordingDispatcher()
     with keep_lease_alive(disp, _Lease(), interval=0.0, lease_seconds=60.0):
         time.sleep(0.02)
-    assert disp.beats == []  # disabled — byte-identical to the pre-heartbeat path
+    assert disp.beats == []  # disabled — no heartbeat thread starts
 
 
 # ---------------------------------------------------------------------------
-# P0-1 — a lost-lease step converges to a durable terminal (never stuck)
+# A lost-lease step converges to a durable terminal (never stuck)
 # ---------------------------------------------------------------------------
 
 
@@ -170,12 +171,12 @@ def test_force_terminal_on_lost_lease_is_idempotent(tmp_path: Path) -> None:
 def test_lost_lease_mid_turn_converges_to_terminal_not_stuck(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The headline regression: when the in-flight turn loses its lease, the
-    task ends terminal (settled / deletable) instead of hanging in ``running``.
+    """When the in-flight turn loses its lease, the task ends terminal
+    (settled / deletable) instead of hanging in ``running``.
 
     Drives the real ``drive_seeded`` path with ``run_leased_task`` forced to
     raise ``InvalidLease`` (a reclaim mid-step) and asserts the task converges
-    to terminal — the exact failure that previously stranded the task with no
+    to terminal — the failure mode that otherwise strands the task with no
     working UI affordance.
     """
     ws = tmp_path / "ws"
@@ -197,8 +198,8 @@ def test_lost_lease_mid_turn_converges_to_terminal_not_stuck(
     with pytest.raises(InvalidLease):
         driver.drive_seeded(seeded)
 
-    # Before the fix: no terminal event was ever written (the step's TaskFailed
-    # was rejected by is_lease_valid) → the task hung in ``running`` forever.
+    # Without the lease-free terminal write, the step's TaskFailed would be
+    # rejected by is_lease_valid and the task would hang in ``running`` forever.
     task = fold(host.event_log, host.content_store, task_id)
     assert task.status == "terminal"
     assert any(e.type == "TaskFailed" for e in event_log.read(task_id))

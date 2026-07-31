@@ -1,11 +1,11 @@
-"""Tests for the first-party ``approval-modes`` manifest plugin (M5).
+"""The first-party ``approval-modes`` manifest plugin.
 
-Covers the spec's acceptance criterion for ``approval-modes``: the four
-goose-style modes produce the expected verdicts (``chat`` denies tools;
+Its four modes decide whether a tool call runs at all (``chat`` denies tools;
 ``approve`` requires approval on all; ``smart_approve`` allows low-risk and
-requires approval otherwise; ``auto`` allows), with per-tool overrides winning;
-plus config validation and loading through ``load_plugins`` + ``process_hooks``
-end-to-end via the loader's explicit-path mechanism (no install).
+requires approval otherwise; ``auto`` allows), with per-tool overrides winning —
+a wrong verdict here is either a blocked agent or an ungated side effect, so
+each mode, the override precedence, config validation, and the end-to-end path
+through ``load_plugins`` + ``process_hooks`` are pinned.
 
 The plugin is loaded twice under two module objects: once here by explicit
 ``importlib`` to reach its classes (``ApprovalModesGuard`` / ``build_policy``),
@@ -130,7 +130,7 @@ def test_smart_approve_classification_is_configurable():
     )
     assert _verdict(guard, "custom_safe") is Verdict.ALLOW
     assert _verdict(guard, "read") is Verdict.ALLOW
-    # The supplied set REPLACES the default, so 'grep' is no longer low-risk.
+    # The supplied set REPLACES the default, so 'grep' is not low-risk here.
     assert _verdict(guard, "grep") is Verdict.REQUIRE_APPROVAL
 
 
@@ -200,7 +200,7 @@ def test_non_list_low_risk_tools_raises():
 
 
 # ---------------------------------------------------------------------------
-# 5. Manifest: env-configured guard + the new loading API
+# 5. Manifest: env-configured guard, resolved through the loader
 # ---------------------------------------------------------------------------
 
 

@@ -1,11 +1,14 @@
-"""Phase 4 I1 — read-only fs tools (`read` / `glob` / `grep`).
+"""``read`` / ``glob`` / ``grep`` — the read-only fs tools.
 
-``read_file`` renamed to ``read``; ``list_dir`` retired.
+Reads are deliberately unfenced while writes are not: observation is reversible,
+so naming an absolute path reads it wherever it points. These tests pin that
+asymmetry together with the budgets that keep a read from swamping the prompt —
+a large body is offloaded whole to the content store while the inline excerpt
+stays under the ceiling — and the ReDoS guard that stops ``grep`` running a
+pattern which would pin the worker thread with no way to time it out.
 
-Each tool is exercised against a real ``InMemoryContentStore`` so the
-artifact path (large ``read``) is real, and every ``ToolResult.output``
-is checked against ``runtime.tool._encode_output`` for the B1 invariant
-(stdlib json.dumps survives — no raw ``ContentRef`` leaked inline).
+Each tool runs against a real ``InMemoryContentStore`` so the artifact path is
+real, and every ``ToolResult.output`` is checked to survive stdlib json.dumps.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ def _ctx_and_workspace(tmp_path: Path) -> tuple[ToolContext, WorkspaceRoot]:
 
 
 def _assert_output_json_safe(result: ToolResult) -> None:
-    """B1: ToolResult.output must survive stdlib json.dumps."""
+    """ToolResult.output must survive stdlib json.dumps."""
     _encode_output(result.output)
 
 
@@ -44,17 +47,17 @@ def _assert_output_json_safe(result: ToolResult) -> None:
 def test_build_fs_tools_exposes_snake_case_names(tmp_path: Path) -> None:
     _, workspace = _ctx_and_workspace(tmp_path)
     tools = build_fs_tools(workspace)
-    # I1 ships the read-only three (list_dir retired,
-    # read_file renamed to read); I2 adds edit / write.
+    # A subset check — the pack also carries the edit tools. Directory listing
+    # gets no tool of its own; ``glob`` covers it.
     assert {"read", "glob", "grep"} <= set(tools.keys())
     assert "list_dir" not in tools
-    # Provider-safe: no dots, no upper case, no spaces — B15.
+    # Provider-safe: no dots, no upper case, no spaces.
     for name in tools.keys():
         assert re.fullmatch(r"[a-z][a-z0-9_]*", name) is not None
 
 
 # ---------------------------------------------------------------------------
-# read (renamed from read_file)
+# read
 # ---------------------------------------------------------------------------
 
 
@@ -111,8 +114,8 @@ def test_read_file_offload_when_large(tmp_path: Path) -> None:
 
 
 def test_read_file_medium_file_fits_inline(tmp_path: Path) -> None:
-    # A ~1500-line file of normal-width lines returns in full, untruncated —
-    # the whole point of the widened budget (no forced re-read paging).
+    # A ~1500-line file of normal-width lines returns in full, untruncated: the
+    # budget is sized so ordinary source files never force re-read paging.
     ctx, workspace = _ctx_and_workspace(tmp_path)
     body = "".join(f"line {i}\n" for i in range(1500))
     (workspace.root / "mid.txt").write_text(body)
@@ -199,9 +202,9 @@ def test_read_file_binary_rejected(tmp_path: Path) -> None:
 
 
 def test_read_file_stray_invalid_bytes_decoded_leniently(tmp_path: Path) -> None:
-    # A text file with a few invalid bytes (legacy encoding remnants) is not
-    # binary — it decodes with U+FFFD replacements instead of failing, and the
-    # summary says so. Only a NUL byte marks real binary (see rejection above).
+    # A text file carrying a few bytes from another encoding is not binary — it
+    # decodes with U+FFFD replacements instead of failing, and the summary says
+    # so. Only a NUL byte marks real binary (see the rejection above).
     ctx, workspace = _ctx_and_workspace(tmp_path)
     body = b"val x = 1 // caf\xe9\nval y = 2\n"
     (workspace.root / "legacy.kt").write_bytes(body)
@@ -218,10 +221,10 @@ def test_read_file_stray_invalid_bytes_decoded_leniently(tmp_path: Path) -> None
 # ---------------------------------------------------------------------------
 # read image
 #
-# A ``read`` of a supported image (png/jpeg/gif/webp) now surfaces the bytes as
-# a ``ToolResult.images`` ContentRef so a vision model can SEE the image; read
-# always emits (the vision gate lives in the adapter). PDFs and over-limit
-# images still degrade with a precise message; a non-image binary keeps the
+# A ``read`` of a supported image (png/jpeg/gif/webp) surfaces the bytes as a
+# ``ToolResult.images`` ContentRef so a vision model can SEE the image; read
+# always emits, because the vision gate lives in the adapter. PDFs and
+# over-limit images degrade with a precise message; a non-image binary gets the
 # generic "not utf-8" error.
 # ---------------------------------------------------------------------------
 
@@ -282,8 +285,8 @@ def test_read_image_detected_by_content_not_extension(tmp_path: Path) -> None:
 
 
 def test_read_image_over_limit_degrades(tmp_path: Path) -> None:
-    # An image over the inline byte limit degrades (no auto-resize in v1) with
-    # an actionable message and emits no image.
+    # An image over the inline byte limit degrades with an actionable message
+    # and emits no image — there is no auto-resize.
     from noeta.builtins.fs.impl.read import IMAGE_MAX_BYTES
 
     ctx, workspace = _ctx_and_workspace(tmp_path)
@@ -298,7 +301,7 @@ def test_read_image_over_limit_degrades(tmp_path: Path) -> None:
 
 
 def test_read_pdf_still_degrades(tmp_path: Path) -> None:
-    # A PDF is a separate (document) wire shape — still degrades, no image.
+    # A PDF is a separate (document) wire shape — it degrades, and emits no image.
     ctx, workspace = _ctx_and_workspace(tmp_path)
     (workspace.root / "doc.pdf").write_bytes(_PDF_MAGIC)
     result = ReadFileTool(workspace=workspace).invoke({"path": "doc.pdf"}, ctx)
@@ -311,8 +314,8 @@ def test_read_pdf_still_degrades(tmp_path: Path) -> None:
 
 
 def test_read_non_image_binary_still_not_utf8(tmp_path: Path) -> None:
-    # Non-image binary keeps the existing generic "not utf-8" error — only
-    # recognised image / PDF magic bytes get special handling.
+    # Non-image binary gets the generic "not utf-8" error — only recognised
+    # image / PDF magic bytes get special handling.
     ctx, workspace = _ctx_and_workspace(tmp_path)
     (workspace.root / "blob.dat").write_bytes(b"\x00\x01\x02\xffnope")
     result = ReadFileTool(workspace=workspace).invoke({"path": "blob.dat"}, ctx)
@@ -418,9 +421,9 @@ def test_glob_drops_symlink_to_outside(tmp_path: Path) -> None:
 
 
 def test_glob_drops_a_symlink_escaping_the_searched_tree(tmp_path: Path) -> None:
-    """The drop rule generalises: it is now "escapes the tree you asked about",
-    not "escapes the workspace" — otherwise an out-of-workspace search would
-    discard every one of its own results."""
+    """The drop rule is "escapes the tree you asked about", not "escapes the
+    workspace" — otherwise an out-of-workspace search would discard every one
+    of its own results."""
     ctx, workspace = _ctx_and_workspace(tmp_path)
     searched = tmp_path / "searched"
     searched.mkdir()
@@ -623,9 +626,8 @@ def _skill_root(tmp_path: Path, files: dict[str, str]) -> Path:
 
 def test_read_reaches_skill_root_by_absolute_path(tmp_path: Path) -> None:
     # The renderer hands the model each skill's absolute base directory; the
-    # model reads the bundled file with the ordinary read tool. This used to
-    # need a ``skill_roots`` allow-list injected at build time — now it is just
-    # the general rule.
+    # model reads the bundled file with the ordinary read tool, since an
+    # absolute path outside the workspace is reachable by the unfenced-read rule.
     ctx, workspace = _ctx_and_workspace(tmp_path)
     root = _skill_root(tmp_path, {"references/NOTE.md": "CONVENTION: be terse."})
     abs_path = str(root / "references" / "NOTE.md")
@@ -639,8 +641,8 @@ def test_read_reaches_skill_root_by_absolute_path(tmp_path: Path) -> None:
 
 def test_read_follows_a_symlink_out_of_the_workspace(tmp_path: Path) -> None:
     # A symlink pointing outside is followed, not refused: with reads unfenced
-    # there is nothing for the old symlink-escape check to protect — the same
-    # bytes are one absolute path away.
+    # there is nothing a symlink-escape check would protect — the same bytes
+    # are one absolute path away.
     import os
 
     ctx, workspace = _ctx_and_workspace(tmp_path)
@@ -656,7 +658,7 @@ def test_read_relative_path_still_resolves_against_the_workspace(
     tmp_path: Path,
 ) -> None:
     # Unfenced does not mean unanchored: a relative path is joined onto the
-    # workspace exactly as before, so the everyday form is unchanged.
+    # workspace, so the everyday form stays anchored there.
     ctx, workspace = _ctx_and_workspace(tmp_path)
     _skill_root(tmp_path, {"NOTE.md": "from skill"})
     result = ReadFileTool(workspace=workspace).invoke({"path": "NOTE.md"}, ctx)

@@ -1,11 +1,7 @@
-"""Deterministic test Policies for Phase 0.
+"""Deterministic test Policies: choreograph an Engine loop without an LLM.
 
-* ``StubFinishPolicy`` — finishes on first call. Issue 01.
-* ``StubScriptedPolicy`` — pops the next Decision from a predetermined
-  sequence on each ``decide``. Issue 02 uses this to choreograph
-  ``tool_calls → finish`` style scripts in integration tests without a
-  real LLM. Exhausted scripts raise ``IndexError`` so a runaway Engine
-  loop surfaces loudly rather than silently re-running the last step.
+An exhausted ``StubScriptedPolicy`` raises ``IndexError`` so a runaway loop
+surfaces loudly instead of silently re-running the last step.
 """
 
 from __future__ import annotations

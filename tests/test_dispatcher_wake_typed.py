@@ -1,4 +1,4 @@
-"""Dispatcher wake semantics for typed WakeCondition (issue 03).
+"""Dispatcher wake semantics for a typed WakeCondition.
 
 These tests pin down four invariants:
 

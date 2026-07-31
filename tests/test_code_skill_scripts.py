@@ -1,10 +1,9 @@
-"""Phase 4.5 Issue E — skill-bundled script execution through `noeta code`.
+"""Skill-bundled script execution in a coding session.
 
 A skill bundles `run.sh`; with `--allow-skill-scripts` the model can call
 `run_skill_script(skill, relpath)`, which is **always** gated by the
-PermissionGuard E precheck + human approval (Issue A) and only then
-executes via an allowlisted interpreter. Default off ⇒ the tool does not
-exist.
+PermissionGuard precheck + human approval and only then executes via an
+allowlisted interpreter. Default off ⇒ the tool does not exist.
 
 Live recording uses a **fake runner** patched onto the
 ``noeta.runtime.subproc._default_run`` seam (so the test does not

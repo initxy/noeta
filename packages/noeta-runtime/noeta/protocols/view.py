@@ -1,19 +1,12 @@
 """View: the Composer's output, the Policy's input.
 
-Issue 14 three-segment shape:
-
-* ``segments`` is a 3-tuple of typed :class:`ViewSegment`
-  (``stable_prefix`` / ``semi_stable`` / ``dynamic_suffix``).
-* ``provider_tool_schemas`` is a separate field (not inside any Block) per the
-  PRD §"Grill round 1 #1" decision — JSON Schema lists should not be
-  stringified through ``TextBlock``.
-* ``plan_ref`` points at the :class:`noeta.protocols.context_plan.ContextPlan`
-  body in ContentStore.
-
-:meth:`iter_messages` is the canonical accessor for "the message
-history a Policy would feed to an LLM": it returns
-``semi_stable.content + dynamic_suffix.content``. The stable_prefix
-content flows separately into ``LLMRequest.system``.
+``segments`` is a fixed 3-tuple of typed :class:`ViewSegment`
+(``stable_prefix`` / ``semi_stable`` / ``dynamic_suffix``);
+``provider_tool_schemas`` stays a separate field so JSON-Schema lists are never
+stringified through a ``TextBlock``. :meth:`iter_messages` is the canonical
+"message history a Policy would feed to an LLM" accessor and returns
+``semi_stable.content + dynamic_suffix.content`` — stable_prefix flows
+separately into ``LLMRequest.system``.
 """
 
 from __future__ import annotations
@@ -36,16 +29,9 @@ class ViewSegment:
     ``content`` is a list of typed :class:`Message` so dynamic_suffix
     keeps role information intact and stable/semi-stable can sit next
     to it without a type-level shape change. ``segment_hash`` is the
-    sha256 hex of the canonical bytes of (``content``, plus any
-    segment-specific extras the Composer hashes together with the
-    content — for stable_prefix the Composer folds ``provider_tool_schemas``
-    in too, per PRD §"Grill round 1 #1").
-
-    The earlier ``entry_sources`` per-entry attribution was retired along with
-    the test infrastructure that consumed it (it was View metadata only — never
-    in ``segment_hash``, the ``ContextPlan`` body, or the wire format). An old
-    recording that still carries the key restores cleanly: the restorer reads
-    only the live fields.
+    sha256 hex of the canonical bytes of ``content`` plus any
+    segment-specific extras the Composer hashes with it — for
+    stable_prefix the Composer folds ``provider_tool_schemas`` in too.
     """
 
     name: SegmentName
@@ -70,8 +56,6 @@ register("view_segment", _restore_segment)
 class View:
     """A composed projection of a Task ready for Policy consumption.
 
-    Issue 14 fields:
-
     * ``segments`` — 3-tuple, fixed order (stable_prefix / semi_stable
       / dynamic_suffix).
     * ``provider_tool_schemas`` — JSON-Schema tool descriptions, passed
@@ -85,7 +69,7 @@ class View:
     plan_ref: Optional[ContentRef] = None
     segments: tuple[ViewSegment, ...] = field(default_factory=tuple)
     provider_tool_schemas: list[dict[str, Any]] = field(default_factory=list)
-    #: ③ (D-3, finding 2) — the RAW rolling history (``task.runtime.messages``)
+    #: The RAW rolling history (``task.runtime.messages``)
     #: the Composer summarised/pruned against, in its *own* coordinate space.
     #: A compaction-aware Policy computes its summarise boundary against THIS
     #: list (never against ``iter_messages()``, which is the post-summary /
@@ -98,7 +82,7 @@ class View:
     #: already collapsed a prefix. Defaulted empty (View is in-memory only,
     #: never serialised) → byte-safe for any View that does not set it.
     rolling_history: list[Message] = field(default_factory=list)
-    #: ③ (D-3, finding 2) — the cumulative raw-history index already collapsed
+    #: The cumulative raw-history index already collapsed
     #: behind the current summary (``ContextState.summary_boundary``). The
     #: Policy treats a fresh boundary as cumulative-from-zero over
     #: ``rolling_history`` (the Composer always replaces ``[:boundary]`` with a

@@ -1,18 +1,13 @@
-"""Anchored content placement + `read`-triggered instructions discovery.
+"""Anchored content placement, and what a ``read`` activates.
 
-Covers docs/adr/anchored-content-placement.md end to end:
-
-* fold records an activation anchor per resident (pre-loop 0, mid-task the
-  rolling-history length, first-write-wins);
-* the composer keeps pre-loop residents in ``semi_stable`` and renders
-  mid-task residents ANCHORED inside the dynamic suffix — sliding past
-  ``role="tool"`` messages, re-hanging after a compaction summary;
-* ``discover_instructions`` walks a read file's ancestor directories inside
-  the workspace (precedence, dedup, naming, containment);
-* the engine seam: with ``instructions_discovery=True`` a successful ``read``
-  emits first-only ``ContextContentRecorded(kind=instructions)`` whose anchor
-  lands AFTER the batched tool results;
-* resume: ``content_preloader`` re-reads active-but-unloaded names.
+An activation is anchored at the history position where it happened, so a
+mid-task resident renders where it became relevant instead of joining the
+cached prefix and rewriting it. The anchor has to survive the two ways
+history moves underneath it: it may never split a ``tool_use`` from its
+batched results, and a compaction summary that swallows its position must
+re-hang it after the summary. Instructions files discovered from a ``read``
+are recorded into the ledger with their bytes, so a resumed task composes
+from the ledger and the store alone and never re-reads disk.
 """
 
 from __future__ import annotations
@@ -371,8 +366,8 @@ def test_discovery_callable_fills_mapping_and_builds_payloads(
     assert payloads[0].policy == "evolving"
     assert len(payloads[0].content_hash) == 64
     assert "src/AGENTS.md" in snapshots
-    # The discovery seam put the rendered bytes so the composer can resolve
-    # them at the recorded hash (spec §6).
+    # The discovery seam puts the rendered bytes so the composer can resolve
+    # them at the recorded hash.
     assert cs.get(
         ContentRef(hash=payloads[0].content_hash, size=0, media_type="")
     ) == render_instructions_text(snapshots["src/AGENTS.md"]).encode("utf-8")
@@ -531,7 +526,7 @@ def test_engine_read_discovers_and_renders_anchored(tmp_path: Path) -> None:
         assert anchor > tool_indices[0]
 
     view = engine._composer.compose(folded)
-    assert view.segments[1].content == []  # nothing in semi_stable
+    assert view.segments[1].content == []
     msgs = view.segments[2].content
 
     def _msg_index(sub: str) -> int:
@@ -548,7 +543,6 @@ def test_engine_read_discovers_and_renders_anchored(tmp_path: Path) -> None:
     assert _msg_index("src conventions") == src_idx
     assert _msg_index("pkg conventions") == pkg_idx
     assert src_idx < pkg_idx
-    # Both render after the tool-results message of the read turn.
     first_tool = min(i for i, m in enumerate(msgs) if m.role == "tool")
     assert src_idx > first_tool
 
@@ -587,11 +581,10 @@ def test_resume_renders_discovered_files_from_store(tmp_path: Path) -> None:
     disp.enqueue(task.task_id)
     _run_to_terminal(engine, disp, task)
 
-    # Fresh-process resume: new inputs (empty in-memory snapshot mapping) but the
-    # SAME durable content store. Under R3 the composer resolves each active
-    # instructions name's bytes from the store at the ledger's hash (spec §6),
-    # so a discovered file renders on resume from the ledger alone — the resume
-    # preloader (still called, must not raise) is no longer what makes it render.
+    # Fresh-process resume: new inputs (empty in-memory snapshot mapping) but
+    # the SAME durable content store. The composer resolves each active
+    # instructions name's bytes from the store at the hash the ledger records,
+    # so the render survives a process boundary that took the mapping with it.
     resumed_inputs = _inputs()
     folded = fold(log, cs, task.task_id)
     resumed_inputs.content_preloader(folded)  # must not raise
@@ -603,9 +596,9 @@ def test_resume_renders_discovered_files_from_store(tmp_path: Path) -> None:
 
 
 def test_resume_render_unaffected_by_disk_change(tmp_path: Path) -> None:
-    """Ledger sufficiency (spec §9 prop 3): once a discovered file's bytes are
-    recorded in the store, deleting the on-disk file does not change the
-    composed output — compose reads the ledger + store, never disk."""
+    """Ledger sufficiency: once a discovered file's bytes are recorded in the
+    store, unlinking the file on disk does not change the composed output —
+    compose reads the ledger and the store, never disk."""
     ws = _ws(tmp_path)
     (ws / "src" / "AGENTS.md").write_text("src conventions")
     (ws / "src" / "pkg" / "x.py").write_text("a\n")

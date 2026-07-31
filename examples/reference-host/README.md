@@ -1,31 +1,25 @@
 # Reference host
 
-A minimal but **real** Noeta host, assembled from the `noeta.sdk` public
-surface only. It is the split spec's reference host
-([`docs/implementation-specs/2026-07-26-sdk-only-repo-split.md`](../../docs/implementation-specs/2026-07-26-sdk-only-repo-split.md),
-decision **D5**): the smallest program that stands up a durable,
-plugin-extended, streaming agent the way an embedding product does — so it
-serves three jobs at once:
-
-- **Host-builder tutorial** — a worked example of the wiring a host owns.
-- **Contract-test bed** — [`tests/test_reference_host.py`](../../tests/test_reference_host.py)
-  drives it end-to-end; it stands in for the product after the agent moves to
-  its own repo.
-- **Integration bed** — the same seams the real product wires, in ~200 lines.
+The smallest complete Noeta embedding host, assembled from the `noeta.sdk`
+public surface alone. It stands up a durable, plugin-extended, streaming agent
+the way a real embedding product does, in one readable file — so it serves as
+both the host-builder tutorial and the contract-test bed that
+[`tests/test_reference_host.py`](../../tests/test_reference_host.py) drives
+end-to-end.
 
 Everything it imports comes from `noeta.sdk`, `noeta.sdk.storage`, and
-`noeta.presets`. It reaches **no** runtime internal — exactly the discipline the
-split repo's import-linter enforces on the product. If the reference host can
-build an agent, a third-party host can too.
+`noeta.presets`. It reaches no runtime internal, which is the point: if the
+reference host can build an agent from the public surface, a third-party host
+can too.
 
 ## What it wires
 
 | Concern | Public surface | In `host.py` |
 | --- | --- | --- |
-| Durable storage | `noeta.sdk.storage` — the sqlite triple | `SqliteEventLog` / `SqliteDispatcher` / `SqliteContentStore` over one file, injected via `HostConfig` |
+| Durable storage | `noeta.sdk.storage` — the sqlite triple | `SqliteDispatcher` / `SqliteEventLog` / `SqliteContentStore` over one file, injected via `HostConfig` |
 | Token streaming | `HostConfig.delta_sink` + `StreamDelta` | `StdoutDeltaSink` — writes live token deltas to stdout |
-| Manifest plugins | `load_plugins` → `PluginSet` | the example plugins are loaded, then handed to `Client(plugins=…)`, which wires them per the D6 effect-scoping rules (governance guards/observer process-wide; the `redaction` transform activated per-agent) |
-| Plugin config | the environment (`apply_plugin_env`) | config is orthogonal to identity in the manifest mechanism, so the host injects it via env (points `protected-paths` at the workspace) |
+| Manifest plugins | `load_plugins` → `PluginSet` | the example plugins are loaded by path, then handed to `Client(plugins=…)`, which routes each contribution by its effect scope |
+| Plugin config | the environment (`plugin_env_scope`) | a manifest keeps config orthogonal to identity, so the host injects it as environment variables before the plugin modules import |
 | Agent identity | `noeta.presets.main_options()` | the official `main` agent as the base recipe |
 | Session driving | `noeta.sdk.Client` | `ReferenceHost.run(goal)` drives one turn |
 
@@ -35,80 +29,79 @@ build an agent, a third-party host can too.
 python examples/reference-host/host.py
 ```
 
-It drives one turn against a **network-free** scripted streaming provider,
-printing the live token stream, then the persisted-event and plugin summary:
+It drives one turn against a network-free scripted streaming provider, printing
+the live token stream and then a summary of what was persisted and wired:
 
 ```
 --- streaming (live token deltas) -------------------------
 Hello from the Noeta reference host.
 -----------------------------------------------------------
-task:          task-…
-status:        suspended        # the turn finished; the session awaits the next goal
+task:          task-522118d276d246ca9d589d946429b0ac
+status:        suspended
 deltas seen:   6
-sqlite file:   /tmp/…/noeta.sqlite  (exists=True)
+sqlite file:   /tmp/noeta-reference-host-…/noeta.sqlite  (exists=True)
 events stored: 14
-loaded plugins:  ['approval-modes', 'git-checkpoint', 'protected-paths', 'redaction']
+loaded plugins:  ['approval-modes', 'checklist-reminder', 'git-checkpoint', 'memory-recall', 'protected-paths', 'redaction']
 process guards:  ['approval_modes', 'protected_paths']
 process observers: ['git_checkpoint']
-activated:       ['fs', 'web', …, 'redaction']
+activated:       ['fs', 'web', 'todo_write', 'ask_user_question', 'skill_invocation', 'memory', 'mcp', 'redaction', 'checklist-reminder', 'memory-recall']
 ```
 
-`status: suspended` is the healthy multi-turn outcome: a finished turn suspends
-on the next-goal handle (a live session waiting for the next message), and the
-streamed answer is already durable in the event log.
+`status: suspended` is the healthy outcome for a turn that finished: the task
+suspends on the next-goal handle, meaning a live session waiting for the next
+message rather than a closed one. The streamed answer is already durable in the
+event log by that point — the deltas were only a preview of it.
 
 ## Swapping in a real provider
 
-The host is **provider-agnostic** — `build_reference_host(provider=...)` takes
-whatever satisfies `LLMProvider` (and, for streaming, the optional
+`build_reference_host(provider=...)` takes anything satisfying `LLMProvider`,
+and streams tokens if it also implements `complete_streaming` (the optional
 `StreamingProvider` capability). The offline demo injects
 `_ScriptedStreamingProvider`, a scripted double built from the public message
-types. A production host deletes that and injects a real provider — one line,
+types. A production host injects a real provider instead — one argument,
 nothing else changes:
 
 ```python
-from noeta.sdk.providers import OpenAICompatProvider   # or an AnthropicProvider
+from noeta.sdk.providers import OpenAICompatProvider   # or AnthropicProvider
 
 host = build_reference_host(
-    provider=OpenAICompatProvider(...),   # ← the only line that differs
+    provider=OpenAICompatProvider(base_url=..., api_key=...),
     workspace_dir=Path("/srv/work"),
     db_path=Path("/var/lib/noeta/state.sqlite"),
 )
 ```
 
-Because a real provider that implements `complete_streaming` is a
-`StreamingProvider`, the same `delta_sink` starts pushing real token deltas with
-no further wiring. Point the sink at your transport (an SSE hub, a websocket)
-instead of stdout, and the host streams to a browser.
+The same `delta_sink` then starts carrying real token deltas with no further
+wiring. Point the sink at your transport — an SSE hub, a websocket — instead of
+stdout, and the host streams to a browser.
 
 ## The plugins it loads
 
-Loaded from [`examples/plugins/`](../plugins/) by explicit path (they are not
-installed in this repo, so entry-point discovery does not apply). The Client
-wires each per the [effect-scoping rules](../../docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md)
-(spec D6):
+Loaded from [`examples/plugins/`](../plugins/) by explicit path, because they
+are not installed and so entry-point discovery cannot find them. Each is wired
+according to the scope of the surface it contributes to:
 
-- **`protected-paths`** — a `guard` that fences file writes to the workspace
-  (governance, process-wide). The host points it at the workspace via
-  `NOETA_PROTECTED_PATHS_ROOTS`.
-- **`approval-modes`** — a `guard` implementing goose-style approval modes
-  (governance, process-wide).
+- **`protected-paths`** — a `guard` fencing file writes to a set of roots. The
+  host points it at the session workspace via `NOETA_PROTECTED_PATHS_ROOTS`.
+- **`approval-modes`** — a `guard` implementing operator-chosen tool-approval
+  modes.
 - **`git-checkpoint`** — an `observer` that snapshots the workspace around
-  mutating tool calls (governance, process-wide).
-- **`redaction`** — a `tool_result_transform` (per-agent) the host **activates**
-  on the main agent, so tool results are scrubbed of secrets before recording.
-- **`checklist-reminder`** — a compose-time `reminder` (per-agent, track B),
-  activated on the main agent; it renders at the tail of the dynamic suffix.
-- **`memory-recall`** — a recorded `reminder_provider` (per-agent, track A),
-  activated on the main agent; it runs at the `turn_intake` seam and its output
-  lands in the ledger, so resume folds it back without re-querying.
+  mutating tool calls, pointed at the workspace via `NOETA_GIT_CHECKPOINT_REPO`.
+- **`redaction`** — a `tool_result_transform` that scrubs secrets out of tool
+  results before they are recorded.
+- **`checklist-reminder`** — a compose-time `reminder` rendered at the tail of
+  the dynamic suffix.
+- **`memory-recall`** — a `reminder_provider` bound to the `turn_intake` seam;
+  its output is recorded, so resuming a task folds the recall back without
+  re-querying.
 
-The three per-agent surfaces are all named in `default_activation()` — a
-per-agent contribution fires only for an agent that opts in, while the governance
-guards / observer apply process-wide once loaded. A name collision or a broken
-plugin fails the build loudly, never a mid-session turn.
+The first three are governance and take effect for every agent in the process
+the moment they load. The last three contribute per-agent surfaces, which fire
+only for an agent that opts in — hence `default_activation()`, which the builder
+folds into `Options.plugins` on top of the preset's own activations. A name
+collision or a broken plugin fails the build loudly, never a mid-session turn.
 
 Plugin config rides the environment, and the host sets it inside
-`plugin_env_scope(...)` — in force while the plugin modules import, restored
-afterwards, so a host built against a temporary workspace does not leave that
-path behind for the next one.
+`plugin_env_scope(...)` so the variables are in force exactly while the plugin
+modules import and are restored afterwards. Without that, a host built against a
+temporary workspace would leave a stale path behind for the next one.

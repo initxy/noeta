@@ -1,25 +1,12 @@
-"""``react`` — the official decision-mapping policy built-in.
+"""``react`` — the default decision-mapping policy built-in.
 
-The implementation lives in the sibling ``impl/`` package (microkernel phase
-2b): ``ReActPolicy``, the workflow ``OrchestrationPolicy`` /
-``StructuredOutputPolicy``, and the builder's ``default_policy_factory`` body
-(``build_react_policy_factory``). The DEFAULT policy is not a per-agent
-contribution: its identity is already baked SDK-side as ``POLICY_REF ("react",
-"1")`` for every compiled agent (parity pins the bytes), and the D10 ``policy``
-surface exists for plugins that *replace* the default. What the manifest DOES
-declare (control-tool-surface S2b) is the two workflow control tools this
-built-in owns: ``run_workflow`` (band 500) + ``structured_output`` (band 600),
-each a ``control_tool`` factory the kernel builder's mount loop runs. The
-catalogue entry also makes the capability listable and the activation name
-resolve.
-
-Consequence, made explicit: this built-in is **replaceable but not removable**.
-``disabled_builtins=["react"]`` raises (``_NON_REMOVABLE_BUILTINS`` in
-``noeta.client.plugin_set``) instead of dropping the name while the policy
-stays wired — an agent with no policy has no identity to compile and no parity
-to resume. Swapping the brain is the supported move and already works: a plugin
-contributing the ``policy`` surface takes over both ``POLICY_REF`` and the
-factory the host wires.
+The default policy's identity is pinned SDK-side as ``POLICY_REF ("react",
+"1")`` for every compiled agent, so this manifest declares only what is a
+genuine per-agent contribution: the two workflow control tools. That makes
+``react`` replaceable but not removable — ``disabled_builtins=["react"]``
+raises, because an agent with no policy has no identity to compile and nothing
+to resume against; contributing the ``policy`` surface is how the brain is
+swapped.
 """
 
 from __future__ import annotations

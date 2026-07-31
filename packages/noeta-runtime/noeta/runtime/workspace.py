@@ -1,40 +1,14 @@
-"""`WorkspaceRoot` — the path-containment seam for the fs tool pack.
+"""``WorkspaceRoot`` — the path-containment fence for the fs write tools.
 
-Every *write* fs tool resolves user-supplied paths through one
-``WorkspaceRoot`` instance. The resolver canonicalises both the workspace
-root and the target through ``os.path.realpath`` (symlink-resolving) and
-asserts the target lives under the realpath root (or under one of the
-``extra_roots`` the host has authorized). This defeats three classes of
-escape:
-
-* absolute paths (``/etc/passwd``) — ``realpath`` of an absolute path
-  is itself; the containment check fails.
-* ``..``-rooted relatives (``../outside``) — ``realpath`` collapses
-  them; the containment check fails.
-* symlinks pointing outside the workspace — ``realpath`` resolves them
-  to the target; the containment check fails.
-
-The check is done at *path-resolution* time, before any IO. Per PRD §B19,
-this is not a sandbox: a tool that invokes external processes
-(``shell_run``, I5) can still touch the rest of the filesystem.
-``WorkspaceRoot`` is about *path resolution*, not subprocess containment.
-
-**Reads are not fenced** (:func:`resolve_anywhere`). A relative path still
-resolves under the workspace, but an absolute path is read wherever it
-points: reading a neighbouring checkout is the everyday "look at how the
-other repo does it" move, and a read is not a destructive act, so paying
-for it with a hard failure the model cannot recover from bought nothing.
-The asymmetry is deliberate — the wall stands where the irreversible act
-is (write / edit / patch), not where the observation is.
-
-**Writes widen by authorization, not by escape.** ``extra_roots`` carries
-the directories a host has decided this caller may write to. The runtime
-takes them as given and applies the same component-wise containment it
-applies to the workspace itself; deciding *what* is in that tuple (asking
-a human, remembering the answer) is the host's business — see the
-noeta-agent product's approval gate, which pauses an out-of-workspace
-write, records the owner's ruling as a durable grant, and feeds the
-granted directories back in here on the resumed call.
+Every write tool resolves user-supplied paths through one ``WorkspaceRoot``:
+root and target are both canonicalised (``realpath``, symlink-resolving) and
+the target must land under the root — or under a directory the host has
+explicitly authorized — which defeats absolute paths, ``..`` escapes and
+outward symlinks in a single check made before any IO. Reads are
+deliberately NOT fenced (:func:`resolve_anywhere`): observation is not a
+destructive act, so the wall stands only where the irreversible act is.
+This is path resolution, not a sandbox — a tool that spawns an external
+process can still touch the rest of the filesystem.
 """
 
 from __future__ import annotations
@@ -64,11 +38,10 @@ __all__ = [
 def path_within(resolved: Path, root: Path) -> bool:
     """Whether ``resolved`` is ``root`` or lives under it.
 
-    The one containment predicate the fence, the display helper and the
-    product's approval gate all share. Matching is **component-wise**
-    (``Path.is_relative_to``), never string-prefix: ``/srv/app-old`` is NOT
-    under ``/srv/app``, though its string form starts with it. Both
-    arguments must already be canonicalised by the caller.
+    The one containment predicate every caller shares. Matching is
+    **component-wise**, never string-prefix: ``/srv/app-old`` is NOT under
+    ``/srv/app``, though its string form starts with it. Both arguments must
+    already be canonicalised by the caller.
     """
     return resolved == root or resolved.is_relative_to(root)
 
@@ -81,36 +54,31 @@ class WorkspaceEscape(ValueError):
 class WorkspaceRoot:
     """Symlink-safe path containment seam.
 
-    ``root`` is the workspace directory the coding agent operates inside.
-    It is canonicalised (``realpath``) at construction; the original
-    user-facing form is kept for messages via ``display``.
+    ``root`` is canonicalised (``realpath``) at construction; ``display``
+    keeps the original user-facing form for messages.
     """
 
     root: Path
     display: str
-    #: Directories OUTSIDE ``root`` this instance may also resolve into —
-    #: the host's authorization surface for out-of-workspace writes (the
-    #: product fills it from the owner's standing grants; the CLI / a bare
-    #: SDK embedding leaves it empty and keeps the single-root wall). Must
-    #: already be canonicalised (``realpath``) by the caller, exactly like
-    #: ``root``. Empty (default) ⇒ byte-identical to a single-root build.
+    #: Directories OUTSIDE ``root`` this instance may also resolve into — the
+    #: host's authorization surface for out-of-workspace writes. Must already
+    #: be canonicalised by the caller, exactly like ``root``. Empty ⇒ the
+    #: single-root wall.
     extra_roots: tuple[Path, ...] = ()
-    #: When ``True``, ``resolve`` normalises *lexically* (``os.path.normpath``)
-    #: instead of ``os.path.realpath`` — the containment fence for a **sandbox**
-    #: workspace, whose ``root`` is a *container* path that does not exist on the
-    #: host (so a host ``realpath`` / symlink-resolve is both wrong and
-    #: impossible). The container itself is the real isolation boundary (D7);
-    #: this stays a tidiness fence (reject ``..`` above root / absolute
-    #: escapes). Default ``False`` ⇒ today's host realpath behaviour, byte-equal
-    #: for every existing construction.
+    #: When ``True``, ``resolve`` normalises *lexically* instead of resolving
+    #: symlinks — the fence for a **sandbox** workspace, whose ``root`` is a
+    #: container path that does not exist on the host, making a host
+    #: ``realpath`` both wrong and impossible. The container is the real
+    #: isolation boundary there; this degrades to a tidiness fence that still
+    #: rejects ``..`` above root and absolute escapes.
     lexical: bool = False
 
     @classmethod
     def from_path(cls, path: str | os.PathLike[str]) -> "WorkspaceRoot":
         """Build a root from a user-supplied directory path.
 
-        The directory must exist and be a directory; this is a coding
-        agent's workspace, not a path to be created on the fly.
+        The directory must already exist: this is a workspace to operate
+        inside, not a path to be created on the fly.
         """
         original = os.fspath(path)
         real = Path(os.path.realpath(original))
@@ -122,13 +90,11 @@ class WorkspaceRoot:
 
     @classmethod
     def for_container(cls, container_dir: str | os.PathLike[str]) -> "WorkspaceRoot":
-        """Build a *lexical* root at a **container** working directory (D7).
+        """Build a *lexical* root at a **container** working directory.
 
         The directory lives inside a sandbox container, not on the host, so it
-        is neither ``realpath``-resolved nor checked for existence here —
-        ``resolve`` does purely lexical (``normpath``) containment and the
-        remote ``ExecEnv`` performs the actual IO. The path must be absolute
-        (a container work dir like ``/home/gem/workspace``).
+        is neither ``realpath``-resolved nor checked for existence here; the
+        remote ``ExecEnv`` performs the actual IO. It must be absolute.
         """
         original = os.fspath(container_dir)
         root = Path(os.path.normpath(original))
@@ -141,11 +107,10 @@ class WorkspaceRoot:
     def with_extra_roots(self, roots: Sequence[Path]) -> "WorkspaceRoot":
         """Return a copy that also resolves into ``roots``.
 
-        The host's per-call widening point: the write tools rebuild their
-        fence from the authorized directories at invoke time, so a grant
-        made *while* a task is paused takes effect on the resumed call
-        without rebuilding the tool set (which would move the stable
-        prefix). An empty ``roots`` returns an equivalent instance.
+        The per-call widening point: the write tools rebuild their fence from
+        the authorized directories at invoke time, so a grant made *while* a
+        task is paused takes effect on the resumed call without rebuilding the
+        tool set — which would move the stable prefix.
         """
         return replace(self, extra_roots=tuple(roots))
 
@@ -155,9 +120,9 @@ class WorkspaceRoot:
         (container) root, relative targets joined onto the workspace."""
         joined = self.root / target if not os.path.isabs(target) else Path(target)
         if self.lexical:
-            # Lexical containment for a container root: collapse ``..`` / ``.``
-            # without touching the host FS (no symlink resolution — there is no
-            # host symlink to follow; the container is the isolation boundary).
+            # Collapse ``..`` / ``.`` without touching the host FS: there is no
+            # host symlink to follow for a container path, and the container
+            # itself is the isolation boundary.
             return Path(os.path.normpath(os.fspath(joined)))
         return Path(os.path.realpath(os.fspath(joined)))
 
@@ -171,11 +136,9 @@ class WorkspaceRoot:
     def resolve(self, target: str) -> Path:
         """Return ``target`` joined under the workspace, canonicalised.
 
-        ``target`` may be relative (joined to the root) or absolute; either
-        way the result must live under ``self.root`` — or under an authorized
-        ``extra_roots`` entry — after resolution (``realpath`` for a host
-        root, ``normpath`` for a lexical / container root). Raises
-        ``WorkspaceEscape`` otherwise.
+        ``target`` may be relative or absolute; either way the result must
+        live under ``self.root`` or an authorized ``extra_roots`` entry
+        **after** resolution, and raises ``WorkspaceEscape`` otherwise.
         """
         if not isinstance(target, str) or not target:
             raise WorkspaceEscape("path must be a non-empty string")
@@ -189,10 +152,9 @@ class WorkspaceRoot:
     def relative(self, resolved: Path) -> str:
         """Return ``resolved`` as a workspace-relative POSIX string.
 
-        Used for stable display strings in tool ``output`` / ``summary``
-        (cross-OS deterministic). A path outside the workspace — an unfenced
-        read, or a write into an authorized ``extra_roots`` directory — has
-        no relative form and is shown absolute, which is also the honest
+        POSIX form keeps tool ``output`` / ``summary`` display strings
+        deterministic across operating systems. A path outside the workspace
+        has no relative form and is shown absolute, which is also the honest
         display: it tells the reader the path left the workspace.
         """
         if not path_within(resolved, self.root):
@@ -202,10 +164,9 @@ class WorkspaceRoot:
 
 
 #: ``task_id -> the directories this task may write outside its workspace``.
-#: The host's authorization seam for the write tools, resolved per call (NOT
-#: bound at build time) so an authorization granted while the task sits paused
-#: on an approval takes effect on the resumed call — and so widening it never
-#: perturbs the tool set / stable prefix. ``None`` ⇒ the single-root wall.
+#: Resolved per call rather than bound at build time, so an authorization
+#: granted while the task sits paused on an approval takes effect on the
+#: resumed call and widening it never perturbs the tool set / stable prefix.
 WriteRootsResolver = Callable[[str], Sequence[str]]
 
 
@@ -218,11 +179,10 @@ def authorized_workspace(
     host authorizes for the task behind ``ctx``.
 
     Fails **closed** in every degenerate case — no resolver, no task id on the
-    context, a resolver that raises, a non-directory entry — by returning the
+    context, a resolver that raises, a non-absolute entry — by returning the
     unwidened workspace, so a broken authorization path can only ever refuse a
     write, never permit one. Entries are canonicalised the same way the root
-    is (``realpath``, or ``normpath`` under a lexical / container root), so
-    containment stays symlink-safe and component-wise.
+    is, keeping containment symlink-safe and component-wise.
     """
     if resolver is None:
         return workspace
@@ -247,15 +207,7 @@ def authorized_workspace(
 
 
 def tool_error(tool_name: str, message: str) -> ToolResult:
-    """Uniform ``ToolResult(success=False, summary="<tool>: <message>")``.
-
-    The single failure shape used by the read- and write-side fs tools
-    (``read`` / ``glob`` / ``grep`` / ``edit``
-    / ``write``). ``shell``'s ``_err`` and ``apply_patch`` /
-    ``run_skill_script``'s one-arg ``_err`` are *not* folded in here: they
-    keep their own form (the latter two bind the tool name as a constant),
-    so this seam only unifies the byte-identical two-arg variant.
-    """
+    """Uniform ``ToolResult(success=False, summary="<tool>: <message>")``."""
     return ToolResult(success=False, summary=f"{tool_name}: {message}")
 
 
@@ -264,10 +216,8 @@ def resolve_or_error(
 ) -> "Path | ToolResult":
     """Resolve ``path`` under ``workspace`` or return a failure ``ToolResult``.
 
-    Wraps ``WorkspaceRoot.resolve``: a ``WorkspaceEscape`` is degraded to
-    ``tool_error(tool_name, str(exc))`` so a malformed / escaping path does
-    not crash the worker. This is the shared form of the per-tool
-    ``_resolve`` that ``read.py`` and ``edit.py`` each used to define.
+    A ``WorkspaceEscape`` is degraded to a failed result so a malformed or
+    escaping path is answered to the model instead of crashing the worker.
     """
     try:
         return workspace.resolve(path)
@@ -280,19 +230,16 @@ def resolve_anywhere(
 ) -> "Path | ToolResult":
     """Resolve ``path`` for *reading* — unfenced.
 
-    A **relative** path is joined onto the workspace and canonicalised, so
-    the everyday form (``src/main.py``) behaves exactly as it always has. An
-    **absolute** path is canonicalised and returned as-is: reads are not
-    fenced, so a neighbouring checkout, a skill pack's bundled reference and
-    a file under ``/usr/share`` are all reachable by naming them.
+    A relative path is joined onto the workspace; an absolute path is
+    canonicalised and returned as-is, so a neighbouring checkout, a skill
+    pack's bundled reference and a file under ``/usr/share`` are all reachable
+    by naming them. A read is observation, not mutation, and the fence that
+    matters guards the irreversible acts (:func:`resolve_or_error`). Anything
+    the host must not disclose has to be kept off the host or out of the
+    process — a path check inside the tool is not that boundary, since
+    ``shell_run`` reads the same bytes.
 
-    A read is observation, not mutation; the fence that matters guards the
-    irreversible acts (:func:`resolve_or_error`, used by ``edit`` / ``write``
-    / ``apply_patch``). Anything the *host* must not disclose has to be kept
-    off the host or out of the process — a path check inside the tool was
-    never that boundary, since ``shell_run`` reads the same bytes (§B19).
-
-    Only the malformed-argument case fails, so the shape stays
+    Only the malformed-argument case fails, so the return shape stays
     ``Path | ToolResult`` like its fenced sibling.
     """
     if not isinstance(path, str) or not path:
@@ -305,7 +252,7 @@ class FsWriteMode(str, Enum):
 
     ``DRY_RUN`` produces the proposed diff artifact + ``applied=False``;
     ``APPLY`` performs the write. The Engine never sees this enum — the
-    decision lives entirely on the closure-injected ``FsToolPack``.
+    decision is bound into the tools themselves.
     """
 
     DRY_RUN = "dry_run"

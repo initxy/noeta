@@ -1,13 +1,11 @@
-"""``ask_user_question`` — the structured-HITL control tool as a built-in plugin.
+"""``ask_user_question`` — the structured human-in-the-loop control tool.
 
-Control-tool-surface S2, D3 + D8: the manifest declares one ``control_tool``
-factory (band 300 — the pre-migration schema band). Its mount also publishes the
-answer codec as a mount export (D8), so the kernel driver's ``answer`` path can
-decode a submitted answer without importing this built-in. ``ask_user_question``
-stays a recognized activation name, so ``plugins=("ask_user_question",)`` still
-lands ``"ask_user_question"`` in the compiled ``AgentSpec.plugins`` identity
-tuple — the plugin name matching the activation name does not change activation
-semantics.
+The manifest declares one ``control_tool`` factory at band 300, which fixes
+this tool's slot in the builder's mount loop so the cross-plugin collision
+check iterates in a stable order; the schema and routing byte-orders come from
+the mount's own bands. The mount also publishes the answer codec, so the
+kernel driver's ``answer`` path decodes a submitted answer without importing
+this built-in.
 """
 
 from __future__ import annotations

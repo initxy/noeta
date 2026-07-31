@@ -1,12 +1,10 @@
-"""``noeta.tools.tool`` — the @tool decorator/factory.
+"""The ``@tool`` decorator/factory from ``noeta.tools``.
 
-Behaviours under test:
-    * a wrapped function is a runnable Tool: it carries the four metadata
-      fields and ``invoke`` delegates to the function
-    * it also publishes a ``.ref`` ToolRef whose four fields match the Tool
-      metadata, and which ``==`` a hand-written ToolRef
-    * ``version`` is required — omitting it raises a clear error
-    * both call forms (direct factory and ``@tool(...)`` decorator) work
+A decorated function has to serve as the runnable Tool AND as the ``AgentSpec``
+entry that names it, so the ``.ref`` it publishes must equal a hand-written
+``ToolRef`` field for field — otherwise a spec and the tool it declares drift
+apart silently. ``version`` has no default for the same reason: an unversioned
+ref cannot pin what the agent was built against.
 """
 
 from __future__ import annotations
@@ -65,13 +63,13 @@ def test_ref_matches_metadata_and_equals_handwritten_ref() -> None:
 
     ref = t.ref
     assert isinstance(ref, ToolRef)
-    # The three ref fields mirror the Tool metadata exactly.
     assert (ref.name, ref.version, ref.risk_level) == (
         t.name,
         t.version,
         t.risk_level,
     )
-    # And equals a ref written out by hand (value equality on the dataclass).
+    # Value equality with a hand-written ref is the point: a spec author may
+    # write either form and must get the same identity.
     assert ref == ToolRef(
         name="echo", version="3", risk_level="medium"
     )

@@ -1,18 +1,14 @@
-"""Dispatcher full lease lifecycle (issue 06).
+"""Dispatcher strict lease-lifecycle invariants the concurrency layers rely on.
 
-Augments the relaxed Phase-0 tests in ``test_dispatcher.py`` by checking
-the strict behaviours the kernel needs once Engine + EventLog enforce
-the three concurrency layers:
-
-* ``is_lease_valid(task_id, lease_id)`` reports lease liveness so the
-  EventLog can refuse writes from expired / released leases.
-* ``heartbeat`` honours a per-lease hard cap and force-releases the
-  task to ``suspended`` with ``lease_quota_exceeded`` when exceeded.
+* ``is_lease_valid(task_id, lease_id)`` reports lease liveness so the EventLog
+  can refuse writes from expired / released leases.
+* ``heartbeat`` honours a per-lease hard cap and force-releases the task to
+  ``suspended`` with ``lease_quota_exceeded`` when exceeded.
 * ``release`` rejects unknown / already-released leases.
-* ``fail`` retryable bounded by ``max_attempts`` (default 3).
+* ``fail`` retryable is bounded by ``max_attempts`` (default 3).
 * Two workers racing for the same task: only one wins the lease.
-* ``requeue_stale`` makes the stale task available; the original
-  lease_id becomes invalid for any subsequent write.
+* ``requeue_stale`` makes the stale task available; the original lease_id
+  becomes invalid for any subsequent write.
 """
 
 from __future__ import annotations

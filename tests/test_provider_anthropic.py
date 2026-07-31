@@ -1,11 +1,12 @@
-"""Test matrix for :class:`noeta.builtins.providers.impl.anthropic.AnthropicProvider`.
+"""Guards :class:`noeta.builtins.providers.impl.anthropic.AnthropicProvider` against
+the Messages wire shape: content-block grouping, tool_result placement, thinking and
+redacted-thinking round trips, stop_reason mapping, cache_control breakpoints, error
+translation, and the vision guard.
 
-Every adapter rule gets a dedicated case. All HTTP traffic is
-mocked via ``respx`` so the suite performs zero real network calls. Tests
-deliberately mirror the shape of ``tests/test_provider_openai_compat.py``
-but focus on Anthropic-specific wire-shape constraints (assistant content
-order, tool_result placement, max_tokens fail-fast, thinking adapter-unit
-only).
+Anthropic rejects bodies other vendors accept — assistant blocks must be grouped by
+type, tool_result may only ride a user turn, max_tokens is mandatory — so every adapter
+rule gets a dedicated case. All HTTP traffic goes through a ``respx`` mock; the suite
+makes zero real network calls.
 """
 
 from __future__ import annotations
@@ -142,7 +143,7 @@ def test_plain_text_response_maps_to_end_turn_textblock() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Headers / endpoint (Q8)
+# Headers / endpoint
 # ---------------------------------------------------------------------------
 
 
@@ -224,7 +225,7 @@ def test_complete_with_headers_none_matches_plain_complete() -> None:
 
 
 # ---------------------------------------------------------------------------
-# max_tokens fail-fast (B4)
+# max_tokens fail-fast
 # ---------------------------------------------------------------------------
 
 
@@ -277,7 +278,7 @@ def test_max_tokens_request_only_works_without_default() -> None:
 
 
 # ---------------------------------------------------------------------------
-# system field separation (G2)
+# system field separation
 # ---------------------------------------------------------------------------
 
 
@@ -294,7 +295,7 @@ def test_system_field_lifted_to_top_level() -> None:
     provider.complete(_basic_request(system=sys))
 
     body = json.loads(route.calls.last.request.content.decode("utf-8"))
-    # #4: system is lifted into block form to carry a cache_control breakpoint.
+    # system is lifted into block form so it can carry a cache_control breakpoint.
     assert body["system"] == [
         {
             "type": "text",
@@ -330,14 +331,14 @@ def test_system_none_omits_top_level_system_field() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Assistant content deterministic regrouping (B2)
+# Assistant content deterministic regrouping
 # ---------------------------------------------------------------------------
 
 
 @respx.mock
 def test_assistant_content_regrouped_thinking_text_tool_use() -> None:
-    """rev2 B2: adapter regroups assistant content blocks
-    deterministically as ThinkingBlock* → TextBlock* → ToolUseBlock*."""
+    """Assistant blocks are regrouped as ThinkingBlock* → TextBlock* → ToolUseBlock*
+    whatever order the caller supplied; Anthropic rejects other orderings."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
         return_value=httpx.Response(200, json=_anthropic_response())
     )
@@ -363,9 +364,8 @@ def test_assistant_content_regrouped_thinking_text_tool_use() -> None:
 
 @respx.mock
 def test_assistant_content_stable_sort_within_group() -> None:
-    """B2: same-type blocks preserve caller order; only inter-type
-    regroup is applied. Two TextBlocks in input order A, B stay A, B
-    in output even if a tool_use sits between them on input."""
+    """Regrouping is stable: same-type blocks keep caller order, so TextBlocks A then B
+    stay A then B even with a tool_use sitting between them on input."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
         return_value=httpx.Response(200, json=_anthropic_response())
     )
@@ -387,7 +387,7 @@ def test_assistant_content_stable_sort_within_group() -> None:
 
 
 # ---------------------------------------------------------------------------
-# tool_use / tool_result round-trip (G3)
+# tool_use / tool_result round-trip
 # ---------------------------------------------------------------------------
 
 
@@ -409,8 +409,8 @@ def test_tool_use_block_outbound_translation() -> None:
 
     body = json.loads(route.calls.last.request.content.decode("utf-8"))
     block = body["messages"][1]["content"][0]
-    # #4: this is the last block of the last message, so it carries the
-    # ephemeral cache_control breakpoint.
+    # Last block of the last message, so it carries the ephemeral cache_control
+    # breakpoint.
     assert block == {
         "type": "tool_use",
         "id": "toolu_001",
@@ -422,7 +422,7 @@ def test_tool_use_block_outbound_translation() -> None:
 
 @respx.mock
 def test_role_tool_message_becomes_user_with_tool_result_only() -> None:
-    """B3: role='tool' folds into one user message whose content is
+    """role='tool' folds into one user message whose content is
     exclusively tool_result blocks in input order."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
         return_value=httpx.Response(200, json=_anthropic_response())
@@ -461,7 +461,7 @@ def test_role_tool_message_becomes_user_with_tool_result_only() -> None:
 
 @respx.mock
 def test_role_user_with_tool_result_block_raises() -> None:
-    """B3 placement defense: ToolResultBlock is forbidden inside
+    """Placement defense: ToolResultBlock is forbidden inside
     role='user' Message; caller must use role='tool'."""
     respx.post(MESSAGES_ENDPOINT).mock(
         return_value=httpx.Response(200, json=_anthropic_response())
@@ -482,7 +482,7 @@ def test_role_user_with_tool_result_block_raises() -> None:
 
 @respx.mock
 def test_role_tool_with_non_tool_result_block_raises() -> None:
-    """B3 placement defense: role='tool' Message must contain only
+    """Placement defense: role='tool' Message must contain only
     ToolResultBlock; anything else raises."""
     respx.post(MESSAGES_ENDPOINT).mock(
         return_value=httpx.Response(200, json=_anthropic_response())
@@ -502,7 +502,7 @@ def test_role_tool_with_non_tool_result_block_raises() -> None:
 
 @respx.mock
 def test_tool_result_error_prefixed_to_content() -> None:
-    """Q10: ToolResultBlock.error str is prefixed to content to keep
+    """ToolResultBlock.error str is prefixed to content to keep
     Noeta's two-field success/error split visible in Anthropic's
     one-field tool_result body."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
@@ -556,7 +556,7 @@ def test_tool_use_block_inbound_translation() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Thinking adapter-unit translation (G4 / B1)
+# Thinking adapter-unit translation
 # ---------------------------------------------------------------------------
 
 
@@ -670,7 +670,7 @@ def test_thinking_block_outbound_translation_with_signature() -> None:
 
     body = json.loads(route.calls.last.request.content.decode("utf-8"))
     assistant_block = body["messages"][1]["content"][0]
-    # #4: last block of the last message carries the cache_control breakpoint.
+    # last block of the last message carries the cache_control breakpoint.
     assert assistant_block == {
         "type": "thinking",
         "thinking": "reasoning",
@@ -681,7 +681,7 @@ def test_thinking_block_outbound_translation_with_signature() -> None:
 
 @respx.mock
 def test_thinking_block_outbound_without_signature_omits_field() -> None:
-    """B1 / Q5: signature=None is propagated as missing field (not
+    """signature=None is propagated as a missing field (not
     written as null) so Anthropic returns its own reject — adapter
     never silently drops the thinking block."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
@@ -696,7 +696,7 @@ def test_thinking_block_outbound_without_signature_omits_field() -> None:
 
     body = json.loads(route.calls.last.request.content.decode("utf-8"))
     assistant_block = body["messages"][1]["content"][0]
-    # #4: last block of the last message carries the cache_control breakpoint;
+    # last block of the last message carries the cache_control breakpoint;
     # signature is still absent (None propagates as a missing field).
     assert assistant_block == {
         "type": "thinking",
@@ -707,7 +707,7 @@ def test_thinking_block_outbound_without_signature_omits_field() -> None:
 
 
 # ---------------------------------------------------------------------------
-# tools schema unpack (NB3)
+# tools schema unpack
 # ---------------------------------------------------------------------------
 
 
@@ -735,7 +735,7 @@ def test_provider_tool_schemas_openai_shape_unpacks_to_anthropic_shape() -> None
         )
     )
     body = json.loads(route.calls.last.request.content.decode("utf-8"))
-    # #4: the last tool carries an ephemeral cache_control breakpoint.
+    # the last tool carries an ephemeral cache_control breakpoint.
     assert body["tools"] == [
         {
             "name": "echo",
@@ -854,7 +854,7 @@ def test_tools_empty_name_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
-# stop_reason mapping (G5 / Q4)
+# stop_reason mapping
 # ---------------------------------------------------------------------------
 
 
@@ -885,7 +885,7 @@ def test_stop_reason_max_tokens_maps_directly() -> None:
 
 @respx.mock
 def test_stop_sequence_maps_to_end_turn() -> None:
-    """Q4: Anthropic stop_sequence → Noeta end_turn (Noeta has no
+    """Anthropic stop_sequence → Noeta end_turn (Noeta has no
     stop_sequence enum)."""
     respx.post(MESSAGES_ENDPOINT).mock(
         return_value=httpx.Response(
@@ -920,7 +920,7 @@ def test_stop_reason_refusal_maps_to_end_turn() -> None:
 
 @respx.mock
 def test_unknown_stop_reason_maps_to_error_without_raising() -> None:
-    """Architect NB2: unknown / future stop_reason maps to
+    """Unknown / future stop_reason maps to
     LLMResponse.stop_reason='error' without raising (mirrors
     OpenAICompatProvider behaviour)."""
     respx.post(MESSAGES_ENDPOINT).mock(
@@ -935,7 +935,7 @@ def test_unknown_stop_reason_maps_to_error_without_raising() -> None:
 
 @respx.mock
 def test_missing_stop_reason_maps_to_error_without_raising() -> None:
-    """Architect NB2: missing stop_reason maps to error (not raise)."""
+    """Missing stop_reason maps to error (not raise)."""
     respx.post(MESSAGES_ENDPOINT).mock(
         return_value=httpx.Response(200, json=_anthropic_response(stop_reason=None))
     )
@@ -988,7 +988,7 @@ def test_inconsistent_stop_reason_end_turn_with_tool_use_block_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Response defense (Q11)
+# Response defense
 # ---------------------------------------------------------------------------
 
 
@@ -1033,7 +1033,7 @@ def test_unknown_response_block_type_is_silently_skipped_intentional() -> None:
 
     Pinning this as a test (not just a docstring) prevents the
     behaviour from being silently flipped to "raise on unknown" by a
-    well-meaning future refactor.
+    well-meaning future edit.
     """
     respx.post(MESSAGES_ENDPOINT).mock(
         return_value=httpx.Response(
@@ -1090,11 +1090,11 @@ def test_response_invalid_json_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
-# HTTP error translation (G5 + ② error recovery)
+# HTTP error translation
 # ---------------------------------------------------------------------------
 #
-# Was "pass-through httpx.HTTPStatusError"; ② now requires the adapter to
-# translate into the neutral Noeta taxonomy at its boundary.
+# The adapter translates Anthropic's wire-shape failures into the neutral
+# Noeta taxonomy at its boundary, so the runtime never sees an httpx type.
 
 
 @respx.mock
@@ -1118,7 +1118,7 @@ def test_http_5xx_translates_to_transient() -> None:
 
 
 # ---------------------------------------------------------------------------
-# usage / cache fields (G5)
+# usage / cache fields
 # ---------------------------------------------------------------------------
 
 
@@ -1181,13 +1181,13 @@ def test_usage_missing_yields_empty_usage_without_raising() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Determinism (G6)
+# Determinism
 # ---------------------------------------------------------------------------
 
 
 @respx.mock
 def test_same_request_and_mock_produces_byte_equal_response() -> None:
-    """G6: adapter is pure translation — same LLMRequest + same mock
+    """Adapter is pure translation — same LLMRequest + same mock
     response → byte-equal LLMResponse twice in a row."""
     respx.post(MESSAGES_ENDPOINT).mock(
         return_value=httpx.Response(
@@ -1255,7 +1255,7 @@ def test_unsupported_role_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
-# ② error recovery — neutral error translation
+# neutral error translation
 # ---------------------------------------------------------------------------
 #
 # The adapter translates Anthropic's wire-shape failures into the neutral
@@ -1392,7 +1392,7 @@ def test_origin_system_wrapped_in_system_reminder_and_merged_into_prev_user_turn
     )
     assert len(wire) == 1
     assert wire[0]["role"] == "user"
-    # #4: the last block of the (only, hence last) message carries cache_control.
+    # the last block of the (only, hence last) message carries cache_control.
     assert wire[0]["content"] == [
         {"type": "text", "text": "real human words"},
         {
@@ -1411,7 +1411,7 @@ def test_origin_memory_before_user_merges_into_next_user_turn() -> None:
     )
     assert len(wire) == 1
     assert wire[0]["role"] == "user"
-    # #4: the last block of the (only, hence last) message carries cache_control.
+    # the last block of the (only, hence last) message carries cache_control.
     assert wire[0]["content"] == [
         {
             "type": "text",
@@ -1432,7 +1432,7 @@ def test_origin_system_with_no_adjacent_user_turn_stands_alone() -> None:
         [_user("q"), assistant, _injected("mid-loop reminder", "system")]
     )
     assert [m["role"] for m in wire] == ["user", "assistant", "user"]
-    # #4: last block of the last message carries cache_control.
+    # last block of the last message carries cache_control.
     assert wire[2]["content"] == [
         {
             "type": "text",
@@ -1460,7 +1460,7 @@ def test_origin_system_merges_into_tool_result_user_turn() -> None:
     )
     assert [m["role"] for m in wire] == ["user", "assistant", "user"]
     assert wire[2]["content"][0]["type"] == "tool_result"
-    # #4: last block of the last message carries cache_control.
+    # last block of the last message carries cache_control.
     assert wire[2]["content"][1] == {
         "type": "text",
         "text": "<system-reminder>\nfile changed on disk\n</system-reminder>",
@@ -1470,7 +1470,7 @@ def test_origin_system_merges_into_tool_result_user_turn() -> None:
 
 @respx.mock
 def test_plain_consecutive_user_turns_stay_unmerged() -> None:
-    """Adjacent user messages without origin keep their original rendering (no merge) — existing behavior untouched."""
+    """Adjacent user messages without origin keep their original rendering (no merge)."""
     wire = _wire_messages([_user("one"), _user("two")])
     assert [m["role"] for m in wire] == ["user", "user"]
 
@@ -1479,7 +1479,7 @@ def test_plain_consecutive_user_turns_stay_unmerged() -> None:
 def test_origin_human_renders_as_plain_user_turn() -> None:
     """origin=human: the role is the natural author, so rendering exactly matches the default (no tag wrapper)."""
     wire = _wire_messages([_injected("hello", "human")])
-    # #4: last block of the last message carries cache_control.
+    # last block of the last message carries cache_control.
     assert wire == [
         {
             "role": "user",
@@ -1494,7 +1494,7 @@ def test_origin_human_renders_as_plain_user_turn() -> None:
     ]
 
 
-# -- output_schema / thinking / effort (new optional fields, wire mapping) ---
+# -- output_schema / thinking / effort wire mapping ---
 
 
 @respx.mock
@@ -1551,12 +1551,11 @@ def test_thinking_wired_to_top_level_thinking() -> None:
 
 @respx.mock
 def test_all_three_fields_none_omitted_from_body() -> None:
-    """All three fields None: no related key appears in the body — existing behavior untouched."""
+    """All three fields None: no related key appears in the body."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
         return_value=httpx.Response(200, json=_anthropic_response())
     )
     provider = _make_provider()
-    # Send a basic request (the new fields default to None).
     provider.complete(_basic_request(text="hi"))
     body = json.loads(route.calls.last.request.content.decode("utf-8"))
     assert "output_config" not in body
@@ -1808,7 +1807,7 @@ def test_image_block_vision_model_without_resolver_raises_loud() -> None:
 
 
 # ---------------------------------------------------------------------------
-# prompt caching — cache_control breakpoints (#4)
+# prompt caching — cache_control breakpoints
 # ---------------------------------------------------------------------------
 #
 # Ephemeral cache_control is stamped on the OUTBOUND wire body only — the last

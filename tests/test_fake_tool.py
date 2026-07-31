@@ -1,12 +1,10 @@
-"""FakeTool: scripted-mapping tool for Phase 0 tool_calls tests.
+"""``FakeTool``: a scripted tool for driving ``tool_calls`` without real I/O.
 
-Behaviours under test (issue 02):
-    * inline outputs are returned as ``ToolResult.output``
-    * outputs larger than 4 KB MUST be written through
-      ``ctx.artifact_store.write`` and surfaced via ``ToolResult.artifacts``
-      with ``output`` left empty (per 4-KB payload ceiling)
-    * a tool invoked with an unscripted arg set returns
-      ``ToolResult(success=False)`` so Policies can react
+The three behaviours every integration test built on it depends on: a small
+output comes back inline, an output past the 4 KB payload ceiling is written
+to the artifact store and surfaced as ``ToolResult.artifacts`` with ``output``
+left empty, and an unscripted argument set returns a failed ``ToolResult``
+rather than raising — so a Policy can react to it like any tool failure.
 """
 
 from __future__ import annotations
@@ -51,7 +49,6 @@ def test_fake_tool_writes_large_output_to_artifact_store() -> None:
     assert len(result.artifacts) == 1
     artifact_ref = result.artifacts[0]
     assert artifact_ref.size == len(big.encode("utf-8"))
-    # The artifact body must be fetchable from the same store.
     assert store.get(artifact_ref).decode("utf-8") == big
 
 

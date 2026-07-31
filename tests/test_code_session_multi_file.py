@@ -1,12 +1,8 @@
-"""Phase 4.5 I4 — multi-file sequential `edit` UX +
-per-edit reporting + honest non-atomic semantics.
+"""Multi-file sequential `edit` UX + per-edit reporting + honest
+non-atomic semantics.
 
-These loops exercise the library-reachable `CodeSessionResult`
-contract (`files_changed`, `failed_edits`, `to_json()`). The
-human-readable summary rendering (`_format_summary` /
-`_group_files_changed`) lived only in the operator CLI and was
-removed in the three-layer split, so the prose-grouping / prose-parity
-assertions are gone; the machine-readable `to_json()` list remains the
+These loops exercise the `CodeSessionResult` contract (`files_changed`,
+`failed_edits`, `to_json()`). The machine-readable `to_json()` list is the
 contract downstream tooling reads.
 
 Acceptance loops:
@@ -21,7 +17,7 @@ Acceptance loops:
 * **Partial-failure path** (the architect's "honest semantics" pin):
   three `edit` calls; the second is constructed with an
   `old` that matches **twice** in the file (forcing `success=False`
-  per Phase 4 B5). Assert:
+  on a non-unique match). Assert:
   * the first edit applied (file bytes changed on disk).
   * the failed edit appears in `result.failed_edits` with the
     structured row shape the architect pinned (`tool` / `path` /
@@ -175,7 +171,7 @@ def test_partial_failure_does_not_abort_or_roll_back(tmp_path: Path) -> None:
         tmp_path,
         {
             "a.py": "alpha\n",
-            # "two" appears TWICE → edit refuses (B5 unique match).
+            # "two" appears TWICE → edit refuses (unique-match rule).
             "b.py": "two\ntwo\n",
             "c.py": "gamma\n",
         },

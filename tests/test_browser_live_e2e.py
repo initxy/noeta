@@ -1,21 +1,20 @@
-"""Live-container end-to-end for the sandbox browser subsystem (spec B8).
+"""Live-container end-to-end for the sandbox browser subsystem.
 
-Starts a real AIO Sandbox container via Docker, serves a fixture HTML page
-through a host-reachable http server, and drives the real
-:class:`~noeta.builtins.sandbox.impl.browser.AioBrowserBackend` through all five noeta-owned
-browser verbs — navigate / extract / type / click / screenshot — plus pins the
-container's ``/mcp`` browser tool names against our backend constants so a
-wire drift fails loudly here rather than perturbing the model-facing schema.
+Starts a real AIO Sandbox container via Docker, serves a fixture HTML page from
+a host-reachable http server, and drives the real
+:class:`~noeta.builtins.sandbox.impl.browser.AioBrowserBackend` through all five
+noeta-owned browser verbs — navigate / extract / type / click / screenshot. It
+also pins the container's ``/mcp`` browser tool names against the backend's wire
+constants, so an image that renames a tool fails loudly here instead of quietly
+perturbing the model-facing schema.
+
+This is the only place live return shapes and live tool names are pinned: the
+fake-transport contract tests in ``test_browser_backend.py`` assert what we
+*send*, never what a real server *returns*.
 
 Gated: skipped unless ``NOETA_TEST_AIO_BROWSER=1`` is set (needs a local Docker
-daemon + the AIO Sandbox image). Set ``NOETA_TEST_AIO_IMAGE`` to override the
-image (default ``ghcr.io/agent-infra/sandbox:latest``; this repo's local dev
-image may differ — see ``apps/noeta-agent/noeta/agent/host/docker_sandbox.py``).
-
-This is the acceptance-criteria #8 test the implementation spec flagged as the
-one place runtime return shapes + live tool names get pinned (the fake-transport
-contract tests in ``test_browser_backend.py`` assert only what we *send*, not
-what the live server *returns*).
+daemon and the AIO Sandbox image). ``NOETA_TEST_AIO_IMAGE`` overrides the image
+(default ``ghcr.io/agent-infra/sandbox:latest``).
 """
 
 from __future__ import annotations
@@ -88,9 +87,8 @@ class _FixtureServer:
         self.port = _pick_free_port()
         handler = SimpleHTTPRequestHandler
         self._server = ThreadingHTTPServer(("0.0.0.0", self.port), handler)
-        # serve from the fixture dir (chdir is done by the caller / we set directory)
-        # ThreadingHTTPServer with SimpleHTTPRequestHandler serves cwd; we'll chdir
-        # before starting.
+        # SimpleHTTPRequestHandler serves the process cwd, so ``start`` chdirs
+        # into the fixture dir before the thread comes up.
         self._thread: threading.Thread | None = None
         self._fixture_dir = fixture_dir
 
@@ -169,8 +167,8 @@ def _await_ready(base_url: str, key: str) -> None:
 def live_sandbox() -> dict:
     """Provision a real AIO container; yield ``{base_url, key, container_name}``.
 
-    Skipped (module-collection skip via pytestmark above gates the whole file,
-    but we also check Docker here for a clear error)."""
+    ``pytestmark`` already gates the file on the env var; the Docker probe here
+    turns a missing daemon into a readable skip instead of a spawn traceback."""
     if not _docker_available():
         pytest.skip("docker not found on PATH")
     image = os.environ.get(_IMAGE_ENV, _DEFAULT_IMAGE)
@@ -227,8 +225,8 @@ def browser_backend(live_sandbox: dict) -> AioBrowserBackend:
 
 
 class TestLiveWireNames:
-    """Pin the live container's ``/mcp`` browser tool names against our backend
-    constants so an image upgrade that renames a tool fails here (R1)."""
+    """Pin the live container's ``/mcp`` browser tool names against the backend's
+    wire constants, so an image upgrade that renames a tool fails here."""
 
     def test_browser_tool_names_present(self, live_sandbox: dict) -> None:
         client = McpHttpClient(

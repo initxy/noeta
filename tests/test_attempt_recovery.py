@@ -1,11 +1,14 @@
-"""Step-attempt recovery (docs/adr/step-attempt-recovery.md).
+"""Recovery of a step attempt whose worker died half-way through it.
 
 Covers the scanner (attempt anchoring, seal-window reset, plan-less
-approval-execution windows), the classifier (guard-chain rule), and the
-worker seal → re-drive-or-park machine end-to-end over the real SQLite +
-InMemory stacks — each crash window simulated exactly like
-tests/test_durable_wake.py (raise mid-step, drop the in-flight lease,
-``requeue_stale``, fresh lease).
+approval-execution windows), the classifier's guard-chain rule, and the
+worker's seal → re-drive-or-park machine end-to-end over both the SQLite
+and InMemory stacks. Each crash window is simulated by raising mid-step,
+abandoning the in-flight lease, then ``requeue_stale`` + a fresh lease.
+The hazard these guard: a blind re-drive over a dirty window would
+re-execute a human-approved call or re-spawn a subtask, so anything the
+guard chain would not have run unattended must park for a human instead.
+See docs/adr/step-attempt-recovery.md.
 """
 
 from __future__ import annotations
@@ -108,8 +111,8 @@ def test_scan_seal_closes_prior_history_and_counts() -> None:
     assert attempt is not None
     assert attempt.attempt_start_seq == 3
     assert attempt.abandon_count == 1
-    # seal with NO re-driven attempt yet → nothing live to recover (the
-    # bare re-drive after the seal is case 2′, not a recovery).
+    # a seal with NO re-driven attempt yet → nothing live to recover; the
+    # bare re-drive that follows a seal is an ordinary step, not a recovery.
     events_sealed_only = events[:3]
     assert scan_interrupted_attempt(events_sealed_only) is None
 
@@ -218,9 +221,6 @@ def test_classify_spawn_and_unknown_tool_park() -> None:
     tail = (
         _Env("ContextPlanComposed", 5),
         _Env("SubtaskSpawned", 6),
-        # a tool that no longer exists in the engine's toolset: the guard
-        # chain allows it (no risk ceiling configured) but resolution at
-        # invoke time would fail — the guard-with-metadata configs deny it.
     )
     verdict = classify_attempt(tail, engine=engine, task=task, content_store=cs)
     assert not verdict.safe
@@ -368,7 +368,7 @@ def _seals(log: Any, tid: str) -> list[Any]:
 
 
 def test_safe_crash_auto_redrives_without_reexecuting(stack: Any) -> None:
-    """AC1 — crash mid-decide after a completed low-risk tool round: the
+    """Crash mid-decide after a completed low-risk tool round: the
     interrupted (empty-tail) attempt is sealed and re-driven with no human;
     the completed round's tool call is NOT re-executed."""
     log, cs, dispatcher, _ = stack
@@ -402,9 +402,9 @@ def test_safe_crash_auto_redrives_without_reexecuting(stack: Any) -> None:
 
 def test_unfinished_lowrisk_tool_still_redrives(stack: Any) -> None:
     """A hard crash mid-tool (Started without Finished) on a guard-allowed
-    tool: the D2 rule re-drives it unattended — the same trust as running
-    it unattended in the first place. The re-driven decide re-issues the
-    call and it completes."""
+    tool re-drives unattended — the same trust as running it unattended in
+    the first place. The re-driven decide re-issues the call and it
+    completes."""
     log, cs, dispatcher, _ = stack
     tool = _KillOnceTool(name="reader", script={("x",): "body"})
     policy = _CrashOncePolicy([
@@ -429,8 +429,8 @@ def test_unfinished_lowrisk_tool_still_redrives(stack: Any) -> None:
 
 
 def test_spawn_in_window_parks_as_stopped_conversation(stack: Any) -> None:
-    """AC2 — a window whose interrupted attempt spawned a subtask parks:
-    seal + system notice + next-goal suspend; typing resumes it."""
+    """A window whose interrupted attempt spawned a subtask parks: seal +
+    system notice + next-goal suspend; typing resumes it."""
     log, cs, dispatcher, _ = stack
     policy = _CrashOncePolicy([
         YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),
@@ -484,8 +484,8 @@ def test_spawn_in_window_parks_as_stopped_conversation(stack: Any) -> None:
 
 
 def test_opening_turn_crash_recovers_on_drained_path(stack: Any) -> None:
-    """AC3 — an opening-turn crash (no TaskWoken exists) is recovered on
-    the wake-less drained path, not silently re-driven on a dirty window."""
+    """An opening-turn crash (no TaskWoken exists) is recovered on the
+    wake-less drained path, not silently re-driven on a dirty window."""
     log, cs, dispatcher, _ = stack
     policy = _CrashOncePolicy([
         RuntimeError("simulated crash during the opening LLM call"),
@@ -511,8 +511,8 @@ def test_opening_turn_crash_recovers_on_drained_path(stack: Any) -> None:
 
 
 def test_crash_loop_hits_abandon_cap_and_parks(stack: Any) -> None:
-    """AC5 — recovery recurses across repeated crashes; the cap forces a
-    park instead of burning LLM calls forever."""
+    """Recovery recurses across repeated crashes; the cap forces a park
+    instead of burning LLM calls forever."""
     log, cs, dispatcher, _ = stack
     script: list[Any] = [YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE)]
     script += [RuntimeError(f"crash {i}") for i in range(ABANDON_CAP + 2)]
@@ -623,9 +623,9 @@ def test_interrupted_approval_execution_parks_and_reapproves(stack: Any) -> None
 
 
 def test_recovered_stream_folds_bytes_equal_from_scratch(stack: Any) -> None:
-    """AC7 half — after a seal + re-drive, the from-scratch fold and the
-    baseline-accelerated fold land byte-equal (the TaskRewound invariant,
-    extended to the new marker)."""
+    """After a seal + re-drive, the from-scratch fold and the
+    snapshot-accelerated fold land byte-equal: the seal marker must not
+    make an accelerated fold disagree with a replay from event zero."""
     log, cs, dispatcher, _ = stack
     policy = _CrashOncePolicy([
         YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),
@@ -642,7 +642,7 @@ def test_recovered_stream_folds_bytes_equal_from_scratch(stack: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# D6 — seed-time prelude durability (driver level)
+# Seed-time prelude durability (driver level)
 # ---------------------------------------------------------------------------
 
 
@@ -680,11 +680,10 @@ def _end_turn(text: str) -> Any:
 
 
 def test_seed_send_goal_is_durable_before_drive(tmp_path: Any) -> None:
-    """D6 — the ack contract: ``seed_send_goal`` returns only after
-    ``TaskWoken`` + the goal message are durable, so a crash between seed
-    and drive loses nothing. The later drive is prelude-less (case 2′) and
-    the turn produces the exact pre-change event order with exactly one
-    ``TaskWoken`` and exactly one goal append."""
+    """The ack contract: ``seed_send_goal`` returns only after ``TaskWoken``
+    and the goal message are durable, so a crash between seed and drive
+    loses nothing. The drive that follows is prelude-less, so the turn ends
+    with exactly one ``TaskWoken`` and exactly one goal append."""
     ws = tmp_path / "ws"
     ws.mkdir()
     host, driver = _coding_session(ws, [_end_turn("t1"), _end_turn("t2")])
@@ -693,7 +692,7 @@ def test_seed_send_goal_is_durable_before_drive(tmp_path: Any) -> None:
     tid = out.task_id
     before = len(host.event_log.read(tid))
     seeded = driver.seed_send_goal(tid, goal="turn two")
-    # the 202 moment: wake consumed into a durable TaskWoken + goal append.
+    # the ack moment: wake consumed into a durable TaskWoken + goal append.
     events = host.event_log.read(tid)
     tail_types = [e.type for e in events[before:]]
     assert tail_types[0] == "TaskWoken"
@@ -738,7 +737,7 @@ def test_scan_pending_park_variants() -> None:
     # notice already on the stream (crash hit between notice and suspend)
     pending = scan_pending_park(parked + [_Env("MessagesAppended", 4)])
     assert pending is not None and pending.notice_appended is True
-    # an auto_redrive seal: the bare case-2′ re-drive IS the design
+    # an auto_redrive seal: the bare re-drive that follows is the design
     redrive = [
         _Env("TaskWoken", 0),
         _Env("ContextPlanComposed", 1),
@@ -860,8 +859,8 @@ def test_crash_during_park_after_notice_does_not_duplicate_it(
     stack: Any, monkeypatch: Any
 ) -> None:
     """A second crash between the park's notice and its suspend: the next
-    entry finishes with the suspend only — the operator warning is not
-    appended twice."""
+    entry finishes with the suspend only — the notice is not appended
+    twice."""
     log, cs, dispatcher, _ = stack
     policy = _CrashOncePolicy([
         YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),
@@ -1000,7 +999,7 @@ def test_capped_planless_window_parks_as_interrupted_approval(
 
 
 # ---------------------------------------------------------------------------
-# D6 hardening — seed-time failure paths stay resumable
+# Seed-time failure paths stay resumable
 # ---------------------------------------------------------------------------
 
 
@@ -1042,8 +1041,8 @@ def test_seed_retry_path_applies_durable_prelude(
     tmp_path: Any, monkeypatch: Any
 ) -> None:
     """The dispatcher-restore retry inside ``_seed_woken`` must land in the
-    same D6 tail as the first-try path: the durable prelude is applied at
-    seed (ack ⇒ input durable) and the drive runs prelude-less."""
+    same tail as the first-try path: the prelude is applied at seed (ack ⇒
+    input durable) and the drive runs prelude-less."""
     ws = tmp_path / "ws"
     ws.mkdir()
     host, driver = _coding_session(ws, [_end_turn("t1"), _end_turn("t2")])
@@ -1062,7 +1061,7 @@ def test_seed_retry_path_applies_durable_prelude(
     before = len(host.event_log.read(tid))
     seeded = driver.seed_send_goal(tid, goal="turn two")
     assert state["n"] >= 2                   # the retry branch actually ran
-    assert seeded.prelude is None            # D6: applied at seed
+    assert seeded.prelude is None            # applied at seed
     tail_types = [e.type for e in host.event_log.read(tid)[before:]]
     assert tail_types[0] == "TaskWoken"
     assert "MessagesAppended" in tail_types
@@ -1073,9 +1072,10 @@ def test_seed_retry_path_applies_durable_prelude(
 def test_worker_loop_emits_reliability_and_never_silent_terminal(
     stack: Any,
 ) -> None:
-    """AC8 — the daemon path: recovery inside ``WorkerLoop.tick`` emits the
-    ``attempt_parked`` reliability kind and the task rests suspended (the
-    old fail(retryable)→terminal path is gone)."""
+    """The daemon path: recovery inside ``WorkerLoop.tick`` emits the
+    ``attempt_parked`` reliability kind and leaves the task suspended —
+    a parked window must never be reported as a retryable step failure and
+    burned down to terminal."""
     log, cs, dispatcher, _ = stack
     policy = _CrashOncePolicy([
         YieldForHumanDecision(prompt=NEXT_GOAL_WAKE_HANDLE),

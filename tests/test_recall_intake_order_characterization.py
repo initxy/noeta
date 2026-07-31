@@ -1,31 +1,23 @@
-"""Characterization goldens for the user-message intake recording ORDER.
+"""Goldens for the user-message intake recording ORDER.
 
-The SDK-extensibility redesign
-(``docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md``, D7,
-Track A) re-expresses the built-in memory auto-recall as a
-``reminder_provider`` on the ``turn_intake`` seam. Its **Risk** entry is
-explicit: "Track-A seam ordering interacts with the existing attachment /
-``goal_origin`` recording order — characterization test first (M3)."
+Intake is where several independent writers land in the same turn, and the
+order they land in is what the model actually reads. Two seams carry it:
 
-This module pins that order across the seam moves. Two seams carry it today:
-
-* :func:`append_user_message_with_recall` (memory built-in) — the intake
-  seam: retrieval runs first (impure, reads the store now), then the **human
-  turn** is recorded (with the caller's ``origin``, e.g. ``system`` for an
-  MCP-prompt-expanded goal), then — only if there were hits — a single
-  **recall follow-up** turn tagged ``origin="memory"``. No hits ⇒ exactly the
-  plain-append bytes.
+* :func:`append_user_message_with_recall` (memory built-in) — retrieval runs
+  first (impure, it reads the store live), then the **human turn** is recorded
+  with the caller's ``origin`` (e.g. ``system`` for an MCP-prompt-expanded
+  goal), then — only if there were hits — a single **recall follow-up** turn
+  tagged ``origin="memory"``. No hits ⇒ exactly the plain-append bytes.
 * :class:`noeta.execution.reminders.IntakeGoalPrelude` — the ``send_goal``
   prelude wrapping that seam: **attachments** seed first (each its own
   ``origin="system"`` turn), then the goal through the provider tuple (the
   host composes recall first), then the ``activate_skills`` state patch last.
 
-The characterization uses a recording stub ``engine`` that captures every
-``append_user_message`` / ``apply_state_patch`` call in order (the seam is a
-pure orchestration over the Engine's append/patch verbs, so a stub that records
-the calls is a faithful and deterministic probe). A real ``MemoryStore`` with
-one memory drives a genuine tier-1 recall hit so the recall follow-up's exact
-text is pinned too.
+A recording stub ``engine`` captures every ``append_user_message`` /
+``apply_state_patch`` call in order: the seams are pure orchestration over
+those two Engine verbs, so recording the calls is a faithful and deterministic
+probe. A real ``MemoryStore`` with one memory drives a genuine tier-1 recall
+hit so the follow-up's exact text is pinned too.
 
 Re-pin (regenerate goldens) with one command::
 

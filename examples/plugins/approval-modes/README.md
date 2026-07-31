@@ -1,28 +1,33 @@
-# `approval-modes` — goose-style tool-approval modes
+# `approval-modes` — one operator switch over every tool call
 
-A first-party example [manifest plugin](../../../docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md)
-that contributes a single `Guard` on the `guard` surface (governance,
-process-wide — spec D6), gating tool calls by an operator-chosen **mode**, with
-per-tool overrides. It is the reference for packaging a *configured* object: the
-guard's immutable `ApprovalPolicy` is built from the environment at import.
+An example manifest plugin that contributes a single `Guard` on the **`guard`**
+surface. It answers a question every host eventually has to answer — *how much
+does this agent get to do without a human in the loop?* — with one switch
+instead of bespoke `can_use_tool` code in every embedding.
+
+`guard` is a process-scoped surface: loading the plugin puts the gate in force
+for **every** agent in the process. There is no per-agent activation to forget,
+which is the point — an approval fence an operator can accidentally omit is not
+a fence.
 
 ## Modes
 
-| Mode            | Verdict for a proposed tool call                                             |
-| --------------- | ---------------------------------------------------------------------------- |
-| `chat`          | **deny** every tool call (reason and answer only — no tools run)             |
-| `approve`       | **require approval** for every tool call — *default*                          |
-| `smart_approve` | **allow** low-risk tools; **require approval** for everything else            |
-| `auto`          | **allow** every tool call                                                    |
+| Mode            | Verdict for a proposed tool call                                   |
+| --------------- | ------------------------------------------------------------------ |
+| `chat`          | **deny** every tool call (the agent reasons and answers, runs nothing) |
+| `approve`       | **require approval** for every tool call — *default*                |
+| `smart_approve` | **allow** low-risk tools; **require approval** for everything else  |
+| `auto`          | **allow** every tool call                                          |
 
-`smart_approve` classifies risk by **tool name**, not by the tool's declared
-`risk_level`, so the guard stays self-contained (it needs no tool registry). The
-default low-risk set is conservative — only the read-only `read` / `grep` /
-`glob` / `ls` — and is replaced wholesale with the `low_risk_tools` config key.
+`smart_approve` classifies by **tool name**, not by a tool's declared
+`risk_level`, so the guard needs no tool registry and stays self-contained. The
+default low-risk set is only the read-only `read` / `grep` / `glob` / `ls`: a
+tool missing from the set asks, so a classification gap fails towards the human.
+Replace the set wholesale with the `low_risk_tools` key.
 
 ## Overrides
 
-A per-tool override always wins over the mode:
+A per-tool override wins over the mode outright:
 
 | Token    | Verdict            |
 | -------- | ------------------ |
@@ -33,40 +38,40 @@ A per-tool override always wins over the mode:
 So `mode: auto` with `overrides: {write: never}` runs everything except `write`;
 `mode: chat` with `overrides: {read: always}` runs nothing except `read`.
 
-The guard gates only tool calls — subtask spawns and finishes pass through
-(approval is about *tool execution*, matching the built-in `PermissionGuard`).
+Only tool calls are gated. Subtask spawns and finishes pass through — approval
+modes are about tool execution, and blocking a finish would strand a turn rather
+than protect anything.
 
-## Config — via the environment
+## Configuration
 
-The shipped guard reads its mode from the environment when the plugin module is
-imported:
+The manifest mechanism resolves a contribution's `ref` to a live object and
+threads no per-plugin config dict, which keeps operator configuration out of
+agent identity. Configuration therefore arrives through the environment, read
+when the plugin module is imported:
 
 | Environment variable | Default | Meaning |
 | --- | --- | --- |
 | `NOETA_APPROVAL_MODE` | `approve` | one of `chat` / `approve` / `smart_approve` / `auto` |
 
-The finer knobs (`overrides`, `low_risk_tools`) remain available to a host that
-constructs its own guard directly:
+Set it **before** `load_plugins` runs — the shipped guard is built at import.
+
+The finer knobs stay available to a host that constructs its own guard:
 
 ```python
-from importlib import import_module  # or load plugin.py by path
-mod = ...  # the plugin module
-guard = mod.ApprovalModesGuard(mod.build_policy({
+guard = ApprovalModesGuard(build_policy({
     "mode": "smart_approve",
     "overrides": {"write": "never", "read": "always"},
     "low_risk_tools": ["read", "grep", "glob", "ls"],
 }))
 ```
 
-`build_policy` raises `ValueError` on an unknown `mode`, a bad override token, or
-a non-list `low_risk_tools`, so a misconfiguration fails loudly.
+`build_policy` raises `ValueError` on an unknown mode, a bad override token, or
+a non-list `low_risk_tools`, so a typo fails the client build instead of quietly
+widening the fence mid-session.
 
-## Loading
+## Loading it
 
-Installed as a package it is discovered through its `[tool.noeta]` manifest +
-`noeta.plugins` entry point (see [`pyproject.toml`](./pyproject.toml)) with
-`load_plugins(entry_points=True)`. In this repository it is loaded by
-**explicit path**, no install:
+In this repository the plugin is not installed, so load it by **explicit path**:
 
 ```python
 import os
@@ -77,8 +82,24 @@ pset = load_plugins(builtins=False, modules=["examples/plugins/approval-modes/pl
 client = Client(presets.main_options(), plugins=pset)  # guard is process-wide
 ```
 
-The single-file `plugin = PluginBuilder("approval-modes")` fixes the plugin's
-identity name. Verify the shipped manifest with
-`python -m noeta.sdk.plugin_check examples/plugins/approval-modes`.
+A real distribution ships the `[tool.noeta]` manifest mirrored into
+[`noeta-plugin.toml`](./noeta-plugin.toml) as wheel package data, plus an entry
+point in the `noeta.plugins` group (see [`pyproject.toml`](./pyproject.toml));
+a host then discovers it with `load_plugins(entry_points=True)`.
 
-Tested in [`tests/test_example_approval_modes.py`](../../../tests/test_example_approval_modes.py).
+The plugin's identity is the builder name — `PluginBuilder("approval-modes")` —
+not the filename. That name is the enable-list key.
+
+## Files
+
+- [`plugin.py`](./plugin.py) — `ApprovalPolicy`, `ApprovalModesGuard`, the
+  env-configured `GUARD`, and the single-file `PluginBuilder` manifest.
+- [`noeta-plugin.toml`](./noeta-plugin.toml) — the shipped static manifest the
+  loader reads without importing plugin code.
+- [`pyproject.toml`](./pyproject.toml) — the packaging convention (not built here).
+
+Keep the two manifests in agreement with:
+
+```bash
+python -m noeta.sdk.plugin_check examples/plugins/approval-modes
+```

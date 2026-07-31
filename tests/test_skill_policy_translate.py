@@ -1,9 +1,11 @@
-"""`skill` control-tool policy translation.
+"""The ``skill`` control tool activates a skill by translating into a state
+patch instead of executing as a tool.
 
-Unit tests cover the four translation paths (success / unknown name /
-sole-call violation / duplicate). Engine-level tests verify the full chain:
-model invocation → StatePatchDecision → TaskState.active_skills → next
-compose semi-stable body → ContextPlan.selected_skills.
+Guards the four translation paths (success, unknown name, sole-call violation,
+duplicate) and the whole chain through the Engine — model call →
+StatePatchDecision → ``TaskState.active_skills`` → rendered body →
+``ContextPlan.selected_skills``. A break anywhere along it leaves the model
+without the instructions it just asked for, with nothing failing loudly.
 """
 
 from __future__ import annotations
@@ -25,10 +27,8 @@ from noeta.builtins.skills.impl import (
     load_workspace_skills,
     make_skill_translate,
 )
-# Deliberately the deep module (control-tool-surface S2b: ``skill`` moved into
-# the ``skills`` built-in): this pins the deep ``control_tool`` module's constant
-# against the package door's re-export (the parity assertion below), which is
-# where ``skill`` vocabulary now lives.
+# Deliberately the deep module rather than the package door: the parity
+# assertion below pins the re-export against the definition.
 from noeta.builtins.skills.impl.control_tool import (
     SKILL_TOOL as _SKILLS_SKILL_TOOL,
 )
@@ -130,8 +130,8 @@ def _assistant_message(response: LLMResponse) -> Message:
 
 
 def _translate(response: LLMResponse, menu: frozenset[str] = _MENU):
-    # Control-tool-surface S1: the skill mount's translate closure captures its
-    # menu; the dispatcher takes the routing-ordered specs (here just skill).
+    # The mount's translate closure captures its own menu; the dispatcher takes
+    # specs in routing order (here only skill).
     return translate_control_tool(
         response,
         _assistant_message(response),
@@ -145,19 +145,18 @@ def _translate(response: LLMResponse, menu: frozenset[str] = _MENU):
 
 
 def test_skill_tool_constant_parity() -> None:
-    """SKILL_TOOL is the same constant on both sides of the seam."""
     assert SKILL_TOOL == "skill"
     assert _SKILLS_SKILL_TOOL == SKILL_TOOL
 
 
 def test_flag_off_returns_none() -> None:
-    """With no mounted specs, a `skill` call falls through unchanged (mounting
-    IS enablement — a disabled tool contributes no spec to route)."""
+    """Mounting IS enablement: a tool that contributes no spec routes nothing,
+    so the call falls through untouched rather than erroring."""
     response = _skill_call("alpha")
     decision = translate_control_tool(
         response,
         _assistant_message(response),
-        specs=(),  # nothing mounted → nothing routed
+        specs=(),
     )
     assert decision is None
 
@@ -173,7 +172,6 @@ def test_translate_skill_success() -> None:
     assert isinstance(decision, StatePatchDecision)
     assert decision.patch is not None
     assert decision.patch.activate_skills == ["alpha"]
-    # ack message
     assert len(decision.messages_after) == 1
     ack = decision.messages_after[0]
     assert ack.role == "tool"
@@ -183,7 +181,7 @@ def test_translate_skill_success() -> None:
     assert block.call_id == "sk"
     assert block.success is True
     assert block.error is None
-    # ack bytes are fixed per the ADR
+    # The ack text is contractual: byte-stable so the model can rely on it.
     assert block.output == (
         "Skill 'alpha' loaded; its instructions will appear in your "
         "context from the next turn."
@@ -216,16 +214,16 @@ def test_translate_skill_unknown_name() -> None:
     response = _skill_call("nope")
     decision = _translate(response)
     assert isinstance(decision, StatePatchDecision)
-    assert decision.patch is None  # no state write
+    assert decision.patch is None
     assert len(decision.messages_after) == 1
     ack = decision.messages_after[0]
     block = ack.content[0]
     assert isinstance(block, ToolResultBlock)
     assert block.success is False
     assert block.error is not None
-    # lists the sorted available names so the model can retry
+    # The ack lists the available names, sorted, so the model can retry
+    # without a second round trip.
     assert block.output.startswith("unknown skill 'nope'; available:")
-    # sorted order
     assert "alpha, beta, gamma" in block.output
 
 
@@ -267,7 +265,8 @@ def test_translate_skill_mixed_with_other_tool() -> None:
     decision = _translate(response)
     assert isinstance(decision, StatePatchDecision)
     assert decision.patch is None
-    # two tool-result blocks (one per call_id), same error text
+    # One tool-result block per call_id, or the provider rejects the next
+    # request for an unanswered tool call.
     assert len(decision.messages_after) == 1
     ack = decision.messages_after[0]
     assert len(ack.content) == 2
@@ -280,9 +279,8 @@ def test_translate_skill_mixed_with_other_tool() -> None:
 
 
 def test_translate_skill_two_skill_calls_is_sole_call_violation() -> None:
-    """Two `skill` invocations in one turn is still a sole-call violation —
-    only one activation per turn is allowed (model should retry with a
-    single call, or make two turns)."""
+    """Two `skill` calls in one turn is a sole-call violation too: one
+    activation per turn, so ordering is unambiguous."""
     response = _two_skill_calls()
     decision = _translate(response)
     assert isinstance(decision, StatePatchDecision)
@@ -295,23 +293,21 @@ def test_translate_skill_two_skill_calls_is_sole_call_violation() -> None:
 
 
 def test_translate_spawn_mixed_with_skill_recoverable_with_both_toggles() -> None:
-    """When BOTH delegation and skill_invocation are on, a turn mixing
-    `spawn_subagent` and `skill` must return a recoverable
-    StatePatchDecision — NOT a FailDecision. All control
-    tools share the sole-call philosophy of a recoverable ack so the
-    task is not poisoned."""
+    """A turn mixing `spawn_subagent` and `skill` yields a recoverable
+    StatePatchDecision, never a FailDecision: every control tool answers a
+    sole-call violation with an ack the model can retry from, so one bad
+    batch cannot poison the Task."""
     response = _mixed_skill_and_other_call()
     decision = translate_control_tool(
         response,
         _assistant_message(response),
-        # Routing order: spawn (band 300) before skill (band 400).
+        # Routing order mirrors the mount loop: spawn is offered the batch
+        # first, so its error text is the one the model sees.
         specs=(
             ControlToolSpec("spawn_subagent", translate_spawn_subagent),
             ControlToolSpec(SKILL_TOOL, make_skill_translate(_MENU)),
         ),
     )
-    # Spawn branch is tried before skill in routing order — the mixed
-    # batch is caught there and turned into an ack.
     assert isinstance(decision, StatePatchDecision)
     assert decision.patch is None
     assert len(decision.messages_after) == 1
@@ -333,16 +329,14 @@ def test_translate_spawn_mixed_with_skill_recoverable_with_both_toggles() -> Non
 
 
 def test_translate_skill_duplicate_name_same_ack() -> None:
-    """Translating the same name twice produces byte-identical acks —
-    idempotency is left to TaskStatePatch.apply's union merge."""
+    """Translation stays stateless: the same name twice yields byte-identical
+    acks, and deduplication is left to TaskStatePatch.apply's union merge."""
     first = _translate(_skill_call("gamma"))
     second = _translate(_skill_call("gamma"))
     assert isinstance(first, StatePatchDecision)
     assert isinstance(second, StatePatchDecision)
-    # same patch (list equality, not identity)
     assert first.patch == second.patch
     assert first.patch.activate_skills == ["gamma"]  # type: ignore[union-attr]
-    # byte-identical ack
     first_ack = first.messages_after[0].content[0]
     second_ack = second.messages_after[0].content[0]
     assert isinstance(first_ack, ToolResultBlock)
@@ -375,14 +369,10 @@ def _build_engine_for_tests(
     system_prompt: str = "you are helpful",
     pass_content_hashes: bool = True,
 ):
-    """Build a fully-wired Engine from build_session_inputs using the
-    same construction order the live runner uses (post the
-    issue-07 generation switch: the generic ``content_hashes`` seam).
-    Returns the engine, dispatcher, and task_id.
+    """Wire an Engine from ``build_session_inputs`` the way a host does.
 
-    ``pass_content_hashes=False`` simulates a host that didn't wire the
-    resolver; in that case mid-loop content provenance must be absent
-    and no errors raised.
+    ``pass_content_hashes=False`` simulates a host that never wired the
+    resolver: content provenance must then be absent, without raising.
     """
     from noeta.core.engine import Engine
     from noeta.core.wiring import wire_default_observers
@@ -443,9 +433,13 @@ def _run_to_terminal(engine, disp, task) -> None:
 
 def test_engine_skill_invocation_full_chain(tmp_path: Path) -> None:
     """Model calls `skill(alpha)` → patch lands → active_skills contains
-    `alpha` → next compose renders the body ANCHORED in the dynamic suffix
-    (docs/adr/anchored-content-placement.md: a mid-task activation no longer
-    rewrites semi_stable) → ContextPlan.selected_skills contains `alpha`."""
+    `alpha` → the body renders anchored in the dynamic suffix → the plan's
+    selected_skills contains `alpha`.
+
+    Anchoring matters: a mid-task activation must leave the head segments
+    byte-identical so the provider's prompt cache survives the turn
+    (docs/adr/anchored-content-placement.md).
+    """
     ws = _make_ws_with_skill(tmp_path)
     engine, disp, cs, log = _build_engine_for_tests(
         ws, [_skill_call("alpha"), _end("done")]
@@ -455,11 +449,11 @@ def test_engine_skill_invocation_full_chain(tmp_path: Path) -> None:
     _run_to_terminal(engine, disp, task)
     tid = task.task_id
 
-    # 1. patch landed in active_skills
     folded = fold(log, cs, tid)
     assert "alpha" in folded.state.active_skills
 
-    # 2. an ack tool-role message was appended (conversation well-formed)
+    # The tool-role ack keeps the conversation well-formed: every tool_use
+    # block the model emitted has a matching result.
     tool_msgs = [m for m in folded.runtime.messages if m.role == "tool"]
     assert tool_msgs
     last_tool = tool_msgs[-1]
@@ -469,8 +463,6 @@ def test_engine_skill_invocation_full_chain(tmp_path: Path) -> None:
     assert block.success is True
     assert block.output.startswith("Skill 'alpha' loaded")
 
-    # 3. at least one ContextPlanComposed fired after the patch; the last
-    #    one should carry the skill body in semi-stable and selected_skills.
     plan_events = [
         e for e in log.read(tid) if e.type == "ContextPlanComposed"
     ]
@@ -481,9 +473,8 @@ def test_engine_skill_invocation_full_chain(tmp_path: Path) -> None:
     assert isinstance(plan, ContextPlan)
     assert "alpha" in plan.selected_skills
 
-    # 4. the composer, given the post-patch task, renders the skill body
-    #    ANCHORED inside the dynamic suffix — semi_stable stays empty (the
-    #    activation was mid-task, so the head segments must not move).
+    # Composing the post-patch Task puts the body in the dynamic suffix and
+    # leaves semi_stable empty — the head segments must not move mid-task.
     post_task = fold(log, cs, tid)
     view = engine._composer.compose(post_task)
     semi = view.segments[1]
@@ -516,8 +507,9 @@ def test_engine_skill_invocation_full_chain(tmp_path: Path) -> None:
 
 
 def test_engine_skill_invocation_no_tool_execution_events(tmp_path: Path) -> None:
-    """The `skill` control tool must never reach ToolRuntime —
-    no ToolCallStarted / ToolResultRecorded events are emitted."""
+    """The `skill` control tool must never reach ToolRuntime: it carries no
+    permission check or audit trail of its own, so an execution path would be
+    an ungoverned side door."""
     ws = _make_ws_with_skill(tmp_path)
     engine, disp, cs, log = _build_engine_for_tests(
         ws, [_skill_call("alpha"), _end("done")]
@@ -540,10 +532,10 @@ def test_engine_skill_invocation_no_tool_execution_events(tmp_path: Path) -> Non
 def test_engine_skill_invocation_emits_generic_provenance_before_patch(
     tmp_path: Path,
 ) -> None:
-    """Mid-loop skill activation must emit ContextContentRecorded
-    (kind=skill, policy=pinned) *before* TaskStatePatched so causal
-    order matches the pre-loop helper's convention; the old
-    SkillContentRecorded never appears in a new recording."""
+    """Provenance is recorded through the generic ContextContentRecorded
+    (kind=skill, policy=pinned), and lands *before* TaskStatePatched — a
+    reader folding the log must see what the content was before it sees the
+    state that depends on it."""
     ws = _make_ws_with_skill(tmp_path)
     engine, disp, cs, log = _build_engine_for_tests(
         ws, [_skill_call("alpha"), _end("done")]
@@ -560,7 +552,6 @@ def test_engine_skill_invocation_emits_generic_provenance_before_patch(
     scr_idx = types.index("ContextContentRecorded")
     tsp_idx = types.index("TaskStatePatched")
     assert scr_idx < tsp_idx
-    # Check payload shape
     scr = events[scr_idx]
     assert scr.payload.kind == "skill"
     assert scr.payload.name == "alpha"
@@ -572,8 +563,9 @@ def test_engine_skill_invocation_emits_generic_provenance_before_patch(
 def test_engine_skill_invocation_duplicate_does_not_reemit(
     tmp_path: Path,
 ) -> None:
-    """Duplicate activations of the same skill within one task must
-    not re-emit SkillContentRecorded (per-task first-only)."""
+    """Provenance is recorded once per Task per content item, so repeated
+    activations of the same skill do not pad the log with identical
+    ContextContentRecorded events."""
     ws = _make_ws_with_skill(tmp_path)
     engine, disp, cs, log = _build_engine_for_tests(
         ws,
@@ -590,7 +582,7 @@ def test_engine_skill_invocation_duplicate_does_not_reemit(
     events = list(log.read(task.task_id))
     scr_count = sum(1 for e in events if e.type == "ContextContentRecorded")
     assert scr_count == 1
-    # Both activations still land as patches (idempotent patching)
+    # Suppressing the provenance event must not suppress the patch itself.
     tsp_count = sum(1 for e in events if e.type == "TaskStatePatched")
     assert tsp_count == 2
 
@@ -598,9 +590,8 @@ def test_engine_skill_invocation_duplicate_does_not_reemit(
 def test_engine_skill_invocation_no_resolver_no_event_no_crash(
     tmp_path: Path,
 ) -> None:
-    """Host that doesn't wire content_hashes must not emit any content
-    provenance and must not crash — byte shape matches recordings that
-    predate provenance events."""
+    """``content_hashes`` is optional wiring: a host that leaves it out gets
+    no provenance events, and activation still works rather than crashing."""
     ws = _make_ws_with_skill(tmp_path)
     engine, disp, cs, log = _build_engine_for_tests(
         ws,
@@ -615,7 +606,6 @@ def test_engine_skill_invocation_no_resolver_no_event_no_crash(
     types = [e.type for e in events]
     assert "SkillContentRecorded" not in types
     assert "ContextContentRecorded" not in types
-    # Activation still works
     assert "TaskStatePatched" in types
     post = fold(log, cs, task.task_id)
     assert "alpha" in post.state.active_skills
@@ -624,9 +614,8 @@ def test_engine_skill_invocation_no_resolver_no_event_no_crash(
 def test_engine_skill_invocation_unknown_skill_no_event_no_crash(
     tmp_path: Path,
 ) -> None:
-    """Activating a name the resolver doesn't know must not emit
-    SkillContentRecorded and must not crash. Verify will classify
-    this as an advisory."""
+    """A resolver that knows no names is a silent no-op for provenance: the
+    activation itself must not depend on the fingerprint being resolvable."""
     from noeta.core.engine import Engine
     from noeta.core.wiring import wire_default_observers
     from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
@@ -658,7 +647,6 @@ def test_engine_skill_invocation_unknown_skill_no_event_no_crash(
     )
     provider = FakeLLMProvider(responses=[_skill_call("alpha"), _end("done")])
     client = RuntimeLLMClient(provider=provider, event_log=log, content_store=cs)
-    # Build engine with a resolver that always returns None.
     engine = Engine(
         event_log=log,
         content_store=cs,
@@ -683,25 +671,16 @@ def test_engine_skill_invocation_unknown_skill_no_event_no_crash(
 
 
 # ---------------------------------------------------------------------------
-# Issue 05 — E2E: full chain (menu visible → order → ack → next-turn body →
-# ContextContentRecorded) AND pre-loop + mid-loop coexist
+# End-to-end: menu visible → model orders → ack → body in context → provenance
 # ---------------------------------------------------------------------------
 
 
 def test_e2e_presets_flag_full_chain(
     tmp_path: Path,
 ) -> None:
-    """Acceptance: wiring through the official presets
-    and the noeta-agent product default (flag on).
-
-    Covers the full chain end-to-end:
-      1. Workspace has a skill → schema exposes the `skill` control tool
-         with the correct name in the menu enum.
-      2. Model orders `skill(bravo)` via the tool.
-      3. Ack "loaded" message appended as a tool-role message.
-      4. Next turn's semi-stable segment contains the skill body.
-      5. ContextContentRecorded (kind=skill, policy=pinned) is in the
-         event log (before the patch) — the post-cutover generic shape.
+    """The same chain, wired through the official presets rather than a
+    hand-built AgentSpec — so preset drift that silently drops the skill
+    capability is caught here and not only in a host.
     """
     from noeta.core.engine import Engine
     from noeta.core.wiring import wire_default_observers
@@ -721,16 +700,11 @@ def test_e2e_presets_flag_full_chain(
     (ws / "x.py").write_text("hello\n")
     write_skill(ws, "bravo", description="the bravo skill")
 
-    # Use the official `main` preset spec so we exercise the preset flag
-    # wiring rather than a free-form AgentSpec.
     main = official_specs()["main"]
     assert agent_activates(main, "skill_invocation") is True, (
-        "preset must have flag on for this E2E to exercise product wiring"
+        "preset must activate skill_invocation for this chain to be exercised"
     )
 
-    # -- Live construction (use the shared resume helper so live/resume
-    #    build the same inputs; its default skill_invocation_enabled=True
-    #    mirrors CodeSessionConfig default). ---------------------------
     cs = InMemoryContentStore()
     disp = InMemoryDispatcher()
     log = InMemoryEventLog(lease_validator=disp)
@@ -742,7 +716,6 @@ def test_e2e_presets_flag_full_chain(
         content_store=cs,
         model="stub-model",
     )
-    # 1. schema exposes the `skill` tool with "bravo" in the menu.
     schema_names = {s["function"]["name"] for s in live_inputs.composer._control_action_schemas}
     assert SKILL_TOOL in schema_names, "flag on + skills present → skill tool visible"
     skill_schema = next(
@@ -770,11 +743,9 @@ def test_e2e_presets_flag_full_chain(
     _run_to_terminal(engine, disp, task)
     tid = task.task_id
 
-    # 2. model ordered the skill → active_skills contains "bravo".
     folded = fold(log, cs, tid)
     assert "bravo" in folded.state.active_skills
 
-    # 3. ack appended (tool-role "loaded" message).
     tool_msgs = [m for m in folded.runtime.messages if m.role == "tool"]
     assert tool_msgs
     last_tool = tool_msgs[-1]
@@ -783,9 +754,8 @@ def test_e2e_presets_flag_full_chain(
     assert block.success is True
     assert "Skill 'bravo' loaded" in block.output
 
-    # 4. next-turn View carries the skill body ANCHORED in the dynamic
-    #    suffix (mid-task activation — docs/adr/anchored-content-placement.md);
-    #    semi_stable stays untouched.
+    # A mid-task activation anchors into the dynamic suffix and leaves
+    # semi_stable untouched (docs/adr/anchored-content-placement.md).
     view = engine._composer.compose(folded)
     semi = next(s for s in view.segments if s.name == "semi_stable")
     assert semi.content == []
@@ -797,7 +767,6 @@ def test_e2e_presets_flag_full_chain(
     assert "Activated skill: bravo" in joined
     assert "Body of the bravo skill." in joined
 
-    # 5. ContextContentRecorded present (mid-loop generic provenance).
     events = list(log.read(tid))
     types = [e.type for e in events]
     assert "SkillContentRecorded" not in types
@@ -813,10 +782,10 @@ def test_e2e_presets_flag_full_chain(
 def test_e2e_preloop_skill_coexists_with_midloop_skill(
     tmp_path: Path,
 ) -> None:
-    """Acceptance: pre-loop static activation (skill A) and
-    mid-loop model ordering (skill B) coexist. Both bodies appear in the
-    semi-stable segment; active_skills contains both names; two
-    ContextContentRecorded events are emitted; live and resume build the same inputs.
+    """A skill activated before the first turn and one the model orders
+    mid-task coexist: both names stay active and both bodies reach the
+    prompt, but they land in different segments — the pre-loop one keeps its
+    semi_stable seat while the mid-task one anchors in the dynamic suffix.
     """
     from noeta.core.engine import Engine
     from noeta.core.wiring import wire_default_observers
@@ -838,7 +807,6 @@ def test_e2e_preloop_skill_coexists_with_midloop_skill(
 
     main = official_specs()["main"]
 
-    # -- Live (homologous with replay, both via build_code_replay_inputs)
     cs = InMemoryContentStore()
     disp = InMemoryDispatcher()
     # lease_validator=None makes the EventLog skip lease_id validity checks, so
@@ -871,11 +839,10 @@ def test_e2e_preloop_skill_coexists_with_midloop_skill(
     task = engine.create_task(goal="coexistence", policy_name="react")
     disp.enqueue(task.task_id)
 
-    # Pre-loop: runner activates "alpha" before the first turn, using the
-    # same activate_skills helper the product host uses. A synthetic
-    # lease_id is sufficient here (lease_id is only recorded as event
-    # provenance, not validated against the dispatcher by activate_skills
-    # or Engine.apply_state_patch).
+    # Activate "alpha" before the first turn through the same helper a host
+    # calls. A synthetic lease_id suffices: neither activate_skills nor
+    # Engine.apply_state_patch validates it against the dispatcher — it is
+    # recorded as event provenance only.
     task = activate_skills(
         engine,
         task,
@@ -886,12 +853,11 @@ def test_e2e_preloop_skill_coexists_with_midloop_skill(
     _run_to_terminal(engine, disp, task)
     tid = task.task_id
 
-    # Both names active.
     folded = fold(log, cs, tid)
     assert "alpha" in folded.state.active_skills
     assert "bravo" in folded.state.active_skills
 
-    # Two generic provenance events, one per skill; no legacy events.
+    # Both activation paths report through the same generic provenance event.
     scrs = [e for e in log.read(tid) if e.type == "ContextContentRecorded"]
     assert {s.payload.name for s in scrs} == {"alpha", "bravo"}
     assert all(s.payload.kind == "skill" for s in scrs)
@@ -900,8 +866,8 @@ def test_e2e_preloop_skill_coexists_with_midloop_skill(
     ]
 
     # Placement splits by anchor (docs/adr/anchored-content-placement.md):
-    # the pre-loop "alpha" keeps its semi_stable seat; the mid-loop "bravo"
-    # renders anchored inside the dynamic suffix.
+    # "alpha" was there before the first turn so it keeps its semi_stable
+    # seat; "bravo" arrived mid-task so it anchors in the dynamic suffix.
     view = engine._composer.compose(folded)
     semi = next(s for s in view.segments if s.name == "semi_stable")
     semi_joined = "\n".join(
@@ -919,25 +885,23 @@ def test_e2e_preloop_skill_coexists_with_midloop_skill(
 
 
 # ---------------------------------------------------------------------------
-# Issue 05 — product default: flag on iff workspace has skills
+# Default: the skill tool appears iff the workspace actually has skills
 # ---------------------------------------------------------------------------
 
 
 def test_product_flag_on_with_skills_grows_skill_tool(tmp_path: Path) -> None:
-    """noeta-agent product default: skill_invocation is on by default; when the
-    workspace has at least one skill the schema carries the skill tool; when no
-    skills exist the schema is unchanged (no skill tool)."""
+    """With skill_invocation activated, the schema grows the skill tool only
+    when the workspace holds a skill — a skill-less workspace sees zero schema
+    drift, so users who never write a SKILL.md pay nothing."""
     from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
     from noeta.runtime.governance import Budget
     from noeta.builtins.skills.impl import SKILL_TOOL
     from noeta.presets import official_specs
     from noeta.storage.memory import InMemoryContentStore
 
-    # Mirror the product default. The deleted ``CodeSessionConfig`` carried the
-    # ``skill_invocation_enabled=True`` default; the production ``SdkHost`` now
-    # reads the spec's ``"skill_invocation"`` activation instead, so the ``main``
-    # preset's activation is the canonical home of that default. A future
-    # refactor that turns it off surfaces here.
+    # ``SdkHost`` reads the spec's ``"skill_invocation"`` activation, so the
+    # ``main`` preset is the single home of this default; a change that turns
+    # it off surfaces here rather than in a host's behaviour.
     assert agent_activates(official_specs()["main"], "skill_invocation") is True, (
         "the main preset must default skill_invocation on"
     )
@@ -964,8 +928,7 @@ def test_product_flag_on_with_skills_grows_skill_tool(tmp_path: Path) -> None:
     }
     assert SKILL_TOOL in names_with
 
-    # Case B: workspace without skills → skill tool absent (zero schema drift
-    # for skill-less workspaces).
+    # Case B: workspace without skills → skill tool absent.
     ws_empty = tmp_path / "ws_empty"
     ws_empty.mkdir()
     inputs_empty = build_session_inputs(

@@ -1,14 +1,9 @@
-"""New event payloads required by issue 06.
+"""Lease-lifecycle and cancellation event payloads.
 
-Issue 06 introduces the lease-lifecycle and cancellation events. The
-issue text used the legacy ``RunLeased`` name; per CONTEXT.md
-"Run" is forbidden, so the kernel adopts ``LeaseGranted``,
-``LeaseHeartbeat``, ``LeaseExpired``, ``TaskRequeued`` (and the
-already-listed ``TaskCancelled``).
-
-Phase 0 only requires ``TaskCancelled`` + ``LeaseGranted`` to be
-defined; the rest are introduced as the relevant emitters arrive in
-later phases (Worker daemon, server-side dispatcher metrics, etc.).
+Guards that ``TaskCancelledPayload`` and ``LeaseGrantedPayload`` are well-formed
+dataclasses carrying the fields their consumers read, and that no lease payload
+is named with the forbidden ``Run`` prefix — ``scripts/lint-naming.py`` bans
+``Run`` as an identifier, so the canonical spelling is ``LeaseGranted``.
 """
 
 from __future__ import annotations
@@ -25,9 +20,8 @@ def test_task_cancelled_payload_dataclass_is_importable() -> None:
 
 
 def test_task_cancelled_payload_supports_cascade_flag() -> None:
-    """Cancellation often cascades to in-flight subtasks (a
-    consequence). The payload carries the documentary flag; the
-    actual cascade mechanism lands with the Worker daemon."""
+    """Cancellation cascades to in-flight subtasks; the payload carries the
+    ``cascade`` flag the cascade logic keys on."""
     from noeta.protocols.events import TaskCancelledPayload
 
     payload = TaskCancelledPayload(reason="parent-cancel", cascade=True)
@@ -47,8 +41,8 @@ def test_lease_granted_payload_dataclass_is_importable() -> None:
 
 
 def test_lease_granted_replaces_forbidden_run_leased_name() -> None:
-    """Sanity: the legacy ``RunLeased`` name from issue 06 prose must
-    not appear in the events module — ``Run`` is forbidden."""
+    """The forbidden ``RunLeased`` name must not appear in the events module —
+    ``Run`` is banned as an identifier."""
     import noeta.protocols.events as events_mod
 
     assert not hasattr(events_mod, "RunLeasedPayload")

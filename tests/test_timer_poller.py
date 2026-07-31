@@ -1,15 +1,11 @@
-"""Timer poller + ``wait_external`` un-stub (deferred structural round).
+"""Timer poller and the ``wait_external`` suspend.
 
-``wait_timer`` suspends used to hang forever: ``TimerFired`` existed
-end-to-end through the storage layer but nothing ever produced it. The
-producer is ``Dispatcher.fire_due_timers`` (both adapters) driven by the
-WorkerLoop's ``maybe_poll_timers`` interval gate. The delivered wake is
-the **recorded deadline** (byte-stable across H2 re-delivery), not
-``TimerFired(fire_at=now)``.
-
-``WaitExternalDecision`` used to hit the ``NotImplementedError``
-fallthrough; it now suspends on the new ``ExternalEvent`` wake variant
-(projection-matching on ``event_kind``).
+``Dispatcher.fire_due_timers`` is the sole producer of ``TimerFired``,
+driven by the WorkerLoop's ``maybe_poll_timers`` interval gate. What it
+delivers is the **recorded deadline**, never ``TimerFired(fire_at=now)``
+— that is what keeps the wake byte-stable across H2 re-delivery. A
+``WaitExternalDecision`` suspends on ``ExternalEvent``, matched by
+projection on ``event_kind``.
 """
 
 from __future__ import annotations
@@ -137,8 +133,9 @@ def test_fire_due_timers_delivers_recorded_deadline_not_now(
 
 def test_fire_due_timers_skips_undecodable_row_and_still_fires_others() -> None:
     """sqlite-only: one corrupt ``wake_on_canonical`` blob must not abort the
-    whole sweep. Before the per-row guard, an undecodable row raised, rolled
-    back the transaction, and stalled EVERY ``wait_timer`` suspend every poll."""
+    whole sweep. Without the per-row guard an undecodable row raises, rolls
+    back the transaction, and stalls EVERY ``wait_timer`` suspend on every
+    poll."""
     disp = SqliteDispatcher(":memory:")
     _suspend_on_timer(disp, "t-good", fire_at=1_000.0)
     _suspend_on_timer(disp, "t-corrupt", fire_at=1_000.0)
@@ -160,19 +157,19 @@ def test_fire_due_timers_skips_undecodable_row_and_still_fires_others() -> None:
 def test_migration_7_backfills_fire_at_for_legacy_timer_suspend(
     tmp_path, monkeypatch
 ) -> None:
-    """sqlite-only: a pre-migration-7 DB (no ``fire_at`` column) upgrades in
-    place, and migration 7's backfill decodes each suspended timer's blob so
-    the indexed sweep still fires it — an in-flight ``wait_timer`` suspend is
-    never stranded across the upgrade. A non-timer suspend backfills to NULL
-    (it must never surface on the timer index)."""
+    """sqlite-only: a database at schema v6 (no ``fire_at`` column) upgrades
+    in place, and migration 7's backfill decodes each suspended timer's blob
+    so the indexed sweep still fires it — an in-flight ``wait_timer`` suspend
+    is never stranded across the upgrade. A non-timer suspend backfills to
+    NULL (it must never surface on the timer index)."""
     from noeta.protocols.canonical import to_canonical_bytes
     from noeta.builtins.storage.impl.sqlite import migrations as migrations_module
     from noeta.builtins.storage.impl.sqlite.migrations import MIGRATIONS
 
     db = tmp_path / "timer_backfill.sqlite"
     # Build a v6 DB (reclaim_count present, fire_at absent) and hand-write the
-    # rows an OLD dispatcher would have left — a raw INSERT, since the current
-    # release path already writes the not-yet-existent fire_at column.
+    # rows a v6 dispatcher leaves behind — raw INSERTs, because the release
+    # path writes the fire_at column that v6 does not have.
     v6_only = [m for m in MIGRATIONS if m.version <= 6]
     monkeypatch.setattr(migrations_module, "MIGRATIONS", v6_only)
     disp = SqliteDispatcher(str(db))
@@ -213,8 +210,8 @@ def test_migration_7_backfills_fire_at_for_legacy_timer_suspend(
 
 def test_fire_due_timers_idle_poll_skips_write_transaction(monkeypatch) -> None:
     """sqlite-only perf invariant: a poll with nothing due returns off the
-    read-only probe WITHOUT opening ``BEGIN IMMEDIATE`` — the ~1s idle poll no
-    longer takes the write lock. A due poll opens exactly one."""
+    read-only probe WITHOUT opening ``BEGIN IMMEDIATE``, so the ~1s idle poll
+    never takes the write lock. A due poll opens exactly one."""
     from noeta.builtins.storage.impl.sqlite import dispatcher as disp_mod
 
     calls = {"n": 0}
@@ -350,8 +347,9 @@ def test_maybe_poll_timers_fires_due_task_and_emits_reliability() -> None:
 
 
 def test_maybe_poll_timers_tolerates_dispatcher_without_the_method() -> None:
-    """A pre-timer external Dispatcher adapter degrades to a no-op poll
-    instead of crashing the loop."""
+    """An external Dispatcher adapter that does not implement
+    ``fire_due_timers`` degrades to a no-op poll instead of crashing the
+    loop."""
 
     class _LegacyDispatcher:
         pass
@@ -403,9 +401,9 @@ def _wire_engine(policy: Any, dispatcher: Any, clock: Any) -> tuple[Any, Any]:
 
 
 def test_wait_timer_full_cycle_resumes_and_finishes(make_dispatcher) -> None:
-    """The liveness proof the review demanded: a ``wait_timer`` suspend
-    is woken by the poll (no external wake producer involved) and the
-    resumed turn runs to terminal."""
+    """Liveness end to end: a ``wait_timer`` suspend is woken by the poll
+    alone (no external wake producer involved) and the resumed turn runs
+    to terminal."""
     disp = make_dispatcher()
     policy = StubScriptedPolicy(
         [WaitTimerDecision(seconds=30), FinishDecision(answer="done")]
@@ -445,7 +443,7 @@ def test_wait_timer_full_cycle_resumes_and_finishes(make_dispatcher) -> None:
 
 
 # ---------------------------------------------------------------------------
-# wait_external — the un-stubbed exit
+# wait_external
 # ---------------------------------------------------------------------------
 
 

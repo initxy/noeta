@@ -1,4 +1,4 @@
-"""Tests for the first-party ``protected-paths`` manifest plugin (M5).
+"""The first-party ``protected-paths`` manifest plugin.
 
 Covered:
 
@@ -9,9 +9,9 @@ Covered:
 * deny-glob precedence (a glob denies even inside an allowed root) and
   deny-glob-only mode (no roots);
 * the manifest ships a configured guard built from the environment;
-* the new loading API — ``load_plugins`` lists the ``guard`` contribution
+* the loading API — ``load_plugins`` lists the ``guard`` contribution
   without executing plugin code, and ``process_hooks`` resolves the configured
-  guard (governance, process-wide, D6).
+  guard (governance, process-wide).
 
 The plugin lives in a hyphenated directory (not an importable package), so —
 like the plugin loader — the module is loaded by explicit file path.
@@ -271,7 +271,7 @@ def test_default_config_protects_cwd_not_nothing():
 
 
 # ---------------------------------------------------------------------------
-# End-to-end — the new manifest loading API (load_plugins + process_hooks)
+# End-to-end — the manifest loading API (load_plugins + process_hooks)
 # ---------------------------------------------------------------------------
 
 

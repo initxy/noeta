@@ -1,81 +1,108 @@
-# Agent identity and provenance: agent→engine resolver + AgentSpec/registry + AgentBound
+# `agent_name` selects the Agent, `AgentSpec` is its closure-free identity, `AgentBound` is its durable provenance
 
 ## Context
 
-A single long-lived worker can host many concurrent sessions at once. When it leases any given Task, it must drive that Task with **that Task's own** Agent (policy + tools + context + budget). This requires a resolution chain from Task to Engine: `agent_name` as the authoritative selector → a generic AgentSpec → durable provenance → backward compatibility with old data. The naming layer was later evolved by `library-sdk-architecture.md`, but the mechanism described here is unchanged.
-
-The original design also included a deterministic digest based on `AgentSpec.fingerprint`: it was recorded on `AgentBound` and drove a three-state agent-drift check under verify. The verify/replay test machinery has since been removed, so **the fingerprint digest, the recorded `agent_fingerprint`, and the drift check no longer exist**. What still carries weight is described below: `agent_name` as the authoritative selector, `AgentSpec` as a frozen, serializable *identity* object (compared by structural equality), the pure wiring-factory contract, and the durable `AgentBound` record (which now carries only `agent_name`). An old recording that still contains an `agent_fingerprint` deserializes cleanly (the key is dropped by the tolerant restorer).
+One long-lived worker hosts many concurrent Tasks. When it leases a Task it must
+drive that Task with **that Task's own** Agent — its policy, tools, context and
+budget. That requires a resolution chain from a leased Task back to an Engine,
+and a durable record of which Agent a Task is bound to, so a resume on another
+process rebuilds the same wiring from the recording alone.
 
 ## Decision
 
-### `agent_name` is the authoritative selector; a per-task agent→engine resolver
+**`agent_name` is the authoritative selector.** Genesis records it in
+`TaskCreated`; the per-task agent→engine seam folds the Task, reads that name,
+looks the Agent up in the registry, and builds the Engine. An unresolvable name
+is a hard error at lease time, never a silent fallback to a default Agent.
+`policy_name` alongside it is observable provenance only.
 
-- **The L2 `resolve_engine(task) → Engine` seam**: fold the Task, read `TaskCreated.agent_name`, look the Agent up through the registry, and build the engine + policy via the `build_engine_for_agent` factory. **`Engine` stays single-policy**—the resolver picks the Engine at the host layer; a single Engine never swaps policy. The single-writer invariant and the Engine line budget are both untouched.
+**The Engine is single-policy.** The resolver picks the Engine at the host
+layer; one Engine never swaps policy mid-flight. A worker runtime driving a
+single Agent has no resolver and uses its one Engine, so the seam is purely
+additive. Every surface converges on one driving primitive (`run_leased_task`);
+per-command differences on the woken branch ride a typed woken-command-prelude
+(append a message, resolve an approval, or nothing) rather than each surface
+growing its own resume machinery.
 
-- **`agent_name` is promoted from "observable" to "authoritative"**: the resolver dispatches on it, so a new task must write a **resolvable** `agent_name`. An unknown name is a hard error at lease time (not a silent no-op). `policy_name` remains observable provenance only.
+**`AgentSpec` is a frozen, fully serializable identity object with no
+`Callable` fields.** It carries name, instructions, policy and composer refs,
+tools, skills, guards, observers, default budget, the `plugins` activation
+tuple, the `spawnable` set, metadata and a preferred model. Turning those refs
+into live components is a separate builder keyed by the same `(name, version)`.
 
-- **One driving primitive across every surface**: CLI and web both converge on `run_leased_task`; the woken branch carries its per-command differences through a typed **woken-command-prelude seam** (append-message / resolve-approval / none), rather than each surface growing its own resume machinery.
+**Identity is structural equality.** Component lists normalize to sorted tuples
+at construction, so author ordering never changes identity. The `plugins`
+activation tuple is behaviour-shaping identity — feature gating is a membership
+test against it, in one shared derivation. `metadata` and `default_model` are
+routing/display hints and are not identity. Deserializing a spec demands an
+explicit `plugins` key: a plugin-free agent must say so, never default silently.
 
-### Generic AgentSpec / AgentRegistry
+**Factory purity is an explicit contract.** A wiring factory must be a pure
+function of a `(name, version)` ref plus host config. Any behaviour-affecting
+change bumps the ref's version and must never hide inside a closure, so
+`ComponentRef.version` and `ToolRef.version` carry behaviour, not a release tag.
 
-- **`AgentSpec` is a frozen, fully serializable *identity* object; the wiring factory is separate.** The spec carries only declarative, canonically serializable identity (name / instructions / policy / composer / tools / skills / guards / observers / default_budget / capabilities / metadata) and has **no `Callable` fields**. Turning a ref into live components is done by **another** registry/builder that resolves the same `(name, version)` ref.
+**`AgentBound` is a separate event, written atomically inside `create_task`.**
+The Engine appends `TaskCreated` then `AgentBound` in one call — one trusted
+write point, so a named Task cannot exist without its identity record. The Agent
+is immutable within a Task, so this happens exactly once and is never re-emitted.
+A host/session binding, when supplied, follows as `TaskHostBound`.
 
-- **Identity is structural equality.** Two specs with equal declarative identity are `==`; component lists are normalized to sorted tuples at construction, so the order the author wrote them in never changes identity. (`metadata` / `default_model` are decorative / routing hints—not behavior-affecting identity.)
-
-- **Factory purity is an explicit contract**: a wiring factory must be a pure function of `(name, version) ref + host config`; any behavior-affecting change **must** show up as a version bump and must never hide inside a closure. A `ToolRef` / `ComponentRef` therefore carries a **non-default** `version`—two behaviorally different components must never share one.
-
-- **`AgentRegistry`**: `add` (duplicate name → error) / `resolve` (unknown name → `UnknownAgentError`) / `names`.
-
-- **The low-level `noeta.agent`** carries an import-linter forbidden contract restricting it to importing only `noeta.protocols`, welding the package boundary shut so that server/worker cannot depend backward on the L3 code layer.
-
-### `AgentBound` durable provenance
-
-- **An incremental `AgentBound {agent_name}` event; never add a field to `TaskCreated`**: adding a field to genesis would drift the canonical bytes of **every** historical recording, whereas a new event type is simply **absent** from old recordings and folds with zero drift (the same byte-safety rule as `ModelBound` / `ConversationClosed`).
-
-- **The Engine writes `AgentBound` atomically inside `create_task`, immediately after `TaskCreated`** (one trusted write point, not an easily forgotten second call), for every **named** task → the class of gap "named Task but no provenance" becomes structurally impossible. The Agent is immutable within a Task, so this happens **exactly once**, not re-emitted every turn. An `unnamed` task emits no `AgentBound`.
-
-- `AgentBound` is the durable record "Agent X was bound to this Task"; resume rebinds the task to its Agent via `agent_name`.
-
-### Legacy `unnamed` compatibility
-
-- **`"unnamed"` is a frozen legacy sentinel** that new tasks **must not** use; it exists only as the default value of `create_task` for low-level tests and old demos.
-
-- **Resolving `"unnamed"` is an opt-in fallback, never silent**: the registry treats it as a hard error like any other unknown name; support for old data is an explicit host choice (`unnamed_fallback`; passing `None` keeps the hard error).
-
-- **Unnamed recordings emit no `AgentBound`** → they fold cleanly with zero drift.
+**`unnamed` is a reserved sentinel with no identity.** It is the default of the
+low-level `create_task` for kernel-level tests, emits no `AgentBound`, and the
+registry rejects it like any other unknown name. A host that wants it to resolve
+opts in explicitly by supplying a fallback spec.
 
 ## Rationale
 
-- **`agent_name` was promoted to authoritative because the recording already self-described the Agent's identity—nobody was reading it.** Genesis has always recorded `agent_name`; having the resolver actually dispatch on it lets CLI and web converge on a single `task → Engine` function and reconstruct the wiring self-describingly from the recording.
+Because the recording self-describes the Agent, dispatching on `agent_name` lets
+every surface converge on one `task → Engine` function and reconstruct the
+wiring from the recording instead of from ambient host state.
 
-- **The Engine stays single-policy to keep host concerns out of the execution core.** Having the Engine hold a resolver, or having `run_one_step` accept a policy, would bloat that ≤500-line core and blur the "one Engine = one Policy" shape. Picking the Engine at the host layer is purely additive.
+A single-policy Engine keeps host concerns out of the execution core: the core
+stays within a tight line budget, and "one Engine = one Policy" is the shape the
+single-writer invariant and the Engine's budget accounting rely on.
 
-- **`AgentSpec` carries no closures so that identity stays declarative.** Closures can be neither compared nor serialized—putting a `policy_factory` on the spec would make identity depend on an opaque object. Separating identity from wiring gives a closure-free, structurally comparable identity object; the pure-factory + versioned-ref contract is exactly what makes behavioral changes visible as a version bump.
+Closures can be neither compared nor serialized. A `policy_factory` on the spec
+would make identity depend on an opaque object, and two behaviourally different
+wirings could then share one identity. The versioned-ref contract is what makes
+a behaviour change visible.
 
-- **`unnamed` compatibility exists so that migration doesn't invalidate all of history overnight.**
+Provenance travels as its own event type, never a field on genesis. A field on
+`TaskCreated` would drift the canonical bytes of every recording; a separate
+event type is simply absent from a recording that does not carry it and folds
+with zero drift.
 
 ## Alternatives considered
 
-1. **Make `Engine` per-task-policy-aware (Engine holds a resolver, or `run_one_step` accepts a policy).** Rejected: bloats the ≤500-line core and pushes host concerns into the execution core.
-
-2. **Have `AgentSpec` carry a `policy_factory` / `composer_factory` closure.** Rejected: identity would depend on a non-serializable, non-comparable closure.
-
-3. **Generalize `CodingAgent` in place.** Rejected: the only agent abstraction would stay in L3, server/worker would have to depend backward on `noeta.code`, and non-code agents could not be hosted.
-
-4. **Add the bound identity as a field on `TaskCreatedPayload`** / **re-emit `AgentBound` every turn.** Rejected: adding a field to genesis drifts all of history (which is the entire reason `ModelBound` exists); the Agent is immutable within a Task, so re-emitting every turn is redundant bytes that also falsely implies "the Agent can change mid-stream."
-
-5. **Auto-register a built-in `"unnamed"` → default Agent.** Rejected: it would silently revive a retired field (a typo would fall through to unnamed behavior).
+1. **Make the Engine per-task-policy-aware** — hold a resolver inside it, or let
+   the step entry point accept a policy. Weighed and rejected: it bloats the
+   execution core and pushes host concerns into it.
+2. **Put a `policy_factory` / `composer_factory` closure on `AgentSpec`.**
+   Rejected: identity would depend on a non-serializable, non-comparable object.
+3. **Keep the only agent abstraction inside a product-specific coding layer and
+   generalize it in place.** Rejected: the worker would depend backward on
+   product code, and non-coding agents could not be hosted at all. The identity
+   layer is instead welded shut by an import-linter contract limiting
+   `noeta.agent.spec` / `noeta.agent.registry` to `noeta.protocols`.
+4. **Carry the bound identity as a field on the genesis payload, or re-emit
+   `AgentBound` every turn.** Rejected: a genesis field drifts all history, and
+   re-emitting is redundant bytes that falsely implies the Agent can change
+   mid-stream.
+5. **Auto-register a built-in `unnamed` → default Agent.** Rejected: a typo in
+   an agent name would silently fall through to default behaviour instead of
+   failing at lease time.
 
 ## Consequences
 
-- Identity and registry land in: `AgentSpec` in `noeta.agent.spec`, `AgentRegistry` + `UnknownAgentError` in `noeta.agent.registry`.
-
-- Resolution and driving land in: the agent→engine resolver + `unnamed_fallback` in `noeta.execution.resolver`, the `run_leased_task` convergence + prelude seam in `noeta.execution.driver` / `noeta.execution.runner`.
-
-- The provenance write point: the `AgentBound` for a named task is written atomically inside `create_task` in `noeta.core.engine`; the event payload lives in the protocols layer.
-
-- Byte safety is the lifeline of this design: new provenance always goes through "add a new event type" rather than "add a field to genesis," to guarantee zero-drift folding of old recordings.
-
-- After the removal of verify/replay, the fingerprint digest, `agent_fingerprint`, and drift check no longer exist; a leftover `agent_fingerprint` key in an old recording is dropped by the tolerant restorer and still deserializes cleanly. Do not rely on fingerprints for identity comparison anymore—identity now rests solely on structural equality of `AgentSpec`.
-
-- Factory purity is a constraint to guard long-term: any behavior-affecting wiring change must show up as a version bump and must never hide inside a closure, or the `(name, version)` ref can no longer uniquely identify a behavior.
+- Identity and lookup live in `noeta.agent.spec` and `noeta.agent.registry`;
+  the generic per-task resolver skeleton in `noeta.execution.resolver`; the
+  resolver seam and `run_leased_task` in `noeta.runtime.worker`; the shared
+  conversation-command driver and its typed preludes in `noeta.execution.driver`.
+- The provenance write point is `create_task` in `noeta.core.engine`; the
+  payload types are in the protocols layer.
+- Provenance always arrives as its own event type, so folding a recording that
+  lacks it stays byte-clean.
+- Factory purity is a standing constraint: a behaviour change that does not bump
+  a ref's version breaks the guarantee that `(name, version)` uniquely names a
+  behaviour, and nothing detects it automatically.

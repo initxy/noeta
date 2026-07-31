@@ -1,119 +1,117 @@
-# Comparison: Noeta vs Claude Agent SDK, LangGraph & Temporal
+# Comparison: Noeta and other agent frameworks
 
-Noeta and the Claude Agent SDK both give you an agent loop, tools, MCP,
-sub-agents, and sessions. The difference is not in those nouns — it is in
-the spine underneath. Noeta makes state event-folded; the SDK does not.
+Noeta is a runtime for long-horizon, task-oriented agents: it hosts, records,
+schedules, and replays agent execution without prescribing how an agent is
+written.
 
-## Head-to-head
+Every statement about Noeta below is checked against the code in this
+repository. Statements about other projects are limited to their headline
+design — for anything finer, read their own documentation.
 
-| Server-side concern | Claude Agent SDK | Noeta |
+## What Noeta is
+
+- **Two libraries, in-process.** `noeta-runtime` is the kernel and declares no
+  dependencies; `noeta-sdk` is the only thing you import and carries every
+  capability implementation. There is no CLI and no HTTP server: a host embeds
+  `noeta.sdk` and drives the loop itself.
+- **State is a fold over an event log.** Each task owns an append-only
+  `EventLog` stream; task state is `fold(events)`. Large bodies live in a
+  content-addressed `ContentStore` (an event payload is capped at 4 KB) and are
+  referenced by `ContentRef`.
+- **Waiting is first class.** A task suspends on a `WakeCondition`
+  (`SubtaskCompleted` / `HumanResponseReceived` / `TimerFired` /
+  `ExternalEvent`); the `Dispatcher` matches an incoming wake event against
+  suspended tasks and re-enqueues, and a `Worker` leases the task to advance it.
+- **Compaction is recorded, not destructive.** A compaction step emits
+  `CompactionRequested` plus `Compacted`; the summary body goes to the
+  `ContentStore` and the composer swaps the covered prefix at compose time. The
+  original messages stay on the stream, where audit and replay can read them.
+- **Provider neutrality is enforced.** `LLMProvider` is the internal protocol;
+  every vendor adapter lives in the `providers` built-in plugin. The kernel
+  cannot reach an adapter, because nothing may statically import
+  `noeta.builtins` — the `sdk-core-not-builtins` `import-linter` contract fails
+  the build if it does.
+- **Sixteen extension surfaces, one loader.** Contributions are declared in a
+  static plugin manifest across three planes: identity (`tool`, `agent`,
+  `content_kind`, `prompt_fragment`, `policy`, `control_tool`), wiring
+  (`guard`, `observer`, `provider`, `reminder_provider`, `reminder`,
+  `tool_result_transform`, `session_pack`), and host (`mcp_server`, `skills`,
+  `sandbox_provider`). A manifest is inert data — a plugin's contributions are
+  listable and collision-checkable before any of its code is imported.
+- **Subagents are ordinary tasks.** `spawn_subtask` and `spawn_subtasks`
+  create independent event-sourced tasks with their own streams; results return
+  through a `SubtaskCompleted` wake, not a nested call.
+- **Governance runs before the act.** `Guard` hooks fire at `before_tool_call`,
+  `before_spawn_subtask`, and `before_finish`, returning
+  `allow` / `deny` / `require_approval`; `Observer` hooks are read-only and
+  their failure cannot affect the task.
+
+## Noeta and the Claude Agent SDK
+
+The Claude Agent SDK is a client library for building agents on Claude. It
+ships an agent loop, built-in tools, MCP support, subagents, permission modes,
+and hooks, and it manages the conversation for you.
+
+| Concern | Claude Agent SDK | Noeta |
 | --- | --- | --- |
-| **Who owns the substrate** | Anthropic hosts the model; you host the loop in-process | You own the whole stack — loop, durable store, wake machinery |
-| **State / session model** | Session JSONL — an append-style conversation recording, auto-persisted | Event-sourced log + content-addressed store; state = `fold(events)` |
-| **Recovery / resume** | Resume or fork by session id; replay the conversation to continue | Fold is recovery — refolding the log restores state with no separate load logic |
-| **Suspend / wake** | Resume / fork by session id; no first-class durable wake | First-class durable wake: a suspended task is matched by projection and re-enqueued, exactly-once |
-| **Context compaction** | Auto-summary, irreversible; interceptable by a `PreCompact` hook | Compaction is a recorded event — auditable, reproducible, original history never scrubbed |
-| **Provider** | Configures multiple backends (Anthropic / Bedrock / Vertex / Azure), but Anthropic-centric | Vendor-neutral internal protocol; each vendor behind an adapter; the kernel is forbidden to depend on any vendor |
-| **Tools** | Built-in tools + `@tool` + in-process SDK MCP server | Built-in tools + `@tool` (with `version` / `risk_level`) + MCP (stdio / HTTP) |
-| **Permissions** | `permission_mode` + `canUseTool` + a hook chain | `permission_mode` + Guards (permission-before-acting) |
-| **Extension** | Hooks, imperative interception (`PreToolUse`, `PostToolUse`, …) | Five extension seams (tools, policy, guards, observers, content channels) plus the single-writer constraint (observers are read-only) |
-| **Sub-agents** | Agent definitions; output returns to the parent; nesting ≤ 5 levels | Subtasks are independent event-sourced tasks; fan-out concurrency; results flow back via a `SubtaskCompleted` wake |
-| **Concurrency / distribution** | A single `query` / `Client` in-process | A distributed-queue substrate of lease + durable log (multi-worker pools shipped; multi-host fencing on Postgres) |
-| **Shape** | A TypeScript / Python library sending straight to the Claude API | Two packages — `noeta-runtime` (engine) + `noeta-sdk` (the client facade you import) |
+| **Who owns the substrate** | Anthropic hosts the model; the library runs the loop in your process | You own loop, store, and wake machinery; the model is behind an adapter |
+| **What is persisted** | The conversation, managed for you | An event ledger; state is `fold(events)`, never stored as the primary copy |
+| **Suspend / wake** | Resume a session | `WakeCondition` matching + `Dispatcher` + `Lease`, delivered exactly once |
+| **Compaction** | Automatic summarisation | `CompactionRequested` / `Compacted` events; originals stay on the stream |
+| **Tools** | Built-in tools, `@tool`, MCP | 11 built-in tools, `@tool` (carrying `version` and `risk_level`), MCP over stdio and HTTP, plus in-process SDK MCP servers |
+| **Permissions** | `permission_mode`, an approval callback, hooks | `permission_mode` (`default` / `acceptEdits` / `bypassPermissions`), `can_use_tool`, and Guards that rule before the act |
+| **Extension** | Hooks | Sixteen manifest-declared surfaces plus the single-writer rule (observers cannot mutate) |
+| **Concurrency** | One client in-process | `Client.start_workers(n)` for a resident pool; multi-host on Postgres |
+| **Shape** | One library, TypeScript and Python | Two Python wheels: `noeta-runtime` (kernel) and `noeta-sdk` (what you import) |
 
-## When each wins
+The two answer different questions. The SDK asks "how do I give my code an
+agent loop?" Noeta asks "how do I turn an agent's running into a ledger I can
+replay, audit, and carry elsewhere?"
 
-**Reach for the Claude Agent SDK when** you want an agent loop out of the
-box, tracking official Anthropic capabilities closely, with minimal
-operational burden. It is a well-hosted client library — install, point at
-your API key, and go.
+## Noeta and LangGraph
 
-**Reach for Noeta when** you need to own the execution substrate: durable
-replay and audit of every step, provider portability across vendors, the
-ability to host an agent as a long-running service with crash recovery,
-or to fold state from a log that outlives any individual process. The
-cost is that you run the infrastructure.
-
-These are not competitors so much as answers to different questions. The
-SDK asks "how do I give my code an agent loop?" Noeta asks "how do I make
-an agent's running into a ledger I can replay, audit, and carry
-elsewhere?"
-
-> **Honest caveats.** Noeta is an early pre-1.0 preview. Multi-worker
-> pools are shipped, and multi-host coordination is shipped on **Postgres
-> only** — SQLite and in-memory deployments stay single-host. The ecosystem
-> is smaller — fewer built-in tools, no plugin marketplace, a younger
-> community. If "it just works against Anthropic's API" is the primary
-> requirement, the Claude Agent SDK is the lower-friction choice today.
-
-## Three differences spelled out
-
-**The shape of ground truth.** Session JSONL is also an append log, but
-what it records is the *conversation*. Noeta records *events*, and state
-is a projection folded out of those events. One is like a recording of a
-conversation; the other is like a state machine's ledger. The ledger lets
-resume, compaction, and audit all land on one mechanism — resume is a
-refold, compaction is a recorded event, audit is another fold. The
-recording model needs a separate set of logic for each.
-
-**The reversibility of compaction.** The SDK's auto-compaction is
-summary-style: the original content is displaced by a summary, and the
-process is irreversible (to archive it you rely on a `PreCompact` hook
-grabbing a copy yourself). Noeta's compaction only records a summary
-boundary into the log; the original messages are still there, and the
-summary is overlaid at context-assembly time. So the same task, recovered,
-compacts the same way — and you can dig up what was actually pared away.
-
-**The provider boundary.** The SDK supports multiple backends, but the
-shape is Anthropic-centric — the message format, the tool calling
-convention, the reasoning model. Noeta makes the internal protocol a
-vendor-neutral canonical, then enforces that the kernel depends on no
-vendor SDK with an import-linter rule. The cost is an extra adapter layer
-per vendor; the return is recordings that are not bound to a vendor, and
-tasks you can fold and audit without installing any vendor's SDK.
-
-## Noeta vs LangGraph
-
-LangGraph is the closest open-source neighbor: it also persists agent
-state, supports human-in-the-loop interrupts, and can rewind ("time
-travel") to earlier points. The difference is what gets persisted and
-what machinery ships around it.
+LangGraph expresses an agent as a graph of nodes and edges, with a checkpointer
+that persists graph state so a thread can be resumed, interrupted for human
+input, and rewound.
 
 | Concern | LangGraph | Noeta |
 | --- | --- | --- |
-| **Unit of persistence** | A checkpoint per super-step: a snapshot of the graph's channel state | An append-only event ledger; state is `fold(events)`, never stored as the primary copy |
-| **What history means** | A list of state snapshots you can rewind to or fork from | A causal record — every event carries `actor` / `causation_id` / `trace_id`, so history answers *why*, not just *what* |
-| **Control flow** | You define a graph of nodes and edges; the model routes within it | No graph. The Policy decides each step; task structure emerges from decisions |
-| **Resume / wake** | Caller re-invokes the thread with a resume command; queues and crons live in the hosted Platform | Dispatcher + lease + worker with durable, exactly-once wake ships in the open-source core |
-| **Compaction** | Left to the application (or bolt-on memory libraries) | A recorded, reversible event — the summary overlays at compose time, originals stay in the log |
-| **Ecosystem** | Mature, large integration catalog, big community | Young, smaller toolset |
-| **Token streaming** | Streamed through the graph's event API | Streamed as ephemeral SSE deltas; the event ledger stays the only durable record |
+| **Unit of persistence** | A checkpoint of graph state | An append-only event ledger; state is derived, never the stored copy |
+| **What history answers** | What the state *was* at a point | What *happened* — every envelope carries `actor` / `causation_id` / `trace_id` |
+| **Control flow** | A graph you define; the model routes within it | No graph. The Policy decides each step; task structure emerges from decisions |
+| **Scheduling** | The caller re-invokes the thread | `Dispatcher` + `Lease` + `WorkerLoop` ship in the library, including stale reclaim |
+| **Compaction** | Application concern | A recorded step; the summary overlays at compose time |
+| **Ecosystem** | Large integration catalogue, mature community | Small: 18 built-in plugins, no marketplace, young community |
+| **Token streaming** | Through the graph's event API | Through a host-supplied `HostConfig.delta_sink`; deltas are ephemeral and the ledger stays the only durable record |
 
-**Reach for LangGraph when** you want to express your agent as a graph,
-lean on the LangChain integration catalog, and need ecosystem
-maturity today.
-
-**Reach for Noeta when** the question is auditability and substrate
-ownership: a snapshot tells you what the state *was*; a ledger tells you
-what *happened* — which tool ran on whose authority, what was compacted
-away, what woke a sleeping task. And the scheduling machinery (leases,
-durable wake, crash reclaim) is part of the open-source core, not a
+Reach for LangGraph when you want a graph and an integration catalogue. Reach
+for Noeta when the question is auditability and substrate ownership — which
+tool ran on whose authority, what was compacted away, what woke a sleeping
+task — and you want the scheduling machinery in the library rather than in a
 hosted product.
 
-## Noeta vs Temporal (a brief note)
+## Noeta and Temporal
 
-Temporal is a workflow engine: you define a DAG of activities in code,
-and Temporal durably schedules and retries them. It is excellent for
-human-orchestrated business processes with durable timers.
+Temporal is a durable execution platform: you write workflows and activities in
+code, and the service durably schedules, retries, and times them.
 
-Noeta is an agent runtime: the LLM drives the control flow dynamically,
-not a pre-defined graph. A task's structure emerges from the model's
-decisions, not from a workflow definition. They solve different problems
-— Temporal for when you know the shape of the work ahead of time, Noeta
-for when the model discovers it as it goes.
+Noeta is not a workflow engine. The LLM drives control flow, so a task's shape
+emerges from the model's decisions rather than from a definition written ahead
+of time. Temporal fits when you know the shape of the work; Noeta fits when the
+model discovers it as it goes. Noeta keeps `Workflow` out of its vocabulary —
+fixed procedures are expressed as a deterministic Policy plus `spawn_subtask`.
+
+## When Noeta is the wrong choice
+
+You run the infrastructure. Multi-host deployments require the Postgres backend;
+the SQLite and in-memory backends are single-host. The built-in tool set is
+small and there is no plugin marketplace. If "it works against a vendor's API
+with no operational surface" is the requirement, a hosted client library is the
+lower-friction choice.
 
 ## See also
 
 - [Event sourcing](../concepts/event-sourcing.md) — why state = fold(log)
 - [Wake & resume](../concepts/wake-resume.md) — the delivery guarantee
+- [Known limitations](../operations/limitations.md) — the boundaries in detail
 - [Architecture overview](../architecture/overview.md) — the full picture

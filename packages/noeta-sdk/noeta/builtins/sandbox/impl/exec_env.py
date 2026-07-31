@@ -1,12 +1,9 @@
-"""``AioSandboxExecEnv`` — the AIO Sandbox container ``ExecEnv`` adapter.
+"""``AioSandboxExecEnv`` — the ``ExecEnv`` implementation backed by an AIO
+Sandbox container over HTTP.
 
-Microkernel M2: moved here from ``noeta.runtime.exec_env`` (which keeps the
-``ExecEnv`` Protocol + ``LocalExecEnv`` — the kernel seam and its host-local
-default). This module is the retirement-slated AIO adapter the ``sandbox``
-built-in plugin declares on the host-plane ``sandbox_provider`` surface; the
-SDK's ``SandboxExecEnvManager`` resolves it through the loader's
-dynamic-import doorway as its default backend factory. The R2 isolation notes
-live on the class docstring below, unchanged.
+The entire container wire contract is isolated in this one module, so a
+container API drift is a one-file change and the tool code above the ``ExecEnv``
+seam never learns which executor it runs on.
 """
 
 from __future__ import annotations
@@ -47,15 +44,15 @@ DEFAULT_AIO_TIMEOUT_S = 60.0
 _DEFAULT_AIO_TOTAL_CAP = 32 * 1024 * 1024
 
 class AioHttpPost(Protocol):
-    """Injectable HTTP transport for the AIO backend.
+    """Injectable HTTP transport: ``(url, json_body, headers, *, timeout_s)`` →
+    raw response body bytes.
 
-    ``(url, json_body, headers, *, timeout_s)`` → raw response body bytes.
-    Injectable so tests substitute a fake and never shell out / open a socket
-    (the ``mcp_http_post`` / ``otlp_http_post`` pattern); production leaves it
-    ``None`` to use stdlib ``urllib``. ``timeout_s`` is the already-resolved
-    socket read timeout for THIS call — the adapter default for file/stat ops,
-    or the caller's per-command budget for a ``run_argv`` shell exec (there is no
-    remote hard-kill in v1, so this transport timeout IS the effective bound).
+    Injectable so tests substitute a fake and never open a socket; leaving it
+    ``None`` uses stdlib ``urllib``. ``timeout_s`` is the already-resolved socket
+    read timeout for THIS call — the adapter default for file/stat ops, or the
+    caller's per-command budget for a ``run_argv`` shell exec. The container
+    never hard-kills a slow exec, so this transport timeout IS the effective
+    bound.
     """
 
     def __call__(
@@ -87,50 +84,45 @@ _AIO_ERROR_TYPES: dict[str, type[OSError]] = {
 class AioSandboxExecEnv:
     """:class:`ExecEnv` backed by an AIO Sandbox container over HTTP.
 
-    Every file / process side effect is routed to a single
-    ``agent-infra/sandbox`` container's v1 API — ``POST /v1/shell/exec`` for
-    process execution and ``POST /v1/file/{read,write}`` for file IO — instead
-    of the local host. The tool code above the seam is byte-for-byte the same;
-    only the executor changes, so a tool's model-facing contract (and its
-    recorded output shape) is unaffected.
+    Every file and process side effect is routed to one ``agent-infra/sandbox``
+    container — ``POST /v1/shell/exec`` for process execution, ``POST
+    /v1/file/{read,write}`` for file IO — instead of the local host. The tool
+    code above the seam is identical either way, so a tool's model-facing
+    contract and its recorded output shape do not depend on the executor.
 
-    **This is the R2 isolation layer.** The AIO v1 wire contract (field names,
-    the base64 read/write encoding, the merged ``output`` stream) is captured
-    *only here* and pinned by fake-transport tests; a contract drift is a
-    one-file change. The mapping decisions worth calling out:
+    The wire contract (field names, the base64 read/write encoding, the merged
+    ``output`` stream) is captured only here and pinned by fake-transport tests.
+    The mapping decisions worth calling out:
 
     * **``run_argv``** joins the argv with :func:`shlex.join` and prefixes
       ``cd <cwd> && `` — cwd is expressed lexically rather than relying on an
-      unconfirmed request field. An optional host-supplied ``preamble`` (per
-      session, minted fresh each call — the process twin of ``auth_headers``) is
-      inserted between the ``cd`` and the command so a session can establish
-      per-exec shell state; ``None`` keeps the wire byte-identical. AIO returns a
-      single merged ``output`` stream, so it lands in ``stdout`` and ``stderr``
-      is empty (the tool's output shape tolerates this — the local backend
-      already merges nothing, but nothing downstream requires the split). A
-      large run's inline ``output`` is truncated by AIO with the full merged
-      stream spilled to a container file named by ``full_output_file_path``;
-      ``run_argv`` reads that file's tail (see ``_read_spill``) so the recovered
-      bytes — not the lossy inline echo — feed the ``output_cap``, and the run
-      never trips the response ``_total_cap`` on a big build log.
+      unconfirmed request field. An optional host-supplied ``preamble``, minted
+      fresh each call, is inserted between the ``cd`` and the command so a
+      session can establish per-exec shell state. The container returns a single
+      merged ``output`` stream, so it lands in ``stdout`` and ``stderr`` stays
+      empty; nothing downstream requires the split. A large run's inline
+      ``output`` is truncated with the full stream spilled to a container file
+      named by ``full_output_file_path``, and ``run_argv`` reads that file's
+      tail (see ``_read_spill``) so the recovered bytes — not the lossy inline
+      echo — feed the ``output_cap`` and a big build log never trips the
+      response ``_total_cap``.
     * **byte fidelity** — reads request ``encoding="base64"`` and decode; writes
       send base64. This is the byte-exact path (edit / apply_patch hash the
       bytes for TOCTOU), and it is the single most contract-sensitive field.
     * **``glob`` / ``rglob``** are expressed with shell ``globstar`` (``rglob``
-      = ``glob('**/'+pattern)``, matching pathlib's own definition); they
-      depend on ``bash`` + ``globstar`` in the image (R5). Their pathlib
-      semantics are a best-effort approximation validated only against a live
-      container (gated ``NOETA_TEST_AIO_SANDBOX_URL``).
+      = ``glob('**/'+pattern)``, matching pathlib's own definition), so they
+      depend on ``bash`` with ``globstar`` in the image. Their pathlib semantics
+      are a best-effort approximation validated only against a live container
+      (gated ``NOETA_TEST_AIO_SANDBOX_URL``).
     * **stat** (``exists`` / ``is_file`` / …) runs ``test`` and reads the exit
       code; **``unlink``** runs ``rm``.
-    * **``tree_snapshot``** folds a whole recursive walk + selected reads into
-      ONE ``find``-driven exec (issue 46) — bulk consumers (skill indexing)
-      use it instead of a per-file ``rglob`` / ``is_file`` / ``read_text``
-      loop, whose per-round-trip fixed cost dominates at 100+ files.
+    * **``tree_snapshot``** folds a whole recursive walk plus selected reads
+      into ONE ``find``-driven exec — bulk consumers such as skill indexing use
+      it instead of a per-file ``rglob`` / ``is_file`` / ``read_text`` loop,
+      whose per-round-trip fixed cost dominates at 100+ files.
 
-    ``fence_token`` is the v1 placeholder for the v2 generation-token fence
-    (D1): the seam shape already carries it so v2 can fill it without touching
-    this interface; v1 leaves it ``None`` and sends no fence header.
+    ``fence_token`` is reserved: it is always ``None`` and no fence header is
+    sent.
     """
 
     def __init__(
@@ -151,45 +143,32 @@ class AioSandboxExecEnv:
         self._timeout_s = timeout_s
         self._total_cap = total_cap
         self._post = post or self._default_post
-        # v1: fence_token is a reserved placeholder (D1); always None today, so
-        # no fence header is sent. v2 rotates it on stale-reclaim.
         self._fence_token = fence_token
-        # ``auth_headers`` (v2, D8) is a per-call header factory — the SDK's
-        # ``SandboxAuth.connect_headers`` — so a short-lived credential (a TAE
-        # Bearer JWT) is minted fresh EACH request rather than fixed at
-        # construction. When it is supplied the static ``api_key`` path is
-        # bypassed; when it is ``None`` the v1 static header is used verbatim
-        # (byte-identical to pre-v2 behaviour). Either way auth rides only on the
-        # wire — never recorded (D5).
+        # ``auth_headers`` is a per-call header factory, so a short-lived
+        # credential is minted fresh for EACH request rather than fixed at
+        # construction. Supplying it bypasses the static ``api_key`` path.
+        # Either way auth rides only on the wire — never recorded.
         self._auth_headers = auth_headers
-        # ``preamble`` is a per-call shell-setup factory — the process twin of
-        # ``auth_headers`` (D8): a host-supplied callable invoked FRESH for each
-        # ``run_argv`` and prepended, verbatim, ahead of the command so a session
-        # can establish per-exec shell state (e.g. short-lived credentials that
-        # expire mid-session) that must be refreshed every command. It receives
-        # the argv (so the host can tailor the prefix to the command) and returns
-        # a complete prefix INCLUDING its own separator (``export X=Y && `` /
-        # ``foo; ``); ``""`` is a no-op. Like ``auth_headers`` it is a host
-        # runtime injection, never LLM-controlled and never recorded (D5); it must
-        # be total (return ``""`` on its own failure) — a raise propagates. The
-        # rendered command is otherwise byte-identical, so a ``None`` preamble
-        # (every deployment that does not set one) keeps the pre-existing wire.
+        # ``preamble`` is the process twin of ``auth_headers``: a host callable
+        # invoked fresh for each ``run_argv`` and prepended verbatim ahead of the
+        # command, so a session can establish per-exec shell state (say a
+        # credential that expires mid-session). It receives the argv, so the host
+        # can tailor the prefix to the command, and must return a complete prefix
+        # INCLUDING its own separator (``export X=Y && `` / ``foo; ``); ``""`` is
+        # a no-op. It is a host runtime injection, never LLM-controlled and never
+        # recorded, and it must be total — a raise propagates into the run.
         self._preamble = preamble
         headers = {"Content-Type": "application/json"}
         if api_key:
-            # AIO accepts the key via X-AIO-API-Key / Authorization: Bearer /
-            # ?api_key=. We use the header form; it rides only on the wire —
-            # never recorded (D5).
+            # The container accepts the key via X-AIO-API-Key, Authorization:
+            # Bearer, or ?api_key=. The header form keeps it off the URL, and it
+            # rides only on the wire — never recorded.
             headers["X-AIO-API-Key"] = api_key
         self._headers = headers
 
     def _request_headers(self) -> Mapping[str, str]:
-        """The headers for one request — static (v1) or freshly minted (v2).
-
-        With an ``auth_headers`` factory (D8) the auth header is computed per
-        call and merged over the constant ``Content-Type``; without it the v1
-        static header dict is returned unchanged, so the pre-v2 wire bytes are
-        identical.
+        """The headers for one request — the static dict, or freshly minted when
+        an ``auth_headers`` factory is wired.
         """
         if self._auth_headers is None:
             return self._headers
@@ -207,10 +186,9 @@ class AioSandboxExecEnv:
         is the socket read timeout for this one call; ``None`` uses the
         adapter-level default (file/stat ops), while ``run_argv`` passes the
         caller's per-command budget so a long ``shell_run`` is bounded by the
-        timeout the model asked for, not a fixed adapter constant. AIO does not
-        hard-kill a slow ``exec``, so this client timeout IS the effective bound
-        — when it fires the command may still be running in the container until
-        the lease cap (see D1/limitations).
+        timeout the model asked for. The container does not hard-kill a slow
+        ``exec``, so this client timeout IS the effective bound — when it fires
+        the command may still be running there until its lease cap.
         """
         url = self._base + path
         data = json.dumps(body, separators=(",", ":")).encode("utf-8")
@@ -286,13 +264,12 @@ class AioSandboxExecEnv:
         )
 
     def create_exclusive(self, path: Path, body: bytes) -> None:
-        # AIO has no O_EXCL; emulate exclusivity with a noclobber gate so a
-        # concurrent create loses the race deterministically. ``set -C`` makes
-        # ``>`` fail if the target exists; only on that gate succeeding do we
-        # write the real (base64) body. Recovery verbs mirror the local dance:
-        # a pre-existing path never became ours (recover="none"); a gate that
-        # opened but whose body write failed leaves a file to delete
-        # (recover="delete").
+        # The container API has no O_EXCL; emulate exclusivity with a noclobber
+        # gate so a concurrent create loses the race deterministically. ``set -C``
+        # makes ``>`` fail if the target exists, and only once that gate succeeds
+        # do we write the real body. The two failure verbs differ on purpose: a
+        # pre-existing path never became ours, while a gate that opened but whose
+        # body write failed leaves a file the caller must delete.
         gate = self._shell(f"set -C; : > {shlex.quote(str(path))}")
         if int(gate.get("exit_code", 1)) != 0:
             raise ExclusiveCreateExists(
@@ -309,17 +286,17 @@ class AioSandboxExecEnv:
             raise AioSandboxError(f"unlink {path}: {outcome.get('output', '')!r}")
 
     def mkdir(self, path: Path) -> None:
-        # ``mkdir -p`` = parents=True, exist_ok=True — the exact restore
-        # semantics ``LocalExecEnv.mkdir`` gives on the host.
+        # ``mkdir -p`` = parents=True, exist_ok=True — the same semantics
+        # ``LocalExecEnv.mkdir`` gives on the host.
         outcome = self._shell(f"mkdir -p -- {shlex.quote(str(path))}")
         if int(outcome.get("exit_code", 1)) != 0:
             raise AioSandboxError(f"mkdir {path}: {outcome.get('output', '')!r}")
 
     @property
     def supports_background(self) -> bool:
-        # v1: no container-side durable job handle; the host runner would spawn
-        # on the HOST, not the container — so shell_run refuses a background
-        # launch cleanly (D5). v2 owns container background as separate work.
+        # There is no container-side durable job handle, and the host runner
+        # would spawn on the HOST rather than in the container — so ``shell_run``
+        # refuses a background launch cleanly instead of running it elsewhere.
         return False
 
     # -- stat ------------------------------------------------------------- #
@@ -364,20 +341,20 @@ class AioSandboxExecEnv:
     def tree_snapshot(
         self, roots: Sequence[Path], *, content_name: str
     ) -> TreeSnapshot:
-        # ONE shell exec for the whole walk (issue 46): ``find -L`` lists every
-        # regular file under the roots (symlinks followed — matching the host
-        # indexer walk; a missing root is silenced), and the loop emits one
-        # self-describing line per file:
+        # ONE shell exec for the whole walk: ``find -L`` lists every regular file
+        # under the roots (symlinks followed, matching the host indexer walk; a
+        # missing root is silenced), and the loop emits one self-describing line
+        # per file:
         #
         #   ``F <b64(path)>``                    — a listed file
         #   ``C <b64(path)> <b64(bytes)>``       — a listed ``content_name``
         #                                          file with its bytes inlined
         #
-        # Both fields are base64 (no spaces/newlines), so paths with any
+        # Both fields are base64 (no spaces or newlines), so paths with any
         # shell-hostile characters parse unambiguously; an unreadable content
         # file degrades to an empty inline body (listed, no bytes). stderr is
-        # dropped because AIO merges it into the one ``output`` stream we are
-        # about to parse.
+        # dropped because the container merges it into the one ``output`` stream
+        # we are about to parse.
         if not roots:
             return TreeSnapshot((), {})
         q_roots = " ".join(shlex.quote(str(r)) for r in roots)
@@ -398,10 +375,10 @@ class AioSandboxExecEnv:
         text = data.get("output") or ""
         spill_path = data.get("full_output_file_path")
         if isinstance(spill_path, str) and spill_path:
-            # AIO truncated the inline echo and spilled the full stream to a
-            # container file — parse the spill, never the lossy inline echo.
-            # (Unlike run_argv's tail, the snapshot needs the WHOLE stream; a
-            # skill-tier listing is orders of magnitude below the response cap.)
+            # The inline echo was truncated and the full stream spilled to a
+            # container file — parse the spill, never the lossy echo. Unlike
+            # run_argv's tail, the snapshot needs the WHOLE stream; a skill-tier
+            # listing is orders of magnitude below the response cap.
             text = self.read_bytes(Path(spill_path)).decode(
                 "utf-8", errors="replace"
             )
@@ -445,16 +422,13 @@ class AioSandboxExecEnv:
         # request field; argv is shell-quoted so the remote shell re-runs the
         # exact tokens.
         del runner
-        # A host-supplied per-call preamble (per-session shell setup, minted
-        # fresh each exec) is prepended verbatim after the ``cd``; ``None`` keeps
-        # the command byte-identical to the pre-existing wire.
         preamble = self._preamble(argv) if self._preamble is not None else ""
         command = f"cd {shlex.quote(str(cwd))} && {preamble}{shlex.join(argv)}"
-        # v1: no remote hard-kill, so the transport read timeout IS the bound —
-        # thread the caller's per-command budget through so ``timeout=`` behaves
-        # like the local backend's ``subprocess`` timeout (a wedged command keeps
-        # running in the container until the lease cap; we still report it out as
-        # a timed-out run below). File/stat ops keep the adapter default.
+        # No remote hard-kill, so the transport read timeout IS the bound: thread
+        # the caller's per-command budget through so ``timeout=`` behaves like the
+        # local backend's ``subprocess`` timeout. A wedged command keeps running
+        # in the container until its lease cap; we still report it as a timed-out
+        # run below.
         start = time.monotonic()
         try:
             data = self._shell(command, timeout_s=timeout_s)
@@ -487,15 +461,14 @@ class AioSandboxExecEnv:
                 timed_out=False,
             )
         duration_ms = int((time.monotonic() - start) * 1000)
-        # AIO merges stdout+stderr into one ``output`` stream (pinned wire
-        # contract — the seam ADR keeps stderr empty). When that stream is
-        # large AIO truncates the inline ``output`` and spills the FULL merged
-        # stream to a container file, handing back ``full_output_file_path``;
-        # read its tail so a big build log lands in the artifact instead of
-        # being lost to inline truncation — or, worse, exceeding the response
-        # ``_total_cap`` and failing the whole run. A spill read that faults
-        # degrades to the truncated inline output; an image without the field
-        # (older AIO) stays byte-identical to the pre-spill path.
+        # The container merges stdout+stderr into one ``output`` stream, so
+        # ``stderr`` stays empty. When that stream is large the inline ``output``
+        # is truncated and the FULL stream spilled to a container file named by
+        # ``full_output_file_path``; read its tail so a big build log lands in
+        # the artifact instead of being lost to truncation — or, worse, exceeding
+        # the response ``_total_cap`` and failing the whole run. A spill read that
+        # faults degrades to the truncated inline output, and an image that never
+        # sends the field takes the same path.
         inline = (data.get("output") or "").encode("utf-8")
         spill_path = data.get("full_output_file_path")
         if isinstance(spill_path, str) and spill_path:
@@ -515,7 +488,7 @@ class AioSandboxExecEnv:
         )
 
     def _read_spill(self, path: str, cap: int) -> bytes:
-        """Return the bounded tail of an AIO ``full_output_file_path`` spill.
+        """Return the bounded tail of a ``full_output_file_path`` spill.
 
         Reading the whole file would re-enter ``/v1/file/read`` and hit the
         very ``_total_cap`` the spill exists to dodge, so pull only the last

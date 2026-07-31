@@ -1,10 +1,12 @@
-"""Token-streaming seam tests: the RuntimeLLMClient probe + delta sink.
+"""Token streaming is a display seam, never a recording seam.
 
-Pins the token-streaming decision's runtime half: streaming happens only
-when a ``delta_sink`` is injected AND the provider is a ``StreamingProvider``
-AND the call site allows it; every other combination takes the historical
-batch paths byte-identically. Deltas are ephemeral — the ledger trio is the
-same whether or not anyone streamed.
+RuntimeLLMClient streams only when all three conditions hold — a
+``delta_sink`` is injected, the provider implements ``StreamingProvider``,
+and the call site allows it — and takes the batch path otherwise. Deltas
+are ephemeral: a sink that raises must not fail the call, and the EventLog
+trio plus its ContentStore bodies must come out byte-identical whether or
+not anyone streamed, so streaming can never change what a replay sees.
+Also covers the SSE line parser the streaming providers decode with.
 """
 
 from __future__ import annotations
@@ -212,8 +214,7 @@ def test_sink_exception_never_fails_the_call() -> None:
 
 def test_ledger_identical_with_and_without_streaming() -> None:
     """A streamed exchange and a batch exchange of the same content produce
-    byte-identical EventLog + ContentStore records (the recording invariant
-    the streaming decision pins)."""
+    byte-identical EventLog + ContentStore records."""
 
     def run(delta_sink: Optional[_SinkRecorder]) -> tuple[list, bytes, bytes]:
         log, cs = InMemoryEventLog(), InMemoryContentStore()

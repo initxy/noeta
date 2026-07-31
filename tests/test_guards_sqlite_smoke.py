@@ -1,11 +1,10 @@
-"""End-to-end smoke for the issue 18 built-in Guards backed by the
-Phase 1 sqlite persistent stack (SqliteEventLog + SqliteDispatcher,
-InMemoryContentStore for now since issue 16 doesn't auto-wire).
+"""Built-in Guards over the sqlite-backed stack, end to end.
 
-A single integration scenario: BudgetGuard with ``max_tool_calls=1``
-denies the second tool call in a batch and the denial is durable on
-the sqlite-backed EventLog. Verifies that the fold-side accumulators
-read the same numbers as the live ``finished.governance``.
+A single integration scenario: with BudgetGuard(``max_tool_calls=1``) and a
+PermissionGuard denylist wired onto a SqliteEventLog + SqliteDispatcher, a
+batch's second and third calls are denied and the denials are durable on the
+sqlite EventLog. Pins that the fold-side accumulators rebuilt from that log read
+the same numbers as the live ``finished.governance``.
 """
 
 from __future__ import annotations

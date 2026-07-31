@@ -1,21 +1,12 @@
-"""``noeta.builtins.fs.impl`` — the file-system tool pack implementation.
+"""The ``fs`` plugin body: the tool classes plus the pack-construction factory.
 
-The ``fs`` built-in plugin's body (microkernel migration, M1): the tool
-classes plus the closure-construction factory. The pack is
-*closure-constructed*: :func:`build_fs_tools` takes one ``WorkspaceRoot``
-(the path-containment seam), an ``FsWriteMode`` (the ``DRY_RUN`` / ``APPLY``
-policy for the edit tools), and a ``ShellMode`` (the ``OFF`` / ``ALLOWLIST``
-/ ``ARBITRARY`` policy for the shell tools), and returns the dict of Tool
-instances keyed by their provider-safe ``snake_case`` name. Each tool keeps a
-reference to the workspace + its mode so the runtime never has to pass them
-in (the L0 ``Tool`` Protocol stays unchanged).
-
-The policy types themselves (``WorkspaceRoot`` / ``FsWriteMode`` /
-``ShellMode`` / the shell allowlist / ``ExecEnv``) are **kernel**
-infrastructure in ``noeta.runtime`` — the kernel and other consumers depend
-on them without touching this plugin body. This module is reached only
-through the plugin loader's ``ref`` resolution (or by the pack factory ref);
-nothing imports it statically.
+The pack is closure-constructed — every tool is built holding the one
+``WorkspaceRoot`` (the path-containment seam) and the write / shell mode it
+must enforce, so the runtime never passes policy at call time and the ``Tool``
+Protocol stays free of fs concepts. The policy types live in ``noeta.runtime``
+so other consumers can depend on them without touching this body; nothing
+imports this module statically, the plugin loader's ``ref`` resolution being
+the only doorway.
 """
 
 from __future__ import annotations
@@ -81,40 +72,25 @@ def build_fs_tools(
 ) -> dict[str, Tool]:
     """Build the fs tool pack sharing one ``WorkspaceRoot`` + write/shell modes.
 
-    Defaults are the safe closures: ``DRY_RUN`` writes (a daemon that
-    forgets ``--allow-write`` emits diff artifacts but does not write)
-    and ``ALLOWLIST`` shell (a daemon that forgets ``--allow-shell``
-    refuses arbitrary commands). The git convenience tools are always
-    present — they are narrow read-only operations and are useful even
-    when ``shell_run`` is fully ``OFF``.
+    Defaults are the safe closures — ``DRY_RUN`` writes (diff artifacts only,
+    nothing lands on disk) and ``ALLOWLIST`` shell — so a host that forgets to
+    opt in cannot mutate anything by accident.
 
-    ``write_path_globs`` injects a workspace-relative path
-    whitelist into the ``write`` tool — empty ⇒ unrestricted (default,
-    identical to pre-whitelist builds); non-empty ⇒ ``write`` refuses any path outside the globs
-    (e.g. passing ``("plans/*.md",)`` physically confines a writer to that
-    directory). It only affects ``write``; ``edit`` / ``apply_patch`` ignore
-    the whitelist.
+    ``write_path_globs`` confines ``write`` to workspace-relative paths matching
+    one of the globs (empty ⇒ unrestricted); it deliberately does not constrain
+    ``edit`` / ``apply_patch``. ``write_roots`` is the host's authorization seam
+    for writes OUTSIDE the workspace, consulted per call by ``edit`` / ``write``
+    / ``apply_patch``: ``None`` keeps the single-root wall, while a host able to
+    obtain a human grant passes a resolver so the approved directory is open on
+    the resumed call. Reads are never fenced and ignore both.
 
-    ``write_roots`` is the host's authorization seam for writes OUTSIDE the
-    workspace: ``task_id -> the directories this task may also write``,
-    consulted per call by ``edit`` / ``write`` / ``apply_patch``. ``None``
-    (default) keeps the single-root wall — a write that resolves outside the
-    workspace fails, full stop. A host that can *ask someone* (the noeta-agent
-    product pauses the call for the owner's ruling and remembers the answer as
-    a durable grant) passes a resolver here so the approved directory is open
-    on the resumed call. Reads are never fenced and ignore this entirely.
-
-    ``exec_env`` is the execution backend the fs / shell tools route their real
-    IO through. ``None`` (default) ⇒ each tool builds its own ``LocalExecEnv``
-    (byte-identical to the pre-seam host behaviour); a sandbox backend
-    (:class:`~noeta.runtime.exec_env.AioSandboxExecEnv`) makes the whole pack
-    act against a container — paired with a container ``workspace``
-    (:meth:`WorkspaceRoot.for_container`). It never changes a tool's
-    name / schema / description, so the stable prefix is unaffected.
+    ``exec_env`` is the backend the pack's real IO routes through; a sandbox
+    backend paired with a container ``workspace`` moves the whole pack into a
+    container without altering any tool's name, schema, or description, so the
+    stable prefix is unaffected.
     """
-    # One backend shared across the pack — ``LocalExecEnv`` is stateless and
-    # documented as reuse-safe, so the default path is byte-identical to each
-    # tool's own ``default_factory=LocalExecEnv``.
+    # ``LocalExecEnv`` is stateless, so one instance is safely shared by the
+    # whole pack.
     env: ExecEnv = LocalExecEnv() if exec_env is None else exec_env
     tools: list[Tool] = [
         ReadFileTool(workspace=workspace, exec_env=env),
@@ -145,27 +121,20 @@ def build_fs_tools(
                 exec_env=env,
             )
         )
-        # shell_poll rides with shell_run — it pulls the snapshot +
-        # status of a background job the model started via shell_run.
+        # Both act only on background jobs ``shell_run`` started, so they ride
+        # with it instead of shipping independently.
         tools.append(ShellPollTool())
-        # shell_kill lets the model stop a background job it
-        # launched (SIGTERM→SIGKILL); high-risk, so PermissionGuard gates it.
         tools.append(ShellKillTool())
     return {t.name: t for t in tools}
 
 
-# ``FsToolPack`` is the public name from the PRD; in I5 it equals the
-# read + edit + shell builder.
 FsToolPack = build_fs_tools
 
-#: Provider-mutex edit-tool table (phase 2c): which of this pack's two
-#: mutually-exclusive batch/precise edit tools the assembly layer must DROP
-#: for a bound model's vendor family (Anthropic ships ``edit``, OpenAI /
-#: GPT ships ``apply_patch``). The fs built-in owns the two names because it
-#: ships both tools; the model→family judgment lives in the providers
-#: built-in's catalog, and the kernel builder applies the drop mechanically
-#: through its ``edit_tool_mutex`` injection (an unrecognised family drops
-#: nothing — both stay, so existing recordings resume byte-equal).
+#: Which of this pack's two mutually-exclusive batch/precise edit tools to DROP
+#: for a bound model's vendor family (Anthropic ships ``edit``, OpenAI / GPT
+#: ships ``apply_patch``). The fs built-in owns the table because it ships both
+#: tools; the model→family judgment lives in the providers built-in's catalog.
+#: An unrecognised family drops nothing, so both tools stay.
 PROVIDER_EDIT_TOOL_MUTEX: Mapping[str, tuple[str, ...]] = {
     "anthropic": ("apply_patch",),
     "openai": ("edit",),
@@ -173,21 +142,13 @@ PROVIDER_EDIT_TOOL_MUTEX: Mapping[str, tuple[str, ...]] = {
 
 
 def build_fs_session_pack(ctx: SessionBuildContext) -> PackContribution:
-    """The fs pack as a ``session_pack`` contribution (microkernel phase 3).
+    """The fs pack as a ``session_pack`` contribution.
 
-    The manifest-declared factory (band 100) the kernel builder's generic
-    loop calls. Builds the pack against the kernel-built workspace root,
-    applies this plugin's own :data:`PROVIDER_EDIT_TOOL_MUTEX` (the
-    edit↔apply_patch drop is fs knowledge — the kernel no longer carries the
-    table), then filters by the agent whitelist — the base packs (fs / web)
-    are the only ones that pass through ``allowed_tools``; capability packs
-    append past it by design.
-
-    The write/shell safety inputs are fs's own ``plugin_config["fs"]`` entry
-    (mechanism-slots-only context, spec §4.2): the pack parses each key here,
-    defaulting an absent key to the safe closure (``DRY_RUN`` writes /
-    ``ALLOWLIST`` shell) exactly as the old builder kwargs did — the sole
-    consumer of these knobs, so they never earned a typed context slot.
+    The agent whitelist is applied here because the base packs (fs / web) are
+    the only ones filtered by ``allowed_tools``; capability packs append past it
+    by design. The write/shell safety inputs come from fs's own
+    ``plugin_config["fs"]`` entry rather than a typed context slot — this pack
+    is their sole consumer — and an absent key falls back to the safe closure.
     """
     cfg = ctx.config("fs")
     pack = build_fs_tools(

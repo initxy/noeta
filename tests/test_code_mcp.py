@@ -1,4 +1,4 @@
-"""Phase 4.5 F2 — MCP external tools end-to-end through `noeta code`.
+"""MCP external tools end-to-end in a coding session.
 
 Runs a coding session that calls a tool from a local stdio MCP server
 (the in-tree fake server), then proves: the call + three-event envelope

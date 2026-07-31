@@ -1,47 +1,83 @@
-# Structured `description` is the canonical source of tool semantics; the prompt keeps only role and cross-tool working strategy
+# `Tool.description` is the canonical source of tool semantics; the prompt carries only role and cross-tool strategy
 
 ## Context
 
-Tool semantics used to be split: half went through the structured channel (`name` + `input_schema`), while the other half (the semantics themselves) was scattered through the prose of the preset prompt — two sources of truth, which inevitably drift. The model is specifically trained to read the `tools[].description` channel, yet we left it empty and forced the model to dig the semantics out of prompt prose. This decision moves tool semantics from prompt prose into the structured `Tool.description`, and the prompt keeps only role and cross-tool working strategy.
-
-Provider neutrality — and the point that "half a contract should not live somewhere else" — is covered in `provider-neutral.md`; the composer's rendering of the stable_prefix and the stable-prefix cache constraint are in the Stable Prefix entry of CONTEXT.md; keeping the ToolRef descriptor lean is covered in `agent-identity-and-provenance.md`.
+Tool semantics can travel through two channels: the structured tool schema the
+provider API defines, or the system prompt's prose. Splitting them across both
+gives one contract two sources of truth. Two constraints narrow the choice: the
+tool set is dynamic (MCP servers, skill scripts and host-registered tools arrive
+at build time, long after any preset prompt was written), and the rendered tool
+schemas fold into the composer's stable-prefix hash, so whatever carries the
+semantics also moves the prompt-cache key.
 
 ## Decision
 
-### `description` is a canonical field of `Tool`, rendered by the composer, serialized by each adapter, and never entering the prompt
+**`description` is a field of the `Tool` protocol**, beside `name` and
+`input_schema` — the same structured, LLM-facing group. `ContextComposer`
+renders it into the provider function dict **only when non-empty**, so a tool
+with no description produces byte-identical schema bytes. Each provider adapter
+serializes it. The preset prompts carry no tool catalog.
 
-Add `description` to the `Tool` protocol, alongside `name` / `input_schema` (they all belong to the same "structured contract, facing the LLM" group). `ContextComposer._render_provider_tool_schemas` emits `description` into the function dict **conditionally** (it only adds this key when non-empty, so a tool without a description keeps the same schema bytes). Each provider adapter is responsible for serializing it. The preset prompt no longer restates "what a tool is."
+**It is treated exactly like `input_schema`.** It stays out of `ToolRef`, whose
+descriptor is `(name, version, risk_level)`. Authors pin a semantic change by
+bumping the tool's `version`; the description itself folds into the
+stable-prefix hash along with the rest of `provider_tool_schemas`, so editing it
+rotates the prompt-cache key exactly as editing a schema does, and a resume that
+rebuilds the tool set from the recorded request stays byte-identical with it.
 
-### Treat `description` like `input_schema`; don't invent a new fingerprint rule for it
+**A first-party description is hand-written LLM-facing text, never a
+docstring.** Both the `Tool` classes and the `@tool` decorator take an explicit
+`description`; nothing auto-pulls `fn.__doc__`. An MCP tool's description comes
+from the remote server, so `McpToolSpec` and `parse_mcp_tool_specs` carry it and
+record it verbatim — a resume reconstructs the tool set from the first recorded
+request without reconnecting, and reproduces the same text.
 
-It does not go into `ToolRef` (the descriptor stays lean: `(name, version, risk_level)`). The spec layer pins it by having authors bump the tool's `version`; the description, together with `provider_tool_schemas`, folds automatically into the composer's stable_prefix hash. So changing a description moves the stable-prefix hash (the prompt-cache key) just as changing a schema does, and when resume rebuilds the tool set from the recording it stays byte-identical with it.
-
-### A first-party tool's `description` is a deliberately hand-written, LLM-facing string, not a docstring
-
-Both the Tool class and the `@tool` decorator get a hand-written `description`. **It does not auto-pull `fn.__doc__`**: noeta's tool docstrings carry internal codenames (edit.py has things like `(B5)`, `Phase-4`), and auto-pulling would ship those straight to the model; `input_schema` already set the "hand-written, LLM-facing" baseline. A knock-on effect: an MCP tool's description comes from the remote server, so `parse_mcp_tool_specs` / `McpToolSpec` each carry a `description` field, **recorded verbatim**, so that resume rebuilding (reconstructing the tool set from the first recorded `LLMRequest.tools`, without reconnecting to the server) reproduces the same description — consistent with how input_schema is handled.
-
-### The prompt keeps "role + cross-tool working strategy"; prefer general rules and use per-category phrasing sparingly
-
-`MAIN_SYSTEM_PROMPT` drops the `Tools:` enumeration; it keeps the role sentence plus `Rules` (read→edit→verify with git_diff→run tests; reason before calling). The dividing line: the **tool catalog/contract** (what a tool is) goes into `description`; the **cross-tool working strategy** (how this agent works) stays in the prompt. Prefer general rules and use per-category phrasing sparingly ("use the search tool to locate the exact line" rather than naming `grep`, consistent with Claude Code's file/search vs shell phrasing); and sink **narrow paired trade-offs** (replace_text vs apply_patch) into `apply_patch.description`, not the prompt. The set of four (MAIN/GENERAL_PURPOSE/EXPLORE/PLAN) is treated identically.
+**The prompt keeps role plus cross-tool working strategy.** The dividing line:
+what a tool *is* goes in its `description`; how this agent *works* across tools
+(read → edit → verify → run tests; reason before calling) stays in the prompt.
+The prompt prefers general phrasing over naming individual tools, and a narrow
+trade-off between two tools is stated in the description of the tool it
+concerns.
 
 ## Rationale
 
-- **A single contract should not be split in two.** Before, half the contract (`name` + `input_schema`) went through the structured channel and the other half (the semantics) went through prompt prose — two sources of truth that inevitably drift. The model is specifically trained to read the `tools[].description` channel, yet we left it empty and forced the model to dig the semantics out of prompt prose. noeta was the outlier here (Claude Code's own system prompt has no "Tools:" catalog anywhere; per-tool semantics live 100% in the structured layer).
-- **This asymmetry should be eliminated.** Both Agent (description in spawn_subagent's schema) and Skill (menu in the skill's schema) feed a description into some tool schema; only Tool — the thing actually callable — had no description of its own.
-- **A prose prompt cannot hold dynamic tools.** MCP / skill-script / user-registered tools carry their own descriptions and cannot be written into a static preset prompt ahead of time. A canonical field can hold them while preserving provider neutrality (not welding "render into some prompt text" into the canonical layer).
-- **Mirroring input_schema and staying out of ToolRef gives both consistent handling and a descriptor that carries only a ref.** Putting it in `ToolRef` would pour long text into the descriptor (violating "descriptors carry a ref, not content") and treat it differently from input_schema; folding it into the composer hash alongside the schema makes it, for free, part of the same stable-prefix cache key (consistent with resume rebuilding).
-- **Hand-written beats docstring, because docstrings carry internal codenames that would be shipped to the model**, whereas input_schema already set the hand-written, LLM-facing baseline.
+- **One contract, one channel.** Half a contract in a structured field and half
+  in prose is two sources of truth that drift. The model is trained to read the
+  `tools[].description` channel; leaving it empty forces the model to mine the
+  semantics out of prose.
+- **A static prompt cannot hold a dynamic tool set.** MCP, skill-script and
+  host-registered tools bring their own descriptions and cannot be written into
+  a preset prompt in advance. A canonical field carries them without welding
+  "render into some prompt text" into the neutral layer.
+- **Mirroring `input_schema` buys consistent handling for free.** The descriptor
+  keeps carrying a reference rather than content, and the description joins the
+  same stable-prefix cache key and the same resume-rebuild guarantee as the
+  schema, with no second fingerprint rule to maintain.
+- **Hand-written text is the only text safe to ship.** Docstrings are written
+  for the next editor and carry internal shorthand; `input_schema` sets the
+  hand-written, LLM-facing baseline for this group of fields.
 
 ## Alternatives considered
 
-1. **Keep tool semantics in the prompt as "product-tunable prose."** Rejected: that has the kernel composer render only half the contract while the semantics live elsewhere — exactly today's inconsistency.
-2. **Put `description` into `ToolRef`.** Rejected: it pours long text into the descriptor, violates "descriptors carry only a ref," and treats it differently from input_schema.
-3. **Auto-pull `fn.__doc__` as the description.** Rejected: docstrings carry internal codenames that would be shipped to the model; input_schema already set the hand-written baseline.
+1. **Keeping tool semantics in the prompt as product-tunable prose.** Rejected:
+   the composer would render half the contract while the other half lives
+   elsewhere, and the dynamic tools could never be described at all.
+2. **Putting `description` into `ToolRef`.** Rejected: it pours long text into a
+   descriptor whose job is to carry a reference, and it would treat the
+   description differently from `input_schema`.
+3. **Auto-pulling `fn.__doc__`.** Rejected: it ships internal notes to the model
+   and makes every docstring edit a silent prompt-cache rotation.
+4. **Emitting the `description` key unconditionally.** Rejected: an empty string
+   for an undocumented tool changes that tool's recorded schema bytes and busts
+   the provider prompt cache for no gain.
 
 ## Consequences
 
-- Landing points: `noeta.protocols.tool` (the `Tool.description` field), `noeta.context.composer` (`_render_provider_tool_schemas` emits description conditionally).
-- Hand-written text lands in `noeta.tools.decorator` (`@tool`'s description parameter/slot), beside each built-in tool's impl in its builtin package (phase 2c), and in `noeta.policies.descriptions` for the control tools (hand-written, LLM-facing description text). *(**Current state:** `noeta.policies.descriptions` was deleted; each control tool's description `.md` now ships beside its impl in its built-in — `todo_write` / `ask_user_question` / `delegation` / `skills` / `react`. See `control-tool-contributions-and-activation-identity.md`.)*
-- MCP tool descriptions are recorded verbatim in `noeta.builtins.mcp.impl.tool` (`McpToolSpec` / `parse_mcp_tool_specs`), reproduced by resume rebuilding.
-- The set-of-four preset slimming lands in `noeta.presets` (apply_patch.description absorbs replace_text's trade-off hint).
-- Note: changing a description moves the stable-prefix hash, so authors pin it by bumping the tool's `version`, guaranteeing byte-identical resume rebuilding.
+- The field is in `noeta.protocols.tool`; the conditional render is in
+  `noeta.context.composer`. The `@tool` decorator in `noeta.tools.decorator`
+  exposes it as an explicit parameter.
+- Built-in tool text ships as a resource beside each tool's implementation; MCP
+  descriptions are captured and recorded in the mcp built-in's tool module.
+- Editing a description moves the stable-prefix hash. Authors bump the tool's
+  `version` alongside the edit so the descriptor reflects the change and resume
+  rebuilding stays byte-identical.

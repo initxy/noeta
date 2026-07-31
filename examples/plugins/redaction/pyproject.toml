@@ -1,10 +1,9 @@
 # Illustrative packaging for the ``redaction`` manifest plugin.
 #
-# This file shows the *real* distribution shape (spec D1): the ``[tool.noeta]``
-# static manifest (mirrored to ``noeta-plugin.toml`` package data, read WITHOUT
-# importing plugin code) plus an entry point in the SDK-owned ``noeta.plugins``
-# group so a host started with ``load_plugins(entry_points=True)`` discovers the
-# distribution.
+# This shows the real distribution shape: the ``[tool.noeta]`` static manifest
+# (mirrored to ``noeta-plugin.toml`` package data, read WITHOUT importing plugin
+# code) plus an entry point in the SDK-owned ``noeta.plugins`` group so a host
+# started with ``load_plugins(entry_points=True)`` discovers the distribution.
 #
 # In THIS repository the plugin is NOT installed; the tests load it by explicit
 # path via ``load_plugins(modules=[".../plugin.py"])``. When packaged for

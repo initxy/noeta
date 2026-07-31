@@ -2,9 +2,9 @@
 
 The tool is driven through a fake search transport (no live network); the real
 ``HttpSearchTransport`` is exercised through ``httpx.MockTransport``. Every
-``ToolResult.output`` is checked against ``runtime.tool._encode_output`` for the
-B1 invariant (no raw ``ContentRef`` leaked inline). ``build_web_tools`` is keyed
-off ``NOETA_WEB_SEARCH_API_KEY`` — present ⇒ the tool appears, absent ⇒ it does not.
+``ToolResult.output`` is checked against ``runtime.tool._encode_output`` to pin
+that no raw ``ContentRef`` leaks inline. ``build_web_tools`` is keyed off
+``NOETA_WEB_SEARCH_API_KEY`` — present ⇒ the tool appears, absent ⇒ it does not.
 """
 
 from __future__ import annotations
@@ -395,7 +395,7 @@ def test_container_search_runs_curl_post_and_parses(
     assert "Content-Type: application/json" in argv
     assert '{"query": "cats", "max_results": 5}' in argv
     assert argv[-1] == "https://api.tavily.com/search"
-    # P2b: the key is NEVER in the argv (process table / shell log). It rides in
+    # The key is NEVER in the argv (process table / shell log). It rides in
     # a curl --config file, referenced by -K, and removed after the request.
     assert not any("tvly-test-key" in tok for tok in argv)
     assert "-K" in argv
@@ -410,7 +410,7 @@ def test_container_search_runs_curl_post_and_parses(
 
 def test_container_and_http_search_parse_identically() -> None:
     # The SAME Tavily JSON through both transports yields identical hits — the
-    # two egress paths share _parse_tavily_payload so they cannot drift (R3).
+    # two egress paths share _parse_tavily_payload so they cannot drift.
     fake = FakeExecEnv(stdout=json.dumps(_TAVILY_JSON).encode("utf-8"))
     container_hits = ContainerCurlSearchTransport(
         exec_env=fake, api_key="k"

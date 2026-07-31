@@ -1,20 +1,14 @@
 # Tutorial: CI integration with Noeta
 
 Run Noeta in your CI pipeline to smoke-test agent recipes, validate
-custom tools, or automate code review. This tutorial shows how to wire
-Noeta into GitHub Actions using the offline `FakeLLMProvider` — no API
-key needed.
+custom tools, or automate code review. This tutorial wires Noeta into
+GitHub Actions using the offline `FakeLLMProvider` — no API key needed.
 
 ## Why a fake provider in CI?
 
-`FakeLLMProvider` is a scripted, offline LLM double that answers with
-pre-scripted responses. It's perfect for CI because:
-
-- **No API key required.** Your CI never needs secrets for LLM access.
-- **Deterministic.** Same inputs always produce the same outputs.
-- **Fast.** No network round-trips.
-
-You can also use a real provider in CI (pass the gateway key as a
+`FakeLLMProvider` is a scripted, offline LLM double: it answers with
+pre-scripted responses, needs no API key, is deterministic, and does no network
+round-trips. A real provider works in CI too (pass the gateway key as a
 secret), but the fake is the right starting point for smoke tests.
 
 ## Step 1: Write a smoke test
@@ -32,8 +26,6 @@ from noeta.sdk.testing import FakeLLMProvider
 
 
 def test_minimal_agent_runs():
-    """The main recipe should produce a TaskCompleted envelope."""
-
     options = Options(
         system_prompt="You are a concise assistant.",
         name="main",
@@ -62,10 +54,9 @@ def test_minimal_agent_runs():
 
     # ``result`` IS the envelope list, so stream-level assertions still work.
     types = [env.type for env in result]
-    assert "TaskCreated" in types, "Agent should create a task"
-    assert "TaskCompleted" in types, "Agent should reach terminal state"
+    assert "TaskCreated" in types
+    assert "TaskCompleted" in types
 
-    # The terminal answer is already folded (and deref'd) onto the result;
     # ``.answer()`` raises QueryFailedError if the task did not complete, so a
     # failed run can never masquerade as a passing assertion.
     assert "Smoke test passed" in str(result.answer())
@@ -183,8 +174,8 @@ Add a job to `.github/workflows/ci.yml`:
         run: uv run pytest tests/test_agent_smoke.py -v
 ```
 
-> **No frontend build needed.** SDK smoke tests exercise the library
-> in-process — no `npm` step and no server required.
+SDK smoke tests exercise the library in-process — no server and no
+frontend build.
 
 ## Step 4: Run the full test suite in CI
 
@@ -194,10 +185,10 @@ Noeta's own CI runs these checks. Reference them for your own pipeline:
 # Core test suite with coverage
 uv run pytest --cov=noeta --cov-report=term --cov-fail-under=85
 
-# Fresh-venv install smoke (verifies pip install paths)
+# Fresh-venv two-wheel install smoke (opt-in via the install_smoke marker)
 uv run pytest -v -m install_smoke tests/test_install_smoke.py
 
-# Naming lint (forbidden terms per CONTEXT.md)
+# Naming lint (forbidden class names per CONTEXT.md)
 uv run python scripts/lint-naming.py
 
 # Import topology lint (L0..L3 layer boundaries)
@@ -209,6 +200,8 @@ MYPYPATH=packages/noeta-runtime \
     --namespace-packages --explicit-package-bases \
     packages/noeta-runtime/noeta/protocols
 ```
+
+`make check` runs the coverage, mypy, and lint gates together.
 
 ## Step 5: Using a real provider in CI (optional)
 
@@ -234,34 +227,49 @@ actual LLM behaviour):
         run: uv run pytest tests/test_integration.py -v -m live
 ```
 
-Mark live tests with the `@pytest.mark.live` decorator so they're
-skipped by default (the repo's `pyproject.toml` configures this):
+Build the provider from those secrets and mark the test `live` so a
+gateway-less run skips it:
 
 ```python
+import os
+
 import pytest
 
+from noeta.sdk.providers import OpenAICompatProvider
+
+
 @pytest.mark.live
+@pytest.mark.skipif(
+    not os.environ.get("LLM_API_KEY"),
+    reason="needs LLM_BASE_URL / LLM_API_KEY / LLM_MODEL",
+)
 def test_agent_with_real_llm():
-    ...  # construct a real provider from your gateway secrets
+    provider = OpenAICompatProvider(
+        base_url=os.environ["LLM_BASE_URL"],
+        api_key=os.environ["LLM_API_KEY"],
+    )
+    ...  # drive query(..., provider=provider, model=os.environ["LLM_MODEL"])
 ```
 
 ## Key points
 
-- **Fake provider for smoke tests.** `FakeLLMProvider` is in
-  `noeta.testing` (also exported as `noeta.sdk.testing`) — the public
-  home for offline doubles. No secrets, no network.
-- **`uv run pytest`** is the test entry point. The workspace-root
-  `pyproject.toml` configures `testpaths = ["tests"]`.
-- **`@pytest.mark.live`** gates real-LLM tests so they don't run in
-  default CI. Use `-m "not live"` to skip them (already the default
-  in `pyproject.toml`).
+- **Fake provider for smoke tests.** `FakeLLMProvider` is exported from
+  `noeta.sdk.testing` — the public home for offline doubles. No secrets,
+  no network.
+- **`uv run pytest`** is the test entry point; the workspace-root
+  `pyproject.toml` sets `testpaths = ["tests"]`.
+- **The `live` marker does not skip on its own.** It is declared in
+  `pyproject.toml`, but the default `addopts` excludes only `install_smoke`.
+  Gate a live test with `@pytest.mark.skipif` on the required env vars so it
+  self-skips when the gateway is absent, or select with `-m "not live"`.
 
 ## Source
 
 - `.github/workflows/ci.yml` — the repo's own CI pipeline
-- `Makefile` — `make install`, `make run`, `make serve`, `make web`, `make dev`
-- `pyproject.toml` — pytest config (`testpaths`, `markers`)
-- `noeta.testing.fake_llm.FakeLLMProvider` — `packages/noeta-runtime/noeta/testing/fake_llm.py`
+- `Makefile` — `make install`, `make test`, `make lint`, `make check`
+- `pyproject.toml` — pytest config (`testpaths`, `markers`, `addopts`)
+- `packages/noeta-runtime/noeta/testing/fake_llm.py` — `FakeLLMProvider`,
+  re-exported at `noeta.sdk.testing`
 - See also: [Your first agent](first-agent.md),
   [Swap providers](../how-to/swap-providers.md),
   [Engine & execution](../concepts/engine-execution.md)

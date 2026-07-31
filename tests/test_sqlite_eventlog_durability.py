@@ -1,9 +1,9 @@
-"""File-on-disk durability smoke for ``SqliteEventLog`` (issue 15).
+"""File-on-disk durability for ``SqliteEventLog``.
 
-The contract suite (`test_event_log_contract.py`) runs the in-memory
-sqlite engine; this module covers the disk-only behaviours: WAL mode
-actually engaged, ``synchronous=FULL`` honoured, and round-tripping
-typed payloads survives a close + reopen.
+The contract suite (`test_event_log_contract.py`) runs the in-memory sqlite
+engine; this module covers the disk-only behaviours: WAL mode actually engaged,
+``synchronous=FULL`` honoured, and round-tripping typed payloads survives a
+close + reopen.
 """
 
 from __future__ import annotations
@@ -72,10 +72,9 @@ def test_typed_payloads_survive_close_reopen(tmp_path) -> None:
 
 
 def test_conversation_lifecycle_payloads_survive_close_reopen(tmp_path) -> None:
-    """Issue 08: the new ``ConversationClosed`` / ``ConversationReopened``
-    L0 payloads round-trip through the sqlite restorer (registered in
-    ``_PAYLOAD_RESTORERS``), including the optional ``reason`` carried as
-    ``None``."""
+    """The ``ConversationClosed`` / ``ConversationReopened`` payloads round-trip
+    through the sqlite restorer (registered in ``_PAYLOAD_RESTORERS``),
+    including the optional ``reason`` carried as ``None``."""
     db = tmp_path / "noeta.db"
     log = SqliteEventLog(db)
     try:
@@ -128,8 +127,8 @@ def test_synchronous_is_full(tmp_path) -> None:
     db = tmp_path / "noeta.db"
     log = SqliteEventLog(db)
     try:
-        # PRAGMA synchronous: 0=OFF, 1=NORMAL, 2=FULL, 3=EXTRA. Issue
-        # 15 sign-off pinned the default at FULL.
+        # PRAGMA synchronous: 0=OFF, 1=NORMAL, 2=FULL, 3=EXTRA. The default
+        # is pinned at FULL for crash durability.
         value = log._conn.execute("PRAGMA synchronous").fetchone()[0]
         assert int(value) == 2
     finally:

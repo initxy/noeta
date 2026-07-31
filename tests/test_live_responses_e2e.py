@@ -1,30 +1,15 @@
-"""OpenAI Responses adapter live LLM E2E, four loops (live marker).
+"""OpenAI Responses adapter against the real gateway (live marker).
 
-Drive :class:`noeta.builtins.providers.impl.openai_responses.OpenAIResponsesProvider`
-directly against the real gateway over four chains, verifying that the
-outbound/inbound translation
-closes the loop on a live model:
+Four chains — plain text, tool call, reasoning continuation, image — because a
+wire translation can only be proven correct by a model that actually answers.
+The reasoning chain is the one worth the credit: under ``store:false`` the
+gateway keeps no server-side state, so the ``encrypted_content`` returned as a
+``ThinkingBlock`` signature is the only continuation token, and it has to go
+back **verbatim** across the tool call or the second turn is rejected.
 
-1. **Plain text** — text in, text out, ``stop_reason == "end_turn"``.
-2. **Tool call** — given one tool schema, the model returns a ``function_call``
-   (parsed into ``ToolUseBlock``), ``stop_reason == "tool_use"``, ``call_id``
-   non-empty.
-3. **Reasoning continuation (encrypted_content carried across a tool call)** —
-   high effort forces real reasoning: turn one returns a
-   ``ThinkingBlock(signature=encrypted_content)`` plus a tool call; the tool
-   result + the **verbatim encrypted_content** go into the second request
-   (D3 makes this mandatory
-   for continuation: under ``store:false`` the ciphertext is the only
-   continuation token), and the model gives a final answer.
-4. **Image** — a tiny local PNG → base64 → ``ImageBlock(ContentRef)`` →
-   provider derefs via ``image_resolver`` → inlined as base64 ``input_image``,
-   and the model describes it.
-
-Why drive the provider directly (not via AgentSessionRunner): this batch
-verifies the **fidelity of the Responses wire translation against the real
-gateway** (D1–D4), and the most direct probe is a hand-built ``LLMRequest`` to
-``complete()``. Session-level integration is covered by the stub path; this live
-layer watches only the adapter↔gateway hop.
+The provider is driven directly with hand-built ``LLMRequest`` values rather
+than through the SDK host: this layer watches only the adapter↔gateway hop, and
+host-level integration is already covered against a stub provider.
 
 Run (credentials come from env, **never** hard-coded; the key is rotated and
 human-held)::
@@ -78,9 +63,9 @@ def _model() -> str:
 
 
 def _build_provider(content_store: Optional[Any] = None):
-    """Build the Responses provider from env; ``image_resolver`` wires to
-    content_store.get (same wiring as the product runner_cli). base_url is the
-    **full** responses endpoint."""
+    """Build the Responses provider from env. ``base_url`` is the **full**
+    responses endpoint, and ``image_resolver`` is what lets the provider
+    dereference an ``ImageBlock``'s ``ContentRef`` at send time."""
     from noeta.builtins.providers.impl.openai_responses import OpenAIResponsesProvider
 
     return OpenAIResponsesProvider(
@@ -101,17 +86,13 @@ requires_live = pytest.mark.skipif(
 )
 
 
-# A deterministically generated 32x32 solid-red PNG for the image chain — no
-# external file dependency.
-# Note: a **1x1 degenerate image won't work** — the gateway's image validation
-# rejects it (HTTP 400 "The image data you provided does not represent a valid
-# image."); it needs an image with real dimensions. The base64 appears once, in
-# the request only; what lands in the ContentStore is real bytes, and the ledger
-# only gets the small ImageBlock(ContentRef) handle
-# (red line).
+# A generated 32x32 solid-red PNG for the image chain — no external file to
+# keep in sync. A **1x1 degenerate image will not work**: the gateway rejects
+# it with HTTP 400 ("The image data you provided does not represent a valid
+# image."), so the fixture needs real dimensions.
 def _solid_png(width: int, height: int, rgba: tuple[int, int, int, int]) -> bytes:
-    """Deterministically generate a solid-color RGBA PNG (fixed zlib level, so
-    the bytes are reproducible)."""
+    """Generate a solid-color RGBA PNG at a fixed zlib level, so the bytes are
+    reproducible across runs and machines."""
     import struct
     import zlib
 
@@ -210,7 +191,7 @@ def test_live_responses_tool_call() -> None:
     assert tool_uses, "model never emitted a function_call"
     call = tool_uses[0]
     assert call.tool_name == "get_weather"
-    assert call.call_id  # inbound pairs by call_id, must be non-empty
+    assert call.call_id  # the tool result is paired back by this id
     assert "city" in call.arguments
 
 
@@ -248,15 +229,14 @@ def test_live_responses_reasoning_continuation_across_tool_call() -> None:
     assert tool_uses, "first turn never emitted a function_call"
     call = tool_uses[0]
     thinking = [b for b in first_response.content if isinstance(b, ThinkingBlock)]
-    # At high effort the gateway returns a reasoning item; signature is the
-    # encrypted_content (the continuation token).
+    # At high effort the gateway returns a reasoning item whose signature is
+    # the encrypted_content continuation token.
     assert thinking, "high-effort turn carried no ThinkingBlock"
     assert thinking[0].signature, "ThinkingBlock missing encrypted_content"
 
-    # Turn two: feed the assistant's original content (ThinkingBlock carried
-    # verbatim + ToolUseBlock) + the tool result back into input. The verbatim
-    # round-trip of encrypted_content is mandatory for continuation (under
-    # store:false the gateway holds no server-side state).
+    # Turn two feeds the assistant's own content back unmodified: the
+    # ThinkingBlock has to survive the round trip byte-for-byte, since the
+    # gateway holds nothing server-side to reconstruct it from.
     assistant_msg = Message(role="assistant", content=list(first_response.content))
     tool_msg = Message(
         role="tool",
@@ -281,7 +261,8 @@ def test_live_responses_reasoning_continuation_across_tool_call() -> None:
     final_text = "".join(
         b.text for b in second_response.content if isinstance(b, TextBlock)
     ).lower()
-    # The model used the "rainy" tool result and should advise bringing an umbrella.
+    # Evidence the tool result actually reached the model: "rainy" is only
+    # knowable from the tool output.
     assert "umbrella" in final_text or "yes" in final_text
 
 
@@ -292,7 +273,8 @@ def test_live_responses_reasoning_continuation_across_tool_call() -> None:
 
 @requires_live
 def test_live_responses_image_input() -> None:
-    # The ContentStore holds the real bytes; the ledger side only holds the small ImageBlock(ContentRef) handle.
+    # The ContentStore holds the real bytes; only the small
+    # ImageBlock(ContentRef) handle travels through the request.
     content_store = InMemoryContentStore()
     ref = content_store.put(_SAMPLE_PNG, media_type="image/png")
     provider = _build_provider(content_store=content_store)
@@ -316,6 +298,6 @@ def test_live_responses_image_input() -> None:
     text = "".join(
         b.text for b in response.content if isinstance(b, TextBlock)
     )
-    # The model actually saw the image (returned a non-empty description); we
-    # don't check specific words (descriptions vary).
+    # Any non-empty description proves the image arrived; the wording varies
+    # run to run, so there is nothing stable to match on.
     assert text.strip(), "model returned no description for the image"

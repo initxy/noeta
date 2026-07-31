@@ -3,18 +3,17 @@
 Three pieces stand up the file half of rewind:
 
 * the per-turn **gate** (``FileCheckpointRegistry``) — first-edit-per-turn
-  test-and-set, cleared at each turn boundary (D6);
+  test-and-set, cleared at each turn boundary;
 * **capture** (``ToolRuntime._capture_file_baselines``) — turns a write-side
   tool's ``file_changes`` into recorded ``FileBaseline``s, deduped by the gate,
-  with ``content_ref=None`` for AI-created files (D4/D5/D6);
+  with ``content_ref=None`` for AI-created files;
 * **restore** (``InteractionDriver._restore_files``) — the live-only fs
   side-effect of a rewind: writes each dead-tail file's EARLIEST baseline back,
-  deleting AI-created files (D5/D6).
+  deleting AI-created files.
 
-Coverage also pins the two boundaries D4 draws: a tool that surfaces no
-``file_changes`` (the shell, or any non-fs tool) is never tracked, and a
-``ToolRuntime`` with no gate (the replay / pre-0043 construction) captures
-nothing — byte-identical to before the feature.
+Coverage also pins two boundaries: a tool that surfaces no ``file_changes``
+(the shell, or any non-fs tool) is never tracked, and a ``ToolRuntime`` with no
+gate captures nothing.
 """
 
 from __future__ import annotations
@@ -33,7 +32,7 @@ from noeta.runtime.workspace import FsWriteMode, WorkspaceRoot
 
 
 # ---------------------------------------------------------------------------
-# Gate — first-edit-per-turn test-and-set, reset at the turn boundary (D6)
+# Gate — first-edit-per-turn test-and-set, reset at the turn boundary
 # ---------------------------------------------------------------------------
 
 
@@ -92,7 +91,7 @@ def test_capture_dedups_repeat_edit_in_same_turn() -> None:
         "root", _result([{"path": "a.py", "before": b"V1"}])
     )
     assert first is not None
-    # Second edit of the SAME path this turn pins nothing new (D6: stash on first touch).
+    # Second edit of the SAME path this turn pins nothing new (stash on first touch).
     again = runtime._capture_file_baselines(
         "root", _result([{"path": "a.py", "before": b"V2"}])
     )
@@ -108,8 +107,7 @@ def test_capture_created_file_has_no_content_ref() -> None:
 
 
 def test_capture_is_noop_without_a_gate() -> None:
-    # The replay / pre-0043 construction injects no registry → no baselines,
-    # byte-identical to a pre-0043 recording (replay-safety).
+    # No registry injected → no baselines captured.
     runtime, _ = _runtime(None)
     assert runtime._capture_file_baselines(
         "root", _result([{"path": "a.py", "before": b"X"}])
@@ -117,8 +115,8 @@ def test_capture_is_noop_without_a_gate() -> None:
 
 
 def test_capture_ignores_tools_with_no_file_changes() -> None:
-    # The shell (and every non-fs tool) surfaces no ``file_changes`` → D4 leaves
-    # shell-driven edits untracked.
+    # The shell (and every non-fs tool) surfaces no ``file_changes`` → its
+    # edits are left untracked.
     runtime, _ = _runtime(FileCheckpointRegistry())
     assert runtime._capture_file_baselines("root", _result(None)) is None
 
@@ -199,7 +197,7 @@ def test_apply_patch_surfaces_pre_edit_bytes_and_feeds_capture(
 
 
 # ---------------------------------------------------------------------------
-# Restore — the live-only fs half of a rewind (D5/D6)
+# Restore — the live-only fs half of a rewind
 # ---------------------------------------------------------------------------
 
 
@@ -267,7 +265,7 @@ def test_restore_is_a_noop_when_the_dead_tail_changed_no_files(
 
 
 # ---------------------------------------------------------------------------
-# D7 — single-file size cap + binary detection (issue 03)
+# Single-file size cap + binary detection
 # ---------------------------------------------------------------------------
 
 
@@ -318,7 +316,7 @@ def test_capture_created_file_is_exempt_from_size_and_binary_check() -> None:
 
 
 # ---------------------------------------------------------------------------
-# D8 — subtask cascade: session-root keying (capture) + descendant enumeration
+# Subtask cascade: session-root keying (capture) + descendant enumeration
 # (restore)
 # ---------------------------------------------------------------------------
 
@@ -353,7 +351,7 @@ def test_session_root_walks_parent_chain() -> None:
 
 
 def test_capture_shares_one_gate_across_a_delegation_tree() -> None:
-    # D8 — the parent stashes X's pre-turn baseline; a subtask that edits the
+    # The parent stashes X's pre-turn baseline; a subtask that edits the
     # SAME X this turn must NOT stash a SECOND (mid-turn, dirty) baseline.
     log = _log_with_parents({"root": None, "child": "root"})
     store = InMemoryContentStore()
@@ -381,7 +379,7 @@ def _spawn(seq: int, subtask_id: str) -> SimpleNamespace:
 
 
 def test_restore_cascades_into_subtask_streams(tmp_path: Path) -> None:
-    # D8 — a rewind reverts files the parent AND its descendant subtasks edited
+    # A rewind reverts files the parent AND its descendant subtasks edited
     # in the rewound span (they share one workspace), and deletes files a
     # subtask created.
     ws = tmp_path / "ws"

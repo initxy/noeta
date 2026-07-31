@@ -2,8 +2,7 @@
 
 ``AgentSpec`` identity is plain frozen-dataclass structural equality (``==``):
 deterministic across constructions, order-independent (component lists normalise
-to sorted tuples), and sensitive to every behaviour-bearing field. The
-verify-era fingerprint digest was retired with verify/replay.
+to sorted tuples), and sensitive to every behaviour-bearing field.
 """
 
 from __future__ import annotations

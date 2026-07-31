@@ -1,14 +1,14 @@
-"""Streaming test matrix for :class:`noeta.builtins.providers.impl.anthropic.AnthropicProvider`.
+"""Streaming path of :class:`noeta.builtins.providers.impl.anthropic.AnthropicProvider`.
 
-Token-streaming Slice 2: ``complete_streaming`` speaks the Anthropic Messages
-streaming protocol (SSE) and must stay shape-identical to the batch path —
-the exact same request body plus ``stream: true``, the same neutral error
-taxonomy, and a final ``LLMResponse`` equal to what ``complete`` parses from
-the equivalent non-streaming body. Only text / thinking fragments surface as
-:class:`StreamDelta`; tool arguments and signatures accumulate silently.
+``complete_streaming`` speaks the Anthropic Messages streaming protocol (SSE)
+and must stay shape-identical to the batch path — the exact same request body
+plus ``stream: true``, the same neutral error taxonomy, and a final
+``LLMResponse`` equal to what ``complete`` parses from the equivalent
+non-streaming body. Only text / thinking fragments surface as
+:class:`StreamDelta`; tool arguments and signatures accumulate silently,
+because a half-parsed JSON fragment is not something a host can render.
 
-All HTTP traffic is mocked via ``respx`` (mirroring
-``tests/test_provider_anthropic.py``); SSE fixtures are raw byte bodies, and
+All HTTP traffic is mocked via ``respx``; SSE fixtures are raw byte bodies, and
 the mid-stream disconnect case uses a custom ``httpx.SyncByteStream`` that
 raises while iterating.
 """
@@ -47,7 +47,7 @@ MESSAGES_ENDPOINT = f"{BASE_URL}/v1/messages"
 
 
 # ---------------------------------------------------------------------------
-# fixtures
+# Fixtures
 # ---------------------------------------------------------------------------
 
 
@@ -200,7 +200,6 @@ def test_text_stream_emits_ordered_deltas_and_batch_shaped_response() -> None:
         uncached=100, cache_read=25, cache_write=50, output=7
     )
     assert response.usage.input == 175
-    # The outbound body carries the stream flag.
     sent = json.loads(route.calls.last.request.content.decode("utf-8"))
     assert sent["stream"] is True
     # raw stays useful for diagnostics: the reconstructed message dict.
@@ -297,7 +296,7 @@ def test_tool_use_stream_never_emits_argument_deltas() -> None:
     sink = _DeltaRecorder()
     response = _make_provider().complete_streaming(_basic_request(), sink)
 
-    # No delta for tool arguments — only the text fragment surfaced.
+    # Argument fragments are partial JSON, so only the text fragment surfaces.
     assert sink.deltas == [StreamDelta(kind="text", text="Checking.", index=0)]
     assert response.stop_reason == "tool_use"
     assert response.content == [
@@ -419,7 +418,7 @@ def test_max_tokens_stop_reason_maps_through() -> None:
 
 
 # ---------------------------------------------------------------------------
-# ② error recovery — same neutral taxonomy as the batch path
+# Error taxonomy — the same neutral classes as the batch path
 # ---------------------------------------------------------------------------
 
 

@@ -1,24 +1,20 @@
-"""Issue 06 — model selector durable binding +
-``Principal`` allowlist validation.
+"""Model-selector durable binding + ``Principal`` allowlist validation.
 
-Covers every acceptance criterion:
+Which model a task runs on is an authorization decision that must survive a
+crash and be auditable back to who sanctioned it. These pin that contract:
 
-* L0 :class:`noeta.protocols.values.Principal` (minimal: identity +
-  allowed_models) + the ⊤ ``LOCAL_PRINCIPAL``.
-* The new L0 ``ModelBound`` event, written by the **Engine** under a driver
-  command, folded into ``GovernanceState`` (opening binding + per-turn
-  switch).
-* The driver validates ``selector ∈ principal.allowed_models ∩ allowlist``
+* :class:`noeta.protocols.values.Principal` is minimal (identity +
+  allowed_models), and ``LOCAL_PRINCIPAL`` is the ⊤ (no trust boundary).
+* the L0 ``ModelBound`` event, written by the **Engine** under a driver
+  command, folds into ``GovernanceState`` (opening binding + per-turn switch).
+* the driver validates ``selector ∈ principal.allowed_models ∩ allowlist``
   *before* any durable write — a rejected selector leaves no ``ModelBound``,
   no turn, no binding.
-* The resolver keys the Engine on ``(agent_name, model)`` taken from the
-  latest ``ModelBound`` fold.
-* CLI local principal = ⊤; a web principal's ``allowed_models`` gates the
-  selector.
-* an old recording with no ``ModelBound`` folds to the local/⊤ default model
-  (no drift).
-* the demo: open on opus, switch to haiku mid-conversation → two
-  ``ModelBound`` events, each traceable to its authorizing principal.
+* the resolver keys the Engine on ``(agent_name, model)`` from the latest
+  ``ModelBound`` fold; a recording with no ``ModelBound`` folds to the
+  host-fixed default (no drift).
+* a mid-conversation switch appends a second ``ModelBound``, each traceable to
+  its authorizing principal.
 """
 
 from __future__ import annotations
@@ -96,7 +92,7 @@ def _host(
 
 def test_principal_is_minimal_two_fields() -> None:
     """Principal carries ONLY identity + allowed_models (+ the ⊤ flag) — no
-    capabilities / side-effects / delegation chain (issue 06: minimal L0)."""
+    capabilities / side-effects / delegation chain."""
     p = Principal(identity="alice", allowed_models=frozenset({"opus"}))
     field_names = {f for f in p.__dataclass_fields__}
     assert field_names == {"identity", "allowed_models", "allows_any"}
@@ -110,7 +106,7 @@ def test_principal_permits_membership() -> None:
 
 
 def test_local_principal_is_top() -> None:
-    """The CLI's local principal permits any selector (⊤ — no trust
+    """The local principal permits any selector (⊤ — no trust
     boundary)."""
     assert LOCAL_PRINCIPAL.allows_any
     assert LOCAL_PRINCIPAL.permits("anything-at-all")
@@ -162,9 +158,9 @@ def test_engine_note_model_bound_emits_and_folds(tmp_path: Path) -> None:
     folded = fold(log, cs, task.task_id)
     assert folded.governance.model_binding == "opus"
     assert folded.governance.principal_identity == "alice"
-    # (I4): the model-binding audit gained a ``provider`` key
-    # (``None`` when only the model was bound — this opening ModelBound carried
-    # no provider, so the host default sticks).
+    # The model-binding audit carries a ``provider`` key (``None`` when only
+    # the model was bound — this opening ModelBound carried no provider, so
+    # the host default sticks).
     assert folded.governance.model_bindings == [
         {"model": "opus", "principal_identity": "alice", "provider": None}
     ]
@@ -191,7 +187,7 @@ def test_fold_latest_model_bound_wins_with_full_audit(tmp_path: Path) -> None:
 def test_old_recording_without_model_bound_folds_to_no_binding(
     tmp_path: Path,
 ) -> None:
-    """An old recording (no ModelBound) folds to model_binding=None — the
+    """A recording with no ModelBound folds to model_binding=None — the
     resolver then falls back to its host-fixed default, no drift."""
     log = InMemoryEventLog()
     cs = InMemoryContentStore()
@@ -246,8 +242,8 @@ def test_start_emits_opening_model_bound_for_allowed_selector(
         principal=Principal(
             identity="bob", allowed_models=frozenset({"opus", "haiku"})
         ),
-        # Microkernel M2: the alias table lives in the providers built-in;
-        # the client injects it — mirrored here.
+        # The alias table lives in the providers built-in; the client
+        # injects it — mirrored here.
         alias_resolver=resolve_model_alias,
     )
     out = driver.start(goal="hello", agent="main", model_selector="opus")
@@ -256,7 +252,7 @@ def test_start_emits_opening_model_bound_for_allowed_selector(
     events = event_log.read(out.task_id)
     bound = [e for e in events if e.type == "ModelBound"]
     assert len(bound) == 1
-    # D-C3: the driver resolves the 'opus' alias to its real model-id before
+    # The driver resolves the 'opus' alias to its real model-id before
     # binding, so ModelBound records the real id (not the friendly alias).
     assert bound[0].payload.model == "claude-opus-4-8"
     assert bound[0].payload.principal_identity == "bob"
@@ -270,7 +266,7 @@ def test_start_emits_opening_model_bound_for_allowed_selector(
 def test_cli_local_principal_binds_host_default_without_selector(
     tmp_path: Path,
 ) -> None:
-    """The CLI (⊤ principal, no selector) still records an opening
+    """The ⊤ local principal with no selector still records an opening
     ModelBound — bound to the host-fixed default model, identity 'local'."""
     ws = tmp_path / "ws"
     ws.mkdir()
@@ -329,7 +325,7 @@ def test_resolver_falls_back_to_host_model_when_no_binding(
     tmp_path: Path,
 ) -> None:
     """A task with no ModelBound resolves on the host-fixed default model —
-    the fallback that lets old recordings resume unchanged."""
+    the fallback that keeps an unbound recording resumable."""
     ws = tmp_path / "ws"
     ws.mkdir()
     host, dispatcher, log = _host(ws, responses=[_end_turn()], model="gpt-test")
@@ -343,7 +339,7 @@ def test_resolver_falls_back_to_host_model_when_no_binding(
 
 
 # ---------------------------------------------------------------------------
-# Per-turn switch: two ModelBound events (the demo)
+# Per-turn switch: two ModelBound events
 # ---------------------------------------------------------------------------
 
 
@@ -375,7 +371,7 @@ def test_per_turn_switch_records_two_model_bounds(tmp_path: Path) -> None:
 
     all_events = event_log.read(started.task_id)
     bound = [e for e in all_events if e.type == "ModelBound"]
-    # D-C3: aliases resolve to real ids before binding.
+    # aliases resolve to real ids before binding.
     assert [b.payload.model for b in bound] == [
         "claude-opus-4-8",
         "claude-haiku-4-5",
@@ -395,7 +391,7 @@ def test_per_turn_switch_records_two_model_bounds(tmp_path: Path) -> None:
     # principal that sanctioned it.
     folded = fold(event_log, host.content_store, started.task_id)
     assert folded.governance.model_binding == "claude-haiku-4-5"
-    # (I4): both switches were model-only ⇒ ``provider`` is None
+    # both switches were model-only ⇒ ``provider`` is None
     # on each audit entry (the host default provider sticks across both turns).
     assert folded.governance.model_bindings == [
         {"model": "claude-opus-4-8", "principal_identity": "carol", "provider": None},

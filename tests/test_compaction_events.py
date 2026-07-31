@@ -1,6 +1,6 @@
-"""Compaction event payloads + fold (③ D-3, unified compaction contract).
+"""Compaction event payloads + fold.
 
-Two new event types carry the unified compaction step:
+Two event types carry the unified compaction step:
 
 * ``CompactionRequested`` — observability anchor for *why* a compaction
   step ran (``reason`` ∈ {"overflow", "proactive"}); fold is a no-op
@@ -11,9 +11,9 @@ Two new event types carry the unified compaction step:
   ``ContextState`` (single writer), which the Composer then
   reads to swap the covered prefix for the summary.
 
-Both restore byte-safe on old streams (the types are simply absent →
-fold's unknown-type tolerance). New typed payloads must register in
-``_PAYLOAD_RESTORERS`` (the contract suite enforces it).
+A stream that carries neither type folds unchanged (fold's unknown-type
+tolerance). Each typed payload must register in ``_PAYLOAD_RESTORERS`` so the
+restorer can rebuild it (the contract suite enforces it).
 """
 
 from __future__ import annotations

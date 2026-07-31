@@ -1,24 +1,12 @@
-"""The scoped session recorder — the one write verb a plugin's ``init`` hook
-gets (spec §4.4/§4.5).
+"""The kernel's concrete session recorder: it routes a plugin's resident-content
+activation through the host-owned ``event_log`` + ``content_store`` in the
+pre-loop seed window.
 
-:class:`SeedRecorder` is the kernel's concrete :class:`SessionRecorder`: it
-routes a resident-content activation through the host-owned ``event_log`` +
-``content_store`` in the pre-loop seed window (no-op guard → first-only gate
-against ``TaskState.active_content`` → one ``ContextContentRecorded`` →
-``apply_event``). The kernel stamps the envelope with ``actor="plugin:<name>"``
-(spec §4.4) so audit attributes the resident to the plugin that produced it —
-the same provenance-label use the ``mcp`` / ``llm`` / ``compaction`` actors
-already make of the field. This is NOT a second physical writer: the kernel's
-recorder is the sole component calling ``event_log.emit`` (a plugin only calls
-``record_content``), so ``fold(events) → state`` still cannot fork
-(single-writer-invariant — which is about the physical writer, never the
-provenance label; fold does not read ``actor``).
-
-:func:`run_content_init` runs each contributed ``init`` hook against a recorder
-bound to that hook's plugin name and returns the folded task. Each hook is
-idempotent per drive: the first-only gate drops a re-record of an already-active
-``(kind, name)``, so running the hooks again (resume) appends nothing when
-nothing changed.
+The envelope carries ``actor="plugin:<name>"`` purely as a provenance label —
+the recorder remains the sole component calling ``event_log.emit``, so the
+single-writer invariant holds and ``fold(events) → state`` cannot fork (fold
+never reads ``actor``). The active-content gate is what makes rerunning the
+hooks on resume append nothing when nothing changed.
 """
 
 from __future__ import annotations
@@ -41,7 +29,7 @@ class SeedRecorder:
     """Concrete :class:`~noeta.execution.session_pack.SessionRecorder` bound to
     one task's seed window.
 
-    Threads the functionally-returned task internally so a caller reads the
+    Threads the functionally-returned task internally, so a caller reads the
     folded result back through :attr:`task` after every hook has run.
     """
 
@@ -79,9 +67,9 @@ class SeedRecorder:
         """Activate the ``(kind, name)`` resident at ``ref``'s bytes.
 
         No-ops on an empty triple or when ``(kind, name)`` is already active
-        with this exact hash (spec §4.4); a new hash records a refresh (hash
-        last-write-wins, spec §3). ``init`` reruns every drive, so an unchanged
-        store appends nothing and a changed store records exactly one refresh.
+        with this exact hash; a new hash records a refresh (hash
+        last-write-wins). ``init`` reruns every drive, so an unchanged store
+        appends nothing and a changed store records exactly one refresh.
         """
         if not kind or not name or not ref.hash:
             return
@@ -115,11 +103,9 @@ def run_content_init(
 ) -> Task:
     """Run each contributed ``init`` hook against a plugin-bound recorder.
 
-    The generic successor of the three hand-rolled seed-recorder calls: the
-    driver hands the folded, priority-ordered ``(plugin, hook)`` tuple and each
-    hook records its residents in that order through a recorder that stamps
-    ``actor="plugin:<name>"`` (spec §4.4). An empty tuple leaves the ledger
-    untouched.
+    ``init_hooks`` arrives priority-ordered and each hook records its residents
+    in that order, so the resulting event order is a function of the pack bands
+    alone. An empty tuple leaves the ledger untouched.
     """
     for name, hook in init_hooks:
         recorder = SeedRecorder(

@@ -1,30 +1,12 @@
-"""``noeta.storage.spi`` — the public SPI for storage backend authors.
+"""The public SPI for storage backend authors.
 
-"A backend only needs the Protocols" is nominally true and practically
-false: any EventLog backend must restore typed payloads from canonical
-bytes, and any Dispatcher backend must apply the stale-reclaim cap and the
-wake-match rule — or silently drift from the built-ins. A third-party
-backend implements the L0 storage Protocols in ``noeta.protocols`` and
-routes these shared domain rules through this facade; the built-in durable
-backends (``noeta.builtins.storage.impl``, noeta-sdk) do exactly the same,
-standing in for the external author. The implementations stay private
-(``noeta.storage._payload_restore`` / ``_reclaim`` / ``_wake_match``) —
-this module is their one documented entry.
-
-* :func:`restore_payload` — the event-type → typed-payload restore table.
-  A persistent EventLog stores the envelope payload as canonical bytes and
-  rebuilds the typed payload dataclass on read; a reflection test in the
-  contract suite fails CI when a new ``*Payload`` class lacks an entry, so
-  every backend restoring through this table stays complete.
-* :func:`enforce_payload_cap` — the ``PayloadTooLarge`` cap every
-  persistent EventLog applies on emit, measured on the canonical bytes it
-  is about to store (large bodies must go through the ContentStore).
-* :func:`reclaim_hits_cap` — the poison-task terminal decision: a task at
-  ``reclaim_max`` consecutive no-progress stale-lease reclaims drops to
-  ``terminal`` instead of requeueing forever.
-* :func:`wake_matches` — the projection-matching invariant deciding
-  whether a wake event satisfies a task's ``wake_on`` condition (delegates
-  to :func:`noeta.protocols.wake.matches_wake`, with the ``None`` guard).
+Satisfying the L0 storage Protocols is not enough to be a correct backend: an
+EventLog must restore typed payloads from canonical bytes and apply the same
+``PayloadTooLarge`` cap, and a Dispatcher must apply the same stale-reclaim cap
+and the same wake-match rule, or it silently drifts from every other backend
+under one shared contract suite. Those four decisions are domain rules rather
+than storage mechanics, so third-party and built-in durable backends alike route
+through this single facade; the implementations stay private behind it.
 """
 
 from __future__ import annotations

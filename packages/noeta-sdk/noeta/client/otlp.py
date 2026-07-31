@@ -1,47 +1,19 @@
-"""OTLP trace export — the documented follow-on ``inner`` adapter for
+"""OTLP/HTTP trace export — the ``inner`` sink for
 :class:`noeta.observers.trace_export.TraceExportObserver`.
 
-Microkernel M2 placement decision: this is **host wiring** (telemetry a
-deployment opts into through ``HostConfig``), not agent governance — so it
-lives in the SDK ``noeta.client`` band rather than the ``governance``
-built-in, and the runtime wheel no longer carries the one module whose
-default transport wants ``httpx``.
-
-Ships the EventLog to any OTLP/HTTP collector (Jaeger, the OpenTelemetry
-Collector, Langfuse behind a collector, …) as real spans. It consumes the
-same :class:`~noeta.observers.audit.AuditRecord` allowlist projection as
-the JSONL exporter — no raw goal / tool arguments / message bodies ever
-leave the process — and synthesizes spans by pairing start/finish events:
-
-* task span — ``TaskCreated``/``TaskStarted`` → ``TaskCompleted`` /
-  ``TaskFailed`` / ``TaskCancelled``; ``TaskSuspended`` / ``TaskWoken``
-  become span events, ``AgentBound`` names the span.
-* tool span — ``ToolCallStarted`` → ``ToolCallFinished``, keyed on
-  ``call_id``; ``ToolResultRecorded`` contributes success.
-* llm span — ``LLMRequestStarted`` → ``LLMRequestFinished``, keyed on
-  ``call_id``; ``LLMResponseRecorded`` contributes the stop reason.
-
-Subtask spans join their parent's trace: ``SubtaskSpawned`` on the parent
-stream links ``subtask_id`` → (parent trace, parent span), and the child's
-task span is parented there, so a delegation tree renders as one waterfall.
-
-Identity is deterministic (sha256 of stable keys): the trace id derives
-from the envelope ``trace_id`` (falling back to ``correlation_id``, which
-defaults to the root ``task_id``), span ids from ``task_id`` / ``call_id``.
-
-Wire format: the OTLP/HTTP **JSON** encoding of
-``ExportTraceServiceRequest`` (the proto3 JSON mapping — hex ids, stringed
-uint64 nanos), POSTed to the configured ``/v1/traces`` URL. Hand-encoding
-the JSON keeps this module free of any OpenTelemetry SDK dependency; the
-only non-stdlib need is an HTTP POST, injected (tests) or defaulting to
-``httpx`` (a noeta-sdk dependency), imported lazily off the hot path.
-
-Threading: the sink runs on the single :class:`AsyncTraceSink` worker
-thread (records arrive serially, per-task in seq order), so the assembler
-keeps plain dict state with no lock. Export failures are logged and
-dropped — an unreachable collector must never break the run. Spans still
-open at ``close()`` (e.g. a task suspended across process shutdown) are
-dropped, not exported with a fake end time.
+Spans are synthesized by pairing start/finish
+:class:`~noeta.observers.audit.AuditRecord` s (task, tool, llm) under
+deterministic sha256-derived ids, so a subtask's span joins its parent's trace
+across streams and a delegation tree renders as one waterfall. Only the same
+allowlist projection the JSONL exporter reads is consumed — no raw goal, tool
+arguments, or message bodies ever leave the process — and the OTLP/HTTP JSON
+``ExportTraceServiceRequest`` is hand-encoded so this module needs no
+OpenTelemetry SDK; its single non-stdlib requirement is an HTTP POST, injectable
+for tests and otherwise ``httpx``, imported lazily off the hot path. The sink
+runs on the one :class:`AsyncTraceSink` worker thread, so the assembler keeps
+plain dict state with no lock; an export failure is logged and its batch dropped
+(an unreachable collector must never break the run), and spans still open at
+``close()`` are dropped rather than exported with a fabricated end time.
 """
 
 from __future__ import annotations
@@ -95,9 +67,9 @@ class OtlpTraceConfig:
 
     ``endpoint`` is the **full** traces URL (e.g.
     ``http://localhost:4318/v1/traces``) — no path magic is applied here;
-    resolving the OTel-standard env vars into a full URL is the caller's
-    (app config layer's) job. ``headers`` ride on every export request
-    (auth for hosted collectors); they never enter any recording.
+    resolving the OTel-standard env vars into a full URL belongs to the caller's
+    config layer. ``headers`` ride on every export request (auth for hosted
+    collectors) and never enter any recording.
     """
 
     endpoint: str
@@ -535,9 +507,8 @@ class OtlpSpanSink:
             **dict(config.headers),
         }
         # Normally single-threaded (the AsyncTraceSink worker), but on a
-        # stuck-collector shutdown the abandoned worker can race close()
-        # running on the stopping thread — the lock + closed flag make that
-        # edge safe (the JsonlTraceSink ``_fh is None`` guard, generalized).
+        # stuck-collector shutdown the abandoned worker can race close() running
+        # on the stopping thread; the lock plus closed flag make that edge safe.
         self._lock = threading.Lock()
         self._closed = False
 
@@ -585,9 +556,8 @@ def make_otlp_trace_observer(
 ) -> TraceExportObserver:
     """Build an OTLP trace export observer for ``config``.
 
-    Same lifecycle shape as :func:`make_jsonl_trace_observer`: the returned
-    :class:`TraceExportObserver` owns subscription + async worker + sink and
-    tears them down in order on ``stop()``.
+    The returned :class:`TraceExportObserver` owns subscription, async worker and
+    sink, and tears them down in that order on ``stop()``.
     """
     return TraceExportObserver(
         event_log=event_log,

@@ -69,9 +69,9 @@ def recall_memories(store: MemoryStore, text: str) -> tuple[RecallHit, ...]:
 
 
 def memory_reminder_provider(store: MemoryStore) -> ReminderProvider:
-    """The built-in memory auto-recall as a track-A ``reminder_provider`` (D7).
+    """The built-in memory auto-recall as a track-A ``reminder_provider``.
 
-    Re-expresses the former inline recall as a provider on the ``turn_intake``
+    A provider on the ``turn_intake``
     seam: given the intake :class:`~noeta.execution.reminders.RecallView`, it
     reads the store NOW (impure — legal because the output is recorded), matches
     against the incoming message text, and returns at most ONE
@@ -99,18 +99,18 @@ def append_user_message_with_recall(
     trace_id: Optional[str] = None,
     origin: Optional[MessageOrigin] = None,
 ) -> Any:
-    """The D7 v1 user-message intake seam: retrieve, then ledger both turns.
+    """The v1 user-message intake seam: retrieve, then ledger both turns.
 
     Order is load-bearing: retrieval (impure) runs first; the human turn
     lands untagged (role's natural author); hits land as ONE follow-up
     turn tagged ``origin="memory"`` through the Engine's sole
     origin-writer seam. Appending the recall AFTER the user message lets
     the Anthropic adapter merge it into the same wire turn (its
-    ``<system-reminder>`` rendering — D4); the ledger itself
+    ``<system-reminder>`` rendering); the ledger itself
     stays provider-neutral. No hits ⇒ exactly the plain
     ``append_user_message`` ledger bytes.
 
-    D7 re-expression: a thin wrapper over the generic ``turn_intake``
+    A thin wrapper over the generic ``turn_intake``
     recording seam (:func:`~noeta.execution.reminders.record_intake_reminders`)
     driven by a single provider — the built-in memory recall
     (:func:`memory_reminder_provider`). The recording order (message, then the

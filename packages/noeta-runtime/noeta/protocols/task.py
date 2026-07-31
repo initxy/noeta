@@ -1,25 +1,11 @@
-"""Task and its four state slices.
+"""Task — the only first-class primitive — and its four state slices.
 
-A Task is the only first-class primitive in Noeta. Its mutable
-state is split into four typed slices, each with a single writer:
-
-* ``RuntimeState``   — Engine writes
-* ``TaskState``      — mutated only by ``TaskStatePatch.apply`` (called
-                       by Engine + fold). The patch author is normally
-                       a Policy via ``Decision.state_patch``; Phase 4
-                       (B17) adds one narrow operator-driven seam,
-                       :meth:`noeta.core.engine.Engine.apply_state_patch`,
-                       used by the Noeta-Code runner for pre-loop skill
-                       activation. Both paths emit the same
-                       ``TaskStatePatched`` event and call the same
-                       ``apply`` — single-writer is preserved. Fold
-                       also adds content-record handlers
-                       (``SkillContentRecorded`` /
-                       ``ContextContentRecorded`` merge into
-                       ``active_content``) as the second fold-owned
-                       write route into this slice.
-* ``ContextState``   — Composer writes
-* ``GovernanceState``— Engine writes (folded from events)
+Each slice has exactly one writer: the Engine writes ``RuntimeState`` and folds
+``GovernanceState`` from events, ``TaskState`` changes only through
+``TaskStatePatch.apply``, and the Composer owns ``ContextState``. Every field
+here is snapshot-serialised, so a new one must be appended LAST with a default
+that reproduces the behaviour of a stream that never sets it — otherwise a
+rehydrated snapshot stops matching a from-scratch fold byte for byte.
 """
 
 from __future__ import annotations
@@ -39,58 +25,37 @@ TASK_STATUSES = ("pending", "running", "suspended", "terminal")
 
 @dataclass
 class RuntimeState:
-    """Engine-owned slice. Holds the rolling LLM message log and usage.
-
-    Phase 1 ``messages`` is a list of :class:`Message` (typed Block
-    content); Phase 0 carried plain dicts (per the docstring of that
-    era which previewed the upgrade).
-    """
+    """Engine-owned slice: the rolling LLM message log and usage."""
 
     messages: list[Message] = field(default_factory=list)
     usage: dict[str, Any] = field(default_factory=dict)
-    # Foundation B (D-B3) — the most recent non-default continuation tag, projected
-    # by fold from the latest ``StepTransitionMarked`` event. The anti-spiral
-    # recovery guards (② / ④) read this O(1) instead of piling logic into the
-    # Engine body. ``None`` on a fresh task and on any old recording (no such
-    # event) → snapshot ``state_dict`` byte-equal, no drift. Appended LAST so
-    # an old snapshot dict (missing the key) rebuilds via this default (the
-    # 'optional + last' byte-safe convention).
+    # The most recent non-default continuation tag, projected by fold from the
+    # latest ``StepTransitionMarked``. The anti-spiral recovery guards read it
+    # in O(1) instead of accreting branch logic inside the Engine body.
     last_transition: Optional[TransitionReason] = None
-    # The REAL input-token usage the provider reported for the
-    # MOST RECENT LLM round-trip (``Usage.input`` = uncached+cache_read+
-    # cache_write), projected by fold from the latest ``LLMRequestFinished``.
-    # Distinct from ``GovernanceState.input_tokens`` (which ACCUMULATES across
-    # the whole task for cost accounting) — this is the SINGLE last-turn value,
-    # the precise size the whole prompt cost last time. The compaction trigger
-    # reads it as the deterministic history baseline (instead of a pure
-    # chars/4 estimate that systematically under-counts cache / structured
-    # blocks / images), then adds a chars/4 estimate of only the messages
-    # APPENDED since. We store the bare ``int`` (not a ``Usage`` — that is an
+    # The input-token count the provider reported for the MOST RECENT
+    # round-trip, projected by fold from the latest ``LLMRequestFinished``.
+    # Distinct from ``GovernanceState.input_tokens``, which accumulates over the
+    # whole task: this single last-turn value is what the whole prompt actually
+    # cost, so the compaction trigger uses it as a deterministic baseline and
+    # adds a chars/4 estimate of only the messages appended since — a pure
+    # chars/4 estimate systematically under-counts cache reads, structured
+    # blocks and images. Stored as a bare ``int`` because ``Usage`` is an
     # untagged dataclass that would not round-trip typed through the snapshot
-    # canonical walker) so the field is byte-safe by construction. ``0`` on a
-    # fresh task and on any old recording (LLMRequestFinished without usage)
-    # → snapshot ``state_dict`` byte-equal; appended LAST so an old snapshot
-    # dict (missing the key) rebuilds via this default (the 'optional + last'
-    # byte-safe convention).
+    # canonical walker.
     last_input_tokens: int = 0
 
 
 @dataclass
 class TaskState:
-    """Policy-owned slice. Holds long-running task memory.
+    """Policy-owned slice: long-running task memory.
 
-    Phase 0 keeps the shape minimal; richer fields land with the
-    typed ``TaskStatePatch`` in issue 02+.
-
-    ``active_content`` is the generic activation map of the
-    context content channel: kind → ``{name: content_hash}``. Three fold
-    routes converge here — the old ``SkillContentRecorded`` event, the
-    ``activate_skills`` patch sugar (both skill-specific, retained
-    read-only), and the generic ``ContextContentRecorded`` event. The
-    hash is **last-write-wins** (a re-record with a new hash is a refresh;
-    spec §3); what a kind means is SDK-registry territory. Appended LAST
-    with an empty default so an old snapshot dict (missing the key)
-    rebuilds via this default (the 'optional + last' byte-safe convention).
+    ``active_content`` is the context content channel's activation map,
+    kind → ``{name: content_hash}``. Three fold routes converge on it
+    (``ContextContentRecorded``, ``SkillContentRecorded``, and the
+    ``activate_skills`` patch sugar) and the hash is **last-write-wins**, so a
+    re-record under a new hash reads as a refresh rather than a conflict. What
+    a kind means is SDK-registry territory, not the kernel's.
     """
 
     goal: str = ""
@@ -102,8 +67,8 @@ class TaskState:
     active_content: dict[str, dict[str, str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        # Snapshot bodies serialise the inner ``{name: hash}`` maps as JSON
-        # objects; normalise back to plain dicts so a rehydrated slice is
+        # Snapshot bodies carry the inner ``{name: hash}`` maps as JSON objects;
+        # normalise them back to plain dicts so a rehydrated slice is
         # type-identical with a from-scratch fold.
         if self.active_content:
             self.active_content = {
@@ -114,96 +79,67 @@ class TaskState:
 
 @dataclass
 class ContextState:
-    """Composer-owned slice. Phase 0 holds the most recent ContextPlan ref.
+    """Composer-owned slice: the latest ContextPlan ref plus compaction state.
 
-    ③ (D-3) adds a compaction summary slice, written ONLY by fold's
-    ``Compacted`` handler (single writer): when set, the first
-    ``summary_boundary`` messages of the rolling history have been
-    collapsed into a single summary message whose body lives behind
-    ``summary_ref``. The Composer reads this slice to swap the covered
-    prefix for the summary on the next compose, keeping ``stable_prefix``
-    intact. Both default to "no summary yet" so an old snapshot (missing
-    the keys) rebuilds via these defaults — the 'optional + last'
-    byte-safe convention; an old recording with no ``Compacted`` event
-    folds to the same defaults → snapshot ``state_dict`` byte-equal.
+    The summary fields are written only by fold's ``Compacted`` handler: when
+    set, the first ``summary_boundary`` messages of the rolling history have
+    been collapsed into a single message whose body lives behind
+    ``summary_ref``. The Composer swaps that covered prefix for the summary on
+    the next compose, leaving ``stable_prefix`` intact.
     """
 
     plan_ref: Optional[ContentRef] = None
     summary_ref: Optional[ContentRef] = None
     summary_boundary: int = 0
-    # ⑥ compaction thrashing detection (D6.2).
-    # Written ONLY by fold's ``Compacted`` handler (single writer) and
-    # reconstructed deterministically from the ``Compacted`` event stream, so
-    # detection never depends on react.py's in-memory ``_step_count`` (a Policy
-    # instance attribute fold cannot see). ``last_compaction_marker`` is the
-    # ``GovernanceState.iterations`` value (the per-compose turn counter)
-    # recorded at the previous ``Compacted``; ``close_compaction_run`` is the
-    # count of consecutive compactions whose turn-gap to the previous one was
-    # ``<= _THRASH_CLOSE_TURNS``; ``compaction_thrashing`` latches True once that
-    # run reaches ``_THRASH_RUN_LIMIT`` and clears the moment a non-close
-    # compaction resets the run. All default to "no compaction yet" so an old
-    # recording (no ``Compacted`` event) folds to the same defaults → snapshot
-    # ``state_dict`` byte-equal, no drift.
+    # Compaction-thrashing detection, written only by fold's ``Compacted``
+    # handler so it reconstructs deterministically from the event stream —
+    # detection must not hang off a Policy instance's in-memory step counter,
+    # which fold cannot see. ``last_compaction_marker`` is the
+    # ``GovernanceState.iterations`` value at the previous ``Compacted``;
+    # ``close_compaction_run`` counts consecutive compactions whose turn-gap was
+    # ``<= _THRASH_CLOSE_TURNS``; ``compaction_thrashing`` latches True once
+    # that run reaches ``_THRASH_RUN_LIMIT`` and clears the moment a non-close
+    # compaction resets the run.
     last_compaction_marker: Optional[int] = None
     close_compaction_run: int = 0
     compaction_thrashing: bool = False
-    # Extended-thinking end-to-end (Slice B/C): the ThinkingBlocks that
-    # ``react._strip_thinking`` removed from the persisted assistant turn,
-    # keyed by that turn's FIRST ``tool_use`` ``call_id`` (the stable
-    # per-turn identity). Written ONLY by fold's
-    # ``AssistantThinkingRecorded`` handler (single writer); the
-    # Composer reads it to re-attach the thinking ahead of the tool_use on
-    # the next compose, so an Anthropic continuation request replays the
-    # signature verbatim. Thinking deliberately never enters
-    # ``runtime.messages`` (its signature is non-deterministic across live
-    # runs and would perturb the stable prompt prefix); it lives here, outside
-    # the persisted message stream, and is re-attached only into the transient
-    # View. Defaults empty so an OpenAI / non-reasoning / old recording (no
-    # such event) folds to the same empty dict → snapshot ``state_dict``
-    # byte-equal, no drift.
+    # ThinkingBlocks stripped from the persisted assistant turn, keyed by that
+    # turn's FIRST ``tool_use`` ``call_id`` (its stable per-turn identity) and
+    # written only by fold's ``AssistantThinkingRecorded`` handler. Thinking
+    # must never enter ``runtime.messages``: its signature is non-deterministic
+    # across live runs and would perturb the stable prompt prefix. Holding it
+    # outside the persisted message stream still lets the Composer re-attach it
+    # ahead of the tool_use in the transient View, so an Anthropic continuation
+    # replays the signature verbatim.
     thinking_by_call_id: dict[str, list[ThinkingBlock]] = field(
         default_factory=dict
     )
-    # Anchored content placement (docs/adr/anchored-content-placement.md):
-    # ``"<kind>:<name>" → rolling-history length at activation``, written ONLY
-    # by fold's activation handlers (``ContextContentRecorded`` / legacy
-    # ``SkillContentRecorded``), first-write-wins. The Composer reads it to
-    # decide placement: an anchor at or before the first assistant message
-    # keeps the resident in ``semi_stable``; a later anchor renders it inside
-    # the dynamic suffix at that point. Defaults empty so an old snapshot
-    # (missing the key) rehydrates anchor-less — those residents stay in
-    # ``semi_stable``, byte-equal to the pre-anchor layout ('optional + last').
+    # ``"<kind>:<name>" → rolling-history length at activation``, written only
+    # by fold's activation handlers, first-write-wins. The Composer reads it to
+    # place a resident: an anchor at or before the first assistant message keeps
+    # it in ``semi_stable``; a later anchor renders it inside the dynamic suffix
+    # at that point. See docs/adr/anchored-content-placement.md.
     content_anchors: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
 class GovernanceState:
-    """Engine-folded slice. Cost, iteration counts, denied actions, and
-    the running list of subtask outcomes.
+    """Engine-folded slice: cost, counters, denied actions, and provenance.
 
-    Real accounting for the numeric fields lands in issue 18 alongside
-    the built-in BudgetGuard: fold accumulates ``iterations`` from
-    ``ContextPlanComposed``, ``tool_calls`` from ``ToolCallStarted``,
-    ``spawned_subtasks`` from ``SubtaskSpawned``, and ``cost_usd`` from
-    ``LLMRequestFinished.cost_usd``. ``denied`` collects records from
-    the three deny event types (``ToolCallDenied / SubtaskDenied /
-    TaskCancelled``); ``finish-denied`` does not enter this list —
-    it materialises as a ``TaskFailed`` event only. ``subtask_results``
-    is filled by fold from ``SubtaskCompleted`` events on the parent
-    stream — per CONTEXT.md, "derived data (subtask_results / ...) does not go
-    into TaskState; it is folded from the EventLog and kept in GovernanceState".
+    Everything here is derived from the event stream, never patched: derived
+    data such as ``subtask_results`` deliberately stays out of ``TaskState``.
+    ``denied`` collects the three deny events (``ToolCallDenied`` /
+    ``SubtaskDenied`` / ``TaskCancelled``); a denied finish is not one of them
+    and materialises as ``TaskFailed`` only.
     """
 
     cost_usd: float = 0.0
     tool_calls: int = 0
     iterations: int = 0
     spawned_subtasks: int = 0
-    # Foundation A (D-A3) — per-token accounting folded from
-    # ``LLMRequestFinished.usage``, at the finest granularity so ① pricing
-    # can apply distinct cache-read / cache-write unit prices without
-    # re-touching this slice (and its snapshot bytes) later. All default 0:
-    # an old recording (LLMRequestFinished without a ``usage`` field) folds
-    # to 0 → snapshot state_dict byte-equal, no drift.
+    # Per-token accounting folded from ``LLMRequestFinished.usage``, kept at the
+    # finest granularity so pricing can apply distinct cache-read / cache-write
+    # unit prices later without re-touching this slice and its snapshot bytes.
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
@@ -211,133 +147,95 @@ class GovernanceState:
     reasoning_tokens: int = 0
     denied: list[dict[str, Any]] = field(default_factory=list)
     subtask_results: list[SubtaskResult] = field(default_factory=list)
-    # Phase 4.5 Issue A — human-in-the-loop tool-call approval.
-    # ``pending_approvals`` is keyed by ``call_id`` and holds the
-    # blocked call's ``{tool_name, arguments}`` between
-    # ``ToolCallApprovalRequested`` (inserts) and
-    # ``ToolCallApprovalResolved`` (deletes) — the durable recovery
-    # anchor that lets the approval-resume path reconstruct the exact
-    # call from the EventLog/snapshot after a restart. ``approvals`` is
-    # the append-only audit of every resolution.
+    # ``pending_approvals`` is keyed by ``call_id`` and holds the blocked call's
+    # ``{tool_name, arguments}`` between ``ToolCallApprovalRequested`` (inserts)
+    # and ``ToolCallApprovalResolved`` (deletes). It is the durable recovery
+    # anchor: without it the approval-resume path could not reconstruct the
+    # exact call after a restart. ``approvals`` is the append-only audit of
+    # every resolution.
     pending_approvals: dict[str, dict[str, Any]] = field(default_factory=dict)
     approvals: list[dict[str, Any]] = field(default_factory=list)
-    # CW18d — durable structured ask-user-question HITL. Pending entries are
-    # keyed by question_id and hold only refs/counts/small metadata; full bodies
-    # are ContentStore blobs. Answers is append-only audit.
+    # Structured ask-user-question state. Pending entries are keyed by
+    # ``question_id`` and hold only refs / counts / small metadata — full bodies
+    # stay in the ContentStore so durable state never grows with them.
     pending_questions: dict[str, dict[str, Any]] = field(default_factory=dict)
     question_answers: list[dict[str, Any]] = field(default_factory=list)
-    # Issue 06 — the current model binding,
-    # folded from the latest ``ModelBound`` event. ``model_binding`` is the
-    # bound selector/model id the resolver keys the Engine on
-    # ``(agent_name, model)``; ``principal_identity`` is the authorizing
-    # Principal's identity (the audit link from binding → who sanctioned
-    # it); ``model_bindings`` is the append-only audit of every binding +
-    # switch. All ``None`` / empty on an old recording (no ``ModelBound``)
-    # → the resolver falls back to its host-fixed default model, byte-equal.
+    # The current model binding, folded from the latest ``ModelBound``.
+    # ``model_binding`` is the selector / model id the resolver keys the Engine
+    # on; ``principal_identity`` is the authorizing Principal, i.e. the audit
+    # link from a binding to whoever sanctioned it; ``model_bindings`` is the
+    # append-only audit of every binding and switch. ``None`` leaves the
+    # resolver on its host-fixed default model.
     model_binding: Optional[str] = None
     principal_identity: Optional[str] = None
     model_bindings: list[dict[str, Any]] = field(default_factory=list)
-    # (I4) — the provider name folded onto the same
-    # ModelBound binding (``None`` on an old recording / a pure model switch
-    # means keep the host default provider). The resolver looks up
-    # ``providers[name]`` for the instance and adds it as the fifth dimension of
-    # the engine cache key. Provider binding reuses the ModelBound route (no
-    # separate ProviderBound event).
+    # The provider name folded onto that same ``ModelBound`` binding — provider
+    # binding deliberately rides the model-binding route rather than owning a
+    # separate event. The resolver looks up ``providers[name]`` and adds it as a
+    # dimension of the engine cache key; ``None`` keeps the host default.
     provider_binding: Optional[str] = None
-    # The server host identity bound at task open, folded from the
-    # single ``TaskHostBound`` event (server product path only). ``None`` on a
-    # non-server / old recording. The earlier ``host_config_fingerprint`` /
-    # ``registry_fingerprint`` / ``agent_fingerprint`` digests were retired along
-    # with the test infrastructure that consumed them (an old snapshot still
-    # carrying them rehydrates via ``restore_dataclass``, which drops the keys).
+    # The server host identity bound at task open, folded from the single
+    # ``TaskHostBound`` event.
     host_id: Optional[str] = None
-    # The per-session workspace **absolute path** welded
-    # into durable state, folded from the single ``TaskHostBound`` event
-    # (``workspace_dir`` field). The resolver passes this directly as the
-    # session's fs root (a resume reproduces the same root dir from here).
-    # ``None`` on an old / non-session recording → the resolver falls back to
-    # its host-fixed default workspace dir, byte-equal.
-    # Legacy "name-style" TaskHostBound records fold to None (D7 break).
+    # The per-session workspace **absolute path**, folded from the same
+    # ``TaskHostBound`` event and passed straight through as the session's fs
+    # root, so a resume reproduces the identical root dir instead of
+    # re-deriving it from whatever host happens to be folding.
     workspace: Optional[str] = None
-    # The sandbox container ``base_url`` this session is bound to, folded
-    # from the single ``TaskHostBound`` event (``exec_env_ref`` field, T6). The
-    # resolver reads it so a resumed / reclaimed session (possibly on another
-    # host) reconnects to the SAME container by this address instead of the
-    # folding host's own config. ``None`` on every local / non-sandbox recording
-    # → the resolver uses the local host, byte-equal.
+    # The sandbox container ``base_url`` this session is bound to. A resumed or
+    # reclaimed session — possibly on another host — must reconnect to the SAME
+    # container by this address rather than trust the folding host's own config.
     exec_env_ref: Optional[str] = None
-    # Issue 08 — the conversation
-    # close/archive lifecycle, folded from ``ConversationClosed`` /
-    # ``ConversationReopened`` events. ``closed`` is the queryable flag the
-    # sessions-list / inspect hot path reads (via fold, NEVER from an
-    # Observer); it is **orthogonal** to ``Task.status`` — a closed
-    # conversation stays ``suspended`` (no synthesized terminal). ``closed_by``
-    # / ``close_reason`` carry the latest close's attribution for inspect;
-    # ``conversation_lifecycle`` is the append-only audit of every
-    # close/reopen. All default to "not closed" on an old recording (no such
-    # event) → byte-equal, no drift.
+    # The conversation close/archive lifecycle, folded from
+    # ``ConversationClosed`` / ``ConversationReopened``. ``closed`` is
+    # **orthogonal** to ``Task.status``: a closed conversation stays
+    # ``suspended`` and no terminal is synthesised. Listing and inspect read the
+    # flag through fold, never from an Observer, so the answer stays derivable
+    # from the stream alone. ``conversation_lifecycle`` is the append-only audit.
     closed: bool = False
     closed_by: Optional[str] = None
     close_reason: Optional[str] = None
     conversation_lifecycle: list[dict[str, Any]] = field(default_factory=list)
-    # Per-tool schema-hash provenance, folded from
-    # the single ``ToolSchemaRecorded`` per tool emitted right before its
-    # first ``ToolCallStarted``. tool_name → sha256(canonical input_schema)
-    # and tool_name → declared ``ToolRef.version`` so drift diagnostics can
-    # tell "schema changed but version didn't" apart from a normal bump.
-    # Empty defaults on an old recording (no such event) → byte-equal.
+    # Per-tool provenance folded from the single ``ToolSchemaRecorded`` emitted
+    # before a tool's first call: tool_name → sha256(canonical input_schema) and
+    # tool_name → declared ``ToolRef.version``. Keeping both lets drift
+    # diagnostics tell "schema changed but version didn't" from a normal bump.
     tool_schema_hashes: dict[str, str] = field(default_factory=dict)
     tool_schema_versions: dict[str, str] = field(default_factory=dict)
-    # Per-skill content-hash provenance, folded from
-    # the single ``SkillContentRecorded`` per activated skill. skill_name →
-    # sha256(SKILL.md bytes) / declared ``ComponentRef.version``.
+    # Per-skill provenance folded from the single ``SkillContentRecorded`` per
+    # activated skill: skill_name → sha256(SKILL.md bytes) / declared
+    # ``ComponentRef.version``.
     skill_content_hashes: dict[str, str] = field(default_factory=dict)
     skill_content_versions: dict[str, str] = field(default_factory=dict)
-    # (issue 05) — the session's background-shell jobs, folded from
-    # the ``BackgroundShell*`` observer events (which issue 04 emits on the
-    # ROOT-TASK stream, so folding the root surfaces every job incl. the
-    # subtask-spawned ones). Append-only audit, mirror of ``subtask_results``:
-    # a job is APPENDED on ``Started`` and its entry only UPDATED (never
-    # removed) on poll / exit / kill so the trail survives for inspect + the
-    # front-end drill-in. Each entry::
+    # The session's background-shell jobs, folded from the ``BackgroundShell*``
+    # events. Those are emitted on the ROOT-TASK stream, so folding the root
+    # surfaces subtask-spawned jobs too. Append-only: an entry is appended on
+    # ``Started`` and only ever UPDATED — never removed — on poll / exit / kill,
+    # so the trail survives for inspect. Each entry::
     #
     #     {job_id, command, status: "running"|"exited"|"killed",
     #      spawned_by_task_id, exit_code?, signal?, ref?}
     #
-    # ``ref`` is the latest known snapshot ContentRef (the front-end derefs it
-    # for the freshest recorded output). Empty default so an old recording (no
-    # such event) folds to ``[]`` → snapshot ``state_dict`` byte-equal; appended
-    # LAST so an old snapshot dict (missing the key) rebuilds via this default
-    # (the 'optional + last' byte-safe convention).
+    # ``ref`` is the latest known snapshot ContentRef of the job's output.
     background_jobs: list[dict[str, Any]] = field(default_factory=list)
-    # (issue 07) — the per-task MCP provenance, folded from the
-    # single ``McpProvenanceRecorded`` event emitted at connect time. A
-    # credential-FREE list of ``{"alias", "tools"}`` dicts (alias-sorted, each
-    # ``tools`` the ticked raw-name subset or ``[]`` for all): the durable audit
-    # answer to "which MCP connectors + which of their tools was this task given
-    # this run". Names ONLY — never a url / token / header (those stay host-side,
-    # D3) — so credentials never enter the durable state. The tools' actual
-    # shape / behaviour is R-1's job (the recorded ``request_ref`` spec is the
-    # durable truth a resume reads back), NOT this provenance. Empty default so a
-    # task with no MCP (or an
-    # old recording with no such event) folds to ``[]`` → snapshot ``state_dict``
-    # byte-equal; appended LAST so an old snapshot dict (missing the key) rebuilds
-    # via this default (the 'optional + last' byte-safe convention).
+    # Per-task MCP provenance folded from ``McpProvenanceRecorded``: an
+    # alias-sorted list of ``{"alias", "tools"}`` dicts, each ``tools`` the
+    # ticked raw-name subset or ``[]`` for all. Names ONLY — never a url, token
+    # or header, which stay host-side — so credentials cannot leak into durable
+    # state. This answers "which connectors and which of their tools was the
+    # task given"; the tools' actual shape is the recorded request spec's job.
     mcp_provenance: list[dict[str, Any]] = field(default_factory=list)
-    # background sub-agents (docs/adr/background-subagent.md) — the session's
-    # append-only audit of sub-agents launched with
-    # ``spawn_subagent(background=True)``. Each entry:
+    # Append-only audit of sub-agents launched with
+    # ``spawn_subagent(background=True)``. Each entry::
+    #
     #     {subtask_id, agent_name, goal, status: "running"|"completed"|"failed",
     #      call_id, result_ref?, summary?}
     #
     # ``BackgroundSubagentStarted`` appends a ``running`` entry;
-    # ``BackgroundSubagentDelivered`` flips it to the child's terminal ``status``
-    # (and records ``result_ref`` + ``summary``) — the latter doubling as the
-    # exactly-once delivery anchor (fold reads it so a resume never re-injects the
-    # turn-boundary notice). Empty default so an old recording (no such event)
-    # folds to ``[]`` → snapshot ``state_dict`` byte-equal; appended LAST so an
-    # old snapshot dict (missing the key) rebuilds via this default (the
-    # 'optional + last' byte-safe convention).
+    # ``BackgroundSubagentDelivered`` flips it to the child's terminal status.
+    # That second event doubles as the exactly-once delivery anchor — fold reads
+    # it so a resume never re-injects the turn-boundary notice.
+    # See docs/adr/background-subagent.md.
     background_subagents: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -352,30 +250,24 @@ class Task:
     task_id: str
     status: str = "pending"
     parent_task_id: Optional[str] = None
-    #: SR1 — delegation depth (root=0, child=parent+1). Set from the genesis
-    #: ``TaskCreated.subtask_depth`` at fold/bootstrap; carried through the
-    #: snapshot body. Immutable for the task's life.
+    #: Delegation depth (root=0, child=parent+1), set from the genesis
+    #: ``TaskCreated.subtask_depth`` and immutable for the task's life.
     subtask_depth: int = 0
     runtime: RuntimeState = field(default_factory=RuntimeState)
     state: TaskState = field(default_factory=TaskState)
     context: ContextState = field(default_factory=ContextState)
     governance: GovernanceState = field(default_factory=GovernanceState)
-    # When suspended, what wakes the task back up.
+    # The WakeCondition that resumes the task while it is suspended.
     wake_on: Any = None
 
     def state_dict(self) -> dict[str, Any]:
-        """Return a canonical-dict serialization of the 4 slices + status.
+        """Serialize the four slices plus status as the Snapshot body.
 
-        Used as the Snapshot body. Walks each slice through
-        :func:`noeta.protocols.canonical.to_canonical` so tagged value
-        types (ContentRef, WakeCondition variants, SubtaskResult,
-        Message + Block) keep their tag, then restores the tagged
-        values back to typed instances via
-        :func:`noeta.protocols.canonical.from_canonical` so the result
-        matches the typed shape ``deserialize_task_state`` would yield —
-        the snapshot deserializer is the consumer of this dict and
-        symmetry between the two paths is what keeps the snapshot-
-        accelerated fold byte-equal with the from-scratch fold.
+        Each slice makes a round trip through ``to_canonical`` and back through
+        ``from_canonical`` so tagged value types keep their tag and the result
+        matches the typed shape ``deserialize_task_state`` yields. That symmetry
+        between writer and reader is what keeps a snapshot-accelerated fold
+        byte-equal with a from-scratch one.
         """
         return {
             "task_id": self.task_id,

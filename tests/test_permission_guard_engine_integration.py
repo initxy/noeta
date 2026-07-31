@@ -1,4 +1,10 @@
-"""Engine-integration tests for ``PermissionGuard`` (issue 18)."""
+"""PermissionGuard refusals surface as events, never as exceptions.
+
+A denied tool call or subtask spawn has to reach the EventLog as
+``ToolCallDenied`` / ``SubtaskDenied`` and carry the task to a clean terminal
+state — including for a tool the Engine has no entry for, where the alternative
+is a ``KeyError`` escaping the worker.
+"""
 
 from __future__ import annotations
 
@@ -75,10 +81,9 @@ def test_permission_guard_blocks_disallowed_tool_emits_tool_call_denied() -> Non
 
 
 def test_permission_guard_fail_closed_unknown_tool_does_not_crash_engine() -> None:
-    """B4 Engine-level regression: an unknown tool name combined with
-    a PermissionGuard that has ``max_risk_level`` configured must
-    surface as ``ToolCallDenied`` rather than letting the Engine
-    fall through to ``_resolve_tool`` and raise ``KeyError``."""
+    """An unknown tool name under a configured ``max_risk_level`` must be
+    denied by the guard before the Engine reaches ``_resolve_tool``, which
+    would raise ``KeyError``."""
     policy = StubScriptedPolicy(
         [
             ToolCallsDecision(

@@ -1,22 +1,13 @@
-"""Tests for the ``git-checkpoint`` example plugin (M2).
+"""The ``git-checkpoint`` example plugin: an undo point per mutating tool call
+that leaves the user's git state alone.
 
-Loads the plugin by explicit path (it is an in-tree example, not an installed
-distribution) and drives it with synthetic ``ToolCallStarted`` events against a
-throwaway ``tmp_path`` git repo. The invariants under test:
-
-1. A mutating tool call records a checkpoint commit and advances the dedicated
-   ref (chained on the previous checkpoint).
-2. The user's branch (``HEAD``) and staging area (``.git/index``) are byte-for
-   -byte untouched by checkpointing, and the checkpoint ref is not a branch.
-3. Non-mutating tool calls record nothing.
-4. ``restore_checkpoint`` writes a checkpoint's tree back into the working tree
-   (tip or a specific commit) without moving ``HEAD`` or the index; and a repo
-   with **no configured git identity** still records checkpoints, attributed to
-   the plugin's own identity rather than the user.
-5. The Observer swallows failures (guard-observer ADR) — a non-git path never
-   raises into the caller.
-6. The plugin factory wires the Observer onto ``Options.observers`` via the
-   SDK loader, honouring operator ``config``.
+Checkpoints are commits chained on a dedicated ref, written with the plugin's
+own identity so a repo with no configured ``user.email`` still gets them and no
+checkpoint masquerades as the user's own commit. ``HEAD``, the branch, and the
+index must come out byte-identical — that is what makes the plugin safe to
+leave switched on, and it is the invariant most easily broken by reaching for
+``git commit`` or ``git stash``. Failures are swallowed (guard-observer ADR):
+pointing the plugin at a non-git directory must never raise into the caller.
 """
 
 from __future__ import annotations
@@ -48,7 +39,7 @@ _CHECKPOINT_REF = "refs/noeta/checkpoints"
 
 
 def _load_module():
-    """Import the example plugin module by path (bypassing installation)."""
+    """Import by path: the plugin is in-tree, not an installed distribution."""
     spec = importlib.util.spec_from_file_location(
         "_git_checkpoint_example", _PLUGIN_PATH
     )
@@ -117,17 +108,17 @@ def test_mutating_call_records_checkpoint_and_ref_advances(tmp_path):
 
     observer(_started("write", 1))
     c1 = _ref_tip(repo)
-    assert c1  # a first checkpoint exists
+    assert c1
 
-    # Mutate the worktree, then a second mutating call.
     (repo / "a.txt").write_text("v2\n", encoding="utf-8")
     observer(_started("edit", 2))
     c2 = _ref_tip(repo)
 
-    assert c2 != c1  # the ref advanced
-    # The second checkpoint is chained on the first.
+    assert c2 != c1
+    # Chained, not orphaned: the second checkpoint's parent is the first, which
+    # is what makes the ref a walkable undo history.
     assert _git(repo, "rev-parse", f"{c2}^") == c1
-    # The two checkpoints captured the two worktree states.
+    # Each checkpoint captured the worktree as it stood at that call.
     assert _git(repo, "show", f"{c1}:a.txt") == "v1"
     assert _git(repo, "show", f"{c2}:a.txt") == "v2"
 
@@ -161,7 +152,7 @@ def test_user_branch_and_index_untouched(tmp_path):
     assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD") == branch_before
     assert (repo / ".git" / "index").read_bytes() == index_before
 
-    # The checkpoint ref is not a branch and never appears in the user's log.
+    # Not a branch, and invisible in the user's log decorations.
     branches = _git(repo, "branch", "--format=%(refname:short)").split()
     assert "noeta" not in " ".join(branches)
     assert _CHECKPOINT_REF not in _git(repo, "log", "--format=%D")
@@ -206,20 +197,18 @@ def test_restore_tip_rewrites_worktree_without_touching_head_or_index(tmp_path):
     repo = _init_repo(tmp_path)
     observer = mod.GitCheckpointObserver(repo)
 
-    # Checkpoint the v1 worktree.
     observer(_started("write", 1))
 
     head_before = _git(repo, "rev-parse", "HEAD")
     index_before = (repo / ".git" / "index").read_bytes()
 
-    # Make an unrelated mess in the worktree.
+    # Uncommitted work the restore is expected to overwrite.
     (repo / "a.txt").write_text("v3-uncommitted\n", encoding="utf-8")
 
     restored = mod.restore_checkpoint(repo)
 
     assert restored == _ref_tip(repo)
     assert (repo / "a.txt").read_text() == "v1\n"
-    # HEAD and the index did not move.
     assert _git(repo, "rev-parse", "HEAD") == head_before
     assert (repo / ".git" / "index").read_bytes() == index_before
 
@@ -234,7 +223,7 @@ def test_restore_specific_commit(tmp_path):
     (repo / "a.txt").write_text("v2\n", encoding="utf-8")
     observer(_started("edit", 2))
 
-    # Worktree currently v2; restore the earlier checkpoint explicitly.
+    # Worktree stands at v2; restoring c1 must reach past the ref tip.
     restored = mod.restore_checkpoint(repo, commit=c1)
     assert restored == c1
     assert (repo / "a.txt").read_text() == "v1\n"
@@ -307,7 +296,7 @@ def test_observer_swallows_non_git_path(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 6. Manifest wiring through the new loader (load_plugins + process_hooks)
+# 6. Manifest wiring (load_plugins + process_hooks)
 # ---------------------------------------------------------------------------
 
 
@@ -332,6 +321,7 @@ def test_module_exposes_builder_and_configured_observer():
 def test_load_plugins_lists_the_observer_without_execution():
     pset = load_plugins(builtins=False, modules=[str(_PLUGIN_PATH)])
     assert pset.names() == ("git-checkpoint",)
+    # Listing reads the static manifest only — no plugin code has run yet.
     listed = pset.contributions("observer")
     assert [(p, c.surface, c.name) for p, c in listed] == [
         ("git-checkpoint", "observer", "git_checkpoint")
@@ -339,7 +329,9 @@ def test_load_plugins_lists_the_observer_without_execution():
 
 
 def test_process_hooks_resolves_env_configured_observer(tmp_path):
-    # The observer's repo + ref come from the environment (read at plugin import).
+    # The plugin reads its repo + ref from the environment at import time, so
+    # the vars have to be in place before the loader executes the module — and
+    # restored afterwards, since the process is shared with other tests.
     repo = _init_repo(tmp_path)
     saved = {
         k: os.environ.get(k)
@@ -357,13 +349,13 @@ def test_process_hooks_resolves_env_configured_observer(tmp_path):
             else:
                 os.environ[k] = v
 
-    assert guards == ()  # no guard contributions
+    assert guards == ()
     assert len(observers) == 1  # governance: process-wide, no activation
     observer = observers[0]
     assert type(observer).__name__ == "GitCheckpointObserver"
     assert observer.repo_path == repo
     assert observer.ref == _CHECKPOINT_REF
-    # Functionally live: a mutating tool call records a checkpoint.
+    # Resolved, not just listed: the observer the loader handed back works.
     observer(_started("write", 1))
     assert _ref_exists(repo)
 

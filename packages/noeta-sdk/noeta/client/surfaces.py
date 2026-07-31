@@ -1,26 +1,12 @@
-"""Surface registry — the generality mechanism (spec D2 / D3).
+"""The surface registry — the mechanism that keeps the plugin loader generic.
 
 A :class:`SurfaceSpec` describes one extension surface: which plane it lives on,
-how a contribution to it is *validated*, how contributions *collide*, how they
-*merge*, and how they *order*. The loader (:mod:`noeta.client.plugin_set`) is
-**surface-agnostic** — it consults one :class:`SurfaceRegistry` and nothing
-else, so adding a future surface is registering one ``SurfaceSpec``, not
-changing the loader.
-
-:func:`standard_registry` seeds the standard catalogue (D3 — all sixteen
-surfaces). A host may :meth:`SurfaceRegistry.register` additional app-plane
-surfaces on a copy **before** load; the same validation / collision / ordering
-pipeline runs over them unchanged — and, since D11, so does the identity
-projection: a registered identity surface names the ``PluginActivation``
-channel it feeds (:data:`ActivationBinding`) and reaches ``compile_options``
-with no loader edit.
-
-This is the *mechanism-core* module of the manifest-plugin redesign. The 0.4.0
-contribution-bundle mechanism it replaced is gone; ``noeta.client.plugins``
-retains only the trust store and the shared error surface. This module imports
-only value types (``AgentDefinition`` / ``ContentKindSpec``) and the shared
-:class:`~noeta.client.plugins.PluginError`, so it introduces no new layering
-edge.
+how a contribution to it is *validated*, how contributions *collide*, and how
+they *order*. The loader (:mod:`noeta.client.plugin_set`) consults one
+:class:`SurfaceRegistry` and nothing else, so adding a surface means registering
+a ``SurfaceSpec``, never editing the loader — including the identity projection,
+which dispatches on the :data:`ActivationBinding` a surface declares rather than
+on its name.
 """
 
 from __future__ import annotations
@@ -47,10 +33,10 @@ __all__ = [
 ]
 
 
-#: A surface's plane, mirroring the ``Options`` / ``HostConfig`` split (D2/D3).
+#: A surface's plane, mirroring the ``Options`` / ``HostConfig`` split.
 Plane = Literal["identity", "wiring", "host"]
 
-#: How a surface's effect is scoped across agents in the process (D6).
+#: How a surface's effect is scoped across the agents in the process.
 ActivationScope = Literal["per-agent", "process", "host-wired"]
 
 #: The namespace a contribution's key lives in — a human label for collision
@@ -60,28 +46,17 @@ ActivationScope = Literal["per-agent", "process", "host-wired"]
 CollisionKey = Literal["name", "kind", "alias", "single-valued", "none"]
 
 #: How merged contributions order. ``sorted`` = ``(plugin, name)``; ``priority``
-#: = an integer ``priority`` param first, ties broken by ``(plugin, name)``
-#: (the guard-observer-hooks precedent).
+#: = an integer ``priority`` param first, ties broken by ``(plugin, name)``.
 Ordering = Literal["sorted", "priority"]
 
-# NOTE: a ``merge_rule`` field ("append" / "single") used to sit beside these.
-# Nothing ever read it — the append-vs-single behaviour is fully determined by
-# ``collision_key`` (``single-valued`` is the single-merge surface), so the
-# field was pure decoration promising a mechanism the loader did not implement.
-# Deleted with the D11 pass rather than left as documentation of a lie.
-
 #: How an **identity-plane** contribution binds into the per-plugin
-#: :class:`~noeta.client.options.PluginActivation` handed to
-#: ``compile_options`` — the table-driven successor of the surface-name
-#: chain ``PluginSet.identity_activations`` used to hardcode (D11). The
-#: first five values name the ``PluginActivation`` channels (a closed set:
-#: the compile contract owns them); ``"elsewhere"`` marks an identity-plane
-#: surface that is deliberately NOT carried at compile because its own
-#: per-agent projection resolves it (``control_tool`` rides
-#: ``activation_control_tools``). An identity surface that declares NO
-#: binding fails projection loudly — the ``content_kind``-went-missing
-#: lesson: a value silently dropped between resolve and compile compiles
-#: the wrong identity.
+#: :class:`~noeta.client.options.PluginActivation` handed to ``compile_options``.
+#: The first five values name the ``PluginActivation`` channels — a closed set
+#: the compile contract owns. ``"elsewhere"`` marks an identity-plane surface
+#: deliberately NOT carried at compile because its own per-agent projection
+#: resolves it (``control_tool`` rides ``activation_control_tools``). An
+#: identity surface declaring NO binding fails projection loudly: a value
+#: dropped silently between resolve and compile compiles the wrong identity.
 ActivationBinding = Literal[
     "tool", "agent", "content_kind", "prompt_fragment", "policy", "elsewhere"
 ]
@@ -90,13 +65,11 @@ ActivationBinding = Literal[
 #: and read straight off the annotations above so there is no second list to
 #: keep in agreement.
 #:
-#: A ``SurfaceSpec`` is written positionally in practice, so deleting a field
-#: from the middle of the signature (``merge_rule``) shifts every later
-#: argument one slot left — silently, because none of these enums had a runtime
-#: check: ``"append"`` landed in ``ordering`` and behaved like ``"sorted"`` by
-#: luck. Registration is a one-time, host-side act; validating it here costs
-#: nothing and turns that class of drift into an error at the line that caused
-#: it.
+#: A ``SurfaceSpec`` is written positionally in practice, so changing a field in
+#: the middle of the signature shifts every later argument one slot left —
+#: silently, because a bare ``Literal`` annotation carries no runtime check.
+#: Registration is a one-time, host-side act; validating it here costs nothing
+#: and turns that class of drift into an error at the line that caused it.
 _FIELD_VOCABULARY: dict[str, tuple[Any, ...]] = {
     "plane": get_args(Plane),
     "activation_scope": get_args(ActivationScope),
@@ -111,9 +84,9 @@ class SurfaceSpec:
 
     ``validator`` is called on a **resolved** contribution value (after a
     manifest ``ref`` has been imported) and must raise — a :class:`PluginError`
-    is preferred — when the value is not a legal member of the surface. It is
-    the D2 "what a legal contribution value is" slot; listing and manifest-level
-    collision never call it (they run without executing plugin code).
+    is preferred — when the value is not a legal member of the surface. Listing
+    and manifest-level collision never call it: they run without executing
+    plugin code.
     """
 
     name: str
@@ -122,12 +95,11 @@ class SurfaceSpec:
     validator: Callable[[Any], None]
     collision_key: CollisionKey
     ordering: Ordering = "sorted"
-    #: How an identity-plane contribution binds into ``PluginActivation``
-    #: (D11). Required for ``plane="identity"`` — the loader's projection
-    #: dispatches on it instead of matching surface names, so a
-    #: host-registered identity surface projects without a loader edit.
-    #: ``None`` for every wiring / host surface (they project through the
-    #: per-agent parameter channels instead).
+    #: How an identity-plane contribution binds into ``PluginActivation``.
+    #: Required for ``plane="identity"`` — the loader's projection dispatches on
+    #: it instead of matching surface names, so a host-registered identity
+    #: surface projects without a loader edit. ``None`` for every wiring / host
+    #: surface: they project through the per-agent parameter channels instead.
     activation_binding: ActivationBinding | None = None
 
     def __post_init__(self) -> None:
@@ -139,9 +111,8 @@ class SurfaceSpec:
                     f"of {', '.join(repr(v) for v in legal)} — check the "
                     f"positional order of the SurfaceSpec fields"
                 )
-        # An identity surface with no binding would be silently dropped
-        # between resolve and compile — the ``content_kind``-went-missing
-        # failure. Catch it at registration, not at projection time.
+        # Caught at registration rather than at projection, where an identity
+        # surface with no binding would simply vanish between the two.
         if self.plane == "identity" and self.activation_binding is None:
             raise PluginError(
                 f"surface {self.name!r} is identity-plane but declares no "
@@ -172,8 +143,8 @@ class SurfaceRegistry:
     """The surface catalogue the loader consults — one name → one ``SurfaceSpec``.
 
     Deliberately small: register, look up, list. A host extends the standard set
-    by taking a :meth:`copy` of :func:`standard_registry` and registering its
-    own app-plane surfaces before calling ``load_plugins``.
+    by taking a :meth:`copy` of :func:`standard_registry` and registering its own
+    app-plane surfaces before calling ``load_plugins``.
     """
 
     def __init__(self) -> None:
@@ -193,7 +164,6 @@ class SurfaceRegistry:
         self._by_name[spec.name] = spec
 
     def get(self, name: str) -> SurfaceSpec:
-        """The spec for ``name``, or a :class:`PluginError` naming the unknown surface."""
         spec = self._by_name.get(name)
         if spec is None:
             raise PluginError(
@@ -206,7 +176,6 @@ class SurfaceRegistry:
         return name in self._by_name
 
     def names(self) -> tuple[str, ...]:
-        """Every registered surface name, sorted."""
         return tuple(sorted(self._by_name))
 
     def copy(self) -> "SurfaceRegistry":
@@ -217,9 +186,8 @@ class SurfaceRegistry:
 
 
 # ---------------------------------------------------------------------------
-# Validators — light structural checks (they tighten as later milestones wire
-# each surface's runtime shape; a legal-value gate that never executes plugin
-# code lives here, the runtime contract lives in the surface's own milestone).
+# Validators — structural legal-value gates; a surface's runtime contract is
+# enforced where that surface is consumed, not here.
 # ---------------------------------------------------------------------------
 
 
@@ -255,7 +223,6 @@ def _v_str(surface: str) -> Callable[[Any], None]:
 
 
 def _v_tool(value: Any) -> None:
-    # A built-in tool name string, or a ``.ref``-bearing / callable tool object.
     if isinstance(value, str) and value.strip():
         return
     if getattr(value, "ref", None) is not None or callable(value):
@@ -279,20 +246,16 @@ def _v_path(value: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# The standard catalogue (D3) — sixteen surfaces.
+# The standard catalogue — sixteen surfaces.
 # ---------------------------------------------------------------------------
 
 
-#: The sixteen standard surfaces, in the D3 table order. ``★`` surfaces are new
-#: in this redesign; their runtime wiring lands in M3/M4, but the mechanism
-#: (registry entry + validation + collision + ordering) is complete here.
-#: ``session_pack`` (microkernel phase 3) is the session-construction surface:
-#: a factory ``(SessionBuildContext) -> PackContribution`` the kernel builder
-#: runs in one priority-ordered loop — see ``noeta.execution.session_pack``.
-#: ``control_tool`` (control-tool-surface S1) is the control-tool-construction
-#: surface: a factory ``(ControlToolBuildContext) -> ControlToolMount | None``
-#: the kernel builder runs in the post-tools dual-priority mount loop — see
-#: ``noeta.execution.control_tool``.
+#: The sixteen standard surfaces. Two carry a factory rather than a value:
+#: ``session_pack`` is a ``(SessionBuildContext) -> PackContribution`` the kernel
+#: builder runs in one priority-ordered loop (``noeta.execution.session_pack``),
+#: and ``control_tool`` is a
+#: ``(ControlToolBuildContext) -> ControlToolMount | None`` it runs in the
+#: post-tools dual-priority mount loop (``noeta.execution.control_tool``).
 STANDARD_SURFACES: tuple[SurfaceSpec, ...] = (
     SurfaceSpec(
         "tool", "identity", "per-agent", _v_tool, "name",
@@ -342,9 +305,9 @@ STANDARD_SURFACES: tuple[SurfaceSpec, ...] = (
         "session_pack", "wiring", "per-agent", _v_callable("session_pack"),
         "name", "priority",
     ),
-    # Declared identity-plane (it enters durable identity in S3) but carried by
-    # the per-agent ``activation_control_tools`` projection, not by
-    # ``PluginActivation`` — hence the ``"elsewhere"`` binding.
+    # Identity-plane (it enters durable identity) but carried by the per-agent
+    # ``activation_control_tools`` projection rather than ``PluginActivation`` —
+    # hence the ``"elsewhere"`` binding.
     SurfaceSpec(
         "control_tool", "identity", "per-agent", _v_callable("control_tool"),
         "name", "priority", activation_binding="elsewhere",
@@ -353,11 +316,11 @@ STANDARD_SURFACES: tuple[SurfaceSpec, ...] = (
 
 
 def standard_registry() -> SurfaceRegistry:
-    """A fresh registry seeded with the standard catalogue (D3).
+    """A fresh registry seeded with the standard catalogue.
 
     A new registry every call, so a host that extends it (``reg =
     standard_registry(); reg.register(app_surface)``) never mutates a shared
-    global. All sixteen standard surfaces are present.
+    global.
     """
     registry = SurfaceRegistry()
     for spec in STANDARD_SURFACES:

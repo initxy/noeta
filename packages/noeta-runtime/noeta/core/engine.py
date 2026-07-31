@@ -1,33 +1,12 @@
-"""Engine: drives a single Task forward by one Step.
+"""Engine: drives one Task from ``compose → decide`` to its next suspend
+point or terminal event.
 
-The Engine advances a Task to its next suspend point or terminal:
-
-    * ``finish`` / ``fail`` emit a ``TaskSnapshot`` before every terminal
-      event, and ``create_task`` emits the ``TaskCreated`` genesis event.
-    * the ``tool_calls`` branch runs each call through a ``ToolRuntime``
-      and loops back to ``compose → decide`` until the Policy returns a
-      non-tool_calls decision; multiple results from one decision batch
-      into a single ``MessagesAppended`` event.
-    * the ``spawn_subtask`` branch keeps strict event ordering; a
-      ``note_woken`` API lets workers emit ``TaskWoken`` on re-lease.
-      Engine deliberately knows nothing about the Dispatcher or any
-      Observer: the ``SubtaskCompleted`` append to the parent stream and
-      the ``dispatcher.wake`` handoff live entirely in
-      ``noeta.core.observers.ChildLifecycleObserver``. The per-decision
-      work itself runs in the module-level ``handle_finish`` /
-      ``handle_fail`` / ``handle_spawn_subtask`` in
-      ``noeta.core._decision_handlers``.
-    * a third ``TaskSnapshot`` trigger writes a snapshot when consecutive
-      ``tool_calls`` iterations cross
-      ``CONSECUTIVE_TOOL_CALLS_SNAPSHOT_THRESHOLD`` (default 20) without
-      releasing the lease (the terminal- and suspend-prefix triggers
-      cover the other two snapshot points).
-    * suspend branches: ``yield_for_human`` exits on a
-      ``HumanResponseReceived`` wake; ``wait_timer`` exits on a
-      ``TimerFired`` wake.
-
-The line budget is ≤ 500 lines
-of body code; we are well under that.
+The Engine is the single writer of ``RuntimeState`` / ``TaskState``: every
+mutation is emitted as an event and folded back through
+:mod:`noeta.core.fold`, so a resume that refolds the prefix lands on exactly
+the state the live turn saw. It knows nothing about the Dispatcher or any
+Observer — the parent/child handoff lives entirely in
+:class:`noeta.core.observers.ChildLifecycleObserver`.
 """
 
 from __future__ import annotations
@@ -124,15 +103,10 @@ from noeta.protocols.tool import Tool
 from noeta.protocols.tool_args import resolve_tool_call_arguments
 
 
-# ---------------------------------------------------------------------------
-# Engine
-# ---------------------------------------------------------------------------
-
-
-#: Work item ④ — upper bound on the recent tool-call history the Engine folds
-#: into ``GuardContext.recent_tool_calls`` for ``RepetitionGuard``. Generous
-#: enough to cover any sane repetition threshold; the guard truncates to its
-#: own ``policy.window`` when counting the consecutive run.
+#: Upper bound on the recent tool-call history the Engine folds into
+#: ``GuardContext.recent_tool_calls``. Generous enough to cover any sane
+#: repetition threshold; ``RepetitionGuard`` truncates to its own
+#: ``policy.window`` when counting the consecutive run.
 _RECENT_TOOL_CALLS_WINDOW = 32
 
 
@@ -151,19 +125,15 @@ def _emit_child_task_created(
     subtask_depth: int = 0,
     background: bool = False,
 ) -> EventEnvelope:
-    """Cross-stream ``system_emit`` of a child's ``TaskCreated`` (the one
-    cross-stream system write a handler needs).
+    """Cross-stream ``system_emit`` of a child's ``TaskCreated``.
 
-    The ``actor`` / ``origin`` / ``trace_id`` bookkeeping for child-task genesis
-    stays in one place; ``policy_name`` is locked to the Engine's
-    ``_SUBTASK_DEFAULT_POLICY_NAME`` (``"scripted"``) to preserve byte-equal
-    behaviour with the pre-refactor inline write. ``background=True``
-    (docs/adr/background-subagent.md) marks the child so the
-    ``ChildLifecycleObserver`` skips it; the default ``False`` omits the key
-    (``__canonical_omit_none__``) ⇒ byte-identical to every foreground child.
-    An oversized ``goal`` spills to the ContentStore (``spill_goal``) instead
-    of blowing the payload cap — content-addressed, so it lands on the same
-    ref the parent's ``SubtaskSpawned`` spill wrote."""
+    The one cross-stream system write a handler needs, kept here so the
+    ``actor`` / ``origin`` / ``trace_id`` bookkeeping for child-task genesis
+    lives in one place. ``background=True`` marks the child so the
+    ``ChildLifecycleObserver`` skips it. An oversized ``goal`` spills to the
+    ContentStore (``spill_goal``) instead of blowing the payload cap —
+    content-addressed, so it lands on the same ref the parent's
+    ``SubtaskSpawned`` spill wrote."""
     goal_inline, goal_ref = spill_goal(content_store, goal)
     return event_log.system_emit(
         task_id=child_task_id,
@@ -188,18 +158,18 @@ def _background_subagent_seams(
     launcher: Optional[Any],
 ) -> tuple[Optional[Any], Optional[Any]]:
     """Split a duck-typed background-sub-agent launcher into the two
-    ``HandlerContext`` seams ``(launch, capacity)`` — or ``(None, None)`` when no
-    launcher is wired (docs/adr/background-subagent.md)."""
+    ``HandlerContext`` seams ``(launch, capacity)``; ``(None, None)`` when no
+    launcher is wired."""
     if launcher is None:
         return None, None
     return launcher.launch, launcher.capacity
 
 
 def _is_background_spawn(decision: Any, launch_seam: Optional[Any]) -> bool:
-    """True iff this decision is a background ``spawn_subagent`` AND a launcher is
-    wired — the gate for the loop-continuing background branch in
-    ``run_one_step`` (docs/adr/background-subagent.md). False ⇒ the decision
-    falls through to the foreground barrier spawn in ``dispatch_exit``."""
+    """True iff this decision is a background ``spawn_subagent`` AND a launcher
+    is wired. Without a launcher the decision must fall through to the
+    foreground barrier spawn in ``dispatch_exit``, so a resume or a child
+    engine never launches anything concurrently."""
     return (
         isinstance(decision, SpawnSubtaskDecision)
         and bool(decision.background)
@@ -208,21 +178,18 @@ def _is_background_spawn(decision: Any, launch_seam: Optional[Any]) -> bool:
 
 
 class Engine:
-    """Phase 0 Engine. Drives one Step toward suspend or terminal.
+    """Drives one Step toward suspend or terminal.
 
-    Per-Decision branch logic (finish / fail / spawn_subtask / wait_timer /
-    yield_for_human / tool_calls) lives in
-    :mod:`noeta.core._decision_handlers` (issue C3 implementation).
-    Engine retains the compose → decide loop, the controlled callable
-    seams (``_emit`` / ``_guard`` / ``_write_snapshot`` /
-    ``_resolve_tool`` / ``_create_child_task``), and the
-    state_patch / assistant_message helpers that fire before every
-    branch handler.
+    Holds the compose → decide loop, the state_patch / assistant_message
+    helpers that fire before every branch handler, and the controlled callable
+    seams (``_emit`` / ``_guard`` / ``_write_snapshot`` / ``_resolve_tool`` /
+    ``_create_child_task``). Per-Decision branch logic lives in
+    :mod:`noeta.core._decision_handlers`, which reaches the EventLog and the
+    HookManager only through those seams.
     """
 
-    #: Subtask genesis default. Pre-refactor inline literal at
-    #: engine.py:723; preserved here so :meth:`_create_child_task`
-    #: writes byte-equal child ``TaskCreatedPayload``.
+    #: The ``policy_name`` every engine-created child task is born with; the
+    #: Engine picks no policy of its own.
     _SUBTASK_DEFAULT_POLICY_NAME = "scripted"
 
     def __init__(
@@ -252,35 +219,28 @@ class Engine:
     ) -> None:
         self._event_log = event_log
         self._content_store = content_store
-        # the kernel holds no opinion on View assembly and
-        # never reaches up into a concrete ``noeta.context`` Composer.
-        # ``composer`` is a required injection — hosts wire a real one
-        # (e.g. ``noeta.context.ThreeSegmentComposer``); callers wanting the
-        # zero-opinion empty View pass ``noeta.core.composer.PassthroughComposer``.
+        # The kernel holds no opinion on View assembly and never reaches up
+        # into a concrete Composer, so this is a required injection; callers
+        # wanting the empty View pass ``PassthroughComposer``.
         self._composer = composer
         self._policy = policy
         self._tools = dict(tools or {})
-        # reject non-positive limits centrally so
-        # every construction path (live host, resume) shares one
-        # error. ``None`` is allowed and disables truncation entirely.
+        # Reject non-positive limits centrally so every construction path
+        # (live host, resume) shares one error. ``None`` disables truncation.
         _validate_tool_output_inline_limit(tool_output_inline_limit)
         self._tool_output_inline_limit = tool_output_inline_limit
         if tool_runtime is None and (tools or tool_result_transforms):
-            # Default ToolRuntime so tests can pass tools without wiring the
-            # wrapper (an injected one brings its own); see _default_tool_runtime.
-            # ``tool_result_transforms`` (spec D9) ride the default runtime so an
-            # agent's activated redaction/transform stages record their output —
-            # and they alone are enough to build one, so a transform is never
-            # silently dropped just because this engine was compiled with no tools.
+            # Transforms alone are enough to build a runtime, so an activated
+            # redaction/transform stage is never silently dropped just because
+            # this engine was compiled with no tools.
             tool_runtime = _default_tool_runtime(
                 event_log, content_store, background_runner,
                 file_checkpoint_registry, tool_result_transforms)
         elif tool_runtime is not None and tool_result_transforms:
-            # An injected runtime carries its own (possibly empty) transform
-            # chain, so honouring these would mean reaching into someone else's
-            # wrapper. Refuse loudly: silently ignoring them turns an activated
-            # redaction plugin into a no-op while every listing still reports it
-            # as wired. Pass the stages to the ToolRuntime you inject instead.
+            # An injected runtime carries its own transform chain, so honouring
+            # these would mean reaching into someone else's wrapper. Refuse
+            # loudly: silently ignoring them turns an activated redaction
+            # plugin into a no-op while every listing still reports it as wired.
             raise ValueError(
                 "tool_result_transforms cannot be applied to an injected "
                 "tool_runtime — pass them to ToolRuntime(tool_result_transforms=…) "
@@ -289,52 +249,39 @@ class Engine:
         self._tool_runtime = tool_runtime
         self._hooks = hooks or HookManager()
         self._clock = clock or time.time
-        # ``id_factory`` mints subtask_ids the engine generates inside
-        # ``_spawn_subtask``. Defaults to ``uuid.uuid4`` so production
-        # callers keep the original behaviour; a test can inject a
-        # deterministic factory (e.g. one that pops a fixed sequence of ids).
+        # The subtask_id source. Random by default; a test injects a
+        # deterministic factory to make spawn streams reproducible.
         self._id_factory: Callable[[], str] = (
             id_factory if id_factory is not None else _default_id_factory
         )
         self._actor = actor
 
-        # Build the HandlerContext once; handlers receive it by value
-        # and reach EventLog / HookManager / ContentStore only through
-        # the typed callables wired here. No raw event_log or
-        # hook_manager exposure to the handler module (issue C3 design
-        # contract).
+        # Handlers receive the HandlerContext by value and reach EventLog /
+        # HookManager / ContentStore only through the typed callables wired
+        # here — no raw log or hook-manager reference escapes into the handler
+        # module, so a handler cannot bypass the single-writer invariant.
         def _apply_event(task: Task, env: EventEnvelope) -> None:
             apply_event(task, env, self._content_store)
 
-        # background sub-agent seams (docs/adr/background-subagent.md): the
-        # launcher is a duck-typed object (``.launch`` / ``.capacity``) so
+        # The launcher is duck-typed (``.launch`` / ``.capacity``) so
         # ``noeta.core`` never imports the executor-driven registry up in
-        # ``noeta.execution``. Derived in one module-level helper; ``None``
-        # everywhere but a top-level interactive Engine.
+        # ``noeta.execution``. ``None`` everywhere but a top-level interactive
+        # Engine, which is what keeps a resume from re-launching.
         bg_launch, bg_capacity = _background_subagent_seams(
             background_subagent_launcher
         )
         self._launch_background_subagent = bg_launch
-        # Anchored-content seams (docs/adr/anchored-content-placement.md):
-        # ``content_discovery`` rides the HandlerContext into the tool loop;
-        # ``content_preloader`` runs at the top of each step (see
-        # ``run_one_step``). Both default ``None`` — every existing
-        # construction is byte-identical.
+        # Impure host hook run at the top of each step to re-supply renderer
+        # state the ledger says is active.
         self._content_preloader = content_preloader
-        # The contributed pre-loop ``init`` hooks (spec §4.5): the driver reads
-        # this generic tuple off the resolved session Engine and runs each
-        # through a ``SeedRecorder`` at seed time (the generic successor of the
-        # feature-named seed recorders). ``()`` ⇒ no pre-loop residents.
+        # Pre-loop ``init`` hooks the driver runs at seed time; the Engine
+        # itself never invokes them. ``()`` ⇒ no pre-loop residents.
         self._content_init_hooks = content_init_hooks
-        # The ask_user_question answer codec: a duck-typed ``AskAnswerCodec``
-        # the SDK host reads off the session's ``SessionInputs.answer_codec``
-        # (the ask mount's typed field, spec §4.3) and threads here, so the
-        # driver's ``answer`` path can decode a submitted answer WITHOUT importing
-        # the ``ask_user_question`` built-in (the kernel never imports noeta.builtins).
-        # ``None`` on every engine whose session never mounted ``ask_user_question``
-        # (and on every kernel-alone / hand-built engine) — an answer arriving for
-        # such a session fails loudly in the driver. A public read attribute (not
-        # a ``_``-private one) because the driver reads it structurally.
+        # Duck-typed answer codec so the driver can decode a submitted answer
+        # without importing the ``ask_user_question`` built-in (the kernel
+        # never imports ``noeta.builtins``). ``None`` when the session mounted
+        # no ask capability — an answer arriving for it fails loudly in the
+        # driver. Public because the driver reads it structurally.
         self.answer_codec = answer_codec
 
         self._ctx = HandlerContext(
@@ -364,11 +311,7 @@ class Engine:
 
     @property
     def content_init_hooks(self) -> tuple[Any, ...]:
-        """The contributed pre-loop ``init`` hooks (spec §4.5).
-
-        Read by the driver's seed path to activate each pack's residents
-        through a ``SeedRecorder``; the engine itself never invokes them.
-        """
+        """Pre-loop ``init`` hooks, read by the driver's seed path."""
         return self._content_init_hooks
 
     # -- task bootstrap ---------------------------------------------------
@@ -388,13 +331,11 @@ class Engine:
         """Append ``TaskCreated`` (and, for a named task, ``AgentBound`` /
         ``TaskHostBound``) and return the in-memory Task object.
 
-        A named task's genesis
-        sequence is ``TaskCreated → AgentBound`` emitted **atomically inside this
-        call** — one trusted write point, so a named product Task can never be
-        created without its durable Agent identity record. When ``host_binding``
-        is also supplied (the server product / session path), a ``TaskHostBound``
-        follows the ``AgentBound``. The legacy / ``unnamed`` path emits neither
-        (byte-equal with old recordings).
+        A named task's genesis sequence ``TaskCreated → AgentBound`` is emitted
+        **atomically inside this call** — one trusted write point, so a named
+        Task can never be created without its durable Agent identity record.
+        ``host_binding`` adds a ``TaskHostBound`` after the ``AgentBound``; an
+        ``unnamed`` task carries no identity and emits neither.
         """
         _validate_genesis_provenance(agent_name, host_binding)
         tid = task_id or f"task-{uuid.uuid4().hex}"
@@ -447,29 +388,18 @@ class Engine:
     ) -> Task:
         """Seed a ``user`` turn into the conversation via the EventLog.
 
-        Callers (CLI / SDK / demo) use this to inject user input *after*
-        ``create_task`` and *before* ``run_one_step``, so the message is
-        durable in the EventLog and shows up identically after
-        ``fold(events)`` — a resume then reconstructs the same
-        ``view.messages`` the live Policy saw. Direct mutation of
-        ``task.runtime.messages`` from outside Engine would break the single-writer invariant
-        (Engine is the single writer of RuntimeState) and surface as an
-        ``llm_args`` divergence between the live turn and a refold.
+        The only sanctioned way to inject user input between ``create_task``
+        and ``run_one_step``. Mutating ``task.runtime.messages`` directly would
+        break the single-writer invariant and surface as an ``llm_args``
+        divergence between the live turn and a refold.
 
-        The seam takes a typed ``content: list[Block]`` (the
-        breaking change for image input — a text-only turn passes
-        ``[TextBlock(text)]`` and serializes byte-identically to the old
-        path). Only the blocks a user turn may legitimately carry are
-        accepted — ``TextBlock`` / ``ImageBlock``; ``ThinkingBlock`` /
-        ``ToolUseBlock`` / ``ToolResultBlock`` and an empty list are
-        rejected with a clear ``ValueError`` so a caller cannot smuggle a
+        Only the blocks a user turn may legitimately carry are accepted
+        (``TextBlock`` / ``ImageBlock``), so a caller cannot smuggle a
         model-side or tool-side block into the user channel.
 
-        ``origin`` is the **sole writer seam** for
-        ``Message.origin``: hosts tag injected system-side content
-        (``system``) or memory recall (``memory``) here; Policy-supplied
-        messages get origin stripped at the Decision seams, so a value
-        in the ledger always means "the host said so at this seam".
+        ``origin`` is the **sole writer seam** for ``Message.origin``:
+        Policy-supplied messages get origin stripped at the Decision seams, so
+        a value in the ledger always means "the host said so at this seam".
         """
         _validate_user_content(content)
         msg = Message(role="user", content=content, origin=origin)
@@ -478,9 +408,9 @@ class Engine:
     def _append_message(
         self, task: Task, msg: Message, *, lease_id: str, trace_id: Optional[str]
     ) -> Task:
-        """Emit one ``MessagesAppended`` for ``msg`` and mirror it into
-        ``task.runtime.messages`` (the shared tail of every message-append
-        seam; Engine stays the single writer)."""
+        """Emit one ``MessagesAppended`` and mirror it into
+        ``task.runtime.messages`` — the shared tail of every message-append
+        seam, which is what keeps Engine the single writer."""
         self._emit(
             task_id=task.task_id,
             type_="MessagesAppended",
@@ -502,22 +432,17 @@ class Engine:
         error: Optional[str] = None,
         trace_id: Optional[str] = None,
     ) -> Task:
-        """Append the paired ``role="tool"`` result for a delegated
-        sub-agent (Phase 4.5 Issue C, architect pin 2).
+        """Append the paired ``role="tool"`` result for a delegated sub-agent.
 
-        After a parent wakes from a ``SubtaskCompleted``, the runner uses
-        this narrow seam to render the child's ``SubtaskResult`` as a
-        ``ToolResultBlock`` paired to the original ``spawn_subagent``
-        ``tool_use`` ``call_id`` — so the child result enters the parent's
-        next compose (``dynamic_suffix``) and the dangling delegation
-        ``tool_use`` gets its matching ``tool_result``. Engine stays the
-        single writer of ``RuntimeState.messages``; the runner
-        never appends directly.
+        After a parent wakes from a ``SubtaskCompleted``, this narrow seam
+        renders the child's ``SubtaskResult`` as a ``ToolResultBlock`` paired
+        to the originating ``spawn_subagent`` ``tool_use`` ``call_id``, so the
+        dangling delegation call gets its matching result and the child's
+        outcome enters the parent's next compose. Engine stays the single
+        writer of ``RuntimeState.messages``; the caller never appends directly.
 
-        On failure the child's own ``reason`` is surfaced via ``error`` (the
-        caller passes ``SubtaskResult.error``) — matching the group seam, so a
-        failed single delegate is no longer flattened to a generic string and a
-        workflow's ``agent()`` can report *why* its helper failed.
+        On failure the child's own ``error`` is surfaced verbatim so a caller
+        can report *why* its helper failed.
         """
         block = ToolResultBlock(
             call_id=call_id,
@@ -547,27 +472,25 @@ class Engine:
         lease_id: str,
         trace_id: Optional[str] = None,
     ) -> Task:
-        """SR2 — render a fan-out group's N child results
-        as **one** ``MessagesAppended`` carrying N ``ToolResultBlock``s in
-        **member (spawn) order**.
+        """Render a fan-out group's N child results as **one**
+        ``MessagesAppended`` carrying N ``ToolResultBlock``s in **member (spawn)
+        order**.
 
         ``wake_event`` is the consumed ``SubtaskGroupCompleted`` (gives the
         ordered ``subtask_ids``); ``call_ids`` is the positional pairing of
-        originating ``spawn_subagent`` call ids (member order, supplied by
-        the caller from the assistant message — a batch call carrying a
-        ``spawns`` array contributes its id once per entry, contiguously).
-        The per-child results are read from the parent stream's keyed
-        ``SubtaskCompleted`` events — NOT the unkeyed
-        ``governance.subtask_results``. Per-block normalization matches the
-        single-child seam (``output`` never ``null``). Engine stays the
-        single writer.
+        originating ``spawn_subagent`` call ids (member order, supplied by the
+        caller from the assistant message — a batch call carrying a ``spawns``
+        array contributes its id once per entry, contiguously). The per-child
+        results are read from the parent stream's keyed ``SubtaskCompleted``
+        events — NOT the unkeyed ``governance.subtask_results``. Per-block
+        normalization matches the single-child seam (``output`` never ``null``).
+        Engine stays the single writer.
 
         Wire correctness pins the block shape: exactly ONE ``ToolResultBlock``
-        per originating call. A one-member run renders exactly as before
-        (byte-equal for every pre-batch recording); a k>1 run (one batch call)
-        renders one block whose ``output`` lists the k member results in entry
-        order (``{"spawn": i, "success": …, "output": …[, "error": …]}``),
-        ``success`` = all members succeeded.
+        per originating call. A one-member run renders one block; a k>1 run (one
+        batch call) renders one block whose ``output`` lists the k member
+        results in entry order (``{"spawn": i, "success": …, "output": …[,
+        "error": …]}``), ``success`` = all members succeeded.
         """
         subtask_ids = tuple(wake_event.subtask_ids)
         if len(call_ids) != len(subtask_ids):
@@ -639,31 +562,23 @@ class Engine:
         lease_id: str,
         trace_id: Optional[str] = None,
     ) -> Task:
-        """Apply an operator-driven ``TaskStatePatch`` (Phase 4 B17).
+        """Apply an operator-driven ``TaskStatePatch``.
 
-        Used by the Noeta-Code runner to deterministically activate
-        skills before the first compose. Emits the durable
-        ``TaskStatePatched`` event so a resume reproduces the same
-        active set (``ContextPlan.selected_skills``) without depending
-        on the model emitting ``activate_skills``.
+        Emits the durable ``TaskStatePatched`` event so a resume reproduces the
+        same active set (``ContextPlan.selected_skills``) without depending on
+        the model emitting ``activate_skills``.
 
-        Engine remains the single writer of ``TaskState``;
-        callers MUST hold a valid lease. The Policy-side path
-        ``_apply_decision_state_patch`` is unchanged — this is a parallel
-        operator-side entry that emits the same event type so fold /
+        Engine remains the single writer of ``TaskState``; callers MUST hold a
+        valid lease. This is a parallel operator-side entry to the Policy-side
+        ``_apply_decision_state_patch``, emitting the same event type so fold /
         resume handle both identically.
 
-        Patches carrying ``activate_skills`` automatically emit one
-        content-provenance event per skill (per-task first-only,
-        fold-guarded) right before the ``TaskStatePatched`` event,
-        matching the causal order the pre-loop SDK helper produces.
-        Post issue-07 generation switch the event is the generic
+        A patch carrying ``activate_skills`` automatically emits one
+        content-provenance event per skill (per-task first-only, fold-guarded)
+        right before the ``TaskStatePatched`` event — the generic
         ``ContextContentRecorded`` (kind="skill", policy="pinned") via the
-        ``content_hashes`` seam; an Engine wired through the retained
-        legacy ``skill_hashes`` seam (resuming an old recording) still
-        emits the old ``SkillContentRecorded`` byte-equal.
-        With neither resolver the emission is skipped entirely, preserving
-        old host byte shapes.
+        ``content_hashes`` seam, matching the causal order the pre-loop SDK
+        helper produces. With no resolver wired the emission is skipped.
         """
         resolved_trace = trace_id or self._latest_trace_id(task.task_id)
         emit_skill_provenance_for_patch(self._ctx, task, patch, lease_id=lease_id, trace_id=resolved_trace)
@@ -677,7 +592,7 @@ class Engine:
         patch.apply(task.state)
         return task
 
-    # -- operator-driven tool-call approval (Phase 4.5 Issue A) ----------
+    # -- operator-driven tool-call approval --------------------------------
 
     def resolve_tool_approval(
         self,
@@ -694,22 +609,20 @@ class Engine:
 
         The public seam the worker/runner calls **after** ``note_woken``
         re-leases a task that suspended on
-        ``HumanResponseReceived(handle="approval-{call_id}")`` (Issue A).
-        Engine stays the single writer of both the governance events and
-        the runtime messages.
+        ``HumanResponseReceived(handle="approval-{call_id}")``. Engine stays the
+        single writer of both the governance events and the runtime messages.
 
-        Fail-closed precondition (architect risk #1): ``call_id`` must
-        still be in ``task.governance.pending_approvals`` — the durable,
-        restart-safe anchor folded from the recorded
-        ``ToolCallApprovalRequested``. A stale or duplicate resolution
-        (``call_id`` absent) raises :class:`ApprovalNotPending` and emits
-        **no** event, so the log never carries two resolutions for one
-        ``call_id``.
+        Fail-closed precondition: ``call_id`` must still be in
+        ``task.governance.pending_approvals`` — the durable, restart-safe anchor
+        folded from the recorded ``ToolCallApprovalRequested``. A stale or
+        duplicate resolution (``call_id`` absent) raises
+        :class:`ApprovalNotPending` and emits **no** event, so the log never
+        carries two resolutions for one ``call_id``.
 
-        On **approve** the recorded pending call is reconstructed and
-        invoked (bypassing the guard — the human already approved); on
-        **deny** a ``role="tool"`` denial-feedback message is appended and
-        no tool runs. On resume the resolution is read from the recorded
+        On **approve** the recorded pending call is reconstructed and invoked
+        (bypassing the guard — the human already approved); on **deny** a
+        ``role="tool"`` denial-feedback message is appended and no tool runs. On
+        resume the resolution is read from the recorded
         ``ToolCallApprovalResolved`` event rather than a live decision.
         """
         pending = task.governance.pending_approvals.get(call_id)
@@ -722,10 +635,9 @@ class Engine:
         arguments = pending["arguments"]
         resolved_trace = trace_id or self._latest_trace_id(task.task_id)
 
-        # 1) The single authoritative resolution event. apply_event folds
-        #    it into governance (pop pending; append approvals; on deny
-        #    also append denied) so the in-memory task matches a fresh
-        #    fold.
+        # The single authoritative resolution event. apply_event folds it into
+        # governance (pop pending; append approvals; on deny also append denied)
+        # so the in-memory task matches a fresh fold.
         env = self._emit(
             task_id=task.task_id,
             type_="ToolCallApprovalResolved",
@@ -741,15 +653,15 @@ class Engine:
         )
         apply_event(task, env, self._content_store)
 
-        # 2) Continue deterministically: run the approved call, or append
-        #    denial feedback so the resumed loop is not left with a
-        #    dangling assistant tool_call and no tool result.
+        # Continue deterministically: run the approved call, or append denial
+        # feedback so the resumed loop is not left with a dangling assistant
+        # tool_call and no tool result.
         if approved:
             call = ToolCall(
                 tool_name=tool_name, arguments=arguments, call_id=call_id
             )
-            # Foundation B (D-B2): the approval-resume is a non-default continuation —
-            # tag it so the recovery guards read ``last_transition`` O(1).
+            # The approval-resume is a non-default continuation — tag it so the
+            # recovery guards read ``last_transition`` O(1).
             emit_step_transition(self._ctx, task, reason="approval_resume", lease_id=lease_id, trace_id=resolved_trace)
             invoke_approved_tool_call(
                 self._ctx, task, call,
@@ -802,7 +714,7 @@ class Engine:
         principal_identity: str,
         provider: Optional[str] = None,
     ) -> Task:
-        """Append ``ModelBound`` for an authorized model selector (issue 06).
+        """Append ``ModelBound`` for an authorized model selector.
 
         The driver/server validated ``selector ∈ principal.allowed_models ∩
         deployment-allowlist`` *before* calling this, so a
@@ -840,11 +752,11 @@ class Engine:
         return task
 
     def note_conversation_closed(self, task: Task, *, closed_by: str, reason: Optional[str] = None, trace_id: Optional[str] = None) -> Task:
-        """Append ``ConversationClosed`` for a human close/archive (issue 08)."""
+        """Append ``ConversationClosed`` for a human close/archive."""
         return _note_conversation_closed(self, task, closed_by=closed_by, reason=reason, trace_id=trace_id)
 
     def note_conversation_reopened(self, task: Task, *, reopened_by: str, reason: Optional[str] = None, trace_id: Optional[str] = None) -> Task:
-        """Append the audit-symmetric ``ConversationReopened`` (issue 08)."""
+        """Append the audit-symmetric ``ConversationReopened``."""
         return _note_conversation_reopened(self, task, reopened_by=reopened_by, reason=reason, trace_id=trace_id)
 
     # -- main loop --------------------------------------------------------
@@ -862,7 +774,7 @@ class Engine:
         Engine appends the tool results, recomposes the View, asks the
         Policy again). Any other decision exits the loop: terminal
         decisions transition status to ``terminal``; suspending
-        decisions (handled by issues 03–05) transition to ``suspended``.
+        decisions transition to ``suspended``.
 
         ``cancelled`` (cancel-cascade) is an optional cooperative-cancel
         predicate the delegation drain binds to ``is_cancelled(root_id)``.
@@ -875,12 +787,11 @@ class Engine:
         recordings stay byte-identical.
         """
         trace_id = self._latest_trace_id(task.task_id)
-        # Resume preload (docs/adr/anchored-content-placement.md): give the
-        # host one impure hook BEFORE the first compose of this step to
-        # re-supply renderer state the ledger says is active (today: discovered
-        # instruction files a fresh process has not read yet). Best-effort —
-        # a broken preload may only omit context, never fail the step — and a
-        # no-op for every host that wires nothing.
+        # Resume preload: give the host one impure hook BEFORE the first compose
+        # of this step to re-supply renderer state the ledger says is active
+        # (e.g. discovered instruction files a fresh process has not read yet).
+        # Best-effort — a broken preload may only omit context, never fail the
+        # step — and a no-op for every host that wires nothing.
         if self._content_preloader is not None:
             try:
                 self._content_preloader(task)
@@ -908,20 +819,20 @@ class Engine:
             # HERE, before the decision is acted on: the in-flight result is
             # abandoned (no assistant message, no tools, no next turn).
             _raise_if_cancelled(cancelled, task.task_id)
-            # rebuild StepContext each turn so the compaction
-            # trigger sees the REAL input-token usage fold projected from the
-            # PREVIOUS round-trip's ``LLMRequestFinished`` (``0`` on the first
-            # turn → the Policy falls back to a pure estimate). The other three
-            # identifiers are loop-invariant; only ``last_input_tokens`` moves.
+            # rebuild StepContext each turn so the compaction trigger sees the
+            # REAL input-token usage fold projected from the PREVIOUS
+            # round-trip's ``LLMRequestFinished`` (``0`` on the first turn → the
+            # Policy falls back to a pure estimate). The other three identifiers
+            # are loop-invariant; only ``last_input_tokens`` moves.
             #
             # ``apply_event`` hands the LLM client the applier for the task we
             # are stepping. Its emits land straight in the EventLog, so without
-            # this the in-memory task never folds them and
-            # ``last_input_tokens`` above stays frozen for the WHOLE turn no
-            # matter how many round-trips the tool loop makes — the read is
-            # rebuilt per iteration, but the field behind it never moved. The
-            # Engine stays the sole physical writer of RuntimeState: it owns the
-            # task and supplies the applier; the client only notifies.
+            # this the in-memory task never folds them and ``last_input_tokens``
+            # above stays frozen for the WHOLE turn no matter how many
+            # round-trips the tool loop makes — the read is rebuilt per
+            # iteration, but the field behind it never moved. The Engine stays
+            # the sole physical writer of RuntimeState: it owns the task and
+            # supplies the applier; the client only notifies.
             ctx = StepContext(
                 task_id=task.task_id, lease_id=lease_id, trace_id=trace_id,
                 last_input_tokens=task.runtime.last_input_tokens,
@@ -947,10 +858,10 @@ class Engine:
                 )
                 continue
             if isinstance(decision, CompactionRequestedDecision):
-                # ③ (D-3b): a loop-continuing compaction step. The handler
-                # owns its emits (tag → CompactionRequested → Compacted) and
-                # the anti-spiral escalation; a returned Task is the terminal
-                # escalation, None loops back to recompose the compacted view.
+                # A loop-continuing compaction step. The handler owns its emits
+                # (tag → CompactionRequested → Compacted) and the anti-spiral
+                # escalation; a returned Task is the terminal escalation, None
+                # loops back to recompose the compacted view.
                 escalated = handle_compaction_requested(
                     self._ctx, task, decision,
                     lease_id=lease_id, trace_id=trace_id,
@@ -966,12 +877,12 @@ class Engine:
             )
 
             if _is_background_spawn(decision, self._launch_background_subagent):
-                # background sub-agent (docs/adr/background-subagent.md): a
-                # loop-CONTINUING spawn (like tool_calls, not an exit) — the
-                # handler emits Started + creates the child + appends a "started"
-                # tool_result + hands it to the executor driver, then returns None
-                # so the parent's SAME turn keeps deciding (no barrier suspend). A
-                # guard deny/approval returns a terminal/suspended Task (exit).
+                # A background sub-agent: a loop-CONTINUING spawn (like
+                # tool_calls, not an exit) — the handler emits Started + creates
+                # the child + appends a "started" tool_result + hands it to the
+                # executor driver, then returns None so the parent's SAME turn
+                # keeps deciding (no barrier suspend). A guard deny/approval
+                # returns a terminal/suspended Task (exit).
                 outcome = handle_spawn_background_subtask(
                     self._ctx, task, decision,
                     lease_id=lease_id, trace_id=trace_id,
@@ -981,26 +892,23 @@ class Engine:
                 continue
 
             if isinstance(decision, ToolCallsDecision):
-                # Issue C3: tool_calls is the only loop-continuing
-                # handler, special-cased here so dispatch_exit's
-                # `-> Task` return type stays honest.
+                # tool_calls is the only loop-continuing handler, special-cased
+                # here so dispatch_exit's `-> Task` return type stays honest.
                 suspended = handle_tool_calls(
                     self._ctx, task, decision,
                     lease_id=lease_id, trace_id=trace_id,
                 )
                 if suspended is not None:
                     return suspended
-                # Mid-loop snapshot: a Policy that keeps
-                # returning tool_calls without ever yielding must still
-                # produce a usable resume point. We write a snapshot
-                # every N consecutive iterations and keep running.
+                # Mid-loop snapshot: a Policy that keeps returning tool_calls
+                # without ever yielding must still produce a usable resume point,
+                # so write one every N consecutive iterations and keep running.
                 consecutive_tool_calls += 1
                 if consecutive_tool_calls >= CONSECUTIVE_TOOL_CALLS_SNAPSHOT_THRESHOLD:
                     self._write_snapshot(
                         task, lease_id=lease_id, trace_id=trace_id
                     )
                     consecutive_tool_calls = 0
-                # loop back to compose → decide; tool_calls is in-place.
                 continue
 
             return self._dispatch(
@@ -1046,22 +954,22 @@ class Engine:
     ) -> None:
         """Append + emit when a Decision carries an ``assistant_message``.
 
-        The Decision is the typed channel through which a
-        Policy hands a side-effect hint to the Engine; the
-        Engine is the only writer of ``RuntimeState.messages``. ReAct-
-        style Policies (issue 13) attach the full LLM-produced assistant
-        turn here so the next compose sees the new history.
+        The Decision is the typed channel through which a Policy hands a
+        side-effect hint to the Engine; the Engine is the only writer of
+        ``RuntimeState.messages``. ReAct-style Policies attach the full
+        LLM-produced assistant turn here so the next compose sees the new
+        history.
         """
         msg = getattr(decision, "assistant_message", None)
         if msg is None:
             return
-        # sole-writer guard: a Policy cannot smuggle origin
-        # through the Decision channel — only the Engine ledger seam
-        # (``append_user_message``) writes it.
+        # sole-writer guard: a Policy cannot smuggle origin through the Decision
+        # channel — only the Engine ledger seam (``append_user_message``) writes
+        # it.
         msg = strip_message_origin(msg)
         self._append_message(task, msg, lease_id=lease_id, trace_id=trace_id)
-        # Slice B: persist any out-of-band extended-thinking the Policy
-        # carried on the Decision (module-level helper keeps the Engine lean).
+        # Persist any out-of-band extended-thinking the Policy carried on the
+        # Decision (module-level helper keeps the Engine lean).
         record_assistant_thinking(
             self._ctx, task, decision, msg, lease_id=lease_id, trace_id=trace_id
         )
@@ -1074,11 +982,9 @@ class Engine:
         lease_id: str,
         trace_id: str,
     ) -> Task:
-        # Issue C3: delegate to the typed dispatch in
-        # noeta.core._decision_handlers. The handler module preserves
-        # the pre-refactor ``NotImplementedError`` shape byte-equal
-        # (message: "Unknown decision type: <name>") for any unmapped
-        # Decision class.
+        # Delegate to the typed dispatch in noeta.core._decision_handlers, which
+        # raises ``NotImplementedError`` ("Unknown decision type: <name>") for
+        # any unmapped Decision class.
         return dispatch_exit(
             self._ctx, task, decision, lease_id=lease_id, trace_id=trace_id
         )
@@ -1093,24 +999,23 @@ class Engine:
         spawned_subtasks_override: Optional[int] = None,
         event_log: Optional[Any] = None,
     ) -> VerdictResult:
-        """Issue 18: refold the EventLog right before each guard check
-        so Guards see counters from emit-sites outside this Engine
-        (ToolRuntime, RuntimeLLMClient). ``copy.deepcopy`` isolates the
-        ``GovernanceState`` snapshot — canonical round-trip would
-        return a plain dict and break the typed Guard contract.
+        """Refold the EventLog right before each guard check so Guards see
+        counters from emit-sites outside this Engine (ToolRuntime,
+        RuntimeLLMClient). ``copy.deepcopy`` isolates the ``GovernanceState``
+        snapshot — a canonical round-trip would return a plain dict and break
+        the typed Guard contract.
 
-        SR2 (B2): ``spawned_subtasks_override`` simulates **only** the
-        ``spawned_subtasks`` counter for batch fan-out admission (the i-th
-        spec sees ``current + i``); ``subtask_depth`` / ``active_skills`` /
-        everything else still come from the fresh fold, so non-budget
-        guards are unaffected.
+        ``spawned_subtasks_override`` simulates **only** the ``spawned_subtasks``
+        counter for batch fan-out admission (the i-th spec sees ``current + i``);
+        ``subtask_depth`` / ``active_skills`` / everything else still come from
+        the fresh fold, so non-budget guards are unaffected.
 
-        ``event_log`` substitutes the reader the fresh fold (and the
-        repetition window) is taken from — the crash-recovery classifier
-        passes a ``BoundedEventLog`` capped at the pre-attempt baseline so
-        Guards judge the state a re-drive would actually run on, not the
-        interrupted attempt's dirty in-window counters. ``None`` (every
-        live-execution call) keeps the Engine's own log.
+        ``event_log`` substitutes the reader the fresh fold (and the repetition
+        window) is taken from — the crash-recovery classifier passes a
+        ``BoundedEventLog`` capped at the pre-attempt baseline so Guards judge
+        the state a re-drive would actually run on, not the interrupted
+        attempt's dirty in-window counters. ``None`` (every live-execution call)
+        keeps the Engine's own log.
         """
         log = event_log if event_log is not None else self._event_log
         fresh = fold(log, self._content_store, task.task_id)
@@ -1125,14 +1030,14 @@ class Engine:
         ctx = GuardContext(
             task_id=task.task_id,
             governance=governance,
-            # Issue B: fold-derived active skills so skill `allowed-tools`
-            # enforcement sees the identical set live / resume.
+            # fold-derived active skills so skill `allowed-tools` enforcement
+            # sees the identical set live / resume.
             active_skills=tuple(fresh.state.active_skills),
-            # SR1: fold-derived delegation depth so the BudgetGuard depth
-            # cap sees the identical value live / resume.
+            # fold-derived delegation depth so the BudgetGuard depth cap sees
+            # the identical value live / resume.
             subtask_depth=fresh.subtask_depth,
-            # Work item ④: recorded tool-call history (neutral identity keys)
-            # so RepetitionGuard detects a stuck loop resume-deterministically.
+            # recorded tool-call history (neutral identity keys) so
+            # RepetitionGuard detects a stuck loop resume-deterministically.
             recent_tool_calls=recent,
         )
         return self._hooks.check(action, ctx)
@@ -1156,8 +1061,8 @@ class Engine:
     def _write_snapshot(
         self, task: Task, *, lease_id: str, trace_id: str
     ) -> None:
-        # Issue 18: refold so the snapshot body captures emit-site
-        # governance accumulation (ToolRuntime, RuntimeLLMClient).
+        # Refold so the snapshot body captures emit-site governance accumulation
+        # (ToolRuntime, RuntimeLLMClient).
         task.governance = fold(self._event_log, self._content_store, task.task_id).governance
         ref = self._content_store.put(serialize_task_state(task), media_type=snapshot_media_type())
         self._emit(
@@ -1221,8 +1126,7 @@ def _recent_tool_calls(
     window: int,
 ) -> tuple[tuple[str, bytes], ...]:
     """Project the last ``window`` recorded tool calls into neutral identity
-    keys ``(tool_name, canonical input bytes)`` for ``RepetitionGuard``
-    (work item ④).
+    keys ``(tool_name, canonical input bytes)`` for ``RepetitionGuard``.
 
     Pure projection of the recorded ``ToolCallStarted`` suffix — no clock /
     random — so live and resume see the identical history. Arguments
@@ -1261,17 +1165,15 @@ def _emit_context_plan(
     lease_id: str,
     trace_id: str,
 ) -> None:
-    """Issue 14 / PRD §C: emit ContextPlanComposed in front of every LLM
-    round-trip, then converge live state through fold so a mid-step
-    snapshot captures the freshly-set plan_ref.
+    """Emit ContextPlanComposed in front of every LLM round-trip, then converge
+    live state through fold so a mid-step snapshot captures the freshly-set
+    plan_ref.
 
-    Emitted **unconditionally** — even when the composer produced no
-    stored plan (``view.plan_ref is None``, the PassthroughComposer
-    fallback). This event is the per-step boundary fold counts
-    ``governance.iterations`` from; skipping it for plan-less views made
-    ``BudgetGuard.max_iterations`` inert under Passthrough (core #2).
-    Module-level helper so the Engine body stays under its
-    500-line budget.
+    Emitted **unconditionally** — even when the composer produced no stored plan
+    (``view.plan_ref is None``, the PassthroughComposer fallback). This event is
+    the per-step boundary fold counts ``governance.iterations`` from; skipping
+    it for plan-less views would make ``BudgetGuard.max_iterations`` inert under
+    Passthrough.
     """
     env = emit(
         task_id=task.task_id,
@@ -1291,9 +1193,9 @@ def _answer_user_question(engine: Engine, task: Task, *, question_id: str, answe
         )
     call_id = str(pending["call_id"])
     resolved_trace = trace_id or engine._latest_trace_id(task.task_id)
-    # Neutral answer-audit codec inlined here (the kernel no longer imports
-    # the product ``user_questions`` module). Byte-identical to the old
-    # ``put_answers_body``: a single ``{"answers": ...}`` JSON object.
+    # Neutral answer-audit codec inlined here (the kernel does not import the
+    # product ``user_questions`` module): a single ``{"answers": ...}`` JSON
+    # object.
     answers_ref = engine._content_store.put(
         to_canonical_bytes({"answers": answers}),
         media_type="application/json",
@@ -1426,12 +1328,11 @@ def suspend_on_human_handle(
 ) -> Task:
     """Cooperative-stop landing: suspend ``task`` on a human ``handle``.
 
-    ``suspend_reason`` rides the A1 channel onto the recorded
-    ``TaskSuspended.reason`` (and through it the dispatcher's stored
-    ``suspend_reason``), so a rest reached by a human stop is distinguishable
-    from an ordinary ``waiting_human`` one without scanning the stream for the
-    control event that caused it. ``None`` keeps the historical default,
-    byte-identical.
+    ``suspend_reason`` rides onto the recorded ``TaskSuspended.reason`` (and
+    through it the dispatcher's stored ``suspend_reason``), so a rest reached by
+    a human stop is distinguishable from an ordinary ``waiting_human`` one
+    without scanning the stream for the control event that caused it. ``None``
+    keeps the default.
 
     Reuses the exact :func:`handle_yield_for_human` machinery a normally
     finished interactive turn exits through, so the task rests in the SAME
@@ -1488,11 +1389,11 @@ def _default_tool_runtime(
     tool_result_transforms: tuple[Any, ...] = (),
 ) -> Any:
     """Convenience ToolRuntime for callers that pass ``tools`` but no explicit
-    ``tool_runtime`` (mostly tests). Forward the host's
-    background runner and per-turn file-checkpoint gate so ``shell_run`` bg jobs
-    and AI-edit rewind baselines reach the runtime, plus the agent's
-    ``tool_result_transform`` stages (D9). Local import breaks the
-    runtime→core import cycle."""
+    ``tool_runtime`` (mostly tests). Forward the host's background runner and
+    per-turn file-checkpoint gate so ``shell_run`` bg jobs and AI-edit rewind
+    baselines reach the runtime, plus the agent's ``tool_result_transform``
+    stages. Local import breaks the runtime→core import cycle.
+    """
     from noeta.runtime.tool import ToolRuntime
 
     return ToolRuntime(
@@ -1507,9 +1408,8 @@ def _default_tool_runtime(
 def _default_id_factory() -> str:
     """Default subtask_id source for production callers.
 
-    Mirrors the inline ``f"task-{uuid.uuid4().hex}"`` the spawn branch
-    used pre-issue-08. This is the production random factory; a test can
-    inject a deterministic replacement via ``id_factory``.
+    The production random factory; a test can inject a deterministic replacement
+    via ``id_factory``.
     """
     return f"task-{uuid.uuid4().hex}"
 
@@ -1526,25 +1426,22 @@ def emit_context_content_recorded(
     lease_id: str,
     trace_id: Optional[str] = None,
 ) -> Task:
-    """Per-task per-(kind, name) first-emission provenance (issue 07
-    generation switch).
+    """Per-task per-(kind, name) first-emission content provenance.
 
-    The kind-neutral successor of the retired ``emit_skill_content_recorded``
-    helper: emits one ``ContextContentRecorded`` right *before* whatever
-    durable activation follows (e.g. ``TaskStatePatched(activate_skills=…)``
-    for the skill kind), so the causal order is unambiguous. Duplicate calls
-    for the same (task, kind, name) drop against fold's authoritative
-    generic activation map ``TaskState.active_content``. All five payload
-    strings are caller-computed (the SDK registry owns kind semantics,
-    hashes, and drift policy), so the kernel stays compare-only-strings and
-    never imports noeta-sdk. Module-level (off the Engine class) like the
-    genesis/lifecycle helpers above, keeping the ≤500-line core budget
+    Emits one ``ContextContentRecorded`` right *before* whatever durable
+    activation follows (e.g. ``TaskStatePatched(activate_skills=…)`` for the
+    skill kind), so the causal order is unambiguous. Duplicate calls for the
+    same (task, kind, name) drop against fold's authoritative generic activation
+    map ``TaskState.active_content``. All five payload strings are
+    caller-computed (the SDK registry owns kind semantics, hashes, and drift
+    policy), so the kernel stays compare-only-strings and never imports
+    noeta-sdk. Module-level (off the Engine class) to keep the core line budget
     honest.
     """
     if not kind or not name or not content_hash:
         return task
-    # Hash last-write-wins (spec §3): no-op only when this exact hash is
-    # already active for ``(kind, name)``; a new hash records a refresh.
+    # Hash last-write-wins: no-op only when this exact hash is already active
+    # for ``(kind, name)``; a new hash records a refresh.
     if task.state.active_content.get(kind, {}).get(name) == content_hash:
         return task
     env = engine._emit(

@@ -1,28 +1,12 @@
-"""L2 crash-recovery attempt scanning + classification.
+"""Crash-recovery scanning and classification of interrupted step attempts.
 
-One Engine step is a loop of decide→act **attempts**, and every attempt's
-first durable emit is ``ContextPlanComposed`` (the step-boundary event fold
-counts iterations from). The stream therefore already carries an implicit
-attempt journal: ``ContextPlanComposed`` is the attempt-start record
-(identity = its seq, intent = the plan + the decision events after it).
-What a mid-step crash leaves behind is the **last** attempt's partial tail
-with no reachable suspend/terminal — the partial-step orphan.
-
-This module holds the two pure pieces of recovery
-(``docs/adr/step-attempt-recovery.md``):
-
-* :func:`scan_interrupted_attempt` — find the live wake window's last
-  attempt (or ``None`` when the tail is bare / prelude-only and a bare
-  re-drive is correct by construction).
-* :func:`classify_attempt` — decide whether re-driving the interrupted
-  attempt needs a human: "whatever could run without a human approval gate
-  may be re-driven without a human". Pure record events are always safe;
-  every recorded tool call (finished or not — a re-drive re-decides, so
-  finished calls may be re-executed too) must pass the live guard chain
-  with ALLOW; a spawned subtask always needs a human.
-
-The seal/re-drive/park state machine that consumes these lives in
-``noeta.runtime.worker`` (it needs the lease + release discipline).
+One Engine step is a loop of decide→act attempts whose first durable emit is
+``ContextPlanComposed``, so the stream is already an attempt journal and a
+mid-step crash is recognisable as the last attempt's partial tail with no
+reachable suspend or terminal. Only the two pure decisions live here — locate
+that tail, and judge whether re-driving it needs a human; the seal / re-drive
+/ park state machine that consumes them lives in ``noeta.runtime.worker``,
+which owns the lease discipline (``docs/adr/step-attempt-recovery.md``).
 """
 
 from __future__ import annotations
@@ -48,28 +32,28 @@ __all__ = [
 
 #: Consecutive seals allowed within one wake window before recovery stops
 #: re-driving and parks regardless of classification — the crash-loop
-#: backstop, mirroring the dispatcher's ``reclaim_max`` poison-task cap.
+#: backstop.
 ABANDON_CAP = 3
 
 
-#: Event types that open a wake window / turn. The last of these in the
-#: stream is where the live window starts; an interrupted attempt can only
-#: exist after it (a ``TaskSuspended`` after them would mean the task is
-#: not ``running``, so recovery is never consulted).
+#: Event types that open a wake window / turn. The last one in the stream is
+#: where the live window starts; an interrupted attempt can only exist after
+#: it, because a ``TaskSuspended`` past them would mean the task is not
+#: ``running`` and recovery would never be consulted.
 _WINDOW_OPENERS = ("TaskStarted", "TaskWoken", "TaskRewound")
 
 
-#: Tail events that always classify the attempt as needing a human:
-#: a spawned child is a real side effect no re-drive may duplicate.
+#: Tail events that always classify the attempt as needing a human: a spawned
+#: child is a real side effect no re-drive may duplicate.
 _SPAWN_EVENTS = ("SubtaskSpawned", "BackgroundSubagentStarted")
 
 
-#: Step-activity events. A live window that carries one of these but NO
-#: ``ContextPlanComposed`` is an interrupted **approval execution** — the
+#: Step-activity events. A live window carrying one of these but NO
+#: ``ContextPlanComposed`` is an interrupted **approval execution**: the
 #: drive-side ``ResolveApprovalPrelude`` (the one prelude that executes a
 #: tool) crashed between the durable ``ToolCallApprovalResolved`` and the
-#: step's first plan. The scan anchors the attempt on the FIRST such event
-#: so the seal returns the task to its pending-approval state.
+#: step's first plan. The scan anchors on the FIRST such event so the seal
+#: returns the task to its pending-approval state.
 _ACTIVITY_EVENTS = (
     "ToolCallApprovalResolved",
     "ToolCallStarted",
@@ -82,21 +66,19 @@ _ACTIVITY_EVENTS = (
 class InterruptedAttempt:
     """The live window's last (interrupted) attempt, as scanned."""
 
-    #: seq of the attempt's anchor event (its ``ContextPlanComposed``, or
-    #: for a plan-less approval-execution window the first activity
-    #: event); recorded as ``StepAttemptAbandoned.abandoned_from_seq``.
+    #: seq of the attempt's anchor event; recorded as
+    #: ``StepAttemptAbandoned.abandoned_from_seq``.
     attempt_start_seq: int
-    #: events from the anchor onward (the tail the seal declares dead
-    #: history).
+    #: events from the anchor onward — the tail the seal declares dead history.
     tail: tuple[Any, ...]
-    #: ``StepAttemptAbandoned`` count inside the live window — the input
-    #: to the :data:`ABANDON_CAP` crash-loop backstop.
+    #: ``StepAttemptAbandoned`` count inside the live window — the input to the
+    #: :data:`ABANDON_CAP` crash-loop backstop.
     abandon_count: int
-    #: True ⇒ anchored on ``ContextPlanComposed`` (the normal mid-step
-    #: crash). False ⇒ a plan-less approval-execution window: recovery
-    #: always parks (a human is in that loop by definition) and re-suspends
-    #: on the window's own wake handle so the ordinary approve verb re-runs
-    #: the resolution against the restored pending-approval state.
+    #: True ⇒ anchored on ``ContextPlanComposed`` (the normal mid-step crash).
+    #: False ⇒ a plan-less approval-execution window: recovery always parks (a
+    #: human is in that loop by definition) and re-suspends on the window's own
+    #: wake handle so the ordinary approve verb re-runs the resolution against
+    #: the restored pending-approval state.
     anchored_on_plan: bool = True
 
 
@@ -104,12 +86,11 @@ def scan_interrupted_attempt(events: list[Any]) -> Optional[InterruptedAttempt]:
     """Scan a ``running`` task's stream for an interrupted attempt.
 
     Returns ``None`` when nothing after the last window opener is step
-    activity — the tail is bare or prelude-only (durable command appends
-    written at seed time), and running the bare step on top is the correct
-    continuation, not a recovery. Callers only invoke this on a folded
-    status of ``running`` with no live writer (fresh lease), so a present
-    attempt is interrupted by definition: had it finished, a
-    suspend/terminal event would have flipped the status.
+    activity — the tail is bare or prelude-only, and running the bare step
+    on top is the correct continuation, not a recovery. Callers only invoke
+    this on a folded status of ``running`` with no live writer (fresh
+    lease), so a present attempt is interrupted by definition: had it
+    finished, a suspend/terminal event would have flipped the status.
     """
     boundary = -1
     for i, env in enumerate(events):
@@ -168,12 +149,9 @@ def scan_pending_park(events: list[Any]) -> Optional[PendingPark]:
     ``auto_redrive``) is a durable "do not re-drive" decision, so the
     worker must finish the park — never run the bare step over it.
 
-    Returns the live window's trailing park-reason seal, or ``None`` when
-    the window does not end on one (no seal, an ``auto_redrive`` seal, or
-    step activity after the seal — a re-drive already ran).
-    ``notice_appended`` keys on a ``MessagesAppended`` after the seal:
-    the park itself is the only writer in that window, so any message
-    there is its notice.
+    ``notice_appended`` keys on a ``MessagesAppended`` after the seal: the
+    park itself is the only writer in that window, so any message there is
+    its notice.
     """
     boundary = -1
     for i, env in enumerate(events):
@@ -217,20 +195,20 @@ def classify_attempt(
     content_store: Any,
     event_log: Any = None,
 ) -> AttemptClassification:
-    """Classify an interrupted attempt's tail per the D2 rule.
+    """Decide whether re-driving an interrupted attempt needs a human.
 
-    ``engine`` / ``task`` feed :func:`guard_allows_tool_call` (the same
-    guard chain that gates live execution — permission mode, risk ceiling,
-    ``can_use_tool``, skill grants); ``content_store`` dereferences
-    offloaded tool arguments. Unknown tools and guard failures classify
-    as blockers (fail closed).
+    The rule is "whatever could run without a human approval gate may be
+    re-driven without a human": every recorded tool call must pass the live
+    guard chain with ALLOW — finished or not, since a re-drive re-decides
+    and may re-execute a finished call — and a spawned subtask always
+    blocks. Unknown tools and guard failures classify as blockers (fail
+    closed).
 
     ``event_log`` should be the ``BoundedEventLog`` capped at the
     pre-attempt baseline (the same one the seal folds): the verdict is
     about the state a re-drive would run on, so the interrupted window's
     own events must not dirty the Budget / Repetition counters the guards
-    read. ``None`` falls back to the engine's full log (unit tests over a
-    hand-built tail).
+    read. ``None`` falls back to the engine's full log.
     """
     finished: set[str] = set()
     for env in tail:

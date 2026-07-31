@@ -1,10 +1,9 @@
-"""Issue 14: MessagesAppendedPayload moves to ContentRef shape.
+"""MessagesAppendedPayload uses a ContentRef shape.
 
-PRD §D + Grill round 1 #3: ``MessagesAppendedPayload`` carries
-``messages_ref: ContentRef`` + ``count: int`` instead of an inline
-``messages`` list, so the EventLog envelope size stays bounded by
-the EventLog's 4 KB ceiling regardless of how large the underlying
-message body is.
+``MessagesAppendedPayload`` carries ``messages_ref: ContentRef`` +
+``count: int`` instead of an inline ``messages`` list, so the EventLog
+envelope size stays bounded by the EventLog's 4 KB ceiling regardless of
+how large the underlying message body is.
 
 Tests:
 

@@ -1,19 +1,14 @@
 """``SqliteContentStore`` — sqlite3-backed adapter for the L0 ContentStore.
 
-Issue 16. Second persistent backend on the same sqlite file that
-``SqliteEventLog`` opens (migration 2 adds the ``content`` table).
-Behaviour is pinned by :class:`noeta.storage.memory.InMemoryContentStore`:
-content-addressed via SHA-256, immutable, **hash-only** dedup; the
-``media_type`` carried on the returned :class:`ContentRef` is the
-value passed to the current ``put`` call, not whatever was recorded
-on the stored row (see ``noeta.protocols.content_store.ContentStore``
-docstring for the full contract).
-
-Single :class:`sqlite3.Connection` + :class:`threading.Lock`, mirroring
-the EventLog adapter's concurrency model. Each ``put`` is a single
-``INSERT OR IGNORE`` (PRIMARY KEY ``hash`` provides atomic dedup, no
-explicit transaction needed). Each ``get`` is a single SELECT under
-the same lock.
+Shares the sqlite file the sibling adapters open; migration 2 owns the
+``content`` table. Behaviour is pinned by
+:class:`noeta.storage.memory.InMemoryContentStore`: content-addressed via
+SHA-256, immutable, **hash-only** dedup, and the ``media_type`` on the
+returned :class:`ContentRef` is the value this ``put`` call passed, not
+whatever the stored row recorded. One :class:`sqlite3.Connection` under one
+:class:`threading.Lock`, mirroring the EventLog adapter; ``put`` needs no
+explicit transaction because the ``hash`` PRIMARY KEY already makes
+``INSERT OR IGNORE`` atomic dedup.
 """
 
 from __future__ import annotations
@@ -33,20 +28,19 @@ from noeta.builtins.storage.impl.sqlite.migrations import apply_migrations
 __all__ = ["SqliteContentStore"]
 
 
-#: Host parameters per ``get_many`` statement. Kept below the 999 floor of
-#: pre-3.32 sqlite builds so the batch read works on every interpreter's
-#: bundled library, not just a recent one.
+#: Host parameters per ``get_many`` statement. Kept below the 999 floor that
+#: older sqlite builds impose so the batch read works against whatever library
+#: the interpreter happens to bundle.
 _IN_CHUNK = 900
 
 
 class SqliteContentStore:
     """sqlite3 implementation of the ``ContentStore`` L0 Protocol.
 
-    Public surface is exactly the Protocol (``put`` + ``get``) plus
-    lifecycle helpers (``close`` + context manager) that the L0
-    contract does not enumerate. Any debug helpers stay underscore-
-    private; the ``storage-adapters-isolated`` import-linter contract
-    forbids production code from reaching across the Protocol anyway.
+    The public surface is exactly the Protocol plus the lifecycle helpers
+    (``close`` + context manager) the L0 contract does not enumerate; debug
+    helpers stay underscore-private, since production code may only reach this
+    class through the Protocol.
     """
 
     def __init__(self, path: Union[str, Path]) -> None:
@@ -61,13 +55,11 @@ class SqliteContentStore:
         digest = hashlib.sha256(body).hexdigest()
         size = len(body)
         with self._lock:
-            # ``INSERT OR IGNORE`` keeps the first-write-wins semantics
-            # the InMemory adapter has (``setdefault``-style): if a row
-            # for this hash already exists, the body and recorded
-            # media_type are left untouched. The returned ContentRef
-            # always carries the caller's ``media_type`` (issue 16 §11
-            # contract — hash-only storage identity, descriptive
-            # metadata).
+            # ``INSERT OR IGNORE`` gives the first-write-wins semantics the
+            # InMemory adapter has: an existing row for this hash keeps its
+            # body and its recorded media_type. The returned ContentRef still
+            # carries the caller's ``media_type`` — storage identity is the
+            # hash alone, media_type is descriptive metadata.
             self._conn.execute(
                 "INSERT OR IGNORE INTO content ("
                 " hash, size, media_type, body"
@@ -89,10 +81,9 @@ class SqliteContentStore:
         """One ``WHERE hash IN (...)`` per chunk instead of one SELECT per ref.
 
         Chunked at :data:`_IN_CHUNK` because sqlite caps host parameters per
-        statement (``SQLITE_MAX_VARIABLE_NUMBER``: 999 on builds predating
-        3.32, 32766 after). A fold tail or a message projection stays well
-        under one chunk in practice; the loop is the correctness floor for the
-        long-history case, not the expected path.
+        statement (``SQLITE_MAX_VARIABLE_NUMBER``). A fold tail or a message
+        projection stays well under one chunk in practice; the loop is the
+        correctness floor for the long-history case, not the expected path.
 
         Missing hashes are omitted per the Protocol contract.
         """

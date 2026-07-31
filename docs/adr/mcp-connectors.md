@@ -1,61 +1,151 @@
-# Remote MCP connectors = an HTTP request/response subset + a frontend-managed server, credentials stay on the host, requests carry only aliases
-
-> **Status: the management layer is superseded by the noeta-agent product's per-space connector registry** (decided in its repository's `server-platform-product.md`); the client and the resume invariant are live.
-> The "frontend-managed server" and the host-layer `mcp_registry` /
-> `mcp_prompt_expander` described here are retired, along with the global
-> `~/.noeta/mcp_servers.json`. Connectors are now **per-space** rows in the
-> application database, credential-scrubbed on read, handed to the SDK host per
-> turn through `HostConfig.mcp_server_resolver`. Everything else stands: the
-> HTTP request/response subset, the synchronous single-threaded client,
-> credentials never leaving the host, requests carrying only aliases, and the
-> resume rule that the tool spec is pinned into the first
-> `LLMRequestStarted.request_ref` and rebuilt from the recording, never
-> reconnected.
+# Noeta is an MCP client over a request/response subset; credentials stay host-side and the tool set is rebuilt from the recording
 
 ## Context
 
-On top of the already-delivered local stdio MCP client, this decision adds a **remote HTTP transport + a frontend-managed server + prompts/resources + a unified `@` channel**, while holding two hard lines: a **synchronous single-threaded client**, and the resume-rebuild invariant that **the tool spec is pinned into the first `LLMRequestStarted.request_ref` at recording time, and on resume the tool set is rebuilt from the recording and never reconnected**.
-
-The host boundary set by `library-sdk-architecture.md` must be respected here: credentials live only in host config and never enter the request body; a browser action (OAuth) cannot be completed on the server side. noeta-agent's positioning is **single-user, local, single-machine**.
+An MCP server — local stdio or remote HTTP — exposes tools, prompts and
+resources that an Agent should be able to use. Noeta is always the client, the
+borrowing party. Two hard lines constrain how: the client is **synchronous and
+single-threaded**, and a Task's tool set must survive **resume** without
+touching the network, because resume works by folding the recording forward.
 
 ## Decision
 
-- **Scope = remote HTTP transport + a frontend-managed server + prompts + resources + a unified `@`.** Whether the server is local stdio or cloud HTTP, Noeta is always the client (the borrowing party). **Non-goals**: exposing Noeta as an MCP server (the reverse direction, a separate project), server-initiated pushes (`list_changed` / `sampling` / `elicitation`), OAuth, resource templates, and Claude-Code-style lazy ToolSearch.
-- **Layering: transport in the sdk; config storage + management interface in noeta-agent; config UI + the `@` selector in web.** The pipe that actually connects to a server and exchanges JSON-RPC belongs to the engine (`noeta/builtins/mcp/impl/` since the 2026-07-29 microkernel migration) and must not be written into the product backend or frontend.
-- **Config lives in a host-side store, and credentials never leave the host. A chat/task request carries only "the list of aliases enabled this time."** The frontend adds / edits / deletes a server through a dedicated management interface (`POST /mcp-servers`); config (including token/URL) is persisted host-side. Each task request body contains only aliases like `["github","notion"]`—the backend looks up the full config from its own store, connects to the server, and pulls tools.
-- **The HTTP transport does only a "request/response" subset, thereby preserving the synchronous single-threaded client.** It implements request-response calls (`initialize` / `tools/list` / `tools/call` / `prompts/list` / `prompts/get` / `resources/list` / `resources/read`); it does none of the three server-initiated pushes.
-- **auth v1 does static credentials only; OAuth is deferred, but the schema reserves a slot for it.** The config form accepts a Bearer token / API key + a custom header, sent in the HTTP header on each call. The server config schema reserves a token + an optional refresh field.
-- **The frontend config manages both HTTP and stdio (single-user local single-machine positioning); it narrows context by "checking tools per server" rather than lazy loading.** stdio config = "which program to start on this machine"—for personal single-machine use there is no RCE risk. To keep tools from blowing up the context, the approach is "at config time, list that server's tools and let the user check only the ones to enable" (that subset is stored host-side and doesn't enter the request), keeping the active tool set small by manual pruning.
-- **Connection lifecycle: connect at task start, freeze the tool set, deterministic order; on connection failure, skip + warn the frontend.** At task start, connect the servers enabled this time, run `tools/list` on each, and immediately freeze the tool set; the order is deterministic (enabled servers by alias alphabetical order, tools within a server by name, appended in the existing `fs → script → MCP → control` order); if a server fails to connect → skip + record a warning event + push it to the frontend + continue with the remaining tools.
-- **Subtasks inherit MCP via a `Capabilities` switch, opt-in per spec.** Add an `mcp` capability switch to `AgentSpec`; by default `main` on, `general-purpose` on, `explore` off, `plan` off. *(**Current state:** `Capabilities` was retired; `mcp` is now an **activation** in `AgentSpec.plugins` — see `control-tool-contributions-and-activation-identity.md`.)* An opt-in subtask connects to servers itself (its own session, its own recording).
-- **prompts: an invocation menu shared with skills + a frontend argument form + the expanded content injected as a recorded message.** `prompts/list` hangs on the slash-invocation menu shared with skills (named `/mcp__<alias>__<prompt-name>`); arguments go through a frontend form; the messages returned by `prompts/get` are inserted into the conversation as opening content, tagged for provenance via `Message.origin`, and recorded as ordinary messages; resume reads the recorded messages and does not re-run `prompts/get`.
-- **resources + the unified `@`: static enumeration + user-manual reference only (the model can't fetch) + read at send time and snapshotted into a recorded message.** `@<alias>:<uri>` references an MCP resource, `@<file-path>` references a workspace file (see `workspace-and-session-path.md`); both go through the same mechanism (fed into the same content channel as `unified-context-supply.md`) and the same `@` selector. Only at the moment of sending is `resources/read` / file-read done and the content snapshotted into the message (rather than just recording a path); resume reads the recorded content.
-- **provenance: each task records "which aliases were enabled + which tools were checked for each" (names only, no credentials); behavior is backstopped by resume-rebuild.** Dynamic server config is not stuffed into the static `host_config_fingerprint`; credentials never enter any recording.
+**Scope is the request/response half of MCP.** Both clients implement
+`initialize`, `tools/list`, `tools/call`, plus `prompts/list`, `prompts/get`,
+`resources/list` and `resources/read`. Neither implements the server-initiated
+half — no `list_changed`, no `sampling`, no `elicitation`. The HTTP client posts
+one JSON-RPC request over the standard library and reads back exactly one
+response, accepting either a bare JSON object or an event-stream body carrying a
+single data line; it never holds a stream open. Resource templates and lazy tool
+search are out of scope, and exposing Noeta *as* an MCP server is the opposite
+direction and out of scope.
+
+**The transport belongs to the `mcp` built-in.** The stdio and HTTP clients, the
+tool wrapper, and the prompt and resource helpers live there; the shared
+vocabulary — the reserved prefix, the server specs, the error types, the
+injectable POST function — sits kernel-side so the kernel builder's
+reserved-prefix check and the public SDK surface can name it statically.
+
+**Each server tool becomes an ordinary Tool** named `mcp__{alias}__{tool}`, with
+every character outside `[A-Za-z0-9_-]` replaced and the whole name matching a
+provider-safe pattern of at most 64 characters. An empty raw name, a name that
+sanitizes to empty, an over-long name, and an intra-server collision all fail
+fast — no silent truncation. `mcp__` is a reserved prefix, and a built-in tool
+occupying it is a hard configuration error. Being ordinary Tools, they flow
+through the one tool set into the composer schema, the Policy, and the permission
+Guard with no special casing.
+
+**Credentials never leave the host.** A host supplies a resolver callback that
+maps an enabled alias to its full spec; the SDK never holds the config store.
+Static credentials — a bearer token, an API key, a custom header — are injected
+into the HTTP request headers at call time and appear in no request body, no
+event, and no recording. A turn carries only the list of enabled aliases.
+
+**Connect at task start, then freeze.** The enabled aliases resolve to specs,
+each server is connected and listed, and the tool set is frozen for the Task.
+Order is deterministic — servers alias-sorted, tools within a server sorted by
+their Noeta-side name — so the tool dict order, the schema order and the stable
+hash reproduce. On the task-start path a per-server connect or handshake fault
+drops that server, records a durable skip event the host surfaces, and continues
+with the rest; one bad connector never sinks the Task. A duplicate alias is a
+hard configuration error, because it is a caller wiring bug rather than a connect
+fault. The discovery path that populates a configuration menu takes the opposite
+stance and fails fast, tearing down every client it had opened.
+
+**Resume rebuilds the tool set from the recording, never by reconnecting.** The
+real tool spec — name, input schema, and description verbatim — is pinned into
+the first recorded LLM request, and a resumed run reconstructs it from there, so
+the rebuilt schema and stable hash match the live run byte for byte.
+
+**Provenance is recorded, credential-free.** One event per Task, emitted before
+the loop starts, records which aliases were enabled and which of each server's
+tools were ticked — names only, never a URL, token or header. A Task with no MCP
+emits nothing and folds to an empty record with zero drift. Tool *behaviour* is
+not carried here; the recorded request spec is the durable truth a resume reads.
+
+**Prompts arrive as recorded messages.** A server's prompts hang on the same
+slash-invocation menu skills use, named `/mcp__<alias>__<prompt>`. Expanding one
+flattens the returned messages into the turn's opening content and records it as
+an ordinary message tagged with a system origin — so a resume reads it back and
+never re-calls the server.
+
+**Resources are user-driven reference material.** `@<alias>:<uri>` names an MCP
+resource and `@<path>` names a workspace file; both ride the same content channel
+and the same selector. The content is read at send time and snapshotted into a
+recorded message, not stored as a path. No tool lets the model pull a resource
+itself.
+
+**Server-controlled injected text is capped.** A prompt expansion or resource
+snapshot is truncated at the inline-content ceiling with a visible marker naming
+what was cut.
+
+**Subtasks inherit MCP only by opting in.** A child inherits the parent's enabled
+aliases only when the child's own `AgentSpec` activates the `mcp` plugin; a spec
+without that activation stays MCP-free.
 
 ## Rationale
 
-- **Hold the host boundary.** noeta-agent is a host/service, not a local CLI running on the user's machine, so credentials can only live in host config and never enter the request body, and a browser action (OAuth) can't be done on the server side. Requests carry only aliases → the request body carries only the harmless "which ones were enabled."
-- **HTTP does only the request/response subset, not server-initiated pushes.** Consistent with the stdio client's "minimal JSON-RPC subset + synchronous single-threaded," introducing no async/threads. `list_changed` conflicts with "freeze the tool set at session start," `sampling` hands out the power to initiate model calls (hard to govern for both safety and determinism), and `elicitation` pops a question mid-stream; common servers are all request/response, so the subset suffices.
-- **OAuth deferred.** It requires popping a browser for the authorization redirect, which noeta-agent as a service can't do; token refresh/expiry/reconnect is a separate lump of complexity. In the future the web frontend running in a real browser drives the redirect and backfills the token host-side, which is naturally consistent with the host boundary.
-- **Lazy ToolSearch deferred.** It would touch the composer/context core, overengineering for this single-machine scale; manual tool-checking narrows the context first.
-- **resume is not threatened.** The resume-rebuild invariant pins the real tool spec into `request_ref` at recording time and rebuilds the tool set from the recording on resume; a difference between two live recordings is an inherent property of "live dependence on the external world"—faithfully recording the tools actually connected this time is enough.
-- **Subtasks opt in per spec.** Replacing the stdio-era "subtasks never inherit," this both respects the whitelist-isolation intent (explore stays read-only) and lets a worker that does the real work use MCP.
-- **resources are user-manual reference only.** Hold the boundary "resource = material for the model to read (what to feed is decided by the user) / tool = let the model take an action"; snapshotting into the message (rather than recording a path) is because reading after recording a path would cause resume drift as the file changes.
+The request/response subset is what keeps the client synchronous and
+single-threaded. Every server-push feature needs a long-lived stream and a
+reader: `list_changed` contradicts freezing the tool set at task start,
+`sampling` hands a remote server the power to initiate model calls, which is hard
+to govern for both safety and determinism, and `elicitation` interrupts mid-turn.
+Common servers are entirely request/response, so the subset suffices.
+
+Credentials staying host-side is the host boundary. A request body carrying
+tokens would spread them into logs, recordings and provenance; a callback that
+resolves an alias into a spec keeps them in one place under operator control.
+
+Resume is not threatened by live dependence on the outside world because the tool
+spec that actually shaped the recording is pinned into it. Two live runs against
+the same server can legitimately differ; faithfully recording the tools this run
+was given is the guarantee that matters.
+
+Injected server text is both a prompt-injection surface and a context bomb — the
+transport caps only at megabytes — so it is bounded before it reaches the model.
+
+Resources are read-material chosen by a person; tools are actions taken by the
+model. Snapshotting the content rather than a path is what keeps a resume from
+drifting when the underlying file or resource changes.
 
 ## Alternatives considered
 
-1. **Expose Noeta as an MCP server.** Rejected: the reverse direction, opposite to "connect to a remote server," a separate project.
-2. **Do full Streamable HTTP (including `list_changed` / `sampling` / `elicitation`).** Rejected: needs a persistent open stream to listen for server pushes, conflicting with synchronous single-threaded; conflicts with the frozen tool set; sampling hands out the power to initiate model calls.
-3. **Do OAuth in v1.** Rejected: a server can't pop a browser; token refresh is separate complexity. Static credentials already cover the bulk.
-4. **Ship lazy ToolSearch in v1.** Rejected: touches the composer/context core, overengineering for single-machine scale.
-5. **Send credentials with the chat request.** Rejected: directly breaks the host boundary (tokens everywhere, and can't enter the fingerprint either).
-6. **The frontend can add HTTP only, with stdio limited to ops-side config.** Rejected: that's the default for a multi-user connectable service; this phase targets single-user local single-machine, where stdio for personal use has no RCE risk.
-7. **Subtasks never / always inherit MCP.** Rejected: never-inherit guts delegation (workers can't touch MCP); always-inherit breaks explore's read-only isolation. Changed to opt-in per spec.
-8. **Let the model fetch resources autonomously.** Rejected: it blurs the line between "resource" and "tool" and makes the context budget hard to govern.
+1. **Implement full streamable HTTP, including the server-push half.** Weighed
+   and rejected: it requires a persistent open stream and a background reader,
+   contradicting the synchronous single-threaded client and the frozen tool set,
+   and `sampling` would hand a remote server the ability to start model calls.
+2. **Expose Noeta itself as an MCP server.** Rejected: it is the opposite
+   direction from connecting out, and shares nothing with this client.
+3. **Support OAuth as the auth mechanism.** Rejected: the authorization redirect
+   needs a real browser, which a host process cannot provide, and token refresh
+   and reconnect are a separate body of complexity. Static credentials cover the
+   bulk; the spec shape leaves room for a refresh slot.
+4. **Ship a lazy tool-search layer so large servers do not flood the context.**
+   Rejected: it reaches into the composer and context core. Narrowing the ticked
+   tool subset at configuration time keeps the active set small without that.
+5. **Send credentials along with the turn request.** Rejected: it breaks the host
+   boundary outright — tokens would end up in request bodies and in anything
+   derived from them.
+6. **Let a subtask never inherit MCP, or always inherit it.** Rejected: never
+   inheriting guts delegation, since the child doing the real work cannot touch
+   the connector; always inheriting breaks a read-only child's isolation. Opting
+   in per spec is the only shape that respects both.
+7. **Give the model a tool to fetch resources on its own.** Rejected: it erases
+   the resource/tool boundary and makes the context budget ungovernable.
+8. **Treat a failed connect at task start as fatal.** Rejected: one unreachable
+   connector would sink an otherwise workable Task; skipping with a durable,
+   surfaced warning keeps the rest usable.
 
 ## Consequences
 
-- The transport lands in `noeta.builtins.mcp.impl` (HTTP transport, resume-rebuild recording, `mcp__alias__tool` naming; the MCP vocabulary — `MCP_PREFIX`, `McpServerSpec`, the error types — sits kernel-side in `noeta.runtime.mcp`), and must not seep into the product backend/frontend.
-- Host-side server config persistence + management interface, and resolution of the unified `@` channel, are borne respectively by the host-layer `mcp_registry`, `mcp_prompt_expander`, and `content_resolver`; a subtask's MCP inheritance is controlled by `AgentSpec.Capabilities.mcp` (presets set the defaults). *(**Current state:** now `"mcp" in AgentSpec.plugins`.)*
-- Credentials have hard in/out constraints: never into the request body, never into any recording, never into `host_config_fingerprint`. When OAuth is wired later, the token backfill must still land host-side to keep this boundary.
-- Static credentials are v1's only auth form; the schema already reserves a slot for refresh, but token refresh/expiry/reconnect logic as a whole is deferred.
+- The clients, tool wrapper, prompt and resource helpers live in the `mcp`
+  built-in; the reserved prefix, server specs and error types sit kernel-side in
+  `noeta.runtime.mcp`. None of it may seep into a host or product layer.
+- A host supplies the alias resolver and, optionally, an injectable POST function
+  so tests can run the whole path without real network.
+- Credentials have hard in/out constraints: never into a request body, never into
+  a recording, never into a host-config fingerprint. Any auth mechanism must keep
+  the token landing host-side.
+- The tools land in a fixed merge band ahead of custom tools, so a custom tool
+  can intentionally shadow an MCP tool of the same name and the merge order stays
+  byte-stable.

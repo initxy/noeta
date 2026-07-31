@@ -1,4 +1,4 @@
-"""T1 — external trace export (JSONL sink + async worker + lifecycle owner).
+"""External trace export (JSONL sink + async worker + lifecycle owner).
 
 Covers: the JSONL line shape (fixed AuditRecord fields), the
 content-allowlist inheritance (no raw goal / tool arguments in the
@@ -240,10 +240,10 @@ def test_code_session_trace_file_writes_jsonl(tmp_path: Path) -> None:
     """Wiring smoke: an SDK host wired with a JSONL trace observer writes a
     JSONL trace live, with the terminal tail flushed by graceful drain.
 
-    The deleted ``CodeSessionConfig.trace_file`` knob is now an explicit
-    observer (``make_jsonl_trace_observer(event_log=host.event_log, ...)``)
-    constructed before driving — the observer self-subscribes on the host
-    event log exactly like the product backend wires it."""
+    The trace file is an explicit observer
+    (``make_jsonl_trace_observer(event_log=host.event_log, ...)``) constructed
+    before driving — it self-subscribes on the host event log exactly like the
+    product backend wires it."""
     from noeta.protocols.messages import LLMResponse, TextBlock, Usage
     from noeta.testing.fake_llm import FakeLLMProvider
     from noeta.runtime.shell_policy import ShellMode

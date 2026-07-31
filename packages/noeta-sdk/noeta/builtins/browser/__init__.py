@@ -1,14 +1,12 @@
 """``browser`` — the sandbox browser tool pack.
 
-Browser tools are gated on a live sandbox backend + the ``browser``
-capability flag, so the manifest declares no identity ``tool``
-contributions — that would merge them into an activating agent's
-``AgentSpec``, which the capability flag deliberately does not do. What it
-does declare (microkernel phase 3) is the session-construction half: the
-``session_pack`` factory (band 700) whose applicability check IS the
-backend + flag gate. The pack implementation AND the ``BrowserBackend``
-Protocol both live in this plugin's ``impl`` package — the kernel holds no
-browser vocabulary; the ``sandbox`` plugin implements the Protocol.
+The pack registers on the ``session_pack`` surface rather than contributing
+identity ``tool`` s: it is gated on a live sandbox backend plus the ``browser``
+capability flag, and neither belongs in an activating agent's ``AgentSpec``.
+Band 700 places it between the skills (600) and MCP (800) packs, and tool
+insertion order feeds the stable-prefix hash, so the band is part of the
+byte-order contract. The ``BrowserBackend`` Protocol lives in this plugin's
+``impl``; the ``sandbox`` plugin implements it.
 """
 
 from __future__ import annotations

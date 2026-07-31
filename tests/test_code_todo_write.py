@@ -1,4 +1,4 @@
-"""CW18b — durable `todo_write` control tool.
+"""Durable `todo_write` control tool.
 
 `todo_write` is a model-visible CONTROL tool (gated, not in engine._tools): a
 call replace-alls TaskState.todos via a TodoWriteDecision → TaskStatePatched,
@@ -7,7 +7,7 @@ and the loop CONTINUES (ack tool_result, no suspend/terminal).
 Gates: set_todos protocol (replace-all + old-recording byte-safe) / schema
 gating / durable patch (no ToolCallStarted/ToolResultRecorded; ack present) /
 event order / malformed → zero state write (not terminal) / replace semantics /
-CW18a inspect integration.
+inspect read-model integration.
 """
 
 from __future__ import annotations
@@ -142,7 +142,7 @@ def test_set_todos_none_is_no_change() -> None:
 
 
 def test_set_todos_old_recording_byte_safe() -> None:
-    # A pre-CW18b payload dict has no `set_todos` key → from_dict → None.
+    # A payload dict without a `set_todos` key → from_dict → None.
     patch = TaskStatePatch.from_dict({"set_phase": "planning"})
     assert patch.set_todos is None
     # round-trip
@@ -152,8 +152,8 @@ def test_set_todos_old_recording_byte_safe() -> None:
 
 def test_to_dict_omits_set_todos_when_none_byte_safe() -> None:
     """P1: a non-todo_write patch must NOT carry `set_todos` in its payload —
-    otherwise old recordings (no such key) would no longer fold/resume."""
-    # Non-todo patches: key absent → byte-identical to pre-CW18b.
+    otherwise a recording without that key would no longer fold/resume."""
+    # Non-todo patches: key absent → byte-identical to a recording without it.
     assert "set_todos" not in TaskStatePatch(activate_skills=["s"]).to_dict()
     assert "set_todos" not in TaskStatePatch(set_phase="plan").to_dict()
     assert "set_todos" not in TaskStatePatch().to_dict()
@@ -322,7 +322,7 @@ def test_todo_write_schema_inherited_by_delegation_child(
 
 
 # ---------------------------------------------------------------------------
-# CW18a integration — inspect read-model sees the todos
+# inspect read-model sees the todos
 # ---------------------------------------------------------------------------
 
 

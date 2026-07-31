@@ -1,62 +1,127 @@
-# Parallel fan-out / N-way join + durable exactly-once wake
+# Fan-out joins N subtasks on one observer-counted group barrier; wakes are delivered at least once and consumed exactly once
 
 ## Context
 
-This extends the wake protocol to add two related things:
+A parent agent dispatches several subagents in one turn and resumes once,
+holding all of their results. Separately, a suspended Task's wake — a single
+subtask completion, a group barrier, an approval, a human answer, a timer — must
+survive a host crash: a wake that should fire always fires, and a redundantly
+delivered wake is consumed only once.
 
-- Parallel fan-out / N-way join: a parent agent fans out **N sub-agents** at once, suspends, and after all N terminate resumes once and uses all N results at once (join / barrier).
-- Durable exactly-once wake: a suspended Task's wake (a single subtask / a group, human / approval, timer) must be **delivered and consumed exactly once** even across a crash — a wake that should fire always fires, and a redundantly delivered wake is consumed only once.
-
-Both hold one red line: **don't change the EventLog / payload**, so recorded bytes don't drift.
+Both are bounded by the same constraint: the EventLog is the only source of
+truth. Neither mechanism may park coordination state anywhere a replay cannot
+reproduce, and neither may widen the recorded shape of an event that every task
+writes.
 
 ## Decision
 
-### Parallel fan-out / N-way join
+### Fan-out and the group barrier
 
-- **Core characterization**: at the wake-protocol level, fan-out is one "N-way join," **not wall-clock parallelism**. Under a single worker (one lease per segment / single writer, see worker-lease-model.md, single-writer-invariant.md), the N subtasks stream and lease independently but **drain serially**. The new capability only lets the parent express "resume after all N terminate." True multi-worker concurrency is **explicitly out of scope**.
-- **The join accumulation lives in an observer (fold count), and the dispatcher's scalar model is untouched**: N `SubtaskCompleted` events (`origin="observer"`) land on the parent stream, `ChildLifecycleObserver` counts to N by **deduplicated membership** (not a bare count), then calls `wake(parent, SubtaskGroupCompleted)` — a single scalar composite event. The dispatcher still matches a scalar, unchanged.
-- **all-of (wait for all to terminate)**: both `completed` and `failed` count as arrivals; the parent resumes with all N results (including failures) and decides the next step. any-of / k-of-n / fail-fast reserve a `policy` extension slot; not done in v1.
-- **Batch spawn = all-or-nothing admission**: before minting any subtask, pre-check all N specs (budget simulated by `current+i`). Any rejection → the parent fails with zero subtasks; any require_approval → treated as a rejection.
-- **`group_id` is derived from the ordered subtask ids** (`sha256(":".join(subtask_ids))`), consuming no extra id_factory draws; fold/resume reads it back from history's `TaskSuspended.wake_on.group_id` and recomputes the same value byte-for-byte.
-- **Results are rebuilt by member (spawn) order from the keyed `SubtaskCompletedPayload`**, not from the unkeyed `governance.subtask_results`. `subtask_ids` is bounded by the 4KB envelope cap, `1<=N<=MAX_FANOUT`.
+- The provider-visible `spawn_subagent` schema is a batch form: a required
+  `spawns` array of `{agent, goal}` entries plus a `background` flag. Routing is
+  by the flattened member total across a turn's spawn calls — exactly one member
+  yields a single-spawn decision (the only shape that honours `background`); two
+  or more yield a fan-out decision, whether they arrive as one call carrying an
+  array, several calls, or a mix. The translate seam also accepts a top-level
+  `{agent, goal}` form, which the orchestration interpreter fabricates for its
+  synthetic spawn turns.
+- Barrier accumulation lives in an observer, not the dispatcher. The N
+  `SubtaskCompleted` events land on the parent's stream; `ChildLifecycleObserver`
+  counts to N by deduplicated membership, then wakes the parent with a single
+  scalar `SubtaskGroupCompleted`. The dispatcher matches one scalar condition.
+- The barrier is all-of: completion and failure both count as arrivals, and the
+  parent resumes with every result — failures included — and decides what
+  follows.
+- Batch admission is all-or-nothing. Before any subtask is minted, every spec is
+  pre-checked: batch size within `MAX_FANOUT`, a `(call_id, member_index)` layout
+  the resume pairing can reproduce, and a per-spec guard verdict with the
+  spawned-subtask counter simulated at `current + i`. Any deny — a
+  require-approval verdict counts as one — fails the parent with zero subtasks
+  created.
+- `group_id` is a hash of the ordered member ids, so it draws no id from the
+  factory and recomputes identically on resume. Wake matching projects on
+  `group_id` alone; the member id list rides along for diagnosis and result
+  assembly, and `MAX_FANOUT` keeps it under the envelope size cap.
+- Results are rebuilt in member order from the keyed `SubtaskCompleted` payloads
+  on the parent's stream, not from the unkeyed governance result list. The wire
+  shape is exactly one tool result block per originating call: a single-member
+  call renders a plain result; a k-member batch call renders one block whose
+  output lists the k member results in entry order, successful only when every
+  member succeeded. `member_index` is never persisted — the layout it describes
+  is reproduced positionally from the recorded assistant message.
 
-### Durable exactly-once wake
+### Exactly-once wake
 
-- **The gap**: previously `lease()` would **destroy** `matched_wake_event` (at-most-once), so a worker crashing between `lease()` and the durable `TaskWoken` **lost the wake**.
-- **The fix = at-least-once delivery + idempotent consumption = exactly once**: `lease()` **no longer clears** matched (D1, it survives the lease); `release()` clears matched only through an explicit typed `consumed_wake_event` seam (D2, and only the worker-woken branch passes it, after `TaskWoken` is durable); `requeue_stale()` **keeps** matched → the next lease re-delivers it automatically (D3).
-- **Idempotent consumption via folded state**: the worker-woken branch is a **"recover-from-most-recent-matching-`TaskWoken` state machine"** (D4, keyed on `(whether a TaskWoken matches / folded status / whether there's a step event after the wake)`, 6 cases) — first consumption, skip-on-crash-resend, terminal / re-suspend reconciliation, partial-step typed error, and mismatch loud failure. *(Update: step-attempt-recovery.md re-keyed the `running` reconciliation on the attempt sentinel `ContextPlanComposed` and replaced the partial-step typed error with a classify → seal → re-drive-or-park recovery; the other cases stand.)*
-- **`release(consumed_wake_event=X)` is validated** (D6): X ≠ the stored matched → typed raise + rollback, never "release normally but skip the clear" leaving a stale matched row. The heartbeat-cap and `fail()` paths **never clear** matched (D5, they can't prove consumption).
-- **Don't change the EventLog / payload**: `TaskWoken`'s shape bytes are unchanged; D1–D3 only move the dispatcher's internal clear timing (dispatcher state isn't in the EventLog → invisible to fold/resume), and D4's fold check is a no-op on every clean recording. **All existing recordings fold and resume as before.** Scope: single host, single worker.
+- Delivery is at-least-once and consumption is idempotent. `lease()` leaves the
+  matched wake event in place so it survives the lease; `release()` clears it
+  only through an explicit typed `consumed_wake_event` argument, passed only
+  after the corresponding `TaskWoken` is durable; `requeue_stale()` keeps the
+  matched event, so the next lease re-delivers it.
+- `release(consumed_wake_event=...)` validates its argument against the stored
+  matched event: a mismatch raises and rolls back rather than releasing while
+  leaving a stale matched row behind. The heartbeat-cap and `fail()` paths never
+  clear it — neither can prove consumption.
+- Idempotency is keyed on folded state, not on a dedup field. The worker's woken
+  branch reconciles against the most recent matching `TaskWoken`: whether one
+  matches, the folded status, and whether an attempt sentinel
+  (`ContextPlanComposed`) follows the wake together select between first
+  consumption, skipping a crash-resent duplicate, reconciling a terminal or
+  re-suspended task, recovering an interrupted attempt, and failing loudly on a
+  wake no suspension can consume.
 
 ## Rationale
 
-- **The join accumulation goes into the observer / EventLog rather than the dispatcher, to touch less hardened surface.** Putting the arrival set into the dispatcher would mean one more mutable state replay must reproduce, and it would touch the already-hardened `matched_wake_event` wake-recovery incision. But that state **is already derivable from the parent stream** (the N `SubtaskCompleted` events are right there), so the observer-fold route needs zero dispatcher changes and has a smaller replay surface.
-- **The deduplicated-membership check is naturally idempotent.** Intersect and then check the full set: a duplicate completion for the same subtask is idempotent, an out-of-group / late completion is filtered out by the intersection, and there's no way to "pad" the barrier full. More robust than a bare count.
-- **exactly-once adds no second schema, to keep recorded bytes stable.** Adding `wake_id` dedup to `TaskWokenPayload` would change the canonical bytes of **every** `TaskWoken`, move their content hashes, and drift all historical recordings. The idempotency instead draws from **the folded `(status, latest TaskWoken.wake_event)`** — `wake_event` is already in the existing payload, so no event grows. The dispatcher's internal clear-timing change is invisible to the EventLog, so zero drift.
-- **A single worker is an honest determinism boundary.** The order of the N `SubtaskCompleted` events = the drain order, which under a single worker is deterministic (FIFO ready queue) → fold/resume re-derives the same state. Multi-worker parallelism would make completion order non-deterministic → the same EventLog could fold to different orders, so it is explicitly out of scope (at which point in-group events would need canonical ordering by subtask_id, folded into a separate ADR). *(v2 update: subtask-parallel-execution.md landed that path and found the canonical subtask_id ordering unnecessary — committing arrival order into the log is itself authoritative — so it was removed as dead defensive code.)*
+- **Barrier state belongs in the log, not the dispatcher.** The arrival set is
+  derivable from the parent's own stream, so folding it in an observer keeps the
+  dispatcher's model a single scalar and the replay surface small.
+- **Deduplicated membership is idempotent by construction.** Intersecting the
+  arrivals with the declared member set and checking for the full set makes a
+  duplicate completion a no-op, filters an out-of-group or late completion, and
+  lets nothing pad the barrier full. A bare count has none of those properties.
+- **Exactly-once costs no second schema.** The idempotency key is the folded pair
+  of task status and the latest `TaskWoken`'s wake event, both of which the
+  recording carries anyway, so no event grows and the fold surface does not
+  widen. The clear timing lives entirely in dispatcher state, which is not part
+  of the EventLog and is therefore invisible to fold and resume.
+- **The array is the schema because it is the shape models emit.** A model
+  narrates a parallel plan and then emits exactly one spawn call per turn, even
+  under an explicit demand for several, while the same session happily
+  parallel-calls ordinary tools. Given an array parameter, it batches several
+  goals into one call. A fan-out that depends on multi-call turns collapses to
+  strictly sequential delegation.
 
 ## Alternatives considered
 
-1. **Fan-out: the dispatcher accumulates the arrival set + adds a new durable column.** Rejected: it puts join state into the dispatcher — one more mutable state replay must reproduce, and it touches the hardened `matched_wake_event` surface; that state can be derived from the EventLog.
-2. **Fan-out: ship a configurable policy (all/any/k-of-n) in v1.** Rejected: any-of / k-of-n need subtask cancellation + dynamic group size, complicating resume. Pin the deterministic wait-all first; reserve an extension slot for policy.
-3. **Fan-out: reuse `SubtaskCompleted` without a new variant, the parent holding N scalar conditions.** Rejected: `wake_on` is a scalar field and can't hold N; making it a list would touch fold / snapshot / dispatcher serialization surfaces, and "wait for all" would have nowhere to live. Adding the `SubtaskGroupCompleted` variant makes the group semantics explicit while `wake_on` stays a single condition.
-4. **Wake: add `wake_id` / `wake_seq` to wake events + add a dedup field to `TaskWokenPayload`.** Rejected: it changes the canonical bytes of every `TaskWoken` and drifts all history.
-5. **Wake: additionally write `WakeReady` / `WakeConsumed` events inside the dispatcher transaction.** Rejected: new recorded event types → changing recording shape + enlarging the fold surface, heavier and more prone to drift.
-6. **Wake: a periodic EventLog reconciliation sweep.** Rejected: a standalone daemon mechanism with its own liveness / timing semantics; the lease / release / requeue model already deterministically closes the crash window, and a sweep is left as future defense-in-depth.
+1. **The dispatcher accumulates the arrival set behind a durable column.**
+   Rejected: it turns join state into mutable dispatcher state a replay must
+   reproduce, and touches the wake-recovery surface, for something already
+   derivable from the parent's stream.
+2. **A configurable join policy (any-of / k-of-n / fail-fast).** Rejected: those
+   modes need subtask cancellation and a dynamic group size, both of which
+   complicate resume. The deterministic wait-all is pinned instead, leaving a
+   policy slot open.
+3. **Reuse `SubtaskCompleted` with the parent holding N scalar conditions.**
+   Rejected: `wake_on` is a scalar field, and turning it into a list would touch
+   fold, snapshot and dispatcher serialization while leaving "wait for all"
+   nowhere to live. A distinct group condition makes the group semantics explicit
+   and keeps `wake_on` a single condition.
+4. **A `wake_id` dedup field on the wake payload.** Rejected: it enlarges every
+   wake event ever written for a property that folded state already answers.
+5. **`WakeReady` / `WakeConsumed` events written inside the dispatcher
+   transaction.** Rejected: recorded event types widen the fold surface for
+   bookkeeping that non-recorded dispatcher state carries just as well.
+6. **A periodic reconciliation sweep over the EventLog.** Rejected: a standalone
+   daemon with its own liveness and timing semantics, where the lease / release /
+   requeue model closes the crash window deterministically without one. It
+   remains available as defence in depth.
 
 ## Consequences
 
-- Protocol layer: the `SubtaskGroupCompleted` variant + the `matches_wake` projected by group_id land in `noeta.protocols.wake`, `SpawnSubtasksDecision` lands in `noeta.protocols.decisions`, the `release(consumed_wake_event=...)` seam lands in `noeta.protocols.dispatcher`.
-- Handling layer: the all-or-nothing `handle_spawn_subtasks` lands in `noeta.core._decision_handlers`, the group-aware fold count lands in `noeta.core.observers`, and the related fold is in `noeta.core.fold`.
-- Runtime and storage: D4's 6-case recovery state machine lands in `noeta.runtime.worker`, and D1–D6's clear timing lands in `noeta.storage.memory` and `noeta.builtins.storage.impl.sqlite.dispatcher`.
-- Follow-on note: this decision deliberately excludes multi-worker concurrency as a determinism boundary; true concurrent execution is taken up by subtask-parallel-execution.md, which has proven the canonical subtask_id ordering can be dropped.
-
-## Amendment (2026-07-02): batch `spawns` form on `spawn_subagent`
-
-**Problem.** The fan-out translate only triggered on **≥2 `spawn_subagent` tool calls in one assistant turn**. Live probing against gpt-5.x (replaying a real recorded request, 17 trials: verbatim, batch-first description, `strict:false`, renamed tool, an explicit "emit 4 calls in this turn" user demand) produced **zero** multi-call turns — the model narrates a parallel plan and then emits exactly one spawn call per turn, while happily parallel-calling ordinary tools (`glob` ×3) in the same session. One call per turn suspends the parent on `SubtaskCompleted`, so every gpt-5.x delegation degraded to strictly sequential. With an **array-of-spawns schema**, the same model batched 4 goals into one call 4/4.
-
-**Decision.** The advertised `spawn_subagent` schema becomes the **batch form**: a required `spawns` array of `{agent, goal}` entries (roster enum unchanged, nested per entry). Routing is by the flattened member total: one member → `SpawnSubtaskDecision` (SR1, `background` honored); ≥2 members — one call carrying an array, several calls, or a mix — → `SpawnSubtasksDecision` (this ADR's fan-out, unchanged machinery). The translate still accepts the legacy top-level `{agent, goal}` single form: old recordings replay byte-equal through it, and the workflow orchestration keeps fabricating it.
-
-**Mechanics.** Members of one batch call share its tool_use `call_id`, contiguously, numbered by a new `SpawnSubtaskSpec.member_index` (default 0 — pre-batch constructors unchanged). The all-or-none admission check widens from bare call_id uniqueness to this layout (a duplicated tool_use id still denies with the same reason). Resume pairing expands each unpaired spawn tool_use by its member count; wire correctness pins **one `ToolResultBlock` per originating call** — a one-member run renders byte-equal to before, a k>1 run renders one block whose `output` lists the k member results in entry order (`{"spawn": i, "success": …, "output": …}`), `success` = all succeeded.
-
-**Red lines kept.** No EventLog/payload change: `SubtaskSpawned` / `SubtaskGroupCompleted` bytes are untouched (`member_index`, like `call_id`, is never persisted); every pre-batch recording folds, replays, and re-renders its group results byte-equal.
+- The group condition and its `group_id` projection live in
+  `noeta.protocols.wake`, the spawn decisions in `noeta.protocols.decisions`, and
+  the `consumed_wake_event` argument on `noeta.protocols.dispatcher`.
+- All-or-nothing batch admission lives in `noeta.core._decision_handlers`, the
+  barrier count in `noeta.core.observers`, the wake-recovery state machine in
+  `noeta.runtime.worker`, and the clear timing in the dispatcher adapters.
+- Wall-clock concurrency between group members is a separate decision; see
+  subtask-parallel-execution.md.

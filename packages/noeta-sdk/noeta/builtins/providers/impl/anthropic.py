@@ -1,64 +1,15 @@
 """Anthropic ``/v1/messages`` adapter for the Noeta-shape LLM protocol.
 
-Issue 22. Implements :class:`noeta.protocols.messages.LLMProvider`
-against the official Anthropic Messages API. The translation contract
-mirrors :mod:`noeta.providers.openai_compat`: every loss
-of fidelity caused by speaking Anthropic's wire shape is contained to
-this single file; Engine / Policy only ever see Noeta-shape
-types.
-
-Key contracts (issue 22 design doc §"Anthropic Messages API translation rules"):
-
-* Provider does not pin a model. ``LLMRequest.model`` is forwarded
-  per-call so one instance can talk to multiple models.
-* ``max_tokens`` is fail-fast (rev2 B4): `LLMRequest.max_tokens` wins;
-  otherwise ``default_max_tokens`` constructor parameter; otherwise
-  raise ``ValueError``. Adapter does not pick a silent default.
-* ``LLMRequest.system`` is flattened to a single string at top-level
-  ``system``; ``role=='system'`` inside ``LLMRequest.messages`` is
-  rejected (same as ``OpenAICompatProvider``).
-* Assistant content is regrouped deterministically (rev2 B2):
-  ``ThinkingBlock*`` → ``TextBlock*`` → ``ToolUseBlock*``. Stable
-  sort within each group preserves caller order.
-* ``Message(role='tool')`` becomes one Anthropic ``user`` message
-  containing only ``tool_result`` content blocks (rev2 B3). Mixed
-  ``ToolResultBlock`` inside ``role='user'`` and non-ToolResultBlock
-  inside ``role='tool'`` raise ``ValueError`` — wire-shape placement
-  is adapter responsibility, ID alignment stays with Engine.
-* Extended thinking (rev2 B1) round-trips end to end, not just within
-  this adapter. Inbound ``thinking`` keeps its ``signature`` and
-  ``redacted_thinking`` keeps its opaque ``data``; outbound both are
-  re-emitted verbatim ahead of the turn's text / tool_use blocks; the
-  streaming path accumulates ``signature_delta`` into the same shape.
-  Upstream carries the blocks out of band — the turn's ThinkingBlocks
-  are recorded per ``tool_use`` call id and the Composer re-attaches
-  them on the continuation request — so a signed reasoning turn stays
-  valid across steps.
-* Tools schema is OpenAI-shape on the way in (Composer emits OpenAI
-  shape); adapter unpacks to Anthropic shape. Missing function /
-  parameters / name raise.
-* ``stop_reason`` mapping: ``end_turn`` / ``tool_use`` /
-  ``max_tokens`` pass through; ``stop_sequence`` collapses to
-  ``end_turn``; unknown / missing maps to ``error`` without raising
-  (matches OpenAICompatProvider). Inconsistent state (e.g.
-  ``stop_reason='tool_use'`` with no ``tool_use`` block in
-  ``content``) raises ``ValueError``.
-
-This module does not implement async, retry, or Bedrock / Vertex auth.
-Token streaming IS supported via the optional ``StreamingProvider``
-capability (:meth:`AnthropicProvider.complete_streaming`): the SSE stream
-is accumulated back into the vendor-shaped ``message`` payload and fed
-through the same parse path as the batch call, so a streamed response is
-shape-identical to a batch response of the same content. Image input IS
-supported on vision-capable models: an
-``ImageBlock`` (user/assistant content, or a ``ToolResultBlock``'s
-``images``) is deref'd via the injected ``image_resolver`` and base64-inlined
-onto the wire (an ``image`` content block / a ``tool_result.content`` array);
-a top-level image bound for a non-vision model raises ``FatalError`` up front,
-and a tool-result image on a non-vision model degrades to string content.
-Prompt caching is applied as ephemeral cache_control breakpoints on the
-outbound wire body only (#4); it never enters ``LLMRequest`` / the recorded
-``request_ref``.
+Implements :class:`noeta.protocols.messages.LLMProvider` against the Anthropic
+Messages API; every loss of fidelity caused by that wire shape is contained to
+this file, so Engine and Policy only ever see Noeta-shape types. The provider
+pins no model — ``LLMRequest.model`` is forwarded per call — and ``max_tokens``
+is fail-fast rather than silently defaulted, because Anthropic requires it and
+a guessed cap truncates answers invisibly. Two wire concerns are stamped on the
+outbound body only and never enter ``LLMRequest`` or the recorded
+``request_ref``: the ephemeral prompt-cache breakpoints, and the
+``<system-reminder>`` tagging that Anthropic needs because it has no
+mid-history system role.
 """
 
 from __future__ import annotations
@@ -94,10 +45,9 @@ from noeta.builtins.providers.impl._sse import iter_sse_events
 from noeta.builtins.providers.impl.codecs import parse_retry_after
 
 
-#: A narrowly injected ``ContentRef → bytes`` deref callback (backed by
-#: ``content_store.get``). It is the **only** image dependency this adapter
-#: holds — it does NOT carry a ContentStore / StepContext, and deref→base64
-#: happens only at wire-assembly time, never written back to the ledger.
+#: The adapter's only image dependency: a narrow ``ContentRef → bytes`` deref
+#: callback, deliberately not a ContentStore or a StepContext. Deref and base64
+#: happen at wire-assembly time and the result is never written back.
 ImageResolver = Callable[[ContentRef], bytes]
 
 
@@ -106,7 +56,6 @@ __all__ = ["AnthropicProvider"]
 
 _API_VERSION_DEFAULT = "2023-06-01"
 
-#: The conventional environment variable an omitted ``api_key`` falls back to.
 _API_KEY_ENV = "ANTHROPIC_API_KEY"
 _MESSAGES_ENDPOINT = "/v1/messages"
 
@@ -115,15 +64,14 @@ _STOP_REASON_MAP: dict[str, Literal["tool_use", "end_turn", "max_tokens", "error
     "tool_use": "tool_use",
     "max_tokens": "max_tokens",
     "stop_sequence": "end_turn",
-    # A safety-classifier ``refusal`` is a *completed* HTTP-200 turn (the
-    # assistant declined; its content carries the refusal text). The Noeta
-    # neutral vocabulary has no ``refusal`` value, so map it to ``end_turn`` —
-    # the refusal surfaces as the assistant's finished answer, NOT a fatal
-    # ``error`` task failure (which would discard the refusal and terminate the
-    # task non-retryably). ``pause_turn`` (Anthropic server-side tools mid-turn)
-    # is deliberately absent: Noeta wires no server-side tools, so it is
-    # unreachable, and mapping it to ``end_turn`` would silently truncate a turn
-    # the API expects to be resumed — an absent key falls through to ``error``.
+    # A safety-classifier ``refusal`` is a *completed* HTTP-200 turn whose
+    # content carries the refusal text. The neutral vocabulary has no
+    # ``refusal``, so it maps to ``end_turn``: the refusal reaches the caller as
+    # the assistant's finished answer rather than an ``error`` that would
+    # discard it and fail the task non-retryably. ``pause_turn`` is absent on
+    # purpose — Noeta wires no server-side tools, so it is unreachable, and
+    # calling it ``end_turn`` would silently truncate a turn the API expects to
+    # be resumed; an absent key falls through to ``error``.
     "refusal": "end_turn",
 }
 
@@ -131,36 +79,22 @@ _STOP_REASON_MAP: dict[str, Literal["tool_use", "end_turn", "max_tokens", "error
 class AnthropicProvider:
     """Adapter for the Anthropic Messages API.
 
-    Construct once with the API key and reuse across calls — the
-    underlying :class:`httpx.Client` is shared, and ``LLMRequest.model``
-    selects the model per call. ``extra_headers`` is the escape hatch
-    for ``anthropic-beta`` flags / org IDs / proxy auth. Prompt caching is
-    GA and needs NO ``anthropic-beta`` header — the ephemeral
-    ``cache_control`` breakpoints ``_apply_cache_control`` stamps on the wire
-    body are honoured on their own (adding a ``prompt-caching-*`` beta flag is
-    unnecessary).
+    Construct once with the API key and reuse across calls — the underlying
+    :class:`httpx.Client` is shared, and ``LLMRequest.model`` selects the model
+    per call. ``extra_headers`` is the escape hatch for ``anthropic-beta``
+    flags, org IDs and proxy auth; prompt caching needs no beta flag, as the
+    ``cache_control`` breakpoints on the wire body are honoured on their own.
 
-    Implements the optional
-    :class:`~noeta.protocols.messages.HeaderAwareProvider` capability
-    (:meth:`complete_with_headers`): the runtime can attach request-scoped
-    headers per call over the shared client. Those headers are transport-only
-    and never affect prompt-cache hits (the cache key is the rendered wire
-    body, not the HTTP headers).
+    :meth:`complete_with_headers` lets the runtime attach request-scoped
+    headers per call over that shared client, which matters because the client
+    is built long before any ``task_id`` exists. Such headers are
+    transport-only and cannot disturb prompt-cache hits: the cache key is the
+    rendered wire body, not the HTTP headers.
 
-    Also implements the optional
-    :class:`~noeta.protocols.messages.StreamingProvider` capability
-    (:meth:`complete_streaming`): the same blocking one-shot contract, with
-    text / thinking deltas fired as side effects while the response is in
-    flight. The streamed final ``LLMResponse`` is shape-identical to the
-    batch path's (same request body plus ``stream: true``, same parse
-    helpers, same neutral error taxonomy).
-
-    ``image_resolver`` is a narrowly injected ``ContentRef → bytes`` deref
-    callback (same nature as the httpx client it already holds): when a request
-    carries an ``ImageBlock`` (user/assistant content or a ``ToolResultBlock``'s
-    ``images``) and the target model is vision-capable, the bytes are deref'd and
-    base64-inlined onto the outbound wire body. **Red line**: it does not hold a
-    ContentStore / StepContext, and the base64 never re-enters the ledger.
+    ``image_resolver`` is a narrow ``ContentRef → bytes`` deref callback, of
+    the same nature as the httpx client the adapter already holds — never a
+    ContentStore or a StepContext, and the base64 it produces never re-enters
+    the ledger.
     """
 
     def __init__(
@@ -176,11 +110,10 @@ class AnthropicProvider:
     ) -> None:
         """``api_key`` defaults to the ``ANTHROPIC_API_KEY`` environment variable.
 
-        Reading the conventional env var matches what every other Anthropic
-        client does (and what a user arriving from claude-agent-sdk expects:
-        "just set the env var"). An explicit argument still wins. When neither
-        is present this raises rather than constructing a client that would
-        fail on its first call with an opaque 401.
+        The conventional env var is read because that is what every other
+        Anthropic client does; an explicit argument still wins. Missing
+        credentials raise here rather than yielding a client that fails its
+        first call with an opaque 401.
         """
         resolved_key = api_key if api_key is not None else os.environ.get(_API_KEY_ENV)
         if not resolved_key:
@@ -215,29 +148,17 @@ class AnthropicProvider:
         request: LLMRequest,
         request_headers: Optional[dict[str, str]],
     ) -> LLMResponse:
-        # HeaderAwareProvider capability: the runtime attaches request-scoped
-        # headers (e.g. a per-task tracing/log id from a gateway) per call
-        # WITHOUT rebuilding the shared client — the httpx client is a
-        # server-level singleton constructed before any ``task_id`` exists.
-        # ``request_headers`` merges over the client's constructor headers
-        # (``x-api-key`` / ``anthropic-version`` stay unless overridden). These
-        # are transport-only: they never enter ``LLMRequest`` / ``request_ref``,
-        # and — because the Anthropic cache key is the rendered wire body
-        # (tools → system → messages), NOT the HTTP headers — they do not affect
-        # prompt-cache hits.
-        #
-        # Vision guard: a top-level ``ImageBlock`` (user/assistant content)
-        # bound for a non-vision model is a loud misroute — refuse before wire
-        # assembly (same stance as the Responses adapter). Tool-result images
-        # ride ``ToolResultBlock.images`` (not a top-level block), so the guard
-        # does not see them — their non-vision degrade happens in the tool
-        # renderer instead (fall back to string content).
+        # ``request_headers`` merges over the constructor headers, so
+        # ``x-api-key`` / ``anthropic-version`` survive unless deliberately
+        # overridden. The guard runs before any wire assembly: a top-level
+        # ``ImageBlock`` bound for a non-vision model is a misroute and must be
+        # loud. Tool-result images ride ``ToolResultBlock.images`` rather than a
+        # top-level block, so the guard cannot see them — their non-vision
+        # degrade belongs to the tool renderer instead.
         _guard_vision_capability(request)
         body = self._build_request_body(request)
-        # ② error recovery: translate every wire-shape failure
-        # to the neutral Noeta error taxonomy here so the runtime never sees
-        # an httpx type. Connection / timeout → transient; HTTP status →
-        # bucketed by ``_translate_http_error``.
+        # Every wire-shape failure is translated into the neutral Noeta error
+        # taxonomy here, so the runtime never sees an httpx type.
         post_kwargs: dict[str, Any] = {"json": body}
         if request_headers is not None:
             post_kwargs["headers"] = request_headers
@@ -267,14 +188,11 @@ class AnthropicProvider:
         on_delta: Callable[[StreamDelta], None],
         request_headers: Optional[dict[str, str]] = None,
     ) -> LLMResponse:
-        # StreamingProvider capability: the same blocking one-shot contract as
-        # ``complete`` — the full ``LLMResponse`` is still the return value;
-        # ``on_delta`` fires as a side effect while the response is in flight.
-        # The request body is built by the exact same path as the batch call
-        # (vision guard included) plus ``stream: true``, and ``request_headers``
-        # merges over the client's constructor headers exactly like
-        # ``complete_with_headers`` — so streamed and batch requests are
-        # byte-identical on the wire apart from the stream flag.
+        # Still the blocking one-shot contract of ``complete``: the full
+        # ``LLMResponse`` is the return value and ``on_delta`` only fires as a
+        # side effect. The body is built by the exact same path as the batch
+        # call, so streamed and batch requests are byte-identical on the wire
+        # apart from the stream flag.
         _guard_vision_capability(request)
         body = self._build_request_body(request)
         body["stream"] = True
@@ -282,14 +200,11 @@ class AnthropicProvider:
         if request_headers is not None:
             stream_kwargs["headers"] = request_headers
         accumulator = _StreamAccumulator(on_delta)
-        # ② error recovery: identical taxonomy to the batch path. HTTP status
-        # errors bucket through ``_translate_http_error`` — the streamed body
-        # must be ``read()`` first (an unread streaming response raises on
-        # ``.json()`` access inside the overflow check). Timeout / transport
-        # failures — including a MID-stream disconnect while iterating —
-        # map to ``TransientError`` so the runtime retry loop applies
-        # unchanged. An in-band ``error`` SSE event raises out of
-        # ``accumulator.feed`` via ``_translate_stream_error_event``.
+        # Identical taxonomy to the batch path. The error body must be
+        # ``read()`` first: an unread streaming response raises when the
+        # overflow check reaches for ``.json()``. Timeout and transport
+        # failures — including a disconnect mid-iteration — stay transient so
+        # the runtime retry loop applies unchanged.
         try:
             with self._client.stream(
                 "POST", _MESSAGES_ENDPOINT, **stream_kwargs
@@ -306,11 +221,9 @@ class AnthropicProvider:
                     accumulator.feed(event_name, data)
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             raise TransientError(str(exc)) from exc
-        # Rebuild the vendor-shaped ``message`` payload and feed it through
-        # the same parse path as batch — the streamed ``LLMResponse`` is
-        # shape-identical to a batch response of the same content. ``raw``
-        # ends up carrying the reconstructed dict: diagnostics only, never
-        # part of the recording.
+        # Reusing the batch parse path is what pins a streamed response
+        # shape-identical to a batch one. ``raw`` then carries the
+        # reconstructed dict: diagnostics only, never part of the recording.
         return self._parse_response(accumulator.message_payload())
 
     # ------------------------------------------------------------------
@@ -319,17 +232,15 @@ class AnthropicProvider:
 
     def _build_request_body(self, request: LLMRequest) -> dict[str, Any]:
         max_tokens = self._resolve_max_tokens(request)
-        # Vision flag computed once per request (catalog lookup): user/assistant
-        # images are already gated by ``_guard_vision_capability``; this flag is
-        # what the tool renderer consults to either inline tool-result images
-        # (vision) or degrade them to string content (non-vision).
+        # One catalog lookup for the whole request: the tool renderer consults
+        # this to inline tool-result images or degrade them to string content.
+        # Top-level images were already settled by the guard.
         vision = _model_supports_vision(request.model)
 
-        # D4: host-injected turns (``origin`` system / memory)
-        # render as <system-reminder>-wrapped text and MERGE into the
-        # adjacent user wire turn (Anthropic has no mid-history system
-        # role). Only pairs touching an injected turn merge — plain
-        # consecutive user turns keep their legacy 1:1 rendering.
+        # Anthropic has no mid-history system role, so a host-injected turn
+        # renders as <system-reminder>-wrapped text and merges into the
+        # adjacent user wire turn. Only pairs touching an injected turn merge;
+        # plain consecutive user turns keep their 1:1 rendering.
         outbound_messages: list[dict[str, Any]] = []
         prev_injected = False
         for message in request.messages:
@@ -362,17 +273,11 @@ class AnthropicProvider:
             body["system"] = _flatten_text_blocks(request.system)
         if request.tools:
             body["tools"] = _translate_tools(request.tools)
-        # Prompt caching (#4): stamp ephemeral cache_control breakpoints on the
-        # outbound wire body ONLY. cache_control is an Anthropic wire concern —
-        # it must never reach LLMRequest / request_ref (the recorded bytes stay
-        # provider-neutral and unchanged). Breakpoints mark the END of a cached
-        # prefix; placing one on the last tool caches the (large) system+tools
-        # prefix, and one on the last message caches the growing conversation.
-        # Anthropic allows up to 4 breakpoints; we use 2-3.
+        # ``cache_control`` is an Anthropic wire concern and must never reach
+        # LLMRequest / request_ref, so it is stamped on the just-built body.
         _apply_cache_control(body)
         if request.temperature is not None:
             body["temperature"] = request.temperature
-        # Structured output (GA): JSON Schema pinned via output_config.
         if request.output_schema is not None:
             body["output_config"] = {
                 **body.get("output_config", {}),
@@ -381,18 +286,20 @@ class AnthropicProvider:
                     "schema": dict(request.output_schema),
                 },
             }
-        # Reasoning effort: carried inside output_config (overwrites any
-        # existing output_config entries set above.
+        # Effort rides inside output_config, alongside any format set above.
         if request.effort is not None:
             body.setdefault("output_config", {})["effort"] = request.effort
-        # Top-level thinking mode ("adaptive" / "disabled") — a sibling of
-        # output_config, not nested.
+        # Thinking mode is a sibling of output_config, not nested inside it.
         if request.thinking is not None:
             body["thinking"] = {"type": request.thinking}
         return body
 
     def _resolve_max_tokens(self, request: LLMRequest) -> int:
-        """rev2 B4: explicit request > explicit default > fail-fast."""
+        """Explicit request beats constructor default; neither raises.
+
+        Anthropic requires ``max_tokens``, and a cap this adapter invented
+        would truncate answers with no signal, so it never picks one.
+        """
         if request.max_tokens is not None:
             return int(request.max_tokens)
         if self._default_max_tokens is not None:
@@ -453,17 +360,16 @@ class AnthropicProvider:
 
 
 # ---------------------------------------------------------------------------
-# Error translation (② error recovery, provider-neutral)
+# Error translation
 # ---------------------------------------------------------------------------
 
-#: Substrings in an Anthropic ``invalid_request_error`` message that signal
-#: the prompt exceeded the context window (→ ContextOverflowError).
-#: Each marker must be a phrase that *only* an input-context overflow emits.
-#: The over-broad ``"max tokens"`` / ``"too many tokens"`` are deliberately
-#: excluded: they can appear in non-overflow 400s (e.g. an output-cap
-#: validation message) that compaction can't fix, and they are redundant —
-#: the real overflow body is ``"prompt is too long: N tokens > M maximum"``,
-#: already caught by the tight phrasings above.
+#: Substrings in an ``invalid_request_error`` message that mean the prompt
+#: exceeded the context window. Every marker must be a phrase that *only* an
+#: input-context overflow emits: the over-broad ``"max tokens"`` /
+#: ``"too many tokens"`` are excluded because they also appear in 400s
+#: compaction cannot fix (an output-cap validation message), and they add
+#: nothing — the real overflow body reads ``"prompt is too long: N tokens > M
+#: maximum"``, which the tight phrasings already catch.
 _OVERFLOW_MESSAGE_MARKERS: tuple[str, ...] = (
     "prompt is too long",
     "prompt too long",
@@ -475,13 +381,10 @@ _OVERFLOW_MESSAGE_MARKERS: tuple[str, ...] = (
 def _translate_http_error(exc: httpx.HTTPStatusError) -> Exception:
     """Map an Anthropic-shape HTTP status error into the neutral taxonomy.
 
-    * 429 → :class:`TransientError` (reads ``retry-after``).
-    * 529 (overloaded) / 5xx → :class:`TransientError`.
-    * 400 ``invalid_request_error`` whose message mentions the context
-      window / prompt-too-long → :class:`ContextOverflowError`.
-    * other 4xx (400 / 401 / 403 / ...) → :class:`FatalError`.
-
-    Anthropic error body: ``{"type": "error", "error": {"type", "message"}}``.
+    429, 529 (overloaded) and 5xx are retryable; every other 4xx is fatal. A
+    400 gets its body sniffed first, because context overflow arrives as an
+    ordinary ``invalid_request_error`` yet needs its own bucket — it is not
+    retryable and the recovery a Policy drives is compaction.
     """
     response = exc.response
     status = response.status_code
@@ -512,8 +415,8 @@ def _is_context_overflow(response: httpx.Response) -> bool:
 
 
 #: In-band SSE ``error`` event types that bucket as :class:`TransientError` —
-#: the same buckets their HTTP-status counterparts land in
-#: (``rate_limit_error`` 429 / ``api_error`` 500 / ``overloaded_error`` 529).
+#: the same failure classes their HTTP-status counterparts land in (429 / 500 /
+#: 529).
 _TRANSIENT_STREAM_ERROR_TYPES: frozenset = frozenset(
     {"rate_limit_error", "api_error", "overloaded_error"}
 )
@@ -522,17 +425,11 @@ _TRANSIENT_STREAM_ERROR_TYPES: frozenset = frozenset(
 def _translate_stream_error_event(payload: dict[str, Any]) -> Exception:
     """Map an in-band SSE ``error`` event into the neutral taxonomy.
 
-    Mid-stream, Anthropic reports failures as ``event: error`` frames instead
-    of HTTP statuses (the 200 header is already on the wire), so the bucketing
-    of :func:`_translate_http_error` is keyed on the error *type* rather than
-    a status code:
-
-    * ``rate_limit_error`` / ``api_error`` / ``overloaded_error`` →
-      :class:`TransientError` (no ``retry_after`` — an SSE frame carries no
-      headers, so the runtime falls back to exponential backoff).
-    * ``invalid_request_error`` mentioning the context window / prompt-too-long
-      → :class:`ContextOverflowError`.
-    * anything else → :class:`FatalError`.
+    The 200 header is already on the wire by then, so mid-stream failures
+    arrive as ``event: error`` frames and this classifies on the error *type*
+    where :func:`_translate_http_error` classifies on a status code. A frame
+    carries no headers, hence no ``retry_after`` — the runtime falls back to
+    exponential backoff.
     """
     error = payload.get("error")
     if not isinstance(error, dict):
@@ -550,27 +447,19 @@ def _translate_stream_error_event(payload: dict[str, Any]) -> Exception:
 
 
 # ---------------------------------------------------------------------------
-# Usage translation (foundation A, provider-neutral)
+# Usage translation
 # ---------------------------------------------------------------------------
 
 
 def _translate_usage(usage_raw: Any) -> Usage:
     """Map Anthropic's usage wire shape into Noeta-shape :class:`Usage`.
 
-    Anthropic reports cache detail and — critically — its
-    ``input_tokens`` is the **uncached** portion only (cache reads /
-    writes are billed separately and counted in their own fields). So:
-
-      * ``input_tokens``               → ``uncached``
-      * ``cache_read_input_tokens``    → ``cache_read``
-      * ``cache_creation_input_tokens``→ ``cache_write``
-      * ``output_tokens``              → ``output``
-
-    The derived ``Usage.input`` then sums to the *total* input
-    (uncached + cache read + cache write), satisfying D-A5. Anthropic
-    has no reasoning-token field today, so ``reasoning_tokens`` stays 0.
-    A missing / non-dict ``usage`` yields an empty ``Usage()`` rather
-    than raising.
+    ``input_tokens`` maps straight to ``uncached`` because Anthropic already
+    excludes the cache buckets from it and bills them separately — the
+    opposite of OpenAI, whose prompt count is a total the cached part must be
+    subtracted from. The derived ``Usage.input`` therefore sums back to the
+    real total. Anthropic reports no reasoning-token field, so that stays 0,
+    and a missing or non-dict ``usage`` degrades to an empty ``Usage()``.
     """
     if not isinstance(usage_raw, dict):
         return Usage()
@@ -590,22 +479,19 @@ def _translate_usage(usage_raw: Any) -> Usage:
 def _model_supports_vision(model: str) -> bool:
     """Whether ``model`` is catalogued as vision-capable.
 
-    Resolve a friendly alias first, then look the real id up in
-    ``catalog.CATALOG``; an unregistered model (or one with
-    ``supports_vision`` False) is treated as **not** vision-capable — the
-    conservative default keeps images away from a model that may not read them.
+    An unregistered model counts as not vision-capable: the conservative
+    reading keeps images away from a model that may be unable to read them.
     """
     spec = catalog.CATALOG.get(catalog.resolve_alias(model))
     return bool(spec is not None and spec.supports_vision)
 
 
 def _request_has_image(request: LLMRequest) -> bool:
-    """True if any ``Message`` carries a **top-level** ``ImageBlock`` (scans
-    every position, not just the last turn).
+    """True if any ``Message`` carries a **top-level** ``ImageBlock``.
 
-    Tool-result images ride ``ToolResultBlock.images`` (nested, not a top-level
-    block), so they are deliberately invisible here — their non-vision degrade
-    is the tool renderer's job, not the guard's.
+    Tool-result images ride ``ToolResultBlock.images`` and are deliberately
+    invisible here: their non-vision degrade is the tool renderer's job, not
+    the guard's.
     """
     return any(
         isinstance(block, ImageBlock)
@@ -615,12 +501,11 @@ def _request_has_image(request: LLMRequest) -> bool:
 
 
 def _guard_vision_capability(request: LLMRequest) -> None:
-    """A top-level ``ImageBlock`` bound for a non-vision model → :class:`FatalError`
-    before going on the wire.
+    """A top-level ``ImageBlock`` bound for a non-vision model → :class:`FatalError`.
 
-    Mirrors the Responses adapter: don't send an image to a model that cannot
-    read it. The text-only / tool-only path hits the catalog only when an image
-    is actually present, so it carries zero overhead and zero behavior change.
+    Refusing before wire assembly beats letting the gateway answer with a
+    cryptic 4xx or, worse, silently ignore the image. The catalog is consulted
+    only when an image is actually present, so the text-only path pays nothing.
     """
     if not _request_has_image(request):
         return
@@ -639,10 +524,10 @@ def _image_block_to_anthropic(
 ) -> dict[str, Any]:
     """``ImageBlock(ContentRef)`` → an Anthropic base64 ``image`` content block.
 
-    deref+base64 happens only at wire-assembly time, is transient, and is never
-    written back to the ledger / ContentStore (red line). A missing
-    ``image_resolver`` (None) means incomplete config → error explicitly rather
-    than silently dropping the image (mirrors the Responses adapter).
+    Deref and base64 happen only at wire-assembly time; the result is
+    transient and never written back to the ledger or ContentStore. A missing
+    ``image_resolver`` is incomplete configuration and errors out, because a
+    silently dropped image is far harder to notice.
     """
     if image_resolver is None:
         raise ValueError(
@@ -669,15 +554,16 @@ def _flatten_text_blocks(message: Message) -> str:
 
 
 def _is_host_injected(message: Message) -> bool:
-    """D4: a user-channel turn authored by the host (system-side
-    injection or memory recall) rather than the human. ``human`` / ``None``
-    mean the role's natural author — rendered as a plain user turn."""
+    """A user-channel turn authored by the host rather than the human.
+
+    ``human`` / ``None`` mean the role's natural author, rendered as a plain
+    user turn.
+    """
     return message.role == "user" and message.origin in ("system", "memory")
 
 
 def _wrap_system_reminder(text: str) -> str:
-    """Anthropic-only tag syntax — exists ONLY in this adapter (the tag
-    never enters the ledger; provider-neutral per D4)."""
+    """Anthropic-only tag syntax; it lives here so it never enters the ledger."""
     return f"<system-reminder>\n{text}\n</system-reminder>"
 
 
@@ -698,12 +584,12 @@ def _message_to_anthropic(
 def _user_message_to_anthropic(
     message: Message, image_resolver: Optional[ImageResolver]
 ) -> dict[str, Any]:
-    """rev2 B3: ``ToolResultBlock`` is forbidden inside ``role='user'``;
-    use ``role='tool'`` instead. ``ImageBlock`` is translated to an Anthropic
-    base64 ``image`` block (the vision guard already rejected the non-vision
-    misroute upstream). Other non-text blocks (Thinking / ToolUse) are skipped
-    silently — they don't normally appear in user history, and silent tolerance
-    matches OpenAICompatProvider's approach."""
+    """``ToolResultBlock`` raises here rather than being translated: tool
+    results must ride ``role='tool'`` so Anthropic's tool_use → tool_result
+    wire ordering stays intact. Thinking / ToolUse blocks are skipped silently
+    — they don't appear in user history, matching OpenAICompatProvider's
+    tolerance. Any non-vision image misroute was already rejected by the vision
+    guard upstream."""
     wrap = _is_host_injected(message)
     blocks: list[dict[str, Any]] = []
     for block in message.content:
@@ -717,21 +603,18 @@ def _user_message_to_anthropic(
             blocks.append({"type": "text", "text": text})
         elif isinstance(block, ImageBlock):
             blocks.append(_image_block_to_anthropic(block, image_resolver))
-        # ThinkingBlock / ToolUseBlock in user message: silently skipped
     return {"role": "user", "content": blocks}
 
 
 def _assistant_message_to_anthropic(
     message: Message, image_resolver: Optional[ImageResolver]
 ) -> dict[str, Any]:
-    """rev2 B2: regroup ``Message.content`` blocks into Anthropic's
-    required-ish order ``thinking* / text* / image* / tool_use*``. Stable sort
-    within each group preserves caller's relative ordering — useful
-    for multi-thinking or multi-tool-use cases. ``ImageBlock`` translates to an
-    Anthropic base64 ``image`` block (placed after text, before tool_use; the
-    vision guard already rejected the non-vision misroute upstream).
-    ``ToolResultBlock`` in an assistant message is silently skipped (caller bug,
-    matches OpenAICompatProvider tolerance)."""
+    """Regroup ``Message.content`` into Anthropic's required order
+    ``thinking* / text* / image* / tool_use*``, stable-sorted within each group
+    to preserve caller ordering across multi-thinking or multi-tool-use turns.
+    ``ToolResultBlock`` is skipped silently (caller bug, matches
+    OpenAICompatProvider tolerance); the non-vision image misroute was already
+    rejected upstream."""
     thinking_blocks: list[ThinkingBlock] = []
     text_blocks: list[TextBlock] = []
     image_blocks: list[ImageBlock] = []
@@ -745,7 +628,6 @@ def _assistant_message_to_anthropic(
             image_blocks.append(block)
         elif isinstance(block, ToolUseBlock):
             tool_use_blocks.append(block)
-        # ToolResultBlock silently skipped
     content: list[dict[str, Any]] = []
     for thinking in thinking_blocks:
         if thinking.data is not None:
@@ -784,11 +666,10 @@ def _tool_message_to_anthropic(
     image_resolver: Optional[ImageResolver],
     vision: bool,
 ) -> dict[str, Any]:
-    """rev2 B3: ``role='tool'`` becomes one Anthropic user message whose
-    content is **only** ``tool_result`` blocks (in input order).
-    Non-ToolResultBlock content raises — the strict placement keeps
-    Anthropic's "tool_use must be followed by tool_result user turn"
-    wire-shape invariant intact."""
+    """``role='tool'`` becomes one Anthropic user message whose content is
+    **only** ``tool_result`` blocks (in input order). Non-ToolResultBlock
+    content raises: the strict placement keeps Anthropic's "tool_use must be
+    followed by a tool_result user turn" wire-shape invariant intact."""
     blocks: list[dict[str, Any]] = []
     for block in message.content:
         if not isinstance(block, ToolResultBlock):
@@ -815,12 +696,12 @@ def _tool_result_content(
     """Render ``ToolResultBlock`` for Anthropic ``tool_result.content``.
 
     Anthropic's ``tool_result.content`` accepts either a bare string or a block
-    array. With no images (or a non-vision model) this returns the historical
-    **string** (JSON-encode non-string outputs; ``error`` prefixed per rev1 Q10),
-    keeping the text-only path byte-identical. When the block carries ``images``
-    AND the model is vision-capable, it returns an **array**: one ``text`` block
-    holding that same string, followed by one base64 ``image`` block per image
-    (deref'd via ``image_resolver``)."""
+    array. With no images (or a non-vision model) this returns the **string**
+    (JSON-encode non-string outputs; ``error`` prefixed), keeping the text-only
+    path byte-identical. When the block carries ``images`` AND the model is
+    vision-capable, it returns an **array**: one ``text`` block holding that same
+    string, followed by one base64 ``image`` block per image (deref'd via
+    ``image_resolver``)."""
     text = _tool_result_text(block)
     if vision and block.images:
         content: list[dict[str, Any]] = [{"type": "text", "text": text}]
@@ -832,8 +713,8 @@ def _tool_result_content(
 
 def _tool_result_text(block: ToolResultBlock) -> str:
     """The string rendering of ``ToolResultBlock.output``: JSON-encode non-string
-    outputs; prefix an ``error`` string (rev1 Q10) so Noeta's two-field
-    success/error split survives Anthropic's one-field tool_result body."""
+    outputs; prefix an ``error`` string so Noeta's two-field success/error split
+    survives Anthropic's one-field tool_result body."""
     output = block.output
     if isinstance(output, str):
         body = output
@@ -845,7 +726,7 @@ def _tool_result_text(block: ToolResultBlock) -> str:
 
 
 #: The single ephemeral cache breakpoint marker reused on every stamp site.
-#: Default TTL (5 min); no extended-TTL flag (out of scope, spec Non-goals).
+#: Default TTL (5 min); no extended-TTL flag.
 _CACHE_CONTROL_EPHEMERAL: dict[str, str] = {"type": "ephemeral"}
 
 
@@ -853,7 +734,7 @@ def _apply_cache_control(body: dict[str, Any]) -> None:
     """Stamp ephemeral prompt-cache breakpoints onto the outbound wire body.
 
     Mutates ``body`` in place; the caller passes the just-built wire dict, so
-    no LLMRequest / request_ref bytes are touched (#4). Breakpoints (≤4):
+    no LLMRequest / request_ref bytes are touched. Breakpoints (≤4):
 
     * **system**: if present, lift the flat string into block form
       ``[{"type":"text","text":...,"cache_control":...}]`` — Anthropic requires
@@ -887,10 +768,8 @@ def _apply_cache_control(body: dict[str, Any]) -> None:
 
 
 def _translate_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Unpack OpenAI-shape tool dicts (Composer's current emit shape)
-    into Anthropic-shape. rev2 NB3 widens defensive validation:
-    ``function`` / ``name`` / ``parameters`` must all be present with
-    the right types."""
+    """Unpack OpenAI-shape tool dicts into Anthropic-shape. ``function`` /
+    ``name`` / ``parameters`` must all be present with the right types."""
     out: list[dict[str, Any]] = []
     for tool in tools:
         function = tool.get("function") if isinstance(tool, dict) else None
@@ -929,11 +808,10 @@ def _translate_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _parse_response_content(content_raw: list[Any]) -> list[Block]:
-    """Translate Anthropic response content blocks 1-to-1 into Noeta
-    Block instances. Unknown block types are silently skipped to
-    keep the adapter forward-compatible with future Anthropic schema
-    additions; the missing block reaches the caller as a content-shape
-    gap (one fewer block than the wire carried)."""
+    """Translate Anthropic response content blocks into Noeta Block instances.
+    Unknown block types are skipped to stay forward-compatible with new
+    Anthropic block types; the missing block reaches the caller as a
+    content-shape gap (one fewer block than the wire carried)."""
     blocks: list[Block] = []
     for entry in content_raw:
         if not isinstance(entry, dict):
@@ -961,10 +839,9 @@ def _parse_response_content(content_raw: list[Any]) -> list[Block]:
             # trip verbatim on the next request (a tool-use turn that carried
             # thinking is rejected if its reasoning blocks are missing). Carry
             # it on ``ThinkingBlock.data`` rather than dropping the block. If the
-            # blob is missing / non-str there is nothing to round-trip: keeping a
+            # blob is missing / non-str there is nothing to round-trip, and a
             # ``ThinkingBlock(text="", data=None)`` would be re-emitted outbound
-            # as an empty ``thinking`` block (the API rejects it), so drop it —
-            # the same skip the pre-``data`` parser did for redacted blocks.
+            # as an empty ``thinking`` block (the API rejects it), so drop it.
             data = entry.get("data")
             if isinstance(data, str):
                 blocks.append(ThinkingBlock(text="", signature=None, data=data))
@@ -983,7 +860,6 @@ def _parse_response_content(content_raw: list[Any]) -> list[Block]:
                     arguments=arguments,
                 )
             )
-        # Unknown block types: silently skipped for forward compatibility
     return blocks
 
 
@@ -1027,8 +903,6 @@ class _StreamAccumulator:
                 f"type={type(payload).__name__}"
             )
         if event_name == "message_start":
-            # The message envelope: id / type / role / model plus the
-            # input-side usage (uncached + cache read/write tokens).
             message = payload.get("message")
             self._message = dict(message) if isinstance(message, dict) else {}
         elif event_name == "content_block_start":

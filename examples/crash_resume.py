@@ -1,35 +1,27 @@
-"""Runtime demo — kill -9 a live worker mid-task; fold brings the task back.
+"""Example — kill -9 a live worker mid-task; fold brings the task back.
 
-Demonstrated runtime capability
--------------------------------
-The core durability claim: a task's entire state is folded from its
-append-only EventLog, never held across runs in process memory. This
-script proves it the blunt way:
+Demonstrated SDK capability
+---------------------------
+Durable storage from ``noeta.sdk.storage``: the SQLite EventLog / ContentStore
+/ Dispatcher triple a host injects, and the durability claim that rests on it —
+a task's state is folded from its append-only EventLog and never held across
+runs in process memory. Two processes share one file: the first records real
+work and suspends on a timer, the orchestrator SIGKILLs it with no chance to
+flush, and the second folds the stream back into the suspended state and drains
+the wake to completion, exactly once.
 
-1. **Process A** creates a task on a durable SQLite store, advances it
-   (a recorded progress message, then a ``wait_timer`` suspend), and
-   idles. The task is now mid-flight: real work recorded, a wake
-   scheduled, nothing finished.
-2. The orchestrator sends **SIGKILL** — no shutdown hook, no flush, the
-   process is simply gone.
-3. **Process B** reopens the same SQLite file, ``fold``s the event
-   stream back into the exact suspended state, polls the dispatcher
-   until the timer comes due, and the woken task runs to completion —
-   exactly once.
+SIGKILL rather than a clean exit is the point: any teardown hook would let the
+demo pass while still holding state in memory.
 
-No API key and no network: decisions come from a scripted policy (a
-``Policy`` is just "given the current View, return a Decision" — an LLM
-is one implementation, a script is another). The mechanism exercised —
-EventLog + fold + Dispatcher wake — is byte-identical to what a real
-LLM-driven agent runs on.
+Decisions come from a scripted Policy, so the run needs no API key and no
+network. A Policy is just "given the current View, return a Decision" — an LLM
+is one implementation, a script another — and the durability path underneath is
+the same either way.
 
-Running it
-----------
     python examples/crash_resume.py
 
-Phases can also be driven by hand (see ``--phase start`` / ``--phase
-resume``), e.g. to hold the crash window open and inspect the SQLite
-file between the two processes.
+``--phase start`` / ``--phase resume`` drive the two halves by hand, which is
+how to hold the crash window open and inspect the SQLite file in between.
 """
 
 from __future__ import annotations
@@ -70,16 +62,19 @@ def _say(text: str) -> None:
 
 
 def _open_runtime(db: str, policy) -> tuple[Engine, SqliteEventLog, SqliteContentStore, SqliteDispatcher]:
-    """Assemble the durable trio + Engine (the deploy-worker wiring)."""
+    """The wiring both processes rebuild identically — nothing is handed over."""
     dispatcher = SqliteDispatcher(db)
     store = SqliteContentStore(db)
+    # The dispatcher validates leases on append, so a worker that lost its
+    # lease (say, to the crash below) cannot write into the stream a live
+    # worker now owns.
     log = SqliteEventLog(db, lease_validator=dispatcher)
     wire_default_observers(log, dispatcher)
     engine = Engine(
         event_log=log,
         content_store=store,
-        # The trivial composer keeps the demo free of LLM concerns; a real
-        # deployment wires ThreeSegmentComposer via the SDK builder.
+        # A trivial composer keeps context assembly out of a demo that is about
+        # durability; it makes no difference to the EventLog path being tested.
         composer=trivial_three_segment(store),
         policy=policy,
     )
@@ -87,7 +82,7 @@ def _open_runtime(db: str, policy) -> tuple[Engine, SqliteEventLog, SqliteConten
 
 
 def phase_start(db: str) -> None:
-    """Process A: create the task, do real work, suspend on a timer, idle."""
+    """Process A: real work recorded, a wake scheduled, nothing finished."""
     progress = Message(
         role="assistant",
         content=[TextBlock(text="Outline drafted; waiting on external data.")],
@@ -122,7 +117,7 @@ def phase_start(db: str) -> None:
 
 
 def phase_resume(db: str, task_id: str) -> None:
-    """Process B: reopen the store, fold state back, drain the timer wake."""
+    """Process B: the file is the only thing it inherits from process A."""
     policy = StubScriptedPolicy([FinishDecision(answer="Weekly report ready.")])
     engine, log, store, dispatcher = _open_runtime(db, policy)
 
@@ -140,6 +135,8 @@ def phase_resume(db: str, task_id: str) -> None:
 
     lease = dispatcher.lease(worker_id="worker-b", task_id=task_id)
     assert lease is not None
+    # Recorded as its own event so the step below has no "fresh start or
+    # resume?" branch to get wrong.
     task = engine.note_woken(task, lease_id=lease.lease_id, wake_event=lease.wake_event)
     task = engine.run_one_step(task, lease_id=lease.lease_id)
     assert task.status == "terminal", task.status
@@ -153,6 +150,8 @@ def phase_resume(db: str, task_id: str) -> None:
     for env in log.read(task_id):
         if env.type == "TaskCompleted":
             assert isinstance(env.payload, TaskCompletedPayload)
+            # The store is required, not decorative: a large answer is spilled
+            # to a ContentRef and the payload alone would read back empty.
             answer = str(answer_from_payload(env.payload, store))
     _say(f"task completed: {answer!r}")
     history = " → ".join(e.type for e in log.read(task_id))
@@ -160,7 +159,11 @@ def phase_resume(db: str, task_id: str) -> None:
 
 
 def orchestrate(db: str) -> int:
-    """Run phase A, SIGKILL it once suspended, then run phase B."""
+    """Run phase A, SIGKILL it once suspended, then run phase B.
+
+    Waits for the marker line rather than a fixed delay: killing before the
+    suspend is durable would test nothing.
+    """
     child = subprocess.Popen(
         [sys.executable, "-u", __file__, "--phase", "start", "--db", db],
         stdout=subprocess.PIPE,

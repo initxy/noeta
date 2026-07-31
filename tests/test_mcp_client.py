@@ -1,9 +1,10 @@
-"""Phase 4.5 F2 — `McpStdioClient` lifecycle + deadlock/cap guards.
+"""``McpStdioClient`` lifecycle plus its deadlock and cap guards.
 
-Exercises the real subprocess against the in-tree fake MCP server: the
-happy initialize→list→call path, the per-call timeout (no hang), a
-server that dies mid-call, an oversized line cap, and bounded shutdown
-that leaves no leaked process.
+An MCP server is an unvetted subprocess on the far side of a pipe: it can hang,
+die mid-call, or flood the reader. These drive the real subprocess against the
+in-tree fake server, so the per-call timeout, the line and cumulative byte caps,
+and a bounded shutdown that leaks no process are exercised for real — a mock
+would never reproduce the hang or the orphaned child.
 """
 
 from __future__ import annotations

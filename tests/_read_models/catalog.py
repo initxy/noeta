@@ -1,21 +1,14 @@
-"""read_models.catalog — `noeta code list` projection (pure read).
+"""Catalog projection: the session list, narrowed to code sessions (pure read).
 
-Filters the generic session catalog down to CODE sessions — tasks whose genesis
-``TaskCreated.agent_name`` is a registered coding Agent
-(canonical main / general-purpose / explore / plan, via ``noeta.presets``) — and
-adds the code-facing fields the ``noeta code list`` table shows.
+Filters the generic session catalog down to tasks whose genesis
+``TaskCreated.agent_name`` is a registered coding Agent (the canonical
+``noeta.presets`` names) and adds the code-facing status fields.
 
-No longer imports
-``noeta.agent.roster.agents.AGENTS``; uses :func:`noeta.presets.official_specs`
-plus legacy aliases to decide whether a stream is a code session.
-
-Read-only and deliberately **light** (CW5b P1.1 / watchpoint 2): imports only the
-narrow ``EventLogReader`` / ``EventLogTaskIndex`` / ``ContentStore`` Protocols,
-``fold``, ``official_specs``, and the typed wake-handle constants — NEVER
-``noeta.agent.execution.resolver`` / ``Engine`` / provider / the session runner.
-The enumeration reuses the CW5a ``EventLogTaskIndex`` capability; the genesis is
-read through the narrow reader (not ``resolver.agent_name_of``, which drags the
-host seam in).
+Deliberately **light**: it imports only the narrow ``EventLogReader`` /
+``EventLogTaskIndex`` / ``ContentStore`` Protocols, ``fold``,
+``official_specs``, and the typed wake-handle constants. Enumeration goes
+through ``EventLogTaskIndex`` and the genesis through the narrow reader, so
+listing sessions never drags in the Engine host seam.
 """
 
 from __future__ import annotations
@@ -42,23 +35,21 @@ __all__ = [
 ]
 
 
-#: D1: legacy recording aliases (kept
-#: consistent with server.py/session.py).
+#: Recording aliases: an ``agent_name`` a stream may carry → its canonical name.
 _ALIASES: dict[str, str] = {"default": "main"}
 
-#: Module-level snapshot: the canonical agent-name set (for code-session checks).
+#: Snapshot of the canonical agent-name set, taken once per import.
 _CANONICAL_NAMES: frozenset[str] = frozenset(official_specs())
 
 
 def _is_code_agent_name(name: str) -> bool:
-    """True if ``agent_name`` is a known code agent (legacy aliases included)."""
     return _ALIASES.get(name, name) in _CANONICAL_NAMES
 
 
 @dataclass(frozen=True, slots=True)
 class CodeSessionRow:
-    """One row of ``noeta code list``. ``model`` is ``None`` until a ``ModelBound``
-    is folded; ``status_text`` is the code-facing label (see :func:`_status_text`)."""
+    """One catalog row. ``model`` stays ``None`` until a ``ModelBound`` is
+    folded; ``status_text`` is the code-facing label (see :func:`_status_text`)."""
 
     task_id: str
     agent: str
@@ -72,11 +63,12 @@ class CodeSessionRow:
 
 
 def _status_text(status: str, closed: bool, wake_on: Any) -> str:
-    """Code-facing status with fixed precedence (CW5b OQ3):
-    ``closed`` > ``terminal`` > ``awaiting approval`` > ``resumable`` > the
-    underlying ``status``. The approval / next-goal cases are decided from the
-    **typed** ``wake_on`` (a :class:`HumanResponseReceived`), never by string
-    matching a rendered value."""
+    """Code-facing status with fixed precedence: ``closed`` > ``terminal`` >
+    ``awaiting approval`` > ``resumable`` > the underlying ``status``.
+
+    The approval / next-goal cases are decided from the **typed** ``wake_on``
+    (a :class:`HumanResponseReceived`), never by string-matching a rendered
+    value."""
     if closed:
         return "closed"
     if status == "terminal":
@@ -129,11 +121,6 @@ def list_code_sessions(
     return rows
 
 
-# ---------------------------------------------------------------------------
-# CW16 — `noeta code list` search / filter / sort (pure, over CodeSessionRow)
-# ---------------------------------------------------------------------------
-
-
 def filter_code_sessions(
     rows: list[CodeSessionRow],
     *,
@@ -148,8 +135,8 @@ def filter_code_sessions(
 
     Filters AND together; order of operations is filter → sort → limit. All
     args default to "no filter", and ``sort="updated"`` **preserves the input
-    order** (the recency-desc + task_id tiebreak ``list_code_sessions`` already
-    produced) — so the default call returns the rows unchanged (CW16 no-drift).
+    order** — the recency-desc + task_id tiebreak ``list_code_sessions`` already
+    produced — so a default call returns the rows unchanged.
 
     - ``status`` — case-insensitive substring against the displayed
       ``status_text`` (so ``"approval"`` matches ``"awaiting approval"``).

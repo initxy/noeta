@@ -1,42 +1,14 @@
-"""L2 hosting layer — the resident worker that drives leased Tasks.
+"""The resident worker that drives leased Tasks.
 
-This is the run layer of the Hosted Single-Host Runtime: the
-resident equivalent of a single-task resume drain loop. It deliberately
-lives in L2 (not a higher layer) so the SDK / embedding / external
-platforms can drive a runtime without reverse-depending on the code
-runner.
-
-Three pieces:
-
-* :class:`WorkerRuntime` — the narrow structural Protocol the worker
-  needs: ``engine`` / ``event_log`` / ``content_store`` / ``dispatcher``.
-  ``noeta.testing.profile.RuntimeBundle`` (the test seam) and the live
-  ``noeta.agent.resolver.CodeEngineResolver`` satisfy it structurally; L2
-  never imports those higher-layer types.
-* :func:`run_leased_task` — the canonical 3-state resume machine
-  (woken / drained / skipped), the single implementation shared by every
-  resume surface. ``noeta.agent.driver`` / ``noeta.agent.session`` re-import it.
-* :class:`WorkerLoop` — the drain loop + worker exception policy (a
-  daemon must never crash on one poisoned task).
-
-Module capabilities: the worker loop (lease → run → release), the
-per-step heartbeat side-thread, the periodic stale-sweep, and the
-best-effort signal-driven graceful shutdown all live here.
-The code runner (``python -m noeta.agent``) is the concrete host that
-wraps this module. Single-worker only; no ``--workers``.
-
-Graceful shutdown is **bounded process-shutdown** (H1): on SIGTERM /
-SIGINT the loop stops leasing new tasks and waits up to
-``shutdown_grace_s`` for the in-flight step (run on a daemon **step
-thread**) to finish, then releases and exits. If the grace elapses the
-loop **abandons** the step — stops its heartbeat so the lease expires,
-emits a ``shutdown_abandoned`` :class:`ReliabilityEvent`, sets
-:attr:`WorkerLoop.abandoned`, and returns without touching the lease.
-There is still NO in-process interrupt (Python cannot kill the thread):
-abandon is **process-shutdown only** — the host MUST exit the process,
-the abandoned thread may still run + write the EventLog, and the
-expired lease is reclaimed by ``requeue_stale`` after the process dies.
-``shutdown_grace_s=None`` / ``<= 0`` restores the old unbounded wait.
+:func:`run_leased_task` is the single implementation of the resume machine
+(woken / drained / skipped, plus the two human-stop landings), so no resume
+surface can drift in how a wake is consumed; :class:`WorkerLoop` adds the
+drain loop, the per-step heartbeat and the exception policy that keeps a
+daemon alive through one poisoned task. It sits in the kernel band and talks
+to its runtime through the narrow :class:`WorkerRuntime` Protocol, so an
+embedding can drive tasks without the worker depending on any host layer.
+Shutdown is bounded and cannot interrupt a running step — see
+:class:`WorkerLoop`, whose abandon path is process-shutdown only.
 """
 
 from __future__ import annotations
@@ -99,40 +71,11 @@ _log = logging.getLogger(__name__)
 DEFAULT_SHUTDOWN_GRACE_S = 30.0
 
 
-# ---------------------------------------------------------------------------
-# Reliability events (H1) — process-local observability ONLY.
-# ---------------------------------------------------------------------------
-#
-# These are deliberately NOT EventLog events: they are not persisted, not
-# folded, and not resumed. They live inside
-# ``noeta.runtime.worker`` as a plain dataclass + an injectable sink so an
-# operator (or a future external trace-export slice) can observe daemon
-# reliability moments without touching the L0 / resume contract.
-#
-# Every ``kind`` is named for what the worker can ACTUALLY prove from the
-# Dispatcher seam — never a root cause it cannot observe:
-#
-# * ``stale_requeued``          — a ``requeue_stale()`` sweep returned ≥1 lease.
-# * ``suspended_without_wake``  — a leased suspended task had no wake_event
-#                                 (the wake-loss *symptom*; cause unprovable).
-# * ``step_failed_retryable``   — the loop caught a step exception and called
-#                                 ``dispatcher.fail(retryable=True)``. Does NOT
-#                                 claim the task went terminal (the Dispatcher
-#                                 decides requeue-vs-terminal; ``fail`` returns
-#                                 nothing).
-# * ``heartbeat_invalid_lease`` — a heartbeat got ``InvalidLease`` (symptom;
-#                                 cause may be cap/expired/requeued/released).
-# * ``shutdown_abandoned``      — the shutdown grace elapsed with a step still
-#                                 in flight (process-shutdown only — see
-#                                 ``WorkerLoop`` docstring).
-# * ``timers_fired``            — the timer poll delivered ``TimerFired``
-#                                 wakes to due ``wait_timer`` suspends.
-# * ``attempt_abandoned``       — crash recovery sealed an interrupted
-#                                 attempt and re-drove the step automatically
-#                                 (classified side-effect-safe).
-# * ``attempt_parked``          — crash recovery sealed an interrupted
-#                                 attempt and parked the task for a human
-#                                 (unsafe tool activity, or the abandon cap).
+# Process-local observability, deliberately NOT EventLog events: never
+# persisted, folded, or resumed, so an operator can watch daemon reliability
+# moments without any of it entering the resume contract. Every kind is named
+# for what the worker can ACTUALLY prove from the Dispatcher seam — a symptom
+# it observed, never a root cause it inferred.
 ReliabilityKind = Literal[
     "stale_requeued",
     "suspended_without_wake",
@@ -168,23 +111,21 @@ def _default_reliability_sink(event: ReliabilityEvent) -> None:
     )
 
 
-# The lifecycle outcome of advancing one leased task. A Literal so mypy
-# catches a mistyped tag at the call site (architect I1 non-blocking).
-#   ``"cancelled"`` / ``"stopped"`` — a human cancel/close landed mid-turn and
-#   the in-flight result was abandoned (see :func:`_settle_stopped_turn`):
-#   ``"cancelled"`` left the task terminal, ``"stopped"`` left it reopenable.
+# The lifecycle outcome of advancing one leased task. ``"cancelled"`` and
+# ``"stopped"`` both mean a human stop landed mid-turn and the in-flight
+# result was abandoned; they differ in whether the task was left terminal or
+# reopenable (see :func:`_settle_stopped_turn`).
 WorkerOutcome = Literal["woken", "drained", "skipped", "cancelled", "stopped"]
 
 
 class WakeRecoveryError(Exception):
-    """H2 (D4 case 6) — a woken lease's wake cannot be reconciled
-    against the task's folded state (no matching suspension, or an
-    unexpected status). The worker fails loud rather than silently
-    continue."""
+    """A woken lease's wake cannot be reconciled against the task's folded
+    state (no matching suspension, or an unexpected status). The worker
+    fails loud rather than silently continue."""
 
 
 def _find_matching_woken_index(events: list[Any], wake_event: Any) -> Optional[int]:
-    """D4 / P1.2 — within the **current suspend-window** (after the
+    """Within the **current suspend-window** (after the
     latest ``TaskSuspended`` whose ``wake_on`` matches ``wake_event`` **or the
     latest ``TaskRewound`` re-base, whichever is later**), the index of a
     ``TaskWoken`` whose ``wake_event`` equals it. Returns the boundary-less
@@ -242,7 +183,7 @@ class WorkerRuntime(Protocol):
 
     ``engine`` is the single-Engine view (one host = one Agent). A
     resident host that drives many Agents instead implements
-    ``resolve_engine(task) → Engine`` (D1): the per-task agent→
+    ``resolve_engine(task) → Engine``: the per-task agent→
     engine resolver. :func:`resolve_engine` (below) is the L2 seam that
     picks between them — it prefers ``rt.resolve_engine(task)`` when the
     runtime provides it, else falls back to the single ``rt.engine``. The
@@ -264,14 +205,14 @@ class WorkerRuntime(Protocol):
 
 
 def resolve_engine(rt: WorkerRuntime, task: Any) -> Any:
-    """The per-task agent→engine seam (D1).
+    """The per-task agent→engine seam.
 
     Returns the Engine that drives ``task``. If the runtime supplies a
     ``resolve_engine(task)`` method (a resident multi-Agent host), defer to
     it — that is where the ``TaskCreated.agent_name`` → ``get_agent`` →
     ``build_engine_for_agent`` fold lives (in L3, so L2 never imports the
     Agent registry). An **unknown** agent raises there at lease time — a
-    hard error, never a silent no-op (D2). A single-Agent host
+    hard error, never a silent no-op. A single-Agent host
     (the degenerate product runner / the daemon over one Agent) has
     no ``resolve_engine`` and falls back to its single ``rt.engine``.
     """
@@ -282,21 +223,21 @@ def resolve_engine(rt: WorkerRuntime, task: Any) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Woken-command-prelude seam (D4)
+# Woken-command-prelude seam
 # ---------------------------------------------------------------------------
 #
 # ``run_leased_task``'s woken branch is *only* ``note_woken → run_one_step``.
 # But the real product commands inject a step **between** ``note_woken`` and
 # ``run_one_step``: ``send_goal`` appends the new turn's user message; an
-# approval resolution runs/denies the pending tool call. Without a seam, the
-# The CLI product runner re-implemented the whole lease→note_woken→<prelude>
-# →run_one_step→release machine inline (including the H2
-# ``consumed_wake_event`` release discipline) — the CLI/web divergence source.
+# approval resolution runs/denies the pending tool call. Without a seam, each
+# surface would re-implement the whole lease→note_woken→<prelude>
+# →run_one_step→release machine inline (including the
+# ``consumed_wake_event`` release discipline), and the surfaces would diverge.
 #
-# A ``WokenPrelude`` is a typed, byte-pure step run inside the H2 case-1
+# A ``WokenPrelude`` is a typed, byte-pure step run inside the case-1
 # (first-consume) window, after ``TaskWoken`` is durable and before the step.
 # It MUST be a no-op-or-append over the SAME engine/lease so the recorded
-# bytes are identical to the old inline path:
+# bytes stay stable:
 #
 #   note_woken → <prelude events> → run_one_step → release(consumed_wake_event)
 #
@@ -304,7 +245,7 @@ def resolve_engine(rt: WorkerRuntime, task: Any) -> Any:
 # worker-loop's plain woken branch). The prelude is the ONLY per-command
 # variation; every surface shares this one machine.
 #
-# ``durable_at_seed`` (D6, docs/adr/step-attempt-recovery.md) marks the
+# ``durable_at_seed`` (see docs/adr/step-attempt-recovery.md) marks the
 # preludes that only APPEND durable events (message / answer / ModelBound):
 # the driver's seed applies these synchronously on the request thread —
 # ``note_woken`` + prelude land BEFORE the command is acked, so an acked
@@ -321,13 +262,12 @@ class WokenPrelude(Protocol):
     Called with the woken task (status ``running`` after ``TaskWoken``) and
     the active ``lease_id``; returns the (possibly-advanced) task to feed
     into ``run_one_step``. Implementations MUST only append durable events
-    over the given engine + lease — they ride the H2 first-consume window,
-    so their bytes land between ``TaskWoken`` and the step, exactly as the
-    old inline CLI path recorded them.
+    over the given engine + lease — they ride the first-consume window,
+    so their bytes land between ``TaskWoken`` and the step.
 
     ``durable_at_seed`` (a class attribute, read via ``getattr`` with a
     ``False`` default) opts an append-only prelude into seed-time
-    application — see the D6 note above.
+    application — see the note above.
     """
 
     def __call__(self, engine: Any, task: Any, *, lease_id: str) -> Any: ...
@@ -339,7 +279,7 @@ class AppendMessagePrelude:
 
     Mirrors ``engine.append_user_message(task, content, lease_id)`` (the
     step formerly inlined in the product runner's goal-resume path).
-    D5: carries the typed ``content: list[Block]`` (a text-only
+    Carries the typed ``content: list[Block]`` (a text-only
     follow-up goal passes ``[TextBlock(goal)]``; images ride along).
 
     ``origin`` is the optional ``Message.origin`` tag the
@@ -371,7 +311,7 @@ class AppendMessagePrelude:
     attachment_texts: tuple[str, ...] = ()
     activate_skills: tuple[str, ...] = ()
 
-    #: Pure appends — safe (and required, D6) to run at seed time.
+    #: Pure appends — safe (and required) to run at seed time.
     durable_at_seed: ClassVar[bool] = True
 
     def __call__(self, engine: Any, task: Any, *, lease_id: str) -> Any:
@@ -470,7 +410,7 @@ def _render_subtask_wake(
     present on the transcript, nothing is appended — safe to call on the
     bare re-drive (case 2′) after a crash between note_woken and the step.
 
-    Pairing correctness (reviewer finding 1): both the single-child and
+    Pairing correctness: both the single-child and
     the fan-out-group branches match tool_result to its originating
     ``spawn_subagent`` tool_use positionally, reading unpaired spawn
     tool_uses forward across assistant messages and pending
@@ -707,8 +647,8 @@ def run_leased_task(
       ``engine.note_woken`` → optional ``prelude`` → ``run_one_step``, then
       release (consuming the wake).
     * ``"skipped"`` — folded task is suspended but no ``wake_event``
-      arrived (a diagnostic symptom: the task is simply still waiting; H2
-      makes wake delivery exactly-once, so this is no longer a loss path)
+      arrived (a diagnostic symptom: the task is simply still waiting; wake
+      delivery is exactly-once, so this is not a loss path)
       → re-release ``suspended`` preserving ``wake_on``.
     * ``"drained"`` — pending / running → ``run_one_step``, then release.
       A ``running`` drain first scans for an interrupted attempt (an
@@ -724,17 +664,17 @@ def run_leased_task(
     (driver / test callers) degrades to logs.
 
     ``engine`` overrides the per-task resolve: the driver's seed passes the
-    Engine it resolved BEFORE applying a seed-time prelude (D6), so a
+    Engine it resolved BEFORE applying a seed-time prelude, so a
     seed-written ``ModelBound`` keeps its drive-the-next-turn semantics.
-    ``None`` (every other caller) resolves as before.
+    ``None`` (every other caller) resolves as usual.
 
-    ``prelude`` (D4) is the typed woken-command-prelude seam: a
+    ``prelude`` is the typed woken-command-prelude seam: a
     step run **after** ``note_woken`` and **before** ``run_one_step`` (the
-    H2 first-consume window). ``None`` is the daemon worker-loop's plain
+    first-consume window). ``None`` is the daemon worker-loop's plain
     woken branch; ``AppendMessagePrelude`` / ``ResolveApprovalPrelude`` are
-    the CLI/web ``send_goal`` / approval commands. The prelude only runs on
+    the ``send_goal`` / approval commands. The prelude only runs on
     the first-consume case — a re-delivered wake whose ``TaskWoken`` is
-    already durable (H2 cases 2–4) reconciles by folded status and never
+    already durable reconciles by folded status and never
     re-runs the prelude (the command's bytes are already recorded).
 
     Single source of truth for the resume machine: the daemon
@@ -742,7 +682,7 @@ def run_leased_task(
     through here so their semantics cannot drift.
     """
     task = fold(rt.event_log, rt.content_store, lease.task_id)
-    # D1: drive ``task`` with ITS OWN Agent's Engine, not a fixed
+    # Drive ``task`` with ITS OWN Agent's Engine, not a fixed
     # ``rt.engine``. The resolver folds ``TaskCreated.agent_name`` (hard
     # error on an unknown agent at lease time); a single-Agent host returns
     # its one Engine. A seed-pinned ``engine`` (see above) wins.
@@ -838,7 +778,7 @@ def _cancel_predicate(rt: WorkerRuntime, task_id: str) -> Optional[Callable[[], 
 
     Returns ``None`` when the host has no ``is_cancelled`` seam (a bare
     ``WorkerRuntime`` test double), so the Engine never polls and recordings
-    stay byte-identical to the pre-stop path.
+    stay byte-identical whether or not a cancel seam is wired.
     """
     is_cancelled = getattr(rt, "is_cancelled", None)
     if not callable(is_cancelled):
@@ -868,7 +808,7 @@ def _settle_stopped_turn(
       typing again.
 
     An ``interrupt`` landing records ``TaskSuspended.reason="interrupted"``
-    (the A1 channel) so the rest is self-describing — a resumable park reached
+    so the rest is self-describing — a resumable park reached
     because a human stopped the turn, not because the model asked a question.
     Read off the control event the stop wrote rather than passed in, because
     the raise unwinds through the Engine and carries nothing with it.
@@ -955,16 +895,16 @@ def _run_woken(
     cancelled: Optional[Callable[[], bool]] = None,
     reliability_sink: Optional[ReliabilitySink] = None,
 ) -> WorkerOutcome:
-    """H2 (D4) — the latest-matching-`TaskWoken` recovery state
+    """The latest-matching-`TaskWoken` recovery state
     machine. ``task`` is the freshly folded task; ``lease.wake_event`` is the
     matched wake (re-)delivered by the dispatcher. Exactly-once: the wake is
     consumed once (case 1) or its already-durable consumption is reconciled
     without a second ``TaskWoken`` (cases 2′–4) — each consuming release
     passes ``consumed_wake_event`` so the dispatcher clears the matched
-    event (D2/D6). The ``running`` reconciliation keys on the attempt
+    event. The ``running`` reconciliation keys on the attempt
     sentinel (a ``ContextPlanComposed`` in the live window — see
     ``noeta.runtime.attempt``): none ⇒ bare re-drive (case 2′), present ⇒
-    the H1 partial-step orphan goes through seal + re-drive-or-park
+    the partial-step orphan goes through seal + re-drive-or-park
     recovery (case 5′, docs/adr/step-attempt-recovery.md). Case 6 = fail
     loud.
     """
@@ -994,10 +934,10 @@ def _run_woken(
         task = _render_subtask_wake(
             engine, task, lease.wake_event, lease_id=lease.lease_id
         )
-        # Woken-command-prelude seam (D4): the per-command step
+        # Woken-command-prelude seam: the per-command step
         # between TaskWoken and run_one_step (append-message / resolve-approval
-        # / none). Rides this first-consume window so its bytes land exactly
-        # where the old inline CLI path recorded them.
+        # / none). Rides this first-consume window so its bytes land where the
+        # step that follows expects them.
         if prelude is not None:
             task = prelude(engine, task, lease_id=lease.lease_id)
         task = engine.run_one_step(task, lease_id=lease.lease_id, cancelled=cancelled)
@@ -1047,7 +987,7 @@ def _run_woken(
             # step. Correct by construction for every caller: timer /
             # subtask re-deliveries (nothing to re-derive), seeded command
             # wakes whose prelude events were written durably at seed time
-            # (D6 — they precede the first attempt and fold into ``task``),
+            # (they precede the first attempt and fold into ``task``),
             # and a crash between an ``auto_redrive`` seal and its re-drive
             # (the seal already re-based the state; park-reason seals never
             # reach here — ``scan_pending_park`` above completes the park
@@ -1073,7 +1013,7 @@ def _run_woken(
                 consumed_wake_event=lease.wake_event,
             )
             return "woken"
-        # case 5′ — an interrupted attempt after the wake (the H1
+        # case 5′ — an interrupted attempt after the wake (the
         # partial-step orphan): seal + re-drive or park.
         return _recover_interrupted_attempt(
             rt,
@@ -1106,11 +1046,11 @@ def _recover_interrupted_attempt(
     """Seal an interrupted attempt, then re-drive or park
     (docs/adr/step-attempt-recovery.md).
 
-    Classify (D2: "whatever could run without a human approval gate may be
-    re-driven without a human") → seal (D3/D4: ``StepAttemptAbandoned``
+    Classify (whatever could run without a human approval gate may be
+    re-driven without a human) → seal (``StepAttemptAbandoned``
     with the pre-attempt baseline, written under THIS lease) → either
     re-drive the step in the same lease, or park the task as a stopped
-    conversation (D7: system notice + next-goal suspend — typing resumes
+    conversation (system notice + next-goal suspend — typing resumes
     it, ``close``/``cancel`` end it, zero new verbs). ``consumed`` is the
     wake to clear on release (``None`` on the drained path). The seal is
     durable before either continuation, so a crash *during* recovery
@@ -1118,14 +1058,14 @@ def _recover_interrupted_attempt(
     as a park completion (after a park-reason seal — ``scan_pending_park``),
     or as a fresh case 5′ (before the seal) — recovery recurses naturally,
     and :data:`~noeta.runtime.attempt.ABANDON_CAP` consecutive seals in one
-    window force a park (D8).
+    window force a park.
     """
     # Baseline = the state as it stood just BEFORE the interrupted
-    # attempt's ``ContextPlanComposed`` (D4: completed attempts and the
+    # attempt's ``ContextPlanComposed`` (completed attempts and the
     # turn's prelude events stay live history; only the interrupted
     # attempt dies). Same bounded-fold machinery as the conversation
     # rewind. Classification runs against this SAME baseline, not the
-    # dirty full stream: the D2 question is whether the re-drive — which
+    # dirty full stream: the question is whether the re-drive — which
     # runs on the sealed state — could proceed unattended, and folding the
     # interrupted window into the Budget / Repetition counters could park
     # an attempt the re-drive itself would allow.
@@ -1224,7 +1164,7 @@ def _recover_interrupted_attempt(
 
 
 def _park_handle(events: list[Any], *, reason: str, consumed: Any) -> str:
-    """The handle a park suspends on (D7).
+    """The handle a park suspends on.
 
     An interrupted approval execution re-suspends on the approval's OWN
     handle — the seal restored the pending-approval state, so the ordinary
@@ -1367,7 +1307,7 @@ def _park_notice(reason: str, blockers: tuple[str, ...]) -> str:
 
 
 class _HeartbeatRunner:
-    """Side-thread that extends a lease while a step runs (3A D2).
+    """Side-thread that extends a lease while a step runs.
 
     Loops ``wait(interval)`` → ``dispatcher.heartbeat(lease_id,
     lease_seconds)`` until stopped. ``wait`` returns ``True`` to stop
@@ -1381,9 +1321,9 @@ class _HeartbeatRunner:
     Dispatcher's ``heartbeat_max`` cap hit) the runner logs + stops. It
     makes NO claim about the task's resulting state — the in-flight
     step's eventual EventLog write will raise ``InvalidLease`` too,
-    handled by the worker exception policy (D7). ``heartbeat_interval *
+    handled by the worker exception policy. ``heartbeat_interval *
     heartbeat_max`` is the max keepalive window per step; past it is an
-    operational-failure path, not a recovery path (3A adds no cap-hit
+    operational-failure path, not a recovery path (there is no cap-hit
     recovery).
     """
 
@@ -1469,8 +1409,8 @@ def keep_lease_alive(
     stops and a subsequent write raises ``InvalidLease`` — the same
     operational-failure boundary the WorkerLoop path has; the caller's
     InvalidLease handling owns it from there. ``interval <= 0`` disables the
-    heartbeat (a test seam / opt-out), byte-identical to the pre-heartbeat
-    path.
+    heartbeat (a test seam / opt-out): with it disabled the Engine runs a
+    step without a lease-extending side thread.
     """
     if interval <= 0:
         yield
@@ -1492,7 +1432,7 @@ def keep_lease_alive(
 class WorkerLoop:
     """Resident loop: lease a ready task, run it one step, repeat.
 
-    Worker exception policy (3A D7) — a daemon must not crash on a
+    Worker exception policy — a daemon must not crash on a
     poisoned task:
 
     * :class:`noeta.protocols.errors.InvalidLease` — the lease is no
@@ -1543,10 +1483,10 @@ class WorkerLoop:
         #: (reopenable by typing again). ``None`` selects the daemon-CLI
         #: behaviour where a human stop releases terminal.
         self._next_goal_handle = next_goal_handle
-        # H1: bounded process-shutdown. After stop(), an in-flight step is
+        # Bounded process-shutdown. After stop(), an in-flight step is
         # waited for up to this many seconds, then ABANDONED (the step runs
         # on a daemon thread we stop waiting on) and the loop returns. A
-        # value of ``None`` / ``<= 0`` selects the old unbounded wait.
+        # value of ``None`` / ``<= 0`` selects an unbounded wait.
         self._shutdown_grace_s = shutdown_grace_s
         # Injectable so tests never wall-clock wait.
         if sleep is None:
@@ -1585,8 +1525,8 @@ class WorkerLoop:
         self._last_timer_poll = clock()
 
     def stop(self) -> None:
-        """Signal the loop to stop after the current iteration. (I3 wires
-        signal handlers onto this.)"""
+        """Signal the loop to stop after the current iteration. (Signal
+        handlers are wired onto this.)"""
         self._running = False
 
     @property
@@ -1685,7 +1625,7 @@ class WorkerLoop:
 
     def _run_one(self, lease: Any) -> None:
         """Drive one leased task on a daemon **step thread** so the loop
-        can impose a shutdown deadline on it (H1).
+        can impose a shutdown deadline on it.
 
         Normal path: the loop waits for the step thread to finish (so
         ``tick()`` is synchronous from the caller's view), then returns.
@@ -1746,7 +1686,7 @@ class WorkerLoop:
         """Wait for the step thread. Returns True if it finished, False if
         it was abandoned (shutdown grace elapsed). Unbounded wait when not
         shutting down or when ``shutdown_grace_s`` is ``None`` / ``<= 0``
-        (the old best-effort-forever behaviour)."""
+        (wait best-effort forever)."""
         grace = self._shutdown_grace_s
         grace_deadline: Optional[float] = None
         while True:
@@ -1770,7 +1710,7 @@ class WorkerLoop:
         and abandon paths."""
         # Pop any stashed non-durable woken prelude (e.g.
         # ResolveApprovalPrelude) the host handed off at seed-yield time
-        # (round 3a single-host-multi-worker). One-shot: consumed by this
+        # (single-host-multi-worker). One-shot: consumed by this
         # step, not re-delivered on retry (a retry reads the durable
         # fold where the prelude's durable events never landed — matches
         # the benign documented loss mode for approval preludes).
@@ -1788,7 +1728,7 @@ class WorkerLoop:
                 _log.warning(
                     "worker: task %s suspended with no wake_event; "
                     "re-released preserving wake_on (diagnostic symptom — "
-                    "task is still waiting; H2 makes wake delivery "
+                    "task is still waiting; wake delivery is "
                     "exactly-once, not a loss path)",
                     lease.task_id,
                 )
@@ -1816,14 +1756,14 @@ class WorkerLoop:
                 lease.task_id,
             )
         except Exception as exc:  # noqa: BLE001 — daemon must not crash
-            # ② error recovery (README D-2c): provider failures NEVER reach
-            # here. The only raw ``provider.complete()`` call sites are inside
+            # Provider failures NEVER reach here. The only raw
+            # ``provider.complete()`` call sites are inside
             # ``runtime/llm.py`` (RuntimeLLMClient), wrapped so a provider
             # exception is translated into an error
             # ``LLMResponse`` (stop_reason="error", raw['category']=...) and
             # returned, not raised — Policy reads the category and decides.
-            # Transient retries are consumed inside that wrapper (LIVE-only,
-            # D-2d), so there is no double-backoff between this worker layer
+            # Transient retries are consumed inside that wrapper (live calls
+            # only), so there is no double-backoff between this worker layer
             # and the LLM layer. This backstop therefore only catches genuine
             # in-process crashes (bugs, storage faults), which stay retryable
             # via the Dispatcher's bounded ``max_fail_attempts``.

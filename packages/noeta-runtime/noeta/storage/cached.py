@@ -1,30 +1,15 @@
 """``CachedContentStore`` — a byte-bounded LRU in front of a durable backend.
 
-The read amplification the batch API cannot reach. ``get_many`` collapses the
-refs of *one* traversal into one query; this collapses the *same ref read by
-different traversals*, which is where a running session actually spends its
-round-trips:
-
-* ``ContextComposer`` re-derefs every active resident's body on **every
-  compose** (``_content_resolve``) — the same skill / instructions / memory
-  hashes, once per model turn, for the life of the task.
-* ``fold`` is called from a dozen sites per step (driver, worker, engine
-  refold); each call re-reads the same snapshot baseline and the same message
-  bodies from the same tail.
-
-Correctness is free here: the store is content-addressed and immutable, so a
-hash either maps to one body forever or is GC'd — there is no invalidation
-rule to get wrong, and no staleness window. A hit on a body the backend has
-since reclaimed is *more* available than the backend, never less consistent.
-
-Bounded by **bytes, not entries**: entry counts say nothing about footprint
-when one tool output can outweigh a thousand message bodies. Bodies above
-``max_entry_bytes`` are not cached at all — a single large snapshot body would
-otherwise evict the entire working set to hold something read once.
-
-Wired by ``noeta.client.storage_resolve`` around the durable backends only.
-The InMemory backend is already the cache; wrapping it would just hold every
-body twice.
+It collapses the round-trips ``get_many`` cannot reach: the *same* ref read by
+*different* traversals, which is where a running session actually spends its
+reads — every compose re-derefs each active resident's body, and every fold
+re-reads the same snapshot baseline and message tail. Correctness is free
+because the store is content-addressed and immutable, so a hash maps to one
+body forever and there is no invalidation rule to get wrong. The bound is on
+bytes rather than entries, since one tool output can outweigh a thousand
+message bodies, and a body over ``max_entry_bytes`` is never admitted at all
+rather than evicting the whole working set to hold something read once. Only
+the durable backends are wrapped — the InMemory backend already *is* the cache.
 """
 
 from __future__ import annotations
@@ -40,22 +25,21 @@ from noeta.protocols.values import ContentRef
 __all__ = ["CachedContentStore"]
 
 
-#: Total cached body bytes. Sized to hold a long session's message + resident
-#: bodies without being a memory line item next to the process itself.
+#: Sized to hold a long session's message and resident bodies without becoming
+#: a memory line item next to the process itself.
 DEFAULT_MAX_BYTES = 64 * 1024 * 1024
 
-#: Per-body ceiling. Above this a body is served straight through: big tool
-#: outputs and snapshot bodies are read once by the traversal that asked for
-#: them, so admitting them only costs the working set its residency.
+#: Bodies this large — big tool outputs, snapshot bodies — are read once by the
+#: traversal that asked for them, so admitting them only costs residency.
 DEFAULT_MAX_ENTRY_BYTES = 1024 * 1024
 
 
 class CachedContentStore:
     """LRU read cache over any :class:`ContentStore`.
 
-    Thread-safe: the adapters it wraps serialise on their own lock and are
-    shared across worker threads, so the cache must be too. The lock covers
-    only the bookkeeping — never the inner store's IO.
+    The wrapped adapters are shared across worker threads, so the cache must be
+    thread-safe too. Its lock covers only the bookkeeping — never the inner
+    store's IO.
     """
 
     __slots__ = (
@@ -81,13 +65,11 @@ class CachedContentStore:
         self._max_entry_bytes = max_entry_bytes
         self._lock = threading.Lock()
 
-    # -- ContentStore Protocol ------------------------------------------
-
     def put(self, body: bytes, *, media_type: str) -> ContentRef:
         ref = self._inner.put(body, media_type=media_type)
         # The write path is a read predictor: the Engine snapshots then
-        # refolds, and every message body it appends is read back by the next
-        # fold of the same tail.
+        # refolds, so every body appended here is read back by the next fold
+        # of the same tail.
         self._admit(ref.hash, body)
         return ref
 
@@ -115,10 +97,7 @@ class CachedContentStore:
             out.update(fetched)
         return out
 
-    # -- internals -------------------------------------------------------
-
     def _take(self, hash_: str) -> bytes | None:
-        """Return a cached body and mark it most-recently-used."""
         with self._lock:
             body = self._cache.get(hash_)
             if body is not None:
@@ -126,7 +105,6 @@ class CachedContentStore:
             return body
 
     def _admit(self, hash_: str, body: bytes) -> None:
-        """Cache ``body`` unless it is too large, evicting LRU to fit."""
         size = len(body)
         if size > self._max_entry_bytes:
             return

@@ -1,27 +1,12 @@
-"""Phase 0's most important demo: parent → child → parent 5-step loop.
+"""The parent → child → parent loop over the whole spawn_subtask + wake spine.
 
-This is the integration test for issue 03. It exercises the entire
-spawn_subtask + wake machinery end-to-end:
-
-1. Parent runs one step → ``spawn_subtask`` → suspends on
-   ``SubtaskCompleted(child_id)``.
-2. Worker leases the child.
-3. Child runs one step → ``finish``.
-4. Child's terminal triggers ``SubtaskCompleted`` on the parent stream
-   plus ``dispatcher.wake(parent_id, ...)``.
-5. Parent is re-leased, runs one step → ``finish``.
-
-The test asserts:
-
-* Both Tasks reach ``terminal``.
-* Parent's EventLog contains the canonical sequence including
-  ``TaskWoken`` between the suspend and the re-step.
-* Child's stream is independent and carries only its own events.
-* ``fold(parent)`` exposes the child's outcome via the folded
-  ``governance.subtask_results`` slice (writer = Engine via fold,
-  per the "Engine-folded GovernanceState" clause).
-* Subtask-fail variant: parent's folded ``subtask_results`` carries a
-  ``failed`` SubtaskResult; the parent Policy still finishes normally.
+The hazard here is a parent that hangs forever, so the child reaching terminal
+must both append ``SubtaskCompleted`` to the parent stream and wake the parent
+at the dispatcher, with ``TaskWoken`` ordered between the suspend and the
+re-step. The two streams stay independent (a child's ``TaskCreated`` never leaks
+onto the parent), and ``fold(parent)`` is what exposes the child's outcome
+through ``governance.subtask_results`` — for a failed child as much as a
+completed one, since the parent Policy must still be able to finish normally.
 """
 
 from __future__ import annotations

@@ -1,49 +1,13 @@
-"""Minimal strict frontmatter parser for SKILL.md (private to skills/).
+"""Minimal strict frontmatter parser for SKILL.md, private to ``skills``.
 
-Issue 21. SKILL.md uses a deliberately narrow frontmatter dialect so
-the parser stays in stdlib (no pyyaml) and so parsing the same disk
-state always produces the same SkillDescription instances (a stable
-rendering keeps the ``semi_stable`` segment cache-friendly).
-
-Format (strict subset):
-
-* File must begin with ``---\\n`` or ``---\\r\\n``.
-* Terminator is a line containing exactly ``---``.
-* Inside frontmatter every top-level non-blank line is ``key: value``.
-* ``key`` matches ``^[A-Za-z][A-Za-z0-9_-]*$`` (a letter, then letters +
-  digits + underscore + hyphen). The hyphen was added in 4.5-I5 so real
-  public skills carrying keys like ``argument-hint`` / ``allowed-tools`` /
-  ``disable-model-invocation`` parse instead of being skipped. Uppercase
-  starts are accepted too so a capitalized key (``Name:`` / ``Description:``)
-  no longer fails the whole file — it is a non-semantic key (``KNOWN_KEYS``
-  is lowercase, so ``Name`` ≠ ``name``) and routes to ``metadata``, matching
-  the "unknown/typo key → metadata, never fatal" contract below.
-* ``value`` is the trimmed remainder of the line, captured **verbatim
-  as an opaque string**; **no** quoting, escaping, list, or
-  nested-structure interpretation. An inline ``allowed-tools: [Read,
-  Bash]`` is stored as the literal string ``"[Read, Bash]"`` — I5 does
-  not parse it into a YAML list.
-* Indented continuation lines after a top-level key are tolerated for
-  compatibility with YAML frontmatter. For ordinary unknown metadata,
-  the block is dedented and captured as an opaque string. For folded
-  (``>``) and literal (``|``) block scalars, the block is reduced to
-  the string a skill menu needs; this is intentionally still a tiny
-  YAML-ish subset, not a general YAML parser.
-* Recognised semantic keys (drive behavior): ``name`` / ``description``
-  / ``version`` / ``priority``. **Any other key is tolerated** (4.5-I5):
-  it is returned in ``fields`` like any other key; ``SkillIndexer``
-  routes the non-semantic keys into ``SkillDescription.metadata`` as
-  opaque captured strings. This is the deliberate trade-off for loading
-  real open-source skills unchanged — a typo of a known key
-  (``descrption:``) silently becomes metadata rather than erroring.
-* Duplicate keys take the *last* value and emit a warning.
-* Body is the post-terminator content, CRLF normalised to LF; trailing
-  whitespace / blank lines preserved.
-
-Structural violations (missing leading/terminating delimiter, malformed
-``key: value`` line) still raise :class:`FrontmatterError`; callers
-(``SkillIndexer``) log + skip and move on so one bad SKILL.md never
-takes down the Registry build.
+The dialect is deliberately narrow: stdlib only (no pyyaml) and values captured
+verbatim as opaque strings — an inline ``allowed-tools: [Read, Bash]`` stays the
+literal ``"[Read, Bash]"`` — so parsing the same disk state always yields the
+same fields and the composer's ``semi_stable`` segment stays cache-friendly.
+Any key parses, not just the semantic four, so a typo of a known key
+(``descrption:``) degrades to metadata instead of failing the file. Only a
+structural violation raises :class:`FrontmatterError`, and callers log and skip
+it so one bad SKILL.md cannot take down the registry build.
 """
 
 from __future__ import annotations
@@ -63,29 +27,17 @@ _LINE_PATTERN = re.compile(r"^([A-Za-z][A-Za-z0-9_-]*)[ \t]*:[ \t]*(.*?)[ \t]*$"
 
 
 class FrontmatterError(ValueError):
-    """Raised when SKILL.md frontmatter is unparseable.
-
-    The whole file is considered invalid; SkillIndexer logs and skips.
-    """
+    """Raised when SKILL.md frontmatter is structurally unparseable."""
 
 
 def parse(text: str) -> tuple[dict[str, str], str, list[str]]:
-    """Parse one SKILL.md text blob.
+    """Parse one SKILL.md text blob into ``(fields, body, warnings)``.
 
-    Returns ``(fields, body, warnings)`` where ``fields`` is the
-    key→value dict produced by the frontmatter, ``body`` is the
-    post-frontmatter content with line endings normalised to LF, and
-    ``warnings`` lists non-fatal advisories (e.g. duplicate keys took
-    the last value).
-
-    ``fields`` carries **every** parsed key, semantic and non-semantic
-    alike (4.5-I5 no longer rejects unknown keys); SkillIndexer splits
-    the semantic keys from the opaque metadata.
-
-    Raises :class:`FrontmatterError` on a structural violation —
-    missing leading/terminating delimiter, malformed ``key: value``
-    line, or invalid key format. The error message names the specific
-    rule so SkillIndexer can log it usefully.
+    ``fields`` carries **every** parsed key, semantic and non-semantic alike;
+    splitting the semantic keys from the opaque metadata is ``SkillIndexer``'s
+    job. ``body`` has its line endings normalised to LF. A structural violation
+    raises :class:`FrontmatterError` naming the rule it broke, so the caller
+    can log something useful; warnings are non-fatal.
     """
     if not (text.startswith("---\n") or text.startswith("---\r\n")):
         raise FrontmatterError(
@@ -105,8 +57,7 @@ def parse(text: str) -> tuple[dict[str, str], str, list[str]]:
 
 
 def _strip_cr(line: str) -> str:
-    """Strip a single trailing ``\\r`` so CRLF input collapses to LF
-    once we re-join with ``\\n``."""
+    """Strip one trailing ``\\r`` so CRLF input collapses to LF on re-join."""
     return line[:-1] if line.endswith("\r") else line
 
 
@@ -156,9 +107,6 @@ def _parse_lines(
             break
 
         value = _normalise_value(value, continuation)
-        # 4.5-I5: unknown keys are tolerated (routed to metadata by the
-        # Indexer), no longer fatal — real public skills carry arbitrary
-        # extra keys (allowed-tools, argument-hint, license, ...).
         if key in fields:
             warnings.append(
                 f"duplicate frontmatter key {key!r}: using last value"

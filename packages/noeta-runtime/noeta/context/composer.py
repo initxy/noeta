@@ -1,17 +1,15 @@
-"""ContextComposer implementations (L2).
+"""The ``stable_prefix / semi_stable / dynamic_suffix`` ContextComposer.
 
-:class:`ThreeSegmentComposer` is the
-``stable_prefix / semi_stable / dynamic_suffix`` assembly. It is the single
-in-tree Composer implementation. Tests that only need a "any
-valid Composer" instance use :func:`noeta.testing.composer.trivial_three_segment`.
-
-Composer is a pure function: no LLM, no clock, no
-randomness, no network IO. The only side effect is writing the
-ContextPlan body into the injected ``ContentStore`` so the Engine has
-a ``ContentRef`` to attach onto the next ``ContextPlanComposed``
-envelope (``ContextState.plan_ref``
-is fold-derived from that event — Composer never writes ``task.context``
-directly, preserving the single-writer invariant).
+Compose is a pure function of folded Task state — no LLM, no clock, no
+randomness, no network IO — so the same state always yields the same View and a
+replay reproduces it byte for byte. The two head segments must additionally
+serialize identically from step to step: churn there busts the provider's
+prompt / KV cache and spikes cost, which is why every volatile product lands in
+the dynamic suffix. The one side effect is writing the ContextPlan body into the
+injected ``ContentStore`` so the Engine has a ``ContentRef`` to attach onto
+``ContextPlanComposed``; ``ContextState.plan_ref`` is fold-derived from that
+event, so the Composer never writes ``task.context`` directly (single-writer
+invariant).
 """
 
 from __future__ import annotations
@@ -47,62 +45,43 @@ __all__ = [
 ]
 
 
-# The composed-bytes history this version string went through (v2 → v3 → v4 →
-# v5): Phase 4.5 Issue D let the composer inline skill referenced-file content;
-# ③ (D-3e) added prune (clearing tool outputs outside the tail window) plus the
-# compaction-summary swap; then changed prune
-# to clear a tool output to a cleared-marker; v5 made that marker LEAN — the
-# full body's ContentStore ref moved OUT of the model-facing string into
-# ``ContextPlan.cleared_outputs`` (the model has no ref-deref tool, so a hash in
-# the marker was dead weight it could only misread). The version is kept purely
-# as a trace/inspect display label (the trace page shows it); there is no longer
-# any consumer that forces a bump when the composed bytes shift — bumping it is
-# now optional bookkeeping, not a contract.
+# A trace / inspect display label only: nothing compares it, so the composed
+# bytes may shift without a bump. Bookkeeping, not a contract.
 COMPOSER_VERSION = "three_segment.v5"
 _PLAN_MEDIA_TYPE = "application/json"
 
 
 def _density(real_baseline: int, estimated: int) -> float:
-    """REAL provider tokens per chars/4 estimated token, measured on the last
-    recorded round-trip (``1.0`` when there is nothing to measure against).
+    """REAL provider tokens per chars/4 estimated token, from the last round-trip.
 
-    Mirrors ``ReActPolicy._observed_density``. Kept as a module function rather
-    than shared with the Policy: the two bands do not import each other
-    (provider neutrality), and the inputs differ — the Policy pins its pair at
-    one call site, the Composer reads the fold-projected baseline off the task.
-
-    ``1.0`` reproduces the pre-existing arithmetic exactly, so an unobserved
-    session (first turn, or right after a compaction zeroed the baseline) keeps
-    today's behaviour byte-for-byte.
+    ``1.0`` when there is nothing to measure against — a first turn, or a
+    compaction that zeroed the baseline — which leaves the caller's arithmetic in
+    pure estimate units. The Policy computes the same ratio rather than sharing
+    this one: the two bands do not import each other, and their inputs differ.
     """
     if real_baseline <= 0 or estimated <= 0:
         return 1.0
     return real_baseline / estimated
-#: ③ (D-3c) — the neutral role of the single summary message swapped in for
-#: the covered prefix; ``user`` keeps it provider-neutral and outside the
-#: ``system`` stable_prefix.
+#: Role of the single summary message swapped in for a compacted prefix:
+#: ``user`` keeps it provider-neutral and outside the ``system`` stable_prefix.
 _SUMMARY_ROLE = "user"
-#: Model-visible name of the ``spawn_subagent`` control tool. Source of truth is
-#: ``noeta.policies.control_semantics.SPAWN_SUBAGENT_TOOL``; duplicated here as a
-#: literal to keep the Composer free of a ``noeta.policies`` import (layering). The
-#: concurrency reminder gates on this name appearing in ``provider_tool_schemas``.
+#: Source of truth is ``noeta.policies.control_semantics.SPAWN_SUBAGENT_TOOL``;
+#: duplicated as a literal to keep the Composer free of a ``noeta.policies``
+#: import. The delegation reminder gates on this name appearing in
+#: ``provider_tool_schemas``.
 _SPAWN_SUBAGENT_TOOL_NAME = "spawn_subagent"
 
 
 @dataclass(frozen=True, slots=True)
 class RetrievedResource:
-    """One body-referenced skill resource considered for inlining
-    (Phase 4.5 Issue D), returned by the renderer for the Composer to
-    persist into provenance.
+    """One body-referenced skill resource considered for inlining.
 
-    ``reason="referenced"`` ⇒ the resource passed every boundary check
-    and its ``raw_bytes`` were inlined into the ``semi_stable`` segment;
-    the Composer puts ``raw_bytes`` into the ContentStore for the
-    provenance ``content_ref``. A ``skipped:*`` reason ⇒ the resource was
-    referenced but failed a boundary check (binary / too_large /
-    symlink_escape); ``raw_bytes`` is ``None`` and nothing entered the
-    prompt. The renderer reads disk but never touches the ContentStore —
-    persistence is the Composer's job (single writer).
+    ``reason="referenced"`` ⇒ the resource passed every boundary check and its
+    ``raw_bytes`` were inlined into the ``semi_stable`` segment; a ``skipped:*``
+    reason ⇒ it failed one (binary / too_large / symlink_escape), ``raw_bytes``
+    is ``None``, and nothing entered the prompt. The renderer reads disk but
+    never touches the ContentStore — persistence is the Composer's job (single
+    writer).
     """
 
     skill: str
@@ -116,19 +95,13 @@ class RetrievedResource:
 class RenderedContent:
     """Output of a :data:`ContentRenderer` call.
 
-    Issue 21 widens the renderer seam: a renderer must now hand back
-    both the rendered ``Message`` list **and** the post-filter,
-    post-sort skill name list. Composer writes ``selected_skills`` into
-    the ``ContextPlan`` body verbatim — the renderer is the single
-    source of truth for "what skill activations actually landed in
-    this View", so Composer cannot re-derive the list from raw
-    ``task.state.active_skills`` (which may include unknown names or
-    arrive in a different order from the rendered output).
-
-    Issue D adds ``retrieved_resources`` — the body-referenced resources
-    the renderer inlined (or skipped) for the active skills, in
-    deterministic ``(skill, relpath)`` order. Defaulted empty so a
-    renderer that does no retrieval is unchanged.
+    ``selected_skills`` is the post-filter, post-sort name list the Composer
+    copies verbatim into the ``ContextPlan`` body: only the renderer knows which
+    activations actually landed in this View, so the Composer cannot re-derive
+    the list from raw activation state (which may carry unknown names, or a
+    different order from the rendered output). ``retrieved_resources`` is the
+    body-referenced content the renderer inlined or skipped, in deterministic
+    ``(skill, relpath)`` order.
     """
 
     messages: list[Message]
@@ -137,10 +110,10 @@ class RenderedContent:
 
 
 #: Deref a resident's currently-active bytes: ``resolve(kind, name)`` returns
-#: the bytes recorded for the hash the ledger has active for ``(kind, name)``
-#: (spec §6). A renderer reads its content through this, so the composed bytes
-#: are a pure function of (folded state, content store) — refresh moves bytes,
-#: a mutated backing store on disk does not. Raises when the pair is not active.
+#: the bytes recorded for the hash the ledger has active for ``(kind, name)``.
+#: A renderer reads its content through this, so the composed bytes stay a pure
+#: function of (folded state, content store) — a refresh moves bytes, a mutated
+#: backing store on disk does not. Raises when the pair is not active.
 ContentResolve = Callable[[str, str], bytes]
 
 #: A content kind's render rule: ``(active_names, resolve) -> RenderedContent``.
@@ -150,10 +123,9 @@ ContentResolve = Callable[[str, str], bytes]
 ContentRenderer = Callable[[list[str], ContentResolve], RenderedContent]
 
 
-#: The content channel's resident kind for skills. The
-#: composer keys one narrow skill-only behaviour on it: the renderer's
-#: post-resolve name list feeds ``ContextPlan.selected_skills`` (a
-#: skill-named plan field kept for plan-body byte stability).
+#: The one kind the composer treats specially: its renderer's post-resolve name
+#: list feeds ``ContextPlan.selected_skills``, a skill-named plan field kept for
+#: plan-body byte stability.
 _SKILL_KIND = "skill"
 
 
@@ -161,11 +133,11 @@ class ContentRenderers(Protocol):
     """The composer-facing surface of a content-channel registry.
 
     One render rule per registered kind; ``kinds()`` order IS the
-    ``semi_stable`` layout. The concrete implementation is
-    :class:`noeta.context.content_channel.ContentChannelRegistry`
-    (declared structurally here so ``composer`` does not import its own
-    consumer). A renderer must stay a pure function of the names fold
-    derived from the ledger — no compose-time fetches (the red line).
+    ``semi_stable`` layout. Declared structurally so ``composer`` does not
+    import its own consumer,
+    :class:`noeta.context.content_channel.ContentChannelRegistry`. A renderer
+    must stay a pure function of the names fold derived from the ledger — no
+    compose-time fetches (the red line).
     """
 
     def kinds(self) -> tuple[str, ...]: ...
@@ -176,12 +148,11 @@ class ContentRenderers(Protocol):
 
 
 class _SkillOnlyRenderers:
-    """Adapter: one legacy ``skill_renderer`` as a single-kind registry.
+    """Adapter presenting one ``skill_renderer`` as a single-kind registry.
 
-    Keeps the long-standing ``ThreeSegmentComposer(skill_renderer=…)``
-    construction working byte-identically while the compose path itself
-    is registry-shaped (the skill renderer is just the ``kind="skill"``
-    item). Hosts wanting more kinds pass a real registry instead.
+    Lets the compose path stay registry-shaped for the
+    ``ThreeSegmentComposer(skill_renderer=…)`` construction too, so both wirings
+    produce byte-identical output. Hosts wanting more kinds pass a real registry.
     """
 
     def __init__(self, renderer: ContentRenderer) -> None:
@@ -199,15 +170,11 @@ class _SkillOnlyRenderers:
 def _default_content_renderer(
     _: list[str], __: ContentResolve
 ) -> RenderedContent:
-    """Default no-op renderer.
+    """Renderer used when no ``skill_renderer`` and no registry are supplied.
 
-    Returned when ``ThreeSegmentComposer`` is constructed without an
-    explicit ``skill_renderer``. Yields an empty semi_stable segment
-    and an empty ``selected_skills`` list — Composer still folds an
-    empty list into the ``ContextPlan`` body, but no skill body bytes
-    enter the View. Wire the skills built-in's ``build_skill_renderer``
-    (``noeta.builtins.skills.impl``)
-    (issue 21) when real Skill activation is wanted.
+    Yields an empty ``semi_stable`` segment; the Composer still folds an empty
+    ``selected_skills`` list into the ``ContextPlan`` body, but no skill bytes
+    enter the View.
     """
     return RenderedContent(messages=[], selected_skills=[])
 
@@ -219,13 +186,12 @@ def _sha256_hex(body: bytes) -> str:
 class ThreeSegmentComposer:
     """Three-segment Composer.
 
-    Construct once per Task family (system_prompt + tool set is fixed
-    over a Task's lifetime). The composer is a pure function (no clock,
-    no randomness), stateless across compose calls — the same Task state
-    always composes the same View. The ``stable_prefix`` and ``semi_stable``
-    segments must additionally serialize reproducibly across steps to stay
-    cache-friendly: churning them busts the provider's prompt / KV cache and
-    spikes cost (see CONTEXT.md "Stable Prefix").
+    Construct once per Task family: ``system_prompt`` and the tool set are fixed
+    over a Task's lifetime. Compose is pure (no clock, no randomness) and
+    stateless across calls, so the same Task state always composes the same
+    View. Beyond that, ``stable_prefix`` and ``semi_stable`` must serialize
+    reproducibly across steps: churning them busts the provider's prompt / KV
+    cache and spikes cost (see CONTEXT.md "Stable Prefix").
     """
 
     def __init__(
@@ -244,13 +210,10 @@ class ThreeSegmentComposer:
         self._system_prompt = system_prompt
         self._tools = dict(tools)
         self._content_store = content_store
-        # The semi_stable segment is rendered
-        # through a content-kind registry. ``skill_renderer`` remains as
-        # construction sugar for the single-kind case — it becomes the
-        # ``kind="skill"`` item of an implicit registry, so both paths
-        # produce byte-identical output. Passing both is ambiguous (the
-        # skill item would exist twice); register skill in the registry
-        # instead.
+        # ``skill_renderer`` is construction sugar for the single-kind case: it
+        # becomes the ``kind="skill"`` item of an implicit registry, so both
+        # paths produce byte-identical output. Passing both is ambiguous — the
+        # skill item would exist twice.
         if skill_renderer is not None and content_renderers is not None:
             raise ValueError(
                 "pass either skill_renderer or content_renderers, not both; "
@@ -261,45 +224,40 @@ class ThreeSegmentComposer:
             if content_renderers is not None
             else _SkillOnlyRenderers(skill_renderer or _default_content_renderer)
         )
-        # Compose-time reminder registry (D8): the dynamic-suffix-tail reminders
-        # are rendered through this table, exactly as semi_stable residents render
-        # through ``content_renderers``. ``None`` is an EMPTY registry
-        # (microkernel M2): the three built-in renderers live in the
-        # ``reminders`` built-in plugin, and the kernel builder injects them —
-        # resolved through the plugin loader — via its ``base_reminders``
-        # parameter; a composer constructed bare renders no reminders. The
-        # composer stays a pure function of folded state — the registry only
-        # ever appends to the volatile dynamic suffix, never the stable prefix.
+        # Compose-time reminder registry: the dynamic-suffix-tail reminders are
+        # rendered through this table, exactly as semi_stable residents render
+        # through ``content_renderers``. ``None`` is an EMPTY registry — a bare
+        # composer renders no reminders; a host injects the built-in renderers
+        # through ``base_reminders``. The composer stays a pure function of
+        # folded state: the registry only ever appends to the volatile dynamic
+        # suffix, never the stable prefix.
         self._reminders: ReminderRegistry = (
             reminders if reminders is not None else ReminderRegistry(())
         )
-        # ③ (D-3e): the protected tail-window size in *estimated tokens*
-        # (D-3d). When set, tool-result outputs of messages older than this
-        # budget are cleared to an explicit cleared-marker (deterministic
-        # prune); ``None`` keeps the legacy "no prune" behaviour
-        # (every output passes through). The
-        # budget is in neutral estimate units — not a hard-coded message
-        # count — so the kept window scales with how big the recent turns
-        # actually are. Provider-neutral.
+        # The protected tail-window size in *estimated tokens*. When set,
+        # tool-result outputs of messages older than this budget are cleared to
+        # an explicit cleared-marker (deterministic prune); ``None`` lets every
+        # output pass through. The budget is in neutral estimate units — not a
+        # message count — so the kept window scales with how big the recent
+        # turns actually are. Provider-neutral.
         self._tail_token_budget = tail_token_budget
-        # ③ (D-3e relief-valve gate): the model's usable window in estimated
-        # tokens (``context_window - max_output - buffer`` — the SAME quantity
-        # the Policy's summarize trigger compares against). When set, prune is a
+        # The model's usable window in estimated tokens
+        # (``context_window - max_output - buffer`` — the SAME quantity the
+        # Policy's summarize trigger compares against). When set, prune is a
         # RELIEF VALVE, not an always-on clamp: tool outputs stay verbatim until
         # the composed history actually approaches this window, so a half-empty
         # window never forces the model to re-run a tool to recover content it
-        # already fetched. ``None`` keeps the legacy always-prune-to-tail
-        # behaviour. Deterministic (a pure function of the model), so live +
-        # resume gate identically.
+        # already fetched. ``None`` prunes to the tail unconditionally.
+        # Deterministic (a pure function of the model), so live + resume gate
+        # identically.
         self._available_window = available_window
-        # Phase 4.5 Issue C — provider-visible **control** action schemas
-        # that are NOT executable workspace tools (e.g. ``spawn_subagent``,
-        # which the policy translates into a Decision and the ToolRuntime
-        # never invokes). They are appended to ``View.provider_tool_schemas`` after
-        # the real tools — so the prompt tool surface (and the
-        # ``stable_prefix`` hash + ``ContextPlan``) faithfully reflects
-        # what the provider sees — while staying absent from the Engine
-        # tools dict / ToolRuntime. Order is deterministic.
+        # Provider-visible **control** action schemas that are NOT executable
+        # workspace tools (e.g. ``spawn_subagent``, which the policy translates
+        # into a Decision and the ToolRuntime never invokes). They are appended
+        # to ``View.provider_tool_schemas`` after the real tools — so the prompt
+        # tool surface (and the ``stable_prefix`` hash + ``ContextPlan``)
+        # faithfully reflects what the provider sees — while staying absent from
+        # the Engine tools dict / ToolRuntime. Order is deterministic.
         self._control_action_schemas: list[dict[str, Any]] = list(
             control_action_schemas or []
         )
@@ -314,24 +272,22 @@ class ThreeSegmentComposer:
         ]
         # stable_prefix hash folds provider_tool_schemas in alongside the content
         # so a tool-set change rotates the prefix hash even though the
-        # narrative prompt text is identical (PRD §"Grill round 1 #1").
+        # narrative prompt text is identical.
         stable_hash = _sha256_hex(
             to_canonical_bytes((stable_content, provider_tool_schemas))
         )
 
-        # Anchored placement (docs/adr/anchored-content-placement.md): split
-        # the active residents by activation anchor. Pre-loop activations
-        # (anchor at/before the first assistant message) render in
-        # ``semi_stable`` exactly as before; mid-task activations render
-        # inside the dynamic suffix at their anchor, so a skill invoked at
-        # turn 40 no longer rewrites the head segments (KV-cache re-prime).
+        # Anchored placement: split the active residents by activation anchor.
+        # Pre-loop activations (anchor at/before the first assistant message)
+        # render in ``semi_stable``; mid-task activations render inside the
+        # dynamic suffix at their anchor, so a skill invoked at turn 40 does not
+        # rewrite the head segments (which would re-prime the KV cache).
         semi_names, anchored = self._split_placement(task)
 
-        # Render the semi_stable residents from
-        # the generic activation map through the kind registry, in
-        # registration order. The skill kind keeps one narrow extra:
-        # its post-resolve name list feeds ``ContextPlan.selected_skills``
-        # (kept skill-named for plan-body byte stability).
+        # Render the semi_stable residents through the kind registry, in
+        # registration order. The skill kind keeps one narrow extra: its
+        # post-resolve name list feeds ``ContextPlan.selected_skills`` (kept
+        # skill-named for plan-body byte stability).
         resolve = self._content_resolve(task)
         semi_content: list[Message] = []
         selected_skills: list[str] = []
@@ -346,11 +302,10 @@ class ThreeSegmentComposer:
             renderer_resources.extend(rendered.retrieved_resources)
         semi_hash = _sha256_hex(to_canonical_bytes(semi_content))
 
-        # ③ (D-3c): swap the compacted prefix for the summary message, then
-        # insert the anchored residents at their (post-summary) anchor
-        # positions, then re-attach extended-thinking (Slice C) ahead of each
-        # assistant turn's tool_use, then ③ (D-3e): prune tool outputs older
-        # than the protected tail window.
+        # Swap the compacted prefix for the summary message, insert the anchored
+        # residents at their (post-summary) anchor positions, re-attach
+        # extended-thinking ahead of each assistant turn's tool_use, then prune
+        # tool outputs older than the protected tail window.
         summarized, anchored_skills, anchored_resources = (
             self._insert_anchored(task, self._apply_summary(task), anchored)
         )
@@ -359,12 +314,11 @@ class ThreeSegmentComposer:
                 selected_skills.append(s)
         renderer_resources.extend(anchored_resources)
 
-        # Issue D: persist the renderer's referenced-resource provenance.
-        # The Composer is the single writer of the ContentStore + plan:
-        # a ``referenced`` resource's raw bytes go to the store (the
-        # content was already inlined into the composed messages by the
-        # renderer, so it is in the segment hashes); a ``skipped`` resource
-        # carries no ``content_ref`` and never entered the prompt.
+        # The Composer is the single writer of the ContentStore + plan: a
+        # ``referenced`` resource's raw bytes go to the store (the content was
+        # already inlined into the composed messages by the renderer, so it is
+        # in the segment hashes); a ``skipped`` resource carries no
+        # ``content_ref`` and never entered the prompt.
         retrieved_resources = self._persist_retrieved(renderer_resources)
 
         dynamic_source = self._reattach_thinking(summarized, task)
@@ -377,12 +331,12 @@ class ThreeSegmentComposer:
                 ),
             )
         )
-        # Compose-time reminders (D8): the todo re-injection, the delegation
-        # fan-out nudge, and the compaction-thrashing read hint are rendered
-        # through the reminder registry and appended, in priority order, to the
-        # END of the dynamic_suffix (the volatile segment), then hashed. Each is
-        # a View-only product: NOT written to ``runtime.messages`` and emitting no
-        # event, so it never enters the folded truth; regenerated from the folded
+        # Compose-time reminders: the todo re-injection, the delegation fan-out
+        # nudge, and the compaction-thrashing read hint are rendered through the
+        # reminder registry and appended, in priority order, to the END of the
+        # dynamic_suffix (the volatile segment), then hashed. Each is a View-only
+        # product: NOT written to ``runtime.messages`` and emitting no event, so
+        # it never enters the folded truth; regenerated from the folded
         # projection on every compose ⇒ resume reproduces it automatically; and,
         # landing in dynamic_content only, it cannot churn the stable_prefix /
         # semi_stable hashes the prompt cache rides on. ``delegation_enabled`` is
@@ -438,15 +392,15 @@ class ThreeSegmentComposer:
             plan_ref=plan_ref,
             segments=segments,
             provider_tool_schemas=provider_tool_schemas,
-            # ③ (finding 2): expose the RAW rolling history + the prior
-            # cumulative summary boundary so a compaction-aware Policy computes
-            # its new boundary in the SAME coordinate space the Composer's
-            # ``_apply_summary`` slices (``task.runtime.messages`` /
-            # ``ContextState.summary_boundary``). Without this the Policy would
-            # count over ``iter_messages()`` — the post-summary, post-prune,
-            # skill-prefixed, tail-truncated projection — and the two boundaries
-            # would point at different messages whenever ``semi_stable`` is
-            # non-empty or a prior summary already collapsed a prefix.
+            # Expose the RAW rolling history + the prior cumulative summary
+            # boundary so a compaction-aware Policy computes its new boundary in
+            # the SAME coordinate space the Composer's ``_apply_summary`` slices
+            # (``task.runtime.messages`` / ``ContextState.summary_boundary``).
+            # Without this the Policy would count over ``iter_messages()`` — the
+            # post-summary, post-prune, skill-prefixed, tail-truncated
+            # projection — and the two boundaries would point at different
+            # messages whenever ``semi_stable`` is non-empty or a prior summary
+            # already collapsed a prefix.
             rolling_history=list(task.runtime.messages),
             summary_boundary=task.context.summary_boundary,
         )
@@ -460,17 +414,16 @@ class ThreeSegmentComposer:
     ) -> tuple[dict[str, list[str]], list[tuple[int, int, int, str, str]]]:
         """Split active residents into semi_stable names vs anchored entries.
 
-        The one placement rule (docs/adr/anchored-content-placement.md): a
-        resident is *anchored* iff its recorded activation anchor lies
-        strictly AFTER the first assistant message of the raw rolling
-        history — i.e. the model had already started talking when the
-        resident activated. Everything else (pre-loop activations, anchor-less
-        residents from old snapshots) keeps today's ``semi_stable`` placement,
-        so a session with no mid-task activation composes byte-identically.
+        A resident is *anchored* iff its recorded activation anchor lies strictly
+        AFTER the first assistant message of the raw rolling history — the model
+        had already started talking when the resident activated. Everything else
+        (pre-loop activations, anchor-less residents) keeps ``semi_stable``
+        placement, so a session with no mid-task activation composes
+        byte-identically.
 
-        Returns ``(semi_names_by_kind, anchored)`` where ``anchored`` entries
-        are ``(anchor, kind_index, activation_index, kind, name)`` sorted by
-        that tuple — anchor first, registration order and activation order as
+        Returns ``(semi_names_by_kind, anchored)`` where ``anchored`` entries are
+        ``(anchor, kind_index, activation_index, kind, name)`` sorted by that
+        tuple — anchor first, registration order and activation order as
         deterministic tie-breaks. Pure over folded state.
         """
         raw = task.runtime.messages
@@ -505,19 +458,19 @@ class ThreeSegmentComposer:
         Coordinates: anchors index the RAW rolling history; ``summarized`` is
         ``[summary] + raw[boundary:]`` when a compaction summary applies, else
         the raw list. An anchor inside the covered prefix clamps to index 1 —
-        the re-hang bucket right after the summary message (the earliest
-        stable position on the new timeline; compaction already invalidated
-        the cache, so the re-hang is free). An anchor past the end appends.
-        The insertion index then slides forward past any ``role="tool"``
-        message so rendered content can never split an assistant ``tool_use``
-        from its results (providers reject that shape). Deterministic and
-        pure: same folded state ⇒ same bytes.
+        the re-hang bucket right after the summary message (the earliest stable
+        position on the new timeline; compaction already invalidated the cache,
+        so the re-hang is free). An anchor past the end appends. The insertion
+        index then slides forward past any ``role="tool"`` message so rendered
+        content can never split an assistant ``tool_use`` from its results
+        (providers reject that shape). Deterministic and pure: same folded state
+        ⇒ same bytes.
 
-        Each resident renders through the SAME kind registry as the
-        semi_stable path, one name per call (the renderers are
-        one-message-per-name). Returns the merged list plus the anchored
-        skill names (for ``ContextPlan.selected_skills``) and the renderers'
-        retrieved resources (for provenance persistence).
+        Each resident renders through the SAME kind registry as the semi_stable
+        path, one name per call (the renderers are one-message-per-name).
+        Returns the merged list plus the anchored skill names (for
+        ``ContextPlan.selected_skills``) and the renderers' retrieved resources
+        (for provenance persistence).
         """
         if not anchored:
             return summarized, [], []
@@ -556,20 +509,10 @@ class ThreeSegmentComposer:
         """The active resident names for ``kind``, read from the generic
         activation map ``TaskState.active_content``.
 
-        The map is the SOLE name source since the issue-07 generation
-        switch (the legacy ``active_skills`` sugar bridge died with it).
-        Every fold-derived state keeps the map in lockstep with the sugar
-        list — the patch sugar mirrors both ways, the old skill event
-        merges in, and pre-generic snapshot bodies are seeded at
-        rehydrate — so any folded stream composes the identical bytes the
-        bridge produced.
-
-        Names are returned **sorted** so the layout is a pure function of
-        the activation set, never of activation/load timing (spec law 3) —
-        and identical whether the map was folded fresh or rehydrated from a
-        canonical (key-sorted) snapshot body. Byte-neutral for the built-in
-        residents (single-name in ``semi_stable``, and the skill renderer
-        re-sorts by ``(priority, name)`` regardless).
+        Names are returned **sorted** so the layout is a pure function of the
+        activation set, never of activation/load timing — and identical whether
+        the map was folded fresh or rehydrated from a canonical (key-sorted)
+        snapshot body.
         """
         return sorted(task.state.active_content.get(kind, {}))
 
@@ -577,12 +520,12 @@ class ThreeSegmentComposer:
         """Bind the ledger's active hashes to a byte-deref over the store.
 
         ``resolve(kind, name)`` returns the bytes recorded for the resident's
-        currently-active hash (spec §6), so a renderer that reads through it
-        composes a pure function of (folded state, content store): a refresh
-        (new hash) yields new bytes, a mutated backing store on disk changes
-        nothing. Raises ``KeyError`` when ``(kind, name)`` is not active with a
-        real hash (a caller bug); a renderer for a kind whose content is not
-        content-addressed — the skill registry — simply never calls it.
+        currently-active hash, so a renderer that reads through it composes a
+        pure function of (folded state, content store): a refresh (new hash)
+        yields new bytes, a mutated backing store on disk changes nothing. Raises
+        ``KeyError`` when ``(kind, name)`` is not active with a real hash (a
+        caller bug); a renderer for a kind whose content is not content-addressed
+        — the skill registry — simply never calls it.
         """
         active = task.state.active_content
         store = self._content_store
@@ -601,13 +544,12 @@ class ThreeSegmentComposer:
         self, resources: list[RetrievedResource]
     ) -> list[dict[str, Any]]:
         """Turn the renderer's :class:`RetrievedResource`s into the
-        ``ContextPlan.retrieved_resources`` provenance dicts (Issue D).
+        ``ContextPlan.retrieved_resources`` provenance dicts.
 
-        A ``referenced`` resource's raw bytes are stored (content-
-        addressed, so the same bytes always yield the same ``content_ref``);
-        a ``skipped`` resource gets ``content_ref=None`` and never had its
-        bytes inlined. Order is preserved (the renderer already sorts by
-        ``(skill, relpath)``).
+        A ``referenced`` resource's raw bytes are stored (content-addressed, so
+        the same bytes always yield the same ``content_ref``); a ``skipped``
+        resource gets ``content_ref=None`` and never had its bytes inlined.
+        Order is preserved (the renderer already sorts by ``(skill, relpath)``).
         """
         out: list[dict[str, Any]] = []
         for r in resources:
@@ -639,14 +581,14 @@ class ThreeSegmentComposer:
         return out
 
     def _apply_summary(self, task: Task) -> list[Message]:
-        """③ (D-3c): swap the compacted prefix for the summary message.
+        """Swap the compacted prefix for the summary message.
 
-        When ``ContextState.summary_ref`` is set (written by fold's
-        ``Compacted`` handler), the first ``summary_boundary`` messages of
-        the rolling history have been collapsed into one summary. We drop
-        that covered prefix and prepend a single provider-neutral summary
-        message (role ``user``), preserving ``stable_prefix``. Pure +
-        deterministic: same task state → same message list.
+        When ``ContextState.summary_ref`` is set (written by fold's ``Compacted``
+        handler), the first ``summary_boundary`` messages of the rolling history
+        have been collapsed into one summary. We drop that covered prefix and
+        prepend a single provider-neutral summary message (role ``user``),
+        preserving ``stable_prefix``. Pure + deterministic: same task state →
+        same message list.
         """
         messages = list(task.runtime.messages)
         ref = task.context.summary_ref
@@ -674,26 +616,25 @@ class ThreeSegmentComposer:
     def _reattach_thinking(
         self, messages: list[Message], task: Task
     ) -> list[Message]:
-        """Slice C: re-attach extended-thinking ahead of each assistant
-        turn's ``tool_use``.
+        """Re-attach extended-thinking ahead of each assistant turn's
+        ``tool_use``.
 
         ``ContextState.thinking_by_call_id`` (written by fold from
         ``AssistantThinkingRecorded``) maps an assistant turn's first
         ``tool_use`` ``call_id`` to the ThinkingBlocks ``_strip_thinking``
-        removed before the turn was persisted. For every assistant message
-        whose first ``tool_use`` ``call_id`` has stored thinking, we prepend
-        those blocks so the View carries the full ``thinking → tool_use``
-        shape an Anthropic continuation request needs (the signature must
-        round-trip verbatim).
+        removed before the turn was persisted. For every assistant message whose
+        first ``tool_use`` ``call_id`` has stored thinking, we prepend those
+        blocks so the View carries the full ``thinking → tool_use`` shape an
+        Anthropic continuation request needs (the signature must round-trip
+        verbatim).
 
-        Provider-neutral: the composer always re-attaches into
-        the neutral View; the OUTBOUND gating lives in each adapter (the
-        Anthropic adapter serializes thinking+signature; ``OpenAICompat``
-        drops it per ``reasoning_continuation``). Pure (no clock, no
-        randomness): same task state → same message list. Empty slice
-        (OpenAI / non-reasoning / old recording) is an identity passthrough,
-        so the dynamic bytes — and ``dynamic_hash`` — match the stripped
-        history unchanged.
+        Provider-neutral: the composer always re-attaches into the neutral View;
+        the OUTBOUND gating lives in each adapter (the Anthropic adapter
+        serializes thinking+signature; ``OpenAICompat`` drops it per
+        ``reasoning_continuation``). Pure (no clock, no randomness): same task
+        state → same message list. An empty slice is an identity passthrough, so
+        the dynamic bytes — and ``dynamic_hash`` — match the stripped history
+        unchanged.
         """
         by_call = task.context.thinking_by_call_id
         if not by_call:
@@ -705,9 +646,9 @@ class ThreeSegmentComposer:
             if not thinking:
                 out.append(msg)
                 continue
-            # The rebuild keeps ``origin`` — the message-stream
-            # source tag must survive every composer transform (byte-safe:
-            # ``origin=None`` is omitted from canonical serialization).
+            # The rebuild keeps ``origin`` — the message-stream source tag must
+            # survive every composer transform (byte-safe: ``origin=None`` is
+            # omitted from canonical serialization).
             out.append(
                 Message(
                     role=msg.role,
@@ -739,10 +680,10 @@ class ThreeSegmentComposer:
         View would leak it to every provider.
 
         Every reminder is a View-only product: appended to ``dynamic_content``
-        only, never written to ``runtime.messages`` and emitting no event (D6 red
-        line), so it stays out of the folded truth, rides only the volatile
-        (uncached) segment, and is re-derived from the folded projection on every
-        compose (resume reproduces it). Pure: same projection → same bytes.
+        only, never written to ``runtime.messages`` and emitting no event, so it
+        stays out of the folded truth, rides only the volatile (uncached)
+        segment, and is re-derived from the folded projection on every compose
+        (resume reproduces it). Pure: same projection → same bytes.
         """
         # ``already_spawned`` is read by exactly one reminder (``delegation-nudge``),
         # which renders nothing unless delegation is offered — so the scan is
@@ -786,75 +727,73 @@ class ThreeSegmentComposer:
     ) -> tuple[
         list[Message], list[ContentRef], list[ContentRef], list[ContentRef]
     ]:
-        """③ (D-3e): clear tool-result outputs outside the tail window.
+        """Clear tool-result outputs outside the tail window.
 
-        Walks from the newest message backward, accumulating the estimated
-        token cost (D-3d). Once the accumulated cost exceeds
-        ``tail_token_budget``, every older message that carries a
-        :class:`ToolResultBlock` has its ``output`` replaced by an explicit
-        cleared-marker: the block keeps its
+        Walks from the newest message backward, accumulating the estimated token
+        cost. Once the accumulated cost exceeds ``tail_token_budget``, every
+        older message that carries a :class:`ToolResultBlock` has its ``output``
+        replaced by an explicit cleared-marker: the block keeps its
         ``call_id`` / ``role`` / ``success`` so the conversation stays
-        well-formed, and the marker is LEAN (``[tool output cleared]``, no
-        hash) so the model reads "there WAS content here, it was elided" —
-        never an empty string that reads as "the tool returned nothing", and
-        never a ContentStore hash it has no tool to deref. The original
-        output's ref is returned (4th tuple element) for
-        ``ContextPlan.cleared_outputs`` so the full body stays
-        audit-deref-able OFF the prompt. Text / tool_use blocks are never
-        touched. Returns the rewritten list plus the kept / cleared message
-        refs and the cleared outputs' refs for ``ContextPlan`` provenance.
+        well-formed, and the marker is LEAN (``[tool output cleared]``, no hash)
+        so the model reads "there WAS content here, it was elided" — never an
+        empty string that reads as "the tool returned nothing", and never a
+        ContentStore hash it has no tool to deref. The original output's ref is
+        returned (4th tuple element) for ``ContextPlan.cleared_outputs`` so the
+        full body stays audit-deref-able OFF the prompt. Text / tool_use blocks
+        are never touched. Returns the rewritten list plus the kept / cleared
+        message refs and the cleared outputs' refs for ``ContextPlan``
+        provenance.
 
         Pure (no clock, no randomness): the token estimate is the stable
-        heuristic, and each cleared ref is content-addressed (same output
-        bytes → same ref) so the same history always produces the same
-        markers + refs. ``tail_token_budget is None`` → no prune (legacy
-        passthrough), refs empty. ``available_window`` arms the relief-valve
-        gate: while the request is below it, the whole history passes through
-        verbatim (refs empty) — clearing only kicks in once the request
-        approaches the usable window, so a half-empty window never forces a
-        tool re-read.
+        heuristic, and each cleared ref is content-addressed (same output bytes →
+        same ref) so the same history always produces the same markers + refs.
+        ``tail_token_budget is None`` → no prune, refs empty. ``available_window``
+        arms the relief-valve gate: while the request is below it, the whole
+        history passes through verbatim (refs empty) — clearing only kicks in
+        once the request approaches the usable window, so a half-empty window
+        never forces a tool re-read.
 
         ``real_baseline`` is ``RuntimeState.last_input_tokens`` (the provider's
         count for the previous round-trip) and ``prefix_estimate`` the chars/4
         size of the stable+semi segments this dynamic tail will be assembled
-        behind. Together they let both knobs above — which count REAL tokens —
-        be read in the same unit the walk accumulates; see the gate comment.
-        Both default to the values a caller with no baseline supplies, which
-        reproduces the pre-existing arithmetic exactly.
+        behind. Together they let both knobs above — which count REAL tokens — be
+        read in the same unit the walk accumulates; see the gate comment. Both
+        default to the values a caller with no baseline supplies, which
+        reproduces the pure-estimate arithmetic.
 
-        Still pure: both inputs are already-recorded numbers folded off the
-        task, so live + resume derive identical cutoffs.
+        Still pure: both inputs are already-recorded numbers folded off the task,
+        so live + resume derive identical cutoffs.
         """
         if self._tail_token_budget is None:
             return messages, [], [], []
-        # ③ (D-3e relief-valve gate): prune is a relief valve, not an always-on
-        # clamp. Below the usable window the whole history stays verbatim — a
-        # half-empty window must NOT clear tool outputs, or the model loses
-        # content it already fetched and re-runs the read (the thrash this gate
-        # fixes). We only start clearing once the request approaches
-        # ``available_window``, mirroring the Policy's summarize trigger so the
-        # two compaction layers share one water mark.
+        # Prune is a relief valve, not an always-on clamp. Below the usable
+        # window the whole history stays verbatim — a half-empty window must NOT
+        # clear tool outputs, or the model loses content it already fetched and
+        # re-runs the read (the thrash this gate fixes). We only start clearing
+        # once the request approaches ``available_window``, mirroring the
+        # Policy's summarize trigger so the two compaction layers share one water
+        # mark.
         #
         # That water mark is REAL provider tokens (``available_window`` derives
-        # from ``context_window``), so the gate may not be read in chars/4:
-        # the heuristic assumes 4 chars/token and a measured production payload
+        # from ``context_window``), so the gate may not be read in chars/4: the
+        # heuristic assumes 4 chars/token and a measured production payload
         # (CJK + JSON + base64 thinking signatures) runs ~1.2, a ~4x under-read
-        # that held the estimate below the window for an ENTIRE session and left
-        # this valve shut while the real request sat AT the window — the exact
-        # under-count ADR context-compaction rejected for the trigger, still
-        # live here because part 3's density conversion stayed local to the
-        # Policy. ``real_baseline`` (``RuntimeState.last_input_tokens``) is the
+        # that can hold the estimate below the window for an entire session and
+        # leave this valve shut while the real request sits AT the window — the
+        # exact under-count the context-compaction trigger avoids, live here
+        # because the density conversion is local to the Policy.
+        # ``real_baseline`` (``RuntimeState.last_input_tokens``) is the
         # provider's own count for the previous round-trip, i.e. the same
         # content minus the newest tool result. ``max`` mirrors the Policy's
         # ``max(estimated, baseline + delta)``: the mix can only ever RAISE the
         # size, so a genuinely huge raw history is never masked and a missing
-        # baseline (first turn, post-compaction) falls back to exactly today's
-        # pure-estimate behaviour. The Policy's ``+ delta`` term has no analogue
-        # here — pairing it needs the estimate of the request the baseline was
-        # measured on, which is not recorded — so the valve opens at most one
-        # round-trip late. Late is the safe direction for a relief valve: the
-        # summarize trigger backstops it, and firing early would clear outputs
-        # the model still needs.
+        # baseline (first turn, post-compaction) falls back to pure-estimate
+        # behaviour. The Policy's ``+ delta`` term has no analogue here — pairing
+        # it needs the estimate of the request the baseline was measured on,
+        # which is not recorded — so the valve opens at most one round-trip late.
+        # Late is the safe direction for a relief valve: the summarize trigger
+        # backstops it, and firing early would clear outputs the model still
+        # needs.
         estimated = prefix_estimate + estimate_messages_tokens(messages)
         if (
             self._available_window is not None
@@ -954,7 +893,7 @@ class ThreeSegmentComposer:
         executable_tool_schemas: list[dict[str, Any]] = [
             _function_schema(tool) for tool in self._tools.values()
         ]
-        # Issue C: control action schemas (e.g. spawn_subagent) follow the real
+        # Control action schemas (e.g. spawn_subagent) follow the real
         # executable tools, deterministically, so they are visible to the provider
         # and folded into the stable hash without being executable tools.
         provider_tool_schemas = executable_tool_schemas
@@ -965,7 +904,7 @@ class ThreeSegmentComposer:
 def _first_tool_use_call_id(msg: Message) -> Optional[str]:
     """Return the ``call_id`` of the first ToolUseBlock in ``msg``, or None.
 
-    This is the stable per-turn identity the thinking slice is keyed by:
+    This is the stable per-turn identity the re-attached thinking is keyed by:
     an Anthropic assistant turn emits its thinking ahead of (possibly
     several parallel) ``tool_use`` blocks, so the first one's id anchors the
     whole turn's reasoning deterministically (content order is preserved).
@@ -976,13 +915,13 @@ def _first_tool_use_call_id(msg: Message) -> Optional[str]:
     return None
 
 
-#: The lean placeholder a pruned tool
-#: output is replaced by. Pure ASCII, no hash — the full body's ContentStore
-#: ref is recorded in ``ContextPlan.cleared_outputs`` (internal audit), NOT
-#: here: the model has no ref-deref tool, so a hash in this string is dead
-#: weight it could only misread. The marker still says "there WAS output, it
-#: was elided" (not an empty string that reads as "the tool returned nothing"),
-#: so the model knows to re-run the tool if it needs the content back.
+#: The lean placeholder a pruned tool output is replaced by. Pure ASCII, no
+#: hash — the full body's ContentStore ref is recorded in
+#: ``ContextPlan.cleared_outputs`` (internal audit), NOT here: the model has no
+#: ref-deref tool, so a hash in this string is dead weight it could only misread.
+#: The marker still says "there WAS output, it was elided" (not an empty string
+#: that reads as "the tool returned nothing"), so the model knows to re-run the
+#: tool if it needs the content back.
 _CLEARED_MARKER = "[tool output cleared]"
 
 
@@ -1028,8 +967,8 @@ def _clear_tool_outputs(
             new_blocks.append(b)
     if not cleared_refs:
         return msg, []
-    # The pruned rebuild keeps ``origin`` (same transform
-    # discipline as ``_reattach_thinking`` — source tags survive).
+    # The pruned rebuild keeps ``origin`` (same transform discipline as
+    # ``_reattach_thinking`` — source tags survive).
     return (
         Message(role=msg.role, content=new_blocks, origin=msg.origin),
         cleared_refs,

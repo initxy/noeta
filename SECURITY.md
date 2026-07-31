@@ -1,20 +1,20 @@
 # Security Policy
 
-Noeta is a single-host, durable, task-oriented agent runtime. Because it runs
+Noeta is a durable, task-oriented agent runtime and SDK. Because it runs
 agents that execute real tools on the host, we take security reports seriously
 and want them to reach us privately.
 
 ## Supported versions
 
-Noeta is pre-1.0 and preview-stage (`0.1.0`). Only the latest `main` is
-supported — fixes land on `main`, and there are no backports to older tags or
-branches. If you're on an older checkout, update to `main` before reporting so
-we're looking at the same code.
+Noeta is pre-1.0 (`0.4.0`). Only the latest `main` is supported — fixes land on
+`main`, and there are no backports to older tags or branches. If you're on an
+older checkout, update to `main` before reporting so we're looking at the same
+code.
 
 | Version        | Supported          |
 | -------------- | ------------------ |
 | latest `main`  | :white_check_mark: |
-| `0.1.0` tag    | best-effort        |
+| `0.4.0` tag    | best-effort        |
 | anything older | :x:                |
 
 ## Reporting a vulnerability

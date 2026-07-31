@@ -1,20 +1,18 @@
-"""Finding 2 — policy boundary ↔ composer slice index-space alignment.
+"""Policy boundary ↔ composer slice must live in the SAME index space.
 
-The bug: ``ReActPolicy`` computed its summarise ``boundary`` over
-``view.iter_messages()`` (``semi_stable + dynamic_suffix``, post-summary,
-post-prune, tail-truncated) while ``ThreeSegmentComposer._apply_summary``
-slices the RAW ``task.runtime.messages``. When ``semi_stable`` is non-empty
-(skills active) or a prior summary already collapsed a prefix, the two indices
-point at *different* messages → the wrong slice gets summarised. The old unit
-tests hid this because ``fake_view`` put every message in ``dynamic_suffix``
-with an empty ``semi_stable`` and no prior summary, making the two lists equal.
+``ThreeSegmentComposer._apply_summary`` slices the RAW ``task.runtime.messages``,
+so the summarise ``boundary`` ``ReActPolicy`` computes must be an index into
+that same list — which is why the View exposes ``rolling_history`` +
+``summary_boundary`` rather than letting the policy count over
+``iter_messages()`` (``semi_stable + dynamic_suffix``, post-summary, post-prune,
+tail-truncated). A boundary computed in the projection points at a *different*
+message the moment ``semi_stable`` is non-empty (skills active) or a prior
+summary already collapsed a prefix, and the wrong slice gets summarised.
 
-The fix exposes ``view.rolling_history`` (raw ``task.runtime.messages``) +
-``view.summary_boundary`` so the policy computes the boundary in the SAME
-coordinate the composer slices. These tests use a REAL ``ThreeSegmentComposer``
-with a non-empty skill renderer AND a prior summary, then assert the
-policy-computed boundary indexes into ``task.runtime.messages`` and the
-composer applies it to exactly those messages.
+The setup is deliberately the case that separates the two coordinate systems: a
+REAL composer with a non-empty skill renderer AND a prior summary. ``fake_view``
+cannot exercise it — it puts every message in ``dynamic_suffix`` with an empty
+``semi_stable`` and no prior summary, making the two lists equal.
 """
 
 from __future__ import annotations
@@ -47,8 +45,8 @@ def _ctx() -> StepContext:
 
 
 def _skill_renderer(_: list[str], __=None) -> RenderedContent:
-    # A non-empty semi_stable segment: this is the prefix that made
-    # iter_messages() diverge from the raw runtime history.
+    # A non-empty semi_stable segment: the prefix that makes iter_messages()
+    # diverge from the raw runtime history.
     return RenderedContent(
         messages=[
             Message(role="user", content=[TextBlock(text="SKILL-BODY" * 20)])
@@ -100,8 +98,8 @@ def test_boundary_indexes_raw_runtime_not_view_projection() -> None:
     task = Task(task_id="t-1")
     task.runtime.messages = list(raw)
 
-    # Prior summary already collapsed the first 4 raw messages — this is the
-    # condition that desynchronised iter_messages() from rolling_history.
+    # Prior summary already collapsed the first 4 raw messages — the condition
+    # that desynchronises iter_messages() from rolling_history.
     prior_summary_ref = store.put(
         to_canonical_bytes("earlier summary"), media_type="application/json"
     )
@@ -111,8 +109,8 @@ def test_boundary_indexes_raw_runtime_not_view_projection() -> None:
     view = composer.compose(task)
 
     # Sanity: iter_messages() (semi + post-summary dynamic) is a DIFFERENT
-    # list/length from the raw runtime history. If these were equal the test
-    # would not be exercising the bug.
+    # list/length from the raw runtime history. If these were equal the two
+    # coordinate systems would coincide and the test would prove nothing.
     assert view.iter_messages() != list(task.runtime.messages)
     assert view.rolling_history == list(task.runtime.messages)
     assert view.summary_boundary == 4
@@ -246,7 +244,7 @@ def _paired_history() -> list[Message]:
 
 def test_boundary_snaps_forward_off_a_tool_result_message() -> None:
     """A tail budget tuned so the raw token cutoff lands on the ``role="tool"``
-    result at index 2. The fix must snap the boundary FORWARD to 3 so the
+    result at index 2. The boundary must snap FORWARD to 3 so the
     ``tool_use``/``tool_result`` pair travels together into the collapsed
     prefix — never left straddling the boundary."""
     history = _paired_history()
@@ -254,8 +252,7 @@ def test_boundary_snaps_forward_off_a_tool_result_message() -> None:
 
     boundary = policy._summary_boundary(history)
 
-    # Without the fix this is 2 (points at the tool-result message); with it,
-    # forward-snapped to 3.
+    # The raw cutoff is 2 (the tool-result message); snapping forward gives 3.
     assert boundary == 3
     # The kept tail begins on a self-contained turn, not an orphan result.
     assert not _carries_tool_result(history[boundary])

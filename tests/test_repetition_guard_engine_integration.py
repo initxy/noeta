@@ -1,15 +1,12 @@
-"""Engine-integration tests for ``RepetitionGuard`` (work item ④).
+"""RepetitionGuard over a real Engine: the history it reads comes from the log.
 
-Wires ``RepetitionGuard`` onto a real Engine + InMemory storage and verifies
-the Engine folds the recorded ``ToolCallStarted`` history into
-``GuardContext.recent_tool_calls`` so a run of identical ``(tool_name,
-arguments)`` calls trips the configured action (deny → ``ToolCallDenied``;
-require_approval → approval suspend), while a default-off session behaves
-exactly as today.
-
-Determinism / replay: the guard reads only the recorded EventLog prefix, so the
-same recording with the same-parameter guard reproduces the same guard-origin
-events. The last test pins identical re-folds yielding identical verdicts.
+The guard is only as good as ``GuardContext.recent_tool_calls``, which the
+Engine folds out of the recorded ``ToolCallStarted`` prefix — so these cases pin
+the wiring as much as the verdict: a tripping run must materialise as
+``ToolCallDenied`` or an approval suspend, distinct arguments must not trip, and
+an unregistered guard must not change a session at all. Because the history is
+derived purely from the log, re-folding the same stream yields the same
+verdicts, which is what makes a recording replayable.
 """
 
 from __future__ import annotations
@@ -123,7 +120,7 @@ def test_repetition_guard_require_approval_suspends() -> None:
 
 
 def test_repetition_guard_off_by_default_unaffected() -> None:
-    """No RepetitionGuard registered → identical calls all run as today."""
+    """With no RepetitionGuard registered, identical calls all run."""
     tool = FakeTool(name="echo", script={("loop",): "out"})
     policy = StubScriptedPolicy(
         [
@@ -177,9 +174,9 @@ def test_repetition_guard_distinct_args_never_trips() -> None:
 
 
 def test_engine_fills_recent_tool_calls_deterministically() -> None:
-    """The Engine's ``_guard`` builds ``recent_tool_calls`` from the recorded
-    ToolCallStarted prefix; folding the same recording twice yields the same
-    history (replay determinism foundation)."""
+    """``recent_tool_calls`` is derived from the recorded ToolCallStarted
+    prefix, so folding the same stream twice yields the same history — the
+    foundation the guard's replay determinism rests on."""
     from noeta.core.engine import _recent_tool_calls
     from noeta.protocols.canonical import to_canonical_bytes
 

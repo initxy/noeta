@@ -82,7 +82,7 @@ def test_content_not_inlined(tmp_path: Path) -> None:
     rendered = reg.render(["s"])
     text = _rendered_text(reg, "s")
     assert "DEEP SECRET CONTENT" not in text
-    assert "Resource: DEEPENING.md" not in text  # the old inline header is gone
+    assert "Resource: DEEPENING.md" not in text  # no inline resource header
     # the renderer retrieves nothing — provenance stays empty.
     assert rendered.retrieved_resources == []
 
@@ -151,7 +151,7 @@ def test_source_path_none_renders_body_only(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ContextPlan backward-compat restore (unchanged invariant)
+# ContextPlan tolerates a body missing retrieved_resources
 # ---------------------------------------------------------------------------
 
 
@@ -167,7 +167,7 @@ def test_old_plan_without_retrieved_resources_restores_empty() -> None:
     )
     body = to_canonical(plan)
     assert isinstance(body, dict)
-    del body["retrieved_resources"]  # simulate a pre-D plan body
+    del body["retrieved_resources"]  # a plan body lacking the field
     restored = from_canonical(body)
     assert isinstance(restored, ContextPlan)
     assert restored.retrieved_resources == []

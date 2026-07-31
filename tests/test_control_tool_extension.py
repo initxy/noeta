@@ -1,13 +1,12 @@
-"""The extension proof for the ``control_tool`` seam (control-tool-surface S2b).
+"""The extension proof for the ``control_tool`` seam.
 
-Control-tool-surface made ``control_tool`` an open plugin surface (the 16th
-standard surface): a *control tool* — a model-visible tool the policy intercepts
-and translates into a neutral Decision, never reaching the ToolRuntime — is now a
-plugin contribution, a factory
+``control_tool`` is an open plugin surface: a *control tool* — a model-visible
+tool the policy intercepts and translates into a neutral Decision, never
+reaching the ToolRuntime — is a plugin contribution, a factory
 ``(ControlToolBuildContext) -> ControlToolMount | None`` the kernel builder runs
-in one dual-priority mount loop, enumerating no control tool by name. The whole
-point is that a **third party** can add a working control tool without editing
-the kernel or the SDK host: author a plugin, contribute a ``control_tool``,
+in one dual-priority mount loop, enumerating no control tool by name. The point
+is that a **third party** can add a working control tool without editing the
+kernel or the SDK host: author a plugin, contribute a ``control_tool``,
 activate it, and its schema renders in band + its translate routes in band.
 
 This file is that proof, mirroring ``tests/test_session_pack_extension.py``. It
@@ -25,7 +24,7 @@ bare :class:`ControlToolEntry`) and asserts the seam carries it end to end:
 
 The built-in control-tool bands are read from the resolved
 ``default_control_tools()`` rather than re-listed, so this file pins only the
-*extension* invariant and never duplicates the S0 golden's job.
+*extension* invariant.
 """
 
 from __future__ import annotations
@@ -64,7 +63,7 @@ from noeta.testing.fake_llm import FakeLLMProvider
 #: The third-party control tool's model-visible name.
 _TOY_TOOL = "toy_control"
 #: Bands chosen to sit BETWEEN built-in bands on both orders (they genuinely
-#: differ, like the S0 golden): schema 250 lands between todo_write (200) and
+#: differ): schema 250 lands between todo_write (200) and
 #: ask_user_question (300); routing 150 lands between ask_user_question (100) and
 #: todo_write (200). Proving the loop sorts the two lists on independent keys.
 _TOY_SCHEMA_BAND = 250
@@ -317,8 +316,8 @@ def test_builder_renders_and_routes_the_external_control_tool_in_band() -> None:
     runs (``_run_control_tool_mounts(spec.control_tools, ctx)``). Feeding it every
     built-in control tool (``default_control_tools()``) + the toy entry proves:
 
-    * the SCHEMA list (the composer's ``control_action_schemas`` byte order — the
-      S0 golden) places ``toy_control`` at its ``schema_priority`` band (250):
+    * the SCHEMA list (the composer's ``control_action_schemas`` byte order)
+      places ``toy_control`` at its ``schema_priority`` band (250):
       strictly after ``todo_write`` (200) and strictly before ``ask_user_question``
       (300);
     * the ROUTING specs place it at its ``routing_priority`` band (150): strictly
