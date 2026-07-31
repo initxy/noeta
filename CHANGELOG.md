@@ -8,6 +8,85 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-07-31
+
+Closing the public-surface holes a product host fell through. A host may import
+only `noeta.sdk` / `noeta.presets`, and building one on 0.5.0 surfaced eight
+places where the honest move was an internal import or a `# noqa: SLF001`.
+Additive throughout, except the one ordering fix noted below.
+
+### Added
+
+- **`Client.dispatch_seeded(seeded)` — the public non-blocking turn handoff.**
+  The twin of `drive_seeded`: one runs the seeded turn on the calling thread and
+  returns its `DriveOutcome`, the other yields the seed's lease back to the
+  ready queue for a resident worker and returns at once. This is the shape an
+  HTTP host needs — a request thread cannot block for the minutes a turn takes,
+  and the durable seed already made the ack crash-safe. It existed as the
+  private `_yield_seeded_lease`, which the SDK's own `run_consolidation` and
+  every real host had to reach for behind a `noqa`.
+- **`Client.task_status(task_id) -> TaskStatus | None`** — where one task rests
+  right now, without driving anything. `status` + `wake_handle` are the same
+  pair a `DriveOutcome` carries, so "I just drove it" and "I am only asking"
+  answer in one vocabulary; `closed` is orthogonal (a closed conversation is
+  still `suspended`). `None` for an unknown task, which a bare fold cannot
+  express — it answers `pending` for both an unstarted task and a stream that
+  does not exist. Snapshot-accelerated.
+- **`Client.suspend_reason(task_id) -> SuspendReason | None`** — the `reason`
+  on the most recent `TaskSuspended`, parsed into a structured
+  **`SuspendReason(kind, detail)`**, plus the three kinds to compare `.kind`
+  against with plain `==`: **`SUSPEND_REASON_WAITING_HUMAN`**,
+  **`SUSPEND_REASON_INTERRUPTED`**, **`SUSPEND_REASON_TURN_FAILED`** (whose
+  `detail` carries the policy's own failure reason). `status="suspended"`
+  collapses three rests a host renders differently — waiting on you, stopped by
+  you, failed and parked — and the tags were previously spelled as literals in
+  two runtime modules with nothing binding them together. Both producers now
+  import the protocol's constants, pinned by an identity test. The ledger
+  still records the single-string tag; **`parse_suspend_reason`** is exported
+  for hosts reading raw `TaskSuspendedPayload`s off `subscribe`.
+
+  Deliberately **not** a field on `DriveOutcome`: `interrupt` returns as soon as
+  it has marked the cancel registry, while the matching `TaskSuspended` is
+  written later by the worker that settles the turn, so an outcome field would
+  read stale on the one verb the tag exists for.
+- **`Client.task_summaries()`** — every task stream folded into a lifecycle row
+  (`status`, `closed`, `parent_task_id`, `agent_name`, `workspace_dir`,
+  `background_jobs`, …), previously reachable only through the forbidden
+  `noeta.read_models`. Documented as a reconciliation/repair path, **not** a
+  list-render one: it folds every task *and* reads each stream in full to reach
+  the genesis event, so it costs one pass over the whole log and batch content
+  reads cannot help.
+- **The types the verbs take and return are exported**, so a host can annotate
+  its own signatures: `DriveOutcome`, `SeededTurn`, `DeleteTaskResult`,
+  `TaskStatus`, `EventEnvelope`, `TaskStreamSummary`, `TaskSuspendedPayload`,
+  `ViewItem`, plus `NotForkableError` (which `fork` raises and nothing else
+  named) and `DEFAULT_MODEL_ALLOWLIST` (what `allowed_models=None` authorizes).
+- **`FakeStreamingLLMProvider` in `noeta.sdk.testing`** — its batch twin was
+  already there, but a host testing a token-streaming wire needs the streaming
+  one.
+- `Client.task_streams()` is typed `list[TaskStreamSummary]` instead of
+  `list[Any]`.
+
+### Fixed
+
+- **`permission_modes()` and `effort_modes()` return picker order, not
+  alphabetical order.** Both projections exist to fill a host's dropdown, and
+  both were `tuple(sorted(...))` over a `frozenset` — so `effort_modes()`
+  returned `('high', 'low', 'max', 'medium', 'xhigh')`, which is nonsense in a
+  picker, and `permission_modes()` offered `bypassPermissions` first. The
+  sources are now ordered tuples: permission modes in widening-trust order
+  (`default`, `acceptEdits`, `bypassPermissions`) and effort modes in
+  increasing-intensity order (`low` … `max`) — the order
+  `docs/reference/sdk-options.md` documented all along. **This changes a
+  returned tuple's order**: a host that renders them in order is fixed, one
+  that pinned the alphabetical tuple must update.
+- `docs/reference/sdk-options.md` (both languages) documented
+  `model_capabilities` as returning `{'vision': True, ...}`. It returns exactly
+  one key, `supports_vision` — the name the provider's own vision guard uses —
+  and the example named a model that is not in the catalog, so it silently
+  demonstrated the fail-closed path instead of a vision model. Doc fixed, code
+  unchanged; the key set is now pinned by a test.
+
 ## [0.5.0] - 2026-07-31
 
 ### Added
@@ -1093,7 +1172,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/initxy/noeta/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/initxy/noeta/compare/v0.3.2...v0.5.0
 [0.2.11]: https://github.com/initxy/noeta/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/initxy/noeta/compare/v0.2.9...v0.2.10
