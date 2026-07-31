@@ -55,21 +55,21 @@ Temporal 是一个持久执行平台：你用代码编写 workflow 和 activity�
 
 Noeta 不是一个工作流引擎。控制流由 LLM 驱动，因此一个任务的形状是从模型的决策中涌现的，而不是来自一份事先写好的定义。当你知道工作的形状时，Temporal 合适；当模型边走边发现它时，Noeta 合适。Noeta 把 `Workflow` 挡在自己的词汇之外——固定流程被表达为一个确定性 Policy 加上 `spawn_subtask`。
 
-## Noeta 与 Pi Agent
+## Noeta 与 Pi Harness
 
-Pi Agent 是一个 computer-use 框架：它把鼠标、键盘和屏幕截取交给一个 LLM 控制，好让 agent 驱动一个桌面 GUI。它是物理计算机之上的一个控制层，不是一个 agent 运行时。
+[Pi](https://github.com/earendil-works/pi)（自称 "Pi Agent Harness"）是一个 TypeScript monorepo，用来构建终端里的 agent：统一的多 provider 模型 API、带工具调用与状态管理的 agent 循环、TUI 库，以及一个交互式 coding agent CLI。它是你在终端里驱动的 agent 的壳 —— 安全边界交给外部容器化（Docker 或 micro-VM），而不是壳自带的权限系统。
 
-| 关注点 | Pi Agent | Noeta |
+| 关注点 | Pi Harness | Noeta |
 | --- | --- | --- |
-| **部署** | 桌面进程 | 多 worker 池；在 Postgres 上多主机 |
-| **它做什么** | 让一个 LLM 点击、输入和读屏 | 托管、记录并调度 agent 的执行 |
-| **持久化** | 瞬时——没有持久执行模型 | 事件溯源的账本，崩溃安全且可重放 |
-| **挂起 / 唤醒** | 不适用 | 一等公民：人、定时器、子任务、外部 |
-| **模型** | 任意 LLM（它是一个控制层） | `LLMProvider` 后面的任何 provider |
-| **工具** | 鼠标 / 键盘 / 截屏原语 | fs、web、memory、browser、MCP、你的插件 |
-| **审计** | 无 | 完整事件日志 |
+| **部署** | 终端里的单进程 | 多 worker 池；在 Postgres 上多主机 |
+| **它做什么** | 运行交互式 coding / agent CLI | 托管、记录并调度 agent 的执行 |
+| **持久化** | 瞬时——会话状态在内存里 | 事件溯源的账本，崩溃安全且可重放 |
+| **挂起 / 唤醒** | 在 TUI 里打断、继续 | 一等公民：人、定时器、子任务、外部 |
+| **模型** | 它统一 API 后面的任何 provider | `LLMProvider` 后面的任何 provider |
+| **安全边界** | 外部容器（Docker / micro-VM） | 可选的 sandbox 插件；被 guard 的工具调用 |
+| **审计** | 会话转录 | 完整事件日志 |
 
-Pi Agent 和 Noeta 解决的是不同的层。Pi Agent 回答"agent 怎么与一个 GUI 交互？"Noeta 回答"agent 的运行怎么变成一本持久、可审计的账本？"两者是互补的：一个 Noeta 任务完全可以通过 `browser` 内置项或一个自定义工具插件去调用 Pi Agent 式的 computer-use 工具。
+Pi Harness 和 Noeta 回答的是不同的问题。Pi Harness 关心的是"怎么在终端里驱动一个 agent ？"Noeta 关心的是"怎么让自己的基础设施上持久、可审计地运行无人值守的 agent ？"两者是互补的：一个用 Pi 造的 CLI，完全可以前端开一个跑在 Noeta worker 池上的任务。
 
 ## Noeta 在什么时候是错误的选择
 

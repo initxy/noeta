@@ -103,17 +103,17 @@ Noeta 以两个库交付，共享同一个 `noeta.` 命名空间。**`noeta-sdk`
 | **可审计** | 每次模型往返、每次工具调用、每个 guard 裁决、每个 token 计数都是事件。compaction 是一层可逆叠加，原文仍留在流上。 |
 | **可扩展** | 16 个由 manifest 声明的扩展 surface。Noeta 自己的内置能力（fs、web、memory、browser、MCP……）与你的插件走同一个加载器。 |
 
-### Noeta vs Claude Agent SDK vs Pi Agent
+### Noeta vs Claude Agent SDK vs Pi Harness
 
-| | **Noeta** | **Claude Agent SDK** | **Pi Agent** |
+| | **Noeta** | **Claude Agent SDK** | **Pi Harness** |
 |---|---|---|---|
-| **定位** | 持久化、面向 server 的 agent 运行时 | 在 Claude 上跑进程内 agent 循环 | 计算机操作：鼠标、键盘、屏幕 |
-| **部署形态** | 多 worker 池；Postgres 上多 host | 客户端库，单进程 | 桌面进程 |
-| **持久化** | 事件账本 —— `state = fold(log)` | 会话由库托管 | 短暂态，无持久执行模型 |
-| **挂起 / 唤醒** | 一等公民：人工、定时器、subtask、外部事件 —— 精确一次 | 会话恢复 | 不适用 |
-| **模型锁定** | 无 —— 接一个适配器即可更换 provider | Claude 优先 | 任意 LLM（它是控制层） |
-| **扩展** | 16 个插件 surface + 单写者规则 | 工具、MCP、子代理、hook | 计算机操作原语 |
-| **审计 / replay** | 完整事件日志，fold 可复现 | 会话转录 | 无 |
+| **定位** | 持久化、面向 server 的 agent 运行时 | 在 Claude 上跑进程内 agent 循环 | 终端 coding agent 壳（TypeScript 工具包） |
+| **部署形态** | 多 worker 池；Postgres 上多 host | 客户端库，单进程 | 终端里的单进程 |
+| **持久化** | 事件账本 —— `state = fold(log)` | 会话由库托管 | 内存中的会话状态 |
+| **挂起 / 唤醒** | 一等公民：人工、定时器、subtask、外部事件 —— 精确一次 | 会话恢复 | 在 TUI 里打断 / 继续 |
+| **模型锁定** | 无 —— 接一个适配器即可更换 provider | Claude 优先 | 无 —— 统一的多 provider API |
+| **扩展** | 16 个插件 surface + 单写者规则 | 工具、MCP、子代理、hook | TypeScript 包：循环、工具、TUI |
+| **审计 / replay** | 完整事件日志，fold 可复现 | 会话转录 | 会话转录 |
 
 **当 agent 的*运行过程*本身必须是一条能 replay、能审计、能跨 worker 与 host 扩展的账本时，就该用 Noeta** —— 而不只是一个能调用的循环。更长的展开（含 LangGraph 与 Temporal）：[对比](https://initxy.github.io/noeta/zh/reference/comparison/)。
 
