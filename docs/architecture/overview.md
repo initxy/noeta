@@ -15,7 +15,7 @@ Noeta ships as two libraries: a thin client over a pure engine.
 | `noeta-sdk` | `packages/noeta-sdk` | The one public surface — `query` / `Client` / `Options` / `@tool`, the re-exported extension interfaces, and the preset agents — plus `builtins`, the catalogue where every official capability actually lives. |
 
 <p align="center">
-  <img src="../assets/architecture.svg" alt="Noeta architecture — the two distributions and module relationships" width="820">
+  <img src="../assets/diagrams/architecture.svg" alt="Noeta architecture — noeta-sdk over noeta-runtime, builtins as plugins" width="820">
   <br>
   <em>A host drives the SDK in-process; the SDK forwards into the runtime's engine, materials, and storage. Arrows are call paths.</em>
 </p>
@@ -239,6 +239,10 @@ Beneath the `Options` fields, the plugin loader consults one `SurfaceRegistry`
 and nothing else, so adding an extension surface means registering a
 `SurfaceSpec`, never editing the loader. The standard catalogue holds sixteen
 surfaces across three planes:
+
+<p align="center">
+  <img src="../assets/diagrams/plugin-system.svg" alt="Noeta plugin system — 16 surfaces across 3 planes, manifest → loader → activation" width="820">
+</p>
 
 - **Identity** (enters durable agent identity): `tool`, `agent`,
   `content_kind`, `prompt_fragment`, `policy`, `control_tool`.

@@ -19,6 +19,10 @@ Only an exit Decision ends the call, moving the Task to `terminal` or
 
 ## One turn: compose → decide → dispatch
 
+<p align="center">
+  <img src="../assets/diagrams/engine-execution.svg" alt="Engine execution — compose → decide → dispatch, tool_calls loops" width="820">
+</p>
+
 1. **Compose.** The ContextComposer assembles the View — the exact input the
    model will see — from the folded state, and the Engine records a
    `ContextPlanComposed` envelope naming what the turn was built from (see

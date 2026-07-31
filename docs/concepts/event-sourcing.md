@@ -10,6 +10,10 @@ The state object is a disposable projection; the log is the master copy.
 Everything Noeta advertises — durability, crash recovery, replay, audit — is a
 consequence of this one decision, not a feature built next to it.
 
+<p align="center">
+  <img src="../assets/diagrams/event-sourcing.svg" alt="Event sourcing — EventLog + ContentStore → fold → four state slices" width="820">
+</p>
+
 ## The EventLog
 
 Each Task owns one append-only stream of `EventEnvelope` records. Every state

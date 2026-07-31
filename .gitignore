@@ -3,6 +3,9 @@
 .claude/*.local.*
 .claude/worktrees/
 
+# Live-test secrets (never committed)
+.env
+
 # Python
 __pycache__/
 *.py[cod]

@@ -5,6 +5,10 @@ one status with a typed `WakeCondition` on `wake_on`, whatever the reason for
 waiting. The Task's state is safely in its EventLog; nothing about it lives in
 process memory while it waits (see [Task model](task-model.md)).
 
+<p align="center">
+  <img src="../assets/diagrams/task-lifecycle.svg" alt="Task lifecycle — pending → running → suspended → terminal, with wake conditions" width="820">
+</p>
+
 ## How a wake matches
 
 Condition and event share one dataclass: the parent stores the shape it is
