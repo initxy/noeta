@@ -6,6 +6,26 @@
 > it describes the final form as if built from scratch. Sequencing, migration,
 > and byte-compatibility with the current tree are deliberately out of scope.
 
+> **Implementation status (2026-07-30, branch `kernel-final-form`).** Shipped
+> green: §4.2 mechanism-slots `SessionContext` (fs knobs → `plugin_config["fs"]`);
+> §4.4/§4.5 the scoped `SessionRecorder` + generic `init` hook replacing the three
+> feature-named seed recorders, on both the top-level and child-subtask seed
+> paths; §3/§6 `active_content` as `kind → {name → hash}` with hash-last-write-wins
+> refresh and renderers that `resolve(kind, name) → bytes` from the ContentStore
+> (skills excepted — pinned, registry-rendered); §4.3 the stringly export
+> vocabulary removed in favour of typed `PackContribution` / `ControlToolMount`
+> fields; §9 acceptance property tests (`tests/test_acceptance_properties.py`).
+> **Two deliberate deviations:** (1) §5's *interleaving* of invoke-tools and
+> control schemas onto one priority scale was **not** done — the composer already
+> renders both into the stable prefix deterministically (invoke by band, then
+> control by `schema_priority`), satisfying §5's substantive goals; the remaining
+> interleave is a cosmetic re-ordering that would re-pin the tool-schema goldens
+> and burst the KV cache for no model benefit (owner decision, 2026-07-30). (2)
+> §4.3's *closures-not-fields* purification of pack-internal state (memory store /
+> entries / instruction+environment snapshots) is deferred: those still ride
+> `SessionInputs` as typed build-inspection pass-throughs for ~10 tests, pending a
+> rework of those tests to behaviour-based inspection.
+
 ## 1. Principle
 
 The kernel is a **mechanism container**: it knows events, blobs, fences,
