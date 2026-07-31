@@ -40,7 +40,11 @@ break over a permanent compatibility table.
 
 `control_tool` is the sixteenth standard surface (`SurfaceSpec` in
 `noeta.client.surfaces`): plane **identity**, `activation_scope` **per-agent**,
-`collision_key` **`name`**, `merge_rule` **append**, ordering **`priority`**.
+`collision_key` **`name`**, ordering **`priority`** *(as written it also carried
+`merge_rule` **append**; that field was deleted on 2026-07-31 — see the
+SDK-layer-cleanup Addendum in the plugin-contribution-bundles ADR — and the slot
+now holds `activation_binding` **`elsewhere`**, since `activation_control_tools`
+carries this surface rather than `PluginActivation`)*.
 A contribution is a factory `(ControlToolBuildContext) -> ControlToolMount | None`
 resolved by the loader like any other surface and run by the kernel builder in
 the **post-tools phase** (replacing `_build_control_action_schemas`).

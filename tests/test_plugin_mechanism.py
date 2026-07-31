@@ -165,7 +165,7 @@ def test_host_extends_registry_before_load():
     """A host registers an app-plane surface on a copy; the loader honours it."""
     reg = standard_registry().copy()
     reg.register(
-        SurfaceSpec("app_router", "host", "host-wired", lambda v: None, "name", "append")
+        SurfaceSpec("app_router", "host", "host-wired", lambda v: None, "name")
     )
     assert "app_router" in reg
     assert "app_router" not in standard_registry()  # the copy is independent
@@ -748,7 +748,7 @@ def test_resolve_runs_the_surface_validator_and_rejects_bad_values():
             raise PluginError("expected an int")
 
     reg = standard_registry().copy()
-    reg.register(SurfaceSpec("counter", "host", "host-wired", only_ints, "name", "append"))
+    reg.register(SurfaceSpec("counter", "host", "host-wired", only_ints, "name"))
 
     good = _loaded(_manifest("g", _contrib("counter", "n")), {("counter", "n"): 7})
     ps_good = PluginSet(plugins=(good,), registry=reg)

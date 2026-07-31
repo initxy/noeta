@@ -324,6 +324,42 @@ def test_host_registered_identity_surface_projects_without_a_loader_edit(
     assert activation.prompt_fragments == (("style", "Follow the house style."),)
 
 
+def test_unroutable_process_surface_is_refused_not_filed_as_a_guard(
+    tmp_path: Path,
+) -> None:
+    """The wiring-plane twin of the identity refusal above.
+
+    ``process_hooks`` derives its governance set from the registry, so a
+    host-registered process-scoped wiring surface is *seen*. But ``Client``
+    wires exactly two process-wide seams (guards, observers), so a third has
+    nowhere to go. Filing it under ``guards`` by default would hand the engine
+    a value that is not a ``Guard`` — a build-time configuration error that
+    only surfaces as a crash on the first tool call.
+    """
+    from noeta.client.surfaces import SurfaceSpec, standard_registry
+
+    registry = standard_registry()
+    registry.register(
+        SurfaceSpec("audit_sink", "wiring", "process", lambda v: None, "none")
+    )
+    body = """
+        noeta_plugin_name = "auditco"
+        from noeta.sdk import PluginBuilder
+
+        SINK = {"kind": "not-a-guard"}
+
+        plugin = PluginBuilder("auditco")
+        plugin.contribute("audit_sink", SINK, name="sink")
+    """
+    plugins = load_plugins(
+        builtins=False,
+        modules=[_write_plugin(tmp_path, "auditco", body)],
+        registry=registry,
+    )
+    with pytest.raises(PluginError, match="no runtime channel"):
+        plugins.process_hooks()
+
+
 # ===========================================================================
 # Collisions — the loader's "no override" rule reaches the real wiring path
 # ===========================================================================
@@ -496,10 +532,13 @@ def test_resolution_is_memoised_per_plugin(tmp_path: Path) -> None:
 
     validated: list[Any] = []
     registry = standard_registry()
+    # Per-agent, not process: ``Client`` wires only guards and observers
+    # process-wide, so a third process-scoped surface is refused (see
+    # ``test_unroutable_process_surface_is_refused_not_filed_as_a_guard``).
+    # Scope is irrelevant to what this test measures — resolution is per
+    # plugin, so the validator fires once however the plugin got resolved.
     registry.register(
-        SurfaceSpec(
-            "counted", "wiring", "process", validated.append, "none", "append"
-        )
+        SurfaceSpec("counted", "wiring", "per-agent", validated.append, "none")
     )
     # A guard (governance pass) + a reminder (activation pass) + the counted
     # surface, so more than one projection has a reason to resolve this plugin —

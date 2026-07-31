@@ -8,7 +8,73 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **`HostConfig(storage_path=...)` — durable storage from one string.** A
+  sqlite file path, a `postgresql://` DSN or `":memory:"` resolves through
+  `noeta.sdk.storage.open_storage_stack`, including the ordering invariant
+  (the event log takes the dispatcher as its `lease_validator`). Mutually
+  exclusive with the explicit `event_log` / `content_store` / `dispatcher`
+  triple, which stays supported.
+- **`query()` accepts `host_config`**, so the one-shot sugar path is no longer
+  limited to in-memory storage — `query(..., host_config=HostConfig(
+  storage_path="run.sqlite"))` records durably.
+- **`Client` is a context manager** (`__exit__` → `shutdown()`), so a `with`
+  block can no longer leak a worker pool or a sandbox container.
+- **Provider env-var fallback**: `AnthropicProvider` reads `ANTHROPIC_API_KEY`
+  and `OpenAICompatProvider` reads `OPENAI_API_KEY` when `api_key` is omitted.
+  A key that is neither passed nor in the environment still fails loudly at
+  construction, naming both the parameter and the variable.
+- `QueryResult.__repr__` — a compact summary instead of the inherited
+  dump of every envelope.
+
 ### Changed
+
+- **BREAKING — SDK-layer cleanup: typing, extensibility, DX.** Removals, with
+  no compatibility aliases:
+  - `noeta.sdk.load_plugin_set` → **`load_plugins`** (one name; the alias
+    existed only while the 0.4.0 bundle loader held it).
+  - `noeta.client.parts.BUILTIN_TOOL_CLASSES` → **`builtin_tool_classes()`**.
+  - `options._EFFORT_MODES` / `_PERMISSION_MODES` → public **`EFFORT_MODES`** /
+    **`PERMISSION_MODES`**; the `options._BUILTIN_ACTIVATIONS` alias is gone
+    (`BUILTIN_ACTIVATIONS` is the only spelling).
+  - **`SurfaceSpec.merge_rule` is deleted** — nothing read it; `collision_key`
+    already determines append-vs-single. Its slot now holds
+    **`activation_binding`**, which the identity projection *does* read:
+    an identity-plane surface names the `PluginActivation` channel it feeds,
+    so a host-registered identity surface reaches `compile_options` with no
+    loader edit. It is required for `plane="identity"`, rejected elsewhere,
+    and every enum field is now validated at construction — a positional
+    argument left in the old `merge_rule` slot raises instead of landing in
+    `ordering`.
+  - **`Options` field order changed** (the wiring fields moved into one
+    block). Keyword construction is unaffected; positional construction past
+    `system_prompt` breaks.
+- **`Options` equality now matches the identity story it documents.** Every
+  field the docstring already called "excluded from identity" (`provider`,
+  `cwd`, `can_use_tool`, `model`, `metadata`, `output_schema`, `thinking`,
+  `effort`, `guards`, `observers`, `content_channels`) is `compare=False` and
+  carries its **real type** — `cwd` / `can_use_tool` were annotated `object`,
+  which only disabled type checking while equality still compared them. The
+  class never was hashable (it holds mapping-valued fields) and no longer
+  claims to be.
+- **Public typing**: all 16 `Client` verbs return `DriveOutcome` / `SeededTurn`
+  instead of `Any`; `delete_task` returns a `TypedDict`; new `PolicyFactory` /
+  `ToolLike` Protocols replace `.ref` duck-typing; `SdkMcpServer` moved down to
+  `noeta.client` (re-exported from `noeta.sdk.authoring`) so
+  `Options.mcp_servers` can name its element type.
+- **`open_storage_stack` rejects an unrecognised URL scheme.** A typo'd DSN
+  (`postgesql://…`) used to fall through to the sqlite branch and create a
+  database file *named after the DSN*.
+- **A process-scoped wiring surface beyond `guard` / `observer` is refused.**
+  `Client` wires exactly two process-wide seams; a third has nowhere to go, and
+  filing it under `guards` handed the engine a value that is not a `Guard`.
+- The TOML manifest form enforces `(surface, name)` uniqueness like
+  `PluginBuilder` always did, and `plugin_check` no longer reports an omitted
+  default (`priority = 0`, empty `seams`) as drift.
+- `Client(workspace_dir=...)` falls back to `Options.cwd` and then the process
+  working directory instead of raising — matching the `SdkHost.workspace_dir`
+  field default it used to contradict.
 
 - **BREAKING — "session" is no longer an identity in engine/SDK names.**
   `CONTEXT.md` bans naming a thing after a session (the engine knows only

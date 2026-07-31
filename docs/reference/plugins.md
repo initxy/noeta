@@ -23,10 +23,10 @@ from noeta.sdk import (
 )
 ```
 
-> `load_plugins` is the `noeta.sdk` name for `noeta.client.plugin_set.load_plugins`
-> (the internal function is `load_plugins`; it is re-exported under the
-> `load_plugins` alias so it does not collide with the retiring 0.4.0
-> `load_plugins`, see [The retired bundle path](#the-retired-bundle-path)).
+> `load_plugins` is `noeta.client.plugin_set.load_plugins`, re-exported from
+> `noeta.sdk` under that one name. The transitional `load_plugin_set` alias —
+> which existed only while the 0.4.0 bundle loader still held the name — is
+> gone; see [The retired bundle path](#the-retired-bundle-path).
 
 > Line numbers are omitted throughout — they drift on every edit. The module path
 > plus the member name is the stable coordinate.
@@ -211,12 +211,31 @@ class SurfaceSpec:
     activation_scope: "per-agent" | "process" | "host-wired"
     validator: Callable[[Any], None]   # raises on an illegal contribution value
     collision_key: "name" | "kind" | "alias" | "single-valued" | "none"
-    merge_rule: "append" | "single" | "dict-merge"
     ordering: "sorted" | "priority" = "sorted"
+    # identity-plane only — which PluginActivation channel the contribution
+    # feeds; "elsewhere" when a per-agent projection carries it instead
+    activation_binding: "tool" | "agent" | "content_kind"
+                      | "prompt_fragment" | "policy" | "elsewhere" | None = None
 ```
 
 `validator` runs on a **resolved** value (after a `ref` is imported); listing and
-manifest-level collision never call it, so they stay execution-free.
+manifest-level collision never call it, so they stay execution-free. Every enum
+field is checked at construction, so a mistyped value (or a positional argument
+in the wrong slot) raises `PluginError` at the registration line.
+
+`activation_binding` is what keeps the identity projection **table-driven**: an
+identity-plane surface declares the channel it feeds and reaches
+`compile_options` with no loader edit. It is **required** for
+`plane="identity"` and **rejected** for every other plane — an identity
+contribution with no binding would be silently dropped between resolve and
+compile, which is exactly how `content_kind` once went missing.
+
+The wiring plane has two **process-wide** channels, `guard` and `observer`.
+A process-scoped wiring surface beyond those two is refused by
+`PluginSet.process_hooks()` rather than filed under one of them — there is no
+third seam for it to reach, and handing the engine a non-`Guard` value would
+turn a build-time configuration error into a crash on the first tool call.
+Give such a surface a per-agent scope instead.
 
 `standard_registry()` returns a fresh `SurfaceRegistry` seeded with the sixteen
 standard surfaces. A host registers additional **app-plane** surfaces on a
@@ -232,7 +251,7 @@ def _valid_route(value):
 
 reg = standard_registry()                       # a fresh copy
 reg.register(SurfaceSpec(
-    "http_route", "host", "host-wired", _valid_route, "name", "append",
+    "http_route", "host", "host-wired", _valid_route, "name",
 ))
 plugins = load_plugins(registry=reg, ...)    # the host's surface is live
 ```

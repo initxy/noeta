@@ -86,6 +86,57 @@ def test_injected_storage_triple_is_used(tmp_path: Path) -> None:
         client.shutdown()
 
 
+def test_storage_path_and_explicit_triple_are_mutually_exclusive() -> None:
+    # Two ways to name a store would name two different stores; the loud error
+    # is the whole point of the one-string form (D9).
+    disp = InMemoryDispatcher()
+    log = InMemoryEventLog(lease_validator=disp)
+    with pytest.raises(ValueError, match="EITHER storage_path"):
+        HostConfig(
+            storage_path=":memory:",
+            event_log=log,
+            content_store=InMemoryContentStore(),
+            dispatcher=disp,
+        ).storage_triple()
+
+
+def test_query_with_storage_path_round_trips_a_durable_sqlite_run(
+    tmp_path: Path,
+) -> None:
+    """The one-string durable form, through the sugar path (D6 + D9).
+
+    ``query()`` used to be mutually exclusive with durable storage, and
+    ``HostConfig`` used to demand a hand-built triple. Together they mean a
+    one-shot call can record to a sqlite file: the assertion re-opens that file
+    with a SECOND stack and finds the run, which is what "durable" has to mean.
+    """
+    from noeta.sdk import query
+    from noeta.sdk.storage import open_storage_stack
+
+    db = tmp_path / "run.sqlite"
+    result = query(
+        _options(),
+        goal="hi",
+        provider=_finishing_provider(),
+        workspace_dir=tmp_path,
+        host_config=HostConfig(storage_path=str(db)),
+    )
+    assert result.answer() == "ok"
+    assert db.exists(), "storage_path did not create the sqlite file"
+
+    event_log, content_store, dispatcher = open_storage_stack(str(db))
+    try:
+        replayed = event_log.read(result.task_id)
+        assert replayed, "the durable log holds no events for the query's task"
+        assert [e.type for e in replayed][0] == "TaskCreated"
+        assert "TaskCompleted" in {e.type for e in replayed}
+    finally:
+        for obj in (event_log, content_store, dispatcher):
+            close = getattr(obj, "close", None)
+            if callable(close):
+                close()
+
+
 def test_host_injections_reach_the_host(tmp_path: Path) -> None:
     # app_gateway / mcp_server_resolver / workflow flag are host-level (not
     # Options): they reach the SdkHost verbatim.

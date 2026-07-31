@@ -213,6 +213,27 @@ def test_is_postgres_url_classifies_dsn_shapes() -> None:
     assert is_postgres_url(":memory:") is False
 
 
+def test_open_storage_stack_refuses_an_unrecognised_url_scheme(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A typo'd DSN is a typo, not a file name.
+
+    ``postgesql://…`` used to fall through to the sqlite branch, which created
+    a database file **named after the DSN** — a misconfiguration that only
+    surfaced later as a confusing empty store. The chdir makes the old
+    behaviour observable: a fallthrough would leave that file right here.
+    """
+    from noeta.sdk.storage import open_storage_stack
+
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError) as exc:
+        open_storage_stack("postgesql://u:p@localhost:5432/db")
+    message = str(exc.value)
+    assert "postgesql://" in message
+    assert "postgresql://" in message  # names what it would have accepted
+    assert not list(tmp_path.iterdir()), "a file was created for a typo'd DSN"
+
+
 def test_open_storage_stack_memory_path_returns_inmemory_adapters(
     tmp_path: pytest.TempPathFactory,
 ) -> None:

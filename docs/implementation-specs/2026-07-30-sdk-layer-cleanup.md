@@ -4,6 +4,47 @@ Status: Implemented (2026-07-31) — `make check` green: 3423 passed / 129
 skipped, coverage 85.55% (gate 85%), mypy --strict 24 files clean, ruff clean,
 import-linter 10/10 contracts kept.
 
+## Review follow-up (2026-07-31)
+
+Acceptance review of the implementation commit found six things worth fixing;
+all are done in the follow-up commit:
+
+* **`process_hooks` mis-routed an unroutable surface.** Deriving the governance
+  set from the registry was right, but the bucket split was `if observer /
+  else guards`, so a host-registered process-scoped wiring surface had its
+  value filed under `guards` — the engine would receive a non-`Guard` and
+  crash on the first tool call. It is now refused loudly, and the docstring no
+  longer claims a third process surface is "collected".
+* **`SurfaceSpec` enum fields are validated in `__post_init__`.** Deleting
+  `merge_rule` from the middle of the signature shifted every positional
+  argument after it; three test call sites kept passing `"append"`, which
+  silently became `ordering="append"` (an illegal `Ordering`) and behaved like
+  `"sorted"` by luck. The call sites are fixed and the class now refuses the
+  value that caused it.
+* **Acceptance criterion 5 had no test.** Added: `query()` through
+  `HostConfig(storage_path=...)` re-opened with a second stack (the durable
+  round-trip), the `storage_path`-vs-explicit-triple refusal, and D10's
+  unknown-URL-scheme rejection (asserting no file is created for the typo).
+* **Doc drift from the removals.** `CONTEXT.md` (PluginSet / SurfaceSpec
+  entries), `docs/reference/plugins.md` + its `zh` mirror (the `SurfaceSpec`
+  block still taught `merge_rule` and never mentioned `activation_binding`;
+  the `load_plugins` note had become self-referential), and an ADR addendum
+  recording `merge_rule` → `activation_binding` + the two-process-channel rule.
+* **`CHANGELOG.md` carried none of this commit's breaking removals** — only the
+  carried session-rename. The full list is now under `[Unreleased]`.
+* **`exec_plugin_file` / `find_builder` were typed `Any`** in a change whose
+  theme is type discipline; they now name `ModuleType` / `str | Path`.
+
+Judged and deliberately **not** changed: `OpenAICompatProvider(api_key="")`
+now raises where it used to send an empty bearer token. Allowing an explicit
+empty string back would re-open the silent-401 path D8 exists to close
+(`api_key=os.environ.get("KEY", "")`), and a no-auth local endpoint can pass
+any placeholder. The docstring says so explicitly instead.
+
+AC4's exception list should also have named `examples/_internal/` — that
+directory is contributor-facing by construction (`examples/_internal/README.md`
+says so) and is not part of the "examples import only via `noeta.sdk`" rule.
+
 Deviations from the plan as written, all deliberate:
 
 * **D9 needed a module move.** `HostConfig.storage_path` cannot call
