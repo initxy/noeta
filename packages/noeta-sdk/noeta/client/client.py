@@ -20,10 +20,13 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, TypedDict
 
 from noeta.agent.registry import AgentRegistry
+from noeta.core.fold import fold
+from noeta.read_models.tasks import list_task_summaries
 from noeta.context.reminders import ReminderSpec
 from noeta.execution.control_tool import ControlToolEntry
 from noeta.execution.session_pack import SessionPackEntry
@@ -40,13 +43,16 @@ from noeta.execution.driver import DriveOutcome, SeededTurn
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
 from noeta.protocols.errors import CodedError
-from noeta.protocols.event_log import EventEnvelope, EventLogFull
+from noeta.protocols.event_log import EventEnvelope, EventLogFull, TaskStreamSummary
+from noeta.protocols.wake import HumanResponseReceived
 from noeta.protocols.events import (
+    SuspendReason,
     TaskCompletedPayload,
     TaskFailedPayload,
     ToolCallApprovalRequestedPayload,
     ToolCallApprovalResolvedPayload,
     answer_from_payload,
+    parse_suspend_reason,
 )
 from noeta.protocols.messages import ImageBlock, LLMProvider
 from noeta.protocols.tool import Tool
@@ -73,7 +79,37 @@ from noeta.client.options import (
 from noeta.client.plugin_set import PluginSet
 
 
-__all__ = ["Client", "DeleteTaskResult", "QueryFailedError", "QueryResult", "query"]
+__all__ = [
+    "Client",
+    "DeleteTaskResult",
+    "QueryFailedError",
+    "QueryResult",
+    "TaskStatus",
+    "query",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class TaskStatus:
+    """Where one task rests right now — the read-only twin of a
+    :class:`~noeta.execution.driver.DriveOutcome`.
+
+    ``status`` and ``wake_handle`` are exactly the pair a drive verb returns, so
+    "I just drove it" and "I am only asking" answer in one vocabulary. What
+    ``status`` alone cannot express is *why* a suspended task is suspended:
+    ``wake_handle`` separates the trailing next-goal suspend
+    (``NEXT_GOAL_WAKE_HANDLE`` — "type again") from an ``approval-{call_id}`` or
+    question suspend ("answer me first").
+
+    ``closed`` is **orthogonal** to ``status``, not a fifth status: a closed
+    conversation is still ``suspended``, and ``send_goal`` reopens it.
+    """
+
+    task_id: str
+    status: str
+    closed: bool
+    wake_handle: Optional[str]
+    parent_task_id: Optional[str]
 
 
 class DeleteTaskResult(TypedDict, total=False):
@@ -1178,14 +1214,92 @@ class Client:
         """
         return list(self._host.event_log.read(task_id, after_seq=after_seq))
 
-    def task_streams(self) -> list[Any]:
+    def task_streams(self) -> list[TaskStreamSummary]:
         """Enumerate every task stream this client has driven.
 
-        Each row carries ``task_id`` + ``last_seq`` (a ``TaskStreamSummary``) —
+        Each row carries ``task_id`` + ``last_seq`` + ``last_event_time`` —
         enough for a streaming bridge to discover the root's subtask tree and
-        catch each sub-stream up from its per-task cursor.
+        catch each sub-stream up from its per-task cursor. Reads the stream
+        index only: no fold, no content.
         """
         return list(self._host.event_log.list_task_streams())
+
+    def task_status(self, task_id: str) -> Optional[TaskStatus]:
+        """Where ``task_id`` rests right now; ``None`` for an unknown task.
+
+        The read-only twin of driving a verb: it answers "is this conversation
+        running, waiting on me, or finished?" without writing anything. Reach
+        for it after a restart, or when a reconnecting client has to reconcile
+        what it shows against the ledger.
+
+        Snapshot-accelerated — the fold restarts from the latest baseline and
+        replays only the tail past it, and 0.5.0's ``CachedContentStore`` serves
+        a re-read baseline from memory, so repeated calls on an idle task stay
+        cheap. Prefer this over :meth:`task_summaries` whenever the question is
+        about one task.
+        """
+        log = self._host.event_log
+        # Unknown vs. genuinely ``pending``: a fold answers "pending" for BOTH a
+        # created-but-unstarted task and a stream that does not exist, so
+        # existence is asked separately. Checking for a snapshot first keeps the
+        # long (accelerated) case off the full read.
+        if log.find_latest_snapshot(task_id) is None and not log.read(task_id):
+            return None
+        task = fold(log, self._host.content_store, task_id)
+        wake_on = task.wake_on
+        return TaskStatus(
+            task_id=task_id,
+            status=task.status,
+            closed=task.governance.closed,
+            wake_handle=(
+                wake_on.handle if isinstance(wake_on, HumanResponseReceived) else None
+            ),
+            parent_task_id=task.parent_task_id,
+        )
+
+    def suspend_reason(self, task_id: str) -> Optional[SuspendReason]:
+        """The parsed ``reason`` on ``task_id``'s most recent ``TaskSuspended``.
+
+        ``None`` when the task has never suspended. This is how a host tells
+        the three rests apart that ``status="suspended"`` collapses into one:
+        compare ``.kind`` with ``==`` against ``SUSPEND_REASON_INTERRUPTED``
+        ("you pressed stop"), ``SUSPEND_REASON_WAITING_HUMAN`` (the ordinary
+        pause — pair it with :meth:`task_status`'s ``wake_handle`` to learn
+        *what* is awaited), or ``SUSPEND_REASON_TURN_FAILED`` (a failed turn
+        parked for the human — ``.detail`` carries the policy's own reason).
+
+        Deliberately not a field on ``DriveOutcome``: :meth:`interrupt` returns
+        as soon as it has marked the cancel registry, while the matching
+        ``TaskSuspended`` is written later by the worker that settles the turn —
+        so an outcome field would read stale on the one verb the tag exists for.
+        """
+        for env in reversed(self._host.event_log.read(task_id)):
+            if env.type == "TaskSuspended":
+                return parse_suspend_reason(str(env.payload.reason))
+        return None
+
+    def task_summaries(self) -> list[dict[str, Any]]:
+        """Every task stream folded into a lifecycle row, most-recent first.
+
+        What :meth:`task_streams` gives (``task_id`` plus the stream-tail
+        bookmarks) plus the fields only a fold can answer::
+
+            {task_id, status, closed, last_seq, last_event_time,
+             created_event_time, parent_task_id, agent_name, workspace_dir,
+             background_jobs}
+
+        ``parent_task_id is None`` marks a root conversation.
+
+        **This is not a list-render path.** It folds every task *and* reads each
+        task's stream in full to reach the genesis event, so it costs one pass
+        over the entire log — batch content reads do not help, because the cost
+        is EventLog IO. It suits a boot-time reconciliation or a repair tool. A
+        product that lists conversations should keep its own index and use
+        :meth:`task_streams` for the bookmarks and :meth:`task_status` for one
+        task's state.
+        """
+        log = self._host.event_log
+        return list_task_summaries(log, log, self._host.content_store)
 
     def delete_task(self, task_id: str) -> DeleteTaskResult:
         """Hard-delete a task and its subtask tree from storage.
@@ -1419,16 +1533,26 @@ class Client:
         self._workers_started = False
         return True
 
-    def _yield_seeded_lease(self, seeded: Any) -> None:
-        """Hand a seeded lease back to the ready queue for a worker to pick up.
+    def dispatch_seeded(self, seeded: SeededTurn) -> None:
+        """Hand a seeded turn to the resident worker pool and return at once.
 
-        Used by the background-drive verbs after seed() when a resident
-        worker pool is running, in place of spawning a one-off drive
-        thread. If the seed produced a non-durable prelude (e.g.
-        ResolveApprovalPrelude — executes the approved tool, cannot ride
-        the request thread), stash it on the host so the worker that
-        picks up the task can apply it between note_woken and
-        run_one_step.
+        The non-blocking twin of :meth:`drive_seeded`. Both take the
+        ``SeededTurn`` a ``seed_*`` verb produced — every durable, validated
+        step is already committed — and differ only in *who* drives it:
+        ``drive_seeded`` runs the turn on the calling thread and returns its
+        :class:`DriveOutcome`; this yields the seed's lease back to the ready
+        queue so a :meth:`start_workers` worker picks it up, and returns
+        ``None`` immediately. Progress rides the committed event stream.
+
+        This is the shape an HTTP host wants: a request thread cannot afford to
+        block for the minutes a turn can take, and the durable seed means the
+        ack is already crash-safe. Call it only with workers running — with no
+        pool the lease sits in the ready queue until one starts.
+
+        If the seed produced a non-durable prelude (e.g. a resolve-approval
+        prelude, which executes the approved tool and so cannot ride the
+        request thread), it is stashed on the host for the worker that picks
+        the task up to apply between ``note_woken`` and ``run_one_step``.
         """
         if getattr(seeded, "prelude", None) is not None:
             self._host.put_pending_prelude(seeded.task_id, seeded.prelude)

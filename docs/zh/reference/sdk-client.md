@@ -109,7 +109,7 @@ client.send_goal(outcome.task_id, goal="Now add a test for it.")
 
 ## seed / drive 拆分
 
-一个异步传输层不应该为了跑完一整轮而占住一个请求线程。`seed_*` 在请求线程上完成每一个持久的、经过校验的步骤——因此一个类型化的拒绝（`ModelSelectorError`、`NotResumableError`）仍然会同步地表现为一个 4xx——并返回一个 `SeededTurn`，你把它交给后台线程上的 `drive_seeded`。
+一个异步传输层不应该为了跑完一整轮而占住一个请求线程。`seed_*` 在请求线程上完成每一个持久的、经过校验的步骤——因此一个类型化的拒绝（`ModelSelectorError`、`NotResumableError`）仍然会同步地表现为一个 4xx——并返回一个 `SeededTurn`，再由你来驱动它。
 
 | 方法 | 签名 |
 | --- | --- |
@@ -118,11 +118,14 @@ client.send_goal(outcome.task_id, goal="Now add a test for it.")
 | `seed_approve` / `seed_deny` | 同 `approve` / `deny` |
 | `seed_answer` | 同 `answer` |
 | `seed_deliver_event` | 同 `deliver_event` |
-| `drive_seeded` | `(seeded)` —— 把 seed 好的这一轮驱动到它的下一个边界 |
+| `drive_seeded` | `(seeded) -> DriveOutcome` —— **在当前线程上**把 seed 好的这一轮驱动到它的下一个边界 |
+| `dispatch_seeded` | `(seeded) -> None` —— 交给常驻 worker 池，立刻返回 |
+
+按「谁该阻塞」来选。`drive_seeded` 在调用线程上跑完这一轮，适合你自己拥有的后台线程；`dispatch_seeded` 把 seed 的租约交回就绪队列，由[常驻 worker](#常驻-worker-池) 接手并立即返回 —— 这是 HTTP 处理器想要的形状，因为持久的 seed 已经让这次 ack 具备崩溃安全性。两种方式下，进度都通过已提交的事件流体现。
 
 ## 常驻 worker 池
 
-有 worker 在跑时，后台驱动路径会把 seed 的租约交回就绪队列，而不是另起一个一次性线程，因此多场对话可以并发推进。唤醒投递依然是持久、单 worker、恰好一次的：一个租约持有一个任务，直到它的下一次挂起或终止。
+有 worker 在跑时，`dispatch_seeded` 会把 seed 的租约交回就绪队列，而不是另起一个一次性线程，因此多场对话可以并发推进。唤醒投递依然是持久、单 worker、恰好一次的：一个租约持有一个任务，直到它的下一次挂起或终止。
 
 | 方法 | 签名 |
 | --- | --- |

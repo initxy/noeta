@@ -706,9 +706,9 @@ class InteractionDriver:
         # otherwise steal it and drive it with an empty message history, which
         # the provider rejects. Same hazard the background subtask child guards
         # against (``BackgroundSubagentRegistry._submit``); the root task reaches
-        # it through this seed path. Once seeded, ``_yield_seeded_lease``'s
-        # ``release_yield`` returns it to the pool as an ordinary
-        # untargeted-leaseable task.
+        # it through this seed path. Once seeded, the SDK's ``dispatch_seeded``
+        # handoff calls ``release_yield``, returning it to the pool as an
+        # ordinary untargeted-leaseable task.
         host.dispatcher.enqueue(task.task_id, reserved=True)
         lease = host.dispatcher.lease(
             worker_id=self._worker_id,

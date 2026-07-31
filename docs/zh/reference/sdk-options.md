@@ -62,12 +62,15 @@
 from noeta.sdk import effort_modes, model_capabilities, permission_modes
 
 print(permission_modes())
-# → ('default', 'acceptEdits', 'bypassPermissions')
+# → ('default', 'acceptEdits', 'bypassPermissions')   # 信任度递增
 print(effort_modes())
-# → ('low', 'medium', 'high', 'xhigh', 'max')
-print(model_capabilities(["claude-sonnet-4-5-20250929"]))
-# → {'claude-sonnet-4-5-20250929': {'vision': True, ...}}
+# → ('low', 'medium', 'high', 'xhigh', 'max')          # 强度递增
+print(model_capabilities(["claude-sonnet-4-6", "gpt-4o-mini"]))
+# → {'claude-sonnet-4-6': {'supports_vision': True},
+#    'gpt-4o-mini': {'supports_vision': False}}
 ```
+
+两个模式元组返回的顺序就是选择器应当展示的顺序，而不是字典序。`model_capabilities` 对每个模型只返回一个键 `supports_vision`——与 provider 自身的视觉门控同名——未收录的选择器返回 `False`，而不是去承诺一个我们无法担保的能力。
 
 ## 插件激活
 

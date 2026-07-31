@@ -305,18 +305,23 @@ class AgentDefinition:
 # ---------------------------------------------------------------------------
 
 
-PERMISSION_MODES = frozenset(
-    {"default", "acceptEdits", "bypassPermissions"}
-)
-"""Legal values for :attr:`Options.permission_mode`."""
+PERMISSION_MODES: tuple[str, ...] = ("default", "acceptEdits", "bypassPermissions")
+"""Legal values for :attr:`Options.permission_mode`, in widening-trust order.
+
+An ordered tuple rather than a set: the order is part of what this exports.
+``noeta.client.capabilities.permission_modes`` hands it straight to a host's
+picker, where alphabetical would put the most permissive mode first.
+"""
 
 
-EFFORT_MODES = frozenset({"low", "medium", "high", "xhigh", "max"})
-"""Legal values for :attr:`Options.effort` (reasoning-effort override).
+EFFORT_MODES: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+"""Legal values for :attr:`Options.effort` (reasoning-effort override), in
+increasing-intensity order.
 
 The single source of truth for the effort enum: ``__post_init__`` validates
 against it, and ``noeta.client.capabilities.effort_modes`` projects it for the
-app's ``/capabilities`` composer dropdown.
+app's ``/capabilities`` composer dropdown — which is why the order is the
+intensity ramp and not the alphabet.
 """
 
 
@@ -513,7 +518,7 @@ class Options:
         if self.effort is not None and self.effort not in EFFORT_MODES:
             raise ValueError(
                 f"Options.effort must be one of "
-                f"{tuple(sorted(EFFORT_MODES))} or None; "
+                f"{EFFORT_MODES} or None; "
                 f"got {self.effort!r}"
             )
         if self.output_schema is not None and not isinstance(
@@ -884,7 +889,7 @@ def compile_options(
     descendant_specs: list[AgentSpec] = []
 
     if options.permission_mode not in PERMISSION_MODES:
-        legal = ", ".join(sorted(PERMISSION_MODES))
+        legal = ", ".join(PERMISSION_MODES)
         raise ValueError(
             f"Invalid permission_mode {options.permission_mode!r}. "
             f"Must be one of: {legal}."

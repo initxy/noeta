@@ -52,7 +52,7 @@ print(client.memory_root(some_task_id))
 新会话的 Task id 是在 `start` / `seed_start` 内部生成的，所以一次简单的字典查询此刻还无从得知。有两种策略：
 
 - **从持久记录里推导出来。** 把租户的工作区作为 `start(goal=..., workspace_dir=...)` 传入。驱动器会在 Task 创建过程中、也就是第一轮 recall 运行之前，把那个绝对路径焊到该会话的 `TaskHostBound` 事件上 —— 于是解析器可以从账本上读出工作区，并把工作区映射到租户。
-- **先 seed、再注册、然后驱动。** 如果你的后端自己驱动每一轮（`seed_start` → `drive_seeded` 这种拆分），就在这两次调用之间注册映射：seed 的 lease 被持有着，所以在映射存在之前没有 worker 能解析出引擎。seed 时刻的 recall 和 seed 时刻的常驻索引会走 host 级别的链条，因此把回退目标（`global_memory_dir`）指向一个空目录。
+- **先 seed、再注册、然后驱动。** 如果你的后端自己驱动每一轮（`seed_start` → `drive_seeded` / `dispatch_seeded` 这种拆分），就在这两次调用之间注册映射：seed 的 lease 被持有着，所以在映射存在之前没有 worker 能解析出引擎。seed 时刻的 recall 和 seed 时刻的常驻索引会走 host 级别的链条，因此把回退目标（`global_memory_dir`）指向一个空目录。
 
 引擎按解析出来的根目录做缓存，所以两个租户永远不会共用某个被缓存引擎的记忆存储。
 

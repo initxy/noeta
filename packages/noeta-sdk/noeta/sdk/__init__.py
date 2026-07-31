@@ -15,7 +15,19 @@ from noeta.client.capabilities import (
     model_capabilities,
     permission_modes,
 )
-from noeta.client.client import Client, QueryFailedError, QueryResult, query
+from noeta.client.client import (
+    DEFAULT_MODEL_ALLOWLIST,
+    Client,
+    DeleteTaskResult,
+    QueryFailedError,
+    QueryResult,
+    TaskStatus,
+    query,
+)
+# The types the ``Client`` verbs return and raise. A host writes functions that
+# take and return them, so without these it cannot annotate its own signatures
+# without reaching into ``noeta.execution``.
+from noeta.execution.driver import DriveOutcome, NotForkableError, SeededTurn
 from noeta.client.consolidation import (
     build_consolidation_digest,
     consolidation_due,
@@ -43,6 +55,7 @@ from noeta.client.messages import (
     ToolResultView,
     ToolUse,
     UserMessage,
+    ViewItem,
     as_messages,
 )
 from noeta.client.options import (
@@ -92,6 +105,19 @@ from noeta.runtime.exec_env import ExecEnv
 # ``BrowserBackend`` is re-exported LAZILY via the module ``__getattr__`` below:
 # its Protocol lives in the ``browser`` built-in, and nothing statically imports
 # ``noeta.builtins``.
+# The read surface's own types: what ``subscribe`` hands a callback, what
+# ``task_streams`` returns, and the suspend payload a host reads the
+# ``waiting_human`` / ``interrupted`` / ``turn_failed: …`` tag off.
+from noeta.protocols.events import (
+    SUSPEND_REASON_INTERRUPTED,
+    SUSPEND_REASON_TURN_FAILED,
+    SUSPEND_REASON_WAITING_HUMAN,
+    EventEnvelope,
+    SuspendReason,
+    TaskSuspendedPayload,
+    parse_suspend_reason,
+)
+from noeta.protocols.event_log import TaskStreamSummary
 from noeta.protocols.event_log import Subscriber as Observer
 from noeta.protocols.hooks import (
     Guard,
@@ -171,6 +197,15 @@ __all__ = [
     "Client",
     "query",
     "QueryResult",
+    # what the Client verbs hand back: every command returns a DriveOutcome,
+    # every seed_* a SeededTurn, delete_task a DeleteTaskResult
+    "DriveOutcome",
+    "SeededTurn",
+    "DeleteTaskResult",
+    # the read-only twin of a DriveOutcome: where a task rests, without driving
+    "TaskStatus",
+    # the deployment allowlist applied when HostConfig sets no allowed_models
+    "DEFAULT_MODEL_ALLOWLIST",
     # memory consolidation: the host-callable entry, plus the guard / digest
     # halves for hosts that orchestrate their own runs
     "run_consolidation",
@@ -213,16 +248,34 @@ __all__ = [
     "NotResumableError",
     "UnsupportedSubtaskSuspend",
     "TaskAlreadyTerminalError",
+    "NotForkableError",
     "permission_modes",
     "effort_modes",
     "model_capabilities",
     "as_messages",
     "envelope_to_dict",
+    # the read surface's own types: the envelope a subscriber / replay reads,
+    # the task_streams row, and the suspend payload carrying the reason tag
+    "EventEnvelope",
+    "TaskStreamSummary",
+    "TaskSuspendedPayload",
+    # the parsed (kind, detail) view of a TaskSuspended.reason tag —
+    # suspend_reason returns it, parse_suspend_reason produces it from the raw
+    # tag a subscriber reads off the payload
+    "SuspendReason",
+    "parse_suspend_reason",
+    # the three reason kinds a host renders differently, compared with ==
+    # against SuspendReason.kind
+    "SUSPEND_REASON_WAITING_HUMAN",
+    "SUSPEND_REASON_INTERRUPTED",
+    "SUSPEND_REASON_TURN_FAILED",
     "AssistantMessage",
     "UserMessage",
     "ToolUse",
     "ToolResultView",
     "Result",
+    # the union as_messages yields — a host annotating its own projection
+    "ViewItem",
     "ImageBlock",
     "ContentRef",
     "tool",

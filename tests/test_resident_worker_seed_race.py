@@ -126,8 +126,9 @@ def test_seed_start_reserves_the_root_task_against_an_untargeted_steal(
 
 def test_seeded_root_task_is_still_picked_up_by_the_pool(tmp_path: Path) -> None:
     """The reservation is a ONE-SHOT claim guard, not a permanent exclusion:
-    once seeded, ``_yield_seeded_lease``'s ``release_yield`` must hand the task
-    back to the pool as an ordinary untargeted-leaseable task."""
+    once seeded, the ``release_yield`` that ``Client.dispatch_seeded`` performs
+    must hand the task back to the pool as an ordinary untargeted-leaseable
+    task."""
     host, driver = _host(tmp_path)
     loop = WorkerLoop(
         host,

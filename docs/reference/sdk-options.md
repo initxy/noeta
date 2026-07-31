@@ -73,12 +73,18 @@ Read the legal values at runtime rather than hard-coding them:
 from noeta.sdk import effort_modes, model_capabilities, permission_modes
 
 print(permission_modes())
-# → ('default', 'acceptEdits', 'bypassPermissions')
+# → ('default', 'acceptEdits', 'bypassPermissions')   # widening trust
 print(effort_modes())
-# → ('low', 'medium', 'high', 'xhigh', 'max')
-print(model_capabilities(["claude-sonnet-4-5-20250929"]))
-# → {'claude-sonnet-4-5-20250929': {'vision': True, ...}}
+# → ('low', 'medium', 'high', 'xhigh', 'max')          # increasing intensity
+print(model_capabilities(["claude-sonnet-4-6", "gpt-4o-mini"]))
+# → {'claude-sonnet-4-6': {'supports_vision': True},
+#    'gpt-4o-mini': {'supports_vision': False}}
 ```
+
+Both mode tuples come back in the order a picker should show them, not sorted.
+`model_capabilities` returns exactly one key per model, `supports_vision` — the
+same name the provider's own vision guard uses — and an uncatalogued selector
+reports `False` rather than a capability we cannot vouch for.
 
 ## Plugin activation
 

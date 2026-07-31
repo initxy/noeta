@@ -38,16 +38,17 @@ class _ConsolidationHost(Protocol):
     Naming the slice keeps a renamed accessor a type error rather than a silently
     empty digest, and tells a caller what a valid ``client`` is.
 
-    The two private members are deliberate, documented couplings rather than
-    accidents, so they are declared here instead of being reached for behind a
+    The one private member is a deliberate, documented coupling rather than an
+    accident, so it is declared here instead of being reached for behind a
     ``noqa``:
 
     * ``_host.content_store`` — ``MessagesAppendedPayload.messages_ref`` bodies
       resolve against the paired store and no other, so there is no public
       accessor by design.
-    * ``_yield_seeded_lease`` — the background-drive handoff a consolidation
-      run rides; the public verbs drive the turn on the caller's thread, which
-      is the one thing a curation pass must not do.
+
+    The handoff this run rides — ``dispatch_seeded`` — is public: a curation
+    pass must not drive its turn on the caller's thread, which is exactly the
+    one thing every other public verb does.
     """
 
     def task_streams(self) -> list[TaskStreamSummary]: ...
@@ -56,7 +57,7 @@ class _ConsolidationHost(Protocol):
 
     def seed_start(self, **kwargs: Any) -> Any: ...
 
-    def _yield_seeded_lease(self, seeded: Any) -> None: ...
+    def dispatch_seeded(self, seeded: Any) -> None: ...
 
     @property
     def _host(self) -> Any: ...
@@ -410,6 +411,7 @@ def run_consolidation(
     # resolve the curation Engine against it.
     if on_seeded is not None:
         on_seeded(seeded.task_id)
-    # Declared on the _ConsolidationHost Protocol — the background-drive path.
-    client._yield_seeded_lease(seeded)
+    # The public non-blocking handoff: a curation pass must not drive its turn
+    # on the caller's thread.
+    client.dispatch_seeded(seeded)
     return True
