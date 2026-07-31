@@ -14,17 +14,32 @@
 > refresh and renderers that `resolve(kind, name) → bytes` from the ContentStore
 > (skills excepted — pinned, registry-rendered); §4.3 the stringly export
 > vocabulary removed in favour of typed `PackContribution` / `ControlToolMount`
-> fields; §9 acceptance property tests (`tests/test_acceptance_properties.py`).
-> **Two deliberate deviations:** (1) §5's *interleaving* of invoke-tools and
-> control schemas onto one priority scale was **not** done — the composer already
-> renders both into the stable prefix deterministically (invoke by band, then
-> control by `schema_priority`), satisfying §5's substantive goals; the remaining
-> interleave is a cosmetic re-ordering that would re-pin the tool-schema goldens
-> and burst the KV cache for no model benefit (owner decision, 2026-07-30). (2)
-> §4.3's *closures-not-fields* purification of pack-internal state (memory store /
-> entries / instruction+environment snapshots) is deferred: those still ride
-> `SessionInputs` as typed build-inspection pass-throughs for ~10 tests, pending a
-> rework of those tests to behaviour-based inspection.
+> fields, then completed to *closures-not-fields* (the pack-internal
+> pass-throughs and `SessionInputs.skill_registry` are gone; the inspecting
+> tests assert through the generic `content_hashes` resolver); §5's "no kit,
+> menu, or registry crosses into kernel code" (the skill control tool rides
+> `PackContribution.control_tools` as a registry closure; guard inputs travel
+> as ONE opaque single-writer `guard_facts` bundle; the goal-intake seam is
+> the single generic `intake_reminder_providers`); §2/§9.1 zero feature-named
+> kernel modules (`execution.{commands,memory,skills,instructions,environment}`
+> and `context.{memory,instructions,environment}` deleted or sunk into their
+> built-ins); §9 acceptance property tests
+> (`tests/test_acceptance_properties.py`).
+> **Deliberate deviations / retained exceptions:** (1) §5's *interleaving* of
+> invoke-tools and control schemas onto one priority scale was **not** done —
+> the composer already renders both into the stable prefix deterministically
+> (invoke by band, then control by `schema_priority`), satisfying §5's
+> substantive goals; the remaining interleave is a cosmetic re-ordering that
+> would re-pin the tool-schema goldens and burst the KV cache for no model
+> benefit (owner decision, 2026-07-30). (2) The **event-vocabulary family**
+> stays: `TaskStatePatch.activate_skills` / `TaskState.active_skills` /
+> `ContextPlan.selected_skills` and fold's `skill_content_hashes` are recorded
+> wire/ledger shapes — changing them is a kernel SPI + recording-compat
+> change (§8 locks the event vocabulary), not a plugin refactor. The
+> `PermissionPolicy` skill fields (and the `SkillGuardFacts` bundle beside
+> them in `noeta.runtime.governance`) are the same family: the guard config
+> vocabulary the governance and skills plugins share through the kernel's
+> opaque channel.
 
 ## 1. Principle
 
