@@ -402,7 +402,7 @@ class SdkHost(GenericEngineResolver):
     custom_tools: dict[str, Tool] = field(default_factory=dict)
     delegation_allowed: bool = True
     #: Host kill-switch for the ``run_workflow`` control tool.
-    #: Default off; the deployment opts in (``HostConfig.workflow_enabled``).
+    #: Default off; the deployment opts in (``HostConfig.workflow_allowed``).
     #: When on, agents expose run_workflow and the reserved ``__workflow__``
     #: orchestration child resolves to :class:`OrchestrationPolicy`.
     workflow_allowed: bool = False
@@ -1740,7 +1740,7 @@ class SdkHost(GenericEngineResolver):
         Reads the script/args off the child's durable ``TaskCreated.inputs`` and
         builds an Engine whose Policy is :class:`OrchestrationPolicy`. Its
         ``agent()`` calls delegate into ``allowed_subtask_agents`` (the inherited
-        worker set, filtered to roster names); ``workflow_enabled`` is OFF (no
+        worker set, filtered to roster names); ``workflow_allowed`` is OFF (no
         nested workflows).
         """
         wf_inputs = self._read_task_inputs(task_id)

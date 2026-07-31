@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Engine Execution — one step",
+    "subtitle": "compose → decide → dispatch; tool_calls loops, other decisions suspend or terminate",
+    "output": "engine-execution.html"
+  },
+  "lanes": [
+    { "id": "engine", "label": "Engine" },
+    { "id": "policy", "label": "Policy" },
+    { "id": "tools", "label": "Tools / runtime" },
+    { "id": "exceptions", "label": "Suspend / terminal", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "compose", "label": "Compose", "fromCol": 0, "toCol": 1 },
+    { "id": "decide", "label": "Decide", "fromCol": 2, "toCol": 3 },
+    { "id": "dispatch", "label": "Dispatch", "fromCol": 4, "toCol": 5 }
+  ],
+  "mainPath": ["fold", "compose", "decide", "guard", "dispatch"],
+  "nodes": [
+    { "id": "fold", "lane": "engine", "col": 0, "type": "backend", "label": "fold(stream)", "sublabel": "rebuild state" },
+    { "id": "compose", "lane": "engine", "col": 1, "type": "backend", "label": "Compose View", "sublabel": "ThreeSegmentComposer" },
+    { "id": "decide", "lane": "policy", "col": 2, "type": "frontend", "label": "decide(view)", "sublabel": "Policy → Decision" },
+    { "id": "guard", "lane": "tools", "col": 3, "type": "security", "label": "Guard check", "sublabel": "allow / deny / approve", "tag": "before act" },
+    { "id": "dispatch", "lane": "engine", "col": 4, "type": "backend", "label": "Dispatch", "sublabel": "route by decision" },
+    { "id": "toolcall", "lane": "tools", "col": 5, "type": "backend", "label": "Run tools", "sublabel": "append results" },
+
+    { "id": "suspend", "lane": "exceptions", "col": 4, "type": "security", "label": "Suspend", "sublabel": "yield / wait" },
+    { "id": "terminal", "lane": "exceptions", "col": 5, "type": "backend", "label": "Terminal", "sublabel": "finish / fail" }
+  ],
+  "edges": [
+    { "from": "fold", "to": "compose" },
+    { "from": "compose", "to": "decide", "label": "View" },
+    { "from": "decide", "to": "guard", "label": "Decision", "variant": "emphasis" },
+    { "from": "guard", "to": "dispatch" },
+    { "from": "dispatch", "to": "toolcall", "label": "tool_calls", "variant": "emphasis" },
+    { "from": "toolcall", "to": "compose", "label": "loop", "variant": "dashed", "fromSide": "bottom", "toSide": "bottom", "route": "bottom-channel" },
+    { "from": "dispatch", "to": "suspend", "label": "yield / wait", "variant": "security", "fromSide": "bottom", "toSide": "top", "labelDy": -30 },
+    { "from": "dispatch", "to": "terminal", "label": "finish / fail", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "outside-right", "labelDy": 30 }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "One step = one turn boundary", "items": ["tool_calls keeps the loop turning in place", "Any other decision ends the step at suspend or terminal", "Guards rule before the act — deny or require_approval"] },
+    { "dot": "cyan", "title": "Locked main loop", "items": ["Engine main loop is not an extension point", "Policy decides, Engine dispatches — Policy never calls tools directly", "State changes go through events, fold is the only reader"] }
+  ]
+}

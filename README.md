@@ -1,202 +1,145 @@
-# Noeta — a durable, provider-neutral runtime + SDK for AI agents
+# Noeta
 
-**English** · [简体中文](README.zh-CN.md)
+**A durable, provider-neutral runtime for long-horizon AI agents.** In-process like the Claude Agent SDK — no server, no HTTP hop — but every turn is a recorded, replayable event ledger.
 
-**[Documentation](https://initxy.github.io/noeta/tutorials/first-agent/)** · [Your first agent](https://initxy.github.io/noeta/tutorials/first-agent/) · [SDK reference](https://initxy.github.io/noeta/reference/sdk/) · [Comparison](https://initxy.github.io/noeta/reference/comparison/)
+**English** · [简体中文](README.zh-CN.md) · [Docs](https://initxy.github.io/noeta/) · [First agent](https://initxy.github.io/noeta/tutorials/first-agent/) · [SDK reference](https://initxy.github.io/noeta/reference/sdk/)
 
-Noeta is a Python library for building long-horizon agents on a durable,
-event-sourced runtime. It runs in-process like the Claude Agent SDK — no server,
-no HTTP between your code and the engine — and every turn is a recorded engine
-task: crash-safe and exactly-once, able to suspend for a human answer or a timer
-and wake when the condition fires, fully auditable and replayable.
+## Why Noeta
 
-## Why not just write the loop yourself
+| | Noeta gives you |
+|---|---|
+| **Crash-safe** | State is `fold(events)`, never held in memory. Kill the process mid-task — the next worker resumes exactly where it stopped, exactly once. |
+| **Server-ready** | Built for multi-process and multi-host. `Client.start_workers(n)` runs a resident pool; on Postgres, several hosts share one database with lease-fenced writes. The Engine is stateless — any worker can fold and advance any task. |
+| **Long-horizon** | A task suspends for a human answer, a timer, or a subtask, then wakes durably when the condition fires. Waiting costs nothing while it sleeps. |
+| **Provider-neutral** | Anthropic, OpenAI-compatible, and Responses API sit behind one protocol. The kernel is structurally forbidden from importing a vendor SDK. |
+| **Auditable** | Every LLM round-trip, tool call, guard verdict, and token count is an event. Compaction is a reversible overlay — the originals stay on the stream. |
+| **Extensible** | 16 manifest-declared extension surfaces. Noeta's own built-ins (fs, web, memory, browser, MCP, …) ride the same plugin loader as yours. |
 
-A hand-rolled `while` loop around an LLM keeps its state in memory. Kill the
-process and the task is gone; there is no record of why the agent did what it
-did, no way to pause for a human without blocking a thread, and no way to swap
-model vendors without rewriting the loop. Noeta gives you:
+## Noeta vs Cloud Agent SDK vs Pi Agent
 
-- **Crash-safe, exactly-once execution.** State is folded from an append-only
-  event log, never held in memory — kill the process mid-task and a fresh one
-  resumes at the exact point, exactly once.
-- **Long-horizon suspend/wake.** A task can park for hours or days on a human
-  answer, a timer, or a sub-task, then wake exactly once when the condition
-  fires. Waiting costs nothing while it sleeps.
-- **Full audit & replay.** Every event, LLM turn, tool call, and token/cache
-  stat is recorded; compaction is a reversible overlay, so a recovered task
-  compacts the same way and you can still read what was pared away.
-- **Provider neutrality.** Anthropic and OpenAI-compatible adapters sit behind
-  one internal protocol; recorded history is not bound to any vendor's shape,
-  and the kernel is forbidden (by an import-linter rule) to depend on a vendor SDK.
-- **A deterministic offline mode.** A scripted `FakeLLMProvider` drives the whole
-  stack with no network, so install, storage, and wiring are provable on a fresh
-  checkout and in CI.
+| | **Noeta** | **Cloud Agent SDK** | **Pi Agent** |
+|---|---|---|---|
+| **Focus** | Durable, server-ready agent runtime | Build agents on Google Cloud (Gemini) | Computer-use: mouse, keyboard, screen |
+| **Deployment** | Multi-worker pool, multi-host on Postgres | Client library, single process | Desktop process |
+| **Persistence** | Event-sourced ledger — `state = fold(log)` | Conversation state, managed for you | Ephemeral — no durable execution model |
+| **Suspend / wake** | First-class: human, timer, subtask, external event — exactly-once delivery | Session resume | Not applicable |
+| **Model lock-in** | None — swap providers by wiring an adapter | Gemini-first | Any LLM (it's a control layer) |
+| **Extension** | 16 plugin surfaces + single-writer invariant | Tools + hooks | Computer-control primitives |
+| **Audit / replay** | Full event log, fold-reproducible | Limited | None |
 
-## Install
+**Noeta is for when the agent's *running* must be a ledger you can replay, audit, and scale across workers and hosts** — not just a loop you can call.
+
+## Architecture
+
+<p align="center">
+  <img src="docs/assets/diagrams/architecture.svg" alt="Noeta architecture — noeta-sdk over noeta-runtime, builtins as plugins" width="820">
+</p>
+
+Two libraries, one `noeta.` namespace:
+
+- **`noeta-sdk`** — the only thing you import. `query` / `Client` / `Options` / `@tool`, the four preset agents, and every built-in capability as a plugin under `noeta.builtins`.
+- **`noeta-runtime`** — the pure kernel: Engine, fold/snapshot, Worker/Dispatcher/Lease, the context composer. Carries no capability implementation, depends on stdlib only.
+
+The kernel never statically imports `noeta.builtins` — every capability reaches it through the plugin loader's dynamic `ref` resolution. That rule is what makes provider neutrality structural.
+
+## Quickstart
 
 ```bash
-uv pip install noeta-sdk      # noeta-runtime comes along as a transitive dependency
+uv pip install noeta-sdk      # noeta-runtime comes along as a transitive dep
 ```
 
-Then `import noeta.sdk` — that single module is the whole public surface.
-Python 3.11+.
-
-## Quickstart — zero credentials
-
-No API key, no network. Build an `Options` recipe and drive one turn with
-`query`, using the deterministic offline provider from `noeta.sdk.testing`:
+Zero credentials, no network — drive one turn with the offline `FakeLLMProvider`:
 
 <!-- runnable: smoke -->
 ```python
-import tempfile
-from pathlib import Path
-
 from noeta.sdk import Options, query, LLMResponse, TextBlock, Usage
 from noeta.sdk.testing import FakeLLMProvider
 
-provider = FakeLLMProvider(
-    responses=[
-        LLMResponse(
-            stop_reason="end_turn",
-            content=[TextBlock(text="Hello from a Noeta SDK agent!")],
-            usage=Usage(uncached=1, output=1),
-        )
-    ]
-)
+provider = FakeLLMProvider(responses=[
+    LLMResponse(stop_reason="end_turn",
+                content=[TextBlock(text="Hello from Noeta.")],
+                usage=Usage(uncached=1, output=1))
+])
 
-with tempfile.TemporaryDirectory() as tmp:
-    result = query(
-        Options(
-            system_prompt="You are a concise assistant.",
-            name="main",
+result = query(
+    Options(system_prompt="You are concise.",
             allowed_tools=("read",),
-            permission_mode="bypassPermissions",
-        ),
-        goal="Say hello.",
-        provider=provider,
-        workspace_dir=Path(tmp),
-        model="stub-model",
-    )
-    assert result.answer() == "Hello from a Noeta SDK agent!"
+            permission_mode="bypassPermissions"),
+    goal="Say hello.",
+    provider=provider,
+    model="stub-model",
+)
+assert result.answer() == "Hello from Noeta."
 ```
 
-`query` returns the full event-envelope stream for the turn — the
-machine-readable record of everything the agent did — and `result.answer()`
-reads the answer off the terminal envelope. Swap the `Client` facade in for a
-multi-turn conversation (`Client.messages`), and the same recording keeps folding.
-
-## Connect a real model
-
-The provider is an `Options` field — **wiring, not identity** — so swapping it
-changes nothing about the agent, its tools, or its recorded history. The adapters
-are re-exported through `noeta.sdk.providers`:
+Connect a real model by swapping the provider — it's wiring, not identity:
 
 ```python
 from noeta.sdk import Options
 from noeta.sdk.providers import AnthropicProvider, OpenAICompatProvider
 
-# api_key falls back to ANTHROPIC_API_KEY / OPENAI_API_KEY when omitted.
-# Anthropic requires a token budget: pass default_max_tokens, or max_tokens per request.
-anthropic = Options(
-    system_prompt="…",
-    provider=AnthropicProvider(default_max_tokens=1024),
-)
-openai = Options(
-    system_prompt="…",
-    provider=OpenAICompatProvider(base_url="https://api.openai.com/v1"),
-)
+anthropic = Options(system_prompt="…", provider=AnthropicProvider(default_max_tokens=1024))
+openai    = Options(system_prompt="…", provider=OpenAICompatProvider(base_url="https://api.openai.com/v1"))
 ```
 
-See [Configure a provider](https://initxy.github.io/noeta/how-to/configure-provider/)
-for the Responses API, secondary gateways, and the offline testing double.
+## How to extend
 
-## What you can extend
+Everything open is an `Options` field or a plugin contribution. Noeta's built-ins use the exact same path.
 
-Everything open is an `Options` field, re-exported through `noeta.sdk`:
+### Add a tool
 
-| Seam | Extends |
-| --- | --- |
-| `@tool` | stamp a function with name, version, risk level, and input schema to make it a first-class tool |
-| `mcp_servers` | in-process SDK MCP tools (`create_sdk_mcp_server`) or connectors to external stdio / HTTP MCP servers |
-| `provider` | any adapter satisfying `LLMProvider` (the basis of provider neutrality) |
-| `policy` | swap the ReAct decision function for your own |
-| `guards` | synchronous checks before a tool call / spawn / finish |
-| `observers` | read-only event subscribers — audit, metrics |
-| `content_channels` | register a `ContentKindSpec` to place custom resident content into context |
+```python
+from noeta.sdk import tool
 
-Bundles of these contributions ship as **plugins**, loaded with `load_plugins`
-and selected per agent through `Options.plugins`. The runnable
-[`examples/plugins/`](examples/plugins/) cover guards (protected paths, approval
-modes), observers (git checkpointing), and a RAG-style memory recall provider.
+@tool
+def get_weather(city: str) -> str:
+    """Get the current weather for a city."""
+    return f"{city}: sunny, 22°C"
 
-## Architecture
-
-Two libraries share one `noeta.` namespace, both at version 0.4.0:
-
-- **noeta-sdk** — the thin client you import, and the **only** public surface.
-  `query` / `Client` / `Options` / `@tool` / `create_sdk_mcp_server`, the four
-  official agents in `noeta.presets`, the open extension interfaces (`Tool` /
-  `LLMProvider` / `Policy` / `Guard` / `Observer` / `ContentKindSpec`), and the
-  plugin loader. Every official capability — the fs/web tool packs, the provider
-  adapters, memory, skills, the durable storage backends — lives here as a
-  built-in plugin under `noeta.builtins`, reached only through the loader's
-  dynamic resolution.
-- **noeta-runtime** — the pure kernel underneath: durable event-sourced task
-  execution, fold/snapshot, the scheduler and worker leases, and the context
-  composer. It carries **no capability implementation of its own** and depends on
-  no vendor SDK. You install it only as a transitive dependency of `noeta-sdk`
-  and never import it directly.
-
-A task advances one step at a time inside the Engine (`compose → decide →
-dispatch`). Folded state comes only from the append-only EventLog plus the
-content-addressed ContentStore, so any process can reconstruct a task from its
-stream alone. A Worker leases a task, runs it to the next suspend or terminal,
-and releases; the drain loop ships as the library primitive
-`noeta.runtime.worker.WorkerLoop`, which an embedding host constructs and runs.
-
-## A real host, from the public surface only
-
-[`examples/reference-host/`](examples/reference-host/) is the smallest program
-that stands up a durable, plugin-extended, streaming agent the way an embedding
-product would — durable SQLite storage, live token streaming, plugins, and the
-official `main` preset, all wired from `noeta.sdk` / `noeta.sdk.storage` /
-`noeta.presets` with **no** runtime internal. If the reference host can build an
-agent, a third-party host can too.
-
-```bash
-python examples/reference-host/host.py   # drives one turn against a scripted offline provider
+opts = Options(system_prompt="…", tools=(get_weather,))
 ```
 
-The runnable [`examples/`](examples/) cover the SDK surface end to end — a
-minimal agent, custom tools, an in-process MCP server, a permission gate,
-provider swapping, sub-agent delegation, and surviving `kill -9` mid-task —
-each with an offline smoke test so they cannot silently rot.
+### Add a plugin
 
-## Documentation
+A plugin is a manifest-declared contribution package. Declare contributions to any of the 16 surfaces across three planes:
 
-Full documentation is rendered at
-**[initxy.github.io/noeta](https://initxy.github.io/noeta/tutorials/first-agent/)**;
-the same files live under [`docs/`](docs/) for source browsing.
+| Plane | Surfaces | Enters agent identity? |
+|---|---|---|
+| **Identity** | `tool`, `agent`, `content_kind`, `prompt_fragment`, `policy`, `control_tool` | Yes |
+| **Wiring** | `guard`, `observer`, `provider`, `reminder_provider`, `reminder`, `tool_result_transform`, `session_pack` | No (process-wide) |
+| **Host** | `mcp_server`, `skills`, `sandbox_provider` | No (host-wired) |
 
-| Layer | Start at | Read it when |
-| --- | --- | --- |
-| Tutorials | [Your first agent](https://initxy.github.io/noeta/tutorials/first-agent/) | You're new and want it running. |
-| How-to guides | [Configure a provider](https://initxy.github.io/noeta/how-to/configure-provider/) · [Build custom tools](https://initxy.github.io/noeta/how-to/build-custom-tools/) · [Write a plugin](https://initxy.github.io/noeta/how-to/write-a-plugin/) · [Deploy a worker](https://initxy.github.io/noeta/how-to/deploy-worker/) | You have a specific task to get done. |
-| Concepts | [Event sourcing](https://initxy.github.io/noeta/concepts/event-sourcing/) | You want to understand the design. |
-| Reference | [SDK](https://initxy.github.io/noeta/reference/sdk/) · [WorkerLoop](https://initxy.github.io/noeta/reference/worker-loop/) · [Comparison](https://initxy.github.io/noeta/reference/comparison/) · [Tools](https://initxy.github.io/noeta/reference/tools/) | You need exact facts. |
+```toml
+# pyproject.toml — a plugin manifest
+[tool.noeta]
+name = "my-plugin"
+requires-noeta = ">=0.4.0,<0.5.0"
 
-Deeper cuts: the [architecture overview](https://initxy.github.io/noeta/architecture/overview/),
-[troubleshooting](https://initxy.github.io/noeta/operations/troubleshooting/), and the
-[ADRs](https://github.com/initxy/noeta/tree/main/docs/adr) recording why each
-cross-module decision is the way it is (vocabulary lives in [`CONTEXT.md`](CONTEXT.md)).
+[[tool.noeta.tool]]
+name = "get_weather"
+ref = "my_plugin.tools:get_weather"
+```
 
-## Contributing
+Load it and activate it per agent:
 
-Development setup and repository layout live in
-[`CONTRIBUTING.md`](CONTRIBUTING.md); working conventions (human or agent) start
-at the root [`AGENTS.md`](AGENTS.md) router.
+```python
+from noeta.sdk import load_plugins, Options
+
+plugins = load_plugins(modules=["my_plugin"])
+opts = Options(system_prompt="…", plugins=("my-plugin",))
+```
+
+See [Write a plugin](https://initxy.github.io/noeta/how-to/write-a-plugin/) for the full manifest shape.
+
+## Where to go next
+
+- **Tutorial:** [Your first agent](https://initxy.github.io/noeta/tutorials/first-agent/)
+- **How-to:** [Configure a provider](https://initxy.github.io/noeta/how-to/configure-provider/) · [Build custom tools](https://initxy.github.io/noeta/how-to/build-custom-tools/) · [Write a plugin](https://initxy.github.io/noeta/how-to/write-a-plugin/) · [Use a sandbox](https://initxy.github.io/noeta/how-to/use-sandbox/) · [Deploy with Docker](https://initxy.github.io/noeta/how-to/docker-deployment/) · [Deploy a worker](https://initxy.github.io/noeta/how-to/deploy-worker/)
+- **Concepts:** [Event sourcing](https://initxy.github.io/noeta/concepts/event-sourcing/) · [Wake & resume](https://initxy.github.io/noeta/concepts/wake-resume/) · [Composer & cache](https://initxy.github.io/noeta/concepts/composer-and-cache/)
+- **Reference:** [SDK](https://initxy.github.io/noeta/reference/sdk/) · [Plugins](https://initxy.github.io/noeta/reference/plugins/) · [Comparison](https://initxy.github.io/noeta/reference/comparison/)
+
+The runnable [`examples/`](examples/) cover custom tools, MCP servers, permission gates, sub-agent delegation, and surviving `kill -9` mid-task — each with an offline smoke test.
 
 ## License
 
-Apache License 2.0 — see [`LICENSE`](LICENSE).
+Apache 2.0 — see [`LICENSE`](LICENSE).

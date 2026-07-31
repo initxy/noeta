@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Noeta Architecture",
+    "subtitle": "Two libraries — noeta-sdk (public surface + builtins) over noeta-runtime (pure kernel)",
+    "output": "architecture.html"
+  },
+  "components": [
+    { "id": "user", "type": "external", "label": "Your code", "sublabel": "import noeta.sdk", "pos": [40, 280], "size": [120, 60] },
+
+    { "id": "sdk-surface", "type": "frontend", "label": "noeta.sdk", "sublabel": "query · Client · Options · @tool", "pos": [220, 160], "size": [200, 60] },
+    { "id": "sdk-builtins", "type": "backend", "label": "noeta.builtins", "sublabel": "18 capability plugins", "pos": [220, 250], "size": [200, 60] },
+    { "id": "sdk-presets", "type": "frontend", "label": "noeta.presets", "sublabel": "main · explore · plan · general-purpose", "pos": [220, 340], "size": [200, 60] },
+
+    { "id": "loader", "type": "messagebus", "label": "Plugin loader", "sublabel": "dynamic ref resolution", "pos": [470, 250], "size": [140, 60] },
+
+    { "id": "rt-protocols", "type": "security", "label": "protocols", "sublabel": "typed boundary", "pos": [660, 70], "size": [150, 52] },
+    { "id": "rt-core", "type": "backend", "label": "core", "sublabel": "Engine · fold · snapshot", "pos": [660, 140], "size": [150, 52] },
+    { "id": "rt-runtime", "type": "backend", "label": "runtime", "sublabel": "Worker · Dispatcher · Lease", "pos": [660, 210], "size": [150, 52] },
+    { "id": "rt-context", "type": "backend", "label": "context", "sublabel": "ThreeSegmentComposer", "pos": [660, 280], "size": [150, 52] },
+    { "id": "rt-policies", "type": "backend", "label": "policies", "sublabel": "control semantics", "pos": [660, 350], "size": [150, 52] },
+    { "id": "rt-execution", "type": "backend", "label": "execution", "sublabel": "session packs · control tools", "pos": [660, 420], "size": [150, 52] },
+
+    { "id": "storage", "type": "database", "label": "Storage backends", "sublabel": "EventLog + ContentStore", "pos": [870, 210], "size": [150, 60] },
+    { "id": "storage-impl", "type": "cloud", "label": "Backends", "sublabel": "InMemory · SQLite · Postgres", "pos": [870, 300], "size": [150, 60] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "noeta-sdk (what you import)", "wraps": ["sdk-surface", "sdk-builtins", "sdk-presets"] },
+    { "kind": "region", "label": "noeta-runtime (pure kernel, no capabilities)", "wraps": ["rt-protocols", "rt-core", "rt-runtime", "rt-context", "rt-policies", "rt-execution"] },
+    { "kind": "security-group", "label": "no static import of noeta.builtins", "wraps": ["loader", "rt-core", "rt-runtime", "rt-context", "rt-policies", "rt-execution"] }
+  ],
+  "connections": [
+    { "from": "user", "to": "sdk-surface", "label": "import", "variant": "emphasis" },
+    { "from": "sdk-surface", "to": "sdk-builtins", "variant": "dashed", "fromSide": "bottom", "toSide": "top" },
+    { "from": "sdk-surface", "to": "sdk-presets", "variant": "dashed", "fromSide": "bottom", "toSide": "top" },
+    { "from": "sdk-builtins", "to": "loader", "label": "manifest refs", "variant": "emphasis", "labelDy": -24 },
+    { "from": "loader", "to": "rt-core", "label": "resolve", "variant": "emphasis" },
+    { "from": "loader", "to": "rt-runtime", "variant": "dashed" },
+    { "from": "loader", "to": "rt-context", "variant": "dashed" },
+    { "from": "rt-core", "to": "storage", "label": "EventLog", "variant": "emphasis" },
+    { "from": "rt-runtime", "to": "storage", "label": "ContentStore", "variant": "emphasis", "labelDy": -22 },
+    { "from": "storage", "to": "storage-impl", "variant": "dashed", "fromSide": "bottom", "toSide": "top" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Public surface", "items": ["Users import only noeta.sdk", "noeta-runtime is a transitive dep", "Builtins reached via plugin loader, never statically"] },
+    { "dot": "emerald", "title": "Kernel carries no capability", "items": ["Every fs/web/memory/browser tool is a built-in plugin", "Kernel depends on stdlib only — no httpx, no vendor SDK", "Provider neutrality is structural, not conventional"] },
+    { "dot": "amber", "title": "Ground truth = fold(log)", "items": ["EventLog is append-only, state is derived", "ContentStore holds large bodies by hash", "Any process can rebuild any task from its stream"] }
+  ]
+}
