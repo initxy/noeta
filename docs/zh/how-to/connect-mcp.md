@@ -1,19 +1,17 @@
 # 连接 MCP 服务器
 
-**目标：** 让你的 SDK Agent 能访问 MCP（Model Context Protocol）服务器 —— 外部的 `stdio` / `http` 服务器，或把你自己的工具打包成的进程内服务器。
+本指南教你让一个 agent 能访问 MCP（Model Context Protocol）服务器 —— 外部的 `stdio` / `http` 服务器，或把你自己的工具打包成的进程内服务器。你需要一套可用的 `noeta.sdk` 环境，以及一个想接入的服务器。
 
-**开始之前：** 一套可用的 `noeta.sdk` 环境，以及一个想接入的 MCP 服务器。
-
-存在两种机制，而且它们不可互换：
+先挑对机制；它们不可互换：
 
 | | 外部服务器 | 进程内服务器 |
 | --- | --- | --- |
 | 挂载于 | `HostConfig.mcp_server_resolver` | `Options.mcp_servers` |
-| 启用方式 | 按回合，按 alias | 始终启用，对该 Agent 生效 |
+| 启用方式 | 按回合，按 alias | 始终启用，对该 agent 生效 |
 | 工具名 | `mcp__{alias}__{tool}` | 裸的 `@tool` 名字 |
 | 运行于 | 子进程或经 HTTP | 你的进程 |
 
-## 外部服务器（`stdio` / `http`）
+## 方案 A —— 外部服务器（`stdio` / `http`）
 
 host 从不把配置存储交给 SDK。它提供一个**解析器（resolver）** —— `alias -> spec | None` —— 并在每个回合上指名要连接哪些 alias。这样凭证就留在 host 一侧：它们只存在于你构造的 spec 里，永远不会进入记录，也不会进入模型可见的工具 schema。
 
@@ -42,7 +40,14 @@ client = Client(
 outcome = client.start(goal="list the data directory", enabled_mcp=("fs",))
 ```
 
-`enabled_mcp` 是一个按回合、非持久的开关。每个驱动回合的动词都接受它（`start`、`send_goal`、`seed_start`、`seed_send_goal`），所以一次对话可以在某一回合启用某个服务器，下一回合不启用。`query` 没有 `enabled_mcp` 参数 —— 外部 MCP 需要一个 `Client`。
+启用 `fs` 这个 alias 之后，子集里的两个工具会以带命名空间的名字到达模型：
+
+```
+mcp__fs__read_file
+mcp__fs__list_directory
+```
+
+`enabled_mcp` 是一个按回合、非持久的开关。每个驱动回合的动词都接受它（`start`、`send_goal`、`seed_start`、`seed_send_goal`），所以一场对话可以在某一回合启用某个服务器，下一回合不启用。`query` 没有 `enabled_mcp` 参数 —— 外部 MCP 需要一个 `Client`。
 
 两种 spec 都是冻结的 dataclass，在构造时校验：
 
@@ -55,7 +60,7 @@ outcome = client.start(goal="list the data directory", enabled_mcp=("fs",))
 
 如果某个服务器在回合开始时连接失败，它会被丢弃，回合的其余部分照常进行；而重复的 alias 永远是一个硬性的 `McpConfigError`。
 
-## 进程内 SDK MCP 服务器
+## 方案 B —— 进程内 SDK MCP 服务器
 
 想把自己的工具打包成 MCP 形态的服务器，用 `create_sdk_mcp_server`：
 
@@ -88,8 +93,11 @@ options = Options(
 
 `Options.mcp_servers` 只接受这类进程内服务器。它们的工具运行时没有子进程、没有网络往返，并且保留其**裸的** `@tool` 名字 —— 模型看到的是 `echo`，而不是 `mcp__my-tools__echo`。服务器名字给这个包分组；它并不给它加命名空间，所以要挑选不会与内置工具撞车的名字。
 
-## 另请参阅
+## 下一步
 
-- [构建自定义工具](build-custom-tools.md) —— 用 `@tool` 定义工具并把它们打包进 SDK MCP 服务器
+- [构建自定义工具](build-custom-tools.md) —— 定义你要打包的那些工具
+- [使用 Sandbox](use-sandbox.md) —— 即使在容器下，MCP 仍留在 host 一侧
+- [SDK 参考](../reference/sdk.md) —— `McpServerSpec`、`McpHttpServerSpec`、`HostConfig`
 - [ADR：MCP connectors](https://github.com/initxy/noeta/blob/main/docs/adr/mcp-connectors.md) —— 客户端的边界，以及凭证存放在哪里
-- `examples/mcp_server.py` —— 一个可运行的进程内 MCP 示例
+
+`examples/mcp_server.py` 是一个可运行的进程内 MCP 示例。

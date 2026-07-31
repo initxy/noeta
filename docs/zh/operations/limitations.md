@@ -1,136 +1,158 @@
 # 已知限制
 
-已发布代码能力的边界。每一条说明边界是什么、你何时会遇到它，以及有变通方案时的变通方案。这些都不是 bug——它们是设计停下来的地方。
+已发布代码能力的边界。每一条都说明边界是什么、什么时候会撞上它，以及如果有的话，绕过的办法是什么。
 
-## 库不会替你运行任何进程
+**这些都不是 bug。** 它们是设计刻意停下的地方 —— 通常是因为再往前走就需要库去拥有本该由 host 拥有的东西。如果你追的是一个故障，请从[故障排查](troubleshooting.md)开始。
 
-**含义：** `noeta-runtime` 和 `noeta-sdk` 是库。没有 CLI、没有 console script、没有 HTTP 或 SSE server，也没有调度守护进程。排空循环以原语 `noeta.runtime.worker.WorkerLoop` 的形式提供；由 host 构造并运行它（或调用 `Client.start_workers(n)` 获得一个常驻池）。没有任何东西替你启动它，因此在没有 Worker 运行时入队的任务只会停在就绪队列里。
+六组：
+[库不会替你运行的东西](#库不会替你运行的东西) ·
+[持久性](#持久性边界) ·
+[可观测性](#可观测性缺口) ·
+[增长与成本](#增长与成本) ·
+[sandbox](#sandbox-边界) ·
+[封闭的扩展点](#封闭的扩展点)。
 
-**何时遇到：** 你以为存在 `noeta run`，或者你把工作入队后什么都没推进。
+## 库不会替你运行的东西
 
-**变通方案：** 把这些库嵌入你自己的 host。`examples/reference-host` 是最小的一个，完全由公开面组装而成。
+### 这两个库不替你跑任何进程
 
-## 多主机协调需要 Postgres
+**这意味着：** `noeta-runtime` 和 `noeta-sdk` 是库。没有 CLI、没有 console script、没有 HTTP 或 SSE server，也没有调度守护进程。排空循环以原语 `noeta.runtime.worker.WorkerLoop` 的形式发布；由 host 构造并运行它（或者调 `Client.start_workers(n)` 得到一个常驻池）。没有任何东西替你启动它，所以一个在没有 worker 运行时入队的 Task，就只是待在就绪队列里。
 
-**含义：** 支持单主机多 Worker——一个进程运行一个常驻 `WorkerLoop` 池，多个任务的轮次同时推进。多个*主机进程*共享一个数据库仅在 **Postgres** 上受支持：事件追加在事务中针对活跃 lease 进行 fencing，lease 过期按数据库时钟计算（因此每主机的时钟偏差不会造成脑裂），并有一个 `worker_id` 列记录持有者。**SQLite** 和**内存**后端是单主机的——它们没有跨主机 fencing，因此把两个主机进程指向同一个 SQLite 文件是不安全的。
+**什么时候撞上：** 你以为存在一个 `noeta run`，或者你把工作入了队却什么都没推进。
 
-**何时遇到：** 你想让多台机器上的 Worker 进程排空一个共享存储。
+**绕过办法：** 把这两个库嵌进你自己的 host。`examples/reference-host` 是最小的那种，完全由公共面组装而成。
 
-**变通方案：** 多主机部署使用 Postgres 后端。在 SQLite 上，保持单主机（该主机上的多 Worker 池没问题），或给不同的工作负载配置各自的 SQLite 文件——就绪队列中没有跨存储路由，因此一个存储中的任务对排空另一个存储的 Worker 不可见。
+## 持久性边界
 
-参见 [ADR：多主机 lease fencing](https://github.com/initxy/noeta/blob/main/docs/adr/multi-host-lease-fencing.md)。
+### 多主机协调需要 Postgres
 
-## 崩溃恢复不会撤销副作用
+**这意味着：** 单主机多 worker 是支持的 —— 一个进程跑一个常驻 `WorkerLoop` 池，多个 Task 的轮次同时推进。多个 *host 进程*共享一个数据库只在 **Postgres** 上受支持：事件追加在事务内对着活跃 lease 加围栏，lease 过期按数据库时钟计算，因此每台主机的时钟偏移不会造成脑裂，而且有一个 `worker_id` 列记录持有者。**SQLite** 和**内存版**后端是单主机的 —— 它们没有跨主机围栏，所以把两个 host 进程指向同一个 SQLite 文件是不安全的。
 
-**含义：** Worker 在 Step 中途崩溃（`kill -KILL`、断电）会在下一次 lease 时恢复：被中断的 Attempt 会以一个持久的 `StepAttemptAbandoned` 标记密封，并且当该 Attempt 记录的所有内容都无需经过人工审批门就能运行时，Step 会被重新驱动。当 Attempt 存在无法证明的副作用时——或在一个轮次里连续密封三次后——任务改为被**停放**：作为一个已停止的对话挂起，附带一条 `origin="system"` 通知，逐一列出被中断的调用以及它是否完成。在人工审批的工具执行期间崩溃总是停放，并在同一个审批上重新挂起。恢复从不静默终止任务，也从不静默重新运行有副作用的调用——但它同样无法撤销崩溃的 Attempt 已经做过的任何事。
+**什么时候撞上：** 你想让多台机器上的 worker 进程排空一个共享存储。
 
-**何时遇到：** 硬杀发生在一个已经运行过有副作用工具的 Attempt 期间。正常的 SIGTERM 关闭不会触发它，读取或规划期间的崩溃则无需任何人参与即可恢复。
+**绕过办法：** 多主机部署请用 Postgres 后端。在 SQLite 上，保持单主机（在那台主机上跑一个多 worker 池是没问题的），或者给不同的工作负载画像各自的 SQLite 文件 —— 就绪队列里没有跨存储的路由，所以一个存储里的 Task 对排空另一个存储的 worker 是不可见的。
 
-**变通方案：** 打开被停放的对话——通知列出了被中断的内容。核实这些操作是完全、部分还是完全没有应用，然后输入内容以继续（轮次从干净的 Attempt 前基线恢复），或重新审批待处理的调用。
+见 [ADR：Multi-host lease fencing](https://github.com/initxy/noeta/blob/main/docs/adr/multi-host-lease-fencing.md)。
 
-## 关闭可能放弃一个仍在运行的 Step
+### 崩溃恢复不会撤销副作用
 
-**含义：** 在 `stop()` 时，`WorkerLoop` 最多等待 `shutdown_grace_s` 让进行中的 Step 完成。如果它没有完成，循环会**放弃**该 Step 并返回——但 Python 无法杀死被放弃的线程。它可能仍在运行并写入 EventLog。
+**这意味着：** 一次 Step 中途的 worker 崩溃（`kill -KILL`、断电）会在下一次拿 lease 时恢复：被中断的 attempt 被一个持久的 `StepAttemptAbandoned` 标记密封，而当该 attempt 记录下来的一切本来都不需要经过人工审批闸门时，这一步会被重新驱动。当这次 attempt 带有无法证明的副作用时 —— 或者在同一轮里连续密封三次之后 —— 这个 Task 会被**停放**：挂起为一场停下的对话，并带一条 `origin="system"` 的通知，逐条指名被中断的调用以及它是否完成。发生在人工批准过的工具执行期间的崩溃总是停放，并重新挂在同一次审批上。恢复绝不会静默终止一个 Task，也绝不会静默重跑一次有副作用的调用 —— 但它同样无法撤销那次崩溃的 attempt 已经做过的任何事。
 
-**何时遇到：** 某个 Step 挂起（比如一次对无响应外部 API 的工具调用），且宽限窗口到期。
+**什么时候撞上：** 一次硬杀落在一个已经跑过有副作用工具的 attempt 上。正常的 SIGTERM 关闭不会触发这个，而发生在读取或规划期间的崩溃无需任何人参与就能恢复。
 
-**变通方案：** **退出进程。** 放弃之后，host 必须调用 `sys.exit()` 或等效操作。被放弃的线程随进程一同死亡，它的 lease 过期，`requeue_stale()` 在下一次启动时回收该任务。`shutdown_grace_s=None`（或 `<= 0`）会无限等待——这时卡住的 Step 需要一个外部的 `kill -KILL <pid>`。
+**绕过办法：** 打开那场被停放的对话 —— 通知里列出了被中断的东西。核实那些操作是完全生效、部分生效还是完全没生效，然后打字继续（这一轮会从干净的 attempt 前基线恢复），或者重新批准那次待定的调用。
 
-## 心跳保活窗口有上限
+### 关闭可能放弃一个仍在跑的 Step
 
-**含义：** 心跳让慢 Step 的 lease 保持存活，但不是永远。Dispatcher 把心跳延长次数限制在 `heartbeat_max`（默认 360），因此 `heartbeat_interval × heartbeat_max` 就是一个 Step 能持有 lease 的最长时间。超过上限后，lease 被强制释放，该 Step 下一次写 EventLog 会以 `InvalidLease` 失败。
+**这意味着：** 在 `stop()` 时，`WorkerLoop` 最多等待 `shutdown_grace_s` 让进行中的 Step 完成。如果它没完成，循环会**放弃**这个 Step 并返回 —— 但 Python 无法杀掉被放弃的线程。它可能仍在运行并写入 EventLog。
 
-**何时遇到：** 单个 Step——一次模型轮次加上它所有的工具调用——耗时超过上限窗口。在默认值下这是数小时，所以很少见。
+**什么时候撞上：** 一个 Step 挂住了（比如一次对无响应外部 API 的工具调用），而宽限窗口到期了。
 
-**变通方案：** 把命中上限当作一个运维故障信号，而不是恢复路径。循环会记录它并继续下一个任务，但命中上限的任务可能需要检查：看它是否仍然可行，还是应该关闭。
+**绕过办法：** **退出进程。** 放弃之后，host 必须调用 `sys.exit()` 或等价物。被放弃的线程随进程一起死掉，它的 lease 过期，`requeue_stale()` 会在下一次启动时回收该 Task。`shutdown_grace_s=None`（或 `<= 0`）会无限等待 —— 那样一个卡住的 Step 就需要外部的 `kill -KILL <pid>`。
 
-## 可靠性事件是进程本地的
+### 心跳保活窗口有上限
 
-**含义：** Worker 会发出 `ReliabilityEvent`——`stale_requeued`、`suspended_without_wake`、`step_failed_retryable`、`heartbeat_invalid_lease`、`shutdown_abandoned`、`timers_fired`、`attempt_abandoned`、`attempt_parked`——到一个可注入的接收器，默认是结构化日志。它们**不是** EventLog 事件，不会持久化，也不会在重启后存活。
+**这意味着：** 心跳让一个慢 Step 的 lease 保持活着，但不是永远。Dispatcher 把心跳延长次数限制在 `heartbeat_max`（默认 360），因此 `heartbeat_interval × heartbeat_max` 就是一个 Step 能持有 lease 的最长时间。超过上限后 lease 被强制释放，该 Step 的下一次 EventLog 写入会以 `InvalidLease` 失败。
 
-**何时遇到：** 你在 Worker 可靠性信号之上构建监控或告警。
+**什么时候撞上：** 单个 Step —— 一次模型轮次加上它的全部工具调用 —— 超过了这个上限窗口。用默认值算这是好几个小时，所以很少见。
 
-**变通方案：** 挂载一个自定义的 `reliability_sink`，把它们转发到你的监控系统。每个事件都以 Worker 能从 dispatcher seam 证明的东西命名——比如 `heartbeat_invalid_lease` 是一个症状，其原因可能是上限、过期或一次 requeue。
+**绕过办法：** 把撞上上限当作一个运维故障信号，而不是恢复路径。循环会记录它并继续处理下一个 Task，但被截断的那个 Task 可能需要检查：看它是否还可行，还是应该关掉。
 
-## 没有任何东西通知有人任务正在等待人类
+## 可观测性缺口
 
-**含义：** 人机协作在带内完全接通：Engine 在一个 `HumanResponseReceived` 唤醒条件上挂起，`answer` 客户端动词递送响应。没有带外通道——任务开始等待时，没有 webhook、没有邮件、没有跨任务收件箱会触发。
+### 可靠性事件是进程本地的
 
-**何时遇到：** Agent 在没有人驱动任务时提出一个问题。任务会持久地等待（这正是重点），但没有任何东西通知任何人。
+**这意味着：** worker 会向一个可注入的 sink 发出 `ReliabilityEvent` —— `stale_requeued`、`suspended_without_wake`、`step_failed_retryable`、`heartbeat_invalid_lease`、`shutdown_abandoned`、`timers_fired`、`attempt_abandoned`、`attempt_parked` —— 这个 sink 默认是结构化日志。它们**不是** EventLog 事件，不会被持久化，也活不过一次重启。
 
-**变通方案：** 交互式地驱动任务，或者给 EventLog 订阅一个 `Observer`，把 `UserQuestionRequested` 事件转发到你自己的通知通道，并用 `answer` 递送回复。
+**什么时候撞上：** 你要基于 worker 的可靠性信号搭监控或告警。
 
-## 未登记的模型会静默关闭 compaction 与定价
+**绕过办法：** 挂一个自定义的 `reliability_sink`，把它们转发到你的监控系统。每个事件的命名对应 worker 从 Dispatcher 接缝上能证明的东西 —— 比如 `heartbeat_invalid_lease` 是一个现象，它的成因可能是上限、过期，或一次重新入队。
 
-**含义：** compaction 旋钮和成本都源自 `providers` 内置插件里的模型目录。对于目录未描述的模型，`derive_compaction_config` 返回 `COMPACTION_OFF`——上下文 compaction 从不启动，因此一段长对话会一直运行到 provider 自己拒绝请求为止。定价以同样的方式退化：一个未定价的模型每次往返花费 `0.0`，因此 `GovernanceState.cost` 始终为零，`max_cost_usd` 预算永远不会触发。这两种退化都不会抛出异常。
+### 没有任何东西通知谁"某个 Task 正在等人"
 
-**何时遇到：** 你把 `Options.model` 指向一个网关模型 id、一个微调模型，或一个不在 `CATALOG` 里的自托管模型。
+**这意味着：** human-in-the-loop 完全是带内接好的：引擎挂在一个 `HumanResponseReceived` 唤醒条件上，而 `answer` 这个客户端动词投递响应。没有带外通道 —— 当一个 Task 开始等待时，不会触发任何 webhook、邮件或跨 Task 的收件箱。
 
-**变通方案：** 为它添加一行 `ModelSpec`。`CATALOG` 和 `ModelSpec` 从 `noeta.sdk.providers` 重新导出；一行提供 `context_window`、`max_output_tokens` 和价格字段，这就是两处推导所读取的全部内容。
+**什么时候撞上：** 一个 agent 在没人盯着这个 Task 的时候提了个问题。Task 会持久地等下去，这正是设计的意图，但没有任何东西去告诉别人。
 
-## 内容永远不会被垃圾回收
+**绕过办法：** 交互式地驱动这个 Task，或者给 EventLog 订阅一个 `Observer`，把 `UserQuestionRequested` 事件转发到你自己的通知渠道，再用 `answer` 投递回复。
 
-**含义：** ContentStore 是内容寻址且仅追加的，且不附带任何 GC。`Client.delete_task` 会清除一个任务在整个子任务树上的事件流和 dispatcher 状态，但刻意保留内容 blob——它们按哈希在任务之间共享，因此删除一个任务无法证明某个内容体不可达。于是存储会随着记录的工具输出、snapshot 和 compaction 摘要单调增长。
+## 增长与成本
 
-**何时遇到：** 一个带有大量工具输出的长期部署。
+### 目录里没有的模型会静默关掉 compaction 和定价
 
-**变通方案：** 库内没有。为保留量确定存储容量，或针对你的后端写一个离线清扫，遍历剩余各流的引用。当树中任何任务持有活跃 lease 时，`delete_task` 还会以 `reason="running"` 拒绝，因此清除永远不会与进行中的轮次竞争。
+**这意味着：** compaction 的各项参数和成本都是从 `providers` 这个 built-in 里的模型目录推导出来的。对于目录未描述的模型，`derive_compaction_config` 返回 `COMPACTION_OFF` —— 上下文 compaction 永远不会介入，因此一场长对话会一直跑到 provider 自己拒绝请求。定价以同样的方式退化：一个没有定价的模型每次往返成本为 `0.0`，因此 `GovernanceState.cost` 停在零，`max_cost_usd` 预算永远不可能触发。这两种退化都不抛异常。
 
-## 库不附带沙箱置备器
+**什么时候撞上：** 你把 `Options.model` 指向一个不在 `CATALOG` 里的网关模型 id、微调模型或自托管模型。
 
-**含义：** `SandboxProvider` 是 SDK 定义并驱动（通过 `SandboxExecEnvManager`）的一个协议，而不是它附带的实现。盒子里唯一的 provider 把一个 `SandboxExecEnvConfig` 适配成一个**仅附着**的 provider：它连接到一个已经在运行的容器，其 `release` 是空操作，因为它并不拥有该容器。置备与回收——运行 `docker`、调用 K8s API、选择挂载——属于 host。
+**绕过办法：** 为它添加一行 `ModelSpec`。`CATALOG` 和 `ModelSpec` 都从 `noeta.sdk.providers` 重新导出；一行提供 `context_window`、`max_output_tokens` 和价格字段，那就是两处推导所读取的全部内容。
 
-**何时遇到：** 你期望开箱即用地为每个对话得到一个全新容器。
+### 内容永远不会被垃圾回收
 
-**变通方案：** 在你的 host 里实现 `SandboxProvider`，并把它作为 `HostConfig.sandbox_provider` 传入。`allocate` 返回一个携带寻址信息以及一个活跃 `SandboxAuth` 策略的 `SandboxHandle`；`attach` 重新连接到记录在 `TaskHostBound` 上的 `exec_env_ref`，这就是一个被恢复或被回收的会话重新找到它的容器的方式。这个重连能否跨机器工作，取决于你写的 provider 的性质，而不是 SDK。
+**这意味着：** ContentStore 是内容寻址且 append-only 的，而且没有发布 GC。`Client.delete_task` 会在整棵子任务树上清除一个 Task 的事件流和 Dispatcher 状态，但刻意不动内容块 —— 它们按哈希在多个 Task 之间共享，所以删掉一个 Task 无法证明某个内容体已不可达。因此存储会随着被记录的工具输出、snapshot 和 compaction 摘要单调增长。
 
-## 沙箱副作用在 Worker 代际之间不受 fencing
+**什么时候撞上：** 一个长期存活、工具输出量很大的部署。
 
-**含义：** 当一个会话在沙箱容器里运行时，它的文件和 shell 副作用通过 HTTP 到达容器——在为 EventLog 写入做 fencing 的共享 Postgres 事务之外。一个被 fencing 挡在日志外的 Worker（一次 GC 暂停、一次 `SIGSTOP` 后又复活）仍然可以向容器 `POST`。因此沙箱副作用是至少一次且不受 fencing 的，与 host 上运行了一半的 `shell_run` 属于同一类：一个回收任务的 Worker 会重连到同一个容器并重新驱动该 Step，但一个缓慢的僵尸在此期间可能污染容器。因为一个容器属于一棵根任务树，僵尸只会污染它自己的会话。
+**绕过办法：** 库里没有。按保留期给存储做容量规划，或者对着你的后端写一个离线清扫，遍历剩余各条流的 ref。当树里还有任何 Task 持有活跃 lease 时，`delete_task` 也会以 `reason="running"` 拒绝，所以一次清除永远不会和进行中的一轮抢跑。
 
-**何时遇到：** 一个持有沙箱会话的 Worker 停滞得足够久，以致它的 lease 过期、另一个 Worker 回收了该任务，然后它醒来又向容器发出一次调用。
+## Sandbox 边界
 
-**变通方案：** 没有自动方案。它受与上面覆盖崩溃 Step 副作用相同的那套 Step-Attempt 重新驱动和人工审查所约束。
+### 库不提供 sandbox 置备器
 
-## 沙箱 `shell_run` 没有远程硬杀
+**这意味着：** `SandboxProvider` 是 SDK 定义并驱动（经由 `SandboxExecEnvManager`）的一个协议，而不是它发布的一个实现。开箱唯一的 provider 把一个 `SandboxExecEnvConfig` 适配成一个**只做 attach** 的 provider：它连接到一个已经在跑的容器，而它的 `release` 是空操作，因为它并不拥有该容器。置备与回收 —— 跑 `docker`、调 K8s API、选择挂载 —— 属于 host。
 
-**含义：** 在 host 上，`shell_run` 的 `timeout` 映射到一个真正杀死进程的子进程超时。在沙箱下没有远程取消动词，因此超时由那一次 HTTP 调用的读取超时在*客户端侧*强制执行。你传入的 `timeout` 会被遵守——一个运行超时的命令会以请求的预算作为超时运行报告给模型——但该命令在调用返回后**仍在容器里继续运行**。它的副作用可能在工具已经报告超时之后才落地。
+**什么时候撞上：** 你以为开箱就能每场对话来一个新容器。
 
-**何时遇到：** 一个沙箱 `shell_run`，其命令超过了它的 `timeout`——比如一个挂起的构建或测试运行。
+**绕过办法：** 在你的 host 里实现 `SandboxProvider`，并把它作为 `HostConfig.sandbox_provider` 传入。`allocate` 返回一个携带寻址信息和一个活跃 `SandboxAuth` 策略的 `SandboxHandle`；`attach` 重新连接到记录在 `TaskHostBound` 上的 `exec_env_ref`，这正是一个被恢复或被回收的会话重新找到自己容器的方式。那次重连能否跨机器工作，取决于你写的那个 provider，而不取决于 SDK。
 
-**变通方案：** 把超时的沙箱 `shell_run` 当作"可能仍在运行"；一条后续命令可以观察或清理它的部分效果。给真正长时间运行的命令一个明确更大的 `timeout`，这样客户端就不会过早切断调用。
+### sandbox 副作用在 worker 世代之间没有围栏
 
-## 后台 shell 仅限 host
+**这意味着：** 当一个会话跑在 sandbox 容器里时，它的文件和 shell 副作用经 HTTP 发往容器 —— 在那个为 EventLog 写入加围栏的共享 Postgres 事务之外。一个已经被日志围栏挡在外面的 worker（一次 GC 暂停、一次 `SIGSTOP` 后又复活）仍然可以往容器 `POST`。因此 sandbox 副作用是至少一次且无围栏的，与宿主机上跑了一半的 `shell_run` 属于同一类：回收方 worker 会重新连到同一个容器并重驱动这一步，但一个慢吞吞的僵尸在这期间可能污染这个容器。因为一个容器属于一棵根 Task 树，僵尸只会污染它自己那场会话。
 
-**含义：** `shell_run(run_in_background=true)` 把校验过的 argv 交给 host 的后台执行器，并返回一个作业 id，`shell_poll` 和 `shell_kill` 随后用它来寻址。一个沙箱 `ExecEnv` 会报告它不支持后台执行，工具会返回一个错误，而不是在前台运行该命令。
+**什么时候撞上：** 一个持有 sandbox 会话的 worker 卡得足够久，久到它的 lease 过期、另一个 worker 回收了该 Task，然后它醒过来又发出了一次容器调用。
 
-**何时遇到：** 一个沙箱化的 Agent 试图启动一个长时间运行的服务器或监视器。
+**绕过办法：** 没有自动办法。它受限于覆盖上面那类崩溃 Step 副作用的同一套 Step attempt 重驱动与人工复核。
 
-**变通方案：** 用一个宽裕的 `timeout` 在前台运行命令，或在后台作业不可或缺时把会话放到沙箱之外运行。
+### sandbox 的 `shell_run` 没有远程硬杀
 
-## 沙箱浏览器是文本级且限定于容器的
+**这意味着：** 在宿主机上，`shell_run` 的 `timeout` 映射成一个真正的子进程超时，会杀掉进程。在 sandbox 下没有远程取消动词，所以超时是由那一次调用的 HTTP 读超时在*客户端侧*强制的。你传的 `timeout` 会被遵守 —— 一条跑过头的命令会按你要求的预算被报告给模型为一次超时运行 —— 但调用返回之后，命令**仍在容器里继续跑**。它的副作用可能在工具已经报告超时之后才落地。
 
-**含义：** 一个沙箱会话可以通过五个 Noeta 自有工具（`browser_navigate`、`browser_click`、`browser_type`、`browser_extract`、`browser_screenshot`）驱动容器的无头浏览器。三个边界：
+**什么时候撞上：** sandbox 里一次 `shell_run` 的命令超过了它的 `timeout` —— 一次挂住的构建或测试运行。
 
-- **没有容器就没有浏览器。** 只有当会话的后端袋里有一个活跃的浏览器后端*并且* Agent 激活了 `browser` 时，这个 pack 才会挂载。否则工具集与非浏览器会话逐字节相同。
-- **感知是文本和元素级的，而非视觉的。** `browser_extract` 返回页面文本，加上一个带编号的可交互元素列表，模型按索引点击和输入。`browser_screenshot` 把一张 PNG 保存为工作区制品；它**不会**作为视觉反馈给模型，因此需要视觉理解的页面无法被完整处理。
-- **浏览器与容器共存。** 它共享会话容器的生命周期和成本；没有单独的暂停。
+**绕过办法：** 把一次超时的 sandbox `shell_run` 当作"可能还在跑"；后续一条命令可以观察或清理它的部分效果。给真正耗时长的命令一个显式的更大 `timeout`，好让客户端不会提前掐断这次调用。
 
-**何时遇到：** 一个必须读取仅以像素渲染的图表的任务，或一个需要在没有容器的情况下浏览的任务。
+### 后台 shell 只在宿主机上可用
 
-**变通方案：** 内容优先用 `browser_extract`，无需交互的页面用 `webfetch`；需要人来看时用 `browser_screenshot`。
+**这意味着：** `shell_run(run_in_background=true)` 把校验过的 argv 交给 host 的后台运行器，并返回一个 job id，随后由 `shell_poll` 和 `shell_kill` 寻址。sandbox 的 `ExecEnv` 会报告它不支持后台执行，于是工具返回一个错误，而不是把命令改到前台跑。
 
-## composer 无法被替换
+**什么时候撞上：** 一个跑在 sandbox 里的 agent 试图启动一个长期运行的 server 或 watcher。
 
-**含义：** `ContextComposer` 是用户面上一个封闭的扩展点。稳定前缀的 KV-cache 可复现性是一条硬约束，因此不提供整体替换 composer。开放的钩子是仅注册且仅追加的：一个 `ContentKindSpec`（一个半稳定的常驻项）或一个 compose 时的 `reminder`（动态后缀尾部）。两者都不触碰稳定前缀。
+**绕过办法：** 用一个宽裕的 `timeout` 在前台跑这条命令；或者当后台任务确实必不可少时，让这场会话跑在 sandbox 之外。
 
-**何时遇到：** 你想要一个根本不同的提示布局。
+### sandbox 浏览器是文本级的，且与容器同生共死
 
-**变通方案：** 通过开放的面添加常驻项和 reminder，或者把这个决策移到一个自定义 `Policy` 里——`Policy` 确实可以通过 `policy` 面替换。
+**这意味着：** 一个 sandbox 会话可以通过五个 Noeta 自有的工具驱动容器里的无头浏览器（`browser_navigate`、`browser_click`、`browser_type`、`browser_extract`、`browser_screenshot`）。有三条边界：
 
-## 另见
+- **没有容器就没有浏览器。** 这个工具包只有在会话的后端袋里有一个存活的浏览器后端*并且* agent 激活了 `browser` 时才挂载。否则工具集与非浏览器会话字节一致。
+- **感知是文本与元素级的，不是视觉的。** `browser_extract` 返回页面文本，外加一份带编号的可交互元素列表，模型按序号点击和输入。`browser_screenshot` 把一张 PNG 存为工作区产物；它**不会**作为视觉输入喂回模型，因此需要视觉理解的页面无法被完整处理。
+- **浏览器与容器同生共死。** 它共享会话容器的生命周期和成本；没有单独的暂停。
 
-- [故障排查](troubleshooting.md)——症状 → 原因 → 解决方案
-- [唤醒与恢复](../concepts/wake-resume.md)——传递保证及其范围
-- [WorkerLoop 参考](../reference/worker-loop.md)——构造函数旋钮与关闭行为
-- [架构概览](../architecture/overview.md)——完整的系统图景
+**什么时候撞上：** 一个必须读懂只以像素呈现的图表的 Task，或者一个需要在没有容器的情况下浏览网页的 Task。
+
+**绕过办法：** 内容优先用 `browser_extract`，不需要交互的页面用 `webfetch`；当需要人来看一眼时才用 `browser_screenshot`。
+
+## 封闭的扩展点
+
+### composer 不可替换
+
+**这意味着：** `ContextComposer` 在用户面上是一个封闭的扩展点。稳定前缀的 KV 缓存可复现性是一条硬约束，所以不提供整体替换 composer。开放的钩子只在注册表层面且只增不改：一个 `ContentKindSpec`（一个 semi-stable 常驻内容）或一个组装期的 `reminder`（dynamic-suffix 的尾部）。两者都不碰稳定前缀。
+
+**什么时候撞上：** 你想要一种根本不同的提示布局。
+
+**绕过办法：** 通过那些开放的 Surface 添加常驻内容和 reminder，或者把这个决定挪进一个自定义 `Policy` —— 后者通过 `policy` 这个 Surface *是*可替换的。
+
+## 下一步
+
+- [故障排查](troubleshooting.md) —— 真实故障的症状 → 原因 → 修法
+- [架构概览](../architecture/overview.md) —— 完整的系统图景
+- [状态与写入者](../architecture/state-and-writers.md) —— 这些边界所依循的那些不变式
+- [WorkerLoop 参考](../reference/worker-loop.md) —— 构造函数参数与关闭行为

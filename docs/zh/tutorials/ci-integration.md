@@ -1,14 +1,20 @@
-# 教程：与 Noeta 的 CI 集成
+# 在 CI 中运行 Noeta
 
-在你的 CI 管道中运行 Noeta，用于对代理配方做冒烟测试、验证自定义工具，或自动化代码审查。本教程用离线的 `FakeLLMProvider` 把 Noeta 接入 GitHub Actions——无需 API key。
+agent 配方和其他代码一样会腐坏：一个改名的工具、一个变了的权限模式、一次 provider 切换。本教程把 Noeta 接进 CI 流水线，让坏掉的配方在构建时就失败，而不是在用户的请求里失败。
 
-## 为什么在 CI 中用 fake provider？
+这里的一切都跑在离线的 `FakeLLMProvider` 上 —— 不需要 API key，不碰网络，也不会抖。最后一步展示在你确实需要时如何加一个真实 provider 的 job。
 
-`FakeLLMProvider` 是一个脚本化的离线 LLM 替身：它以预先脚本化的响应作答，不需要 API key，是确定性的，也不做任何网络往返。真实 provider 在 CI 中同样能用（把网关密钥作为 secret 传入），但对于冒烟测试，fake provider 才是正确的起点。
+**前置条件：**[你的第一个 agent](first-agent.md)，以及一个带 CI 流水线的仓库（示例用 GitHub Actions）。
 
-## 步骤 1：编写冒烟测试
+## 为什么 CI 里用假 provider
 
-创建 `tests/test_agent_smoke.py`：
+`FakeLLMProvider` 回放一列脚本化的 `LLMResponse` 对象。它不需要凭证、不做网络往返，而且每次运行都返回同样的东西 —— 所以一个失败的测试意味着你的接线坏了，而不是模型今天状态不好。
+
+真实 provider 在 CI 里也能用（把网关 key 作为 secret 传进去），但每次推送都该跑的是脚本化的运行。
+
+## 第 1 步：写一个冒烟测试
+
+冒烟测试的意义在于：配方能编译、这一轮能跑、Task 能到达终态。创建 `tests/test_agent_smoke.py`：
 
 ```python
 """Smoke test: run the minimal agent recipe end-to-end with the fake provider."""
@@ -28,61 +34,52 @@ def test_minimal_agent_runs():
         permission_mode="bypassPermissions",
     )
 
-    provider = FakeLLMProvider(
-        responses=[
-            LLMResponse(
-                stop_reason="end_turn",
-                content=[TextBlock(text="Smoke test passed.")],
-                usage=Usage(uncached=1, output=1),
-            )
-        ]
-    )
+    provider = FakeLLMProvider(responses=[
+        LLMResponse(
+            stop_reason="end_turn",
+            content=[TextBlock(text="Smoke test passed.")],
+            usage=Usage(uncached=1, output=1),
+        )
+    ])
 
     with tempfile.TemporaryDirectory(prefix="noeta-ci-smoke-") as tmp:
-        result = query(
-            options,
-            goal="Say hello.",
-            provider=provider,
-            workspace_dir=Path(tmp),
-            model="stub-model",
-        )
+        result = query(options, goal="Say hello.", provider=provider,
+                       workspace_dir=Path(tmp), model="stub-model")
 
-    # ``result`` IS the envelope list, so stream-level assertions still work.
+    # `result` IS the envelope list, so stream-level assertions work directly.
     types = [env.type for env in result]
     assert "TaskCreated" in types
     assert "TaskCompleted" in types
 
-    # ``.answer()`` raises QueryFailedError if the task did not complete, so a
+    # `.answer()` raises QueryFailedError if the task did not complete, so a
     # failed run can never masquerade as a passing assertion.
     assert "Smoke test passed" in str(result.answer())
 ```
 
-本地运行：
+运行它：
 
 ```bash
 uv run pytest tests/test_agent_smoke.py -v
 ```
 
-## 步骤 2：测试自定义工具
+```
+tests/test_agent_smoke.py::test_minimal_agent_runs PASSED                 [100%]
+1 passed
+```
 
-如果你的代理使用了自定义工具，就要测试它们是否被正确接线：
+## 第 2 步：测试一个自定义工具
+
+对配方下断言只能证明 agent 编译成功了。要证明你的工具确实跑了，就把模型脚本成去调用它，然后对 `ToolCallStarted` 事件下断言：
 
 ```python
-"""Smoke test: custom tool gets called."""
+"""Smoke test: the custom tool gets called."""
 
 import tempfile
 from pathlib import Path
 
 from noeta.sdk import (
-    LLMResponse,
-    Options,
-    TextBlock,
-    ToolContext,
-    ToolResult,
-    ToolUseBlock,
-    Usage,
-    query,
-    tool,
+    LLMResponse, Options, TextBlock, ToolContext, ToolResult, ToolUseBlock,
+    Usage, query, tool,
 )
 from noeta.sdk.testing import FakeLLMProvider
 
@@ -91,11 +88,9 @@ from noeta.sdk.testing import FakeLLMProvider
     name="ping",
     version="1",
     risk_level="low",
-    input_schema={
-        "type": "object",
-        "properties": {},
-        "additionalProperties": False,
-    },
+    description="Return pong.",
+    input_schema={"type": "object", "properties": {},
+                  "additionalProperties": False},
 )
 def ping(arguments: dict, ctx: ToolContext) -> ToolResult:
     return ToolResult(success=True, output="pong")
@@ -109,46 +104,32 @@ def test_custom_tool_called():
         permission_mode="bypassPermissions",
     )
 
-    provider = FakeLLMProvider(
-        responses=[
-            LLMResponse(
-                stop_reason="tool_use",
-                content=[
-                    ToolUseBlock(
-                        call_id="p1",
-                        tool_name="ping",
-                        arguments={},
-                    )
-                ],
-                usage=Usage(uncached=1, output=1),
-            ),
-            LLMResponse(
-                stop_reason="end_turn",
-                content=[TextBlock(text="Pinged.")],
-                usage=Usage(uncached=1, output=1),
-            ),
-        ]
-    )
+    provider = FakeLLMProvider(responses=[
+        LLMResponse(
+            stop_reason="tool_use",
+            content=[ToolUseBlock(call_id="p1", tool_name="ping", arguments={})],
+            usage=Usage(uncached=1, output=1),
+        ),
+        LLMResponse(
+            stop_reason="end_turn",
+            content=[TextBlock(text="Pinged.")],
+            usage=Usage(uncached=1, output=1),
+        ),
+    ])
 
     with tempfile.TemporaryDirectory() as tmp:
-        envelopes = list(query(
-            options,
-            goal="Ping.",
-            provider=provider,
-            workspace_dir=Path(tmp),
-        ))
+        result = query(options, goal="Ping.", provider=provider,
+                       workspace_dir=Path(tmp), model="stub-model")
 
-    tool_calls = [
-        e.payload.tool_name
-        for e in envelopes
-        if e.type == "ToolCallStarted"
-    ]
-    assert "ping" in tool_calls, f"Expected ping in {tool_calls}"
+    called = [e.payload.tool_name for e in result if e.type == "ToolCallStarted"]
+    assert called == ["ping"], f"expected ping, got {called}"
 ```
 
-## 步骤 3：接入 GitHub Actions
+因为整次运行就是一条被记录下来的事件流，你可能想要的每一条 CI 断言 —— 跑了哪些工具、哪些 Guard 拒绝了、用了多少轮 —— 都只是对 `result` 的一次列表推导。
 
-向 `.github/workflows/ci.yml` 添加一个 job：
+## 第 3 步：接进 GitHub Actions
+
+往 `.github/workflows/ci.yml` 里加一个 job：
 
 ```yaml
   agent-smoke:
@@ -169,14 +150,14 @@ def test_custom_tool_called():
         run: uv run pytest tests/test_agent_smoke.py -v
 ```
 
-SDK 冒烟测试在进程内运行库本身——不需要服务器，也不需要前端构建。
+没有服务、没有端口、没有前端构建：SDK 是进程内的，所以冒烟 job 就是一个普通的 Python 测试 job。
 
-## 步骤 4：在 CI 中运行完整测试套件
+## 第 4 步：借用 Noeta 自己的关卡
 
-Noeta 自己的 CI 就运行这些检查。为你自己的管道参考它们：
+Noeta 的 CI 跑下面这些检查。挑适合你项目的用：
 
 ```bash
-# Core test suite with coverage
+# Test suite with coverage
 uv run pytest --cov=noeta --cov-report=term --cov-fail-under=85
 
 # Fresh-venv two-wheel install smoke (opt-in via the install_smoke marker)
@@ -185,7 +166,7 @@ uv run pytest -v -m install_smoke tests/test_install_smoke.py
 # Naming lint (forbidden class names per CONTEXT.md)
 uv run python scripts/lint-naming.py
 
-# Import topology lint (L0..L3 layer boundaries)
+# Import topology lint (the layer boundaries in .importlinter)
 uv run lint-imports --config .importlinter
 
 # mypy strict on protocol definitions
@@ -195,11 +176,11 @@ MYPYPATH=packages/noeta-runtime \
     packages/noeta-runtime/noeta/protocols
 ```
 
-`make check` 把 coverage、mypy 和 lint 这几道闸门一起跑。
+`make check` 把覆盖率、mypy、命名和导入拓扑这几道关卡一起跑；`make lint` 是只做静态检查的快速子集。
 
-## 步骤 5：在 CI 中使用真实 provider（可选）
+## 第 5 步（可选）：一个真实 provider 的 job
 
-当你需要 CI 中的真实模型时（例如针对真实 LLM 行为做集成测试）：
+当你需要真实的模型行为时 —— 提示词回归、工具调用格式 —— 加第二个从 secrets 读取凭证的 job：
 
 ```yaml
   agent-integration:
@@ -220,7 +201,7 @@ MYPYPATH=packages/noeta-runtime \
         run: uv run pytest tests/test_integration.py -v -m live
 ```
 
-用这些 secret 构建 provider，并把测试标记为 `live`，让没有网关的运行跳过它：
+用这些 secret 构建 provider，并把测试标记为 `live`，这样没有网关的检出会跳过它而不是失败：
 
 ```python
 import os
@@ -243,18 +224,11 @@ def test_agent_with_real_llm():
     ...  # drive query(..., provider=provider, model=os.environ["LLM_MODEL"])
 ```
 
-## 要点
+在你自己的 `pyproject.toml` 里声明这个 marker，并决定它如何被选中。Noeta 的根配置默认排除 `live` 和 `install_smoke`（`addopts = "-ra -m 'not install_smoke and not live'"`），所以一个 live 测试只有在你用 `-m live` 主动要求时才会跑。无论如何都保留 `skipif` —— 正是它让这种"主动开启"的运行在没有网关的机器上降级为跳过，而不是报错。
 
-- **冒烟测试用 fake provider。** `FakeLLMProvider` 从 `noeta.sdk.testing` 导出——离线替身的公开归宿。无 secret，无网络。
-- **`uv run pytest`** 是测试入口点；工作区根目录的 `pyproject.toml` 设置了 `testpaths = ["tests"]`。
-- **`live` 标记不会自己跳过。** 它在 `pyproject.toml` 中声明，但默认的 `addopts` 只排除了 `install_smoke`。用 `@pytest.mark.skipif` 依据所需环境变量门控一个 live 测试，让它在网关缺失时自动跳过；或者用 `-m "not live"` 选择。
+## 下一步
 
-## 来源
-
-- `.github/workflows/ci.yml` —— 仓库自己的 CI 管道
-- `Makefile` —— `make install`、`make test`、`make lint`、`make check`
-- `pyproject.toml` —— pytest 配置（`testpaths`、`markers`、`addopts`）
-- `packages/noeta-runtime/noeta/testing/fake_llm.py` —— `FakeLLMProvider`，在 `noeta.sdk.testing` 处再导出
-- 另见：[你的第一个代理](first-agent.md)、
-  [切换 provider](../how-to/swap-providers.md)、
-  [Engine 与执行](../concepts/engine-execution.md)
+- **构建你正在测试的那个 agent** —— [你的第一个 agent](first-agent.md)。
+- **让 CI 指向你的网关** —— [切换 Provider](../how-to/swap-providers.md)。
+- **理解账本记录了什么** —— [引擎与执行](../concepts/engine-execution.md)。
+- **查阅这些测试替身** —— [SDK 参考](../reference/sdk.md)；`FakeLLMProvider` 住在 `noeta.sdk.testing`。
