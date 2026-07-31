@@ -14,13 +14,21 @@ from noeta.client.options import EFFORT_MODES, PERMISSION_MODES
 
 
 def permission_modes() -> tuple[str, ...]:
-    """The legal :attr:`Options.permission_mode` values, sorted."""
-    return tuple(sorted(PERMISSION_MODES))
+    """The legal :attr:`Options.permission_mode` values, in widening-trust order.
+
+    The order is the contract, not an accident: a host renders these straight
+    into a picker, and alphabetical would offer ``bypassPermissions`` first.
+    """
+    return PERMISSION_MODES
 
 
 def effort_modes() -> tuple[str, ...]:
-    """The legal :attr:`Options.effort` values, sorted."""
-    return tuple(sorted(EFFORT_MODES))
+    """The legal :attr:`Options.effort` values, in increasing-intensity order.
+
+    Same reason as :func:`permission_modes`: a picker showing
+    ``high, low, max, medium, xhigh`` is unreadable.
+    """
+    return EFFORT_MODES
 
 
 def model_capabilities(models: Sequence[str]) -> dict[str, dict[str, bool]]:

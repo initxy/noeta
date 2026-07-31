@@ -17,6 +17,7 @@ from noeta.protocols.decisions import (
     FinishDecision,
     YieldForHumanDecision,
 )
+from noeta.protocols.events import SUSPEND_REASON_TURN_FAILED
 from noeta.protocols.policy import Policy
 from noeta.protocols.step_context import StepContext
 from noeta.protocols.view import View
@@ -33,7 +34,9 @@ __all__ = [
 #: ``TaskSuspended.reason`` tag for a turn that failed and was parked for the
 #: human instead of terminating the conversation. The full policy reason follows
 #: after ``": "``, so a host can both branch on the tag and show the detail.
-TURN_FAILED_SUSPEND_TAG = "turn_failed"
+#: Bound to the protocol's constant rather than re-spelled, so the producer and
+#: the tag a host compares against cannot drift apart.
+TURN_FAILED_SUSPEND_TAG = SUSPEND_REASON_TURN_FAILED
 
 
 class MultiTurnReActPolicy:

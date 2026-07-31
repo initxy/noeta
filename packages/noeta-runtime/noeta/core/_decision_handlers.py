@@ -44,6 +44,7 @@ from noeta.protocols.events import (
     BackgroundSubagentStartedPayload,
     CompactedPayload,
     CompactionRequestedPayload,
+    SUSPEND_REASON_WAITING_HUMAN,
     ContextContentRecordedPayload,
     EventEnvelope,
     MessagesAppendedPayload,
@@ -923,7 +924,7 @@ def handle_yield_for_human(
     something else — a failed multi-turn turn parked for the human — is legible
     in the ledger instead of reading as an ordinary pause.
     """
-    suspend_reason = decision.suspend_reason or "waiting_human"
+    suspend_reason = decision.suspend_reason or SUSPEND_REASON_WAITING_HUMAN
     anchor = decision.request_anchor
     if anchor is not None:
         env = ctx.emit(
@@ -976,7 +977,7 @@ def _yield_for_approval(
         ctx,
         task,
         wake_on=HumanResponseReceived(handle=handle),
-        reason="waiting_human",
+        reason=SUSPEND_REASON_WAITING_HUMAN,
         lease_id=lease_id,
         trace_id=trace_id,
     )

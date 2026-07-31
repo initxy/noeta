@@ -150,8 +150,7 @@ rather than parsing the handle.
 An async transport should not hold a request thread for a whole turn. `seed_*`
 performs every durable, validated step on the request thread — so a typed
 rejection (`ModelSelectorError`, `NotResumableError`) still surfaces as a
-synchronous 4xx — and returns a `SeededTurn` you hand to `drive_seeded` on a
-background thread.
+synchronous 4xx — and returns a `SeededTurn` you then drive.
 
 | Method | Signature |
 | --- | --- |
@@ -160,12 +159,20 @@ background thread.
 | `seed_approve` / `seed_deny` | same as `approve` / `deny` |
 | `seed_answer` | same as `answer` |
 | `seed_deliver_event` | same as `deliver_event` |
-| `drive_seeded` | `(seeded)` — run the seeded turn to its next boundary |
+| `drive_seeded` | `(seeded) -> DriveOutcome` — run the seeded turn to its next boundary **on this thread** |
+| `dispatch_seeded` | `(seeded) -> None` — hand it to the resident worker pool and return at once |
+
+Pick by who should block. `drive_seeded` runs the turn on the calling thread,
+which suits a background thread you own. `dispatch_seeded` yields the seed's
+lease back to the ready queue for a [resident worker](#resident-worker-pool) to
+pick up and returns immediately — the shape an HTTP handler wants, since the
+durable seed already made the ack crash-safe. Progress rides the committed
+event stream either way.
 
 ## Resident worker pool
 
-With workers running, the background-drive path yields the seed's lease back to
-the ready queue instead of spawning a one-off thread, so conversations advance
+With workers running, `dispatch_seeded` yields the seed's lease back to the
+ready queue instead of spawning a one-off thread, so conversations advance
 concurrently. Wake delivery stays durable, single-worker and exactly-once: one
 lease holds a task until its next suspend or terminal.
 

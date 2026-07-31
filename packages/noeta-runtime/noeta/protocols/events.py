@@ -505,17 +505,72 @@ class SubtaskCompletedPayload:
     result: SubtaskResult
 
 
+#: ``TaskSuspended.reason`` — the ordinary rest: the Task waits for the next
+#: thing the human supplies. It does NOT say what is being waited for: the next
+#: goal and a pending approval / question both carry this tag, and only
+#: ``wake_on.handle`` (``NEXT_GOAL_WAKE_HANDLE`` vs ``approval-{call_id}`` /
+#: ``question-{id}``) separates them.
+SUSPEND_REASON_WAITING_HUMAN = "waiting_human"
+
+#: ``TaskSuspended.reason`` for a rest reached by an explicit ``interrupt``.
+#: Bare, with no detail suffix — the caller's own ``reason`` rides the
+#: ``TurnInterrupted`` marker, not this tag.
+SUSPEND_REASON_INTERRUPTED = "interrupted"
+
+#: ``TaskSuspended.reason`` *kind* for a turn that failed and was parked for
+#: the human instead of terminating the conversation. The recorded tag carries
+#: the policy's own reason as a detail suffix —
+#: ``f"{SUSPEND_REASON_TURN_FAILED}: {policy_reason}"`` — which
+#: :func:`parse_suspend_reason` splits back apart, so a host compares ``kind``
+#: with ``==`` and shows ``detail``, never substring-matching the raw tag.
+SUSPEND_REASON_TURN_FAILED = "turn_failed"
+
+
+@dataclass(frozen=True, slots=True)
+class SuspendReason:
+    """A ``TaskSuspended.reason`` tag split into its two halves.
+
+    ``kind`` is the stable vocabulary a host branches on — compare with ``==``
+    against the ``SUSPEND_REASON_*`` constants. It stays a string rather than
+    an enum because the vocabulary is open: a new producer may add a tag
+    without a protocol bump. ``detail`` is the free-text suffix a producer
+    attached after ``": "`` (today only ``turn_failed`` carries one — the
+    policy's own failure reason); ``None`` for a bare tag.
+
+    The *recorded* tag on the ledger stays the single string — this is the
+    parsed view, not a new persisted shape.
+    """
+
+    kind: str
+    detail: Optional[str]
+
+
+def parse_suspend_reason(reason: str) -> SuspendReason:
+    """Split a recorded ``TaskSuspended.reason`` tag into kind and detail.
+
+    The one definition of the ``f"{kind}: {detail}"`` convention: producers
+    join with ``": "``, this splits on the first ``": "``. Defined next to the
+    constants so the two halves of the convention cannot drift apart.
+    """
+    kind, sep, detail = reason.partition(": ")
+    return SuspendReason(kind=kind, detail=detail if sep else None)
+
+
 @dataclass(frozen=True, slots=True)
 class TaskSuspendedPayload:
     """Engine pauses the Task and releases the lease.
 
     ``reason`` is a short tag (``waiting_subtask`` / ``waiting_subtask_group`` /
-    ``waiting_human`` / ``waiting_timer`` / ``waiting_external``, plus
-    ``turn_failed: <policy reason>`` when a multi-turn wrapper parks a failed
-    turn for the human instead of terminating); ``wake_on`` is the typed
-    WakeCondition that the Dispatcher matches against incoming wake
-    events. Nothing branches on the tag — it is a legibility field, so a new
-    producer may add one without a protocol bump.
+    ``waiting_human`` / ``waiting_timer`` / ``waiting_external`` /
+    ``interrupted``, plus ``turn_failed: <policy reason>`` when a multi-turn
+    wrapper parks a failed turn for the human instead of terminating);
+    ``wake_on`` is the typed WakeCondition that the Dispatcher matches against
+    incoming wake events. Nothing branches on the tag — it is a legibility
+    field, so a new producer may add one without a protocol bump. The three
+    tags a host renders differently are named above as
+    ``SUSPEND_REASON_WAITING_HUMAN`` / ``_INTERRUPTED`` / ``_TURN_FAILED``;
+    :func:`parse_suspend_reason` splits the recorded string into its
+    ``(kind, detail)`` halves.
     """
 
     reason: str

@@ -71,9 +71,9 @@ dict lookup cannot know it yet. Two strategies:
   first turn's recall runs — so the resolver can read the workspace off the
   ledger and map workspace → tenant.
 - **Seed, register, then drive.** If your backend drives turns itself (the
-  `seed_start` → `drive_seeded` split), register the mapping between the two
-  calls: the seed lease is held, so no worker can resolve the engine before the
-  mapping exists. Seed-time recall and the seed-time resident index resolve
+  `seed_start` → `drive_seeded` / `dispatch_seeded` split), register the mapping
+  between the two calls: the seed lease is held, so no worker can resolve the
+  engine before the mapping exists. Seed-time recall and the seed-time resident index resolve
   through the host-level chain, so point the fallback (`global_memory_dir`) at
   an empty directory.
 

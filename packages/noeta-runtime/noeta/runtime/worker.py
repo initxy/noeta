@@ -23,6 +23,7 @@ from noeta.core.engine import abandon_step_attempt, suspend_on_human_handle
 from noeta.core.fold import BoundedEventLog, fold
 from noeta.protocols.decisions import TaskStatePatch
 from noeta.protocols.errors import InvalidLease, TaskCancellationRequested
+from noeta.protocols.events import SUSPEND_REASON_INTERRUPTED
 from noeta.protocols.messages import (
     Block,
     MessageOrigin,
@@ -847,7 +848,9 @@ def _settle_stopped_turn(
 
 
 #: ``TaskSuspended.reason`` for a rest reached by an explicit ``interrupt``.
-STOP_INTERRUPTED_SUSPEND_REASON = "interrupted"
+#: Bound to the protocol's constant rather than re-spelled, so the producer and
+#: the tag a host compares against cannot drift apart.
+STOP_INTERRUPTED_SUSPEND_REASON = SUSPEND_REASON_INTERRUPTED
 
 #: Where a turn begins — the scan-back boundary for "did a stop land in THIS
 #: turn". Its own copy rather than a reach into ``attempt``'s private tuple:

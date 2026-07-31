@@ -77,6 +77,28 @@ HOST_CONTRACT: dict[str, tuple[str, ...]] = {
         "Options",
         "AgentDefinition",
         "compile_options",
+        # What the verbs hand back / take. A host writes functions over these,
+        # so without them it cannot annotate its own signatures.
+        "DriveOutcome",
+        "SeededTurn",
+        "DeleteTaskResult",
+        "TaskStatus",
+        "DEFAULT_MODEL_ALLOWLIST",
+        # The read surface's types: the envelope a subscriber and a replay
+        # both see, the task_streams row, and the suspend payload a host reads
+        # the waiting_human / interrupted / turn_failed tag off.
+        "EventEnvelope",
+        "TaskStreamSummary",
+        "TaskSuspendedPayload",
+        "ViewItem",
+        # The parsed (kind, detail) view of a TaskSuspended.reason tag, and
+        # the three kinds a host renders differently — `status="suspended"`
+        # alone cannot tell them apart.
+        "SuspendReason",
+        "parse_suspend_reason",
+        "SUSPEND_REASON_WAITING_HUMAN",
+        "SUSPEND_REASON_INTERRUPTED",
+        "SUSPEND_REASON_TURN_FAILED",
         # Tool + MCP authoring
         "tool",
         "create_sdk_mcp_server",
@@ -109,11 +131,17 @@ HOST_CONTRACT: dict[str, tuple[str, ...]] = {
         "is_trusted",
         # Workspace helpers a path guard needs
         "path_within",
+        # Typed errors a host maps onto HTTP statuses. `CodedError` is the
+        # structural base boundary code matches on; `NotForkableError` is
+        # pinned because `fork` raises it and nothing else names it.
+        "CodedError",
+        "NotForkableError",
     ),
     # Official factory content a host may start from.
     "noeta.presets": ("main_options",),
-    # Test doubles a host's own suite runs on.
-    "noeta.sdk.testing": ("FakeLLMProvider",),
+    # Test doubles a host's own suite runs on — the batch provider and the
+    # streaming twin a token-streaming wire needs to exercise StreamDelta.
+    "noeta.sdk.testing": ("FakeLLMProvider", "FakeStreamingLLMProvider"),
 }
 
 
