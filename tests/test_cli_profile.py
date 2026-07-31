@@ -261,8 +261,14 @@ def test_open_storage_stack_file_path_returns_sqlite_adapters(
         open_storage_stack,
     )
 
+    from noeta.storage.cached import CachedContentStore
+
     db = str(tmp_path / "store.sqlite")
     event_log, content_store, dispatcher = open_storage_stack(db)
     assert isinstance(event_log, SqliteEventLog)
-    assert isinstance(content_store, SqliteContentStore)
     assert isinstance(dispatcher, SqliteDispatcher)
+    # Durable stacks hand back the sqlite adapter behind a read cache — the
+    # same immutable hash is re-read across composes and folds, and this is
+    # the one place every caller gets the stack from.
+    assert isinstance(content_store, CachedContentStore)
+    assert isinstance(content_store._inner, SqliteContentStore)

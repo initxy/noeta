@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 
+from noeta.core.prefetch import prefetched
 from noeta.core.snapshot import deserialize_task_state, rehydrate_task
 from noeta.protocols.canonical import from_canonical_bytes
 from noeta.protocols.content_store import ContentStore
@@ -23,6 +24,7 @@ from noeta.protocols.events import EventEnvelope, goal_from_payload
 from noeta.protocols.messages import Message
 from noeta.protocols.task import Task, TaskState
 from noeta.protocols.tool_args import resolve_tool_call_arguments
+from noeta.protocols.values import ContentRef
 
 _log = logging.getLogger(__name__)
 
@@ -62,8 +64,11 @@ def fold(
         task = _bootstrap_from_genesis(events, task_id, content_store)
         tail = events[1:] if events else []
 
+    # One batch read for the whole tail (see ``_prefetch_refs``); the handlers
+    # below still deref through a plain ContentStore and are unaware of it.
+    store = prefetched(content_store, _prefetch_refs(tail))
     for env in tail:
-        _apply_event(task, env, content_store)
+        _apply_event(task, env, store)
     return task
 
 
@@ -127,6 +132,51 @@ def _snapshot_is_legacy_for_issue18(state_dict: dict[str, object]) -> bool:
     if not isinstance(governance, dict):
         return False
     return "spawned_subtasks" not in governance
+
+
+#: Event types whose handler re-bases the Task from a recorded ``state_ref``
+#: (both route to ``_on_task_rewound``). ``TaskSnapshot`` is deliberately NOT
+#: here: its handler is a no-op, so its body is never dereferenced on this
+#: path — the accelerated path reads it once in ``fold`` itself, before the
+#: tail is even known. Pinned against ``_HANDLERS`` by the prefetch tests.
+_REBASE_EVENT_TYPES = ("TaskRewound", "StepAttemptAbandoned")
+
+
+def _prefetch_refs(events: list[EventEnvelope]) -> list[ContentRef]:
+    """Every ContentRef the tail handlers will dereference, in one scan.
+
+    fold can batch its reads because nothing it derefs is discovered by
+    reading: all four refs sit in event payloads that are already in memory, so
+    the whole tail's bodies can be fetched before the first handler runs. The
+    four are ``MessagesAppended.messages_ref``, the re-base ``state_ref``,
+    ``AssistantThinkingRecorded.thinking_ref`` and — only when the call was
+    offloaded — ``ToolCallApprovalRequested.arguments_ref``.
+
+    Everything else is deliberately absent. fold never reads
+    ``ToolResultRecorded.output_ref``, tool artifacts, or
+    ``TaskCompleted.answer_ref`` (those handlers are no-ops or read the inline
+    field), and those are the *largest* bodies in the store — prefetching them
+    would trade N small reads for one transfer of megabytes nothing consumes.
+    A ref set that mirrors the event vocabulary rather than the handlers is the
+    failure mode to avoid here.
+
+    Missing a type costs one round-trip on the ``PrefetchedContentStore``
+    fall-through, never correctness.
+    """
+    refs: list[ContentRef] = []
+    for env in events:
+        event_type = env.type
+        if event_type == "MessagesAppended":
+            refs.append(env.payload.messages_ref)
+        elif event_type in _REBASE_EVENT_TYPES:
+            refs.append(env.payload.state_ref)
+        elif event_type == "AssistantThinkingRecorded":
+            refs.append(env.payload.thinking_ref)
+        elif event_type == "ToolCallApprovalRequested":
+            arguments_ref = env.payload.arguments_ref
+            if arguments_ref is not None:
+                refs.append(arguments_ref)
+    return refs
 
 
 def _bootstrap_from_genesis(

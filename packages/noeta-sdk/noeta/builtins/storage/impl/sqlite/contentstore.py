@@ -22,7 +22,7 @@ import hashlib
 import threading
 from pathlib import Path
 from types import TracebackType
-from typing import Optional, Union
+from typing import Iterable, Optional, Union
 
 from noeta.protocols.errors import ContentNotFound
 from noeta.protocols.values import ContentRef
@@ -31,6 +31,12 @@ from noeta.builtins.storage.impl.sqlite.migrations import apply_migrations
 
 
 __all__ = ["SqliteContentStore"]
+
+
+#: Host parameters per ``get_many`` statement. Kept below the 999 floor of
+#: pre-3.32 sqlite builds so the batch read works on every interpreter's
+#: bundled library, not just a recent one.
+_IN_CHUNK = 900
 
 
 class SqliteContentStore:
@@ -78,6 +84,33 @@ class SqliteContentStore:
         if row is None:
             raise ContentNotFound(ref.hash)
         return bytes(row["body"])
+
+    def get_many(self, refs: Iterable[ContentRef]) -> dict[str, bytes]:
+        """One ``WHERE hash IN (...)`` per chunk instead of one SELECT per ref.
+
+        Chunked at :data:`_IN_CHUNK` because sqlite caps host parameters per
+        statement (``SQLITE_MAX_VARIABLE_NUMBER``: 999 on builds predating
+        3.32, 32766 after). A fold tail or a message projection stays well
+        under one chunk in practice; the loop is the correctness floor for the
+        long-history case, not the expected path.
+
+        Missing hashes are omitted per the Protocol contract.
+        """
+        hashes = list(dict.fromkeys(ref.hash for ref in refs))
+        if not hashes:
+            return {}
+        out: dict[str, bytes] = {}
+        with self._lock:
+            for start in range(0, len(hashes), _IN_CHUNK):
+                chunk = hashes[start : start + _IN_CHUNK]
+                placeholders = ",".join("?" * len(chunk))
+                rows = self._conn.execute(
+                    f"SELECT hash, body FROM content WHERE hash IN ({placeholders})",
+                    chunk,
+                ).fetchall()
+                for row in rows:
+                    out[str(row["hash"])] = bytes(row["body"])
+        return out
 
     # -- lifecycle (adapter-only, not on Protocol) ----------------------
 

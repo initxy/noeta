@@ -142,7 +142,7 @@ One record in the EventLog. The envelope holds `seq / type / actor / trace_id / 
 _Avoid_: Message, Record
 
 **ContentStore**:
-Content-addressed, immutable large-object storage. **The source of truth for large objects.**
+Content-addressed, immutable large-object storage. **The source of truth for large objects.** Reads come in two shapes: `get` (one ref, raises `ContentNotFound`) and `get_many` (a batch, missing hashes omitted so one reclaimed body cannot abort the rest). Both are required Protocol members — every traversal that walks an event stream knows its refs from the payloads before it reads any body, so the batch is always available to it. Because content is immutable, a read cache needs no invalidation rule: `CachedContentStore` wraps the durable backends at stack build.
 _Avoid_: BLOB Store, Asset Store, Object Store (ambiguous)
 
 **ContentRef**:

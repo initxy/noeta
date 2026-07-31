@@ -10,7 +10,9 @@ other caller uses instead of growing a second copy of the dispatch.
 Nothing here statically imports a backend. The concrete adapters live in the
 ``storage`` built-in (``noeta.builtins.storage.impl``) and are reached through
 :func:`importlib.import_module`, the sanctioned microkernel doorway — so a host
-that chose sqlite never pays for ``psycopg``.
+that chose sqlite never pays for ``psycopg``. (``noeta.storage.cached`` is not
+a backend — it is the Protocol-level read cache this module wraps the durable
+ones in, and it imports nothing but the Protocols.)
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from typing import Any, Optional
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
 from noeta.protocols.event_log import EventLogFull
+from noeta.storage.cached import CachedContentStore
 
 
 __all__ = [
@@ -57,6 +60,14 @@ def build_storage_stack(
     invariant — the event log takes the dispatcher as ``lease_validator``
     — is wired by the factory itself. Unknown names raise ``ValueError``
     naming the known set.
+
+    A durable backend's ContentStore comes back wrapped in
+    :class:`~noeta.storage.cached.CachedContentStore`. Every read path above
+    this line — compose-time resident deref, fold, the message projection —
+    re-reads the same immutable hashes many times over a session, and this is
+    the one place all three get the stack from, so the wrap belongs here rather
+    than at each of them. ``memory`` is left bare: it is already an in-process
+    dict, and caching it would hold every body twice.
     """
     module_name = _BACKENDS.get(backend)
     if module_name is None:
@@ -64,9 +75,16 @@ def build_storage_stack(
         raise ValueError(
             f"unknown storage backend {backend!r}; expected one of: {known}"
         )
-    stack: tuple[EventLogFull, ContentStore, Dispatcher] = importlib.import_module(
+    event_log, content_store, dispatcher = importlib.import_module(
         module_name
     ).build_stack(**config)
+    if backend != "memory":
+        content_store = CachedContentStore(content_store)
+    stack: tuple[EventLogFull, ContentStore, Dispatcher] = (
+        event_log,
+        content_store,
+        dispatcher,
+    )
     return stack
 
 

@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import threading
 from types import TracebackType
-from typing import Optional
+from typing import Iterable, Optional
 
 from noeta.protocols.errors import ContentNotFound
 from noeta.protocols.values import ContentRef
@@ -72,6 +72,31 @@ class PostgresContentStore:
         if row is None:
             raise ContentNotFound(ref.hash)
         return bytes(row["body"])
+
+    def get_many(self, refs: Iterable[ContentRef]) -> dict[str, bytes]:
+        """One ``hash = ANY(...)`` round-trip instead of one SELECT per ref.
+
+        This is the backend the batch read exists for: every ``get`` here is a
+        network round-trip *and* it serialises on the adapter's single
+        connection lock, so a fold tail or a message projection that used to
+        hold the lock N times now holds it once.
+
+        ``= ANY(array)`` rather than ``IN (...)`` deliberately — the hash list
+        binds as one array parameter, so there is no host-parameter ceiling to
+        chunk around and the statement text is identical for every batch size
+        (one prepared-statement shape for the server to reuse).
+
+        Missing hashes are omitted per the Protocol contract.
+        """
+        hashes = list(dict.fromkeys(ref.hash for ref in refs))
+        if not hashes:
+            return {}
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT hash, body FROM content WHERE hash = ANY(%s)",
+                (hashes,),
+            ).fetchall()
+        return {str(row["hash"]): bytes(row["body"]) for row in rows}
 
     # -- lifecycle (adapter-only, not on Protocol) ----------------------
 

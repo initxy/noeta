@@ -431,6 +431,17 @@ class _StubContentStore:
             raise ContentNotFound(ref.hash)
         return self._blobs[ref.hash]
 
+    def get_many(self, refs):
+        # Required Protocol member: fold batches the tail's bodies into one
+        # read. Missing hashes are omitted rather than raised — fold's
+        # prefetch view re-``get``s anything absent here and gets the
+        # ``ContentNotFound`` from the branch above.
+        return {
+            ref.hash: self._blobs[ref.hash]
+            for ref in refs
+            if ref.hash in self._blobs
+        }
+
 
 def test_fold_empty_stream_returns_bare_task() -> None:
     log = _StubEventLog([])
