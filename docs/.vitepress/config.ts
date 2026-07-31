@@ -119,6 +119,8 @@ export default defineConfig({
                 { text: 'Connect MCP', link: '/how-to/connect-mcp' },
                 { text: 'Write a plugin', link: '/how-to/write-a-plugin' },
                 { text: 'Deploy a worker', link: '/how-to/deploy-worker' },
+                { text: 'Use a sandbox', link: '/how-to/use-sandbox' },
+                { text: 'Deploy with Docker', link: '/how-to/docker-deployment' },
                 { text: 'Multi-tenant memory', link: '/how-to/multi-tenant-memory' },
                 { text: 'Swap providers', link: '/how-to/swap-providers' },
               ],

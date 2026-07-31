@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Task Lifecycle",
+    "subtitle": "pending → running → suspended → terminal, with durable wake conditions",
+    "output": "task-lifecycle.html",
+    "viewBox": [980, 700]
+  },
+  "lanes": [
+    { "id": "main", "label": "Lifecycle" },
+    { "id": "waiting", "label": "Suspend reasons" },
+    { "id": "terminal", "label": "Terminal" }
+  ],
+  "states": [
+    { "id": "pending", "type": "start", "label": "Pending", "sublabel": "enqueued", "lane": "main", "col": 0, "step": "01" },
+    { "id": "running", "type": "active", "label": "Running", "sublabel": "compose → decide → dispatch", "lane": "main", "col": 1, "step": "02" },
+    { "id": "suspended", "type": "waiting", "label": "Suspended", "sublabel": "parked on wake condition", "lane": "main", "col": 2, "step": "03" },
+
+    { "id": "wake-subtask", "type": "waiting", "label": "Subtask done", "sublabel": "SubtaskCompleted", "lane": "waiting", "col": 0 },
+    { "id": "wake-human", "type": "waiting", "label": "Human reply", "sublabel": "HumanResponseReceived", "lane": "waiting", "col": 1 },
+    { "id": "wake-timer", "type": "waiting", "label": "Timer fired", "sublabel": "TimerFired", "lane": "waiting", "col": 2 },
+    { "id": "wake-external", "type": "waiting", "label": "External event", "sublabel": "ExternalEvent", "lane": "waiting", "col": 2, "yOffset": 80 },
+
+    { "id": "completed", "type": "success", "label": "Completed", "sublabel": "finish decision", "lane": "terminal", "col": 0 },
+    { "id": "failed", "type": "failure", "label": "Failed", "sublabel": "fail decision", "lane": "terminal", "col": 1 },
+    { "id": "cancelled", "type": "failure", "label": "Cancelled", "sublabel": "cancel / close", "lane": "terminal", "col": 2 }
+  ],
+  "transitions": [
+    { "from": "pending", "to": "running", "variant": "emphasis" },
+    { "from": "running", "to": "suspended", "label": "yield / wait", "variant": "emphasis", "labelDy": -25 },
+    { "from": "suspended", "to": "running", "label": "wake event", "variant": "emphasis", "fromSide": "top", "toSide": "top", "labelDy": -25 },
+    { "from": "running", "to": "completed", "label": "finish", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "labelDy": 41 },
+    { "from": "running", "to": "failed", "label": "fail", "variant": "security", "fromSide": "bottom", "toSide": "top", "labelDy": 41 },
+    { "from": "suspended", "to": "cancelled", "label": "cancel", "variant": "security", "fromSide": "bottom", "toSide": "top", "labelDy": 41 },
+    { "from": "wake-subtask", "to": "suspended", "variant": "dashed", "fromSide": "bottom", "toSide": "bottom" },
+    { "from": "wake-human", "to": "suspended", "variant": "dashed", "fromSide": "bottom", "toSide": "bottom" },
+    { "from": "wake-timer", "to": "suspended", "variant": "dashed", "fromSide": "bottom", "toSide": "bottom" },
+    { "from": "wake-external", "to": "suspended", "variant": "dashed", "fromSide": "bottom", "toSide": "bottom" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "Durable exactly-once wake", "items": ["Dispatcher matches wake event to suspended task", "Wake survives the lease — cleared only on consuming release", "Crash between wake and resume re-delivers, never loses"] },
+    { "dot": "cyan", "title": "One suspend state, many reasons", "items": ["Subtask, human, timer, external all share suspended", "Resume path is identical whatever the reason", "Waiting costs nothing while the task sleeps"] }
+  ]
+}

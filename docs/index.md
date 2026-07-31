@@ -26,6 +26,9 @@ features:
   - title: Long-horizon by design
     details: A task suspends to wait on a person, a timer, or a subtask, and wakes exactly once when the condition fires — the match is durable, so a crash between wake and resume re-delivers rather than loses it.
 
+  - title: Server-ready
+    details: Run a resident worker pool with `Client.start_workers(n)`, or scale to multiple hosts on Postgres. The Engine is stateless and writes are lease-fenced, so any worker can fold and advance any task.
+
   - title: Provider-neutral
     details: Anthropic, any OpenAI chat-completions gateway, and the OpenAI Responses API sit behind one internal protocol that never names a vendor. Swapping endpoints is wiring, not a rewrite — the kernel is barred from importing a provider package.
 

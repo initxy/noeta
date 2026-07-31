@@ -189,3 +189,23 @@ def test_host_config_excluded_from_agent_identity(tmp_path: Path) -> None:
     finally:
         plain.shutdown()
         wired.shutdown()
+
+
+def test_write_mode_defaults_to_dry_run() -> None:
+    # The safe default: no config means no real writes.
+    assert HostConfig().write_mode == "dry_run"
+
+
+def test_write_mode_accepts_the_two_legal_values() -> None:
+    assert HostConfig(write_mode="dry_run").write_mode == "dry_run"
+    assert HostConfig(write_mode="apply").write_mode == "apply"
+
+
+def test_invalid_write_mode_raises_at_construction() -> None:
+    # A typo used to fall back to dry-run silently — a user who meant real
+    # writes got none, with no error. It now fails loudly, like Options
+    # validates permission_mode / thinking / effort.
+    with pytest.raises(ValueError, match="write_mode"):
+        HostConfig(write_mode="Apply")
+    with pytest.raises(ValueError, match="write_mode"):
+        HostConfig(write_mode="apply ")

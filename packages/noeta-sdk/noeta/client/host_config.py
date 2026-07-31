@@ -42,12 +42,18 @@ from noeta.runtime.mcp import HttpPostFn, McpAnyServerSpec
 AppPreviewGateway = Any
 
 
-__all__ = ["HostConfig", "SandboxExecEnvConfig"]
+__all__ = ["HostConfig", "SandboxExecEnvConfig", "WRITE_MODES"]
+
+
+#: Legal values for :attr:`HostConfig.write_mode`. ``"dry_run"`` stages a
+#: proposed diff without touching disk (the safe default); ``"apply"`` performs
+#: real writes. Validated in :meth:`HostConfig.__post_init__`.
+WRITE_MODES = frozenset({"dry_run", "apply"})
 
 
 @dataclass(frozen=True)
 class SandboxExecEnvConfig:
-    """Config for ATTACHING the fs / shell tools to one AIO Sandbox container.
+    """Config for ATTACHING the fs / shell tools to one sandbox container.
 
     A pure, serialisable config value — it carries only *addressing*, never a
     live client or a secret. The host turns it into a live ``AioSandboxExecEnv``
@@ -163,13 +169,13 @@ class HostConfig:
     #: Per-request provider header factory: ``(ctx) -> {header: value}`` called
     #: once per LLM round-trip, merged over the provider client's static
     #: headers. The product wires a stable per-task ``root_task_id`` here so a
-    #: gateway that pins prompt-cache to a single backend account (ModelHub's
-    #: ``extra.root_task_id`` account-stickiness) keeps a long task on one
-    #: account and actually reuses its KV cache. ``None`` ⇒ no per-request
+    #: gateway that pins prompt-cache to a single backend account (via a
+    #: per-request account-stickiness field the gateway keys on) keeps a long
+    #: task on one account and actually reuses its KV cache. ``None`` ⇒ no per-request
     #: headers — a host runtime injection, never agent identity.
     provider_headers: Optional[Callable[[StepContext], Mapping[str, str]]] = None
 
-    #: **Attach path.** ONE pre-existing AIO Sandbox container named by
+    #: **Attach path.** ONE pre-existing sandbox container named by
     #: ``base_url``; every session on the host attaches it, and the Client wraps
     #: it into an attach ``SandboxProvider``. ``None`` ⇒ the local host
     #: (``LocalExecEnv``). Routing fs / shell side effects into a container
@@ -278,6 +284,19 @@ class HostConfig:
     #: session start, this one governs subdirectory files found while reading.
     instructions_discovery: bool = False
     write_mode: str = "dry_run"
+
+    def __post_init__(self) -> None:
+        # ``write_mode`` is consumed as ``FsWriteMode.APPLY if == "apply" else
+        # DRY_RUN``, so a typo (``"Apply"`` / ``"apply "`` / ``"applied"``) would
+        # silently fall back to dry-run and a user who meant real writes would get
+        # none, with no error. Validate at construction the way ``Options``
+        # validates ``permission_mode`` / ``thinking`` / ``effort``.
+        if self.write_mode not in WRITE_MODES:
+            legal = ", ".join(sorted(WRITE_MODES))
+            raise ValueError(
+                f"HostConfig.write_mode must be one of {{{legal}}}; "
+                f"got {self.write_mode!r}"
+            )
 
     def storage_triple(
         self,

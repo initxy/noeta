@@ -12,7 +12,7 @@ Noeta 以两个库的形式发布：一个薄客户端位于一个纯引擎之�
 | `noeta-sdk` | `packages/noeta-sdk` | 唯一的公共 Surface —— `query` / `Client` / `Options` / `@tool`、重新导出的扩展接口，以及各预设 agent —— 外加 `builtins`，即每个官方能力真正落脚的目录。 |
 
 <p align="center">
-  <img src="../../assets/architecture.svg" alt="Noeta 架构 —— 两个发行包与模块关系" width="820">
+  <img src="../../assets/diagrams/architecture.svg" alt="Noeta 架构 —— noeta-sdk 位于 noeta-runtime 之上，builtins 作为插件" width="820">
   <br>
   <em>host 在进程内驱动 SDK；SDK 转发进 runtime 的引擎、物料与存储。箭头为调用路径。</em>
 </p>

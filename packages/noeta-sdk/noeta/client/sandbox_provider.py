@@ -63,22 +63,40 @@ class SandboxAuth(Protocol):
     def connect_headers(self) -> dict[str, str]: ...
 
 
+#: The default HTTP header carrying the sandbox container key. Overridable per
+#: :class:`StaticApiKeyAuth` instance, since the header name is a property of
+#: whichever container gateway the host talks to, not of this generic strategy.
+DEFAULT_SANDBOX_API_KEY_HEADER = "X-AIO-API-Key"
+
+
 class StaticApiKeyAuth:
     """Auth strategy backed by a static ``SANDBOX_API_KEY`` from the environment.
 
     The key is read from ``env_name`` **at connect time** — never at construction,
     never held on a durable object — so the secret is fetched only on the wire. An
     unset env var yields no header (an unauthenticated container).
+
+    ``header_name`` is the HTTP header the key rides in, defaulting to
+    :data:`DEFAULT_SANDBOX_API_KEY_HEADER`. It is a constructor argument rather
+    than a hardcoded constant because the header is a property of the target
+    container gateway, not of this generic strategy — a different gateway can
+    supply its own (e.g. ``"Authorization"``) with no seam change.
     """
 
-    __slots__ = ("_env_name",)
+    __slots__ = ("_env_name", "_header_name")
 
-    def __init__(self, env_name: str = "SANDBOX_API_KEY") -> None:
+    def __init__(
+        self,
+        env_name: str = "SANDBOX_API_KEY",
+        *,
+        header_name: str = DEFAULT_SANDBOX_API_KEY_HEADER,
+    ) -> None:
         self._env_name = env_name
+        self._header_name = header_name
 
     def connect_headers(self) -> dict[str, str]:
         key = os.environ.get(self._env_name)
-        return {"X-AIO-API-Key": key} if key else {}
+        return {self._header_name: key} if key else {}
 
 
 # --------------------------------------------------------------------------- #
