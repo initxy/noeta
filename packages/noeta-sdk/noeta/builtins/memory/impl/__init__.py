@@ -22,6 +22,11 @@ from typing import Optional, cast
 
 from noeta.builtins.memory.impl import store as _store_mod
 from noeta.builtins.memory.impl.index import (
+    MEMORY_DRIFT_POLICY,
+    MEMORY_INDEX_NAME,
+    MEMORY_INDEX_VERSION,
+    MEMORY_KIND,
+    MemoryEntries,
     memory_content_kind,
     render_memory_index_text,
 )
@@ -39,13 +44,6 @@ from noeta.builtins.memory.impl.store import (
     build_memory_tools,
     load_memory_store,
 )
-from noeta.context.memory import (
-    MEMORY_DRIFT_POLICY,
-    MEMORY_INDEX_NAME,
-    MEMORY_INDEX_VERSION,
-    MEMORY_KIND,
-    MemoryEntries,
-)
 from noeta.execution.session_pack import (
     EMPTY_CONTRIBUTION,
     ContentKindContribution,
@@ -57,7 +55,12 @@ from noeta.protocols.tool import Tool
 
 
 __all__ = [
+    "MEMORY_DRIFT_POLICY",
+    "MEMORY_INDEX_NAME",
+    "MEMORY_INDEX_VERSION",
+    "MEMORY_KIND",
     "MemoryArchiveTool",
+    "MemoryEntries",
     "MemoryReadTool",
     "MemorySearchTool",
     "MemoryStore",

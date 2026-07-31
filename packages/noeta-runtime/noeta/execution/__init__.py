@@ -43,21 +43,6 @@ from noeta.execution.resolver import (
     GenericEngineResolver,
     agent_name_of,
 )
-from noeta.execution.environment import (
-    EnvironmentKit,
-)
-from noeta.execution.instructions import (
-    InstructionsKit,
-)
-# Microkernel phase 2a: the skill material (indexer / script tool / wiring)
-# moved into the ``skills`` built-in plugin (``noeta.builtins.skills.impl``);
-# this package re-exports only the kernel seams.
-from noeta.execution.skills import (
-    SkillsKit,
-    activate_skills,
-    build_skill_hashes,
-    skill_content_hash,
-)
 from noeta.execution.subtask_drain import (
     DrainHost,
     UnsupportedSubtaskSuspend,
@@ -65,16 +50,11 @@ from noeta.execution.subtask_drain import (
 )
 
 __all__ = [
-    "activate_skills",
     "agent_name_of",
     "AgentRegistryProtocol",
     "build_session_inputs",
-    "build_skill_hashes",
-    "SkillsKit",
     "COMPACTION_OFF",
     "CompactionConfig",
-    "EnvironmentKit",
-    "InstructionsKit",
     "DrainHost",
     "drive_pending_subtasks",
     "GenericEngineResolver",
@@ -89,6 +69,5 @@ __all__ = [
     "NEXT_GOAL_WAKE_HANDLE",
     "ResidentHost",
     "SessionInputs",
-    "skill_content_hash",
     "UnsupportedSubtaskSuspend",
 ]

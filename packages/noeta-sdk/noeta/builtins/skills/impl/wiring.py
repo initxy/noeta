@@ -1,12 +1,10 @@
 """Skill registry loading + session wiring — the ``skills`` built-in's body.
 
-Moved out of ``noeta.execution.skills`` (microkernel phase 2a): everything
-that CONSTRUCTS or WALKS registries / indexers / the script tool lives here;
-the kernel keeps only the typed seams (``SkillsKit``, the recording path
-``activate_skills``, the hash helpers) in ``noeta.execution.skills``.
-:func:`build_skills_kit` is the injection the kernel builder requires (its
-``skills_factory`` param), resolved by the SDK through
-``noeta.client.parts.default_skills_kit_factory()``.
+Everything that CONSTRUCTS or WALKS registries / indexers / the script tool
+lives here; the bundle types and helpers live in the sibling
+:mod:`~noeta.builtins.skills.impl.kit` (kernel final form: the kernel has no
+skills module). :func:`build_skills_session_pack` is this plugin's
+``session_pack`` contribution — the whole kit stays inside its closure.
 
 The function bodies are unchanged moves — the rendered skill bytes, the
 tier-merge precedence (built-in < global < workspace), and the script-wiring
@@ -31,7 +29,7 @@ from noeta.execution.session_pack import (
     PackContribution,
     SessionBuildContext,
 )
-from noeta.execution.skills import (
+from noeta.builtins.skills.impl.kit import (
     SKILL_DRIFT_POLICY,
     SKILL_KIND,
     SkillsKit,
@@ -343,7 +341,7 @@ def build_skill_composer(
 
     The renderer reads from ``task.state.active_skills`` on each
     ``compose`` call, so the activation in
-    :func:`noeta.execution.skills.activate_skills` is what flips a skill on
+    :func:`~noeta.builtins.skills.impl.kit.activate_skills` is what flips a skill on
     (PRD D10/D11).
 
     ③ (finding 1): ``tail_token_budget`` arms the composer's deterministic
@@ -391,7 +389,7 @@ def skill_content_kind(
 
     Skills are the channel's first resident: render rule =
     :func:`build_skill_renderer` (unchanged bytes), fingerprints =
-    :func:`noeta.execution.skills.build_skill_hashes` (``(version,
+    :func:`~noeta.builtins.skills.impl.kit.build_skill_hashes` (``(version,
     sha256(SKILL.md bytes))``), drift policy = ``pinned`` — a SKILL.md
     edit without a declared version bump changes the rendered prefix bytes,
     so the recorded fingerprint pins the content for resume. New kinds
@@ -423,7 +421,7 @@ def build_skills_kit(
     One call assembles everything the session build needs from the skill
     subsystem — registry, script wiring, content kind, resolved allowed-tools
     grants — so the kernel's tool pipeline consumes a finished
-    :class:`~noeta.execution.skills.SkillsKit` and imports no skills
+    :class:`~noeta.builtins.skills.impl.kit.SkillsKit` and imports no skills
     implementation. Each part is the unchanged pre-move construction, in the
     same relative order the builder ran them.
     """

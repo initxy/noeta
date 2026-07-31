@@ -294,7 +294,7 @@ class SkillHashesFn(Protocol):
     for skills the host knows, ``None`` for unknown skills — ``None``
     skips the ``SkillContentRecorded`` emission. Both strings are opaque
     to the kernel (the hash is
-    computed host-side, e.g. via ``noeta.execution.skills.skill_content_hash``),
+    computed host-side, e.g. via the skills built-in's ``skill_content_hash``),
     so noeta-runtime never imports noeta-sdk.
     """
 

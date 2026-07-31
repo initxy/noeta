@@ -212,7 +212,7 @@ def test_live_memory_write_tool(tmp_path: Path) -> None:
     assert out.status == "terminal"
     # Memory writes land in the
     # global memory dir (conftest pins it to a per-test tmp), not ws/.noeta/memories.
-    from noeta.execution.memory import DEFAULT_GLOBAL_MEMORY_DIR
+    from noeta.builtins.memory.impl.store import DEFAULT_GLOBAL_MEMORY_DIR
 
     written = Path(DEFAULT_GLOBAL_MEMORY_DIR) / "team-greeting.md"
     assert written.is_file(), "model never wrote the memory file"
@@ -235,7 +235,7 @@ def test_live_memory_recall_origin(tmp_path: Path) -> None:
     ws.mkdir()
     # Memory is pinned to the global directory (conftest pins it to a
     # per-test tmp), not the runner-era ``ws/.noeta/memories``.
-    from noeta.execution.memory import DEFAULT_GLOBAL_MEMORY_DIR
+    from noeta.builtins.memory.impl.store import DEFAULT_GLOBAL_MEMORY_DIR
 
     mem = Path(DEFAULT_GLOBAL_MEMORY_DIR)
     mem.mkdir(parents=True, exist_ok=True)

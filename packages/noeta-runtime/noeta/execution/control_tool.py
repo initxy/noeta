@@ -53,7 +53,7 @@ __all__ = [
 class AskAnswerCodec:
     """The ``ask_user_question`` answer codec the driver's ``answer`` path reads.
 
-    A kernel-side kit type (the ``EnvironmentKit`` / ``InstructionsKit`` pattern):
+    A kernel-side bundle type (spec §4.3: a typed field on the mount):
     the three answer-side functions live in the ``ask_user_question`` built-in
     (schema + translate + codec are collocated there), and the built-in fills
     this struct so the kernel driver can call them WITHOUT a static

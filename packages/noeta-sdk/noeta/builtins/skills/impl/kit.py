@@ -1,14 +1,12 @@
-"""Skill seams — the kernel's skills surface (microkernel phase 2a).
+"""Skill kit — the bundle types + fingerprint/activation helpers (impl).
 
-The skill *material* — the SKILL.md indexer, the three-tier merge, the
-``run_skill_script`` tool, the registry-consuming wiring — lives in the
-``skills`` built-in plugin (``noeta.builtins.skills.impl``, the noeta-sdk
-wheel). This module keeps only what the kernel itself owns:
+Kernel final form: moved here from ``noeta.execution.skills`` — the kernel
+consumes nothing from the skill subsystem anymore (the pack contributes its
+content kind, tools, control tool, and guard facts through the generic
+surfaces), so this whole module is plugin-internal:
 
-* :class:`SkillsKit` — the typed bundle the builder's ``skills_factory``
-  injection returns: everything one session build consumes from the skill
-  subsystem, with the registry carried as an **opaque handle** (the kernel
-  never walks it beyond the duck-typed ``names()`` / ``get()`` surface).
+* :class:`SkillsKit` — the typed bundle :func:`~.wiring.build_skills_kit`
+  returns; consumed only by the session pack in the same package.
 * :func:`activate_skills` — runner-driven, **pre-loop**, **durable**
   activation (B11 + B17). Emits a real ``TaskStatePatched`` event
   through ``Engine.apply_state_patch`` so resume folds the same active

@@ -30,7 +30,7 @@ from noeta.builtins.skills.impl import (
     build_skill_composer as build_coding_composer,
     load_workspace_skills,
 )
-from noeta.execution.skills import activate_skills
+from noeta.builtins.skills.impl import activate_skills
 from noeta.context.composer import ThreeSegmentComposer
 from noeta.builtins.skills.impl import SkillRegistry
 from noeta.core.engine import Engine

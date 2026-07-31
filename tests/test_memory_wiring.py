@@ -5,21 +5,20 @@ Switch surface follows the flag precedent (431bccd + f0f39c1 review round):
 * The ``"memory"`` activation is an identity flag (part of structural
   equality — membership in ``AgentSpec.plugins``); only ``main`` enables it in
   presets.
-* ``build_session_inputs(memory_enabled=…, memory_dir=…)`` is the single
-  construction point for live/replay: bytes match only when the switch matches.
-  On → memory_write/read tools join the tool table (fixed order
-  fs → local → memory → script → mcp → custom), memory kind joins the content
-  channel registry (after skill), and ``SessionInputs`` exposes the store and
-  the entries snapshot (record and compose share one snapshot, one source of
-  truth). Off (default) → unchanged, zero byte change.
-* The SDK seed path runs the D5/D6 set for a memory-enabled agent (the port
-  of the deleted noeta-agent runner's prepare() / ``_goal_prelude`` wiring):
-  ``driver.seed_start`` records the index as resident
+* ``build_session_inputs`` (memory flag + ``plugin_config["memory"]``) is the
+  single construction point for live/replay: bytes match only when the switch
+  matches. On → memory_write/read tools join the tool table (fixed order
+  fs → local → memory → script → mcp → custom) and the memory kind joins the
+  content channel registry (after skill); record and compose share one
+  entries snapshot, asserted through the generic ``content_hashes`` resolver.
+  Off (default) → unchanged, zero byte change.
+* The SDK seed path runs the D5/D6 set for a memory-enabled agent:
+  the memory pack's init hook records the index resident
   (``ContextContentRecorded`` kind=memory, policy=evolving) and the goal
-  enters through the recall seam (``append_user_message_with_recall``);
-  ``driver.send_goal`` routes a follow-up goal through ``RecallGoalPrelude``,
-  the same recall seam. The host seam (``SdkHost.memory_recall_context``)
-  returns ``None`` for a memory-off spec, keeping that stream byte-identical.
+  enters through the ``turn_intake`` recording seam; ``driver.send_goal``
+  routes a follow-up goal through ``IntakeGoalPrelude``, the same seam. The
+  host's ``intake_reminder_providers`` composes no recall provider for a
+  memory-off spec, keeping that stream byte-identical.
 """
 
 from __future__ import annotations
@@ -31,8 +30,8 @@ from tests._session_inputs import (
     fold_legacy_capability_kwargs,
 )
 from noeta.agent.spec import agent_activates
-from noeta.context.environment import ENVIRONMENT_KIND
-from noeta.context.memory import MEMORY_INDEX_NAME, MEMORY_KIND
+from noeta.builtins.workspace.impl import ENVIRONMENT_KIND
+from noeta.builtins.memory.impl import MEMORY_INDEX_NAME, MEMORY_KIND
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
 from noeta.runtime.governance import Budget
 from noeta.presets import official_specs

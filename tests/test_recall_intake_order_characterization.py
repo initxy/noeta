@@ -7,17 +7,18 @@ Track A) re-expresses the built-in memory auto-recall as a
 explicit: "Track-A seam ordering interacts with the existing attachment /
 ``goal_origin`` recording order — characterization test first (M3)."
 
-This module pins that order **before** the seam moves. Two seams carry it today
-(``noeta.execution.memory``):
+This module pins that order across the seam moves. Two seams carry it today:
 
-* :func:`append_user_message_with_recall` — the intake seam: retrieval runs
-  first (impure, reads the store now), then the **human turn** is recorded (with
-  the caller's ``origin``, e.g. ``system`` for an MCP-prompt-expanded goal), then
-  — only if there were hits — a single **recall follow-up** turn tagged
-  ``origin="memory"``. No hits ⇒ exactly the plain-append bytes.
-* :class:`RecallGoalPrelude` — the ``send_goal`` prelude wrapping that seam:
-  **attachments** seed first (each its own ``origin="system"`` turn), then the
-  goal-through-recall, then the ``activate_skills`` state patch last.
+* :func:`append_user_message_with_recall` (memory built-in) — the intake
+  seam: retrieval runs first (impure, reads the store now), then the **human
+  turn** is recorded (with the caller's ``origin``, e.g. ``system`` for an
+  MCP-prompt-expanded goal), then — only if there were hits — a single
+  **recall follow-up** turn tagged ``origin="memory"``. No hits ⇒ exactly the
+  plain-append bytes.
+* :class:`noeta.execution.reminders.IntakeGoalPrelude` — the ``send_goal``
+  prelude wrapping that seam: **attachments** seed first (each its own
+  ``origin="system"`` turn), then the goal through the provider tuple (the
+  host composes recall first), then the ``activate_skills`` state patch last.
 
 The characterization uses a recording stub ``engine`` that captures every
 ``append_user_message`` / ``apply_state_patch`` call in order (the seam is a

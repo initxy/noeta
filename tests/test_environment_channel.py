@@ -2,7 +2,7 @@
 
 Reuses the generic content-channel mechanism,
 adds kind="environment", policy=evolving, mirroring the instructions channel's
-structure (noeta/context/environment.py + noeta/execution/environment.py). Unlike
+structure (both live in the workspace built-in). Unlike
 instructions/memory it is ALWAYS registered + activated (a workspace always
 exists), and it lives in semi_stable — NOT the system prompt — so its absolute
 path never rotates the stable_prefix hash / busts prompt caching.
@@ -28,14 +28,12 @@ import pytest
 import noeta.builtins.workspace.impl.loaders as env_exec
 from noeta.context.composer import RenderedContent, ThreeSegmentComposer
 from noeta.context.content_channel import ContentChannelRegistry
-from noeta.context.environment import (
+from noeta.builtins.workspace.impl import (
     ENVIRONMENT_DRIFT_POLICY,
     ENVIRONMENT_KIND,
     ENVIRONMENT_NAME,
     ENVIRONMENT_VERSION,
     EnvironmentSnapshot,
-)
-from noeta.builtins.workspace.impl import (
     build_environment_renderer,
     environment_content_hash,
     environment_content_kind,
@@ -452,7 +450,7 @@ def test_server_seed_start_records_instructions_when_file_present(
 ) -> None:
     # With instructions enabled and an AGENTS.md present, the same server seed
     # path must also record the instructions channel (parity with prepare()).
-    from noeta.context.instructions import INSTRUCTIONS_KIND
+    from noeta.builtins.workspace.impl import INSTRUCTIONS_KIND
     from noeta.execution.driver import InteractionDriver
 
     ws = tmp_path / "ws"
@@ -480,7 +478,7 @@ def test_server_seed_start_skips_instructions_when_disabled(tmp_path: Path) -> N
     # instructions_enabled off → no instructions event even if AGENTS.md exists
     # (byte-equal to a host that never configured a project instructions file),
     # while the always-on environment block still records.
-    from noeta.context.instructions import INSTRUCTIONS_KIND
+    from noeta.builtins.workspace.impl import INSTRUCTIONS_KIND
     from noeta.execution.driver import InteractionDriver
 
     ws = tmp_path / "ws"

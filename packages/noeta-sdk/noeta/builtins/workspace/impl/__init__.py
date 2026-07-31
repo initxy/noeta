@@ -1,13 +1,11 @@
 """Workspace-context material — the environment + instructions residents.
 
-Phase 2c: the renderer prose, hash rules and ``ContentKindSpec`` factories
-for the two workspace residents moved here from
-``noeta.context.{environment,instructions}`` (which keep only the kind
-vocabulary constants and the snapshot types). The kernel consumes this
-material solely through the injected kits
-(:class:`noeta.execution.environment.EnvironmentKit` /
-:class:`noeta.execution.instructions.InstructionsKit`) — the reminders
-built-in precedent: registry mechanism kernel-side, rendered material here.
+Phase 2c → kernel final form: the renderer prose, hash rules,
+``ContentKindSpec`` factories, kind vocabulary constants AND snapshot types
+for the two workspace residents all live in this plugin (the vocabulary in
+:mod:`~noeta.builtins.workspace.impl.loaders`). The kernel consumes nothing
+here — the packs contribute their content kinds and init hooks through the
+generic surfaces.
 
 Red line (unchanged from the kernel days): every renderer is pure over a
 wiring-time snapshot — no disk, no clock at compose time — so the same
@@ -26,28 +24,22 @@ from typing import Mapping
 from noeta.context.composer import ContentResolve, RenderedContent
 from noeta.context.content_channel import ContentKindSpec, ContentRenderer
 from noeta.protocols.errors import ContentNotFound
-from noeta.context.environment import (
+from noeta.builtins.workspace.impl.loaders import (
     ENVIRONMENT_DRIFT_POLICY,
     ENVIRONMENT_KIND,
     ENVIRONMENT_NAME,
     ENVIRONMENT_VERSION,
     EnvironmentSnapshot,
-)
-from noeta.context.instructions import (
     INSTRUCTIONS_DRIFT_POLICY,
     INSTRUCTIONS_KIND,
     INSTRUCTIONS_VERSION,
     InstructionsSnapshot,
-)
-from noeta.builtins.workspace.impl.loaders import (
     build_instructions_discovery,
     build_instructions_preloader,
     discover_instructions,
     load_environment,
     load_instructions,
 )
-from noeta.execution.environment import EnvironmentKit
-from noeta.execution.instructions import InstructionsKit
 from noeta.execution.session_pack import (
     ContentKindContribution,
     PackContribution,
@@ -61,11 +53,18 @@ from typing import Optional, cast
 
 __all__ = [
     "DEFAULT_INSTRUCTIONS_FILENAMES",
-    "build_environment_kit",
+    "ENVIRONMENT_DRIFT_POLICY",
+    "ENVIRONMENT_KIND",
+    "ENVIRONMENT_NAME",
+    "ENVIRONMENT_VERSION",
+    "EnvironmentSnapshot",
+    "INSTRUCTIONS_DRIFT_POLICY",
+    "INSTRUCTIONS_KIND",
+    "INSTRUCTIONS_VERSION",
+    "InstructionsSnapshot",
     "build_environment_renderer",
     "build_environment_session_pack",
     "build_instructions_discovery",
-    "build_instructions_kit",
     "build_instructions_preloader",
     "build_instructions_renderer",
     "build_instructions_session_pack",
@@ -191,12 +190,6 @@ def environment_content_kind(
     )
 
 
-def build_environment_kit() -> EnvironmentKit:
-    """The kernel builder's ``environment_kit`` injection (phase 2c)."""
-    return EnvironmentKit(
-        content_kind=environment_content_kind,
-        content_hash=environment_content_hash,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -319,13 +312,6 @@ def instructions_content_kind_from(
     )
 
 
-def build_instructions_kit() -> InstructionsKit:
-    """The kernel builder's ``instructions_kit`` injection (phase 2c)."""
-    return InstructionsKit(
-        content_kind_from=instructions_content_kind_from,
-        content_hash=instructions_content_hash,
-        filenames=DEFAULT_INSTRUCTIONS_FILENAMES,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -350,14 +336,13 @@ def build_instructions_session_pack(ctx: SessionBuildContext) -> PackContributio
     enabled = bool(cfg.get("instructions_enabled", False))
     discovery = bool(cfg.get("instructions_discovery", False))
     override = cast(Optional[Path], cfg.get("instructions_file"))
-    kit = build_instructions_kit()
     content_store = ctx.content_store
     snapshots: dict[str, InstructionsSnapshot] = {}
     root_snapshot: Optional[InstructionsSnapshot] = None
     if enabled:
         snapshot = load_instructions(
             ctx.workspace_dir,
-            filenames=kit.filenames,
+            filenames=DEFAULT_INSTRUCTIONS_FILENAMES,
             override_path=override,
             exec_env=ctx.exec_env,
         )
@@ -370,7 +355,9 @@ def build_instructions_session_pack(ctx: SessionBuildContext) -> PackContributio
     kinds: tuple[ContentKindContribution, ...] = ()
     if snapshots or discovery:
         kinds = (
-            ContentKindContribution(300, kit.content_kind_from(snapshots)),
+            ContentKindContribution(
+                300, instructions_content_kind_from(snapshots)
+            ),
         )
     content_discovery = None
     content_preloader = None
@@ -378,7 +365,7 @@ def build_instructions_session_pack(ctx: SessionBuildContext) -> PackContributio
         content_discovery = build_instructions_discovery(
             ctx.workspace,
             snapshots,
-            kit=kit,
+            filenames=DEFAULT_INSTRUCTIONS_FILENAMES,
             content_store=content_store,
             render_text=render_instructions_text,
             exec_env=ctx.exec_env,
@@ -428,7 +415,6 @@ def build_environment_session_pack(ctx: SessionBuildContext) -> PackContribution
     activate it.
     """
     snapshot = load_environment(ctx.workspace_dir, exec_env=ctx.exec_env)
-    kit = build_environment_kit()
     content_store = ctx.content_store
 
     def _init(rec: SessionRecorder) -> None:
@@ -451,7 +437,7 @@ def build_environment_session_pack(ctx: SessionBuildContext) -> PackContribution
 
     return PackContribution(
         content_kinds=(
-            ContentKindContribution(400, kit.content_kind(snapshot)),
+            ContentKindContribution(400, environment_content_kind(snapshot)),
         ),
         init=_init,
     )

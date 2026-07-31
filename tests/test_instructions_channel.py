@@ -1,8 +1,8 @@
 """Project instructions file (the CLAUDE.md counterpart) — third content-channel tenant.
 
 Reuses the generic content-channel mechanism,
-adds kind="instructions", policy=evolving, mirroring the memory channel's structure
-(noeta/context/instructions.py + noeta/execution/instructions.py).
+adds kind="instructions", policy=evolving, mirroring the memory channel's
+structure (the vocabulary + loaders live in the workspace built-in).
 
 Coverage:
 
@@ -22,15 +22,13 @@ from typing import Optional
 from tests._session_inputs import default_factory_kwargs
 from noeta.context.composer import RenderedContent, ThreeSegmentComposer
 from noeta.context.content_channel import ContentChannelRegistry
-from noeta.context.environment import ENVIRONMENT_KIND
-from noeta.context.instructions import (
+from noeta.builtins.workspace.impl import (
+    DEFAULT_INSTRUCTIONS_FILENAMES,
+    ENVIRONMENT_KIND,
     INSTRUCTIONS_DRIFT_POLICY,
     INSTRUCTIONS_KIND,
     INSTRUCTIONS_VERSION,
     InstructionsSnapshot,
-)
-from noeta.builtins.workspace.impl import (
-    DEFAULT_INSTRUCTIONS_FILENAMES,
     build_instructions_renderer,
     instructions_content_hash,
     instructions_content_kind,
