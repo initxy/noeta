@@ -55,22 +55,6 @@ Temporal 是一个持久执行平台：你用代码编写 workflow 和 activity�
 
 Noeta 不是一个工作流引擎。控制流由 LLM 驱动，因此一个任务的形状是从模型的决策中涌现的，而不是来自一份事先写好的定义。当你知道工作的形状时，Temporal 合适；当模型边走边发现它时，Noeta 合适。Noeta 把 `Workflow` 挡在自己的词汇之外——固定流程被表达为一个确定性 Policy 加上 `spawn_subtask`。
 
-## Noeta 与 Google Cloud Agent SDK
-
-Cloud Agent SDK 在 Google Cloud 上构建 agent：Gemini 模型、接到 GCP 服务（BigQuery、Cloud Storage 等）的工具，以及一个驱动 agent 循环的 `Runner`。它是一个客户端库——agent 跑在你的进程里，但底座（模型、工具集成）是 Google 的。
-
-| 关注点 | Cloud Agent SDK | Noeta |
-| --- | --- | --- |
-| **部署** | 客户端库，单进程 | 多 worker 池；在 Postgres 上多主机，写入受租约 fencing 保护 |
-| **模型** | Gemini 优先 | `LLMProvider` 后面的任何 provider |
-| **持久化** | 对话状态，由它管理 | 事件账本；`state = fold(events)` |
-| **挂起 / 唤醒** | Session 恢复 | `WakeCondition` + `Dispatcher` + `Lease`，恰好一次 |
-| **工具生态** | GCP 服务集成 | 11 个内置工具 + 你的插件；MCP |
-| **扩展** | 工具 + 钩子 | 16 个由 manifest 声明的 Surface |
-| **审计 / 重放** | 有限 | 完整事件日志，fold 可复现 |
-
-当你全面押注 Google Cloud、并且想开箱即用地拿到 GCP 服务工具时，选 Cloud Agent SDK。当你需要一本持久的、provider 中立的、可审计可重放的账本，并且想把它作为一个多 worker 或多主机服务来跑、而不是一个单进程客户端时，选 Noeta。
-
 ## Noeta 与 Pi Agent
 
 Pi Agent 是一个 computer-use 框架：它把鼠标、键盘和屏幕截取交给一个 LLM 控制，好让 agent 驱动一个桌面 GUI。它是物理计算机之上的一个控制层，不是一个 agent 运行时。

@@ -102,28 +102,6 @@ of time. Temporal fits when you know the shape of the work; Noeta fits when the
 model discovers it as it goes. Noeta keeps `Workflow` out of its vocabulary —
 fixed procedures are expressed as a deterministic Policy plus `spawn_subtask`.
 
-## Noeta and the Google Cloud Agent SDK
-
-The Cloud Agent SDK builds agents on Google Cloud: Gemini models, tools wired
-to GCP services (BigQuery, Cloud Storage, …), and a `Runner` that drives the
-agent loop. It is a client library — the agent runs in your process, but the
-substrate (model, tool integrations) is Google's.
-
-| Concern | Cloud Agent SDK | Noeta |
-| --- | --- | --- |
-| **Deployment** | Client library, single process | Multi-worker pool; multi-host on Postgres with lease-fenced writes |
-| **Model** | Gemini-first | Any provider behind `LLMProvider` |
-| **Persistence** | Conversation state, managed | Event ledger; `state = fold(events)` |
-| **Suspend / wake** | Session resume | `WakeCondition` + `Dispatcher` + `Lease`, exactly-once |
-| **Tool ecosystem** | GCP service integrations | 11 built-in tools + your plugins; MCP |
-| **Extension** | Tools + hooks | 16 manifest-declared surfaces |
-| **Audit / replay** | Limited | Full event log, fold-reproducible |
-
-Reach for the Cloud Agent SDK when you are all-in on Google Cloud and want
-GCP service tools out of the box. Reach for Noeta when you need a durable,
-provider-neutral ledger you can audit and replay, and you want to run it as a
-multi-worker or multi-host service rather than a single-process client.
-
 ## Noeta and Pi Agent
 
 Pi Agent is a computer-use framework: it gives an LLM control of a mouse,
