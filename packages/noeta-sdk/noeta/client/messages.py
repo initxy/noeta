@@ -52,6 +52,7 @@ from dataclasses import dataclass
 from typing import Callable, Iterable, Optional, TypeVar, Union
 
 from noeta.core.fold import messages_from_appended
+from noeta.core.prefetch import prefetched
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.events import (
     EventEnvelope,
@@ -70,6 +71,7 @@ from noeta.protocols.messages import (
     ToolUseBlock,
 )
 from noeta.protocols.tool_args import resolve_tool_call_arguments
+from noeta.protocols.values import ContentRef
 
 
 _log = logging.getLogger(__name__)
@@ -169,6 +171,37 @@ ViewItem = Union[
 # ---------------------------------------------------------------------------
 
 
+def _prefetch_refs(envelopes: Iterable[EventEnvelope]) -> list[ContentRef]:
+    """Every ContentRef this projection will dereference, in one scan.
+
+    The four projected event types that carry a body: ``messages_ref``, an
+    offloaded ``ToolCallStarted.arguments_ref``, ``output_ref`` (this is the
+    one consumer that *does* read tool outputs — it renders them) and a spilled
+    ``TaskCompleted.answer_ref``. Types the projection skips contribute
+    nothing, and neither does ``thinking_ref``: ``ThinkingBlock`` is explicitly
+    not part of this view.
+
+    This set is intentionally not fold's — the two traversals read different
+    bodies, and a shared table would make each pay for the other's.
+    """
+    refs: list[ContentRef] = []
+    for env in envelopes:
+        event_type = env.type
+        if event_type == "MessagesAppended":
+            refs.append(env.payload.messages_ref)
+        elif event_type == "ToolCallStarted":
+            arguments_ref = env.payload.arguments_ref
+            if arguments_ref is not None:
+                refs.append(arguments_ref)
+        elif event_type == "ToolResultRecorded":
+            refs.append(env.payload.output_ref)
+        elif event_type == "TaskCompleted":
+            answer_ref = env.payload.answer_ref
+            if answer_ref is not None:
+                refs.append(answer_ref)
+    return refs
+
+
 def as_messages(
     envelopes: Iterable[EventEnvelope],
     content_store: ContentStore,
@@ -185,11 +218,19 @@ def as_messages(
     With a ``Client``, use ``client.messages(task_id)``; with one-shot
     ``query``, use the pre-folded ``QueryResult.messages()``.
     """
+    # Materialised because the stream is walked twice — once to collect refs,
+    # once to project — and ``envelopes`` may be a one-shot iterator.
+    stream = list(envelopes)
+    # One batch read for the whole projection. Unlike fold there is no snapshot
+    # to shorten the walk: this reads the task's entire history, so the per-ref
+    # cost it replaces grows without bound as the conversation does.
+    content_store = prefetched(content_store, _prefetch_refs(stream))
+
     out: list[ViewItem] = []
     seen_tool_use: set[str] = set()
     seen_tool_result: set[str] = set()
 
-    for env in envelopes:
+    for env in stream:
         t = env.type
 
         if t == "MessagesAppended":

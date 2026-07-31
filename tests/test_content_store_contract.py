@@ -178,6 +178,77 @@ def test_put_large_body_works(make_store) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Batch read (``get_many``)
+# ---------------------------------------------------------------------------
+
+
+def test_get_many_returns_every_body_keyed_by_hash(make_store) -> None:
+    store = make_store()
+    refs = [store.put(f"body-{i}".encode(), media_type="text/plain") for i in range(5)]
+    assert store.get_many(refs) == {r.hash: store.get(r) for r in refs}
+
+
+def test_get_many_omits_missing_hashes_instead_of_raising(make_store) -> None:
+    """The one deliberate divergence from ``get``: a body outside the GC
+    window must not abort the rest of the batch."""
+    store = make_store()
+    present = store.put(b"present", media_type="text/plain")
+    absent = ContentRef(hash="0" * 64, size=0, media_type="text/plain")
+
+    result = store.get_many([present, absent])
+
+    assert result == {present.hash: b"present"}
+    assert absent.hash not in result
+
+
+def test_get_many_with_no_refs_returns_empty_without_touching_storage(
+    make_store,
+) -> None:
+    store = make_store()
+    store.put(b"unrelated", media_type="text/plain")
+    assert store.get_many([]) == {}
+
+
+def test_get_many_collapses_duplicate_refs(make_store) -> None:
+    store = make_store()
+    ref = store.put(b"once", media_type="text/plain")
+    assert store.get_many([ref, ref, ref]) == {ref.hash: b"once"}
+
+
+def test_get_many_is_hash_only_like_get(make_store) -> None:
+    """``size`` / ``media_type`` are not cross-checked, matching ``get``."""
+    store = make_store()
+    ref = store.put(b"hello", media_type="text/plain")
+    spoofed = ContentRef(hash=ref.hash, size=99999, media_type="image/png")
+    assert store.get_many([spoofed]) == {ref.hash: b"hello"}
+
+
+def test_get_many_agrees_with_get_over_a_mixed_batch(make_store) -> None:
+    """The property the prefetch path relies on: batching changes which
+    query runs, never which bytes come back."""
+    store = make_store()
+    bodies = [b"", b"a", b"\x00\xff binary", b"x" * 5000]
+    refs = [store.put(b, media_type="application/octet-stream") for b in bodies]
+
+    batched = store.get_many(refs)
+
+    assert batched == {ref.hash: store.get(ref) for ref in refs}
+
+
+def test_get_many_handles_more_refs_than_one_query_can_bind(make_store) -> None:
+    """sqlite caps host parameters per statement, so its ``get_many``
+    chunks; 1000 refs crosses that boundary and must still come back whole."""
+    store = make_store()
+    refs = [store.put(f"chunk-{i}".encode(), media_type="text/plain") for i in range(1000)]
+
+    result = store.get_many(refs)
+
+    assert len(result) == len(refs)
+    assert result[refs[0].hash] == b"chunk-0"
+    assert result[refs[-1].hash] == b"chunk-999"
+
+
+# ---------------------------------------------------------------------------
 # Sqlite-specific: content table CHECK constraints catch bypass writes
 # ---------------------------------------------------------------------------
 

@@ -32,7 +32,7 @@ import time
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.content_store import ContentStore
@@ -99,6 +99,19 @@ class InMemoryContentStore:
             return self._blobs[ref.hash]
         except KeyError as exc:
             raise ContentNotFound(ref.hash) from exc
+
+    def get_many(self, refs: Iterable[ContentRef]) -> dict[str, bytes]:
+        # No round-trip to save here — the reference backend implements the
+        # batch read only so it stays a drop-in for the durable ones. Missing
+        # hashes are omitted (Protocol contract), so callers see the same
+        # partial-result shape they get from sqlite / postgres.
+        blobs = self._blobs
+        out: dict[str, bytes] = {}
+        for ref in refs:
+            body = blobs.get(ref.hash)
+            if body is not None:
+                out[ref.hash] = body
+        return out
 
     def __len__(self) -> int:
         return len(self._blobs)

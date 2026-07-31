@@ -10,6 +10,22 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ### Added
 
+- **Batch content reads — a traversal costs one query, not N.** `fold` and
+  `as_messages` know every `ContentRef` they will dereference before they
+  process an event (the refs sit in the payloads), so both now scan first and
+  fetch their bodies in a single `ContentStore.get_many`. The per-event
+  handlers are untouched — they read through a `PrefetchedContentStore` view
+  that answers from the batch and falls through to the store for anything the
+  scan did not predict. `as_messages` benefits most: it walks the full task
+  history with no snapshot to shorten it.
+- **`CachedContentStore` — a byte-bounded LRU over the durable backends.**
+  `noeta.sdk.storage.build_storage_stack` now wraps sqlite / Postgres content
+  stores in it (`memory` is left bare — it is already a dict). This collapses
+  the reads batching cannot: the same immutable hash re-read across composes
+  and folds, which is what the compose-time resident deref does on every model
+  turn. Bounded by bytes rather than entries, and bodies over 1 MiB are served
+  straight through so one large body cannot evict the working set.
+
 - **`HostConfig(storage_path=...)` — durable storage from one string.** A
   sqlite file path, a `postgresql://` DSN or `":memory:"` resolves through
   `noeta.sdk.storage.open_storage_stack`, including the ordering invariant
@@ -30,6 +46,14 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ### Changed
 
+- **BREAKING — `ContentStore` gains a required `get_many(refs)`.** Third-party
+  adapters must implement it; the three shipped backends do (`WHERE hash IN`
+  chunked for sqlite, `hash = ANY` for Postgres, dict lookups for InMemory).
+  It is deliberately a required member rather than a Protocol default: an
+  adapter that answered it with a loop over `get` would silently cost N
+  round-trips at exactly the call sites that chose the batch API to avoid
+  them. Unlike `get`, a missing hash is **omitted** from the result rather
+  than raising, so one reclaimed body cannot abort a batch.
 - **BREAKING — SDK-layer cleanup: typing, extensibility, DX.** Removals, with
   no compatibility aliases:
   - `noeta.sdk.load_plugin_set` → **`load_plugins`** (one name; the alias
