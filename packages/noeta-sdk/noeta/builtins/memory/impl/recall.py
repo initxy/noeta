@@ -1,13 +1,11 @@
 """Memory auto-recall — the ``turn_intake`` reminder provider (impl).
 
-Microkernel M3: moved here from ``noeta.execution.memory``, which keeps the
-kernel *seams* only — ``record_memory_index`` (pure activation recording over
-``noeta.context.memory``), the generic provider composition, and the
-``RecallGoalPrelude`` — while everything that touches a live
-:class:`~noeta.builtins.memory.impl.store.MemoryStore` lives here. The host
-binds :func:`memory_reminder_provider` to a live store and hands the bound
-provider through its ``memory_recall_context`` seam; the kernel driver never
-sees the store.
+Everything that touches a live
+:class:`~noeta.builtins.memory.impl.store.MemoryStore` lives here; the kernel
+has no memory module at all (final form). The host binds
+:func:`memory_reminder_provider` to a live store and prepends the bound
+provider to the ONE generic ``intake_reminder_providers`` seam the driver
+reads; the kernel driver never sees the store.
 
 The ``memory`` built-in plugin's manifest declares
 :func:`memory_reminder_provider` on the ``reminder_provider`` surface (the

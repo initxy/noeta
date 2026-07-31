@@ -32,7 +32,6 @@ from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.context.content_channel import ContentKindSpec
-from noeta.context.memory import MemoryEntries
 from noeta.context.reminders import ReminderSpec
 from noeta.execution.builder import build_session_inputs
 from noeta.execution.host import AgentRegistryProtocol
@@ -2016,73 +2015,61 @@ class SdkHost(GenericEngineResolver):
         # (defensive; should not happen once the per-session workspace path is fully wired).
         return self.workspace_dir
 
-    def memory_recall_context(
+    def intake_reminder_providers(
         self, agent: str, task_id: Optional[str] = None
-    ) -> Optional[tuple[Any, MemoryEntries]]:
-        """The (recall-provider, entries-snapshot) pair for ``agent``'s memory recall.
+    ) -> tuple[Any, ...]:
+        """``agent``'s composed ``turn_intake`` providers — the ONE intake seam.
 
-        The seam the :class:`~noeta.execution.driver.InteractionDriver`'s seed
-        path (``seed_start`` / ``seed_send_goal``) reads to run the deleted
-        runner's prepare-time memory wiring: record the index resident
-        (``ContextContentRecorded`` kind=memory, policy=evolving) and route the
-        incoming goal through the ``turn_intake`` recording seam so hits land
-        as one ``origin="memory"`` turn. Retrieval therefore happens on the
-        WRITE side (at recording time), never at compose time — the composer
-        stays a pure function of folded state. Microkernel M3: the provider is
-        the memory built-in's ``memory_reminder_provider`` bound HERE to the
-        live store — the kernel driver composes providers and never sees a
-        store.
+        The driver asks for the FULL ordered tuple for a turn (D6/D7) and never
+        distinguishes one provider from another; the composition rule lives
+        HERE: the built-in memory auto-recall FIRST (its recorded position is
+        pinned by the characterization goldens), then the agent's activated
+        ``reminder_provider`` plugins in their ``(plugin, name)`` order. The
+        recording path runs them before the incoming turn enters the ledger
+        and records what they return as follow-up turns — retrieval happens on
+        the WRITE side (at recording time), never at compose time, so the
+        composer stays a pure function of folded state and resume folds the
+        reminders back without re-invoking a provider.
 
-        Returns ``None`` when the agent's spec does not activate ``"memory"``
-        (only the ``main`` preset enables it), so a memory-off agent's stream
-        stays byte-identical to the pre-seam path. The store root resolution is
-        the SAME precedence :func:`~noeta.execution.builder.build_session_inputs`
-        uses for the tools + resident index (:meth:`memory_root` — the per-task
+        The recall provider joins only for an agent whose spec activates
+        ``"memory"`` (only the ``main`` preset does), so a memory-off agent's
+        stream stays byte-identical. It arrives already bound to the live
+        store (the memory built-in's ``memory_reminder_provider`` — the kernel
+        driver never sees a store), and the store root resolution is the SAME
+        precedence :func:`~noeta.execution.builder.build_session_inputs` uses
+        for the tools + resident index (:meth:`memory_root` — the per-task
         ``memory_root_resolver`` when it resolves, else ``memory_dir`` override
-        > ``global_memory_dir`` > the SDK global default), so recall reads
-        exactly the store the session's ``memory_write`` / ``memory_read``
-        tools use. ``task_id`` is the task the goal is being recorded on; the
-        driver passes it so a multi-tenant host recalls from that tenant's
-        store (``None`` — a caller without a task — keeps the host-level
-        chain). The global default is read late off the impl module (never
-        from-imported) so a test pinning
-        ``noeta.builtins.memory.impl.store.DEFAULT_GLOBAL_MEMORY_DIR`` stays
-        hermetic. An empty / missing directory is a valid empty store
-        (``entries == ()``): the index record no-ops and recall never hits, so
-        the default flow pays zero bytes.
+        > ``global_memory_dir`` > the SDK global default). ``task_id`` is the
+        task the goal is being recorded on; the driver passes it so a
+        multi-tenant host recalls from that tenant's store (``None`` — a
+        caller without a task — keeps the host-level chain). The global
+        default is read late off the impl module (never from-imported) so a
+        test pinning ``noeta.builtins.memory.impl.store.DEFAULT_GLOBAL_MEMORY_DIR``
+        stays hermetic. An empty / missing directory is a valid empty store:
+        recall never hits, so the default flow pays zero bytes.
+
+        Empty for a memory-off agent that activated no provider-bearing
+        plugin, which is what keeps a plugin-free session's ledger
+        byte-identical. Read defensively by the driver (``getattr``), so a
+        host without this seam is a clean no-op.
         """
+        providers: list[Any] = []
         if agent == "unnamed" and self.unnamed_fallback is not None:
             spec = self.unnamed_fallback
         else:
             spec = self._lookup_agent(agent, task_id="<unbound>")
-        if not agent_activates(spec, "memory"):
-            return None
-        impl = memory_impl()
-        store = impl.load_memory_store(root=self.memory_root(task_id))
-        return impl.memory_reminder_provider(store), store.entries()
-
-    def intake_reminder_providers(self, agent: str) -> tuple[Any, ...]:
-        """``agent``'s activated ``reminder_provider`` s for the ``turn_intake`` seam.
-
-        The track-A counterpart of :meth:`memory_recall_context` (D7): the
-        recording path asks for the providers, runs them before the incoming turn
-        enters the ledger, and records what they return as follow-up turns. The
-        two compose — a memory-enabled agent that also activates a RAG plugin runs
-        the built-in recall *and* the plugin, in that order (the built-in is bound
-        to a live store by the host, so it is prepended by the caller rather than
-        living in this table).
-
-        Empty for every agent that activated no provider-bearing plugin, which is
-        what keeps a plugin-free session's ledger byte-identical. Read defensively
-        by the driver (``getattr``), so a host without this seam is a clean no-op.
-        """
-        return tuple(self.reminder_providers.get(agent, {}).get(TURN_INTAKE, ()))
+        if agent_activates(spec, "memory"):
+            impl = memory_impl()
+            store = impl.load_memory_store(root=self.memory_root(task_id))
+            providers.append(impl.memory_reminder_provider(store))
+        providers.extend(self.reminder_providers.get(agent, {}).get(TURN_INTAKE, ()))
+        return tuple(providers)
 
     def memory_root(self, task_id: Optional[str] = None) -> Path:
         """The resolved memory-store root directory (pure wiring, no IO).
 
         ONE resolution chain for every consumer — the session builder's tool
-        pack + resident index, :meth:`memory_recall_context`, and a product's
+        pack + resident index, :meth:`intake_reminder_providers`, and a product's
         host-side memory material (e.g. the consolidation debounce marker,
         which must sit NEXT TO the store the memory tools mutate): the
         per-task ``memory_root_resolver`` when set AND ``task_id`` is given AND
@@ -2186,7 +2173,7 @@ class SdkHost(GenericEngineResolver):
         """The agent spec's declared ``skills`` (``Options.skills``), as plain names.
 
         Read at ``InteractionDriver.seed_start`` (mirrors the ``getattr``-guarded
-        seam pattern of :meth:`memory_recall_context`) so ``Options(skills=[...])``
+        seam pattern of :meth:`intake_reminder_providers`) so ``Options(skills=[...])``
         pre-activates through the SAME pre-loop
         ``TaskStatePatch(activate_skills=...)`` channel a slash-command-resolved
         ``activations`` selector already rides — one activation mechanism, two
