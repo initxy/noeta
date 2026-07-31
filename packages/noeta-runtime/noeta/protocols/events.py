@@ -484,10 +484,13 @@ class SubtaskCompletedPayload:
 class TaskSuspendedPayload:
     """Engine pauses the Task and releases the lease.
 
-    ``reason`` is a short tag (``waiting_subtask`` / ``waiting_human`` /
-    ``waiting_timer`` / ``waiting_external``); ``wake_on`` is the typed
+    ``reason`` is a short tag (``waiting_subtask`` / ``waiting_subtask_group`` /
+    ``waiting_human`` / ``waiting_timer`` / ``waiting_external``, plus
+    ``turn_failed: <policy reason>`` when a multi-turn wrapper parks a failed
+    turn for the human instead of terminating); ``wake_on`` is the typed
     WakeCondition that the Dispatcher matches against incoming wake
-    events.
+    events. Nothing branches on the tag — it is a legibility field, so a new
+    producer may add one without a protocol bump.
     """
 
     reason: str

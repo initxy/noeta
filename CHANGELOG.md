@@ -111,6 +111,26 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ### Fixed
 
+- **A failed turn no longer ends a multi-turn conversation.** `TaskFailed` is a
+  terminal event, so any turn that failed — a transient provider 5xx, a tool
+  crash escalated to a fail, a spent structured-output nudge budget — sealed the
+  task's ledger and voided every bit of context the person had built up, leaving
+  "start a new task" as the only move. `MultiTurnReActPolicy` now translates a
+  `FailDecision` on a non-final turn into the same next-goal suspend an ordinary
+  turn rests on, recorded as `TaskSuspended.reason = "turn_failed: <reason>"`;
+  the human's next message resumes the same task. No new event type and no
+  Engine / fold change — it reuses the wake-resume primitive the wrapper already
+  drives between turns. A `final=True` turn still terminates.
+
+  `retryable` is deliberately **not** the gate: it answers "would re-driving
+  this step help?", and it is `False` for exactly the faults a human can clear
+  (a transient provider error arrives as non-retryable `llm_error`), so gating
+  on it would have kept killing the motivating case.
+
+  New protocol field: **`YieldForHumanDecision.suspend_reason`** (optional, last
+  position → byte-safe for existing recordings) overrides the recorded
+  `TaskSuspended.reason` tag, which defaults to `waiting_human` as before.
+
 - **`structured_output` payloads are checked against the schema before they
   become an answer.** A provider's tool `parameters` only steer the model, so a
   call that missed a required field or got a type wrong used to be accepted

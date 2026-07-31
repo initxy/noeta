@@ -329,6 +329,15 @@ class YieldForHumanDecision:
     #: :attr:`ToolCallsDecision.assistant_thinking`; empty for non-reasoning
     #: models.
     assistant_thinking: tuple[ThinkingBlock, ...] = ()
+    #: Recorded as ``TaskSuspended.reason`` in place of the default
+    #: ``waiting_human``. A suspend that stands in for something other than a
+    #: plain "waiting for the next thing the human types" says so in the ledger
+    #: rather than dissolving into a generic pause — the multi-turn wrapper sets
+    #: it when it parks a *failed* turn. Within the Decision-field boundary this
+    #: ADR draws: it maps to a field of the event the handler already emits, the
+    #: way ``request_anchor`` does. Defaulted (last field) → byte-safe for plain
+    #: yield recordings.
+    suspend_reason: Optional[str] = None
 
 
 @dataclass(frozen=True, slots=True)
