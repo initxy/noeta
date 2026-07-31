@@ -1,11 +1,11 @@
-"""Unit tests for the shared process-group signalling primitive.
+"""The shared process-group signalling primitive.
 
-``send_group_signal`` is the single atom the three kill paths
-(``_subprocess._kill_process_group``, ``background_shell._terminate``,
-``background_shell._posix_kill_pid``) now funnel their raw signal-send
-through. These pin its three behaviours — group-first, single-PID fallback,
-and the leader gate — plus the swallowed-race contract, with the real
-``os`` calls monkeypatched so no real process is signalled.
+``send_group_signal`` is the single atom every kill path
+(``subproc._kill_process_group``, ``background_shell._terminate``,
+``background_shell._posix_kill_pid``) funnels its raw signal-send through, so
+its three behaviours — group-first, single-PID fallback, and the leader gate
+— plus the swallowed-race contract are pinned once here. The real ``os``
+calls are monkeypatched so no live process is ever signalled.
 """
 
 from __future__ import annotations

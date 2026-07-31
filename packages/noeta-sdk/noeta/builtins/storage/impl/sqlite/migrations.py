@@ -1,15 +1,13 @@
 """Schema migrations shared across every sqlite backend adapter.
 
-Issues 15 / 16 / 17 all land in the **same** sqlite file. The migration
-sequence here is the single source of truth for the file's schema —
-``PRAGMA user_version`` records how far the file has been advanced;
-each :class:`Migration` is applied in one ``BEGIN IMMEDIATE`` transaction
-so a partial failure rolls back atomically and the next init retries
-cleanly.
-
-Forward-only. Downgrades are out of scope; a backwards-incompatible
-change requires a new file and an explicit migration tool. Each new
-adapter appends Migration entries; ``SCHEMA_VERSION`` bumps with them.
+All three adapters land in the **same** sqlite file, so this sequence is the
+single source of truth for that file's schema: ``PRAGMA user_version`` records
+how far a file has been advanced, and each :class:`Migration` applies inside
+one ``BEGIN IMMEDIATE`` transaction so a partial failure rolls back atomically
+and the next init retries cleanly. Forward-only — downgrades are out of scope,
+and a backwards-incompatible change requires a new file plus an explicit
+migration tool. An applied migration is immutable: correcting one means
+appending another and bumping ``SCHEMA_VERSION``.
 """
 
 from __future__ import annotations
@@ -35,12 +33,11 @@ def _timer_fire_at(blob: object) -> Optional[float]:
     """Decode a ``wake_on_canonical`` blob and return the ``TimerFired``
     deadline, or ``None`` for a NULL / non-timer / undecodable blob.
 
-    Registered on each connection as the SQL function
-    ``_noeta_timer_fire_at`` so migration 7's backfill can seed the new
-    ``fire_at`` column out of the opaque canonical blob (plain SQL cannot
-    decode it). A poison row yields ``None`` (left un-swept, exactly as the
-    live sweep's per-row guard treats it) rather than aborting the whole
-    migration.
+    Registered on each connection as the SQL function ``_noeta_timer_fire_at``
+    so migration 7's backfill can seed ``fire_at`` out of the opaque canonical
+    blob, which plain SQL cannot decode. A poison row yields ``None`` — left
+    un-swept, exactly as the live sweep's per-row guard treats it — rather than
+    aborting the whole migration.
     """
     if blob is None:
         return None
@@ -55,10 +52,9 @@ def _timer_fire_at(blob: object) -> Optional[float]:
 class Migration:
     """One forward-only schema step.
 
-    ``statements`` is the ordered list of single SQL statements to
-    execute. We intentionally do not use ``executescript`` because it
-    issues an implicit ``COMMIT`` before running, which would defeat
-    the ``BEGIN IMMEDIATE`` boundary that keeps each migration atomic
+    ``statements`` holds single SQL statements executed in order. Never
+    ``executescript``: it issues an implicit ``COMMIT`` before running, which
+    would break the ``BEGIN IMMEDIATE`` boundary keeping each migration atomic
     with its ``PRAGMA user_version`` bump.
     """
 
@@ -67,29 +63,26 @@ class Migration:
     statements: tuple[str, ...]
 
 
-# Migration 1 (issue 15): events + idempotency tables.
+# Migration 1: events + idempotency tables.
 #
-# The ``events`` table stores envelope metadata column-by-column so
-# inspect / index queries (``(task_id, seq)``, ``(task_id,
-# type)``) stay relational. ``payload_canonical`` is the canonical
-# bytes produced by :func:`noeta.protocols.canonical.to_canonical_bytes`
-# — the same single-source-of-truth path
-# for Snapshot bodies and ContentStore hashes.
+# The ``events`` table stores envelope metadata column-by-column so inspect /
+# index queries (``(task_id, seq)``, ``(task_id, type)``) stay relational.
+# ``payload_canonical`` holds the bytes produced by
+# :func:`noeta.protocols.canonical.to_canonical_bytes` — the same
+# single-source-of-truth path used for Snapshot bodies and ContentStore hashes.
 #
-# ``WITHOUT ROWID`` turns ``(task_id, seq)`` into the clustered key so
-# append-order writes are physically sequential on disk. The partial
-# index on ``type='TaskSnapshot'`` was meant to accelerate the
-# ``find_latest_snapshot`` lookup mandated as
-# fold-loop fast — but that lookup was later broadened to
-# ``type IN ('TaskSnapshot', 'TaskRewound')``, which this narrower
-# partial index can no longer serve; migration 5 widens it.
+# ``WITHOUT ROWID`` makes ``(task_id, seq)`` the clustered key so append-order
+# writes are physically sequential on disk. The partial index here is narrower
+# than the live ``find_latest_snapshot`` predicate and therefore unusable by
+# it; migration 5 (and later 8 / 10) re-creates it to match. It stays in this
+# form because an applied migration is immutable.
 #
 # ``idempotency`` lives in its own table because ``lease_id`` /
 # ``idempotency_key`` are write-time concurrency metadata, not envelope
-# content. The InMemory adapter never stores them on the envelope
-# either; keeping the events row column set equal to the
-# :class:`noeta.protocols.events.EventEnvelope` field set keeps the
-# adapters semantically equivalent under the contract suite.
+# content. The InMemory adapter does not store them on the envelope either;
+# keeping the events row column set equal to the
+# :class:`noeta.protocols.events.EventEnvelope` field set is what makes the
+# two adapters interchangeable under the contract suite.
 _MIGRATION_1_EVENTS = """
 CREATE TABLE events (
     task_id           TEXT    NOT NULL,
@@ -125,17 +118,17 @@ CREATE TABLE idempotency (
 """.strip()
 
 
-# Migration 2 (issue 16): content blobs.
+# Migration 2: content blobs.
 #
-# Content is keyed solely by ``hash`` — the "dedup-by-hash"
-# clause and the hash-only ``ContentStore.get`` lookup pin
-# this. ``media_type`` is recorded for the first put but does not
-# participate in dedup; see ``noeta.protocols.content_store`` and
-# ``noeta.protocols.values.ContentRef`` for the contract.
+# Content is keyed solely by ``hash``, which is what the dedup-by-hash rule and
+# the hash-only ``ContentStore.get`` lookup require. ``media_type`` is recorded
+# for the first put but takes no part in dedup; see
+# ``noeta.protocols.content_store`` and ``noeta.protocols.values.ContentRef``
+# for the contract.
 #
-# CHECK constraints enforce the three storage invariants any caller
-# bypassing the adapter would otherwise be able to violate: 64-char
-# hex hash, non-negative size, and ``size == length(body)``.
+# The CHECK constraints enforce the three storage invariants a caller
+# bypassing the adapter could otherwise violate: 64-char hex hash,
+# non-negative size, and ``size == length(body)``.
 _MIGRATION_2_CONTENT = """
 CREATE TABLE content (
     hash       TEXT    NOT NULL,
@@ -150,16 +143,15 @@ CREATE TABLE content (
 """.strip()
 
 
-# Migration 3 (issue 17): SqliteDispatcher tables.
+# Migration 3: SqliteDispatcher tables.
 #
-# Single row per task in ``dispatcher_tasks`` carrying status + lease
-# + suspend metadata; CHECK constraints physicalise three state-machine
+# Single row per task in ``dispatcher_tasks`` carrying status + lease +
+# suspend metadata; CHECK constraints physicalise three state-machine
 # invariants (status enum, ready⇔ready_order, leased⇔lease_id +
-# lease_expires_at) so any direct INSERT/UPDATE bypassing the adapter
-# is rejected. ``dispatcher_pending_wakes`` keeps a per-task FIFO of
-# wake events; it has **no FK** because ``wake(unknown, ...)`` may
-# legitimately arrive before any ``enqueue`` creates the task row
-# (issue 17 design B1 / G1).
+# lease_expires_at) so any direct INSERT/UPDATE bypassing the adapter is
+# rejected. ``dispatcher_pending_wakes`` keeps a per-task FIFO of wake events;
+# it has **no FK** because ``wake(unknown, ...)`` may legitimately arrive
+# before any ``enqueue`` creates the task row.
 _MIGRATION_3_DISPATCHER_TASKS = """
 CREATE TABLE dispatcher_tasks (
     task_id            TEXT    PRIMARY KEY,
@@ -202,41 +194,34 @@ CREATE TABLE dispatcher_pending_wakes (
 """.strip()
 
 
-# Migration 4 (wake-resume): persist the matched wake_event between
-# ``wake()`` / ``release(suspended)``-drain and the next ``lease()``.
+# Migration 4: persist the matched wake_event between ``wake()`` /
+# ``release(suspended)``-drain and the next ``lease()``.
 #
-# Wake-resume design rev3: when a wake matches a task's stored
-# ``wake_on``, the originating event must survive long enough for the
-# CLI to write the durable ``TaskWoken(wake_event=...)`` envelope on
-# resume. The InMemory adapter holds it in ``_DispatcherTask.matched_wake_event``;
-# this column is the sqlite equivalent.
+# When a wake matches a task's stored ``wake_on``, the originating event must
+# survive long enough for the resume path to write the durable
+# ``TaskWoken(wake_event=...)`` envelope. The InMemory adapter holds it in
+# ``_DispatcherTask.matched_wake_event``; this column is the sqlite equivalent.
 #
-# Atomic consume happens at ``lease()`` time: the column is read and
-# cleared in the same UPDATE that flips the task to ``leased``. The
-# CHECK that ``status = 'leased'`` implies ``lease_id NOT NULL`` /
-# ``lease_expires_at NOT NULL`` already covers structural invariants;
-# ``matched_wake_event_canonical`` is permitted to be NULL in any state.
-# NULL-backfill of pre-migration rows is implicit in ``ALTER TABLE ...
-# ADD COLUMN`` (sqlite default fill).
+# ``matched_wake_event_canonical`` may be NULL in any state, so it needs no
+# CHECK of its own — the ``status = 'leased'`` CHECK already covers the
+# structural invariants. Existing rows backfill to NULL implicitly through
+# sqlite's ``ALTER TABLE ... ADD COLUMN`` default fill.
 _MIGRATION_4_MATCHED_WAKE = (
     "ALTER TABLE dispatcher_tasks "
     "ADD COLUMN matched_wake_event_canonical BLOB NULL"
 )
 
 
-# Migration 5: widen the snapshot index to cover
-# the actual fold baseline predicate.
+# Migration 5: widen the snapshot index to the fold-baseline predicate.
 #
-# The migration-1 index was partial on ``type = 'TaskSnapshot'`` only,
-# but ``find_latest_snapshot`` was made to look up
-# ``type IN ('TaskSnapshot', 'TaskRewound')`` (TaskRewound is a
-# snapshot-shaped baseline too). SQLite can't use a partial index whose
-# WHERE is narrower than the query predicate, so the live IN-list query
-# fell back to a reverse PRIMARY KEY walk — O(tail-since-last-baseline)
-# on the hot fold/resume path — while every TaskSnapshot insert still
-# paid for the now-unread index. Re-create the index with the same
-# ``IN`` predicate as the query so it is actually chosen (an indexed
-# single-row hit) and the write cost buys a read benefit.
+# ``find_latest_snapshot`` looks up ``type IN ('TaskSnapshot', 'TaskRewound')``
+# — TaskRewound is a snapshot-shaped baseline too. SQLite will not use a
+# partial index whose WHERE is narrower than the query predicate, so the
+# migration-1 index cannot serve that query: the lookup degrades to a reverse
+# PRIMARY KEY walk, O(tail-since-last-baseline) on the hot fold/resume path,
+# while every TaskSnapshot insert still pays to maintain an index nobody reads.
+# Re-creating the index with the query's exact ``IN`` predicate is what makes
+# it eligible, turning the lookup into an indexed single-row hit.
 _MIGRATION_5_DROP_SNAPSHOT_INDEX = "DROP INDEX IF EXISTS ix_events_snapshot"
 
 _MIGRATION_5_BASELINE_INDEX = (
@@ -246,18 +231,18 @@ _MIGRATION_5_BASELINE_INDEX = (
 )
 
 
-# Migration 6: stale-reclaim attempt counter (kernel #3).
+# Migration 6: stale-reclaim attempt counter.
 #
-# ``requeue_stale`` used to move an expired lease back to ready
-# unconditionally, so a poison task that silently kills its worker
-# loops lease → expire → reclaim forever. The counter tracks
-# CONSECUTIVE no-progress reclaims; it is reset by any progress signal
-# (successful heartbeat / clean release / controlled fail-requeue /
-# force-enqueue) and at ``reclaim_max`` the task drops to ``terminal``
-# with ``suspend_reason = 'stale_reclaim_exceeded'`` — the reclaim-path
-# analogue of ``max_fail_attempts``. ``NOT NULL DEFAULT 0`` backfills
-# pre-migration rows to the correct "no reclaims observed" state
-# (sqlite requires a DEFAULT for a NOT NULL ADD COLUMN).
+# Without it ``requeue_stale`` returns an expired lease to ready
+# unconditionally, so a poison task that silently kills its worker loops
+# lease → expire → reclaim forever. The counter tracks CONSECUTIVE no-progress
+# reclaims: any progress signal (successful heartbeat / clean release /
+# controlled fail-requeue / force-enqueue) resets it, and at ``reclaim_max``
+# the task drops to ``terminal`` with
+# ``suspend_reason = 'stale_reclaim_exceeded'`` — the reclaim-path analogue of
+# ``max_fail_attempts``. ``NOT NULL DEFAULT 0`` backfills existing rows to the
+# correct "no reclaims observed" state (sqlite requires a DEFAULT for a
+# NOT NULL ADD COLUMN).
 _MIGRATION_6_RECLAIM_COUNT = (
     "ALTER TABLE dispatcher_tasks "
     "ADD COLUMN reclaim_count INTEGER NOT NULL DEFAULT 0"
@@ -266,24 +251,22 @@ _MIGRATION_6_RECLAIM_COUNT = (
 
 # Migration 7: indexed timer deadline (``fire_at``) for O(due) timer sweeps.
 #
-# ``fire_due_timers`` used to full-scan every suspended row and canonical-
-# decode its ``wake_on`` blob on each ~1s poll to find due ``TimerFired``
-# waits — O(all suspends) work plus a ``BEGIN IMMEDIATE`` write transaction
-# even when nothing was due. This adds a nullable ``fire_at`` column that
-# mirrors the deadline of a suspended timer wait (NULL for every non-timer
-# suspend and every non-suspended state), a partial index over it, and a
-# one-time backfill seeding the deadline out of existing suspended timer
-# rows. The sweep then selects the due set straight off the index
-# (``fire_at <= now``) and, when the set is empty, skips the write
-# transaction entirely.
+# Without it, ``fire_due_timers`` must full-scan every suspended row and
+# canonical-decode its ``wake_on`` blob on each ~1s poll to find due
+# ``TimerFired`` waits — O(all suspends) work plus a ``BEGIN IMMEDIATE`` write
+# transaction even when nothing is due. The nullable ``fire_at`` column mirrors
+# the deadline of a suspended timer wait (NULL for every non-timer suspend and
+# every non-suspended state); the partial index over it lets the sweep select
+# the due set with ``fire_at <= now`` and skip the write transaction entirely
+# when that set is empty.
 #
-# The adapter maintains one invariant: ``fire_at`` is written in lockstep
-# with ``wake_on_canonical`` — set to the ``TimerFired`` deadline whenever a
-# suspend installs a timer wait, cleared to NULL on every other write of
-# ``wake_on_canonical`` (leave-suspended, non-timer suspend, terminal,
-# ready). The backfill uses the registered ``_noeta_timer_fire_at`` SQL
-# function (plain SQL cannot decode the canonical blob) so an in-place
-# upgrade never strands an in-flight ``wait_timer`` suspend at NULL.
+# The adapter maintains one invariant: ``fire_at`` is written in lockstep with
+# ``wake_on_canonical`` — set to the ``TimerFired`` deadline whenever a suspend
+# installs a timer wait, cleared to NULL on every other write of
+# ``wake_on_canonical`` (leave-suspended, non-timer suspend, terminal, ready).
+# The backfill goes through the registered ``_noeta_timer_fire_at`` SQL
+# function because plain SQL cannot decode the canonical blob; without it an
+# in-place upgrade would strand every in-flight ``wait_timer`` suspend at NULL.
 _MIGRATION_7_FIRE_AT_COLUMN = (
     "ALTER TABLE dispatcher_tasks ADD COLUMN fire_at REAL NULL"
 )
@@ -300,18 +283,18 @@ _MIGRATION_7_FIRE_AT_INDEX = (
 )
 
 
-# Migration 8: widen the fold-baseline index to include the
-# crash-recovery seal.
+# Migration 8: widen the fold-baseline index to include the crash-recovery
+# seal.
 #
 # ``StepAttemptAbandoned`` is a third snapshot-shaped fold baseline
-# (``state_ref``, like TaskRewound). ``find_latest_snapshot`` now looks up
-# ``type IN ('TaskSnapshot', 'TaskRewound', 'StepAttemptAbandoned')``, and
-# a partial index is only chosen when its WHERE matches the query
-# predicate exactly (the migration-5 lesson), so the index is re-created
-# with the widened IN-list. The list is deliberately a frozen literal
-# (applied migrations are immutable); the live queries render theirs from
-# ``noeta.protocols.event_log.SNAPSHOT_BASELINE_EVENT_TYPES``, so growing
-# that constant requires a NEW migration re-widening this index —
+# (``state_ref``, like TaskRewound), so ``find_latest_snapshot`` looks up
+# ``type IN ('TaskSnapshot', 'TaskRewound', 'StepAttemptAbandoned')``. Same
+# constraint as migration 5: a partial index is only chosen when its WHERE
+# matches the query predicate exactly, so the index is re-created with the
+# widened IN-list. The list is a frozen literal because an applied migration is
+# immutable, while the live queries render theirs from
+# ``noeta.protocols.event_log.SNAPSHOT_BASELINE_EVENT_TYPES`` — growing that
+# constant therefore requires a NEW migration re-widening this index.
 # ``tests/test_fix_storage.py`` pins the two in sync via the query plan.
 _MIGRATION_8_DROP_SNAPSHOT_INDEX = "DROP INDEX IF EXISTS ix_events_snapshot"
 
@@ -330,12 +313,12 @@ _MIGRATION_8_BASELINE_INDEX = (
 # untargeted FIFO poll must NOT steal it first: only
 # ``subtask_drain._descend_to_child`` seeds a child's goal into its opening
 # user message, so an untargeted worker would drive it with an empty message
-# history and the provider would reject the request. This adds a boolean
-# ``reserved`` column (``0``/``1``); the untargeted ``lease(task_id=None)``
-# selection filters ``reserved = 0`` and the FIRST successful lease clears the
-# flag (a one-shot claim), so a later suspend/resume re-enqueue is an ordinary
+# history and the provider would reject the request. The boolean ``reserved``
+# column (``0``/``1``) is filtered out of the untargeted
+# ``lease(task_id=None)`` selection, and the FIRST successful lease clears the
+# flag (a one-shot claim) so a later suspend/resume re-enqueue is an ordinary
 # untargeted-leaseable task. ``NOT NULL DEFAULT 0`` backfills every existing
-# row to the historical "not reserved" behaviour.
+# row to un-reserved.
 _MIGRATION_9_RESERVED_COLUMN = (
     "ALTER TABLE dispatcher_tasks "
     "ADD COLUMN reserved INTEGER NOT NULL DEFAULT 0"
@@ -345,15 +328,15 @@ _MIGRATION_9_RESERVED_COLUMN = (
 # Migration 10: widen the fold-baseline index to include the conversation
 # branch marker.
 #
-# ``TaskForked`` is a fourth snapshot-shaped fold baseline (``state_ref``,
-# like TaskRewound) — it names the history a forked task inherited from the
-# conversation it branched off, which is the only way that history folds at
-# all (it is not derivable from the fork's own genesis). Same migration-5
-# lesson as migration 8: a partial index is only chosen when its WHERE
-# matches the query predicate exactly, so the index is re-created with the
-# widened IN-list. The list stays a frozen literal (applied migrations are
-# immutable) while the live queries render theirs from
-# ``noeta.protocols.event_log.SNAPSHOT_BASELINE_EVENT_TYPES`` —
+# ``TaskForked`` is a fourth snapshot-shaped fold baseline (``state_ref``, like
+# TaskRewound) — it names the history a forked task inherited from the
+# conversation it branched off, which is the only way that history folds at all
+# (it is not derivable from the fork's own genesis). Same constraint as
+# migrations 5 and 8: a partial index is only chosen when its WHERE matches the
+# query predicate exactly, so the index is re-created with the widened IN-list.
+# The list stays a frozen literal (an applied migration is immutable) while the
+# live queries render theirs from
+# ``noeta.protocols.event_log.SNAPSHOT_BASELINE_EVENT_TYPES``;
 # ``tests/test_fix_storage.py`` pins the two in sync via the query plan.
 _MIGRATION_10_DROP_SNAPSHOT_INDEX = "DROP INDEX IF EXISTS ix_events_snapshot"
 
@@ -450,31 +433,21 @@ SCHEMA_VERSION: int = MIGRATIONS[-1].version
 def apply_migrations(conn: sqlite3.Connection) -> None:
     """Advance ``conn``'s schema to :data:`SCHEMA_VERSION`.
 
-    Loop-per-step structure (issue 16 B1): each iteration acquires
-    ``BEGIN IMMEDIATE``, re-reads ``PRAGMA user_version`` **inside**
-    the write lock, picks the next pending :class:`Migration`, and
-    either commits its DDL + the version bump or returns when there's
-    nothing left to do.
+    Each iteration re-reads ``PRAGMA user_version`` **inside** its own
+    ``BEGIN IMMEDIATE``, which is what makes concurrent initialisation safe:
+    reading the version once up front lets two connections opening the same
+    empty file both observe ``current=0``, serialise on the write lock, and the
+    loser then re-runs version-1 DDL and fails with
+    ``table events already exists``. Re-reading under the lock means the loser
+    sees the winner's bumped version and exits cleanly.
 
-    This shape is the fix for the race that the issue-15 "read
-    user_version once, then iterate" sequence had: two connections
-    initialising the same empty file would both see ``current=0``,
-    serialise on the write lock, and the second one would still
-    re-run version-1 DDL with stale state and fail with
-    ``table events already exists``. Re-reading inside the lock means
-    the loser of the race sees the winner's bumped ``user_version``
-    and exits cleanly.
-
-    Atomicity: each migration's DDL statements and the matching
-    ``PRAGMA user_version`` bump live in one transaction. A failure
-    rolls back together, so ``user_version`` never advances past a
-    half-applied schema. Idempotent: re-running after success is a
-    no-op.
+    Each migration's DDL and its ``PRAGMA user_version`` bump share one
+    transaction, so ``user_version`` never advances past a half-applied schema.
+    Re-running after success is a no-op.
     """
-    # Migration 7's backfill decodes each suspended timer's canonical
-    # ``wake_on`` blob to seed ``fire_at``; plain SQL cannot, so expose the
-    # decode as a per-connection SQL function. Registering it on every call
-    # is cheap and harmless — unused once the file is already at head.
+    # Registered unconditionally: migration 7's backfill needs this decode and
+    # plain SQL cannot do it. The registration is cheap, and harmless on a file
+    # already at head.
     conn.create_function("_noeta_timer_fire_at", 1, _timer_fire_at)
     while True:
         _begin_immediate_with_retry(conn)

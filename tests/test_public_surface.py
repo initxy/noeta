@@ -1,18 +1,12 @@
 """Public-surface completeness contract for host builders.
 
-The repo-split spec (``docs/implementation-specs/2026-07-26-sdk-only-repo-split.md``,
-decision D4) puts the *host* half of the import contract in the product
-repository (import-linter: the app may reach only ``noeta.sdk``) and the
-*library* half here: whatever a host legitimately needs must be reachable
-through the public surface, or the contract has a hole and the host is pushed
-back onto a runtime internal.
-
-Its predecessor scanned ``apps/noeta-agent`` for internal imports; that target
-left with the split, so this is the split-independent replacement:
+A host binds only to ``noeta.sdk`` / ``noeta.presets``, so everything it
+legitimately needs must be reachable there — a missing symbol is a hole that
+pushes the host onto a runtime internal. Three things are pinned:
 
 1. **Pinned surface** — the paths and symbols a host binds to are importable
    from ``noeta.sdk`` / ``noeta.sdk.storage`` (the data list below is the
-   contract; adding to it is how a new host need gets blessed).
+   contract; extending it is how a host need gets blessed).
 2. **Zero-logic re-export** — ``noeta.sdk.storage`` hands back (lazily,
    PEP 562) the very objects the ``storage`` built-in's backend packages
    (``noeta.builtins.storage.impl.{sqlite,postgres}``) define, so the blessed
@@ -34,11 +28,11 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-#: The host-contract examples: the reference host (split-spec D5) and the
-#: first-party plugins. These are written against the public surface on purpose
-#: and stand in for a product host. The rest of ``examples/`` are runtime-level
-#: demos that deliberately show internals (composer, policies, in-memory
-#: stores) and are out of scope here.
+#: The host-contract examples: the reference host and the first-party plugins.
+#: These are written against the public surface on purpose and stand in for a
+#: product host. The rest of ``examples/`` are runtime-level demos that
+#: deliberately show internals (composer, policies, in-memory stores) and are
+#: out of scope here.
 HOST_EXAMPLE_ROOTS = (
     REPO_ROOT / "examples" / "reference-host",
     REPO_ROOT / "examples" / "plugins",
@@ -49,13 +43,13 @@ HOST_EXAMPLE_ROOTS = (
 #: all covered).
 PUBLIC_ROOTS = ("noeta.sdk", "noeta.presets")
 
-#: The host contract: public path -> the symbols a host binds to there. This is
-#: the completeness half of split-spec D4 — a host need that is missing here is
-#: closed by a **re-export**, never by blessing an internal path.
+#: The host contract: public path -> the symbols a host binds to there. A host
+#: need that is missing here is closed by a **re-export**, never by blessing an
+#: internal path.
 HOST_CONTRACT: dict[str, tuple[str, ...]] = {
-    # Durable storage: the single public doorway (storage-backend-relocation
-    # spec D3) — the stack builders + path predicates it defines itself, and
-    # the 12 lazy adapter re-exports (6 sqlite + 6 postgres).
+    # Durable storage: the single public doorway — the stack builders + path
+    # predicates it defines itself, and the 12 lazy adapter re-exports
+    # (6 sqlite + 6 postgres).
     "noeta.sdk.storage": (
         # The four functions the doorway defines itself.
         "build_storage_stack",
@@ -234,9 +228,9 @@ def test_examples_exist() -> None:
 def test_examples_import_only_the_public_surface() -> None:
     """The reference host and every first-party plugin stay on ``noeta.sdk``.
 
-    They are this repo's stand-in for a product host (split-spec D5), so a
-    runtime-internal import here is the contract gap a real host would hit —
-    close it with a re-export and add the symbol to ``HOST_CONTRACT``.
+    They are this repo's stand-in for a product host, so a runtime-internal
+    import here is the contract gap a real host would hit — close it with a
+    re-export and add the symbol to ``HOST_CONTRACT``.
     """
     violations = [
         f"{path.relative_to(REPO_ROOT)}: {module}"

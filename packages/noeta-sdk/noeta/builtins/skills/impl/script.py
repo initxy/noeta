@@ -1,21 +1,14 @@
-"""``run_skill_script`` — execute a skill's bundled script under
-governance (Phase 4.5 Issue E).
+"""``run_skill_script`` — execute a skill's bundled script under governance.
 
-A **narrow, opt-in, always-approval** exec tool: it runs a script that a
-skill bundled (e.g. ``analyze-sessions.mjs`` / ``scripts/check.sh``), but
-only for a script L3 resolved as discovered + in-root, only via an
-allowlisted interpreter, only after the ``PermissionGuard`` E precheck +
-human approval (Issue A). It is **separate** from ``shell_run`` — its
-argv is constructed by Noeta (interpreter + resolved script realpath +
-validated args), never from a free-form command string.
-
-Layering: this lives in the ``noeta.tools`` band (skills subsystem, phase 2) and reuses the shell
-module's restricted-subprocess primitive. It takes the resolved script
-map as **plain ``(skill, relpath, root_path)`` tuples** — it never
-imports ``noeta.context.skills``. Honest boundary (same as ``shell_run``):
-Noeta does **not** sandbox the spawned process; the hash/ref are the bytes
-read just before exec — this does not defend against a concurrent
-malicious rewrite. Trusted-workspace only.
+A narrow, opt-in, always-approval exec tool: it runs a script a skill bundled
+(``analyze-sessions.mjs`` / ``scripts/check.sh``), but only for a script
+resolved as discovered + in-root, only via an allowlisted interpreter, and only
+after the ``PermissionGuard`` precheck + human approval. Separate from
+``shell_run`` — its argv is constructed by Noeta (interpreter + resolved script
+realpath + validated args), never from a free-form command string. Honest
+boundary: the spawned process is not sandboxed and the hash/ref are the bytes
+read just before exec, so this does not defend against a concurrent malicious
+rewrite — trusted-workspace only.
 """
 
 from __future__ import annotations
@@ -57,7 +50,7 @@ __all__ = [
 
 SKILL_SCRIPT_TOOL_NAME = "run_skill_script"
 
-#: Per-script byte cap (mirrors the write / Issue D resource cap).
+#: Per-script byte cap (mirrors the write resource cap).
 _SCRIPT_MAX_BYTES = 64 * 1024
 #: Closed suffix → interpreter map. An unknown suffix is refused.
 _INTERPRETER_FOR_SUFFIX: dict[str, str] = {
@@ -72,8 +65,8 @@ _MAX_ARG_LEN = 4096
 
 
 def is_skill_script_resource(relpath: str) -> bool:
-    """True if ``relpath``'s suffix has an allowlisted interpreter — i.e.
-    it is an executable skill script (public seam so L3 need not import a
+    """True if ``relpath``'s suffix has an allowlisted interpreter — i.e. it is
+    an executable skill script (public seam so the resolver need not import a
     private suffix map)."""
     return Path(relpath).suffix.lower() in _INTERPRETER_FOR_SUFFIX
 
@@ -90,12 +83,12 @@ def _err(message: str) -> ToolResult:
 class RunSkillScriptTool:
     """Execute a discovered skill script via an allowlisted interpreter.
 
-    Constructed with the L3-resolved ``scripts`` map (``(skill, relpath,
-    root_path)`` tuples; ``root_path`` is the skill root's absolute
-    realpath). The ``PermissionGuard`` already enforced the always-
-    approval invariant + active-skill + discovered checks before this
-    tool is ever invoked; the tool re-validates defensively and
-    re-resolves the realpath at invoke (TOCTOU-aware).
+    Constructed with the resolved ``scripts`` map (``(skill, relpath,
+    root_path)`` tuples; ``root_path`` is the skill root's absolute realpath).
+    The ``PermissionGuard`` already enforced the always-approval invariant +
+    active-skill + discovered checks before this tool is invoked; the tool
+    re-validates defensively and re-resolves the realpath at invoke
+    (TOCTOU-aware).
     """
 
     workspace: WorkspaceRoot
@@ -103,12 +96,12 @@ class RunSkillScriptTool:
     timeout_s: int = DEFAULT_SHELL_TIMEOUT_S
     output_cap: int = DEFAULT_SHELL_OUTPUT_CAP
     runner: Optional[Callable[..., subprocess.CompletedProcess[bytes]]] = None
-    #: Sandbox execution backend (D6-Skills / S7). ``None`` (default) reads the
-    #: script bytes + spawns the interpreter on the HOST, byte-identical to
-    #: before. When set, the hash-check read AND the interpreter run go THROUGH
-    #: the container (``exec_env.read_bytes`` / ``exec_env.run_argv``), and the
-    #: script paths (``scripts``) are container paths — the whole execution lands
-    #: inside the session's sandbox, cwd = the container workspace root.
+    #: Sandbox execution backend. ``None`` reads the script bytes + spawns the
+    #: interpreter on the HOST. When set, the hash-check read AND the
+    #: interpreter run go THROUGH the container (``exec_env.read_bytes`` /
+    #: ``exec_env.run_argv``), the script paths (``scripts``) are container
+    #: paths, and the whole execution lands inside the session's sandbox with
+    #: cwd = the container workspace root.
     exec_env: Optional[ExecEnv] = None
     name: str = SKILL_SCRIPT_TOOL_NAME
     description: str = (
@@ -165,12 +158,10 @@ class RunSkillScriptTool:
         if interpreter is None:
             return _err(f"no allowlisted interpreter for {relpath!r}")
 
-        # Re-resolve + re-confirm containment at invoke (TOCTOU-aware);
-        # use the SAME path for hashing + argv. Sandbox mode (``exec_env`` set)
-        # keeps the path a LEXICAL container path: a host ``.resolve()`` /
+        # Re-resolve + re-confirm containment at invoke (TOCTOU-aware); use the
+        # SAME path for hashing + argv. In sandbox mode a host ``.resolve()`` /
         # ``.stat()`` is meaningless inside the container, so containment is a
-        # lexical (``normpath``) check and the size / read go through the ExecEnv
-        # — the container is the isolation boundary.
+        # lexical (``normpath``) check and the size / read go through the ExecEnv.
         candidate = root / relpath
         if self.exec_env is None:
             try:
@@ -213,7 +204,7 @@ class RunSkillScriptTool:
             )
         except OSError as exc:
             # interpreter missing / spawn failure → typed failure result,
-            # NOT a half-enveloped raise (watchpoint #3).
+            # not a half-enveloped raise.
             return _err(f"could not execute {interpreter!r}: {exc}")
 
         return self._build_result(

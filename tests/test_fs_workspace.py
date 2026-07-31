@@ -1,8 +1,11 @@
-"""Phase 4 I1 — `WorkspaceRoot` path-containment regressions.
+"""``WorkspaceRoot`` path containment.
 
-Covers the three escape classes the resolver must reject (absolute
-paths, ``..``-rooted relatives, symlinks pointing outside) plus the
-happy-path resolution / relative-display helpers.
+The resolver is the only thing between a model-supplied path and the rest of the
+host filesystem, so each escape class it must reject is pinned here: absolute
+paths, ``..``-rooted relatives, and symlinks that land outside. ``extra_roots``
+is the host's deliberate widening seam, and it is checked after ``realpath`` and
+component-wise — a string-prefix check would leak a sibling directory whose name
+merely starts with an authorized one.
 """
 
 from __future__ import annotations

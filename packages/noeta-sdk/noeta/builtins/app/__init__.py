@@ -1,16 +1,11 @@
-"""``app`` — the app-preview tool (``open_app``).
+"""``app`` — the app-preview capability (the ``open_app`` tool).
 
-The tool is gated on a live host preview gateway (the product's concrete
-gateway rides the kernel's backend bag as ``"app_preview"``), so the
-manifest declares no identity ``tool`` contributions — that would merge it
-into an activating agent's ``AgentSpec``, which the gateway-gated wiring
-deliberately does not do. What it does declare (microkernel phase 3) is the
-session-construction half: the ``session_pack`` factory (band 1000 — after
-the kernel's custom entry, so the host's ``open_app`` is authoritative)
-whose applicability check IS the gateway gate. The implementation AND the
-``AppPreviewGateway`` / ``AppMount`` seam types all live in this plugin's
-``impl`` package (``noeta.builtins.app.impl``) — the kernel holds no
-app-preview vocabulary.
+The tool exists only where the host wires a live ``"app_preview"`` gateway, so
+the pack registers on the ``session_pack`` surface rather than contributing an
+identity ``tool``: host wiring must not leak into an activating agent's
+``AgentSpec``. Band 1000 is the last tool band, so the gateway-backed
+``open_app`` shadows a same-named custom tool (band 900) instead of losing to
+it.
 """
 
 from __future__ import annotations

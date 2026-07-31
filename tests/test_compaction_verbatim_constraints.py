@@ -7,8 +7,7 @@ instruction when it collapses a long prefix into a concise note — and once tha
 constraint is paraphrased away, the safety rule it encoded silently stops
 binding the rest of the session.
 
-The tool/agent catalog makes the ``compaction`` agent keep those constraints **verbatim**.
-Two layers enforce it:
+Two layers keep those constraints **verbatim**:
 
 1. the summarize PROMPT carries a hard rule telling the model to copy
    safety/permission directives word-for-word (best effort, model-facing);
@@ -176,7 +175,7 @@ def test_summarize_prompt_carries_verbatim_rule() -> None:
 
 def _summarize_system_text(policy: ReActPolicy, provider: FakeLLMProvider,
                            view: Any) -> str:
-    """Run a compaction and return the lower-cased summarize system prompt."""
+    """Run a compaction and return the summarize system prompt text."""
     policy.decide(_ctx(), view)
     assert len(provider.received_requests) == 1
     system = provider.received_requests[0].system
@@ -187,9 +186,9 @@ def _summarize_system_text(policy: ReActPolicy, provider: FakeLLMProvider,
 
 
 def test_summarize_prompt_uses_durable_sections() -> None:
-    """The summarize prompt is organized into the
-    durable-distillation sections — it adopts Claude Code's structure but trims it to a
-    durable subset. All seven adopted section headings must be present."""
+    """The summarize prompt asks for a note organized under a fixed set of
+    durable-distillation sections; all seven headings must reach the model, or
+    the produced note loses the structure the rest of the session reads."""
     resp = LLMResponse(
         stop_reason="end_turn", content=[TextBlock(text="note")]
     )
@@ -210,9 +209,9 @@ def test_summarize_prompt_uses_durable_sections() -> None:
 
 
 def test_summarize_prompt_drops_current_work_and_next_step() -> None:
-    """Current Work / Next Step are DROPPED — the latest state is
-    kept verbatim in the protected tail (D3), so re-narrating it from an
-    estimate would be wasteful and could disagree with the verbatim tail."""
+    """The prompt asks for no Current Work / Next Step section: the latest
+    state is kept verbatim in the protected tail, so re-narrating it wastes
+    budget and risks a summary that disagrees with the tail it sits next to."""
     resp = LLMResponse(
         stop_reason="end_turn", content=[TextBlock(text="note")]
     )
@@ -243,8 +242,8 @@ def test_summarize_prompt_files_section_is_path_list_only() -> None:
 
 
 def test_summarize_prompt_is_provider_neutral() -> None:
-    """Red line: the summarize prompt names no vendor and no
-    vendor-specific mechanism — it must work for any provider."""
+    """The summarize prompt names no vendor and no vendor-specific mechanism —
+    it must work for any provider (ADR provider-neutral)."""
     resp = LLMResponse(
         stop_reason="end_turn", content=[TextBlock(text="note")]
     )

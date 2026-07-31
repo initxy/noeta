@@ -1,12 +1,13 @@
-"""Streaming test matrix for ``OpenAICompatProvider.complete_streaming``.
+"""Streaming path of ``OpenAICompatProvider.complete_streaming``.
 
-Mirrors ``test_provider_openai_compat.py``: all HTTP traffic is mocked via
-``respx`` (zero real network calls), here as ``text/event-stream`` bodies in
-the Chat Completions chunk shape — nameless data-only SSE events terminated
-by a ``data: [DONE]`` sentinel. The contract under test: deltas fire for
-text / reasoning fragments only (tool-call fragments accumulate silently),
+The contract under test: deltas fire for text / reasoning fragments only
+(tool-call fragments accumulate silently, since partial JSON is unrenderable),
 and the returned ``LLMResponse`` is shape-identical to what ``complete()``
-produces for the equivalent batch body.
+produces for the equivalent batch body — the property that lets a host turn
+streaming on with no downstream change. All HTTP traffic is mocked via
+``respx`` (zero real network calls) as ``text/event-stream`` bodies in the Chat
+Completions chunk shape: nameless data-only SSE events terminated by a
+``data: [DONE]`` sentinel.
 """
 
 from __future__ import annotations
@@ -121,7 +122,7 @@ class _ExplodingStream(httpx.SyncByteStream):
 
 
 # ---------------------------------------------------------------------------
-# 1. Text-only stream: ordered text deltas + batch-identical final response
+# Text-only stream: ordered text deltas + batch-identical final response
 # ---------------------------------------------------------------------------
 
 
@@ -163,8 +164,8 @@ def test_text_stream_emits_ordered_deltas_and_matches_batch() -> None:
         StreamDelta(kind="text", text="Hel", index=0),
         StreamDelta(kind="text", text="lo", index=0),
     ]
-    # Streamed result is shape-identical to the equivalent batch call
-    # (``raw`` is diagnostics-only and legitimately differs).
+    # Shape identity with the equivalent batch call; ``raw`` is
+    # diagnostics-only and legitimately differs.
     assert streamed.stop_reason == batched.stop_reason == "end_turn"
     assert streamed.content == batched.content == [TextBlock(text="Hello")]
     assert streamed.usage == batched.usage == Usage(uncached=3, output=2)
@@ -199,7 +200,7 @@ def test_request_headers_are_merged_into_the_post() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2. Tool-call stream: silent accumulation, batch-identical decode
+# Tool-call stream: silent accumulation, batch-identical decode
 # ---------------------------------------------------------------------------
 
 
@@ -295,7 +296,7 @@ def test_text_before_tool_calls_keeps_both_in_content() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. Reasoning fragments: thinking deltas + final ThinkingBlock
+# Reasoning fragments: thinking deltas + final ThinkingBlock
 # ---------------------------------------------------------------------------
 
 
@@ -372,7 +373,7 @@ def test_encrypted_reasoning_accumulates_silently_into_signature() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. Usage: terminal include_usage chunk mapped; absence degrades to zero
+# Usage: terminal include_usage chunk mapped; absence degrades to zero
 # ---------------------------------------------------------------------------
 
 
@@ -419,7 +420,7 @@ def test_missing_usage_degrades_to_zero_usage() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. Error taxonomy: mid-stream transport failures and HTTP errors on open
+# Error taxonomy: mid-stream transport failures and HTTP errors on open
 # ---------------------------------------------------------------------------
 
 
@@ -492,7 +493,7 @@ def test_401_on_open_maps_to_fatal() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6. [DONE] handling / malformed chunks skipped / truncated stream
+# [DONE] handling / malformed chunks skipped / truncated stream
 # ---------------------------------------------------------------------------
 
 

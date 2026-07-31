@@ -1,74 +1,140 @@
-# Background subagent: spawn a subtask without suspending the parent, run it concurrently, and wake the parent to continue when it terminates
+# A background subagent is a barrier-free Task that runs concurrently with the parent's turn and pushes its result back at a turn boundary
 
 ## Context
 
-noeta can already push a **program** to the background (`shell_run(run_in_background=True)`, see shell-permission-and-background.md): the process runs concurrently as a host side effect without blocking the task, and on exit "mechanism C" wakes the session, injects a notification, and the model continues from there. But a **subagent**—a Subtask with a Policy that runs its own multi-turn loop—has no equivalent capability: once a parent spawns a subtask, it **suspends on an all-of barrier** (`wake_on = SubtaskGroupCompleted`, see subtask-fanout-and-durable-wake.md) and doesn't resume until the whole group terminates. The parent cannot "delegate a subagent, keep chatting with the user, let the subagent work in the background, and check back when it's done."
+Delegating a subagent normally suspends the parent on an all-of barrier (see
+subtask-fanout-and-durable-wake.md): the parent stops taking turns until the
+group terminates. Some work should not hold the turn — a broad scan, a long
+research job — and the user should be able to keep chatting while it runs.
 
-subtask-parallel-execution.md already loosened one layer of concurrency: members of an opt-in concurrent group can run **truly concurrently** on the process-global thread pool during drain. But that layer of concurrency **always happens within the window where the parent is suspended on the barrier**—drain is triggered inline after the parent releases its lease, on that released worker. A subtask never coexists with a parent that is **still advancing its own turn**.
-
-background-shell deliberately made background commands host side effects, and one of the reasons was "avoiding prematurely prying open the concurrency invariant that fan-out deliberately deferred." A background subagent wants exactly that deferred cut: let a subtask run to completion concurrently **while the parent is not suspended and is still taking user turns**.
+A shell command covers that shape for programs the host can run detached (see
+shell-permission-and-background.md). A subagent is a different case: it has a
+Policy and runs its own multi-turn decide loop, so it cannot be modelled as a
+process the host watches for an exit code.
 
 ## Decision
 
-### A background subagent is a Subtask, not a host side effect
+- **A background subagent is a Task, not a host side effect.** It carries a
+  Policy, owns an EventLog stream, and goes through the recorded pipeline like
+  any other subtask, which makes it durable: after a crash it resumes from its
+  own log rather than being recovered through process-identity guesswork.
 
-A background command has no Policy (no decision-maker), so it was made a side effect in the host process registry. A background subagent is the opposite—it **has** a Policy, is a first-class Task, and goes through the EventLog as usual. The upside is that it is naturally durable: after a crash it resumes and continues from its own EventLog, unlike an OS process that must be recovered through conservative PID identity checks.
+- **The spawn hangs no barrier.** `spawn_subagent(background=true)` returns a
+  "started" receipt as the call's tool result, leaves the parent advancing its
+  turn, and submits the child subtree to the shared fan-out executor (see
+  subtask-parallel-execution.md), where it runs to terminal concurrently with the
+  parent. The child is enqueued reserved, so only the targeted lease that seeds
+  its goal can claim it and an untargeted poll cannot drive it with an empty
+  history. The single-writer invariant holds: parent and child are two Tasks
+  writing two streams, and what overlaps is each one's own model and tool I/O.
 
-### Prying open the "subtask concurrent with a non-suspended parent" invariant
+- **The result is delivered at a turn boundary, proactively.** On terminal, the
+  child's result is snapshotted into the ContentStore and handed to a shared
+  background-delivery seam — the same one the background shell path uses — which
+  hops onto a daemon thread and folds the parent. A terminal session has no turn
+  to wake, so the push is dropped and the durable exit event stands for audit; a
+  session idle-suspended on its next-goal handle is woken and driven through one
+  notice turn tagged as system-origin, carrying a one-line summary plus the
+  subagent's result text dereferenced and inlined so the model reads the answer
+  rather than a pointer it cannot resolve (the content reference is retained on
+  the delivery anchor for provenance and re-delivery); a parent mid-turn is
+  re-attempted until it settles or a bounded deadline elapses. The spawn's
+  tool-result slot holds the "started" receipt, so completion cannot reuse it and
+  must arrive as its own notice.
 
-On `spawn_subagent(background=True)`, the Engine **does not hang a barrier for this subtask and does not suspend the parent**: it immediately submits the subtask subtree to the existing process-global thread pool (subtask-parallel-execution.md's `_global_executor`) and immediately returns a "started" `tool_result` to the parent. The parent continues advancing this turn; the background subtask runs to terminal state **concurrently** with it on the thread pool.
+- **A background subagent is always a single one.** The `background` flag is
+  valid only on a call carrying exactly one spawn entry; a fan-out batch is
+  always foreground. The child's creation event carries the flag conditionally
+  folded, so it is absent from a foreground child's canonical bytes.
 
-This is exactly where the deferred invariant is explicitly opened: before this, "concurrent subtasks" existed only in the window where the parent was suspended; now a background subtask can coexist with a live parent turn. **The single-writer invariant is not broken** (single-writer-invariant.md): the parent and the subtask are two different Tasks, each writing its own EventLog stream; the storage layer was built for concurrent threads from the start (WAL, per-adapter write locks, see subtask-parallel-execution.md), and what runs concurrently is each one's own LLM / tool I/O, not concurrent writes to the same stream.
+- **Lifetime belongs to the session, lineage to the task.** The child may outlive
+  the turn that started it, its parent link never blocks the parent's completion,
+  and a per-session cap (default eight) is checked before any durable write, so
+  an over-cap launch is refused outright rather than queued and leaves no trace.
+  Session close tears in-flight children down cooperatively through the cancel
+  cascade, writing each a terminal marker on its own stream so a later recovery
+  scan does not re-drive it.
 
-### Delivery via mechanism C: on termination, wake the parent session and inject the notification at a turn boundary
+- **Recovery is a startup scan.** For every launch event on a parent stream
+  without its matching delivery event, a non-terminal child is re-enqueued and
+  re-driven from its own EventLog (the descent skips re-seeding a goal a child
+  already has), and a terminal child whose notice was lost is re-delivered
+  without re-driving.
 
-When the background subtask reaches terminal state, it offloads its return result into the ContentStore, then **reuses mechanism C** (shell-permission-and-background.md): it wakes the parent session through the next-goal wake handle, and a host-side background driver injects, at a turn boundary, a notification tagged `origin="system"` (a one-line summary plus the sub-agent's result text, dereferenced from the ContentStore and inlined so the model reads the real answer directly rather than an opaque pointer; the result ContentRef is retained in the delivery anchor for provenance / re-delivery). The parent agent sees it on its next turn and continues accordingly—**active delivery, without the user having to ask again and without the model polling**.
+- **Determinism rests on the delivery anchor.** When the child terminates
+  relative to the parent's turn is genuinely non-deterministic in wall-clock
+  terms, but the notice is injected at a turn boundary and the delivery event
+  guarantees it is injected exactly once, so fold and resume reproduce the same
+  parent state. Retrying a deferred push only shifts *when* the notice turn is
+  injected.
 
-The `tool_result` slot of `spawn_subagent` is already occupied by the "started" receipt at spawn time, so completion **cannot** reuse that tool_result and must go through mechanism C's separate notification message—exactly isomorphic to how background commands deliver.
-
-### The `background` flag folds conditionally, and a background subtask is always a single one
-
-The intent hangs on the transient `SpawnSubtaskDecision.background`, folded conditionally (omit-when-falsey, mirroring how subtask-parallel-execution.md handles `concurrent`): on the non-background path, all existing recordings are byte-for-byte unchanged; only a background spawn writes one extra key. A background subagent is always a **single** one—"fire one and forget it" is the semantics of background; for a group of concurrent joins, use the existing `parallel` / `SpawnSubtasksDecision` barrier group.
-
-### Lifetime belongs to the session, lineage to the task; crash recovery resumes; kill goes through cancel cascade
-
-Mirroring background commands: a background subagent may outlive the parent turn that started it, its lifetime owner is the session, and `spawned_by_task_id` is only a lineage label that **never blocks the parent's completion**. After a host restart, background subtasks that "have a `BackgroundSubagentStarted` but no `BackgroundSubagentDelivered` / terminal state" are scanned and resubmitted to the thread pool to continue (the subtask itself resumes from its EventLog). On session close, in-flight background subagents are stopped via the cancel cascade. Per-session background subagents have a concurrency limit (default 8, mirroring the background command job limit); over the limit is rejected outright, not queued.
-
-### Red line: deterministic fold / resume is not broken
-
-The termination of the background subtask, the `BackgroundSubagentDelivered` dedup anchor, and the mechanism-C-injected notification are all events with a **deterministic recorded position** on the parent stream. "When the subtask completes relative to the parent turn" is genuinely non-deterministic in wall-clock terms, but noeta's honest boundary (subtask-parallel-execution.md) has always been "fold / resume reproduces **that one** recording, not two live runs byte-for-byte identical"—background completion is injected once at a turn boundary and the `Delivered` anchor guarantees it is injected only once, so fold / resume reproduces the same parent state.
+- **Nested background is not offered.** The Engine reaches the background driver
+  through a duck-typed launcher seam wired only in the top-level interactive
+  engine; child engines and one-shot engines get none, so a background spawn
+  inside a background child collapses to a foreground barrier spawn.
 
 ## Rationale
 
-- **A background subagent should be a Task rather than a host side effect because it has a Policy.** Background commands were made host side effects because a process has no decision-maker, and forcing it into "Task = has a Policy" is awkward. A subagent carries its own Policy, so making it a Task goes with the grain—and gets EventLog durability / resume for free, sparing it the conservative PID recovery of background commands.
+- **A subagent has a Policy, so it belongs on the Task substrate.** Modelling it
+  as a host object would mean inventing "a host object that runs a Policy", which
+  is heavier than a first-class Task and forfeits recorded durability and resume.
 
-- **Delivery reuses mechanism C rather than inventing a fresh wake for subagents.** noeta-agent is request-driven with no long-lived WorkerLoop; the wake + turn-boundary injection for "background completion" was already solved once for background commands, and its durable footprint is byte-for-byte isomorphic to a single `send_goal` turn. The completion of a background subagent and the completion of a background command are the same class of event (a background activity terminates and its result must be pushed to a session that isn't waiting for it), so reusing the same path means no new WakeCondition serialization and no enlarged fold surface.
+- **Delivery reuses the turn-boundary push, needing no new wake.** A background
+  command finishing and a background subagent finishing are the same class of
+  event: a detached activity terminates and its result must reach a session that
+  is not waiting for it. Sharing the path means no new wake condition to
+  serialize and no wider fold surface — and one implementation of the fiddly
+  parts (the non-blocking hop, the terminal-parent check, the bounded mid-turn
+  retry) instead of two that drift.
 
-- **Conditional folding = zero blast radius.** Default behavior and every existing recording are byte-for-byte unchanged; background is a flag that a `spawn_subagent` call actively requests. Same folding discipline as `concurrent`.
+- **Conditional folding keeps the blast radius at zero.** Background is something
+  a call actively requests, and a foreground spawn records no trace of the
+  question.
 
-- **Only a single background subagent is supported because "group" semantics live elsewhere.** The essence of background is "fire and forget," and a single scalar subtask is enough; for N-way concurrent join, use the existing barrier group. Keeping "background" and "grouped" orthogonal keeps both sides simple.
+- **"Fire and forget" needs no group semantics.** A single scalar subtask is the
+  whole of it; N-way concurrent join is the barrier group's job. Keeping
+  background and grouped orthogonal keeps both simple.
 
 ## Alternatives considered
 
-1. **Make the background subagent a host side effect too (stuffed into the process registry like a background command).** Rejected: a subagent has a Policy and runs an EventLog-driven decide-loop; it is not an OS process you can "fire and monitor the exit code of." Forcing it into a host side effect would require inventing a "host object that runs a Policy," which is heavier than making it a first-class Task and also loses durability / resume.
-
-2. **Don't pry open the concurrency invariant; instead "serially drain the background subtask during the parent's next suspend window."** Rejected: that isn't "run in the background," it's "run later"—the subtask doesn't move while the parent is still taking user turns, so you don't get the "chat while it works in the background" experience, which misses the alignment goal.
-
-3. **A true long-lived worker pool + dispatcher driving background subtasks across multiple leases.** Rejected: a re-architecture far larger than this capability needs; the existing inline drain + thread pool can already run subtasks concurrently, and the only missing piece is "submit one without binding it to the parent barrier."
-
-4. **On completion, reuse the spawn `tool_result` slot to deliver the result.** Rejected: that slot is already occupied by the "started" receipt at spawn; completion is a late-arriving thing decoupled from the original tool call and must go through a separate mechanism-C notification (consistent with background commands).
-
-5. **Let a background subagent spawn further backgrounds (nested background).** Rejected: nested concurrency is deliberately not provided (subtask-parallel-execution.md); background-on-background would let the number of in-flight background activities run away and render the concurrency ceiling meaningless. If a background subagent fans out internally, it drains serially per the existing rules.
+1. **Make the background subagent a host side effect, held in the process
+   registry like a background command.** Rejected: a subagent runs a
+   Policy-driven decide loop, not an OS process whose exit code can be watched.
+   Forcing it into a host side effect requires inventing a host object that runs
+   a Policy, and loses durability and resume.
+2. **Keep the barrier and drain the "background" subtask during the parent's next
+   suspend window.** Rejected: that is running it *later*, not in the background
+   — the subtask makes no progress while the parent takes user turns, which is
+   the entire point.
+3. **A long-lived worker pool plus a dispatcher driving background subtasks
+   across multiple leases.** Rejected: a re-architecture far larger than the
+   capability needs; the inline drain and its shared pool run subtasks
+   concurrently on their own, and the only missing piece is submitting one
+   without binding it to a barrier.
+4. **Deliver the result by reusing the spawn call's tool-result slot.** Rejected:
+   that slot carries the "started" receipt. Completion is a late-arriving event
+   decoupled from the originating call and needs its own notice.
+5. **Let a background subagent spawn further background children.** Rejected:
+   nested concurrency is deliberately not offered, and background-on-background
+   would let the number of in-flight activities run away, making the concurrency
+   ceiling meaningless. A background subagent that fans out internally drains
+   under the ordinary rules.
 
 ## Consequences
 
-- Protocol side: `SpawnSubtaskDecision.background` (conditionally folded) lands in `noeta.protocols.decisions`; the boundary events `BackgroundSubagentStarted` / `BackgroundSubagentDelivered` land in `noeta.protocols.events` (`BackgroundShell*` is their shape template).
-- Handling / execution side: the non-blocking admission of the background branch lands in `noeta.core._decision_handlers` (`handle_spawn_background_subtask`, loop-continuing, via a special case in `Engine.run_one_step` rather than `dispatch_exit`); mechanism C's "background completion notification" must not carry the background-command-specific PID / process-registry assumptions into the subagent path.
-
-  **Implementation landing (deviation from the design assumption)**: the background subagent registry lands in **`noeta.execution.background_subagent.BackgroundSubagentRegistry`**, not in `noeta.runtime`—it reuses drain's `_drive_member_to_terminal` / `_global_executor` (both in `noeta.execution`), and in the import-linter layer order `execution` sits above `runtime`, so the registry cannot land in `runtime`. The Engine obtains it through a duck-typed `background_subagent_launcher` (two seams: `.launch` / `.capacity`), wired only in the top-level interactive Engine (which has the multi-turn `policy_wrapper`)—sub-Engines / oneshot get `None`, so "a background subagent opening further background" naturally degrades to foreground serial drain (a non-goal in v1). Mechanism-C delivery is driven through `InteractionDriver.notify_background_subagent_exit`; the shared host-side glue (the daemon-thread hop + parent-fold terminal check + mid-turn-deferral retry loop) that background shell and background subagent had each duplicated is now the one `noeta.execution.background_delivery.BackgroundDelivery` seam both exit hooks funnel through (`SdkHost._on_background_exit` / `_on_background_subagent_exit` shrink to a per-tenant `plan` projection). The notifier is wired by `noeta.sdk.Client.__init__` via `set_background_notifier` (which incidentally activated the previously-unwired background-shell mechanism C).
-
-  **Two v1 simplifications (documented)**: ① a background spawn does not write `SubtaskSpawned`, so it is not counted toward `Budget.max_spawned_subtasks`—concurrency is backstopped by the per-session background limit (default 8). ② When a subagent completes while the parent turn is still in flight (a rare race), the delivery thread does a bounded retry-until-idle (default 30s). This was originally the subagent-only refinement over background shell's "single attempt + no reschedule"; the two paths have since been unified behind the shared `BackgroundDelivery` seam, so the background-shell path now shares the same bounded retry (the issue-02 "auto-re-arm a deferred push" follow-up is closed). Purely wall-clock timing, with recording bytes unaffected either way.
-
-- Governance: the per-session background subagent concurrency limit, lifetime belonging to the session, and kill going through the cancel cascade are all the same shape as background-command job governance.
-- Remember the honest boundary: what is guaranteed is that fold / resume reproduces the recorded order, not that two live runs are byte-for-byte identical; the `BackgroundSubagentDelivered` dedup anchor is where this boundary bears weight on the background path, and any change to it must preserve "injected exactly once."
-- Non-goals (v1): mid-flight progress polling of a background subagent, a model-visible `subagent_kill` tool, and nested background—none of these are done.
+- The `background` flag lands on the spawn decision in
+  `noeta.protocols.decisions` and, conditionally folded, on the child creation
+  payload; the launch and delivery boundary events live in
+  `noeta.protocols.events`.
+- The non-blocking admission path lives in `noeta.core._decision_handlers`, the
+  in-flight registry and its recovery scan in
+  `noeta.execution.background_subagent` (reusing the drain's member-drive and
+  shared executor), and the shared turn-boundary push in
+  `noeta.execution.background_delivery`, which both background tenants funnel
+  through with only their own completion-notice projection.
+- A background spawn writes no subtask-spawned event, so it is not counted
+  against the spawned-subtask budget; the per-session cap is the backstop.
+- The delivery anchor is where the exactly-once guarantee bears weight on this
+  path; any change to it must preserve "injected exactly once".
+- Not offered: mid-flight progress polling of a background subagent, a
+  model-visible kill tool, and nested background.

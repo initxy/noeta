@@ -1,33 +1,15 @@
-"""First-party example manifest plugin — ``checklist-reminder``: a compose-time
-(track B) reminder.
+"""A compose-time nudge when the agent's checklist grows too long.
 
-Demonstrated SDK capability
----------------------------
-The new ``reminder`` surface — **track B** of the SDK-extensibility redesign
-(``docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md``, D8): a
-compose-time, **pure** reminder. A ``reminder`` is ``(name, priority, render)``
-where ``render`` is a *pure function of a narrow folded-state projection*
-returning ``str | None``, rendered at the **tail of the dynamic suffix** (the
-composer wraps a non-``None`` string in one ``<system-reminder>`` message). The
-stable prefix is untouched by construction — reminders only append to the
-volatile dynamic suffix.
+Demonstrated SDK capability: the ``reminder`` surface. A reminder is a pure
+``render`` over a narrow folded-state projection, appended to the tail of the
+composed request's dynamic suffix. Purity is the contract — no clock, no
+randomness, no external fetch — because the same folded state must compose the
+same bytes for replay and for the cached stable prefix to hold. A reminder that
+needs to reach the outside world belongs on ``reminder_provider`` instead, where
+its output is recorded.
 
-Purity is the contract (the same trust class as a ``ContentKindSpec`` renderer):
-no clock, no randomness, no external fetch — so the same folded state always
-composes the same bytes, and replay / the KV-cache prefix stay reproducible.
-
-What it renders
----------------
-When the agent's checklist grows past :data:`THRESHOLD` unfinished items, it
-appends a scope-hygiene nudge — a pure function of the projection's ``todos``.
-A short (or finished) list renders nothing, so the reminder is self-limiting and
-never nags. ``priority`` places it AFTER the three built-in reminders
-(``unfinished-todos`` 100, ``delegation-nudge`` 200, ``read-suggestion`` 300).
-
-The ``render`` takes the composer's narrow ``ReminderView`` projection by
-duck typing — it reads only ``view.todos`` (a tuple of ``{id, content, status}``
-mappings), never the raw task — so this example stays on the ``noeta.sdk``
-public surface (the projection type is a runtime internal).
+The render reads the projection by duck typing so this example depends on
+nothing outside ``noeta.sdk``; the projection type itself is a runtime internal.
 """
 
 from __future__ import annotations
@@ -37,16 +19,17 @@ from typing import Any, Optional
 from noeta.sdk import PluginBuilder
 
 
-#: Unfinished-item count above which the nudge renders.
+#: Unfinished-item count above which the nudge renders. High enough that an
+#: ordinary multi-step task never trips it.
 THRESHOLD = 5
 
 
 def long_checklist_reminder(view: Any) -> Optional[str]:
-    """Nudge to split a long checklist into sub-agents (pure over ``view.todos``).
+    """Nudge to split a long checklist into sub-agents.
 
-    ``view`` is the composer's ``ReminderView`` projection; only its ``todos``
-    field is read. Returns ``None`` (render nothing) unless there are more than
-    :data:`THRESHOLD` unfinished todos.
+    Returning ``None`` renders nothing, which is what keeps the reminder
+    self-limiting: a short or finished list is silent, so the nudge cannot decay
+    into noise the model learns to skip.
     """
     todos = getattr(view, "todos", ())
     unfinished = [
@@ -64,9 +47,12 @@ def long_checklist_reminder(view: Any) -> Optional[str]:
     )
 
 
-#: The single-file manifest (decorator sugar *is* the manifest, spec D1). The
-#: contributed render is cached for single-file resolution; a distributed install
-#: exposes it at ``checklist_reminder:long_checklist_reminder``.
-#: ``python -m noeta.sdk.plugin_check`` derives the TOML from this builder.
+#: The builder *is* this plugin's manifest, and its name is the plugin identity
+#: — the activation key, not the filename. ``python -m noeta.sdk.plugin_check``
+#: derives TOML from it and verifies the shipped ``noeta-plugin.toml`` matches.
+#:
+#: ``priority=400`` places the nudge after the three built-in reminders
+#: (``unfinished-todos`` 100, ``delegation-nudge`` 200, ``read-suggestion`` 300),
+#: so an advisory note never displaces the ones the agent acts on.
 plugin = PluginBuilder("checklist-reminder", requires_noeta=">=0.4")
 plugin.reminder(long_checklist_reminder, name="long-checklist", priority=400)

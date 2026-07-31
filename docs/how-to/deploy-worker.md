@@ -1,170 +1,151 @@
 # Deploy a worker
 
-**Goal:** run a `WorkerLoop` as a resident drain loop that continuously
-processes tasks from a durable store.
+**Goal:** run a resident pool of workers that continuously drains a durable
+store, so tasks progress after the request that created them is gone.
 
 **Before you start:** you understand the SDK from [Your first
-agent](../tutorials/first-agent.md). You have a durable SQLite store set
-up.
+agent](../tutorials/first-agent.md).
 
-## What WorkerLoop is
+## Why you need one
 
-`WorkerLoop` is the library primitive for running a resident agent that
-drains the dispatcher's ready queue. It is not a console script and not
-a daemon — you construct and run it in your own process:
+A task advances only when something leases it off the dispatcher's ready
+queue. Nothing launches that drain for you. Without a running worker:
 
-```python
-from noeta.runtime.worker import WorkerLoop
+- a `wait_timer` suspension never wakes — the worker's timer poll is the only
+  producer of `TimerFired`;
+- a task whose worker crashed mid-step is never reclaimed, because the
+  stale-lease sweep runs inside the drain loop;
+- a task made ready by one process is never picked up by another.
 
-loop = WorkerLoop(rt, worker_id="my-worker")
-loop.run_forever(install_signals=True)  # blocks until stop()
-```
+A worker is the deployment shape for anything that must outlive the request
+that created it.
 
-`WorkerLoop` is a dedicated drain: it polls the ready queue, leases one
-task, advances it one step, and repeats. A host embeds a pool of
-them; this page is for running your own — the
-deployment shape for agents that need to outlive any individual HTTP
-request.
+## Use durable storage
 
-## Build a WorkerRuntime
-
-`WorkerLoop` expects a `WorkerRuntime` — an object with four read-only
-properties:
+Cross-process handoff only works through shared on-disk state, so a resident
+pool needs real storage. `HostConfig.storage_path` takes one string — a SQLite
+file path, a `postgresql://` DSN, or `":memory:"` — and builds the whole
+`(EventLog, ContentStore, Dispatcher)` triple in the right order:
 
 ```python
-from dataclasses import dataclass
+from pathlib import Path
 
-@dataclass
-class MyRuntime:
-    engine: ...        # noeta Engine instance
-    event_log: ...     # EventLog (SQLite-backed for durability)
-    content_store: ... # ContentStore
-    dispatcher: ...    # Dispatcher
+from noeta.sdk import Client, HostConfig, Options
+
+options = Options(system_prompt="You are a helpful assistant.", name="main")
+
+client = Client(
+    options,
+    provider=my_provider,
+    workspace_dir=Path("./workspace"),
+    model="claude-sonnet-4-5-20250929",
+    host_config=HostConfig(storage_path="./noeta.sqlite"),
+)
 ```
 
-The in-repo `noeta.testing.profile.RuntimeBundle` satisfies this
-protocol for testing. For a real deployment, assemble these from the
-runtime's storage and engine modules.
+Do not use `":memory:"` for a resident pool — the store dies with the process
+and nothing else can see it.
 
-### Use real SQLite storage
-
-Cross-process enqueue only works through shared on-disk state. Do not
-use `:memory:` for a resident worker:
+If you build the triple yourself, use `noeta.sdk.storage` and keep all three
+components on the same database; the event log takes the dispatcher as its
+lease validator:
 
 ```python
 from noeta.sdk.storage import build_storage_stack
 
-db_path = "./worker.sqlite"
 event_log, content_store, dispatcher = build_storage_stack(
-    "sqlite", path=db_path,
+    "sqlite", path="./noeta.sqlite",
 )
 ```
 
-`build_storage_stack` points all three components at the same SQLite
-file and wires their internal coordination. The adapter classes
-(`SqliteEventLog` / `SqliteContentStore` / `SqliteDispatcher`) are also
-re-exported from `noeta.sdk.storage` for hosts that construct them
-directly — keep them on the same on-disk database so the dispatcher can
-coordinate with the event log.
+`build_storage_stack` accepts `"memory"` (no config), `"sqlite"` (`path=`) and
+`"postgres"` (`dsn=`). `open_storage_stack` runs the same value-shape dispatch
+`HostConfig.storage_path` uses. Pass the triple as the `event_log` /
+`content_store` / `dispatcher` fields of `HostConfig` — all three or none;
+mixing them with `storage_path` raises `ValueError`.
 
-If you only need durable storage for a `Client` (not a standalone worker
-loop), skip the triple entirely and hand `HostConfig` the path — it runs the
-same resolution, including the ordering invariant:
+## Start and stop the pool
 
 ```python
-from noeta.sdk import Client, HostConfig
-
-client = Client(options, provider=provider,
-                host_config=HostConfig(storage_path="./worker.sqlite"))
+with client:
+    client.start_workers(4)
+    ...
+    client.stop_workers(timeout=30.0)
 ```
 
-`storage_path` accepts a SQLite file path, a `postgresql://` DSN, or
-`":memory:"`; `query(..., host_config=...)` takes the same config, so even a
-one-shot run can be recorded durably.
+Each worker runs on its own daemon thread with its own `worker_id`, and all of
+them drain the same ready queue. Concurrent workers are safe: every
+lease-checked append is fenced, so a worker whose lease was reclaimed is
+rejected rather than allowed to write.
 
-## Construct and run
+`start_workers` is one-shot — a second call raises `RuntimeError`.
+`stop_workers` signals every loop and joins the threads, returning `True` when
+all of them exited within `timeout`. On a timeout it returns `False` and
+deliberately keeps the pool tracked, so a retry can finish the job instead of
+stacking a second pool on the first. `Client.shutdown` (and therefore leaving
+the `with` block) stops the pool before tearing anything else down.
 
-```python
-from noeta.runtime.worker import WorkerLoop, install_stop_signals
+### Knobs
 
-loop = WorkerLoop(
-    rt,
-    worker_id="noeta-worker",
-    lease_seconds=600.0,
-    poll_interval=0.5,
-    heartbeat_interval=30.0,
-    stale_sweep_interval=10.0,
-    timer_poll_interval=1.0,
-    shutdown_grace_s=30.0,
-)
-
-# Wire SIGTERM/SIGINT to stop() (main thread only)
-install_stop_signals(loop)
-
-# Blocks until stop() is called or a signal arrives
-loop.run_forever(install_signals=True)
-```
-
-### Constructor knobs
-
-| Knob | Default | What it does |
+| Parameter | Default | What it does |
 | --- | --- | --- |
-| `worker_id` | `"noeta-worker"` | Lease owner identifier |
+| `num_workers` | `1` | Number of drain threads. Must be `>= 1`. |
+| `poll_interval` | `0.1` | Sleep when the ready queue is empty |
+| `heartbeat_interval` | `30.0` | Per-step lease keepalive |
+| `stale_sweep_interval` | `10.0` | `requeue_stale()` cadence |
+| `timer_poll_interval` | `1.0` | `fire_due_timers()` cadence |
 | `lease_seconds` | `600.0` | Initial lease deadline per task |
-| `poll_interval` | `0.5` | Sleep when the ready queue is empty |
-| `heartbeat_interval` | `30.0` | Per-step lease keepalive (`<= 0` disables) |
-| `stale_sweep_interval` | `10.0` | `requeue_stale()` cadence (`<= 0` disables) |
-| `timer_poll_interval` | `1.0` | `fire_due_timers()` poll cadence |
-| `shutdown_grace_s` | `30.0` | Max wait for in-flight step after `stop()`. `None` = unbounded |
-| `reliability_sink` | structured logs | Where `ReliabilityEvent`s go |
+| `shutdown_grace_s` | `10.0` | Max wait for an in-flight step after stop. `None` = unbounded |
 
-There is **no `workers` knob**: one `WorkerLoop` is one drain thread. Scale out
-by running several loops (each with its own `worker_id`) against the same store.
-Concurrent loops are safe: lease-checked appends are fenced.
+## What a worker does per iteration
 
-## What happens at runtime
+1. Sweep stale leases — `requeue_stale()` reclaims tasks whose leases expired.
+2. Poll timers — `fire_due_timers()` flips every due `wait_timer` suspension
+   back to ready with a `TimerFired` wake.
+3. Lease one ready task and advance it one step.
+4. If the queue was empty, sleep `poll_interval`.
 
-Each iteration of `run_forever`:
+A poisoned task never crashes the loop. An `InvalidLease` is logged and
+skipped — the lease is not this worker's, so it makes no claim about the
+task. Any other exception becomes `dispatcher.fail(retryable=True)`: bounded
+retry, then terminal. The loop always proceeds to the next task.
 
-1. `maybe_sweep()` — if `stale_sweep_interval` elapsed, call
-   `dispatcher.requeue_stale()` to reclaim tasks whose leases expired.
-2. `maybe_poll_timers()` — if `timer_poll_interval` elapsed, call
-   `dispatcher.fire_due_timers()` to produce `TimerFired` wake events.
-3. `tick()` — lease one ready task and advance it one step. Returns
-   `False` if the queue is empty.
-4. If `tick()` returned `False`, sleep `poll_interval` seconds.
+## Shutdown
 
-## Shutting down
+A stop request is cooperative. The loop stops leasing new tasks and waits up
+to `shutdown_grace_s` for the in-flight step, whose lease the heartbeat keeps
+alive. If the step does not finish in time the loop **abandons** it and
+returns.
 
-Call `loop.stop()` to signal a graceful shutdown. The loop:
+Abandon is process-shutdown only. Python cannot kill the abandoned step
+thread, so it may still be running and writing to the EventLog: the host must
+exit the process. Once it does, the lease expires and the next
+`requeue_stale` sweep reclaims the task.
 
-1. Stops leasing new tasks.
-2. Waits up to `shutdown_grace_s` for the in-flight step to complete
-   (its lease is kept alive by the heartbeat).
-3. If the step does not finish in time, **abandons** it: stops the
-   heartbeat, emits `shutdown_abandoned`, sets `loop.abandoned = True`.
+## Scaling out
 
-When `loop.abandoned` is `True`, the host **must exit the process**. The
-abandoned step thread may still be writing to the EventLog; in-process
-reuse after abandon is unsupported. After the process exits, the lease
-expires and `requeue_stale` reclaims the task on the next start.
+Several processes may drain one store only on **Postgres**, where appends are
+fenced in-transaction against the live lease and lease expiry runs on the
+database clock. SQLite has no cross-host fencing — keep it to one host, where
+a multi-worker pool is fine.
 
-## Exception handling
+The ready queue does no routing: a worker drains whatever it leases, so every
+task in a store must be one that pool can run. Give distinct workload profiles
+their own store.
 
-A resident loop must not crash on a poisoned task:
+## Driving the loop yourself
 
-- `InvalidLease` → log and continue (the lease is no longer ours).
-- Any other exception → `dispatcher.fail(lease_id, retryable=True,
-  reason=…)`: bounded retry, then terminal.
-- If `fail()` itself raises → log and continue.
-
-The loop always proceeds to the next task.
+A host that has no `Client` — a standalone drain process assembling its own
+engine, event log, content store and dispatcher — can construct the drain
+primitive directly. See the [WorkerLoop
+reference](../reference/worker-loop.md) for the `WorkerRuntime` protocol it
+expects and every constructor parameter, method, and outcome type.
 
 ## See also
 
-- [WorkerLoop reference](../reference/worker-loop.md) — every constructor
-  parameter, method, and outcome type
-- [Wake & resume](../concepts/wake-resume.md) — the delivery guarantee
-  the worker implements
+- [WorkerLoop reference](../reference/worker-loop.md) — the loop primitive in
+  full
+- [Wake & resume](../concepts/wake-resume.md) — the delivery guarantee the
+  worker implements
 - [Known limitations](../operations/limitations.md) — the SQLite single-host
   boundary and crash-recovery scope

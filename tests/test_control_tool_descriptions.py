@@ -1,21 +1,12 @@
-"""Every control tool carries a non-empty, externalized function-level
-description.
+"""Every control tool carries a non-empty, externalized function description.
 
 The composer renders a control tool's schema verbatim into
-``View.provider_tool_schemas``; unlike executable tools there is no ``Tool``
-dataclass to hang a ``description`` field on, so the description must be set
-directly in each ``*_tool_schema()`` function — and sourced from a sibling
-``<name>.md`` resource rather than a Python string literal. This guard fails
-loudly if a new control tool ships without a function-level description or
-hard-codes it inline instead of externalizing it.
-
-Control-tool-surface S2/S2b moved every control tool into a built-in (schema +
-``.md`` collocated beside the impl, loaded via the shared L0 ``load_markdown``):
-``todo_write`` / ``ask_user_question`` / ``spawn_subagent`` into their own
-built-ins; ``skill`` into ``skills``; ``run_workflow`` into ``react``. The kernel
-``policies`` band keeps NO control-tool description any more. Each schema's
-description must still equal its own externalized ``.md`` resource, wherever it
-now lives.
+``View.provider_tool_schemas``; unlike an executable tool there is no ``Tool``
+dataclass to hang a ``description`` on, so each ``*_tool_schema()`` sets it
+directly — and sources it from the sibling ``<name>.md`` beside the impl
+rather than a Python string literal. A control tool that ships with no
+description, or with an inline copy, sends the model text nobody reviewed as
+prose; this fails loudly on both.
 """
 from __future__ import annotations
 
@@ -29,9 +20,9 @@ from noeta.builtins.todo_write.impl import todo_write_tool_schema
 from noeta.policies.control_semantics import RUN_WORKFLOW_TOOL
 from noeta.protocols.resources import load_markdown
 
-# (tool name, freshly built schema, its externalized-description loader) —
-# roster-taking tools get an empty roster so we exercise the no-roster shape;
-# the function-level description must be present regardless of roster contents.
+# (tool name, freshly built schema, its externalized-description loader). The
+# menu / directory-taking schemas are built empty on purpose: the function
+# description must be present regardless of what those listings contain.
 _CONTROL_SCHEMAS: dict[str, tuple[dict[str, Any], Callable[[], str]]] = {
     "todo_write": (
         todo_write_tool_schema(),

@@ -7,14 +7,6 @@
 twice; if still no call after two nudges → that helper fails. ``agent()``
 without a schema is unchanged; the tool is visible only to that helper, never
 leaking to the parent or other helpers.
-
-T8/③-B port: these tests originally drove the deleted noeta-agent runner
-(``AgentSessionRunner._build_child_engine`` read the helper's ``output_schema``
-off its ``TaskCreated.inputs``). They now drive the production SDK drain —
-``GenericEngineResolver._build_subtask_engine`` reads the same durable inputs
-and ``SdkHost._build_engine`` mounts the ``structured_output`` control schema +
-``StructuredOutputPolicy`` — the same path the shipping backend uses via
-``noeta.sdk.Client``.
 """
 
 from __future__ import annotations
@@ -182,7 +174,7 @@ def test_nudge_then_success(tmp_path: Path) -> None:
 
 def test_two_nudges_then_helper_fails(tmp_path: Path) -> None:
     # Helper never calls structured_output → after MAX nudges it fails. A failed
-    # helper now HALTS the workflow loudly, surfacing the child's
+    # helper HALTS the workflow loudly, surfacing the child's
     # own reason — which also exercises the single-delegate seam propagating
     # SubtaskResult.error (not a generic "sub-agent failed").
     script = (
@@ -316,7 +308,7 @@ def test_invalid_payload_is_rejected_then_corrected(tmp_path: Path) -> None:
 
 
 def test_invalid_payload_exhausts_the_budget_and_fails(tmp_path: Path) -> None:
-    # Three bad payloads: reject, reject, fail — the same D6 ceiling the
+    # Three bad payloads: reject, reject, fail — the same ceiling the
     # never-called path uses, and the reason names the violation.
     provider = FakeLLMProvider(
         responses=[

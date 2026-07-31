@@ -1,11 +1,9 @@
-"""``governance`` — the default guard / observer hooks.
+"""``governance`` — the default guard stack and the hook observer.
 
-D6: process-scoped once loaded, never following activation. These are
-governance authority. Microkernel M2: the refs point into this plugin's own
-``impl`` package (the enforcement classes moved out of ``noeta.guards`` /
-``noeta.observers.hook``); the SDK host wires the default stack by resolving
-``impl:build_default_guards`` (:func:`noeta.client.parts.default_guards_factory`)
-into the kernel builder's ``guards_factory`` injection.
+Governance is process-scoped once loaded and never follows activation: a Guard
+is an authority, so it must not be something a Task can switch off. The SDK
+host wires the stack by resolving ``impl:build_default_guards`` into the kernel
+builder's ``guards_factory`` injection.
 """
 
 from __future__ import annotations

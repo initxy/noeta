@@ -1,16 +1,8 @@
-"""Unified-diff primitives shared by ``edit`` / ``write`` /
-``apply_patch``.
+"""Unified-diff primitives shared by ``edit`` / ``write`` / ``apply_patch``.
 
-These pure functions + the diff media-type constant compute the audit
-artifact every fs write tool emits: a ``difflib`` unified diff (``a/`` ·
-``b/`` framing), its ``+N/-M`` line-stat counts, and the before/after
-sha256 hashes that go into ``ToolResult.output``. They live here so
-``edit.py`` and ``patch.py`` share the *exact same* diff bytes — the
-recorded artifact's hash must stay stable, so the output format must not
-drift between the two write tools.
-
-The function bodies are moved verbatim from ``edit.py`` (no behaviour
-change); the public names are the new shared seam.
+They live in one place so every fs write tool emits the *exact same* diff
+bytes: diff artifacts are content-addressed, so the format must not drift
+between the write tools or their recorded hashes diverge.
 """
 
 from __future__ import annotations
@@ -27,7 +19,6 @@ __all__ = [
 ]
 
 
-#: Media type recorded for every diff artifact (ContentStore + I6 endpoint).
 DIFF_MEDIA_TYPE = "text/x-diff"
 
 

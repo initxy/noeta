@@ -1,16 +1,13 @@
-"""Sandbox browser activation — the product-layer opt-in that registers the
-``web`` subagent into main's delegation roster (spec D3 / B6).
+"""Sandbox browser activation — the opt-in that puts ``web`` in main's roster.
 
-``web`` is the sole identity that opens ``browser``; ``main`` stays browser-free
-and delegates every page interaction to ``web``.
-
-The browser subsystem is inert by default: ``main_options()`` carries no ``web``
-agent and ``browser=False``, so every non-sandbox deployment's roster + stable
-prefix are byte-identical to pre-browser-subsystem. ``sandbox_browser_options()``
-is the explicit opt-in a product uses when it provisions per-session AIO
-containers (``NOETA_AGENT_SANDBOX`` on) — only then can the browser tool pack
-actually work. These tests pin that activation shape and the non-activation
-invariant.
+``web`` is the sole identity that opens the ``browser`` capability; ``main``
+stays browser-free and delegates every page interaction to it. The subsystem is
+inert by default — ``main_options()`` carries no ``web`` agent and no ``browser``
+plugin — and ``sandbox_browser_options()`` is the explicit opt-in for a
+deployment that provisions per-session AIO containers, the only setting where
+the browser pack can work at all. Both halves are pinned: a default that quietly
+gained ``web`` would move every non-sandbox deployment's stable prefix, and a
+roster that gained ``web`` without the prompt would leave it unused.
 """
 
 from __future__ import annotations
@@ -41,8 +38,8 @@ class TestSandboxBrowserOptions:
         assert opts.agents["web"] is WEB_SUBAGENT
 
     def test_main_browser_stays_off(self) -> None:
-        # Direction A: main never opens ``browser`` — it has no browser tools
-        # and must delegate to ``web``. Only ``web`` opens the capability.
+        # main never opens ``browser``: it holds no browser tools and must
+        # delegate to ``web``, the one identity that opens the capability.
         opts = sandbox_browser_options()
         assert "browser" not in opts.plugins
         main, _ = compile_options(opts)
@@ -60,10 +57,9 @@ class TestSandboxBrowserOptions:
         assert "web" in main.spawnable
 
     def test_main_identity_unchanged_from_main(self) -> None:
-        """Activation only adds ``web`` to the roster; main's full activation
-        identity is byte-identical to :func:`main_options` — including
-        ``browser`` (stays off; direction A). No drift of the conversational
-        agent's ``plugins`` tuple."""
+        """Activation adds ``web`` to the roster and nothing else: main's own
+        ``plugins`` tuple stays byte-identical to :func:`main_options`, browser
+        included. Any drift here moves the conversational agent's identity."""
         base_main, _ = compile_options(main_options())
         sb_main, _ = compile_options(sandbox_browser_options())
         assert sb_main.plugins == base_main.plugins
@@ -119,8 +115,8 @@ class TestDefaultInvariant:
         assert "web" not in opts.agents
 
     def test_default_browser_off(self) -> None:
-        # Browser is expressed as activation (D5): main does not activate it, so
-        # the compiled identity carries browser=False.
+        # Browser is expressed as an activation, not a tool list: main does not
+        # activate it, so the compiled identity carries browser=False.
         opts = main_options()
         assert "browser" not in opts.plugins
         main, _ = compile_options(opts)
@@ -137,8 +133,4 @@ class TestDefaultInvariant:
     def test_official_main_spawnable_has_no_web(self) -> None:
         specs = official_specs()
         assert "web" not in specs["main"].spawnable
-
-
-# -- EngineRoom full-chain smoke ------------------------------------------ #
-
 

@@ -1,38 +1,18 @@
-"""First-party example manifest plugin — ``memory-recall``: a RAG-style
-(track A) ``reminder_provider`` with a stub retriever.
+"""RAG-style recall of cross-task notes, injected as the turn is recorded.
 
-Demonstrated SDK capability
----------------------------
-The new ``reminder_provider`` surface — **track A** of the SDK-extensibility
-redesign (``docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md``,
-D7): *recorded injection*. At a named recording seam the provider receives a
-narrow read-only ``RecallView`` (task id, incoming message, a ``TaskState``
-projection, workspace path) and returns zero or more reminders. Because the
-output is **recorded** through the Engine's sole origin-writer seam, the provider
-**may be impure** — query a vector DB, an external RAG index, a memory store —
-and resume/replay folds the reminder back **from the ledger, never re-invoking
-the provider**. This is the seam that opens RAG-backed memory plugins; noeta's
-own memory auto-recall is the built-in tenant of the same surface.
+Demonstrated SDK capability: the ``reminder_provider`` surface — *recorded*
+injection. At a named seam the provider sees a narrow read-only view of the
+incoming turn and returns zero or more reminders, and because that output goes
+through the Engine's sole origin-writer seam it lands in the ledger. This is what
+lets a provider be **impure**: query a vector store, a RAG index, a memory
+service. Resume and replay fold the reminder back from the ledger and never
+re-invoke the provider, so a retrieval that returns different results tomorrow
+cannot rewrite yesterday's task. Anything pure and deterministic belongs on the
+``reminder`` surface instead.
 
-This example wires a **stub retriever** (:class:`StubRetriever`) — a tiny
-in-process keyword-overlap "vector store" over a fixed corpus — in place of a
-real embedding index, so the shape is complete and offline-runnable. Swap
-:data:`RETRIEVER` for a real client and the provider is production-shaped.
-
-Seams and ordering
-------------------
-The provider is bound to the ``turn_intake`` seam (a user message being
-recorded). Multiple providers on one seam run in ``(plugin, name)`` order; a
-provider raise fails the turn loudly (a provider that prefers degradation
-catches internally — this one does).
-
-Public-surface note
--------------------
-A shipped plugin returns noeta's ``Reminder(text, origin)``. To keep this example
-on the ``noeta.sdk`` public surface only (the recorded-reminder type is a runtime
-internal), it returns a **structural** stand-in — a ``(text, origin)`` pair the
-recording seam reads by duck typing. ``origin`` is ``"memory"`` (recalled
-cross-task material); the seam is the single writer of that author tag.
+The retriever here is a deterministic keyword-overlap stand-in for an embedding
+index, so the shape is complete and the example runs offline; a real plugin
+points :data:`RETRIEVER` at its own index and changes nothing else.
 """
 
 from __future__ import annotations
@@ -44,23 +24,23 @@ from typing import Any
 from noeta.sdk import PluginBuilder
 
 
-#: A structural stand-in for noeta's recorded-reminder contract (``text`` +
-#: ``origin``). The ``turn_intake`` recording seam reads these two fields by duck
-#: typing; a shipped plugin returns ``noeta``'s ``Reminder`` instead.
+#: The seam reads ``text`` and ``origin`` by duck typing, so this example can
+#: stand in for noeta's recorded-reminder type and stay clear of runtime
+#: internals. A shipped plugin returns noeta's ``Reminder`` instead.
 Recalled = namedtuple("Recalled", ["text", "origin"])
 
 
-#: How many recalled notes to surface at most per turn.
+#: Capped low on purpose: recall competes with the turn's own content for the
+#: model's attention, and a long recall block reliably wins that fight.
 TOP_K = 2
 
 
 class StubRetriever:
-    """A tiny deterministic keyword-overlap retriever standing in for a vector DB.
+    """A keyword-overlap retriever standing in for a vector store.
 
-    ``query`` scores each corpus note by the size of its token overlap with the
-    incoming text and returns the top matches (score-desc, id-asc for stable
-    ties). Deterministic and offline — a real plugin swaps this for an embedding
-    index while keeping the same ``query(text) -> [(id, text, score)]`` shape.
+    Ties break on id so the example is reproducible in tests; a real embedding
+    index has no such obligation, since the provider's output is recorded and
+    replay reads the ledger rather than re-querying.
     """
 
     def __init__(self, corpus: dict[str, str]) -> None:
@@ -81,26 +61,28 @@ class StubRetriever:
         return hits[:k]
 
 
-#: The stub corpus of cross-task "memories" the retriever searches. A real plugin
-#: points :data:`RETRIEVER` at its own index.
+#: A stand-in corpus of cross-task "memories" — the kind of standing constraint
+#: a team would otherwise repeat in every prompt.
 CORPUS: dict[str, str] = {
     "deploy": "Deploys go through the staging gate first; never push straight to prod.",
     "db": "The analytics database is read-replica only — writes must target the primary.",
     "style": "Public API errors use the CodedError base with a stable string code.",
 }
 
-#: The live retriever the provider queries. Swap for a real client in production.
+#: The one seam a real deployment repoints at its own index.
 RETRIEVER = StubRetriever(CORPUS)
 
 
 def rag_recall(view: Any) -> list:
-    """Recall relevant notes for the incoming turn (impure; output is recorded).
+    """Recall relevant notes for the incoming turn.
 
-    ``view`` is the seam's ``RecallView``; ``view.text`` is the recall key (the
-    incoming message's concatenated text). Returns zero or more structural
-    reminders tagged ``origin="memory"``. Impure by contract (it may query an
-    external index); it catches nothing here because the stub cannot fail, but a
-    provider that prefers degradation over a loud turn-failure catches internally.
+    Tagged ``origin="memory"`` because the seam is the single writer of that
+    author tag — recalled material must be distinguishable from what the user
+    actually said.
+
+    Nothing is caught here only because the stub cannot fail. A provider over a
+    real index chooses: let the exception fail the turn loudly, or catch and
+    degrade to no recall. Silence is the safer default for retrieval.
     """
     hits = RETRIEVER.query(getattr(view, "text", "") or "")
     if not hits:
@@ -110,10 +92,12 @@ def rag_recall(view: Any) -> list:
     return [Recalled(text=text, origin="memory")]
 
 
-#: The single-file manifest (decorator sugar *is* the manifest, spec D1). The
-#: contributed provider is cached for single-file resolution; a distributed
-#: install exposes it at ``memory_recall:rag_recall``. ``seams`` names the
-#: recording seam(s) it binds to. ``python -m noeta.sdk.plugin_check`` derives the
-#: TOML from this builder.
+#: The builder *is* this plugin's manifest, and its name is the plugin identity
+#: — the activation key, not the filename. ``python -m noeta.sdk.plugin_check``
+#: derives TOML from it and verifies the shipped ``noeta-plugin.toml`` matches.
+#:
+#: ``seams`` names where the provider runs. ``turn_intake`` is the moment a user
+#: message is being recorded — the only point at which injected material can
+#: enter the ledger alongside the turn it belongs to.
 plugin = PluginBuilder("memory-recall", requires_noeta=">=0.4")
 plugin.reminder_provider(rag_recall, name="rag-recall", seams=["turn_intake"])

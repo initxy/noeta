@@ -1,37 +1,35 @@
 ; Noeta import-linter contracts.
 ;
-; Enforces the layering across the two-package topology
+; Enforce the layering across the two-package topology
 ; (noeta-runtime / noeta-sdk). Both distributions contribute subpackages to
 ; the shared PEP 420 ``noeta`` namespace, so the contracts run on import
-; *paths*, which stay invariant while the physical distribution boundary
-; moves. ``protocols`` is the typed boundary (L0) and must not depend on any
-; other in-project module; ``core`` (L1) may depend on ``protocols`` only.
+; *paths*, which stay invariant across the physical distribution boundary.
+; ``protocols`` is the typed boundary (L0) and must not depend on any other
+; in-project module; ``core`` (L1) may depend on ``protocols`` only.
 ;
-; Microkernel layer table (M4 redraw). noeta-runtime is a pure kernel: the
-; kernel-services band (runtime / storage / observers / read_models), the
-; materials band above it (context — the locked composer + registries;
-; policies — phase 2; tools — authoring machinery only, every capability
-; impl moved out), and ``execution`` (the injection-only session builder).
-; noeta-sdk carries ``client`` (SDK core — the assembly boundary that
-; injects the parts), ``presets`` / ``builtins`` (top-of-stack content: the
-; built-in plugin catalogue holds every official capability impl), and the
-; ``noeta.sdk`` façade. The old guards / providers / tool-pack
-; implementation bands are gone — they live inside ``noeta.builtins.*.impl``
-; and are reachable ONLY through the loader's dynamic ``ref`` doorway
-; (``sdk-core-not-builtins`` below is the universal static ban, which is
-; also what keeps kernel↛adapter: ``noeta.runtime`` can never statically
-; import the provider / backend adapters, because they all live in
-; ``noeta.builtins``). The ``noeta.agent`` identity layer (``spec`` /
+; The layer stack. noeta-runtime is a pure kernel: a kernel-services band
+; (runtime / storage / observers / read_models), a materials band above it
+; (context — the composer and its registries; policies; tools — authoring
+; machinery that holds no capability impl), and ``execution`` (the
+; injection-only session builder). noeta-sdk carries ``client`` (the SDK
+; assembly boundary that injects the parts), ``presets`` / ``builtins``
+; (top-of-stack content: the built-in plugin catalogue holds every official
+; capability impl), and the ``noeta.sdk`` façade. Capability
+; implementations live inside ``noeta.builtins.*.impl`` and are reachable
+; ONLY through the loader's dynamic ``ref`` doorway. ``sdk-core-not-builtins``
+; below is the universal static ban on importing ``noeta.builtins``; it is
+; also what keeps the kernel free of adapters, because ``noeta.runtime``
+; cannot statically import the provider / backend adapters, which all live
+; under ``noeta.builtins``. The ``noeta.agent`` identity layer (``spec`` /
 ; ``registry``) ships in the library wheels; product hosts live in their own
 ; repositories and drive the engine only through ``noeta.sdk`` (the
 ; engine-behaviour suite assembles via ``noeta.sdk.Client``, tests/_sdk_session).
 
 [importlinter]
 root_package = noeta
-; Engine lazily imports ToolRuntime as a wiring convenience when callers
+; The Engine lazily imports ToolRuntime as a wiring convenience when callers
 ; do not pass one explicitly; the edge is intentional and documented in
-; core/engine.py. The library-SDK refactor removed the old composer default, so the
-; kernel no longer reaches into noeta.context at all.
+; core/engine.py. The kernel does not otherwise reach into noeta.context.
 include_external_packages = False
 
 [importlinter:contract:layers]
@@ -84,8 +82,8 @@ ignore_imports =
     ; The Engine lazily imports ``noeta.runtime.tool.ToolRuntime`` only when
     ; the caller did not wire one explicitly. A runtime convenience, not a
     ; module-load-order dependency, but import-linter sees the string so we
-    ; mark it as the intentional exception. The library-SDK refactor removed
-    ; the old ``noeta.context.composer`` default — the kernel no longer reaches there.
+    ; mark it as the intentional exception. The kernel does not otherwise
+    ; reach into ``noeta.context``.
     noeta.core.engine -> noeta.runtime.tool
 
 [importlinter:contract:sdk-core-not-presets]
@@ -186,7 +184,8 @@ forbidden_modules =
     noeta.core
 ; ``noeta.core`` is forbidden wholesale so read_models cannot reach
 ; engine/wiring/observers; the ONE allowed core edge — the fold projection —
-; is whitelisted precisely (CW5a P1: lock the boundary, don't leave core open).
+; is whitelisted precisely, keeping the boundary locked rather than leaving
+; core open.
 ignore_imports =
     noeta.read_models.tasks -> noeta.core.fold
 

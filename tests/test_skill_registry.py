@@ -1,4 +1,4 @@
-"""SkillRegistry resolve / render tests (issue 21).
+"""SkillRegistry resolve / render behaviour.
 
 Indexer-level disk scanning lives in ``test_skill_indexer.py``; here we
 construct the Registry directly from synthetic :class:`SkillDescription`
@@ -102,8 +102,8 @@ def test_resolve_orders_by_priority_then_name() -> None:
 
 
 def test_resolve_input_order_does_not_affect_render_order() -> None:
-    """Q3: Composer must be invariant to Policy reshuffles of
-    ``active_skills``; render order is purely (priority, name)."""
+    """Composer must be invariant to Policy reshuffles of ``active_skills``;
+    render order is purely (priority, name)."""
     registry = _registry(
         _desc("alpha", priority=20),
         _desc("beta", priority=10),
@@ -132,7 +132,7 @@ def test_render_returns_rendered_skills_dataclass() -> None:
 
 
 def test_render_emits_user_role_messages_only() -> None:
-    """P1: ``role='system'`` is forbidden inside ``LLMRequest.messages``
+    """``role='system'`` is forbidden inside ``LLMRequest.messages``
     (``messages.py:109``). All skill renders must use ``role='user'``.
     """
     registry = _registry(_desc("a"), _desc("b"))
@@ -150,8 +150,8 @@ def test_render_message_text_uses_activated_skill_prefix() -> None:
 
 
 def test_render_selected_skills_is_resolved_names_in_render_order() -> None:
-    """P2: ``selected_skills`` is the post-filter, post-sort name list,
-    not the raw active list. Composer writes this verbatim to
+    """``selected_skills`` is the post-filter, post-sort name list, not the
+    raw active list. Composer writes this verbatim to
     ``ContextPlan.selected_skills``."""
     registry = _registry(
         _desc("alpha", priority=20),
@@ -191,26 +191,24 @@ def test_build_skill_renderer_returns_registry_render() -> None:
 
 
 # ---------------------------------------------------------------------------
-# NB1 — SkillDescription default equality includes source_path,
-#       but render output is byte-equal across source_path differences
+# source_path participates in equality, and render embeds the base directory
 # ---------------------------------------------------------------------------
 
 
 def test_descriptions_with_different_source_paths_not_equal() -> None:
-    """rev2 NB1: ``source_path`` participates in default dataclass
-    equality so debug tooling can distinguish same-content files from
-    different on-disk locations."""
+    """``source_path`` participates in default dataclass equality so debug
+    tooling can distinguish same-content files from different on-disk
+    locations."""
     a = _desc("k", source_path=Path("/a/SKILL.md"))
     b = _desc("k", source_path=Path("/b/SKILL.md"))
     assert a != b
 
 
 def test_render_embeds_source_path_base_directory() -> None:
-    """(reverses NB1): ``render`` now emits the skill's parent
-    directory as the ``Base directory for this skill:`` line so the model
-    can ``read`` bundled references by path. Two checkouts at different
-    paths therefore render DIFFERENTLY — each carries its own base dir —
-    so resume is tied to the same skill paths (single-machine)."""
+    """``render`` emits the skill's parent directory as the ``Base directory
+    for this skill:`` line so the model can ``read`` bundled references by
+    path. Two checkouts at different paths therefore render differently — each
+    carries its own base dir."""
     reg_a = _registry(_desc("k", source_path=Path("/checkout-a/k/SKILL.md")))
     reg_b = _registry(_desc("k", source_path=Path("/checkout-b/k/SKILL.md")))
     text_a = reg_a.render(["k"]).messages[0].content[0].text

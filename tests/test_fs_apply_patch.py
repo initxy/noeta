@@ -1,11 +1,11 @@
-"""M1 — `apply_patch` multi-file transactional edit (unit / direct invoke).
+"""``apply_patch`` — multi-file transactional edit, driven by direct invoke.
 
-Pins the transaction semantics: validate-all-then-apply (no write on any
-validation failure), TOCTOU revalidation + exclusive-create + rollback,
-typed rollback-failure surface, conflict / case-collision / boundary
-rejection, stale-hash guard, deterministic ordering, output inline
-budget, no-orphan-artifact on validation failure, and the outer per-call
-byte backstop (oversize args offload — no longer envelope-bound).
+Atomicity is the whole point: a half-applied batch would leave the workspace in a
+state the model never reasoned about, so these tests pin validate-all-then-apply,
+TOCTOU revalidation, exclusive create, rollback and the typed rollback-failure
+surface, conflict / case- and NFC-collision rejection, the stale-hash guard,
+deterministic ordering, and the byte caps. A failed batch must also leave no
+orphan diff artifacts and no ``file_changes`` for the checkpoint gate to stash.
 """
 
 from __future__ import annotations
@@ -406,9 +406,9 @@ def test_toctou_replace_revalidation(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_current_replace_partial_write_is_recovered(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P1: the FAILING target itself (not yet in `done`) must be
-    recovered — a replace whose write truncates/corrupts then raises is
-    restored to its pre-edit bytes."""
+    """The FAILING target itself is not yet in `done`, so rollback would skip it
+    — a replace whose write corrupts the file then raises must still be restored
+    to its pre-edit bytes."""
     ws = _ws(tmp_path, {"z.py": "zzz\n"})
     ctx, _cs = _ctx()
     real_write = Path.write_bytes
@@ -432,8 +432,8 @@ def test_current_replace_partial_write_is_recovered(
 def test_current_create_write_error_deletes_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P1: a create whose O_EXCL open SUCCEEDS but whose write fails must
-    delete the now-existing file (it is not in `done`)."""
+    """A create whose O_EXCL open SUCCEEDS but whose write fails must delete the
+    file it just brought into existence — it is not in `done` either."""
     ws = _ws(tmp_path, {})
 
     def boom_write(fd: int, data: Any) -> int:
@@ -452,8 +452,8 @@ def test_current_create_write_error_deletes_file(
 def test_os_write_short_return_is_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P1: a partial `os.write` (returns 0) is NOT treated as success —
-    the create fails and the file is deleted."""
+    """A partial `os.write` (returns 0) is NOT success — the create fails and
+    the file is deleted."""
     ws = _ws(tmp_path, {})
 
     def short_write(fd: int, data: Any) -> int:
@@ -471,9 +471,9 @@ def test_os_write_short_return_is_failure(
 def test_create_close_failure_deletes_and_rolls_back(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P1: a create whose write succeeds but whose `os.close` raises (a
-    deferred write-back error) must NOT escape invoke — it deletes the
-    new file, rolls back already-applied edits, and returns typed."""
+    """`os.close` can raise a deferred write-back error long after the write
+    returned; that must not escape invoke — the file is deleted, already-applied
+    edits roll back, and the failure comes out typed."""
     ws = _ws(tmp_path, {"a.py": "aaa\n"})
     ctx, _cs = _ctx()
 
@@ -514,8 +514,9 @@ def test_before_sha256_overlong_rejected(tmp_path: Path) -> None:
 
 
 def test_normalization_collision_rejected(tmp_path: Path) -> None:
-    """P1: NFC-equal paths (precomposed U+00E9 vs e + U+0301 combining
-    acute) collide and are rejected — not only case collisions."""
+    """NFC-equal paths (precomposed U+00E9 vs e + U+0301 combining acute) name
+    the same file on disk, so they collide and are rejected just like a case
+    collision."""
     ws = _ws(tmp_path, {})
     ctx, _cs = _ctx()
     precomposed = "\u00e9.py"      # 'é' as one code point
@@ -552,7 +553,7 @@ def test_exclusive_create_collision(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 
 # ---------------------------------------------------------------------------
-# byte caps + envelope fit (gate 9)
+# byte caps
 # ---------------------------------------------------------------------------
 
 
@@ -561,8 +562,8 @@ def test_over_canonical_byte_budget_rejected(tmp_path: Path) -> None:
     ctx, _cs = _ctx()
     # Each create is < the 64 KB per-field cap and the count is < the edit
     # cap, but together they blow the outer per-call canonical-byte backstop
-    # → the tool tells the caller to split. (Offload carries normal oversize
-    # args; an absurd multi-hundred-KB single call is still refused.)
+    # → the tool tells the caller to split. Offload carries ordinary oversize
+    # args; an absurd multi-hundred-KB single call is refused outright.
     per = 60_000
     n = MAX_PATCH_CANONICAL_BYTES // per + 2
     assert n <= MAX_PATCH_EDITS  # the byte backstop fires, not the edit-count cap
@@ -576,13 +577,11 @@ def test_over_canonical_byte_budget_rejected(tmp_path: Path) -> None:
 
 
 def test_oversize_patch_accepted_not_envelope_bound(tmp_path: Path) -> None:
-    """Post-offload (`noeta.protocols.tool_args`) the tool is no longer capped
-    to the 4 KB event envelope: a create whose content far exceeds the old
-    512-byte / 3072-byte caps is accepted — the runtime offloads oversize
-    args via `arguments_ref` rather than rejecting them."""
+    """The runtime offloads oversize args via ``arguments_ref`` rather than
+    rejecting them, so the tool is not bound by the 4 KB event envelope."""
     ws = _ws(tmp_path, {})
     ctx, _cs = _ctx()
-    big = "x" * 8000  # >> the old _CONTENT_MAX_BYTES (512) and budget (3072)
+    big = "x" * 8000  # far over the event-envelope ceiling
     res = _tool(ws).invoke(
         {"edits": [{"op": "create", "path": "big.py", "content": big}]},
         ctx,

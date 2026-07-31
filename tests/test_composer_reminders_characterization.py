@@ -1,29 +1,22 @@
-"""Characterization goldens for the three composer built-in dynamic reminders.
+"""Goldens for the three built-in compose-time reminders.
 
-The SDK-extensibility redesign
-(``docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md``, D8)
-migrates the three ``ThreeSegmentComposer`` built-in dynamic reminders onto the
-new ``reminder`` surface (compose-time, pure), priorities chosen "to keep
-today's output byte-identical". Its **acceptance criterion 9** requires the
-pre/post-migration composer output to stay byte-identical for these three
-built-ins.
+Reminder text is model-facing prose that no other assertion reads, so a
+one-word edit changes what every session's model sees while every behavioural
+test stays green. These goldens are the only thing that makes such an edit
+deliberate. The three are:
 
-This module pins that output **before** the migration. The three reminders are:
-
-* **unfinished-todos** (``_append_todo_reminder``) — surfaces the unfinished
-  ``TaskState.todos`` the model would otherwise never see again;
-* **delegation nudge** (``_append_concurrency_reminder``) — the just-in-time
-  fan-out note, live only while delegation is offered AND no ``spawn_subagent``
-  has landed yet;
-* **read suggestion** (``_append_compaction_thrashing_reminder``) — the
-  "different reading strategy" hint, live only while
+* **unfinished-todos** — surfaces the unfinished ``TaskState.todos`` the model
+  would otherwise never see again;
+* **delegation-nudge** — the just-in-time fan-out note, live only while
+  delegation is offered AND no ``spawn_subagent`` has landed yet;
+* **read-suggestion** — the "different reading strategy" hint, live only while
   ``ContextState.compaction_thrashing`` is latched.
 
 The test runs the **real** assembly path (``build_session_inputs`` →
 ``ThreeSegmentComposer.compose``) over representative folded states and pins the
 whole ``dynamic_suffix`` — the fixed base user turn followed by whichever
-reminders fire, in the exact order the composer appends them (todo → delegation
-→ read). Because the base message is fixed and the Task activates no
+reminders fire, in the exact order they are appended (todo → delegation →
+read). Because the base message is fixed and the Task activates no
 skills/memory/environment residents, the dynamic suffix contains nothing but
 the base turn and the reminders, so the golden captures the rendered text AND
 the relative order in one artifact.
@@ -190,10 +183,9 @@ def test_composer_reminders_golden(label: str) -> None:
 def test_all_three_relative_order_is_todo_delegation_read() -> None:
     """Explicit order assertion, independent of the golden bytes.
 
-    Beyond the golden, pin the *sequence* directly so a re-ordering during the
-    migration (D8: priorities chosen to keep order) is caught as an ordering
-    failure and not just a diff: after the fixed base turn the three reminders
-    appear as todo, then delegation, then read.
+    Priorities are what put the three in the order todo → delegation → read; a
+    priority edit that re-orders them should fail as an ordering error here,
+    not merely as an unreadable byte diff in the golden.
     """
     suffix = _dynamic_suffix_payload(**_STATES["all_three"])  # type: ignore[arg-type]
     # Base turn first (author-neutral), then exactly three system reminders.

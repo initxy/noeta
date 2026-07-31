@@ -48,6 +48,6 @@ Thumbs.db
 *.tmp.xml
 *.tmp
 
-# Leftover pre-platform local config (may contain an api_key). Nothing reads it
-# any more, but keep it ignored so a stale local copy can never be committed.
+# Local host config that may hold an api_key — ignored so a local copy can
+# never be committed.
 /noeta.config.json

@@ -1,28 +1,20 @@
-"""Anti-spiral false-kill regression — a long session must be allowed to
-compact MORE THAN ONCE when each compaction makes real progress (fix A).
+"""Anti-spiral must not false-kill a long session that legitimately compacts
+more than once.
 
-The pre-fix anti-spiral arm judged a spiral by a STICKY continuation tag
-(``last_transition == "compaction_retry"`` / ``"overflow_recovery"``). That
-tag is written via ``StepTransitionMarked`` ONLY on a compaction step and
-folded last-write-wins, so a normal tool/turn step never re-marks it: it
-stayed sticky across real work. Consequence — a session that proactively
-compacts, then does genuine tool work (raw history grows → a larger prefix
-becomes summarisable), then *legitimately* compacts again was killed with
-``TaskFailed(compaction_overflow_spiral)`` even though the second compaction
-strictly advanced ``summary_boundary``.
-
-The fix re-bases anti-spiral on **boundary monotonic progress**: the policy
-only emits a ``CompactionRequested`` whose boundary exceeds the cumulative
+Anti-spiral is based on **boundary monotonic progress**: the policy only emits
+a ``CompactionRequested`` whose boundary exceeds the cumulative
 ``summary_boundary`` already collapsed (else ``FailDecision`` /
-``compaction_no_progress``); the kernel only escalates when the boundary it
-is about to write fails to advance. Real history growth → boundary growth →
-no false kill; a genuinely stuck compaction (boundary cannot move) still
-terminates.
+``compaction_no_progress``), and the kernel escalates only when the boundary it
+is about to write fails to advance. Real tool work grows the raw history, which
+makes a larger prefix summarisable, which advances the boundary — so a second
+proactive compaction is legitimate and must survive. The tension is that a
+genuinely stuck compaction (boundary cannot move) must still terminate, and
+these two cases are one line apart.
 
-These tests drive the **real** ``Engine`` + **real** ``ReActPolicy`` + **real**
-``ThreeSegmentComposer`` + a **real** recording tool (no Stub policy, no
-``fake_view``) so the policy↔composer boundary contract is exercised end to
-end — the only way to reproduce / falsify the agent's false-kill scenario.
+Both tests drive the **real** ``Engine`` + ``ReActPolicy`` +
+``ThreeSegmentComposer`` + a real recording tool (no Stub policy, no
+``fake_view``): the policy↔composer boundary contract only exists end to end,
+so a fake view cannot falsify either side.
 """
 
 from __future__ import annotations
@@ -194,14 +186,11 @@ def _run() -> tuple[str, InMemoryEventLog, InMemoryContentStore, Any]:
 
 
 def test_two_legit_compactions_around_real_tool_work_complete() -> None:
-    """Fix A core: proactive compaction → real tool work (history grows) →
-    a SECOND legitimate proactive compaction must SUCCEED (not TaskFailed),
-    and the task completes.
-
-    Pre-fix this died with ``TaskFailed(compaction_overflow_spiral)`` because
-    the sticky ``compaction_retry`` tag set by the first compaction was still
-    present when the second one arrived, even though real work had grown the
-    history and the second boundary strictly advanced.
+    """Proactive compaction → real tool work (history grows) → a SECOND
+    legitimate proactive compaction must SUCCEED (not TaskFailed), and the task
+    completes. Any anti-spiral rule that judges by a sticky per-step tag rather
+    than by boundary progress kills this session even though the second
+    boundary strictly advanced.
     """
     task_id, log, _cs, final = _run()
     types = [e.type for e in log.read(task_id)]
@@ -223,9 +212,9 @@ def test_two_legit_compactions_around_real_tool_work_complete() -> None:
 
 
 def test_stuck_compaction_with_no_boundary_progress_still_fails() -> None:
-    """Complementary guard: a genuinely stuck compaction (the trigger fires
-    but no NEW prefix is summarisable, so the boundary cannot advance) must
-    still terminate — the fix must not make anti-spiral permissive.
+    """The complementary half: a genuinely stuck compaction (the trigger fires
+    but no larger prefix is summarisable, so the boundary cannot advance) must
+    still terminate — boundary-based anti-spiral must not be permissive.
 
     Here the protected tail budget swallows the WHOLE history, so the policy's
     summarise boundary is 0 and never advances: the policy self-terminates

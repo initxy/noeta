@@ -1,10 +1,12 @@
-"""Deterministic, provider-neutral token estimation (③ D-3d).
+"""Token estimation stays deterministic and provider-neutral.
 
-The estimator is a cheap chars/4-style heuristic — NOT a real tokenizer
-(those drift across vendor/library versions, breaking the stable prompt
-prefix the cross-host prompt cache depends on). It is shared by ③ (compaction trigger / tail-window budget)
-and is provider-neutral: it counts the canonical text surface
-of Noeta-shape :class:`Message` / :class:`Block`, never a vendor wire shape.
+The estimator is a cheap chars/4 heuristic rather than a real tokenizer:
+a vendor tokenizer drifts across library versions, and the compaction
+trigger and tail-window budget that read these numbers would then cut
+differently on identical input, breaking the stable prompt prefix the
+cross-host prompt cache depends on. It counts the canonical text surface
+of Noeta-shape :class:`Message` / :class:`Block`, never a vendor wire
+shape.
 """
 
 from __future__ import annotations

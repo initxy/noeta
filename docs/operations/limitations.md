@@ -1,279 +1,280 @@
 # Known limitations
 
-These are deliberate boundaries of the current preview, not bugs. Each
-entry describes what it means, when you hit it, and the workaround if
-any.
+Boundaries of what the shipped code can do. Each entry says what the boundary
+is, when you hit it, and the workaround if there is one. None of these is a
+bug — they are places where the design stops.
+
+## The libraries run no process for you
+
+**What it means:** `noeta-runtime` and `noeta-sdk` are libraries. There is no
+CLI, no console script, no HTTP or SSE server, and no scheduler daemon. The
+drain loop ships as the primitive `noeta.runtime.worker.WorkerLoop`; a host
+constructs and runs it (or calls `Client.start_workers(n)` for a resident
+pool). Nothing launches it for you, so a task enqueued with no worker running
+simply sits in the ready queue.
+
+**When you hit it:** You expected `noeta run` to exist, or you enqueued work
+and nothing advanced.
+
+**Workaround:** Embed the libraries in your own host.
+`examples/reference-host` is the smallest one, assembled from the public
+surface alone.
 
 ## Multi-host coordination requires Postgres
 
-**What it means:** Single-host multi-worker is shipped — a host runs a
-resident `WorkerLoop` pool, so several tasks' turns progress at once in one
-process. Multiple *hosts* sharing one database is supported only on
-**Postgres**: emit appends are fenced
-in-transaction against the live lease, lease expiry runs on the database
-clock (so per-host clock skew cannot split-brain), and a `worker_id`
-column records the holder. The **SQLite** and **in-memory** backends stay
-single-host — they have no cross-host fencing, so pointing two host
-processes at one SQLite file is unsafe.
+**What it means:** Single-host multi-worker is supported — one process runs a
+resident `WorkerLoop` pool and several tasks' turns progress at once. Multiple
+*host processes* sharing one database is supported only on **Postgres**: event
+appends are fenced in-transaction against the live lease, lease expiry is
+computed on the database clock so per-host clock skew cannot split-brain, and a
+`worker_id` column records the holder. The **SQLite** and **in-memory**
+backends are single-host — they have no cross-host fencing, so pointing two
+host processes at one SQLite file is unsafe.
 
 **When you hit it:** You want worker processes on more than one machine
 draining a shared store.
 
-**Workaround:** Use the Postgres backend for multi-host deployments. On
-SQLite, keep to a single host (a multi-worker pool on that host is fine),
-or give separate workload profiles their own SQLite files — there is no
-cross-store routing in the ready queue, so tasks in one store are not
-visible to workers draining another.
+**Workaround:** Use the Postgres backend for multi-host deployments. On SQLite,
+keep to a single host (a multi-worker pool on that host is fine), or give
+separate workload profiles their own SQLite files — there is no cross-store
+routing in the ready queue, so tasks in one store are invisible to workers
+draining another.
 
-**Why it is this way:** Cross-host fencing needs a shared transactional
-clock and lease arbitration the embedded stores do not provide; Postgres
-supplies both. The design is recorded in the multi-host lease fencing ADR.
+See [ADR: Multi-host lease fencing](https://github.com/initxy/noeta/blob/main/docs/adr/multi-host-lease-fencing.md).
 
-## Mid-step crash recovery does not undo side effects
+## Crash recovery does not undo side effects
 
-**What it means:** A worker crash **mid-step** (`kill -KILL`, power
-loss) is recovered automatically on the next lease: the interrupted
-attempt is sealed with a durable `StepAttemptAbandoned` marker and the
-step is re-driven when everything the attempt recorded would have run
-without a human approval gate. When the attempt had unprovable side
-effects — or after 3 consecutive seals in one turn — the task is
-instead **parked**: suspended as a stopped conversation with an
-`origin="system"` notice naming each interrupted call and whether it
-completed. A crash during a human-approved tool execution always parks,
-re-suspended on the same approval. Recovery never silently terminates
-the task and never silently re-runs a side-effectful call — but it
-also does **not** undo anything the crashed attempt already did.
+**What it means:** A worker crash mid-step (`kill -KILL`, power loss) is
+recovered on the next lease: the interrupted attempt is sealed with a durable
+`StepAttemptAbandoned` marker, and the step is re-driven when everything the
+attempt recorded would have run without a human approval gate. When the attempt
+had unprovable side effects — or after three consecutive seals in one turn —
+the task is **parked** instead: suspended as a stopped conversation with an
+`origin="system"` notice naming each interrupted call and whether it completed.
+A crash during a human-approved tool execution always parks, re-suspended on
+the same approval. Recovery never silently terminates a task and never silently
+re-runs a side-effectful call — but it also cannot undo anything the crashed
+attempt already did.
 
-**When you hit it:** A hard kill or power loss lands during an attempt
-that had already run side-effectful tools (an interrupted `shell_run`,
-a completed `edit`, an approved call mid-execution). Normal shutdown
-(SIGTERM) does not trigger this, and a crash during reads or planning
-recovers with no human involved.
+**When you hit it:** A hard kill lands during an attempt that had already run
+side-effectful tools. Normal SIGTERM shutdown does not trigger this, and a
+crash during reads or planning recovers with nobody involved.
 
-**Workaround:** Open the parked conversation — the notice lists what
-was interrupted. Verify whether those operations applied fully,
-partially, or not at all, then just type to continue (the turn resumes
-from the clean pre-attempt baseline) or re-approve the pending call;
-`close` / `cancel` work as usual.
+**Workaround:** Open the parked conversation — the notice lists what was
+interrupted. Verify whether those operations applied fully, partially, or not
+at all, then type to continue (the turn resumes from the clean pre-attempt
+baseline) or re-approve the pending call.
 
-**Why it is this way:** Classification reuses the same permission
-surface that gates live execution, so recovery is never more permissive
-than the agent's own approval rules. But whether a half-run `shell_run`
-actually changed the world cannot be proven from the log — the design
-prevents silent duplicates and leaves the judgment of half-applied
-effects to a human.
+## Shutdown can abandon a step that keeps running
 
-## Bounded shutdown, but no in-process thread interrupt
+**What it means:** On `stop()`, `WorkerLoop` waits up to `shutdown_grace_s` for
+the in-flight step to complete. If it does not finish, the loop **abandons** the
+step and returns — but Python cannot kill the abandoned thread. It may still be
+running and writing to the EventLog.
 
-**What it means:** On `stop()` (SIGTERM / SIGINT), `WorkerLoop` waits up
-to `shutdown_grace_s` for the in-flight step to complete. If it does
-not finish, the loop **abandons** the step and returns. But Python
-cannot kill the abandoned step thread — it may still be running and
-writing to the EventLog.
-
-**When you hit it:** A step hangs (e.g. a tool call to an unresponsive
-external API) and the grace window expires.
+**When you hit it:** A step hangs (a tool call to an unresponsive external API,
+say) and the grace window expires.
 
 **Workaround:** **Exit the process.** After abandon, the host must call
-`sys.exit()` or equivalent. The abandoned thread dies with the process;
-its lease expires and `requeue_stale()` reclaims the task on the next
-start. Set `shutdown_grace_s=None` (or `<= 0`) for unbounded wait —
-then a stuck step needs external `kill -KILL <pid>`.
+`sys.exit()` or equivalent. The abandoned thread dies with the process, its
+lease expires, and `requeue_stale()` reclaims the task on the next start.
+`shutdown_grace_s=None` (or `<= 0`) waits unboundedly — then a stuck step needs
+an external `kill -KILL <pid>`.
 
-## Heartbeat keepalive window is capped
+## The heartbeat keepalive window is capped
 
-**What it means:** The heartbeat keeps a slow step's lease alive, but
-not forever. The dispatcher caps heartbeat extensions
-(`heartbeat_max`), so `heartbeat_interval × heartbeat_max` is the
-maximum time one step can hold a lease. Past the cap, the lease is
-force-released and the step's next EventLog write fails with
-`InvalidLease`.
+**What it means:** The heartbeat keeps a slow step's lease alive, but not
+forever. The dispatcher caps heartbeat extensions at `heartbeat_max` (360 by
+default), so `heartbeat_interval × heartbeat_max` is the maximum time one step
+can hold a lease. Past the cap the lease is force-released and the step's next
+EventLog write fails with `InvalidLease`.
 
-**When you hit it:** A single step (one LLM turn plus all its tool
-calls) takes longer than the cap window. The default is generous
-(hours, not minutes), so this is rare.
+**When you hit it:** A single step — one model turn plus all its tool calls —
+takes longer than the cap window. With the defaults that is hours, so it is
+rare.
 
-**Workaround:** This cap-hit is an **operational-failure signal, not a
-recovery path**. The loop logs and continues to the next task, but the
-cap-hit task may need operator inspection. Check if the task is still
-viable or if it should be closed.
+**Workaround:** Treat a cap hit as an operational-failure signal, not a
+recovery path. The loop logs it and continues to the next task, but the capped
+task may need inspection: check whether it is still viable or should be closed.
 
-## Reliability events are process-local, not durable
+## Reliability events are process-local
 
-**What it means:** The worker emits `ReliabilityEvent`s —
-`stale_requeued`, `suspended_without_wake`, `step_failed_retryable`,
-`heartbeat_invalid_lease`, `shutdown_abandoned`, `timers_fired`,
-`attempt_abandoned`, `attempt_parked` — to an injectable sink
-(default: structured logs). These are **not** EventLog events, are not
-persisted, and do not survive a process restart.
+**What it means:** The worker emits `ReliabilityEvent`s — `stale_requeued`,
+`suspended_without_wake`, `step_failed_retryable`, `heartbeat_invalid_lease`,
+`shutdown_abandoned`, `timers_fired`, `attempt_abandoned`, `attempt_parked` —
+to an injectable sink that defaults to structured logs. They are **not**
+EventLog events, are not persisted, and do not survive a restart.
 
-**When you hit it:** You are trying to build monitoring or alerting on
-top of worker reliability signals.
+**When you hit it:** You are building monitoring or alerting on worker
+reliability signals.
 
-**Workaround:** Mount a custom `reliability_sink` that forwards events
-to your monitoring system. Each event is named for what the worker can
-prove from the dispatcher seam (e.g. `heartbeat_invalid_lease` is a
-symptom — the cause may be cap / expired / requeued).
+**Workaround:** Mount a custom `reliability_sink` that forwards them to your
+monitoring system. Each event is named for what the worker can prove from the
+dispatcher seam — `heartbeat_invalid_lease`, for instance, is a symptom whose
+cause may be the cap, expiry, or a requeue.
 
-## No out-of-band notification for human-in-the-loop waits
+## Nothing notifies anyone that a task is waiting on a human
 
 **What it means:** Human-in-the-loop is fully wired in-band: the engine
-suspends on `HumanResponseReceived` wake events and the `answer` client verb
-delivers the response. What does not exist is an out-of-band channel — no
-webhook, email, or cross-task inbox fires when a task starts waiting on a
-human.
+suspends on a `HumanResponseReceived` wake condition and the `answer` client
+verb delivers the response. There is no out-of-band channel — no webhook, no
+email, no cross-task inbox fires when a task starts waiting.
 
-**When you hit it:** An agent asks a question while nobody is driving the
-task. The task waits durably (that is the point), but nothing notifies
-anyone that it is waiting.
+**When you hit it:** An agent asks a question while nobody is driving the task.
+The task waits durably, which is the point, but nothing tells anyone.
 
-**Workaround:** Drive the task interactively, or mount a custom `Observer`
-subscribed to the EventLog to forward `UserQuestionRequested` events to your
-own notification channel, then deliver the reply with the `answer` verb.
+**Workaround:** Drive the task interactively, or subscribe an `Observer` to the
+EventLog, forward `UserQuestionRequested` events to your own notification
+channel, and deliver the reply with `answer`.
+
+## An uncatalogued model silently disables compaction and pricing
+
+**What it means:** Compaction knobs and cost are both derived from the model
+catalog in the `providers` built-in. For a model the catalog does not describe,
+`derive_compaction_config` returns `COMPACTION_OFF` — context compaction never
+engages, so a long conversation runs until the provider itself rejects the
+request. Pricing degrades the same way: an unpriced model costs `0.0` per
+round-trip, so `GovernanceState.cost` stays zero and a `max_cost_usd` budget
+can never fire. Neither degradation raises.
+
+**When you hit it:** You point `Options.model` at a gateway model id, a
+fine-tune, or a self-hosted model that is not in `CATALOG`.
+
+**Workaround:** Add a `ModelSpec` row for it. `CATALOG` and `ModelSpec` are
+re-exported from `noeta.sdk.providers`; a row supplies `context_window`,
+`max_output_tokens`, and the price fields, which is everything both derivations
+read.
+
+## Content is never garbage-collected
+
+**What it means:** The ContentStore is content-addressed and append-only, and
+no GC ships. `Client.delete_task` purges a task's event stream and dispatcher
+state across the whole subtask tree, but deliberately leaves the content blobs
+alone — they are shared by hash across tasks, so deleting one task cannot prove
+a body is unreachable. Storage therefore grows monotonically with recorded
+tool output, snapshots, and compaction summaries.
+
+**When you hit it:** A long-lived deployment with heavy tool output.
+
+**Workaround:** None in the library. Size the store for retention, or write an
+offline sweep against your backend that walks the remaining streams' refs.
+`delete_task` also refuses with `reason="running"` while any task in the tree
+holds a live lease, so a purge never races an in-flight turn.
+
+## The library ships no sandbox provisioner
+
+**What it means:** `SandboxProvider` is a protocol the SDK defines and drives
+(through `SandboxExecEnvManager`), not an implementation it ships. The only
+provider in the box adapts a `SandboxExecEnvConfig` into an **attach-only**
+provider: it connects to one already-running container, and its `release` is a
+no-op because it does not own the container. Provisioning and reaping — running
+`docker`, calling a K8s API, choosing mounts — belong to the host.
+
+**When you hit it:** You expected a fresh container per conversation out of the
+box.
+
+**Workaround:** Implement `SandboxProvider` in your host and pass it as
+`HostConfig.sandbox_provider`. `allocate` returns a `SandboxHandle` carrying
+addressing plus a live `SandboxAuth` strategy; `attach` reconnects to the
+`exec_env_ref` recorded on `TaskHostBound`, which is how a resumed or reclaimed
+session finds its container again. Whether that reconnect works across machines
+is a property of the provider you write, not of the SDK.
 
 ## Sandbox side effects are not fenced across worker generations
 
-**What it means:** When a session runs in a sandbox container (the
-`ExecEnv` seam bound to an AIO Sandbox backend), its file and shell
-side effects hit the container over HTTP — outside the shared Postgres
-transaction that fences EventLog writes. A worker that was fenced out of
-the log (a GC pause, a `SIGSTOP` then revive) can still `POST` to the
-container. The sandbox side effect is therefore **at-least-once and
-unfenced**, the same class as a half-run `shell_run` on the host: a
-reclaiming worker reconnects to the same container and re-drives the
-step, but a slow zombie can pollute the container in the meantime. The
-per-session-container model (2026-07-08) shrinks the blast radius — a
-zombie now pollutes only **its own session's** container, not a
-host-shared one — but the write is still unfenced across generations.
+**What it means:** When a session runs in a sandbox container, its file and
+shell side effects go to the container over HTTP — outside the shared Postgres
+transaction that fences EventLog writes. A worker fenced out of the log (a GC
+pause, a `SIGSTOP` then revive) can still `POST` to the container. The sandbox
+side effect is therefore at-least-once and unfenced, the same class as a
+half-run `shell_run` on the host: a reclaiming worker reconnects to the same
+container and re-drives the step, but a slow zombie can pollute the container in
+the meantime. Because a container belongs to one root-task tree, a zombie
+pollutes only its own session.
 
-**When you hit it:** A worker holding a sandbox session stalls long
-enough for its lease to expire and another worker to reclaim the task,
-while the stalled worker later wakes and issues one more container call.
+**When you hit it:** A worker holding a sandbox session stalls long enough for
+its lease to expire and another worker to reclaim the task, then wakes and
+issues one more container call.
 
-**Workaround:** None automatic in v1 — it is bounded by the same
-step-attempt re-drive and human review that cover crashed-step side
-effects (see "Mid-step crash recovery does not undo side effects"). A
-future generation-token fence (the seam already reserves the slot) will
-close the window.
+**Workaround:** None automatic. It is bounded by the same step-attempt re-drive
+and human review that cover crashed-step side effects above.
 
-**Why it is this way:** The lease-fencing design assumes no load-bearing
-write lands outside the shared database; a container write is exactly
-such a write. Fencing it properly needs an orchestration-layer token and
-a validating proxy in front of the container — real work deferred to the
-per-container future. The trade-off is recorded in the execution
-environment seam ADR, which links back to the multi-host lease fencing ADR.
-
-## Per-session sandbox: weak mount isolation, no cross-machine reconnect, idle cost
-
-**What it means:** The per-session sandbox (2026-07-08) provisions a
-**fresh container per root-task tree** (`LocalDockerSandboxProvider`), so
-two concurrent conversations get **separate** containers and the durable
-`exec_env_ref` carries a distinct `sandbox_id`. Three costs remain with
-the local-Docker backend:
-
-- **Weak filesystem isolation.** The container writes the host workspace
-  through a `-v` bind mount, not a full FS jail; only the workspace + skill
-  dirs are mounted (never host root), so a tool cannot reach outside those,
-  but a write to a mounted path lands on the host filesystem directly.
-- **No cross-machine reconnect.** A local-Docker container is bound to the
-  machine that ran it. If a session is reclaimed on a **different** host, the
-  `attach` fails — that host cannot reach a container on the original
-  machine. Same-host resume/reclaim works.
-- **Idle container cost + cold start.** A container has no pause/snapshot: it
-  stays alive (and billed) while its session is active, including long
-  suspends; each new session pays a seconds-scale AIO cold start.
-
-**When you hit it:** Untrusted code that must not touch the host
-filesystem at all; a multi-host deployment where a worker crashes and the
-session is reclaimed on another machine; leaving many sandboxed sessions
-suspended.
-
-**Workaround:** For hard isolation, run the whole host in a VM/container.
-For cross-machine reclaim, keep a session's reclaim on its original host
-(the same-host path works), or use a distributed / NAS-backed provider
-(below). For idle cost, close sessions you are done with so their
-containers are released.
-
-**Why it is this way:** The seam is built for a **Distributed** provider
-family (TAE / K8s) that removes cross-machine reconnect from the storage
-layer — a NAS mount makes file state reachable from any host, so a
-reclaiming host just re-pulls a container against the same NAS. The three
-zero-rework hooks are already in place: `SandboxHandle.auth` (a strategy,
-not a static key — a short-lived Bearer JWT drops in), a gateway-path-prefix
-`base_url`, and `MountSpec.kind=nas`. Real FS isolation (copy-in/sync-out)
-and warm pool / pause are future provider work. See the execution
-environment seam ADR (v2).
-
-## Sandbox `shell_run` timeout is client-side, not a remote hard-kill
+## Sandbox `shell_run` has no remote hard-kill
 
 **What it means:** On the host, `shell_run`'s `timeout` maps to a real
-subprocess timeout that kills the process. Under a sandbox the AIO
-container has no remote hard-kill, so the timeout is enforced *client
-side* by the HTTP read timeout of that one call. The `timeout` you pass
-is honoured — a command that runs past it is reported to the model as a
-timed-out run at the requested budget (not a fixed adapter default) — but
-the command itself **keeps running in the container** after the call
-returns, until the AIO lease cap reaps it. Its side effects may still
-land after the tool has reported a timeout.
+subprocess timeout that kills the process. Under a sandbox there is no remote
+cancel verb, so the timeout is enforced *client side* by the HTTP read timeout
+of that one call. The `timeout` you pass is honoured — a command that runs past
+it is reported to the model as a timed-out run at the requested budget — but
+the command **keeps running in the container** after the call returns. Its side
+effects may land after the tool has already reported a timeout.
 
-**When you hit it:** A sandbox `shell_run` whose command exceeds its
-`timeout` (or the default) — for example a build or test run that hangs.
+**When you hit it:** A sandbox `shell_run` whose command exceeds its `timeout`
+— a hanging build or test run.
 
-**Workaround:** None automatic in v1. Treat a timed-out sandbox
-`shell_run` as "may still be running"; a follow-up command can observe
-or clean up its partial effects. Give genuinely long commands an explicit
-larger `timeout` so the client does not cut the call off early.
+**Workaround:** Treat a timed-out sandbox `shell_run` as "may still be
+running"; a follow-up command can observe or clean up its partial effects. Give
+genuinely long commands an explicit larger `timeout` so the client does not cut
+the call off early.
 
-**Why it is this way:** AIO's `/v1/shell/exec` is a synchronous call with
-no cancel verb, so the only bound the client owns is its own read
-timeout. Threading the per-command budget into that timeout makes the
-model-facing `timeout` behave like the local backend within the limits of
-a no-hard-kill backend. A container-durable, cancellable job handle is
-separate future work (the same work that unlocks background shell under a
-sandbox). See the execution environment seam ADR.
+## Background shell is host-only
 
-## Sandbox browser is text-level and container-scoped in v1
+**What it means:** `shell_run(run_in_background=true)` hands the validated argv
+to the host's background runner and returns a job id that `shell_poll` and
+`shell_kill` then address. A sandbox `ExecEnv` reports that it does not support
+background execution, and the tool returns an error rather than running the
+command in the foreground.
 
-**What it means:** A sandbox session can drive the container's headless
-browser through five noeta-owned tools (`browser_navigate` /
-`browser_click` / `browser_type` / `browser_extract` /
-`browser_screenshot`), exposed to a `web` subagent the main agent
-delegates page work to. Three v1 boundaries:
+**When you hit it:** A sandboxed agent tries to start a long-running server or
+watcher.
 
-- **No browser without a container.** The tools appear only in sandbox
-  mode for a browser-capable agent; a non-sandbox session has no browser at
-  all.
-- **Perception is text / element-level, not visual.**
-  `browser_extract` returns page text plus a numbered list of
-  interactive elements the model clicks/types by index;
-  `browser_screenshot` is saved as a **workspace artifact** (viewable
-  in the file panel), **not** fed back to the model as vision. Sites
-  that need visual understanding (canvas, heavy anti-bot) are not fully
-  handled — a config-gated vision mode is future work.
-- **The browser lives and is billed with the container.** It shares
-  the per-session container's lifecycle and idle cost (see above);
-  there is no separate pause.
+**Workaround:** Run the command in the foreground with a generous `timeout`, or
+run the session outside the sandbox when background jobs are essential.
 
-**When you hit it:** A task that must read a chart rendered only as
-pixels, or one that needs to browse without a sandbox container.
+## The sandbox browser is text-level and container-scoped
 
-**Workaround:** For content, prefer `browser_extract` (and `webfetch`
-for raw pages that need no interaction); for a visual record,
-`browser_screenshot` saves a PNG a human can open. Enable the sandbox to
-get the browser at all.
+**What it means:** A sandbox session can drive the container's headless browser
+through five Noeta-owned tools (`browser_navigate`, `browser_click`,
+`browser_type`, `browser_extract`, `browser_screenshot`). Three boundaries:
 
-**Why it is this way:** v1 pins a text/element-level contract that keeps
-the model's context lean and the tool schema stable; visual perception
-and the coordinate-level `/v1/browser` path are a deliberate increment 2
-with the seam already reserved. See the execution environment seam ADR
-(browser subsystem).
+- **No browser without a container.** The pack mounts only when a live browser
+  backend is in the session's backend bag *and* the agent activates `browser`.
+  Otherwise the tool set is byte-identical to a non-browser session.
+- **Perception is text and element level, not visual.** `browser_extract`
+  returns page text plus a numbered list of interactive elements the model
+  clicks and types by index. `browser_screenshot` saves a PNG as a workspace
+  artifact; it is **not** fed back to the model as vision, so pages that need
+  visual understanding are not fully handled.
+- **The browser lives with the container.** It shares the session container's
+  lifecycle and cost; there is no separate pause.
+
+**When you hit it:** A task that must read a chart rendered only as pixels, or
+one that needs to browse without a container.
+
+**Workaround:** Prefer `browser_extract` for content and `webfetch` for pages
+that need no interaction; use `browser_screenshot` when a human needs to look.
+
+## The composer cannot be replaced
+
+**What it means:** `ContextComposer` is a closed extension point on the user
+surface. Stable-prefix KV-cache reproducibility is a hard constraint, so
+swapping the composer wholesale is not offered. The open hooks are
+registry-only and append-only: a `ContentKindSpec` (a semi-stable resident) or
+a compose-time `reminder` (the dynamic-suffix tail). Neither touches the stable
+prefix.
+
+**When you hit it:** You want a fundamentally different prompt layout.
+
+**Workaround:** Add residents and reminders through the open surfaces, or move
+the decision into a custom `Policy`, which *is* replaceable through the
+`policy` surface.
 
 ## See also
 
 - [Troubleshooting](troubleshooting.md) — symptom → cause → resolution
-- [Wake & resume](../concepts/wake-resume.md) — the delivery guarantee
-  and its scope
-- [WorkerLoop reference](../reference/worker-loop.md) — constructor
-  knobs and shutdown behavior
-- [Architecture overview](../architecture/overview.md) — the full
-  system picture
+- [Wake & resume](../concepts/wake-resume.md) — the delivery guarantee and its
+  scope
+- [WorkerLoop reference](../reference/worker-loop.md) — constructor knobs and
+  shutdown behavior
+- [Architecture overview](../architecture/overview.md) — the full system
+  picture

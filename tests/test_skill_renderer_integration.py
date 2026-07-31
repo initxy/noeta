@@ -1,21 +1,13 @@
-"""Composer × SkillRegistry integration tests (issue 21).
+"""Composer reads active skills through SkillRegistry and renders their bodies.
 
-Pins the rev3 acceptance criteria:
-* **G3** Composer reads the fold-owned activation state only (the
-  generic map ``TaskState.active_content`` since the issue-07
-  generation switch; the patch sugar keeps it in lockstep with
-  ``active_skills``); resolution / sorting happens inside
-  :meth:`SkillRegistry.render`.
-* **G4 (rev3 NB2)** A 5 KB skill body appears verbatim in the
-  transient View, while the persisted ``ContextPlanComposed`` payload
-  and ContentStore-backed ``ContextPlan`` body never contain the body
-  literal.
-* **G5** Determinism / drift: byte-equal output across compose calls;
-  changing the Registry rotates ``semi_stable`` hash but not the
-  other two segments; changing ``active_skills`` rotates only
-  ``semi_stable``.
-* **P2** ``view.plan_ref`` body deserialises with
-  ``selected_skills`` set to the post-filter, post-sort name list.
+The Composer reads only the fold-owned activation map (``TaskState.active_content``,
+kept in lockstep with the ``active_skills`` sugar); resolution and sorting happen
+inside :meth:`SkillRegistry.render`. A skill body must appear verbatim in the
+transient View but never in a persisted record — neither the ``ContextPlanComposed``
+payload nor the ContentStore-backed ``ContextPlan`` body — so the log stays small and
+body-free. Compose is deterministic: a segment's hash rotates only when its own inputs
+change, which is what keeps the provider's prompt cache alive. ``selected_skills`` on
+the persisted plan is the post-filter, post-sort render order, not the raw active list.
 """
 
 from __future__ import annotations
@@ -73,9 +65,8 @@ def _composer_with(
 
 def _task(*, active_skills: list[str], user_text: str = "hi") -> Task:
     task = Task(task_id="t-1", state=TaskState())
-    # Patch-sugar activation keeps the sugar list and the generic
-    # activation map in lockstep (the composer reads the map only since
-    # the issue-07 generation switch).
+    # The patch-sugar list and the generic activation map stay in lockstep; the
+    # composer reads the map only.
     TaskStatePatch(activate_skills=list(active_skills)).apply(task.state)
     task.runtime.messages.append(
         Message(role="user", content=[TextBlock(text=user_text)])
@@ -97,7 +88,7 @@ def _desc(name: str, *, description: str = "d", body: str = "b", priority: int =
 
 
 # ---------------------------------------------------------------------------
-# G3 + Composer wiring
+# Composer wiring — active skills render into semi_stable
 # ---------------------------------------------------------------------------
 
 
@@ -135,7 +126,7 @@ def test_unknown_active_skill_dropped_from_semi_stable() -> None:
 
 
 # ---------------------------------------------------------------------------
-# G5 — determinism / drift
+# Determinism / drift
 # ---------------------------------------------------------------------------
 
 
@@ -194,7 +185,7 @@ def test_removing_skill_rotates_semi_stable_hash() -> None:
 
 
 # ---------------------------------------------------------------------------
-# P2 — ContextPlan provenance
+# ContextPlan provenance
 # ---------------------------------------------------------------------------
 
 
@@ -228,12 +219,12 @@ def test_plan_selected_skills_excludes_unknown_active_skill() -> None:
 
 
 # ---------------------------------------------------------------------------
-# G4 — persisted vs runtime body location (rev3 NB2)
+# Persisted vs runtime body location
 # ---------------------------------------------------------------------------
 
 
 def test_large_body_in_view_but_not_in_persisted_records() -> None:
-    """rev3 G4 + NB2: a 5 KB skill body must
+    """A 5 KB skill body must
     1) appear verbatim in ``view.segments[1]`` (transient runtime),
     2) NOT appear in the canonical bytes of the actual
        ``ContextPlanComposed`` envelope read back from EventLog,

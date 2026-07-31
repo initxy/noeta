@@ -1,13 +1,10 @@
 """Single-writer enforcement at the file boundary.
 
-``task.context.plan_ref = ...`` must only appear in ``core/fold.py``.
-Anywhere else (Composer, Policy, Tool, Engine) is a violation: even
-Engine's live path converges its state through fold's
-:func:`apply_event`, so the assignment line stays in fold.py — the lint
-check below is the regression barrier.
-
-Future issues extend this file with the same shape of check for
-``runtime.messages`` / ``state.*`` / ``governance.*`` writers.
+``task.context.plan_ref = ...`` may appear only in ``core/fold.py``. Even the
+Engine's live path converges its state through fold's :func:`apply_event`, so
+an assignment anywhere else (Composer, Policy, Tool, Engine) would mean two
+writers for one field and a live state that a replay cannot reproduce. Type
+checking cannot express that, so the source scan below is the barrier.
 """
 
 from __future__ import annotations

@@ -1,22 +1,23 @@
 # Swap providers
 
-**Goal:** switch an agent from one LLM provider to another without
-rewriting any agent code.
+**Goal:** switch an agent from one LLM provider to another without rewriting
+any agent code.
 
 **Before you start:** you have a working agent using one provider (see
 [Configure a provider](configure-provider.md)).
 
 ## The same recipe, different wiring
 
-Provider neutrality means your agent's identity — system prompt, tools,
-permission mode, child agents — never depends on which provider is
-serving it. The provider is **wiring**, injected at `Client` or `query`
-time. Swap it, and the same `Options` compiles to the same `AgentSpec`.
+An agent's identity — system prompt, tools, permission mode, child agents —
+does not depend on which provider serves it. The provider is **wiring**,
+injected at `Client` or `query` time (or set on `Options.provider`, which the
+explicit kwarg overrides). Swap it and the same `Options` compiles to the same
+`AgentSpec`.
 
-## Before: Anthropic
+## Anthropic
 
 ```python
-from noeta.sdk import Client, Options, query
+from noeta.sdk import Client, Options
 from noeta.sdk.providers import AnthropicProvider
 
 options = Options(
@@ -31,16 +32,16 @@ client = Client(
     options,
     provider=anthropic,
     workspace_dir="./",
-    model="claude-sonnet-4-5-20250929",
+    model="claude-sonnet-4-6",
 )
 ```
 
-Note where the model lives: a provider is an *adapter for a vendor's wire
-protocol*, not a binding to one model, so it takes no `model` argument. The
-model is chosen per session on `Client(model=…)` / `query(model=…)` — which is
-exactly what lets one provider instance serve many models.
+A provider is an adapter for a vendor's wire protocol, not a binding to one
+model, so it takes no `model` argument. The model is chosen per session on
+`Client(model=…)` / `query(model=…)`, which lets one provider instance serve
+many models.
 
-## After: OpenAI-compatible
+## OpenAI-compatible
 
 ```python
 from noeta.sdk.providers import OpenAICompatProvider
@@ -51,17 +52,15 @@ openai = OpenAICompatProvider(
 )
 
 # Same options, same client construction — only the provider changes
-client = Client(options, provider=openai, workspace_dir="./", model="gpt-5.5")
+client = Client(
+    options, provider=openai, workspace_dir="./", model="gpt-5.5-2026-04-24"
+)
 ```
 
-Nothing else changes: same `Options`, same tools, same `Client` usage.
-Your recorded history is also portable — EventLog entries are
-provider-agnostic, so a session started with Anthropic can resume with
-OpenAI.
+`noeta.sdk.providers` also ships `OpenAIResponsesProvider` for the OpenAI
+Responses API, which takes the same `base_url` / `api_key` pair.
 
 ## Via `query()` (one-shot)
-
-The `query()` convenience function also accepts a `provider` kwarg:
 
 ```python
 from noeta.sdk import query
@@ -71,20 +70,20 @@ result = query(
     goal="What is the capital of France?",
     provider=openai,  # or anthropic, or any provider
     workspace_dir="./",
-    model="gpt-5.5",
+    model="gpt-5.5-2026-04-24",
 )
 print(result.answer())
 ```
 
 ## Verify the swap
 
-Run the same goal against both providers and confirm both produce a
-terminal answer:
+Run the same goal against both providers and confirm both produce a terminal
+answer:
 
 ```python
 runs = [
-    ("anthropic", anthropic, "claude-sonnet-4-5-20250929"),
-    ("openai", openai, "gpt-5.5"),
+    ("anthropic", anthropic, "claude-sonnet-4-6"),
+    ("openai", openai, "gpt-5.5-2026-04-24"),
 ]
 for name, prov, model in runs:
     result = query(
@@ -93,34 +92,32 @@ for name, prov, model in runs:
     print(f"{name}: {result.answer()}")
 ```
 
-Both should return a successful answer. The exact text will differ
-(different models), but both reach a terminal state.
+The exact text differs, but both reach a terminal state.
 
 ## What does not change
-
-When you swap providers:
 
 - **Tool definitions** — same `@tool` functions, same names, same schemas.
 - **Agent identity** — the compiled `AgentSpec` is identical because
   `compile_options` never sees the provider.
-- **EventLog format** — recorded events are vendor-neutral. A log
-  written with Anthropic can be folded with an OpenAI provider active.
+- **EventLog format** — recorded events carry neutral message shapes, so a log
+  written against one vendor folds without that vendor's adapter installed, and
+  a session can resume under a different provider.
 - **Permission model** — same `permission_mode`, same Guards.
 
 ## What might change
 
-- **Tool calling format** — the internal protocol normalizes this, but
-  edge cases (e.g. parallel tool calls) may behave slightly differently
-  across providers.
-- **Reasoning / extended thinking** — providers that support extended
-  thinking (Anthropic) vs those that do not may produce different
-  internal traces.
-- **Token counts and pricing** — obviously different per provider.
+- **Tool calling format** — the internal protocol normalizes this, but edge
+  cases (parallel tool calls, for instance) may behave slightly differently.
+- **Reasoning continuation** — `OpenAICompatProvider` drops re-attached
+  thinking blocks unless you construct it with `reasoning_continuation="chat"`;
+  `OpenAIResponsesProvider` echoes the encrypted continuation the Responses API
+  requires by default. Traces therefore differ across vendors.
+- **Token counts and pricing** — different per provider.
 
 ## See also
 
-- [Provider neutrality](../concepts/provider-neutrality.md) — the design
-  behind this
+- [Provider neutrality](../concepts/provider-neutrality.md) — the design behind
+  this
 - [Configure a provider](configure-provider.md) — setup for each provider
 - [SDK reference](../reference/sdk.md) — `Options`, `Client`, `query`
   signatures

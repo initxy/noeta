@@ -1,31 +1,15 @@
-"""Phase 4.5 I5 — open-source Skill compatibility acceptance.
+"""A public open-source skill must load and run byte-for-byte as published.
 
-@xy-d-user made loading **real public open-source skills unchanged** a
-runtime acceptance gate ("take an open-source skill and it must run as-is"). These
-tests exercise that against literal, verbatim, Apache-2.0 public skills
-copied from the ``claude-plugins-official`` marketplace (see
-``fixtures/oss_skills/PROVENANCE.md``), plus one authored fixture for a
-controlled progressive-disclosure case.
-
-Coverage:
-
-* the verbatim public skills load (frontmatter tolerance for hyphenated
-  / unknown keys + inline list values, on real content);
-* non-semantic frontmatter keys flow into ``SkillDescription.metadata``
-  as opaque sorted strings (no key normalisation, no YAML parse);
-* bundled files are discovered as ``resources`` (sorted POSIX-relative,
-  ``SKILL.md`` excluded, provenance/license files outside skill roots
-  never leak in);
-* ``metadata`` / ``resources`` do **not** perturb the rendered Message
-  bytes or the ``semi_stable`` segment hash (a stable prompt prefix the
-  cross-host prompt cache depends on);
-* end-to-end through the Engine: a real public skill activates durably
-  (``TaskStatePatched``), its body materialises in the ``semi_stable``
-  segment, ``ContextPlan.selected_skills`` records it, and the
-  activation survives a fresh fold;
-* out-of-scope guard: a bundled script is recorded as a resource and is
-  **NOT** executed (no subprocess) — the unsupported behavior is
-  explicit, not faked.
+The fixtures are verbatim Apache-2.0 skills (see
+``fixtures/oss_skills/PROVENANCE.md``), so the frontmatter is whatever their
+authors wrote: hyphenated keys, unknown keys, inline list values. Anything the
+parser does not understand has to survive as opaque metadata rather than
+crash or be normalised, and metadata must not reach the rendered Message —
+the ``semi_stable`` segment hash is the cross-host prompt-cache key, so a skill
+that ships an extra frontmatter line would otherwise invalidate every cache.
+Loading a skill also never executes what it bundles: a script is recorded as a
+reachable path, and the whole load → activate → compose flow spawns no
+subprocess.
 """
 
 from __future__ import annotations
@@ -59,7 +43,7 @@ OSS_SKILLS_DIR = Path(__file__).parent / "fixtures" / "oss_skills"
 
 def _read_plan(cs: InMemoryContentStore, view: object) -> dict[str, object]:
     """Restore the ``ContextPlan`` the composer wrote, narrowing the
-    ``ContentRef | None`` ref so ``mypy --strict`` is satisfied."""
+    ``ContentRef | None`` ref for ``mypy --strict``."""
     plan_ref = view.plan_ref  # type: ignore[attr-defined]
     assert plan_ref is not None
     plan = json.loads(cs.get(plan_ref).decode("utf-8"))
@@ -84,8 +68,9 @@ def _semi_stable_text(view: object) -> str:
 
 
 def _registry() -> SkillRegistry:
-    # The fixtures dir IS the skill pack root; PROVENANCE.md + LICENSE sit
-    # at its top level (outside any <name>/ skill root) on purpose.
+    # The fixtures dir IS the skill pack root, and PROVENANCE.md + LICENSE sit
+    # at its top level on purpose: they are outside every ``<name>/`` skill
+    # root, which is what resource discovery must respect.
     return load_workspace_skills(
         OSS_SKILLS_DIR.parent, override_skills_dir=OSS_SKILLS_DIR
     )
@@ -98,17 +83,17 @@ def test_all_oss_fixtures_load() -> None:
 
 
 def test_example_command_frontmatter_metadata_captured() -> None:
-    """Verbatim public skill: ``argument-hint`` (hyphen key) +
-    ``allowed-tools: [Read, Glob, Grep, Bash]`` (inline list) no longer
-    crash the parser; they are captured as opaque, raw-key-sorted
-    metadata strings."""
+    """Verbatim public skill: ``argument-hint`` (hyphen key) and
+    ``allowed-tools: [Read, Glob, Grep, Bash]`` (inline list) are captured as
+    opaque, raw-key-sorted metadata strings."""
     desc = _registry().get("example-command")
     assert desc is not None
     assert desc.metadata == (
         ("allowed-tools", "[Read, Glob, Grep, Bash]"),
         ("argument-hint", "<required-arg> [optional-arg]"),
     )
-    # opaque string capture — NOT parsed into a YAML list (I5 scope)
+    # Captured as a string, NOT parsed into a YAML list: the loader must not
+    # take a position on syntax it does not act on.
     assert dict(desc.metadata)["allowed-tools"] == "[Read, Glob, Grep, Bash]"
 
 
@@ -130,8 +115,8 @@ def test_refactor_guide_semantic_vs_metadata_split() -> None:
 
 
 def test_session_report_resources_discovered() -> None:
-    """Verbatim public skill bundling a script + a template: both are
-    recorded as resources, sorted, SKILL.md excluded."""
+    """A skill bundling a script + a template records both as resources,
+    sorted, with SKILL.md itself excluded."""
     desc = _registry().get("session-report")
     assert desc is not None
     assert desc.resources == ("analyze-sessions.mjs", "template.html")
@@ -165,15 +150,14 @@ def test_provenance_and_license_never_leak_into_resources() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Determinism: metadata/resources do not perturb render bytes (stable prompt prefix)
+# Determinism: metadata/resources do not perturb render bytes (prompt prefix)
 # ---------------------------------------------------------------------------
 
 
 def test_metadata_and_resources_do_not_change_render_bytes() -> None:
-    """Two descriptions with identical name/description/body but different
-    metadata + resources must render byte-equal — only name/description/
-    body reach the canonical Message, so the ``semi_stable`` segment hash
-    is unaffected."""
+    """Two descriptions differing only in metadata + resources render
+    byte-equal: only name/description/body reach the canonical Message, which
+    is what keeps the ``semi_stable`` segment hash stable."""
     plain = SkillDescription(
         name="d", description="same desc", body="same body\n"
     )
@@ -184,9 +168,9 @@ def test_metadata_and_resources_do_not_change_render_bytes() -> None:
         metadata=(("allowed-tools", "[Read]"), ("license", "MIT")),
         resources=("a.md", "scripts/x.sh"),
     )
-    # they are NOT equal as objects (metadata/resources participate in eq)...
+    # Unequal as objects (metadata/resources participate in eq), identical on
+    # the wire — that gap is exactly the property under test.
     assert plain != decorated
-    # ...but render identically.
     rendered_plain = SkillRegistry({"d": plain}).render(["d"])
     rendered_decorated = SkillRegistry({"d": decorated}).render(["d"])
     assert rendered_plain.messages == rendered_decorated.messages
@@ -194,8 +178,8 @@ def test_metadata_and_resources_do_not_change_render_bytes() -> None:
 
 
 def test_semi_stable_segment_hash_stable_across_metadata(tmp_path: Path) -> None:
-    """Composer-level proof: activating a skill whose only difference is
-    extra metadata/resources yields the same ``semi_stable`` hash."""
+    """Composer-level proof of the same property: activating a skill that
+    differs only in metadata/resources yields the same ``semi_stable`` hash."""
 
     def _hash_for(registry: SkillRegistry) -> str:
         cs = InMemoryContentStore()
@@ -261,32 +245,29 @@ def test_real_public_skill_activates_and_materialises(tmp_path: Path) -> None:
 
     activate_skills(engine, task, skills=["session-report"], lease_id=lease_id)
 
-    # durable activation event
+    # Activation is durable, so a resume does not lose the skill.
     patched = [e for e in log.read(task.task_id) if e.type == "TaskStatePatched"]
     assert len(patched) == 1
     assert patched[0].payload.patch["activate_skills"] == ["session-report"]
 
-    # body materialises into semi_stable + selected_skills records it
     view = engine._composer.compose(task)  # noqa: SLF001 (test introspection)
     semi_stable = next(s for s in view.segments if s.name == "semi_stable")
-    # ONE message per skill — body + the skill's absolute base
-    # directory line (for on-demand `read`), no force-inlined resource.
+    # ONE message per skill: body plus the skill's absolute base directory, so
+    # bundled resources are reachable by `read` without inlining any of them.
     assert len(semi_stable.content) == 1
     block = semi_stable.content[0].content[0]
     assert isinstance(block, TextBlock)
     assert "Activated skill: session-report" in block.text
     assert "Session Report" in block.text  # from the real public body
-    # the base directory is surfaced so the model can `read` bundled
-    # resources (analyze-sessions.mjs, template.html) on demand by path.
     skill_dir = OSS_SKILLS_DIR / "session-report"
     assert f"Base directory for this skill: {skill_dir}" in block.text
-    # the retired manifest / dedicated-tool affordances are gone (the body
-    # may still name the script — that is verbatim SKILL.md, not a listing).
+    # No resource listing and no dedicated read tool are injected. The body may
+    # name the script itself — that is verbatim SKILL.md, not a listing.
     assert "read_skill_resource" not in block.text
     assert "Bundled resources" not in block.text
     plan = _read_plan(cs, view)
     assert plan["selected_skills"] == ["session-report"]
-    # nothing is force-inlined anymore → no retrieval provenance.
+    # Nothing is force-inlined, so there is no retrieval provenance to record.
     assert plan["retrieved_resources"] == []
 
 
@@ -306,12 +287,11 @@ def test_bundled_script_is_recorded_but_not_executed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A skill can ship a script (``session-report`` ships
-    ``analyze-sessions.mjs``; ``refactor-guide`` ships
-    ``scripts/check.sh``). **Lists** a body-referenced script's
-    relpath in the activation manifest (an offer to read, not execution)
-    — so the whole load → activate → compose flow must still spawn **no
-    subprocess**. Executing a script is the separate ``run_skill_script``
-    path (Issue E)."""
+    ``analyze-sessions.mjs``; ``refactor-guide`` ships ``scripts/check.sh``).
+    Loading one only offers its path — the whole load → activate → compose
+    flow must spawn **no subprocess**, because a skill anyone can publish must
+    not gain execution simply by being read. Running a script is the separate,
+    guarded ``run_skill_script`` tool."""
 
     def _boom(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("must not execute bundled skill scripts")
@@ -328,7 +308,7 @@ def test_bundled_script_is_recorded_but_not_executed(
         lease_id=lease_id,
     )
     view = engine._composer.compose(task)  # noqa: SLF001
-    # the script paths ARE recorded as resources...
+    # The script paths ARE recorded as resources...
     registry = load_workspace_skills(
         tmp_path / "ws", override_skills_dir=OSS_SKILLS_DIR
     )
@@ -336,9 +316,8 @@ def test_bundled_script_is_recorded_but_not_executed(
     rg = registry.get("refactor-guide")
     assert sr is not None and "analyze-sessions.mjs" in sr.resources
     assert rg is not None and "scripts/check.sh" in rg.resources
-    # One message per activated skill; the skill's base directory
-    # is surfaced (so the script is reachable by path) but the script is
-    # never inlined or executed (the monkeypatched _boom never fired).
+    # ...reachable by path via the skill's base directory, but never inlined
+    # and never executed — reaching this line at all means _boom never fired.
     semi_stable = next(s for s in view.segments if s.name == "semi_stable")
     assert len(semi_stable.content) == 2  # one message per skill
     rg_dir = OSS_SKILLS_DIR / "refactor-guide"

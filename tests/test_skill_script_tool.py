@@ -1,4 +1,4 @@
-"""Phase 4.5 Issue E — `RunSkillScriptTool` invoke-level boundaries.
+"""`RunSkillScriptTool` invoke-level boundaries.
 
 Directly exercises the tool's invoke: the happy path's audit fields +
 the boundary branches (unknown suffix, symlink escape, shell-meta arg,
@@ -53,7 +53,7 @@ def _skill_root(tmp_path: Path, files: dict[str, str]) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# happy path + audit fields (#3)
+# happy path + audit fields
 # ---------------------------------------------------------------------------
 
 
@@ -79,7 +79,7 @@ def test_happy_path_runs_and_audits(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# boundary branches — success=False, runner NEVER called (#2)
+# boundary branches — success=False, runner NEVER called
 # ---------------------------------------------------------------------------
 
 

@@ -19,9 +19,9 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
-    # Microkernel M4: httpx lives here — the HTTP-speaking capability impls
-    # (providers, web, mcp, sandbox backends, otlp export) all ship in this
-    # wheel; noeta-runtime is transport-free.
+    # httpx lives here — the HTTP-speaking capability impls (providers, web,
+    # mcp, sandbox backends, otlp export) all ship in this wheel;
+    # noeta-runtime is transport-free.
     "httpx>=0.28.1",
     # [binary] bundles libpq so the Postgres storage adapters work out of
     # the box (the langchain-postgres / dbt pattern; the maintainer chose
@@ -30,12 +30,12 @@ dependencies = [
     # (``noeta.builtins.storage.impl``) and load lazily through
     # ``noeta.sdk.storage``, so only a host that chose Postgres imports this.
     "psycopg[binary]>=3.2",
-    # Upper-bounded on purpose. Since phase 2b the built-ins band consumes the
-    # kernel ACROSS the wheel boundary (the react built-in imports the control
-    # band; skills / memory / providers import the kernel's seams), so version
-    # skew that used to be impossible — one wheel, one release — is now
-    # installable. Under 0.x a minor bump is the breaking one, so the SDK
-    # tracks the kernel minor-for-minor rather than failing at first build.
+    # Upper-bounded on purpose. The built-ins band consumes the kernel ACROSS
+    # the wheel boundary (the react built-in imports the control band; skills /
+    # memory / providers import the kernel's seams), so the two wheels can be
+    # installed at skewed versions. Under 0.x a minor bump is the breaking one,
+    # so the SDK tracks the kernel minor-for-minor rather than failing at first
+    # build.
     "noeta-runtime>=0.4.0,<0.5.0",
 ]
 

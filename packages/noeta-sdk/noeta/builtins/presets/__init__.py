@@ -1,8 +1,9 @@
-"""``presets`` — the official agents (D11).
+"""``presets`` — the official agents contributed on the ``agent`` surface.
 
-The two standalone official ``AgentDefinition`` s are declared by ref; the
-three main-roster subagents ride ``noeta.presets`` directly (they live in a
-dict, not module attributes).
+A contribution resolves its ``ref`` as ``module:attribute``, so only the two
+standalone :class:`AgentDefinition` s can be declared here; the three roster
+subagents live inside ``noeta.presets.OFFICIAL_SUBAGENTS`` — a dict, not module
+attributes — and are wired from there.
 """
 
 from __future__ import annotations

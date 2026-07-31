@@ -1,6 +1,6 @@
 """End-to-end: Engine drives a script of ``tool_calls`` then ``finish``.
 
-Covers Phase 0 issue 02 acceptance:
+Covers:
 
 * ``StubScriptedPolicy([tool_calls([t1, t2]), finish("done")])`` reaches
   terminal in a single ``run_one_step`` invocation.
@@ -211,7 +211,7 @@ def test_next_compose_view_contains_both_tool_result_messages() -> None:
 
     view = trivial_three_segment(_cs).compose(finished)
     tool_messages = [m for m in view.iter_messages() if m.role == "tool"]
-    # Phase 1: a single role="tool" Message batches both ToolResultBlocks.
+    # A single role="tool" Message batches both ToolResultBlocks.
     assert len(tool_messages) == 1
     call_ids = [b.call_id for b in tool_messages[0].content]
     assert call_ids == ["c1", "c2"]

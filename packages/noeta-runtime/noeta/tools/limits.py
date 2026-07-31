@@ -1,18 +1,12 @@
-"""Inline-size budget helpers shared by every tool pack.
+"""Inline-size budget helpers shared by every tool.
 
-`ToolResult.output` and `ToolResult.summary` ride **inline** in the
-EventLog (`ToolResultRecordedPayload` stores `summary` and the
-`output_ref`, and `output` becomes the next LLM round's `ToolResultBlock`),
-so they must stay small *as canonically encoded*. UTF-8 byte truncation
-alone is not enough: the ToolRuntime serialises `output` with stdlib
-`json.dumps` (`ensure_ascii=True`), so control chars / non-ASCII can expand
-a "small" string up to ~6x. These helpers measure with the same encoding
-and shrink to a hard ceiling. The full body always lives in a ContentStore
-artifact, never inline.
-
-Promoted from `noeta.tools.research._limits` (Phase 4 B16) so the fs tool
-pack and any future pack can share the same byte-budget seam without
-importing into another pack's private module.
+`ToolResult.output` and `ToolResult.summary` ride **inline** in the EventLog and
+in the next LLM round's `ToolResultBlock`, so they must stay small *as
+canonically encoded*. UTF-8 byte truncation alone is not enough: the ToolRuntime
+serialises `output` with stdlib `json.dumps` (`ensure_ascii=True`), so control
+chars / non-ASCII can expand a "small" string up to ~6x — these helpers measure
+with the same encoding and shrink to a hard ceiling. The full body always lives
+in a ContentStore artifact, never inline.
 """
 
 from __future__ import annotations

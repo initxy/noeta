@@ -1,16 +1,10 @@
-"""Argument offload helpers for the tool-call events.
+"""Argument offload for the tool-call events.
 
-A ``ToolCallStarted`` / ``ToolCallApprovalRequested`` payload captures the
-call's arguments verbatim. Arguments small enough to fit the EventLog's 4-KB
-payload ceiling stay inline; oversized ones are offloaded to the ContentStore
-and referenced by ``arguments_ref`` (large bodies go by reference,
-never inline). Exactly one of ``arguments`` / ``arguments_ref`` is populated.
-
-These helpers live at the protocols layer so every layer can share one offload
-rule: the runtime ``ToolRuntime`` builds ``ToolCallStarted`` payloads; the core
-decision handler builds ``ToolCallApprovalRequested`` payloads; the core fold
-reads the arguments back. ``noeta.core`` may only import ``noeta.protocols``, so a
-runtime-level home would be off-limits to those callers.
+Arguments that fit the EventLog's payload ceiling stay inline; oversized ones
+go to the ContentStore and are referenced by ``arguments_ref``. Exactly one of
+``arguments`` / ``arguments_ref`` is ever populated. The helpers live at the
+protocols layer because three different layers must share the *same* offload
+rule and ``noeta.core`` may import nothing above ``noeta.protocols``.
 """
 
 from __future__ import annotations
@@ -30,8 +24,8 @@ from noeta.protocols.values import EVENT_PAYLOAD_MAX_BYTES, ContentRef
 
 _ARGS_MEDIA_TYPE = "application/json"
 
-# Either tool-call event that captures arguments — both expose ``arguments``
-# and ``arguments_ref`` with identical offload semantics.
+# Both payloads expose ``arguments`` / ``arguments_ref`` with identical
+# offload semantics, so one alias covers every helper below.
 _ArgPayload = Union[ToolCallStartedPayload, ToolCallApprovalRequestedPayload]
 
 
@@ -43,10 +37,10 @@ def _arguments_ref_if_oversized(
     """Return a ContentRef for ``args`` when the inline payload would breach
     the EventLog's payload ceiling, else ``None`` (keep arguments inline).
 
-    The threshold is measured on the *same* canonical bytes the EventLog caps
-    (``to_canonical_bytes`` of the whole payload), so a payload is offloaded
-    exactly when — and only when — it would otherwise be rejected. The bytes
-    are content-addressed, so the same arguments always yield the same ref.
+    The threshold is measured on the *same* canonical bytes the EventLog caps,
+    so a payload is offloaded exactly when — and only when — it would otherwise
+    be rejected. The bytes are content-addressed, so identical arguments always
+    yield an identical ref.
     """
     if len(to_canonical_bytes(inline_payload)) <= EVENT_PAYLOAD_MAX_BYTES:
         return None
@@ -58,13 +52,10 @@ def _arguments_ref_if_oversized(
 def build_tool_call_started_payload(
     call: ToolCall, content_store: ContentStore
 ) -> ToolCallStartedPayload:
-    """Build a ``ToolCallStarted`` payload, offloading oversized arguments to
-    the ContentStore. Exactly one of ``arguments`` /
-    ``arguments_ref`` is populated.
+    """Build a ``ToolCallStarted`` payload, offloading oversized arguments.
 
-    The offload decision is a pure function of the canonical argument bytes,
-    so the live ``ToolRuntime`` reconstructs deterministic payloads from the
-    same ``ToolCall``.
+    The offload decision is a pure function of the canonical argument bytes, so
+    the same ``ToolCall`` always reconstructs the same payload.
     """
     args = dict(call.arguments)
     inline = ToolCallStartedPayload(
@@ -81,13 +72,12 @@ def build_tool_call_started_payload(
 def build_tool_call_approval_requested_payload(
     call: ToolCall, content_store: ContentStore
 ) -> ToolCallApprovalRequestedPayload:
-    """Build a ``ToolCallApprovalRequested`` payload, offloading oversized
-    arguments to the ContentStore — the same rule as
-    :func:`build_tool_call_started_payload`.
+    """Build a ``ToolCallApprovalRequested`` payload under the same offload
+    rule as :func:`build_tool_call_started_payload`.
 
-    This event is the durable recovery anchor: on resume the fold
-    rebuilds the pending entry from it, dereferencing ``arguments_ref`` back
-    out of the (equally durable) ContentStore.
+    This event is the durable recovery anchor: on resume the fold rebuilds the
+    pending entry from it, dereferencing ``arguments_ref`` back out of the
+    equally durable ContentStore.
     """
     args = dict(call.arguments)
     inline = ToolCallApprovalRequestedPayload(
@@ -105,9 +95,7 @@ def resolve_tool_call_arguments(
     payload: _ArgPayload, content_store: ContentStore
 ) -> dict[str, Any]:
     """Return a tool-call payload's arguments, dereferencing ``arguments_ref``
-    from the ContentStore when the call was offloaded (the large-arguments
-    path of the ``build_*`` helpers above). Works for both ``ToolCallStarted``
-    and ``ToolCallApprovalRequested`` payloads."""
+    from the ContentStore when the call was offloaded."""
     if payload.arguments_ref is not None:
         body = content_store.get(payload.arguments_ref)
         return cast(dict[str, Any], json.loads(body.decode("utf-8")))

@@ -2,23 +2,15 @@
 
 Demonstrated SDK capability
 ---------------------------
-The :func:`noeta.tools.tool` decorator. Wrap a plain
-``fn(arguments, ctx) -> ToolResult`` function and you get back a single
-object that is **both** a runnable tool and a carrier of the matching
-identity ref. Drop it into ``Options.allowed_tools`` by value and the SDK
-wires the live closure into the session while the ref enters the agent's
-declared identity — the runnable and its identity can never drift apart.
+The :func:`noeta.sdk.tool` decorator. Wrapping a plain
+``fn(arguments, ctx) -> ToolResult`` yields one object that is both the
+runnable tool and the carrier of its identity ref, so listing that object by
+value in ``Options.allowed_tools`` wires the live closure and declares the
+identity from a single definition — the two cannot drift apart.
 
-Here the model is scripted to call a ``word_count`` tool once; the
-example proves the custom closure actually ran by inspecting the
-``ToolCallStarted`` / ``ToolResultRecorded`` envelopes.
-
-Running it
-----------
-Offline by default (:class:`FakeLLMProvider`, no API key). To drive a real
-model, swap ``_demo_provider()`` for ``OpenAICompatProvider`` /
-``AnthropicProvider`` (see ``minimal_agent.py``) and let the live model
-decide when to call the tool.
+The provider is scripted so the example needs no API key; pass a live
+provider from ``noeta.sdk.providers`` to :func:`run` and a real model decides
+for itself when to call the tool.
 
     python examples/custom_tool.py
 """
@@ -51,6 +43,9 @@ _WORD_COUNT_SCHEMA = {
 }
 
 
+# ``version`` is required rather than defaulted: it is part of the tool's
+# declared identity, so a silent default would let two behaviourally different
+# tools share one.
 @tool(
     name="word_count",
     version="1",
@@ -58,18 +53,14 @@ _WORD_COUNT_SCHEMA = {
     input_schema=_WORD_COUNT_SCHEMA,
 )
 def word_count(arguments: dict, ctx: ToolContext) -> ToolResult:
-    """Count whitespace-separated words in ``arguments['text']``.
-
-    A tool is just a function returning a :class:`ToolResult`. ``version``
-    is mandatory (no default) because it is part of the tool's declared
-    identity — two behaviourally different tools must never share one.
-    """
+    # ``input_schema`` is model-facing metadata only — nothing validates
+    # ``arguments`` against it, so a tool defends itself.
     n = len(str(arguments.get("text", "")).split())
     return ToolResult(success=True, output=f"{n} words")
 
 
 def _demo_provider() -> FakeLLMProvider:
-    """Scripted: call ``word_count`` once, then finish."""
+    """A network-free provider scripted to call ``word_count`` once, then finish."""
     return FakeLLMProvider(
         responses=[
             LLMResponse(
@@ -93,12 +84,12 @@ def _demo_provider() -> FakeLLMProvider:
 
 
 def run(*, provider=None, workspace_dir: Path, model: str = "stub-model"):
-    """Drive one turn and return the list of tool names that ran."""
+    """Drive one turn and return the tool names the agent actually invoked."""
     options = Options(
         system_prompt="You count words when asked.",
         name="counter",
-        # Pass the decorated closure by value — that is how a custom tool
-        # gets both wired (runnable) and identified (its ref).
+        # The decorated object, not its name: a bare string would resolve to a
+        # built-in and there is no built-in ``word_count``.
         allowed_tools=(word_count,),
         permission_mode="bypassPermissions",
     )

@@ -29,7 +29,7 @@ What you expected to happen instead.
 - Python version:
 - Install path used: <!-- packages/noeta-sdk | packages/noeta-runtime -->
 - Provider: <!-- stub | openai-compat | anthropic -->
-- Noeta version / commit: <!-- `main` @ <sha>, or the 0.1.0 tag -->
+- Noeta version / commit: <!-- `main` @ <sha>, or the 0.4.0 tag -->
 
 ## Logs
 

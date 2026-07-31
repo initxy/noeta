@@ -5,7 +5,7 @@ aliases through its ``mcp_server_resolver`` seam and passes the discovered
 tools as the builder's ``mcp_tools_override``), so the manifest carries no
 contributions — a connector tool is never agent identity. The activation name
 ``mcp`` lands ``"mcp"`` in the identity tuple; the implementation lives in this
-plugin's ``impl`` package (``noeta.builtins.mcp.impl`` — microkernel M3),
+plugin's ``impl`` package (``noeta.builtins.mcp.impl``),
 reached by the SDK host through the loader's dynamic-import doorway
 (:func:`noeta.client.parts.mcp_impl`); the connector *vocabulary* (server
 specs, errors, the reserved ``mcp__`` prefix) is kernel-side in

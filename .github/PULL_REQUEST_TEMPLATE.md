@@ -4,7 +4,7 @@ What this change does and why. Lead with the conclusion.
 
 ## Which package(s)
 
-- [ ] `noeta-runtime` (engine / kernel / agent materials)
+- [ ] `noeta-runtime` (the event-sourced engine / kernel)
 - [ ] `noeta-sdk` (in-process client surface)
 - [ ] docs
 
@@ -21,7 +21,7 @@ make check   # pytest + coverage, mypy --strict on protocols, naming + import li
 ```
 
 Note anything that couldn't be verified and why. The Postgres storage contract
-tests, the web e2e smoke, and the install smoke run in CI only (see
+tests and the fresh-venv install smoke run in CI only (see
 [CONTRIBUTING.md](../CONTRIBUTING.md)).
 
 ## Checklist

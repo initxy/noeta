@@ -1,21 +1,15 @@
-"""Issue 05 — the shared ``InteractionDriver``.
+"""The shared ``InteractionDriver`` behind every conversation command.
 
-Drives the five conversation commands (``start`` / ``send_goal`` /
-``approve`` / ``deny`` / ``cancel``) against a real resident
-:class:`noeta.agent.resolver.SdkHost` host + an in-memory runtime,
-and asserts:
+``start`` / ``send_goal`` / ``approve`` / ``deny`` / ``cancel`` / ``close`` /
+``rewind`` run against a real :class:`noeta.client.SdkHost` over in-memory
+storage, so the recorded event envelope — not a mock — proves each command rides
+the one :func:`noeta.runtime.worker.run_leased_task` primitive and its
+woken-command prelude instead of spinning up a second runtime, and that a Task
+is driven by its own Agent's Engine.
 
-* the four turn-driving commands route through the SHARED
-  :func:`noeta.runtime.worker.run_leased_task` primitive + the issue-01
-  woken-command-prelude seam (no second runtime) — proven by the recorded
-  envelope shape (``TaskWoken`` → prelude events → step) rather than a mock;
-* a created Task is driven by **its own Agent's Engine** (the issue-02
-  resolver), with the chosen ``agent_name`` recorded on ``TaskCreated``;
-* interactive turns run ``final=False`` — a normally-finishing turn ends in
-  a trailing next-goal suspend, while a **fail** turn still terminates;
-* the model selector is validated against the stub allowlist;
-* ``cancel`` writes the pre-existing L0 ``TaskCancelled`` event (no new
-  schema) and folds the Task to terminal.
+Interactive turns run ``final=False``: a finishing turn parks on the next-goal
+handle so the human's next message resumes the same Task, and only an explicit
+``cancel`` makes it terminal.
 """
 
 from __future__ import annotations
@@ -148,14 +142,14 @@ def test_start_validates_model_selector(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()
     host, _, _ = _host(ws, responses=[_end_turn()])
-    # The deployment allowlist is an injection (phase 2c) — a bare driver has
-    # no deployment bound, so the test wires the one it validates against.
+    # The allowlist is an injection — a bare driver has no deployment bound, so
+    # the test wires the one it validates against.
     driver = InteractionDriver(
         host, model_allowlist=frozenset({"opus", "sonnet", "haiku"})
     )
     with pytest.raises(ModelSelectorError):
         driver.start(goal="x", agent="main", model_selector="gpt-9000")
-    # An allowlisted selector is accepted (and otherwise unused this slice).
+    # An allowlisted selector is accepted.
     out = driver.start(goal="x", agent="main", model_selector="sonnet")
     assert out.status == "suspended"
 
@@ -193,10 +187,10 @@ def test_send_goal_threads_effort_per_turn(tmp_path: Path) -> None:
 
 def test_spawned_child_inherits_turn_effort(tmp_path: Path) -> None:
     """A delegated child runs on the spawning turn's reasoning effort — the
-    whole delegation tree shares the root session's per-turn override, same as
-    permission_mode / provider. Without inheritance the child fell back to
-    effort None, which on the Responses provider used to also drop the
-    reasoning-ciphertext include and broke the child's prompt-cache prefix."""
+    whole delegation tree shares the root's per-turn override, same as
+    permission_mode / provider. Without inheritance the child falls back to
+    effort None, which on the Responses provider also drops the
+    reasoning-ciphertext include and breaks the child's prompt-cache prefix."""
     ws = tmp_path / "ws"
     ws.mkdir()
     # Wired by hand (not via _host): without the ChildLifecycleObserver the
@@ -264,7 +258,7 @@ def test_send_goal_drives_followup_turn_through_prelude(tmp_path: Path) -> None:
     assert out.status == "suspended"
     assert out.wake_handle == NEXT_GOAL_WAKE_HANDLE
 
-    # The woken-command-prelude seam (issue 01): the new turn's
+    # The woken-command-prelude seam: the follow-up turn's
     # MessagesAppended (the appended "second" user goal) lands AFTER the
     # TaskWoken and BEFORE the step's ContextPlanComposed — proving the goal
     # rode run_leased_task's first-consume window, not a second runtime.
@@ -282,7 +276,7 @@ def test_send_goal_drives_followup_turn_through_prelude(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# activations — web-path parity (deterministic /command skill pin)
+# activations — the deterministic /command skill pin
 # ---------------------------------------------------------------------------
 
 
@@ -307,9 +301,9 @@ def test_start_activations_pin_skill_after_goal(tmp_path: Path) -> None:
     assert out.status == "suspended"
 
     events = event_log.read(out.task_id)
-    # The deterministic activation rode the seed turn: a TaskStatePatched carrying
-    # activate_skills=["review"] is emitted, mirroring the resident-runner pre-loop
-    # activate_skills (so the composer pins the body for this turn onward).
+    # The activation rides the seed turn: a TaskStatePatched carrying
+    # activate_skills=["review"] is emitted, so the composer pins the skill body
+    # from this turn onward.
     assert ["review"] in _activate_patches(events), [
         e.payload.patch for e in events if e.type == "TaskStatePatched"
     ]
@@ -325,8 +319,8 @@ def test_start_without_activations_emits_no_patch(tmp_path: Path) -> None:
     driver = InteractionDriver(host)
 
     out = driver.start(goal="hello", agent="main")
-    # No activations ⇒ byte-identical to the pre-parity path: no operator-side
-    # TaskStatePatched (the FakeLLM end-turn emits none either).
+    # No activations ⇒ no TaskStatePatched at all (the FakeLLM end-turn emits
+    # none either).
     assert _activate_patches(event_log.read(out.task_id)) == []
 
 
@@ -426,7 +420,7 @@ def test_deny_skips_gated_tool_then_suspends(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# cancel — L0 TaskCancelled, no new schema
+# cancel — the L0 TaskCancelled event
 # ---------------------------------------------------------------------------
 
 
@@ -445,7 +439,6 @@ def test_cancel_writes_task_cancelled_and_terminates(tmp_path: Path) -> None:
     ]
     assert len(cancelled) == 1
     assert cancelled[0].payload.reason == "user-cancel"
-    # fold treats it as terminal.
     task = fold(event_log, host.content_store, started.task_id)
     assert task.status == "terminal"
 
@@ -462,7 +455,7 @@ def test_cancel_refuses_already_terminal(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# A fail turn still terminates (native semantics preserved)
+# A failing turn parks for the human
 # ---------------------------------------------------------------------------
 
 
@@ -471,8 +464,8 @@ def test_fail_turn_parks_for_the_human(tmp_path: Path) -> None:
     (here: max-steps exhaustion, not a provider fault) parks on the next-goal
     handle instead of sealing the conversation.
 
-    The old behaviour terminated, which meant one turn that ran long cost the
-    person the entire session and every bit of context in it."""
+    Terminating instead would cost the person the whole conversation and every
+    bit of context in it because one turn ran long."""
     ws = tmp_path / "ws"
     ws.mkdir()
     # A provider that loops a non-finishing tool call forever; with
@@ -511,17 +504,17 @@ def test_fail_turn_parks_for_the_human(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# close / reopen — L0 ConversationClosed lifecycle (issue 08)
+# close / reopen — the L0 ConversationClosed lifecycle
 # ---------------------------------------------------------------------------
 
 
 def test_close_writes_conversation_closed_and_keeps_suspended(
     tmp_path: Path,
 ) -> None:
-    """``close`` writes the L0 ``ConversationClosed`` event (writer Engine),
-    folds ``GovernanceState.closed = True`` for the sessions-list/inspect hot
-    path, and — per "No synthesized terminal" — leaves
-    ``task.status`` = ``suspended`` (NO manufactured ``TaskCompleted``)."""
+    """``close`` writes the L0 ``ConversationClosed`` event (written by the
+    Engine), folds ``GovernanceState.closed = True`` for the list/inspect hot
+    path, and leaves ``task.status`` = ``suspended`` — closing is orthogonal to
+    status and never manufactures a ``TaskCompleted``."""
     ws = tmp_path / "ws"
     ws.mkdir()
     host, _, event_log = _host(ws, responses=[_end_turn("hi")])
@@ -567,7 +560,7 @@ def test_close_refuses_already_terminal(tmp_path: Path) -> None:
 
 
 def test_new_goal_reopens_closed_conversation(tmp_path: Path) -> None:
-    """CW2 — close is **advisory**: a new goal on a closed+suspended Task drives
+    """Close is **advisory**: a new goal on a closed+suspended Task drives
     the next turn AND implicitly reopens it. ``send_goal`` emits
     ``ConversationReopened`` in the suspend window (before ``TaskWoken``), so the
     folded ``closed`` flag clears and the lifecycle audit records the reopen."""
@@ -608,8 +601,8 @@ def test_new_goal_reopens_closed_conversation(tmp_path: Path) -> None:
 
     task = fold(event_log, host.content_store, started.task_id)
     assert task.governance.closed is False
-    # implicit reopen records the acting principal (CLI ⊤ LOCAL_PRINCIPAL) +
-    # the "new goal" reason — the lifecycle audit keeps both close and reopen.
+    # The implicit reopen records the acting principal (LOCAL_PRINCIPAL) and the
+    # "new goal" reason — the lifecycle audit keeps both close and reopen.
     assert task.governance.conversation_lifecycle == [
         {"event": "closed", "by": "leo", "reason": None},
         {"event": "reopened", "by": LOCAL_PRINCIPAL.identity,
@@ -636,7 +629,8 @@ def test_send_goal_reopens_only_once_across_turns(tmp_path: Path) -> None:
 
 def test_send_goal_never_closed_emits_no_reopen(tmp_path: Path) -> None:
     """The common path: a new goal on a conversation that was never closed
-    writes ZERO ``ConversationReopened`` — so old recordings drift nowhere."""
+    writes ZERO ``ConversationReopened`` — an ordinary stream carries no
+    lifecycle noise."""
     ws = tmp_path / "ws"
     ws.mkdir()
     host, _, event_log = _host(
@@ -652,13 +646,12 @@ def test_send_goal_never_closed_emits_no_reopen(tmp_path: Path) -> None:
 def test_send_goal_rejected_selector_writes_nothing_when_closed(
     tmp_path: Path,
 ) -> None:
-    """CW2 — a closed conversation + a new goal carrying an UNAUTHORIZED model
+    """A closed conversation + a new goal carrying an UNAUTHORIZED model
     selector leaves ZERO durable write. The selector is validated BEFORE the
     reopen emission (driver.py send_goal), so the rejection produces no
     ``ConversationReopened`` / no new ``ModelBound`` / no new goal
     ``MessagesAppended`` — the stream is untouched and the conversation stays
-    closed. Pins the reopen-before-wake branch's zero-write guarantee (the
-    pre-existing selector test only covers ``start``/open)."""
+    closed. Pins the zero-write guarantee of the reopen-before-wake branch."""
     ws = tmp_path / "ws"
     ws.mkdir()
     host, _, event_log = _host(ws, responses=[_end_turn("t1")])
@@ -683,7 +676,7 @@ def test_send_goal_rejected_selector_writes_nothing_when_closed(
 
 
 def test_explicit_reopen_is_idempotent_when_open(tmp_path: Path) -> None:
-    """CW2 — explicit ``reopen`` on a conversation that is not closed is a
+    """Explicit ``reopen`` on a conversation that is not closed is a
     no-op: it writes no ``ConversationReopened`` (no spurious audit entry)."""
     ws = tmp_path / "ws"
     ws.mkdir()
@@ -873,7 +866,7 @@ def test_rewind_then_send_goal_continues_conversation(tmp_path: Path) -> None:
 def test_rewind_after_cancel_repairs_dispatcher_for_next_goal(
     tmp_path: Path,
 ) -> None:
-    """Running-turn rewind first writes TaskCancelled to stop the old turn.
+    """Rewinding a running turn first writes TaskCancelled to stop it.
 
     The TaskRewound marker re-bases fold to the prior suspended boundary; the
     dispatcher must be repaired to that same boundary or the next send_goal sees
@@ -914,10 +907,10 @@ def test_rewind_after_cancel_repairs_dispatcher_for_next_goal(
 def test_send_goal_repairs_stale_dispatcher_mismatch_before_resuming(
     tmp_path: Path,
 ) -> None:
-    """A stale pre-fix session can fold as suspended while dispatcher is terminal.
+    """A task can fold as suspended while its dispatcher row says terminal.
 
-    The driver should rebuild the dispatcher row from the folded EventLog state
-    and continue, instead of surfacing the low-level wake/lease mismatch.
+    The driver rebuilds the dispatcher row from the folded EventLog state and
+    continues, instead of surfacing the low-level wake/lease mismatch.
     """
     ws = tmp_path / "ws"
     ws.mkdir()

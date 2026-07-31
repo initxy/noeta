@@ -1,4 +1,12 @@
-"""CW18d — durable `ask_user_question` typed HITL control tool."""
+"""``ask_user_question`` is a durable control tool, never an executable one.
+
+A call suspends the task on a question handle and parks the question body in
+the ContentStore, so the event payload stays under the size cap however large
+the question is; answering resumes the same task with a paired tool result. A
+malformed call has to stay recoverable — an error ack, no pending question, no
+suspend — and a delegated child never sees the tool at all, because only the
+root task has a human attached.
+"""
 
 from __future__ import annotations
 
@@ -333,8 +341,8 @@ def test_answer_records_audit_tool_result_and_continues(tmp_path: Path) -> None:
 
 
 def test_answer_accepts_choice_and_freeform_together(tmp_path: Path) -> None:
-    # B17 / U6 — a choice AND a freeform note resume the task end-to-end and the
-    # recorded tool result carries BOTH fields (the model decides how to use them).
+    # A choice AND a freeform note resume the task, and the recorded tool
+    # result carries both fields — the model decides how to use them.
     ws = _make_ws(tmp_path)
     freeform_q = [{**_QUESTIONS[0], "allow_freeform": True}]
     host, driver, _provider = _session(ws, [_ask(questions=freeform_q), _end("answered")])

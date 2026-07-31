@@ -1,7 +1,6 @@
 """Fresh-venv wheel install smoke for the two library distributions.
 
-Two closures, per the microkernel distribution boundary (acceptance 4/5 of
-``docs/implementation-specs/archive/2026-07-29-microkernel-capability-migration.md``):
+The distribution boundary has to hold on the shipped artifacts, in two closures:
 
 * **runtime-alone** — the noeta-runtime wheel installed by itself is a pure
   kernel: kernel imports work, no capability impl (``noeta.builtins``) or SDK
@@ -9,7 +8,7 @@ Two closures, per the microkernel distribution boundary (acceptance 4/5 of
   only) runs a turn to its terminal event.
 * **sdk closure** — both wheels together carry the public surface AND the
   capability impls: ``noeta.builtins`` ships in the sdk wheel and the parts
-  doorway resolves the default 11-tool roster from it.
+  doorway resolves the default 11-tool set from it.
 
 The wheels — not an editable install — are the artifact under
 test: the packaged metadata + module tree must be enough on their own
@@ -121,11 +120,10 @@ def test_wheel_install_imports_public_surface(tmp_path: Path) -> None:
     """The **sdk closure**: both wheels into a fresh venv; the public surface
     imports fully offline and the capability impls are present.
 
-    Microkernel acceptance 4, sdk half: ``noeta.builtins`` (manifests + impls)
-    ships in the noeta-sdk wheel, and the parts doorway resolves the default
-    11-tool roster from it. Also gates the TL6 invariant: the wheels must not
-    resurrect a ``noeta`` console script — the libraries ship no entry point
-    at all.
+    ``noeta.builtins`` (manifests + impls) ships in the noeta-sdk wheel, and the
+    parts doorway resolves the default 11-tool set from it. The wheels must also
+    install no ``noeta`` console script — the libraries ship no entry point at
+    all.
     """
     uv_bin = _require_uv()
     env = _clean_env()
@@ -159,16 +157,16 @@ def test_wheel_install_imports_public_surface(tmp_path: Path) -> None:
         f"uv pip install of the built wheels failed:\n{install.stderr}"
     )
 
-    # TL6: no console script; the libraries ship no entry point at all.
+    # No console script: the libraries ship no entry point at all.
     noeta_cmd = _venv_console_script(venv_dir, "noeta")
     assert not noeta_cmd.exists(), (
         f"the wheels must not install a `noeta` console script; found {noeta_cmd}"
     )
 
     # 3. Import the public surface in the fresh venv, fully offline — and
-    # prove the impls arrived: the loader-resolved default roster is the
-    # 11 fs/web tools (microkernel D2), reachable only if the sdk wheel
-    # carries ``noeta.builtins`` and its impl modules.
+    # prove the impls arrived: the loader-resolved default set is the 11 fs/web
+    # tools, reachable only if the sdk wheel carries ``noeta.builtins`` and its
+    # impl modules.
     smoke = subprocess.run(
         [
             str(py),
@@ -176,8 +174,8 @@ def test_wheel_install_imports_public_surface(tmp_path: Path) -> None:
             (
                 "import sys; "
                 "import noeta.sdk, noeta.sdk.storage, noeta.presets; "
-                # Storage-backend relocation G3: the doorway is lazy — merely
-                # importing it must load neither psycopg nor any backend impl.
+                # The storage doorway is lazy: merely importing it must load
+                # neither psycopg nor any backend impl.
                 "assert 'psycopg' not in sys.modules, "
                 "'import noeta.sdk.storage alone must not load psycopg'; "
                 "leaked = [m for m in sys.modules "
@@ -207,18 +205,17 @@ def test_wheel_install_imports_public_surface(tmp_path: Path) -> None:
     assert smoke.stdout.strip() == "ok"
 
 
-#: The runtime-alone smoke body (microkernel acceptance 4, kernel half). Runs
-#: inside the fresh venv where ONLY the noeta-runtime wheel is installed:
-#: kernel imports work, no capability impl / SDK band / httpx is importable,
-#: and a hand-injected agent (protocol objects only — a hand-written Policy
-#: driving ``RuntimeLLMClient`` + ``FakeLLMProvider``, plus FakeTool, over
-#: in-memory storage; since microkernel phase 2b even ReActPolicy lives in the
-#: react built-in, so the kernel-alone story is a host-authored Policy against
-#: the protocol) runs a real tool_use → end_turn round-trip to its terminal
-#: event. The LLM band is driven ON PURPOSE: "the kernel can host an agent"
-#: means the provider round-trip closes runtime-alone, not merely that the
-#: modules import — a regression that made ``RuntimeLLMClient`` or
-#: ``noeta.testing.fake_llm`` depend on the sdk band would otherwise pass.
+#: The runtime-alone smoke body. Runs inside the fresh venv where ONLY the
+#: noeta-runtime wheel is installed: kernel imports work, no capability impl /
+#: SDK band / httpx is importable, and a hand-injected agent (protocol objects
+#: only — ReActPolicy lives in the react built-in, so the kernel-alone story is
+#: a host-authored Policy against the protocol, driving ``RuntimeLLMClient`` +
+#: ``FakeLLMProvider`` and a FakeTool over in-memory storage) runs a real
+#: tool_use → end_turn round-trip to its terminal event. The LLM band is driven
+#: ON PURPOSE: "the kernel can host an agent" means the provider round-trip
+#: closes runtime-alone, not merely that the modules import — a regression that
+#: made ``RuntimeLLMClient`` or ``noeta.testing.fake_llm`` depend on the sdk
+#: band would otherwise pass.
 _RUNTIME_ALONE_SCRIPT = """
     import importlib.util
 
@@ -239,9 +236,9 @@ _RUNTIME_ALONE_SCRIPT = """
     import noeta.testing.profile
 
     # 2. No capability impls, no SDK bands, no httpx/psycopg in the closure.
-    # The durable storage backends moved to the ``storage`` built-in
-    # (noeta-sdk) — the kernel keeps only ``noeta.storage.memory`` + the
-    # ``noeta.storage.spi`` facade, and the old module paths must be gone.
+    # The durable storage backends live in the ``storage`` built-in
+    # (noeta-sdk); the kernel carries only ``noeta.storage.memory`` + the
+    # ``noeta.storage.spi`` facade.
     for absent in (
         "noeta.builtins",
         "noeta.client",
@@ -260,9 +257,9 @@ _RUNTIME_ALONE_SCRIPT = """
 
     # 3. A hand-injected agent runs: the kernel hosts execution; every part —
     # the Policy included — arrives as a protocol object. The policy is
-    # host-authored (the kernel ships none since phase 2b) but it drives the
-    # kernel's OWN llm band: FakeLLMProvider -> RuntimeLLMClient -> a real
-    # tool_use round-trip recorded onto the in-memory log.
+    # host-authored (the kernel ships none) but it drives the kernel's OWN llm
+    # band: FakeLLMProvider -> RuntimeLLMClient -> a real tool_use round-trip
+    # recorded onto the in-memory log.
     from noeta.core.engine import Engine
     from noeta.protocols.decisions import (
         FinishDecision,
@@ -358,10 +355,9 @@ _RUNTIME_ALONE_SCRIPT = """
 def test_runtime_wheel_alone_is_a_pure_kernel(tmp_path: Path) -> None:
     """The **runtime-alone closure**: the kernel wheel installed by itself.
 
-    Microkernel acceptance 4 + 5, kernel half: kernel imports work, no
-    capability impl (``noeta.builtins``) / SDK band / ``httpx`` is present,
-    and a hand-injected agent (protocols only) runs a scripted turn to
-    ``TaskCompleted``. The wheel content is inspected too: no
+    Kernel imports work, no capability impl (``noeta.builtins``) / SDK band /
+    ``httpx`` is present, and a hand-injected agent (protocols only) runs a
+    scripted turn to ``TaskCompleted``. The wheel content is inspected too: no
     ``noeta/builtins/`` portion may ship in the kernel wheel.
     """
     uv_bin = _require_uv()
@@ -375,9 +371,9 @@ def test_runtime_wheel_alone_is_a_pure_kernel(tmp_path: Path) -> None:
     assert _wheel_module_paths(runtime_wheel, "noeta/builtins/") == [], (
         "the kernel wheel must not carry capability impls"
     )
-    # Storage-backend relocation G2: the kernel wheel's dist metadata declares
-    # no psycopg requirement — the durable backends took the driver dependency
-    # with them into the noeta-sdk wheel.
+    # The kernel wheel's dist metadata declares no psycopg requirement: the
+    # driver dependency belongs to the noeta-sdk wheel, alongside the durable
+    # backends that use it.
     with zipfile.ZipFile(runtime_wheel) as zf:
         metadata_name = next(
             n for n in zf.namelist() if n.endswith(".dist-info/METADATA")
@@ -513,7 +509,7 @@ def test_no_distribution_imports_outside_its_dependency_closure() -> None:
 
 
 def test_httpx_is_an_sdk_dependency_not_a_runtime_one() -> None:
-    """Microkernel acceptance 5, statically (no wheel build, every dev run).
+    """The kernel is transport-free, verified statically (no wheel build).
 
     The kernel is transport-free: every HTTP-speaking impl (providers, web,
     mcp, sandbox backends, otlp export) ships in the sdk wheel, so ``httpx``
@@ -528,7 +524,7 @@ def test_httpx_is_an_sdk_dependency_not_a_runtime_one() -> None:
         _REPO_ROOT / "packages" / "noeta-sdk" / "pyproject.toml"
     ).read_text(encoding="utf-8")
     assert '"httpx' not in runtime_text, (
-        "noeta-runtime must not depend on httpx (microkernel M4: the kernel "
+        "noeta-runtime must not depend on httpx (the kernel "
         "is transport-free)"
     )
     assert '"httpx' in sdk_text, (

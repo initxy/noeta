@@ -1,12 +1,12 @@
-"""Issue 04 — snapshot-accelerated fold.
+"""Snapshot-accelerated fold.
 
 Behavioural tests for the three-trigger ``TaskSnapshot`` policy:
 
-* terminal-prefix and suspend-prefix snapshots are exercised by issue
-  01/03 tests already; this file adds the **mid-loop** trigger that
-  fires when an Engine is stuck in a long ``tool_calls`` cycle.
+* the **mid-loop** trigger that fires when an Engine is stuck in a long
+  ``tool_calls`` cycle (terminal- and suspend-prefix snapshots are
+  covered elsewhere),
 * ``fold`` must use the most-recent snapshot only (never replay multiple)
-  and must finish in well under 5 ms on a 100-event task fixture.
+  and must finish in well under 5 ms on a 100-event task fixture,
 * ``apply_event`` must tolerate unknown event types (warning + continue)
   so future schema additions never break replay of historical streams.
 """
@@ -119,8 +119,8 @@ def test_long_tool_loop_writes_mid_snapshot_and_does_not_exit_main_loop() -> Non
         e.seq for e in events if e.type == "TaskCompleted"
     )
 
-    # Terminal snapshot is always present (issue 01); mid snapshots are
-    # the new behaviour. We expect at least 2 snapshots: one mid-loop
+    # A terminal snapshot is always present; the mid snapshots are the
+    # behaviour under test. We expect at least 2 snapshots: one mid-loop
     # plus the terminal one immediately before TaskCompleted.
     assert len(snapshot_seqs) >= 2, (
         f"expected at least 1 mid + 1 terminal snapshot, got {snapshot_seqs}"
@@ -239,7 +239,7 @@ def test_fold_without_snapshot_falls_back_to_full_scan() -> None:
 
 
 def test_fold_on_100_event_task_finishes_under_5ms() -> None:
-    """Performance budget per acceptance criteria: < 5 ms on InMemory.
+    """Performance budget: < 5 ms on InMemory.
 
     100 events is enough to dwarf the bookkeeping cost while still
     leaving headroom for slower CI runners.

@@ -2,9 +2,8 @@
 
 Locks the genesis sequence ``TaskCreated → AgentBound → …`` on the product
 paths, the create_task consistency guards, the SQLite decode round-trip, and the
-legacy/``unnamed`` byte-safety (no AgentBound for unnamed tasks). The verify-era
-``agent_fingerprint`` field was retired with the verify/replay test
-infrastructure — ``AgentBound`` now carries only ``agent_name``.
+``unnamed`` byte-safety (no AgentBound for unnamed tasks). ``AgentBound``
+carries only ``agent_name``.
 """
 
 from __future__ import annotations

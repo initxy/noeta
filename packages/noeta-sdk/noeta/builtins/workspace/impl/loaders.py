@@ -1,10 +1,8 @@
-"""The workspace residents' impure loader half (microkernel phase 3, D10).
+"""The workspace residents' impure loader half.
 
-Moved here from ``noeta.execution.instructions`` / ``noeta.execution.environment``:
-the ``NOETA.md``/``AGENTS.md`` discovery convention and the git/platform/date
-capture are product content, not kernel mechanism. The kernel keeps only the
-typed record seams (``record_instructions`` / ``record_environment``) and the
-kit dataclasses; this module holds everything that touches the disk, the
+The ``NOETA.md``/``AGENTS.md`` discovery convention and the git/platform/date
+capture are product content, not kernel mechanism. This module holds
+everything that touches the disk, the
 subprocess table, or the wall clock:
 
 * :func:`load_instructions` — pre-loop root-file loader (kit search order or
@@ -59,9 +57,8 @@ __all__ = [
 ]
 
 
-# --- The two residents' vocabulary (kernel final form: plugin-owned) -------
-# Moved from ``noeta.context.instructions`` / ``noeta.context.environment`` —
-# the kind keys are this plugin's own, discriminating the generic
+# --- The two residents' vocabulary (plugin-owned) -------
+# The kind keys are this plugin's own, discriminating the generic
 # ``ContextContentRecorded`` / ``active_content`` shapes; the kernel never
 # names them.
 
@@ -367,7 +364,7 @@ def load_environment(
     reads ``sys.platform``, and — when it is a git repo — spawns git to
     read the branch / short status, plus reads the host clock) but called
     ONCE pre-loop — before anything enters the ledger — so the composer's
-    renderer and the pre-loop ``record_environment`` share one snapshot,
+    renderer and the pre-loop ``_init`` recording share one snapshot,
     and record time equals compose time by construction.
 
     Reproducibility scope: the snapshot is memoized for the whole session,

@@ -1,11 +1,10 @@
-"""``shell_run`` foreground execution — assert real exit code AND stdout bytes.
+"""``shell_run`` foreground execution — real exit code AND real stdout bytes.
 
-The existing foreground ``shell_run`` tests check the permission gate, the
-result *shape* (``returncode`` present, ``stdout_tail`` key exists), or a
-stub-provider canned call — none pin the actual executed *output*, so mutating
-``run_argv``'s stdout would not fail them. These drive a real subprocess through
-the default ``LocalExecEnv`` and assert on the produced bytes, so the seam's
-happy path (tool → ``exec_env.run_argv`` → captured stdout/exit) is covered.
+Shape assertions (``returncode`` present, ``stdout_tail`` key exists) stay green
+even when the seam hands back nothing the command actually produced. These drive
+a real subprocess through the default ``LocalExecEnv`` and assert on the bytes,
+covering the whole happy path: tool → ``exec_env.run_argv`` → captured
+stdout/exit code, with the workspace root as cwd.
 """
 
 from __future__ import annotations
@@ -45,7 +44,8 @@ def test_foreground_python_computes_and_returns_stdout(tmp_path: Path) -> None:
 def test_foreground_nonzero_exit_is_reported(tmp_path: Path) -> None:
     tool, ctx = _tool_and_ctx(tmp_path)
     result = tool.invoke({"command": "sh -c 'exit 3'"}, ctx)
-    # the tool still "succeeds" (it ran); the command's exit code is surfaced.
+    # A nonzero command exit is not a tool failure: the tool ran, and the model
+    # needs the code to decide what to do next.
     assert result.output["returncode"] == 3
 
 

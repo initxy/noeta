@@ -1,37 +1,16 @@
-"""The generic SDK builder is the single construction point that live runs and resume share.
+"""The single construction point a live run and a resume share: it assembles one
+session's tools, composer, policy factory and guards from explicit inputs.
 
-This is the one fixed construction site (the old code-product shim was
-deleted with the roster). The product side (noeta-agent) calls it
-directly via :class:`noeta.client.host.SdkHost` (the old
-``noeta.agent.host.session`` runner was deleted). The parameterized
-"product defaults" (agent fields, budget, compaction, plan-mode tool set)
-are passed in explicitly by the caller; the roster/wiring layer is gone,
-so no second code path exists.
-
-Byte-stable construction is the headline constraint: a resumed turn rebuilds
-the SAME tool set / composer / guards from the same inputs, so the prefix it
-composes stays byte-stable (the stable-prefix prompt cache only hits when the
-prefix is byte-stable).
-
-Internal shape (microkernel phase 3): the builder enumerates no capability.
-:func:`build_session_inputs`:
-
-* freezes the operator inputs into a :class:`_BuildSpec` (read-only),
-* builds the containment :class:`WorkspaceRoot` and the generic
-  :class:`~noeta.execution.session_pack.SessionBuildContext`,
-* runs every :class:`~noeta.execution.session_pack.SessionPackEntry` —
-  manifest-contributed packs plus the two kernel-owned injections (mcp /
-  custom) — through ONE ``(priority, name)``-sorted loop, merging tools
-  (later-wins), content kinds (their own priority) and named exports,
-* then runs the post-tools phases (control schemas → content channels →
-  composer → policy factory → guards) as named helpers reading from the
-  assembly.
-
-The priority bands are the construction-order contract (fs=100 → web=200 →
-memory=300 → instructions=400 → environment=500 → skills=600 → browser=700
-→ mcp=800 → custom=900 → app=1000), load-bearing for byte-equality (tool
-dict insertion order feeds the Engine's deterministic ToolSchemaRecorded
-emission) and locked by ``tests/test_session_pack_goldens.py``.
+Byte-stable construction is the constraint that shapes everything here — a
+resumed turn must rebuild the SAME tool set, composer and guards from the same
+inputs, because the stable-prefix prompt cache only hits on a byte-stable prefix.
+The builder therefore enumerates no capability: every contribution arrives as a
+session pack or a control-tool entry and merges through one ``(priority,
+name)``-ordered loop. Those priority bands (fs=100 → web=200 → memory=300 →
+instructions=400 → environment=500 → skills=600 → browser=700 → mcp=800 →
+custom=900 → app=1000) are the construction-order contract, because tool dict
+insertion order feeds the Engine's ``ToolSchemaRecorded`` emission; they are
+locked by ``tests/test_session_pack_goldens.py``, so do not renumber them.
 """
 
 from __future__ import annotations
@@ -80,19 +59,13 @@ __all__ = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# Compaction config (③ finding 1)
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True, slots=True)
 class CompactionConfig:
     """The deterministic compaction knobs for one ``(agent, model)`` session.
 
-    ``context_window is None`` ⇒ compaction OFF (legacy behaviour). When set,
-    the policy's available window is
-    ``context_window - max_output_tokens - compaction_buffer`` and the composer
-    protects / the policy summarises against ``tail_token_budget``.
+    ``context_window is None`` ⇒ compaction OFF. When set, the policy's available
+    window is ``context_window - max_output_tokens - compaction_buffer`` and the
+    composer protects / the policy summarises against ``tail_token_budget``.
     """
 
     context_window: Optional[int]
@@ -102,8 +75,7 @@ class CompactionConfig:
     composer_version: str
 
 
-#: Compaction disabled — the byte-equal-safe default for any model the catalog
-#: does not describe (``stub-model`` and friends).
+#: Compaction disabled — the default for any model the catalog does not describe.
 COMPACTION_OFF = CompactionConfig(
     context_window=None,
     max_output_tokens=0,
@@ -113,96 +85,56 @@ COMPACTION_OFF = CompactionConfig(
 )
 
 
-# NOTE (microkernel M2): ``derive_compaction_config`` — the catalog-driven
-# derivation of these knobs — moved into the ``providers`` built-in plugin
-# (``noeta.builtins.providers.impl.catalog``), reachable SDK-side through
-# :func:`noeta.client.parts.derive_compaction_config`. The kernel keeps the
-# ``CompactionConfig`` TYPE and takes the derived knobs pre-resolved
-# (``build_session_inputs(compaction=…)``) — it holds no model opinions.
-
-
-# ---------------------------------------------------------------------------
-# SessionInputs + build_session_inputs — the single construction point (D9)
-# ---------------------------------------------------------------------------
+#: The catalog-driven derivation of these knobs lives in the ``providers``
+#: built-in plugin; the kernel takes them pre-resolved and holds no model
+#: opinions of its own.
 
 
 @dataclass(frozen=True, slots=True)
 class SessionInputs:
-    """Composer + Policy factory + tools bundle for a generic agent
-    session (live run or resume).
+    """Everything an Engine needs for one session, live or resumed.
 
-    Returned by :func:`build_session_inputs`. Carries the pieces an
-    Engine needs: the filtered-and-ordered tool dict, the composer (with
-    content-kind rendering and control-action schemas wired in), the policy
-    factory bound to the same ``(tools, model, compaction)`` triple, the
-    guard HookManager (budget / permission / repetition / hook in the same
-    deterministic order the live session registered them), and the generic
-    content-fingerprint resolver.
+    The pieces are mutually consistent by construction: the policy factory is
+    bound to the same ``(tools, model, compaction)`` triple the composer sees,
+    and the guards are registered in the same deterministic order every time, so
+    a resumed turn reproduces the recording's guard-origin events.
     """
 
     tools: dict[str, Tool]
     composer: ThreeSegmentComposer
-    #: The default factory builds :class:`ReActPolicy`; a custom
-    #: ``policy_factory_override`` (SDK ``Options.policy`` extension point)
-    #: substitutes any :class:`~noeta.protocols.policy.Policy`, hence the
-    #: widened return type.
+    #: Widened return type because ``policy_factory_override`` may substitute
+    #: any :class:`~noeta.protocols.policy.Policy` for the default.
     policy_factory: Callable[[Any], Policy]
-    #: Issue A — the guard shape the live session ran (BudgetGuard +
-    #: PermissionGuard with the same allow-list + ``require_approval``
-    #: set). A session recording that suspended for approval (or that a
-    #: guard denied) carries its guard-origin events.
     hooks: HookManager
-    #: The generic ``(kind, name) → (version, hash)``
-    #: resolver derived from the content-channel registry the composer
-    #: renders from (one source of truth). Hosts wire this into
-    #: ``Engine(content_hashes=…)`` so mid-loop activations emit the
-    #: generic ``ContextContentRecorded`` with the same fingerprints the
-    #: composer's kinds declare.
+    #: The ``(kind, name) → (version, hash)`` resolver derived from the same
+    #: content-channel registry the composer renders from, so a mid-loop
+    #: activation records the fingerprints the composer's kinds declare.
     content_hashes: Callable[[str, str], Optional[tuple[str, str]]]
-    #: microcompact — host-level inline char cap for tool
-    #: results before they are appended as messages. ``None`` ⇒ no
-    #: truncation (default, backward-compatible). The value is forwarded
-    #: verbatim to :class:`Engine` (which validates it). A resuming host must
-    #: wire the same value so the rebuilt messages match the recording.
+    #: Inline char cap for tool results before they become messages; ``None`` ⇒
+    #: no truncation. A resuming host MUST wire the same value, or the rebuilt
+    #: messages diverge from the recording.
     tool_output_inline_limit: Optional[int] = None
-    #: Anchored-content seams (docs/adr/anchored-content-placement.md), built
-    #: only when ``instructions_discovery`` is on. ``content_discovery`` is the
-    #: post-tool ``(task, call, result) → activation payloads`` hook the host
-    #: wires into ``Engine(content_discovery=…)``; ``content_preloader`` is the
-    #: per-step ``(task) → None`` resume re-read the host wires into
-    #: ``Engine(content_preloader=…)``. Both ``None`` by default so every
-    #: existing caller is byte-identical.
+    #: Anchored-content seams, built only when instructions discovery is armed:
+    #: the post-tool activation hook and the per-step resume re-read the host
+    #: wires onto the Engine.
     content_discovery: Optional[Any] = None
     content_preloader: Optional[Any] = None
-    #: The contributed pre-loop ``init`` hooks (spec §4.5) as ``(plugin, hook)``
-    #: pairs, folded and priority-ordered from the pack loop. The host wires
-    #: them onto the session's Engine; the driver runs each through a
-    #: :class:`~noeta.execution.recorder.SeedRecorder` bound to its plugin name
-    #: (``actor="plugin:<name>"``) at seed time — the generic successor of the
-    #: three feature-named kernel seed recorders. Empty for a session whose
-    #: packs activate no pre-loop residents.
+    #: The contributed pre-loop ``init`` hooks as ``(plugin, hook)`` pairs in
+    #: pack-loop order; the driver runs each through a recorder bound to its
+    #: plugin name at seed time.
     init_hooks: tuple[tuple[str, InitHook], ...] = ()
-    #: The ``ask_user_question`` mount's answer codec (spec §4.3: a typed field,
-    #: not a stringly mount-export bag), which the host puts on the session's
-    #: Engine for the driver's ``answer`` path. ``None`` for a session that
-    #: mounts no ``ask_user_question``.
+    #: The ``ask_user_question`` mount's answer codec, which the host puts on the
+    #: Engine for the driver's ``answer`` path.
     answer_codec: Optional[AskAnswerCodec] = None
 
 
-# ---------------------------------------------------------------------------
-# C02 deepening — frozen build spec + mutable tool-assembly accumulator
-# ---------------------------------------------------------------------------
-
-
 class GuardsFactory(Protocol):
-    """Loader-resolved constructor of the default guard stack (microkernel M2).
+    """Loader-resolved constructor of the default guard stack.
 
-    The kernel never imports a guard class: the SDK host resolves the
-    ``governance`` built-in plugin's factory through the plugin loader and
-    injects it here. The kernel calls it with the finished tool assembly, the
-    packs' opaque ``guard_facts`` bundle, and the operator passthrough
-    fields; it returns the registered :class:`~noeta.core.hooks.HookManager`.
-    Signature = ``noeta.builtins.governance.impl:build_default_guards``.
+    The kernel never imports a guard class: the host resolves the ``governance``
+    built-in plugin's factory through the plugin loader and injects it here. The
+    kernel calls it with the finished tool assembly, the packs' opaque
+    ``guard_facts`` bundle, and the operator passthrough fields.
     """
 
     def __call__(
@@ -225,16 +157,12 @@ class GuardsFactory(Protocol):
 
 
 class PolicyFactoryBuilder(Protocol):
-    """Loader-resolved constructor of the default policy factory
-    (microkernel phase 2b).
+    """Loader-resolved constructor of the default policy factory.
 
-    The kernel never imports the decision-mapping policy: the SDK host
-    resolves the ``react`` built-in plugin's factory builder through the
-    plugin loader and injects it here. It takes exactly the kernel-computed
-    session facts the builder used to close over inline and returns the
-    ``(llm) -> Policy`` factory. ``Options.policy`` / the plugin ``policy``
-    surface (D10) still override the default. Signature =
-    ``noeta.builtins.react.impl:build_react_policy_factory``.
+    The kernel never imports the decision-mapping policy: the host resolves the
+    ``react`` built-in plugin's factory builder through the plugin loader and
+    injects it here, and it returns the ``(llm) -> Policy`` factory. A
+    ``policy_factory_override`` still replaces the default outright.
     """
 
     def __call__(
@@ -244,10 +172,8 @@ class PolicyFactoryBuilder(Protocol):
         system_prompt: str,
         model: str,
         max_steps: int,
-        #: The routing-ordered control-tool translate specs the mount loop
-        #: produced (control-tool-surface S1) — replaces the five ``*_enabled``
-        #: flags + ``skill_menu_names`` the policy used to rebuild toggles from.
-        #: Mounting IS enablement, so a disabled tool simply contributes no spec.
+        #: The routing-ordered translate specs the mount loop produced. Mounting
+        #: IS enablement, so a disabled tool simply contributes no spec.
         control_translate_specs: tuple[ControlToolSpec, ...],
         content_store: ContentStore,
         context_window: Optional[int],
@@ -265,13 +191,11 @@ class PolicyFactoryBuilder(Protocol):
 class _BuildSpec:
     """All operator inputs to one session build, frozen.
 
-    This is the internal mirror of :func:`build_session_inputs`'s keyword
-    parameters: the public function copies its args into one of these so the
-    pipeline stages read a single read-only object instead of closing over 30
-    locals. Keeping the public signature byte-identical (resume must pass the
-    same params to rebuild identically; a test asserts on ``inspect.signature``)
-    is the whole reason this is a SEPARATE struct rather than the function
-    exposing it.
+    The internal mirror of :func:`build_session_inputs`'s keyword parameters, so
+    the pipeline stages read one read-only object instead of closing over thirty
+    locals. It stays a SEPARATE struct because the public signature is itself a
+    contract — resume must pass the same params to rebuild identically, and a
+    test asserts on ``inspect.signature``.
     """
 
     workspace_dir: Path
@@ -286,30 +210,24 @@ class _BuildSpec:
     require_approval_tools: tuple[str, ...]
     shell_approval_predicate: Optional[Callable[[str, Mapping[str, Any]], bool]]
     #: The effective capability flags by name (agent activation × host
-    #: kill-switch, already ANDed by the host) — the ONE generic bag both the
-    #: session packs (via ``SessionBuildContext``) and the control-tool mounts
-    #: (via ``ControlToolBuildContext``) self-gate on. The kernel enumerates
-    #: no capability here.
+    #: kill-switch, ANDed by the host) — the ONE generic bag both the
+    #: session packs and the control-tool mounts self-gate on.
     capability_flags: Mapping[str, bool]
     structured_output_schema: Optional[dict[str, Any]]
     mcp_tools_override: Optional[dict[str, Tool]]
     custom_tools: Optional[dict[str, Tool]]
-    #: Execution backend for the fs / shell pack. ``None`` ⇒ host
-    #: (``LocalExecEnv``, byte-identical); a sandbox ``ExecEnv`` makes the pack
-    #: act against a container and switches the workspace to lexical
-    #: (container-path) containment. A wiring-only runtime injection, never part
-    #: of session identity — the tool schemas are unchanged either way.
+    #: Execution backend for the fs / shell pack. ``None`` ⇒ the host; a sandbox
+    #: ``ExecEnv`` makes the pack act against a container and switches the
+    #: workspace to lexical (container-path) containment. Wiring-only, never part
+    #: of session identity — the tool schemas are the same either way.
     exec_env: Optional[ExecEnv]
     hooks_pre_tool_use: tuple[PreToolUseRule, ...]
-    #: SDK ``Options`` extension points (T3). Custom Guards registered after
-    #: the built-in guard stack; custom ContentKindSpec channels appended
-    #: after the built-in content residents. Both default to ``()`` so every
-    #: other caller (product host, tests, resume) is byte-identical.
+    #: Custom Guards register after the built-in guard stack; custom content
+    #: channels append after the built-in residents.
     extra_guards: tuple[Guard, ...]
     extra_content_kinds: tuple[ContentKindSpec, ...]
-    #: Per-agent-activated compose-time reminders (D8), appended after the three
-    #: built-in reminders in the composer's reminder registry. Default ``()`` so
-    #: every existing caller composes byte-identically (the built-in three only).
+    #: Per-agent-activated compose-time reminders, interleaved by priority with
+    #: the injected base reminders.
     extra_reminders: tuple[ReminderSpec, ...]
     repetition_threshold: int
     repetition_action: RepetitionAction
@@ -319,34 +237,34 @@ class _BuildSpec:
     thinking: Optional[str]
     effort: Optional[str]
     tool_output_inline_limit: Optional[int]
-    #: Loader-resolved built-in compose-time reminders (microkernel M2, D2):
-    #: the three renders the ``reminders`` built-in plugin declares, resolved by
-    #: the SDK host and injected here. ``None`` fails loudly at the reminder-
-    #: registry phase — the kernel never imports a renderer.
+    #: Loader-resolved built-in compose-time reminders: the renders the
+    #: ``reminders`` built-in plugin declares, resolved by the SDK host and
+    #: injected here. ``None`` fails loudly at the reminder-registry phase — the
+    #: kernel never imports a renderer.
     base_reminders: Optional[tuple[ReminderSpec, ...]] = None
-    #: Loader-resolved default guard-stack factory (microkernel M2, D2):
+    #: Loader-resolved default guard-stack factory:
     #: ``noeta.builtins.governance.impl:build_default_guards``, resolved by the
     #: SDK host and injected here. ``None`` fails loudly at the guards phase —
     #: the kernel never imports a guard class.
     guards_factory: Optional[GuardsFactory] = None
     #: The bound model's vendor family (``"anthropic"`` / ``"openai"`` /
     #: ``None``), resolved by the SDK host from the providers built-in's
-    #: catalog (microkernel M2) and exposed to packs through the context
+    #: catalog and exposed to packs through the context
     #: (the fs pack keys its own edit-tool mutex on it). ``None``
     #: (kernel-alone / stub) drops neither edit tool — the documented
     #: no-catalog semantic, NOT a silent fallback.
     provider_family: Optional[str] = None
-    #: The manifest-contributed session packs (microkernel phase 3): resolved
+    #: The manifest-contributed session packs: resolved
     #: by the SDK host (``noeta.client.parts.default_session_packs`` + the
     #: external plugins' ``session_pack`` projection) and run by the generic
     #: pack loop in ``(priority, name)`` order. Empty builds a session with
     #: no pack tools at all — the kernel mandates no capability.
     session_packs: tuple[SessionPackEntry, ...] = ()
-    #: The contributed control tools (control-tool-surface S2/S2b): resolved by
+    #: The contributed control tools: resolved by
     #: the SDK host (``noeta.client.parts.default_control_tools`` — the built-in
     #: ``control_tool`` contributions — + the external plugins' ``control_tool``
-    #: projection) and run through the dual-priority mount loop. Since S2b the
-    #: kernel keeps NO internal control-tool table, so this tuple is the whole
+    #: projection) and run through the dual-priority mount loop. The kernel
+    #: keeps no internal control-tool table, so this tuple is the whole
     #: input: empty ⇒ a session with zero control tools.
     control_tools: tuple[ControlToolEntry, ...] = ()
 
@@ -360,46 +278,31 @@ class _BuildSpec:
 # custom=900 → app=1000), load-bearing for byte-equality (tool dict insertion
 # order feeds the Engine's deterministic ToolSchemaRecorded emission) and
 # locked by ``tests/test_session_pack_goldens.py``; do not renumber.
-#
-# Microkernel phase 3, S1: the packs still close over the legacy
-# ``_BuildSpec`` factory fields (loader-resolved by the SDK host exactly as
-# before); S2+ replaces each with the plugin's own manifest-contributed
-# ``session_pack`` factory reading only the SessionBuildContext.
 # ---------------------------------------------------------------------------
 
 
-# NOTE (microkernel phase 3): every capability pack is a ``session_pack``
-# manifest contribution (``noeta.builtins.<name>.impl:build_*_session_pack``)
-# resolved by the SDK host and passed in as ``session_packs``; the capability
-# seam Protocols live in their plugins (``BrowserBackend`` → browser,
-# ``AppPreviewGateway`` → app) and their live backing objects ride the
-# generic ``backends`` bag under the plugins' own names. The kernel owns only
-# the two pre-built injections below (mcp / custom), which ride the same loop
-# as fixed-priority internal entries.
+# Every capability pack is a ``session_pack`` manifest contribution
+# (``noeta.builtins.<name>.impl:build_*_session_pack``) resolved by the SDK
+# host and passed in as ``session_packs``; the capability seam Protocols live
+# in their plugins (``BrowserBackend`` → browser, ``AppPreviewGateway`` → app)
+# and their live backing objects ride the generic ``backends`` bag under the
+# plugins' own names. The kernel owns only the two pre-built injections below
+# (mcp / custom), which ride the same loop as fixed-priority internal entries.
 
 
 # ---------------------------------------------------------------------------
-# Post-tools phases — control schemas, content channels, composer, policy,
-# guards. Each reads from the finished assembly and the frozen spec.
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Control-tool mount loop — a pure MECHANISM (control-tool-surface S1 → S2b).
-# The builder enumerates no control tool: every mount arrives as a host-supplied
-# ``ControlToolEntry`` (the built-in ``control_tool`` contributions the SDK host
-# resolves from the manifests via ``default_control_tools()`` + the external
-# plugins' ``control_tool`` projection), each a factory that self-gates on the
+# Control-tool mount loop — a pure MECHANISM. The builder enumerates no
+# control tool: every mount arrives as a host-supplied ``ControlToolEntry``
+# (the built-in ``control_tool`` contributions the SDK host resolves from the
+# manifests via ``default_control_tools()`` + the external plugins'
+# ``control_tool`` projection), each a factory that self-gates on the
 # ``ControlToolBuildContext`` and returns a ``ControlToolMount`` or ``None``.
-# S2b emptied the last three internal entries (``skill`` → ``skills``,
-# ``run_workflow`` / ``structured_output`` → ``react``), so no fixed table
-# remains — the loop below runs whatever the host passes. The two priority BANDS
-# are the byte-order contract, locked by the S0 golden: schema render order
-# spawn=100 → todo=200 → ask=300 → skill=400 → workflow=500 →
-# structured_output=600; decision routing order ask=100 → todo=200 → spawn=300 →
-# skill=400 → workflow=500. ``structured_output`` carries no translate (react's
-# StructuredOutputPolicy intercepts it) so it contributes a schema but no routing
-# spec.
+# The two priority BANDS are the byte-order contract, locked by the golden:
+# schema render order spawn=100 → todo=200 → ask=300 → skill=400 →
+# workflow=500 → structured_output=600; decision routing order ask=100 →
+# todo=200 → spawn=300 → skill=400 → workflow=500. ``structured_output``
+# carries no translate (react's StructuredOutputPolicy intercepts it) so it
+# contributes a schema but no routing spec.
 # ---------------------------------------------------------------------------
 
 
@@ -419,14 +322,14 @@ def _mount_control_tools(
     naming both entries, exactly as the pack loop rejects a re-export (e.g. a
     third-party ``control_tool`` clashing with a built-in one). The two
     output orders come from each mount's OWN bands: the schema list sorts on
-    ``schema_priority`` (the composer's ``control_action_schemas`` byte order —
-    the S0 golden), the routing specs on ``routing_priority`` (the decision
+    ``schema_priority`` (the composer's ``control_action_schemas`` byte order),
+    the routing specs on ``routing_priority`` (the decision
     dispatch order), ties broken by name in both. A mount with no ``translate``
     (``structured_output``) contributes a schema but no routing spec. An empty
     schema list folds to ``None`` (the composer's "no control schemas" sentinel).
 
-    The third output is the mounts' :attr:`ControlToolMount.answer_codec` (spec
-    §4.3: a typed field, not a stringly bag) — single-writer across the loop (a
+    The third output is the mounts' :attr:`ControlToolMount.answer_codec` (a
+    typed field, not a stringly bag) — single-writer across the loop (a
     second mount filling it raises); only the ``ask_user_question`` mount does.
     """
     ordered = sorted(entries, key=lambda e: (e.priority, e.name))
@@ -474,7 +377,7 @@ def _run_control_tool_mounts(
 
     The mechanism seam ``tests/test_control_tool_mount_loop.py`` pins; the
     builder itself uses :func:`_mount_control_tools`, which additionally returns
-    the mounts' answer codec (spec §4.3).
+    the mounts' answer codec.
     """
     schema_list, routing_specs, _codec = _mount_control_tools(entries, ctx)
     return schema_list, routing_specs
@@ -486,10 +389,9 @@ def _build_content_registry(
 ) -> ContentChannelRegistry:
     """The content-channel registry — registration order IS semi_stable layout.
 
-    Microkernel phase 3 (S4): every built-in resident arrives as a pack
-    contribution — the packs' content kinds are sorted upstream by
-    ``(kind priority, pack order)``, which reproduces the historical layout
-    (skill=100 → memory=200 → instructions=300 → environment=400). A pack
+    Every built-in resident arrives as a pack contribution — the packs' content
+    kinds are sorted upstream by ``(kind priority, pack order)``, giving the
+    layout skill=100 → memory=200 → instructions=300 → environment=400. A pack
     that does not apply (skills disabled, memory off, no instructions file
     and no discovery) contributes no kind and the later kinds close up
     behind it — correct and self-consistent, because a session built without
@@ -501,7 +403,7 @@ def _build_content_registry(
     fingerprint come from one source.
     """
     content_kinds: list[ContentKindSpec] = list(pack_kinds)
-    # SDK ``Options.content_channels`` extension point (T3): user-registered
+    # ``Options.content_channels`` extension point: user-registered
     # ContentKindSpec channels append LAST, after every built-in resident, so
     # existing sessions (no extra channels) keep their semi_stable byte layout
     # byte-identical. This is the ONLY composer extension seam — the composer
@@ -511,23 +413,22 @@ def _build_content_registry(
 
 
 def _build_reminder_registry(spec: _BuildSpec) -> ReminderRegistry:
-    """The compose-time reminder registry (D8) — injected base + activated extras.
+    """The compose-time reminder registry — injected base + activated extras.
 
-    Microkernel M2: the three built-in reminders (todo / delegation / read) are
-    no longer imported here — the SDK host resolves the ``reminders`` built-in
-    plugin's renders through the plugin loader and injects them as
-    ``base_reminders`` (their priorities keep the composed dynamic-suffix tail
-    byte-identical to the pre-migration append order). Per-agent-activated
-    plugin reminders (``extra_reminders``) append after them and interleave by
-    priority — the exact mirror of how ``_build_content_registry`` extends the
-    built-in content kinds with ``Options.content_channels``. Empty extras ⇒
-    byte-identical to the built-in-only composer.
+    The SDK host resolves the ``reminders`` built-in plugin's renders through
+    the plugin loader and injects them as ``base_reminders`` (their priorities
+    fix the composed dynamic-suffix tail order); the kernel imports no renderer.
+    Per-agent-activated plugin reminders (``extra_reminders``) append after them
+    and interleave by priority — the exact mirror of how
+    ``_build_content_registry`` extends the built-in content kinds with
+    ``Options.content_channels``. Empty extras ⇒ byte-identical to the
+    built-in-only composer.
     """
     if spec.base_reminders is None:
         raise RuntimeError(
             "base reminders were not injected — the SDK host resolves the "
             "reminders built-in plugin through the plugin loader and passes "
-            "base_reminders (microkernel M2); the kernel builder imports no "
+            "base_reminders; the kernel builder imports no "
             "reminder renderer"
         )
     return ReminderRegistry((*spec.base_reminders, *spec.extra_reminders))
@@ -540,19 +441,19 @@ def _build_guards(
 ) -> HookManager:
     """The guard HookManager in the live session's registration order.
 
-    Issue A: rebuild the exact guard shape the live session ran so a resumed
-    Engine reproduces guard-origin events (the approval suspend +
+    Rebuild the exact guard shape the live session ran so a resumed Engine
+    reproduces guard-origin events (the approval suspend +
     ``ToolCallApprovalRequested``, or a guard deny) consistently.
 
-    Microkernel M2: the construction body lives in the ``governance``
-    built-in plugin (``build_default_guards``) — this phase forwards the
-    finished tool assembly, the packs' opaque ``guard_facts`` bundle
-    (spec §4.3: the builder never reads inside it), and the operator
-    passthrough fields. Issue C — delegation targets are authorized only
-    while delegation is enabled; the caller has already roster-filtered the
-    set through the same single-source helper the live runner uses, so an
-    unknown ``--delegate-to`` produces the identical (empty) allow-list —
-    live deny == resume deny, no SubtaskDenied-vs-SubtaskSpawned divergence.
+    The construction body lives in the ``governance`` built-in plugin
+    (``build_default_guards``) — this phase forwards the finished tool
+    assembly, the packs' opaque ``guard_facts`` bundle (the builder never
+    reads inside it), and the operator passthrough fields. Delegation targets
+    are authorized only while delegation is enabled; the caller has
+    filtered the set through the same single-source helper the live driver
+    uses, so an unknown ``--delegate-to`` produces the identical (empty)
+    allow-list — live deny == resume deny, no SubtaskDenied-vs-SubtaskSpawned
+    divergence.
 
     The budget and repetition defaults are supplied by the caller (product
     layer) so this phase stays noeta.agent-agnostic.
@@ -561,7 +462,7 @@ def _build_guards(
         raise RuntimeError(
             "guards factory was not injected — the SDK host resolves the "
             "governance built-in plugin through the plugin loader and passes "
-            "guards_factory (microkernel M2); the kernel builder imports no "
+            "guards_factory; the kernel builder imports no "
             "guard implementation"
         )
     return spec.guards_factory(
@@ -595,10 +496,10 @@ def build_session_inputs(
     allowed_subtask_agents: frozenset[str] = frozenset(),
     max_steps: int = 20,
     #: The write/shell safety inputs (``write_mode`` / ``shell_mode`` /
-    #: ``shell_allowlist`` / ``write_path_globs`` / ``write_roots``) are no
-    #: longer kernel-signature parameters: they have a single consumer (the fs
+    #: ``shell_allowlist`` / ``write_path_globs`` / ``write_roots``) are not
+    #: kernel-signature parameters: they have a single consumer (the fs
     #: pack), so the host supplies them in ``plugin_config["fs"]`` and the fs
-    #: pack parses its own entry (mechanism-slots-only context, spec §4.2).
+    #: pack parses its own entry (mechanism-slots-only context).
     require_approval_tools: tuple[str, ...] = (),
     #: Per-call conditional approval predicate, forwarded verbatim into
     #: ``PermissionPolicy.conditional_approval``. Built by the SDK host for the
@@ -617,11 +518,11 @@ def build_session_inputs(
     #: SDK/test fixture) ⇒ the host ``LocalExecEnv`` and a host ``WorkspaceRoot``
     #: — byte-identical, and the tool schemas are unchanged so the stable prefix
     #: is unaffected. A sandbox ``ExecEnv`` (supplied per-task by the product
-    #: host once it has provisioned / attached a container, T5/T6) makes the
+    #: host once it has provisioned / attached a container) makes the
     #: pack act against that container and switches the workspace to lexical
     #: (container-path) containment. Wiring-only, never session identity.
     exec_env: Optional[ExecEnv] = None,
-    #: The named backend bag (microkernel phase 3): the host's live backing
+    #: The named backend bag: the host's live backing
     #: objects for capability packs, keyed by the contributing plugins' own
     #: names (the sandbox-vended ``"browser"`` backend, the product's
     #: ``"app_preview"`` gateway, …). An absent name means the capability has
@@ -631,12 +532,12 @@ def build_session_inputs(
     #: The agent's effective capability flags by name (``"browser"`` /
     #: ``"memory"`` / ``"delegation"`` / ``"todo_write"`` / …) — the ONE
     #: per-agent truth both the session packs AND the control-tool mounts
-    #: self-gate on. The host supplies the already-ANDed values (agent
+    #: self-gate on. The host supplies the ANDed values (agent
     #: activation × host kill-switch, plus any cross-capability gates such as
     #: workflow requiring delegation); the kernel never re-derives or
     #: enumerates a flag.
     capability_flags: Optional[Mapping[str, bool]] = None,
-    #: Per-plugin config bag (microkernel phase 3): ``plugin name → its own
+    #: Per-plugin config bag: ``plugin name → its own
     #: keys`` (the memory roots, the skills dirs + script switch, the
     #: workspace residents' instructions settings, …). Each pack parses only
     #: its own entry; the kernel never reads a key.
@@ -663,30 +564,30 @@ def build_session_inputs(
     policy_factory_override: Optional[Callable[[Any], Policy]] = None,
     extra_guards: tuple[Guard, ...] = (),
     extra_content_kinds: tuple[ContentKindSpec, ...] = (),
-    #: Per-agent-activated compose-time reminders (D8, track B). Default ``()`` so
-    #: every existing caller composes the built-in three only, byte-identically.
+    #: Per-agent-activated compose-time reminders. Default ``()`` so
+    #: every caller composes the built-in reminders only, byte-identically.
     extra_reminders: tuple[ReminderSpec, ...] = (),
-    #: The manifest-contributed session packs (microkernel phase 3): the SDK
+    #: The manifest-contributed session packs: the SDK
     #: host resolves every ``session_pack`` contribution (built-ins via
     #: ``noeta.client.parts.default_session_packs``, external plugins via the
     #: PluginSet projection) and injects the merged, priority-ordered entry
     #: tuple here. The generic loop is the whole tool-assembly pipeline;
     #: an empty tuple builds a session with no pack tools at all.
     session_packs: tuple[SessionPackEntry, ...] = (),
-    #: The contributed control tools (control-tool-surface S2/S2b): the SDK host
+    #: The contributed control tools: the SDK host
     #: resolves every ``control_tool`` contribution (built-ins via
     #: ``noeta.client.parts.default_control_tools`` — todo_write / ask_user_question
     #: / delegation / skill / run_workflow / structured_output — external plugins
-    #: via the PluginSet projection) and injects them here. Since S2b the kernel
+    #: via the PluginSet projection) and injects them here. The kernel
     #: holds no internal control-tool table, so this tuple is the whole mount-loop
     #: input; a name clash between two contributions raises loudly. Empty ⇒ a
     #: session with zero control tools.
     control_tools: tuple[ControlToolEntry, ...] = (),
-    #: Loader-resolved built-in compose-time reminders (microkernel M2, D2):
-    #: the three renders declared by the ``reminders`` built-in plugin,
+    #: Loader-resolved built-in compose-time reminders:
+    #: the renders declared by the ``reminders`` built-in plugin,
     #: resolved by the SDK host and injected here; ``None`` fails loudly.
     base_reminders: Optional[tuple[ReminderSpec, ...]] = None,
-    #: Loader-resolved default guard-stack factory (microkernel M2, D2):
+    #: Loader-resolved default guard-stack factory:
     #: the ``governance`` built-in plugin's ``build_default_guards``, resolved
     #: by the SDK host and injected here; ``None`` fails loudly.
     guards_factory: Optional[GuardsFactory] = None,
@@ -695,7 +596,7 @@ def build_session_inputs(
     #: by the edit-tool mutex. ``None`` ⇒ both edit tools stay (the documented
     #: unrecognised-model semantic — byte-identical for stub/test builds).
     provider_family: Optional[str] = None,
-    #: Loader-resolved default policy factory builder (microkernel phase 2b):
+    #: Loader-resolved default policy factory builder:
     #: the ``react`` built-in plugin's ``build_react_policy_factory``,
     #: resolved by the SDK host and injected here; ``None`` fails loudly at
     #: policy construction unless ``policy_factory_override`` replaces the
@@ -720,7 +621,7 @@ def build_session_inputs(
     * ``compaction`` — pre-derived knobs (window / output cap / buffer /
       tail / composer version); the product determines threshold policy.
     * ``budget`` — pre-parsed session budget (caller supplies default).
-    * ``allowed_subtask_agents`` — already roster-filtered set of
+    * ``allowed_subtask_agents`` — filtered set of
       delegation targets (``None``-when-disabled semantics handled here).
     * ``plugin_config["fs"]`` — the write/shell safety inputs (``write_mode``
       / ``shell_mode`` / ``shell_allowlist`` / ``write_path_globs`` /
@@ -741,10 +642,6 @@ def build_session_inputs(
     name. The canonical construction-order contract is
     ``fs → local → script → mcp → custom``.
     ``None`` ⇒ nothing is merged (existing paths unchanged).
-
-    Internally (C02 deepening) the body is an explicit tool pipeline
-    (:data:`_TOOL_PIPELINE`) plus the named post-tools phases below; the
-    keyword interface and every produced byte are unchanged.
     """
     spec = _BuildSpec(
         workspace_dir=workspace_dir,
@@ -792,8 +689,7 @@ def build_session_inputs(
     else:
         workspace = WorkspaceRoot.for_container(workspace_dir)
 
-    # The generic pack context (microkernel phase 3): every session pack
-    # reads THIS, never the spec.
+    # The generic pack context: every session pack reads THIS, never the spec.
     ctx = SessionBuildContext(
         workspace=workspace,
         workspace_dir=workspace_dir,
@@ -807,7 +703,7 @@ def build_session_inputs(
         plugin_config=dict(plugin_config) if plugin_config else {},
     )
 
-    # The two kernel-owned injections (D1: pre-built objects, not packs) ride
+    # The two kernel-owned injections (pre-built objects, not packs) ride
     # the same loop as internal fixed-priority entries so ONE sorted iteration
     # is the whole construction-order contract. ``_mcp_entry`` closes over the
     # accumulating tool dict for the reserved-prefix check — by band 800 every
@@ -842,7 +738,7 @@ def build_session_inputs(
     pack_kinds: list[tuple[int, int, ContentKindSpec]] = []
     init_hooks: list[tuple[str, InitHook]] = []
     pack_control_tools: list[ControlToolEntry] = []
-    # The typed contribution side-state the builder consumes (spec §4.3): each
+    # The typed contribution side-state the builder consumes: each
     # is single-writer across the pack loop (a second contributor is a wiring
     # fault, not a merge). ``None`` ⇒ no pack contributed it.
     guard_facts: Optional[Any] = None
@@ -870,10 +766,9 @@ def build_session_inputs(
         # ``actor="plugin:<name>"`` and records residents deterministically.
         if contrib.init is not None:
             init_hooks.append((entry.name, contrib.init))
-        # Pack-contributed control-tool entries (spec §4.1 session plane:
-        # translate closures are factory outputs) — collected in pack-loop
-        # order and mounted through the SAME dual-priority loop as the
-        # host-supplied entries below.
+        # Pack-contributed control-tool entries (translate closures are
+        # factory outputs) — collected in pack-loop order and mounted through
+        # the SAME dual-priority loop as the host-supplied entries below.
         pack_control_tools.extend(contrib.control_tools)
         guard_facts = _claim("guard_facts", guard_facts, contrib.guard_facts)
         content_discovery = _claim(
@@ -883,17 +778,15 @@ def build_session_inputs(
             "content_preloader", content_preloader, contrib.content_preloader
         )
 
-    # Control-tool mounts (control-tool-surface S1 → S2b): build the control-
-    # specific context (the generic capability-flag bag), then run the
-    # host-supplied ``control_tools`` (every ``control_tool`` contribution the
-    # SDK host resolves) PLUS the packs' contributed entries through the
-    # generic dual-priority mount loop. Since S2b the kernel keeps no internal
-    # control-tool table; each mount self-gates on its own flag / closed-over
-    # state (the skill mount carries its menu in its closure — no kit crosses
-    # into kernel code, spec §5). It yields the composer's
-    # ``control_action_schemas`` (schema-band order, the S0 golden), the
+    # Control-tool mounts: build the control-specific context (the generic
+    # capability-flag bag), then run the host-supplied ``control_tools`` (every
+    # ``control_tool`` contribution the SDK host resolves) PLUS the packs'
+    # contributed entries through the generic dual-priority mount loop. Each
+    # mount self-gates on its own flag / closed-over state (the skill mount
+    # carries its menu in its closure — no kit crosses into kernel code). It
+    # yields the composer's ``control_action_schemas`` (schema-band order), the
     # routing-ordered translate specs the policy factory binds, and the
-    # collected mount exports (D8 — the ask answer codec). The loop re-sorts by
+    # collected mount exports (the ask answer codec). The loop re-sorts by
     # ``(priority, name)``; the collision check guards a third-party clash with
     # a built-in control-tool name.
     control_ctx = ControlToolBuildContext(
@@ -918,10 +811,6 @@ def build_session_inputs(
         ),
     )
     reminder_registry = _build_reminder_registry(spec)
-    # Microkernel phase 2a: the composer is constructed directly — the old
-    # ``build_skill_composer`` wrapper's only skill-specific behaviour was a
-    # single-kind registry fallback this call never used (the multi-kind
-    # ``content_registry`` is always passed explicitly).
     composer = ThreeSegmentComposer(
         system_prompt=system_prompt,
         tools=tools,
@@ -952,14 +841,12 @@ def build_session_inputs(
         ),
     )
 
-    # SDK ``Options.policy`` extension point (T3): a custom decision policy
+    # ``Options.policy`` extension point: a custom decision policy
     # factory fully replaces the default. ``None`` ⇒ the loader-resolved
-    # default (microkernel phase 2b: the ReAct construction lives in the
-    # ``react`` built-in; the injected builder receives exactly the
-    # kernel-computed facts the old inline closure captured — byte-identical
-    # prompts and schemas). Wiring-only LLM request overrides
-    # (output_schema / thinking / effort) ride through; omitted from
-    # canonical bytes when unset so legacy recordings resume byte-equal.
+    # default (the ReAct construction lives in the ``react`` built-in; the
+    # injected builder receives exactly the kernel-computed facts). Wiring-only
+    # LLM request overrides (output_schema / thinking / effort) ride through;
+    # omitted from canonical bytes when unset so recordings resume byte-equal.
     policy_factory: Callable[[Any], Policy]
     if policy_factory_override is not None:
         policy_factory = policy_factory_override
@@ -968,8 +855,8 @@ def build_session_inputs(
             raise RuntimeError(
                 "default policy factory was not injected — the SDK host "
                 "resolves the react built-in plugin through the plugin "
-                "loader and passes default_policy_factory (microkernel "
-                "phase 2b); the kernel builder imports no policy "
+                "loader and passes default_policy_factory; the kernel "
+                "builder imports no policy "
                 "implementation"
             )
         policy_factory = default_policy_factory(

@@ -1,9 +1,10 @@
-"""Event envelope and Phase-0 event payload dataclasses.
+"""Event envelope and typed event payloads.
 
-The envelope is the universal record format on an EventLog stream. The
-payload is a typed dataclass attached per ``type``. Phase 0 ships only the
-event types exercised by the minimal task happy path; other types are
-added incrementally by later issues.
+The envelope is the universal record format on an EventLog stream; each event
+``type`` attaches its own frozen payload dataclass. Payloads are capped at
+``EVENT_PAYLOAD_MAX_BYTES``, so anything unbounded — messages, answers, goals,
+state bodies — travels as a ``ContentRef`` into the ContentStore rather than
+inline.
 """
 
 from __future__ import annotations
@@ -23,12 +24,10 @@ from noeta.protocols.wake import SubtaskResult, WakeCondition
 # ---------------------------------------------------------------------------
 
 
-#: Typed source-of-write marker. Names the Noeta role that appended the
-#: event to its stream, orthogonal to ``actor`` (which carries the
-#: writer's *identity*; the same observer class might run under different
-#: actor labels in tests). Surfaced as descriptive provenance in the audit
-#: trail (``AuditObserver``) and the events HTTP/JSON API; the read model
-#: and front-end can show which role wrote each event.
+#: Typed source-of-write marker: the Noeta role that appended the event to its
+#: stream, orthogonal to ``actor``, which carries the writer's *identity* (the
+#: same observer class may run under different actor labels). Descriptive
+#: provenance for the audit trail and read models, never a control input.
 EventOrigin = Literal["engine", "llm", "observer", "tool", "system"]
 
 
@@ -73,19 +72,13 @@ class EventEnvelope:
     ) -> "EventEnvelope":
         """Build a pre-append envelope with sensible defaults.
 
-        Centralises the field defaults every EventLog backend would
-        otherwise re-spell:
-
-        * ``seq=0`` (the log stamps the real value on append),
-        * ``correlation_id=task_id`` (each stream is its own correlation
-          for now),
-        * ``trace_id`` falls back to ``"trace-unknown"``,
-        * ``origin="engine"`` (the most common writer; LLM / Observer /
-          Tool call sites override).
-
-        Callers override only the fields that actually vary per backend:
-        ``id`` (mint policy), ``occurred_at`` (clock), and
-        ``schema_version`` (envelope generation).
+        Centralises the field defaults every EventLog backend would otherwise
+        re-spell — ``seq=0`` (the log stamps the real value on append),
+        ``correlation_id=task_id`` (each stream is its own correlation),
+        ``trace_id`` falling back to ``"trace-unknown"``, ``origin="engine"``
+        — leaving backends to override only what genuinely varies between
+        them: ``id`` (mint policy), ``occurred_at`` (clock), and
+        ``schema_version``.
         """
         return cls(
             id=id,
@@ -104,7 +97,7 @@ class EventEnvelope:
 
 
 # ---------------------------------------------------------------------------
-# Phase-0 event payloads
+# Event payloads
 # ---------------------------------------------------------------------------
 
 
@@ -112,18 +105,15 @@ class EventEnvelope:
 class TaskCreatedPayload:
     """The genesis event of a Task stream.
 
-    Carries the immutable header (goal, principal, contract, budget) that
-    later ``fold`` calls use to bootstrap empty state. Phase 0 keeps the
-    shape minimal; more fields land alongside their consumers.
+    Carries the immutable header ``fold`` bootstraps empty state from.
 
-    A large ``goal`` is spilled to the ContentStore (the genesis event has
-    no other escape from the ``EVENT_PAYLOAD_MAX_BYTES`` cap —
-    ``MessagesAppended.messages_ref`` only covers subsequent messages) —
-    ``goal`` then holds ``""`` and the full text is reachable via
-    ``goal_ref``. Small goals stay inline with ``goal_ref=None``;
-    ``__canonical_omit_none__`` drops the absent ref so a small-goal event
-    is byte-identical to a pre-spill recording. Write through
-    :func:`spill_goal`, read with :func:`goal_from_payload`.
+    A large ``goal`` is spilled to the ContentStore — the genesis event has no
+    other escape from the ``EVENT_PAYLOAD_MAX_BYTES`` cap, since
+    ``MessagesAppended.messages_ref`` covers only subsequent messages — leaving
+    ``goal`` as ``""`` with the full text behind ``goal_ref``. Small goals stay
+    inline with ``goal_ref=None``, which ``__canonical_omit_none__`` keeps out
+    of the byte stream entirely. Write through :func:`spill_goal`, read with
+    :func:`goal_from_payload`.
     """
 
     goal: str
@@ -131,18 +121,15 @@ class TaskCreatedPayload:
     agent_name: str = "unnamed"
     parent_task_id: Optional[str] = None
     inputs: dict[str, Any] = field(default_factory=dict)
-    #: SR1 — delegation depth decided at creation: root tasks carry 0, a
-    #: child carries ``parent.subtask_depth + 1``. Recorded (not derived by
-    #: walking the parent chain) so audit / fold / snapshot / resume all see
-    #: it directly. Old recordings without the key restore to 0.
+    #: Delegation depth decided at creation: a root carries 0, a child carries
+    #: ``parent.subtask_depth + 1``. Recorded rather than derived by walking the
+    #: parent chain, so audit, fold, snapshot and resume all read it directly.
     subtask_depth: int = 0
-    #: background sub-agent (docs/adr/background-subagent.md): ``True`` marks a
-    #: child spawned by ``spawn_subagent(background=True)``. The
-    #: ``ChildLifecycleObserver`` reads it to SKIP this child's lineage / enqueue
-    #: / auto-wake (the parent never suspended on it — the background-subagent
-    #: driver owns its lifecycle instead). ``None`` (default) is the ordinary
-    #: foreground child; ``__canonical_omit_none__`` drops the absent key so every
-    #: pre-existing recording is byte-identical (same rule as ``answer_ref``).
+    #: ``True`` marks a child spawned by ``spawn_subagent(background=True)``
+    #: (see docs/adr/background-subagent.md). ``ChildLifecycleObserver`` reads
+    #: it to SKIP this child's lineage / enqueue / auto-wake, because the parent
+    #: never suspended on it and the background-subagent driver owns its
+    #: lifecycle. ``None`` is the ordinary foreground child.
     background: Optional[bool] = None
     #: Spill escape for an oversized ``goal`` — see the class docstring.
     goal_ref: Optional[ContentRef] = None
@@ -153,8 +140,7 @@ class TaskCreatedPayload:
 #: Goal bytes above this go to the ContentStore so no goal-carrying event
 #: (``TaskCreated`` / ``SubtaskSpawned`` / ``SubtaskDenied`` /
 #: ``BackgroundSubagentStarted``) can blow the ``EVENT_PAYLOAD_MAX_BYTES``
-#: cap; the ~1 KB headroom covers the surrounding payload structure (same
-#: rationale as the ``TaskCompleted`` answer spill).
+#: cap; the ~1 KB headroom covers the surrounding payload structure.
 GOAL_INLINE_LIMIT = EVENT_PAYLOAD_MAX_BYTES - 1024
 
 _GOAL_MEDIA_TYPE = "application/json"
@@ -178,11 +164,11 @@ def spill_goal(
 
 
 def goal_from_payload(payload: Any, content_store: ContentStore) -> str:
-    """The full goal of any goal-carrying payload: derefs ``goal_ref`` (set
-    when the goal was spilled to the ContentStore) or returns the inline
-    ``goal``. The single reader every consumer should use so the spill is
-    transparent. Defensive ``getattr`` so a legacy / malformed payload reads
-    as ``""`` (the same tolerance ``fold``'s genesis bootstrap always had)."""
+    """The full goal of any goal-carrying payload: derefs ``goal_ref`` or
+    returns the inline ``goal``. The single reader every consumer should use,
+    so the spill stays transparent. The defensive ``getattr`` makes a malformed
+    payload read as ``""`` instead of raising, matching the tolerance of
+    ``fold``'s genesis bootstrap."""
     ref = getattr(payload, "goal_ref", None)
     if ref is not None:
         return str(from_canonical_bytes(content_store.get(ref)))
@@ -200,17 +186,13 @@ class TaskStartedPayload:
 class TaskStatePatchedPayload:
     """Records a typed ``TaskStatePatch`` applied to the ``state`` slice.
 
-    The patch author is normally a Policy (``Decision.state_patch``);
-    Phase 4 (B17) adds one narrow operator-driven author,
-    :meth:`noeta.core.engine.Engine.apply_state_patch`, used by the
-    Noeta-Code runner for pre-loop skill activation. Both authors emit a
-    byte-equal ``TaskStatePatchedPayload`` (same ``patch`` dict + same
-    canonical encoding), so fold / resume treat them
-    identically and the single-writer rule is preserved
-    through one shape.
+    Both patch authors — a Policy through ``Decision.state_patch`` and the
+    operator seam :meth:`noeta.core.engine.Engine.apply_state_patch` — emit a
+    byte-equal payload, so fold and resume treat them identically and the
+    single-writer rule holds through one shape.
 
-    The patch is stored as a plain dict so the canonical encoding does
-    not depend on the live :class:`noeta.protocols.decisions.TaskStatePatch`
+    The patch is stored as a plain dict so the canonical encoding does not
+    depend on the live :class:`noeta.protocols.decisions.TaskStatePatch`
     dataclass; :meth:`TaskStatePatch.from_dict` is the typed inverse.
     """
 
@@ -221,15 +203,11 @@ class TaskStatePatchedPayload:
 class MessagesAppendedPayload:
     """Records new messages appended to ``RuntimeState.messages``.
 
-    Issue 14 reshape: the message bodies live in ContentStore behind
-    ``messages_ref`` (canonical-serialized ``list[Message]``); the
-    envelope only carries the ref + a count so a single
-    ``MessagesAppended`` envelope stays well under the 4 KB
-    ceiling no matter how large the message bodies are.
-
-    fold dereferences ``messages_ref`` to rebuild
-    ``RuntimeState.messages``. The ref is content-addressed, so the same
-    message bodies always hash to the same ``messages_ref``.
+    The bodies live in ContentStore behind ``messages_ref`` (a
+    canonical-serialized ``list[Message]``) and the envelope carries only the
+    ref plus a count, so the event stays well under the 4 KB ceiling however
+    large the messages are. The ref is content-addressed, so identical message
+    bodies always produce the same ``messages_ref``.
     """
 
     messages_ref: ContentRef
@@ -252,13 +230,11 @@ class TaskRewoundPayload:
     serialises it (the SAME 4-slice body :class:`TaskSnapshotPayload`
     points at), stores it in the ContentStore, and **appends** this marker.
     fold treats the latest ``TaskRewound`` exactly like the latest
-    ``TaskSnapshot`` — its ``state_ref`` is the rebuild baseline (same code
-    path, ``find_latest_snapshot`` returns whichever has the higher seq) —
-    so the ``target_seq+1..M`` segment becomes folded-over dead history
-    (still on the stream, still auditable). ``target_seq`` is recorded for
-    the read model / front-end timeline truncation; the baseline itself is
-    ``state_ref``. Absent from any historical recording → byte-safe (same
-    additive-event rule as ``ModelBound`` / ``TaskCancelled``)."""
+    ``TaskSnapshot`` — its ``state_ref`` is the rebuild baseline, and
+    ``find_latest_snapshot`` returns whichever of the two has the higher seq —
+    so the ``target_seq+1..M`` segment becomes folded-over dead history, still
+    on the stream and still auditable. ``target_seq`` is recorded for timeline
+    truncation in read models; the baseline itself is ``state_ref``."""
 
     target_seq: int
     state_ref: ContentRef
@@ -290,8 +266,7 @@ class StepAttemptAbandonedPayload:
     the tail), ``"interrupted_approval"`` (parked — the crash hit a
     human-approved tool execution; the seal restores the pending
     approval) or ``"abandon_cap"`` (the consecutive-abandon cap forced a
-    park). Absent from any historical recording → byte-safe (same
-    additive-event rule as ``TaskRewound``)."""
+    park)."""
 
     abandoned_from_seq: int
     state_ref: ContentRef
@@ -323,10 +298,9 @@ class TaskForkedPayload:
     in ``source_task_id`` — discovered by scanning streams, the way subtask
     lineage is discovered from ``TaskCreated.parent_task_id``.
 
-    ``source_seq`` is the fold-through boundary on the source stream (recorded
-    for the read model / a branch-point UI); the baseline itself is
-    ``state_ref``. Absent from any historical recording → byte-safe (the same
-    additive-event rule as ``TaskRewound`` / ``StepAttemptAbandoned``)."""
+    ``source_seq`` is the fold-through boundary on the source stream, recorded
+    so a read model can show the branch point; the baseline itself is
+    ``state_ref``."""
 
     source_task_id: str
     source_seq: int
@@ -351,8 +325,7 @@ class TurnInterruptedPayload:
     ran). Discarding them is ``TaskRewound``'s job, and the two compose.
 
     ``reason`` is free-form operator text; ``interrupted_by`` names the actor
-    for the lifecycle audit. Absent from any historical recording → byte-safe
-    (same additive-event rule as ``TaskCancelled``)."""
+    for the lifecycle audit."""
 
     reason: Optional[str] = None
     interrupted_by: str = "user"
@@ -360,23 +333,18 @@ class TurnInterruptedPayload:
 
 @dataclass(frozen=True, slots=True)
 class ContextPlanComposedPayload:
-    """Issue 14: Engine emits this per step in front of the LLM round-trip.
+    """Emitted by the Engine once per step, in front of the LLM round-trip.
 
     ``plan_ref`` points at the canonical bytes of the
-    :class:`noeta.protocols.context_plan.ContextPlan` body in
-    ContentStore. ``fold`` writes ``task.context.plan_ref`` from this
-    event (single-writer: Engine, not Composer).
+    :class:`noeta.protocols.context_plan.ContextPlan` body in ContentStore, and
+    ``fold`` writes ``task.context.plan_ref`` from this event — the Engine is
+    the single writer, not the Composer.
 
-    ``plan_ref`` is ``None`` when the composer produced no stored plan
-    (the protocols-only ``PassthroughComposer`` fallback). The event is
-    emitted **unconditionally once per Engine step** either way — it is
-    the step-boundary event ``fold`` counts ``governance.iterations``
-    from, so the ``BudgetGuard.max_iterations`` cap must not depend on
-    which composer is wired (core #2). Byte-safety: the shipped
-    ``ThreeSegmentComposer`` always sets ``plan_ref``, so every
-    historical recording carries a non-``None`` value and refolds
-    byte-identically; only Passthrough-composed steps (which previously
-    emitted nothing) write the new ``null`` shape.
+    ``plan_ref`` is ``None`` when the composer produced no stored plan (the
+    protocols-only ``PassthroughComposer`` fallback), but the event is emitted
+    **unconditionally** either way: it is the step-boundary event ``fold``
+    counts ``governance.iterations`` from, so the ``BudgetGuard.max_iterations``
+    cap must not depend on which composer is wired.
     """
 
     plan_ref: Optional[ContentRef] = None
@@ -386,13 +354,12 @@ class ContextPlanComposedPayload:
 class TaskCompletedPayload:
     """Terminal event: Task finished successfully with ``answer``.
 
-    A large ``answer`` is spilled to the ContentStore (unbounded
-    bodies must not live inline in an event payload, which is capped at
-    ``EVENT_PAYLOAD_MAX_BYTES``) — ``answer`` then holds ``None`` and the full
-    value is reachable via ``answer_ref``. Small answers stay inline with
-    ``answer_ref=None``; ``__canonical_omit_none__`` drops the absent ref so a
-    small-answer event is byte-identical to a pre-spill recording. Read the
-    full value with :func:`answer_from_payload`."""
+    A large ``answer`` is spilled to the ContentStore, since an unbounded body
+    cannot live inline under the ``EVENT_PAYLOAD_MAX_BYTES`` cap: ``answer``
+    then holds ``None`` and the full value sits behind ``answer_ref``. Small
+    answers stay inline with ``answer_ref=None``, which
+    ``__canonical_omit_none__`` keeps out of the byte stream. Read the full
+    value with :func:`answer_from_payload`."""
 
     answer: Any
     answer_ref: Optional[ContentRef] = None
@@ -404,9 +371,8 @@ def answer_from_payload(
     payload: "TaskCompletedPayload", content_store: ContentStore
 ) -> Any:
     """The full answer for a ``TaskCompleted`` payload: derefs ``answer_ref``
-    (set when the answer was spilled to the ContentStore) or returns the inline
-    ``answer``. The single reader every consumer should use so the spill is
-    transparent."""
+    or returns the inline ``answer``. The single reader every consumer should
+    use, so the spill stays transparent."""
     if payload.answer_ref is not None:
         return from_canonical_bytes(content_store.get(payload.answer_ref))
     return payload.answer
@@ -478,12 +444,11 @@ class ToolResultRecordedPayload:
     ``side_effects`` is a list of typed claims (e.g. file writes, HTTP
     calls) for the audit trail.
 
-    ``file_baselines`` carries the rewind baseline for each file
-    this tool call edited for the FIRST time this turn (the per-turn gate
-    deduped repeats). Empty on every non-fs / dry-run / repeat-edit call →
-    ``__canonical_omit_none__`` drops it so a recording without checkpoints is
-    byte-identical to a pre-0043 one. ``fold`` reads it to project "the files
-    this turn changed"; the live rewind restore writes those baselines back.
+    ``file_baselines`` carries the rewind baseline for each file this tool call
+    edited for the FIRST time this turn; the per-turn gate dedupes repeats, and
+    every non-fs / dry-run / repeat-edit call leaves it absent.  ``fold`` reads
+    it to project "the files this turn changed"; the live rewind restore writes
+    those baselines back.
     """
 
     call_id: str
@@ -511,10 +476,10 @@ class ToolCallFinishedPayload:
 class SubtaskSpawnedPayload:
     """Parent stream: parent's Policy asked to spawn a child Task.
 
-    A large ``goal`` is spilled to the ContentStore via ``goal_ref`` (same
-    contract as ``TaskCreated`` — see :func:`spill_goal` /
-    :func:`goal_from_payload`); ``inputs`` stay inline (Phase 0 inputs are
-    small; larger inputs would need their own ContentRef).
+    A large ``goal`` is spilled to the ContentStore via ``goal_ref``, the same
+    contract as ``TaskCreated`` (see :func:`spill_goal` /
+    :func:`goal_from_payload`). ``inputs`` stay inline and are therefore bound
+    by the payload cap.
     """
 
     subtask_id: str
@@ -562,9 +527,8 @@ class TaskWokenPayload:
     """Engine re-leased the Task after a matching wake event arrived.
 
     ``wake_event`` is the WakeCondition shape that fired (e.g. the
-    ``SubtaskCompleted`` payload). Phase 0 only emits this in the
-    spawn_subtask → wake path; later issues use the same payload for
-    HITL / timer / external wakes.
+    ``SubtaskCompleted`` payload). The same payload carries the
+    spawn_subtask, HITL, timer, and external wake paths.
     """
 
     wake_event: WakeCondition
@@ -592,7 +556,7 @@ class ToolCallDeniedPayload:
 @dataclass(frozen=True, slots=True)
 class ToolCallApprovalRequestedPayload:
     """A Guard returned ``require_approval`` for a single ``tool_call``;
-    the task is about to suspend for human approval (Phase 4.5 Issue A).
+    the task is about to suspend for human approval.
 
     This is the **durable recovery anchor**: it records the blocked call
     *before* the suspend so the exact ``ToolCall`` can be reconstructed
@@ -615,8 +579,7 @@ class ToolCallApprovalRequestedPayload:
 
 @dataclass(frozen=True, slots=True)
 class ToolCallApprovalResolvedPayload:
-    """The human approve/deny decision for a pending tool-call approval
-    (Phase 4.5 Issue A).
+    """The human approve/deny decision for a pending tool-call approval.
 
     The single authoritative record of the resolution — a deny does
     **not** also emit a ``ToolCallDenied`` event. Fold appends every
@@ -668,13 +631,10 @@ class UserQuestionAnsweredPayload:
 
 # -- LLM events -------------------------------------------------------------
 #
-# Phase 0 ships only StubPolicy paths that never invoke a real LLM, so
-# these payloads are not produced in the kernel happy path. They are
-# defined here so the protocol surface listed in PRD §"Event catalog (Phase 0)"
-# is complete and so Phase 1's real LLM adapter slots in without
-# touching ``noeta.protocols``. Once a Phase 1 adapter
-# starts emitting these events, fixtures upgrade from raw-dict payloads
-# to these typed shapes with no callsite churn.
+# These payloads are the typed shapes an LLM provider adapter emits. They
+# live in ``noeta.protocols`` so the event catalogue is complete and an
+# adapter slots in without touching the protocol surface; fixtures use these
+# typed shapes rather than raw-dict payloads with no callsite churn.
 
 
 @dataclass(frozen=True, slots=True)
@@ -936,14 +896,14 @@ class CompactedPayload:
     composer_version: str
 
 
-# -- Lifecycle / lease events (issue 06) -----------------------------------
+# -- Lifecycle / lease events -----------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class ModelBoundPayload:
     """The model selector that was authorized + bound for the next turn(s).
 
-    Issue 06. Writer is the **Engine** (under a
+    Writer is the **Engine** (under a
     driver command, exactly like ``TaskWoken`` / ``TaskStarted`` — *not* a
     policy ``Decision``). Emitted (a) once at task start = the opening
     binding, and (b) on **each per-turn model switch** so a conversation can
@@ -1034,11 +994,11 @@ class TaskHostBoundPayload:
     workspace_dir: Optional[str] = None
 
     #: The sandbox execution backend this session is bound to — the per-session
-    #: container's ``"{base_url}#{sandbox_id}"`` ref (D4). Welded here so a
+    #: container's ``"{base_url}#{sandbox_id}"`` ref. Welded here so a
     #: resumed / **reclaimed** session (possibly on another host) reconnects to
     #: the SAME container by reading this address rather than the folding host's
     #: own config, which may differ. Addressing only — the API key is NEVER
-    #: recorded (D5); it is re-read from the reconnecting host's env at connect
+    #: recorded; it is re-read from the reconnecting host's env at connect
     #: time. ``None`` (every local / non-sandbox recording) → the resolver uses
     #: the local host. The ref is a **flat string** (packed by
     #: ``noeta.client.sandbox_provider.encode_exec_env_ref`` and split on the last
@@ -1058,7 +1018,7 @@ class TaskHostBoundPayload:
 
 @dataclass(frozen=True, slots=True)
 class ConversationClosedPayload:
-    """A conversation was closed / archived by a human (issue 08).
+    """A conversation was closed / archived by a human.
 
     Writer is the **Engine** (under the driver's ``close`` command, exactly
     like ``TaskWoken`` / ``ModelBound`` — *not* a policy ``Decision``).
@@ -1072,10 +1032,10 @@ class ConversationClosedPayload:
     Observer — Observers are projections, not state of record).
 
     Why a **new event type** and not a field on ``TaskCreatedPayload`` (or any
-    existing event): adding a field to a historical payload drifts the
-    canonical bytes of *every* recording (the MS1/SR2 moat). A new
-    type is simply *absent* from old recordings → they fold to ``closed =
-    False`` with zero drift. Same byte-safe rule as ``ModelBound`` (issue 06).
+    existing event): adding a field to an existing payload drifts the
+    canonical bytes of *every* recording. A new
+    type is simply *absent* from a recording made without it → it folds to
+    ``closed = False`` with zero drift. Same byte-safe rule as ``ModelBound``.
 
     "Closed" is **advisory, not a lock**: a new goal on a closed+suspended
     Task reopens it (the driver may emit the symmetric
@@ -1090,7 +1050,7 @@ class ConversationClosedPayload:
 
 @dataclass(frozen=True, slots=True)
 class ConversationReopenedPayload:
-    """A previously-closed conversation was reopened (issue 08).
+    """A previously-closed conversation was reopened.
 
     The optional audit-symmetric counterpart to
     :class:`ConversationClosedPayload`. Reopen is **advisory**: sending a new
@@ -1111,8 +1071,8 @@ class TaskCancelledPayload:
     """The Task was cancelled before reaching its own terminal Decision.
 
     ``cascade=True`` documents that the cancel should propagate to any
-    in-flight subtasks (the actual cascade mechanism lands with the
-    Worker daemon — Phase 0 just records the intent).
+    in-flight subtasks (the Worker performs the cascade; this event just
+    records the intent).
     """
 
     reason: str
@@ -1183,7 +1143,7 @@ class SkillContentRecordedPayload:
 
     Emitted **once** per activated declarative skill, right before the
     durable ``TaskStatePatched(activate_skills=…)`` that flips it on.
-    Additive event → old recordings stay byte-identical.
+    Additive event → a recording made without it stays byte-identical.
 
     ``version`` is the declared ``ComponentRef.version`` — the same
     ``[name, version]`` pair the AgentSpec identifies a skill by;
@@ -1198,7 +1158,7 @@ class SkillContentRecordedPayload:
     content_hash: str
 
 
-# -- Background shell events (issue 01) --------------------------
+# -- Background shell events --------------------------
 #
 # A background ``shell_run`` is a host-layer effect, NOT a subtask: the
 # spawned process has no Policy. The off-ledger ``ProcessRegistry``
@@ -1213,11 +1173,11 @@ class SkillContentRecordedPayload:
 class BackgroundShellStartedPayload:
     """A background process was spawned.
 
-    Emitted on the ``spawned_by_task_id`` stream (issue 01 keys jobs by the
-    launching task; issue 04 re-keys lifetime to the session root). ``ref`` is
+    Emitted on the ``spawned_by_task_id`` stream (jobs are keyed by the
+    launching task, and lifetime is keyed to the session root). ``ref`` is
     the empty content-addressed snapshot minted at spawn — every later
     snapshot grows from it. ``command`` is the raw command string (audit /
-    front-end label); ``pid`` is the OS pid for best-effort recovery (issue 06).
+    front-end label); ``pid`` is the OS pid for best-effort recovery.
     """
 
     job_id: str
@@ -1253,12 +1213,12 @@ class BackgroundShellPolledPayload:
 
 @dataclass(frozen=True, slots=True)
 class BackgroundShellExitedPayload:
-    """A background process reached terminal — reaped by the watcher (D5).
+    """A background process reached terminal — reaped by the watcher.
 
     ``final_ref`` is the snapshot of the complete (cap-truncated) output;
     ``exit_code`` the process return code (``-1`` on signal/abnormal exit);
     ``summary`` a one-line human/agent description for the front-end and the
-    completion wake (issue 02 pushes it, issue 01 only records it).
+    completion wake.
 
     ``truncated``: ``True`` when the buffer overflowed
     ``output_cap`` so ``final_ref`` is the tail. Same canonical-omit-when-None
@@ -1276,7 +1236,7 @@ class BackgroundShellExitedPayload:
 
 @dataclass(frozen=True, slots=True)
 class BackgroundShellKilledPayload:
-    """A background process was killed (issue 03).
+    """A background process was killed.
 
     The TERMINAL lifecycle event for a job that ``shell_kill`` (or the human
     emergency-stop) ended — recorded by the watcher's reap path **instead of**
@@ -1383,16 +1343,14 @@ CONTENT_DRIFT_POLICIES = ("pinned", "evolving")
 
 @dataclass(frozen=True, slots=True)
 class ContextContentRecordedPayload:
-    """Per-task, per-content-item content-hash provenance (issue 02).
+    """Per-task, per-content-item content-hash provenance.
 
-    Generic successor of :class:`SkillContentRecordedPayload`: the same
-    ``(name, version, content_hash)`` shape plus ``kind`` (the content
-    channel resident's species — ``skill``, ``memory``, …; semantics live
-    entirely in the SDK registry) and ``policy`` (one of
-    ``CONTENT_DRIFT_POLICIES``, recorded as passive provenance — it states
-    how drift would be judged, but the drift-comparison consumer has since
-    been removed). Additive event type: absent from old
-    recordings → zero canonical drift; the old event stays fold-readable.
+    The generic content-recording event: a ``(name, version, content_hash)``
+    triple plus ``kind`` (the content channel resident's species —
+    ``skill``, ``memory``, …; semantics live entirely in the SDK registry)
+    and ``policy`` (one of ``CONTENT_DRIFT_POLICIES``, recorded as passive
+    provenance stating how drift would be judged). An additive event type:
+    a recording made without it folds with zero canonical drift.
     Fold merges ``name`` into the generic activation map
     ``TaskState.active_content[kind]``.
     """
@@ -1404,12 +1362,12 @@ class ContextContentRecordedPayload:
     policy: str
 
 
-# -- MCP connection lifecycle (issue 03) ----------------------
+# -- MCP connection lifecycle ----------------------
 
 
 @dataclass(frozen=True, slots=True)
 class McpServerSkippedPayload:
-    """An enabled MCP server could not be connected and was SKIPPED (D7).
+    """An enabled MCP server could not be connected and was SKIPPED.
 
     Emitted (origin ``observer``) at task-start build time when one enabled MCP
     server fails to connect / handshake / ``tools/list`` — the offending server
@@ -1419,7 +1377,7 @@ class McpServerSkippedPayload:
     exactly which connector failed and why.
 
     ``alias`` is the server's host-side alias (a clean name, never a url/token —
-    credentials never enter any event, D3); ``reason`` is the typed
+    credentials never enter any event); ``reason`` is the typed
     ``McpError`` / ``McpConfigError`` message string (a transport / handshake
     fault description, no user content). New event type ⇒ absent from old
     recordings ⇒ zero canonical-byte drift (same rule as ModelBound). The
@@ -1433,7 +1391,7 @@ class McpServerSkippedPayload:
 
 @dataclass(frozen=True, slots=True)
 class McpProvenanceRecordedPayload:
-    """The per-task MCP provenance: which connectors + tool subsets, no creds (D11).
+    """The per-task MCP provenance: which connectors + tool subsets, no creds.
 
     Emitted (origin ``observer``, actor ``mcp``) ONCE at task-start connect time,
     in the pre-loop window (after ``TaskCreated`` / before ``TaskStarted``) so
@@ -1445,13 +1403,12 @@ class McpProvenanceRecordedPayload:
     additive-event rule as ``ModelBound`` / ``McpServerSkipped``).
 
     ``servers`` is the credential-FREE record from
-    :func:`noeta.tools.mcp.mcp_provenance_from_specs` — a list of
+    :func:`noeta.builtins.mcp.impl.tool.mcp_provenance_from_specs` — a list of
     ``{"alias": str, "tools": list[str]}`` dicts, alias-sorted, each ``tools`` the
     ticked raw-name subset (sorted) or ``[]`` for "all advertised". It records
     **only names** — never a url / token / header — so credentials never enter any
-    recording (D3). The tools' actual shape / behaviour is NOT carried here; that
-    stays R-1's job (the recorded ``request_ref`` tool spec is the durable truth
-    a resume reads back).
+    recording. The tools' actual shape / behaviour is NOT carried here; the
+    recorded ``request_ref`` tool spec is the durable truth a resume reads back.
     Plain JSON lists (not tuples) so the event-log / snapshot round-trip is
     byte-stable. Well under the 4-KB envelope cap (a handful of short names)."""
 

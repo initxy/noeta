@@ -1,34 +1,15 @@
-"""External trace export (T1) — a live-only observer that ships the
-EventLog as a trace to an external sink (v1: newline-JSON to a file).
+"""Ship the EventLog to an external trace sink, live only.
 
-Reuses :class:`noeta.observers.audit.AuditObserver`'s projection of every
-``EventEnvelope`` into an :class:`AuditRecord` (an **allowlist
-projection** — it does NOT carry the raw goal, tool arguments, or
-message / LLM bodies; it DOES carry operational metadata: task_id,
-tool_name, model, content-hash refs, summary/reason, possibly paths — so
-a trace file is sensitive operational data, not a scrubbed artifact).
-
-Three pieces, all `noeta.protocols` + stdlib only (``observers-only-
-protocols`` holds; this module itself stays free of ``httpx`` / OTel —
-the OTLP ``inner`` adapter lives in :mod:`noeta.client.otlp`, host wiring):
-
-* :class:`JsonlTraceSink` — an inner exporter (the :class:`TraceSink`
-  shape: ``__call__(record)`` + ``close()``): one canonical-JSON line
-  per record appended to a real file. IO failure is logged + dropped.
-* :class:`AsyncTraceSink` — wraps an inner ``AuditSink`` so the EventLog
-  emit path never blocks: the hot-path ``__call__`` only ``put_nowait``s
-  onto a bounded queue (full → drop + log); a background worker runs the
-  inner. ``stop()`` drains the pre-stop backlog within a bounded timeout,
-  dropping only an overrunning (stuck/too-slow) remainder.
-* :class:`TraceExportObserver` — the **lifecycle owner**. Because
-  ``AuditObserver.stop()`` only unsubscribes (it does not stop a sink),
-  this composes the subscription + the async sink + the file and stops
-  them in a fixed order. It is what the runtime's observer list owns.
-
-Live-only: it is wired only at the live construction point
-(``noeta.execution.builder``) and never participates in fold / resume /
-state reconstruction, so a rebuilt state is identical with or without a
-trace export. No L0 / fold change.
+Records are :class:`~noeta.observers.audit.AuditRecord` projections, so a trace
+carries operational metadata (task ids, tool and model names, content hashes,
+summaries, possibly paths) but no goal, tool arguments, or message / LLM bodies
+— sensitive operational data, not a scrubbed artifact. Export is non-blocking by
+construction: the emit path only enqueues, a daemon worker runs the inner sink,
+and overflow or IO failure is dropped with a warning rather than allowed to
+stall or break a run. Trace export never participates in fold or state
+reconstruction, so a rebuilt state is identical with or without it; transport
+dependencies stay out of this layer, so an OTLP exporter is supplied as an
+``inner_sink`` by the host.
 """
 
 from __future__ import annotations
@@ -55,10 +36,8 @@ __all__ = [
 
 
 class TraceSink(Protocol):
-    """The inner-exporter shape: a serially-invoked :data:`AuditSink`
-    plus a ``close()`` that releases its transport (file handle, final
-    HTTP flush). Implementations: :class:`JsonlTraceSink`,
-    :class:`noeta.client.otlp.OtlpSpanSink`."""
+    """An inner exporter: a serially-invoked :data:`AuditSink` plus a
+    ``close()`` that releases its transport (file handle, final HTTP flush)."""
 
     def __call__(self, record: AuditRecord) -> None: ...
 
@@ -69,18 +48,17 @@ _log = logging.getLogger(__name__)
 
 _DEFAULT_QUEUE_MAX = 1024
 _WORKER_POLL_S = 0.1
-#: On stop, the worker is given this long to drain records already queued
-#: BEFORE stop; only if it overruns (a stuck/too-slow inner) is the
-#: remainder dropped and the daemon worker abandoned.
+#: How long ``stop()`` waits for the pre-stop backlog to drain before giving up
+#: on a stuck or too-slow inner sink and abandoning the daemon worker.
 _STOP_DRAIN_TIMEOUT_S = 2.0
 
 
 class JsonlTraceSink:
     """Append one canonical-JSON line per :class:`AuditRecord` to a file.
 
-    IO errors are logged + dropped (an export hiccup must never break the
-    run). Single-writer by construction (the :class:`AsyncTraceSink`
-    worker calls it serially)."""
+    An unopenable path or a failed write is logged and dropped — an export
+    hiccup must never break the run. Not thread-safe, and does not need to be:
+    the :class:`AsyncTraceSink` worker is its only caller."""
 
     def __init__(self, path: Path) -> None:
         self._path = Path(path)
@@ -113,10 +91,9 @@ class JsonlTraceSink:
 
 
 class AsyncTraceSink:
-    """Non-blocking wrapper: the hot-path ``__call__`` only enqueues; a
-    background worker runs ``inner``. The EventLog emit path is never
-    blocked on export (a slow/stuck collector applies back-pressure via
-    drop, never a stall)."""
+    """Non-blocking wrapper: ``__call__`` only enqueues, a background worker
+    runs ``inner``. A slow or stuck collector therefore costs dropped records,
+    never a stalled EventLog emit path."""
 
     def __init__(
         self,
@@ -133,8 +110,7 @@ class AsyncTraceSink:
         self._worker.start()
 
     def __call__(self, record: AuditRecord) -> None:
-        # Pure hot-path: stopped → drop; else non-blocking enqueue. NO
-        # file IO, no blocking — a full queue drops + logs.
+        # Runs on the EventLog emit path: no IO, nothing blocking.
         if self._stop.is_set():
             return
         try:
@@ -143,15 +119,14 @@ class AsyncTraceSink:
             _log.warning("trace export: queue full; dropping a trace record")
 
     def _drain(self) -> None:
-        # Drain until the queue is empty AND stop was requested. This means
-        # `stop()` does NOT discard records already queued before it — the
-        # worker keeps writing them; it only exits once the backlog is gone.
+        # Exit requires an empty queue AND a stop request, so ``stop()`` does
+        # not discard records queued before it.
         while True:
             try:
                 record = self._q.get(timeout=_WORKER_POLL_S)
             except queue.Empty:
                 if self._stop.is_set():
-                    return  # stop requested and the backlog is fully drained
+                    return
                 continue
             try:
                 self._inner(record)
@@ -159,21 +134,16 @@ class AsyncTraceSink:
                 _log.warning("trace export: inner sink raised; continuing", exc_info=True)
 
     def stop(self) -> None:
-        """Bounded graceful shutdown: stop accepting new records, then let
-        the worker drain the records already queued BEFORE stop within a
-        bounded timeout. On a clean (non-stuck) inner this returns with the
-        worker dead and every pre-stop record written. Only if the inner is
-        stuck / too slow to finish within the timeout is the remaining
-        backlog dropped and the daemon worker abandoned (Python cannot
-        safely cancel a thread)."""
+        """Bounded graceful shutdown: against a healthy inner sink this returns
+        with the worker dead and every record queued before the stop written.
+        A stuck or too-slow inner costs the remaining backlog and leaves the
+        daemon worker abandoned, because Python cannot safely cancel a
+        thread."""
         self._stop.set()
-        # New records are already dropped by __call__; the worker keeps
-        # draining the pre-stop backlog. Give it a bounded window.
         self._worker.join(timeout=_STOP_DRAIN_TIMEOUT_S)
         if self._worker.is_alive():
-            # Stuck / too-slow inner: drop the remaining backlog so the
-            # abandoned daemon worker reaches an empty queue and exits
-            # quickly (it writes at most its one in-flight record more).
+            # Emptying the queue lets the abandoned worker finish its in-flight
+            # record and exit instead of writing the whole backlog behind us.
             while True:
                 try:
                     self._q.get_nowait()
@@ -182,10 +152,10 @@ class AsyncTraceSink:
 
 
 class TraceExportObserver:
-    """Lifecycle owner: subscribes an :class:`AuditObserver` whose sink is
-    an :class:`AsyncTraceSink` over ``inner_sink``, and stops all three in
-    the right order (``AuditObserver.stop()`` alone only unsubscribes — it
-    does not stop a sink)."""
+    """Lifecycle owner for the subscription, the async worker and the sink.
+
+    This is what an observer list holds: ``AuditObserver.stop()`` alone only
+    unsubscribes, leaving a worker thread and an open transport behind."""
 
     def __init__(
         self,
@@ -200,9 +170,9 @@ class TraceExportObserver:
         self._stopped = False
 
     def stop(self) -> None:
-        """Fixed order, idempotent: (1) unsubscribe so no new records
-        arrive, (2) stop the async sink (drain/join; an overrun drops the
-        remainder), (3) close the file."""
+        """Idempotent, and the order is load-bearing: unsubscribe first so no
+        new records arrive, drain the worker second, release the transport
+        last."""
         if self._stopped:
             return
         self._stopped = True
@@ -217,5 +187,4 @@ class TraceExportObserver:
 def make_jsonl_trace_observer(
     *, event_log: EventLogSubscriber, path: Path
 ) -> TraceExportObserver:
-    """Build a JSONL trace export observer for the given file path."""
     return TraceExportObserver(event_log=event_log, inner_sink=JsonlTraceSink(path))

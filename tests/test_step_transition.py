@@ -1,20 +1,10 @@
-"""Foundation B — StepTransition continuation tag (pure runtime).
+"""The ``StepTransition`` tag: why a step had a successor.
 
-Covers the new judgement-tag mechanism that records *why* a step had a
-next step, so the later recovery guards (② error recovery,
-④ RepetitionGuard) can read an O(1) field instead of piling logic into
-the Engine body. The contract is fixed by README D-B1..D-B6:
-
-* D-B1 a NEW independent ``StepTransitionMarked`` event (not a reuse of
-  ``TaskWoken`` / ``TaskSuspended``).
-* D-B2 only **non-default** continuations emit a tag (``approval_resume``
-  / ``transient_retry`` / ``overflow_recovery`` / ``max_output_recovery``
-  / ``compaction_retry``); the implicit ``next_turn`` default does NOT
-  emit, keeping the event stream small.
-* D-B3 the anti-spiral guard reads only ``RuntimeState.last_transition``
-  (last-write-wins, byte-safe optional). No durable attempt counter.
-* D-B5 fold tolerates an unknown ``reason`` (warning-not-fatal).
-* byte-equal: the payload round-trips canonical bytes stably.
+Recovery guards need to know *why* the previous step continued without
+re-deriving it from the event stream, so the reason is recorded as a tag and
+read back off ``RuntimeState.last_transition`` in O(1) instead of piling
+logic into the Engine body. Only non-default continuations emit a tag — the
+implicit ``next_turn`` default stays silent to keep the event stream small.
 """
 
 from __future__ import annotations
@@ -32,15 +22,9 @@ from noeta.protocols.step_transition import (
 from noeta.protocols.task import RuntimeState
 
 
-# ---------------------------------------------------------------------------
-# TransitionReason vocabulary + StepTransition dataclass
-# ---------------------------------------------------------------------------
-
-
 def test_transition_reasons_are_the_six_locked_values() -> None:
-    """The locked vocabulary (README D-B2). ``next_turn`` is the implicit
-    default (never emitted); the other five are non-default continuations
-    that DO emit a tag."""
+    """``next_turn`` is the implicit default and never emits a tag; the other
+    five are the non-default continuations that do."""
     assert TRANSITION_REASONS == (
         "next_turn",
         "approval_resume",
@@ -55,7 +39,7 @@ def test_step_transition_constructs_for_every_reason() -> None:
     for reason in TRANSITION_REASONS:
         st = StepTransition(reason=reason)
         assert st.reason == reason
-        assert st.attempt == 0  # attempt defaults to 0 (reserved for ②)
+        assert st.attempt == 0
 
 
 def test_step_transition_carries_attempt() -> None:
@@ -70,8 +54,8 @@ def test_step_transition_is_frozen() -> None:
 
 
 def test_step_transition_only_imports_stdlib() -> None:
-    """protocols-isolation (L0): step_transition.py may import only the
-    standard library / sibling protocols — never a higher layer."""
+    """``noeta.protocols`` is the typed boundary: this module may import only
+    the standard library and sibling protocols, never a higher layer."""
     import ast
     from pathlib import Path
 
@@ -94,11 +78,6 @@ def test_step_transition_only_imports_stdlib() -> None:
     assert not bad, f"step_transition.py must not import higher layers: {bad}"
 
 
-# ---------------------------------------------------------------------------
-# RuntimeState.last_transition
-# ---------------------------------------------------------------------------
-
-
 def test_runtime_state_last_transition_defaults_none() -> None:
     assert RuntimeState().last_transition is None
 
@@ -110,18 +89,11 @@ def test_runtime_state_last_transition_is_settable() -> None:
 
 
 def test_runtime_state_last_transition_is_the_last_field() -> None:
-    """Newest optional field appended LAST so an old snapshot dict (without
-    the key) rebuilds via the default and a new snapshot stays
-    byte-comparable (the set_todos/skill 'optional + last' convention).
-    Compaction appended ``last_input_tokens`` after ``last_transition`` —
-    it is now the tail field guarded by this convention."""
+    """Optional fields are appended LAST, so a snapshot dict written without
+    the key rebuilds via the default and stays byte-comparable. Pinning the
+    current tail field makes a violation of that convention fail loudly."""
     names = [f.name for f in dataclasses.fields(RuntimeState)]
     assert names[-1] == "last_input_tokens"
-
-
-# ---------------------------------------------------------------------------
-# StepTransitionMarkedPayload — the replay-durable carrier (D-B1)
-# ---------------------------------------------------------------------------
 
 
 def test_payload_round_trips_canonical_bytes() -> None:

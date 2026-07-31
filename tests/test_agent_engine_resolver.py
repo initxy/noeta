@@ -1,20 +1,15 @@
-"""Issue 02 — per-task agent→engine resolver + authoritative
-``agent_name``.
+"""Per-task agent→engine resolver + authoritative ``agent_name``.
 
 Covers:
 
-* :func:`noeta.agent.session.build_engine_for_agent` — the extracted factory:
-  the agent's ``allowed_tools`` filter the tool pack, the agent's system
-  prompt reaches the policy, and the Engine stays single-policy. A
-  ``policy_wrapper`` wraps the produced policy.
-* :func:`noeta.runtime.worker.resolve_engine` — the L2 seam: prefer
+* :func:`noeta.runtime.worker.resolve_engine` — the resolver seam: prefer
   ``rt.resolve_engine(task)`` when present, else fall back to ``rt.engine``.
-* :class:`noeta.agent.resolver.SdkHost` — folds a Task's recorded
-  ``agent_name`` → the matching Agent's Engine; unknown agent is a HARD error
-  at resolve/lease time; ``unnamed`` only resolves with an explicit fallback.
-* **Demo** — a general-purpose-created task is driven by the general-purpose
-  Engine and an explore-created task by the explore Engine, both leased through
-  the single ``run_leased_task`` primitive against one resident resolver host.
+* :class:`noeta.client.SdkHost` — folds a Task's recorded ``agent_name`` →
+  the matching Agent's Engine; an unknown agent is a HARD error at
+  resolve/lease time; ``unnamed`` only resolves with an explicit fallback.
+* A general-purpose-created task is driven by the general-purpose Engine and
+  an explore-created task by the explore Engine, both leased through the
+  single ``run_leased_task`` primitive against one resident resolver host.
 * The SDK host/driver writes the driving agent name (not ``"unnamed"``) on the
   root ``TaskCreated``.
 """

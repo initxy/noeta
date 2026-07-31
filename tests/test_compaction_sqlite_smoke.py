@@ -1,9 +1,8 @@
 """CompactionWorker end-to-end on SqliteEventLog + SqliteContentStore.
 
-Asserts the Sqlite-backed adapter pair behaves the same as the
-InMemory pair under issue 20 semantics: accelerated fold starts from
-the Worker snapshot, governance counters survive a close/reopen, and
-the snapshot body restores post-issue-18 governance fields.
+The Sqlite-backed adapter pair must behave exactly like the InMemory pair:
+accelerated fold starts from the Worker snapshot, governance counters survive a
+close/reopen, and the snapshot body restores the governance fields.
 """
 
 from __future__ import annotations

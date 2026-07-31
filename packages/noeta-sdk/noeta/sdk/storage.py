@@ -1,23 +1,10 @@
 """``noeta.sdk.storage`` — the single public doorway for storage wiring.
 
-A host picks a storage backend and injects the resulting
-``(EventLogFull, ContentStore, Dispatcher)`` triple into the engine
-(``Client`` / ``HostConfig``). This module is where that happens:
-:func:`build_storage_stack` builds a named backend's triple through its
-``build_stack`` factory, :func:`open_storage_stack` adds the value-shape
-dispatch its hosts share (a storage path / DSN string — the same resolution
-``HostConfig(storage_path=...)`` runs), and the concrete adapter classes are
-re-exported for hosts that construct adapters directly.
-
-The durable backends live in the ``storage`` built-in
-(``noeta.builtins.storage.impl`` — declaration-only manifest, never
-activated); the InMemory reference backend stays in the kernel wheel
-(``noeta.storage.memory``). The re-exports are **lazy** (PEP 562 module
-``__getattr__``, the ``noeta.sdk.providers`` discipline): the universal
-microkernel rule says nothing statically imports ``noeta.builtins``, and
-``noeta.sdk`` is deliberately not a source of the ``sdk-core-not-builtins``
-contract, so the backend modules load on first attribute access — only a
-host that actually chose Postgres pays for ``psycopg``.
+A host picks a backend and injects the resulting ``(EventLogFull, ContentStore,
+Dispatcher)`` triple into the engine. The concrete adapter classes and stack
+builders are re-exported **lazily** (PEP 562 module ``__getattr__``) because
+nothing statically imports ``noeta.builtins`` and only a host that actually chose
+Postgres should pay for ``psycopg``.
 
 A third-party backend needs no registration here: implement the
 ``noeta.protocols`` storage Protocols, route the shared domain rules
@@ -33,8 +20,6 @@ from typing import Any
 # The stack builders live one band down (``noeta.client.storage_resolve``) so
 # ``HostConfig.storage_path`` can share this exact dispatch — ``noeta.sdk`` sits
 # above ``noeta.client``, so the host config could not import them from here.
-# This module stays the documented public doorway; the names are re-exported
-# verbatim, the same discipline ``@tool`` / ``SdkMcpServer`` follow.
 from noeta.client.storage_resolve import (
     build_storage_stack,
     is_memory_path,
@@ -62,7 +47,6 @@ __all__ = [
     "SqliteSchemaVersionError",
 ]
 
-#: Public adapter name → the backend package (its ``__init__``) defining it.
 _EXPORTS = {
     "PostgresContentStore": "noeta.builtins.storage.impl.postgres",
     "PostgresDispatcher": "noeta.builtins.storage.impl.postgres",

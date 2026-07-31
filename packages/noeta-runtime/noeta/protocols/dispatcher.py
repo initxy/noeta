@@ -1,21 +1,11 @@
-"""Dispatcher + LeaseRegistry Protocols — L0 typed boundary.
+"""Dispatcher and LeaseRegistry Protocols — the scheduling boundary.
 
-The "one worker, one lease, one stretch" model: the
-Dispatcher handles Task enqueue / lease grant / wake dispatch / stale reclaim.
-The typed boundary splits into two Protocols:
-
-* :class:`Dispatcher`    — scheduling lifecycle (enqueue / lease / heartbeat /
-                            release / fail / wake / requeue_stale /
-                            fire_due_timers)
-* :class:`LeaseRegistry` — lease validation (is_lease_valid), for the EventLog
-                            backend's reverse lookup
-
-Why split: the EventLog backend must validate that a ``lease_id`` is still live
-on write (the single-writer invariant routes through the
-dispatcher), but the EventLog does **not** need to know about lifecycle methods
-like enqueue / wake. Narrowing to LeaseRegistry reduces the EventLog's reverse
-dependency to a single method, keeping the dependency graph clean.
-InMemoryDispatcher implements both Protocols on one class at zero line cost.
+One worker, one lease, one stretch: the Dispatcher owns Task enqueue, lease
+grant, wake dispatch, and stale reclaim. :class:`LeaseRegistry` is split out
+because the single-writer invariant makes an EventLog backend validate a
+``lease_id`` on every write, and that backend has no business knowing about
+enqueue or wake — narrowing its reverse dependency to one method keeps the
+dependency graph acyclic. A single class may implement both Protocols.
 """
 
 from __future__ import annotations
@@ -37,8 +27,8 @@ class Lease:
 
     ``wake_event`` is populated when the Task being leased had a
     matched wake event waiting (set by a prior ``dispatcher.wake(...)``
-    or by the ``release(suspended)`` pending-wake-drain). H2:
-    the matched event is **NOT** consumed at lease time — it survives the
+    or by the ``release(suspended)`` pending-wake-drain). The matched
+    event is **NOT** consumed at lease time — it survives the
     lease ("matched-in-flight") so a crash before the durable
     ``TaskWoken`` does not lose it. It is cleared only by a **consuming
     release** (``release(consumed_wake_event=<this>)``, after ``TaskWoken``
@@ -84,11 +74,10 @@ class Dispatcher(Protocol):
     timer sweep that wakes ``wait_timer`` suspends whose deadline
     passed; the Worker daemon runs both on an interval.
 
-    Debug-helper methods (``task_status`` / ``wake_on`` /
-    ``suspend_reason``) are deliberately NOT on this Protocol — those
-    are InMemory introspection points used only in tests. Production
-    code that wants task state should fold the EventLog instead
-    (single source of truth).
+    Introspection helpers (``task_status`` / ``wake_on`` / ``suspend_reason``)
+    are deliberately NOT on this Protocol: they are test-only affordances of an
+    adapter, and production code that wants task state folds the EventLog,
+    which is the single source of truth.
     """
 
     def enqueue(self, task_id: str, *, reserved: bool = False) -> None:
@@ -97,23 +86,20 @@ class Dispatcher(Protocol):
         Idempotent: enqueueing an already-ready task is a no-op.
 
         ``reserved=True`` marks the task as **targeted-lease-only**: an
-        untargeted ``lease(task_id=None)`` FIFO poll SKIPS it, so only the
-        driver that owns it (a targeted ``lease(task_id=<id>)``) can claim it.
-        This exists for a task that is enqueued before it has been seeded, so
-        the driver that will seed it can targeted-lease it while a
-        resident-worker pool must NOT steal it first — a bare
-        ``run_leased_task`` step does not seed, and would drive the task with an
-        empty message history that the provider rejects. Two paths reserve: a
-        freshly-created subtask child (only ``subtask_drain._descend_to_child``
-        seeds a child's goal) and a freshly-created root task (only
-        ``InteractionDriver.seed_start``'s tail writes ``ModelBound`` + the
-        opening goal message).
+        untargeted ``lease(task_id=None)`` FIFO poll SKIPS it, so only a
+        targeted ``lease(task_id=<id>)`` can claim it. It exists for a task
+        enqueued before it has been seeded: a bare ``run_leased_task`` step
+        does not seed, so a resident-worker pool that stole the task would
+        drive it with an empty message history the provider rejects. Both
+        reservers are seeders — a freshly-created subtask child (whose goal
+        only ``subtask_drain._descend_to_child`` writes) and a freshly-created
+        root task (whose ``ModelBound`` + opening goal message only
+        ``InteractionDriver.seed_start``'s tail writes).
+
         The flag is a ONE-SHOT claim guard: the first successful ``lease``
-        CLEARS it, so once the task has been seeded and later re-enters the
-        ready queue (a seed ``release_yield``'d to the pool, or a
-        suspend/approval resume) it is an ordinary untargeted-leaseable task.
-        ``reserved=False`` (the default) is byte-identical to the historical
-        enqueue.
+        CLEARS it, so once seeded, a task re-entering the ready queue (a seed
+        ``release_yield``'d to the pool, or a suspend/approval resume) is an
+        ordinary untargeted-leaseable task.
         """
         ...
 
@@ -127,8 +113,7 @@ class Dispatcher(Protocol):
         """Try to acquire a lease on a ready Task.
 
         ``task_id=None`` (default): pick any ready Task in FIFO order
-        (today: ``ready_order`` ascending in both in-memory and sqlite
-        adapters).
+        (``ready_order`` ascending).
 
         ``task_id=<id>``: targeted lease — return a :class:`Lease`
         only if that specific Task is in the ready queue and not
@@ -143,10 +128,10 @@ class Dispatcher(Protocol):
         call :meth:`heartbeat` before expiry to extend it.
 
         The returned ``Lease.wake_event`` is the matched wake (if one was
-        queued); H2 does **not** consume it at lease time — see
-        :class:`Lease`'s docstring for the consume-at-release / re-delivery
-        contract, and :func:`noeta.protocols.wake.matches_wake` for the
-        projection-matching invariant that produced it.
+        queued); it is **not** consumed at lease time — see :class:`Lease` for
+        the consume-at-release / re-delivery contract, and
+        :func:`noeta.protocols.wake.matches_wake` for the projection-matching
+        invariant that produced it.
         """
         ...
 
@@ -175,7 +160,7 @@ class Dispatcher(Protocol):
         the Dispatcher matches against incoming wake events;
         ``suspend_reason`` is a short tag for observability.
 
-        ``consumed_wake_event`` (H2): when a woken lease
+        ``consumed_wake_event``: when a woken lease
         finishes after writing a durable ``TaskWoken``, the worker passes
         the lease's wake event here so the Dispatcher clears the task's
         ``matched_wake_event`` — but **only if it equals the stored matched
@@ -188,8 +173,8 @@ class Dispatcher(Protocol):
         un-consumed wake is preserved and re-delivered (at-least-once),
         making delivery+consume exactly-once across crashes.
 
-        On a ``suspended`` release that BOTH clears an old matched
-        (``consumed_wake_event``) AND installs a new ``wake_on`` (D4 case 4),
+        On a ``suspended`` release that BOTH clears a stored matched
+        (``consumed_wake_event``) AND installs a new ``wake_on``,
         the order is fixed: validate+clear the old matched FIRST, then
         install the new ``wake_on`` and drain pending wakes against it
         (which may set a fresh matched) — the old matched and the new
@@ -245,15 +230,14 @@ class Dispatcher(Protocol):
 
         ``reserved=True`` marks the requeued Task **targeted-lease-only**
         (same one-shot guard as :meth:`enqueue`), so an untargeted
-        ``lease(task_id=None)`` FIFO poll SKIPS it until the driver that
-        owns this wake claims it with a targeted lease. A resume that seeds
-        durable state AFTER the wake (``InteractionDriver._seed_wake_common``
-        appends the command's message only after its own targeted lease) sets
-        this so a resident-worker pool cannot lease the woken-but-not-yet-seeded
-        Task and re-drive it WITHOUT the command's input. Only the matched→ready
-        transition carries the flag; a buffered wake (no requeue) never becomes
-        leaseable, so there is nothing to reserve. ``reserved=False`` (the
-        default) is byte-identical to the historical wake.
+        ``lease(task_id=None)`` FIFO poll SKIPS it until the driver that owns
+        this wake claims it with a targeted lease. A resume that appends the
+        command's message only after its own targeted lease sets this: between
+        the wake and that lease the Task is ready-but-unseeded, and a
+        resident-worker pool leasing it there would re-drive the turn WITHOUT
+        the command's input. Only the matched→ready transition carries the
+        flag; a buffered wake never becomes leaseable, so there is nothing to
+        reserve.
         """
         ...
 
@@ -287,7 +271,7 @@ class Dispatcher(Protocol):
         The delivered wake event is the **recorded deadline**
         (``TimerFired(fire_at=<stored deadline>)``, satisfying the
         inclusive ``>=`` threshold at the equality boundary), not
-        ``TimerFired(fire_at=now)`` — so H2 re-delivery after a crash
+        ``TimerFired(fire_at=now)`` — so a re-delivery after a crash
         hands the worker a byte-identical wake event and the durable
         ``TaskWoken`` reconciliation matches by equality.
         """

@@ -1,16 +1,16 @@
-"""Content-provenance recording side.
+"""Content-provenance recording: what a task durably says about the content it
+was given.
 
-Covers the recording side of the per-task first-only content-hash events that
-survived the verify/replay removal:
+A content hash recorded *after* the activation it describes proves nothing, so
+the ordering — record first, then patch — is the whole point of these tests,
+together with first-only emission (a re-activation must not append a second
+record) and the drift ``policy`` each kind carries (``pinned`` for a skill body,
+``evolving`` for the workspace environment).
 
-* **Skill content** — the retained legacy ``skill_hashes`` seam still emits a
-  first-only ``SkillContentRecorded`` per (task, skill) right before the
-  ``TaskStatePatched(activate_skills=…)``; it folds into ``GovernanceState``
-  last-write-wins tables.
-* **Code-product E2E** — a live SDK host session records the
-  generic ``ContextContentRecorded`` (kind="skill", policy="pinned") before the
-  activation patch. The verify-era ``ToolSchemaRecorded`` emission was removed
-  with the verify/replay test infrastructure, so a new recording emits none.
+Two paths reach the same guarantee: the Engine's optional ``skill_hashes`` hook
+emits ``SkillContentRecorded`` folded into ``GovernanceState``
+last-write-wins tables, and a live SDK host session emits the generic
+``ContextContentRecorded``.
 """
 
 from __future__ import annotations
@@ -56,9 +56,9 @@ def _make_runtime() -> tuple[InMemoryEventLog, InMemoryContentStore, InMemoryDis
 def _record_skill_activation(
     *, with_provenance: bool, emit_twice: bool = False
 ) -> tuple[str, InMemoryEventLog, InMemoryContentStore]:
-    """Record a skill activation through the retained legacy ``skill_hashes``
-    seam: the old ``SkillContentRecorded`` event once per (task, skill) right
-    before the activation patch."""
+    """Record a skill activation through the Engine's ``skill_hashes`` seam:
+    one ``SkillContentRecorded`` per (task, skill), right before the activation
+    patch."""
     log, cs, disp = _make_runtime()
     engine = Engine(
         event_log=log,
@@ -128,7 +128,7 @@ def test_fold_defaults_empty_without_events() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Code-product E2E (PATH C + activate_skills wiring)
+# End-to-end through a live SDK host session
 # ---------------------------------------------------------------------------
 
 
@@ -194,22 +194,23 @@ def test_code_session_records_content_provenance(
         shell_mode=ShellMode.OFF,
         require_approval_tools=(),
     )
-    # ``extra_skills=("fix-python-test",)`` → the driver's pre-loop ``activations``
-    # (the same workspace-skill activation the runner did at prepare()).
+    # ``activations`` are the workspace skills the driver activates pre-loop,
+    # before the first turn is composed.
     out = make_driver(host).start(
         goal="rename foo", agent="main", activations=("fix-python-test",)
     )
     assert out.status == "terminal"
     events = list(host.event_log.read(out.task_id))
-    # The verify-era ToolSchemaRecorded / SkillContentRecorded are no longer
-    # emitted in a new recording — only the generic ContextContentRecorded.
+    # A host session records provenance through the generic
+    # ContextContentRecorded only — the kind-specific events stay unused.
     assert not [e for e in events if e.type == "ToolSchemaRecorded"]
     assert not [e for e in events if e.type == "SkillContentRecorded"]
     content_events = [e for e in events if e.type == "ContextContentRecorded"]
     # The always-on workspace-environment resident activates pre-loop through
-    # the workspace pack's init hook (spec §4.5), so it records BEFORE the
-    # post-goal skill activation. Both are pre-loop residents; their semi_stable
-    # placement is band-ordered (skill<environment) regardless of record order.
+    # the workspace pack's init hook, so it records BEFORE the post-goal skill
+    # activation. Record order is not placement order: both are pre-loop
+    # residents and their semi_stable placement is band-ordered
+    # (skill < environment) either way.
     assert [
         (e.payload.kind, e.payload.name, e.payload.policy)
         for e in content_events
@@ -223,8 +224,8 @@ def test_code_session_records_content_provenance(
     expected_hash = skill_content_hash(desc)
     skill_event = next(e for e in content_events if e.payload.kind == "skill")
     assert skill_event.payload.content_hash == expected_hash
-    # The skill's provenance record still lands right before its activation
-    # patch (the mid-loop maybe_emit_provenance path is unchanged).
+    # The skill's provenance record lands before its activation patch: a hash
+    # recorded after the fact cannot pin what the turn actually saw.
     skill_idx = next(
         i
         for i, e in enumerate(events)

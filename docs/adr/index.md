@@ -1,40 +1,16 @@
 # docs/adr/ — Architecture Decision Records
 
-This directory holds Noeta's **Architecture Decision Records (ADRs)**: each file captures one stable, cross-module decision — **what was decided, why it was decided that way, and why the alternatives were rejected**. The audience is any agent about to change this code (including Claude Code itself): before you touch a subsystem, read the matching decision file so you understand where things currently stand and which paths have already been ruled out — don't walk back down a dead end someone already explored (Chesterton's fence).
+This directory holds Noeta's **Architecture Decision Records (ADRs)**: each file captures one stable, cross-module decision — **what the decision is, why the system is shaped that way, and why the alternatives are rejected**. The audience is any agent about to change this code. Before you touch a subsystem, read the matching decision file: it names the constraint the current shape protects and the paths that are ruled out, so a rejected design does not get proposed a second time.
+
+Every file here is live. A decision file describes part of the system as it stands.
 
 ## Division of labor with CONTEXT.md
 
-- **`docs/adr/`** (this directory): **why it was decided this way**, organized by topic. One topic per file, containing only "why it is this way / why the alternatives were rejected."
-- **`CONTEXT.md`**: a glossary that pins down what a term **currently means** in this repository.
+- **`docs/adr/`** (this directory): **why the system is this way**, organized by topic. One topic per file, containing only "why it is this way / why the alternatives are rejected."
+- **`CONTEXT.md`**: a glossary that pins down what a term means in this repository.
 - **Nearby docstrings**: local rationale that affects only a single file or function lives in that docstring, not here.
 
 Rule of thumb: the wider the impact (spanning multiple modules), the more it belongs in `docs/adr/`; the narrower it is, the closer it should sit to the code itself.
-
-## Status
-
-A decision file is **live** unless it says otherwise. When a later decision
-overrides part or all of an earlier one, the earlier file gets a `> **Status:**`
-blockquote directly under its title — nothing else changes, so the original
-reasoning stays readable:
-
-```markdown
-# <the original title>
-
-> **Status: superseded by [runtime-sdk-app-restructure.md](runtime-sdk-app-restructure.md)** (<what changed>).
-> <one or two sentences: which part is dead, which part still holds.>
-```
-
-Two rules make this useful rather than decorative:
-
-- **Say what survived.** Most supersessions are partial — the wire changed, the
-  invariant did not. A blanket "superseded" throws away a rationale that is
-  still load-bearing.
-- **Never delete a superseded file.** The point of a decision record is the
-  rejected alternatives; deleting it invites someone to re-walk the dead end
-  (the whole Chesterton's fence purpose of this directory).
-
-Without this marker the only way to discover that a decision had been overturned
-was to read all 40+ files and notice the contradiction.
 
 ## The decisions
 
@@ -82,7 +58,6 @@ was to read all 40+ files and notice the contradiction.
 **Boundaries, workspace & sandbox**:
 [library-sdk-architecture](library-sdk-architecture.md) ·
 [package-layout](package-layout.md) ·
-[runtime-sdk-app-restructure](runtime-sdk-app-restructure.md) ·
 [execution-environment-seam](execution-environment-seam.md) ·
 [workspace-and-session-path](workspace-and-session-path.md) ·
 [workspace-write-authorization](workspace-write-authorization.md) ·
@@ -97,19 +72,19 @@ One topic per file, named with a topic slug (e.g. `provider-neutral.md`). Every 
 
 ## Context
 
-The problem, constraints, and circumstances that triggered this decision.
+The problem and the constraints the decision answers to.
 
 ## Decision
 
-The current conclusion, stated in the present tense ("the system is this way"), not "we will…".
+The conclusion, stated in the present tense ("the system is this way"), not "we will…".
 
 ## Rationale
 
-The core invariant or benefit this decision protects. This is the lifeblood of the Chesterton's fence — write it out fully, and don't cut it just because it "looks obvious."
+The core invariant or benefit this decision protects. Write it out fully; don't cut it because it "looks obvious."
 
 ## Alternatives considered
 
-Every option that was seriously weighed and then rejected, together with **why it was rejected**, so nobody proposes the same dead end again.
+Every option seriously weighed and rejected, together with **why it is rejected**, so nobody proposes the same dead end again.
 
 ## Consequences
 
@@ -120,8 +95,10 @@ The constraints, costs, and follow-on points this decision creates. When you nee
 
 ## Writing discipline
 
-- **Keep the why, drop the how-we-got-here.** Process numbering that only mattered during one construction effort — "the refactor split into steps 3A/3B," "issue 14 §C," "Phase 1, first cut" — never belongs in a decision file.
-- **Use the present tense.** A decision describes the system as it is now, not a changelog.
-- **Don't reference code, and don't get referenced by code.** A decision file may name modules, but it never says "the code comment already points back to this file"; the code side likewise never references this directory (see doc-code-link-direction.md).
+- **Use the present tense.** A decision file describes the system as it stands, not a changelog.
+- **Write the live design and the rejected alternatives** — those two, and nothing else. The shape that exists and the shapes that lost out are both load-bearing; the route between them is not.
+- **No process numbering.** "Steps 3A/3B", "issue 14 §C", "phase 1, first cut" — construction bookkeeping belongs nowhere in a decision file.
+- **No references to spec documents.** `docs/implementation-specs/` holds only in-flight work and must never be cited from a decision file; a decision worth keeping is written out here in full.
+- **Don't reference code, and don't get referenced by code.** A decision file may name modules, but it never says "the code comment points back to this file"; the code side likewise never references this directory (see doc-code-link-direction.md).
 - **Don't redefine terms.** Term meanings live in CONTEXT.md; decision files use them directly, adding a one-line anchor where needed.
 - **Prose is in English**, with technical terms kept in their original form (code identifiers / APIs / library / tool / command names / file paths, plus fixed architecture terms like module, interface, seam, adapter, deep module).

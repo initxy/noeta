@@ -1,37 +1,13 @@
-"""Edit primitives + dry-run/apply mode + diff audit.
+"""``edit`` / ``write`` — exact-match replace and read-first whole-file write.
 
-``edit(path, old, new)`` and ``write(path, content)`` are the **only**
-ways the fs tool pack can modify the workspace. They share two hard
-rules baked into the type-level contract:
-
-* The write mode is **bound at construction** (``FsWriteMode.DRY_RUN`` or
-  ``FsWriteMode.APPLY``). The Engine never pauses mid-flight to ask;
-  confirmation is a *pre-run* policy set by the CLI (I4) / daemon
-  governance. In dry-run, the tool computes the proposed change, emits
-  the unified diff as a ContentStore artifact, and returns
-  ``applied=False`` — nothing on disk moves.
-* The fs tools' write side is *only* exercised inside a live
-  ``Engine.run_one_step``.
-
-The diff itself is computed with ``difflib.unified_diff``; the inline
-``output`` carries before/after sha256 hashes + ``+N/-M`` counts + a
-``diff_ref`` (the ``{hash,size,media_type}`` JSON form, never a raw
-``ContentRef``) so the SPA / inspector can fetch the full diff out of
-the ContentStore via the I6 artifact endpoint.
-
-``edit`` requires its ``old`` segment to match the file **exactly once**
-(B5) — 0 or >1 matches return ``success=False`` with **no write**.
-``write`` creates a new file freely, but overwriting an **existing**
-file is gated by a **read-first precondition**: the model
-must have ``read`` that file's current contents earlier in this session,
-so it can never blindly clobber a file it has not seen. The precondition
-reuses the content-addressed ``ContentStore`` (``read`` offloads the full
-file body keyed by its sha256; ``write`` checks that the existing file's
-current bytes are present under that key) — **no new runtime primitive,
-no new tool field**. A brand-new file has no read
-precondition (you cannot read a file that does not exist). The body is
-capped at ``WRITE_FILE_MAX_BYTES`` (64 KB) so v1 cannot land a runaway
-file.
+The write mode is **bound at construction** (``DRY_RUN`` / ``APPLY``) because
+the Engine never pauses mid-flight to ask: confirmation is a pre-run policy, and
+a dry run emits the unified diff as an artifact with ``applied=False`` while
+nothing on disk moves. Neither tool can clobber content the model has not seen —
+``edit`` refuses unless its ``old`` segment matches **exactly once**, and
+overwriting an existing file requires that file's current bytes to have been
+``read`` earlier in the session, a precondition served by probing the
+content-addressed store rather than by any new runtime primitive or tool field.
 """
 
 from __future__ import annotations
@@ -78,19 +54,16 @@ __all__ = [
 ]
 
 
-#: Hard cap on a ``write`` body. v1 safety bound; large new files
-#: are deferred to Phase 6 along with multi-file patches.
+#: Hard cap on a ``write`` body — a safety bound against a runaway file.
 WRITE_FILE_MAX_BYTES = 65_536
 
-#: The media type ``read`` offloads file bodies under. ``write``'s
-#: read-first precondition reconstructs the same content-addressed
-#: ``ContentRef`` to ask "has this exact body been read this session?".
-#: Must match ``noeta.tools.fs.read._READ_FILE_MEDIA_TYPE``.
+#: The media type ``read`` offloads file bodies under. ``write``'s read-first
+#: precondition reconstructs the same content-addressed ``ContentRef`` to ask
+#: "has this exact body been read this session?", so this must stay identical
+#: to ``read``'s own ``_READ_FILE_MEDIA_TYPE``.
 _READ_FILE_MEDIA_TYPE = "text/plain"
 
-#: Backward-compat alias — the diff primitives now live in
-#: ``noeta.tools.fs._diff``. Kept so a caller importing ``_sha256`` from
-#: this module (e.g. ``test_fs_apply_patch``) is not broken.
+#: Re-exported so callers can take the hash helper from this module.
 _sha256 = file_hash
 
 
@@ -98,19 +71,12 @@ def _was_read_this_task(ctx: ToolContext, raw: bytes) -> bool:
     """Whether ``raw`` (an existing file's current bytes) was ``read`` this
     session.
 
-    read-first precondition, implemented with **zero new
-    runtime primitives**: ``read`` offloads the full file body into the
-    content-addressed ``ContentStore`` keyed by its sha256 (see
-    ``ReadFileTool``). So "was this file read?" reduces to "are these exact
-    bytes already in the store?" — reconstruct the ``ContentRef`` ``read``
-    would have minted and probe ``get`` (``get`` is hash-only; ``size`` /
-    ``media_type`` are not validated). A hit means the model saw this
-    content; a miss (``ContentNotFound``) means it never read it.
-
-    The probe hash is ``sha256`` over the **raw bytes** — the exact key the
-    ``ContentStore`` computed at ``put`` time (``read`` offloads the raw
-    file body, not a re-encoded string), so this matches even for files
-    whose bytes are not a clean utf-8 round-trip.
+    ``read`` offloads every file body into the content-addressed store, so
+    "was this file read?" reduces to "are these exact bytes already stored?" —
+    reconstruct the ``ContentRef`` ``read`` would have minted and probe ``get``,
+    which keys on the hash alone. The hash must be taken over the **raw bytes**,
+    the same key ``put`` computed, so the probe still matches a file whose bytes
+    are not a clean utf-8 round-trip.
     """
     probe = ContentRef(
         hash=hashlib.sha256(raw).hexdigest(),
@@ -130,22 +96,21 @@ class ReplaceTextTool:
     ``edit``).
 
     The match must be exactly-once — 0 or N>1 matches return
-    ``success=False`` and **never** write. This is the only Phase-4 way
-    to edit existing files; there is intentionally no unified-diff
-    applier (Q2 — too easy to land an invalid patch on a moved file).
+    ``success=False`` and **never** write. There is deliberately no
+    unified-diff applier: it is too easy to land an invalid patch on a file
+    that has shifted underneath it.
     """
 
     workspace: WorkspaceRoot
     mode: FsWriteMode = FsWriteMode.DRY_RUN
     #: Host authorization for writes OUTSIDE the workspace, resolved per call
-    #: (see ``_workspace.authorized_workspace``). ``None`` ⇒ single-root wall.
+    #: (see ``authorized_workspace``). ``None`` ⇒ single-root wall.
     write_roots: Optional[WriteRootsResolver] = None
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "edit"
     description: str = field(default=load_markdown(__package__, "edit"))
-    # PRD D2: write-side fs tools are high-risk so PermissionGuard treats
-    # them as privileged. A policy that permits medium-risk tools must
-    # not accidentally allow file mutation.
+    # High risk so PermissionGuard treats this as privileged: a policy that
+    # permits medium-risk tools must not accidentally allow file mutation.
     risk_level: str = "high"
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
@@ -191,10 +156,9 @@ class ReplaceTextTool:
         count = before.count(old)
         if count == 0:
             return tool_error(self.name, f"'old' not found in {path!r}")
-        # ``replace_all`` relaxes the exactly-once contract to "replace every
-        # match" — the only way to mutate N>1 matches in one call. Without it
-        # an ambiguous (N>1) match is still refused so a single edit can never
-        # silently touch a region the model did not intend.
+        # Without ``replace_all``, an ambiguous (N>1) match is refused so a
+        # single edit can never silently touch a region the model did not
+        # intend.
         if count > 1 and not replace_all:
             return tool_error(
                 self.name, f"'old' matches {count} times in {path!r}; must be unique"
@@ -215,11 +179,10 @@ class ReplaceTextTool:
             except OSError as exc:
                 return tool_error(self.name, f"write failed: {exc}")
             applied = True
-            # surface the PRE-edit bytes so the ToolRuntime
-            # can stash this turn's rewind baseline. ``edit`` only ever touches
-            # an EXISTING file (it just read ``raw``), so ``before`` is its old
-            # content — never ``None`` (that marker is for AI-created files,
-            # which only ``write`` can produce).
+            # The PRE-edit bytes are the ToolRuntime's rewind baseline for this
+            # turn. ``edit`` only ever touches an EXISTING file, so this is
+            # never ``None`` — that marker means "did not exist" and only
+            # ``write`` can produce it.
             file_changes = [{"path": rel, "before": raw}]
 
         output: dict[str, Any] = {
@@ -250,44 +213,31 @@ class WriteFileTool:
     """Create a new file, or overwrite one already read this session (tool
     name ``write``).
 
-    Creating a brand-new file always works. Overwriting an **existing**
-    file is gated by the read-first precondition: the model
-    must have ``read`` that file's current contents earlier in this
-    session (checked via the content-addressed store — no new primitive),
-    otherwise the write is refused. The body is capped at
-    ``WRITE_FILE_MAX_BYTES`` (64 KB) — a safety bound, not a UX cap.
-    Multi-file patches and large blobs are deferred to Phase 6.
+    Creating a brand-new file always works — you cannot have read what did not
+    exist. Overwriting an **existing** file is gated by the read-first
+    precondition, so the model can never blindly clobber a file it has not
+    seen, and the body is capped at ``WRITE_FILE_MAX_BYTES``.
 
-    **Path-restricted variant.**
-    ``allowed_path_globs`` is an injected, construction-time
-    whitelist of workspace-relative glob patterns. The empty default ⇒ the
-    unrestricted ``write`` (current behaviour, byte-identical). When it is
-    non-empty, a write whose resolved workspace-relative path matches NONE of
-    the globs is refused with a path-guard error **before** any IO or
-    read-first check. This is how a custom ``AgentSpec`` can physically confine
-    a writer to e.g. ``plans/*.md``: the restriction is an assembly-time
-    injection on the concrete tool object (same shape as ``mode`` /
-    ``workspace``), NOT a new ``Tool`` / ``ToolRef`` / ``AgentSpec`` identity
-    field (D1: zero new tool fields). The tool stays ``risk_level=high``
-    regardless — a restricted write is still a privileged file mutation.
+    ``allowed_path_globs`` is how an ``AgentSpec`` physically confines a writer
+    to e.g. ``plans/*.md``: a construction-time injection on the concrete tool
+    object, in the same shape as ``mode`` / ``workspace``, rather than a new
+    ``Tool`` / ``ToolRef`` / ``AgentSpec`` identity field. The tool stays
+    ``risk_level=high`` regardless — a restricted write is still a privileged
+    file mutation.
     """
 
     workspace: WorkspaceRoot
     mode: FsWriteMode = FsWriteMode.DRY_RUN
     #: Host authorization for writes OUTSIDE the workspace, resolved per call
-    #: (see ``_workspace.authorized_workspace``). ``None`` ⇒ single-root wall.
+    #: (see ``authorized_workspace``). ``None`` ⇒ single-root wall.
     write_roots: Optional[WriteRootsResolver] = None
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "write"
     description: str = field(default=load_markdown(__package__, "write"))
-    # PRD D2: write-side fs tools are high-risk so PermissionGuard treats
-    # them as privileged. A policy that permits medium-risk tools must
-    # not accidentally allow file creation.
+    # High risk so PermissionGuard treats this as privileged: a policy that
+    # permits medium-risk tools must not accidentally allow file creation.
     risk_level: str = "high"
-    #: injected path whitelist (workspace-relative globs).
-    #: Empty ⇒ unrestricted (default; identical to pre-0040-issue-04 builds).
-    #: Non-empty ⇒ only paths matching one of these globs may be written
-    #: (an AgentSpec may inject e.g. ``("plans/*.md",)``). Normalised to a
+    #: Workspace-relative glob whitelist; empty ⇒ unrestricted. Normalised to a
     #: sorted tuple so two equal whitelists compare equal.
     allowed_path_globs: tuple[str, ...] = ()
     input_schema: dict[str, Any] = field(
@@ -307,7 +257,7 @@ class WriteFileTool:
 
     def _path_allowed(self, rel: str) -> bool:
         """Whether workspace-relative ``rel`` is writable under the injected
-        whitelist. Empty whitelist ⇒ always allowed (unrestricted)."""
+        whitelist. Empty whitelist ⇒ always allowed."""
         if not self.allowed_path_globs:
             return True
         return any(fnmatch.fnmatch(rel, pat) for pat in self.allowed_path_globs)
@@ -332,10 +282,8 @@ class WriteFileTool:
         resolved = resolve_or_error(workspace, self.name, path)
         if isinstance(resolved, ToolResult):
             return resolved
-        # path guard: when this write was built with a path
-        # whitelist (the ``plan`` preset's restricted write), refuse any path
-        # outside it BEFORE the read-first check or any IO. The check runs on
-        # the canonical workspace-relative form so ``..``/symlink escapes are
+        # The whitelist is enforced BEFORE the read-first check or any IO, on
+        # the canonical workspace-relative form so ``..`` / symlink escapes are
         # already collapsed by ``resolve``.
         rel_guard = workspace.relative(resolved)
         if not self._path_allowed(rel_guard):
@@ -350,9 +298,9 @@ class WriteFileTool:
         # path which is checked here.
         overwrite = self.exec_env.exists(resolved)
         before_text = ""
-        # the PRE-write bytes for the rewind baseline: the existing
-        # content when overwriting, ``None`` when creating a brand-new file (the
-        # "did not exist" marker → a rewind past this turn DELETES the file).
+        # The ToolRuntime's rewind baseline: existing content when overwriting,
+        # ``None`` for a brand-new file — that marker makes a rewind past this
+        # turn DELETE the file.
         before_bytes: bytes | None = None
         if overwrite:
             if not self.exec_env.is_file(resolved):
@@ -362,10 +310,8 @@ class WriteFileTool:
             except OSError as exc:
                 return tool_error(self.name, f"read failed: {exc}")
             before_bytes = existing_raw
-            # overwriting an existing file requires you to have
-            # ``read`` its CURRENT contents earlier this session — otherwise
-            # the write is a blind clobber. (A brand-new file has no such
-            # precondition; you cannot have read what did not exist.)
+            # Overwriting requires having ``read`` the file's CURRENT contents
+            # earlier this session; otherwise the write is a blind clobber.
             if not _was_read_this_task(ctx, existing_raw):
                 return tool_error(
                     self.name,
@@ -398,9 +344,6 @@ class WriteFileTool:
             except OSError as exc:
                 return tool_error(self.name, f"write failed: {exc}")
             applied = True
-            # surface the PRE-write bytes (or the ``None``
-            # "did-not-exist" marker for a new file) so the ToolRuntime stashes
-            # this turn's rewind baseline.
             file_changes = [{"path": rel, "before": before_bytes}]
 
         output: dict[str, Any] = {

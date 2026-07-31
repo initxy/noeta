@@ -1,18 +1,15 @@
-"""T1 — ``noeta.sdk.Client`` per-session workspace / per-turn model+effort widen.
+"""``Client`` per-session workspace and per-turn model + effort selection.
 
-The thin Client
-re-exposes what the runtime/SdkHost always had — per-session ``workspace_dir``
-welded into durable ``TaskHostBound`` (zero mapping: a follow-up turn
-fold-resolves it), per-turn ``effort``, and a local-deployment ``allowed_models``
-that widens the driver's per-turn model-selector allowlist (LOCAL_PRINCIPAL is ⊤,
-so the configured model list IS the authorized set).
+Three couplings must hold for a session to be steerable per turn:
 
-Acceptance:
-* ``allowed_models`` lets a real (non-stub) model selector pass; absent it the
-  driver's STUB allowlist still rejects it (default byte-identical).
-* ``Client.start(workspace_dir=...)`` welds the absolute path into durable, and a
-  follow-up ``send_goal`` (no workspace) keeps the same binding (zero mapping).
-* ``effort`` flows into every turn's ``LLMRequest`` (start + send_goal).
+* ``allowed_models`` widens the driver's per-turn model-selector allowlist.
+  LOCAL_PRINCIPAL is ⊤, so the configured model list IS the authorized set; a
+  real (non-stub) selector passes only when listed, otherwise the STUB
+  allowlist rejects it.
+* ``Client.start(workspace_dir=...)`` welds the absolute path into the durable
+  fold, and a follow-up ``send_goal`` with no workspace re-resolves the same
+  binding from the fold — no caller-side mapping to carry it forward.
+* ``effort`` flows into every turn's ``LLMRequest`` (start and send_goal alike).
 """
 
 from __future__ import annotations
@@ -75,8 +72,8 @@ def test_allowed_models_lets_real_selector_pass(tmp_path: Path) -> None:
 
 
 def test_without_allowed_models_rejects_unlisted_selector(tmp_path: Path) -> None:
-    """Default Client keeps the driver's STUB allowlist — an unlisted real
-    selector is refused, byte-identical to every pre-widening caller."""
+    """Without ``allowed_models`` the driver keeps the STUB allowlist, so an
+    unlisted real selector is refused."""
     client, _ = _client(tmp_path)  # no allowed_models
     try:
         with pytest.raises(ModelSelectorError):

@@ -1,13 +1,14 @@
-"""Regression: a resident WorkerLoop (the served product's ``background_drive``
-/ ``start_workers`` path) must drive foreground AND background subagents to
-terminal WITHOUT stranding them unseeded.
+"""A resident WorkerLoop (a host's ``start_workers`` / ``background_drive``
+path) must drive foreground AND background subagents to terminal WITHOUT
+stranding them unseeded.
 
-Root cause guarded here: only ``subtask_drain._descend_to_child`` seeds a
-child's ``state.goal`` into the opening user message. The resident-worker step
+The hazard: only ``subtask_drain._descend_to_child`` seeds a child's
+``state.goal`` into the opening user message. The resident-worker step
 primitive ``run_leased_task`` does not, and the dispatcher's untargeted FIFO
-lease will hand an enqueued child to a resident worker. Part A makes the worker
-settle the subtree through the drain (foreground); Part B keeps untargeted
-leases off enqueued children (background race).
+lease will hand an enqueued child to a resident worker. Two defences keep the
+child from being driven with an empty history — the worker settles the subtree
+through the drain (foreground), and untargeted leases stay off enqueued
+children (background). Both are asserted through the same parametrized run.
 """
 
 from __future__ import annotations

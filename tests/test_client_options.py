@@ -1,25 +1,12 @@
-"""Tests for ``noeta.client.options``.
+"""``compile_options`` — the pure ``Options`` → ``AgentSpec`` compile.
 
-Covers:
-
-1. Purity: equal ``Options`` → structurally equal specs across two compile calls.
-2. Substantive field mutations → the main spec is no longer ``==`` the base.
-3. Non-identity wiring (``cwd``, ``permission_mode``) → spec unchanged.
-4. Mixed tools: ``@tool``-decorated callable + builtin-name string produce
-   the expected ``ToolRef`` s, and the builtin ``read`` ref is
-   byte-equal to the one produced by ``noeta.agent.roster.specs.agent_spec_for``
-   (cross-package sanity — SDK parts table must never drift from the
-   code-roster parts table).
-5. Error paths: unknown builtin name → ``KeyError``; non-DecoratedTool/str
-   entry → ``TypeError``.
-6. Child agents (flat ``agents`` dict): compile produces a flat
-   descendant list, parent capabilities carry ``delegation=True`` and the
-   child's name in ``spawnable``; child fingerprint is deterministic.
-   Deep recursion and cousin-name-collision semantics no longer apply
-   (see per-test inline comments).
-7. Policy/composer ref alignment: compiled specs carry exactly
-   ``ComponentRef("react","1")`` / ``ComponentRef("three_segment","v3")`` —
-   the same values the code-roster uses.
+Agent identity is structural equality of the compiled spec, so this module pins
+which ``Options`` fields feed identity (prompt, tools, skills, budget, plugins,
+child agents) and which are pure wiring that must never perturb it (``cwd``,
+``permission_mode``, ``output_schema``, ``thinking``, ``effort``). It also
+guards the SDK parts table against declaring a different ``ToolRef`` than
+:func:`noeta.presets.official_specs` does for the same built-in name — two
+tables disagreeing about one tool is invisible until a fingerprint moves.
 """
 
 from __future__ import annotations
@@ -74,7 +61,7 @@ def _base_options() -> Options:
 
 
 # ---------------------------------------------------------------------------
-# 1. Purity
+# Purity
 # ---------------------------------------------------------------------------
 
 def test_purity_equal_inputs_equal_spec() -> None:
@@ -86,7 +73,7 @@ def test_purity_equal_inputs_equal_spec() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2. Substantive fields → spec identity changes
+# Substantive fields → spec identity changes
 # ---------------------------------------------------------------------------
 
 def test_substantive_system_prompt_changes_identity() -> None:
@@ -125,8 +112,8 @@ def test_substantive_activation_changes_identity() -> None:
 
 
 def test_substantive_subagents_name_changes_identity() -> None:
-    # child names live in the `agents` dict key. Swapping the key
-    # changes spawnable contents and therefore the parent identity.
+    # Child names live in the `agents` dict key, so swapping the key changes
+    # spawnable contents and therefore the parent identity.
     child_a = AgentDefinition(description="sub agent", prompt="sub prompt")
     child_b = AgentDefinition(description="sub agent", prompt="sub prompt")
     base, _ = compile_options(dataclasses.replace(_base_options(), agents={"child_a": child_a}))
@@ -135,36 +122,30 @@ def test_substantive_subagents_name_changes_identity() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. Non-identity wiring (cwd, permission_mode) → spec unchanged (below in §13)
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# 4. Mixed tools: DecoratedTool + builtin string → correct refs, cross-package
+# Mixed tools: DecoratedTool + builtin-name string
 # ---------------------------------------------------------------------------
 
 def test_mixed_tools_refs_correct_and_cross_package_consistent() -> None:
     main, _ = compile_options(_base_options())
 
-    # Two distinct ToolRefs, sorted alphabetically by AgentSpec.
+    # AgentSpec normalises tool order, so compare as a set.
     assert {t.name for t in main.tools} == {"my_tool", "read"}
 
     my_ref = next(t for t in main.tools if t.name == "my_tool")
     read_ref = next(t for t in main.tools if t.name == "read")
 
-    # DecoratedTool's ref is carried through verbatim.
     assert my_ref == my_tool.ref
     assert my_ref == ToolRef(name="my_tool", version="2", risk_level="medium")
 
-    # read's ref must byte-match the ref official_specs()["main"] declares for the
-    # same name. This is the cross-package drift guard for slice 4a.
+    # Both tables must declare the same ref for a shared built-in name; drift
+    # here goes unnoticed until an agent fingerprint moves.
     roster_spec = official_specs()["main"]
     roster_read = next(t for t in roster_spec.tools if t.name == "read")
     assert read_ref == roster_read
 
 
 # ---------------------------------------------------------------------------
-# 5. Error paths
+# Error paths
 # ---------------------------------------------------------------------------
 
 def test_unknown_builtin_name_raises_keyerror() -> None:
@@ -184,21 +165,11 @@ def test_illegal_tool_entry_raises_typeerror() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6. Child agents (flat `agents` dict): compilation + caps + determinism
+# Child agents (flat `agents` dict): compilation, activation, determinism
 # ---------------------------------------------------------------------------
-# NOTE: the library-SDK refactor abandons recursive subagent nesting. Three-level trees
-# (parent→child→grandchild) and cousin-name-collision semantics are no
-# longer expressible — they have been dropped (see inline comments).
-#
-# Deleted tests (no longer expressible in the flat-dict model):
-#   - test_subagents_flattened_and_capabilities_set (grandchild nesting)
-#   - test_subagents_duplicate_name_raises_valueerror (dict keys are unique)
-#   - test_deep_descendant_matching_root_name_raises_valueerror (no nesting)
 
 
 def test_child_agents_flat_and_capabilities_set() -> None:
-    """Flat `agents` dict: two children → parent delegation=True,
-    spawnable = sorted child names; children are flat leaves."""
     opts = Options(
         system_prompt="parent",
         name="parent",
@@ -209,22 +180,19 @@ def test_child_agents_flat_and_capabilities_set() -> None:
     )
     main, descendants = compile_options(opts)
 
-    # Two flat descendants, no recursion.
     assert {s.name for s in descendants} == {"child_a", "child_b"}
-
-    # Parent: delegation=True, spawnable = sorted union of child names.
     assert agent_activates(main, "delegation") is True
     assert tuple(main.spawnable) == ("child_a", "child_b")
 
-    # Children: no delegation, no spawnable (flat leaves).
+    # Children are flat leaves: they never delegate and never spawn.
     for s in descendants:
         assert agent_activates(s, "delegation") is False
         assert tuple(s.spawnable) == ()
 
 
 def test_child_agents_name_collides_with_root_raises_valueerror() -> None:
-    """An `agents` entry sharing the main agent's own name raises ValueError
-    at compile time (not later at Client registration)."""
+    """A child sharing the main agent's name fails at compile time, not later
+    at Client registration."""
     defn = AgentDefinition(description="dup of root", prompt="child prompt")
     with pytest.raises(ValueError, match="main"):
         compile_options(
@@ -244,16 +212,8 @@ def test_child_agent_identity_deterministic() -> None:
     assert child_a == child_b
 
 
-# NOTE: the removed ``Options.capabilities`` field also carried the only path to
-# set ``delegation`` / ``spawnable`` by hand (the explicit-caps union). Under the
-# redesign those are purely structural — ``delegation=bool(children)`` and
-# ``spawnable`` = the sorted ``agents`` keys — so the old
-# ``test_explicit_capabilities_preserves_flags_and_unions_spawnable`` case tested
-# a capability that no longer exists and was dropped.
-
-
 # ---------------------------------------------------------------------------
-# 7. Policy / composer ref alignment with roster
+# Policy / composer ref alignment
 # ---------------------------------------------------------------------------
 
 def test_policy_and_composer_match_roster_constants() -> None:
@@ -261,35 +221,32 @@ def test_policy_and_composer_match_roster_constants() -> None:
     roster_spec = official_specs()["main"]
     assert main.policy == roster_spec.policy
     assert main.composer == roster_spec.composer
-    # Direct assertion against our canonical parts refs too.
     assert main.policy == POLICY_REF
     assert main.composer == COMPOSER_REF
 
 
 # ---------------------------------------------------------------------------
-# Extra: builtin_tool_ref surface + builtin_tool_classes() inventory
+# builtin_tool_ref surface + builtin_tool_classes() inventory
 # ---------------------------------------------------------------------------
 
 def test_builtin_tool_ref_inventory_complete() -> None:
-    # The SDK parts table must cover every tool the code-roster declares.
+    # The catalogue is the set of addressable built-in names, which is what
+    # ``tools=None`` expands to — so membership is a behaviour, not a detail.
     expected_names = {
-        # fs read (list_dir retired, read_file renamed read)
+        # fs read
         "read", "glob", "grep",
         # fs edit
         "edit", "write", "apply_patch",
-        # fs shell (shell_poll / shell_kill joined the catalog
-        # so the background triplet can enter a preset whitelist via tools=None)
+        # fs shell — the background triplet is catalogued together so
+        # ``tools=None`` can whitelist all three at once.
         "shell_run", "shell_poll", "shell_kill",
-        # web (webfetch is a built-in but not an fs tool;
-        # it joins the catalog so main's tools=None full set includes it)
+        # web — not an fs tool, but catalogued so ``tools=None`` includes it.
         "webfetch",
-        # web_search joins the catalog the same way (so main's tools=None full
-        # set includes it). It is only built when NOETA_WEB_SEARCH_API_KEY is set;
-        # the catalog entry is the addressable name, gated at build time.
+        # web_search is only built when NOETA_WEB_SEARCH_API_KEY is set; the
+        # catalogue entry is the addressable name, gated at build time.
         "web_search",
     }
     assert set(builtin_tool_classes()) == expected_names
-    # Each name produces a ToolRef with version="1".
     for name in expected_names:
         ref = builtin_tool_ref(name)
         assert isinstance(ref, ToolRef)
@@ -306,7 +263,7 @@ def test_skills_become_component_refs_with_default_version() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 8. flat `agents` dict compilation
+# Flat `agents` dict compilation
 # ---------------------------------------------------------------------------
 
 
@@ -326,21 +283,18 @@ def test_agents_dict_produces_child_spec_with_description_metadata() -> None:
     child = descendants[0]
     assert child.name == "researcher"
     assert child.instructions == "You are a researcher."
-    # description goes into metadata.
     assert child.metadata.get("description") == "A researcher that finds facts."
-    # Children get the standard budget guard (max_subtask_depth=3).
+    # Runaway-recursion guard, installed on every child.
     assert child.default_budget.max_subtask_depth == 3
-    # Children get an empty activation — delegation False, no spawnable.
     assert agent_activates(child, "delegation") is False
     assert tuple(child.spawnable) == ()
-    # Parent spawnable includes the flat dict name.
     assert tuple(main.spawnable) == ("researcher",)
     assert agent_activates(main, "delegation") is True
 
 
 def test_agents_dict_child_metadata_merges_under_description() -> None:
-    # AgentDefinition.metadata merges into the child spec's
-    # metadata (description always wins its key), so the plan preset can ship
+    # AgentDefinition.metadata merges into the child spec's metadata
+    # (description always wins its key), so a preset can ship
     # write_path_globs as a host-binding hint.
     defn = AgentDefinition(
         description="A planner.",
@@ -403,8 +357,6 @@ def test_agents_dict_empty_description_raises_valueerror() -> None:
 
 
 def test_agents_dict_distinct_children_compile_cleanly() -> None:
-    """Two flat-dict entries with distinct keys compile cleanly and spawnable
-    is sorted."""
     defn_a = AgentDefinition(description="a", prompt="pa")
     defn_b = AgentDefinition(description="b", prompt="pb")
     opts = Options(
@@ -434,7 +386,6 @@ def test_agents_child_tools_default_to_full_builtin_set() -> None:
     _, kids = compile_options(
         Options(system_prompt="root", name="main", agents={"c": defn})
     )
-    # None → full set of 13 built-ins.
     assert {t.name for t in kids[0].tools} == set(builtin_tool_classes())
 
 
@@ -451,23 +402,20 @@ def test_agents_child_tools_explicit_list() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 9. allowed_tools / disallowed_tools
+# allowed_tools / disallowed_tools
 # ---------------------------------------------------------------------------
 
 
 def test_bare_options_defaults_to_all_builtin_tools() -> None:
-    """Bare Options(system_prompt=…) defaults to full set of
-    built-in tools (no `allowed_tools` override)."""
+    """Omitting ``allowed_tools`` mounts the full built-in set."""
     main, _ = compile_options(Options(system_prompt="hi", name="main"))
     assert {t.name for t in main.tools} == set(builtin_tool_classes())
 
 
 def test_builtin_tool_whitelist_is_pinned() -> None:
-    """The built-in whitelist is a number the tutorials quote
-    (``docs/tutorials/first-agent.md``: "all 11 built-in tools", of which 10
-    mount without extra configuration — ``web_search`` needs an API key). It
-    had drifted to a documented 13. Pin the set so the next change to it has
-    to come back and update the prose."""
+    """``docs/tutorials/first-agent.md`` quotes this count in prose (11 names,
+    of which 10 mount without extra configuration — ``web_search`` needs an API
+    key). Pinning the set forces any change to come back and update the doc."""
     assert set(builtin_tool_classes()) == {
         "apply_patch",
         "edit",
@@ -503,7 +451,6 @@ def test_allowed_tools_empty_tuple_means_no_tools() -> None:
 
 
 def test_disallowed_tools_subtracts_from_builtin_set() -> None:
-    # None → all builtins; subtract two → (len-2) remain.
     main, _ = compile_options(
         Options(
             system_prompt="hi",
@@ -517,7 +464,6 @@ def test_disallowed_tools_subtracts_from_builtin_set() -> None:
 
 
 def test_disallowed_tools_missing_names_are_silently_ignored() -> None:
-    # None → all builtins; subtract two non-existent names → same set.
     main, _ = compile_options(
         Options(
             system_prompt="hi",
@@ -553,7 +499,7 @@ def test_allowed_tools_dedup_preserves_first_occurrence() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 10. permission_mode validation
+# permission_mode validation
 # ---------------------------------------------------------------------------
 
 
@@ -563,7 +509,7 @@ def test_allowed_tools_dedup_preserves_first_occurrence() -> None:
 def test_permission_mode_three_legal_values_pass(valid: str) -> None:
     main, _ = compile_options(
         Options(system_prompt="hi", permission_mode=valid))
-    # Compile succeeds (no runtime wiring yet — just no ValueError).
+    # The behaviour under test is that compiling does not raise.
     assert main.name == "main"
 
 
@@ -577,7 +523,7 @@ def test_permission_mode_invalid_value_raises_valueerror() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 11. max_turns / budget.max_iterations merging
+# max_turns / budget.max_iterations merging
 # ---------------------------------------------------------------------------
 
 
@@ -585,7 +531,7 @@ def test_max_turns_populates_budget_max_iterations() -> None:
     main, _ = compile_options(
         Options(system_prompt="hi", max_turns=100))
     assert main.default_budget.max_iterations == 100
-    # runaway-recursion guard is still installed.
+    # The runaway-recursion guard rides along with the derived budget.
     assert main.default_budget.max_subtask_depth == 3
 
 
@@ -597,10 +543,9 @@ def test_max_turns_combined_with_explicit_budget() -> None:
             max_turns=77,
         )
     )
-    # max_iterations comes from max_turns; the rest from explicit budget.
     assert main.default_budget.max_iterations == 77
     assert main.default_budget.max_tool_calls == 500
-    # Caller supplied budget overrides our default depth guard — keep as None.
+    # A caller-supplied budget overrides the default depth guard — stays None.
     assert main.default_budget.max_subtask_depth is None
 
 
@@ -616,14 +561,12 @@ def test_max_turns_and_budget_max_iterations_both_set_raises_valueerror() -> Non
 
 
 # ---------------------------------------------------------------------------
-# 12. SystemPromptPreset resolution
+# SystemPromptPreset resolution
 # ---------------------------------------------------------------------------
 
 
 def test_system_prompt_preset_unregistered_raises_valueerror() -> None:
-    # Use a name that can never be registered to verify the unregistered-preset
-    # ValueError path. ("main" is now registered by noeta.presets, so it no
-    # longer works as an unregistered example.)
+    # A name nothing registers — ``noeta.presets`` owns the real ones.
     with pytest.raises(ValueError, match="preset"):
         compile_options(Options(system_prompt=SystemPromptPreset(preset="__no_such_preset__")))
 
@@ -676,13 +619,13 @@ from noeta.client.options import _PRESET_PROMPTS  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# 13. Purity / fingerprint invariants with new fields
+# Purity / identity invariance for the wiring fields
 # ---------------------------------------------------------------------------
 
 
 def test_purity_new_fields_equal_inputs_equal_spec() -> None:
-    """Equal Options (using new fields) compile to structurally
-    equal specs on two independent calls."""
+    """Equal ``Options`` compile to structurally equal specs on two
+    independent calls."""
     opts = Options(
         system_prompt="hello",
         agents={
@@ -717,22 +660,19 @@ def test_cwd_does_not_affect_identity() -> None:
 
 
 def test_permission_mode_change_does_not_affect_identity() -> None:
-    """permission_mode is not part of AgentSpec identity (it maps to guards,
-    which this issue does not yet wire — identity does not change)."""
+    """``permission_mode`` maps to approval guards, not to spec identity."""
     m_a, _ = compile_options(Options(system_prompt="hi", permission_mode="default"))
     m_b, _ = compile_options(Options(system_prompt="hi", permission_mode="bypassPermissions"))
     assert m_a == m_b
 
 
 # ---------------------------------------------------------------------------
-# 14. AgentDefinition activation (plugins=) compiles into child identity
+# AgentDefinition activation (plugins=) compiles into child identity
 # ---------------------------------------------------------------------------
 
 
 def test_agent_definition_activation_compiled_into_child_spec() -> None:
-    """An AgentDefinition activation compiles into the child spec identity:
-    a child that activates feature bundles differs from a plain child —
-    i.e. activation is compiled into the child spec's identity."""
+    """An ``AgentDefinition`` activation is part of the child spec's identity."""
     defn_with_caps = AgentDefinition(
         description="d",
         prompt="p",
@@ -747,36 +687,31 @@ def test_agent_definition_activation_compiled_into_child_spec() -> None:
 
     assert agent_activates(kids_with[0], "todo_write") is True
     assert agent_activates(kids_with[0], "ask_user_question") is True
-    # With vs without activation: identities must differ.
     assert kids_with[0] != kids_plain[0]
 
 
 def test_agent_definition_no_activation_defaults_to_empty_capabilities() -> None:
-    """With no activation (default empty ``plugins``), the child spec's
-    activation tuple is empty; spawnable stays empty
-    (children are flat leaves and do not union spawnable like the parent does)."""
+    """A child with no declared ``plugins`` activates nothing."""
     defn = AgentDefinition(description="d", prompt="p")
-    assert defn.plugins == ()  # surface default: no activation
+    assert defn.plugins == ()
     _, kids = compile_options(Options(system_prompt="root", name="main", agents={"c": defn}))
     child = kids[0]
-    # No feature activated.
     assert child.plugins == ()
     assert agent_activates(child, "todo_write") is False
     assert agent_activates(child, "ask_user_question") is False
     assert agent_activates(child, "delegation") is False
-    # spawnable empty (not the parent's spawnable, and no union across children).
+    # The parent's spawnable must not leak down, and children never union it.
     assert tuple(child.spawnable) == ()
 
 
 # ---------------------------------------------------------------------------
-# 15. skill_invocation capability is part of identity
+# skill_invocation activation is part of identity
 # ---------------------------------------------------------------------------
 
 
 def test_options_skill_invocation_passthrough() -> None:
-    """When ``plugins`` activates skill_invocation, the flag passes through to
-    the compiled main spec and its identity differs from the un-activated
-    version."""
+    """``skill_invocation`` reaches the compiled main spec and changes its
+    identity."""
     opts_false = Options(
         system_prompt="hi",
         name="main",
@@ -795,9 +730,8 @@ def test_options_skill_invocation_passthrough() -> None:
 
 
 def test_agent_definition_skill_invocation_passthrough() -> None:
-    """When an AgentDefinition activates skill_invocation, the flag passes
-    through to the compiled child spec and its identity differs from a child
-    spec built with no activation."""
+    """``skill_invocation`` reaches the compiled child spec and changes its
+    identity."""
     defn_true = AgentDefinition(
         description="d",
         prompt="p",

@@ -1,20 +1,17 @@
-"""Kernel #3 (stale-reclaim attempt cap) + kernel #8 (buffered-wake GC
-on terminal) — deferred structural round.
+"""Two dispatcher safety valves: a stale-reclaim cap and buffered-wake GC.
 
-#3: ``requeue_stale`` used to move an expired lease back to ready
-unconditionally — a poison task that silently kills its worker loops
-lease → expire → reclaim forever. Now each reclaim increments a
-``reclaim_count`` (reset on any progress signal: successful heartbeat /
-clean release / controlled fail-requeue / force-enqueue) and at
-``reclaim_max`` the task drops to terminal
-(``stale_reclaim_exceeded``) — the reclaim-path analogue of
-``max_fail_attempts``.
+Reclaim cap: an unconditional ``requeue_stale`` lets a poison task that
+silently kills its worker loops cycle lease → expire → reclaim forever. Each
+reclaim increments a ``reclaim_count`` (reset on any progress signal:
+successful heartbeat, clean release, controlled fail-requeue, force-enqueue),
+and at ``reclaim_max`` the task drops to terminal (``stale_reclaim_exceeded``)
+— the reclaim-path analogue of ``max_fail_attempts``.
 
-#8: buffered wake events that never match a ``wake_on`` were only ever
-drained by a matching suspend-release; once a task went terminal they
-leaked forever. Terminal transitions (release-terminal, fail-terminal,
-reclaim-cap-terminal) now GC them. The matched wake (H2 exactly-once
-handoff) is deliberately untouched.
+Buffered-wake GC: wake events that never match a ``wake_on`` are drained only
+by a matching suspend-release, so a task that goes terminal first would leak
+them. Every terminal transition (release-terminal, fail-terminal,
+reclaim-cap-terminal) GCs the buffer. A matched wake awaiting consume is
+exempt — losing it would break the exactly-once wake handoff.
 """
 
 from __future__ import annotations
@@ -67,7 +64,7 @@ def _lease_then_expire(disp: Any, clock: dict[str, float], task_id: str) -> None
 
 
 # ---------------------------------------------------------------------------
-# Kernel #3 — reclaim cap
+# Reclaim cap
 # ---------------------------------------------------------------------------
 
 
@@ -154,7 +151,7 @@ def test_clean_release_resets_reclaim_counter(make_dispatcher) -> None:
 
 def test_reclaim_cap_preserves_matched_wake_discipline(make_dispatcher) -> None:
     """A reclaim between wake-match and consume keeps re-delivering the
-    matched wake (H2) — the counter must not interfere below the cap."""
+    matched wake — the counter must not interfere below the cap."""
     clock = {"t": 1_000.0}
     disp = make_dispatcher(now=lambda: clock["t"], reclaim_max=3)
     disp.enqueue("t1")
@@ -172,7 +169,7 @@ def test_reclaim_cap_preserves_matched_wake_discipline(make_dispatcher) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Kernel #8 — buffered-wake GC on terminal
+# Buffered-wake GC on terminal
 # ---------------------------------------------------------------------------
 
 

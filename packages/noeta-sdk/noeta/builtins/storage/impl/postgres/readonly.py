@@ -1,24 +1,15 @@
 """Read-only Postgres reader for list / inspect projections.
 
-The Postgres mirror of :mod:`noeta.builtins.storage.impl.sqlite.readonly`: a read-only
-consumer must NEVER create, migrate, or otherwise mutate the store. The
-live adapters cannot give that guarantee — their constructors run
-``apply_migrations`` (forward-migrating an older database).
-
-:class:`PostgresReadOnlyStore` opens the connection with
-``default_transaction_read_only = on`` (every statement runs in a
-read-only transaction, so any write is rejected by the server — the
-``mode=ro`` analogue), performs no migrations, and verifies the recorded
-``noeta_schema_version`` equals ``SCHEMA_VERSION`` **before** any read.
-An older / newer / uninitialised schema is a typed
-:class:`PostgresSchemaVersionError` (never silently read, never
-migrated). It satisfies ``EventLogReader`` + ``EventLogTaskIndex`` +
-``ContentStore`` through plain ``SELECT``s, reusing the live adapter's
-:func:`noeta.builtins.storage.impl.postgres.eventlog._row_to_envelope` so the read
-shape cannot drift. Like the sqlite mirror, the adapter is selected at
-the wiring layer only — read models depend on the Protocols, never on
-this class — and it is single-consumer (no adapter lock; inspect
-commands are not concurrent writers).
+A read-only consumer must NEVER create, migrate, or otherwise mutate the
+store, which is a guarantee the live adapters cannot give: their constructors
+run ``apply_migrations``. :class:`PostgresReadOnlyStore` therefore opens the
+connection with ``default_transaction_read_only = on`` so the server itself
+rejects every write, and verifies the recorded ``noeta_schema_version``
+equals :data:`SCHEMA_VERSION` **before** any read — a mismatched or
+uninitialised schema raises :class:`PostgresSchemaVersionError` rather than
+being silently read. Reads reuse the live adapter's
+:func:`noeta.builtins.storage.impl.postgres.eventlog._row_to_envelope` so the
+two read shapes cannot drift, and a single consumer needs no adapter lock.
 """
 
 from __future__ import annotations
@@ -40,9 +31,9 @@ from noeta.builtins.storage.impl.postgres.eventlog import _row_to_envelope
 from noeta.builtins.storage.impl.postgres.migrations import SCHEMA_VERSION
 
 # The ``find_latest_snapshot`` predicate, rendered once from the protocol
-# constant so the query can never drift from the contract set (the
-# ``ix_events_snapshot`` partial index must keep matching it textually —
-# see the migration notes).
+# constant so the query can never drift from the contract set. The
+# ``ix_events_snapshot`` partial index must keep matching it textually, so
+# widening the constant means writing a new migration.
 _BASELINE_TYPES_SQL = "(" + ", ".join(
     f"'{t}'" for t in SNAPSHOT_BASELINE_EVENT_TYPES
 ) + ")"
@@ -58,11 +49,9 @@ __all__ = [
 class PostgresSchemaVersionError(NoetaError):
     """The store's recorded schema version is not the version this build reads.
 
-    Raised up front by :class:`PostgresReadOnlyStore` so a read-only
-    command surfaces a clear "different Noeta schema version" error
-    instead of silently reading an unknown shape or (the live adapters'
-    behaviour) migrating it. ``found == 0`` also covers a database the
-    live adapters never initialised (no ``noeta_schema_version`` table).
+    Raised up front so a read-only caller gets a clear schema-version error
+    instead of reading an unknown row shape. ``found == 0`` also covers a
+    database with no ``noeta_schema_version`` table at all.
     """
 
     def __init__(self, *, dsn: str, found: int, expected: int) -> None:
@@ -90,8 +79,8 @@ class PostgresReadOnlyStore:
     def __init__(self, dsn: str) -> None:
         self._conn = psycopg.connect(dsn, autocommit=True, row_factory=dict_row)
         try:
-            # Server-side write rejection for every subsequent statement —
-            # no DDL, no migrations, no version bump can slip through.
+            # Server-side write rejection for every subsequent statement, so
+            # no DDL, migration, or version bump can slip through.
             self._conn.execute("SET default_transaction_read_only = on")
             found = self._read_version()
             if found != SCHEMA_VERSION:
@@ -108,8 +97,8 @@ class PostgresReadOnlyStore:
                 "SELECT version FROM noeta_schema_version"
             ).fetchone()
         except psycopg.errors.UndefinedTable:
-            # Never initialised by the live adapters — report as version 0,
-            # exactly like a fresh sqlite file's PRAGMA user_version.
+            # An uninitialised database reads as version 0 rather than an
+            # error, so the caller sees one schema-version failure mode.
             return 0
         return 0 if row is None else int(row["version"])
 
@@ -132,8 +121,8 @@ class PostgresReadOnlyStore:
         return [_row_to_envelope(row) for row in rows]
 
     def find_latest_snapshot(self, task_id: str) -> Optional[EventEnvelope]:
-        # TaskRewound / StepAttemptAbandoned are snapshot-shaped fold
-        # baselines too — take whichever of the three has the higher seq.
+        # Every type in the baseline set re-bases the fold, so the highest
+        # seq among them wins regardless of which type it is.
         row = self._conn.execute(
             "SELECT * FROM events WHERE task_id = %s "
             f"AND type IN {_BASELINE_TYPES_SQL} "

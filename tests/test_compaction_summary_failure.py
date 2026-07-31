@@ -1,20 +1,16 @@
-"""P1-2 — a failed/empty summarize response must NOT be recorded as a compaction.
+"""A failed or empty summarize response must NOT be recorded as a compaction.
 
-The bug: ``ReActPolicy._compaction_decision`` built ``summary`` from the
-summarize response's text blocks and emitted a ``CompactionRequestedDecision``
-unconditionally. When the summarize round-trip returned an ``error`` stop_reason
-(the LLM client's transient retries already exhausted, or a fatal error) OR came
-back with no text, ``summary`` was ``""``; fold then set ``summary_ref`` to the
-empty note and the Composer's ``_apply_summary`` REPLACED the whole collapsed
-prefix with a single empty ``user`` message — the early intent + accumulated
-context were destroyed, and the empty text block 400'd the very next request.
+Compaction is destructive by design: fold writes ``summary_ref`` and the
+Composer's ``_apply_summary`` REPLACES the collapsed prefix with that single
+message. So a summarize round-trip that comes back with an ``error``
+stop_reason, a ``max_tokens`` truncation, or nothing but whitespace must be
+detected and turned into ``FailDecision(compaction_summary_failed)`` — recording
+it destroys the early intent and accumulated context for good, and the empty
+text block 400s the very next request.
 
-The fix: detect the failed/empty summarize and return a clean
-``FailDecision(compaction_summary_failed)``, leaving the durable history intact.
-
-The setup mirrors ``test_compaction_boundary_alignment`` (a real
+The setup mirrors ``test_compaction_boundary_alignment``: a real
 ``ThreeSegmentComposer`` + a history large enough to trip the proactive trigger,
-so the summarize call is the first — and only — LLM round-trip of the step).
+so the summarize call is the first — and only — LLM round-trip of the step.
 """
 
 from __future__ import annotations
@@ -107,11 +103,10 @@ def test_empty_summary_fails_cleanly_without_recording_compaction() -> None:
 
 
 def test_reasoning_model_maxtokens_truncation_fails_cleanly() -> None:
-    # The production shape (trace 75a63fcb…): a reasoning model on a gateway that
-    # caps output when the client sends no ``max_tokens`` spent its whole default
-    # budget on hidden reasoning and returned ``stop_reason="max_tokens"`` with no
-    # text block. The empty-summary guard must still fail cleanly here rather than
-    # record an empty compaction that would destroy the collapsed prefix.
+    # A reasoning model on a gateway that caps output when the client sends no
+    # ``max_tokens`` can spend its whole default budget on hidden reasoning and
+    # return ``stop_reason="max_tokens"`` with no text block — a "successful"
+    # response carrying nothing. The guard must fail cleanly here too.
     decision, provider = _drive(LLMResponse(stop_reason="max_tokens", content=[]))
     assert len(provider.received_requests) == 1
     assert isinstance(decision, FailDecision)

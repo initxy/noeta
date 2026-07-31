@@ -1,38 +1,14 @@
-"""`apply_patch` — multi-file transactional edit (M1).
+"""``apply_patch`` — a batch of edits carried by one tool call, applied atomically.
 
-A single tool call carries a **batch** of edits (`replace` an existing
-file's unique segment, or `create` a new file). The batch is **atomic
-in-process**: every edit is validated first, and only if all pass are
-any writes performed; an apply-phase fault rolls the workspace back to
-its pre-batch state. This closes the I4 "non-atomic sequence" gap for a
-multi-file change.
-
-Several `replace` edits MAY target the same file: they are grouped and
-applied in array order to one in-memory buffer (edit N's `old` matches
-the file as left by edits 0..N-1), then collapse into a single
-per-file write/diff. Only path spellings that coincide solely under
-case-fold / NFC are rejected — those are not one file on every
-filesystem. A `create` still stands alone (it writes the whole file).
-
-Boundaries (architect-pinned, M1 rev3):
-
-* **fs tool-layer** transaction, not an Engine transaction. One tool
-  call ⇒ one `PermissionGuard` decision ⇒ one approval (Issue-A).
-* **args offload, NOT 4 KB-bound**: `ToolCallStarted` /
-  `ToolCallApprovalRequested` carry the args BEFORE invoke.
-  The EventLog payload ceiling is 4 KB, but the runtime now auto-offloads
-  oversize args to the ContentStore and carries an `arguments_ref` instead
-  (`noeta.protocols.tool_args`) — so a patch is NOT bound to fit 4 KB. The
-  per-field / per-call caps below are therefore tool-layer **safety
-  bounds** (mirroring `write`'s 64 KB ceiling), not the old envelope-fit
-  limit. `MAX_PATCH_CANONICAL_BYTES` is just an outer per-call sanity
-  backstop (tell an absurd batch to split), no longer an envelope guard.
-* **no fuzzy unified-diff partial apply**: `replace` is an exact unique
-  substring swap; `create` writes the full content. The unified diff is
-  output/audit only, never an input.
-* atomicity is **in-process** (validation / apply-error rollback). A
-  hard OS crash mid-apply is NOT transactionally protected (snapshots
-  live in memory) — a future journal / fsync+rename slice.
+The whole batch is validated before anything is written and an apply-phase fault
+rolls the workspace back to its pre-batch state, so a multi-file change never
+lands half-done. Atomicity is a **tool-layer, in-process** property: the
+rollback snapshots live in memory, so a hard OS crash mid-apply is not
+protected, and the transaction boundary is one tool call ⇒ one
+``PermissionGuard`` decision ⇒ one approval. Several ``replace`` edits may
+target the same file — they fold into one in-memory buffer in array order — but
+two path spellings that coincide only under case-fold / NFC are rejected,
+because they are not one file on every filesystem.
 """
 
 from __future__ import annotations
@@ -73,19 +49,17 @@ __all__ = [
 ]
 
 
-#: Outer per-call sanity backstop on the whole ``arguments`` (canonical
-#: bytes). Oversize args are offloaded to the ContentStore via
-#: ``arguments_ref`` (the escape) — this is NOT an envelope-fit
-#: guard anymore, just a ceiling that tells an absurdly large batch to
-#: split. Generous: well above any realistic multi-file batch.
+#: Outer per-call sanity backstop on the whole ``arguments`` (canonical bytes).
+#: Oversize args are offloaded to the ContentStore, so this is not an
+#: envelope-fit guard — it only tells an absurdly large batch to split, and sits
+#: well above any realistic multi-file batch.
 MAX_PATCH_CANONICAL_BYTES = 256 * 1024
 #: One tool call = one approval = one atomic batch; bounds the blast
 #: radius / rollback scope per approval, not the byte size.
 MAX_PATCH_EDITS = 16
 _PATH_MAX_BYTES = 120
-#: ``replace`` old/new and ``create`` content share ``write``'s 64 KB file
-#: ceiling — a safety bound, not a UX cap. Args over the 4 KB
-#: EventLog envelope are offloaded by the runtime, not rejected here.
+#: ``replace`` old/new and ``create`` content share ``write``'s file ceiling —
+#: a safety bound, not a UX cap.
 _OLDNEW_MAX_BYTES = WRITE_FILE_MAX_BYTES
 _CONTENT_MAX_BYTES = WRITE_FILE_MAX_BYTES
 _SHA_MAX_BYTES = 64
@@ -123,10 +97,9 @@ class _Planned:
 
 @dataclass
 class _Target:
-    """A parsed edit — op/path validated and resolved to a workspace path,
-    not yet read or planned. Carries the original ``edit`` dict + its array
-    index so all edits hitting one file can be grouped and planned together
-    (so a single call may take several edits to the same file)."""
+    """A parsed edit — op/path validated and resolved to a workspace path, not
+    yet read or planned. It keeps the original ``edit`` dict and its array index
+    so all edits hitting one file can be grouped and planned together."""
 
     i: int
     edit: dict[str, Any]
@@ -136,21 +109,22 @@ class _Target:
 
 @dataclass
 class ApplyPatchTool:
-    """Validate a batch of edits, then atomically apply (or dry-run) it."""
+    """Validate a batch of edits, then atomically apply (or dry-run) it.
+
+    ``replace`` is an exact, unique substring swap and ``create`` writes a whole
+    file; the unified diff is output and audit only, never an input, so there is
+    no fuzzy partial apply.
+    """
 
     workspace: WorkspaceRoot
     mode: FsWriteMode = FsWriteMode.DRY_RUN
     #: Host authorization for writes OUTSIDE the workspace, resolved per call
-    #: (see ``_workspace.authorized_workspace``). ``None`` ⇒ single-root wall.
+    #: (see ``authorized_workspace``). ``None`` ⇒ single-root wall.
     write_roots: Optional[WriteRootsResolver] = None
-    #: file-IO backend for read / stat / replace-write / rollback (local
-    #: host by default). The exclusive-``create`` fd path stays inline (its
-    #: granular fd-level recovery is local-only; sandbox create lands in a
-    #: later round). Path resolution stays on ``workspace``.
+    #: File-IO backend for read / stat / replace-write / rollback. Path
+    #: resolution stays on ``workspace``.
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "apply_patch"
-    # the LLM-facing description is the four-section text resource
-    # (descriptions/apply_patch.md), not an inline Python string.
     description: str = field(default=load_markdown(__package__, "apply_patch"))
     risk_level: str = "high"
     input_schema: dict[str, Any] = field(
@@ -163,9 +137,9 @@ class ApplyPatchTool:
                     "items": {
                         "type": "object",
                         "properties": {
-                            # NOTE: maxLength here is an LLM HINT (chars),
-                            # not the real byte bound — the tool enforces
-                            # UTF-8 byte caps + a canonical-byte budget.
+                            # maxLength is an LLM HINT (chars), not the real
+                            # bound — the tool enforces UTF-8 byte caps plus a
+                            # canonical-byte budget.
                             "op": {"type": "string", "enum": ["replace", "create"]},
                             "path": {"type": "string", "maxLength": _PATH_MAX_BYTES},
                             "old": {"type": "string", "maxLength": _OLDNEW_MAX_BYTES},
@@ -192,8 +166,6 @@ class ApplyPatchTool:
     # -- invoke ----------------------------------------------------------
 
     def invoke(self, arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        # Preflight: whole-arguments canonical-byte budget (direct-invoke
-        # defence; the real-LLM over-4KB case PayloadTooLarge's earlier).
         if len(to_canonical_bytes(arguments)) > MAX_PATCH_CANONICAL_BYTES:
             return _err(
                 f"patch too large (> {MAX_PATCH_CANONICAL_BYTES} canonical bytes); "
@@ -206,12 +178,10 @@ class ApplyPatchTool:
             return _err(f"too many edits ({len(edits)} > {MAX_PATCH_EDITS})")
 
         # ---- Phase A: validate every edit in memory (no writes, no puts).
-        # Edits hitting the SAME file are grouped and applied in array order
-        # to one in-memory buffer, so a single call may take several edits to
-        # one file. Two DIFFERENT path spellings that coincide only under
-        # case-fold / NFC are still rejected — their on-disk identity diverges
-        # between case-sensitive and case-insensitive filesystems, so silently
-        # merging them would not be portable.
+        # Two DIFFERENT path spellings that coincide only under case-fold / NFC
+        # are rejected: their on-disk identity diverges between case-sensitive
+        # and case-insensitive filesystems, so silently merging them would not
+        # be portable.
         groups: dict[str, list[_Target]] = {}
         order: list[str] = []                 # exact-key first-appearance order
         collide_owner: dict[str, str] = {}    # fold/NFC key -> owning exact key
@@ -221,7 +191,7 @@ class ApplyPatchTool:
             if isinstance(tgt, ToolResult):
                 return tgt
             exact = str(tgt.resolved)
-            fold = _collision_key(tgt.resolved)  # NFC + casefold
+            fold = _collision_key(tgt.resolved)
             owner = collide_owner.setdefault(fold, exact)
             if owner != exact:
                 return _err(
@@ -242,9 +212,8 @@ class ApplyPatchTool:
                 return res
             planned.append(res)
 
-        # Deterministic order: sort by resolved POSIX path (resume-stable).
-        # Each file's intra-group edit sequence is already baked into its
-        # single _Planned, so a cross-file sort stays order-independent.
+        # Resume-stable order. Each file's intra-group edit sequence is already
+        # baked into its single _Planned, so sorting across files is safe.
         planned.sort(key=lambda p: p.resolved.as_posix())
 
         # ---- Phase B: apply (APPLY only) with TOCTOU revalidation + rollback.
@@ -264,8 +233,7 @@ class ApplyPatchTool:
         self, workspace: WorkspaceRoot, i: int, edit: Any
     ) -> "_Target | ToolResult":
         """Validate op/path and resolve it against ``workspace`` — this call's
-        fence, i.e. the workspace plus any host-authorized write roots (no
-        file read)."""
+        fence, i.e. the workspace plus any host-authorized write roots."""
         if not isinstance(edit, dict):
             return _err(f"edit #{i} must be an object")
         op = edit.get("op")
@@ -286,8 +254,8 @@ class ApplyPatchTool:
         )
 
     def _plan_group(self, members: list["_Target"]) -> "_Planned | ToolResult":
-        """Plan one file's edits into a single ``_Planned``. A group is either
-        a lone ``create`` or one-or-more ``replace`` edits applied in order."""
+        """Plan one file's edits into a single ``_Planned``: either a lone
+        ``create`` or one-or-more ``replace`` edits applied in order."""
         first = members[0]
         if any(m.edit.get("op") == "create" for m in members):
             if len(members) > 1:
@@ -303,8 +271,8 @@ class ApplyPatchTool:
         self, resolved: Path, rel: str, members: list["_Target"]
     ) -> "_Planned | ToolResult":
         """Apply every ``replace`` in ``members`` (array order) to one buffer:
-        edit N's ``old`` is matched against the file as left by edits 0..N-1
-        in THIS call, then a single _Planned (original → final) is returned."""
+        edit N's ``old`` is matched against the file as left by edits 0..N-1 in
+        THIS call, and the result is one _Planned spanning original → final."""
         i0 = members[0].i
         if not self.exec_env.is_file(resolved):
             return _err(f"edit #{i0}: not a file: {rel!r}")
@@ -332,14 +300,12 @@ class ApplyPatchTool:
                     f"edit #{i}: old/new exceeds {_OLDNEW_MAX_BYTES}B "
                     "(write safety cap); split into smaller replaces"
                 )
-            # Treat an empty string the same as "not provided": LLMs habitually
-            # fill an optional string field with "" instead of omitting it, and a
-            # blank hash must NOT be compared against the real file hash (that
-            # always mismatches → every such edit fails with a spurious
-            # "stale edit"). Only a non-empty hash arms the staleness guard.
-            # Every before_sha256 in a group is the hash of the ORIGINAL file
-            # (all edits are authored against the same read), so all compare
-            # against ``before_hash`` — not the running buffer.
+            # Only a non-empty hash arms the staleness guard: models habitually
+            # fill an optional string field with "" instead of omitting it, and
+            # comparing a blank hash would fail every such edit as "stale".
+            # Every before_sha256 in a group describes the ORIGINAL file — all
+            # edits are authored against the same read — so they compare against
+            # ``before_hash``, not the running buffer.
             want_sha = edit.get("before_sha256")
             if want_sha:
                 if not isinstance(want_sha, str):
@@ -354,7 +320,7 @@ class ApplyPatchTool:
                     )
             count = working.count(old)
             # Past the first edit, an earlier edit in THIS call may have already
-            # rewritten the region — say so, so the model knows to re-anchor.
+            # rewritten the region, so the model is told to re-anchor.
             prior = (
                 " (an earlier edit in this same call may have changed this region)"
                 if pos else ""
@@ -411,13 +377,14 @@ class ApplyPatchTool:
 
     def _apply(self, planned: list[_Planned]) -> Optional[ToolResult]:
         """Apply all edits with TOCTOU revalidation + exclusive create.
-        Returns None on success, or a typed failure ToolResult after
-        recovering the **current failing target** AND rolling back every
-        already-written edit. ``recover`` tells the failure handler how to
-        undo the current target: ``none`` (it was never modified — TOCTOU
-        before any write / failed exclusive-open), ``restore`` (a replace
-        whose write may have truncated/partially written), ``delete`` (a
-        create whose file already exists after a successful O_EXCL open)."""
+
+        Returns None on success, or a typed failure ToolResult after recovering
+        the **current failing target** AND rolling back every already-written
+        edit. ``recover`` tells the failure handler how to undo the current
+        target: ``none`` (never modified — TOCTOU before any write, or a failed
+        exclusive open), ``restore`` (a replace whose write may have truncated
+        or partially written), ``delete`` (a create whose file exists because
+        the exclusive open succeeded)."""
         done: list[_Planned] = []
         for p in planned:
             if p.op == "replace":
@@ -437,11 +404,9 @@ class ApplyPatchTool:
                     return self._fail(done, failed=p, recover="restore",
                                       reason=f"write failed: {exc}")
             else:  # create — exclusive, never overwrite
-                # The atomic exclusive-create + its granular recovery verbs now
-                # live behind the ExecEnv seam (LocalExecEnv keeps the exact
-                # os.open/write/close dance; a sandbox emulates exclusivity);
-                # the typed error carries the recover verb + reason this branch
-                # used to build inline.
+                # The atomic exclusive create lives behind the ExecEnv seam, so
+                # its typed error carries the recover verb and reason rather
+                # than this branch reconstructing them from an OSError.
                 try:
                     self.exec_env.create_exclusive(p.resolved, p.after_bytes)
                 except ExclusiveCreateError as exc:
@@ -542,13 +507,11 @@ class ApplyPatchTool:
         mode_label = "applied" if applied else "proposed"
         total_added = sum(p.added for p in planned)
         total_removed = sum(p.removed for p in planned)
-        # surface the PRE-edit bytes for every path this call mutated so the
-        # ToolRuntime can stash this turn's rewind baseline (mirrors
-        # ``edit``/``write``'s ``file_changes``): ``before_bytes`` is already
-        # ``None`` for a ``create`` (no pre-edit content) and the original
+        # The ToolRuntime's rewind baseline for every path this call mutated.
+        # ``before_bytes`` is already ``None`` for a ``create`` and the original
         # bytes for a ``replace`` — the same "did-not-exist" vs. "overwrote"
-        # marker those tools use. DRY_RUN writes nothing, so it surfaces no
-        # ``file_changes`` either, matching ``edit``/``write``.
+        # marker ``edit`` / ``write`` use. DRY_RUN mutates nothing, so it
+        # surfaces no baseline either.
         file_changes: list[dict[str, Any]] | None = None
         if applied:
             file_changes = [

@@ -1,9 +1,10 @@
-"""WakeCondition + SubtaskResult typed value objects.
+"""``SubtaskCompleted`` and ``SubtaskResult`` as typed value objects.
 
-Issue 03 introduces typed wake conditions so the Dispatcher can match
-"wake event vs what the task is waiting on" by shape rather than by
-arbitrary equality. Phase 0 only ships ``SubtaskCompleted`` (the other
-three condition variants land with issue 05 / Phase 1).
+A subtask wake matches by identity projection, so ``subtask_id`` alone
+carries the identity of the condition a parent stored: the result a child
+hands back is informational payload and must never decide whether the
+parent recognises its own wake. ``SubtaskResult`` holds both terminal
+outcomes in one shape, populating only the field its status implies.
 """
 
 from __future__ import annotations

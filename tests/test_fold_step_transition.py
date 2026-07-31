@@ -1,8 +1,9 @@
-"""Fold-side projection of the StepTransition tag (foundation B, D-B3 / D-B5).
+"""fold projects the ``StepTransitionMarked`` tag onto ``RuntimeState``.
 
-``StepTransitionMarked`` is the source of record; fold projects it onto
-``RuntimeState.last_transition`` so the anti-spiral guard reads it O(1).
-Last-write-wins (D-B3); an unknown ``reason`` is tolerated (D-B5).
+The event is the source of record; ``last_transition`` is the O(1) read the
+anti-spiral guard depends on. Last write wins, and an unknown ``reason`` is
+projected verbatim rather than rejected — a producer that emits a reason this
+build does not know must not make the recording unfoldable.
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ def test_fold_projects_reason_onto_last_transition() -> None:
 
 
 def test_fold_takes_last_of_multiple_marks() -> None:
-    """D-B3 last-write-wins: the guard reads the most recent transition."""
+    """Last write wins: the guard reads the most recent transition."""
     log, cs = _make_runtime()
     for reason in ("overflow_recovery", "approval_resume", "transient_retry"):
         log.emit(
@@ -49,16 +50,16 @@ def test_fold_takes_last_of_multiple_marks() -> None:
 
 
 def test_fold_without_any_mark_keeps_none() -> None:
-    """An old recording with no StepTransitionMarked folds to None —
-    byte-safe backward compatibility."""
+    """A recording with no ``StepTransitionMarked`` folds to ``None``: the
+    tag is optional, so its absence is not an error."""
     log, cs = _make_runtime()
     assert fold(log, cs, "t1").runtime.last_transition is None
 
 
 def test_fold_tolerates_unknown_reason() -> None:
-    """D-B5: a producer drift that writes an unknown reason must not crash
-    fold (warning-not-fatal, mirroring fold's unknown-event-type policy).
-    The raw value is still projected so inspect can see the drift."""
+    """An unknown reason must not crash fold (warning-not-fatal, mirroring
+    fold's unknown-event-type policy). The raw value is still projected so a
+    reader can see the drift."""
     log, cs = _make_runtime()
     log.emit(
         task_id="t1",

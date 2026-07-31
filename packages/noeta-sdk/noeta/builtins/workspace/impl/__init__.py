@@ -1,17 +1,16 @@
 """Workspace-context material — the environment + instructions residents.
 
-Phase 2c → kernel final form: the renderer prose, hash rules,
+The renderer prose, hash rules,
 ``ContentKindSpec`` factories, kind vocabulary constants AND snapshot types
 for the two workspace residents all live in this plugin (the vocabulary in
 :mod:`~noeta.builtins.workspace.impl.loaders`). The kernel consumes nothing
 here — the packs contribute their content kinds and init hooks through the
 generic surfaces.
 
-Red line (unchanged from the kernel days): every renderer is pure over a
+Red line: every renderer is pure over a
 wiring-time snapshot — no disk, no clock at compose time — so the same
 folded state always composes the same bytes. The impure loaders live in the
-sibling :mod:`.loaders` module (microkernel phase 3, D10 — moved out of the
-kernel), and both residents enter a session as this plugin's
+sibling :mod:`.loaders` module, and both residents enter a session as this plugin's
 ``session_pack`` contributions (:func:`build_instructions_session_pack` /
 :func:`build_environment_session_pack`).
 """
@@ -274,10 +273,10 @@ def instructions_content_kind_from(
     ``snapshots`` maps resident name → preloaded snapshot: the root file
     under its basename, plus (discovery mode,
     docs/adr/anchored-content-placement.md) every discovered subdirectory
-    file under its workspace-relative path. The mapping still feeds the
-    ``content_hash`` seam (:func:`_hashes`) and the discovery hook, but the
-    renderer no longer reads it — it **resolves each active name's bytes from
-    the ContentStore at the ledger's active hash** (spec §6), so the composed
+    file under its workspace-relative path. The mapping feeds the
+    ``content_hash`` seam (:func:`_hashes`) and the discovery hook. The
+    renderer **resolves each active name's bytes from
+    the ContentStore at the ledger's active hash**, so the composed
     instructions are a pure function of (folded state, store). A name active
     in the ledger whose bytes are absent (vanished file, degraded preload)
     renders nothing: the ``evolving`` policy tolerates drift, and a resolve
@@ -315,7 +314,7 @@ def instructions_content_kind_from(
 
 
 # ---------------------------------------------------------------------------
-# Session packs (microkernel phase 3) — the residents' construction halves.
+# Session packs — the residents' construction halves.
 # ---------------------------------------------------------------------------
 
 
@@ -375,13 +374,12 @@ def build_instructions_session_pack(ctx: SessionBuildContext) -> PackContributio
         )
 
     def _init(rec: SessionRecorder) -> None:
-        """Pre-loop activation of the ROOT instructions resident (spec §4.5).
+        """Pre-loop activation of the ROOT instructions resident.
 
         Records the same root snapshot the composer's kind renders from; the
         ``ref.hash`` equals the rendered-instructions sha256 the fingerprint
-        always carried, so the event payload matches the retired
-        ``record_instructions`` call (the envelope now attributes
-        ``actor="plugin:instructions"``). Discovered subtree files activate
+        carries, and the envelope attributes
+        ``actor="plugin:instructions"``. Discovered subtree files activate
         later through the content-discovery hook, not here. No root file ⇒ no-op.
         """
         if root_snapshot is None:
@@ -409,7 +407,7 @@ def build_environment_session_pack(ctx: SessionBuildContext) -> PackContribution
 
     Always on (a workspace always exists): captures the session-static
     workspace facts once so the composer's renderer AND the pre-loop
-    ``record_environment`` share the same snapshot, and contributes the
+    ``_init`` recording share the same snapshot, and contributes the
     environment content kind LAST of the built-in residents (kind band 400)
     so the semi_stable byte layout is unchanged for sessions that never
     activate it.
@@ -418,12 +416,11 @@ def build_environment_session_pack(ctx: SessionBuildContext) -> PackContribution
     content_store = ctx.content_store
 
     def _init(rec: SessionRecorder) -> None:
-        """Pre-loop activation of the environment resident (spec §4.5).
+        """Pre-loop activation of the environment resident.
 
         Records the same snapshot the composer's kind renders from; ``ref.hash``
-        equals the rendered-environment sha256 the fingerprint always carried,
-        so the event payload matches the retired ``record_environment`` call
-        (the envelope now attributes ``actor="plugin:environment"``).
+        equals the rendered-environment sha256 the fingerprint carries,
+        and the envelope attributes ``actor="plugin:environment"``.
         """
         body = render_environment_text(snapshot).encode("utf-8")
         ref = content_store.put(body, media_type="text/markdown")

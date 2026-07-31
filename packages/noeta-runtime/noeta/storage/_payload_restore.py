@@ -1,21 +1,12 @@
 """Typed-payload restore table shared by the persistent EventLog adapters.
 
-Every SQL-backed EventLog stores the envelope payload as canonical bytes
-and must rebuild the typed payload dataclass on read.
-``from_canonical_bytes`` restores nested ``__canonical_tag__``-bearing
-values (``ContentRef``, ``Message``, ``WakeCondition``, ``SubtaskResult``,
-``ContextPlan``, ``ViewSegment``) automatically; this table covers the
-outer payload classes that do *not* carry a tag and would otherwise read
-back as plain dicts.
-
-Extracted from the sqlite EventLog adapter when the Postgres adapter
-landed, so the two backends read from the single table instead of
-drifting apart. A test in the contract suite reflects
-``noeta.protocols.events`` and fails CI the moment a new ``*Payload``
-class lands without a matching entry here. Backends (built-in durable
-ones in ``noeta.builtins.storage.impl`` and third-party alike) reach
-this table only through the public facade :mod:`noeta.storage.spi`
-(``restore_payload`` / ``enforce_payload_cap``).
+A SQL-backed EventLog stores the envelope payload as canonical bytes and must
+rebuild the typed payload dataclass on read. ``from_canonical_bytes`` handles
+nested values that carry a ``__canonical_tag__``; this table covers the outer
+payload classes, which carry no tag and would otherwise read back as plain
+dicts. A reflection test over ``noeta.protocols.events`` fails the build the
+moment a ``*Payload`` class has no entry here, so the table cannot fall behind
+the event vocabulary.
 """
 
 from __future__ import annotations
@@ -91,17 +82,12 @@ __all__ = [
 
 
 def _restore_llm_request_started_payload(d: Any) -> LLMRequestStartedPayload:
-    """Restore ``LLMRequestStarted`` tolerating MS1's optional ``selection``.
+    """Restore ``LLMRequestStarted``, tolerating three shapes of ``selection``.
 
-    Three deterministic shapes for ``selection``:
-      * absent / ``None`` → ``None`` (pre-MS1 old-shape payload);
-      * an already-typed :class:`MessageSelection` (the normal read
-        path: ``from_canonical_bytes`` rehydrates the tagged value before
-        this restorer runs) → kept as-is;
-      * a plain (untagged) dict — old-ish / handwritten / fixture bodies →
-        rebuilt from the fixed five fields; a missing required key is a
-        ``KeyError`` (fail loud — a malformed body is not silently dropped).
-    Any other shape fails loud.
+    Absent, an already-typed :class:`MessageSelection` (what
+    ``from_canonical_bytes`` hands back for a tagged value), or an untagged
+    dict; anything else raises. A required key missing from the dict form is a
+    ``KeyError``, so a malformed body fails loud instead of being dropped.
     """
     sel = d.get("selection")
     if sel is None:
@@ -115,8 +101,8 @@ def _restore_llm_request_started_payload(d: Any) -> LLMRequestStartedPayload:
             selected=sel["selected"],
             dropped=sel["dropped"],
             limit=sel["limit"],
-            # ③ (D-3f): additive prune/summarize counters — ``.get`` so a
-            # pre-③ dict body restores with the byte-safe defaults.
+            # ``.get``: a stored body without these counters must restore at
+            # the byte-safe defaults rather than fail the read.
             pruned=sel.get("pruned", 0),
             summarized=sel.get("summarized", 0),
         )
@@ -134,21 +120,12 @@ def _restore_llm_request_started_payload(d: Any) -> LLMRequestStartedPayload:
 
 
 def _restore_llm_request_finished_payload(d: Any) -> LLMRequestFinishedPayload:
-    """Restore ``LLMRequestFinished`` tolerating the optional ``usage`` added in foundation phase A.
+    """Restore ``LLMRequestFinished``, tolerating three shapes of ``usage``.
 
-    Three deterministic shapes for ``usage`` (mirrors the selection
-    three-state restorer above):
-      * absent / ``None`` → empty ``Usage()`` (old-shape payload from
-        before foundation phase A — the dataclass default also covers this,
-        but we are explicit so the intent survives refactors);
-      * an already-typed :class:`Usage` (the normal read path:
-        ``from_canonical_bytes`` does NOT rehydrate ``Usage`` because it
-        carries no tag, so in practice this is the dict branch — kept for
-        symmetry / defensiveness) → kept as-is;
-      * a plain (untagged) dict — the stored canonical body → rebuilt
-        from its stored fields. Unknown keys (e.g. a legacy bare-dict
-        ``input_tokens`` / ``total_tokens`` from a hand-written fixture)
-        are dropped rather than crashing ``Usage(**d)``.
+    ``Usage`` carries no canonical tag, so the live read path is always the
+    untagged-dict branch; unknown keys in it are dropped rather than crashing
+    ``Usage(**d)``, since a body carrying a field this reader does not know must
+    still fold. A missing ``usage`` restores as an empty ``Usage()``.
     """
     raw = d.get("usage")
     if raw is None:
@@ -178,11 +155,9 @@ def _restore_llm_request_finished_payload(d: Any) -> LLMRequestFinishedPayload:
 
 
 _PAYLOAD_RESTORERS: dict[str, Callable[[Any], Any]] = {
-    # ``restore_dataclass`` (not ``**d``) on the goal-carrying payloads: they
-    # grew an additive optional ``goal_ref`` (goal spill), so a reader one
-    # version behind a writer that adds the NEXT additive key must fold/resume
-    # instead of crashing on an unexpected keyword (same one-way tolerance as
-    # AgentBound / TaskHostBound below).
+    # ``restore_dataclass`` rather than ``**d`` wherever a stored body may carry
+    # a key this reader does not know: fold and resume must survive it, not die
+    # on an unexpected keyword argument.
     "TaskCreated":         lambda d: restore_dataclass(TaskCreatedPayload, d),
     "TaskStarted":         lambda d: TaskStartedPayload(**d),
     "TaskStatePatched":    lambda d: TaskStatePatchedPayload(**d),
@@ -218,9 +193,6 @@ _PAYLOAD_RESTORERS: dict[str, Callable[[Any], Any]] = {
     "LLMRetryScheduled":   lambda d: LLMRetryScheduledPayload(**d),
     "TaskCancelled":       lambda d: TaskCancelledPayload(**d),
     "ModelBound":          lambda d: ModelBoundPayload(**d),
-    # ``restore_dataclass`` (not ``**d``) so an old recording that still
-    # carries the retired verify-era ``*_fingerprint`` keys folds/resumes
-    # instead of crashing on an unexpected keyword (R1 tolerance).
     "AgentBound":          lambda d: restore_dataclass(AgentBoundPayload, d),
     "TaskHostBound":       lambda d: restore_dataclass(TaskHostBoundPayload, d),
     "ConversationClosed":  lambda d: ConversationClosedPayload(**d),
@@ -246,9 +218,9 @@ _PAYLOAD_RESTORERS: dict[str, Callable[[Any], Any]] = {
 def _restore_payload(event_type: str, body: Any) -> Any:
     restorer = _PAYLOAD_RESTORERS.get(event_type)
     if restorer is None:
-        # Forward-compatibility: an event type we don't yet know about
-        # passes through as the canonical dict. New typed payload
-        # classes must register here; the contract suite enforces it.
+        # An unregistered event type passes through as the canonical dict
+        # rather than failing the read; the contract suite is what guarantees
+        # every typed payload class actually has an entry.
         return body
     return restorer(body)
 

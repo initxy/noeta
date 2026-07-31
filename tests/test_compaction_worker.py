@@ -1,4 +1,12 @@
-"""CompactionWorker: API, threshold, fold consistency, best-effort race."""
+"""CompactionWorker: snapshot threshold, fold consistency, races.
+
+A snapshot is an acceleration and never a source of truth, so the Worker may
+only append, and the state it snapshots must fold byte-equal to a from-scratch
+replay. It runs beside live writers, which makes the interesting cases the
+losing ones: any path where an event lands between the fold and the append has
+to end with no snapshot at all, because a snapshot at seq S that does not cover
+events 0..S-1 would silently corrupt every later fold.
+"""
 
 from __future__ import annotations
 
@@ -49,11 +57,8 @@ def _seed_governance_events(
     subtasks: int = 0,
     llm_finishes: int = 0,
 ) -> None:
-    """Emit a parameterised mix of governance-affecting events.
-
-    Mirrors the events fold accumulates in issue 18 so the
-    Worker's snapshot has interesting numbers to round-trip.
-    """
+    """Emit a parameterised mix of governance-affecting events, so the
+    snapshot under test carries non-default counters to round-trip."""
     for i in range(plans):
         log.emit(
             task_id=task_id,
@@ -116,7 +121,6 @@ def test_compact_below_threshold_is_no_op() -> None:
     assert res.events_since_latest_snapshot == 4
     assert res.latest_snapshot_seq_before is None
     assert res.new_snapshot_seq is None
-    # No TaskSnapshot emitted.
     assert all(e.type != "TaskSnapshot" for e in log.read("t1"))
 
 
@@ -176,7 +180,6 @@ def test_compact_twice_back_to_back_is_idempotent_no_op() -> None:
     assert second.compacted is False
     assert second.events_since_latest_snapshot == 0
     assert second.latest_snapshot_seq_before == first.new_snapshot_seq
-    # Exactly one TaskSnapshot from the Worker.
     snapshots = [e for e in log.read("t1") if e.type == "TaskSnapshot"]
     assert len(snapshots) == 1
 
@@ -193,13 +196,13 @@ def test_threshold_parameter_is_configurable() -> None:
 
 
 # ---------------------------------------------------------------------------
-# G1 — historical immutability
+# Append-only history
 # ---------------------------------------------------------------------------
 
 
 def test_compaction_only_appends_does_not_rewrite_history() -> None:
-    """Worker emit only adds a new event; it never deletes or rewrites
-    existing events."""
+    """Compacting appends one event and leaves every earlier envelope
+    untouched — replay from seq 0 must stay possible forever."""
     log, cs = _new_runtime()
     _seed_task_created(log)
     _seed_governance_events(log, cs, "t1", plans=5)
@@ -221,13 +224,14 @@ def test_compaction_only_appends_does_not_rewrite_history() -> None:
 
 
 # ---------------------------------------------------------------------------
-# G2 — no GC / no ContentStore.delete
+# Content is never collected
 # ---------------------------------------------------------------------------
 
 
 def test_compaction_only_calls_content_store_put_no_delete() -> None:
-    """Wrap the ContentStore to assert ``put`` is the only mutating
-    method exercised — Worker must not introduce delete/prune."""
+    """The ContentStore is wrapped in a surface that offers only ``put`` and
+    ``get``: compaction that reclaimed bodies would break replay of the events
+    still pointing at them."""
     log, cs = _new_runtime()
     _seed_task_created(log)
     _seed_governance_events(log, cs, "t1", plans=10)
@@ -254,20 +258,20 @@ def test_compaction_only_calls_content_store_put_no_delete() -> None:
     )
     w.compact_if_needed("t1")
     assert "put" in calls
-    # No delete / prune was even attempted (no such method on Worker
-    # surface; no such method on Tracking).
+    # A delete attempt would have raised AttributeError above rather than
+    # failed an assertion here.
 
 
 # ---------------------------------------------------------------------------
-# G3 — fold consistency including issue 18 governance fields
+# Fold consistency across the accelerated and from-scratch paths
 # ---------------------------------------------------------------------------
 
 
 def test_compaction_snapshot_outcome_byte_equal_via_ignore_snapshots() -> None:
-    """``fold(ignore_snapshots=True)`` and ``fold(ignore_snapshots=False)``
-    on a stream containing a Worker-emitted snapshot must agree on
-    every field — this is the **real** stability guarantee for
-    issue 20."""
+    """Whole-Task equality between ``fold(ignore_snapshots=True)`` and
+    ``fold(ignore_snapshots=False)`` over a stream carrying a Worker snapshot.
+    Field-by-field checks can only catch what they enumerate; this is the
+    guarantee that makes a snapshot safe to trust."""
     log, cs = _new_runtime()
     _seed_task_created(log)
     _seed_governance_events(
@@ -285,9 +289,9 @@ def test_compaction_snapshot_outcome_byte_equal_via_ignore_snapshots() -> None:
 
 
 def test_compaction_preserves_issue18_governance_fields() -> None:
-    """Issue 18 added five governance accumulators; the accelerated
-    fold path must show the same counters as the from-scratch path
-    after compaction."""
+    """The governance accumulators are what BudgetGuard reads, so a snapshot
+    that dropped or reset one would let a task run past its budget: the
+    accelerated fold must report the same counters as the from-scratch fold."""
     log, cs = _new_runtime()
     _seed_task_created(log)
     _seed_governance_events(
@@ -321,11 +325,10 @@ def test_compaction_preserves_issue18_governance_fields() -> None:
 
 
 def test_compaction_snapshot_is_not_treated_as_legacy_by_issue18_guard() -> None:
-    """The Worker writes a post-issue-18 snapshot body (state_dict
-    includes ``spawned_subtasks``), so the B7 legacy snapshot guard
-    in fold must NOT discard it. We confirm this by checking that
-    the accelerated fold path actually picks up the Worker snapshot
-    rather than silently falling back to from-scratch."""
+    """fold discards a snapshot body whose governance dict has no
+    ``spawned_subtasks`` key, because such a body cannot carry trustworthy
+    prefix counters. A Worker snapshot must clear that bar, or acceleration
+    silently degrades to a full replay with nobody noticing."""
     log, cs = _new_runtime()
     _seed_task_created(log)
     _seed_governance_events(log, cs, "t1", plans=10)
@@ -335,8 +338,8 @@ def test_compaction_snapshot_is_not_treated_as_legacy_by_issue18_guard() -> None
     res = w.compact_if_needed("t1")
     assert res.compacted
 
-    # Reach into the snapshot body and confirm spawned_subtasks key
-    # is present (would be missing on a pre-issue-18 body).
+    # Reach into the snapshot body: the key is fold's sentinel for a body it
+    # is allowed to accelerate from.
     state_dict = __import__(
         "noeta.core.snapshot", fromlist=["deserialize_task_state"]
     ).deserialize_task_state(
@@ -353,17 +356,15 @@ def _latest_snapshot_ref(log: InMemoryEventLog, task_id: str) -> ContentRef:
 
 
 # ---------------------------------------------------------------------------
-# G4 — best-effort semantics: stale snapshot safety + concurrent race
+# Best-effort semantics: stale-snapshot safety under concurrent writers
 # ---------------------------------------------------------------------------
 
 
 def test_race_during_put_is_caught_by_expected_seq_no_stale_snapshot() -> None:
-    """A new event landing during ``ContentStore.put`` (between fold
-    and the snapshot emit) is caught by the EventLog's
-    ``expected_seq`` CAS, not by the Worker's optimistic guard A.
-    The CAS is the correctness gate; guard A is a cost optimisation
-    only. Either way, no stale snapshot is emitted and the fold
-    invariant holds."""
+    """An event landing during ``ContentStore.put`` is past the Worker's own
+    pre-put short circuit, so only the EventLog's ``expected_seq`` CAS can
+    catch it — which is the point: the CAS is the correctness gate and the
+    short circuit is a cost optimisation. No stale snapshot is emitted."""
     log, cs = _new_runtime()
     _seed_task_created(log)
     _seed_governance_events(log, cs, "t1", plans=10)
@@ -401,12 +402,10 @@ def test_race_during_put_is_caught_by_expected_seq_no_stale_snapshot() -> None:
 
 
 def test_guard_a_short_circuits_known_stale_fold_before_put() -> None:
-    """Guard A is an optimisation that short-circuits a wasted
-    ``ContentStore.put`` when a concurrent writer landed an event
-    between ``read`` and the fold completing. Correctness is owned
-    by the ``expected_seq`` CAS later; this test pins that guard A
-    really kicks in (i.e. ``put`` is never called) when the race
-    is detectable before ``put``."""
+    """When a concurrent writer lands an event while the fold is running, the
+    Worker re-reads the tail and gives up before ``ContentStore.put`` — the
+    snapshot body would be thrown away anyway, and the discarded blob would
+    stay in the store forever. Pins that the short circuit really fires."""
     log, cs = _new_runtime()
     _seed_task_created(log)
     _seed_governance_events(log, cs, "t1", plans=10)

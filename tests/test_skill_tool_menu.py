@@ -1,20 +1,9 @@
-"""Tests for ``skill`` control-tool schema + workspace-skill menu.
+"""The ``skill`` tool's schema is the model's only view of what skills exist.
 
-Covers:
-
-1. **Flag off → schema absent.** ``skill_invocation_enabled=False`` → composer
-   does not expose a ``skill`` tool, regardless of workspace skills.
-2. **Empty registry → schema absent.** Flag on but workspace has no skills →
-   no ``skill`` tool grown (pure-SDK users zero-perceived).
-3. **Non-empty registry — enum + description.** Sorted ``(name, description)``
-   pairs from the skill registry drive the ``skill`` property ``enum`` and
-   description roster. Entries with no description render as bare names.
-4. **Sorting determinism.** Input skill-name ordering on disk does not affect
-   the enum order (always sorted by name).
-5. **SdkHost integration.** activating ``skill_invocation`` (``"skill_invocation"``
-   in ``spec.plugins``) flows
-   through ``_build_engine`` into the composer schema when the workspace has
-   skills; ``False`` keeps it absent.
+It appears exactly when the capability is activated AND the workspace holds a
+skill, so a workspace without skills causes zero schema drift. The enum is
+sorted by name regardless of the order files landed on disk, which keeps the
+schema bytes stable across machines and preserves the provider's prompt cache.
 """
 
 from __future__ import annotations
@@ -69,13 +58,14 @@ def test_skill_schema_empty_menu_shape() -> None:
     assert params["required"] == ["skill"]
     prop = params["properties"]["skill"]
     assert prop["type"] == "string"
-    # No enum when the menu is empty
+    # An empty enum is invalid in several provider schemas, so it is omitted.
     assert "enum" not in prop
     assert prop["description"] == "Name of the skill to activate."
 
 
 def test_skill_schema_no_args_no_reason() -> None:
-    """Per D4: parameters has ONLY ``skill`` — no ``args``, no ``reason``."""
+    """The tool takes a name and nothing else: extra parameters would invite
+    the model to pass state the activation path has nowhere to put."""
     schema = skill_tool_schema((("alpha", "does things"),))
     props = schema["function"]["parameters"]["properties"]
     assert set(props.keys()) == {"skill"}
@@ -114,7 +104,8 @@ def test_skill_schema_bare_name_when_description_empty() -> None:
 
 
 def test_skill_schema_deterministic_bytes_for_same_input() -> None:
-    """Same menu → canonical bytes identical (stable-hash guard)."""
+    """The schema feeds a hashed prompt prefix, so identical input must give
+    byte-identical output."""
     menu = (("a", "first"), ("b", "second"))
     assert _canonical(skill_tool_schema(menu)) == _canonical(
         skill_tool_schema(menu)
@@ -141,7 +132,7 @@ def _build_composer_schemas(
         compaction=COMPACTION_OFF,
         budget=Budget(),
         capability_flags={"skill_invocation": skill_invocation_enabled},
-        # The fs write/shell knobs ride plugin_config["fs"] (spec §4.2).
+        # The fs write/shell knobs ride plugin_config under the plugin's name.
         plugin_config={
             "fs": {"write_mode": FsWriteMode.DRY_RUN, "shell_mode": ShellMode.OFF},
         },
@@ -172,7 +163,6 @@ def test_flag_on_empty_registry_no_skill_schema(tmp_path: Path) -> None:
     """Flag on but no skills on disk → skill tool absent."""
     ws = tmp_path / "ws"
     ws.mkdir()
-    # No .noeta/skills at all → registry is empty
     schemas = _build_composer_schemas(ws, skill_invocation_enabled=True)
     assert _find_skill_schema(schemas) is None
 
@@ -181,7 +171,7 @@ def test_flag_on_with_skills_renders_sorted_menu(tmp_path: Path) -> None:
     """Registry non-empty + flag on → enum sorted by name, descriptions present."""
     ws = tmp_path / "ws"
     ws.mkdir()
-    # Write in an intentionally non-sorted order on disk
+    # Written out of order on purpose so the sort has something to do.
     write_skill(ws, "zeta", "last letter")
     write_skill(ws, "alpha", "first letter")
     write_skill(ws, "beta", "")  # empty description
@@ -189,23 +179,19 @@ def test_flag_on_with_skills_renders_sorted_menu(tmp_path: Path) -> None:
     schema = _find_skill_schema(schemas)
     assert schema is not None
     prop = schema["function"]["parameters"]["properties"]["skill"]
-    # Enum must be alphabetically sorted regardless of disk write order
     assert prop["enum"] == ["alpha", "beta", "zeta"]
     desc = prop["description"]
     assert "alpha — first letter" in desc
     assert "zeta — last letter" in desc
-    # Bare-name beta, must NOT be followed by " — "
     assert "beta" in desc
     assert "beta — " not in desc
 
 
 def test_menu_built_from_registry_not_caller(tmp_path: Path) -> None:
-    """The menu derives from the loaded registry (the skills mount reads its
-    own typed ``skills_kit`` contribution) — callers never supply a menu arg,
-    and the flag rides the generic ``capability_flags`` bag. (Regression guard:
-    neither a ``skill_menu`` nor a feature-named flag kwarg exists on
-    ``build_session_inputs`` per design.)
-    """
+    """The menu derives from the loaded registry, never from a caller
+    argument, and the flag rides the generic ``capability_flags`` bag — the
+    builder's signature must stay free of skill-specific vocabulary or the
+    kernel starts knowing what a skill is."""
     import inspect
 
     sig = inspect.signature(build_session_inputs)
@@ -215,7 +201,7 @@ def test_menu_built_from_registry_not_caller(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# SdkHost integration — the "skill_invocation" activation drives the flag
+# SdkHost — the spec's "skill_invocation" activation drives the flag
 # ---------------------------------------------------------------------------
 
 
@@ -276,7 +262,8 @@ def _skill_schema_from_engine(engine: Any) -> dict[str, Any] | None:
 def test_sdkhost_capability_on_preserves_schema_with_skills(
     tmp_path: Path,
 ) -> None:
-    """activating skill_invocation + workspace skills → schema."""
+    """The activation on the AgentSpec reaches the composer schema through
+    ``_build_engine``, so a spec is enough to configure the menu."""
     ws = tmp_path / "ws"
     ws.mkdir()
     write_skill(ws, "coder", "Writes code")
@@ -299,7 +286,6 @@ def test_sdkhost_capability_on_preserves_schema_with_skills(
     prop = schema["function"]["parameters"]["properties"]["skill"]
     assert prop["enum"] == ["coder", "reviewer"]
     assert "coder — Writes code" in prop["description"]
-    # reviewer with empty description → bare name
     assert "reviewer" in prop["description"]
     assert "reviewer — " not in prop["description"]
 
@@ -307,7 +293,8 @@ def test_sdkhost_capability_on_preserves_schema_with_skills(
 def test_sdkhost_capability_off_masks_schema_even_with_skills(
     tmp_path: Path,
 ) -> None:
-    """skill_invocation not activated → schema absent (no leak)."""
+    """Without the activation the schema stays absent even though skills are
+    on disk — the workspace's contents must never override the spec."""
     ws = tmp_path / "ws"
     ws.mkdir()
     write_skill(ws, "coder", "Writes code")

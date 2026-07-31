@@ -1,7 +1,9 @@
-"""Contract tests for ``PermissionGuard`` (issue 18).
+"""PermissionGuard admission rules, including what it does when unsure.
 
-Verifies allowlist / denylist / risk_level cap / agent allowlist and
-the fail-closed behaviour required by issue 18 B4.
+Allowlist, denylist, risk-level cap, subtask-agent allowlist and the per-call
+``conditional_approval`` predicate. The rule worth pinning hardest is
+fail-closed: with a risk cap configured, a tool whose metadata is missing or
+whose ``risk_level`` is unrecognised is denied rather than assumed safe.
 """
 
 from __future__ import annotations
@@ -83,7 +85,7 @@ def test_tool_in_allowlist_passes() -> None:
 
 
 # ---------------------------------------------------------------------------
-# risk_level cap (issue 18 B4 fail-closed)
+# risk_level cap — fail-closed when the level cannot be established
 # ---------------------------------------------------------------------------
 
 
@@ -104,7 +106,7 @@ def test_risk_level_exceeds_max_returns_deny() -> None:
 
 
 def test_permission_guard_fails_closed_on_unknown_tool_metadata() -> None:
-    """B4: max_risk_level set + tools dict missing the tool → DENY."""
+    """A risk cap the guard cannot evaluate must deny, not default to allow."""
     policy = PermissionPolicy(max_risk_level="low")
     guard = PermissionGuard(policy, tools={})  # no metadata for any tool
     result = guard.check(_tool("mystery"), _ctx())
@@ -115,7 +117,8 @@ def test_permission_guard_fails_closed_on_unknown_tool_metadata() -> None:
 
 
 def test_permission_guard_fails_closed_on_unknown_risk_level_string() -> None:
-    """B4: tool.risk_level is not in the known ordering → DENY."""
+    """A ``risk_level`` outside the known ordering is not comparable to the
+    cap, so it fails closed instead of sorting arbitrarily."""
     policy = PermissionPolicy(max_risk_level="low")
     tools = {"weird": _FakeTool(name="weird", risk_level="exotic-tier")}
     guard = PermissionGuard(policy, tools=tools)
@@ -125,7 +128,8 @@ def test_permission_guard_fails_closed_on_unknown_risk_level_string() -> None:
 
 
 def test_permission_guard_skips_risk_check_when_max_unset() -> None:
-    """No ``max_risk_level`` configured → don't query tools dict at all."""
+    """Without a cap the tools mapping is never consulted, so an empty one is
+    not a fail-closed trigger."""
     policy = PermissionPolicy()  # no max_risk_level
     guard = PermissionGuard(policy, tools={})  # empty intentionally
     assert guard.check(_tool("anything"), _ctx()).verdict is Verdict.ALLOW
@@ -181,9 +185,9 @@ def _call(name: str, args: dict[str, Any]) -> ProposedToolCall:
 
 
 def test_conditional_approval_gates_only_matching_calls() -> None:
-    """The injected predicate gates per call/argument: ``shell_run`` whose
-    command is unknown → require_approval; a known one → allow; other tools and
-    a None predicate are unaffected (byte-identical to before)."""
+    """The predicate sees the tool name AND the arguments, so a host can gate
+    one shell command and wave through another; tools it declines to match, and
+    the absent-predicate case, stay on the plain allow path."""
 
     def needs_approval(tool_name: str, args: dict[str, Any]) -> bool:
         return tool_name == "shell_run" and args.get("command") != "git status"

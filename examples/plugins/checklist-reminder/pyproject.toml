@@ -1,21 +1,18 @@
-# Illustrative packaging for the ``checklist-reminder`` manifest plugin.
+# Illustrative packaging for the ``checklist-reminder`` plugin. Not built here —
+# the tests load ``plugin.py`` by explicit path — so this file exists to show the
+# two things that make a distribution discoverable: the ``[tool.noeta]`` manifest
+# (mirrored into the wheel as ``noeta-plugin.toml`` package data, which is what
+# lets the loader read identity and contributions without importing plugin code)
+# and an entry point in the SDK-owned ``noeta.plugins`` group.
 #
-# This file shows the *real* distribution shape (spec D1): the ``[tool.noeta]``
-# static manifest (mirrored to ``noeta-plugin.toml`` package data, read WITHOUT
-# importing plugin code) plus an entry point in the SDK-owned ``noeta.plugins``
-# group so a host started with ``load_plugins(entry_points=True)`` discovers the
-# distribution.
-#
-# In THIS repository the plugin is NOT installed; the tests load it by explicit
-# path via ``load_plugins(modules=[".../plugin.py"])``. When packaged for
-# real, the ``checklist-reminder`` directory becomes the importable
-# ``checklist_reminder`` package (dashes are not valid in a Python module name),
-# so ``ref`` resolves to ``checklist_reminder:long_checklist_reminder``.
+# Packaged for real, this directory becomes the importable ``checklist_reminder``
+# package — dashes are illegal in a Python module name — which is why the ``ref``
+# below reads ``checklist_reminder:long_checklist_reminder``.
 
 [project]
 name = "noeta-plugin-checklist-reminder"
 version = "0.1.0"
-description = "A compose-time (track B) reminder that nags when the todo checklist grows long."
+description = "A compose-time reminder that nudges when the todo checklist grows long."
 requires-python = ">=3.10"
 dependencies = ["noeta-sdk"]
 
@@ -29,9 +26,9 @@ name = "long-checklist"
 ref = "checklist_reminder:long_checklist_reminder"
 priority = 400
 
-# The discovery hook (its VALUE is not a factory in the manifest mechanism — the
-# manifest is read from package data; the entry point only makes the dist
-# discoverable).
+# Discovery only. The value is not a factory — the manifest is read from package
+# data — so the entry point exists purely to make the distribution visible to
+# ``load_plugins(entry_points=True)``.
 [project.entry-points."noeta.plugins"]
 checklist-reminder = "checklist_reminder"
 

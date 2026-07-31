@@ -1,10 +1,9 @@
-# Illustrative packaging for the ``git-checkpoint`` manifest plugin.
-#
-# In THIS repository the plugin is loaded by explicit path (it is an in-tree
-# example, see README.md), so this file is not built. A real, pip-installable
-# plugin ships the ``[tool.noeta]`` manifest (mirrored to ``noeta-plugin.toml``
-# package data) plus an entry point in the SDK-owned ``noeta.plugins`` group so
-# ``load_plugins(entry_points=True)`` discovers the distribution.
+# Illustrative packaging for the ``git-checkpoint`` plugin. Not built here — the
+# tests load ``plugin.py`` by explicit path — so this file exists to show the two
+# things that make a distribution discoverable: the ``[tool.noeta]`` manifest
+# (mirrored into the wheel as ``noeta-plugin.toml`` package data, which is what
+# lets the loader read identity and contributions without importing plugin code)
+# and an entry point in the SDK-owned ``noeta.plugins`` group.
 
 [project]
 name = "noeta-plugin-git-checkpoint"
@@ -18,9 +17,9 @@ dependencies = [
     "noeta-sdk>=0.4.0",
 ]
 
-# The static manifest (D1). A real distribution ships ``plugin.py`` inside an
-# importable package (``git_checkpoint/``), so ``ref`` reads
-# ``git_checkpoint:OBSERVER``.
+# Packaged for real, this directory becomes the importable ``git_checkpoint``
+# package — dashes are illegal in a Python module name — which is why the ``ref``
+# below reads ``git_checkpoint:OBSERVER`` and not ``plugin:OBSERVER``.
 [tool.noeta]
 name = "git-checkpoint"
 requires-noeta = ">=0.4"
@@ -34,9 +33,9 @@ surface = "observer"
 name = "git_checkpoint"
 ref = "git_checkpoint:OBSERVER"
 
-# The discovery hook (its VALUE is not a factory in the manifest mechanism — the
-# manifest is read from package data; the entry point only makes the dist
-# discoverable).
+# Discovery only. The value is not a factory — the manifest is read from package
+# data — so the entry point exists purely to make the distribution visible to
+# ``load_plugins(entry_points=True)``.
 [project.entry-points."noeta.plugins"]
 git-checkpoint = "git_checkpoint"
 

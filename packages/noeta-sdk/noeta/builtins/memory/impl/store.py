@@ -558,8 +558,8 @@ def load_memory_store(*, root: Path) -> MemoryStore:
     """Build the global :class:`MemoryStore` at ``root``.
 
     ``root`` is the **fixed global** memory directory the agent layer
-    supplies (default :data:`DEFAULT_GLOBAL_MEMORY_DIR`) — it is no longer
-    derived from the per-session workspace, so reads / writes land in one
+    supplies (default :data:`DEFAULT_GLOBAL_MEMORY_DIR`) — independent of
+    the per-session workspace, so reads / writes land in one
     place regardless of which workspace the turn runs in. A missing
     directory is a valid empty store — an unconfigured global dir pays
     nothing (``entries() == ()`` keeps every default flow byte-identical).

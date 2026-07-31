@@ -129,7 +129,7 @@ def _parse_tavily_payload(payload: dict) -> list[SearchResult]:
 
     Shared by both transports (:class:`HttpSearchTransport` over httpx and
     :class:`ContainerCurlSearchTransport` over the sandbox ``curl``) so the two
-    network paths cannot drift in how a Tavily payload maps to hits (R3): only
+    network paths cannot drift in how a Tavily payload maps to hits: only
     the transport differs, the parse is one place. Each field is length-clamped
     exactly as the pre-seam inline extraction did.
     """
@@ -263,13 +263,13 @@ class HttpSearchTransport:
 class ContainerCurlSearchTransport:
     """Web search over the Tavily API issued through the sandbox container.
 
-    In sandbox mode (D3/D5) every tool's execution must happen inside the
+    In sandbox mode every tool's execution must happen inside the
     session's container rather than on the host. This transport reuses the
     ``ExecEnv`` process seam to run ``curl`` *inside* the container — the same
     ``POST https://api.tavily.com/search`` request ``HttpSearchTransport`` makes
-    over httpx, only the egress moves into the sandbox (D6). The Tavily response
+    over httpx, only the egress moves into the sandbox. The Tavily response
     is parsed by the SAME :func:`_parse_tavily_payload` the httpx path uses, so
-    the two egress paths cannot drift (R3).
+    the two egress paths cannot drift.
 
     ``--fail`` makes ``curl`` exit nonzero on an HTTP >= 400 (an auth / quota
     failure) rather than returning the error JSON with exit 0 — without it the
@@ -277,10 +277,10 @@ class ContainerCurlSearchTransport:
     429 to a bland "no results" instead of surfacing the cause. With ``--fail``
     such a response (or a timeout) raises (named cause) so the tool degrades to
     ``ToolResult(success=False, ...)`` exactly like the httpx ``raise_for_status``
-    path (R3).
+    path.
 
     The Tavily key never enters ``curl``'s argv (it would land in the container
-    process table and any shell-command log the AIO backend keeps, D5). Instead
+    process table and any shell-command log the AIO backend keeps). Instead
     the ``Authorization`` header is written to a ``curl --config`` file over the
     file API (``/v1/file/write`` — not a shell command) and referenced with
     ``-K``; the file is removed immediately after the request. ``curl``'s argv

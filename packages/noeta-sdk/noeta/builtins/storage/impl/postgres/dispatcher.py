@@ -1,23 +1,11 @@
 """``PostgresDispatcher`` — psycopg-backed adapter for ``Dispatcher`` + ``LeaseRegistry``.
 
-Third Postgres adapter on the same database that ``PostgresEventLog``
-and ``PostgresContentStore`` share. Behaviour is pinned by
-:class:`noeta.storage.memory.InMemoryDispatcher` and the
-storage-backend-neutral contract suite, mirroring
-:class:`noeta.builtins.storage.impl.sqlite.dispatcher.SqliteDispatcher`
-structure-for-structure.
-
-Where sqlite serialises every lifecycle write behind the file-wide
-``BEGIN IMMEDIATE`` lock, each write transaction here takes ONE global
-``pg_advisory_xact_lock`` for the dispatcher state machine — the FIFO
-``ready_order`` allocation and the wake-matching read-modify-write span
-multiple tasks, so a per-task lock would not preserve the serial
-semantics the contract pins. Dispatcher lifecycle calls are not a hot
-path (per step, not per event), so the single lock is not a bottleneck.
-
-Public surface is exactly the ``Dispatcher`` + ``LeaseRegistry`` L0
-Protocols plus the same lifecycle helpers (``close`` + context manager)
-the other adapters expose.
+Every lifecycle write transaction takes ONE global
+``pg_advisory_xact_lock`` for the dispatcher state machine: the FIFO
+``ready_order`` allocation and the wake-matching read-modify-write both span
+multiple tasks, so a per-task lock would not preserve the serial semantics the
+storage contract pins. Lifecycle calls happen per step rather than per event,
+which is what makes a single global lock affordable.
 """
 
 from __future__ import annotations
@@ -58,11 +46,10 @@ def _timer_deadline(wake_on: Any) -> Optional[float]:
     """The ``fire_at`` value mirrored onto the row for a timer suspend, or
     ``None`` for every non-timer wake.
 
-    Kept in lockstep with ``wake_on_canonical`` at every write site so
-    the indexed timer sweep selects the due set off ``fire_at`` without
-    decoding each suspended row. The invariant: ``fire_at`` is non-NULL
-    iff the row is a suspended ``TimerFired`` wait carrying this
-    deadline.
+    Every write site must keep this in lockstep with ``wake_on_canonical``:
+    the invariant ``fire_at IS NOT NULL`` iff the row is a suspended
+    ``TimerFired`` wait is what lets the indexed timer sweep pick the due set
+    without decoding each suspended row.
     """
     return wake_on.fire_at if isinstance(wake_on, TimerFired) else None
 
@@ -84,20 +71,18 @@ def _deserialize_wake(blob: Any) -> Any:
 class PostgresDispatcher:
     """psycopg implementation of ``Dispatcher`` + ``LeaseRegistry``.
 
-    Public surface matches the Protocols (plus the standard adapter
-    lifecycle helpers). Debug introspection beyond ``task_status`` /
-    ``has_active_lease`` is deliberately NOT part of this surface;
-    tests reach into ``_conn`` directly when they need the raw rows.
+    Debug introspection beyond ``task_status`` / ``has_active_lease`` is
+    deliberately absent from this surface; tests reach into ``_conn`` when
+    they need raw rows.
     """
 
     def __init__(
         self,
         dsn: str,
         *,
-        # ``now`` defaults to wall-clock ``time.time``, NOT
-        # ``time.monotonic``. ``lease_expires_at`` is a persisted
-        # float; comparisons across a process restart only make sense
-        # against a wall clock.
+        # Wall-clock ``time.time``, NOT ``time.monotonic``:
+        # ``lease_expires_at`` is persisted, and comparing it across a
+        # process restart only makes sense against a wall clock.
         now: Optional[Callable[[], float]] = None,
         heartbeat_max: int = 360,
         max_fail_attempts: int = 3,
@@ -106,34 +91,32 @@ class PostgresDispatcher:
     ) -> None:
         self._conn = _open_connection(dsn)
         apply_migrations(self._conn)
-        # No injected ``now`` (production) → expiry math runs on the
-        # database clock (``_DB_NOW_SQL``), the one clock every host
-        # shares. An injected ``now`` keeps the deterministic
-        # client-side comparisons the contract tests drive.
+        # Without an injected ``now`` the expiry math runs on the database
+        # clock (``_DB_NOW_SQL``), the one clock every host shares; an
+        # injected ``now`` keeps the deterministic client-side comparisons
+        # the contract tests drive.
         self._db_clock = now is None
         self._now = now or time.time
         self._heartbeat_max = heartbeat_max
         self._max_fail_attempts = max_fail_attempts
         self._reclaim_max = reclaim_max
-        # Upper bound on a lifecycle transaction's wait for a
-        # dispatcher-row lock. The EventLog's in-tx fence probe
-        # (``SELECT ... FOR SHARE``, ADR multi-host-lease-fencing.md D1)
-        # can hold a row lock for the duration of an emit transaction;
-        # a wedged emit (GC pause, SIGSTOP, dead client) must not pin
-        # the global dispatcher advisory lock fleet-wide through e.g. a
-        # blocked ``requeue_stale`` UPDATE. On timeout the transaction
-        # aborts (``psycopg.errors.LockNotAvailable``), the caller's
-        # sweep retries next poll, and every other lifecycle op
-        # proceeds. Normal emits commit in milliseconds — hitting this
-        # bound means the emitter is already pathological.
+        # Upper bound on a lifecycle transaction's wait for a dispatcher-row
+        # lock. The EventLog's in-transaction fence probe
+        # (``SELECT ... FOR SHARE``) holds a row lock for the length of an
+        # emit, so a wedged emit (GC pause, SIGSTOP, dead client) would
+        # otherwise pin the global dispatcher advisory lock fleet-wide behind
+        # e.g. a blocked ``requeue_stale`` UPDATE. On timeout the transaction
+        # aborts (``psycopg.errors.LockNotAvailable``), the caller's sweep
+        # retries next poll, and every other lifecycle op proceeds. Normal
+        # emits commit in milliseconds; reaching this bound means the emitter
+        # is already pathological.
         self._row_lock_timeout_ms = row_lock_timeout_ms
         self._lock = threading.Lock()
-        # ``is_lease_valid`` is on the EventLog write path: every
-        # ``emit(... lease_id=...)`` calls it from **inside** the
-        # EventLog's open transaction. Give it a separate read-only
-        # connection + lock (same shape as the sqlite adapter) so a
-        # validation read never queues behind a lifecycle write
-        # transaction held by another thread on the main connection.
+        # ``is_lease_valid`` sits on the EventLog write path: every
+        # ``emit(... lease_id=...)`` calls it from **inside** the EventLog's
+        # open transaction. It gets its own connection + lock so a validation
+        # read never queues behind a lifecycle write transaction another
+        # thread is holding on the main connection.
         self._read_conn = _open_connection(dsn)
         self._read_lock = threading.Lock()
         self._closed = False
@@ -145,16 +128,14 @@ class PostgresDispatcher:
     def _begin_locked(self) -> None:
         """Open a transaction holding the global dispatcher advisory lock.
 
-        The sqlite adapter's ``BEGIN IMMEDIATE`` analogue: every
-        lifecycle read-modify-write runs serialised behind this one
-        transaction-scoped lock (auto-released at COMMIT / ROLLBACK).
+        Every lifecycle read-modify-write is serialised behind this one
+        transaction-scoped lock, auto-released at COMMIT / ROLLBACK.
 
-        The advisory acquisition itself waits unboundedly (host-to-host
-        serialisation is normal); the ``SET LOCAL lock_timeout`` issued
-        AFTER it only bounds subsequent row-lock waits — i.e. an UPDATE
+        The advisory acquisition itself waits unboundedly, since host-to-host
+        serialisation is the normal case; the ``SET LOCAL lock_timeout``
+        issued AFTER it bounds only subsequent row-lock waits — an UPDATE
         queued behind an emit's ``FOR SHARE`` fence probe — so a wedged
-        emitter cannot pin the global lock indefinitely (see
-        ``_row_lock_timeout_ms``).
+        emitter cannot pin the global lock indefinitely.
         """
         self._conn.execute("BEGIN")
         try:
@@ -174,29 +155,19 @@ class PostgresDispatcher:
     ) -> tuple[str, float]:
         """Return ``(sql_fragment, param)`` for a lease-expiry computation.
 
-        DB-clock mode (production, no injected ``now``): the server
-        computes ``clock_timestamp() + lease_seconds``, so every host
-        agrees on the expiry instant regardless of per-host skew (ADR
-        multi-host-lease-fencing.md D2). The returned fragment is an
-        expression, not a placeholder — the caller embeds it directly
-        into its SQL.
-
-        Injected-clock mode (tests): the caller's ``self._now()`` is
-        used, keeping the deterministic client-side comparisons the
-        contract suite drives.
+        In DB-clock mode the server computes ``clock_timestamp() +
+        lease_seconds``, so every host agrees on the expiry instant whatever
+        its own clock says. The fragment is an SQL expression, not always a
+        placeholder, so the caller must embed it in the statement text rather
+        than pass it as a parameter.
         """
         if self._db_clock:
             return f"{_DB_NOW_SQL} + %s", lease_seconds
         return "%s", self._now() + lease_seconds
 
     def _now_clause(self) -> tuple[str, tuple]:
-        """Return ``(sql_expression, params)`` for "now".
-
-        DB-clock mode: the expression is ``_DB_NOW_SQL`` with no
-        parameters — the server evaluates it per-statement.
-        Injected-clock mode: the expression is ``%s`` with
-        ``self._now()`` as the parameter.
-        """
+        """Return ``(sql_expression, params)`` for "now", so that every
+        predicate comparing against it renders the same clock base."""
         if self._db_clock:
             return _DB_NOW_SQL, ()
         return "%s", (self._now(),)
@@ -237,12 +208,13 @@ class PostgresDispatcher:
     def _drain_first_matching_pending(
         self, task_id: str, wake_on: Any
     ) -> Optional[bytes]:
-        """If a buffered wake event matches ``wake_on``, delete it and
-        return its canonical bytes so the caller can persist them on
-        the task row as ``matched_wake_event_canonical``. Returns
-        ``None`` when no buffered event matches. Caller is responsible
-        for transitioning the task row to ``ready`` and clearing wake
-        metadata."""
+        """If a buffered wake event matches ``wake_on``, delete it and return
+        its canonical bytes; ``None`` when nothing matches.
+
+        Deliberately leaves the task row alone: the caller owns the
+        transition to ``ready`` and the clearing of wake metadata, and must
+        persist the returned bytes as ``matched_wake_event_canonical``.
+        """
         if wake_on is None:
             return None
         for row in self._conn.execute(
@@ -268,18 +240,10 @@ class PostgresDispatcher:
     def enqueue(self, task_id: str, *, reserved: bool = False) -> None:
         """Mark ``task_id`` as ready-to-lease.
 
-        Three paths matching the Protocol's idempotency promise:
-
-        * No row → INSERT with a fresh ``ready_order``.
-        * Existing row already in ``ready`` → no-op (preserve original
-          ``ready_order`` — and its existing ``reserved`` flag — so FIFO
-          is not reshuffled).
-        * Existing row in any non-ready status → transition to ready,
-          clearing all non-ready columns and assigning a fresh
-          ``ready_order``.
-
-        ``reserved`` (see :meth:`Dispatcher.enqueue`) marks the task
-        targeted-lease-only until its first lease claims it.
+        Idempotent as the Protocol requires: a task already in ``ready``
+        keeps its ``ready_order`` and its ``reserved`` flag untouched, so
+        re-enqueueing cannot reshuffle FIFO position. ``reserved`` marks the
+        task targeted-lease-only until its first lease claims it.
         """
         with self._lock:
             self._begin_locked()
@@ -300,13 +264,11 @@ class PostgresDispatcher:
                     # No-op; FIFO must not be reshuffled.
                     pass
                 else:
-                    # Non-ready → ready transition: clear every
-                    # state-specific field of the prior state in
+                    # Clear every field belonging to the prior state in
                     # lockstep with the status flip, including
-                    # ``matched_wake_event_canonical``. A stale matched
-                    # wake surviving a force-enqueue would let the next
-                    # lease deliver a wake_event the caller did not
-                    # request (see InMemory.enqueue).
+                    # ``matched_wake_event_canonical``: a matched wake
+                    # surviving a force-enqueue would let the next lease
+                    # deliver a wake_event the caller never requested.
                     order = self._next_ready_order()
                     self._conn.execute(
                         "UPDATE dispatcher_tasks SET "
@@ -340,25 +302,22 @@ class PostgresDispatcher:
         """Lease a ready task — FIFO when ``task_id is None``, targeted
         otherwise.
 
-        Targeted-lease semantics (``task_id=<id>``): returns ``None`` if
-        the task does not exist or is not currently in the ``ready``
-        state. Never raises — diagnosis is the caller's job.
-
-        On success, any ``matched_wake_event_canonical`` queued by a
-        prior :meth:`wake` or release-drain is read and handed back on
-        :attr:`Lease.wake_event`. It is **NOT** cleared at lease time —
-        it survives the lease and is cleared only by a consuming
-        ``release(consumed_wake_event=...)``, otherwise re-delivered by
-        :meth:`requeue_stale` (at-least-once delivery + idempotent
-        consumption = exactly-once).
+        A targeted lease returns ``None`` when the task does not exist or is
+        not in ``ready``; it never raises, because diagnosis is the caller's
+        job. A queued ``matched_wake_event_canonical`` is handed back on
+        :attr:`Lease.wake_event` but is **NOT** cleared here: only a
+        consuming ``release(consumed_wake_event=...)`` clears it, so an
+        interrupted worker's wake is re-delivered by :meth:`requeue_stale`.
+        At-least-once delivery plus idempotent consumption is what makes the
+        pair exactly-once.
         """
         with self._lock:
             self._begin_locked()
             try:
                 if task_id is None:
-                    # ``reserved`` tasks are targeted-lease-only (a fresh
-                    # subtask child its drain/executor must claim first) —
-                    # skip them in the untargeted FIFO selection.
+                    # ``reserved`` tasks are targeted-lease-only — a fresh
+                    # subtask child its own driver must claim first — so the
+                    # untargeted FIFO selection skips them.
                     row = self._conn.execute(
                         "SELECT task_id, matched_wake_event_canonical "
                         "FROM dispatcher_tasks "
@@ -392,8 +351,8 @@ class PostgresDispatcher:
                         " worker_id = %s,"
                         " ready_order = NULL,"
                         # One-shot claim: only a targeted lease can reach a
-                        # reserved row, so this lease claims the child for its
-                        # owning driver — clear the guard.
+                        # reserved row, so reaching here means the owning
+                        # driver has claimed the child and the guard is spent.
                         " reserved = false "
                         "WHERE task_id = %s "
                         "RETURNING lease_expires_at",
@@ -442,13 +401,12 @@ class PostgresDispatcher:
                     self._conn.execute("ROLLBACK")
                     raise InvalidLease(lease_id)
                 if int(row["heartbeat_count"]) >= self._heartbeat_max:
-                    # Cap exceeded — force release in the same transaction.
-                    # The matched wake is NOT consumed here (no TaskWoken
-                    # proof), so it must be PRESERVED and re-delivered,
-                    # not stranded. If a matched is in-flight the task
-                    # goes back to **ready** (re-deliverable, same as a
-                    # non-consuming release); otherwise it suspends on
-                    # its preserved wake_on.
+                    # Force release in the same transaction. The matched wake
+                    # is NOT consumed here (there is no TaskWoken proof), so
+                    # it must be preserved and re-delivered rather than
+                    # stranded: a task with one in flight goes back to
+                    # **ready**, otherwise it suspends on its preserved
+                    # wake_on.
                     if row["matched_wake_event_canonical"] is not None:
                         self._conn.execute(
                             "UPDATE dispatcher_tasks SET "
@@ -483,8 +441,8 @@ class PostgresDispatcher:
                 expiry_sql, expiry_param = self._expiry_sql_and_param(
                     lease_seconds
                 )
-                # A successful heartbeat is the leased-task progress
-                # signal: reset the stale-reclaim counter.
+                # A successful heartbeat is the only progress signal a leased
+                # task gives, so it resets the stale-reclaim counter.
                 if self._db_clock:
                     updated = self._conn.execute(
                         "UPDATE dispatcher_tasks SET "
@@ -539,9 +497,9 @@ class PostgresDispatcher:
                     raise InvalidLease(lease_id)
                 task_id = row["task_id"]
 
-                # --- step 1: validate + clear the OLD matched iff a
-                # consuming release presents the exact wake.
-                # Mismatch / no-matched → raise + ROLLBACK (commit nothing).
+                # The stored matched wake is cleared only when a consuming
+                # release presents that exact wake; a mismatch rolls back so
+                # the call commits nothing at all.
                 clear_matched = False
                 if consumed_wake_event is not None:
                     stored = _as_bytes(row["matched_wake_event_canonical"])
@@ -578,9 +536,9 @@ class PostgresDispatcher:
                         "WHERE task_id = %s",
                         (suspend_reason, task_id),
                     )
-                    # Terminal is forever — buffered wakes that never
-                    # matched can never drain; GC them. The matched wake
-                    # (handoff) is deliberately kept.
+                    # Terminal is forever, so buffered wakes can never drain
+                    # and are collected here. The matched wake is deliberately
+                    # kept — it is the handoff to whoever reads the result.
                     self._conn.execute(
                         "DELETE FROM dispatcher_pending_wakes WHERE task_id = %s",
                         (task_id,),
@@ -602,15 +560,14 @@ class PostgresDispatcher:
                         "WHERE task_id = %s",
                         (wake_blob, suspend_reason, _timer_deadline(wake_on), task_id),
                     )
-                    # The OLD matched was cleared above iff consuming.
                     matched_present = (
                         not clear_matched
                         and row["matched_wake_event_canonical"] is not None
                     )
                     if matched_present:
-                        # An un-consumed matched is PRESERVED and means a
-                        # delivery is pending → the task goes back to
-                        # **ready** (re-deliverable), not stuck-suspended.
+                        # An un-consumed matched wake means a delivery is
+                        # still pending, so the task goes back to **ready**
+                        # rather than suspending on a wake it already has.
                         order = self._next_ready_order()
                         self._conn.execute(
                             "UPDATE dispatcher_tasks SET "
@@ -623,9 +580,9 @@ class PostgresDispatcher:
                             (order, task_id),
                         )
                     else:
-                        # No matched: install the NEW wake_on (already set
-                        # above) and drain a single matching pending wake →
-                        # a possible NEW matched.
+                        # The new wake_on is installed above; a buffered wake
+                        # that already matches it must be drained now, or the
+                        # task would suspend on an event that has arrived.
                         drained = self._drain_first_matching_pending(task_id, wake_on)
                         if drained is not None:
                             order = self._next_ready_order()
@@ -650,10 +607,9 @@ class PostgresDispatcher:
     def release_yield(self, lease_id: str) -> None:
         """Voluntary yield of a seeded lease back to the ready queue.
 
-        Transitions leased→ready WITHOUT incrementing fail_attempts —
-        used by transports that seed a task durably under a targeted
-        lease and then hand it off to a resident worker pool. Matched
-        wakes are preserved.
+        Goes leased→ready WITHOUT incrementing ``fail_attempts``, because a
+        transport that seeds a task under a targeted lease and hands it to a
+        worker pool has not failed anything. Matched wakes are preserved.
         """
         with self._lock:
             self._begin_locked()
@@ -703,8 +659,8 @@ class PostgresDispatcher:
                 task_id = row["task_id"]
                 attempts = int(row["fail_attempts"])
                 if retryable and attempts + 1 < self._max_fail_attempts:
-                    # A controlled fail is a progress signal for the
-                    # RECLAIM counter (bounding is fail_attempts' job).
+                    # A controlled fail counts as progress for the reclaim
+                    # counter; bounding retries is ``fail_attempts``' job.
                     order = self._next_ready_order()
                     self._conn.execute(
                         "UPDATE dispatcher_tasks SET "
@@ -742,8 +698,7 @@ class PostgresDispatcher:
                         "WHERE task_id = %s",
                         (1 if retryable else 0, final_reason, task_id),
                     )
-                    # GC never-matching buffered wakes on the terminal
-                    # transition (same as release-terminal).
+                    # Terminal is forever, so buffered wakes can never drain.
                     self._conn.execute(
                         "DELETE FROM dispatcher_pending_wakes WHERE task_id = %s",
                         (task_id,),
@@ -762,14 +717,12 @@ class PostgresDispatcher:
                 row = self._fetch_task(task_id)
 
                 if row is None:
-                    # Wake-before-enqueue: record the event in
-                    # pending_wakes only. No dispatcher_tasks row is
-                    # created — the CHECK constraints would require
-                    # either ready+ready_order or some other consistent
-                    # state, and we don't want to make this task
-                    # leaseable yet. enqueue() will materialise the row
-                    # later; release(suspended, wake_on=match) will
-                    # drain the buffered event.
+                    # Wake-before-enqueue: buffer the event without creating
+                    # a ``dispatcher_tasks`` row, since any row satisfying
+                    # the CHECK constraints would also make the task
+                    # leaseable before anything has enqueued it. A later
+                    # ``enqueue`` materialises the row and a subsequent
+                    # suspend drains the buffered event.
                     arrival_seq = self._next_arrival_seq(task_id)
                     self._conn.execute(
                         "INSERT INTO dispatcher_pending_wakes ("
@@ -794,9 +747,8 @@ class PostgresDispatcher:
                             " fire_at = NULL,"
                             " ready_order = %s,"
                             # Targeted-lease-only guard for a seed-after-wake
-                            # resume (one-shot; the owning driver's targeted
-                            # lease clears it). ``reserved=False`` writes the
-                            # historical ``false``.
+                            # resume; one-shot, cleared by the owning
+                            # driver's targeted lease.
                             " reserved = %s "
                             "WHERE task_id = %s",
                             (matched_blob, order, reserved, task_id),
@@ -820,10 +772,11 @@ class PostgresDispatcher:
     def requeue_stale(self) -> list[str]:
         """Sweep expired leases back to ready; return the requeued ids.
 
-        Each reclaim increments ``reclaim_count``; at ``reclaim_max``
+        Each reclaim increments ``reclaim_count``, and at ``reclaim_max``
         consecutive no-progress reclaims the task drops to ``terminal``
-        (``stale_reclaim_exceeded``) instead of requeueing.
-        Terminal-by-cap tasks are NOT in the returned list.
+        instead of requeueing, so a task that kills every worker that leases
+        it cannot loop forever. Tasks terminated by that cap are NOT in the
+        returned list.
         """
         requeued: list[str] = []
         with self._lock:
@@ -857,7 +810,8 @@ class PostgresDispatcher:
                             "WHERE task_id = %s",
                             (task_id,),
                         )
-                        # Terminal transition GCs buffered wakes.
+                        # Terminal is forever, so buffered wakes can never
+                        # drain.
                         self._conn.execute(
                             "DELETE FROM dispatcher_pending_wakes WHERE task_id = %s",
                             (task_id,),
@@ -886,30 +840,19 @@ class PostgresDispatcher:
     def fire_due_timers(self, *, now: float) -> list[str]:
         """Wake every suspended task whose ``TimerFired`` deadline passed.
 
-        ``now`` is a wall-clock epoch timestamp supplied by the caller
-        (the same base the Engine used to compute ``fire_at``); the
-        delivered wake is the **recorded deadline** blob so re-delivery
-        stays byte-identical.
+        ``now`` is a wall-clock epoch supplied by the caller on the same base
+        the Engine used to compute ``fire_at``, and the delivered wake is the
+        **recorded deadline** blob so re-delivery stays byte-identical. In
+        DB-clock mode the parameter is **ignored**: both the probe and the
+        sweep use the database's ``clock_timestamp()``, so every host answers
+        "is it due?" identically whatever its own clock says.
 
-        In DB-clock mode (production, no injected ``now``) the ``now``
-        parameter is **ignored** — the due-check and sweep both use the
-        database server's ``clock_timestamp()`` so every host answers
-        "is it due?" identically regardless of per-host skew (ADR
-        multi-host-lease-fencing.md D2). ``now`` only matters in the
-        injected-clock test seam.
-
-        The due set is selected straight off the partial ``fire_at``
-        index. A read-only probe on the separate read connection runs
-        FIRST: when nothing is due (the common ~1s poll) it returns
-        without opening a write transaction at all, so an idle poll
-        never takes the dispatcher advisory lock. The probe/commit race
-        is benign — a timer that comes due in the gap is caught by the
-        next poll.
+        The read-only probe on the separate read connection runs FIRST so an
+        idle poll — the common case, roughly once a second — returns without
+        opening a write transaction or touching the dispatcher advisory lock.
+        The probe/commit race is benign: a timer coming due in the gap is
+        caught by the next poll.
         """
-        # DB-clock mode drives the due-check off the database clock so
-        # every host answers "is it due?" identically regardless of
-        # per-host skew; the caller's ``now`` then only matters for the
-        # injected-clock test seam (ADR multi-host-lease-fencing.md D2).
         with self._read_lock:
             if self._db_clock:
                 due = self._read_conn.execute(
@@ -941,11 +884,11 @@ class PostgresDispatcher:
                         (now,),
                     ).fetchall()
                 for row in rows:
-                    # ``fire_at`` is written only for TimerFired suspends,
-                    # so this set is already the due timers. Still
-                    # decode-guard: a blob corrupted AFTER suspend keeps
-                    # its ``fire_at``, so skip an undecodable / non-timer
-                    # row rather than deliver garbage as its matched wake.
+                    # ``fire_at`` is written only for TimerFired suspends, so
+                    # this set is already the due timers. The decode guard
+                    # still matters: a blob corrupted after suspend keeps its
+                    # ``fire_at``, and skipping that row is better than
+                    # delivering garbage as its matched wake.
                     try:
                         wake_on = _deserialize_wake(row["wake_on_canonical"])
                     except Exception:  # noqa: BLE001 — one bad row must not stall timers
@@ -980,14 +923,13 @@ class PostgresDispatcher:
     # ------------------------------------------------------------------
 
     def is_lease_valid(self, task_id: str, lease_id: str) -> bool:
-        """Read-only single-SELECT path on the hot wire — every
-        ``PostgresEventLog.emit`` with a ``lease_id`` calls this from
-        inside its own open transaction. No advisory lock; MVCC
-        guarantees committed-state visibility, and the read connection's
-        own lock just protects connection thread-safety. The read
-        connection is intentionally separate from the lifecycle writer
-        connection so a validation read never queues behind a lifecycle
-        write held by another thread (see ``__init__``).
+        """Read-only single-SELECT path on the hot wire: every
+        ``PostgresEventLog.emit`` carrying a ``lease_id`` calls this from
+        inside its own open transaction.
+
+        No advisory lock is taken — MVCC already guarantees committed-state
+        visibility, and the read connection's lock only protects connection
+        thread-safety.
         """
         return self._lease_is_active(task_id, lease_id=lease_id)
 
@@ -995,14 +937,8 @@ class PostgresDispatcher:
         self, task_id: str, *, lease_id: Optional[str] = None
     ) -> bool:
         """Shared expiry check backing :meth:`is_lease_valid` and
-        :meth:`has_active_lease`.
-
-        Single SELECT on the read connection. The "now" reference is
-        ``_DB_NOW_SQL`` in production (server clock) or ``self._now()``
-        in injected-clock test mode, both rendered through
-        :meth:`_now_clause` so the predicate never drifts between
-        callers.
-        """
+        :meth:`has_active_lease`, so the two can never disagree about
+        whether a lease is live."""
         with self._read_lock:
             now_expr, now_params = self._now_clause()
             if lease_id is not None:
@@ -1027,8 +963,7 @@ class PostgresDispatcher:
     def task_status(self, task_id: str) -> Optional[str]:
         """Return the dispatcher status for ``task_id`` (``ready`` /
         ``leased`` / ``suspended`` / ``terminal``), or ``None`` if the
-        dispatcher holds no row for it. Read-only single SELECT on the
-        separate read connection (same reasoning as ``is_lease_valid``)."""
+        dispatcher holds no row for it."""
         with self._read_lock:
             row = self._read_conn.execute(
                 "SELECT status FROM dispatcher_tasks WHERE task_id = %s",
@@ -1040,13 +975,11 @@ class PostgresDispatcher:
         """True iff a worker currently holds a *live* (non-expired) lease on
         ``task_id``.
 
-        Unlike :meth:`task_status` — which returns the literal ``leased``
-        even for a lease whose TTL lapsed after the worker process or step
-        thread died — this applies the same expiry test as
-        :meth:`is_lease_valid` (``lease_expires_at > now``), so a leaked
-        (zombie) lease reads as *not running*. Callers asking "is a worker
-        actively running this task right now?" (e.g. the DELETE active
-        guard) must use this, not ``task_status() == 'leased'``."""
+        :meth:`task_status` returns the literal ``leased`` even for a lease
+        whose TTL lapsed when the worker process died, so any caller asking
+        "is a worker running this task right now?" must use this instead —
+        it applies the expiry test, and a zombie lease reads as not running.
+        """
         return self._lease_is_active(task_id)
 
     def restore_task(
@@ -1057,14 +990,12 @@ class PostgresDispatcher:
         wake_on: Any = None,
         suspend_reason: Optional[str] = None,
     ) -> None:
-        """Adapter-local lifecycle repair used by live conversation rewind.
+        """Adapter-local lifecycle repair used by conversation rewind.
 
-        ``TaskRewound`` re-bases the EventLog fold to an older
-        snapshot-shaped state. The dispatcher row is a lease/wake
-        accelerator, so the live rewind command must re-align it with
-        that folded baseline without pretending a worker performed a
-        normal lease release. This is a maintenance seam, deliberately
-        not part of the Dispatcher Protocol.
+        ``TaskRewound`` re-bases the EventLog fold to an earlier state, and
+        the dispatcher row — a lease/wake accelerator — has to be re-aligned
+        with that baseline without pretending a worker performed a normal
+        release. Deliberately not part of the Dispatcher Protocol.
         """
         if status not in {"ready", "suspended", "terminal"}:
             raise ValueError(f"invalid restore status: {status}")
@@ -1135,20 +1066,18 @@ class PostgresDispatcher:
                         " ready_order = NULL",
                         (task_id, wake_blob, suspend_reason, _timer_deadline(wake_on)),
                     )
-                    # No buffered-wake redelivery here: the DELETE above
-                    # already cleared every pending wake for this task, so
-                    # any drain would query an empty table and never
-                    # re-ready the task.
+                    # No buffered-wake drain here: the DELETE above already
+                    # cleared every pending wake for this task, so a drain
+                    # would query an empty table.
                 self._conn.execute("COMMIT")
             except Exception:
                 self._conn.execute("ROLLBACK")
                 raise
 
     def purge_task(self, task_id: str) -> None:
-        """Hard-delete all dispatcher state for ``task_id`` (the task row
-        plus any buffered pending wakes). Maintenance affordance backing
-        the agent product's "delete session"; not on the Dispatcher
-        Protocol. Idempotent — purging an unknown task is a no-op."""
+        """Hard-delete all dispatcher state for ``task_id`` (the task row plus
+        any buffered pending wakes). A maintenance affordance kept off the
+        Dispatcher Protocol; purging an unknown task is a no-op."""
         with self._lock:
             self._begin_locked()
             try:

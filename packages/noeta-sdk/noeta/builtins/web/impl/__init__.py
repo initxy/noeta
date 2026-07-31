@@ -1,6 +1,6 @@
 """``noeta.builtins.web.impl`` — the web tool pack implementation.
 
-The ``web`` built-in plugin's body (microkernel migration, M1). Ships two
+The ``web`` built-in plugin's body. Ships two
 read-only tools that take no ``WorkspaceRoot``, both ``risk_level="low"``
 with no workspace mutation:
 
@@ -42,7 +42,7 @@ from noeta.execution.session_pack import PackContribution, SessionBuildContext
 
 
 def build_web_session_pack(ctx: SessionBuildContext) -> PackContribution:
-    """The web pack as a ``session_pack`` contribution (microkernel phase 3).
+    """The web pack as a ``session_pack`` contribution.
 
     The manifest-declared factory (band 200) — appends directly after the fs
     pack, preserving the merged fs-then-web insertion order, and filters by

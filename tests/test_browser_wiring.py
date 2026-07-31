@@ -1,12 +1,12 @@
-"""Browser subsystem — wiring the browser pack into ``build_session_inputs`` (B4).
+"""Wiring the browser pack into ``build_session_inputs``.
 
 The browser pack is a per-session, flag-gated tool set (the twin of the memory /
-open_app packs): it is merged into the tool set only when BOTH a browser backend
-is present (the SDK host built one off the session's sandbox handle) AND the
-agent opens the ``browser`` capability. It is NOT whitelist-filtered — a
-capability gates it, not the ``allowed_tools`` set — and it never touches the
-tool set when either input is absent, so a non-sandbox / non-browser session's
-schemas + stable prefix are byte-identical.
+open_app packs): it is merged only when BOTH a browser backend is present (the
+SDK host built one off the session's sandbox handle) AND the agent opens the
+``browser`` capability. It is deliberately NOT whitelist-filtered — the
+capability gates it, not ``allowed_tools`` — and with either input absent the
+tool set must come out byte-identical, so a non-sandbox session's schemas and
+stable prefix never move.
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ def test_browser_tools_present_when_backend_and_enabled(tmp_path: Path) -> None:
     inputs = _session(tmp_path, browser_backend=_FakeBrowser(), browser_enabled=True)
     for name in BROWSER_TOOL_NAMES:
         assert name in inputs.tools, f"{name} should be merged"
-    # all high-risk (B7 force-gates them through approval)
+    # all high-risk, so every browser call is force-gated through approval
     for name in BROWSER_TOOL_NAMES:
         assert inputs.tools[name].risk_level == "high"
 

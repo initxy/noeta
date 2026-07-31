@@ -1,9 +1,8 @@
-"""Generic transaction helpers for sqlite backend adapters.
+"""``BEGIN IMMEDIATE`` acquisition with retry, shared by the sqlite adapters.
 
-Issue 17 promoted this module out of :mod:`noeta.builtins.storage.impl.sqlite.migrations`
-so that both the migration runner and the dispatcher (and any future
-adapter that needs ``BEGIN IMMEDIATE`` retry semantics) consume the
-same helper instead of reaching into migration-runner internals.
+It sits in its own module so the migration runner, the dispatcher, and any
+other writer needing the same lock back-off consume one helper rather than
+reaching into each other's internals.
 """
 
 from __future__ import annotations
@@ -22,13 +21,12 @@ def _begin_immediate_with_retry(conn: sqlite3.Connection) -> None:
     """Issue ``BEGIN IMMEDIATE``, retrying briefly on transient
     ``database is locked``.
 
-    ``PRAGMA busy_timeout`` covers most contention paths, but sqlite's
-    built-in busy handler does not always fire for the WAL-mode
-    writer-lock acquisition that ``BEGIN IMMEDIATE`` triggers from
-    Python's sqlite3 driver — under heavy contention it can return
-    ``SQLITE_BUSY`` straight through to the caller as
-    ``OperationalError('database is locked')``. We back off with
-    short sleeps so concurrent writers converge instead of aborting.
+    ``PRAGMA busy_timeout`` covers most contention paths, but sqlite's built-in
+    busy handler does not always fire for the WAL writer-lock acquisition that
+    ``BEGIN IMMEDIATE`` triggers through Python's sqlite3 driver: under heavy
+    contention ``SQLITE_BUSY`` reaches the caller as
+    ``OperationalError('database is locked')``. The explicit back-off lets
+    concurrent writers converge instead of aborting.
     """
     last_error: sqlite3.OperationalError | None = None
     for delay in _BEGIN_IMMEDIATE_RETRY_DELAYS:
@@ -40,8 +38,6 @@ def _begin_immediate_with_retry(conn: sqlite3.Connection) -> None:
                 raise
             last_error = exc
             time.sleep(delay)
-    # Final attempt: let any failure propagate so the caller sees the
-    # real error rather than a synthetic one.
     try:
         conn.execute("BEGIN IMMEDIATE")
     except sqlite3.OperationalError as exc:

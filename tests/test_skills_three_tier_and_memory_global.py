@@ -1,19 +1,10 @@
-"""Three-tier skill merge + single global memory tier.
+"""Skills resolve across three tiers (builtin < global < workspace-local) and
+memory lives in one global directory.
 
-Skills go from a single directory to three tiers (builtin < global < workspace-local,
-workspace wins), merged via the existing ``merge_skill_registries``. Memory is pinned to
-one global directory: all reads/writes happen there, independent of the workspace. Skills
-and memory no longer drift with the working directory.
-
-Acceptance criteria covered:
-
-* Same-named skill: workspace-local shadows global shadows builtin.
-* A fresh empty workspace can still use global/builtin skills (the skill set is non-empty).
-* Memory reads/writes target the global directory, independent of the current workspace;
-  switching workspaces leaves memory unchanged.
-* Global skills default to ``~/.noeta/skills`` and memory to ``~/.noeta/memories``; the
-  agent layer can override both.
-* ``merge_skill_registries`` actually enters the execution path (previously never called).
+The precedence order is what lets a user override a shipped skill without
+editing it, and what lets a fresh empty workspace still see the global and
+builtin sets. Pinning memory to a single directory keeps recall from drifting
+with whichever workspace happens to be open.
 """
 
 from __future__ import annotations
@@ -54,7 +45,8 @@ def _skill_body(name: str, description: str) -> str:
 
 
 def test_three_tiers_disjoint_names_all_present(tmp_path: Path) -> None:
-    """Builtin/global/workspace each contribute a unique skill -> the union is all present."""
+    """Disjoint names union rather than shadow: a lower tier is a fallback,
+    not a fallback-only-if-empty."""
     builtin = tmp_path / "builtin"
     write_skill_raw(builtin, "review", _skill_body("review", "builtin review"))
     glob = tmp_path / "global"
@@ -70,7 +62,8 @@ def test_three_tiers_disjoint_names_all_present(tmp_path: Path) -> None:
 
 
 def test_workspace_local_shadows_global_shadows_builtin(tmp_path: Path) -> None:
-    """``edit`` exists in all three tiers: workspace-local wins (builtin < global < workspace)."""
+    """With the same name in all three tiers, workspace-local wins — the
+    closest-to-the-user definition is the one that takes effect."""
     builtin = tmp_path / "builtin"
     write_skill_raw(builtin, "edit", _skill_body("edit", "BUILTIN edit"))
     glob = tmp_path / "global"
@@ -86,7 +79,8 @@ def test_workspace_local_shadows_global_shadows_builtin(tmp_path: Path) -> None:
 
 
 def test_global_shadows_builtin_when_no_workspace_clash(tmp_path: Path) -> None:
-    """Same name only in builtin + global: global wins (order builtin < global)."""
+    """Precedence holds between the two lower tiers on their own, not only
+    when a workspace tier is present to break the tie."""
     builtin = tmp_path / "builtin"
     write_skill_raw(builtin, "edit", _skill_body("edit", "BUILTIN edit"))
     glob = tmp_path / "global"
@@ -101,13 +95,14 @@ def test_global_shadows_builtin_when_no_workspace_clash(tmp_path: Path) -> None:
 
 
 def test_empty_workspace_still_sees_lower_tiers(tmp_path: Path) -> None:
-    """A fresh empty workspace (no .noeta/skills) can still use global/builtin skills."""
+    """A workspace with no ``.noeta/skills`` still sees the global and builtin
+    tiers, so a brand-new directory is usable immediately."""
     builtin = tmp_path / "builtin"
     write_skill_raw(builtin, "review", _skill_body("review", "builtin review"))
     glob = tmp_path / "global"
     write_skill_raw(glob, "deploy", _skill_body("deploy", "global deploy"))
     ws = tmp_path / "ws"
-    ws.mkdir()  # completely empty workspace
+    ws.mkdir()
 
     registry = load_workspace_skills(ws, lower_skill_dirs=[builtin, glob])
     assert set(registry.names()) == {"review", "deploy"}
@@ -125,7 +120,8 @@ def test_missing_lower_dir_is_skipped_not_errored(tmp_path: Path) -> None:
 
 
 def test_no_lower_dirs_keeps_single_dir_behaviour(tmp_path: Path) -> None:
-    """Empty ``lower_skill_dirs`` (the default) = legacy single-tier behavior, byte-for-byte."""
+    """Empty ``lower_skill_dirs`` (the default) loads the workspace-local tier
+    alone."""
     ws = tmp_path / "ws"
     ws_local = ws / ".noeta" / "skills"
     write_skill_raw(ws_local, "tidy", _skill_body("tidy", "workspace tidy"))
@@ -141,8 +137,8 @@ def test_no_lower_dirs_keeps_single_dir_behaviour(tmp_path: Path) -> None:
 
 
 def _inputs(ws: Path, **kwargs):
-    # Phase 3 (S4): fold the legacy per-feature kwargs (skill tiers, memory
-    # roots, memory switch) into the generic capability_flags / plugin_config.
+    # Fold the per-feature kwargs (skill tiers, memory roots, memory switch)
+    # into the generic capability_flags / plugin_config the builder accepts.
     fold_legacy_capability_kwargs(kwargs)
     return build_session_inputs(
         **default_factory_kwargs(),
@@ -187,7 +183,7 @@ def test_builder_merges_three_tiers_into_registry(tmp_path: Path) -> None:
 
 
 def test_builder_no_global_tiers_unchanged(tmp_path: Path) -> None:
-    """No lower-tier dirs passed: registry holds only the workspace-local tier (single-tier behavior unchanged)."""
+    """No lower-tier dirs passed: registry holds only the workspace-local tier."""
     ws = tmp_path / "ws"
     ws_local = ws / ".noeta" / "skills"
     write_skill_raw(ws_local, "tidy", _skill_body("tidy", "workspace tidy"))
@@ -202,10 +198,9 @@ def test_builder_no_global_tiers_unchanged(tmp_path: Path) -> None:
 
 
 def test_builtin_pack_enters_execution_path(tmp_path: Path) -> None:
-    """``BUILTIN_SKILLS_DIR`` actually enters the execution path (previously only loaded, never merged).
-
-    Feed the real builtin pack to build_session_inputs as a lower tier: even with empty
-    workspace and global tiers, all builtin skills are present in the final registry.
+    """``BUILTIN_SKILLS_DIR`` enters the execution path when fed to
+    build_session_inputs as a lower tier: even with empty workspace and global
+    tiers, all builtin skills are present in the final registry.
     """
     ws = tmp_path / "ws"
     ws.mkdir()
@@ -230,7 +225,7 @@ def test_memory_root_is_global_not_workspace_derived(tmp_path: Path) -> None:
     (glob_mem / "deploy.md").write_text("# Deploy\n", encoding="utf-8")
     ws = tmp_path / "ws"
     ws.mkdir()
-    # Also put a memory under the workspace that used to be picked up, to prove it is now ignored.
+    # A memory under the workspace must be ignored: only the global dir counts.
     ws_mem = ws / ".noeta" / "memories"
     ws_mem.mkdir(parents=True)
     (ws_mem / "stale.md").write_text("# Stale\n", encoding="utf-8")
@@ -300,7 +295,7 @@ def test_memory_dir_override_beats_global(tmp_path: Path) -> None:
 
 
 def test_load_memory_store_takes_root_directly(tmp_path: Path) -> None:
-    """load_memory_store takes the global root directly, no longer derived from the workspace."""
+    """load_memory_store takes the global root directly, independent of the workspace."""
     root = tmp_path / "anywhere"
     store = load_memory_store(root=root)
     assert store.root == root

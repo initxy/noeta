@@ -1,9 +1,9 @@
-"""MCP prompt / resource injection is bounded (tools m5).
+"""MCP prompt / resource injection is bounded.
 
 A ``prompts/get`` or ``resources/read`` result is flattened and injected as an
-``origin="system"`` message. The server controls that text, so an unbounded
+``origin="system"`` message, and the server controls that text — so an unbounded
 body is both a prompt-injection surface and a context/token bomb (the transport
-only caps at ~8 MB). The flatten functions cap the injected text at the
+alone only caps at ~8 MB). The flatten functions cap the injected text at the
 inline-content ceiling (64 KiB) with a visible truncation marker.
 """
 

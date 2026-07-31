@@ -1,35 +1,10 @@
-"""psycopg connection construction for the Postgres storage adapters.
+"""psycopg connection construction shared by the Postgres storage adapters.
 
-Centralises connection settings so the EventLog / ContentStore /
-Dispatcher adapters all see identical semantics, mirroring
-:mod:`noeta.builtins.storage.impl.sqlite._connection` for the sqlite backend:
-
-* ``autocommit=True``       — the psycopg driver never opens implicit
-                              transactions; each adapter owns its
-                              transaction boundaries explicitly
-                              (``BEGIN`` / ``COMMIT`` / ``ROLLBACK``),
-                              exactly like the sqlite adapters run with
-                              ``isolation_level=None``. Plain reads
-                              outside a ``BEGIN`` see latest committed
-                              state (the WAL concurrent-reader analogue).
-* ``row_factory=dict_row``  — rows read by column name, mirroring
-                              ``sqlite3.Row`` access in the sqlite
-                              adapters.
-* ``synchronous_commit=on`` — Postgres' default, asserted explicitly:
-                              the EventLog is the "decision and
-                              causality source of truth"; no committed
-                              event may be lost on a crash (the
-                              ``synchronous=FULL`` analogue).
-
-Advisory-lock key space: sqlite serialises every writer behind the
-file-wide ``BEGIN IMMEDIATE`` lock; Postgres is MVCC, so each adapter
-takes a transaction-scoped advisory lock (``pg_advisory_xact_lock``)
-over the state it read-modify-writes. The two-int form partitions the
-key space by adapter class below; locks auto-release at COMMIT /
-ROLLBACK. Advisory locks are database-wide (not schema-scoped), so two
-schemas in one database serialise against each other — harmless for
-correctness, and the per-task EventLog class keeps the hot append path
-per-stream anyway.
+``autocommit=True`` because each adapter owns its transaction boundaries
+explicitly (``BEGIN`` / ``COMMIT`` / ``ROLLBACK``); ``synchronous_commit=on``
+is Postgres' default asserted here on purpose, because the EventLog is the
+decision and causality source of truth and no committed event may be lost on
+a crash.
 """
 
 from __future__ import annotations
@@ -49,26 +24,25 @@ __all__ = [
 
 #: ``pg_advisory_xact_lock(classid, objid)`` class ids, one per adapter
 #: family so an EventLog stream lock can never collide with the
-#: Dispatcher's global lock. Arbitrary but fixed 31-bit constants.
+#: Dispatcher's global lock. Arbitrary but fixed 31-bit constants. Advisory
+#: locks are database-wide rather than schema-scoped, so two schemas sharing
+#: one database serialise against each other.
 _ADVISORY_CLASS_MIGRATIONS = 0x6E5F6D69  # "n_mi"
 _ADVISORY_CLASS_EVENTS = 0x6E5F6576  # "n_ev"
 _ADVISORY_CLASS_DISPATCHER = 0x6E5F6469  # "n_di"
 
-#: SQL expression for the database clock "now". ``clock_timestamp()``
-#: (not ``now()`` / ``current_timestamp``) advances within a transaction,
-#: so a long emit transaction never compares against a stale
-#: statement-start instant. Used by Dispatcher (lease expiry / stale
-#: detection / timer firing) and EventLog (in-tx fence probe) so the
-#: time reference can never drift between the two adapters.
+#: SQL expression for the database clock "now", shared by the Dispatcher
+#: (lease expiry / stale detection / timer firing) and the EventLog (in-tx
+#: fence probe) so the time reference cannot drift between the two adapters.
+#: ``clock_timestamp()`` rather than ``now()`` / ``current_timestamp``
+#: because it advances within a transaction: a long emit transaction must
+#: not compare against a stale statement-start instant.
 _DB_NOW_SQL = "EXTRACT(EPOCH FROM clock_timestamp())::double precision"
 
 
 def _open_connection(dsn: str) -> psycopg.Connection[DictRow]:
-    """Open a psycopg connection configured for the adapter suite.
-
-    The connection is shared across threads by each adapter behind its
-    own :class:`threading.Lock` (the same single-connection model as the
-    sqlite adapters), so no pool is used.
+    """Each adapter shares one connection across threads behind its own
+    :class:`threading.Lock`, so there is no pool.
     """
     conn = psycopg.connect(dsn, autocommit=True, row_factory=dict_row)
     conn.execute("SET synchronous_commit = on")

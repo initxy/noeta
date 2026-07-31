@@ -1,9 +1,9 @@
-"""HookManager unit tests for Phase 0 issue 05.
+"""HookManager arbitration, exercised without an Engine.
 
-These tests exercise the manager directly (no Engine) so the
-priority-ordering, short-circuiting on first non-allow, and the
-"guard exception = deny" defensive behaviour are pinned down by
-narrow tests rather than only by Engine-level integration tests.
+Two properties decide whether governance can be trusted: guards run in
+ascending priority and the first non-allow short-circuits the rest, and a guard
+whose ``check`` raises counts as that deciding deny — a buggy guard must never
+be able to quietly grant what it was registered to block.
 """
 
 from __future__ import annotations
@@ -107,10 +107,8 @@ def test_first_require_approval_short_circuits_remaining_guards() -> None:
 
 
 def test_register_assigns_priority_when_caller_omits_attr() -> None:
-    """Callers may pass priority via register() instead of a class attr.
-
-    This keeps tests and small inline guards from needing a class shell.
-    """
+    """Registration order carries no meaning: ``priority`` alone orders the
+    queue, so a host can register guards in any order it finds readable."""
     trace: list[str] = []
     mgr = HookManager()
     a = _RecordingGuard("a", 5, VerdictResult.allow(), trace)
@@ -135,9 +133,8 @@ class _ExplodingGuard:
 
 
 def test_guard_exception_is_treated_as_deny_with_reason() -> None:
-    """Defensive: a buggy Guard must not crash the Engine; it falls
-    through as ``deny`` (with a synthetic reason naming the guard).
-    """
+    """A buggy Guard must not crash the Engine; it decides ``deny``, and the
+    reason names the guard so the failure is traceable from the EventLog."""
     mgr = HookManager()
     mgr.register(_ExplodingGuard())
 
@@ -165,11 +162,8 @@ def test_guard_exception_short_circuits_lower_priority_guards() -> None:
 
 
 def test_legacy_verdict_alias_is_still_importable() -> None:
-    """Issue 01 exposed ``Verdict`` from ``noeta.core.hooks``.
-
-    Callers (and the SDD module table) should not have to retarget the
-    import path. This test fails if the alias is removed.
-    """
+    """``noeta.core.hooks`` re-exports ``Verdict`` so a guard author imports
+    the manager and its verdict vocabulary from one module."""
     from noeta.core.hooks import Verdict as CoreVerdict
     from noeta.protocols.hooks import Verdict as ProtoVerdict
 
@@ -177,11 +171,8 @@ def test_legacy_verdict_alias_is_still_importable() -> None:
 
 
 def test_register_returns_none_and_does_not_invoke_guard() -> None:
-    """A defensive guarantee: registration itself MUST not call check().
-
-    Some guards do non-trivial setup in __init__; registration is purely
-    a list mutation.
-    """
+    """Registration is a list mutation and nothing more — a guard that does
+    real work in ``check`` must not have it triggered at wiring time."""
 
     class _NeverCallMe:
         name = "x"

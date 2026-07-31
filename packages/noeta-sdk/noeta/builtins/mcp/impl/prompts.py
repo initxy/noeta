@@ -13,7 +13,7 @@ as a normal recorded message, resume simply reads it back and NEVER re-calls
 
 The two entrypoints connect a single server spec (HTTP or stdio), do one
 request-response round-trip, and shut the client down — they never hold a stream
-open (D4: request-response subset only). Credentials live in the spec and ride
+open (request-response subset only). Credentials live in the spec and ride
 the wire only; nothing here records them.
 
 * :func:`discover_prompts` — ``prompts/list`` → ``[{name, noeta_name,
@@ -61,7 +61,7 @@ def make_mcp_prompt_name(alias: str, raw_prompt_name: object) -> str:
 
     Reuses the tool-name mapper (same provider-safe sanitisation, same fail-fast
     on empty / over-long / collision-prone names) so a prompt slash command and
-    an MCP tool share one naming rule (D9)."""
+    an MCP tool share one naming rule."""
     return make_mcp_tool_name(alias, raw_prompt_name)
 
 

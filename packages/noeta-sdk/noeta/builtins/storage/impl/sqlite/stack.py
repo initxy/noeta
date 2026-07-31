@@ -3,8 +3,7 @@
 Every storage backend ships one ``build_stack(**config)`` returning the
 ``(EventLogFull, ContentStore, Dispatcher)`` triple, wiring the triple's
 one internal invariant itself: the event log takes the dispatcher as
-``lease_validator``. The host injects the result through ``HostConfig``;
-the public doorway is :mod:`noeta.sdk.storage`.
+``lease_validator``. The host injects the result through ``HostConfig``.
 """
 
 from __future__ import annotations

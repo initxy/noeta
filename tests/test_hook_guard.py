@@ -1,9 +1,10 @@
-"""Phase 4.5 F3 — `HookGuard` (deterministic PreToolUse) + precedence.
+"""HookGuard: declarative PreToolUse rules, and where they sit in precedence.
 
-Unit coverage of the declarative verdict (first-match deny/approval/
-allow), the `match_arg` predicates (equals/contains/regex + missing-path
-no-match + string-only), and the architect-pinned precedence: a built-in
-non-allow (deny OR require_approval) always wins over a user hook.
+Rules are first-match, so their order is the whole semantics, and a ``match_arg``
+predicate can only narrow a rule — a missing path or a non-string value under a
+regex is simply no match. The load-bearing invariant is the last section's: a
+built-in guard's non-allow (deny OR require_approval) always wins, so a user
+hook can tighten an allow but never loosen a refusal.
 """
 
 from __future__ import annotations
@@ -112,7 +113,7 @@ def test_non_tool_action_allows() -> None:
     assert g.check(ProposedFinish(answer="x"), GuardContext(task_id="t")).verdict is Verdict.ALLOW
 
 
-# -- precedence: built-in non-allow always wins (architect watchpoint #3) ----
+# -- precedence: a built-in non-allow always wins over a user hook ----------
 
 
 class _StubGuard:

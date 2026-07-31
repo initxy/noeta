@@ -1,30 +1,20 @@
-"""SdkHost / InteractionDriver assembly helpers for engine-behaviour tests.
+"""SdkHost / InteractionDriver assembly helpers for the engine-behaviour tests.
 
-These replace the deleted ``noeta.agent.host.session.AgentSessionRunner`` /
-``noeta.agent.api`` fixture.
-The engine-behaviour suite used to drive the now-deleted product runner; it now
-drives the **production** SDK assembly directly — the same path the shipping
-``noeta.agent`` backend uses via :class:`noeta.sdk.Client` / :class:`SdkHost` /
-:class:`InteractionDriver`.
-
-There is no second engine-assembly here: :class:`SdkHost._build_engine` does all
-the wiring. These helpers only translate the old ``CodeSessionConfig`` knobs onto
-their real homes:
+The suite drives the production SDK assembly — :class:`noeta.sdk.Client` /
+:class:`SdkHost` / :class:`InteractionDriver` — rather than a test-only engine,
+so a wiring bug cannot hide behind a parallel assembly path. There is
+deliberately no second engine build here: :meth:`SdkHost._build_engine` does all
+of it, and these helpers only put each knob on its real home:
 
 * **per-agent behaviour flags** (``todo_write`` / ``ask_user_question`` /
   ``delegation`` / ``skill_invocation`` / ``memory`` / ``mcp`` / ``spawnable``)
-  → the ``plugins`` activation tuple + ``spawnable`` on the registered
-  :class:`AgentSpec` (the SDK host reads that tuple through
-  :func:`~noeta.agent.spec.agent_activates` as the source of truth);
+  live in the ``plugins`` activation tuple + ``spawnable`` of the registered
+  :class:`AgentSpec`, which the host reads through
+  :func:`~noeta.agent.spec.agent_activates` as the single source of truth;
 * **host knobs** (``require_approval_tools`` / ``write_mode`` / ``shell_mode`` /
   ``skill_tool_enforcement`` / ``allow_skill_scripts`` / ``repetition_*`` /
-  ``hooks_pre_tool_use`` / ``mcp_server_resolver`` / ``budget`` / …) → fields on
-  :class:`SdkHost`.
-
-``runner_main_spec`` seeds the capability defaults to the OLD ``CodeSessionConfig``
-*effective* flags (todo_write / ask_user / delegation OFF, skill_invocation ON,
-memory follows the preset) rather than the fully-capable official ``main`` spec,
-so a migrated ``CodeSessionConfig(agent="main")`` test keeps the same tool set.
+  ``hooks_pre_tool_use`` / ``mcp_server_resolver`` / ``budget`` / …) are fields
+  on :class:`SdkHost`.
 """
 
 from __future__ import annotations
@@ -49,16 +39,17 @@ from noeta.storage.memory import (
 from noeta.runtime.shell_policy import ShellMode
 from noeta.runtime.workspace import FsWriteMode
 
-#: Legacy-recording alias the runner used (``TaskCreated.agent_name="default"``
-#: maps to the canonical ``"main"``); the SdkHost resolves it via ``aliases``.
+#: Recording alias: a stream whose ``TaskCreated.agent_name`` is ``"default"``
+#: resolves to the canonical ``"main"``. SdkHost applies it via ``aliases``.
 DEFAULT_ALIASES = {"default": "main"}
 
 
 def default_coding_budget() -> Budget:
-    """The v1 interactive-coding-session budget (inlined from the deleted
-    ``noeta.agent.host.session``). Sized so a long session does not trip a cap
-    while still bounding a runaway loop; ``max_spawned_subtasks=None`` (not 0)
-    keeps the BudgetGuard from denying the first tool call."""
+    """Budget for an interactive coding session.
+
+    Sized so a long session never trips a cap while a runaway loop still gets
+    bounded. ``max_spawned_subtasks=None`` disables that cap outright — ``0``
+    would make BudgetGuard deny every spawn instead."""
     return Budget(
         max_iterations=200,
         max_tool_calls=400,
@@ -68,8 +59,7 @@ def default_coding_budget() -> Budget:
 
 
 def coding_replay_budget(max_subtask_depth: Optional[int]) -> Budget:
-    """The coding default plus a ``max_subtask_depth`` cap (inlined from the
-    deleted ``noeta.agent.host.session``)."""
+    """The coding default plus a ``max_subtask_depth`` cap."""
     return dataclasses.replace(
         default_coding_budget(), max_subtask_depth=max_subtask_depth
     )
@@ -78,9 +68,10 @@ def coding_replay_budget(max_subtask_depth: Optional[int]) -> Budget:
 def resolve_write_mode(
     *, allow_write: bool, yes: bool, read_only: bool
 ) -> FsWriteMode:
-    """Map CLI-style flags → ``FsWriteMode`` (inlined from the deleted
-    ``noeta.agent.host.session``). ``--read-only`` always wins; otherwise a write
-    requires BOTH ``--allow-write`` and ``--yes``."""
+    """Map operator-style flags → ``FsWriteMode``.
+
+    ``read_only`` always wins; otherwise a write needs BOTH ``allow_write`` and
+    ``yes``, so neither flag alone can turn a dry run into a real write."""
     if read_only:
         return FsWriteMode.DRY_RUN
     if allow_write and yes:
@@ -91,9 +82,10 @@ def resolve_write_mode(
 def resolve_shell_mode(
     *, allow_shell: bool, shell_off: bool = False
 ) -> ShellMode:
-    """Map CLI-style flags → ``ShellMode`` (inlined from the deleted
-    ``noeta.agent.host.session``). Default ``ALLOWLIST``; ``--allow-shell`` opts
-    into arbitrary commands; ``shell_off`` removes ``shell_run`` entirely."""
+    """Map operator-style flags → ``ShellMode``.
+
+    Default ``ALLOWLIST``; ``allow_shell`` opts into arbitrary commands;
+    ``shell_off`` removes ``shell_run`` entirely."""
     if shell_off:
         return ShellMode.OFF
     if allow_shell:
@@ -110,9 +102,10 @@ def make_registry(*specs: AgentSpec) -> AgentRegistry:
 
 
 def official_registry(*extra: AgentSpec) -> AgentRegistry:
-    """The four official preset specs (+ any ``extra``), mirroring the deleted
-    ``official_agent_registry()``. Aliases are applied at :attr:`SdkHost.aliases`,
-    not here (same split as the product)."""
+    """The official preset specs, plus any ``extra``.
+
+    Aliases belong on :attr:`SdkHost.aliases`, not in the registry — the
+    registry keys on canonical names only."""
     registry = AgentRegistry()
     specs = official_specs()
     for name in sorted(specs):
@@ -127,7 +120,7 @@ def preset_spec(name: str) -> AgentSpec:
     return official_specs()[name]
 
 
-#: The identity feature names an activation tuple can carry (D6). Used by
+#: The identity feature names an activation tuple can carry. Used by
 #: :func:`runner_main_spec` to rebuild ``AgentSpec.plugins`` from a flag dict
 #: while preserving the preset's identity-inert packs (``fs`` / ``web`` …).
 _FEATURE_FLAG_NAMES = (
@@ -142,23 +135,18 @@ _FEATURE_FLAG_NAMES = (
 
 
 def runner_main_spec(name: str = "main", **caps_overrides: Any) -> AgentSpec:
-    """An official spec whose activation defaults to the OLD ``CodeSessionConfig``
-    *effective* flags, overridable per test.
+    """An official preset spec narrowed to a plain coding-session activation.
 
-    The runner read its own ``CodeSessionConfig`` fields (not the spec's
-    activation) so a ``CodeSessionConfig(agent="main")`` ran with todo_write /
-    ask_user / delegation OFF even though the ``main`` preset enables them. The
-    SDK host reads the spec's ``plugins`` tuple (D6), so to keep the same engine
-    we rebuild the tuple with the runner defaults:
+    Most engine-behaviour tests want a minimal, predictable tool set rather than
+    the fully-capable ``main`` preset, so the ``plugins`` tuple is rebuilt with:
 
     * ``todo_write`` / ``ask_user_question`` / ``delegation`` → False
-    * ``skill_invocation`` → True (the ``CodeSessionConfig`` default)
-    * ``memory`` / ``mcp`` → follow the preset (``memory_enabled=None`` followed
-      the spec; ``mcp`` was inert without ``mcp_servers``)
-    * ``spawnable`` → () (delegation off by default)
+    * ``skill_invocation`` → True
+    * ``memory`` / ``mcp`` / ``browser`` → whatever the preset activates
+    * ``spawnable`` → ``()``
 
-    Pass keyword overrides (e.g. ``todo_write=True``, ``delegation=True,
-    spawnable=("explore",)``) to mirror a test that flipped a flag.
+    Pass keyword overrides (``todo_write=True``, ``delegation=True,
+    spawnable=("explore",)``, …) for a test that needs one of them back.
     """
     base = official_specs()[name]
     flags: dict[str, bool] = dict(

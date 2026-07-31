@@ -1,17 +1,9 @@
-"""``react`` built-in — implementation package (microkernel phase 2b).
+"""``react`` built-in implementation — the default policy and the workflow story.
 
-The official decision-mapping policy: :class:`ReActPolicy` (``react``) and the
-workflow interpreter :class:`OrchestrationPolicy` + ``StructuredOutputPolicy``
-+ ``WORKFLOW_SYSTEM_PROMPT`` (``orchestration``). Since control-tool-surface S2b
-this built-in ALSO owns the workflow control tools — ``run_workflow`` +
-``structured_output`` schemas + translate + their ``.md`` descriptions
-(``control_tool``) and the determinism sandbox (``workflow_sandbox``) — declared
-as two ``control_tool`` contributions on the manifest. The kernel keeps only the
-neutral control MECHANISM (``noeta.policies.control_semantics`` — the mount /
-routing types + reserved ``run_workflow`` / ``__workflow__`` vocabulary) and the
-generic multi-turn wrapper (``noeta.execution.multi_turn``); nothing imports this
-package statically — the SDK resolves :func:`build_react_policy_factory` and the
-two control-tool factories through the manifest at client build.
+Nothing imports this package statically: the SDK reaches
+:func:`build_react_policy_factory` and the two control-tool factories only
+through the manifest's ``ref`` strings at client build, which is what keeps
+policy implementation out of the kernel.
 """
 
 from __future__ import annotations
@@ -77,18 +69,8 @@ def build_react_policy_factory(
     thinking: Optional[str],
     effort: Optional[str],
 ) -> Callable[[Any], Policy]:
-    """The kernel builder's ``default_policy_factory`` injection.
-
-    Takes exactly the kernel-computed kwargs the builder used to close over
-    inline and returns the ``(llm) -> Policy`` factory — the same
-    :class:`ReActPolicy` construction, byte-identical prompts and schemas.
-    ``Options.policy`` / the plugin ``policy`` surface (D10) still take
-    priority over this default at the builder.
-
-    Control-tool-surface S1: the policy receives the routing-ordered
-    ``control_translate_specs`` the mount loop produced, replacing the five
-    ``*_enabled`` flags + ``skill_menu_names`` — mounting IS enablement.
-    """
+    """The ``(llm) -> Policy`` factory the builder falls back to; ``Options.policy``
+    and a plugin's ``policy`` contribution both outrank it."""
 
     def factory(llm: Any) -> Policy:
         return ReActPolicy(

@@ -1,6 +1,6 @@
 """``Engine.append_user_message`` round-trips through the EventLog.
 
-Regression for the Phase 1 demo bug: directly mutating
+Regression for directly mutating
 ``task.runtime.messages`` outside Engine emits no ``MessagesAppended``
 event, so ``fold(events)`` rebuilds an empty conversation.
 

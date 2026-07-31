@@ -1,11 +1,11 @@
-"""``open_app`` tool unit tests (gateway faked).
+"""``open_app`` — validate, mount, and signal the preview panel.
 
-The tool's contract: validate the dir (inside workspace, has ``index.html``)
-+ the proxy target (http/https), register a mount on the injected
-:class:`AppPreviewGateway`, and surface the render URL both as ``output`` and as
-an ``open_app`` ``side_effect``. A fake gateway records the mount call so these
-stay fast + hermetic (the real gateway's HTTP behaviour is covered by
-``test_preview_gateway``).
+The tool must clear both checks — the directory is inside the workspace and
+carries an ``index.html``, the proxy target is http(s) — before it registers a
+mount on the injected :class:`AppPreviewGateway`, then surface the render URL as
+``output`` AND as an ``open_app`` side effect, which is the frontend's only cue
+to open the panel. A fake gateway records the mount call, keeping these fast and
+free of real sockets.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def test_metadata(tmp_path: Path) -> None:
     tool, _, _ = _setup(tmp_path)
     assert tool.name == "open_app"
     assert tool.risk_level == "low"
-    assert tool.description  # loaded from descriptions/open_app.md
+    assert tool.description  # loaded from the app built-in's open_app.md
     assert tool.input_schema["required"] == ["dir", "proxy_to"]
 
 
@@ -65,11 +65,11 @@ def test_success_mounts_and_signals(tmp_path: Path) -> None:
     assert result.output["url"] == "/preview/tok123/"
     assert result.output["path"] == "app"
     assert result.output["proxy_to"] == "http://localhost:3000"
-    # the open_app side-effect is the frontend's signal to open the panel
     assert result.side_effects == [
         {"type": "open_app", "url": "/preview/tok123/", "dir": "app"}
     ]
-    # gateway got the workspace root + relative app dir + target + task id
+    # The gateway is handed the workspace ROOT plus a relative app dir, never a
+    # joined absolute path — it must not be able to serve outside the workspace.
     assert len(gw.calls) == 1
     call = gw.calls[0]
     assert call["app_rel"] == "app"

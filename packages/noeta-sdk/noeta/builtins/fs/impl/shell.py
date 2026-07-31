@@ -1,37 +1,14 @@
-"""Phase 4 I5 — shell runner + git convenience tools.
+"""``shell_run`` plus the two tools that manage the background jobs it starts.
 
-The PRD-D2 / B4 / B19 contract, as amended (Claude-Code Bash
-alignment):
-
-* ``shell_run`` has **two tiers**, picked by construction ``mode``:
-  - :attr:`ShellMode.ALLOWLIST` — the strict, untrusted-default tier
-    (daemon, CLI default). Shell metacharacters are rejected before
-    tokenisation; the parsed argv is matched *structurally* against a
-    small allowlist and run **directly, with no shell** — never as a
-    substring of the original string.
-  - :attr:`ShellMode.ARBITRARY` — a **real bash**. The raw
-    ``command`` runs through ``bash -c`` so pipes, redirection, and
-    chaining work, exactly like Claude Code's Bash tool. Safety here is
-    *not* an argv wall — it is the host's PermissionGuard + the
-    approval predicate (allowlisted commands run silently, anything else
-    asks for a one-time human sign-off). The SDK-host product path forces
-    this tier, so product agents get full bash gated by approval.
-* Every command runs with ``cwd = workspace.root``, a bounded timeout
-  (per-call ``timeout`` ms, ceiling 600000), a scrubbed environment (no
-  secrets), and an output cap that offloads the full streams to
-  ContentStore artifacts. These guards are the only things Noeta itself
-  promises (B19); the spawned process is **not** sandboxed and can write
-  files anywhere on the host, so ``shell_run`` is **only appropriate for a
-  trusted workspace**.
-* ``risk_level = "high"`` so ``PermissionGuard`` treats it as
-  privileged. The CLI ``--allow-shell`` flag (I4) flips the closure
-  into arbitrary mode by setting ``allow_arbitrary=True`` at
-  construction; the daemon-default Agent does **not** enable it (I6).
-
-``git_status`` / ``git_diff`` are thin convenience tools that funnel
-through the same allowlist + guards, so an agent can inspect its own
-changes with a structured output (and the SPA can render the diff
-artifact via the I6 endpoint).
+The tier is fixed at construction: ``ALLOWLIST`` rejects shell metacharacters
+before tokenisation and runs the structurally matched argv directly with no
+shell, so nothing is ever executed as a substring of the model's string, while
+``ARBITRARY`` is a real ``bash -c`` whose safety boundary is the host's
+PermissionGuard plus approval predicate rather than an argv wall. Either way a
+command gets ``cwd = workspace.root``, a bounded timeout, a scrubbed
+environment, and an output cap that offloads the full streams to artifacts —
+and nothing beyond that: the spawned process is **not** sandboxed and can write
+files anywhere on the host, so ``shell_run`` suits a trusted workspace only.
 """
 
 from __future__ import annotations
@@ -80,26 +57,13 @@ def _err(name: str, message: str) -> ToolResult:
     return ToolResult(success=False, summary=f"{name}: {message}")
 
 
-# ---------------------------------------------------------------------------
-# Tools
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class ShellRunTool:
     """Shell runner with a strict (allowlist) and a full-bash (arbitrary) tier.
 
-    Construction-time ``mode`` decides the tier: :attr:`ALLOWLIST`
-    rejects shell metacharacters and runs the parsed argv directly with no
-    shell; :attr:`ARBITRARY` runs the raw command through ``bash -c`` (pipes,
-    redirection, chaining), with the host's PermissionGuard + approval
-    predicate as the safety boundary. The daemon default Agent uses
-    :attr:`ShellMode.OFF` (the tool is simply absent from the pack) — see
-    :func:`build_fs_tools`.
-
-    Honest boundary (B19): Noeta guarantees cwd = workspace, scrubbed env,
-    bounded timeout, and output cap. It does **not** sandbox the spawned
-    process — commands execute workspace code, which can do arbitrary local IO.
+    Honest boundary: Noeta guarantees cwd = workspace, scrubbed env, bounded
+    timeout, and output cap. It does **not** sandbox the spawned process —
+    commands execute workspace code, which can do arbitrary local IO.
     Trusted-workspace use only.
     """
 
@@ -111,30 +75,25 @@ class ShellRunTool:
         default_factory=lambda: DEFAULT_SHELL_RULES
     )
     runner: Optional[Callable[..., subprocess.CompletedProcess[bytes]]] = None
-    #: execution backend the foreground command runs through — the local
-    #: host (default) or a sandbox container. Background spawns still go
-    #: through the host ``background_runner`` (sandbox background is v2).
+    #: Backend the FOREGROUND command runs through — the local host or a
+    #: sandbox container. Background spawns always go through the host's
+    #: ``background_runner`` instead.
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
     name: str = "shell_run"
-    # description lives in an independent text resource
-    # (descriptions/shell_run.md, four-section shape), not a Python string.
     description: str = field(default=load_markdown(__package__, "shell_run"))
-    # PRD D2: high-risk so PermissionGuard treats this as privileged.
+    # High risk so PermissionGuard treats this as privileged.
     risk_level: str = "high"
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",
             "properties": {
                 "command": {"type": "string"},
-                # per-call wall-clock cap in milliseconds (ceiling
-                # 600000); aligns the schema with Claude Code's Bash.
+                # per-call wall-clock cap in milliseconds (ceiling 600000)
                 "timeout": {"type": "number"},
-                # optional human-readable description of the command
-                # (UI hint; does not affect execution).
+                # UI hint only; does not affect execution
                 "description": {"type": "string"},
-                # launch detached instead of blocking the engine
-                # main loop on the (possibly long-running) process. Renamed from
-                # ``background`` to match Claude Code's ``run_in_background``.
+                # launch detached instead of blocking the engine main loop on a
+                # possibly long-running process
                 "run_in_background": {"type": "boolean"},
             },
             "required": ["command"],
@@ -148,11 +107,6 @@ class ShellRunTool:
         command = arguments.get("command")
         if not isinstance(command, str) or not command.strip():
             return _err(self.name, "requires non-empty 'command'")
-        # ALLOWLIST stays the strict argv-only tier (reject meta-
-        # characters, match the parsed argv against the allowlist, run argv with
-        # no shell). ARBITRARY is a real bash — the raw command runs through
-        # ``bash -c`` so pipes / redirection / chaining work; safety is the
-        # PermissionGuard + approval predicate, not an argv wall.
         if self.mode is ShellMode.ALLOWLIST:
             if _has_shell_meta(command):
                 return _err(
@@ -174,15 +128,13 @@ class ShellRunTool:
         else:  # ShellMode.ARBITRARY — full bash
             exec_argv = ["bash", "-c", command]
         timeout_s = _resolve_timeout(arguments.get("timeout"), self.timeout_s)
-        # background launch — REUSE the mode gate above, then hand off
-        # to the host's runner and return immediately. The sync timeout does NOT
-        # apply to a backgrounded process.
+        # The tier gate above still applies; the sync timeout does NOT — a
+        # backgrounded process outlives this call.
         if bool(arguments.get("run_in_background")):
-            # A sandbox backend cannot run host-side background jobs (the runner
-            # spawns HOST subprocesses; AIO has no durable job handle, v1) — so
-            # refuse cleanly instead of silently running on the wrong machine.
-            # ``getattr`` default True keeps every local / pre-seam backend on
-            # the existing path. (D5)
+            # A sandbox backend cannot run host-side background jobs: the runner
+            # spawns HOST subprocesses. Refuse cleanly rather than silently
+            # running on the wrong machine. ``getattr`` defaults to True so a
+            # backend that does not declare the attribute keeps working.
             if not getattr(self.exec_env, "supports_background", True):
                 return _err(
                     self.name,
@@ -209,10 +161,10 @@ class ShellRunTool:
     ) -> ToolResult:
         """Hand the validated argv to the host's background runner.
 
-        The runner spawns detached and records ``BackgroundShellStarted`` on
-        the launching task's stream; we return the ``{job_id, ref}`` handle
-        immediately. ``None`` runner ⇒ the host did not enable background
-        execution → refuse cleanly (no spawn)."""
+        The runner spawns detached and records ``BackgroundShellStarted`` on the
+        launching task's stream, so the ``{job_id, ref}`` handle can be returned
+        immediately. A ``None`` runner means the host did not enable background
+        execution, which must refuse rather than fall back to a blocking run."""
         runner = ctx.background_runner
         if runner is None:
             return _err(self.name, "background execution is not available on this host")
@@ -226,9 +178,9 @@ class ShellRunTool:
             spawned_by_task_id=spawned_by_task_id,
             trace_id=trace_id,
         )
-        # the host rejected the spawn over the per-session
-        # concurrency cap (it did NOT queue): surface the reason as a clean tool
-        # failure the model can act on ("kill one first"), not a crash.
+        # A rejected spawn (per-session concurrency cap) is NOT queued, so the
+        # reason must reach the model as a clean tool failure it can act on
+        # ("kill one first") rather than a crash.
         if spawned.get("rejected"):
             return _err(self.name, str(spawned["reason"]))
         summary_cmd = truncate_bytes(command, SUMMARY_EMBED_MAX_BYTES)
@@ -278,8 +230,6 @@ def _build_shell_result(
         output["stdout_ref"] = ref_json(stdout_ref_obj)
     if stderr_ref_obj is not None:
         output["stderr_ref"] = ref_json(stderr_ref_obj)
-    # Inline budget — drop stderr_tail first, then stdout_tail, then
-    # command echo, until under the canonical-encoded ceiling.
     output = fit_output_fields(
         output,
         shrink_order=["stderr_tail", "stdout_tail", "command"],
@@ -304,18 +254,14 @@ def _build_shell_result(
 class ShellPollTool:
     """Pull the latest snapshot + status of a background job.
 
-    Thin by design: it returns ``{status, ref, offset}`` (plus
-    ``exit_code`` once exited), NOT the bytes — the model reads the output by
-    dereferencing ``ref`` with the existing deref path, so there is no fat
-    cursor-read tool. The host runner mints a fresh content-addressed snapshot
-    and records ``BackgroundShellPolled(ref, offset)`` so the model reads
-    exactly the prefix it saw. ``risk_level="low"`` — reading status is
-    harmless.
+    Thin by design: it returns ``{status, ref, offset}``, never the bytes, so
+    the model dereferences ``ref`` through the ordinary deref path instead of
+    this becoming a second, fat cursor-read tool. The host runner mints a fresh
+    content-addressed snapshot and records ``BackgroundShellPolled(ref,
+    offset)``, so the model reads exactly the prefix it was shown.
     """
 
     name: str = "shell_poll"
-    # description lives in an independent text resource
-    # (descriptions/shell_poll.md, four-section shape), not a Python string.
     description: str = field(default=load_markdown(__package__, "shell_poll"))
     risk_level: str = "low"
     input_schema: dict[str, Any] = field(
@@ -344,8 +290,8 @@ class ShellPollTool:
             "status": state["status"],
             "ref": state["ref"],
             "offset": state["offset"],
-            # tell the model the snapshot is the tail when
-            # the buffer overflowed output_cap (oldest output dropped).
+            # Tells the model the snapshot is only the tail: the buffer
+            # overflowed ``output_cap`` and the oldest output was dropped.
             "truncated": bool(state.get("truncated")),
         }
         if "exit_code" in state:
@@ -361,23 +307,18 @@ class ShellPollTool:
 class ShellKillTool:
     """Terminate a background shell job the model started.
 
-    The agent self-kills a job it launched wrong / no longer needs (a server it
-    started on the wrong port, a build it must restart) so it is never stuck
-    waiting on the human. Sends SIGTERM, then SIGKILL after a grace, via the
-    host's background runner; the call returns immediately (the watcher reaps
-    the process and records ``BackgroundShellKilled`` + fires the same
-    completion notice ``shell_run(background)`` exits use — issue 02's push, so
-    the model is told the job ended).
-    ``risk_level="high"`` so :class:`PermissionGuard` gates it exactly like
-    ``shell_run`` (an operator policy can deny / require approval for it).
+    Lets the agent stop a job it launched wrong — a server on the wrong port, a
+    build it must restart — so it is never stuck waiting on a human. The call
+    returns immediately; the host's watcher sends SIGTERM then SIGKILL after a
+    grace, reaps the process, records ``BackgroundShellKilled`` and fires the
+    same completion notice a background ``shell_run`` exit does, so the model
+    learns the job ended.
     """
 
     name: str = "shell_kill"
-    # description lives in an independent text resource
-    # (descriptions/shell_kill.md, four-section shape), not a Python string.
     description: str = field(default=load_markdown(__package__, "shell_kill"))
-    # high-risk so PermissionGuard treats it as privileged (an
-    # operator policy can deny / gate it, same as shell_run).
+    # High risk so PermissionGuard gates it exactly like ``shell_run``: an
+    # operator policy can deny it or require approval.
     risk_level: str = "high"
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {

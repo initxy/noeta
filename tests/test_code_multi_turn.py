@@ -1,22 +1,11 @@
-"""Phase 4.5 I3 — multi-turn chat session.
+"""Multi-turn conversations rest between turns instead of terminating.
 
-Grouped acceptance:
-
-* **MultiTurnReActPolicy unit tests** — wrapper preserves ``state_patch`` and
-  ``assistant_message`` on non-final turns and passes other Decision shapes
-  through.
-* **End-to-end two-turn run via the SDK driver** — the EventLog carries the
-  turn boundary (``TaskSuspended``/``TaskWoken``) and the workspace edit from
-  turn 1 survives into turn 2's compose.
-* **Per-turn ``CodeSessionResult`` slicing** — turn-2's projected report covers
-  only the second turn's events (windowed past the turn-1 cursor).
-
-Driven through the production
-``InteractionDriver`` (``start`` → ``send_goal``). Unlike the deleted runner's
-``set_turn_final`` (which synthesised a ``TaskCompleted`` on the "final" turn),
-the SDK multi-turn conversation **never self-terminates** — every turn rests on
-the next-goal suspend and the conversation is ended out-of-band via the control
-plane (``close``). The lifecycle assertions reflect that.
+``MultiTurnReActPolicy`` translates a turn-ending ``FinishDecision`` — and a
+turn-ending ``FailDecision`` — into the next-goal suspend, so one bad turn
+never seals the ledger and the context a person built up survives into the next
+goal. Per-turn ``CodeSessionResult`` projections window past the previous
+turn's cursor, so a turn reports its own work rather than the cumulative
+stream.
 """
 
 from __future__ import annotations
@@ -126,8 +115,8 @@ def test_wrapper_passes_through_when_final_true() -> None:
 
 
 def test_wrapper_translates_finish_to_yield_when_final_false() -> None:
-    """Architect constraint #1: preserve state_patch and
-    assistant_message verbatim from the inner FinishDecision."""
+    """``state_patch`` and ``assistant_message`` cross the translation verbatim
+    — the wrapper never synthesises or drops what the inner policy produced."""
     inner = _FakeInnerPolicy()
     wrapper = MultiTurnReActPolicy(inner, final=False)
     patch = TaskStatePatch(set_phase="turn1-done")
@@ -181,8 +170,9 @@ def test_wrapper_parks_a_failed_turn_instead_of_terminating() -> None:
 def test_retryable_is_not_the_gate() -> None:
     """Both flags park. ``retryable`` answers "would re-driving this step
     help?" — a terminal-path question. It is ``False`` for exactly the faults a
-    human rescues (the transient provider error arrives as non-retryable
-    ``llm_error``), so gating on it would keep killing the motivating case."""
+    human rescues (a transient provider error arrives as non-retryable
+    ``llm_error``), so gating on it would kill the very case parking exists
+    for."""
     inner = _FakeInnerPolicy()
     wrapper = MultiTurnReActPolicy(inner, final=False)
     for retryable in (False, True):
@@ -199,8 +189,8 @@ def test_final_turn_still_terminates_on_failure() -> None:
 
 
 def test_wrapper_set_final_is_mutable_post_construction() -> None:
-    """Architect constraint #1: the runner flips `final` between
-    turns without rebuilding the Engine/Policy."""
+    """``final`` flips between turns without rebuilding the Engine or the
+    Policy."""
     inner = _FakeInnerPolicy()
     wrapper = MultiTurnReActPolicy(inner, final=False)
     inner.next_decision = FinishDecision(answer="x")
@@ -211,10 +201,9 @@ def test_wrapper_set_final_is_mutable_post_construction() -> None:
 
 
 def test_wrapper_state_patch_lands_on_engine_event_log(tmp_path: Path) -> None:
-    """Architect constraint #1 integration pin: state_patch the inner
-    policy attached to FinishDecision must show up as a
-    TaskStatePatched event after the wrapper translates the call to
-    a YieldForHumanDecision and the Engine processes it."""
+    """A ``state_patch`` the inner policy attached to its ``FinishDecision``
+    still reaches the ledger as ``TaskStatePatched``, even though what the
+    Engine actually sees is the wrapper's ``YieldForHumanDecision``."""
     from noeta.core.engine import Engine
     from noeta.storage.memory import (
         InMemoryContentStore,
@@ -255,7 +244,6 @@ def test_wrapper_state_patch_lands_on_engine_event_log(tmp_path: Path) -> None:
     assert task.status == "suspended"
     assert isinstance(task.wake_on, HumanResponseReceived)
     assert task.wake_on.handle == NEXT_GOAL_WAKE_HANDLE
-    # state_patch survived: fold-derived state.phase + recorded event payload.
     assert task.state.phase == "turn1-done"
     events = event_log.read(task.task_id)
     patched = [env for env in events if env.type == "TaskStatePatched"]
@@ -275,9 +263,9 @@ def test_wrapper_state_patch_lands_on_engine_event_log(tmp_path: Path) -> None:
 def test_failed_turn_parks_and_the_fold_agrees(tmp_path: Path) -> None:  # noqa: ARG001
     """The suspend a failed turn produces is an ordinary, replayable one.
 
-    Task-lifecycle semantics change, so the pin is on the ledger: no terminal
-    event, the reason is legible, and re-folding the stream reproduces the live
-    state exactly (a suspend recorded mid-failure must not fold differently).
+    The pin is on the ledger: no terminal event, a legible reason, and
+    re-folding the stream reproduces the live state exactly — a suspend
+    recorded mid-failure must not fold differently from any other.
     """
     from noeta.core.engine import Engine
     from noeta.core.fold import fold
@@ -400,10 +388,8 @@ def test_two_turn_run_lifecycle_emits_expected_events(tmp_path: Path) -> None:
     # completes — the SDK multi-turn path rests on the next-goal suspend.
     assert types.count("TaskStarted") == 1
     assert "TaskCompleted" not in types
-    # Intermediate turn boundary.
     assert "TaskSuspended" in types
     assert "TaskWoken" in types
-    # `TaskWoken`'s payload carries the next-goal wake the send_goal delivered.
     woken = next(env for env in events if env.type == "TaskWoken")
     assert isinstance(woken.payload.wake_event, HumanResponseReceived)
     assert woken.payload.wake_event.handle == NEXT_GOAL_WAKE_HANDLE
@@ -421,13 +407,10 @@ def _error_response() -> LLMResponse:
 
 
 def test_a_failed_turn_does_not_end_the_conversation(tmp_path: Path) -> None:
-    """The motivating case, end to end through the real driver.
+    """A provider error on turn 1 must not end the conversation.
 
-    Turn 1 hits a provider error. Before, that sealed the task: the ledger
-    closed, every bit of context the person had built up was void, and the only
-    way forward was a brand-new task. Now the same conversation carries on — so
-    this also proves the park released its lease (``send_goal`` could not
-    otherwise acquire one) and kept the accounting for the turn that failed.
+    Parking also has to release the lease — ``send_goal`` could not otherwise
+    acquire one — while keeping the accounting for the turn that failed.
     """
     from noeta.core.fold import fold
 
@@ -479,7 +462,6 @@ def test_per_turn_result_slices_only_that_turn(tmp_path: Path) -> None:
     first = driver.start(goal="rename foo to bar", agent="main")
     cursor = _last_seq(host, first.task_id)
     second = driver.send_goal(first.task_id, goal="now read x.py back")
-    # Turn 1 wrote x.py once.
     first_result = session_result(host, first)
     assert [c["path"] for c in first_result.files_changed] == ["x.py"]
     # Turn 2 only read — windowing past the turn-1 cursor, files_changed is empty
@@ -495,15 +477,13 @@ def test_per_turn_last_shell_is_not_cumulative(
     the previous turn's (windowed projection)."""
     workspace = _make_workspace(tmp_path)
 
-    # Distinguishable git_status output per turn via a monkeypatched
-    # subprocess.run keyed on a mutable turn marker.
+    # A mutable turn marker lets one stub hand back a different exit code per
+    # turn, which is what makes the two turns' last_shell distinguishable.
     import subprocess
 
     state = {"turn": 1}
 
     def fake_run(argv: list[str], **_: Any) -> subprocess.CompletedProcess[bytes]:
-        # `shell_run` records returncode in its output; vary it per turn
-        # so the per-turn last_shell is distinguishable.
         rc = 0 if state["turn"] == 1 else 3
         return subprocess.CompletedProcess(
             args=argv, returncode=rc, stdout=b"pytest output\n", stderr=b""
@@ -548,9 +528,9 @@ _SKILL_BODY = (
 
 
 def test_skill_carries_into_turn_two_without_reactivation(tmp_path: Path) -> None:
-    """An activated workspace skill is recorded once via a durable
-    TaskStatePatched before turn 1 and remains selected on turn 2 — NOT
-    re-emitted per turn."""
+    """An activated workspace skill is recorded once, by a durable
+    ``TaskStatePatched`` before turn 1, and stays selected on turn 2 rather
+    than being re-emitted every turn."""
     workspace = _make_workspace(tmp_path)
     skills_dir = workspace / ".noeta" / "skills" / "tidy"
     skills_dir.mkdir(parents=True)
@@ -615,7 +595,6 @@ def test_assistant_message_carries_into_turn_two_compose(tmp_path: Path) -> None
     workspace = _make_workspace(tmp_path)
     host, driver = _multi_turn_session(workspace, _two_turn_responses())
     first = driver.start(goal="rename foo to bar", agent="main")
-    # Snapshot the recorded MessagesAppended events between turns.
     msg_events_before = [
         env for env in host.event_log.read(first.task_id)
         if env.type == "MessagesAppended"

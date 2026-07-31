@@ -1,9 +1,8 @@
-"""Fold-side governance accumulation tests (issue 18).
+"""Fold-side governance accumulation.
 
-The Engine relies on fold's handlers to keep ``GovernanceState`` in
-sync with the EventLog so BudgetGuard reads accurate counters via the
-``_guard`` refold. Each handler is tested in isolation here; cross-
-adapter wiring is covered in ``test_budget_guard_engine_integration``.
+Budget caps are only as trustworthy as the counters ``fold`` rebuilds from the
+EventLog: a handler that misses an event silently disables the cap that reads
+it. Each handler is pinned here in isolation, away from Engine wiring.
 """
 
 from __future__ import annotations
@@ -97,11 +96,9 @@ def test_cost_usd_accumulates_from_llm_request_finished() -> None:
 
 
 def test_tokens_accumulate_from_llm_request_finished_usage() -> None:
-    """Foundation A: fold accumulates per-token counters from the typed Usage.
-
-    ``input_tokens`` is the derived uncached+cache_read+cache_write total,
-    kept distinct from the cache breakdown so ① can price them separately.
-    """
+    """``input_tokens`` is the derived uncached+cache_read+cache_write total,
+    kept distinct from the cache breakdown so pricing can rate the three
+    classes separately."""
     log, cs = _make_runtime()
     log.emit(
         task_id="t1",
@@ -165,9 +162,9 @@ def test_last_input_tokens_includes_cache_breakdown() -> None:
 
 
 def test_last_input_tokens_zero_without_usage() -> None:
-    """Byte-safe: an old recording's LLMRequestFinished has no ``usage`` field
-    → ``last_input_tokens`` stays at its default 0 (the trigger then falls back
-    to a pure estimate)."""
+    """An ``LLMRequestFinished`` carrying no ``usage`` leaves
+    ``last_input_tokens`` at its default 0, so the compaction trigger falls back
+    to a pure estimate instead of reading a stale figure."""
     log, cs = _make_runtime()
     log.emit(
         task_id="t1",
@@ -198,21 +195,16 @@ def test_tokens_sum_across_multiple_llm_request_finished() -> None:
 
 
 def test_old_recording_without_usage_keeps_token_counters_zero() -> None:
-    """Byte-safe: an old recording's payload predates the ``usage`` field.
-
-    We simulate the old shape by stripping ``usage`` off the folded payload
-    so fold sees a payload object with no such attribute — the getattr
-    fallback must leave every token counter at its default 0, matching the
-    from-scratch fold of a pre-Foundation-A stream.
-    """
+    """A payload without a usable ``usage`` must leave every token counter at
+    its default 0 — fold reads them through ``getattr`` fallbacks precisely so
+    an unusual stream degrades instead of raising."""
     log, cs = _make_runtime()
     log.emit(
         task_id="t1",
         type="LLMRequestFinished",
         payload=LLMRequestFinishedPayload(call_id="L", success=True),
     )
-    # Drop the usage attribute to mimic a payload restored from a recording
-    # that never had the field (the fold getattr-tolerance contract).
+    # Strip ``usage`` so fold has to take its getattr fallback.
     env = log.read("t1")[-1]
     object.__setattr__(env.payload, "usage", None)
     g = fold(log, cs, "t1").governance
@@ -325,7 +317,7 @@ def test_spawned_subtasks_independent_from_subtask_results() -> None:
 
 
 # ---------------------------------------------------------------------------
-# (issue 05) — background-shell jobs folded into governance
+# Background-shell jobs folded into governance
 # ---------------------------------------------------------------------------
 
 
@@ -437,13 +429,10 @@ def test_background_shell_poll_on_unknown_job_is_ignored() -> None:
 
 
 def test_old_recording_without_bg_events_folds_empty_and_byte_equal() -> None:
-    """Byte-safe: a stream with no BackgroundShell events folds to an empty
-    list, and a snapshot serialize→deserialize round-trip is a fixed point —
-    the new field never perturbs the canonical bytes of old recordings.
-
-    Mirrors the snapshot byte-equal contract the other GovernanceState lists
-    honour: ``background_jobs`` defaults to ``[]`` and is appended LAST.
-    """
+    """A stream with no BackgroundShell events folds to an empty list and
+    serialize→deserialize→refold is a fixed point, so ``background_jobs`` never
+    perturbs a stream's canonical snapshot bytes. Like the other
+    GovernanceState lists it defaults to ``[]`` and is appended LAST."""
     from noeta.core.snapshot import deserialize_task_state, serialize_task_state
 
     log, cs = _make_runtime()
@@ -459,16 +448,15 @@ def test_old_recording_without_bg_events_folds_empty_and_byte_equal() -> None:
 
 
 def test_old_snapshot_dict_missing_field_rehydrates_via_default() -> None:
-    """An old snapshot body has no ``background_jobs`` key in its governance
-    dict; ``GovernanceState(**governance)`` must rebuild via the field default
-    (the 'optional + last' convention) instead of raising."""
+    """A snapshot body whose governance dict lacks ``background_jobs`` must
+    rebuild through the field default rather than raising — the 'optional and
+    last' convention is what keeps snapshot bodies readable across versions."""
     from noeta.core.snapshot import rehydrate_task
     from noeta.protocols.canonical import from_canonical, to_canonical
     from noeta.protocols.task import Task
 
     fresh = Task(task_id="t1", status="running")
     state_dict = fresh.state_dict()
-    # Simulate a pre-issue-05 snapshot body: drop the new key entirely.
     del state_dict["governance"]["background_jobs"]
     # Round-trip through canonical exactly like the real snapshot reader.
     state_dict = from_canonical(to_canonical(state_dict))
@@ -477,10 +465,9 @@ def test_old_snapshot_dict_missing_field_rehydrates_via_default() -> None:
 
 
 def test_old_snapshot_runtime_missing_last_input_tokens_defaults_zero() -> None:
-    """Compaction byte-safety: a pre-compaction snapshot body has no
-    ``last_input_tokens`` key in its runtime dict; ``RuntimeState(**runtime)``
-    must rebuild via the field default (0, the 'optional + last' convention)
-    instead of raising."""
+    """Same convention on the runtime side: a snapshot body without
+    ``last_input_tokens`` rebuilds at the field default 0 rather than raising,
+    so compaction can read it unconditionally."""
     from noeta.core.snapshot import rehydrate_task
     from noeta.protocols.canonical import from_canonical, to_canonical
     from noeta.protocols.task import Task

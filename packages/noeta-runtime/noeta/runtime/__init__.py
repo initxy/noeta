@@ -1,8 +1,10 @@
-"""L2 runtime wrappers: normal-mode LLM and Tool invocation.
+"""Kernel runtime services — the side-effecting layer beneath the Engine.
 
-The wrappers exist so that Engine call sites route every LLM / Tool call
-through one layer (recording the canonical events into EventLog +
-ContentStore).
+Every LLM call, tool call, subprocess spawn and background job routes
+through one wrapper here so the canonical events land in the EventLog and
+ContentStore exactly once. The in-process registries (cancellation,
+background shells, file checkpoints) are accelerators only: the event log
+stays authoritative, so a resume that folds the log needs none of them.
 """
 
 from __future__ import annotations

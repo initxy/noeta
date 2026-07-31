@@ -1,22 +1,13 @@
-"""Background shell spawn + growing artifact (pull half).
+"""Background shell spawn and the growing output artifact.
 
-Walks the whole background-execution spine for the FIRST slice only: the
-``ProcessRegistry`` accelerator + the ``shell_run(background=true)`` /
-``shell_poll`` tools + the three ``BackgroundShell*`` events, but NOT the
-completion wake (02), kill (03), session re-keying (04) or read-model (05).
-
-Coverage matrix:
-
-* ``shell_run(background=true)`` returns ``{job_id, status:"running", ref}``
-  immediately (the engine main loop is never blocked on the process), and
-  ``background=false`` stays byte-for-byte the synchronous 120s-cap path.
-* the watcher thread fills an off-ledger buffer; ``content_store.put`` mints
-  a fresh content-addressed snapshot ref on spawn / each poll / exit, so a
-  ``deref`` walks partial → complete output. Bytes NEVER inline in events.
-* the three events land on the ``spawned_by_task_id`` stream via
-  ``system_emit`` — ``BackgroundShellStarted`` (pid + ref),
-  ``BackgroundShellPolled`` (ref + offset), ``BackgroundShellExited``
-  (exit_code + final_ref + summary).
+``shell_run(background=true)`` must hand back ``{job_id, status:"running",
+ref}`` immediately so the engine main loop is never blocked on the process,
+while a watcher thread fills an off-ledger buffer and ``content_store.put``
+mints a fresh content-addressed snapshot on spawn, on each poll and at exit — a
+``deref`` therefore walks partial → complete output. Output bytes must never
+inline into an event: only refs ride ``BackgroundShellStarted`` /
+``BackgroundShellPolled`` / ``BackgroundShellExited`` on the
+``spawned_by_task_id`` stream.
 """
 
 from __future__ import annotations
@@ -127,17 +118,15 @@ def test_output_grows_partial_then_complete(tmp_path: Path) -> None:
 
 
 def test_poll_sees_output_while_process_still_running(tmp_path: Path) -> None:
-    """Pull half, deterministic regression guard.
+    """A mid-run poll must see flushed output while the job is still running.
 
-    A process writes one flushed line then BLOCKS in a long sleep (it does NOT
-    exit, and emits < 4 KB). A mid-run poll MUST see that line while the job is
-    still ``running``. This only holds because the watcher uses ``read1``
+    The process writes one flushed line then BLOCKS in a long sleep (it never
+    exits, and emits < 4 KB). This only holds because the watcher uses ``read1``
     (returns whatever bytes are available) — a plain ``read(_READ_CHUNK)`` would
     block until 4096 bytes OR EOF, so the buffer would stay empty for the whole
-    sleep and the model could never "deref to watch progress". The earlier
-    two-line test left this best-effort (it raced on the watcher-thread
-    schedule); this one is deterministic because the line is available for
-    seconds before any exit.
+    sleep and the model could never "deref to watch progress". The long sleep
+    makes the assertion deterministic instead of racing the watcher thread's
+    schedule.
     """
     reg, _log, store = _registry(tmp_path)
     out = reg.spawn(
@@ -281,7 +270,7 @@ def test_shell_run_background_without_runner_errors_cleanly(tmp_path: Path) -> N
 
 
 def test_shell_run_background_false_unchanged(tmp_path: Path) -> None:
-    """The synchronous path is byte-for-byte the old behaviour."""
+    """``background=false`` keeps the synchronous result shape — no job handle."""
     _, _, store = _registry(tmp_path)
     ws = _ws(tmp_path)
     tool = ShellRunTool(workspace=ws, mode=ShellMode.ARBITRARY)
@@ -294,10 +283,8 @@ def test_shell_run_background_false_unchanged(tmp_path: Path) -> None:
 
 
 def test_shell_run_background_reuses_mode_gate(tmp_path: Path) -> None:
-    # the background path goes through the same mode gate as the sync
-    # path. In the strict ALLOWLIST tier a metachar command is rejected before
-    # any spawn. (In ARBITRARY it would now run through bash — full-bash
-    # coverage lives in test_fs_shell_tools.test_arbitrary_mode_runs_through_bash.)
+    # The background path shares the mode gate with the synchronous path, so in
+    # the strict ALLOWLIST tier a metachar command is refused before any spawn.
     reg, _, store = _registry(tmp_path)
     ws = _ws(tmp_path)
     tool = ShellRunTool(workspace=ws, mode=ShellMode.ALLOWLIST)

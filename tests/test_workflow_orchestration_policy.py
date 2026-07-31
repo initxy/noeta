@@ -1,22 +1,14 @@
-"""OrchestrationPolicy spine, direct (unit level).
+"""OrchestrationPolicy driven directly, without the ``run_workflow`` control
+tool or a main agent.
 
-Without the ``run_workflow`` control tool or main agent, drive one
-spawn→worker→resume→finish directly with :class:`OrchestrationPolicy` as the
-parent policy, verifying:
-
-* First ``decide``: the script's ``agent()`` spawns **exactly one** real subtask
-  (``SpawnSubtaskDecision``, deterministic call_id ``wf-0``); the parent
-  suspends on ``SubtaskCompleted``.
-* After the worker finishes and its result folds back into the parent stream
-  (paired ``tool_result`` call_id=wf-0), the second ``decide`` re-runs the
-  script from the top; that ``agent()`` returns instantly from the recording,
-  the script ``return``s → ``FinishDecision`` carrying the worker's output.
-* The subtask has its own EventLog stream; the parent stream records the full
-  spawn→suspend→woken→finish.
-
-This is the minimal slice pinning the "orchestration Policy + script host +
-re-run from the top + result fold-back" quartet on a single-worker sequential
-model (end-to-end drain/control-tool coverage is in test_workflow_run_tool_e2e.py).
+Pins the quartet the workflow spine rests on: each ``agent()`` call spawns
+exactly one real subtask with a deterministic ``wf-N`` call_id and suspends the
+parent on ``SubtaskCompleted``; the worker's result folds back as a paired
+``tool_result``; re-running the script from the top replays that recorded result
+instead of spawning again, so the script can ``return`` it; and the subtask keeps
+its own event stream while the parent records spawn → suspend → woken → finish.
+End-to-end drain and control-tool coverage lives in
+test_workflow_run_tool_e2e.py.
 """
 
 from __future__ import annotations
@@ -118,7 +110,7 @@ def test_single_agent_workflow_spine() -> None:
 
     # Step 3: parent (orchestration) is re-queued by the child-completion
     # observer. Re-lease, fold, woken, render the child result as a paired
-    # tool_result (mirrors subtask_drain._resume_parent), then re-step.
+    # tool_result (mirrors subtask_drain._resume_parent_leased), then re-step.
     o_lease_2 = disp.lease(worker_id="w1")
     assert o_lease_2 is not None and o_lease_2.task_id == orch.task_id
     orch = fold(log, cs, orch.task_id)
@@ -238,13 +230,10 @@ def test_try_except_never_swallows_the_spawn_suspend() -> None:
 
 
 def test_multiline_triple_quoted_string_literal_survives_the_wrap() -> None:
-    """``_run_script`` wraps the script in a synthetic function so a
-    top-level ``return`` is legal. An earlier ``textwrap.indent``-based
-    string wrap prepended 4 spaces to every physical line of the script,
-    which silently corrupted the interior lines of any multi-line (e.g.
-    triple-quoted) string literal — the added indentation became part of
-    the string's value. The AST-splice wrap must reproduce the literal
-    byte-for-byte instead."""
+    """``_run_script`` wraps the script in a synthetic function so a top-level
+    ``return`` is legal. The wrap has to be an AST splice: any text-level
+    re-indentation would prepend spaces to every physical line and silently
+    fold them into the value of a multi-line (e.g. triple-quoted) literal."""
     from noeta.protocols.decisions import SpawnSubtaskDecision
 
     script = (
@@ -261,10 +250,9 @@ def test_multiline_triple_quoted_string_literal_survives_the_wrap() -> None:
 
 
 def test_multiline_string_literal_nested_in_a_block_survives_the_wrap() -> None:
-    """Same corruption risk, but with the literal's own source indentation
-    nested inside an ``if`` block — pins that the fix is not merely
-    "strip a fixed 4-space prefix" but a real AST splice that never touches
-    the literal's interior lines regardless of surrounding structure."""
+    """Same corruption risk with the literal nested inside an ``if`` block: the
+    wrap must leave a literal's interior lines alone whatever the surrounding
+    indentation, which stripping a fixed prefix could never guarantee."""
     from noeta.protocols.decisions import SpawnSubtaskDecision
 
     script = (

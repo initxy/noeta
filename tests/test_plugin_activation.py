@@ -1,14 +1,14 @@
-"""Activation (spec D5) + effect scoping (spec D6) for the manifest-plugin path.
+"""Activation + effect scoping for the manifest-plugin path.
 
-These pin the switch-over that completes M1:
+These pin:
 
 * built-in feature-bundle activation folds into the ``AgentSpec.plugins``
-  identity tuple exactly as the retired ``Capabilities(...)`` recipe field did;
-* an unknown activation name fails compilation loudly (D5 / acceptance-4);
+  identity tuple;
+* an unknown activation name fails compilation loudly;
 * per-agent activation makes an external plugin's tools follow the agent that
-  activates it, and NOT a sibling that does not (D6 / acceptance-6);
+  activates it, and NOT a sibling that does not;
 * a loaded plugin's guard / observer is process authority — resolved from the
-  loaded set regardless of any agent's activation (D6 / acceptance-7).
+  loaded set regardless of any agent's activation.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from noeta.client.plugin_set import load_plugins
 
 
 # ---------------------------------------------------------------------------
-# D5 — built-in feature-bundle activation folds onto identity flags
+# built-in feature-bundle activation folds onto identity flags
 # ---------------------------------------------------------------------------
 
 
@@ -70,8 +70,8 @@ def test_control_and_feature_bundles_all_map() -> None:
 
 
 def test_control_tool_plugin_names_coexist_with_activation_bundles() -> None:
-    """control-tool-surface S2: ``todo_write`` / ``ask_user_question`` /
-    ``delegation`` are now BOTH real built-in plugins (a ``control_tool``
+    """``todo_write`` / ``ask_user_question`` /
+    ``delegation`` are BOTH real built-in plugins (a ``control_tool``
     contribution each) AND activation bundle names. Naming the plugins the same
     must NOT change activation semantics: with the full built-in catalogue
     loaded, ``plugins=(those names)`` still folds to the matching identity flags
@@ -137,7 +137,7 @@ def test_unknown_child_activation_names_the_child() -> None:
 
 
 # ---------------------------------------------------------------------------
-# D6 — external plugin identity contributions follow per-agent activation
+# external plugin identity contributions follow per-agent activation
 # ---------------------------------------------------------------------------
 
 
@@ -164,7 +164,7 @@ def test_external_prompt_fragment_follows_activation() -> None:
 
 
 # ---------------------------------------------------------------------------
-# D6 — guard / observer are process authority (do NOT follow activation)
+# guard / observer are process authority (do NOT follow activation)
 # ---------------------------------------------------------------------------
 
 

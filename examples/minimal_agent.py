@@ -1,34 +1,16 @@
-"""SDK example — run a minimal agent through ``Options`` + ``query``.
+"""SDK example — run an agent with ``Options`` + ``query``.
 
 Demonstrated SDK capability
 ---------------------------
-The one-shot entrypoint :func:`noeta.client.query`: hand it an
-:class:`noeta.client.Options` recipe + a provider + a workspace, get back
-the full Noeta event-envelope stream for a single turn — the canonical,
-machine-readable record of everything the agent did. The final answer
-rides the terminal ``TaskCompleted`` envelope, read out here with the
-public :func:`noeta.protocols.events.answer_from_payload`.
+:func:`noeta.sdk.query`, the one-shot entrypoint: a recipe, a provider and a
+workspace go in; the whole event-envelope stream for one turn comes back. The
+envelope stream — not the answer string — is the canonical record of what the
+agent did, and :meth:`QueryResult.answer` is the projection off it.
 
-This is the smallest possible "hello, agent" — one built-in ``read``
-tool, no sub-agents, no custom tools. It is the right starting point for
-a library user who just wants to drive a model against a workspace and
-read what happened.
-
-Running it
-----------
-The example ships with an offline :class:`FakeLLMProvider` so it runs with
-no API key and no network — every call is a pre-scripted response, which
-is also what the smoke test relies on. To point it at a real model,
-replace ``_demo_provider()`` with one of the real adapters::
-
-    from noeta.sdk.providers import OpenAICompatProvider
-    provider = OpenAICompatProvider(base_url=..., api_key=...)
-
-    # or
-    from noeta.sdk.providers import AnthropicProvider
-    provider = AnthropicProvider(api_key=..., default_max_tokens=1024)
-
-then pass ``model="<your-model-id>"`` to :func:`run`.
+The smallest starting point there is: one built-in tool, no sub-agents, no
+custom tools. The provider is scripted so the example needs no API key and no
+network; pass a live ``OpenAICompatProvider`` / ``AnthropicProvider`` from
+``noeta.sdk.providers`` (with the matching ``model``) to :func:`run` instead.
 
     python examples/minimal_agent.py
 """
@@ -44,11 +26,7 @@ from noeta.sdk.testing import FakeLLMProvider
 
 
 def _demo_provider() -> FakeLLMProvider:
-    """An offline provider scripted to answer in one turn (no tool use).
-
-    Swap this for ``OpenAICompatProvider`` / ``AnthropicProvider`` (see the
-    module docstring) to drive a real model.
-    """
+    """A network-free provider scripted to answer in one turn, no tool use."""
     return FakeLLMProvider(
         responses=[
             LLMResponse(
@@ -63,8 +41,8 @@ def _demo_provider() -> FakeLLMProvider:
 def run(*, provider=None, workspace_dir: Path, model: str = "stub-model") -> str:
     """Drive one turn and return the agent's final answer string.
 
-    Factored out of :func:`main` so the smoke test can assert on the
-    return value without going through ``stdout``.
+    Kept apart from :func:`main` so the smoke test asserts on a value rather
+    than on parsed stdout.
     """
     options = Options(
         system_prompt="You are a concise assistant.",
@@ -81,11 +59,11 @@ def run(*, provider=None, workspace_dir: Path, model: str = "stub-model") -> str
         model=model,
     )
 
-    # ``result`` IS the full envelope list, but the terminal answer is already
-    # folded onto it — dereferenced against the live store before ``query``
-    # tore it down, so a spilled answer resolves too. ``.answer()`` raises
-    # ``QueryFailedError`` if the task did not complete, so a failure reason
-    # can never be mistaken for an answer.
+    # ``result`` is the envelope list, but reading the answer off it by hand
+    # would break on a spilled answer: the ContentRef is only resolvable
+    # against the store ``query`` has already torn down. ``answer()`` was
+    # materialized while that store was alive, and it raises
+    # ``QueryFailedError`` rather than let a failure reason pass for an answer.
     return str(result.answer())
 
 

@@ -1,11 +1,11 @@
 """MCP tool wrapper + provider-safe name mapping.
 
-Phase 4.5 F2. Each tool a local stdio MCP server exposes becomes an
+Each tool a local stdio MCP server exposes becomes an
 ordinary Noeta :class:`~noeta.protocols.tool.Tool` so it flows through the
 one tool set into the composer schema, the policy, and the
 ``PermissionGuard`` with no special casing.
 
-Naming (architect-pinned, F2 rev2 §0): the Noeta-side tool name is
+Naming: the Noeta-side tool name is
 ``mcp__{alias}__{safe_tool}`` where ``safe_tool`` is the raw MCP tool
 name with every char outside ``[A-Za-z0-9_-]`` replaced by ``_``. The
 full name must match ``^[A-Za-z0-9_-]{1,64}$`` (provider-safe); empty
@@ -103,7 +103,7 @@ class McpToolSpec:
 
 @dataclass(frozen=True, slots=True)
 class McpServerSkip:
-    """One enabled MCP server that ``build_mcp_tools`` could not connect (D7).
+    """One enabled MCP server that ``build_mcp_tools`` could not connect.
 
     Returned (third element) only when ``skip_on_failure=True``: the server's
     connect / handshake / ``tools/list`` raised, so it was dropped and the build
@@ -126,11 +126,11 @@ def mcp_provenance_from_specs(
     dicts — one per enabled+resolved server, alias-sorted, each ``tools`` the
     server's ticked raw-name subset (sorted) or ``[]`` when no subset was set
     (⇒ all advertised tools). It records ONLY names: never a url / token / header
-    (those live on the spec but are deliberately dropped here, D3) — so the
+    (those live on the spec but are deliberately dropped here) — so the
     record is safe to persist in any event / recording / task provenance. The actual
-    tool shape / behaviour is NOT carried here; that is R-1's job (the recorded
-    ``request_ref`` tool spec, rebuilt on resume). This is the audit answer to
-    "what connectors + which of their tools was this task given this run".
+    tool shape / behaviour is NOT carried here; the recorded
+    ``request_ref`` tool spec (rebuilt on resume) is that truth. This is the audit
+    answer to "what connectors + which of their tools was this task given this run".
 
     Lists (not tuples) so the JSON round-trip through the event log / snapshot
     is byte-stable (a tuple would deserialise back as a list and drift)."""
@@ -295,7 +295,7 @@ def _connect_one_server(
         # ``tools/list`` names). ``None`` ⇒ keep all (back-compat); a tuple ⇒
         # drop any advertised tool not in it BEFORE it is wrapped, so unselected
         # tools never enter the tool set / reach the model. The surviving set is
-        # sorted below, so order/stable-hash determinism (D7) is unchanged.
+        # sorted below, so order/stable-hash determinism is unchanged.
         subset = spec.tool_subset
         allow = set(subset) if subset is not None else None
         built: dict[str, McpTool] = {}
@@ -344,7 +344,7 @@ def build_mcp_tools(
     """Connect each server, discover its tools, and build the namespaced
     ``McpTool`` set. Specs may be local stdio (``McpServerSpec``) or remote
     HTTP (``McpHttpServerSpec``); both map to the same ``mcp__{alias}__{tool}``
-    tools. **Deterministic order (D7)**: servers in ``specs``
+    tools. **Deterministic order**: servers in ``specs``
     order (callers pass them alias-sorted), tools within a server sorted by
     Noeta-side name — so the ``tools`` dict order → schema order → stable hash is
     reproducible on resume.
@@ -388,7 +388,7 @@ def build_mcp_tools(
             except (McpError, McpConfigError) as exc:
                 if not skip_on_failure:
                     raise
-                # D7 option B: drop this server, record the skip, keep going.
+                # Skip-on-failure option: drop this server, record the skip, keep going.
                 skipped.append(McpServerSkip(alias=spec.alias, reason=str(exc)))
                 continue
             clients.append(client)

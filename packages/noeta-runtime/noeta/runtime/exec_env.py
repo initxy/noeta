@@ -1,33 +1,14 @@
-"""``ExecEnv`` — the execution-backend seam under the fs / shell tool pack.
+"""``ExecEnv`` — the file-IO and process-execution backend under the fs tools.
 
-Every fs / shell tool performs two kinds of side effect against the
-workspace: **file IO** (read / write / stat / directory walk) and
-**process execution** (spawn a command). Today both go straight to the
-local host — ``Path.read_bytes`` / ``Path.glob`` / ``subprocess`` via
-``run_argv``. ``ExecEnv`` is the one seam those leaf operations route
-through, so the *same* tool code can run either against the local host
-(:class:`LocalExecEnv`, the default — byte-identical to the pre-seam
-behaviour) or against a remote sandbox container (an adapter satisfying this
-same Protocol over HTTP — the AIO one lives in the ``sandbox`` built-in
-plugin, ``noeta.builtins.sandbox.impl.exec_env``, since microkernel M2).
-
-Deliberately **IO-only**. Path *resolution* (the ``WorkspaceRoot``
-containment fence — ``resolve`` / ``resolve_readable`` / ``relative`` /
-``root``) stays on ``WorkspaceRoot`` and is unchanged: a tool still
-resolves a user-supplied path to an absolute :class:`~pathlib.Path`
-through the fence, then hands that *resolved* path to the ``ExecEnv`` for
-the actual read / write / walk. For a remote backend the ``WorkspaceRoot``
-is simply rooted at the container's workspace path (lexical containment —
-absolute / ``..`` escapes still rejected; the container itself is the
-real isolation boundary), and the ``ExecEnv`` IO methods are what cross
-the process boundary.
-
-:class:`LocalExecEnv` is **stateless**: it operates on the absolute
-``Path`` the tool already resolved, so a tool passing ``resolved`` to
-``exec_env.read_bytes(resolved)`` produces the exact same bytes as the
-old ``resolved.read_bytes()``. That byte-identity is the contract this
-seam is introduced under (Noeta's stable-prefix / resume moat): swapping
-the *executor* must never perturb a tool's recorded output.
+Routing both kinds of side effect through one seam lets identical tool code
+run against the local host (:class:`LocalExecEnv`) or against a remote sandbox
+container (an adapter in the ``sandbox`` built-in plugin). The seam is
+deliberately IO-only: path *resolution* stays on ``WorkspaceRoot``, so a tool
+pushes a user-supplied path through the containment fence first and hands down
+only the resolved absolute path — a remote backend roots that fence at the
+container's workspace path and leans on the container itself as the real
+isolation boundary. Swapping the executor must never perturb a tool's recorded
+output; that byte-identity is what keeps a resume reproducible.
 """
 
 from __future__ import annotations
@@ -58,13 +39,10 @@ __all__ = [
 
 
 def _write_all(fd: int, data: bytes) -> None:
-    """Write every byte to ``fd`` (``os.write`` may short-write).
+    """Write every byte to ``fd`` — ``os.write`` may short-write.
 
-    A zero-length write or an ``OSError`` is a failure — a partial write is
-    NEVER treated as success. Moved here from ``patch.py`` when
-    ``apply_patch``'s exclusive-create routed through
-    :meth:`ExecEnv.create_exclusive`; the ``os.write`` seam the patch tests
-    monkeypatch is unchanged.
+    A zero-length write or an ``OSError`` is a failure; a partial write is
+    NEVER reported as success.
     """
     mv = memoryview(data)
     total = 0
@@ -78,13 +56,10 @@ def _write_all(fd: int, data: bytes) -> None:
 class ExclusiveCreateError(OSError):
     """A :meth:`ExecEnv.create_exclusive` failure, carrying the rollback verb.
 
-    ``apply_patch`` distinguishes three outcomes of an atomic create so it can
-    pick the right recovery (``recover="none"`` when the target was never
-    created by us, ``recover="delete"`` when it was created then the write /
-    close failed). Subclasses fix ``recover``; ``reason`` is the exact
-    human-facing message the tool surfaces (preserved byte-for-byte from the
-    pre-seam inline dance). Subclasses ``OSError`` so the tool's existing
-    ``except OSError`` rollback sites keep working.
+    A caller must know whether the target exists after a failed atomic create
+    before it can clean up, so each failure mode fixes ``recover`` rather than
+    leaving the caller to guess from ``errno``. Subclasses ``OSError`` so a
+    caller's ``except OSError`` rollback path still catches it.
     """
 
     #: The rollback verb ``apply_patch._fail`` acts on ("none" | "delete").
@@ -92,7 +67,6 @@ class ExclusiveCreateError(OSError):
 
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
-        #: The exact failure message the tool surfaces as its ``reason``.
         self.reason = reason
 
 
@@ -116,19 +90,15 @@ class ExclusiveCreateWriteFailed(ExclusiveCreateError):
 
     recover = "delete"
 
-#: The injectable subprocess runner ``shell_run`` threads through to
-#: ``run_argv`` (tests pass a fake to avoid shelling out on the happy path).
-#: A ``subprocess.run``-shaped callable; ``None`` ⇒ the default local runner.
+#: A ``subprocess.run``-shaped callable ``shell_run`` threads through to
+#: ``run_argv``; ``None`` ⇒ the default local runner. Injectable so tests
+#: need not shell out on the happy path.
 SubprocRunner = Callable[..., "subprocess.CompletedProcess[bytes]"]
 
 
 @dataclass(frozen=True)
 class TreeSnapshot:
     """One recursive listing of file trees, with selected contents inlined.
-
-    Returned by :meth:`ExecEnv.tree_snapshot` — the batch primitive that
-    replaces a per-file ``rglob`` / ``is_file`` / ``read_text`` walk when the
-    backend has a per-call fixed cost (a sandbox HTTP round-trip, issue 46).
 
     * ``files`` — every **regular file** under any of the requested roots
       (recursive, symlinks followed), sorted and de-duplicated. Directories are
@@ -146,11 +116,9 @@ class TreeSnapshot:
 class ExecEnv(Protocol):
     """The file-IO + process-execution backend a fs / shell tool acts through.
 
-    Every method operates on an **already-resolved absolute path** (the tool
-    passes the ``Path`` it obtained from ``WorkspaceRoot.resolve`` /
-    ``resolve_readable``); the ``ExecEnv`` never does containment itself. A
-    ``LocalExecEnv`` reads the host filesystem; a sandbox backend fulfils the
-    same shape against a container over its API.
+    Every method takes an **already-resolved absolute path**: containment is
+    the caller's ``WorkspaceRoot``'s job, and an implementation must not
+    re-interpret or re-root what it is handed.
     """
 
     # -- file reads --------------------------------------------------------
@@ -164,20 +132,19 @@ class ExecEnv(Protocol):
     def create_exclusive(self, path: Path, body: bytes) -> None:
         """Atomically create ``path`` and write ``body`` — never overwrite.
 
-        The create must fail if the path already exists. On failure raises a
-        :class:`ExclusiveCreateError` subclass whose ``recover`` /``reason``
-        tell ``apply_patch`` how to roll back (the seam preserves the exact
-        recovery semantics ``apply_patch`` had inline before the seam existed).
+        The create must fail if the path already exists. On failure raises an
+        :class:`ExclusiveCreateError` subclass whose ``recover`` / ``reason``
+        tell the caller how to roll back.
         """
         ...
 
     def unlink(self, path: Path) -> None: ...
 
     def mkdir(self, path: Path) -> None:
-        """Create ``path`` and any missing parents (``parents=True,
-        exist_ok=True``). Used by the rewind restore (T7) to re-create a
-        directory an edited-then-restored file lived in when the rewound span
-        had removed it. An existing directory is not an error."""
+        """Create ``path`` and any missing parents; an existing directory is
+        not an error (``parents=True, exist_ok=True``). A rewind restore leans
+        on both: the directory a restored file lived in may itself have been
+        removed inside the rewound span."""
         ...
 
     # -- stat --------------------------------------------------------------
@@ -191,11 +158,11 @@ class ExecEnv(Protocol):
 
     # -- directory walk ----------------------------------------------------
     def glob(self, base: Path, pattern: str) -> Iterable[Path]:
-        """``base.glob(pattern)`` — one directory level of pattern expansion."""
+        """Match :meth:`pathlib.Path.glob` semantics exactly."""
         ...
 
     def rglob(self, base: Path, pattern: str) -> Iterable[Path]:
-        """``base.rglob(pattern)`` — recursive pattern expansion."""
+        """Match :meth:`pathlib.Path.rglob` semantics exactly."""
         ...
 
     def tree_snapshot(
@@ -204,11 +171,10 @@ class ExecEnv(Protocol):
         """Batch walk: list every regular file under ``roots`` and inline the
         bytes of each file named ``content_name`` — in ONE backend operation.
 
-        The batch counterpart of ``rglob`` + ``is_file`` + ``read_text`` for
-        bulk discovery (skill indexing, issue 46): on a remote backend each of
-        those is a full round-trip with a fixed cost that dominates, so a
-        per-file walk over N files costs O(N) round-trips; this primitive
-        costs O(1). A missing root contributes nothing (not an error).
+        Bulk discovery (skill indexing) done with ``rglob`` + ``is_file`` +
+        ``read_text`` costs O(N) round-trips on a remote backend, where the
+        per-call fixed cost dominates; this primitive costs O(1). A missing
+        root contributes nothing (not an error).
         """
         ...
 
@@ -217,11 +183,10 @@ class ExecEnv(Protocol):
     def supports_background(self) -> bool:
         """Whether ``shell_run(run_in_background=True)`` is valid on this backend.
 
-        The host background runner (``ProcessRegistry``) spawns detached HOST
-        subprocesses — it cannot reach into a container, and AIO exposes no
-        durable job handle (a v2 concern). So a container backend returns
-        ``False`` and ``shell_run`` refuses a background launch cleanly; the
-        local host returns ``True``."""
+        ``ProcessRegistry`` spawns detached HOST subprocesses and cannot reach
+        into a container, so a container backend must return ``False`` and let
+        ``shell_run`` refuse the launch rather than silently run the job on the
+        wrong side of the isolation boundary."""
         ...
 
     def run_argv(
@@ -235,8 +200,9 @@ class ExecEnv(Protocol):
     ) -> RunOutcome:
         """Spawn ``argv`` under ``cwd``, capture output, enforce timeout + cap.
 
-        Returns the same :class:`~noeta.runtime.subproc.RunOutcome` the
-        tools already consume.
+        The timeout and the output cap are the implementation's obligation,
+        not the caller's: a backend that ignores them lets one command hang or
+        flood the recorded stream.
         """
         ...
 
@@ -244,10 +210,8 @@ class ExecEnv(Protocol):
 class LocalExecEnv:
     """The default :class:`ExecEnv`: the local host filesystem + subprocess.
 
-    Stateless — every method is the exact ``Path`` / ``os`` / ``run_argv``
-    operation the tools performed inline before the seam existed, so a tool
-    routed through ``LocalExecEnv`` records byte-identical output. One shared
-    instance is safe to reuse across every tool and task.
+    Stateless, so one shared instance is safe to reuse across every tool and
+    task.
     """
 
     __slots__ = ()
@@ -262,11 +226,6 @@ class LocalExecEnv:
         path.write_bytes(body)
 
     def create_exclusive(self, path: Path, body: bytes) -> None:
-        # The exact fd-level dance apply_patch ran inline before the seam
-        # existed: exclusive O_EXCL open, write-all, close — each failure
-        # mapped to the recovery verb the tool expects. The ``os.open`` /
-        # ``os.write`` / ``os.close`` seams the patch tests monkeypatch are
-        # unchanged; only their home moved.
         try:
             fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError as exc:
@@ -297,7 +256,6 @@ class LocalExecEnv:
 
     @property
     def supports_background(self) -> bool:
-        # The host runner spawns host subprocesses — valid for the local host.
         return True
 
     def exists(self, path: Path) -> bool:
@@ -321,11 +279,9 @@ class LocalExecEnv:
     def tree_snapshot(
         self, roots: Sequence[Path], *, content_name: str
     ) -> TreeSnapshot:
-        # Local IO has no per-call fixed cost, so this is simply the walk the
-        # per-file methods would do, folded into one result. Symlinked
-        # directories are followed with a realpath cycle guard — the same
-        # semantics as the sandbox backend's ``find -L`` (and the host skill
-        # indexer's own walk, which does not route through this).
+        # Symlinked directories are followed (matching the sandbox backend's
+        # ``find -L``), so a realpath cycle guard is mandatory or a symlink
+        # loop inside the workspace walks forever.
         files: set[Path] = set()
         contents: dict[Path, bytes] = {}
         seen_dirs: set[str] = set()

@@ -1,11 +1,10 @@
-"""Canonical round-trip tests for Phase 1 typed Message / Block protocol.
+"""Canonical round-trip tests for the typed Message / Block protocol.
 
 SSOT: ``to_canonical_bytes`` → ``from_canonical_bytes`` must
-restore tagged typed values back into their dataclass instances. Phase 1
-adds five new typed shapes (``Message`` + four ``Block`` subclasses);
-this module is the regression barrier that they each register a
-``__canonical_tag__`` and a restorer so the round-trip preserves
-``isinstance`` identity.
+restore tagged typed values back into their dataclass instances. This
+module is the regression barrier that ``Message`` and the four ``Block``
+subclasses each register a ``__canonical_tag__`` and a restorer so the
+round-trip preserves ``isinstance`` identity.
 """
 
 from __future__ import annotations

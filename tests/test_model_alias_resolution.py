@@ -71,7 +71,7 @@ def test_start_resolves_alias_to_real_model_id_in_model_bound(
     driver = InteractionDriver(
         host,
         principal=Principal(identity="bob", allowed_models=frozenset({"opus"})),
-        # Microkernel M2: the alias table lives in the providers built-in;
+        # The alias table lives in the providers built-in;
         # the client injects it — mirrored here.
         alias_resolver=resolve_model_alias,
     )

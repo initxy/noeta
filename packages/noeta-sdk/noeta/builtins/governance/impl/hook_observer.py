@@ -1,33 +1,13 @@
-"""``HookObserver`` — Phase 4.5 F3 user PostToolUse / Notification hooks.
+"""``HookObserver`` — user PostToolUse / Notification hooks as side-effects.
 
-A user hook on these points can only **observe / record / notify**
-— it never writes the EventLog, runtime messages, or
-payloads. It subscribes to the EventLog post-COMMIT (read-only) and, on
-a matching event, fires a side-effect.
-
-**The subscriber callback never runs a command.** EventLog subscriber
-callbacks fire synchronously inside the writer's emit path; running a
-user `subprocess` there would stall the runtime decision loop. So the
-callback does only lightweight matching + a non-blocking enqueue onto a
-bounded queue, and a single background worker thread runs the commands.
-A full queue drops + logs (back-pressure never blocks emit).
-
-The command runner scrubs its subprocess env through the shared
-``noeta.runtime.env.scrub_env`` seam, narrowed to this observer's own
-allowlist (the old "protocols + stdlib only" import diet applied while this
-class lived in ``noeta.observers``; as a built-in impl it may reach the
-kernel-services band). The runner is **injectable** so tests can substitute
-a fake (no real subprocess / no real sleep).
-
-This observer is **live-only**: a host wires it at its live construction
-point, and it never participates in fold / resume / state reconstruction, so
-a hook side-effect cannot perturb a rebuilt state and a resume never re-fires
-a user notification.
-
-Microkernel M2: moved here from ``noeta.observers.hook`` — the ``governance``
-built-in plugin's ``observer`` contribution refs this class; the rule types
-(``PostToolUseRule`` / ``NotificationRule``) travel with it because only the
-host that wires the observer ever constructs them.
+A hook here may only observe, record or notify; it never writes the EventLog.
+EventLog subscriber callbacks fire synchronously inside the writer's emit
+path, so running a user subprocess there would stall the decision loop: the
+callback only matches and enqueues onto a bounded queue, one background worker
+runs the commands, and a full queue drops rather than applying back-pressure
+to emit. The observer is live-only — it never participates in fold or resume,
+so a hook side-effect cannot perturb a rebuilt state and a resume never
+re-fires a user notification.
 """
 
 from __future__ import annotations
@@ -78,17 +58,17 @@ class PostToolUseRule:
 
 @dataclass(frozen=True, slots=True)
 class NotificationRule:
-    on: str  # v1: "approval"
+    on: str  # the only recognised value is "approval"
     command: Optional[tuple[str, ...]] = None
     log: bool = False
 
 
 class NotifyHandle(Protocol):
-    """A started notify side-effect the worker can wait on and `stop()`
-    can **cancel** (F3 P1). ``wait`` blocks until the side-effect finishes
-    (or its own bounded timeout); ``cancel`` terminates an in-flight one
-    so ``stop()`` does not leave a user hook running after the session
-    exits. Both must be safe to call from different threads."""
+    """A started notify side-effect the worker waits on and ``stop()`` cancels.
+
+    ``wait`` blocks until the side-effect finishes or its own bounded timeout;
+    ``cancel`` terminates an in-flight one so no user hook keeps running after
+    the session exits. Both must be safe to call from different threads."""
 
     def wait(self) -> None: ...
 
@@ -101,9 +81,6 @@ NotifyRunner = Callable[[tuple[str, ...]], NotifyHandle]
 
 
 def _scrub_env_local() -> dict[str, str]:
-    # The shared subprocess scrubber, narrowed to the observer's own allowlist
-    # (a notify command inherits even less than a tool subprocess — none of
-    # the Python interpreter keys).
     return scrub_env(allowlist=_OBS_ENV_ALLOWLIST)
 
 
@@ -118,8 +95,8 @@ class _NoopHandle:
 
 
 class _PopenHandle:
-    """Wraps a live ``Popen``: ``wait`` enforces the per-command timeout
-    (kill on expiry); ``cancel`` terminates it (``stop()`` path)."""
+    """Wraps a live ``Popen``; ``wait`` kills the process once the per-command
+    timeout expires, so one wedged hook cannot pin the worker."""
 
     def __init__(self, proc: "subprocess.Popen[bytes]", timeout_s: float) -> None:
         self._proc = proc
@@ -136,8 +113,8 @@ class _PopenHandle:
             _log.warning("notify command failed: %s", exc)
 
     def cancel(self) -> None:
-        # Terminate the in-flight process; the worker's `wait()`
-        # (communicate) then returns. terminate→kill, best-effort.
+        # terminate→kill is best-effort; the worker's blocked ``communicate``
+        # unblocks once the process is gone.
         with contextlib.suppress(Exception):
             self._proc.terminate()
         with contextlib.suppress(Exception):
@@ -150,12 +127,10 @@ class _PopenHandle:
 def make_subprocess_runner(
     *, cwd: str, timeout_s: float = DEFAULT_NOTIFY_TIMEOUT_S
 ) -> NotifyRunner:
-    """The default runner: start one command (argv, **never** ``shell``)
-    with cwd=workspace, stdin/stdout/stderr=DEVNULL, and a scrubbed env;
-    return a :class:`NotifyHandle` the worker waits on (bounded timeout,
-    kill+reap on expiry) and ``stop()`` can cancel. A spawn failure is
-    swallowed (returns a no-op handle) — a notify hook must never break
-    the session."""
+    """The default runner: one command as argv, **never** through a shell.
+
+    A spawn failure is swallowed (a no-op handle comes back) because a notify
+    hook must never break the session."""
 
     def _run(argv: tuple[str, ...]) -> NotifyHandle:
         try:
@@ -176,8 +151,7 @@ def make_subprocess_runner(
 
 
 class HookObserver:
-    """Subscribe to the EventLog; enqueue notify side-effects for a
-    background worker. Live-only, never wired into fold / resume."""
+    """Enqueue notify side-effects for a background worker. Live-only."""
 
     def __init__(
         self,
@@ -194,17 +168,16 @@ class HookObserver:
         self._runner = runner
         self._log_sink = log_sink or (lambda msg: _log.info("%s", msg))
         self._q: "queue.Queue[tuple[str, ...]]" = queue.Queue(maxsize=max_queue)
-        #: In-flight tool calls (call_id -> tool_name), populated on
-        #: ToolCallStarted and evicted on ToolResultRecorded so the dict
-        #: only ever holds calls still awaiting a result. Guarded by
-        #: ``_names_lock`` because subscriber callbacks fire post-COMMIT
-        #: outside the writer lock and may run concurrently (see the
-        #: Observer concurrency contract — same discipline as Audit/Metrics).
+        #: In-flight tool calls (call_id -> tool_name); evicting on
+        #: ToolResultRecorded is what keeps it from growing without bound over
+        #: a long session. Guarded by ``_names_lock`` because subscriber
+        #: callbacks fire post-COMMIT outside the writer lock and may run
+        #: concurrently.
         self._call_names: dict[str, str] = {}
         self._names_lock = threading.Lock()
         self._stop = threading.Event()
         #: The handle for the command the worker is currently running, so
-        #: ``stop()`` can cancel an in-flight notify (F3 P1). Guarded by
+        #: ``stop()`` can cancel an in-flight notify. Guarded by
         #: ``_current_lock`` (set/read from worker + stop threads).
         self._current: Optional[NotifyHandle] = None
         self._current_lock = threading.Lock()
@@ -223,9 +196,6 @@ class HookObserver:
                     self._call_names[env.payload.call_id] = env.payload.tool_name
                 return
             if env.type == "ToolResultRecorded":
-                # The call is finished — evict its entry so the dict only
-                # retains in-flight calls (no unbounded growth over a long
-                # session and its subtasks).
                 with self._names_lock:
                     tool = self._call_names.pop(env.payload.call_id, None)
                 if tool is None:
@@ -286,14 +256,15 @@ class HookObserver:
                     self._current = None
 
     def stop(self) -> None:
-        """Bounded teardown: unsubscribe, signal stop, **cancel the
-        in-flight command** (F3 P1 — so no user hook keeps running after
-        the session exits), drain/drop the queue, and join the worker
-        with a timeout. Idempotent."""
+        """Bounded, idempotent teardown.
+
+        Cancelling the in-flight command is the point: without it a user hook
+        keeps running after the session exits. Every step is bounded (queue
+        dropped, worker joined with a timeout) so teardown cannot hang.
+        """
         with contextlib.suppress(Exception):
             self._handle.stop()
         self._stop.set()
-        # Cancel an in-flight notify so it cannot outlive the session.
         with self._current_lock:
             current = self._current
         if current is not None:

@@ -1,9 +1,10 @@
-"""Skill referenced-file disclosure through `noeta code`.
+"""A skill's bundled resources are disclosed by path, never inlined.
 
-A workspace skill whose `SKILL.md` references a bundled resource gets its
-absolute base directory surfaced at compose time (`Base directory for this
-skill: <dir>`) so the model can `read` the resource on demand; the content
-is never inlined.
+A workspace skill whose ``SKILL.md`` references a bundled file gets its
+absolute base directory surfaced at compose time (``Base directory for this
+skill: <dir>``) so the model can ``read`` the resource on demand. Inlining
+the file instead would spend context on material the model may never need,
+and would grow without bound as a skill accumulates resources.
 """
 
 from __future__ import annotations
@@ -60,12 +61,10 @@ def test_referenced_resource_listed_not_inlined(tmp_path: Path) -> None:
         shell_mode=ShellMode.OFF,
     )
     driver = make_driver(host)
-    # ``extra_skills=("doc-skill",)`` → the driver's pre-loop ``activations`` (the
-    # same workspace-skill activation the runner did at prepare()).
+    # ``activations`` is the pre-loop hook a host uses to turn on a workspace
+    # skill before the first model call.
     out = driver.start(goal="do the thing", agent="main", activations=("doc-skill",))
-    # the prompt the model saw surfaces the skill's absolute
-    # base directory (so it can `read` NOTE.md on demand) + the body
-    # verbatim, but never inlines the resource content.
+    # Reconstruct the prompt the model actually saw.
     prompt = " ".join(
         b.text
         for m in provider.received_requests[0].messages
@@ -74,9 +73,9 @@ def test_referenced_resource_listed_not_inlined(tmp_path: Path) -> None:
     )
     skill_dir = ws / ".noeta" / "skills" / "doc-skill"
     assert f"Base directory for this skill: {skill_dir}" in prompt
-    assert "read NOTE.md for the conventions" in prompt  # body verbatim
+    assert "read NOTE.md for the conventions" in prompt
     assert "CONVENTION: be terse." not in prompt
-    # the plan provenance carries no force-inlined resource.
+    # The plan provenance must agree: no resource was force-inlined.
     events = host.event_log.read(out.task_id)
     plan_refs = [
         e.payload.plan_ref

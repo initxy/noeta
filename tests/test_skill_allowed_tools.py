@@ -1,4 +1,4 @@
-"""Phase 4.5 Issue B — skill `allowed-tools` enforcement (L2 unit).
+"""Skill ``allowed-tools`` enforcement (unit level).
 
 Covers the conservative parser, the exact 1:1 Claude→Noeta alias map, and
 the `PermissionGuard` enforcement decision driven by
@@ -23,8 +23,8 @@ from noeta.protocols.hooks import GuardContext, ProposedToolCall, Verdict
 
 
 def test_kernel_guard_carries_no_claude_vocab() -> None:
-    """The Claude→Noeta alias map + parser moved to noeta-sdk; the kernel
-    guard must no longer carry any product tool vocabulary (mechanism-vs-material)."""
+    """The Claude→Noeta alias map + parser live in noeta-sdk; the kernel
+    guard carries no product tool vocabulary (mechanism-vs-material)."""
     assert not hasattr(permission_mod, "_CLAUDE_TO_NOETA_TOOL")
     assert not hasattr(permission_mod, "_parse_allowed_tools")
     assert not hasattr(permission_mod, "_alias_to_noeta")
@@ -97,7 +97,6 @@ def test_parse_malformed_returns_none_not_widened() -> None:
 
 
 def test_alias_map_is_exact_1to1() -> None:
-    # Read maps to the renamed `read`; LS dropped (list_dir retired).
     assert _CLAUDE_TO_NOETA_TOOL == {
         "Read": "read",
         "Glob": "glob",
@@ -121,9 +120,9 @@ def test_guard_unknown_claude_name_grants_nothing() -> None:
 
 
 def test_partial_unknown_invalidates_whole_declaration() -> None:
-    """P1 (architect): a single unknown token degrades the WHOLE grant to
-    empty — `[Read, Bogus]` must NOT keep `read` allowed; a typo in
-    a security-relevant grant gates everything until fixed."""
+    """A single unknown token degrades the WHOLE grant to empty — `[Read,
+    Bogus]` must NOT keep `read` allowed; a typo in a security-relevant grant
+    gates everything until fixed."""
     g = _guard(raw=(("s", "[Read, Bogus]"),))
     assert _check(g, "read", ("s",)) is Verdict.REQUIRE_APPROVAL
     g_deny = _guard(raw=(("s", "[Read, Bogus]"),), mode="deny")
@@ -175,11 +174,11 @@ def test_mode_off_never_gates() -> None:
 
 
 def test_malformed_diagnostic_logged_once(caplog) -> None:  # type: ignore[no-untyped-def]
-    # The single diagnostic now fires at SDK resolution time (once), not on
-    # every guard tool check.
+    # The single diagnostic fires once at SDK resolution time, not on every
+    # guard tool check.
     caplog.set_level(logging.WARNING, logger="noeta.builtins.skills.impl.allowed_tools")
     g = _guard(raw=(("s", "bad: value"),))
-    # resolved once already; multiple checks must not re-log.
+    # Already resolved once; multiple checks must not re-log.
     _check(g, "read", ("s",))
     _check(g, "write", ("s",))
     warnings = [

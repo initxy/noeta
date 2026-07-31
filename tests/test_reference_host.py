@@ -1,26 +1,20 @@
 """Contract test for the reference host (``examples/reference-host/host.py``).
 
-This is the split spec's Phase-1 contract test (``docs/implementation-specs/
-2026-07-26-sdk-only-repo-split.md``, decision D5), updated for the manifest
-plugin mechanism (``docs/implementation-specs/2026-07-28-sdk-extensibility-
-redesign.md``). It stands in for the real product after the agent moves to its
-own repo. It boots the reference host — written against the ``noeta.sdk`` public
-surface **only** — against an offline fake provider and asserts the host's
-load-bearing claims:
+The reference host is written against the ``noeta.sdk`` public surface only and
+stands in for a real product, so it is booted here against an offline fake
+provider and held to its load-bearing claims:
 
 1. **Streaming works.** A ``StreamingProvider`` + the host's ``delta_sink`` push
    ephemeral deltas while the turn is in flight; they reach the sink.
 2. **Durable storage works.** The sqlite triple lands a real file on disk and
    the turn's events are persisted through it.
 3. **Manifest plugins are wired.** The loaded :class:`~noeta.sdk.PluginSet`
-   contributes process-wide governance guards / an observer (D6), and a
-   per-agent ``tool_result_transform`` (``redaction``) is activated and applied
-   before recording — the secret never lands in the durable ledger or content
-   store (acceptance 10).
+   contributes process-wide governance guards / an observer, and a per-agent
+   ``tool_result_transform`` (``redaction``) is activated and applied before
+   recording — the secret never lands in the durable ledger or content store.
 
-The host itself never imports a runtime internal; this test lives in the SDK's
-own suite, so it may reach ``noeta.testing`` for the fake provider — that reach
-is exactly what the split repo forbids the *product* and is fine here.
+This test may reach ``noeta.testing`` for the fake provider; the host may not,
+and ``tests/test_public_surface.py`` is what holds it to that.
 """
 
 from __future__ import annotations
@@ -112,9 +106,9 @@ def test_reference_host_streams_and_persists_with_plugins(
         delta_out=delta_out,
     )
     try:
-        # The manifest plugins are loaded and wired per the effect-scoping rules
-        # (D6): the governance guards / observer are process-wide (not gated on
-        # activation), and the redaction transform is activated on the main agent.
+        # Effect scoping: the governance guards / observer are process-wide (not
+        # gated on activation), the redaction transform is per-agent and must be
+        # activated on the main agent to apply.
         assert set(host.plugins.names()) >= {
             "protected-paths",
             "approval-modes",
@@ -128,16 +122,14 @@ def test_reference_host_streams_and_persists_with_plugins(
 
         outcome = host.run(goal="say hi")
 
-        # 1. Streaming deltas arrived — the StreamingProvider path was taken and
-        #    each delta reached the stdout sink (captured here into a buffer).
+        # The streaming path was taken (not the batch one) and every delta
+        # reached the stdout sink, captured here into a buffer.
         assert provider.streamed_calls == 1, provider.streamed_calls
         assert provider.batch_calls == 0, provider.batch_calls
         assert host.delta_sink.delta_count == 2, host.delta_sink.delta_count
         streamed = delta_out.getvalue()
         assert streamed == "hi there", repr(streamed)
 
-        # 2. Durable storage — the sqlite file exists and the turn's events were
-        #    persisted through the injected triple.
         assert db_path.exists(), db_path
         events = host.events(outcome.task_id)
         assert events, "no events persisted to the sqlite event log"
@@ -153,7 +145,7 @@ def test_reference_host_streams_and_persists_with_plugins(
 
 
 # ---------------------------------------------------------------------------
-# The redaction tool_result_transform is wired end-to-end (acceptance 10).
+# The redaction tool_result_transform, end to end
 # ---------------------------------------------------------------------------
 
 
@@ -229,13 +221,11 @@ def test_reference_host_redaction_transform_scrubs_the_ledger(
         outcome = host.run(goal="fetch the token")
 
         events = host.events(outcome.task_id)
-        # The tool ran (a ToolResultRecorded event exists) ...
         recorded = [e for e in events if e.type == "ToolResultRecorded"]
         assert recorded, "the leaky tool never ran"
-        # ... and no event payload anywhere carries the secret.
+        # No event payload anywhere may carry the secret.
         for env in events:
             assert _SECRET not in str(env.payload), env.type
-        # The recorded summary was scrubbed to the redaction marker.
         assert any("***REDACTED***" in str(e.payload) for e in recorded)
 
         # The offloaded tool output blob in the content store is secret-free too

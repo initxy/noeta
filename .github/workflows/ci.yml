@@ -41,10 +41,10 @@ jobs:
         run: uv run python -c "from noeta.core.engine import Engine; print('import OK')"
 
       - name: Run pytest with coverage
-        # The four PRD-priority modules are gated to >= 90% via per-module
-        # coverage thresholds asserted in tests/test_phase0_coverage_gaps.py
-        # plus the integration suite. Repo-wide we require >= 85% so a
-        # broad regression cannot sneak in.
+        # Repo-wide coverage gate: the run fails under 85% so a broad
+        # regression cannot sneak in. NOETA_TEST_POSTGRES_DSN enables the
+        # Postgres parameter of the storage contract suites against the
+        # service above.
         env:
           NOETA_TEST_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/postgres
         run: uv run pytest -n auto --cov=noeta --cov-report=term --cov-fail-under=85

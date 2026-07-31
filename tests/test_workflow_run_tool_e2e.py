@@ -1,17 +1,16 @@
-"""`run_workflow` end to end (full
-chain: control tool -> translation -> orchestration subtask -> real subtask ->
-result fold-back -> EventLog), single `agent()`.
+"""``run_workflow`` end to end: control tool -> translation -> orchestration
+subtask -> real subtask -> result fold-back -> event log.
 
-The main agent calls ``run_workflow(script=...)``; a single ``agent("...")`` in
-the script spawns exactly one real subtask (its own EventLog); the subtask
-runs, its result is folded back, the orchestration script ends -> workflow
-completes and the final result folds back to the main agent.
+The main agent calls ``run_workflow(script=...)``; the single ``agent("...")``
+in the script spawns exactly one real subtask on its own event stream, whose
+result folds back so the orchestration script ends and its answer reaches the
+main agent as the paired ``run_workflow`` tool_result.
 
-LLM call order (FakeLLMProvider is shared globally, consumed in complete() call
-order):
-1. main agent -> ``run_workflow`` tool_use;
-2. (orchestration Policy issues no LLM call) worker(explore) -> end_turn with the result;
-3. (orchestration Policy issues no LLM call) main agent -> end_turn to finish.
+One ``FakeLLMProvider`` is shared by all three tasks and consumed in
+``complete()`` call order, so the response list must be ordered: the main
+agent's ``run_workflow`` tool_use, then the worker's ``end_turn``, then the main
+agent's closing ``end_turn`` — the orchestration Policy itself issues no LLM
+call.
 """
 
 from __future__ import annotations

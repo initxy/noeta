@@ -1,14 +1,12 @@
-"""T4 — wiring the ExecEnv seam into config + the tool builder.
+"""Wiring the ExecEnv seam into config and the tool builder.
 
-Covers the four seams that make a sandbox backend *reachable* (the per-task
-provisioning that populates it is T5/T6):
-
-* the lexical (container) ``WorkspaceRoot`` — D7 containment for a sandbox root;
-* ``build_fs_tools(exec_env=...)`` threading the backend into every fs tool;
-* ``SandboxExecEnvConfig`` / ``HostConfig.exec_env`` — the SDK config surface;
-* ``build_session_inputs(exec_env=...)`` choosing the lexical workspace and
-  routing the pack's IO through the injected backend, without perturbing the
-  default (host) path.
+Four seams have to line up before a sandbox backend is reachable at all: the
+lexical (container) ``WorkspaceRoot``, which contains paths without ever
+consulting the host filesystem; ``build_fs_tools(exec_env=...)`` threading one
+backend into every fs tool; the ``SandboxExecEnvConfig`` / ``HostConfig.exec_env``
+config surface; and ``build_session_inputs(exec_env=...)`` picking the lexical
+workspace and routing the pack's IO through the injected backend — all without
+perturbing the default host path.
 """
 
 from __future__ import annotations
@@ -180,10 +178,9 @@ def test_sandbox_config_defaults() -> None:
 
 
 def test_sandbox_config_rejects_the_removed_provision_field() -> None:
-    """``provision`` was a dead field: nothing read it, so ``"eager"`` silently
-    attached instead of provisioning. Per-session provisioning is the
-    ``SandboxProvider`` seam. A caller still passing it must fail loudly rather
-    than quietly get the other behaviour."""
+    """``SandboxExecEnvConfig`` carries no ``provision`` knob — per-session
+    provisioning is the ``SandboxProvider`` seam. A caller who passes one must
+    fail loudly instead of quietly getting attach-only behaviour."""
     with pytest.raises(TypeError):
         SandboxExecEnvConfig(  # type: ignore[call-arg]
             base_url="http://box:8080", provision="eager"

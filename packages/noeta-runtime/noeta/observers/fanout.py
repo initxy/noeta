@@ -1,29 +1,10 @@
-"""Transport-neutral envelope fan-out primitives + Observer.
+"""Fan every ``EventEnvelope`` out to per-subscriber bounded queues.
 
-These primitives are **transport-neutral**: they only know
-:class:`EventEnvelope`. They do not know HTTP, sockets, SSE framing, or
-NDJSON. SSE (``noeta.agent.backend``) and any future stdio-NDJSON surface are
-*consumers* of the fan-out, not part of it.
-
-Three layers with hard boundaries:
-
-1. :class:`EventFanout` — subscribes to an ``EventLogSubscriber`` and
-   forwards each :class:`EventEnvelope` to an :class:`EnvelopeBroadcaster`.
-   Knows EventEnvelope; **does not** know HTTP, sockets, JSON, or
-   client identity.
-2. :class:`EnvelopeBroadcaster` — fans envelopes out to per-subscriber
-   bounded queues. Each consumer (typically an HTTP request thread, but
-   equally a stdio-NDJSON writer) gets a :class:`FanoutSubscription` it
-   ``get()``s from. Slow consumers that fill their queue are closed; the
-   broadcaster never has its own worker thread, so a stuck transport write
-   cannot block the publisher.
-3. The transport adapter (``noeta.agent.backend``, owns SSE framing and
-   socket writes) calls ``broadcaster.subscribe()`` and iterates the
-   subscription; broadcaster has no idea HTTP exists.
-
-The subscription-owns-queue model (rev2 B4) is the deliberate fix for
-the rev1 "broadcaster worker thread calls callbacks" shape, which would
-have let a slow socket write stall the publisher.
+Nothing here knows HTTP, sockets, SSE framing, or NDJSON — a transport adapter
+subscribes and iterates its own subscription, and that is the only place a
+wire format exists. Each subscription owns its queue and the broadcaster runs
+no worker thread of its own, so publishing can never block on a consumer's
+write; a subscriber that lets its queue fill is closed and dropped instead.
 """
 
 from __future__ import annotations
@@ -46,8 +27,8 @@ _DEFAULT_MAX_QUEUE_SIZE = 256
 
 
 class _CloseSentinel:
-    """Sentinel posted to a subscription's queue when it is closed so
-    a blocked :meth:`FanoutSubscription.get` returns promptly."""
+    """Posted to a subscription's queue on close so a blocked
+    :meth:`FanoutSubscription.get` returns promptly."""
 
 
 _SENTINEL = _CloseSentinel()
@@ -56,13 +37,10 @@ _SENTINEL = _CloseSentinel()
 class FanoutSubscription:
     """One subscriber's view of the broadcast stream.
 
-    The consumer (typically an HTTP request thread, equally a
-    stdio-NDJSON writer) iterates ``get()`` or ``__iter__`` to receive
-    envelopes; the broadcaster only ``put_nowait``s into the
-    subscription's bounded queue. If the queue fills (slow consumer),
-    the broadcaster calls :meth:`close` and drops the subscription on
-    its next iteration — events stop arriving, ``get()`` returns
-    ``None``, the iterator exits.
+    The consumer pulls; the broadcaster only ``put_nowait``s. A consumer too
+    slow to keep its bounded queue from filling is closed by the broadcaster
+    rather than waited on: events stop arriving, ``get()`` returns ``None``,
+    and the iterator exits.
     """
 
     def __init__(self, *, max_queue_size: int) -> None:
@@ -76,11 +54,8 @@ class FanoutSubscription:
         return self._closed
 
     def get(self, *, timeout: Optional[float] = None) -> Optional[EventEnvelope]:
-        """Block up to ``timeout`` seconds for the next envelope.
-
-        Returns ``None`` if the subscription was closed (sentinel
-        observed) or the timeout elapsed without an envelope.
-        """
+        """``None`` means either "closed" or "timed out" — check
+        :attr:`closed` to tell them apart."""
         try:
             item = self._queue.get(timeout=timeout)
         except queue.Empty:
@@ -90,13 +65,7 @@ class FanoutSubscription:
         return item
 
     def __iter__(self) -> Iterator[EventEnvelope]:
-        """Yield envelopes until :meth:`close` is called.
-
-        Transport adapter typical use::
-
-            for env in subscription:
-                socket.write(sse_frame(env))
-        """
+        """Yield envelopes until :meth:`close` is called."""
         while not self._closed:
             env = self.get(timeout=1.0)
             if env is None:
@@ -106,8 +75,7 @@ class FanoutSubscription:
             yield env
 
     def close(self) -> None:
-        """Idempotent. Enqueues a sentinel so a blocked ``get()``
-        returns promptly."""
+        """Idempotent."""
         if self._closed:
             return
         self._closed = True
@@ -120,13 +88,9 @@ class FanoutSubscription:
 class EnvelopeBroadcaster:
     """Bounded fan-out from one publisher to N subscriptions.
 
-    No internal worker thread (rev2 B4): :meth:`publish` synchronously
-    walks the subscription list and ``put_nowait``s into each. Slow
-    subscriptions whose queue is full are closed and dropped from the
-    list on the same pass — publish never blocks the EventLog writer.
-
-    Thread-safe: subscribe / publish / close all serialise on a single
-    mutex. The mutex is held briefly (no blocking IO under it).
+    :meth:`publish` runs on the caller's thread and only ``put_nowait``s, so it
+    never blocks the EventLog writer. Thread-safe: subscribe / publish / close
+    serialise on one mutex, which is only ever held across non-blocking work.
     """
 
     def __init__(self, *, max_queue_size: int = _DEFAULT_MAX_QUEUE_SIZE) -> None:
@@ -136,12 +100,8 @@ class EnvelopeBroadcaster:
         self._closed = False
 
     def subscribe(self) -> FanoutSubscription:
-        """Register a new subscriber.
-
-        Raises :class:`RuntimeError` if the broadcaster has been
-        closed — subscribers attached after server shutdown would
-        never receive events.
-        """
+        """Raises :class:`RuntimeError` once closed: a subscriber attached
+        after shutdown would wait forever for events that cannot come."""
         with self._lock:
             if self._closed:
                 raise RuntimeError("EnvelopeBroadcaster is closed")
@@ -150,12 +110,8 @@ class EnvelopeBroadcaster:
             return sub
 
     def publish(self, env: EventEnvelope) -> None:
-        """Fan ``env`` out to every live subscription.
-
-        Subscriptions whose queue is full or already closed are
-        dropped on this pass. Never raises; never blocks longer than
-        ``put_nowait``.
-        """
+        """Fan ``env`` out to every live subscription; never raises, and never
+        blocks longer than a ``put_nowait``."""
         dropped: list[FanoutSubscription] = []
         with self._lock:
             for sub in self._subscriptions:
@@ -180,7 +136,7 @@ class EnvelopeBroadcaster:
                     pass
 
     def close(self) -> None:
-        """Close every subscription and drop them. Idempotent."""
+        """Idempotent."""
         with self._lock:
             if self._closed:
                 return
@@ -198,12 +154,8 @@ class EventFanout:
     """Subscribes to an EventLog and forwards envelopes to an
     :class:`EnvelopeBroadcaster`.
 
-    Same shape as :class:`noeta.observers.audit.AuditObserver` /
-    :class:`noeta.observers.metrics.MetricsObserver`: self-subscribes
-    on construction, ``stop()`` unsubscribes. Failures inside
-    ``broadcaster.publish`` are swallowed at WARNING — Observer
-    callbacks fire post-COMMIT outside the EventLog writer lock and
-    must never raise back into the writer.
+    A failure inside ``broadcaster.publish`` is swallowed at WARNING: an
+    Observer callback must never raise back into the EventLog writer.
     """
 
     name = "fanout"

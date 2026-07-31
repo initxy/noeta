@@ -1,43 +1,14 @@
 """OpenAI ``/chat/completions`` adapter for the Noeta-shape LLM protocol.
 
-Implements :class:`noeta.protocols.messages.LLMProvider` against any
-endpoint that speaks the OpenAI Chat Completions wire format —
-official OpenAI, vLLM, OpenRouter, LiteLLM, and most middle-proxy
-gateways. The translation contract is pinned: every loss of
-fidelity caused by speaking OpenAI's wire shape is contained to this
-single file; Engine / Policy only ever see Noeta-shape types.
-
-Key contracts (cross-referenced to PRD §"OpenAICompatProvider translation rules"):
-
-* The provider does **not** hold a model. ``LLMRequest.model`` is
-  forwarded per-call so one instance can talk to multiple models.
-* ``LLMRequest.system`` (when present) is flattened to a single
-  ``{"role": "system", "content": str}`` message prepended to the
-  outbound array; a ``role=="system"`` message inside
-  ``LLMRequest.messages`` is rejected with :class:`ValueError` because
-  the canonical place for system instructions is the dedicated field.
-* :class:`noeta.protocols.messages.ThinkingBlock` round-trips outbound
-  via the ``reasoning_content`` (text) and ``encrypted_reasoning``
-  (signature) fields — but **only when ``reasoning_continuation`` is not
-  ``"off"``** (the default). The ContextComposer re-attaches thinking
-  neutrally for every provider; this adapter is the single place that
-  decides whether OpenAI's wire actually carries it, because native
-  OpenAI hides reasoning and DeepSeek-style gateways *reject* an echoed
-  ``reasoning_content`` (HTTP 400). Inbound recognises any of
-  ``reasoning_content`` / ``reasoning`` / ``encrypted_reasoning``
-  (the first match wins) so different middle-proxy implementations
-  stay supported.
-* Inconsistent responses (``finish_reason="stop"`` together with
-  non-empty ``tool_calls``, or ``finish_reason="tool_calls"`` with
-  no calls) raise :class:`ValueError` — the wrapping
-  ``RuntimeLLMClient`` (issue 12) is what translates exceptions into
-  ``LLMResponse(stop_reason="error", ...)``.
-
-This module does **not** implement async, retry, prompt caching, or
-the Anthropic protocol — those are explicitly Out of Scope for issue
-11. Token streaming is supported through the optional
-:class:`noeta.protocols.messages.StreamingProvider` capability
-(``complete_streaming``); the batch ``complete`` path is unchanged.
+Implements :class:`noeta.protocols.messages.LLMProvider` against any endpoint
+speaking the OpenAI Chat Completions wire format — official OpenAI, vLLM,
+OpenRouter, LiteLLM, most middle-proxy gateways. Every loss of fidelity caused
+by that wire shape is contained to this file, so Engine and Policy only ever
+see Noeta-shape types. The provider pins no model: ``LLMRequest.model`` is
+forwarded per call, which is what lets one instance serve many models. Wire
+inconsistencies (a ``finish_reason`` that contradicts the ``tool_calls``
+array) raise rather than being papered over — ``RuntimeLLMClient`` is what
+turns an exception into ``stop_reason="error"``.
 """
 
 from __future__ import annotations
@@ -74,7 +45,6 @@ from noeta.builtins.providers.impl.codecs import (
 )
 
 
-#: The conventional environment variable an omitted ``api_key`` falls back to.
 _API_KEY_ENV = "OPENAI_API_KEY"
 
 _FINISH_REASON_MAP: dict[str, Literal["tool_use", "end_turn", "max_tokens", "error"]] = {
@@ -89,16 +59,13 @@ _REASONING_FIELDS: tuple[str, ...] = (
     "encrypted_reasoning",
 )
 
-#: Outbound reasoning-echo policy (extended-thinking alignment, Slice A).
-#: Decides whether an assistant ``ThinkingBlock`` re-attached upstream by the
-#: ContextComposer is written back onto the wire. ``"off"`` (default) drops it:
+#: Whether an assistant ``ThinkingBlock`` that the ContextComposer re-attached
+#: is written back onto the wire. ``"off"`` (the default) drops it, because
 #: native OpenAI hides reasoning and DeepSeek-style gateways reject an echoed
-#: ``reasoning_content`` (HTTP 400), so a neutral composer that always carries
-#: thinking forward must not leak it here. ``"chat"`` echoes
-#: ``reasoning_content`` + ``encrypted_reasoning`` for gateways that round-trip
-#: reasoning through Chat Completions; ``"responses"`` is reserved for the
-#: OpenAI Responses-API encrypted-continuation shape (treated like ``"chat"``
-#: by this Chat-Completions adapter until a dedicated Responses adapter lands).
+#: ``reasoning_content`` with HTTP 400 — a composer that neutrally carries
+#: thinking forward for every provider must not leak it here. ``"chat"`` echoes
+#: it for gateways that do round-trip reasoning; ``"responses"`` exists for
+#: symmetry with the Responses adapter and behaves like ``"chat"`` here.
 ReasoningContinuation = Literal["off", "chat", "responses"]
 
 
@@ -123,16 +90,14 @@ class OpenAICompatProvider:
     ) -> None:
         """``api_key`` defaults to the ``OPENAI_API_KEY`` environment variable.
 
-        The conventional fallback every OpenAI-shape client offers; an explicit
-        argument still wins. Neither present raises here rather than letting
-        the first call fail with an opaque 401. ``base_url`` stays required —
-        an OpenAI-*compatible* endpoint has no conventional default.
+        Missing credentials raise here rather than letting the first call fail
+        with an opaque 401. ``base_url`` has no default because an
+        OpenAI-*compatible* endpoint has no conventional one.
 
-        An **empty** key is treated as absent, deliberately: the common way to
-        arrive at one is ``os.environ.get("KEY", "")``, i.e. the very
-        misconfiguration this check exists to name. A local endpoint that
-        wants no authentication passes any placeholder (``api_key="none"``);
-        the header is sent and the server ignores it.
+        An **empty** key counts as absent: the usual way to arrive at one is
+        ``os.environ.get("KEY", "")``, the very misconfiguration this check
+        exists to name. An endpoint that wants no authentication passes any
+        placeholder — the header is sent and the server ignores it.
         """
         resolved_key = api_key if api_key is not None else os.environ.get(_API_KEY_ENV)
         if not resolved_key:
@@ -160,11 +125,8 @@ class OpenAICompatProvider:
 
     def complete(self, request: LLMRequest) -> LLMResponse:
         body = self._build_request_body(request)
-        # ② error recovery: every wire-shape failure is
-        # translated to the neutral Noeta error taxonomy *here* so the
-        # runtime never sees an httpx type. Connection / timeout errors are
-        # transient (worth a retry); HTTP status errors are bucketed by
-        # ``_translate_http_error``.
+        # Every wire-shape failure is translated into the neutral Noeta error
+        # taxonomy here, so the runtime never sees an httpx type.
         try:
             http_response = self._client.post("/chat/completions", json=body)
             http_response.raise_for_status()
@@ -196,23 +158,19 @@ class OpenAICompatProvider:
     ) -> LLMResponse:
         """Stream a Chat Completions request, firing ``on_delta`` per fragment.
 
-        Implements :class:`noeta.protocols.messages.StreamingProvider`: same
-        blocking one-shot contract as :meth:`complete` — the complete
-        :class:`LLMResponse` is still returned, rebuilt from the accumulated
-        fragments and fed through the same ``_parse_response`` path so
-        streamed and batch results are shape-identical. ``content`` fragments
-        emit ``kind="text"`` deltas; reasoning fragments
-        (``reasoning_content`` / ``reasoning`` — the same keys
-        ``_extract_thinking`` sniffs) emit ``kind="thinking"``; tool-call
-        fragments accumulate silently (argument JSON is undecodable while
-        partial). ``request_headers`` are transport-only: merged into this
-        POST on top of the client-level headers, never recorded.
+        Still the blocking one-shot contract of :meth:`complete`: the full
+        :class:`LLMResponse` is the return value, rebuilt from the fragments
+        and fed through the same ``_parse_response``, which is what pins
+        streamed and batch results shape-identical. Tool-call fragments
+        accumulate without firing deltas — partial argument JSON is
+        undecodable. ``request_headers`` are transport-only and never
+        recorded.
         """
         body = self._build_request_body(request)
         body["stream"] = True
-        # ``include_usage`` requests the terminal usage-only chunk. Some
-        # OpenAI-compatible gateways never send it — a missing usage object
-        # degrades to an empty ``Usage`` exactly like batch, no error.
+        # Requests the terminal usage-only chunk. Some OpenAI-compatible
+        # gateways never send it; a missing usage object degrades to an empty
+        # ``Usage`` exactly like batch, without erroring.
         body["stream_options"] = {"include_usage": True}
         accumulator = _ChatStreamAccumulator(on_delta)
         try:
@@ -223,8 +181,8 @@ class OpenAICompatProvider:
                 headers=request_headers,
             ) as http_response:
                 if http_response.status_code >= 400:
-                    # Error bodies are small; read them so the overflow
-                    # sniff (``_is_context_overflow``) can see the JSON.
+                    # Read the (small) error body while the stream is open, so
+                    # ``_is_context_overflow`` can still see the JSON.
                     http_response.read()
                     try:
                         http_response.raise_for_status()
@@ -237,8 +195,8 @@ class OpenAICompatProvider:
                     try:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
-                        # Tolerant: skip a malformed chunk, mirroring the
-                        # batch parsers' unknown-shape stance.
+                        # Skip a malformed chunk, mirroring the batch parser's
+                        # tolerance of unknown shapes.
                         continue
                     if isinstance(chunk, dict):
                         accumulator.feed(chunk)
@@ -277,7 +235,6 @@ class OpenAICompatProvider:
             body["temperature"] = request.temperature
         if request.max_tokens is not None:
             body["max_tokens"] = request.max_tokens
-        # Structured output: OpenAI-style response_format with json_schema.
         if request.output_schema is not None:
             body["response_format"] = {
                 "type": "json_schema",
@@ -286,9 +243,8 @@ class OpenAICompatProvider:
                     "schema": dict(request.output_schema),
                 },
             }
-        # Reasoning effort. OpenAI only supports low/medium/high; the Noeta
-        # xhigh/max values are collapsed to "high" because the vendor has
-        # no finer buckets.
+        # OpenAI has no bucket above "high", so the Noeta xhigh/max values
+        # collapse onto it.
         if request.effort is not None:
             body["reasoning_effort"] = {
                 "xhigh": "high",
@@ -336,11 +292,9 @@ class OpenAICompatProvider:
             content.append(TextBlock(text=text_value))
         for call in tool_calls:
             function = call.get("function") or {}
-            # Treating an empty string as default (``or "{}"``) is this
-            # adapter's local reading convention; after normalizing, the shared
-            # codec decodes it. The error prefix ``tool_call arguments`` is this
-            # provider's wire vocabulary,
-            # passed through verbatim so the wording bytes stay unchanged.
+            # Reading an empty arguments string as ``{}`` is this adapter's own
+            # convention (the shared codec only defaults ``None``), and
+            # ``tool_call arguments`` is this adapter's own error vocabulary.
             arguments = decode_tool_arguments(
                 function.get("arguments") or "{}",
                 error_label="tool_call arguments",
@@ -370,18 +324,14 @@ class OpenAICompatProvider:
 class _ChatStreamAccumulator:
     """Folds Chat Completions stream chunks back into the batch wire shape.
 
-    Fires :class:`StreamDelta` side effects for text / reasoning fragments as
-    they arrive; tool-call fragments accumulate silently. ``terminal_payload``
-    rebuilds the completed ``{"choices": [{"message": ..., "finish_reason":
-    ...}], "usage": ...}`` dict so the existing ``_parse_response`` produces a
-    response shape-identical to batch (same consistency checks, same tool-call
-    codec, same usage degrade).
+    Rebuilding the vendor-shaped payload — rather than assembling an
+    :class:`LLMResponse` directly — is what lets ``_parse_response`` run
+    unchanged, so a streamed response gets the same consistency checks, the
+    same tool-call codec and the same usage degrade as a batch one.
 
-    Delta block indexes are assigned in arrival order (first kind seen takes
-    0, the other takes 1). Reasoning models emit all reasoning fragments
-    before ``content``, so the indexes match the final response's block
-    positions (:class:`ThinkingBlock` before :class:`TextBlock`, as
-    ``_parse_response`` assembles them); either way the two kinds always get
+    Delta block indexes are assigned in arrival order. Reasoning models emit
+    every reasoning fragment before ``content``, so the indexes line up with
+    the final response's block positions; either way the two kinds always get
     distinct, ordered indexes.
     """
 
@@ -413,8 +363,7 @@ class _ChatStreamAccumulator:
         usage = chunk.get("usage")
         if isinstance(usage, dict):
             self._usage = usage
-        # Keep the first-seen response metadata so the diagnostic ``raw``
-        # payload stays vendor-shaped.
+        # First-seen wins, so the rebuilt ``raw`` payload stays vendor-shaped.
         for key in ("id", "model"):
             value = chunk.get(key)
             if isinstance(value, str) and value and key not in self._meta:
@@ -448,8 +397,8 @@ class _ChatStreamAccumulator:
                         index=self._block_index("thinking"),
                     )
                 )
-        # Opaque continuation token: accumulated silently (it is a signature,
-        # not visible reasoning text — never surfaced as a delta).
+        # A signature, not visible reasoning text, so it never surfaces as a
+        # delta.
         signature = delta.get("encrypted_reasoning")
         if isinstance(signature, str) and signature:
             self._signature_parts.append(signature)
@@ -489,7 +438,6 @@ class _ChatStreamAccumulator:
             entry["arguments"].append(arguments)
 
     def terminal_payload(self) -> dict[str, Any]:
-        """Rebuild the vendor-shaped completed response dict."""
         message: dict[str, Any] = {
             "role": "assistant",
             # Batch tool-call responses carry ``content: null``; mirror that
@@ -527,21 +475,17 @@ class _ChatStreamAccumulator:
 
 
 # ---------------------------------------------------------------------------
-# Error translation (② error recovery, provider-neutral)
+# Error translation
 # ---------------------------------------------------------------------------
 
 
 def _translate_http_error(exc: httpx.HTTPStatusError) -> Exception:
     """Map an OpenAI-shape HTTP status error into the neutral taxonomy.
 
-    * 429 → :class:`TransientError` (reads ``Retry-After``).
-    * 5xx → :class:`TransientError`.
-    * 400 with ``error.code/type == 'context_length_exceeded'`` (or a
-      message mentioning the maximum context length) →
-      :class:`ContextOverflowError`.
-    * other 4xx (400 / 401 / 403 / ...) → :class:`FatalError`.
-
-    OpenAI error body shape: ``{"error": {"message", "type", "code"}}``.
+    429 and 5xx are retryable; every other 4xx is fatal. A 400 gets its body
+    sniffed first, because context overflow arrives as an ordinary bad request
+    yet needs its own bucket — it is not retryable and the recovery a Policy
+    drives is compaction.
     """
     response = exc.response
     status = response.status_code
@@ -580,11 +524,10 @@ def _is_context_overflow(response: httpx.Response) -> bool:
 # ---------------------------------------------------------------------------
 
 
-#: D6: this Chat Completions
-#: adapter does NOT support image input. ``ImageBlock`` should only flow to a
-#: vision-capable Responses provider. An image task misrouted here raises
-#: explicitly and never silently drops the image (one task is pinned to one
-#: provider, so this only fires on a misroute — and a misroute must be loud).
+#: This adapter carries no image input; an ``ImageBlock`` belongs on a
+#: vision-capable Responses provider. One task is pinned to one provider, so
+#: an image arriving here can only be a misroute — and a misroute must be
+#: loud, never a silently dropped image.
 _NO_IMAGE_SUPPORT = (
     "this provider does not support image input (ImageBlock); "
     "route image tasks to a vision-capable Responses provider instead of "
@@ -593,7 +536,6 @@ _NO_IMAGE_SUPPORT = (
 
 
 def _reject_image_block(block: Block) -> None:
-    """Raise :class:`ValueError` on any ``ImageBlock`` (D6 defensive branch)."""
     if isinstance(block, ImageBlock):
         raise ValueError(_NO_IMAGE_SUPPORT)
 
@@ -614,17 +556,14 @@ def _message_to_openai(
     message: Message, reasoning_continuation: ReasoningContinuation
 ) -> list[dict[str, Any]]:
     if message.role == "user":
-        # D6: an ImageBlock in
-        # a user turn raises explicitly. ``_flatten_text_blocks`` keeps only
-        # TextBlock, so an image would be silently dropped — scan first to make
-        # the misroute loud.
+        # ``_flatten_text_blocks`` keeps only TextBlock, so an image would
+        # vanish without a trace — scan first to make the misroute loud.
         for block in message.content:
             _reject_image_block(block)
-        # D4: host-injected turns (``origin`` system / memory)
-        # ride the user channel in the ledger but render as a mid-history
-        # ``system`` role wire message — OpenAI's chat shape supports
-        # that natively, so no tag syntax is needed. ``human`` / ``None``
-        # mean the role's natural author → plain user turn.
+        # Host-injected turns ride the user channel in the ledger but render as
+        # a mid-history ``system`` wire message, which OpenAI's chat shape
+        # supports natively — so no tag syntax is needed. ``human`` / ``None``
+        # mean the role's natural author, i.e. a plain user turn.
         if message.origin in ("system", "memory"):
             return [
                 {"role": "system", "content": _flatten_text_blocks(message)}
@@ -645,7 +584,7 @@ def _assistant_message_to_openai(
     signature: Optional[str] = None
     tool_calls: list[dict[str, Any]] = []
     for block in message.content:
-        _reject_image_block(block)  # D6: no images; misroute must be loud
+        _reject_image_block(block)  # a misroute must be loud, not silent
         if isinstance(block, TextBlock):
             text_parts.append(block.text)
         elif isinstance(block, ThinkingBlock):
@@ -663,17 +602,15 @@ def _assistant_message_to_openai(
                     },
                 }
             )
-        # ToolResultBlock has no place in an assistant message; ignore silently
-        # to match OpenAI's tolerance (it would be a misuse upstream).
+        # A ToolResultBlock here is an upstream misuse; ignored silently to
+        # match OpenAI's own tolerance.
     out: dict[str, Any] = {
         "role": "assistant",
         "content": "\n".join(text_parts) if text_parts else None,
     }
-    # Outbound reasoning echo is gated: the ContextComposer re-attaches
-    # thinking neutrally for every provider, but only gateways that actually
-    # accept it should see it on the wire. ``off`` (default) drops both fields
-    # so native OpenAI / DeepSeek never receive an echoed ``reasoning_content``
-    # (which DeepSeek rejects with HTTP 400).
+    # The composer re-attaches thinking neutrally for every provider, so the
+    # echo has to be gated here: only a gateway that accepts an echoed
+    # ``reasoning_content`` should see one (DeepSeek answers HTTP 400).
     if reasoning_continuation != "off":
         if thinking_parts:
             out["reasoning_content"] = "\n".join(thinking_parts)
@@ -687,7 +624,7 @@ def _assistant_message_to_openai(
 def _tool_message_to_openai(message: Message) -> list[dict[str, Any]]:
     expanded: list[dict[str, Any]] = []
     for block in message.content:
-        _reject_image_block(block)  # D6: no images; misroute must be loud
+        _reject_image_block(block)  # a misroute must be loud, not silent
         if not isinstance(block, ToolResultBlock):
             continue
         output = block.output
@@ -722,22 +659,12 @@ def _extract_thinking(message: dict[str, Any]) -> Optional[ThinkingBlock]:
 def _translate_usage(usage: Any) -> Usage:
     """Map OpenAI's usage wire shape into Noeta-shape :class:`Usage`.
 
-    Chat Completions reports a cache breakdown nested under
-    ``prompt_tokens_details`` (mirrors ``openai_responses._translate_usage``'s
-    ``input_tokens_details.cached_tokens`` handling, D2):
-
-      * ``prompt_tokens − cached_tokens`` → ``uncached``
-      * ``prompt_tokens_details.cached_tokens`` → ``cache_read`` (absent → 0)
-      * ``cache_write`` is always 0 (Chat Completions does not report
-        cache writes)
-      * ``completion_tokens`` → ``output``
-      * ``completion_tokens_details.reasoning_tokens`` →
-        ``reasoning_tokens`` (newer reasoning models; absent → 0, D-A5)
-
-    ``total_tokens`` is a redundant provider-side field — the derived
-    ``input`` recomputes the total — so it is dropped, not pinned into
-    the internal contract. A missing / non-dict ``usage``
-    yields an empty ``Usage()``.
+    ``prompt_tokens`` is a *total*, so the cached part is subtracted out to get
+    ``uncached`` — the opposite of Anthropic, whose input count already
+    excludes cache. ``cache_write`` stays 0 because Chat Completions never
+    reports one, and ``total_tokens`` is dropped rather than pinned into the
+    neutral contract: ``Usage.input`` recomputes it. A missing or non-dict
+    ``usage`` degrades to an empty ``Usage()`` instead of raising.
     """
     if not isinstance(usage, dict):
         return Usage()

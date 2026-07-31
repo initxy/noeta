@@ -256,9 +256,9 @@ class HttpFetchTransport:
 
 @dataclass
 class ContainerCurlFetchTransport:
-    """Fetch a URL through the sandbox container via ``curl`` (D6).
+    """Fetch a URL through the sandbox container via ``curl``.
 
-    In sandbox mode (D3/D5) a tool's execution must land inside the session's
+    In sandbox mode a tool's execution must land inside the session's
     container rather than on the host, so ``webfetch`` egresses by running
     ``curl`` through the ``ExecEnv`` process seam instead of streaming over
     httpx. The fetched HTML is handed to the SAME :func:`html_to_markdown` the
@@ -270,7 +270,7 @@ class ContainerCurlFetchTransport:
     surface a server error page as a "successful" fetch. With ``--fail`` such a
     response (or a timeout) raises with the cause named and the tool degrades to
     ``ToolResult(success=False, ...)`` — byte-for-byte the same outcome the httpx
-    path reaches through ``raise_for_status`` (R3: the two egress paths cannot
+    path reaches through ``raise_for_status`` (the two egress paths cannot
     diverge on HTTP error status).
     """
 
@@ -331,7 +331,7 @@ def build_web_tools(exec_env: Optional[ExecEnv] = None) -> dict[str, Tool]:
     When ``exec_env`` is supplied (sandbox mode) both tools egress THROUGH the
     container — ``webfetch`` via :class:`ContainerCurlFetchTransport` and
     ``web_search`` via :class:`ContainerCurlSearchTransport` — instead of over
-    httpx on the host (D3/D6). ``exec_env is None`` keeps the byte-identical
+    httpx on the host. ``exec_env is None`` keeps the byte-identical
     host httpx path.
     """
     fetch_transport: FetchTransport = (

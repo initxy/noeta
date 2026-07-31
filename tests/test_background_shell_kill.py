@@ -299,11 +299,10 @@ def _end_turn(text: str = "done") -> LLMResponse:
 
 
 def test_driver_cancel_kills_session_background_jobs(tmp_path: Path) -> None:
-    """Human emergency-stop: a control-plane ``cancel`` (the same
-    call the web UI's ``POST /tasks/{id}/cancel`` makes) kills the session's
+    """Human emergency-stop: a control-plane ``cancel`` kills the session's
     background shell jobs via ``SdkHost.kill_background_shells`` → the registry
     ``kill_root_task`` primitive (so a cancelled conversation leaves no orphan
-    process). issue 04's session-close cascade reuses the SAME primitive."""
+    process). The session-close cascade reuses the SAME primitive."""
     ws = tmp_path / "ws"
     ws.mkdir()
     dispatcher = InMemoryDispatcher()

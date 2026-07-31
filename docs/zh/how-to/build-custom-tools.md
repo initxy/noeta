@@ -1,16 +1,15 @@
 # 构建自定义工具
 
-**目标：** 用 `@tool` 定义你自己的工具，将它们接入代理，并可选地将它们打包为进程内 MCP 服务器。
+**目标：** 用 `@tool` 定义你自己的工具，把它们接入 Agent，并可选地打包成进程内 MCP 服务器。
 
-**开始之前：** 你已完成[你的第一个代理](../tutorials/first-agent.md)的学习，并熟悉 `Options` 和 `Client`。
+**开始之前：** 你已经跑过[你的第一个 Agent](../tutorials/first-agent.md)，并熟悉 `Options` 和 `Client`。
 
 ## 用 `@tool` 定义工具
 
-工具是一个普通函数 `fn(arguments: dict, ctx: ToolContext) -> ToolResult`，用 `@tool` 装饰器包装：
+工具就是一个普通函数 `fn(arguments: dict, ctx: ToolContext) -> ToolResult`，用 `@tool` 装饰器包一层：
 
 ```python
-from noeta.sdk import tool
-from noeta.protocols.tool import ToolContext, ToolResult
+from noeta.sdk import ToolContext, ToolResult, tool
 
 @tool(
     name="fetch_weather",
@@ -30,59 +29,69 @@ from noeta.protocols.tool import ToolContext, ToolResult
 def fetch_weather(arguments: dict, ctx: ToolContext) -> ToolResult:
     city = arguments["city"]
     units = arguments.get("units", "celsius")
-    # ... 你的实现 ...
+    # ... your implementation ...
     return ToolResult(success=True, output=f"22°C in {city}")
 ```
 
 ### 装饰器参数
 
-| 参数 | 是否必需 | 用途 |
+| 参数 | 默认值 | 用途 |
 | --- | --- | --- |
-| `name` | 是 | 模型调用时使用的字符串。必须为 `snake_case`。 |
-| `version` | 是 | 提供工具的身份指纹。行为变化时请递增。 |
-| `risk_level` | 是 | `"low"`、`"medium"` 或 `"high"`。由权限系统使用。 |
-| `description` | 是 | 模型理解工具语义的主要来源。请写得清晰明了。 |
-| `input_schema` | 是 | 描述预期参数的 JSON Schema。面向 LLM 的元数据。 |
+| `name` | 必填 | 模型调用时使用的字符串。要用 Provider 安全的 `snake_case`。 |
+| `version` | 必填 | 工具声明身份的一部分。省略会抛 `TypeError` —— 若给默认值，两个行为不同的工具就会在同一个 Agent 内共用一个身份。 |
+| `input_schema` | 必填 | 一份手写的、符合 JSON Schema 形状的 dict。仅作面向 LLM 的元数据：Noeta **不会**在调用时用它校验 `arguments`。 |
+| `risk_level` | `"low"` | `"low"`、`"medium"` 或 `"high"`。由权限系统读取。 |
+| `description` | `""` | 模型理解工具语义的唯一来源，会被渲染进 Provider 的工具 schema。 |
+
+即便 `risk_level` 和 `description` 有默认值，也请显式传入：空描述会让模型只能靠猜，而 `"low"` 会让工具在所有权限模式下自动批准 —— 对只读查询是对的，对任何会写入的操作则是错的。
+
+装饰器返回一个 `DecoratedTool`：它在结构上满足 `Tool` 协议，**同时**暴露 `.ref`，也就是 Agent 声明时用的 `ToolRef` 身份。两半都由同一批字段构建，因此可运行的闭包与它被记录下来的身份不会彼此漂移。
 
 ### `ToolResult`
 
-成功调用返回 `ToolResult(success=True, output="...")`，失败返回 `ToolResult(success=False, output="error message")`。`output` 是模型读取的字符串——保持简洁清晰。
-
-`ToolResult` 还接受 `artifacts`（`Artifact` 对象列表）和 `output_ref`（指向大输出的 `ContentRef`），但对大多数工具来说，`success` + `output` 就足够了。
-
-## 将工具接入代理
-
-通过 `Options.allowed_tools` 传入工具：
+`output` 是任何可 JSON 编码的值，也是模型读回的内容。表示失败时，把消息放进 `summary` 而非 `output` —— 投影会渲染出一个 `success=False` 的结果，并以 `summary` 作为错误文本（为空时回退为 `"tool failed"`）：
 
 ```python
-from noeta.sdk import Options, Client
+return ToolResult(success=False, summary="city not found")
+```
+
+`artifacts` 和 `images` 是 `list[ContentRef]`：用 `ctx.artifact_store.put(body, media_type=...)` 把大体积或二进制内容放进 ContentStore，再在这里引用它们。`output_ref` 由运行时在卸载 output 之后赋值；工具永远不要自己设置它。
+
+## 将工具接入 Agent
+
+在 `Options.allowed_tools` 里按值传入工具对象：
+
+```python
+from noeta.sdk import Client, Options
 
 options = Options(
     system_prompt="You are a weather assistant.",
     name="weather-bot",
-    allowed_tools=(fetch_weather,),
+    allowed_tools=("read", "grep", fetch_weather),
 )
 
 client = Client(options, provider=my_provider, workspace_dir="./")
 ```
 
-当 `allowed_tools` 是 `DecoratedTool` 实例的元组时，只有这些工具可用。传入 `None` 可获得所有内置工具加上你的工具，或使用 `disallowed_tools` 从完整集合中减去。
+`allowed_tools` **就是**这份选择清单：自定义工具只有出现在其中才可用，所以要把你自己的工具和想要的内置工具一起列出来。`None` 会选中那份 11 个名字的内置白名单，不会带上任何自定义工具。`disallowed_tools` 从解析出的清单里减去名字；它永远不会添加任何东西。
 
 ## 风险等级与权限
 
-你工具上的 `risk_level` 与 `permission_mode` 相互作用：
+`risk_level` 与 `Options.permission_mode` 相互作用：
 
-| 风险 | `default` 模式 | `acceptEdits` 模式 | `bypassPermissions` 模式 |
+| 风险 | `default` | `acceptEdits` | `bypassPermissions` |
 | --- | --- | --- | --- |
 | `low` | 自动批准 | 自动批准 | 自动批准 |
 | `medium` | 需要批准 | 需要批准 | 自动批准 |
 | `high` | 需要批准 | 需要批准 | 自动批准 |
 
-将写入文件、运行命令或发起外部 API 调用的工具标记为 `"high"`。只读工具为 `"low"`。
+`acceptEdits` 与 `default` 的唯一区别，是豁免三个内置的编辑工具（`edit`、`write`、`apply_patch`）；它对自定义工具没有任何改变。
 
-## 将工具打包为 MCP 服务器
+把会写入文件、运行命令或发起外部 API 调用的工具标记为 `"high"`。只读查询是 `"low"`。
 
-如果你想在多个代理之间共享工具，或通过 MCP 协议提供它们，请将它们打包为进程内 MCP 服务器：
+## 把工具打包成进程内 MCP 服务器
+
+要把几个相关工具作为一个整体交付，用 `create_sdk_mcp_server` 打包它们：
 
 ```python
 from noeta.sdk import create_sdk_mcp_server
@@ -94,28 +103,29 @@ weather_mcp = create_sdk_mcp_server(
 )
 ```
 
-然后在 `Options` 中挂载：
+每一项都必须是 `@tool` 装饰过的函数；其他任何东西都会在编写期抛出 `TypeError`。把这个包挂到 `Options.mcp_servers` 上：
 
 ```python
 options = Options(
     system_prompt="...",
     name="my-agent",
     mcp_servers=(weather_mcp,),
-    allowed_tools=None,  # 所有内置工具 + MCP 工具
 )
 ```
 
-MCP 服务器的工具在工具允许列表中显示为 `mcp__weather-tools__fetch_weather`。代理可以像调用内置工具一样调用它们。
+进程内服务器的工具保留其**裸的** `@tool` 名字 —— 模型看到的是 `fetch_weather`，而不是 `mcp__weather-tools__fetch_weather`。服务器名字只是一个分组标签，而非命名空间，所以要挑选不会与内置工具冲突的工具名（用 `fetch_weather`，别用 `read`）。它的工具会被直接加入 Agent 的工具集；它们不需要 `allowed_tools` 条目。
+
+> `mcp__{alias}__{tool}` 这个前缀属于**远程** MCP 服务器 —— host 会按回合连接它们，见[连接 MCP](connect-mcp.md)。那些工具需要命名空间，因为相互独立的第三方服务器确实会在工具名上撞车。
 
 ## 离线测试你的工具
 
-使用 `FakeLLMProvider` 脚化对你工具的调用并验证它能正常运行：
+用 `FakeLLMProvider` 脚本化一次调用，再用 `query` 驱动一个回合；`query` 返回完整的信封列表 —— 于是断言就能证明闭包真的运行了：
 
 ```python
-from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.protocols.messages import (
-    LLMResponse, TextBlock, ToolUseBlock, Usage,
-)
+from pathlib import Path
+
+from noeta.sdk import LLMResponse, TextBlock, ToolUseBlock, Usage, query
+from noeta.sdk.testing import FakeLLMProvider
 
 provider = FakeLLMProvider(
     responses=[
@@ -135,12 +145,25 @@ provider = FakeLLMProvider(
         ),
     ]
 )
+
+result = query(
+    options,
+    goal="What is the weather in Tokyo?",
+    provider=provider,
+    workspace_dir=Path("./"),
+    model="stub-model",
+)
+
+assert [e.payload.tool_name for e in result if e.type == "ToolCallStarted"] == [
+    "fetch_weather"
+]
 ```
 
-用 `Client` 驱动它，并在消息流中验证 `ToolResult`。
+`examples/custom_tool.py` 和 `examples/mcp_server.py` 是本页两部分内容的可运行版本。
 
 ## 另请参阅
 
-- [SDK 参考](../reference/sdk.md) — `@tool`、`create_sdk_mcp_server`、`ToolResult` 完整签名
-- [连接 MCP](connect-mcp.md) — 注册远程 MCP 服务器
-- [Guard 与 Observer](../concepts/guard-observer.md) — 权限系统如何工作
+- [SDK 参考](../reference/sdk.md) —— `@tool`、`create_sdk_mcp_server`、`ToolResult` 的完整签名
+- [内置工具](../reference/tools.md) —— 那份 11 个名字的白名单及其风险等级
+- [连接 MCP](connect-mcp.md) —— 远程 MCP 服务器
+- [Guard 与 Observer](../concepts/guard-observer.md) —— 权限系统如何工作

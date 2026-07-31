@@ -24,7 +24,7 @@ respect-gitignore = false
 
 [tool.ruff.lint.per-file-ignores]
 # PEP 562 lazy re-export modules: names in __all__ are served by a module
-# __getattr__ (the microkernel dynamic-import doorway — no static builtins
+# __getattr__ (the plugin loader's dynamic-import doorway — no static builtins
 # edge), which F822 cannot see.
 "packages/noeta-sdk/noeta/sdk/providers.py" = ["F822"]
 "packages/noeta-sdk/noeta/sdk/storage.py" = ["F822"]
@@ -38,8 +38,8 @@ markers = [
     "install_smoke: spawns a fresh venv + pip install; slow (~30-60 s), opt-in via -m install_smoke",
 ]
 
-# The coverage config from the former shell package's packages/noeta/pyproject.toml moved up
-# to the root when the tests did (CI runs pytest --cov=noeta at the repo root).
+# CI runs ``pytest --cov=noeta`` from the repo root, so the coverage config
+# lives here at the workspace virtual root alongside the test suite.
 [tool.coverage.run]
 source = ["noeta"]
 branch = true

@@ -1,28 +1,10 @@
-"""``tool`` — turn a plain function into a Tool + matching ToolRef.
+"""``tool`` — wrap a plain function as a runnable Tool carrying its ToolRef.
 
-A library author writes a function ``fn(arguments, ctx) -> ToolResult`` and
-wraps it with :func:`tool`, getting back a single object that is **both** a
-runnable :class:`noeta.protocols.tool.Tool` (it has ``name`` / ``risk_level`` /
-``input_schema`` and an ``invoke`` method) **and** a carrier of the matching
-:class:`noeta.agent.spec.ToolRef` under ``.ref``. The ref is the identity an
-:class:`~noeta.agent.spec.AgentSpec` references by value; keeping the runnable
-and the ref on one object means a recipe can wire ``spec.tools`` and the live
-tool from the same definition without the metadata fields drifting apart.
-
-Why ``version`` is required (no default): the ref's ``(name, version,
-risk_level)`` tuple is the tool's declared identity inside an ``AgentSpec``. A
-silent default version would let two behaviourally different tools share an
-identity, so we force the author to state it.
-
-``input_schema`` is passed explicitly as a hand-written JSON-Schema-shaped dict.
-This repo authors those dicts by hand (see ``noeta.builtins.fs.impl`` / ``noeta.tools.mcp``)
-rather than deriving them from type hints; the decorator stays in step and adds
-no schema-derivation dependency.
-
-Layer note: this module lives in the ``noeta.tools`` band, which sits above
-``noeta.agent`` and ``noeta.protocols`` in the layering — so importing
-``ToolRef`` (identity) and the ``Tool`` Protocol is allowed. It never reaches up
-into ``noeta.agent``.
+The wrapper is deliberately one object rather than two: an author wires
+``spec.tools`` and the live tool from the same definition, so the ref's
+identity fields can never drift from the Tool metadata they were built from.
+``input_schema`` stays a hand-written JSON-Schema-shaped dict — deriving it from
+type hints would pull a schema-derivation dependency into the kernel.
 """
 
 from __future__ import annotations
@@ -43,12 +25,10 @@ ToolFn = Callable[[dict[str, Any], ToolContext], ToolResult]
 class DecoratedTool:
     """A function wrapped as a Tool, carrying its matching :class:`ToolRef`.
 
-    Satisfies the :class:`noeta.protocols.tool.Tool` Protocol structurally — it
-    exposes the metadata attributes plus :meth:`invoke` — while also publishing
-    ``.ref`` so the same object can be dropped into an
-    :class:`~noeta.agent.spec.AgentSpec`'s ``tools``. The ref fields are the very
-    same values used for the Tool metadata, so the runnable and the ref can
-    never disagree.
+    Satisfies the :class:`noeta.protocols.tool.Tool` Protocol structurally while
+    also publishing ``.ref``, so the same object can be dropped into an
+    ``AgentSpec``'s ``tools``. The ref is built from the very fields the Tool
+    metadata exposes, so the runnable and the ref cannot disagree.
     """
 
     __slots__ = (
@@ -79,11 +59,7 @@ class DecoratedTool:
 
     @property
     def ref(self) -> ToolRef:
-        """The :class:`ToolRef` an ``AgentSpec`` references this tool by.
-
-        Built from the same fields the Tool metadata exposes, so ``spec.tools``
-        and the live tool stay identical by construction.
-        """
+        """The :class:`ToolRef` an ``AgentSpec`` references this tool by."""
         return ToolRef(
             name=self.name,
             version=self.version,
@@ -114,16 +90,12 @@ def tool(
         @tool(name="read", version="1", input_schema=SCHEMA)
         def read(arguments, ctx): ...
 
-    ``version`` is **required**; omitting it raises ``TypeError`` (a default
-    would let unrelated tools collide on identity inside an ``AgentSpec``).
-    ``input_schema`` is a hand-written JSON-Schema-shaped dict — LLM-facing
-    metadata that Noeta does not validate ``arguments`` against at runtime.
-    ``description`` is the hand-written, LLM-facing statement of what the tool
-    does — the model's single source of tool semantics, rendered
-    into the provider tool schema; library authors should supply one.
-
-    Returns a :class:`DecoratedTool` when ``fn`` is supplied directly, or a
-    decorator awaiting the function when used as ``@tool(...)``.
+    ``version`` is **required**: ``(name, version, risk_level)`` is the tool's
+    declared identity inside an ``AgentSpec``, and a silent default would let two
+    behaviourally different tools share one. ``input_schema`` is LLM-facing
+    metadata only — ``arguments`` is never validated against it at runtime.
+    ``description`` is the model's single source of tool semantics, rendered into
+    the provider tool schema, so authors should supply one.
     """
     if version is None:
         raise TypeError(

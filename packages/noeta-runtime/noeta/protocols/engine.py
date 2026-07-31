@@ -1,15 +1,10 @@
-"""Engine Protocol — the structured seam between execution hosts and the Kernel Engine.
+"""Engine Protocol — the seam between execution hosts and the kernel Engine.
 
-Hoisted ``noeta.execution`` (``multi_turn`` /
-``subtask_drain``) and product-layer drivers reach the Kernel through this
-Protocol rather than the concrete :class:`noeta.core.engine.Engine` class, so
-alternative Engine implementations (fakes, resume-adapters, etc.) can slot
-into the same host plumbing without subclassing.
-
-The Protocol surface is bounded by what the execution hosts actually call —
-it is intentionally a strict subset of the concrete Engine's public API.
-Methods only the Engine calls internally (underscore helpers) or that no
-upstream host reaches today are intentionally omitted.
+Execution hosts (``noeta.execution``) and product-layer drivers reach the kernel
+through this Protocol rather than the concrete :class:`noeta.core.engine.Engine`,
+so an alternative implementation — a fake, a resume adapter — slots into the same
+plumbing without subclassing. The surface is deliberately a strict subset of the
+concrete Engine's public API: only what a host actually calls belongs here.
 """
 
 from __future__ import annotations
@@ -50,11 +45,9 @@ class EngineProtocol(Protocol):
        paired ``tool_result`` blocks before the next ``run_one_step``.
 
     All methods take and return the in-memory ``Task``; the Engine is the
-    single writer so the caller MUST not mutate ``task`` fields
-    outside these seams.
+    single writer, so a caller MUST NOT mutate ``task`` fields outside these
+    seams.
     """
-
-    # -- task bootstrap ---------------------------------------------------
 
     def create_task(
         self,
@@ -68,8 +61,6 @@ class EngineProtocol(Protocol):
         trace_id: Optional[str] = None,
         host_binding: Optional[TaskHostBoundPayload] = None,
     ) -> Task: ...
-
-    # -- conversation seeding ----------------------------------------------
 
     def append_user_message(
         self,
@@ -103,8 +94,6 @@ class EngineProtocol(Protocol):
         trace_id: Optional[str] = None,
     ) -> Task: ...
 
-    # -- operator-driven state patch ------------------------------------
-
     def apply_state_patch(
         self,
         task: Task,
@@ -113,8 +102,6 @@ class EngineProtocol(Protocol):
         lease_id: str,
         trace_id: Optional[str] = None,
     ) -> Task: ...
-
-    # -- operator-driven tool-call approval + user question -------------
 
     def resolve_tool_approval(
         self,
@@ -138,8 +125,6 @@ class EngineProtocol(Protocol):
         lease_id: str,
         trace_id: Optional[str] = None,
     ) -> Task: ...
-
-    # -- wake bookkeeping ----------------------------------------------
 
     def note_woken(
         self, task: Task, *, lease_id: str, wake_event: Any
@@ -172,8 +157,6 @@ class EngineProtocol(Protocol):
         reason: Optional[str] = None,
         trace_id: Optional[str] = None,
     ) -> Task: ...
-
-    # -- main loop -----------------------------------------------------
 
     def run_one_step(
         self,

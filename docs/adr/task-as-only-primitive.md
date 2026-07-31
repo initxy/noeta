@@ -1,34 +1,33 @@
-# Task is the only first-class primitive
+# Task is the only first-class primitive in the core data model
 
 ## Context
 
-An agent runtime tends to sprout several parallel core abstractions: Run, Workflow, Session, ChildRun, and Conversation each become a first-class concept with its own spec / runner / state slice / event set. This decision compresses the core data model down to a single abstraction, so the abstraction count does not triple and orchestration is not outsourced out of the kernel.
+An agent runtime attracts several parallel core abstractions — a run, a workflow, a session, a child run, a conversation — each arriving with its own spec, runner, state slice and event set. Left unchecked, every capability has to be built once per family, and coordinating them pushes orchestration outside the Engine.
 
 ## Decision
 
-Noeta's core data model has exactly one abstraction: **Task**. Workflow, Session, ChildRun, and Conversation are **not** parallel first-class concepts — they are special cases or usages of Task:
+The core data model has exactly one entity: **Task**. A pipeline, a multi-agent tree and a multi-turn conversation are usages of Task, not siblings of it:
 
-- A fixed pipeline = a deterministic Policy.
-- Multi-agent orchestration = a Task that spawns child tasks (each child task is its own task, its own EventLog stream, linked via `parent_task_id`).
-- A multi-turn conversation = a single Task receiving user input across several turns.
+- A fixed pipeline is a deterministic Policy. A Policy is any function from the composed `View` to a `Decision`; nothing in the kernel requires an LLM behind it.
+- Multi-agent orchestration is a Task spawning child tasks. Each child is a Task with its own EventLog stream, linked to its parent by `parent_task_id` and carrying its own `subtask_depth`.
+- A multi-turn conversation is one Task receiving user input across several turns.
 
-The runtime has exactly one entity type: Task. The names `WorkflowSpec / WorkflowRunner / WorkflowPolicy / SessionStore / ConversationManager` **must not appear in the code** (mechanically enforced by `scripts/lint-naming.py`).
+`scripts/lint-naming.py` keeps the vocabulary from re-splitting: the class names `Run`, `Workflow`, `Session`, `Mutator` and `Pattern`, and the compounds `WorkflowRunner`, `WorkflowPolicy`, `WorkflowSpec`, `SessionStore` and `ConversationManager`, fail the lint in project sources. The same lint bans naming an *identity* after a session below the host layer, because the engine knows only tasks and that identity already has a name.
 
-The Engine main loop has no second-class concept like handoff. A Decision is a set of **neutral mechanism variants** (not a fixed count): the canonical neutral variants + `SpawnSubtasksDecision` (fanout) + `StatePatchDecision` (a durable state write that continues the loop) + others. The test is "is it a neutral mechanism?", not "how many are there?". Product control tools like todo / plan / ask-user-question **do not get their own kernel variant**; the SDK expresses them through these neutral channels.
+The Engine loop likewise has no second-class concept such as handoff. `Decision` is a set of **neutral mechanism variants**, and the admission test is "is this a neutral mechanism?", not a headcount: alongside the canonical set sit the fan-out of a spawn, the loop-continuing state write and the loop-continuing compaction request. Product control tools — todo, plan mode, ask-user-question — get no kernel variant of their own; the SDK expresses them through the neutral channels.
 
 ## Rationale
 
-- **The count of core abstractions must not triple.** Three parallel families — Run + Workflow + Session — force every capability to be built three times, and `WorkflowRunner` additionally has to subscribe to the EventLog to coordinate cross-Run state and parent/child Run synchronization. Compressed into a single Task entity, a child task's wait / cancel / budget inheritance can all be handled uniformly inside the Engine.
-- **Don't outsource orchestration.** A child task's join / cancel / budget inheritance must be handled uniformly inside the Engine to preserve single-EventLog semantics and keep fold/resume re-derivable.
-- **"Neutral mechanism variant" is an extensible test, not a hard-coded enum.** The old phrasing ("there are only 7 Decisions") forced product control semantics to be jammed into the kernel as variants. Switching to "is it a neutral mechanism?" lets product control tools be expressed through neutral channels, so the kernel shape is not dragged along by product features.
+- **One entity keeps every capability built once.** Parallel run / workflow / session families multiply the surface by three and force a coordinator to subscribe to the EventLog just to keep cross-entity and parent/child state in step.
+- **Orchestration stays in the Engine so single-EventLog semantics survive.** A child's join, cancel and budget inheritance must be derivable by fold; delegating them to an outside coordinator puts state that fold cannot see on the critical path of resume.
+- **"Neutral mechanism" is an extensible test; a fixed variant count is not.** A hard-coded enum forces product control semantics to be jammed into the kernel as new variants. Testing for neutrality instead lets product control tools ride the existing channels, so the kernel shape is not dragged along by product features.
 
 ## Alternatives considered
 
-1. **Three parallel families — Run + Workflow + Session — each with its own spec / runner / state slice / event set.** Rejected: the core abstraction count triples; `WorkflowRunner` subscribing to the EventLog to coordinate cross-Run state and parent/child sync is complex; every capability must be built three times.
-2. **Fully flat, no child tasks, orchestration outsourced to Temporal.** Rejected: responsibilities overlap with Temporal, and a child task's wait / cancel / budget inheritance cannot be handled uniformly inside the Engine.
+1. **Three parallel families — run, workflow and session — each with its own spec, runner, state slice and event set.** Weighed and rejected: the core abstraction count triples, every capability has to be built three times, and the workflow runner ends up subscribing to the EventLog to coordinate cross-entity and parent/child state.
+2. **A fully flat model with no child tasks, orchestration delegated to an external workflow engine.** Rejected: responsibilities overlap with that engine, and a child's wait, cancel and budget inheritance can no longer be handled uniformly inside the Engine.
 
 ## Consequences
 
-- The mechanical guard lives in `scripts/lint-naming.py`: it forbids rejected names like `WorkflowRunner` from entering the source.
-- The neutral Decision variants themselves live in `noeta.protocols.decisions`.
-- The concrete landing of child-task fanout / join and `parent_task_id` linkage is covered in `subtask-fanout-and-durable-wake.md` (the SpawnSubtasks / StatePatch mechanisms are carried there).
+- The neutral variants live in `noeta.protocols.decisions`; the union's shape and the decision-handler design contract are pinned by structural tests, so a product-shaped variant cannot slip into the kernel unnoticed. The naming guard runs as part of the verification gate.
+- Child-task fan-out, join and the `parent_task_id` linkage are elaborated in `subtask-fanout-and-durable-wake.md`.

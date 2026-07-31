@@ -1,4 +1,4 @@
-"""Strict-minimal SKILL.md frontmatter parser tests (issue 21).
+"""Strict-minimal SKILL.md frontmatter parser.
 
 Covers the parser only; SkillIndexer-level skip + log behaviour lives
 in ``test_skill_indexer.py``.
@@ -141,11 +141,10 @@ def test_parse_malformed_line_raises() -> None:
 
 
 def test_parse_uppercase_key_is_tolerated_as_metadata() -> None:
-    """A capitalized key (``Name:`` / ``Description:``) no longer fails the
-    whole SKILL.md. The key regex accepts an uppercase start, so it parses and
-    is returned verbatim in ``fields``; since ``KNOWN_KEYS`` is lowercase,
-    ``Name`` ≠ the semantic ``name`` and the Indexer routes it to metadata —
-    matching the "unknown/typo key → metadata, never fatal" contract."""
+    """A capitalized key (``Name:`` / ``Description:``) parses and is returned
+    verbatim in ``fields``; since ``KNOWN_KEYS`` is lowercase, ``Name`` ≠ the
+    semantic ``name`` and the Indexer routes it to metadata — matching the
+    "unknown/typo key → metadata, never fatal" contract."""
     text = _wrap("Name: x\ndescription: y\n")
     fields, _, _ = parse(text)
     assert fields == {"Name": "x", "description": "y"}
@@ -154,16 +153,14 @@ def test_parse_uppercase_key_is_tolerated_as_metadata() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4.5-I5: unknown / hyphenated keys are tolerated, not fatal
+# unknown / hyphenated keys are tolerated, not fatal
 # ---------------------------------------------------------------------------
-# These three cases were strict skips through Phase 1 (rev3 NB3) and are
-# deliberately INVERTED in I5 so real public skills carrying arbitrary
-# extra keys load unchanged. The parser now returns every key in
-# ``fields``; SkillIndexer splits the semantic keys from opaque metadata.
+# Real public skills carry arbitrary extra keys, so the parser returns every
+# key in ``fields``; SkillIndexer splits the semantic keys from opaque metadata.
 
 
 def test_parse_unknown_key_is_tolerated() -> None:
-    """Unknown key no longer invalidates the file (was strict skip)."""
+    """An unknown key does not invalidate the file."""
     text = _wrap("name: x\ndescription: y\nextra: nope\n")
     fields, _, _ = parse(text)
     assert fields == {"name": "x", "description": "y", "extra": "nope"}
@@ -171,9 +168,9 @@ def test_parse_unknown_key_is_tolerated() -> None:
 
 def test_parse_typo_key_is_tolerated_now_silent() -> None:
     """The cost of tolerating real skills: a typo of a known key
-    (``descrption:``) silently becomes a separate (metadata) key rather
-    than erroring. The Indexer then skips for a *missing* ``description``,
-    which is the documented I5 trade-off."""
+    (``descrption:``) becomes a separate (metadata) key rather than erroring.
+    The Indexer then skips for a *missing* ``description`` — the documented
+    trade-off."""
     text = _wrap("name: x\ndescrption: typo\n")
     fields, _, _ = parse(text)
     assert fields == {"name": "x", "descrption": "typo"}
@@ -181,9 +178,8 @@ def test_parse_typo_key_is_tolerated_now_silent() -> None:
 
 
 def test_parse_key_with_hyphen_is_tolerated() -> None:
-    """Hyphenated keys (``argument-hint``, ``allowed-tools``) now parse;
-    the key regex is ``^[a-z][a-z0-9_-]*$`` (underscore kept, hyphen
-    added)."""
+    """Hyphenated keys (``argument-hint``, ``allowed-tools``) parse; the key
+    regex is ``^[a-z][a-z0-9_-]*$`` (underscore and hyphen both allowed)."""
     text = _wrap(
         "name: x\n"
         "description: y\n"
@@ -201,7 +197,7 @@ def test_parse_key_with_hyphen_is_tolerated() -> None:
 
 
 def test_parse_underscore_key_still_tolerated() -> None:
-    """Underscore was always allowed and must stay allowed (architect P1)."""
+    """Underscore is allowed in keys."""
     text = _wrap("name: x\ndescription: y\nmax_steps: 5\n")
     fields, _, _ = parse(text)
     assert fields["max_steps"] == "5"

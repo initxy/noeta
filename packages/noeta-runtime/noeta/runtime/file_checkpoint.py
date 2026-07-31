@@ -1,30 +1,13 @@
-"""Per-turn file-checkpoint gate.
+"""Per-turn gate on which workspace files already carry a rewind baseline.
 
-A live, in-process record of "which workspace files have already had a rewind
-baseline stashed THIS turn", keyed by the session root task id. The first time
-the AI edits a file in a turn, :meth:`ToolRuntime` stashes that file's pre-edit
-content as the turn's baseline and marks the path here; every later edit of the
-same file in the same turn is a no-op (the baseline already pins the turn's
-starting state).
-
-This is a RUNTIME accelerator only — exactly the property
-:class:`noeta.runtime.cancellation.CancellationRegistry` and
-:class:`noeta.runtime.background_shell.ProcessRegistry` carry. The AUTHORITATIVE
-record of a turn's baselines is the ``file_baselines`` field on the
-``ToolResultRecorded`` events; this gate just lets the live runtime avoid
-re-stashing the same file twice in one turn without re-folding the log. It is
-**never written to the log**, so it has zero effect on the persisted record.
-
-Keyed by the ROOT-TASK (not the editing task) so the subtask
-cascade can share ONE gate across a whole delegation tree: a parent that edited
-X, then a subtask that edits the same X, must not stash a SECOND (mid-turn,
-dirty) baseline for X. v1 subtasks run same-process / sequential / one lease at
-a time, so a plain ``threading.Lock`` is enough — the SSE host
-drives turns on background threads, so the lock is not merely defensive.
-
-``reset_turn`` is called by the driver at every turn boundary (each new user
-goal) so a NEW turn re-stashes a fresh baseline for any file it touches — this
-is the "clear every turn" rule D6 depends on for restoring to any turn boundary.
+A runtime accelerator only: the authoritative baselines are the
+``file_baselines`` on the ``ToolResultRecorded`` events, and this gate is
+never written to the log — it only spares the live runtime a re-fold to learn
+a file was already stashed this turn. Keyed by the ROOT task so a whole
+delegation tree shares ONE gate: were a subtask to stash a second baseline for
+a file its parent already edited, that baseline would pin mid-turn (dirty)
+content instead of the turn's starting state. Clearing it at every turn
+boundary is what lets a rewind restore to any turn boundary.
 """
 
 from __future__ import annotations
@@ -37,17 +20,16 @@ class FileCheckpointRegistry:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        # session-root task id -> set of workspace-relative paths already
-        # baselined this turn.
+        # root task id -> workspace-relative paths baselined this turn.
         self._seen: dict[str, set[str]] = {}
 
     def mark_if_first(self, root_task_id: str, path: str) -> bool:
-        """Record ``path`` as baselined this turn; return whether it was the
-        FIRST time this turn (so the caller stashes a baseline).
+        """Record ``path`` as baselined this turn; True ⇒ the caller must
+        stash the baseline.
 
-        Atomic test-and-set under the lock: a miss returns ``True`` AND marks
-        the path, so two threads racing the same file's first edit cannot both
-        stash a baseline."""
+        Test and set are one atomic step under the lock: two threads racing
+        the same file's first edit must not both stash a baseline, or the
+        loser overwrites the turn's starting state with dirty content."""
         key = str(root_task_id)
         with self._lock:
             seen = self._seen.setdefault(key, set())
@@ -57,8 +39,7 @@ class FileCheckpointRegistry:
             return True
 
     def reset_turn(self, root_task_id: str) -> None:
-        """Clear the baselined-paths set for ``root_task_id`` (turn boundary).
-
-        Idempotent; an unknown root is a clean no-op."""
+        """Clear ``root_task_id``'s baselined paths at a turn boundary so the
+        next turn stashes fresh ones. Idempotent."""
         with self._lock:
             self._seen.pop(str(root_task_id), None)

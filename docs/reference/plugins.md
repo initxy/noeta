@@ -1,11 +1,10 @@
 # Plugins reference
 
-The plugin mechanism — **manifest-declared contribution packages over a surface
+The plugin mechanism: **manifest-declared contribution packages over a surface
 registry**, with a **host-level load / agent-level activation** split. A plugin
 carries a static manifest listing its contributions; loading reads those
-manifests (no plugin code runs) into a `PluginSet`; an agent then *activates* the
-plugins it uses through `Options.plugins`. Every symbol below is re-exported
-through `noeta.sdk`; source of truth:
+manifests (no plugin code runs) into a `PluginSet`; an agent then *activates*
+the plugins it uses through `Options.plugins`. Source of truth:
 `packages/noeta-sdk/noeta/client/{plugin_manifest,surfaces,plugin_set}.py`.
 
 ```python
@@ -23,38 +22,27 @@ from noeta.sdk import (
 )
 ```
 
-> `load_plugins` is `noeta.client.plugin_set.load_plugins`, re-exported from
-> `noeta.sdk` under that one name. The transitional `load_plugin_set` alias —
-> which existed only while the 0.4.0 bundle loader still held the name — is
-> gone; see [The retired bundle path](#the-retired-bundle-path).
-
-> Line numbers are omitted throughout — they drift on every edit. The module path
-> plus the member name is the stable coordinate.
-
-This mechanism implements the [SDK-extensibility
-redesign](https://github.com/initxy/noeta/blob/main/docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md)
-(decision numbers `D1`–`D12` are cited inline).
-
 ## The model in one screen
 
-- A **Plugin** (`D1`) is a package (or a single `.py` file) carrying a **static
+- A **Plugin** is a package (or a single `.py` file) carrying a **static
   manifest**: a `name`, a `requires-noeta` range, an optional `config-schema`,
   and a list of **contributions**, each naming a **surface** plus a `ref` (an
   import string) or `path` (a resource).
-- A **Surface** (`D2`/`D3`) is one extension point — `tool`, `guard`, `policy`,
-  `reminder`, … Each has a `SurfaceSpec` describing how a contribution to it is
-  validated, how it collides, how it merges, and how it orders. The loader is
-  **surface-agnostic**: it consults the registry and nothing else, so a host can
-  register its own surfaces.
-- **Load** (`D5`, host level): `load_plugins(...) -> PluginSet` — which plugin
-  *code* is available in the process. A `PluginSet` is listable and
-  collision-checkable **without executing plugin code**.
-- **Activate** (`D5`, agent level): `Options.plugins: list[str]` and
+- A **Surface** is one extension point — `tool`, `guard`, `policy`, `reminder`,
+  … Each has a `SurfaceSpec` describing how a contribution to it is validated,
+  how it collides, and how it orders. The loader is **surface-agnostic**: it
+  consults the registry and nothing else, so a host can register its own
+  surfaces.
+- **Load** (host level): `load_plugins(...) -> PluginSet` — which plugin *code*
+  is available in the process. A `PluginSet` is listable and collision-checkable
+  **without executing plugin code**.
+- **Activate** (agent level): `Options.plugins: tuple[str, ...]` and
   `AgentDefinition.plugins` — which loaded plugins *this agent* uses. Activation
   enters `AgentSpec` identity. `Client(options, plugins=<PluginSet>)` binds the
-  two together; an activation name that is not in the loaded set fails the build.
+  two together; an activation name that is not in the loaded set fails the
+  build.
 
-## Manifest format (`D1`)
+## Manifest format
 
 A manifest is inert data — reading it imports **no** plugin code. There are two
 forms.
@@ -63,8 +51,8 @@ forms.
 
 An installed package declares its manifest under `[tool.noeta]` in
 `pyproject.toml` and **mirrors it into the wheel as package data**
-`noeta-plugin.toml`, located via the distribution metadata. The reader
-(`read_distribution_manifest`, `plugin_manifest.py`) reads that file straight off
+`noeta-plugin.toml`, located via the distribution metadata.
+`read_distribution_manifest` (`plugin_manifest.py`) reads that file straight off
 disk for a regular install, and falls back to `importlib.util.find_spec` (which
 locates a package without importing it) for an editable install — the
 zero-execution guarantee holds in both.
@@ -78,11 +66,11 @@ requires-noeta = ">=0.4"
 [[tool.noeta.contributions]]
 surface = "prompt_fragment"
 name    = "house-style"
-ref     = "house_style:HOUSE_STYLE"     # module:attr import string
+text    = "Answer in at most three sentences."
 
 [[tool.noeta.contributions]]
 surface  = "tool"
-ref      = "house_style.tools:LintTool"
+ref      = "house_style.tools:LintTool"     # module:attr import string
 ```
 
 `parse_manifest_text` accepts three TOML shapes, in priority order:
@@ -94,28 +82,30 @@ bare top-level keys (the mirrored `noeta-plugin.toml`).
 | Field | Shape | Meaning |
 | --- | --- | --- |
 | `name` | `str`, required | the plugin's identity — the load-time dedup key and the activation name |
-| `requires-noeta` | `str \| None` | a version range (advisory in v1) |
+| `requires-noeta` | `str \| None` | a version range (advisory) |
 | `config-schema` | `table \| None` | an optional schema for operator config |
 | `contributions` | array of tables | one entry per contribution |
 
-Each contribution is a `ManifestContribution` (`plugin_manifest.py`):
+Each contribution is a `ManifestContribution`:
 
 | Key | Shape | Meaning |
 | --- | --- | --- |
-| `surface` | `str`, required | a registered surface name (see the [catalog](#surface-catalog-d3)) |
+| `surface` | `str`, required | a registered surface name (see the [catalog](#surface-catalog)) |
 | `name` | `str` | collision / ordering key **and** listing label; derived from `ref` / `path` when omitted |
 | `ref` | `str \| None` | a `module` or `module:qualname` import string — resolved **only** at the execution boundary |
 | `path` | `str \| None` | a resource path (for resource-only surfaces such as `skills`) |
-| `params` | remaining keys | surface-specific params kept verbatim (e.g. `priority` for `reminder`, `seams` for `reminder_provider`) |
+| `params` | remaining keys | surface-specific params kept verbatim (`priority` for `reminder`, `seams` for `reminder_provider`, `text` for a literal-valued `prompt_fragment`) |
 
-When `name` is omitted it is derived from the `ref`'s attribute (or the module's
-last segment), else from the `path` basename.
+When `name` is omitted it is derived from the `ref`'s final attribute (or the
+module's last segment), else from the `path` basename. `(surface, name)` must be
+unique within one manifest; a duplicate raises `PluginError` naming both
+entries.
 
 ### Single-file form — `PluginBuilder`
 
 A local `.py` plugin declares one module-level `PluginBuilder` and decorates its
-contributions; the builder **is** the manifest (`D1`). Acceptable because local
-files pass an explicit trust gate anyway.
+contributions; the builder **is** the manifest. Acceptable because local files
+pass an explicit trust gate anyway.
 
 ```python
 # brevity.py — a single-file plugin
@@ -132,7 +122,9 @@ def stay_brief(view):
 
 `PluginBuilder(name, *, requires_noeta=None, config_schema=None)` exposes one
 decorator/method per surface — each forwards to the generic `contribute(surface,
-value, *, name=None, ref=None, path=None, **params)`:
+value, *, name=None, ref=None, path=None, **params)`, which also covers surfaces
+with no dedicated method (`agent`, `content_kind`, `mcp_server`, `skills`,
+`provider`):
 
 | Method | Surface | Params |
 | --- | --- | --- |
@@ -142,9 +134,11 @@ value, *, name=None, ref=None, path=None, **params)`:
 | `tool_result_transform(fn=None, *, name=None, priority=0)` | `tool_result_transform` | `priority` |
 | `guard(obj=None, *, name=None)` | `guard` | — |
 | `observer(fn=None, *, name=None)` | `observer` | — |
-| `prompt_fragment(text, *, name)` | `prompt_fragment` | — |
+| `prompt_fragment(text, *, name)` | `prompt_fragment` | `text` |
 | `policy(factory=None, *, name=None)` | `policy` | — |
 | `sandbox_provider(obj=None, *, name=None)` | `sandbox_provider` | — |
+| `session_pack(factory=None, *, name=None, priority=0)` | `session_pack` | `priority` |
+| `control_tool(factory=None, *, name=None, priority=0)` | `control_tool` | `priority` |
 
 `manifest()` returns the equivalent `PluginManifest`; the decorated objects are
 also cached (`resolved_objects`) so the loader resolves a single-file plugin's
@@ -152,41 +146,42 @@ contributions without a second import. `python -m noeta.sdk.plugin_check` (there
 is **no** console script) derives and verifies the TOML from the decorators at
 publish time.
 
-## Surface catalog (`D3`)
+## Surface catalog
 
-The standard catalog is sixteen surfaces (`surfaces.py`, `STANDARD_SURFACES`).
-Each row is a `SurfaceSpec`: which **plane** it lives on, how its effect is
-**scoped** across agents (`D6`), its **collision key**, its **merge rule**, and
-its **ordering**. ★ = new in this redesign.
+The standard catalog is sixteen surfaces
+(`noeta.client.surfaces.STANDARD_SURFACES`). Each row is a `SurfaceSpec`: which
+**plane** it lives on, how its effect is **scoped** across agents, its
+**collision key**, and its **ordering**.
 
-| Surface | Plane | Scope (`D6`) | Collision key | Merge | Ordering | Notes |
-| --- | --- | --- | --- | --- | --- | --- |
-| `tool` | identity | per-agent | `name` | append | `(plugin, name)` | includes tool packs |
-| `agent` | identity | per-agent | `name` | append | `(plugin, name)` | an `AgentDefinition` |
-| `content_kind` | identity | per-agent | `kind` | append | `(plugin, name)` | a `ContentKindSpec` |
-| `prompt_fragment` ★ | identity | per-agent | `name` | append | `(plugin, name)` | appended after the preset prompt |
-| `policy` ★ | identity | per-agent | **single-valued** | single | — | base + active plugin, or two plugins, = error |
-| `guard` | wiring | **process** | none | append | `(plugin, name)` | governance — see [scope](#effect-scoping-d6) |
-| `observer` | wiring | **process** | none | append | `(plugin, name)` | governance — see [scope](#effect-scoping-d6) |
-| `provider` | wiring | host-wired | **single-valued** | single | — | `Options.provider` collision = error |
-| `reminder_provider` ★ | wiring | per-agent | `name` | append | `(plugin, name)` | recorded injection (track A) |
-| `reminder` ★ | wiring | per-agent | `name` | append | **priority** | compose-time, pure (track B) |
-| `tool_result_transform` ★ | wiring | per-agent | `name` | append | **priority** | ToolRuntime stage before recording |
-| `mcp_server` | host | host-wired | `alias` | append | `(plugin, name)` | connectable server spec |
-| `skills` | host | host-wired | none | append | `(plugin, name)` | resource-only (`path`) |
-| `sandbox_provider` ★ | host | host-wired | `name` | append | `(plugin, name)` | host selects one |
-| `session_pack` | wiring | per-agent | `name` | append | **priority** | session-construction factory `(SessionBuildContext) -> PackContribution` (microkernel phase 3) |
-| `control_tool` ★ | identity | per-agent | `name` | append | **priority** | control-tool-construction factory `(ControlToolBuildContext) -> ControlToolMount \| None` (control-tool-surface) |
+| Surface | Plane | Scope | Collision key | Ordering | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `tool` | identity | per-agent | `name` | `(plugin, name)` | a built-in tool name or a `.ref`-bearing tool |
+| `agent` | identity | per-agent | `name` | `(plugin, name)` | an `AgentDefinition` |
+| `content_kind` | identity | per-agent | `kind` | `(plugin, name)` | a `ContentKindSpec` |
+| `prompt_fragment` | identity | per-agent | `name` | `(plugin, name)` | a literal string, appended after the prompt |
+| `policy` | identity | per-agent | **single-valued** | — | base + active plugin, or two plugins, = error |
+| `guard` | wiring | **process** | none | `(plugin, name)` | governance — see [scope](#effect-scoping) |
+| `observer` | wiring | **process** | none | `(plugin, name)` | governance — see [scope](#effect-scoping) |
+| `provider` | wiring | host-wired | **single-valued** | — | `Options.provider` collision = error |
+| `reminder_provider` | wiring | per-agent | `name` | `(plugin, name)` | recorded injection at a named seam |
+| `reminder` | wiring | per-agent | `name` | **priority** | compose-time, pure |
+| `tool_result_transform` | wiring | per-agent | `name` | **priority** | ToolRuntime stage before recording |
+| `mcp_server` | host | host-wired | `alias` | `(plugin, name)` | connectable server spec |
+| `skills` | host | host-wired | none | `(plugin, name)` | resource-only (`path`) |
+| `sandbox_provider` | host | host-wired | `name` | `(plugin, name)` | host selects one |
+| `session_pack` | wiring | per-agent | `name` | **priority** | session-construction factory `(SessionBuildContext) -> PackContribution` |
+| `control_tool` | identity | per-agent | `name` | **priority** | control-tool factory `(ControlToolBuildContext) -> ControlToolMount \| None` |
 
 - **Collision key** `none` means the surface never collides (guards / observers
   / skill dirs). `single-valued` means at most one across the whole loaded set.
 - **Ordering** `priority` orders by an integer `priority` param first, ties
-  broken by `(plugin, name)` — the guard-observer-hooks precedent. Everything
-  else sorts by `(plugin, name)`, so discovery order never changes the result.
+  broken by `(plugin, name)`. Everything else sorts by `(plugin, name)`, so
+  discovery order never changes the result.
 
-Host-defined surfaces extend this table (see [SurfaceRegistry](#surfacespec-surfaceregistry-d2)).
+Host-defined surfaces extend this table (see
+[SurfaceRegistry](#surfacespec--surfaceregistry)).
 
-### Effect scoping (`D6`)
+### Effect scoping
 
 The one deliberate asymmetry — which surfaces follow per-agent activation and
 which are process-wide:
@@ -197,7 +192,7 @@ which are process-wide:
 | `guard` `observer` | **loaded ⇒ in force for every agent in the process.** Governance is operator authority; an agent author must not opt out of interception or audit by omitting an activation |
 | `provider` `sandbox_provider` `mcp_server` `skills` | host wiring; the host selects and binds them, never per-agent |
 
-## `SurfaceSpec` / `SurfaceRegistry` (`D2`)
+## `SurfaceSpec` / `SurfaceRegistry`
 
 The registry is the generality mechanism — the loader consults it and nothing
 else, so **adding a surface is registering one `SurfaceSpec`, not editing the
@@ -223,27 +218,25 @@ manifest-level collision never call it, so they stay execution-free. Every enum
 field is checked at construction, so a mistyped value (or a positional argument
 in the wrong slot) raises `PluginError` at the registration line.
 
-`activation_binding` is what keeps the identity projection **table-driven**: an
+`activation_binding` keeps the identity projection **table-driven**: an
 identity-plane surface declares the channel it feeds and reaches
-`compile_options` with no loader edit. It is **required** for
-`plane="identity"` and **rejected** for every other plane — an identity
-contribution with no binding would be silently dropped between resolve and
-compile, which is exactly how `content_kind` once went missing.
+`compile_options` with no loader edit. It is **required** for `plane="identity"`
+(an identity contribution with no binding would be silently dropped between
+resolve and compile) and **rejected** for every other plane.
 
-The wiring plane has two **process-wide** channels, `guard` and `observer`.
-A process-scoped wiring surface beyond those two is refused by
-`PluginSet.process_hooks()` rather than filed under one of them — there is no
-third seam for it to reach, and handing the engine a non-`Guard` value would
-turn a build-time configuration error into a crash on the first tool call.
-Give such a surface a per-agent scope instead.
+The wiring plane has exactly two **process-wide** channels, `guard` and
+`observer`. `PluginSet.process_hooks()` refuses a third rather than filing it
+under one of them: handing the engine a non-`Guard` value would turn a
+build-time configuration error into a crash on the first tool call. Give such a
+surface a per-agent scope instead.
 
 `standard_registry()` returns a fresh `SurfaceRegistry` seeded with the sixteen
-standard surfaces. A host registers additional **app-plane** surfaces on a
-**copy** before load — the same validation / collision / ordering pipeline runs
-over them unchanged:
+standard surfaces. A host registers additional surfaces on a **copy** before
+load — the same validation / collision / ordering pipeline runs over them
+unchanged:
 
 ```python
-from noeta.sdk import standard_registry, SurfaceSpec, PluginError
+from noeta.sdk import standard_registry, SurfaceSpec, PluginError, load_plugins
 
 def _valid_route(value):
     if not callable(value):
@@ -253,13 +246,13 @@ reg = standard_registry()                       # a fresh copy
 reg.register(SurfaceSpec(
     "http_route", "host", "host-wired", _valid_route, "name",
 ))
-plugins = load_plugins(registry=reg, ...)    # the host's surface is live
+plugins = load_plugins(registry=reg)            # the host's surface is live
 ```
 
 `SurfaceRegistry` methods: `register(spec)` (a duplicate name raises),
 `get(name)`, `names()`, `__contains__`, `copy()`.
 
-## Sources and the load pipeline (`D4`)
+## Sources and the load pipeline
 
 Five sources, each with its own gate. Discovery order **never** affects the
 result (only error attribution).
@@ -274,9 +267,9 @@ result (only error attribution).
 
 The pipeline for every candidate: **read manifest** (zero code execution for the
 package / `.toml` forms) → **`enabled` gate before any import** → **trust gate**
-(source 4 only) → **resolve `ref`s** → **validate per `SurfaceSpec`** →
-**collision check** → **deterministic merge** sorted by `(plugin, contribution)`.
-Resolution / validation only happen when a caller reaches the execution boundary
+(source 4 only) → **collision check** → **deterministic merge** sorted by
+`(plugin, contribution)`. Resolving `ref`s and running each surface's
+`validator` happen only when a caller reaches the execution boundary
 (`PluginSet.resolve` and friends); listing and merge run over the static
 manifests alone.
 
@@ -298,19 +291,18 @@ load_plugins(
 ) -> PluginSet
 ```
 
-- `builtins=True` discovers the built-in catalog (`D11`); pass an iterable of
-  `PluginManifest`s to inject a custom set (the testing seam). `disabled_builtins`
-  drops built-ins by name, and the disable is **recorded** on the returned set
-  (`PluginSet.disabled_builtins`) so a host can also honour it where no
-  contribution expresses it — `skills` contributes nothing per-agent, so
-  disabling it is what makes `Client` withhold the skills kit (no indexing, no
-  `skill` tool, no skill content kind). Note that absence is not a disable:
-  `builtins=False` scopes the *loaded set*, never the SDK's own capabilities.
+- `builtins=True` discovers the built-in catalog; pass an iterable of
+  `PluginManifest`s to inject a custom set (the testing seam).
+  `disabled_builtins` drops built-ins by name, and the disable is **recorded**
+  on the returned set (`PluginSet.disabled_builtins`) so a host can also honour
+  it where no contribution expresses it — disabling `skills` is what makes
+  `Client` withhold the skills kit (no indexing, no `skill` control tool, no
+  skill content kind). Absence is not a disable: `builtins=False` scopes the
+  *loaded set*, never the SDK's own capabilities.
 - `react` **cannot** be disabled — `disabled_builtins=["react"]` raises
   `PluginError`. It supplies the default decision policy, whose identity every
-  compiled `AgentSpec` pins as `POLICY_REF ("react", "1")`; an agent with no
-  policy has no identity to compile and no parity to resume. The default brain
-  is *replaceable*, not removable: activate a plugin contributing the `policy`
+  compiled `AgentSpec` pins as `POLICY_REF ("react", "1")`. The default brain is
+  *replaceable*, not removable: activate a plugin contributing the `policy`
   surface and its ref takes over both the identity and the wired factory.
 - `entry_points=True` discovers the `noeta.plugins` group via
   `importlib.metadata`; an iterable of entry-point-like objects (`.name` +
@@ -318,8 +310,8 @@ load_plugins(
   `noeta-plugin.toml` fails loudly.
 - `modules` entries may be a dotted module (importing it is authorized), a `.py`
   file, a directory (scanned like a source-3/4 dir), or a `.toml` manifest.
-- `user_dirs` load unconditionally; `workspace_dirs` load only when the directory
-  is recorded in the trust store, else are skipped with an
+- `user_dirs` load unconditionally; `workspace_dirs` load only when the
+  directory is recorded in the trust store, else are skipped with an
   `UntrustedPluginDirWarning`. Both scan sub-directories carrying a
   `noeta-plugin.toml` (zero execution) **and** top-level `*.py` single-file
   plugins (executed — a trusted directory), skipping files starting with `_`.
@@ -329,19 +321,25 @@ A cross-source duplicate plugin **name** is an error naming both origins.
 ## `PluginSet`
 
 The loaded, host-level set (`plugin_set.py`). Frozen; holds the discovered
-`LoadedPlugin`s plus the surface registry they loaded against.
+`LoadedPlugin`s plus the surface registry they loaded against. Every projection
+below memoizes its resolution, so one build imports each `ref` at most once.
 
 | Member | Returns | Executes plugin code? |
 | --- | --- | --- |
 | `names()` / `__iter__` / `__len__` / `__contains__` / `get(name)` | listing | no |
-| `contributions(surface=None)` | `((plugin_name, ManifestContribution), …)` — every contribution, optionally one surface | **no** (`D5` / acceptance-2) |
+| `contributions(surface=None)` | `((plugin_name, ManifestContribution), …)` — every contribution, optionally one surface | **no** |
 | `merged()` | `MergedContributions` — collision-checked, deterministically ordered | **no** |
+| `disabled_builtins` | `frozenset[str]` — the built-ins the caller turned off | no |
 | `resolve()` | `(ResolvedContribution, …)` — every contribution with its `ref` imported and validated | **yes** — the execution boundary |
-| `identity_activations()` | `dict[str, PluginActivation]` — each **external** plugin's identity-plane contributions (tools / agents / prompt fragments / policy) | yes |
-| `activation_transforms()` | `dict[str, ((priority, name, fn), …)]` — each external plugin's `tool_result_transform` stages | yes |
+| `identity_activations(only=None)` | `dict[str, PluginActivation]` — each **external** plugin's identity-plane contributions (tools / agents / content kinds / prompt fragments / policy) | yes |
+| `activation_transforms(only=None)` | `dict[str, ((priority, name, fn), …)]` — `tool_result_transform` stages | yes |
+| `activation_reminders(only=None)` | `dict[str, ((priority, name, render), …)]` — compose-time `reminder` renders | yes |
+| `activation_reminder_providers(only=None)` | `dict[str, ((seams, name, provider), …)]` — recorded `reminder_provider`s | yes |
+| `activation_session_packs(only=None)` | `dict[str, ((priority, name, factory), …)]` — `session_pack` factories | yes |
+| `activation_control_tools(only=None)` | `dict[str, ((priority, name, factory), …)]` — `control_tool` factories | yes |
 | `process_hooks()` | `(guards, observers)` — every **external** plugin's governance hooks, in `(plugin, name)` order | yes |
 
-`contributions()` is the acceptance-2 guarantee: a caller sees exactly what an
+`contributions()` is the listing guarantee: a caller sees exactly what an
 installed plugin contributes without any of its code running.
 
 ```python
@@ -352,13 +350,14 @@ for plugin_name, contribution in pset.contributions("tool"):
 pset.get("memory").manifest.requires_noeta  # ">=0.4"
 ```
 
-`Client` calls `identity_activations` / `activation_transforms` / `process_hooks`
-during the build (never a mid-session turn); built-in plugins are excluded from
-all three — their feature effect rides the capability-flag vocabulary compile
-handles by name (see [Activation](#activation-d5-d6)), and the default guard /
-observer stack is the engine's own.
+`Client` calls the activation projections and `process_hooks` during the build,
+never a mid-session turn. Built-in plugins are excluded from all of them — their
+feature effect rides the activation vocabulary `compile_options` handles by
+name, and the default guard / observer stack is the engine's own. The `only=`
+argument restricts resolution to the names some agent actually activates, so a
+loaded-but-unactivated plugin's module body never runs.
 
-## Activation (`D5` / `D6`)
+## Activation
 
 Loading makes plugin code *available*; **activation** decides which loaded
 plugins an agent uses. Activation names live on `Options.plugins` and
@@ -371,7 +370,7 @@ pset = load_plugins(modules=["./brevity.py"])   # built-ins + the local plugin
 
 options = Options(
     system_prompt="You are a coding agent.",
-    plugins=DEFAULT_PLUGINS + ("memory", "brevity"),   # activate three by name
+    plugins=DEFAULT_PLUGINS + ("memory", "brevity"),
 )
 
 client = Client(options, provider=..., workspace_dir=".", plugins=pset)
@@ -380,72 +379,77 @@ client = Client(options, provider=..., workspace_dir=".", plugins=pset)
 An activation name must be one of:
 
 - a **built-in feature bundle** that folds into the `AgentSpec.plugins`
-  activation tuple (`D5`): `memory`, `browser`, `skill_invocation`, `todo_write`,
-  `ask_user_question`, `mcp` — activating one adds its name to the tuple and
-  nothing else (`memory=True` becomes `plugins=["memory"]`). `todo_write` /
-  `ask_user_question` / `delegation` are also **real built-in plugins** (they
-  contribute on the `control_tool` surface); `skill_invocation` is a recognized
-  non-plugin activation (it gates the `skill` control tool inside the `skills`
-  built-in);
-- `delegation` — the one *structural* capability that is also authorable. It is
-  normally derived (a root with `agents` delegates; a flat child does not), and
-  activating it only ever turns it **on**: it is how a child agent is granted the
-  right to spawn, which the retired `AgentDefinition.capabilities` used to do.
-  `spawnable` stays derived from the `agents` dict — activation cannot name an
-  agent;
-- an **identity-inert built-in** recognised so a typo still fails loudly but with
-  no compile effect: `fs`, `web`, `skills`, `reminders`, `governance`,
-  `providers`, `presets`, `sandbox`, `workspace`;
+  activation tuple: `memory`, `browser`, `mcp`, `todo_write`,
+  `ask_user_question`, `skill_invocation`, `delegation`. Activating one adds its
+  name to the tuple and nothing else; `agent_activates(agent, plugin)` is the
+  membership read. `todo_write` / `ask_user_question` / `delegation` are also
+  real built-in plugins contributing on the `control_tool` surface;
+  `skill_invocation` is a recognised non-plugin activation (it gates the `skill`
+  control tool inside the `skills` built-in). `delegation` is additionally
+  *derived* — a root with `agents` delegates, a flat child does not — so naming
+  it only ever turns it **on**, granting a child the right to spawn. `spawnable`
+  stays derived from the `agents` dict; activation cannot name an agent;
+- an **identity-inert built-in** recognised so a typo still fails loudly but
+  with no compile effect: `app`, `fs`, `governance`, `presets`, `providers`,
+  `react`, `reminders`, `sandbox`, `skills`, `storage`, `web`, `workspace`;
 - the **name of a loaded plugin** in the `PluginSet` handed to `Client` — its
-  identity-plane contributions (extra tools / child agents / prompt fragments /
-  policy) fold in.
+  identity-plane contributions (extra tools / child agents / content kinds /
+  prompt fragments / policy) fold in.
 
 `DEFAULT_PLUGINS = ("fs", "web")` is the default of `Options.plugins`; both are
-identity-inert (the default 11-tool set still comes from `builtin_tool_classes()`),
-so a **bare `Options()` compiles byte-identically** to the pre-redesign spec — the
-parity contract. `AgentDefinition.plugins` defaults to `()` (a child's tools come
-from its own `tools` field).
-
-`Capabilities` is **deleted** — not merely retired as the activation vocabulary.
-`Capabilities(memory=True)` becomes `plugins=["memory"]`, and the official presets
-declare their activation sets this way (`presets/__init__.py`). The
-`Options.capabilities` / `AgentDefinition.capabilities` authoring fields are
-**removed** — `plugins=` is the only activation path, and the compiled `AgentSpec`
-carries the resolved `plugins` tuple + `spawnable` directly: identity **is** the
-tuple, and `agent_activates(agent, plugin)` is the membership read.
+identity-inert (the default 11-tool set comes from `builtin_tool_classes()`,
+which reads the `fs` and `web` manifests), so a bare `Options()` compiles to the
+same `AgentSpec` with or without them. `AgentDefinition.plugins` defaults to
+`()` — a child's tools come from its own `tools` field.
 
 An unknown activation name fails compilation with a `ValueError` naming both the
 offending name and where it appeared (`Options` or the child agent), listing the
 built-in vocabulary and the loaded set — load it before activating, or fix the
 name.
 
-## Built-in plugins (`D11`)
+## Built-in plugins
 
-noeta expresses its own capabilities as built-in plugins in `noeta/builtins/`
-(the top-of-stack band beside `noeta.presets`). Since the 2026-07-29
-microkernel migration each directory holds the manifest **and** the
-implementation: `__init__.py` is the zero-execution `MANIFEST` (a
-`PluginManifest` whose contributions carry `ref` strings), `impl/` is the code,
-and the refs point at the sibling impl modules. Nothing in the manifest layer
-imports the impl, so listing a built-in still runs zero capability code. The
-loader reaches the catalog by a **dynamic** import (`builtin_manifests()`), and
-`.importlinter`'s universal `sdk-core-not-builtins` contract keeps every band —
-kernel included — free of static edges into `noeta.builtins`.
+noeta expresses its own capabilities as built-in plugins in
+`packages/noeta-sdk/noeta/builtins/` — the top-of-stack band beside
+`noeta.presets`. Each directory holds the manifest **and** the implementation:
+`__init__.py` is the zero-execution `MANIFEST` (a `PluginManifest` whose
+contributions carry `ref` strings), `impl/` is the code, and the refs point at
+the sibling impl modules. Nothing in the manifest layer imports the impl, so
+listing a built-in runs zero capability code. The loader reaches the catalog by
+a **dynamic** import (`builtin_manifests()`), and `.importlinter`'s
+`sdk-core-not-builtins` contract keeps every band — kernel included — free of
+static edges into `noeta.builtins`.
 
-The seventeen built-ins (one directory per built-in under `noeta/builtins/` — the
-canonical worked corpus of manifest declarations): `fs`, `web`, `memory`,
-`browser`, `app`, `mcp`, `skills`, `react`, `reminders`, `governance`,
-`providers`, `sandbox`, `presets`, `workspace`, `todo_write`,
-`ask_user_question`, `delegation` (the last three are the control-tool built-ins
-on the `control_tool` surface). Adding a first-party capability
-is adding a directory here (plus a `SurfaceSpec` registration only when a
-genuinely new surface is needed).
+The eighteen built-ins, one directory each, are the canonical worked corpus of
+manifest declarations:
+
+| Built-in | Contributes |
+| --- | --- |
+| `fs` | nine `tool`s (`read`, `glob`, `grep`, `edit`, `write`, `apply_patch`, `shell_run`, `shell_poll`, `shell_kill`) + a `session_pack` |
+| `web` | `webfetch` / `web_search` `tool`s + a `session_pack` |
+| `memory` | four memory `tool`s, a `prompt_fragment`, a `reminder_provider`, a `session_pack` |
+| `browser` | a `session_pack` (sandbox-backed browser tools) |
+| `app` | a `session_pack` (the gateway-gated `open_app` tool) |
+| `skills` | a `session_pack` |
+| `react` | the `run_workflow` / `structured_output` `control_tool`s |
+| `reminders` | three `reminder`s |
+| `governance` | four `guard`s + one `observer` |
+| `sandbox` | two `sandbox_provider`s |
+| `presets` | the `web` and `__consolidation__` `agent`s |
+| `workspace` | two `session_pack`s (instructions, environment) |
+| `todo_write` | one `control_tool` |
+| `ask_user_question` | one `control_tool` |
+| `delegation` | the `spawn_subagent` `control_tool` |
+| `mcp`, `providers`, `storage` | declaration-only (zero contributions); their code is reached through the SDK's own accessors |
+
+Adding a first-party capability is adding a directory here, plus a `SurfaceSpec`
+registration only when a genuinely new surface is needed.
 
 ## Trust store
 
 The workspace-directory trust store is a JSON file — `{"trusted": [abs path, …]}` —
-at `DEFAULT_TRUST_STORE` (`~/.noeta/trust.json`) by default. Only `workspace_dirs`
-consult it; `user_dirs` are always scanned.
+at `DEFAULT_TRUST_STORE` (`~/.noeta/trust.json`) by default. Only
+`workspace_dirs` consult it; `user_dirs` are always scanned.
 
 | Function | Signature | Behaviour |
 | --- | --- | --- |
@@ -471,10 +475,11 @@ mid-session turn:
 - A bad or missing manifest, a broken file, an unimportable `ref`, a missing
   `ref` attribute, or a value that fails its surface `validator` raises
   `PluginError` naming the plugin.
-- **Any collision** — two plugins claiming the same key; a cross-source duplicate
-  plugin name; a second `policy` / `provider` — raises `PluginError` **naming both
-  sides. There is no override.** (Collisions against a base `Options.policy` /
-  `Options.provider` are caught by `compile_options` / the `Client` build.)
+- **Any collision** — two plugins claiming the same key; a cross-source
+  duplicate plugin name; a second `policy` / `provider` — raises `PluginError`
+  **naming both sides. There is no override.** (Collisions against a base
+  `Options.policy` / `Options.provider` are caught by `compile_options` / the
+  `Client` build.)
 - An **unknown activation name** raises `ValueError` at compile.
 
 The single non-raising skip is an **untrusted `workspace_dirs`** entry, which
@@ -492,22 +497,10 @@ except PluginError as exc:
     ...
 ```
 
-## The retired bundle path
-
-The 0.4.0 mechanism — `noeta_plugin(api)` factories, the `PluginAPI` accumulator,
-`load_plugins` + `merge_plugins`, `LoadedPlugin`, `PluginContributions`, and
-`merged_mcp_servers` / `merged_skill_dirs` — has been **removed** from `noeta.sdk`
-and replaced outright by the manifest mechanism on this page (nothing of 0.4.0 was
-published, so no compatibility was owed). Only the primitives the manifest
-mechanism reuses survive in `client/plugins.py`: the trust-store functions
-(`grant_trust` / `is_trusted`) and `PluginError` / `UntrustedPluginDirWarning`.
-
 ## See also
 
 - [Write a plugin](../how-to/write-a-plugin.md) — the task-oriented guide
 - [SDK reference](sdk.md) — `Options.plugins` activation and the `Client` /
   `query` `plugins=` argument
-- [SDK-extensibility redesign](https://github.com/initxy/noeta/blob/main/docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md)
-  — the full decision record (`D1`–`D12`)
 - [ADR: Plugin contribution bundles](https://github.com/initxy/noeta/blob/main/docs/adr/plugin-contribution-bundles.md)
   — the durable design rationale

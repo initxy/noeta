@@ -1,15 +1,11 @@
-"""Contract tests for ``RepetitionGuard`` (work item ④, D-4 / D-4b).
+"""RepetitionGuard: catching a model stuck in a loop without false positives.
 
-The guard reads the last few ``(tool_name, canonical input bytes)`` pairs
-folded by the Engine into ``GuardContext.recent_tool_calls`` and, once the
-*same* identity key has repeated ``threshold`` times **consecutively**, returns
-the configured action (``require_approval`` by default, ``deny`` when
-configured). Identity is provider-neutral: ``tool_name`` plus
-``to_canonical_bytes(arguments)`` (key-order independent, stable for replay).
-
-Determinism is load-bearing: the guard is a pure function of its policy and the
-recorded history, so a recording replays to the identical verdict (the final
-case nails this down).
+Identity is ``tool_name`` plus ``to_canonical_bytes(arguments)`` — provider-
+neutral and key-order independent — and the run must be unbroken at the tail of
+``GuardContext.recent_tool_calls``, so an interleaved different call resets it.
+Determinism is load-bearing here: the verdict is a pure function of the policy
+and the recorded history, which is what lets a recorded stream replay to the
+same guard decisions.
 """
 
 from __future__ import annotations
@@ -68,9 +64,8 @@ def test_empty_history_allows() -> None:
 
 
 def test_below_threshold_allows() -> None:
-    """threshold=3: only two prior identical calls in history → the proposed
-    call would make three, but with the consecutive-count-includes-proposed
-    semantics fewer than threshold consecutive matches must still allow."""
+    """The proposed call counts towards the run, so one prior identical call
+    under ``threshold=3`` is only two in a row and must still pass."""
     args = {"k": "a"}
     guard = RepetitionGuard(RepetitionPolicy(threshold=3))
     history = (_key("echo", args),)  # one prior identical call
@@ -224,9 +219,9 @@ def test_policy_is_frozen() -> None:
 
 
 def test_deterministic_same_inputs_same_verdict() -> None:
-    """Replay safety: the verdict is a pure function of policy + recorded
-    history, so two evaluations with the same inputs agree byte-for-byte on
-    verdict and reason."""
+    """Replay safety: two evaluations of the same policy, history and action
+    must agree on verdict AND on reason text, since the reason reaches the
+    model and the EventLog."""
     args = {"x": 1, "y": [2, 3]}
     guard = RepetitionGuard(RepetitionPolicy(threshold=3, action="deny"))
     history = (_key("tool", args), _key("tool", args))

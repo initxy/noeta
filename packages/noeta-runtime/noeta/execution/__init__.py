@@ -1,17 +1,9 @@
-"""noeta.execution — the in-process agent execution machine (D1/D7).
+"""The in-process agent execution machine: session construction, the interaction
+driver, multi-turn policy wrapping, engine resolution, and the delegation drain.
 
-Hoisted out of ``noeta.agent`` so the SDK can drive an agent end-to-end without
-the coding product: the multi-turn policy wrappers, the sub-agent delegation
-drain, the :class:`GenericEngineResolver` skeleton, and the Protocol-typed
-:class:`InteractionDriver` (issue 01 complete — noeta.agent keeps thin
-re-export shims until the issue-07 flip).
-
-Code-agnostic by contract: this package may import the lower layers
-(``noeta.protocols`` / ``noeta.core`` / ``noeta.policies`` / the kernel-services
-band) plus the sdk-owned identity layer ``noeta.agent.spec`` /
-``noeta.agent.registry`` — but never the noeta-agent product modules
-(``noeta.agent.host`` / ``noeta.agent.backend`` / …), enforced by the import-linter
-layered topology (see .importlinter).
+Product-agnostic by contract — this package may import the lower layers plus the
+identity layer (``noeta.agent.spec`` / ``noeta.agent.registry``) and nothing
+above it, enforced by the import-linter layered topology.
 """
 
 from __future__ import annotations

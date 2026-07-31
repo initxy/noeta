@@ -1,11 +1,9 @@
-"""FakeTool: scripted-mapping tool for tests.
+"""FakeTool: a scripted-mapping Tool for tests.
 
-The Tool resolves a call by hashing its arguments into a key and looking
-up a predetermined output. If the output exceeds the EventLog payload
-ceiling (SDD §Data), the body is offloaded to ContentStore
-via the supplied ``ToolContext.artifact_store`` and surfaced as a
-``ToolResult.artifacts`` entry; the inline ``output`` field is left empty
-in that case.
+It exercises the real offload path — an output over the EventLog payload
+ceiling goes to the ContentStore and comes back as a ``ToolResult.artifacts``
+entry with an empty inline ``output`` — so tests see the same two shapes a
+production tool produces.
 """
 
 from __future__ import annotations
@@ -17,10 +15,9 @@ from typing import Any
 from noeta.protocols.tool import ToolContext, ToolResult
 
 
-# The EventLog payload cap is 4 KB. We offload anything
-# strictly larger than this from the inline ``output`` field. The same
-# constant is what the ToolRuntime uses to decide where to record the
-# canonical body, so they stay in lock-step.
+# The EventLog payload cap. Anything strictly larger is offloaded out of the
+# inline ``output`` field — the same threshold the ToolRuntime applies when it
+# decides where to record the canonical body, so the two stay in lock-step.
 INLINE_OUTPUT_LIMIT_BYTES = 4 * 1024
 _ARTIFACT_MEDIA_TYPE = "application/octet-stream"
 
@@ -29,14 +26,11 @@ _ARTIFACT_MEDIA_TYPE = "application/octet-stream"
 class FakeTool:
     """Deterministic, scripted tool.
 
-    ``script`` is a mapping from one positional value tuple (the values
-    of the call's arguments, sorted by key) to the desired output. The
-    scripted ``output`` may be a string or any JSON-serialisable value.
-
-    ``input_schema`` defaults to the lax ``additionalProperties: True``
-    object schema; the :class:`noeta.protocols.tool.Tool`
-    Protocol requires the attribute as LLM-facing metadata. Tests can
-    override per fixture.
+    ``script`` maps a value tuple — the call's argument values, sorted by key —
+    to the desired output, which may be a string or any JSON-serialisable value.
+    ``input_schema`` defaults to the lax ``additionalProperties: True`` object
+    schema only because the Tool Protocol requires the attribute; tests override
+    it per fixture.
     """
 
     name: str = "fake"
@@ -54,9 +48,8 @@ class FakeTool:
     def invoke(
         self, arguments: dict[str, Any], ctx: ToolContext
     ) -> ToolResult:
-        # Tests script by argument *values* keyed in insertion order.
-        # We compare by the value-tuple of the sorted-by-key items so
-        # callers do not need to depend on dict iteration order.
+        # Key on the values of the sorted-by-key items so a script never depends
+        # on the caller's dict iteration order.
         values_key = tuple(v for _, v in sorted(arguments.items()))
         if values_key not in self.script:
             return ToolResult(

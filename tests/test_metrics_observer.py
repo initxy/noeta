@@ -94,7 +94,7 @@ def test_stop_is_idempotent_and_stops_counting() -> None:
 
 
 def test_thread_safe_under_concurrent_writes() -> None:
-    """Issue 19 B1 stress: multiple writer threads emitting
+    """Stress: multiple writer threads emitting
     concurrently must produce the right total count and per-task
     counts. The EventLog ``_notify`` fires post-COMMIT outside the
     writer lock, so the observer's internal lock is the real

@@ -1,26 +1,10 @@
-"""In-memory adapters for the L0 storage Protocols.
+"""The in-memory reference backend for the L0 storage Protocols.
 
-Issue 06 hardened the Phase 0 baseline (issue 01) into a real
-concurrency-protected backend. The typed boundary was then lifted to
-``noeta.protocols.event_log / content_store / dispatcher``;
-the classes here are adapters that satisfy those Protocols.
-
-* :class:`InMemoryEventLog` implements ``EventLog`` (Reader + Writer)
-  and ``EventLogSubscriber``. Three concurrency layers on
-  :meth:`emit` — optimistic ``expected_seq``, lease validity via a
-  wired ``LeaseRegistry``, and ``(lease_id, idempotency_key)`` dedup.
-  Cross-stream system writes go through :meth:`system_emit` (no lease
-  check, no idempotency); this replaces the legacy ``bypass_lease=True``
-  flag the earlier ``emit`` carried.
-* :class:`InMemoryContentStore` implements ``ContentStore``.
-* :class:`InMemoryDispatcher` implements both ``Dispatcher`` (lease
-  lifecycle) and ``LeaseRegistry`` (``is_lease_valid`` for EventLog
-  backends) in one class.
-
-The InMemory backend is the kernel's reference backend — the executable
-definition of the Protocols' semantics. The durable backends (sqlite /
-Postgres) live in the ``storage`` built-in (noeta-sdk) and plug into the
-same Protocols; :func:`build_stack` is the uniform factory shape every
+These adapters are the executable definition of the Protocols' semantics, so
+the rules a durable backend must reproduce — the write-protection layers on
+:meth:`InMemoryEventLog.emit`, the lease/wake lifecycle, the payload cap — are
+spelled out here rather than in prose elsewhere. The durable backends plug into
+the same Protocols; :func:`build_stack` is the uniform factory shape every
 backend ships.
 """
 
@@ -63,11 +47,8 @@ def _default_id_factory() -> str:
     return f"evt-{uuid.uuid4().hex}"
 
 
-# Adapter-local alias preserved so existing test imports
-# (``from noeta.storage.memory import MAX_PAYLOAD_BYTES``) keep working
-# after the canonical constant moved to :mod:`noeta.protocols.values`
-# under its more precise name (issue 16). L0 callers should import
-# ``EVENT_PAYLOAD_MAX_BYTES`` directly.
+# Adapter-local alias the storage contract suite imports; L0 callers should
+# reach for ``EVENT_PAYLOAD_MAX_BYTES`` directly.
 MAX_PAYLOAD_BYTES = EVENT_PAYLOAD_MAX_BYTES
 
 
@@ -77,10 +58,7 @@ MAX_PAYLOAD_BYTES = EVENT_PAYLOAD_MAX_BYTES
 
 
 class InMemoryContentStore:
-    """Content-addressed, immutable, dedup-by-hash blob store (in-memory).
-
-    Phase 0 only.
-    """
+    """Content-addressed, immutable, dedup-by-hash blob store (in-memory)."""
 
     def __init__(self) -> None:
         self._blobs: dict[str, bytes] = {}
@@ -89,8 +67,8 @@ class InMemoryContentStore:
     def put(self, body: bytes, *, media_type: str) -> ContentRef:
         digest = hashlib.sha256(body).hexdigest()
         with self._lock:
-            # Immutable: identical hash means identical body. We never
-            # overwrite an existing entry.
+            # Content-addressed and immutable: an identical hash is an
+            # identical body, so an existing entry is never overwritten.
             self._blobs.setdefault(digest, body)
         return ContentRef(hash=digest, size=len(body), media_type=media_type)
 
@@ -101,10 +79,10 @@ class InMemoryContentStore:
             raise ContentNotFound(ref.hash) from exc
 
     def get_many(self, refs: Iterable[ContentRef]) -> dict[str, bytes]:
-        # No round-trip to save here — the reference backend implements the
-        # batch read only so it stays a drop-in for the durable ones. Missing
-        # hashes are omitted (Protocol contract), so callers see the same
-        # partial-result shape they get from sqlite / postgres.
+        # There is no round-trip to save here; the batch read exists so this
+        # backend stays a drop-in for the durable ones. Missing hashes are
+        # omitted rather than raising, which is the Protocol's partial-result
+        # contract every backend owes its callers.
         blobs = self._blobs
         out: dict[str, bytes] = {}
         for ref in refs:
@@ -123,9 +101,9 @@ class InMemoryContentStore:
 
 
 def _enforce_payload_cap(envelope: EventEnvelope) -> None:
-    # The cap decision is the shared backend rule (``noeta.storage.spi``);
-    # the canonical bytes are computed here because the in-memory adapter
-    # never serialises the payload otherwise.
+    # The cap decision belongs to the shared backend rule; only the canonical
+    # bytes are computed here, because this adapter never serialises the
+    # payload otherwise and the cap must measure what a wire backend stores.
     enforce_payload_cap(
         envelope.task_id, envelope.type, to_canonical_bytes(envelope.payload)
     )
@@ -134,36 +112,25 @@ def _enforce_payload_cap(envelope: EventEnvelope) -> None:
 @dataclass
 class _StreamState:
     events: list[EventEnvelope] = field(default_factory=list)
-    # idempotency cache: (lease_id, idempotency_key) -> seq
     idempotency: dict[tuple[str, str], int] = field(default_factory=dict)
 
 
 class InMemoryEventLog:
     """Append-only per-task event stream with three-layer write protection.
 
-    Three concurrency layers on :meth:`emit` (the business-path writer):
+    :meth:`emit` is the business path: ``(lease_id, idempotency_key)`` dedup,
+    optimistic ``expected_seq``, and lease validity, in that order. Dedup runs
+    first so a retried write returns its original envelope instead of tripping
+    ``expected_seq``.
 
-    1. **Optimistic ``expected_seq``** — caller asserts the next slot
-       they intend to claim. Mismatch raises :class:`StaleSequence`.
-    2. **Lease validity** — when ``lease_id`` is provided *and* a
-       ``LeaseRegistry`` was injected at construction (or via
-       :meth:`bind_lease_registry`), the registry must approve the
-       (task_id, lease_id) pair. Stale or unknown leases raise
-       :class:`InvalidLease`.
-    3. **Idempotency** — same ``(lease_id, idempotency_key)`` twice
-       returns the originally-assigned envelope silently; no duplicate
-       event is appended.
+    ``lease_validator`` is typed as the :class:`LeaseRegistry` Protocol rather
+    than a Dispatcher, so the EventLog never imports the Dispatcher type;
+    leaving it ``None`` accepts every write unchecked.
 
-    The :class:`LeaseRegistry` parameter is intentionally a Protocol
-    (not a Dispatcher instance) so the EventLog never imports the
-    Dispatcher type. Callers that don't need lease enforcement (most
-    pure EventLog unit tests) leave it ``None`` and writes are accepted.
-
-    Cross-stream system writes (e.g. a child-completion observer that
-    writes ``SubtaskCompleted`` onto the *parent* stream while holding
-    only the child's lease) use :meth:`system_emit`. That method skips
-    all three concurrency layers — the caller takes responsibility for
-    ordering and idempotency.
+    Cross-stream system writes — an Observer appending ``SubtaskCompleted`` to
+    the *parent* stream while holding only the child's lease — go through
+    :meth:`system_emit`, which skips all three layers and puts ordering and
+    idempotency on the caller.
     """
 
     def __init__(
@@ -185,13 +152,8 @@ class InMemoryEventLog:
     # -- wiring ----------------------------------------------------------
 
     def bind_lease_registry(self, registry: LeaseRegistry) -> None:
-        """Late-bind a :class:`LeaseRegistry` (e.g. once the Dispatcher
-        exists).
-
-        Useful when the EventLog and Dispatcher are constructed in
-        either order. After binding, every :meth:`emit` with a non-
-        ``None`` ``lease_id`` is subject to validation.
-        """
+        """Late-bind the registry so the two halves of a stack can be built in
+        either order."""
         self._lease_validator = registry
 
     # -- writes ----------------------------------------------------------
@@ -210,8 +172,6 @@ class InMemoryEventLog:
         idempotency_key: str | None = None,
         origin: EventOrigin = "engine",
     ) -> EventEnvelope:
-        """Append one business event. See class docstring for the three
-        concurrency layers this enforces."""
         envelope = EventEnvelope.build(
             task_id=task_id,
             type=type,
@@ -243,18 +203,12 @@ class InMemoryEventLog:
         trace_id: str | None = None,
         causation_id: str | None = None,
     ) -> EventEnvelope:
-        """Append one cross-stream system event.
+        """Append one cross-stream system event, unchecked.
 
-        No lease validation, no ``expected_seq``, no idempotency
-        dedup. Used by Observer-style writers (Phase 0:
-        ``ChildLifecycleObserver`` writing ``SubtaskCompleted`` to the
-        parent stream while holding only the child's lease).
-
-        ``actor`` carries the system writer's identity; ``origin``
-        names the Noeta role (``observer`` / ``engine`` / ``llm`` /
-        ``tool`` / ``system``) and is what the suspend-window
-        re-injection keys on, superseding the actor-string
-        heuristic.
+        Both ``actor`` and ``origin`` are required because they are not the
+        same axis: ``actor`` is the writer's identity, ``origin`` its Noeta
+        role (``observer`` / ``engine`` / ``llm`` / ``tool`` / ``system``), and
+        readers key on the role, not on the identity string.
         """
         envelope = EventEnvelope.build(
             task_id=task_id,
@@ -288,31 +242,26 @@ class InMemoryEventLog:
         with self._lock:
             stream = self._streams[envelope.task_id]
 
-            # Layer 3: idempotency dedup (returns the cached seq without
-            # writing a second event). Evaluate before layer 1 so a
-            # retried write does not trip ``expected_seq``.
+            # Dedup first: a retried write must return its original envelope
+            # rather than trip the ``expected_seq`` assertion below.
             if lease_id is not None and idempotency_key is not None:
                 key = (lease_id, idempotency_key)
                 if key in stream.idempotency:
                     existing_seq = stream.idempotency[key]
                     return stream.events[existing_seq]
 
-            # Layer 0: 4-KB payload cap. Run before any state
-            # mutation so an oversized write never advances the stream;
-            # we measure the canonicalized JSON shape so the check matches
-            # what a real wire backend (SQL/Postgres) would store.
+            # Before any state mutation, so an oversized write never advances
+            # the stream.
             _enforce_payload_cap(envelope)
 
             next_seq = len(stream.events)
 
-            # Layer 1: optimistic concurrency on the next slot.
             if expected_seq is not None and expected_seq != next_seq:
                 raise StaleSequence(
                     f"task_id={envelope.task_id}, "
                     f"expected={expected_seq}, actual={next_seq}"
                 )
 
-            # Layer 2: lease validity.
             if (
                 require_lease
                 and lease_id is not None
@@ -327,8 +276,8 @@ class InMemoryEventLog:
             if lease_id is not None and idempotency_key is not None:
                 stream.idempotency[(lease_id, idempotency_key)] = next_seq
 
-        # Notify subscribers outside the lock; failures are silent so
-        # an Observer crash never breaks the writer.
+        # Outside the lock, and failures are swallowed: an Observer crash must
+        # never break the writer that produced the event.
         for sub in list(self._subscribers):
             try:
                 sub(stamped)
@@ -352,23 +301,22 @@ class InMemoryEventLog:
         with self._lock:
             events = self._streams[task_id].events
             for envelope in reversed(events):
-                # TaskRewound / StepAttemptAbandoned are snapshot-shaped fold
-                # baselines (carry ``state_ref`` too), so a rewind / attempt
-                # seal re-bases fold from the same accelerated lookup. Reverse
-                # scan returns whichever baseline has the higher seq.
+                # Several event types carry ``state_ref`` and so are equally
+                # valid fold baselines; the reverse scan is what makes the
+                # highest-seq baseline win regardless of which type it is.
                 if envelope.type in SNAPSHOT_BASELINE_EVENT_TYPES:
                     return envelope
         return None
 
-    # -- task index (CW5a EventLogTaskIndex capability) --------------------
+    # -- task index --------------------------------------------------------
 
     def list_task_streams(self) -> list[TaskStreamSummary]:
         """Enumerate non-empty task streams, most-recent-update first.
 
-        ``_streams`` is a ``defaultdict`` so a prior ``read()`` on an unknown
-        task_id may have materialised an empty stream — those are skipped (a
-        task with no events is not a session). Deterministic tie-break on
-        ``task_id`` keeps the order stable when ``last_event_time`` ties.
+        ``_streams`` is a ``defaultdict``, so a prior ``read()`` of an unknown
+        task_id may have materialised an empty stream; those are skipped,
+        because a task with no events is not a conversation. The ``task_id``
+        tie-break keeps the order stable when timestamps collide.
         """
         with self._lock:
             summaries = [
@@ -386,10 +334,12 @@ class InMemoryEventLog:
     # -- maintenance -------------------------------------------------------
 
     def purge_task(self, task_id: str) -> bool:
-        """Drop a task's whole stream. Mirror of
-        :meth:`SqliteEventLog.purge_task` — a GC/maintenance affordance
-        (NOT on the L0 Protocols) backing the agent product's "delete
-        session". Returns ``True`` iff a non-empty stream was removed."""
+        """Drop a task's whole stream; ``True`` iff a non-empty one was removed.
+
+        A maintenance affordance every backend mirrors, deliberately NOT on the
+        L0 Protocols — deletion is a host decision, not part of the append-only
+        contract the Engine writes against.
+        """
         with self._lock:
             stream = self._streams.pop(task_id, None)
             return bool(stream and stream.events)
@@ -397,11 +347,7 @@ class InMemoryEventLog:
     # -- subscribe ---------------------------------------------------------
 
     def subscribe(self, callback: Subscriber) -> Unsubscribe:
-        """Register a sync callback invoked after each successful append.
-
-        Returns an unsubscribe function. Subscriber failures are swallowed
-        (Observers must not affect the writer).
-        """
+        """Register a sync callback invoked after each successful append."""
         self._subscribers.append(callback)
 
         def _unsubscribe() -> None:
@@ -426,56 +372,46 @@ class _DispatcherTask:
     lease_expires_at: float | None = None
     heartbeat_count: int = 0
     fail_attempts: int = 0
-    # Consecutive stale-lease reclaims with no observed progress in
-    # between (kernel #3). Incremented by ``requeue_stale``; reset by any
-    # progress signal — a successful heartbeat, a clean release, a
-    # controlled fail-requeue, or a force-enqueue. At ``reclaim_max`` the
-    # task drops to terminal (``stale_reclaim_exceeded``) instead of
-    # looping lease → expire → requeue forever.
+    # Consecutive stale-lease reclaims with no observed progress in between.
+    # Every progress signal — heartbeat, clean release, controlled
+    # fail-requeue, force-enqueue — resets it, so only a task that keeps
+    # killing its worker silently can reach ``reclaim_max``.
     reclaim_count: int = 0
     wake_on: Any = None
     suspend_reason: str | None = None
     pending_wake_events: list[Any] = field(default_factory=list)
-    # Matched wake event waiting to be handed out on the next lease.
-    # Set by ``wake()`` when the event matched the task's ``wake_on``,
-    # and by ``_release_locked(suspended)`` when a buffered pending wake
-    # matches the freshly-stored ``wake_on``. H2:
-    # it **survives the lease** (handed to the worker on
-    # ``lease()`` but NOT cleared there — see ``lease`` D1) and is cleared
-    # only by a consuming ``release(consumed_wake_event=…)`` (D2). A crash
-    # before that consuming release re-delivers it via ``requeue_stale``.
+    # Matched wake event waiting to be handed out on the next lease. It
+    # SURVIVES that lease: ``lease()`` hands it over but does not clear it, and
+    # only a consuming ``release(consumed_wake_event=…)`` does. A crash before
+    # that release therefore re-delivers it through ``requeue_stale``, which is
+    # what turns at-least-once delivery plus idempotent consumption into
+    # exactly-once.
     matched_wake_event: Any = None
-    # Targeted-lease-only guard (Dispatcher.enqueue ``reserved``). A freshly
-    # enqueued subtask child sets this so an untargeted FIFO poll skips it
-    # (only its delegation drain / background executor may targeted-lease it,
-    # since only that path seeds its goal). A ONE-SHOT claim guard: the first
-    # successful ``lease`` clears it, so a later suspend/resume re-enqueue is an
-    # ordinary untargeted-leaseable task.
+    # Targeted-lease-only guard. A freshly enqueued subtask child sets it so an
+    # untargeted FIFO poll skips it: only the driver that seeds its goal may
+    # claim it. One-shot — the first successful lease clears it, so a later
+    # suspend/resume re-enqueue is an ordinary leaseable task.
     reserved: bool = False
 
 
 class InMemoryDispatcher:
     """In-memory adapter for ``Dispatcher`` + ``LeaseRegistry``.
 
-    Eight lifecycle methods (``enqueue / lease / heartbeat / release /
-    fail / wake / requeue_stale / fire_due_timers``) plus the
-    ``is_lease_valid`` registry surface used by EventLog backends. The four debug helpers
-    (``task_status / wake_on / suspend_reason``) are NOT on either
-    Protocol — they are introspection points used only in tests.
+    One class serves both Protocols because ``is_lease_valid`` has to answer
+    from the very state the lease lifecycle mutates. The introspection helpers
+    (``task_status`` / ``has_active_lease`` / ``wake_on`` / ``suspend_reason``)
+    are on neither Protocol.
 
-    Knobs:
+    Three caps keep a task from cycling forever, and all three end in a state a
+    human has to look at rather than a silent retry:
 
-    * ``heartbeat_max`` (default 360, matching the "default
-      ~1 hour at 10s heartbeat" rule of thumb): after the cap, any
-      further heartbeat raises ``InvalidLease`` and force-releases the
-      task to ``suspended`` with reason ``lease_quota_exceeded``.
-    * ``max_fail_attempts`` (default 3): retryable failures past this
-      number drop the task into ``terminal``.
-    * ``reclaim_max`` (default 3): consecutive no-progress stale-lease
-      reclaims past this number drop the task into ``terminal`` with
-      reason ``stale_reclaim_exceeded`` (kernel #3 — a poison task that
-      silently kills its worker must not requeue forever). Reset on any
-      progress signal (heartbeat / release / fail-requeue / enqueue).
+    * ``heartbeat_max`` — a further heartbeat raises ``InvalidLease`` and
+      force-releases the task to ``suspended`` (``lease_quota_exceeded``). The
+      default bounds a lease to roughly an hour at a 10s heartbeat.
+    * ``max_fail_attempts`` — retryable failures past this drop to ``terminal``.
+    * ``reclaim_max`` — consecutive no-progress stale-lease reclaims past this
+      drop to ``terminal`` (``stale_reclaim_exceeded``), so a poison task that
+      silently kills every worker leasing it cannot requeue forever.
     """
 
     def __init__(
@@ -497,11 +433,9 @@ class InMemoryDispatcher:
     # -- LeaseRegistry ---------------------------------------------------
 
     def is_lease_valid(self, task_id: str, lease_id: str) -> bool:
-        """Return True iff ``lease_id`` is the active lease for
-        ``task_id`` and the lease has not expired.
-
-        This is the EventLog's hook into the dispatcher. It is read-only
-        and never mutates state.
+        """True iff ``lease_id`` is the active, unexpired lease for
+        ``task_id``. The EventLog's read-only hook into the dispatcher —
+        it never mutates state.
         """
         with self._lock:
             task = self._tasks.get(task_id)
@@ -605,9 +539,9 @@ class InMemoryDispatcher:
         ``status='ready'`` transition — including
         ``matched_wake_event``. Letting a stale matched wake survive a
         force-enqueue would let the next ``lease()`` hand out a
-        wake_event the caller did not request (B1 invariant: matched
+        wake_event the caller did not request: a matched
         wake_event is owned by the single wake → lease handoff that
-        produced it).
+        produced it.
 
         ``reserved`` (see :meth:`Dispatcher.enqueue`) marks the task
         targeted-lease-only until its first lease claims it.
@@ -651,11 +585,11 @@ class InMemoryDispatcher:
         On success, any ``matched_wake_event`` queued by a prior
         :meth:`wake` (or by the pending-wake-drain in
         :meth:`_release_locked`) is handed out on the returned
-        :class:`Lease`. H2: lease does **not** clear it — the
+        :class:`Lease`. Lease does **not** clear it — the
         matched wake survives the lease ("matched-in-flight") so a crash
         before the durable ``TaskWoken`` does not lose it; it is cleared
-        only by a consuming ``release(consumed_wake_event=...)`` (D2) and
-        otherwise re-delivered after ``requeue_stale`` (D3) — at-least-once
+        only by a consuming ``release(consumed_wake_event=...)`` and
+        otherwise re-delivered after ``requeue_stale`` — at-least-once
         delivery + idempotent consumption = exactly-once.
         """
         with self._lock:
@@ -696,8 +630,8 @@ class InMemoryDispatcher:
             # skips reserved tasks), so clear the guard. A later suspend/resume
             # re-enqueue is then an ordinary untargeted-leaseable task.
             target_task.reserved = False
-            # H2 (D1): do NOT clear matched_wake_event here — survives the
-            # lease; cleared only by a consuming release (D2).
+            # Do NOT clear matched_wake_event here — it survives the
+            # lease; cleared only by a consuming release.
             wake_event = target_task.matched_wake_event
             return Lease(
                 lease_id=lease_id,
@@ -718,7 +652,6 @@ class InMemoryDispatcher:
             if task is None or task.status != "leased":
                 raise InvalidLease(lease_id)
             if task.heartbeat_count >= self._heartbeat_max:
-                # Cap exceeded — force a suspend release inline.
                 self._release_locked(
                     task,
                     next_state="suspended",
@@ -782,8 +715,8 @@ class InMemoryDispatcher:
                 if task.fail_attempts >= self._max_fail_attempts:
                     task.status = "terminal"
                     task.suspend_reason = reason or "max_attempts_exceeded"
-                    # Kernel #8: terminal is forever — buffered wakes
-                    # that never matched can never drain; GC them.
+                    # Terminal is forever — buffered wakes that never
+                    # matched can never drain; GC them.
                     task.pending_wake_events.clear()
                 else:
                     task.status = "ready"
@@ -822,7 +755,7 @@ class InMemoryDispatcher:
 
         On a successful match, the matched ``wake_event`` is recorded
         on ``task.matched_wake_event``; it is handed to the worker on the
-        next ``lease()`` but **survives** it (H2),
+        next ``lease()`` but **survives** it,
         cleared only by a consuming
         ``release(consumed_wake_event=…)`` — a crash before that re-delivers
         it via ``requeue_stale``.
@@ -832,8 +765,7 @@ class InMemoryDispatcher:
         until the owning driver's targeted lease claims it and clears the flag.
         Set by a seed-after-wake resume so a resident worker cannot lease the
         woken-but-not-yet-seeded task. Only the matched→ready branch carries it;
-        a buffered wake never becomes leaseable. ``reserved=False`` (the default)
-        is byte-identical to the historical wake.
+        a buffered wake never becomes leaseable.
         """
         with self._lock:
             if task_id not in self._tasks:
@@ -853,11 +785,11 @@ class InMemoryDispatcher:
     def requeue_stale(self) -> list[str]:
         """Move any leased tasks whose lease expired back to ready.
 
-        Returns the list of task_ids that were requeued. The previously
-        held lease_id is invalidated; the original worker's writes will
+        Returns the list of task_ids that were requeued. The prior
+        lease_id is invalidated; the original worker's writes will
         fail :class:`InvalidLease` on the EventLog.
 
-        Kernel #3: each reclaim increments the task's ``reclaim_count``;
+        Each reclaim increments the task's ``reclaim_count``;
         at ``reclaim_max`` consecutive no-progress reclaims the task
         drops to ``terminal`` (``stale_reclaim_exceeded``) instead of
         requeueing — the poison-task analogue of ``max_fail_attempts``.
@@ -875,7 +807,7 @@ class InMemoryDispatcher:
                     task.lease_id = None
                     task.lease_expires_at = None
                     task.heartbeat_count = 0
-                    # Kernel #3: bound the silent lease-expiry loop. The
+                    # Bound the silent lease-expiry loop. The
                     # counter only resets on a progress signal, so a
                     # poison task that keeps killing its worker without
                     # a heartbeat/fail/release lands terminal here.
@@ -898,7 +830,7 @@ class InMemoryDispatcher:
         deliberately NOT ``self._now`` (which defaults to
         ``time.monotonic``): ``fire_at`` was computed with the Engine's
         wall clock and the two bases must match. The delivered wake is
-        the **recorded deadline** (byte-stable across H2 re-delivery),
+        the **recorded deadline** (byte-stable across re-delivery),
         not ``TimerFired(fire_at=now)``; matching is the same inclusive
         ``>=`` threshold :func:`matches_wake` pins.
         """
@@ -945,7 +877,7 @@ class InMemoryDispatcher:
         suspend_reason: str | None,
         consumed_wake_event: Any = None,
     ) -> None:
-        # H2 step 1: validate BEFORE any mutation so a
+        # Validate BEFORE any mutation so a
         # mismatch commits nothing (rollback parity with sqlite). Clear the
         # OLD matched iff a consuming release presents the exact wake.
         clear_matched = False
@@ -969,11 +901,11 @@ class InMemoryDispatcher:
         task.reclaim_count = 0
         task.status = next_state
         if clear_matched:
-            task.matched_wake_event = None  # OLD matched consumed (D2)
+            task.matched_wake_event = None  # OLD matched consumed
         if next_state == "suspended":
             task.wake_on = wake_on
             task.suspend_reason = suspend_reason
-            # H2 (D5): an un-consumed matched is PRESERVED. A matched wake
+            # An un-consumed matched is PRESERVED. A matched wake
             # means a delivery is pending, which supersedes "suspended
             # waiting" — the task goes back to **ready** so the next lease
             # re-delivers it (never stuck-suspended, never overwritten).
@@ -984,7 +916,7 @@ class InMemoryDispatcher:
                 self._ready.append(task.task_id)
             else:
                 # No matched: drain a single matching pending wake into a
-                # NEW matched (D4 case 4 — old matched was cleared above).
+                # NEW matched (old matched was cleared above).
                 for evt in list(task.pending_wake_events):
                     if wake_matches(task.wake_on, evt):
                         task.pending_wake_events.remove(evt)
@@ -997,9 +929,9 @@ class InMemoryDispatcher:
         else:
             task.wake_on = None
             task.suspend_reason = suspend_reason
-            # Kernel #8: terminal is forever — buffered wake events that
+            # Terminal is forever — buffered wake events that
             # never matched can never drain now; GC them. The matched
-            # wake (H2 exactly-once handoff) is deliberately untouched.
+            # wake (exactly-once handoff) is deliberately untouched.
             task.pending_wake_events.clear()
 
 

@@ -1,8 +1,10 @@
-"""Contract tests for ``BudgetGuard`` (issue 18).
+"""BudgetGuard cap matrix: which cap applies to which action, and how.
 
-Verifies the action-specific cap matrix, the strict ``>`` comparison
-for ``max_iterations`` (B5), and the consumption-style ``>=`` for
-``tool_calls`` / ``spawned_subtasks`` / ``cost_usd``.
+The matrix is deliberate — spawn and finish consume no tool slots, and finish is
+never blocked by the subtask cap — and the comparisons differ by counter.
+``max_iterations`` uses a strict ``>`` because the in-flight step is already
+folded in, while the consumption counters (``tool_calls`` / ``spawned_subtasks``
+/ ``cost_usd``) use ``>=`` so the cap is a ceiling on what will be spent.
 """
 
 from __future__ import annotations
@@ -58,7 +60,7 @@ def test_empty_budget_allows_all_actions() -> None:
 
 
 # ---------------------------------------------------------------------------
-# max_iterations: strict ``>`` (B5)
+# max_iterations: strict ``>``
 # ---------------------------------------------------------------------------
 
 

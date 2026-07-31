@@ -75,7 +75,7 @@ def _composer(
         # and lose the body the test wrote.
         content_store=content_store if content_store is not None else InMemoryContentStore(),
         skill_renderer=skill_renderer,
-        # Microkernel M2: a bare composer has no reminders; these behavior
+        # A bare composer has no reminders; these behavior
         # tests cover the built-in three, so inject them the way the builder
         # does (loader-resolved specs).
         reminders=ReminderRegistry(default_reminder_specs()),
@@ -467,7 +467,7 @@ def test_no_reminder_when_todos_empty_or_all_completed() -> None:
 
 
 def test_todo_reminder_not_written_to_runtime_messages() -> None:
-    """The reminder is a compose-time View product (D6): it must NOT enter
+    """The reminder is a compose-time View product: it must NOT enter
     ``task.runtime.messages`` and must not survive across composes."""
     composer = _composer()
     task = _task_with([Message(role="user", content=[TextBlock(text="hi")])])

@@ -5,7 +5,7 @@ All three loops run through the production SDK assembly (``SdkHost`` +
 
 1. **Skill invocation (generic shape)** — the real model invokes via the `skill`
    control tool; the log shows ``ContextContentRecorded`` (kind=skill,
-   policy=pinned) and no longer the old ``SkillContentRecorded``; the skill body
+   policy=pinned), never a bespoke ``SkillContentRecorded``; the skill body
    lands in semi_stable.
 2. **Memory write** — the real model calls the plain ``memory_write`` tool; the
    memory file lands on disk.
@@ -66,10 +66,17 @@ def _build_provider() -> Optional[Any]:
         from noeta.builtins.providers.impl.anthropic import AnthropicProvider
 
         max_tokens_str = os.environ.get("NOETA_MAX_TOKENS")
-        return AnthropicProvider(
-            api_key=os.environ["NOETA_API_KEY"],
-            default_max_tokens=int(max_tokens_str) if max_tokens_str else 1024,
-        )
+        # ``NOETA_BASE_URL`` retargets the adapter at an Anthropic-shape gateway
+        # (e.g. an internal /v1/messages relay); unset falls back to the public
+        # api.anthropic.com default the adapter carries.
+        base_url = os.environ.get("NOETA_BASE_URL")
+        kwargs: dict[str, Any] = {
+            "api_key": os.environ["NOETA_API_KEY"],
+            "default_max_tokens": int(max_tokens_str) if max_tokens_str else 1024,
+        }
+        if base_url:
+            kwargs["base_url"] = base_url
+        return AnthropicProvider(**kwargs)
     return None
 
 
@@ -161,8 +168,8 @@ def test_live_skill_invocation_generic_shape(tmp_path: Path) -> None:
     assert out.status == "terminal"
     events = list(host.event_log.read(out.task_id))
     types = [e.type for e in events]
-    # New recordings always use the generic shape: a
-    # ContextContentRecorded(kind=skill), no old event.
+    # Skill activation records the generic shape: a
+    # ContextContentRecorded(kind=skill), never a bespoke SkillContentRecorded.
     assert "SkillContentRecorded" not in types
     skill_events = [
         e for e in events
@@ -175,16 +182,22 @@ def test_live_skill_invocation_generic_shape(tmp_path: Path) -> None:
 
     folded = fold(host.event_log, host.content_store, out.task_id)
     assert "release-checklist" in folded.state.active_skills
-    assert folded.state.active_content.get("skill") == (
+    # active_content[kind] is the generic activation map name -> content_hash;
+    # assert on the name set, the hash is content-dependent.
+    assert tuple(folded.state.active_content.get("skill", {})) == (
         "release-checklist",
     )
-    # Skill body lands in semi_stable.
+    # Skill body is supplied to the model. A mid-loop activation (the model
+    # ordered the skill after it had already started talking) anchors the body
+    # into the rolling history — it lands in dynamic_suffix, not semi_stable
+    # (anchored-content-placement). Assert on the whole composed view so the
+    # test tracks "the body reached the model", not a fixed segment.
     engine = host.resolve_engine_for_agent("main", model=_model())
     view = engine._composer.compose(folded)
-    semi = next(s for s in view.segments if s.name == "semi_stable")
     joined = "\n".join(
         b.text
-        for m in semi.content
+        for seg in view.segments
+        for m in seg.content
         for b in m.content
         if hasattr(b, "text")
     )
@@ -210,8 +223,8 @@ def test_live_memory_write_tool(tmp_path: Path) -> None:
         agent="main",
     )
     assert out.status == "terminal"
-    # Memory writes land in the
-    # global memory dir (conftest pins it to a per-test tmp), not ws/.noeta/memories.
+    # Memory writes land in the global memory dir (conftest pins it to a
+    # per-test tmp).
     from noeta.builtins.memory.impl.store import DEFAULT_GLOBAL_MEMORY_DIR
 
     written = Path(DEFAULT_GLOBAL_MEMORY_DIR) / "team-greeting.md"
@@ -224,17 +237,17 @@ def test_live_memory_write_tool(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-# (T8/③-B resolved): auto-recall (origin=memory injected message + kind=memory
-# index event) is the ``driver.seed_start`` recall seam
-# (``append_user_message_with_recall`` + ``record_memory_index``, resolved via
-# ``SdkHost.memory_recall_context``) — the SDK port of the deleted noeta-agent
-# runner's prepare-time wiring.
+# Auto-recall (origin=memory injected message + kind=memory index event) is
+# the ``driver.seed_start`` recall seam: ``append_user_message_with_recall``
+# runs the memory ``reminder_provider`` before the goal enters the ledger, so a
+# goal matching a memory name injects an ``origin="memory"`` follow-up turn and
+# records a resident ``ContextContentRecorded(kind=memory, policy=evolving)``.
 @requires_live_llm
 def test_live_memory_recall_origin(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()
     # Memory is pinned to the global directory (conftest pins it to a
-    # per-test tmp), not the runner-era ``ws/.noeta/memories``.
+    # per-test tmp).
     from noeta.builtins.memory.impl.store import DEFAULT_GLOBAL_MEMORY_DIR
 
     mem = Path(DEFAULT_GLOBAL_MEMORY_DIR)

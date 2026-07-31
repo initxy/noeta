@@ -1,45 +1,136 @@
-# An orchestration script the model writes on the spot = one Task + one Policy that interprets it (helpers are real Subtasks)
+# A model-written orchestration script is one Task plus one Policy that interprets it; every helper is a real Subtask
 
 ## Context
 
-We want Noeta to be able to "let the model write a small orchestration script on the spot, dispatch a few helpers, then look at intermediate results and change direction" — without adding any runtime primitive.
-
-It builds on the "workflow → compiled into Task+Policy" route (see task-as-only-primitive.md), grouped fanout / join (see subtask-fanout-and-durable-wake.md), and AgentSpec / registry (see agent-identity-and-provenance.md).
+An agent needs to write a small orchestration script on the spot, dispatch a few
+helpers, look at intermediate results and change direction — without adding a
+runtime primitive. It builds on the "a workflow compiles into Task + Policy"
+route (see task-as-only-primitive.md), the grouped fan-out join (see
+subtask-fanout-and-durable-wake.md), and AgentSpec identity (see
+agent-identity-and-provenance.md).
 
 ## Decision
 
-- **One workflow run = one Task; the orchestration script = one Policy that interprets it; zero new runtime primitives.** A workflow run is exactly "a recorded, suspendable, resumable agent execution" = a Task, so we reuse it directly rather than inventing a new container; the script is interpreted by a Policy. **There is no `WorkflowRunner` / `WorkflowPolicy` class** (holding the "Workflow is not a first-class concept" red line in CONTEXT.md).
-- **Each helper = a real Subtask (with its own EventLog), not a disposable worker.** Every helper an `agent()` call dispatches is a real Subtask with its own EventLog stream, so inspect, fold, and resume all apply automatically.
-- **Stop-and-go relies on "re-run from the top + use the EventLog as a journal to skip completed steps" — not on freezing coroutines.** Each Policy step re-runs the script from the first line; `agent()` calls whose result is already in the EventLog are replayed instantly from the recording, and the first one without a result yet → emits a spawn decision and suspends to await the join. **The EventLog itself is that journal.**
-- **The script sandbox guarantees determinism only, not safety.** `compile()` + `exec()` into a controlled `globals`: only the orchestration API is injected (`agent` / `parallel` / `log` / `budget` / `args`), not `time` / `random` / `datetime`, and a static AST check hard-forbids importing these non-deterministic sources and external IO. Reasoning: the model writing the script already holds the shell / file tools, so exec-ing the Python it wrote adds no new attack surface; what we want is determinism, not a security sandbox.
-- **The entry point is a standalone control tool `run_workflow`, which lands as "spawn a child task that runs the orchestration Policy."** It is the same family as `spawn_subagent → SpawnSubtaskDecision` and shares the same pipeline; the only difference is that the child task runs an orchestration Policy rather than a roster agent. The tool only "submits the job"; the job itself is that Task.
-- **Per-helper structured output = inject a `structured_output` tool + steer that child task toward it**, rather than reusing the session-level `output_schema` (which is reserved for "the shape of the top-level final answer"; see unified-context-supply.md).
-- **Concurrency is an explicitly reserved follow-up of fanout (v2).** `parallel()` reuses the grouped barrier from subtask-fanout-and-durable-wake.md; the only thing real concurrency would break is deterministic fold/resume, because grouped-completion events are recorded into the EventLog in arrival order — the cornerstone envisioned then was **canonical-sorting by `subtask_id`** (the fanout ADR pre-wrote that patch) so that re-running from the top derives the same state regardless of arrival timing. v1 wires the skeleton onto the existing single-worker serial drain with zero new infrastructure; v2 adds a bounded concurrent executor + one lease relaxation (opt-in groups only). *(v2 update: subtask-parallel-execution.md landed v2 and found the canonical sort unnecessary — committing arrival order to the log is authoritative — so it was removed as dead defensive code.)*
-- **v1's orchestration primitives are only `agent()` + `parallel()`; `pipeline()` is deferred.** Both have the property that "every call site stops and waits" → the parent task never "keeps running itself while subtasks are still in flight" → zero new wake mechanism. `pipeline()` needs wake-on-any plus a stable identity per call site (chain-hash), and it is merely a throughput optimization, not a new capability, so v1 skips it.
+- **One workflow run is one Task; the script is a Policy that interprets it.** A
+  workflow run is exactly "a recorded, suspendable, resumable agent execution",
+  which is what a Task is, so it is reused directly rather than wrapped in a new
+  container. There is no `WorkflowRunner` and no `WorkflowPolicy` class —
+  `scripts/lint-naming.py` rejects those names, holding the line that Workflow is
+  not a first-class concept.
+
+- **Every helper is a real Subtask.** Each `agent()` call dispatches a Subtask
+  with its own EventLog stream, so inspect, fold and resume apply to it
+  automatically.
+
+- **Stop-and-go re-runs the script from the top and uses the EventLog as its
+  journal.** Every Policy step re-executes the script from line one; each
+  `agent()` call site is keyed by execution-order cursor (`wf-<i>`), so a call
+  whose result is already recorded returns instantly from the recording, and the
+  first one without a result emits a spawn decision and suspends on the join. No
+  coroutine is frozen and no second journal exists.
+
+- **The script sandbox guarantees determinism, not safety.** The script is parsed
+  and executed into a controlled namespace holding only the orchestration API
+  (`agent` / `parallel` / `log` / `args`) plus a builtin allowlist with no
+  `import`, `open`, `eval`, `exec` or `__import__`. A static AST check runs at
+  translation time and rejects imports, references to non-deterministic or IO
+  modules, dunder/reflection access and IO builtins, pointing the error at the
+  offending line; a violation yields a recoverable receipt and spawns no subtask
+  at all. The model writing the script already holds the shell and file tools, so
+  executing the Python it wrote adds no attack surface — what is needed is
+  reproducibility, not isolation.
+
+- **The entry point is a standalone `run_workflow` control tool that spawns a
+  child task running the orchestration Policy.** It is the same family as
+  `spawn_subagent` and shares that pipeline; the difference is only that the
+  child runs the interpreter Policy rather than a catalogued agent. The tool must
+  be the sole tool call in its turn, and it only submits the job — the job itself
+  is that Task.
+
+- **A helper failure is loud.** A subtask that terminates in failure raises out of
+  `agent()` / `parallel()` rather than returning an empty result, so an
+  untolerated failure fails the whole workflow with a deterministic reason; a
+  script that wants to survive a dead helper says so with `try`/`except`.
+
+- **Per-helper structured output injects a `structured_output` tool into that
+  helper and steers it there.** `agent(goal, schema=...)` puts the schema on the
+  child's inputs; a wrapper Policy intercepts the call before it reaches the
+  ToolRuntime, validates its arguments against the schema, and turns a clean
+  payload into that subtask's answer. A payload that misses the schema is acked
+  as a failed tool result naming the violations, and both miss modes — never
+  calling the tool, and calling it off-schema — share one bounded nudge budget
+  before the subtask fails. The session-level `output_schema` is reserved for the
+  shape of the top-level final answer (see unified-context-supply.md).
+
+- **The orchestration primitives are `agent()` and `parallel()`.** Both stop and
+  wait at the call site, so the workflow task never keeps running while subtasks
+  are in flight and no new wake mechanism is needed. `parallel()` builds an
+  all-of group on the barrier from subtask-fanout-and-durable-wake.md; its
+  members run with wall-clock concurrency by default, and the authoritative
+  account of that is subtask-parallel-execution.md.
 
 ## Rationale
 
-- **The first draft's copy of Claude Code's "an ad-hoc orchestration layer above the engine / a shadow execution engine" is backwards.** CC makes subagents disposable (running on a thread pool, discarded when done, written only to a side-channel journal, never entering the EventLog) because it has no durable substrate — ad-hoc is its ceiling. Noeta has that substrate (it records, schedules, and resumes agent execution from a single EventLog, and that durable substrate is the project's moat), so copying the ad-hoc model amounts to voluntarily surrendering the moat in the busiest multi-agent scenario.
-- **Stop-and-go uses "re-run from the top + the EventLog as the journal" rather than frozen coroutines**: Python coroutine frames are hard to persist reliably, whereas the EventLog is already the source of truth — writing a second side-channel journal is duplication + two-source drift. This works precisely because the script is deterministic.
-- **The sandbox only guarantees determinism**: stop-and-go re-runs from the top and must derive the same decision every time, which needs determinism; it can't stop a model that already holds the shell, so we don't add RestrictedPython / subprocess isolation for "safety" (cost mismatch).
-- **`run_workflow` is a standalone tool rather than reusing `spawn_subagent`**: the latter's `{agent, goal}` schema is deliberately kept stable so old recordings still fold/resume cleanly; stuffing `script` in would change that schema, and would also jam two contracts into one tool, muddying `description` (the single source of truth for model-visible semantics).
-- **The Engine is untouched**: script interpretation lives in the Policy, not the Engine, keeping the Engine ≤500 lines and workflow-agnostic.
+- **Re-run plus the EventLog beats a frozen coroutine.** Python coroutine frames
+  are hard to persist reliably, whereas the EventLog is already the source of
+  truth; a second side-channel journal is duplication and two-source drift. This
+  works precisely because the script is deterministic.
+
+- **Determinism is the constraint the sandbox exists for.** Stop-and-go re-runs
+  from the top and must derive the same decision every time. Isolation aimed at
+  safety would be a cost mismatch against a model that already holds the shell.
+
+- **`run_workflow` is its own tool.** `spawn_subagent`'s schema is deliberately
+  stable so recordings keep folding and resuming cleanly; stuffing a `script`
+  parameter into it would change that schema and jam two contracts into one tool
+  description, which is the single source of truth for model-visible semantics.
+
+- **The Engine stays workflow-agnostic.** Script interpretation lives entirely in
+  the Policy, so the Engine carries no knowledge of orchestration.
 
 ## Alternatives considered
 
-1. **An ad-hoc in-process orchestration layer above the engine (first draft / copy of CC).** Rejected: it bypasses Task / EventLog, subagents escape the durable record (no fold/resume), and it violates the vocabulary red line.
-2. **Freeze a half-run coroutine and its locals to disk, thaw them later.** Rejected: Python coroutine frames are hard to persist reliably.
-3. **A single-writer `journal.jsonl` (first draft's D5).** Rejected: the EventLog is already the journal; a second one is duplication + two-source drift.
-4. **Add RestrictedPython / subprocess isolation for "safety."** Rejected: cost mismatch, and it can't stop a model that already holds the shell; what we want is determinism.
-5. **"Soft-block (just don't inject) + give up determinism for any workflow that used non-determinism."** Rejected: too coarse-grained, it would slowly erode the determinism that stop-and-go re-run-from-the-top depends on; changed to hard-forbidding non-deterministic constructs outright.
-6. **Stuff the entire orchestration into a synchronous run-to-completion tool-call body.** Rejected: a single tool call can't survive stop-and-go + crash restart.
-7. **Add a `script` parameter to `spawn_subagent` to reuse it.** Rejected: it breaks the tool's byte stability + muddies description routing.
-8. **Reuse the session-level `output_schema` per helper.** Rejected: both the granularity and the semantics are wrong (one per whole session vs. one per subtask receipt).
-9. **Hard-land `pipeline()` in v1 / open leases globally in v1.** Rejected: prematurely introducing a new wake mode + in-flight tracking for a pure speedup feature is bad risk / reward; the lease relaxation applies only to opt-in groups and must ship together with the canonical sort. *(v2 update: subtask-parallel-execution.md removed that canonical sort — the recorded arrival order is authoritative — while keeping the per-group lease relaxation.)*
+1. **An ad-hoc in-process orchestration layer above the Engine, with disposable
+   helpers on a thread pool and a side-channel journal.** Rejected: it bypasses
+   Task and the EventLog, so helpers escape the durable record and lose fold and
+   resume, and it reintroduces the vocabulary the naming rule forbids. The
+   durable substrate is the whole point of running orchestration here at all.
+2. **Freeze a half-run coroutine and its locals to disk, thaw them later.**
+   Rejected: Python coroutine frames are hard to persist reliably.
+3. **A single-writer `journal.jsonl` beside the log.** Rejected: the EventLog is
+   already the journal; a second one is duplication and two-source drift.
+4. **RestrictedPython or subprocess isolation for safety.** Rejected: cost
+   mismatch, and it cannot stop a model that already holds the shell; the
+   requirement is determinism.
+5. **Soft-block non-determinism — simply do not inject those names, and give up
+   determinism for any script that reaches for them.** Rejected: too
+   coarse-grained, and it erodes the determinism that re-run-from-the-top depends
+   on. Non-deterministic constructs are hard-forbidden at translation time
+   instead.
+6. **Run the whole orchestration inside one synchronous run-to-completion tool
+   call.** Rejected: a single tool call cannot survive stop-and-go plus a crash
+   restart.
+7. **Add a `script` parameter to `spawn_subagent` and reuse it.** Rejected: it
+   breaks that tool's schema stability and muddies description-driven routing.
+8. **Reuse the session-level `output_schema` for each helper.** Rejected: both
+   the granularity and the semantics are wrong — one per session versus one per
+   subtask receipt.
+9. **A `pipeline()` primitive that keeps the workflow running while stages are in
+   flight.** Rejected: it needs a wake-on-any mode and a stable per-call-site
+   identity (a chain hash), and it is a throughput optimization rather than a new
+   capability, so it is not offered.
 
 ## Consequences
 
-- The Policy that interprets orchestration scripts lands in `noeta.policies`; the deterministic script host (compile/exec + controlled namespace + AST guard) lands in `noeta.policies._workflow_sandbox`; the orchestration API lands in `noeta.policies.orchestration`.
-- The `run_workflow` control tool → spawn-subtask translation lands in `noeta.policies.control_tools` / `noeta.policies.control_semantics`. **Current state:** the workflow interpreter, its determinism sandbox, and the `run_workflow` control tool all moved into the `react` built-in (`noeta.builtins.react.impl` — `orchestration` / `workflow_sandbox` / the `run_workflow` `control_tool` contribution); `noeta.policies` keeps only the neutral translate mechanism (see `control-tool-contributions-and-activation-identity.md`).
-- The `structured_output` tool injection and subtask drain land in `noeta.execution`, reusing `SpawnSubtasksDecision` / `SubtaskGroupCompleted` from subtask-fanout-and-durable-wake.md.
-- Follow-up note: `pipeline()` is still not done; when needed it will require wake-on-any and a per-call chain-hash stable identity; the authoritative implementation of concurrency is in subtask-parallel-execution.md.
+- The interpreter Policy, its determinism sandbox and the `run_workflow` control
+  tool all live in the `react` built-in (`noeta.builtins.react.impl` —
+  `orchestration`, `workflow_sandbox`, and the `run_workflow` `control_tool`
+  contribution). `noeta.policies` holds only the neutral translate mechanism and
+  the shared control-tool names (see
+  control-tool-contributions-and-activation-identity.md).
+- The embedding host resolves an orchestration child to the interpreter Policy
+  and wraps a helper's Policy with the structured-output decorator when the
+  child's inputs carry a schema.
+- The subtask drain that pairs helper results back to their spawning calls lives
+  in `noeta.execution`, reusing the group spawn decision and group wake condition
+  from subtask-fanout-and-durable-wake.md.

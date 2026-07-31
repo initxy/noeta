@@ -1,19 +1,21 @@
-"""⑥ compaction thrashing detection (D6.1/D6.2/D6.3).
+"""Compaction thrashing detection.
 
-Detects "several compactions land within a few turns of each other" — a single
-large file / large tool output repeatedly refilling the window so compaction
-spins without freeing headroom — and injects an ``origin="system"`` reminder
-suggesting a different read strategy.
+Thrashing is "several compactions land within a few turns of each other" — one
+large file or tool output repeatedly refilling the window, so compaction spins
+without freeing headroom. Detecting it earns an ``origin="system"`` reminder
+suggesting a different read strategy; the model otherwise has no way to see
+that its own read pattern is the cause.
 
 The detection state lives on ``ContextState`` and is folded ONLY from the
 ``Compacted`` event stream (single writer ``fold._on_compacted``), measuring the
 turn-gap between consecutive compactions in ``GovernanceState.iterations`` (the
-per-compose turn counter folded from ``ContextPlanComposed``). It is therefore
-deterministic and reconstructs identically on resume — no in-memory counter.
+per-compose turn counter folded from ``ContextPlanComposed``). Keeping it in
+fold rather than in an in-memory counter is what makes it deterministic and
+identical after a resume.
 
-Complementary to the anti-spiral guard (compaction with NO boundary progress →
-FailDecision): thrashing is the opposite case — compaction makes progress but
-the freed window is immediately refilled.
+It is the mirror image of the anti-spiral guard (compaction with NO boundary
+progress → FailDecision): here compaction makes progress but the freed window
+is immediately refilled.
 """
 
 from __future__ import annotations
@@ -72,7 +74,7 @@ def _advance(task: Task, turns: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# D6.1/D6.2 — fold latches / clears the flag from the Compacted stream
+# fold latches / clears the flag from the Compacted stream
 # ---------------------------------------------------------------------------
 
 
@@ -115,8 +117,8 @@ def test_M_consecutive_close_compactions_latch_thrashing() -> None:
 
 def test_distant_compaction_clears_run_and_flag() -> None:
     """Once latched, a single distant compaction (gap ``> _THRASH_CLOSE_TURNS``)
-    resets the run to 0 and clears the flag — the composer reminder disappears on
-    its own (D6.3)."""
+    resets the run to 0 and clears the flag, so the composer reminder retires on
+    its own — nothing has to remember to switch it off."""
     task = Task(task_id="t-1")
     _compose(task)
     _compact(task, boundary=5)
@@ -172,7 +174,7 @@ def test_fold_resume_reproduces_thrashing_state() -> None:
 
 
 # ---------------------------------------------------------------------------
-# D6.3 — composer injects an origin="system" reminder when the flag is set
+# composer injects an origin="system" reminder when the flag is set
 # ---------------------------------------------------------------------------
 
 
@@ -193,9 +195,9 @@ def _composer() -> ThreeSegmentComposer:
         system_prompt="you are a helpful agent",
         tools={"echo": _FakeTool("echo")},
         content_store=InMemoryContentStore(),
-        # Microkernel M2: a bare composer has no reminders; these tests cover
-        # the built-in read-suggestion reminder, so inject the loader-resolved
-        # three the way the builder does.
+        # A bare composer carries no reminders; these tests cover the built-in
+        # read-suggestion reminder, so inject the loader-resolved three the way
+        # the builder does.
         reminders=ReminderRegistry(default_reminder_specs()),
     )
 

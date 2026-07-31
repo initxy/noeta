@@ -1,11 +1,10 @@
 """ChildLifecycleObserver must notify the parent when a child is CANCELLED.
 
-Regression: the observer handled ``TaskCompleted`` / ``TaskFailed`` but not
-``TaskCancelled``. A child that reached terminal via cancellation (outside a
-full-tree cascade that also cancels the parent) emitted no ``SubtaskCompleted``,
-so a parent suspended on ``SubtaskCompleted`` waited forever on a wake that
-never fired. The observer now surfaces a cancelled child as a ``failed``
-``SubtaskResult`` carrying the cancel reason.
+Cancellation is the easy terminal to miss: a child cancelled outside a
+full-tree cascade (one that would also cancel the parent) leaves a parent
+suspended on ``SubtaskCompleted`` waiting forever on a wake that never fires.
+The cancelled child has to surface as a ``failed`` ``SubtaskResult`` carrying
+the cancel reason.
 """
 
 from __future__ import annotations

@@ -1,20 +1,14 @@
-"""Resource governance: per-session concurrency cap +
-output-size cap surfaced as a ``truncated`` flag (replay/deref-consistent).
+"""Background-job resource governance: the per-session concurrency cap and the
+output-size cap surfaced as a ``truncated`` flag.
 
-Two axes, both runtime accelerators that never perturb replay bytes:
-
-* **Concurrency cap** — ``max_jobs_per_root_task`` (default 8). ``spawn`` counts
-  the session root's currently-RUNNING jobs; the (cap+1)th is **rejected**
-  (NOT queued) with a clear refusal the model can act on, records NO
-  ``BackgroundShellStarted`` event, and starts no process. After one of the
-  running jobs reaches terminal (kill / natural exit), a fresh spawn is
-  accepted again.
-* **Output cap** — the watcher already tail-truncates the off-ledger buffer to
-  ``output_cap``; issue 07 surfaces a ``truncated: bool`` on ``poll`` and on the
-  ``BackgroundShellPolled`` / ``BackgroundShellExited`` payloads (default False
-  + canonical-omit so old recordings stay byte-identical). The snapshot ``put``
-  stores the already-truncated buffer, so a deref / replay reads exactly the
-  truncated tail — proven byte-equal here.
+Both are runtime accelerators that must never perturb replay bytes.
+``max_jobs_per_root_task`` counts one session root's currently-RUNNING jobs and
+**rejects** the (cap+1)th rather than queueing it — a refusal the model can act
+on, with no ``BackgroundShellStarted`` event and no process started. The watcher
+tail-truncates the off-ledger buffer to ``output_cap`` and the snapshot ``put``
+stores that already-truncated buffer, so a deref or replay reads exactly the
+truncated tail the model saw; the ``truncated`` flag defaults to False and is
+omitted from the canonical bytes so an untruncated payload stays minimal.
 """
 
 from __future__ import annotations
@@ -140,8 +134,8 @@ def test_spawn_accepted_again_after_one_terminal(tmp_path: Path) -> None:
 
 
 def test_concurrency_cap_is_per_session_not_global(tmp_path: Path) -> None:
-    """The cap counts RUNNING jobs under ONE session root — a different session
-    root has its own budget (jobs keyed by session root, issue 04)."""
+    """The cap counts RUNNING jobs under ONE session root — jobs are keyed by
+    session root, so a different root has its own budget."""
     log = InMemoryEventLog()
     store = InMemoryContentStore()
     reg = ProcessRegistry(event_log=log, content_store=store, max_jobs_per_root_task=1)
@@ -202,7 +196,7 @@ def test_truncated_false_when_under_cap(tmp_path: Path) -> None:
     final = _await_terminal(reg, out["job_id"])
     assert final["truncated"] is False
     exited = next(e for e in log.read("t-small") if e.type == "BackgroundShellExited")
-    # default-False omitted from canonical bytes ⇒ byte-identical to pre-07.
+    # A default-False flag is omitted from the canonical bytes.
     assert exited.payload.truncated in (False, None)
 
 
@@ -259,8 +253,8 @@ def test_polled_payload_carries_truncated(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Canonical-byte safety: a default-False truncated is OMITTED from the bytes
-# (so pre-07 recordings stay byte-identical), a True one is present.
+# Canonical-byte safety: a default-False truncated is OMITTED from the bytes,
+# a True one is present.
 # ---------------------------------------------------------------------------
 
 
@@ -268,7 +262,6 @@ def test_truncated_default_omitted_from_canonical_bytes() -> None:
     from noeta.protocols.values import ContentRef
 
     ref = ContentRef(hash="h", size=0, media_type="text/plain")
-    # The pre-07 payload shape == the default-truncated payload bytes.
     polled_default = BackgroundShellPolledPayload(job_id="j", ref=ref, offset=0)
     assert b"truncated" not in to_canonical_bytes(polled_default)
     exited_default = BackgroundShellExitedPayload(

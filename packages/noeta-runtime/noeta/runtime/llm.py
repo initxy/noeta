@@ -1,25 +1,13 @@
-"""LLM client wrapper — Phase 1 issue 12.
+"""LLM client wrapper — the one layer every provider round-trip goes through.
 
-The client class exposes a ``complete(req, ctx) -> LLMResponse`` shape, so
-Policy injection routes every LLM call through this one wrapper layer:
-
-* :class:`RuntimeLLMClient`  — calls a real :class:`LLMProvider`, records
-                              the three LLM events (Started / Recorded /
-                              Finished) into EventLog + ContentStore. On
-                              provider exception the three-event contract
-                              is preserved: the exception is
-                              translated into ``LLMResponse(stop_reason=
-                              "error", ...)``, all three events still fire,
-                              and the caller receives the error response
-                              without an upstream raise.
-
-The *single point of canonical bytes* in Noeta is
-:mod:`noeta.protocols.canonical`. The helpers below route every
-serialisation through ``to_canonical_bytes`` (and the inverse through
-``from_canonical_bytes``); going around them with ``dataclasses.asdict``
-+ ``json.dumps`` would silently drop the ``__canonical_tag__`` keys that
-let callers rebuild typed Blocks, which is the most common Phase-1
-foot-gun.
+:class:`RuntimeLLMClient` records each round-trip as three events (Started /
+Recorded / Finished) into the EventLog + ContentStore, and holds that
+contract on the failure path too: a provider exception is translated into
+``LLMResponse(stop_reason="error", ...)``, never re-raised, so Policy decides
+what to do from the response. Serialisation must route through
+:mod:`noeta.protocols.canonical` — reaching for ``dataclasses.asdict`` +
+``json.dumps`` silently drops the ``__canonical_tag__`` keys that let a
+reader rebuild typed Blocks.
 """
 
 from __future__ import annotations
@@ -71,32 +59,23 @@ __all__ = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# Shared serialisation helpers (single canonical layer).
-# ---------------------------------------------------------------------------
-
-
 _LLM_MEDIA_TYPE = "application/json"
 
 
 def _serialize_request(req: LLMRequest) -> bytes:
-    """Canonicalise an :class:`LLMRequest` to stable bytes."""
     return to_canonical_bytes(req)
 
 
 def _serialize_response(resp: LLMResponse) -> bytes:
-    """Canonicalise an :class:`LLMResponse` to stable bytes."""
     return to_canonical_bytes(resp)
 
 
 def _deserialize_response(body: bytes) -> LLMResponse:
     """Rebuild an :class:`LLMResponse` from canonical bytes.
 
-    The canonical layer (issue 10 ``register`` calls in
-    :mod:`noeta.protocols.messages`) restores tagged Block / Message
-    sub-types; the surrounding ``LLMResponse`` dataclass is rebuilt by
-    this helper directly because untagged dataclasses do not round-trip
-    through ``from_canonical`` automatically.
+    The canonical layer restores tagged Block / Message sub-types on its own;
+    the surrounding ``LLMResponse`` is rebuilt here by hand because untagged
+    dataclasses do not round-trip through ``from_canonical``.
     """
     raw = from_canonical_bytes(body)
     if not isinstance(raw, dict):
@@ -114,12 +93,10 @@ def _deserialize_response(body: bytes) -> LLMResponse:
 def _rebuild_usage(value: Any) -> Usage:
     """Rebuild a typed :class:`Usage` from canonical form.
 
-    ``Usage`` carries no ``__canonical_tag__`` (it rides inside the
-    untagged ``LLMResponse``), so ``from_canonical`` leaves it a
-    stored-field dict; this helper rebuilds the typed object. Old
-    recordings whose ``usage`` was a legacy bare dict with vendor keys
-    (e.g. ``input_tokens`` / ``total_tokens``) restore to an empty
-    ``Usage()``. ``None`` / missing → empty.
+    ``Usage`` carries no ``__canonical_tag__`` (it rides inside the untagged
+    ``LLMResponse``), so ``from_canonical`` leaves it a plain dict. A dict
+    carrying vendor-shaped keys instead of the known fields restores to an
+    empty ``Usage()`` rather than raising.
     """
     if isinstance(value, Usage):
         return value
@@ -130,10 +107,11 @@ def _rebuild_usage(value: Any) -> Usage:
 
 
 def _rebuild_block_list(items: list[Any]) -> list[Block]:
-    """Some Block variants come back as typed instances via the canonical
-    restorers; legacy paths that dropped the tag remain dicts. Pass typed
-    instances through and reject the latter so callers see the regression
-    loudly.
+    """Pass restored Block instances through; reject anything still a dict.
+
+    An untagged block means the bytes did not go through
+    ``to_canonical_bytes``, and silently handing a dict to a caller expecting
+    a Block would surface far from the real fault.
     """
     out: list[Block] = []
     for it in items:
@@ -168,29 +146,21 @@ def _default_sleep(seconds: float) -> None:
     time.sleep(seconds)
 
 
-#: Default transient-retry budget for ``RuntimeLLMClient`` (README D-2d).
-#: A provider-neutral budget: the retry loop is LIVE-only — intermediate
-#: attempts record no request/response trio, only an observational
-#: ``LLMRetryScheduled`` marker per backoff (so the frontend can show
-#: "retrying" instead of a silent stall). Sized so a persistent 429
-#: rate-limit gets a real recovery window (~1+2+4+8+16+30+30+30s ⇒ ~2min of
-#: waiting across 8 retries; a gateway that stays saturated past the 16s
-#: rung usually needs tens of seconds, not another doubling) — still
-#: comfortably inside the driver's 600s lease, so the lease never expires
-#: mid-backoff. A provider-supplied ``Retry-After`` overrides the backoff per
-#: attempt (see ``retry_policy``).
+#: Default transient-retry budget. Sized so a persistent rate-limit gets a
+#: real recovery window (~1+2+4+8+16+30+30+30s ⇒ ~2 min of waiting) while
+#: staying comfortably inside the 600 s lease, so the lease can never expire
+#: mid-backoff. A provider-supplied ``Retry-After`` overrides the backoff for
+#: that attempt.
 _DEFAULT_MAX_RETRIES = 8
 
 
 def _error_response(exc: Exception) -> LLMResponse:
     """Translate a provider exception into a typed error ``LLMResponse``.
 
-    ② error recovery: the error *category* (transient / overflow / fatal)
-    rides inside ``raw`` (a dict), letting Policy branch on
-    ``raw['category']`` without re-deriving the class. A bare (untranslated)
-    exception is bucketed ``fatal`` — the conservative default that maps to
-    a non-retryable ``FailDecision`` and preserves the historical contract
-    that an unrecognised provider failure does not loop.
+    The error *category* (transient / overflow / fatal) rides inside ``raw``
+    so Policy can branch on it without re-deriving the exception class. An
+    untranslated exception is bucketed ``fatal``: the conservative default,
+    which maps to a non-retryable decision rather than a loop.
     """
     category = getattr(exc, "category", CATEGORY_FATAL)
     retry_after = getattr(exc, "retry_after", None)
@@ -213,9 +183,9 @@ def _call_provider(
     provider_headers: Optional[Callable[[StepContext], Mapping[str, str]]] = None,
     on_delta: Optional[Callable[[StreamDelta], None]] = None,
 ) -> LLMResponse:
-    # Probe order: streaming → header-aware → plain. Streaming subsumes the
-    # header capability (its signature carries request_headers) so the two
-    # optional Protocols never form a probe matrix.
+    # Streaming subsumes the header capability (its signature already carries
+    # request_headers), so probing streaming first keeps the two optional
+    # Protocols from forming a matrix of combinations.
     if on_delta is not None and isinstance(provider, StreamingProvider):
         headers = (
             dict(provider_headers(ctx)) if provider_headers is not None else None
@@ -226,21 +196,13 @@ def _call_provider(
     return provider.complete(req)
 
 
-# ---------------------------------------------------------------------------
-# RuntimeLLMClient
-# ---------------------------------------------------------------------------
-
-
 class RuntimeLLMClient:
     """Records every LLM round-trip into EventLog + ContentStore.
 
-    The three-event contract is preserved on both success
-    and provider exception paths: an exception is translated into
-    ``LLMResponse(stop_reason="error", content=[], usage=Usage(),
-    raw={"error": str(e)})`` and the LLMResponseRecorded / LLMRequestFinished events
-    are written before the response is returned to the caller. Policy
-    sees ``stop_reason="error"`` and decides what to do (Phase 1
-    first-slice ReActPolicy produces ``FailDecision(retryable=False)``).
+    The three-event contract holds on the failure path too: a provider
+    exception becomes ``LLMResponse(stop_reason="error", ...)`` and the
+    Recorded / Finished events are written before that response reaches the
+    caller, so Policy — not this layer — decides what a failure means.
     """
 
     def __init__(
@@ -264,22 +226,16 @@ class RuntimeLLMClient:
         self._content_store = content_store
         self._id_factory = id_factory or _default_id_factory
         self._clock = clock or _default_clock
-        # ① billing: provider-neutral pricing is INJECTED (the kernel never
-        # imports the providers built-in). ``pricing(model, usage) -> USD``
-        # is supplied by the SDK host wiring (catalog price); ``None`` keeps
-        # the stub / no-pricing path at cost_usd=0.0.
+        # ``pricing(model, usage) -> USD`` is injected because the kernel
+        # never imports the providers built-in; ``None`` prices at 0.0.
         self._pricing = pricing
         self._provider_headers = provider_headers
-        # Token-streaming seam: ``delta_sink(ctx, call_id, delta)`` receives
-        # ephemeral StreamDeltas while a streaming-capable provider's call is
-        # in flight. Host wiring only (the product's delta hub); ``None`` (the
-        # default, and every headless SDK caller) keeps the non-streaming
-        # provider paths byte-identical to today. Deltas are never recorded —
-        # the trio + MessagesAppended stay the only durable record.
+        # ``delta_sink(ctx, call_id, delta)`` receives ephemeral StreamDeltas
+        # while a streaming-capable provider's call is in flight. Deltas are
+        # never recorded — the trio plus MessagesAppended stay the only
+        # durable record of a round-trip.
         self._delta_sink = delta_sink
-        # ② error recovery: provider-neutral transient-retry budget + an
-        # injectable sleep (so tests never wall-clock-sleep). The
-        # retry loop is LIVE-only and writes no events (README D-2d).
+        # Injectable sleep so tests never wall-clock-sleep through a backoff.
         self._max_retries = max_retries
         self._sleep = sleep or _default_sleep
 
@@ -294,10 +250,9 @@ class RuntimeLLMClient:
         call_id = self._id_factory()
         request_ref = _put_request(self._content_store, req)
 
-        # Token streaming: bind the injected sink to this trio's identity.
         # ``allow_stream=False`` is the per-call opt-out for round-trips that
         # are not user-facing output (the compaction summarize call). Sink
-        # exceptions are swallowed — deltas are observational and must never
+        # exceptions are swallowed: deltas are observational and must never
         # fail or retry an LLM call.
         on_delta: Optional[Callable[[StreamDelta], None]] = None
         if allow_stream and self._delta_sink is not None:
@@ -309,10 +264,10 @@ class RuntimeLLMClient:
                 except Exception:  # noqa: BLE001 — observational channel
                     pass
 
-        # 1. LLMRequestStarted — MS1: persist the policy's message-selection
-        # provenance (counts + strategy). It is event-only metadata: it is
-        # NOT part of ``req`` / ``request_ref`` (request bytes/hash unchanged).
-        # This is the single writer of ``selection``.
+        # ``selection`` (the policy's message-selection provenance) is
+        # event-only metadata and deliberately NOT part of ``req`` /
+        # ``request_ref``, so recording it leaves the request hash alone.
+        # This is its single writer.
         self._emit(
             ctx,
             type="LLMRequestStarted",
@@ -325,14 +280,9 @@ class RuntimeLLMClient:
             ),
         )
 
-        # 2. Invoke provider, wrapped in the LIVE-only transient-retry loop
-        # (README D-2d). Intermediate failed attempts record no
-        # request/response trio — one logical request emits exactly one trio,
-        # so a resume that folds the EventLog rebuilds the same state — but
-        # each scheduled backoff emits an observational ``LLMRetryScheduled``
-        # (a fold no-op) so a live consumer sees the stall. Non-transient
-        # categories (overflow / fatal) and a budget-exhausted transient are
-        # translated into a single error response carrying ``raw['category']``.
+        # One logical request emits exactly ONE trio however many times the
+        # retry loop below re-calls the provider, so a resume that folds the
+        # EventLog rebuilds the same state.
         t0 = self._clock()
         resp = self._invoke_with_retry(
             req, ctx, call_id=call_id, on_delta=on_delta
@@ -340,7 +290,6 @@ class RuntimeLLMClient:
         t1 = self._clock()
         latency_ms = max(0, int((t1 - t0) * 1000))
 
-        # 3. LLMResponseRecorded
         response_ref = _put_response(self._content_store, resp)
         self._emit(
             ctx,
@@ -353,12 +302,10 @@ class RuntimeLLMClient:
             ),
         )
 
-        # 4. LLMRequestFinished — price the round-trip if a pricing callback
-        # was injected (① billing). cost_usd is recorded INTO the event so a
-        # fold reads the captured value; a later price-table
-        # change never rewrites old recordings. The error path carries an
-        # empty Usage, so pricing it yields 0.0 naturally — no accumulator
-        # pollution.
+        # cost_usd is recorded INTO the event, so a fold reads the price as it
+        # stood at the call and a later price-table change never rewrites past
+        # recordings. The error path carries an empty Usage and therefore
+        # prices at 0.0 without polluting any accumulator.
         cost_usd = (
             self._pricing(req.model, resp.usage)
             if self._pricing is not None
@@ -382,18 +329,16 @@ class RuntimeLLMClient:
         """Append one LLM event, then fold it onto the Engine's in-memory task.
 
         The apply half is what keeps ``fold(events) → state`` equal to the
-        runtime state INSIDE a tool loop. Without it the Engine — which folds
-        every event it emits itself — never sees this client's emits, so
-        ``RuntimeState.last_input_tokens`` stays at the entry fold's value for
-        the whole turn and every consumer of the real-usage baseline silently
-        degrades to the chars/4 estimate the compaction ADR rejected. The Engine
-        supplies the applier bound to the task it is stepping (it stays the sole
-        physical writer); ``None`` keeps the emit-only path for callers that
-        build a StepContext without one.
+        runtime state INSIDE a tool loop. Without it the Engine never sees this
+        client's emits, ``RuntimeState.last_input_tokens`` stays pinned at the
+        entry fold's value for the whole turn, and every consumer of the
+        real-usage baseline silently degrades to a chars/4 estimate. The Engine
+        supplies the applier bound to the task it is stepping, so it remains
+        the sole physical writer.
 
-        Only ``LLMRequestFinished`` carries state (``last_input_tokens`` plus the
-        governance counters); the other three fold as no-ops, so routing all four
-        through here costs nothing and leaves no second emit-site to forget.
+        Only ``LLMRequestFinished`` carries state; the others fold as no-ops,
+        so routing all four through here costs nothing and leaves no second
+        emit site to forget.
         """
         env = self._event_log.emit(
             task_id=ctx.task_id,
@@ -414,17 +359,15 @@ class RuntimeLLMClient:
         call_id: str,
         on_delta: Optional[Callable[[StreamDelta], None]] = None,
     ) -> LLMResponse:
-        """Call the provider with LIVE-only transient backoff (README D-2d).
+        """Call the provider, retrying transient failures with backoff.
 
-        Returns a normal :class:`LLMResponse` on success, or a typed error
-        response (``stop_reason="error"`` + ``raw['category']``) when the
-        failure is non-transient or the transient budget is exhausted.
-        Intermediate transient retries write **no** request/response trio and
-        emit **no** ``StepTransitionMarked`` — fold rebuilds the same state on
-        resume. Each scheduled backoff DOES record an observational
-        ``LLMRetryScheduled`` (a fold no-op keyed to this trio's ``call_id``)
-        so the SSE stream carries "rate-limited, retrying" to the frontend
-        instead of a silent multi-second stall.
+        Returns a normal :class:`LLMResponse`, or a typed error response
+        (``stop_reason="error"`` + ``raw['category']``) when the failure is
+        non-transient or the budget is exhausted. Retries are live-only: an
+        intermediate attempt writes no request/response trio, so a resume
+        folds the same state either way. Each scheduled backoff does record an
+        ``LLMRetryScheduled`` — a fold no-op, present purely so a live
+        consumer sees "rate-limited, retrying" instead of a silent stall.
         """
         attempt = 0
         while True:
@@ -441,7 +384,8 @@ class RuntimeLLMClient:
                 ContextOverflowError,
                 FatalError,
             ) as exc:
-                # Non-transient (overflow / fatal): surface immediately.
+                # ``None`` delay ⇒ non-transient (overflow / fatal): surface
+                # it immediately rather than burning the budget.
                 delay = retry_policy(exc, attempt=attempt)
                 if delay is None or attempt >= self._max_retries:
                     return _error_response(exc)
@@ -460,7 +404,6 @@ class RuntimeLLMClient:
                 )
                 self._sleep(delay)
             except Exception as exc:  # noqa: BLE001 — protocol contract
-                # A provider that did not translate cleanly: bucket fatal
-                # (conservative, non-retryable) to preserve the historical
-                # contract that an unrecognised failure does not loop.
+                # A provider that did not translate its failure cleanly:
+                # bucket it fatal, so an unrecognised error cannot loop.
                 return _error_response(exc)

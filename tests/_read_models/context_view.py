@@ -1,12 +1,10 @@
-"""read_models.context_view — `noeta code context` provenance view (pure read).
+"""Context-provenance projection for a code session (pure read).
 
-Projects a code session's recorded context provenance — the
-``ContextPlanComposed`` plans (decoded ref-summaries, never bodies) and the
-``LLMRequestStarted`` message-selection counts — for ``noeta code context``.
-
-No longer imports
-``noeta.agent.roster.agents.AGENTS``; uses :mod:`noeta.presets` + legacy aliases to
-decide whether a stream is a code session.
+Projects the recorded ``ContextPlanComposed`` plans and the
+``LLMRequestStarted`` message-selection counts. Body-free by construction: a
+plan is decoded only far enough to summarise it, and every reference is reported
+as ``{hash, bytes, media_type}``, so inspecting what the model saw never
+re-materialises prompt or resource bytes.
 """
 
 from __future__ import annotations
@@ -34,10 +32,10 @@ __all__ = [
 ]
 
 
-#: D1: legacy recording aliases.
+#: Recording aliases: an ``agent_name`` a stream may carry → its canonical name.
 _ALIASES: dict[str, str] = {"default": "main"}
 
-#: Module-level snapshot: the canonical agent-name set.
+#: Snapshot of the canonical agent-name set, taken once per import.
 _CANONICAL_NAMES: frozenset[str] = frozenset(official_specs())
 
 
@@ -50,11 +48,10 @@ class ContextPlanView:
     """One recorded ``ContextPlanComposed`` projected for display (no body bytes).
 
     ``decode_error`` is ``None`` on a sound plan; when the ``plan_ref`` is
-    missing / unreadable / decodes to something other than a
-    :class:`~noeta.protocols.context_plan.ContextPlan` (CW17 W2 — canonical-tag
-    type check, no duck typing) it carries a short reason and the other fields
-    stay empty, so a corrupt recording is **flagged**, never silently shown as a
-    valid empty plan (CW17 OQ3)."""
+    missing, unreadable, or decodes to something other than a
+    :class:`~noeta.protocols.context_plan.ContextPlan` it carries a short reason
+    and the other fields stay empty, so a corrupt recording is **flagged**,
+    never silently shown as a valid empty plan."""
 
     seq: int
     occurred_at: float
@@ -70,17 +67,16 @@ class ContextPlanView:
 
 @dataclass(frozen=True, slots=True)
 class SelectionView:
-    """One ``LLMRequestStarted`` — the request-ref summary (the hash of the
-    bytes the model actually saw, CW17 W1, never the body) plus the recorded
-    ``MessageSelection`` counts WHEN one was attached.
+    """One ``LLMRequestStarted``: the request-ref summary — the hash of the
+    bytes the model actually saw, never the body — plus the recorded
+    ``MessageSelection`` counts when one was attached.
 
-    The count-based tail-window guard was made default-off, so a
-    ``LLMRequestStarted`` now usually carries ``selection=None`` (no count-based
-    truncation happened). The per-turn request_ref anchor must NOT vanish with
-    it — the trace column's whole point is "what did the model see each turn" —
-    so this view is built for EVERY ``LLMRequestStarted``; the selection counts
-    simply degrade to the no-truncation values (``strategy=""``, ``dropped=0``,
-    the rest ``0``) when no ``MessageSelection`` was recorded."""
+    A view is built for EVERY ``LLMRequestStarted``, including the common case
+    where no count-based truncation happened and ``selection`` is ``None``: the
+    per-turn ``request_ref`` anchor is the whole point of the trace ("what did
+    the model see this turn?") and must not vanish with the counts. Absent a
+    ``MessageSelection`` the counts degrade to the no-truncation values
+    (``strategy=""``, the rest ``0``)."""
 
     seq: int
     call_id: str
@@ -138,8 +134,8 @@ def _context_plan_view(env: Any, content_store: ContentStore) -> ContextPlanView
         plan = from_canonical_bytes(content_store.get(ref))
     except Exception as exc:  # noqa: BLE001 — read-only view must not crash
         return _err(f"unreadable plan_ref ({type(exc).__name__})")
-    # W2: canonical-tag type check — a body that decodes to anything other than
-    # a ContextPlan is a decode_error, not duck-typed.
+    # Canonical-tag type check: a body that decodes to anything other than a
+    # ContextPlan is a decode_error, never duck-typed into one.
     if not isinstance(plan, ContextPlan):
         return _err(f"decoded {type(plan).__name__}, expected ContextPlan")
     return ContextPlanView(
@@ -184,14 +180,13 @@ def build_code_context_view(
     """Project a session's recorded context provenance (pure read).
 
     Returns ``(agent, plans, selections)`` for a code session — ``plans`` from
-    ``ContextPlanComposed`` (each ``plan_ref`` decoded; corrupt → ``decode_error``)
-    and one ``selections`` entry per ``LLMRequestStarted`` (the per-turn
-    request_ref anchor; its ``MessageSelection`` counts are present only when a
-    count-based truncation was recorded). ``all_steps=False`` keeps only the latest of each
-    (CW17 OQ1). Returns ``None`` for a non-code / malformed-genesis stream
-    (caller → rc 2); a valid code session with no ``ContextPlanComposed`` yields
-    empty lists (caller → "no context recorded"). Reads bytes only to decode the
-    plan body; never emits message/resource bodies (only ref summaries)."""
+    ``ContextPlanComposed`` (each ``plan_ref`` decoded; corrupt →
+    ``decode_error``) and one ``selections`` entry per ``LLMRequestStarted``.
+    ``all_steps=False`` keeps only the latest of each. ``None`` for a non-code
+    or malformed-genesis stream; a valid code session with no
+    ``ContextPlanComposed`` yields empty lists, which the caller reads as "no
+    context recorded". Reads bytes only to decode the plan body; message and
+    resource bodies are never emitted, only ref summaries."""
     events = event_log.read(task_id)
     if not events:
         return None
@@ -205,11 +200,10 @@ def build_code_context_view(
         if env.type == "ContextPlanComposed":
             plans.append(_context_plan_view(env, content_store))
         elif env.type == "LLMRequestStarted":
-            # Build a SelectionView for EVERY LLM round-trip so the
-            # per-turn request_ref anchor survives even when no count-based
-            # ``MessageSelection`` was recorded (the default since the tail-
-            # window guard was removed). ``_selection_view`` tolerates a None
-            # selection — its counts degrade to the no-truncation values.
+            # A SelectionView for EVERY LLM round-trip, so the per-turn
+            # request_ref anchor survives even without a recorded
+            # ``MessageSelection`` — ``_selection_view`` tolerates a None
+            # selection and degrades its counts to the no-truncation values.
             selection = getattr(env.payload, "selection", None)
             selections.append(_selection_view(env, selection))
 
@@ -254,17 +248,14 @@ def build_code_session_context(
     content_store: ContentStore,
     task_id: str,
 ) -> Optional[dict[str, Any]]:
-    """JSON projection of a code session's context provenance (CW21 web seam).
+    """JSON projection of a code session's context provenance.
 
-    The JSON-ready adapter the server's ``GET /tasks/{id}/context`` endpoint
-    wires as ``ConsoleBackend.session_context``: it runs
-    :func:`build_code_context_view` with ``all_steps=True`` (every recorded turn,
-    so the trace page's context column can track the conversation) and shapes the
-    dataclasses into a plain mapping ``{"agent", "plans": [...],
-    "selections": [...]}``. Body-free — every reference is a ``{hash, bytes,
-    media_type}`` summary, never a body (the trace page derefs the named refs via
-    the existing A2-scoped ``/content`` endpoint). Returns ``None`` for a
-    non-code / malformed-genesis stream (the endpoint then 404s)."""
+    Runs :func:`build_code_context_view` with ``all_steps=True`` — every
+    recorded turn, so a consumer can track the whole conversation — and shapes
+    the dataclasses into a plain mapping ``{"agent", "plans": [...],
+    "selections": [...]}``. Body-free: every reference is a ``{hash, bytes,
+    media_type}`` summary, so a consumer that wants bytes must dereference them
+    deliberately. ``None`` for a non-code or malformed-genesis stream."""
     result = build_code_context_view(
         event_log, content_store, task_id, all_steps=True
     )

@@ -1,11 +1,10 @@
-"""Issue 14: Engine emits ContextPlanComposed and fold writes plan_ref.
+"""``ContextPlanComposed`` lands before anything a decision produces.
 
-PRD §C / Grill round 2 #8: ContextPlanComposed is emitted in front of
-the LLM round-trip — for non-LLM Stub policies it lands right after
-``TaskStarted`` and before any decision-derived event (it's the very
-first thing the Engine does inside ``run_one_step`` after the
-bootstrap). fold then writes ``task.context.plan_ref`` from the last
-``ContextPlanComposed`` (single writer per grill #4).
+The Engine composes context as the first thing it does inside
+``run_one_step``, so the plan event always precedes the decision-derived
+events of that step — a recording therefore shows what the Policy saw before
+what it did, which is what makes a replay interpretable. fold projects
+``task.context.plan_ref`` from the last such event and is its only writer.
 """
 
 from __future__ import annotations
@@ -52,8 +51,6 @@ def test_context_plan_composed_appears_before_first_decision_event() -> None:
     types = [e.type for e in event_log.read(task_id)]
     assert "ContextPlanComposed" in types
     plan_idx = types.index("ContextPlanComposed")
-    # No MessagesAppended / ToolCallStarted / TaskCompleted may appear
-    # before the ContextPlanComposed event of the same step.
     for forbidden in ("MessagesAppended", "ToolCallStarted", "TaskCompleted"):
         if forbidden in types:
             assert types.index(forbidden) > plan_idx, (

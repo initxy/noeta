@@ -12,8 +12,7 @@ A tool is a plain function `fn(arguments: dict, ctx: ToolContext) ->
 ToolResult`, wrapped with the `@tool` decorator:
 
 ```python
-from noeta.sdk import tool
-from noeta.protocols.tool import ToolContext, ToolResult
+from noeta.sdk import ToolContext, ToolResult, tool
 
 @tool(
     name="fetch_weather",
@@ -39,75 +38,82 @@ def fetch_weather(arguments: dict, ctx: ToolContext) -> ToolResult:
 
 ### Decorator parameters
 
-| Parameter | Required | Purpose |
+| Parameter | Default | Purpose |
 | --- | --- | --- |
-| `name` | yes | The string the model calls. Must be `snake_case`. |
-| `input_schema` | yes | JSON Schema describing the expected arguments. LLM-facing metadata. |
-| `version` | no (`None`) | Feeds the tool's identity fingerprint. Bump when behavior changes. |
-| `risk_level` | no (`"low"`) | `"low"`, `"medium"`, or `"high"`. Used by the permission system. |
-| `description` | no (`""`) | The model's primary source of tool semantics. Write it clearly. |
+| `name` | required | The string the model calls. Provider-safe `snake_case`. |
+| `version` | required | Part of the tool's declared identity. Omitting it raises `TypeError` — a default would let two behaviourally different tools share one identity inside an agent. |
+| `input_schema` | required | A hand-written JSON-Schema-shaped dict. LLM-facing metadata only: Noeta does **not** validate `arguments` against it at call time. |
+| `risk_level` | `"low"` | `"low"`, `"medium"`, or `"high"`. Read by the permission system. |
+| `description` | `""` | The model's single source of tool semantics, rendered into the provider tool schema. |
 
-Only `name` and `input_schema` have no default. Pass the other three anyway:
-an empty `description` leaves the model guessing what the tool does, and the
-default `risk_level="low"` means the tool is auto-approved in every permission
-mode — fine for a read-only lookup, wrong for anything that writes.
+Pass `risk_level` and `description` even though they have defaults: an empty
+description leaves the model guessing, and `"low"` auto-approves the tool in
+every permission mode — right for a read-only lookup, wrong for anything that
+writes.
+
+The decorator returns a `DecoratedTool`: it satisfies the `Tool` protocol
+structurally **and** exposes `.ref`, the `ToolRef` identity an agent declares.
+Both halves are built from the same fields, so the runnable closure and its
+recorded identity cannot drift apart.
 
 ### `ToolResult`
 
-Return `ToolResult(success=True, output="...")` for a successful call, or
-`ToolResult(success=False, output="error message")` for a failure. The
-`output` is a string the model reads — keep it concise and clear.
+`output` is any JSON-encodable value and is what the model reads back. For a
+failure, put the message in `summary`, not `output` — the projection renders a
+`success=False` result with `summary` as its error text (falling back to
+`"tool failed"` when empty):
 
-`ToolResult` also accepts `artifacts` (a list of `Artifact` objects) and
-`output_ref` (a `ContentRef` to large output), but for most tools
-`success` + `output` is enough.
+```python
+return ToolResult(success=False, summary="city not found")
+```
+
+`artifacts` and `images` are `list[ContentRef]`: put large or binary bodies
+into the ContentStore with `ctx.artifact_store.put(body, media_type=...)` and
+reference them here. `output_ref` is assigned by the runtime after it offloads
+the output; tools never set it.
 
 ## Wire it into your agent
 
-Pass the tool via `Options.allowed_tools`:
+Pass the tool object by value in `Options.allowed_tools`:
 
 ```python
-from noeta.sdk import Options, Client
+from noeta.sdk import Client, Options
 
 options = Options(
     system_prompt="You are a weather assistant.",
     name="weather-bot",
-    allowed_tools=(fetch_weather,),
+    allowed_tools=("read", "grep", fetch_weather),
 )
 
 client = Client(options, provider=my_provider, workspace_dir="./")
 ```
 
-`allowed_tools` **is** the selection — a custom tool is available only if it
-appears there. `None` means "the built-in whitelist", which does *not* pick up
-a tool merely because you defined it, so list your own alongside the built-ins
-you want:
-
-```python
-allowed_tools=("read", "grep", fetch_weather)
-```
-
-`disallowed_tools` subtracts from the built-in set; it does not add custom
-tools either.
+`allowed_tools` **is** the selection: a custom tool is available only if it
+appears there, so list your own alongside the built-ins you want. `None`
+selects the 11-name built-in whitelist and picks up nothing custom.
+`disallowed_tools` subtracts names from the parsed list; it never adds
+anything.
 
 ## Risk levels and permissions
 
-The `risk_level` on your tool interacts with the `permission_mode`:
+`risk_level` interacts with `Options.permission_mode`:
 
-| Risk | `default` mode | `acceptEdits` mode | `bypassPermissions` mode |
+| Risk | `default` | `acceptEdits` | `bypassPermissions` |
 | --- | --- | --- | --- |
 | `low` | auto-approved | auto-approved | auto-approved |
 | `medium` | requires approval | requires approval | auto-approved |
 | `high` | requires approval | requires approval | auto-approved |
 
+`acceptEdits` differs from `default` only by exempting the three built-in edit
+tools (`edit`, `write`, `apply_patch`); it changes nothing for a custom tool.
+
 Mark tools that write files, run commands, or make external API calls as
-`"high"`. Read-only tools are `"low"`.
+`"high"`. Read-only lookups are `"low"`.
 
-## Bundle tools into an MCP server
+## Bundle tools into an in-process MCP server
 
-If you want to share your tools across multiple agents or make them
-available via the MCP protocol, bundle them into an in-process MCP
-server:
+To ship several related tools as one unit, bundle them with
+`create_sdk_mcp_server`:
 
 ```python
 from noeta.sdk import create_sdk_mcp_server
@@ -119,39 +125,37 @@ weather_mcp = create_sdk_mcp_server(
 )
 ```
 
-Then mount it in `Options`:
+Every entry must be a `@tool`-decorated function; anything else raises
+`TypeError` at authoring time. Mount the bundle on `Options.mcp_servers`:
 
 ```python
 options = Options(
     system_prompt="...",
     name="my-agent",
     mcp_servers=(weather_mcp,),
-    allowed_tools=None,  # all built-ins + this server's tools
 )
 ```
 
 An in-process server's tools keep their **bare** `@tool` name — the model sees
-`fetch_weather`, not `mcp__weather-tools__fetch_weather`. Bundling them this
-way is about grouping and reuse across agents; it does not rename them.
+`fetch_weather`, not `mcp__weather-tools__fetch_weather`. The server name is a
+grouping label, not a namespace, so pick tool names that will not collide with
+a built-in (`fetch_weather`, not `read`). Its tools are added to the agent's
+tool set directly; they need no `allowed_tools` entry.
 
-> The `mcp__{alias}__{tool}` prefix belongs to **remote** MCP servers — the
-> ones a host connects per turn through `HostConfig.mcp_server_resolver` (see
-> [Connect MCP](connect-mcp.md)). Those are namespaced because independent
-> third-party servers can and do collide on tool names.
-
-Because the names are bare, an in-process server's tool collides with a
-built-in of the same name. Pick names that will not clash (`fetch_weather`,
-not `read`).
+> The `mcp__{alias}__{tool}` prefix belongs to **remote** MCP servers, which a
+> host connects per turn — see [Connect MCP](connect-mcp.md). Those are
+> namespaced because independent third-party servers do collide on tool names.
 
 ## Test your tool offline
 
-Use `FakeLLMProvider` to script a call to your tool and verify it runs:
+Script a call with `FakeLLMProvider` and drive one turn with `query`, which
+returns the full envelope list — so the assertion proves the closure ran:
 
 ```python
-from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.protocols.messages import (
-    LLMResponse, TextBlock, ToolUseBlock, Usage,
-)
+from pathlib import Path
+
+from noeta.sdk import LLMResponse, TextBlock, ToolUseBlock, Usage, query
+from noeta.sdk.testing import FakeLLMProvider
 
 provider = FakeLLMProvider(
     responses=[
@@ -171,14 +175,29 @@ provider = FakeLLMProvider(
         ),
     ]
 )
+
+result = query(
+    options,
+    goal="What is the weather in Tokyo?",
+    provider=provider,
+    workspace_dir=Path("./"),
+    model="stub-model",
+)
+
+assert [e.payload.tool_name for e in result if e.type == "ToolCallStarted"] == [
+    "fetch_weather"
+]
 ```
 
-Drive it with `Client` and verify the `ToolResult` in the message stream.
+`examples/custom_tool.py` and `examples/mcp_server.py` are runnable versions
+of both halves of this page.
 
 ## See also
 
 - [SDK reference](../reference/sdk.md) — `@tool`, `create_sdk_mcp_server`,
   `ToolResult` full signatures
-- [Connect MCP](connect-mcp.md) — register remote MCP servers
+- [Built-in tools](../reference/tools.md) — the 11-name whitelist and its risk
+  levels
+- [Connect MCP](connect-mcp.md) — remote MCP servers
 - [Guard vs Observer](../concepts/guard-observer.md) — how the permission
   system works

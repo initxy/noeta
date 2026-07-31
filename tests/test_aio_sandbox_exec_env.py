@@ -1,11 +1,10 @@
 """``AioSandboxExecEnv`` — the AIO Sandbox HTTP backend for the fs/shell seam.
 
-These pin the *wire contract* the adapter is coded against (the R2 isolation
-layer): given a fake transport, every ``ExecEnv`` method must POST the right
-endpoint + body and parse the documented response shape. They never open a
-socket — the real container round-trip is a separate, gated
-(``NOETA_TEST_AIO_SANDBOX_URL``) end-to-end check. If the live v1 API differs,
-these tests are what re-pin the one-file adapter change.
+These pin the *wire contract* the adapter is coded against: given a fake
+transport, every ``ExecEnv`` method must POST the right endpoint and body and
+parse the documented response shape. They never open a socket, so the live
+container's own behaviour is out of scope here; when the API drifts, these are
+what re-pin the adapter.
 """
 
 from __future__ import annotations
@@ -195,8 +194,8 @@ def test_run_argv_spill_read_failure_falls_back_to_inline() -> None:
 
 
 def test_run_argv_without_spill_field_makes_no_extra_call() -> None:
-    # No ``full_output_file_path`` ⇒ the inline output is complete; the adapter
-    # must stay byte-identical to the pre-spill path (one round-trip, no tail).
+    # No ``full_output_file_path`` ⇒ the inline output is complete, so the
+    # adapter must settle for one round-trip and no tail read.
     fake = FakeAio({"/v1/shell/exec": _exec_ok(output="done")})
     outcome = _env(fake).run_argv(["ok"], cwd=Path("/w"), timeout_s=5, output_cap=100)
     assert outcome.stdout == b"done"
@@ -212,9 +211,9 @@ def test_run_argv_remote_fault_is_a_reported_failed_run_not_a_raise() -> None:
 
 
 def test_run_argv_threads_caller_budget_as_socket_timeout() -> None:
-    # v1 has no remote hard-kill, so the transport read timeout IS the bound:
+    # There is no remote hard-kill, so the transport read timeout IS the bound:
     # the caller's per-command budget must reach the transport, not a fixed
-    # adapter constant. (P1: previously ``timeout_s`` was dropped.)
+    # adapter constant.
     fake = FakeAio({"/v1/shell/exec": _exec_ok(output="ok")})
     _env(fake, timeout_s=60.0).run_argv(
         ["sleep", "1"], cwd=Path("/w"), timeout_s=300, output_cap=99
@@ -384,8 +383,8 @@ def _snapshot_lines(*lines: str) -> str:
 
 
 def test_tree_snapshot_is_one_exec_and_parses_files_and_contents() -> None:
-    # The whole multi-tier walk must be ONE /v1/shell/exec (issue 46): the
-    # command find(1)s every root, and each output line is self-describing —
+    # The whole multi-tier walk must be ONE /v1/shell/exec: the command
+    # find(1)s every root, and each output line is self-describing —
     # ``F <b64 path>`` for a plain file, ``C <b64 path> <b64 bytes>`` for a
     # content_name file with its bytes inlined.
     skill_md = b"---\nname: demo\n---\nbody\n"
@@ -514,7 +513,7 @@ def test_transport_exception_becomes_sandbox_error() -> None:
 
 
 def test_fence_token_placeholder_is_accepted() -> None:
-    # v1: reserved seam field (D1); accepted, stored, no fence header today.
+    # Reserved seam field: accepted and stored, but it sends no fence header.
     fake = FakeAio({"/v1/file/read": _ok({"content": ""})})
     env = _env(fake, fence_token=None)
     env.read_bytes(Path("/w/f"))

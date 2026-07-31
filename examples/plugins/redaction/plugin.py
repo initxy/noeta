@@ -1,33 +1,21 @@
-"""First-party example manifest plugin — ``redaction``: a secret-scrubbing
-``tool_result_transform`` stage.
+"""A secret-scrubbing ``tool_result_transform`` stage.
 
-Demonstrated SDK capability
----------------------------
-The new ``tool_result_transform`` surface (the SDK-extensibility redesign,
-``docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md``, D9): a
-**pure** ``ToolResult -> ToolResult`` stage applied **inside the ToolRuntime
-boundary, before recording**. The transformed result *is* the recorded output,
-so a redaction stage means the secret never reaches the EventLog or the
-ContentStore (acceptance 10). It is a ToolRuntime pipeline stage, **not** a
-third hook role — Guard/Observer stays exactly two roles.
+Demonstrated SDK capability: the ``tool_result_transform`` surface. A transform
+is a pure ``ToolResult -> ToolResult`` stage applied inside the ToolRuntime
+boundary before the result is recorded, so the transformed value *is* what lands
+in the EventLog and the ContentStore — a redaction stage means the secret is
+never written. It is a pipeline stage, not a hook role: governance has two roles,
+Guard and Observer, and this is neither.
 
-Unlike ``guard`` / ``observer`` (governance, process-wide), a
-``tool_result_transform`` is a **per-agent activation** surface (spec D6): only
-an agent that activates this plugin (``Options.plugins = [... "redaction"]``)
-gets the stage. Stages run in ``(priority, plugin, name)`` order. The reference
-host activates this plugin, so its recorded tool results are scrubbed
-(``examples/reference-host/host.py``).
+Unlike ``guard`` / ``observer`` (process-wide governance), a
+``tool_result_transform`` is a **per-agent activation** surface — only an agent
+that lists this plugin in ``Options.plugins`` gets the stage. Stages run in
+``(priority, plugin, name)`` order.
 
-What it scrubs
---------------
-Common credential shapes — provider API keys (``sk-...`` / ``AKIA...``), bearer
-tokens, and ``key=value`` secrets — are replaced with :data:`REDACTED` in the
-result's ``summary`` and anywhere a string appears in its structured
-``output``. The transform is **pure and deterministic**: the same
-``ToolResult`` always scrubs to the same bytes (the contract every transform
-owes, so replay and the stable-prefix cache are undisturbed). It is intentionally
-conservative pattern matching — a real deployment tunes the pattern set to its
-own secret formats.
+Purity is the contract: the same ``ToolResult`` must scrub to the same bytes, or
+replay diverges and the stable-prefix cache stops holding. The credential
+patterns are intentionally conservative — a real deployment tunes the set to the
+secret formats its own tools emit.
 """
 
 from __future__ import annotations
@@ -91,11 +79,11 @@ def scrub_secrets(result: ToolResult) -> ToolResult:
     )
 
 
-#: The single-file manifest (decorator sugar *is* the manifest, spec D1). The
-#: contributed function is cached for single-file resolution; a distributed
-#: install exposes it at ``redaction:scrub_secrets``. Priority orders this stage
-#: among sibling transforms (ties broken by ``(plugin, name)``); redaction runs
-#: early so later stages never see the secret. ``python -m noeta.sdk.plugin_check``
-#: derives the TOML from this builder and verifies the shipped ``noeta-plugin.toml``.
+#: The builder *is* this plugin's manifest. The contributed function is cached
+#: for single-file resolution; a distributed install exposes it at
+#: ``redaction:scrub_secrets``. ``priority=50`` runs redaction early so a later
+#: stage never sees the secret (ties broken by ``(plugin, name)``).
+#: ``python -m noeta.sdk.plugin_check`` derives the TOML from this builder and
+#: verifies the shipped ``noeta-plugin.toml`` matches.
 plugin = PluginBuilder("redaction", requires_noeta=">=0.4")
 plugin.tool_result_transform(scrub_secrets, name="scrub-secrets", priority=50)

@@ -1,45 +1,42 @@
 """Golden snapshot of a preset's **composed View** — the assembled prompt.
 
-This is the composer-side companion to ``test_prompt_snapshot.py``. That suite
-pins the *static* spec inputs (``spec.instructions`` + the tool schemas); it
-never runs the composer, so it cannot catch drift introduced by the
-**assembly** step itself:
+The composer-side companion to ``test_prompt_snapshot.py``. That suite pins the
+*static* spec inputs (``spec.instructions`` + the tool schemas) without ever
+running the composer, so it cannot see drift introduced by the **assembly**
+step itself:
 
 * **control-tool schema injection** — ``spawn_subagent`` / ``todo_write`` /
-  ``ask_user_question`` (and friends) are NOT executable workspace tools; the
-  composer appends them to ``View.provider_tool_schemas`` after the real tools
+  ``ask_user_question`` (and friends) are NOT executable workspace tools; they
+  are appended to ``View.provider_tool_schemas`` after the real tools
   (``noeta.execution.builder._run_control_tool_mounts``, the dual-priority mount
   loop). A flag flip or a re-ordering there is invisible to the static-spec
-  snapshot but visible here.
+  snapshot and visible here.
 * **three-segment assembly** — the system prompt becomes ``stable_prefix``, the
   content channel renders ``semi_stable``, the message stream becomes
   ``dynamic_suffix``, and each segment carries a ``segment_hash``. A change to
-  how the segments are cut or hashed shows up as a golden diff here.
+  how segments are cut or hashed shows up as a golden diff.
 
-The View is produced through the real construction path
+Each View comes from the real construction path
 (``noeta.execution.builder.build_session_inputs`` →
-``ThreeSegmentComposer.compose``) for each preset, fed a fixed minimal Task
-(one fixed user message, no skills / memory / environment activated). The
-composer is a pure function — it never calls the LLM — so this exercises the
-true assembly without a network round-trip.
+``ThreeSegmentComposer.compose``) fed a fixed minimal Task (one user message,
+no skills / memory / environment activated). The composer never calls the LLM,
+so the assembly is exercised without a network round-trip.
 
-Determinism (verified by running the suite twice — both PASS):
+Determinism, and why the golden needs no normalization:
 
 * ``model="stub-model"`` keeps the catalog-driven compaction OFF, so no
   per-model token math enters the bytes.
-* The Task activates no content residents, so ``semi_stable`` is empty — the
-  workspace-environment resident (which would carry the absolute workspace
-  path + platform) never renders. The per-call temp ``workspace_dir`` therefore
-  does **not** leak into the View; a probe confirmed the canonical bytes of the
-  segments + schemas are byte-identical across two builds with different temp
-  workspaces. No normalization is needed.
-* The View is serialized with ``to_canonical`` (the same deterministic,
-  key-sorted, object-id-free encoder used everywhere else), so no Python object
-  ids / addresses / timestamps reach the golden.
+* The Task activates no content residents, so ``semi_stable`` is empty and the
+  workspace-environment resident (which would carry the absolute workspace path
+  + platform) never renders — the per-call temp ``workspace_dir`` cannot leak
+  into the View.
+* The View is serialized with ``to_canonical`` (the deterministic, key-sorted,
+  object-id-free encoder used everywhere else), so no Python object ids /
+  addresses / timestamps reach the golden.
 
-Coverage: the **complete three segments** (content + per-segment hash) plus the
-full ``provider_tool_schemas`` list — i.e. the entire model-visible composed
-surface, control-tool schemas included.
+Coverage is the whole model-visible composed surface: the complete three
+segments (content + per-segment hash) plus the full ``provider_tool_schemas``
+list, control-tool schemas included.
 
 Re-pin (regenerate goldens) with one command::
 
@@ -90,9 +87,9 @@ def _compose_view_payload(preset: str) -> dict[str, object]:
     spec = official_specs()[preset]
     allowed = frozenset(t.name for t in spec.tools)
 
-    # A throwaway temp workspace: nothing is read from it (no skills/memory),
-    # and the probe confirmed its absolute path never reaches the composed
-    # bytes — so no path normalization is required for determinism.
+    # A throwaway temp workspace: nothing is read from it (no skills/memory)
+    # and its absolute path never reaches the composed bytes, so the golden
+    # needs no path normalization.
     workspace = Path(tempfile.mkdtemp(prefix="composer_view_snapshot_"))
     content_store = InMemoryContentStore()
 

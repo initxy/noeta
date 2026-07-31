@@ -1,7 +1,8 @@
-"""noeta.presets — the four official factory agents.
+"""The official factory agents: ``main`` and its three subagents, plus two
+identities a host registers explicitly (``web``, ``__consolidation__``).
 
-No other SDK module may import this one (import-linter sdk-core-not-presets);
-only consumers (the product / library users) import it.
+This is top-of-stack content: no other SDK module may import it (import-linter
+``sdk-core-not-presets``), only consumers do.
 """
 from __future__ import annotations
 
@@ -38,20 +39,12 @@ __all__ = [
 
 
 # ---------------------------------------------------------------------------
-# Prompt text: role + cross-tool workflow policy. The tool catalog/contract is
-# not restated here — each tool's semantics ride on its structured description,
-# which the composer renders into the provider tool schema.
-# General rules use per-category
-# wording; narrow pairwise choices sink into the relevant tool's description.
-# (This module holds its own
-# prompts and does not import noeta.agent.roster.)
-#
-# Prompt text is externalized into
-# ``prompts/<name>.md`` resources (like tool descriptions: editable as docs,
-# clean git diffs, non-engineers can change them). Loaded with ``strip=False``
-# so it is byte-for-byte equal to the original constant and ``AgentSpec`` identity
-# is unchanged. One-line roster descriptions are not externalized (they stay in
-# OFFICIAL_SUBAGENTS below).
+# Prompt text lives in ``prompts/<name>.md`` resources, not inline, and is
+# loaded with ``strip=False`` because the bytes feed the composer's stable
+# prefix and therefore ``AgentSpec`` identity. A prompt carries role plus
+# cross-tool workflow policy only — never the tool catalog, since each tool's
+# semantics ride on its own structured description. The one-line roster
+# descriptions stay inline below: they are part of the spawn schema, not prose.
 # ---------------------------------------------------------------------------
 
 
@@ -60,14 +53,13 @@ def _load_prompt(name: str) -> str:
     return load_markdown("noeta.presets.prompts", name, strip=False)
 
 
-#: The memory-policy prompt fragment (memory v2): what earns a memory, what
-#: never does, and the write hygiene (dedupe before writing / stable slugs /
-#: archive the stale). It rides the preset prompt layer, NOT the memory-index
-#: resident — the index renders zero bytes on an empty store, but the policy
-#: must be in place before the first memory is ever written. Appended (via
-#: :func:`_with_memory_policy`) to the prompt of every preset that activates
-#: ``memory``; exported so custom-spec authors who set
-#: ``plugins=["memory"]`` can concatenate it onto their own prompts the same way.
+#: The memory-policy prompt fragment: what earns a memory, what never does, and
+#: the write hygiene (dedupe before writing / stable slugs / archive the stale).
+#: It rides the preset prompt layer rather than the memory-index resident because
+#: the index renders zero bytes on an empty store, yet the policy must be in place
+#: before the first memory is ever written. :func:`_with_memory_policy` appends it
+#: to every preset that activates ``memory``; exported so custom-spec authors who
+#: set ``plugins=["memory"]`` can do the same.
 MEMORY_POLICY_PROMPT = _load_prompt("memory-policy")
 
 
@@ -85,14 +77,13 @@ def _with_memory_policy(prompt: str) -> str:
 #: (``main`` is the one official preset that activates ``memory``; the
 #: three subagents are memory-free and get no fragment).
 MAIN_SYSTEM_PROMPT = _with_memory_policy(_load_prompt("main"))
-#: The sandbox-browser variant of ``main``'s prompt: identical except the
-#: delegation bullet also names the ``web`` specialist. Loaded from its own
-#: file so ``main.md`` (and thus every non-sandbox deployment's stable prefix)
-#: stays byte-identical to pre-browser-subsystem; a test pins the two files to
-#: differ ONLY in that bullet. Used by :func:`sandbox_browser_options` — the
-#: prompt must not mention ``web`` unless ``web`` is actually in the roster.
-#: It inherits ``main``'s activation (memory included), so it carries the
-#: same memory-policy fragment.
+#: The sandbox-browser variant of ``main``'s prompt: identical to ``main.md``
+#: except the delegation bullet also names the ``web`` specialist. A separate file
+#: so ``main.md`` — every non-sandbox deployment's stable prefix — is never touched
+#: by the browser variant, and a test pins the two to differ ONLY in that bullet.
+#: Used by :func:`sandbox_browser_options`, because the prompt must not name
+#: ``web`` unless ``web`` is actually in the roster. It inherits ``main``'s
+#: activation, memory included, hence the same policy fragment.
 MAIN_WEB_SYSTEM_PROMPT = _with_memory_policy(_load_prompt("main-web"))
 _GENERAL_PURPOSE_PROMPT = _load_prompt("general-purpose")
 _EXPLORE_PROMPT = _load_prompt("explore")
@@ -100,15 +91,11 @@ _PLAN_PROMPT = _load_prompt("plan")
 _WEB_PROMPT = _load_prompt("web")
 
 
-#: The read-mostly tool set shared by explore and plan — aligned with Claude
-#: Code's Explore/Plan agents: every built-in tool except the write family
-#: (edit / write / apply_patch). ``shell_run`` is in the allowlist, but the
-#: prompt restricts it to read-only commands (ls / git log / git diff / find /
-#: cat …), matching CC — "no writes" is enforced by the prompt, with noeta's
-#: approval gate on ``high`` risk shell as an extra backstop. (Previously
-#: explore had only glob/grep/read and plan carried one restricted write; now
-#: rebased to match CC: both get read-only shell + webfetch, and plan writes no
-#: file at all — the plan is returned as the agent's message, never persisted.)
+#: The read-mostly tool set shared by explore and plan: every built-in tool
+#: except the write family (edit / write / apply_patch). ``shell_run`` is in the
+#: allowlist because read-only investigation needs it (ls / git log / git diff /
+#: find / cat …); "no writes" is enforced by the prompt, with the approval gate
+#: on ``high``-risk shell as the backstop.
 _SCOUT_TOOLS = (
     "glob",
     "grep",
@@ -120,13 +107,11 @@ _SCOUT_TOOLS = (
 )
 
 
-#: general-purpose's tool allowlist — aligned with Claude Code's general-purpose
-#: (all tools). It gets the full built-in set (same tool surface as main): it can
-#: search with ``grep`` / ``glob``, batch-edit with ``apply_patch``, and fetch
-#: pages with ``webfetch`` instead of being forced back to ``shell_run`` for
-#: grep / find. (The one spot we don't copy CC is recursive delegation: gp's
-#: ``delegation`` capability stays off — it's a leaf worker, spawns nothing
-#: further, avoiding unbounded fan-out.)
+#: general-purpose's tool allowlist: the full built-in set, the same surface as
+#: main, so it searches with ``grep`` / ``glob``, batch-edits with
+#: ``apply_patch``, and fetches with ``webfetch`` instead of being forced back
+#: through ``shell_run``. Its ``delegation`` capability stays off — a leaf
+#: worker that spawns nothing further cannot fan out without bound.
 _GENERAL_PURPOSE_TOOLS = (
     "apply_patch",
     "edit",
@@ -142,13 +127,13 @@ _GENERAL_PURPOSE_TOOLS = (
 )
 
 
-#: The ``web`` subagent's whitelist-filtered base tools. The browser pack
-#: (``browser_*``) is NOT listed here — it is flag-gated by
-#: the ``browser`` activation + a live sandbox backend (like memory), not by
-#: this whitelist. These are the supporting tools: read/write to save findings,
-#: read-only shell + ``webfetch`` (a raw-content fetch when no interaction is
-#: needed). No ``edit``/``apply_patch`` — a browser worker writes fresh notes, it
-#: does not batch-edit a codebase.
+#: The ``web`` subagent's whitelist-filtered base tools — the supporting cast
+#: around browsing: read/write to save findings, read-only shell, and
+#: ``webfetch`` for a raw fetch when no interaction is needed. The browser pack
+#: (``browser_*``) is deliberately absent: it is gated by the ``browser``
+#: activation plus a live sandbox backend, not by this whitelist. No ``edit`` /
+#: ``apply_patch`` either — a browser worker writes fresh notes rather than
+#: batch-editing a codebase.
 _WEB_TOOLS = (
     "glob",
     "grep",
@@ -162,7 +147,8 @@ _WEB_TOOLS = (
 
 
 # ---------------------------------------------------------------------------
-# The three subagents of the four official agents (main + three subs = four).
+# main's delegation roster. Every name here lands in main's ``spawn_subagent``
+# schema, so adding one changes main's stable prefix for every deployment.
 # ---------------------------------------------------------------------------
 
 
@@ -174,18 +160,10 @@ OFFICIAL_SUBAGENTS: dict[str, AgentDefinition] = {
             "the result."
         ),
         prompt=_GENERAL_PURPOSE_PROMPT,
-        # Aligned to Claude Code's general-purpose agent: the full built-in
-        # tool surface (same as main), so it searches with grep/glob and
-        # batch-edits with apply_patch instead of falling back to shell
-        # grep/find.
         tools=_GENERAL_PURPOSE_TOOLS,
-        # todo_write disabled (gp returns a value, it does not narrate
-        # progress); delegation stays off (no spawnable) — gp is a leaf worker
-        # and never spawns further down. This is the one spot we intentionally
-        # do NOT mirror CC, which lets general-purpose spawn agents.
-        # ``mcp`` — the real working worker opts INTO inheriting the parent
-        # task's enabled MCP tool set (it connects its own independent sessions,
-        # R-1 records its own specs). Expressed as activation (D5).
+        # No ``todo_write``: gp returns a value, it does not narrate progress.
+        # ``mcp`` is on because a real working worker inherits the parent task's
+        # enabled MCP tool set, connecting its own independent sessions.
         plugins=("skill_invocation", "mcp"),
     ),
     "explore": AgentDefinition(
@@ -194,9 +172,6 @@ OFFICIAL_SUBAGENTS: dict[str, AgentDefinition] = {
             "to investigate the workspace and report facts (never edits)."
         ),
         prompt=_EXPLORE_PROMPT,
-        # Aligned to Claude Code's Explore: every built-in tool except the
-        # write family (edit/write/apply_patch). shell_run is in the set but
-        # the prompt restricts it to read-only commands.
         tools=_SCOUT_TOOLS,
         plugins=("skill_invocation",),
     ),
@@ -206,33 +181,24 @@ OFFICIAL_SUBAGENTS: dict[str, AgentDefinition] = {
             "implementation plan (read-only — never writes any file)."
         ),
         prompt=_PLAN_PROMPT,
-        # Aligned to Claude Code's Plan: same read-mostly surface as explore,
-        # and NO write at all — the plan is returned as the agent's message
-        # (with a "Critical Files" section), never written to disk. (Dropped
-        # the old restricted plans/*.md write and its write_path_globs
-        # metadata.)
+        # No write tool at all: the plan is returned as the agent's message,
+        # never persisted to a file the caller then has to find and clean up.
         tools=_SCOUT_TOOLS,
-        # plan opens ONLY ask_user_question (no todo_write, no skill_invocation).
         plugins=("ask_user_question",),
     ),
 }
 
 
-#: The browser specialist (layer 4). A delegatable subagent whose one job is to
-#: drive the sandbox container's browser: it holds the ``browser`` capability
-#: (so the noeta-owned browser pack is merged when a live sandbox backend is
-#: present) plus a read/write + read-only-shell base, and a browsing-loop prompt
-#: that isolates a web task's token churn in its own context and returns a
-#: distilled answer to the parent.
+#: The browser specialist: a delegatable subagent whose one job is to drive the
+#: sandbox container's browser. Its browsing-loop prompt isolates a web task's
+#: token churn in its own context and returns a distilled answer to the parent.
 #:
-#: **Deliberately NOT in ``OFFICIAL_SUBAGENTS``.** Registering it there would add
-#: ``web`` to ``main``'s spawnable roster, which changes ``main``'s
-#: ``spawn_subagent`` schema — churning ``main``'s stable prefix for EVERY
-#: deployment, including non-sandbox ones where the browser cannot even work.
-#: Browser only makes sense under a sandbox, so wiring ``web`` into the roster
-#: is a **product-activation** concern, gated on ``NOETA_AGENT_SANDBOX`` (S10) —
-#: not baked into the SDK presets. This definition is exported ready for that
-#: gated registration (see :func:`sandbox_browser_options`). ``web`` is the sole
+#: **Deliberately NOT in ``OFFICIAL_SUBAGENTS``.** Registering it there would put
+#: ``web`` in ``main``'s spawnable roster and so change ``main``'s
+#: ``spawn_subagent`` schema for EVERY deployment, including non-sandbox ones
+#: where the browser cannot work at all. Browsing only makes sense under a
+#: sandbox, so wiring ``web`` in is a host-activation decision
+#: (:func:`sandbox_browser_options`), never an SDK default. ``web`` is the sole
 #: identity that opens ``browser``; ``main`` stays browser-free and delegates.
 WEB_SUBAGENT: AgentDefinition = AgentDefinition(
     description=(
@@ -242,32 +208,25 @@ WEB_SUBAGENT: AgentDefinition = AgentDefinition(
     ),
     prompt=_WEB_PROMPT,
     tools=_WEB_TOOLS,
-    # browser: the noeta-owned browser pack (flag-gated, sandbox-backed).
-    # skill_invocation on, matching the other workers. Activation (D5).
     plugins=("browser", "skill_invocation"),
 )
 
 
-#: The internal memory-consolidation curator (memory v2 phase 3; architecture:
+#: The internal memory-consolidation curator (architecture:
 #: ``docs/adr/memory-consolidation.md``). An ordinary agent driven as an
 #: ordinary root task by the host's session-stop trigger
-#: (``noeta.client.consolidation.run_consolidation``): its goal carries a
-#: host-built digest of recent session activity; its whole tool surface is the
-#: memory pack. ``tools=()`` empties the whitelist so ONLY the
-#: capability-gated pack attaches (``_stage_memory`` is flag-gated, NOT
-#: whitelist-filtered) — no fs, no shell, no delegation; every effect on the
-#: store goes through the same slug-confined ``memory_write`` /
-#: ``memory_archive`` the interactive agent uses. Like every memory-enabled
-#: preset, its prompt carries the memory-policy fragment (duty 3 — backfilling
-#: missed durable facts — is defined BY that policy).
+#: (``noeta.client.consolidation.run_consolidation``), with a goal carrying a
+#: host-built digest of recent session activity. ``tools=()`` empties the
+#: whitelist so ONLY the capability-gated memory pack attaches — no fs, no
+#: shell, no delegation — which confines every effect on the store to the same
+#: slug-checked ``memory_write`` / ``memory_archive`` the interactive agent uses.
 #:
-#: **Deliberately NOT in ``OFFICIAL_SUBAGENTS``** (it is nobody's delegate),
-#: and its reserved ``__``-prefixed name (re-exported above from
-#: ``noeta.client.consolidation``, the module that seeds by it) keeps it out
-#: of a parent's ``spawnable`` auto-union at compile time and out of the
-#: product's advertised agent list — resolvable for host-seeded root tasks,
-#: never model- or user-selectable (the ``__workflow__`` precedent). Products
-#: register it via :func:`with_consolidation_agent`.
+#: **Deliberately NOT in ``OFFICIAL_SUBAGENTS``**: it is nobody's delegate. Its
+#: reserved ``__``-prefixed name keeps it out of a parent's ``spawnable``
+#: auto-union at compile time and out of a host's advertised agent list —
+#: resolvable for host-seeded root tasks, never model- or user-selectable, the
+#: same treatment ``__workflow__`` gets. Hosts register it via
+#: :func:`with_consolidation_agent`.
 CONSOLIDATION_AGENT: AgentDefinition = AgentDefinition(
     description=(
         "Internal background curator of the long-term memory store: reads a "
@@ -283,12 +242,10 @@ CONSOLIDATION_AGENT: AgentDefinition = AgentDefinition(
 def with_consolidation_agent(options: Options) -> Options:
     """Register :data:`CONSOLIDATION_AGENT` into ``options`` (idempotent shape).
 
-    The product-activation helper for the consolidation trigger (mirrors
-    :func:`sandbox_browser_options`' explicit-opt-in stance): the served
-    backend applies it when its ``memory_consolidation`` config is on, so the
+    A host applies this when it runs the consolidation trigger, so the
     ``__consolidation__`` identity resolves for the trigger's ``seed_start``.
     Because the name is ``__``-reserved, registration changes NO spawnable
-    roster and NO stable prefix — main's compiled spec stays byte-identical.
+    roster and NO stable prefix — main's compiled spec is unaffected.
     """
     agents = dict(options.agents)
     agents[CONSOLIDATION_AGENT_NAME] = CONSOLIDATION_AGENT
@@ -296,24 +253,19 @@ def with_consolidation_agent(options: Options) -> Options:
 
 
 def main_options() -> Options:
-    """The official main recipe: full tool set + three subagents + all control-plane capabilities.
+    """The official main recipe: full tool set, three subagents, all control tools.
 
-    ``memory=True`` is enabled only on
-    main — memory recall hooks into the user-message ingest seam, and only the
-    top-level conversational agent receives user messages. explore/plan are
-    read-only identities and the general-purpose subtask never converses with the
-    user, so the three subagents leave it off (zero fingerprint drift).
+    ``memory`` is activated on main alone: recall hooks into the user-message
+    ingest seam, and only the top-level conversational agent receives user
+    messages. explore and plan are read-only identities and general-purpose
+    never converses with the user, so the three subagents leave it off.
     """
     return Options(
         system_prompt=MAIN_SYSTEM_PROMPT,
         name="main",
         agents=dict(OFFICIAL_SUBAGENTS),
-        # Activation (D5): the built-in feature bundles main opens. ``fs`` / ``web``
-        # are the default tool packs (DEFAULT_PLUGINS); ``memory`` / ``mcp`` and
-        # the control-tool bundles fold into the same identity the retired
-        # ``Capabilities(...)`` set carried, now the ``AgentSpec.plugins`` tuple.
-        # ``delegation`` folds into that tuple and ``spawnable`` is derived
-        # structurally from the three subagents by compile's additive union.
+        # ``spawnable`` is not listed here: compile derives it structurally from
+        # the three subagents above, by additive union.
         plugins=DEFAULT_PLUGINS
         + ("todo_write", "ask_user_question", "skill_invocation", "memory", "mcp"),
     )
@@ -323,39 +275,30 @@ def sandbox_browser_options() -> Options:
     """Sandbox-activated variant of :func:`main_options`: the ``web`` subagent
     is registered into main's delegation roster. Main itself stays browser-free.
 
-    Product-activation helper (the sandbox-browser-subsystem spec, D3 / B6):
-    when a deployment provisions a per-session AIO Sandbox (``NOETA_AGENT_SANDBOX``
-    on), the browser tool pack can actually work, so the ``web`` browsing
-    specialist — the only identity that activates ``browser`` —
-    is wired into main's delegation roster. Main does NOT open ``browser``: it
-    has no ``browser_*`` tools and must delegate every page interaction to
-    ``web`` (which isolates browsing token churn in a child context and returns
-    a distilled result). Giving main the browser pack directly would let it
-    shortcut delegation — a one-line ``browser_navigate`` always beats a
-    ``spawn_subagent`` hop — so the browser capability lives on ``web`` alone.
+    A host calls this only once its deployment provisions a per-session sandbox,
+    because that is the point at which the browser tool pack can actually work.
+    Main deliberately does not open ``browser`` itself: given ``browser_*`` tools
+    directly it would shortcut delegation — a one-line ``browser_navigate``
+    always beats a ``spawn_subagent`` hop — and lose the context isolation that
+    makes ``web`` worth having.
 
-    Off by default — non-sandbox deployments keep :func:`main_options` (no
-    ``web`` agent, ``browser=False``) so the roster + stable prefix are
-    byte-identical to pre-browser-subsystem. This function is the *explicit*
-    opt-in a product uses to activate, never a silent default.
+    Never a silent default: a deployment without a sandbox keeps
+    :func:`main_options`, whose roster and stable prefix this function does not
+    touch.
     """
     base = main_options()
     agents = dict(base.agents)
     agents["web"] = WEB_SUBAGENT
-    # ``compile_options`` unions ``spawnable`` with the child names and keeps
-    # ``delegation`` as-is (already True on main), so ``web`` becomes
-    # delegatable. Main's own identity is left untouched — ``browser`` stays
-    # ``False`` (it has no browser tools; every page interaction is delegated
-    # to ``web``). The prompt swaps to the web-aware variant in lockstep with
-    # the roster: a prompt that names ``web`` without ``web`` being spawnable
-    # (or vice versa) makes the model chase a subagent that isn't there.
+    # The prompt swaps to the web-aware variant in lockstep with the roster: a
+    # prompt naming ``web`` without ``web`` being spawnable (or the reverse)
+    # sends the model chasing a subagent that is not there.
     return dataclasses.replace(
         base, agents=agents, system_prompt=MAIN_WEB_SYSTEM_PROMPT
     )
 
 
 def official_specs() -> dict[str, AgentSpec]:
-    """Compile the four agents and return them as a dict keyed by name (for the product registration path)."""
+    """Compile main and its subagents into specs keyed by name, ready to register."""
     main, descendants = compile_options(main_options())
     out: dict[str, AgentSpec] = {main.name: main}
     for d in descendants:
@@ -363,7 +306,7 @@ def official_specs() -> dict[str, AgentSpec]:
     return out
 
 
-# Register the main preset prompts so SystemPromptPreset(preset="main") /
-# (preset="main-web") resolve.
+# Import-time registration is what makes ``SystemPromptPreset(preset="main")``
+# and ``(preset="main-web")`` resolvable at all.
 register_preset_prompt("main", MAIN_SYSTEM_PROMPT)
 register_preset_prompt("main-web", MAIN_WEB_SYSTEM_PROMPT)

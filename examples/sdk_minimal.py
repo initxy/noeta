@@ -1,23 +1,17 @@
-"""SDK example — run an agent in-process using only ``noeta.sdk``.
+"""SDK example — drive an agent through ``Client`` and read the message view.
 
 Demonstrated SDK capability
 ---------------------------
-The ``noeta.sdk`` public surface as the **single** import home.
-Everything used here —
-``query``, ``Options``, ``tool``, ``as_messages`` — comes from ``noeta.sdk``;
-the example never imports ``noeta.client`` or any noeta-runtime internal. This is
-the "pure SDK path": like claude-agent-sdk / LangChain, you import the SDK and
-drive an agent in the same process, with no app and no HTTP.
+:class:`noeta.sdk.Client`, the stateful counterpart to :func:`query`. It hands
+back a task id and stays open, which is what makes the projections addressable:
+:meth:`Client.messages` folds that task's envelopes into the human-readable
+view (``as_messages``) so an application never parses the ledger itself.
 
-The model is scripted (offline :class:`FakeLLMProvider`) to call one custom
-``greet`` tool and then finish; the example folds the resulting envelope stream
-into a human-readable message view with ``Client.messages`` (the public
-projection over ``as_messages``).
+An open ``Client`` owns workers and observer subscriptions, so ``shutdown``
+belongs in a ``finally`` — it is idempotent, and skipping it leaks them.
 
-Running it
-----------
-Offline by default (no API key). To drive a real model, pass a live provider
-to ``run`` (see ``minimal_agent.py`` / ``swap_provider.py``).
+The provider is scripted so the example needs no API key; pass a live provider
+from ``noeta.sdk.providers`` to :func:`run` to drive a real model.
 
     python examples/sdk_minimal.py
 """
@@ -40,9 +34,8 @@ from noeta.sdk import (
     tool,
 )
 
-# The scripted provider is a runtime building block, not part of the
-# user-facing recipe surface — a real deployment supplies a live provider and
-# never scripts one. ``noeta.sdk.testing`` is its public home.
+# A scripted provider is test scaffolding, not part of the recipe surface, so
+# it lives in ``noeta.sdk.testing`` rather than alongside the real adapters.
 from noeta.sdk.testing import FakeLLMProvider
 
 
@@ -56,13 +49,12 @@ _GREET_SCHEMA = {
 
 @tool(name="greet", version="1", risk_level="low", input_schema=_GREET_SCHEMA)
 def greet(arguments: dict, ctx: ToolContext) -> ToolResult:
-    """Return a greeting for ``arguments['name']``."""
     who = str(arguments.get("name", "world"))
     return ToolResult(success=True, output=f"Hello, {who}!")
 
 
 def _demo_provider() -> FakeLLMProvider:
-    """Scripted: call ``greet`` once, then finish."""
+    """A network-free provider scripted to call ``greet`` once, then finish."""
     return FakeLLMProvider(
         responses=[
             LLMResponse(
@@ -98,6 +90,9 @@ def run(*, provider=None, workspace_dir: Path, model: str = "stub-model"):
         provider=provider if provider is not None else _demo_provider(),
         workspace_dir=workspace_dir,
         model=model,
+        # The default (``True``) parks the task on a next-goal suspend so a
+        # conversation can continue; one goal in, one terminal out is what this
+        # example wants.
         multi_turn=False,
     )
     try:

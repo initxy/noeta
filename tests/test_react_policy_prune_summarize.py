@@ -1,17 +1,13 @@
-"""ReActPolicy compaction triggers (③ D-3: proactive + passive).
+"""ReActPolicy compaction triggers: the proactive pre-call estimate and the
+passive provider overflow.
 
-Both triggers return a :class:`CompactionRequestedDecision` (the unified
-contract). The summarize LLM round-trip goes through the injected
-``RuntimeLLMClient`` so it is recorded onto the event log.
-
-* proactive — the deterministic pre-call estimate (D-3d) hits the
-  available window (``context_window - max_output - buffer``); the main
-  LLM call is NOT made this turn (we compact first).
-* passive — the provider returned an error response carrying ②'s
-  ``raw['category'] == 'overflow'``; the policy compacts before retrying.
-
-Compaction is OFF by default (no ``context_window`` injected) → existing
-sessions are unchanged.
+Proactive fires when the deterministic estimate hits the available window
+(``context_window - max_output - buffer``) and skips the main LLM call for that
+turn; passive fires when the provider returns an overflow-category error.  Both
+return a :class:`CompactionRequestedDecision`, and the summarize round-trip goes
+through the injected ``RuntimeLLMClient`` so it is recorded onto the event log.
+Compaction is inert without a configured ``context_window``, so an unconfigured
+policy must never compact.
 """
 
 from __future__ import annotations
@@ -118,15 +114,12 @@ def test_proactive_trigger_returns_compaction_decision() -> None:
 
 
 def test_many_small_messages_compact_not_dropped() -> None:
-    """Root-cause scenario: a long session of MANY SMALL messages.
+    """A long session of MANY SMALL messages must compact, not silently drop.
 
-    With the legacy count guard gone (default ``max_history_messages=None``),
-    a history of 120 short messages whose total estimate fills the window must
-    trigger the token summariser (→ ``CompactionRequestedDecision``) instead of
-    being silently truncated by a count gate — exactly the ``Compacted == 0 /
-    dropped == 97`` regression task-7559 hit. The policy is built WITHOUT a
-    ``max_history_messages`` escape hatch, so the only gate that can fire is the
-    token one."""
+    A history of 120 short messages whose total estimate fills the window has to
+    reach the token summariser rather than being truncated by a message-count
+    gate. The policy is built without a ``max_history_messages`` escape hatch so
+    the token gate is the only one that can fire."""
     many_small = [
         Message(role="user", content=[TextBlock(text="x" * 80)])
         for _ in range(120)
@@ -156,7 +149,7 @@ def _ctx_usage(last_input_tokens: int) -> StepContext:
 
 def test_trigger_estimate_no_usage_falls_back_to_pure_estimate() -> None:
     """First turn / no recorded usage (``last_input_tokens == 0``) → the mix
-    is identical to the legacy pure chars/4 estimate."""
+    collapses to the pure chars/4 estimate."""
     policy, *_ = _policy([_summary_resp()])
     assert policy._trigger_estimate(_ctx_usage(0), estimated=1234) == 1234
 
@@ -199,8 +192,8 @@ def test_trigger_estimate_clamps_shrunk_estimate() -> None:
 def test_real_usage_triggers_compaction_pure_estimate_would_not() -> None:
     """End-to-end: a history whose pure chars/4 estimate sits UNDER the window
     still compacts when the recorded real usage (carried on the StepContext)
-    exceeds it — the precision upgrade that dropping the count gate (D1) made
-    necessary."""
+    exceeds it — the heuristic alone is not precise enough to be the only
+    trigger."""
     # window = 2000-500-100 = 1400. A medium view estimates well under it, so
     # WITHOUT the mix this would just answer; WITH a real baseline of 1500 the
     # proactive trigger fires and we get a CompactionRequestedDecision.
@@ -242,11 +235,11 @@ def test_passive_overflow_returns_compaction_decision() -> None:
 
 
 def test_proactive_with_nothing_to_summarize_fails_fast() -> None:
-    """Finding 3 (policy arm): when the proactive trigger fires but the whole
-    history fits inside the protected tail window (boundary == 0), there is
-    nothing summarising can collapse. Emitting an empty CompactionRequested
-    would spin forever (compose → over window → no-op compact → compose …),
-    so the policy fails fast with a non-retryable FailDecision instead."""
+    """When the proactive trigger fires but the whole history fits inside the
+    protected tail window (boundary == 0), there is nothing summarising can
+    collapse. Emitting an empty CompactionRequested would spin forever
+    (compose → over window → no-op compact → compose …), so the policy fails
+    fast with a non-retryable FailDecision."""
     provider = FakeLLMProvider(responses=[])  # would raise if any LLM call
     log = InMemoryEventLog()
     store = InMemoryContentStore()
@@ -276,13 +269,13 @@ def test_proactive_with_nothing_to_summarize_fails_fast() -> None:
 
 
 def test_proactive_when_boundary_already_collapsed_fails_fast() -> None:
-    """Fix A (policy primary judge): the proactive trigger fires but the
-    summarise boundary the policy would compute does NOT advance past what is
-    already collapsed (``view.summary_boundary``) — re-summarising the same
-    prefix would spin forever — so the policy self-terminates with a
-    non-retryable ``FailDecision(compaction_no_progress)`` and makes NO
-    summarize LLM call. This is the per-step guarantee that keeps the kernel's
-    boundary-progress arm from ever needing to fire under a good Policy."""
+    """The proactive trigger fires but the summarise boundary the policy would
+    compute does NOT advance past what is already collapsed
+    (``view.summary_boundary``) — re-summarising the same prefix would spin
+    forever — so the policy self-terminates with a non-retryable
+    ``FailDecision(compaction_no_progress)`` and makes NO summarize LLM call.
+    This per-step guarantee is what keeps the kernel's boundary-progress arm
+    from ever needing to fire under a well-behaved Policy."""
     from dataclasses import replace
 
     provider = FakeLLMProvider(responses=[])  # would raise if any LLM call
@@ -341,7 +334,6 @@ def test_summarize_round_trip_is_recorded() -> None:
     live = policy.decide(_ctx(), view)
     assert isinstance(live, CompactionRequestedDecision)
     assert len(provider.received_requests) == 1
-    # The summarize call recorded its three-event trio on the task stream.
     assert [e.type for e in log.read("t-1")] == [
         "LLMRequestStarted",
         "LLMResponseRecorded",

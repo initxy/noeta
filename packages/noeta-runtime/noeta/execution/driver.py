@@ -1,51 +1,24 @@
-"""``InteractionDriver`` — the single conversation-command seam (D1/D3).
+"""``InteractionDriver`` — the single conversation-command seam.
 
-Issue 05. The product has two surfaces — a Claude-Code-class CLI and a
-Claude-class web UI — that **both** expose the same capability over the
-**same** runtime: open a conversation, drive turns, approve gated tools,
-cancel. D1/D3 require **one** task-creation + drive code path that
-both surfaces route through; the only per-surface difference is the
-transport adapter's input validation (the web validates a model *selector*
-and refuses raw provider config; the CLI on the user's own machine has no
-trust boundary).
+One task-creation + drive code path that every embedding surface routes through:
+open a conversation, drive turns, approve gated tools, cancel, fork, interrupt,
+rewind. This is **not** a second runtime — every command walks the real
+dispatcher contract and hands the lease to the L2 canonical primitive
+:func:`noeta.runtime.worker.run_leased_task`, driving each leased Task with **its
+own Agent's Engine** via the :class:`noeta.execution.host.ResidentHost` Protocol.
+The per-command variation is the typed woken-command-prelude
+(``AppendMessagePrelude`` / ``ResolveApprovalPrelude``), never re-inlined here.
 
-This module is that shared seam. It is **not** a second runtime: every
-command walks the real dispatcher contract and hands the lease to the L2
-canonical primitive :func:`noeta.runtime.worker.run_leased_task`, driving
-each leased Task with **its own Agent's Engine** via the issue-01
-:class:`noeta.execution.host.ResidentHost` Protocol. The per-command variation
-is the typed woken-command-prelude (``AppendMessagePrelude`` /
-``ResolveApprovalPrelude``) from issue 01 — never re-inlined here.
-
-The driver is **Protocol-typed**: it depends
-on the :class:`ResidentHost` structural seam and the
-:class:`AgentRegistryProtocol` identity lookup — not the concrete
-``CodeEngineResolver`` or ``CODE_AGENT_SPECS`` dict. Alternative host
-implementations (SDK-side agent hosts, resume fakes, multi-product hosts)
-slot in unchanged.
-
-Five commands:
-
-* :meth:`InteractionDriver.start` — create a Task from **server-side**
-  config (only ``goal`` / ``agent`` / an optional model *selector* come
-  from the caller), seed the goal, and drive the first turn. The driver
-  never reads provider / endpoint / base_url / credentials / profile /
-  tool-registry from the caller (R4).
-* :meth:`InteractionDriver.send_goal` — the per-turn append-message
-  command (issue 01 prelude = append-message).
-* :meth:`InteractionDriver.approve` / :meth:`InteractionDriver.deny` —
-  resolve a pending gated tool call (issue 01 prelude = resolve-approval).
-* :meth:`InteractionDriver.cancel` — write the L0 ``TaskCancelled`` control
-  event (no new schema; not a policy ``Decision``).
-
-Interactive turns run ``final=False`` ("Interactive sessions
-terminate on a trailing suspend"): a normally-finishing turn suspends on
-the next-goal handle instead of completing, so the conversation's durable
-end-state is a trailing suspend. The resolver wraps each agent's policy in
-``MultiTurnReActPolicy(final=False)``, which parks a *failed* turn on the same
-suspend (``TaskSuspended.reason`` = ``"turn_failed: <reason>"``) rather than
-sealing the conversation over one transient fault; ``approval`` / ``subtask``
-keep their native semantics.
+Protocol-typed: the driver depends on the :class:`ResidentHost` structural seam
+and the :class:`AgentRegistryProtocol` identity lookup, not a concrete host, so
+alternative hosts slot in unchanged. Interactive turns run ``final=False`` — a
+normally-finishing turn suspends on the next-goal handle instead of completing,
+so the conversation's durable end-state is a trailing suspend, and the resolver
+wraps each agent's policy in ``MultiTurnReActPolicy(final=False)`` (which parks a
+*failed* turn on the same suspend rather than sealing the conversation over one
+transient fault); ``approval`` / ``subtask`` keep their native semantics. A
+transport adapter that carries a trust boundary (an authenticated web session)
+validates a model *selector* rather than accepting raw provider config.
 """
 
 from __future__ import annotations
@@ -124,12 +97,12 @@ __all__ = [
 class ModelSelectorError(CodedError):
     """The model *selector* is not in ``principal.allowed_models ∩ allowlist``.
 
-    Issue 06 (D2 / D3): the selector is rejected when the
-    authenticated Principal is not sanctioned to bind it, or it is outside
-    the deployment allowlist. On rejection the driver emits **no**
-    ``ModelBound``, runs **no** turn, and leaves **no** binding — the refusal
-    happens before any durable write. ``allowed`` is the intersection the
-    selector failed (what the caller *could* have picked).
+    The selector is rejected when the authenticated Principal is not
+    sanctioned to bind it, or it is outside the deployment allowlist. On
+    rejection the driver emits **no** ``ModelBound``, runs **no** turn, and
+    leaves **no** binding — the refusal happens before any durable write.
+    ``allowed`` is the intersection the selector failed (what the caller
+    *could* have picked).
     """
 
     code = "model_selector_rejected"
@@ -143,7 +116,7 @@ class ModelSelectorError(CodedError):
 
 
 class ProviderSelectorError(CodedError):
-    """The ``(provider, model)`` selector is not a legal pair (I4).
+    """The ``(provider, model)`` selector is not a legal pair.
 
     Rejected when the provider name is **not configured** on the host's
     provider registry, or the chosen ``model`` is **not in that provider's
@@ -172,8 +145,8 @@ class ProviderSelectorError(CodedError):
 class NotResumableError(CodedError, RuntimeError):
     """A command tried to resume a task that is not on the expected wake.
 
-    Also a :class:`RuntimeError` so any historical ``except RuntimeError``
-    contract keeps matching; the new :class:`CodedError` base is what the
+    Also a :class:`RuntimeError` so an ``except RuntimeError``
+    contract keeps matching; the :class:`CodedError` base is what the
     product backend switches on (``code``).
     """
 
@@ -196,7 +169,7 @@ class NotResumableError(CodedError, RuntimeError):
         self.dispatcher_status = dispatcher_status
         # ``expected`` names the wake the command required when it is NOT the
         # human-handle default (e.g. ``deliver_event`` expecting an
-        # ``ExternalEvent``); ``None`` keeps the historical message.
+        # ``ExternalEvent``); ``None`` keeps the default message.
         if expected is None:
             expected = f"HumanResponseReceived(handle={handle!r})"
         message = f"task {task_id!r} is {status!r}, not waiting for {expected}"
@@ -210,11 +183,10 @@ class TaskAlreadyTerminalError(CodedError, RuntimeError):
     that is already terminal — a terminal conversation is not cancellable,
     closable, or reopenable.
 
-    Replaces the bare ``RuntimeError(f"...: already terminal")`` these verbs
-    used to raise: the product backend matched it by the ``"already terminal"``
-    message substring, which this ``code`` makes structural. Kept a
-    :class:`RuntimeError` too so any ``except RuntimeError`` contract is
-    unaffected. Carries the offending ``task_id`` and the ``verb``.
+    A :class:`RuntimeError` too so any ``except RuntimeError`` contract is
+    unaffected, and a ``code`` the product backend can match structurally
+    rather than by message substring. Carries the offending ``task_id`` and
+    the ``verb``.
     """
 
     code = "task_already_terminal"
@@ -241,7 +213,7 @@ class NotForkableError(CodedError, RuntimeError):
       ``MessagesAppended`` on this stream, so there is no turn boundary to
       branch at (the same anchor rule ``rewind`` enforces).
 
-    Kept a :class:`RuntimeError` too, like its siblings, so any
+    A :class:`RuntimeError` too, like its siblings, so any
     ``except RuntimeError`` contract is unaffected.
     """
 
@@ -257,7 +229,7 @@ class NotForkableError(CodedError, RuntimeError):
 class ModelBindPrelude:
     """A woken-command prelude that binds a model, then chains another step.
 
-    Issue 06: a per-turn model switch must record its ``ModelBound`` in the
+    A per-turn model switch must record its ``ModelBound`` in the
     same first-consume window (after ``TaskWoken``, before ``run_one_step``)
     as the turn's own prelude — so both land before the next
     ``ContextPlanComposed`` and a resumed fold reconstructs the same binding
@@ -267,23 +239,22 @@ class ModelBindPrelude:
 
     The Engine ``run_leased_task`` resolves for a woken task is keyed on the
     Task's *folded* model binding; ``note_model_bound`` runs ON that resolved
-    Engine (the still-current-model one) and only writes the event — the new
-    binding takes effect on the **next** resolve (Claude Code ``/model``
-    semantics: the switch drives the next turn). ``note_model_bound`` simply
-    appends the ``ModelBound`` to the same EventLog regardless of which
-    Engine instance emits it.
+    Engine (the current-model one) and only writes the event — the new
+    binding takes effect on the **next** resolve (the switch drives the next
+    turn). ``note_model_bound`` simply appends the ``ModelBound`` to the same
+    EventLog regardless of which Engine instance emits it.
     """
 
     model: str
     principal_identity: str
     inner: Optional[WokenPrelude] = None
-    #: (I4) — the per-turn provider name folded into THIS same
+    #: the per-turn provider name folded into THIS same
     #: ``ModelBound`` (not a separate ProviderBound event). ``None`` ⇒ this turn
     #: switched only the model: fold leaves the current provider binding intact.
     provider: Optional[str] = None
 
     #: ``ModelBound`` + the chained append prelude are pure event appends —
-    #: seed-time safe (D6). Only ever constructed over append-type inners.
+    #: seed-time safe. Only ever constructed over append-type inners.
     durable_at_seed: ClassVar[bool] = True
 
     def __call__(self, engine: Any, task: Any, *, lease_id: str) -> Any:
@@ -305,9 +276,8 @@ def multi_turn_policy_wrapper(policy: Policy) -> Policy:
     The single ``policy_wrapper`` the :class:`InteractionDriver` hands the
     resolver: every Engine the resolver builds wraps the agent's policy in
     ``MultiTurnReActPolicy(final=False)``. ``send_goal`` is unconditionally
-    ``final=False`` (lookahead stays a file-mode-only
-    convenience and is *not* ported here), so a normally-finishing turn ends
-    in a trailing next-goal suspend.
+    ``final=False``, so a normally-finishing turn ends in a trailing
+    next-goal suspend.
     """
     return MultiTurnReActPolicy(policy, final=False)
 
@@ -315,7 +285,7 @@ def multi_turn_policy_wrapper(policy: Policy) -> Policy:
 def _intake_providers_for(
     host: Any, agent: str, task_id: Optional[str] = None
 ) -> tuple[ReminderProvider, ...]:
-    """``agent``'s composed ``turn_intake`` reminder providers (D6/D7).
+    """``agent``'s composed ``turn_intake`` reminder providers.
 
     ONE generic host seam: the host returns the FULL ordered tuple for this
     turn — its built-in memory recall (bound to the live store, memory-active
@@ -332,7 +302,7 @@ def _intake_providers_for(
 
 
 def _background_exit_notice(summary: str, ref: ContentRef, job_id: str) -> str:
-    """Render the background-completion notice body (D3).
+    """Render the background-completion notice body.
 
     One line of human summary + the content-addressed ``ref`` (so the model can
     deref the full output it never sees inline) + the ``job_id`` (so the model
@@ -347,7 +317,7 @@ def _background_exit_notice(summary: str, ref: ContentRef, job_id: str) -> str:
 def _background_subagent_notice(
     summary: str, result_text: str, subtask_id: str, status: str
 ) -> str:
-    """Render the background-sub-agent completion notice body (Mechanism C).
+    """Render the background-sub-agent completion notice body.
 
     docs/adr/background-subagent.md. Mirrors :func:`_background_exit_notice`: one
     line of human summary + the sub-agent's ACTUAL result text (dereferenced from
@@ -422,60 +392,58 @@ class SeededTurn:
     * :meth:`InteractionDriver.seed_start` / ``seed_send_goal`` / ``seed_*``
       do every **durable, validated** step synchronously — create / wake,
       authorize the selector, write the opening ``ModelBound`` / goal /
-      reopen, take the lease, and (D6) apply any append-type prelude —
+      reopen, take the lease, and apply any append-type prelude —
       ``TaskWoken`` + the user's message are durable before the ack, so an
       acked command can never lose its input to a crash. A rejected
       selector or a not-suspended task still fails *here*, before any
       ``SeededTurn`` exists, so the transport keeps returning the same
       typed 4xx.
     * :meth:`InteractionDriver.drive_seeded` runs the actual turn
-      (``run_leased_task`` + the S3b subtask drain) and folds the outcome.
+      (``run_leased_task`` + the subtask drain) and folds the outcome.
 
     ``start`` / ``send_goal`` / ``approve`` / ``deny`` / ``answer`` remain the
-    one-call seam (seed-then-drive) the CLI and the synchronous HTTP path use
-    — byte-identical to the pre-split sequence. The async HTTP path calls
-    ``seed_*`` on the request thread and ``drive_seeded`` on a background
-    thread. ``prelude`` is ``None`` for ``start`` (the opening turn carries no
-    woken prelude) and the typed woken-command prelude otherwise; ``lease`` is
-    the dispatcher lease ``drive_seeded`` consumes (opaque to the transport).
+    one-call seam (seed-then-drive) the synchronous HTTP path uses. The async
+    HTTP path calls ``seed_*`` on the request thread and ``drive_seeded`` on a
+    background thread. ``prelude`` is ``None`` for ``start`` (the opening turn
+    carries no woken prelude) and the typed woken-command prelude otherwise;
+    ``lease`` is the dispatcher lease ``drive_seeded`` consumes (opaque to the
+    transport).
     """
 
     task_id: str
     lease: Any
     prelude: Optional[WokenPrelude] = None
     #: The Engine resolved at seed time, BEFORE a seed-applied prelude's
-    #: events landed (D6). Pinning it preserves the ``/model`` per-turn
+    #: events landed. Pinning it preserves the ``/model`` per-turn
     #: semantics: a seed-written ``ModelBound`` must drive the NEXT turn,
     #: but the drive's own fold would already see it. ``None`` (no
-    #: seed-applied prelude) ⇒ the drive resolves as before.
+    #: seed-applied prelude) ⇒ the drive resolves normally.
     engine: Optional[Any] = None
 
 
 # Hoisted to ``noeta.core.fold`` (the crash-recovery attempt seal in L2
-# needs the same point-in-time bounded fold); aliased so the established
-# in-module name keeps working.
+# needs the same point-in-time bounded fold); aliased so the in-module name
+# keeps working.
 _BoundedEventLog = BoundedEventLog
 
 
 class InteractionDriver:
     """The shared conversation-command driver over a resident host.
 
-    Wraps a :class:`noeta.execution.host.ResidentHost` (the issue-01
-    Protocol seam: ``event_log`` / ``content_store`` / ``dispatcher`` +
-    engine resolver + agent registry). Every command drives the canonical
+    Wraps a :class:`noeta.execution.host.ResidentHost` (the Protocol seam:
+    ``event_log`` / ``content_store`` / ``dispatcher`` + engine resolver +
+    agent registry). Every command drives the canonical
     :func:`noeta.runtime.worker.run_leased_task` primitive against that
-    host — there is no second task-creation or drive logic (D1).
+    host — there is no second task-creation or drive logic.
 
-    The driver is surface-agnostic: the ``python -m noeta.agent`` runner
-    constructs one with the
-    :data:`noeta.protocols.values.LOCAL_PRINCIPAL` (⊤ — no trust boundary,
-    D3) over its in-process bundle; the web
-    backend (``noeta.client.host`` driving ``noeta.agent.backend``) constructs one
-    with the authenticated session's :class:`~noeta.protocols.values.Principal`
-    over the server bundle. The model-selector check (D2) lives here, on
-    the shared seam — ``selector ∈ principal.allowed_models ∩ allowlist`` —
-    and refuses raw provider config by simply never accepting it as input
-    (``start`` / ``send_goal`` take only ``goal`` / ``agent`` / a *selector*).
+    The driver is surface-agnostic: an in-process embedding constructs one
+    with the :data:`noeta.protocols.values.LOCAL_PRINCIPAL` (⊤ — no trust
+    boundary) over its bundle; an authenticated web backend constructs one
+    with the session's :class:`~noeta.protocols.values.Principal` over the
+    server bundle. The model-selector check lives here, on the shared seam —
+    ``selector ∈ principal.allowed_models ∩ allowlist`` — and refuses raw
+    provider config by simply never accepting it as input (``start`` /
+    ``send_goal`` take only ``goal`` / ``agent`` / a *selector*).
     """
 
     def __init__(
@@ -492,11 +460,11 @@ class InteractionDriver:
         self._host = host
         self._worker_id = worker_id
         self._lease_seconds = lease_seconds
-        #: Issue 06 — who is acting + which models they may bind (
-        #: D2/D3). CLI = ⊤ local principal; web = authenticated session.
+        #: Who is acting + which models they may bind. An in-process embedding
+        #: uses the ⊤ local principal; a web backend an authenticated session.
         self._principal = principal
         #: Deployment allowlist — the *other* half of the selector check.
-        #: An **injection** (phase 2c): the selector-alias table is product
+        #: An injection: the selector-alias table is product
         #: knowledge (the SDK client passes its default or the host's
         #: ``allowed_models``). ``None`` ⇒ no deployment bound — selectors
         #: are gated by the principal alone (the kernel-alone semantic).
@@ -506,13 +474,13 @@ class InteractionDriver:
         #: host-fixed model so the opening ``ModelBound`` records the same id
         #: the Engine would use anyway → byte-equal with the no-selector path.
         self._default_model = default_model or host.model
-        #: Friendly-alias → real-model-id resolver (microkernel M2). The model
+        #: Friendly-alias → real-model-id resolver. The model
         #: catalog (and with it the ``opus``/``sonnet``/``haiku`` alias table)
         #: lives in the ``providers`` built-in plugin; the SDK client injects
         #: its ``resolve_alias`` here. ``None`` ⇒ identity — the CORRECT
         #: kernel-alone semantic, not a fallback: with no catalog there are no
-        #: aliases, so every selector already IS a real id (the stub/test path,
-        #: byte-identical). A resuming host must inject the same resolver the
+        #: aliases, so every selector IS a real id (the stub/test path).
+        #: A resuming host must inject the same resolver the
         #: live host used or an alias-bound recording diverges.
         self._resolve_alias: Callable[[str], str] = (
             alias_resolver if alias_resolver is not None else (lambda s: s)
@@ -539,20 +507,18 @@ class InteractionDriver:
     ) -> DriveOutcome:
         """Create a Task from server-side config and drive its first turn.
 
-        The one-call seam (seed-then-drive) the CLI and the synchronous HTTP
-        path use — byte-identical to the pre-split sequence. The async HTTP
-        path instead calls :meth:`seed_start` (request thread) and
-        :meth:`drive_seeded` (background thread) so the ``task_id`` is
+        The one-call seam (seed-then-drive) the synchronous HTTP path uses.
+        The async HTTP path instead calls :meth:`seed_start` (request thread)
+        and :meth:`drive_seeded` (background thread) so the ``task_id`` is
         published before the blocking turn runs.
 
         ``workspace_dir`` is the per-session workspace **absolute
         path** welded into the durable record (the agent layer resolves it; the
-        driver only receives the final path); ``provider_selector``
-        (I4) the per-session provider name —
-        see :meth:`seed_start`. ``permission_mode`` (code-review) is
-        the per-turn, NON-durable permission selector — also see :meth:`seed_start`.
-        ``activations`` are the built-in skill names a slash command resolved to —
-        see :meth:`seed_start`.
+        driver only receives the final path); ``provider_selector`` the
+        per-session provider name — see :meth:`seed_start`. ``permission_mode``
+        is the per-turn, NON-durable permission selector — also see
+        :meth:`seed_start`. ``activations`` are the built-in skill names a slash
+        command resolved to — see :meth:`seed_start`.
         """
         return self.drive_seeded(
             self.seed_start(
@@ -591,18 +557,18 @@ class InteractionDriver:
     ) -> SeededTurn:
         """Create a Task from server-side config and seed its first turn.
 
-        Only ``goal`` / ``agent`` / ``model_selector`` come from the caller
-        (D1/D2): the provider / endpoint / base_url / credentials /
-        profile / tool-registry are all host-fixed on the resolver and are
-        **never** read here (R4).
+        Only ``goal`` / ``agent`` / ``model_selector`` come from the caller:
+        the provider / endpoint / base_url / credentials / profile /
+        tool-registry are all host-fixed on the resolver and are **never**
+        read here.
 
-        D5: ``images`` is an additive channel —— the
+        ``images`` is an additive channel — the
         user's opening turn may carry :class:`ImageBlock`s alongside the goal
         text. They are appended after ``TextBlock(goal)`` in the seeded user
         message; an empty ``images`` keeps the seed byte-identical to the
         text-only path.
 
-        Issue 06: the selector is validated against
+        The selector is validated against
         ``principal.allowed_models ∩ deployment-allowlist`` *before* anything
         durable is written; a rejected selector raises
         :class:`ModelSelectorError` and leaves **no** Task, **no**
@@ -612,19 +578,18 @@ class InteractionDriver:
         ``TaskCreated`` so it sits in the pre-loop window (before
         ``TaskStarted``) and the resolver folds it to drive this first turn
         on the bound model. The seed Engine writes ``TaskCreated`` with the
-        chosen ``agent`` (authoritative ``agent_name``, D2).
+        chosen ``agent`` (authoritative ``agent_name``).
 
         ``workspace_dir`` is the per-session workspace **absolute
         path** welded into the durable record (the agent layer expands it once at
         ``POST /tasks``; the driver only receives the final absolute path). It is
         recorded on ``TaskHostBound.workspace_dir`` (merged into ``host_binding``
         when one was injected, else a workspace-only binding is minted); a
-        resumed session reads this absolute path directly, no longer consulting
-        a registry or base pool. It is ALSO passed to the seed Engine resolution here so the
-        first turn runs in the session's own fs root. ``None`` ⇒ the host-fixed
-        default workspace dir (the pre-decision path).
+        resumed session reads this absolute path directly. It is ALSO passed to
+        the seed Engine resolution here so the first turn runs in the session's
+        own fs root. ``None`` ⇒ the host-fixed default workspace dir.
 
-        (I4): ``provider_selector`` is the per-session provider
+        ``provider_selector`` is the per-session provider
         **name** (never a key / endpoint — only the name selector). The
         ``(provider, model)`` pair is validated against the host's provider
         registry *before* anything durable is written (provider configured +
@@ -633,18 +598,18 @@ class InteractionDriver:
         turn. The bound provider name is folded into the **opening**
         ``ModelBound`` (the same event the model rides) and passed to the seed
         Engine so the first turn runs on the right adapter. ``None`` ⇒ the host
-        default provider (the pre-I4 single-provider path, byte-equal).
+        default provider.
 
-        (code-review): ``permission_mode`` is the per-turn permission
+        ``permission_mode`` is the per-turn permission
         selector (``"default"`` / ``"acceptEdits"`` / ``"bypassPermissions"``).
         Unlike workspace / provider it is **NOT durable** — never written to any
         event; instead it is stashed on the host (``note_turn_permission``) keyed
         by the new task_id so the seed-time resolve, the first-turn drive, and any
         approval-resume all derive the same gating set. ``None`` ⇒ the host-fixed
-        default, byte-identical to every pre-#4 path.
+        default.
         """
         bound_model = self._authorize_selector(model_selector)
-        # I4: validate the (provider, model) pair on the ORIGINAL selector names
+        # validate the (provider, model) pair on the ORIGINAL selector names
         # before any durable write. ``None`` provider ⇒ host default (no check).
         bound_provider = self._authorize_pair(
             provider_selector, model_selector, bound_model
@@ -663,16 +628,16 @@ class InteractionDriver:
         # ``resolve_engine(task)`` (line below), where the real ``task_id``
         # exists — that lets the connect's skip-on-failure record its
         # ``McpServerSkipped`` events on the task's own stream (the front-end
-        # surface), and avoids a redundant pre-connect under a now-stale key.
-        # Per-session sandbox (D4): eagerly provision THIS session's container
+        # surface), and avoids a redundant pre-connect under a stale key.
+        # Per-session sandbox: eagerly provision THIS session's container
         # and weld its ``exec_env_ref`` into TaskHostBound (below) so a resumed /
         # reclaimed session reconnects to the SAME container, and pass the ref to
         # the seed resolve so the seed Engine targets it too. The container is
         # keyed by the ROOT task id, so we pre-mint it here (``create_task``
         # accepts an explicit ``task_id``) and hand it to ``allocate_exec_env``.
         # ``getattr`` guards a host / test double without the sandbox seam →
-        # ``None`` (the local path, byte-identical: ``task_id`` stays ``None`` so
-        # ``create_task`` mints it, exactly as before). Addressing only (D5).
+        # ``None`` (the local path: ``task_id`` stays ``None`` so
+        # ``create_task`` mints it). Addressing only.
         pre_minted_task_id: Optional[str] = None
         bound_exec_env_ref: Optional[str] = None
         allocate = getattr(host, "allocate_exec_env", None)
@@ -687,10 +652,9 @@ class InteractionDriver:
         # Record the per-session workspace absolute path AND the sandbox
         # container address on the durable ``TaskHostBound`` so a resumed /
         # reclaimed session reproduces the same root dir and reconnects to the
-        # same container. When a host binding was injected (CodeServer path)
-        # merge them in; when none was (the bare CLI / web ConsoleBackend path
-        # passes no binding) mint a binding carrying whichever is set. Both
-        # ``None`` keeps the no-binding path untouched (byte-identical).
+        # same container. When a host binding was injected merge them in; when
+        # none was (a caller passing no binding) mint a binding carrying
+        # whichever is set. Both ``None`` keeps the no-binding path untouched.
         bound_host_binding = host_binding
         if workspace_dir or bound_exec_env_ref:
             if bound_host_binding is None:
@@ -710,8 +674,8 @@ class InteractionDriver:
             policy_name="react",
             agent_name=agent,
             host_binding=bound_host_binding,
-            # Sandbox path pre-minted the root id so the container is keyed by it
-            # (D4); ``None`` (the local path) lets ``create_task`` mint as before.
+            # Sandbox path pre-minted the root id so the container is keyed by
+            # it; ``None`` (the local path) lets ``create_task`` mint the id.
             task_id=pre_minted_task_id,
         )
         # A NEW user goal opens a turn — clear the per-turn
@@ -722,15 +686,15 @@ class InteractionDriver:
         # Stash the per-turn, NON-durable permission_mode
         # now that the task_id exists, so the resolve_engine below AND the (possibly
         # background-thread) drive both derive the same gating set. ``None`` ⇒ host
-        # default (byte-equal). Never written to the event log.
+        # default. Never written to the event log.
         host.note_turn_permission(task.task_id, permission_mode)
         note_effort = getattr(host, "note_turn_effort", None)
         if note_effort is not None:
             note_effort(task.task_id, effort)
         # Stash the per-turn enabled-MCP-alias list (clean names, no
         # url/token) so the resolve_engine below + the (possibly background-thread)
-        # drive both connect the SAME servers for this turn. ``()`` ⇒ no live MCP
-        # (byte-equal). Guarded: a host Protocol impl that omits it is a no-op.
+        # drive both connect the SAME servers for this turn. ``()`` ⇒ no live MCP.
+        # Guarded: a host Protocol impl that omits it is a no-op.
         note_mcp = getattr(host, "note_turn_mcp", None)
         if note_mcp is not None:
             note_mcp(task.task_id, enabled_mcp)
@@ -756,7 +720,7 @@ class InteractionDriver:
                 f"dispatcher gave no lease for freshly enqueued task "
                 f"{task.task_id!r}"
             )
-        # Opening binding (issue 06): emit ModelBound BEFORE the goal/step so
+        # Opening binding: emit ModelBound BEFORE the goal/step so
         # it lands in the pre-loop window AND so run_leased_task's fold sees
         # the binding and resolves the bound-model Engine for this first turn.
         seed_engine.note_model_bound(
@@ -767,15 +731,15 @@ class InteractionDriver:
             provider=bound_provider,
         )
         # Seed the goal as the first user turn (durable, resume-safe) BEFORE
-        # the step — same shape the in-process product runner uses.
+        # the step.
         engine = host.resolve_engine(task)
-        # Pre-loop activation of every contributed resident (spec §4.5) — the
-        # generic successor of the three feature-named seed recorders. Each
-        # pack's init hook (memory index, workspace instructions + environment)
-        # records its resident through ONE SeedRecorder, in folded pack-loop
-        # order, BEFORE the goal so the residents anchor pre-loop (semi_stable,
-        # byte-identical placement). Idempotent per drive: a re-record of an
-        # already-active (kind, name) is dropped, so resume appends nothing.
+        # Pre-loop activation of every contributed resident — the
+        # generic seam. Each pack's init hook (memory index, workspace
+        # instructions + environment) records its resident through ONE
+        # SeedRecorder, in folded pack-loop order, BEFORE the goal so the
+        # residents anchor pre-loop (semi_stable, byte-identical placement).
+        # Idempotent per drive: a re-record of an already-active (kind, name)
+        # is dropped, so resume appends nothing.
         task = run_content_init(
             host.event_log,
             host.content_store,
@@ -804,8 +768,8 @@ class InteractionDriver:
         # recording seam: identical goal bytes, plus one recorded follow-up turn
         # per reminder a provider returns. The host composes the full provider
         # tuple (its built-in memory recall, bound to the live store, ahead of
-        # the activated plugins' providers — D6/D7) behind ONE generic seam;
-        # retrieval runs on the WRITE side (now, at recording time), never at
+        # the activated plugins' providers) behind ONE generic seam;
+        # retrieval runs on the WRITE side (at recording time), never at
         # compose time, and resume folds the recorded reminders back without
         # re-retrieving. No providers, or providers that all return nothing ⇒
         # exactly the plain ``append_user_message`` bytes.
@@ -825,10 +789,9 @@ class InteractionDriver:
                 lease_id=lease.lease_id,
                 origin=goal_origin,
             )
-        # Web-path parity: a slash command (``/review``-style) the host
-        # resolved to built-in skill(s) deterministically pins their bodies for
-        # this turn onward — the same pre-loop activation the resident CLI runner
-        # does via ``activate_skills``, mirroring Claude Code's ``/skill-name``.
+        # A slash command (``/review``-style) the host resolved to built-in
+        # skill(s) deterministically pins their bodies for this turn onward —
+        # the same pre-loop activation ``activate_skills`` performs.
         # Emitted AFTER the goal message (goal-then-patch order); the Engine's
         # ``apply_state_patch`` records the per-skill content provenance itself
         # (fold-guarded, first-only). ``()`` ⇒ byte-identical to the no-skill path.
@@ -841,7 +804,7 @@ class InteractionDriver:
         # into the ONE ``apply_state_patch`` call below — so a skill that is both
         # declared on the spec and separately activated (e.g. a slash command)
         # activates exactly once, and a spec with no declared skills stays
-        # byte-identical to the pre-fix path.
+        # byte-identical to the no-declared-skill path.
         declared_skills_fn = getattr(host, "declared_skill_activations", None)
         declared_skills = (
             declared_skills_fn(agent) if callable(declared_skills_fn) else ()
@@ -855,13 +818,11 @@ class InteractionDriver:
                 patch=TaskStatePatch(activate_skills=list(combined_activations)),
                 lease_id=lease.lease_id,
             )
-        # The session-level instructions + environment residents are now
-        # activated by the workspace pack's init hooks (spec §4.5), run through
-        # the SeedRecorder above alongside the memory index — replacing the
-        # three feature-named seed recorders and the host's
-        # ``content_snapshots`` seam. The workspace factory captures the
-        # SAME snapshot its renderer holds, so the recorded fingerprint still
-        # equals the composed bytes by construction.
+        # The session-level instructions + environment residents are
+        # activated by the workspace pack's init hooks, run through
+        # the SeedRecorder above alongside the memory index. The workspace
+        # factory captures the SAME snapshot its renderer holds, so the
+        # recorded fingerprint equals the composed bytes by construction.
         return SeededTurn(task_id=task.task_id, lease=lease, prelude=None)
 
     def drive_seeded(self, seeded: SeededTurn) -> DriveOutcome:
@@ -869,10 +830,9 @@ class InteractionDriver:
 
         The second half of the split drive path: runs the canonical
         ``run_leased_task`` primitive (with the seeded woken prelude, if any),
-        drains any S3b delegation subtree synchronously, then folds the
-        outcome. Identical work to the tail of the pre-split ``start`` /
-        ``_drive_woken`` — only *when* it runs (request thread vs background
-        thread) differs between the synchronous and async transports.
+        drains any delegation subtree synchronously, then folds the
+        outcome. Only *when* it runs (request thread vs background thread)
+        differs between the synchronous and async transports.
         """
         try:
             # ``keep_lease_alive`` renews the lease while the step runs: this
@@ -915,7 +875,7 @@ class InteractionDriver:
                 seeded.lease.lease_id, retryable=True, reason=str(exc)
             )
             raise
-        # S3b: if this turn delegated, drive the (possibly nested) delegation
+        # if this turn delegated, drive the (possibly nested) delegation
         # tree to terminal synchronously before folding the outcome. The drain
         # leases + runs each node itself (each wrapped in its own heartbeat); a
         # node that still loses its lease converges to terminal the same way.
@@ -932,12 +892,12 @@ class InteractionDriver:
             # ToolCallApprovalRequested is on its own stream (the SSE tree
             # surfaces it), and the later approve / deny / answer on the
             # child re-enters the tree via _resume_woken_ancestors below.
-            # Raising here used to 409 the command AND strand the parent
-            # forever — no code path ever re-entered the drain.
+            # Raising here would 409 the command AND strand the parent
+            # forever — no code path would re-enter the drain.
             pass
         # Out-of-band parent resume: if THIS driven task settled a child
         # whose parent tree was stranded on an approval suspend, the
-        # ChildLifecycleObserver has already delivered the parent's wake —
+        # ChildLifecycleObserver has delivered the parent's wake —
         # walk up and drive the woken ancestors.
         self._resume_woken_ancestors(seeded.task_id)
         return self._outcome(seeded.task_id)
@@ -1000,7 +960,7 @@ class InteractionDriver:
         attachment_texts: tuple[str, ...] = (),
         activations: tuple[str, ...] = (),
     ) -> DriveOutcome:
-        """Append a new user turn and drive it (issue-01 append-message).
+        """Append a new user turn and drive it.
 
         Requires the conversation to be suspended on the next-goal handle
         (a normally-finishing interactive turn). Walks the real dispatcher
@@ -1009,19 +969,18 @@ class InteractionDriver:
         ``AppendMessagePrelude`` — the single drive primitive, never an
         inline second resume machine.
 
-        Issue 06 — ``model_selector`` is the per-turn ``/model`` switch.
+        ``model_selector`` is the per-turn ``/model`` switch.
         When given, it is validated against
         ``principal.allowed_models ∩ allowlist`` (rejected → no switch, no
         durable write) and emitted as a ``ModelBound`` in the same
         post-``TaskWoken`` window as the appended goal (a
-        :class:`ModelBindPrelude` chaining the append). Mirroring Claude
-        Code's ``/model``, the new binding takes effect **going forward**:
-        the seed resolves the driving Engine *before* applying the prelude
-        (D6 seed-time durability) and the drive reuses that pinned Engine,
-        so this turn runs on the binding in force when it started and the
-        switch drives the **next** turn (whose fold now sees the new
-        ``ModelBound``). With no selector the conversation keeps its
-        current binding (no ``ModelBound`` written).
+        :class:`ModelBindPrelude` chaining the append). The new binding takes
+        effect **going forward**: the seed resolves the driving Engine *before*
+        applying the prelude and the drive reuses that pinned Engine, so this
+        turn runs on the binding in force when it started and the switch drives
+        the **next** turn (whose fold now sees the new ``ModelBound``). With no
+        selector the conversation keeps its current binding (no ``ModelBound``
+        written).
 
         ``provider_selector`` is the per-turn provider switch
         (folded into the SAME ``ModelBound`` as the model). Like
@@ -1065,9 +1024,9 @@ class InteractionDriver:
     ) -> SeededTurn:
         """Validate + seed an appended-goal turn without driving it.
 
-        The synchronous, durable half of :meth:`send_goal` (issue-01
-        append-message): refuse a non-next-goal-suspended task, authorize any
-        per-turn selector, write the CW2 reopen, then wake + lease. Raises
+        The synchronous, durable half of :meth:`send_goal`:
+        refuse a non-next-goal-suspended task, authorize any
+        per-turn selector, write the reopen, then wake + lease. Raises
         *before* any :class:`SeededTurn` on a rejected selector / wrong wake —
         so the async transport returns the same typed 4xx as the synchronous
         path; only ``run_leased_task`` moves off the request thread.
@@ -1100,9 +1059,9 @@ class InteractionDriver:
         # Build the woken prelude, validating any selector FIRST: a rejected
         # selector must leave NO durable write (no reopen, no ModelBound, no
         # turn), so ``_authorize_selector`` / ``_authorize_pair`` raise before
-        # the CW2 reopen below.
+        # the reopen below.
         # ``goal_origin`` tags this appended turn's
-        # author source (``None`` ⇒ a human follow-up goal, byte-identical;
+        # author source (``None`` ⇒ a human follow-up goal;
         # ``"system"`` ⇒ an MCP-prompt-expanded goal — host-injected content the
         # transcript attributes, and a recorded message resume reads back without
         # re-expanding).
@@ -1135,7 +1094,7 @@ class InteractionDriver:
         prelude: WokenPrelude
         if model_selector is None and provider_selector is None:
             # No per-turn switch — the conversation keeps both bindings; no
-            # ModelBound is written (byte-equal with the pre-I4 no-selector path).
+            # ModelBound is written.
             prelude = append
         else:
             # The model riding this ModelBound: the new selector when given,
@@ -1175,7 +1134,7 @@ class InteractionDriver:
         # permission_mode keyed by task_id — set AFTER selector authorization (a
         # rejected selector raises above, leaving the prior turn's mode intact) so
         # the reopen-resolve below and the (background-thread) drive both derive
-        # the same gating set. ``None`` ⇒ host default (byte-equal); overwrites the
+        # the same gating set. ``None`` ⇒ host default; overwrites the
         # previous turn's value so the frontend selector is the per-turn source.
         self._host.note_turn_permission(task_id, permission_mode)
         note_effort = getattr(self._host, "note_turn_effort", None)
@@ -1183,17 +1142,17 @@ class InteractionDriver:
             note_effort(task_id, effort)
         # Stash this turn's enabled-MCP aliases (clean names, no
         # url/token) so the reopen-resolve + drive connect the same servers. ``()``
-        # ⇒ no live MCP (byte-equal). Guarded — a host without the seam is a no-op.
+        # ⇒ no live MCP. Guarded — a host without the seam is a no-op.
         note_mcp = getattr(self._host, "note_turn_mcp", None)
         if note_mcp is not None:
             note_mcp(task_id, enabled_mcp)
-        # CW2: a new goal on a closed+suspended
+        # a new goal on a closed+suspended
         # conversation implicitly reopens it. Emit ``ConversationReopened`` in
         # the suspend window — BEFORE the wake — so it lands in
         # ``[TaskSuspended, TaskWoken)``, the control-event window fold folds the
         # reopen from when it reconstructs the resumed turn.
         # Only when actually closed → no event on the common (never-closed)
-        # path, so old recordings drift nowhere. ``closed`` is a lifecycle flag
+        # path. ``closed`` is a lifecycle flag
         # and does NOT itself imply any wake type; the suspended-on-NEXT_GOAL
         # guarantee comes solely from ``_require_human_suspend`` above, so a
         # non-next-goal wake can never reach this reopen.
@@ -1375,7 +1334,7 @@ class InteractionDriver:
         reason: Optional[str] = None,
         resolver: str = "driver",
     ) -> DriveOutcome:
-        """Approve a pending gated tool call and resume (issue-01 prelude)."""
+        """Approve a pending gated tool call and resume."""
         return self._resolve_approval(
             task_id, call_id=call_id, approved=True, reason=reason,
             resolver=resolver,
@@ -1389,7 +1348,7 @@ class InteractionDriver:
         reason: Optional[str] = None,
         resolver: str = "driver",
     ) -> DriveOutcome:
-        """Deny a pending gated tool call and resume (issue-01 prelude)."""
+        """Deny a pending gated tool call and resume."""
         return self._resolve_approval(
             task_id, call_id=call_id, approved=False, reason=reason,
             resolver=resolver,
@@ -1424,9 +1383,9 @@ class InteractionDriver:
         """Validate + seed an answer-and-resume turn (async transport half).
 
         The ask answer codec (``question_handle`` / ``load_questions_body`` /
-        ``normalize_answer_document``) is no longer a kernel import: it moved into
+        ``normalize_answer_document``) is not a kernel import: it lives in
         the ``ask_user_question`` built-in and reaches this driver on the mount's
-        typed ``answer_codec`` field (spec §4.3), threaded onto the resolved
+        typed ``answer_codec`` field, threaded onto the resolved
         Engine. A session that never mounted ``ask_user_question`` carries no
         codec and answering it fails loudly.
         """
@@ -1454,7 +1413,7 @@ class InteractionDriver:
         )
 
     def _answer_codec(self, task_id: str) -> Any:
-        """The session's ask answer codec (D8), read off the resolved Engine.
+        """The session's ask answer codec, read off the resolved Engine.
 
         The ``ask_user_question`` built-in's mount carries an
         :class:`~noeta.execution.control_tool.AskAnswerCodec` on its typed
@@ -1514,7 +1473,7 @@ class InteractionDriver:
         Per the wake domain rule (any payload belongs on the caller's own
         channel — a recorded message — never on the wake event), it does NOT
         ride the wake: when given, it is appended as an ``origin="system"``
-        user message in the H2 first-consume window (the background-notice
+        user message in the first-consume window (the background-notice
         idiom, via :class:`AppendMessagePrelude`). ``None`` seeds no prelude,
         keeping the resumed turn byte-identical to an internal wake delivery.
         """
@@ -1541,10 +1500,9 @@ class InteractionDriver:
 
         Forbids manufacturing a ``TaskCompleted`` terminal from the
         control plane (that would fake a policy ``Decision``). ``cancel`` is
-        different: ``TaskCancelled`` is a **pre-existing L0 control event**
-        (no new schema; absent from any historical recording → byte-safe),
-        and fold already treats it as a terminal lifecycle event. It is
-        written via ``system_emit`` (an observer-style control-plane write,
+        different: ``TaskCancelled`` is an L0 control event
+        (no new schema), and fold treats it as a terminal lifecycle event. It
+        is written via ``system_emit`` (an observer-style control-plane write,
         no lease / no ``state_patch``), so it does not race the Engine's
         single ``RuntimeState`` writer.
 
@@ -1577,13 +1535,13 @@ class InteractionDriver:
         # ``make build`` outlives the task that started it, so cancelling the
         # conversation must not leave orphans). Reuses the per-job kill primitive
         # via the host seam; ``getattr`` so a host without background execution
-        # (test doubles) is a clean no-op. issue 04's session-CLOSE cascade
+        # (test doubles) is a clean no-op. The session-CLOSE cascade
         # reuses the SAME ``kill_background_shells`` primitive.
         kill_bg = getattr(host, "kill_background_shells", None)
         if callable(kill_bg):
             kill_bg(task_id)
         # background sub-agent cascade (docs/adr/background-subagent.md): the
-        # ``request_cancellation`` mark above already makes each in-flight
+        # ``request_cancellation`` mark above makes each in-flight
         # background child abandon its drive at the next step boundary (the
         # ``DrainHost.cancel_check`` polls it); this just frees the registry's
         # per-session cap table. ``getattr`` so a host without it is a no-op.
@@ -1607,14 +1565,13 @@ class InteractionDriver:
     ) -> DriveOutcome:
         """Close / archive a conversation by writing ``ConversationClosed``.
 
-        Issue 08. An interactive
+        An interactive
         conversation rests at a trailing next-goal ``suspended`` and is
         **never** forced to ``TaskCompleted`` from the control plane (that
         would manufacture a terminal not produced by any policy ``Decision``).
         "Closed" is a lifecycle dimension **orthogonal** to
-        ``task.status``: this writes a *new* L0 control event (absent from any
-        historical recording → byte-safe, exactly like ``ModelBound`` /
-        ``TaskCancelled``), folded into ``GovernanceState.closed`` so the
+        ``task.status``: this writes an L0 control event
+        folded into ``GovernanceState.closed`` so the
         sessions-list / inspect hot path can query it **by fold, never from an
         Observer**. ``task.status`` stays ``suspended`` — the conversation is
         not terminated, only marked closed.
@@ -1647,7 +1604,7 @@ class InteractionDriver:
             request(task_id)
         # Session-CLOSE cascade: a closed conversation
         # must not leave its long-running ``shell_run(background)`` processes
-        # orphaned. Reuses issue 03's per-session kill primitive via the SAME
+        # orphaned. Reuses the per-session kill primitive via the SAME
         # host seam ``cancel`` uses (SIGTERM→SIGKILL per job; the watchers reap +
         # record ``BackgroundShellKilled`` on the session-root stream).
         # ``getattr`` so a host without background execution (test doubles) is a
@@ -1676,15 +1633,14 @@ class InteractionDriver:
     ) -> DriveOutcome:
         """Stop an in-flight turn WITHOUT ending the conversation.
 
-        The third member of the human-stop family, and the one that was
-        missing. ``cancel`` kills the conversation (``TaskCancelled``,
-        terminal, not reopenable); ``close`` archives it
-        (``ConversationClosed``); this one does neither — it halts the turn the
-        model is in the middle of and leaves the task resting at its next-goal
-        suspend, live and resumable by simply typing again. What pressing Esc
-        in an interactive client should do.
+        The third member of the human-stop family. ``cancel`` kills the
+        conversation (``TaskCancelled``, terminal, not reopenable); ``close``
+        archives it (``ConversationClosed``); this one does neither — it halts
+        the turn the model is in the middle of and leaves the task resting at
+        its next-goal suspend, live and resumable by simply typing again. What
+        pressing Esc in an interactive client should do.
 
-        Mechanically it reuses the landing the worker already implements
+        Mechanically it reuses the landing the worker implements
         (``run_leased_task`` → ``_settle_stopped_turn``): write the durable
         marker, mark the process-local cancel registry, and the Engine's poll
         at its next turn boundary raises ``TaskCancellationRequested``. The
@@ -1692,11 +1648,6 @@ class InteractionDriver:
         handle. Ordering matters and matches ``cancel`` / ``close``: the
         durable ``TurnInterrupted`` is written BEFORE the registry mark, so the
         re-fold can never race ahead of its own reason.
-
-        Until now that landing was reachable only as a side effect of ``close``
-        (which also archives the conversation) or by poking the registry
-        directly — and a bare poke left no durable trace that a human had
-        stopped anything.
 
         The interrupted turn's events **stay on the stream** as real history:
         the model said what it said and the tools ran what they ran. Throwing
@@ -1765,16 +1716,16 @@ class InteractionDriver:
         reopened_by: str = "user",
         reason: Optional[str] = None,
     ) -> DriveOutcome:
-        """Explicitly reopen a closed conversation (audit-symmetric, issue 08).
+        """Explicitly reopen a closed conversation (audit-symmetric).
 
-        Reopen is **advisory**: a new goal on a closed+suspended Task already
-        reopens it implicitly (CW2 — :meth:`send_goal` emits the same event),
+        Reopen is **advisory**: a new goal on a closed+suspended Task
+        reopens it implicitly (:meth:`send_goal` emits the same event),
         so this method exists only to record the reopen in the lifecycle audit
         when a surface wants an explicit "reopen" action distinct from sending
         the next goal. Writes ``ConversationReopened`` (writer Engine), folding
         ``GovernanceState.closed = False`` without touching ``task.status``.
 
-        **Idempotent** (CW2): reopening a conversation that is not currently
+        **Idempotent**: reopening a conversation that is not currently
         closed is a no-op — no event is written, so calling ``reopen`` twice (or
         on a never-closed conversation) cannot stack spurious audit entries.
         Refuses a terminal task.
@@ -1795,7 +1746,7 @@ class InteractionDriver:
     def rewind(self, task_id: str, *, message_seq: int) -> DriveOutcome:
         """Rewind the conversation to BEFORE the user message at ``message_seq``.
 
-        D9 (issue 01 — conversation half only). ``message_seq`` is
+        ``message_seq`` is
         the seq of the rewound user-goal ``MessagesAppended`` event (the bubble
         the user clicked "undo" on). The conversation is re-based to where it
         rested just BEFORE that turn opened: this message, the AI output it
@@ -2032,7 +1983,7 @@ class InteractionDriver:
         """The seq to fold-through for a rewind of the message at ``message_seq``.
 
         ``message_seq`` must be a user-goal ``MessagesAppended`` (the rewind
-        anchor lives on a user bubble, D9). The keep boundary is the seq right
+        anchor lives on a user bubble). The keep boundary is the seq right
         before that turn's opener (the ``TaskWoken`` for a follow-up turn, the
         ``TaskStarted`` for the opening turn), which is the prior next-goal
         suspend (or, for the first turn, the pre-loop header). Folding through it
@@ -2065,15 +2016,15 @@ class InteractionDriver:
 
         Walk the dead tail (seq > ``keep_through``) on the parent stream AND,
         recursively, every descendant subtask stream it spawned inside that span
-        (D8: subtasks share the parent's ONE workspace — so their
+        (subtasks share the parent's ONE workspace — so their
         edits hit the same disk and must be undone together). For each workspace path take
         its EARLIEST baseline — the first edit that pinned the file's pre-turn
-        state. The shared per-turn gate (D8) stashes at most ONE baseline per path
+        state. The shared per-turn gate stashes at most ONE baseline per path
         across the whole tree, so the union is clean. Write each back to disk —
-        or, for a sandbox session (T7), back into the CONTAINER through the
+        or, for a sandbox session, back into the CONTAINER through the
         session's ExecEnv; a baseline with no ``content_ref`` means the AI created
         the file inside the rewound span, so it is DELETED. Only AI
-        ``edit``/``write`` touches are covered (D4): a path the shell mutated
+        ``edit``/``write`` touches are covered: a path the shell mutated
         never surfaced ``file_changes`` so it has no baseline here.
 
         Reuses the parent↔child graph (``SubtaskSpawned.subtask_id`` +
@@ -2090,9 +2041,9 @@ class InteractionDriver:
         def _collect(stream: list[EventEnvelope], *, after: int) -> None:
             # ``after``: only seq > this count is in the rewound span — the parent
             # stream is walked from ``keep_through``. A subtask's WHOLE stream
-            # lives inside the rewound turn (v1 runs subtasks sequentially and the
+            # lives inside the rewound turn (subtasks run sequentially and the
             # parent waits until the whole delegation tree is terminal before
-            # continuing, D8), so children are walked with ``after=-1`` (every event).
+            # continuing), so children are walked with ``after=-1`` (every event).
             for env in stream:
                 if env.seq <= after:
                     continue
@@ -2112,9 +2063,9 @@ class InteractionDriver:
         _collect(events, after=keep_through)
         if not earliest:
             return
-        # T7 — a SANDBOX session's baselines live in the container, so the
+        # a SANDBOX session's baselines live in the container, so the
         # write-back must go through the session's ExecEnv (the recorded
-        # ``exec_env_ref``, T6) rooted at the container workdir, NOT the host FS.
+        # ``exec_env_ref``) rooted at the container workdir, NOT the host FS.
         # ``exec_env_for_ref`` returns ``None`` for a local session (or a host
         # without a sandbox / a test double), so the local path below stays
         # byte-identical. This is live-only, exactly like the local path.
@@ -2220,8 +2171,7 @@ class InteractionDriver:
     ) -> DriveOutcome:
         """Wake + lease + drive — the one-call woken seam (seed-then-drive).
 
-        Identical machine to the product runner's woken-command drive — the
-        woken-command-prelude seam (issue 01) so the H2 ``consumed_wake_event``
+        The woken-command-prelude seam, so the ``consumed_wake_event``
         release discipline and the ``note_woken → prelude → run_one_step``
         ordering are NOT re-inlined per surface. The split halves are
         :meth:`_seed_woken` (wake + lease) and :meth:`drive_seeded`
@@ -2243,23 +2193,23 @@ class InteractionDriver:
         """Wake the task on ``handle`` and take the matched lease — no drive.
 
         The synchronous half of the woken seam: consumes the matched wake into
-        a targeted lease (H2 ``consumed_wake_event`` discipline) and packages
+        a targeted lease (the ``consumed_wake_event`` discipline) and packages
         it with the per-command prelude for :meth:`drive_seeded` to run.
 
         ``condition`` is the wake event to deliver; ``None`` (every human
         command) means ``HumanResponseReceived(handle)``. ``deliver_event``
         passes an :class:`ExternalEvent` instead — the machine is otherwise
-        identical, so the H2 consume discipline is never re-inlined per wake
+        identical, so the consume discipline is never re-inlined per wake
         variant.
 
-        D6 (docs/adr/step-attempt-recovery.md): an append-type prelude
+        An append-type prelude
         (``durable_at_seed``) is applied HERE, synchronously, right after
         the lease — ``note_woken`` + the prelude's events are durable before
         the command is acked, so an acked ``send_goal`` / ``answer`` can
         never lose the user's input to a crash. The returned
         :class:`SeededTurn` then carries ``prelude=None`` and the drive runs
-        the bare step (worker case 2′). The approval prelude (executes the
-        approved tool) keeps the old drive-side path.
+        the bare step. The approval prelude (executes the
+        approved tool) keeps the drive-side path.
         """
         host = self._host
         expected: Optional[str] = None
@@ -2286,7 +2236,7 @@ class InteractionDriver:
             # Dispatcher out of sync with the folded truth (e.g. a fresh
             # dispatcher over an existing log): restore its rows from the
             # fold and retry ONCE. The retried lease then falls through to
-            # the same seed tail below — the D6 durable-prelude application
+            # the same seed tail below — the durable-prelude application
             # must not depend on which acquisition path produced the lease.
             task = fold(host.event_log, host.content_store, task_id)
             if self._restore_dispatcher_to_baseline(task_id, task):
@@ -2319,14 +2269,14 @@ class InteractionDriver:
     def _apply_seed_prelude(
         self, task_id: str, lease: Any, prelude: WokenPrelude
     ) -> Any:
-        """Apply an append-type prelude synchronously under the seed's lease
-        (D6): ``note_woken`` + the prelude's durable events land before the
+        """Apply an append-type prelude synchronously under the seed's lease:
+        ``note_woken`` + the prelude's durable events land before the
         202 ack, in exactly the order (and bytes) the drive-side path
-        recorded them. Returns the Engine resolved from the PRE-prelude fold
+        records them. Returns the Engine resolved from the PRE-prelude fold
         so the drive runs this turn on the binding in force when it started
-        (a prelude-written ``ModelBound`` drives the next turn, as before);
+        (a prelude-written ``ModelBound`` drives the next turn);
         the drive itself is then prelude-less — its woken machine reconciles
-        the already-durable ``TaskWoken`` and runs the bare step (case 2′).
+        the already-durable ``TaskWoken`` and runs the bare step.
         """
         host = self._host
         task = fold(host.event_log, host.content_store, task_id)
@@ -2339,7 +2289,7 @@ class InteractionDriver:
         except Exception:
             # ``TaskWoken`` is already durable; propagating with the turn
             # half-seeded would strand a ``running`` window the worker later
-            # re-drives WITHOUT the command's input (a bare case 2′), and the
+            # re-drives WITHOUT the command's input (a bare step), and the
             # client's retry would find the task not suspended. Compensate:
             # re-suspend on the wake's own handle and release the lease, so
             # the stream reads woken→suspended and retrying the SAME command
@@ -2370,11 +2320,10 @@ class InteractionDriver:
         """Refuse a command whose task is not suspended on ``handle``; return
         the folded task on success.
 
-        Mirrors the product runner's goal-resume path /
-        ``resolve_tool_approval`` guards: appending a goal / resolving an
+        The ``resolve_tool_approval`` guard: appending a goal / resolving an
         approval must not silently consume an unrelated wake condition. The
         folded task is returned so a caller (``send_goal``) can read the
-        lifecycle state (CW2: is this conversation closed?) without re-folding.
+        lifecycle state (is this conversation closed?) without re-folding.
         """
         host = self._host
         task = fold(host.event_log, host.content_store, task_id)
@@ -2432,28 +2381,27 @@ class InteractionDriver:
     def _authorize_selector(self, selector: Optional[str]) -> str:
         """Validate a model selector and return the model id to bind.
 
-        Issue 06: the selector is permitted iff it is in
-        ``principal.allowed_models ∩ deployment-allowlist``. The CLI's ⊤
+        The selector is permitted iff it is in
+        ``principal.allowed_models ∩ deployment-allowlist``. A ⊤
         principal permits any selector (still gated by the allowlist); a web
         principal's ``allowed_models`` is the session's explicit set. A
         rejected selector raises :class:`ModelSelectorError` *before* any
         durable write, so no ``ModelBound`` / Task / turn is produced.
 
-        ``None`` (no selector — the CLI's default, or a web request that
-        omits ``model``) binds the host-fixed :attr:`_default_model`: that is
-        the deployment's own choice, not caller input, so it is not subject
-        to the selector check. Returns the concrete model id to record in
-        ``ModelBound`` (and to key the resolver Engine on).
+        ``None`` (no selector) binds the host-fixed :attr:`_default_model`:
+        that is the deployment's own choice, not caller input, so it is not
+        subject to the selector check. Returns the concrete model id to record
+        in ``ModelBound`` (and to key the resolver Engine on).
 
-        D-C3: the allowlist check runs on the *alias* (the selector the
+        The allowlist check runs on the *alias* (the selector the
         caller / principal speaks), then the alias is resolved to its real
-        model-id via the sdk catalog just before binding. So ModelBound,
+        model-id via the catalog just before binding. So ModelBound,
         ``resolver._bound_model_for``, ``req.model``, and the pricing key all
-        carry the real id and never drift; a rejected selector still raises
+        carry the real id and never drift; a rejected selector raises
         with the original alias before any resolution or durable write. A
-        non-alias selector (already a real id, or the test-only ``stub-model``)
+        non-alias selector (a real id, or the test-only ``stub-model``)
         passes through the injected alias resolver unchanged (identity when no
-        catalog resolver was injected — microkernel M2).
+        catalog resolver was injected).
         """
         if selector is None:
             return self._default_model
@@ -2491,15 +2439,15 @@ class InteractionDriver:
 
         Returns the bound provider **name** to fold into the ``ModelBound``, or
         ``None`` when no provider was selected (provider sticks at the host
-        default / current binding — byte-equal with the pre-I4 single-provider
-        path). When a provider IS named the pair is legal iff:
+        default / current binding). When a provider IS named the pair is legal
+        iff:
 
           1. the provider name is configured on the host's registry, AND
           2. the model that will actually be bound after this turn belongs to
              that provider. This is always checked — including provider-only
              switches (no ``model_selector``) where ``bound_model`` (the
              already-resolved id of the current sticky binding) is tested
-             instead. This closes three gaps in the original design:
+             instead. This covers three cases:
 
              (a) ``seed_start`` supplied a provider but no model — the host
                  default would be bound to a provider that never declared it.
@@ -2548,14 +2496,14 @@ class InteractionDriver:
         return provider_selector
 
     def _drain_pending_subtasks(self, task_id: str) -> None:
-        """S3b — drive any pending sub-agent delegation tree synchronously,
+        """Drive any pending sub-agent delegation tree synchronously,
         in-request, after a driven command.
 
         A parent turn that ended on a delegation wake
         (``SubtaskCompleted`` / ``SubtaskGroupCompleted``) is driven to its
         resumed terminal here, so ``start`` / ``send_goal`` / ``approve`` /
         ``deny`` / ``answer`` all settle a delegation tree before returning the
-        :class:`DriveOutcome` (no WorkerLoop — the SR1 drain runs on the driver).
+        :class:`DriveOutcome` (no WorkerLoop — the drain runs on the driver).
 
         Host-tolerant: a resolver without ``drive_pending_subtasks`` (e.g. the
         single-agent / lifecycle resolver) is a NO-OP, and a turn that did NOT
@@ -2625,7 +2573,7 @@ class InteractionDriver:
     def _outcome(self, task_id: str) -> DriveOutcome:
         host = self._host
         task = fold(host.event_log, host.content_store, task_id)
-        # Per-session sandbox teardown (D4): when a ROOT task reaches a terminal,
+        # Per-session sandbox teardown: when a ROOT task reaches a terminal,
         # its whole tree is done, so release the session's container. Guarded to
         # the root (``parent_task_id is None``) so a completed SUBTASK never reaps
         # the parent's shared container, and to ``terminal`` so an interactive

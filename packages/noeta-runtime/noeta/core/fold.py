@@ -1,10 +1,8 @@
-"""fold: rebuild a ``Task`` from an EventLog (+ ContentStore).
+"""Rebuild a ``Task`` from its event stream (+ ContentStore).
 
 Both the from-scratch path and the snapshot-accelerated path (skip the
-prefix-scan when a snapshot exists) live here.
-
-The function intentionally takes no other inputs: ``fold(eventlog,
-contentstore, task_id)`` is the entire signature, matching the SDD.
+prefix-scan when a snapshot exists) live here, and must land on byte-equal
+state: resume refolds the same prefix and has to reach the same content address.
 """
 
 from __future__ import annotations
@@ -38,21 +36,18 @@ def fold(
 ) -> Task:
     """Reconstruct the current ``Task`` state from its event stream.
 
-    ``ignore_snapshots`` exists so tests can verify that a from-scratch
-    fold produces byte-equal state vs a snapshot-accelerated fold.
+    ``ignore_snapshots`` forces the from-scratch path so tests can verify it
+    produces byte-equal state to the snapshot-accelerated fold.
     """
     snap = None if ignore_snapshots else event_log.find_latest_snapshot(task_id)
     if snap is not None:
         body = content_store.get(snap.payload.state_ref)
         state_dict = deserialize_task_state(body)
         if _snapshot_is_legacy_for_issue18(state_dict):
-            # Pre-issue-18 snapshot bodies do not carry the governance
-            # accumulation fields fold now relies on. Treating them
-            # as authoritative would let BudgetGuard read undercounted
-            # values for the snapshot's event prefix. Discard the
-            # snapshot and fall back to the from-scratch path; the
-            # next ``_write_snapshot`` from a post-18 Engine will
-            # produce a body that reactivates the accelerated path.
+            # This snapshot body predates the governance accumulation fields
+            # fold relies on. Treating it as authoritative would let BudgetGuard
+            # read undercounted values for the snapshot's event prefix, so
+            # discard it and fall back to the from-scratch path.
             events = event_log.read(task_id)
             task = _bootstrap_from_genesis(events, task_id, content_store)
             tail = events[1:] if events else []
@@ -65,7 +60,7 @@ def fold(
         tail = events[1:] if events else []
 
     # One batch read for the whole tail (see ``_prefetch_refs``); the handlers
-    # below still deref through a plain ContentStore and are unaware of it.
+    # below deref through a plain ContentStore and are unaware of it.
     store = prefetched(content_store, _prefetch_refs(tail))
     for env in tail:
         _apply_event(task, env, store)
@@ -75,16 +70,15 @@ def fold(
 class BoundedEventLog:
     """A read-only EventLog view truncated at ``max_seq``.
 
-    Point-in-time state ("as it stood THROUGH ``max_seq``") is a fold over
-    only the events up to and including that seq. Rather than teach ``fold``
-    a seq cap, callers hand it this thin reader over the already-read prefix:
-    ``read`` filters to ``seq <= max_seq`` and ``find_latest_snapshot`` to a
-    baseline at or below the cap, so fold's own snapshot/rewound acceleration
-    still works inside the bounded window. Serves ONLY from the events it
-    was constructed with — never from the underlying store — so it is a pure
-    projection: no clock / IO of its own. Used by the conversation rewind
-    (``InteractionDriver.rewind``) and by the crash-recovery attempt seal
-    (``noeta.runtime.attempt``)."""
+    Point-in-time state ("as it stood THROUGH ``max_seq``") is a fold over only
+    the events up to and including that seq. Rather than teach ``fold`` a seq
+    cap, callers hand it this thin reader over the already-read prefix: ``read``
+    filters to ``seq <= max_seq`` and ``find_latest_snapshot`` to a baseline at
+    or below the cap, so fold's snapshot/rewind acceleration works inside the
+    bounded window. Serves ONLY from the events it was constructed with — never
+    from the underlying store — so it is a pure projection with no clock or IO
+    of its own.
+    """
 
     def __init__(
         self,
@@ -116,17 +110,13 @@ class BoundedEventLog:
 
 
 def _snapshot_is_legacy_for_issue18(state_dict: dict[str, object]) -> bool:
-    """Detect snapshots written before issue 18 introduced governance
-    accumulation.
+    """True for snapshot bodies that predate governance accumulation.
 
-    The presence of ``spawned_subtasks`` in the governance dict is the
-    stable schema sentinel: pre-18 fold never wrote it, so any snapshot
-    body without that key was produced by old code where
-    ``iterations / tool_calls / cost_usd / denied`` carried only their
-    default zeros — i.e. they do not represent the real prefix counters
-    BudgetGuard would need. Treating those snapshots as authoritative
-    would silently undercount and defeat the fold-from-EventLog
-    Guard-read model.
+    The presence of ``spawned_subtasks`` in the governance dict is the stable
+    schema sentinel: a body without that key carries only default-zero
+    ``iterations / tool_calls / cost_usd / denied`` counters, so it does not
+    represent the real prefix counters BudgetGuard needs. Trusting it would
+    silently undercount and defeat the fold-from-EventLog Guard-read model.
     """
     governance = state_dict.get("governance", {})
     if not isinstance(governance, dict):
@@ -204,13 +194,11 @@ def _bootstrap_from_genesis(
 def messages_from_appended(
     env: EventEnvelope, content_store: ContentStore
 ) -> list[Message]:
-    """Issue 14: dereference ``MessagesAppendedPayload.messages_ref`` to
-    the underlying ``list[Message]`` body.
+    """Dereference ``MessagesAppendedPayload.messages_ref`` to its
+    ``list[Message]`` body.
 
-    Inspect / CLI all hit this same pattern (the payload only
-    carries the ref + count to keep the envelope under the
-    4 KB ceiling). Centralised so a backend swap (Sqlite, S3) is one
-    callsite.
+    The payload carries only the ref + count to keep the envelope under the
+    4 KB ceiling. Centralised so a backend swap (Sqlite, S3) is one callsite.
     """
     body = content_store.get(env.payload.messages_ref)
     restored = from_canonical_bytes(body)
@@ -222,17 +210,13 @@ def apply_event(
 ) -> None:
     """Live-path entrypoint to the same handlers fold uses on resume.
 
-    Engine calls this after emitting events whose effect on the Task
-    state lives exclusively under fold's ownership (issue 14:
-    ``ContextPlanComposed``; single-writer means the
-    ``task.context.plan_ref = ...`` line must stay inside this module).
-    Keeping live and resume paths converged through one handler set
-    means a snapshot taken mid-step captures the same state fold would
-    rebuild from the prefix.
-
-    ``content_store`` is required because issue 14's
-    ``MessagesAppended`` handler dereferences ``messages_ref`` to
-    rebuild ``RuntimeState.messages``.
+    Engine calls this after emitting events whose effect on Task state lives
+    exclusively under fold's ownership (e.g. ``ContextPlanComposed``): the
+    single-writer rule keeps the ``task.context.plan_ref = ...`` line inside
+    this module. Converging live and resume paths on one handler set means a
+    snapshot taken mid-step captures the same state fold would rebuild from the
+    prefix. ``content_store`` is required because the ``MessagesAppended``
+    handler dereferences ``messages_ref`` to rebuild ``RuntimeState.messages``.
     """
     _apply_event(task, env, content_store)
 
@@ -240,13 +224,11 @@ def apply_event(
 def _apply_event(
     task: Task, env: EventEnvelope, content_store: ContentStore
 ) -> None:
-    """Route an event to the correct slice's reducer."""
     handler = _HANDLERS.get(env.type)
     if handler is None:
-        # Unknown types are intentionally non-fatal so future schema
-        # additions never break resume of historical streams (SDD: "adding
-        # an event type does not affect old folds"). We log a warning so
-        # the divergence is visible in inspect output.
+        # Unknown types are non-fatal so adding an event type never breaks
+        # resume of a historical stream. The warning keeps the divergence
+        # visible in inspect output.
         _log.warning(
             "fold: unknown event type %r at seq=%d on task %r; skipping",
             env.type,
@@ -260,7 +242,7 @@ def _apply_event(
 def _on_task_created(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
-    # TaskCreated already consumed by _bootstrap_from_genesis; no-op here.
+    # Consumed by _bootstrap_from_genesis.
     return
 
 
@@ -283,8 +265,7 @@ def _on_task_state_patched(
 def _on_messages_appended(
     task: Task, env: EventEnvelope, content_store: ContentStore
 ) -> None:
-    # Issue 14: dereference messages_ref from ContentStore. Frozen
-    # Messages need no defensive copy.
+    # Frozen Messages need no defensive copy.
     for m in messages_from_appended(env, content_store):
         task.runtime.messages.append(m)
 
@@ -292,27 +273,25 @@ def _on_messages_appended(
 def _on_task_snapshot(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
-    # In the snapshot-accelerated path we never reach here; in the from-
-    # scratch path the snapshot body is the same state we are already
-    # rebuilding, so it is intentionally a no-op.
+    # On the accelerated path we never reach here; on the from-scratch path the
+    # snapshot body is the same state being rebuilt, so it is a no-op.
     return
 
 
 def _on_task_rewound(
     task: Task, env: EventEnvelope, content_store: ContentStore
 ) -> None:
-    # The rewind baseline. In the accelerated path
-    # ``find_latest_snapshot`` already returned the latest TaskRewound (it
-    # carries a ``state_ref`` like TaskSnapshot), rehydrated it, and started the
-    # tail after it — so this handler is never reached there. In the from-scratch
-    # (``ignore_snapshots``) path we DO reach it while resuming the full prefix:
-    # the marker re-bases the conversation onto the state folded at
-    # ``target_seq``, discarding everything the dead ``target_seq+1..M`` segment
-    # accreted. We rehydrate the recorded baseline and overwrite the working
-    # Task's slices in place (the fold loop holds one Task reference, so a rebind
-    # would not propagate). This makes a from-scratch fold land byte-equal to the
-    # accelerated fold — the invariant resume relies on. Append-only is intact:
-    # nothing on the stream is rewritten, the marker simply names a new baseline.
+    # The rewind baseline. On the accelerated path ``find_latest_snapshot``
+    # already returned the latest TaskRewound (it carries a ``state_ref`` like
+    # TaskSnapshot), rehydrated it, and started the tail after it — so this
+    # handler is unreached there. On the from-scratch (``ignore_snapshots``)
+    # path it IS reached while resuming the full prefix: the marker re-bases the
+    # conversation onto the state folded at ``target_seq``, discarding whatever
+    # the dead ``target_seq+1..M`` segment accreted. Overwrite the working
+    # Task's slices in place — the fold loop holds one Task reference, so a
+    # rebind would not propagate. This makes a from-scratch fold land byte-equal
+    # to the accelerated fold. Append-only is intact: nothing on the stream is
+    # rewritten; the marker simply names a new baseline.
     body = content_store.get(env.payload.state_ref)
     baseline = rehydrate_task(deserialize_task_state(body))
     task.status = baseline.status
@@ -366,51 +345,41 @@ def _on_subtask_completed(
 def _on_context_plan_composed(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
-    # Issue 14 / Grill round 2 #10: ContextState's single writer is
-    # Engine fold (from this event). Composer computes the plan body
-    # but never mutates ``task.context`` directly — that would break
-    # the Composer's pure-function contract.
+    # Single writer for ContextState: fold owns this field, driven by this
+    # event. The Composer computes the plan body but never mutates
+    # ``task.context`` directly — that would break its pure-function contract.
     task.context.plan_ref = env.payload.plan_ref
-    # Issue 18 / core #2: ``ContextPlanComposed`` is emitted
-    # **unconditionally once per Engine step** — with ``plan_ref=None``
-    # when the composer produced no stored plan (the protocols-only
-    # ``PassthroughComposer`` fallback) — so it is the step-boundary
-    # event this counter folds from regardless of which composer is
-    # wired, and ``BudgetGuard.max_iterations`` is never inert.
-    # Byte-safety: the shipped ``ThreeSegmentComposer`` always set
-    # ``plan_ref``, so historical recordings are unchanged; only
-    # Passthrough steps (which previously emitted nothing and never
-    # counted) gained the event.
+    # ``ContextPlanComposed`` is emitted unconditionally once per Engine step —
+    # with ``plan_ref=None`` when the composer stored no plan (the
+    # ``PassthroughComposer`` fallback) — so it is the step-boundary event this
+    # counter folds from regardless of which composer is wired, and
+    # ``BudgetGuard.max_iterations`` is never inert.
     task.governance.iterations += 1
 
 
 def _on_tool_call_started(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
-    # Issue 18: count tool invocations as they begin so the in-flight
-    # call is visible to BudgetGuard *before* the next one would be
-    # admitted.
+    # Count a tool invocation as it begins so the in-flight call is visible to
+    # BudgetGuard before the next one would be admitted.
     task.governance.tool_calls += 1
 
 
 def _on_llm_request_finished(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
-    # Issue 18: accumulate per-step LLM cost the provider reported.
-    # Adapters that cannot price a call leave ``cost_usd`` at 0, which
-    # contributes nothing — the cap is still enforceable for adapters
-    # that do report cost.
+    # Accumulate per-step LLM cost the provider reported. An adapter that
+    # cannot price a call leaves ``cost_usd`` at 0, contributing nothing — the
+    # cap stays enforceable for adapters that do report cost.
     cost = float(getattr(env.payload, "cost_usd", 0.0) or 0.0)
     if cost > 0.0:
         task.governance.cost_usd += cost
 
-    # Foundation A (D-A3): accumulate per-token counters from the typed Usage.
-    # ``getattr`` tolerance is the byte-safe seam: an old recording's
-    # LLMRequestFinished payload has no ``usage`` field → ``None`` →
-    # nothing accumulates, so a from-scratch fold of an old stream lands
-    # the same zero counters it always did. ``input`` is the derived
-    # uncached+cache_read+cache_write total (kept distinct from the cache
-    # breakdown so ① can price them at different unit rates).
+    # Accumulate per-token counters from the typed Usage. The ``getattr``
+    # tolerance is the byte-safe seam: a payload with no ``usage`` field yields
+    # ``None`` and nothing accumulates, so a fold lands the same zero counters.
+    # ``input`` is the derived uncached+cache_read+cache_write total (kept
+    # distinct from the cache breakdown so a pricer can rate them separately).
     usage = getattr(env.payload, "usage", None)
     if usage is not None:
         task.governance.input_tokens += usage.input
@@ -418,13 +387,12 @@ def _on_llm_request_finished(
         task.governance.cache_read_tokens += usage.cache_read
         task.governance.cache_write_tokens += usage.cache_write
         task.governance.reasoning_tokens += usage.reasoning_tokens
-        # Also project the LAST-turn input total (last-write-wins)
-        # onto RuntimeState so the compaction trigger can use the real recorded
-        # size as its history baseline. Unlike the governance accumulators above
-        # this is NOT a running sum: each finished round-trip OVERWRITES it with
-        # that turn's ``Usage.input``. Reading an already-recorded value keeps
-        # resume re-derivation consistent (a refold lands the same baseline) —
-        # we never re-count tokens live.
+        # Project the LAST-turn input total (last-write-wins) onto RuntimeState
+        # so the compaction trigger uses the real recorded size as its history
+        # baseline. Unlike the accumulators above this is NOT a running sum:
+        # each finished round-trip OVERWRITES it with that turn's
+        # ``Usage.input``. Reading an already-recorded value keeps resume
+        # re-derivation consistent — tokens are never re-counted live.
         task.runtime.last_input_tokens = usage.input
 
 
@@ -444,13 +412,12 @@ def _on_tool_call_denied(
 def _on_tool_call_approval_requested(
     task: Task, env: EventEnvelope, content_store: ContentStore
 ) -> None:
-    # Phase 4.5 Issue A: record the blocked call as the durable recovery
-    # anchor so the approval-resume path can reconstruct the exact
-    # ToolCall from the EventLog/snapshot after a restart. Resolve the
-    # arguments back to a plain dict here (dereferencing ``arguments_ref``
-    # from the ContentStore for offloaded large calls) so every downstream
-    # reader of ``pending_approvals`` — engine resume, the detail read
-    # model — sees the real arguments without knowing about the offload.
+    # Record the blocked call as the durable recovery anchor so approval-resume
+    # can reconstruct the exact ToolCall from the EventLog/snapshot after a
+    # restart. Resolve the arguments back to a plain dict here (dereferencing
+    # ``arguments_ref`` for offloaded large calls) so every reader of
+    # ``pending_approvals`` sees the real arguments without knowing about the
+    # offload.
     task.governance.pending_approvals[env.payload.call_id] = {
         "tool_name": env.payload.tool_name,
         "arguments": resolve_tool_call_arguments(env.payload, content_store),
@@ -460,11 +427,9 @@ def _on_tool_call_approval_requested(
 def _on_tool_call_approval_resolved(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
-    # Phase 4.5 Issue A: the single authoritative resolution record.
-    # Append to the audit list, clear the pending anchor, and — on a
-    # deny — also append to the established ``denied`` governance
-    # counter (no separate ToolCallDenied event is emitted for a human
-    # deny).
+    # The single authoritative resolution record. Append to the audit list,
+    # clear the pending anchor, and — on a deny — also append to the ``denied``
+    # counter (no separate ToolCallDenied event is emitted for a human deny).
     task.governance.pending_approvals.pop(env.payload.call_id, None)
     task.governance.approvals.append(
         {
@@ -528,10 +493,9 @@ def _on_subtask_denied(
 def _on_task_cancelled(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
-    # TaskCancelled is a terminal lifecycle event per SDD; the
-    # governance record is part of the audit trail, not a status
-    # change in itself. Promote the task to ``terminal`` here so
-    # fold doesn't leave it in ``running`` / ``suspended`` after a
+    # TaskCancelled is a terminal lifecycle event; the governance record is part
+    # of the audit trail, not a status change in itself. Promote to ``terminal``
+    # here so fold does not leave the task ``running`` / ``suspended`` after a
     # cancel arrives.
     task.status = "terminal"
     task.wake_on = None
@@ -547,21 +511,19 @@ def _on_task_cancelled(
 def _on_model_bound(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
-    # Issue 06 (D2 / D3): fold the latest model binding
-    # into GovernanceState so the resolver keys the Engine on
-    # ``(agent_name, model)`` and inspect can trace every binding back to
-    # the authorizing Principal. Writer is the Engine under a driver
-    # command (validated *before* the emit), not a policy Decision.
+    # Fold the latest model binding into GovernanceState so the resolver keys
+    # the Engine on ``(agent_name, model)`` and inspect can trace every binding
+    # to the authorizing Principal. Writer is the Engine under a driver command
+    # (validated before the emit), not a policy Decision.
     model = str(getattr(env.payload, "model", ""))
     principal_identity = str(getattr(env.payload, "principal_identity", ""))
     task.governance.model_binding = model
     task.governance.principal_identity = principal_identity
-    # (I4): provider folds into the
-    # same model binding. When ``None`` (an old recording has no provider field,
-    # or a turn switched only the model), do **not** overwrite the existing
-    # provider_binding — provider carries over from the current binding (per-turn
-    # switch semantics: pass one and the other holds); the resolver falls back to
-    # the host default when the value is missing.
+    # Provider folds into the same model binding. When ``None`` (a turn switched
+    # only the model, or the field is absent), do NOT overwrite the existing
+    # ``provider_binding`` — provider carries over from the current binding
+    # (per-turn switch: pass one and the other holds); the resolver falls back
+    # to the host default when the value is missing.
     provider = getattr(env.payload, "provider", None)
     if provider is not None:
         task.governance.provider_binding = str(provider)
@@ -577,20 +539,17 @@ def _on_model_bound(
 def _on_task_host_bound(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
-    # D4: fold the durable server host identity into GovernanceState.
-    # Emitted once at task open on the server product path; old / non-server
-    # recordings have no TaskHostBound → these stay None. The earlier
-    # host/registry digest folds were retired along with the test infrastructure
-    # that consumed them.
+    # Fold the durable server host identity into GovernanceState. Emitted once
+    # at task open on the server product path; a recording without it leaves
+    # these None.
     task.governance.host_id = str(getattr(env.payload, "host_id", "")) or None
-    # The per-session workspace absolute path is welded into durable state.
-    # Legacy name-style records carried ``workspace`` (a name); those are superseded
-    # and fold to None here — the resolver falls back to its host-fixed default
-    # dir (D7 clean break: name-style records fold this field to None).
+    # The per-session workspace absolute path is welded into durable state. A
+    # record carrying only a workspace name folds this field to None — the
+    # resolver falls back to its host-fixed default dir.
     task.governance.workspace = (
         str(getattr(env.payload, "workspace_dir", "") or "") or None
     )
-    # T6: the sandbox container base_url welded per session, so a resumed /
+    # The sandbox container base_url welded per session, so a resumed /
     # reclaimed task reconnects to the SAME container. ``None`` on every local /
     # non-sandbox recording → resolver uses the local host, byte-equal.
     task.governance.exec_env_ref = (
@@ -601,13 +560,12 @@ def _on_task_host_bound(
 def _on_mcp_provenance_recorded(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
-    # (issue 07): fold the per-task MCP provenance into
-    # GovernanceState so the inspect / read-model path can answer "which MCP
-    # connectors + which tools was this task given this run" by fold (never from
-    # an Observer projection). The payload's ``servers`` is already the
-    # credential-free, alias-sorted record (names only, no url/token); we copy it
-    # verbatim. Emitted once at connect time; a task with no MCP carries no such
-    # event → this stays the empty default, byte-equal.
+    # Fold the per-task MCP provenance into GovernanceState so the inspect /
+    # read-model path can answer "which MCP connectors + which tools was this
+    # task given this run" by fold, never from an Observer projection. The
+    # payload's ``servers`` is already the credential-free, alias-sorted record
+    # (names only, no url/token); copy it verbatim. A task with no MCP carries
+    # no such event → this stays the empty default.
     servers = getattr(env.payload, "servers", None)
     if isinstance(servers, list):
         task.governance.mcp_provenance = [dict(s) for s in servers]
@@ -616,13 +574,12 @@ def _on_mcp_provenance_recorded(
 def _on_conversation_closed(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
-    # Issue 08 ("No synthesized terminal"): fold the close into
-    # GovernanceState so the sessions-list / inspect hot path can query
-    # "closed?" by fold — never from an Observer (which is a projection, not
-    # state of record). This is a lifecycle flag ORTHOGONAL to task.status:
-    # we deliberately do NOT touch ``task.status`` here — a closed
-    # conversation stays ``suspended`` (no manufactured terminal). Writer is
-    # the Engine under the driver's close command, not a policy Decision.
+    # Fold the close into GovernanceState so the sessions-list / inspect hot
+    # path can query "closed?" by fold, never from an Observer (a projection,
+    # not state of record). This is a lifecycle flag ORTHOGONAL to task.status:
+    # a closed conversation stays ``suspended`` — no manufactured terminal, so
+    # ``task.status`` is left alone here. Writer is the Engine under the driver's
+    # close command, not a policy Decision.
     closed_by = str(getattr(env.payload, "closed_by", ""))
     reason = getattr(env.payload, "reason", None)
     task.governance.closed = True
@@ -636,9 +593,9 @@ def _on_conversation_closed(
 def _on_conversation_reopened(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
-    # Issue 08: the audit-symmetric reopen. Clears the ``closed`` flag (a new
-    # goal on a closed+suspended Task already works regardless — reopen is
-    # advisory, not a lock). Like its sibling, leaves ``task.status`` alone.
+    # The audit-symmetric reopen. Clears the ``closed`` flag (a new goal on a
+    # closed+suspended Task already works regardless — reopen is advisory, not a
+    # lock). Like its sibling, leaves ``task.status`` alone.
     reopened_by = str(getattr(env.payload, "reopened_by", ""))
     reason = getattr(env.payload, "reason", None)
     task.governance.closed = False
@@ -652,21 +609,18 @@ def _on_conversation_reopened(
 def _on_step_transition_marked(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
-    # Foundation B (D-B3): project the latest non-default continuation tag onto
-    # ``RuntimeState.last_transition`` (last-write-wins — successive marks
-    # simply overwrite, so the guard reads the most recent one). D-B5: an
-    # unknown ``reason`` from a newer producer is NOT rejected here; we store
-    # the raw value so inspect can see the drift, mirroring fold's
-    # warning-not-fatal stance on unknown event types.
+    # Project the latest non-default continuation tag onto
+    # ``RuntimeState.last_transition`` (last-write-wins). An unknown ``reason``
+    # from a newer producer is NOT rejected here; store the raw value so inspect
+    # can see the drift, mirroring fold's warning-not-fatal stance on unknown
+    # event types.
     task.runtime.last_transition = env.payload.reason
 
 
-#: ⑥ compaction thrashing detection thresholds (D6.1). Aligned
-#: with Claude Code's "Autocompact is thrashing" heuristic — "refilled to the
-#: limit within 3 turns of the previous compact, 3 times in a row".
-#: ``_THRASH_CLOSE_TURNS`` (K=3) is the turn-gap that still counts as a "close"
-#: refill; ``_THRASH_RUN_LIMIT`` (M=3) is how many consecutive close refills
-#: latch the thrashing flag. v1 is not configurable (constants, not Options).
+#: Compaction thrashing detection thresholds. ``_THRASH_CLOSE_TURNS`` (K=3) is
+#: the turn-gap that still counts as a "close" refill; ``_THRASH_RUN_LIMIT``
+#: (M=3) is how many consecutive close refills latch the thrashing flag. Not
+#: configurable (constants, not Options).
 _THRASH_CLOSE_TURNS = 3
 _THRASH_RUN_LIMIT = 3
 
@@ -674,39 +628,32 @@ _THRASH_RUN_LIMIT = 3
 def _on_compacted(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
-    # ③ (D-3): project the compaction result onto ContextState (single
-    # writer). The first ``boundary_count`` messages have been
-    # collapsed into the summary behind ``summary_ref``; the Composer reads
-    # this slice next compose to swap the covered prefix for the summary.
-    # ``CompactionRequested`` is observational (no state) → registered as a
-    # no-op below.
+    # Project the compaction result onto ContextState (single writer). The
+    # first ``boundary_count`` messages have been collapsed into the summary
+    # behind ``summary_ref``; the Composer reads this slice next compose to swap
+    # the covered prefix for the summary.
     task.context.summary_ref = env.payload.summary_ref
     task.context.summary_boundary = env.payload.boundary_count
     # A compaction INVALIDATES the real-usage baseline: every recorded input
-    # count in hand describes a history that no longer exists. Anything reading
-    # it now over-reads the collapsed history — the trigger would re-fire on a
-    # just-shrunk prefix whose boundary cannot advance (``compaction_no_progress``),
-    # and the Composer's prune would derive an absurd density and over-clear.
-    # ``0`` is the same "no baseline yet" value a fresh task carries, so every
-    # consumer's existing first-turn fallback (pure estimate / density 1.0)
-    # covers this case with no new branch. Belongs in fold rather than in a
-    # Policy-local sentinel: it is a property of the history, so every reader
-    # must see it, and a resumed run must re-derive it — ADR context-compaction
-    # "Decision, part 2" states the rule; this is the layer that owns the field.
+    # count describes a history that no longer exists. Reading it now over-reads
+    # the collapsed history — the trigger would re-fire on a just-shrunk prefix
+    # whose boundary cannot advance (``compaction_no_progress``), and the
+    # Composer's prune would derive an absurd density and over-clear. ``0`` is
+    # the same "no baseline yet" value a fresh task carries, so every consumer's
+    # first-turn fallback covers this case with no new branch. Belongs in fold,
+    # not a Policy-local sentinel: it is a property of the history, so every
+    # reader must see it and a resumed run must re-derive it.
     task.runtime.last_input_tokens = 0
-    # ⑥ thrashing detection (D6.1/D6.2): measure the turn-gap between this
-    # ``Compacted`` and the previous one and latch a flag when several land
-    # back-to-back. The gap is measured in ``GovernanceState.iterations`` — the
-    # per-compose turn counter fold maintains from ``ContextPlanComposed`` (one
-    # per Engine step, see ``_on_context_plan_composed``). It is chosen over
-    # react.py's ``_step_count`` (a Policy *instance* attribute fold cannot see)
-    # and over ``len(runtime.messages)`` (grows a variable 1-2 per turn, a
-    # noisier proxy for "turns") because it is fold-visible, strictly monotonic,
-    # EventLog-reconstructable, and maps 1:1 to Claude Code's "within N turns"
-    # unit. The triggering compose's ``ContextPlanComposed`` is folded before
-    # this ``Compacted``, so the counter already reflects this compaction's turn.
-    # Complementary to the anti-spiral guard (a compaction with NO boundary
-    # progress → FailDecision, in ``handle_compaction_requested``): thrashing is
+    # Thrashing detection: measure the turn-gap between this ``Compacted`` and
+    # the previous one and latch a flag when several land back-to-back. The gap
+    # is measured in ``GovernanceState.iterations`` — the per-compose turn
+    # counter fold maintains from ``ContextPlanComposed``. It is chosen over a
+    # Policy instance attribute fold cannot see, and over ``len(runtime.messages)``
+    # (a noisier proxy for "turns"), because it is fold-visible, strictly
+    # monotonic, and EventLog-reconstructable. The triggering compose's
+    # ``ContextPlanComposed`` is folded before this ``Compacted``, so the counter
+    # already reflects this compaction's turn. Complementary to the anti-spiral
+    # guard (a compaction with NO boundary progress → FailDecision): thrashing is
     # the opposite case — compaction DOES make progress but the freed window is
     # immediately refilled by re-reading the same large content.
     marker = task.governance.iterations
@@ -715,8 +662,8 @@ def _on_compacted(
         task.context.close_compaction_run += 1
     else:
         # First compaction (no prior marker) or a distant one (gap > K) — start
-        # the run over. A distant compaction here is what clears a previously
-        # latched ``compaction_thrashing`` flag below.
+        # the run over. A distant compaction here clears a previously latched
+        # ``compaction_thrashing`` flag below.
         task.context.close_compaction_run = 0
     task.context.last_compaction_marker = marker
     task.context.compaction_thrashing = (
@@ -727,14 +674,12 @@ def _on_compacted(
 def _on_assistant_thinking_recorded(
     task: Task, env: EventEnvelope, content_store: ContentStore
 ) -> None:
-    # Extended-thinking end-to-end (Slice B): deref the turn's ThinkingBlocks
-    # and write them into ContextState under the turn's first tool_use
-    # ``call_id`` (single writer). The Composer reads this slice to
-    # re-attach the thinking ahead of the tool_use on the next compose. The
-    # blocks are content-addressed (``thinking_ref``) so live + resume deref
-    # the identical bytes — last-write-wins per call_id (an id is unique to
-    # one turn, so there is never a real collision). Old recordings carry no
-    # such event → the slice stays its empty default, byte-equal.
+    # Deref the turn's ThinkingBlocks and write them into ContextState under the
+    # turn's first tool_use ``call_id`` (single writer). The Composer reads this
+    # slice to re-attach the thinking ahead of the tool_use on the next compose.
+    # The blocks are content-addressed (``thinking_ref``) so live + resume deref
+    # identical bytes — last-write-wins per call_id (an id is unique to one turn,
+    # so there is never a real collision).
     blocks = list(from_canonical_bytes(content_store.get(env.payload.thinking_ref)))
     task.context.thinking_by_call_id[env.payload.call_id] = blocks
 
@@ -742,11 +687,9 @@ def _on_assistant_thinking_recorded(
 def _on_tool_schema_recorded(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
-    # D3 — per-tool schema-hash provenance. The emission
-    # contract guarantees one event per (task, tool_name); fold still uses
-    # last-write-wins so a malformed stream with duplicates converges
-    # deterministically instead of crashing. Old recordings carry no such
-    # event → the dicts stay their empty defaults, byte-equal.
+    # Per-tool schema-hash provenance. The emission contract guarantees one
+    # event per (task, tool_name); fold uses last-write-wins so a malformed
+    # stream with duplicates converges deterministically instead of crashing.
     tool_name = str(getattr(env.payload, "tool_name", ""))
     schema_hash = str(getattr(env.payload, "schema_hash", ""))
     if not tool_name or not schema_hash:
@@ -760,11 +703,9 @@ def _on_tool_schema_recorded(
 def _on_skill_content_recorded(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
-    # D8 — per-skill content-hash provenance. Same fold
-    # discipline as ToolSchemaRecorded: last-write-wins per skill_name,
-    # empty defaults keep old recordings byte-equal. Retained read-only
-    # for old recordings (D2); it also merges into the generic
-    # activation map as the skill-specific route.
+    # Per-skill content-hash provenance. Same fold discipline as
+    # ToolSchemaRecorded: last-write-wins per skill_name. It also merges into
+    # the generic activation map as the skill-specific route.
     skill_name = str(getattr(env.payload, "skill_name", ""))
     content_hash = str(getattr(env.payload, "content_hash", ""))
     if not skill_name or not content_hash:
@@ -780,12 +721,11 @@ def _on_skill_content_recorded(
 def _on_context_content_recorded(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
-    # D2 — the generic content-channel provenance
-    # event: merge the resident's name into the activation map under its
-    # recorded kind. The runtime is kind-neutral here — what a kind means
-    # (and its drift policy, carried on the payload) is SDK territory; the
-    # drift-comparison consumer has been removed. Blank fields are skipped so a
-    # malformed stream converges deterministically instead of crashing.
+    # The generic content-channel provenance event: merge the resident's name
+    # into the activation map under its recorded kind. The runtime is
+    # kind-neutral here — what a kind means (and its drift policy, carried on
+    # the payload) is SDK territory. Blank fields are skipped so a malformed
+    # stream converges deterministically instead of crashing.
     kind = str(getattr(env.payload, "kind", ""))
     name = str(getattr(env.payload, "name", ""))
     content_hash = str(getattr(env.payload, "content_hash", ""))
@@ -798,23 +738,23 @@ def _on_context_content_recorded(
 def _merge_active_content(
     state: TaskState, kind: str, name: str, content_hash: str
 ) -> None:
-    """Record ``active_content[kind][name] = content_hash`` (spec §3).
+    """Record ``active_content[kind][name] = content_hash``.
 
-    Hash last-write-wins: a re-record with a new hash refreshes the bytes;
-    an identical hash is a no-op the recorder already swallowed. Placement
-    (the anchor) is first-write-wins and lives in
-    :func:`_record_content_anchor` — refresh moves bytes, never placement."""
+    Hash last-write-wins: a re-record with a new hash refreshes the bytes; an
+    identical hash is a no-op the recorder already swallowed. Placement (the
+    anchor) is first-write-wins and lives in :func:`_record_content_anchor` —
+    refresh moves bytes, never placement.
+    """
     state.active_content.setdefault(kind, {})[name] = content_hash
 
 
 def _record_content_anchor(task: Task, kind: str, name: str) -> None:
     """Record the resident's activation anchor — the rolling-history length at
-    the moment its activation folds (docs/adr/anchored-content-placement.md).
+    the moment its activation folds.
 
-    First-write-wins, matching ``_merge_active_content``'s no-duplicate rule:
-    a re-emitted activation (re-entrant path, malformed stream) never moves an
-    anchor. The anchor is DERIVED state (no event-shape change), so an old
-    recording replays deterministically under the anchored-placement rule.
+    First-write-wins, matching ``_merge_active_content``'s no-duplicate rule: a
+    re-emitted activation never moves an anchor. The anchor is DERIVED state, so
+    a recording replays deterministically under the anchored-placement rule.
     """
     key = f"{kind}:{name}"
     if key not in task.context.content_anchors:
@@ -837,9 +777,9 @@ def _find_background_job(task: Task, job_id: str) -> dict[str, object] | None:
 def _on_background_shell_started(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
-    # (issue 05): a new background process — append the running
-    # audit entry. ``ref`` is the spawn snapshot the front-end derefs until a
-    # poll/exit replaces it with a fresher one. Append-only: never removed.
+    # A new background process — append the running audit entry. ``ref`` is the
+    # spawn snapshot the front-end derefs until a poll/exit replaces it with a
+    # fresher one. Append-only: never removed.
     task.governance.background_jobs.append(
         {
             "job_id": env.payload.job_id,
@@ -918,10 +858,9 @@ def _find_background_subagent(
 def _on_background_subagent_started(
     task: Task, env: EventEnvelope, content_store: ContentStore
 ) -> None:
-    # (docs/adr/background-subagent.md): a sub-agent was launched in the
-    # background — append the running audit entry. The parent did NOT suspend on
-    # it, so this entry (not a SubtaskSpawned + suspend pair) is the durable
-    # record. Append-only: never removed.
+    # A sub-agent was launched in the background — append the running audit
+    # entry. The parent did NOT suspend on it, so this entry (not a
+    # SubtaskSpawned + suspend pair) is the durable record. Append-only.
     task.governance.background_subagents.append(
         {
             "subtask_id": env.payload.subtask_id,
@@ -937,12 +876,11 @@ def _on_background_subagent_delivered(
     task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
 ) -> None:
     # The background sub-agent reached terminal and its result was injected as a
-    # turn-boundary notice (Mechanism C). Flip the entry to the child's terminal
-    # status and record the result snapshot + summary — this is also the
-    # exactly-once DELIVERY ANCHOR (the driver reads a folded "already delivered"
-    # so a resume never re-injects). Never delete (audit trail). Defensive on a
-    # missing entry (a Delivered without a folded Started, e.g. a partial resume
-    # window).
+    # turn-boundary notice. Flip the entry to the child's terminal status and
+    # record the result snapshot + summary — this is also the exactly-once
+    # DELIVERY ANCHOR (the driver reads a folded "already delivered" so a resume
+    # never re-injects). Never delete (audit trail). Defensive on a missing
+    # entry (a Delivered without a folded Started, e.g. a partial resume window).
     entry = _find_background_subagent(task, env.payload.subtask_id)
     if entry is None:
         return
@@ -956,11 +894,10 @@ def _on_noop(
 ) -> None:
     """Recognised event with no fold-side state effect.
 
-    Used for record-keeping events the live runtime emits but that do
-    not contribute to any state slice — registering them silences the
-    'unknown event type' warning that would otherwise fire on every
-    RuntimeLLMClient recording when fold runs (snapshot /
-    resume / guard refold).
+    Registering record-keeping events the runtime emits — but that touch no
+    state slice — silences the 'unknown event type' warning that would otherwise
+    fire on every such recording when fold runs (snapshot / resume / guard
+    refold).
     """
     return
 
@@ -1005,10 +942,9 @@ _HANDLERS = {
     "LLMResponseRecorded": _on_noop,
     # A live transient-retry marker (rate limit / flaky transport): purely
     # observational — the frontend paints "retrying", fold derives no state.
-    # Additive event type: absent from old recordings → byte-equal.
     "LLMRetryScheduled": _on_noop,
-    # Slice B: the assistant turn's extended-thinking, keyed by its first
-    # tool_use call_id; the Composer re-attaches it on the next compose.
+    # The assistant turn's extended-thinking, keyed by its first tool_use
+    # call_id; the Composer re-attaches it on the next compose.
     "AssistantThinkingRecorded": _on_assistant_thinking_recorded,
     "ToolResultRecorded": _on_noop,
     "ToolCallFinished": _on_noop,
@@ -1020,38 +956,35 @@ _HANDLERS = {
     "SubtaskDenied": _on_subtask_denied,
     "TaskCancelled": _on_task_cancelled,
     "ModelBound": _on_model_bound,
-    # AgentBound now carries only ``agent_name`` (a durable record, already on
-    # TaskCreated); with the earlier digest fold gone it derives no
-    # state. Registered as a no-op so old + new recordings stay warning-free.
+    # AgentBound carries only ``agent_name`` (a durable record already on
+    # TaskCreated) and derives no state. Registered as a no-op to stay
+    # warning-free.
     "AgentBound": _on_noop,
     "TaskHostBound": _on_task_host_bound,
     "McpProvenanceRecorded": _on_mcp_provenance_recorded,
     "ConversationClosed": _on_conversation_closed,
     "ConversationReopened": _on_conversation_reopened,
     "StepTransitionMarked": _on_step_transition_marked,
-    # ③ (D-3): CompactionRequested is observational (fold derives no
-    # state); Compacted writes the summary slice onto ContextState.
+    # CompactionRequested is observational (fold derives no state); Compacted
+    # writes the summary slice onto ContextState.
     "CompactionRequested": _on_noop,
     "Compacted": _on_compacted,
-    # D3/D8 — per-task first-emission content-hash provenance.
-    # Additive event types: absent from old recordings → byte-equal.
+    # Per-task first-emission content-hash provenance.
     "ToolSchemaRecorded": _on_tool_schema_recorded,
     "SkillContentRecorded": _on_skill_content_recorded,
-    # D2 — the generic content-channel provenance event.
+    # The generic content-channel provenance event.
     "ContextContentRecorded": _on_context_content_recorded,
-    # (issue 05) — background-shell lifecycle, folded into the
-    # session's append-only ``background_jobs`` audit. Additive event types:
-    # absent from old recordings → byte-equal.
+    # Background-shell lifecycle, folded into the session's append-only
+    # ``background_jobs`` audit.
     "BackgroundShellStarted": _on_background_shell_started,
     "BackgroundShellPolled": _on_background_shell_polled,
     "BackgroundShellExited": _on_background_shell_exited,
     "BackgroundShellKilled": _on_background_shell_killed,
-    # issue 06 — the orphan-recovery mark: flips a job with no terminal to
-    # status="lost" on host restart (never deleted — audit trail).
+    # The orphan-recovery mark: flips a job with no terminal to status="lost" on
+    # host restart (never deleted — audit trail).
     "BackgroundShellLost": _on_background_shell_lost,
-    # background sub-agents (docs/adr/background-subagent.md) — folded into the
-    # session's append-only ``background_subagents`` audit. Additive event types:
-    # absent from old recordings → byte-equal.
+    # Background sub-agents — folded into the session's append-only
+    # ``background_subagents`` audit.
     "BackgroundSubagentStarted": _on_background_subagent_started,
     "BackgroundSubagentDelivered": _on_background_subagent_delivered,
 }

@@ -1,18 +1,17 @@
-"""H1 — daemon hardening: bounded process-shutdown, crash recovery, and
-process-local reliability events.
+"""Daemon hardening: bounded shutdown, crash recovery, reliability signals.
 
-Part 1 (deterministic fakes + monkeypatched ``fold``) exercises the new
-worker control paths without an Engine: abandon-after-grace
-process-shutdown (and that NO further lease is taken), and the four
-symptom `ReliabilityEvent`s — all process-local, none touching the
-EventLog.
+Part 1 drives the worker's control paths against deterministic fakes and
+a monkeypatched ``fold``: a step that outruns the shutdown grace is
+abandoned with NO further lease taken, and each failure symptom surfaces
+as a ``ReliabilityEvent``. Those events are deliberately process-local —
+operator signal, not task truth — so they must never reach the EventLog.
 
-Part 2 (real `build_runtime` bundle, InMemory **and** Sqlite) proves the
-recoverable crash class: a **lease-only / before-first-durable-step-
-event** crash → `requeue_stale` → a fresh worker drives to completion,
-and the recovered recording replays the **same event sequence** as
-a clean no-crash run; plus a poison task → bounded retry → **terminal
-asserted from the dispatcher final state** (not a worker event).
+Part 2 uses a real ``build_runtime`` bundle over InMemory **and** Sqlite
+to pin the recoverable crash class: a lease abandoned before any durable
+step event must, after ``requeue_stale``, replay to the same event
+sequence as a clean run; and a task whose step always raises must stop
+being leasable after bounded retries — asserted from the dispatcher's own
+final state, since a crashing worker writes no event to assert on.
 """
 
 from __future__ import annotations
@@ -81,8 +80,8 @@ class _FakeEngine:
 
 def _rt(engine: Any, dispatcher: Any) -> Any:
     # ``event_log.read`` returns an empty stream so the drained path's
-    # interrupted-attempt scan (step-attempt-recovery) finds nothing and
-    # runs the bare step — the pre-recovery Part-1 control flow.
+    # interrupted-attempt scan finds nothing and the bare step runs — the
+    # control path these fakes are here to exercise.
     return SimpleNamespace(
         engine=engine,
         event_log=SimpleNamespace(read=lambda task_id, **kw: []),
@@ -104,9 +103,8 @@ class _CaptureSink:
 
 def _task(status: str = "running", wake_on: Any = None) -> Any:
     # ``parent_task_id`` is read by ``run_leased_task``'s subtask goal-seeding
-    # guard (worker.py); these doubles model root tasks, so ``None`` makes the
-    # guard short-circuit and the step runs normally (the pre-seeding path
-    # these crash-recovery tests were written for).
+    # guard; these doubles model root tasks, so ``None`` short-circuits the
+    # guard and the step runs plainly.
     return SimpleNamespace(
         status=status, wake_on=wake_on, task_id="t1", parent_task_id=None
     )
@@ -121,7 +119,7 @@ def test_abandon_after_grace_is_process_shutdown(
     release_step = threading.Event()
 
     def _blocking_step(task: Any, *, lease_id: str, cancelled: Any = None) -> Any:
-        # ``cancelled`` is the cooperative-stop poll ``run_leased_task`` now
+        # ``cancelled`` is the cooperative-stop poll ``run_leased_task``
         # threads into every ``run_one_step``; this blocking fake ignores it.
         started.set()
         release_step.wait(5.0)
@@ -237,8 +235,9 @@ def test_heartbeat_invalid_lease_symptom() -> None:
 
 
 def test_reliability_events_are_process_local_not_eventlog() -> None:
-    # The sink is just a callable; events never reach an EventLog. A guard
-    # against accidentally turning ReliabilityEvent into an L0 type.
+    # The sink is just a callable; events never reach an EventLog. Guards
+    # against ReliabilityEvent drifting into the recorded event vocabulary,
+    # where it would become replayable task truth.
     from noeta.protocols import events as l0_events
 
     assert not hasattr(l0_events, "ReliabilityEvent")

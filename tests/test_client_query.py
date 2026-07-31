@@ -1,19 +1,11 @@
-"""Tests for noeta.client Client + query.
+"""The two entry points users call: one-shot ``query`` and multi-turn ``Client``.
 
-Covers:
-
-1. one-shot ``query`` happy path: Options with built-in fs tools +
-   FakeLLMProvider scripted ToolUse → envelope stream has all the
-   canonical event types (TaskCreated / AgentBound / MessagesAppended /
-   ToolCallStarted / ToolResultRecorded / TaskCompleted).
-2. custom ``@tool`` closure runs: a decorated greet tool is referenced
-   by name in Options.tools and the scripted model invokes it once.
-3. multi-turn Client suspends at NEXT_GOAL, round-trips send_goal +
-   close + reopen, MessagesAppended count grows, governance.closed
-   tracks lifecycle.
-4. Options-compiled fingerprint == hand-written AgentSpec fingerprint
-   with the same identity fields (tested on the simple builtin-only
-   recipe so we avoid DecoratedTool metadata).
+The sharpest case here is a spilled answer. ``query`` tears down its temporary
+``Client`` and ``ContentStore`` before returning, so ``QueryResult`` must have
+materialised the answer already — otherwise the caller is left holding a
+``ContentRef`` nothing can resolve. The multi-turn cases pin that closing a
+conversation is orthogonal to task status: ``governance.closed`` flips while the
+task stays suspended and resumable.
 """
 
 from __future__ import annotations
@@ -107,7 +99,7 @@ def _envelopes_of_type(envelopes, type_name: str):
 
 
 # ---------------------------------------------------------------------------
-# Case 1 — query happy path with built-in tools
+# query happy path with built-in tools
 # ---------------------------------------------------------------------------
 
 
@@ -140,7 +132,6 @@ def test_query_happy_path_builtin_tools(tmp_path: Path) -> None:
         model="stub-model",
     )
 
-    # 1. envelope stream has each canonical type at least once
     type_names = {e.type for e in envelopes}
     for required in (
         "TaskCreated",
@@ -152,34 +143,30 @@ def test_query_happy_path_builtin_tools(tmp_path: Path) -> None:
     ):
         assert required in type_names, f"missing {required} in stream"
 
-    # 2. TaskCreated.agent_name == "main"
     created = _envelopes_of_type(envelopes, "TaskCreated")
     assert len(created) == 1
     tc = created[0].payload
     assert isinstance(tc, TaskCreatedPayload)
     assert tc.agent_name == "main"
 
-    # 3. AgentBound is emitted once and carries the compiled agent's name.
     bounds = _envelopes_of_type(envelopes, "AgentBound")
     assert len(bounds) == 1
     assert isinstance(bounds[0].payload, AgentBoundPayload)
     assert bounds[0].payload.agent_name == compiled_main.name
 
-    # 4. edit tool was called once
     started = _envelopes_of_type(envelopes, "ToolCallStarted")
     assert len(started) == 1
     assert isinstance(started[0].payload, ToolCallStartedPayload)
     assert started[0].payload.tool_name == "edit"
 
-    # 5. workspace saw the edit (replay recorded the result; dry-run does
-    #    not actually write x.py — verify the tool *result* was recorded
-    #    with success by reading ToolResultRecorded payload).
+    # Dry-run never writes x.py, so the recorded result is the only evidence
+    # the edit ran.
     results = _envelopes_of_type(envelopes, "ToolResultRecorded")
     assert len(results) >= 1
 
 
 # ---------------------------------------------------------------------------
-# Case 2 — custom @tool closure
+# custom @tool closure
 # ---------------------------------------------------------------------------
 
 
@@ -225,7 +212,7 @@ def test_query_custom_tool(tmp_path: Path) -> None:
         model="stub-model",
     )
 
-    # greet was actually called (the @tool closure ran via the custom_tools path).
+    # Proves the decorated closure was mounted through the custom_tools path.
     started = _envelopes_of_type(envelopes, "ToolCallStarted")
     assert len(started) == 1
     assert isinstance(started[0].payload, ToolCallStartedPayload)
@@ -233,7 +220,7 @@ def test_query_custom_tool(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Case 3 — multi-turn Client lifecycle
+# multi-turn Client lifecycle
 # ---------------------------------------------------------------------------
 
 
@@ -268,7 +255,6 @@ def test_client_multi_turn(tmp_path: Path) -> None:
         multi_turn=True,
     )
     try:
-        # Turn 1: start → suspended on next-goal
         outcome = client.start(goal="turn one")
         assert outcome.status == "suspended"
         assert outcome.wake_handle == NEXT_GOAL_WAKE_HANDLE
@@ -277,7 +263,6 @@ def test_client_multi_turn(tmp_path: Path) -> None:
         turn1_count = len(_envelopes_of_type(client.events(task_id), "MessagesAppended"))
         assert turn1_count >= 1
 
-        # Turn 2: send_goal → still suspended
         outcome2 = client.send_goal(task_id, goal="turn two")
         assert outcome2.status == "suspended"
         assert outcome2.wake_handle == NEXT_GOAL_WAKE_HANDLE
@@ -285,13 +270,12 @@ def test_client_multi_turn(tmp_path: Path) -> None:
         turn2_count = len(_envelopes_of_type(client.events(task_id), "MessagesAppended"))
         assert turn2_count > turn1_count, "second turn must append messages"
 
-        # Close: task.status stays suspended but governance.closed flips True
+        # Closing is orthogonal to status: the task stays suspended.
         outcome3 = client.close(task_id, closed_by="tester")
-        assert outcome3.status == "suspended"  # "closed is orthogonal to status"
+        assert outcome3.status == "suspended"
         folded = fold(client._host.event_log, client._host.content_store, task_id)
         assert folded.governance.closed is True
 
-        # Reopen: governance.closed flips back
         outcome4 = client.reopen(task_id, reopened_by="tester")
         assert outcome4.status == "suspended"
         folded2 = fold(client._host.event_log, client._host.content_store, task_id)
@@ -303,7 +287,7 @@ def test_client_multi_turn(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Case 4 — fingerprint alignment: Options-vs-handwritten AgentSpec
+# Options-compiled spec vs hand-written AgentSpec
 # ---------------------------------------------------------------------------
 
 
@@ -324,10 +308,8 @@ def test_options_vs_handwritten_spec_identity() -> None:
     compiled, descendants = compile_options(options)
     assert len(descendants) == 0
 
-    # Hand-write a spec that is byte-identical to what compile_options
-    # should have produced. Frozen-normalisation means ordering doesn't
-    # matter for identity, but we give the tools in sorted order to
-    # match the AgentSpec.__post_init__ normalisation anyway.
+    # AgentSpec.__post_init__ normalises ordering, so tuple order does not
+    # affect identity; the tools are pre-sorted here only to read the same way.
     hand = AgentSpec(
         name="main",
         instructions=_PROMPT,
@@ -350,7 +332,7 @@ def test_options_vs_handwritten_spec_identity() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Case 5 — issue #5: QueryResult materializes projections before shutdown
+# QueryResult materialises projections before shutdown
 # ---------------------------------------------------------------------------
 
 
@@ -387,7 +369,7 @@ def test_query_large_answer_survives_shutdown(tmp_path: Path) -> None:
         model="stub-model",
     )
 
-    # Precondition of the bug: the terminal event really did spill the answer.
+    # Precondition: the terminal event really did spill the answer.
     completed = _envelopes_of_type(result, "TaskCompleted")
     assert len(completed) == 1
     payload = completed[0].payload
@@ -403,8 +385,8 @@ def test_query_large_answer_survives_shutdown(tmp_path: Path) -> None:
 
 
 def test_query_small_answer_inline_unchanged(tmp_path: Path) -> None:
-    """An inline (small) answer takes the same accessors; the envelope keeps
-    the pre-spill shape (answer inline, no ref)."""
+    """A small answer rides inline on the envelope and takes the same
+    accessors."""
     ws = _make_workspace(tmp_path)
     provider = FakeLLMProvider(responses=[_end_turn("done")])
 
@@ -426,8 +408,8 @@ def test_query_small_answer_inline_unchanged(tmp_path: Path) -> None:
 
 
 def test_query_result_is_still_the_envelope_list(tmp_path: Path) -> None:
-    """Compatibility: QueryResult behaves as the plain envelope list every
-    pre-existing caller iterates / indexes / isinstance-checks."""
+    """``QueryResult`` behaves as the plain envelope list callers iterate,
+    index, and isinstance-check."""
     ws = _make_workspace(tmp_path)
     provider = FakeLLMProvider(responses=[_end_turn("done")])
 

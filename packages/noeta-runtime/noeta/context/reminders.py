@@ -1,40 +1,28 @@
-"""Compose-time reminder registry — the composer's swappable reminder table (D8).
+"""Compose-time reminder registry — the composer's swappable reminder table.
 
-Track B of the SDK-extensibility redesign
-(``docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md``, D8). A
-**reminder** is a compose-time, *pure* contribution rendered at the **tail of
+A **reminder** is a compose-time, *pure* contribution rendered at the **tail of
 the dynamic suffix**: ``(name, priority, render)`` where ``render`` is a pure
 function of a narrow folded-state projection (:class:`ReminderView`) returning
 ``str | None``. A non-``None`` string is wrapped by the composer in one
 ``Message(role="user", origin="system")`` (the adapter turns ``origin="system"``
 into ``<system-reminder>``); ``None`` renders nothing.
 
-This mirrors :mod:`noeta.context.content_channel` exactly: one
-:class:`ReminderSpec` per reminder, collected into an immutable
-:class:`ReminderRegistry` the :class:`~noeta.context.composer.ThreeSegmentComposer`
-consults — the composer stays locked (registry hook only, like the
-``ContentChannelRegistry`` seam), and adding a reminder is registering one spec,
-not editing the composer.
-
-Ordering is the guard-observer precedent: integer ``priority`` ascending, ties
-broken by ``name`` (cross-plugin ``(plugin, name)`` tie-breaking is resolved
-upstream by the plugin merge before specs reach the registry).
+This mirrors :mod:`noeta.context.content_channel`: one :class:`ReminderSpec` per
+reminder, collected into an immutable :class:`ReminderRegistry` the
+:class:`~noeta.context.composer.ThreeSegmentComposer` consults — the composer
+stays locked (registry hook only), and adding a reminder is registering one spec,
+not editing the composer. Ordering is integer ``priority`` ascending, ties broken
+by ``name`` (cross-plugin ``(plugin, name)`` ties are resolved by the plugin
+merge before specs reach the registry).
 
 Red line (same trust class as ``ContentKindSpec`` renderers): a ``render`` must
 be a pure function of the projection — no clock, no randomness, no external
 fetch — so the same folded state always composes the same dynamic-suffix bytes.
-The stable prefix is untouched by construction: reminders only ever append to
-the volatile dynamic suffix.
-
-This module is the registry **mechanism only** (microkernel M2): the three
-built-in renderers — the migration of the composer's former
-``_append_todo_reminder`` / ``_append_concurrency_reminder`` /
-``_append_compaction_thrashing_reminder`` methods — live in the ``reminders``
-built-in plugin (``noeta.builtins.reminders.impl``), declared by its manifest
-and resolved through the plugin loader at the client build. The kernel builder
-receives them as an injected ``base_reminders`` tuple
-(``build_session_inputs``) and never imports a renderer; a composer built
-without a registry has **no** reminders.
+The stable prefix is untouched by construction: reminders only ever append to the
+volatile dynamic suffix. This module is the registry **mechanism only**; the
+built-in reminders live in the ``reminders`` built-in plugin and reach the
+composer through the kernel builder's injected ``base_reminders`` tuple. A
+composer built without a registry has **no** reminders.
 """
 
 from __future__ import annotations

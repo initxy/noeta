@@ -1,21 +1,13 @@
-"""Byte-identity parity goldens for compiled ``AgentSpec`` s (M2 safety net).
+"""Byte-identity parity goldens for compiled ``AgentSpec`` s.
 
-The SDK-extensibility redesign
-(``docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md``) retires
-``Capabilities`` and re-expresses every built-in capability as a built-in
-plugin loaded through the new surface registry. Its **acceptance criterion 1**
-is a hard promise: a bare ``Options()`` and every official preset must still
-compile to a **byte-identical ``AgentSpec``** after the mechanism change.
-
-This module is the characterization net that pins that contract **before** any
-mechanism change lands (Plan: "byte-identical parity test"; Risks: "Parity
-drift while removing ``Capabilities`` — mitigated by writing the parity test
-before the removal"). For a bare ``Options()`` and for every official
-recipe in :mod:`noeta.presets`, it compiles via
+A bare ``Options()`` and every official preset must compile to a
+**byte-identical ``AgentSpec``**. This module is the characterization net that
+pins that contract: for a bare ``Options()`` and for every official recipe in
+:mod:`noeta.presets`, it compiles via
 :func:`noeta.client.options.compile_options` and serializes the resulting
 ``AgentSpec`` (root + descendants) deterministically into a golden file. The
-golden IS the byte-identity contract: after the redesign, the same recipes must
-serialize to the same bytes or this test fails with a readable diff.
+golden IS the byte-identity contract: the same recipes must serialize to the
+same bytes or this test fails with a readable diff.
 
 Serialization is ``dataclasses.asdict`` (full, recursive, every field — not the
 narrowed ``test_prompt_snapshot`` view) fed through

@@ -1,7 +1,10 @@
-"""Test matrix for :class:`noeta.builtins.providers.impl.openai_compat.OpenAICompatProvider`.
+"""Wire translation for :class:`noeta.builtins.providers.impl.openai_compat.OpenAICompatProvider`.
 
-Each OpenAICompatProvider translation rule gets a dedicated case. All HTTP
-traffic is mocked via ``respx``, so the suite makes zero real network calls.
+Every rule that maps the neutral message protocol onto the Chat Completions
+wire — and every failure the adapter must translate into the neutral error
+taxonomy — gets its own case, because a silent mistranslation here corrupts
+whatever the model sees without ever raising. All HTTP traffic is mocked via
+``respx``, so the suite makes zero real network calls.
 """
 
 from __future__ import annotations
@@ -112,7 +115,7 @@ def _chat_response(
 
 
 # ---------------------------------------------------------------------------
-# 1. Plain text response (finish_reason=stop)
+# Plain text response (finish_reason=stop)
 # ---------------------------------------------------------------------------
 
 
@@ -129,7 +132,7 @@ def test_plain_text_response_maps_to_end_turn_textblock() -> None:
     assert isinstance(response, LLMResponse)
     assert response.stop_reason == "end_turn"
     assert response.content == [TextBlock(text="hello")]
-    # total_tokens is a redundant provider field — dropped, not pinned.
+    # total_tokens is derivable from the other two, so the mapping ignores it.
     assert response.usage == Usage(uncached=1, output=1)
     assert response.usage.input == 1
     assert response.raw is not None and response.raw["id"] == "chatcmpl-xyz"
@@ -202,7 +205,7 @@ def test_empty_usage_yields_empty_usage() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2. Single tool_call → ToolUseBlock + stop_reason=tool_use
+# Single tool_call → ToolUseBlock + stop_reason=tool_use
 # ---------------------------------------------------------------------------
 
 
@@ -233,7 +236,7 @@ def test_single_tool_call_maps_to_tool_use_block() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. Multiple tool_calls
+# Multiple tool_calls
 # ---------------------------------------------------------------------------
 
 
@@ -265,7 +268,7 @@ def test_multiple_tool_calls_each_become_their_own_block() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. text + tool_call mixed
+# text + tool_call mixed
 # ---------------------------------------------------------------------------
 
 
@@ -294,7 +297,7 @@ def test_text_and_tool_call_both_appear_in_content() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. inconsistent state: finish_reason=stop with tool_calls
+# Inconsistent state: finish_reason=stop with tool_calls
 # ---------------------------------------------------------------------------
 
 
@@ -318,7 +321,7 @@ def test_inconsistent_stop_with_tool_calls_raises_value_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6. inconsistent state: finish_reason=tool_calls with empty tool_calls
+# Inconsistent state: finish_reason=tool_calls with empty tool_calls
 # ---------------------------------------------------------------------------
 
 
@@ -336,7 +339,7 @@ def test_inconsistent_tool_calls_with_empty_array_raises_value_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 7. max_tokens truncation
+# max_tokens truncation
 # ---------------------------------------------------------------------------
 
 
@@ -352,15 +355,15 @@ def test_finish_reason_length_maps_to_max_tokens() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 8. 401 → HTTPStatusError
+# 401 → FatalError
 # ---------------------------------------------------------------------------
 
 
 @respx.mock
 def test_401_translates_to_fatal_error() -> None:
-    """② error recovery: a 401 is a non-retryable client error → FatalError.
-    The adapter no longer leaks ``httpx.HTTPStatusError`` past its boundary;
-    the runtime only ever sees the neutral class."""
+    """A 401 is a non-retryable client error → FatalError. ``httpx`` exception
+    types must never cross the adapter boundary; the runtime only ever sees the
+    neutral class."""
     respx.post(CHAT_ENDPOINT).mock(
         return_value=httpx.Response(401, json={"error": "invalid_api_key"})
     )
@@ -370,7 +373,7 @@ def test_401_translates_to_fatal_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 9. 429 → TransientError (with / without Retry-After)
+# 429 → TransientError (with / without Retry-After)
 # ---------------------------------------------------------------------------
 
 
@@ -401,7 +404,7 @@ def test_429_without_retry_after_maps_to_transient_none() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 10. 5xx → TransientError
+# 5xx → TransientError
 # ---------------------------------------------------------------------------
 
 
@@ -426,7 +429,7 @@ def test_503_maps_to_transient_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 10b. 400 context_length_exceeded → ContextOverflowError
+# 400: context overflow vs. plain invalid request
 # ---------------------------------------------------------------------------
 
 
@@ -468,7 +471,7 @@ def test_400_plain_invalid_request_maps_to_fatal() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 11. Network error → TransientError
+# Network error → TransientError
 # ---------------------------------------------------------------------------
 
 
@@ -493,7 +496,7 @@ def test_timeout_maps_to_transient() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 12. Parse failure → ValueError
+# Parse failure → ValueError
 # ---------------------------------------------------------------------------
 
 
@@ -520,7 +523,7 @@ def test_missing_choices_raises_value_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 13. Reasoning model: reasoning_content present → ThinkingBlock first
+# Reasoning model: reasoning_content present → ThinkingBlock first
 # ---------------------------------------------------------------------------
 
 
@@ -541,7 +544,7 @@ def test_reasoning_content_becomes_thinking_block_before_text() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 14. Reasoning model: reasoning + encrypted_reasoning round-trip signature
+# Reasoning model: reasoning + encrypted_reasoning round-trip signature
 # ---------------------------------------------------------------------------
 
 
@@ -571,7 +574,7 @@ def test_reasoning_with_encrypted_signature_populates_thinking_block() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 15. No reasoning fields → no ThinkingBlock
+# No reasoning fields → no ThinkingBlock
 # ---------------------------------------------------------------------------
 
 
@@ -586,7 +589,7 @@ def test_no_reasoning_fields_produces_no_thinking_block() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 16. LLMRequest.system translation
+# LLMRequest.system translation
 # ---------------------------------------------------------------------------
 
 
@@ -614,7 +617,7 @@ def test_system_field_is_prepended_to_outbound_messages() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 17. system role inside messages → defensive ValueError
+# system role inside messages → defensive ValueError
 # ---------------------------------------------------------------------------
 
 
@@ -630,7 +633,7 @@ def test_system_role_in_messages_array_raises_value_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 18. Same provider instance handles multiple models
+# Same provider instance handles multiple models
 # ---------------------------------------------------------------------------
 
 
@@ -652,7 +655,7 @@ def test_same_provider_instance_routes_different_models() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 19. Outbound assistant ThinkingBlock round-trips to reasoning_content
+# Outbound assistant ThinkingBlock round-trips to reasoning_content
 # ---------------------------------------------------------------------------
 
 
@@ -711,7 +714,8 @@ def test_outbound_thinking_block_round_trips_into_reasoning_fields() -> None:
     assert body["tools"] == provider_tool_schemas
 
     msgs = body["messages"]
-    # Order: user, assistant, tool(call_x), tool(call_y)
+    # One wire message per ToolResultBlock, so the single tool-role Message
+    # fans out into two: user, assistant, tool(call_x), tool(call_y).
     assert msgs[0] == {"role": "user", "content": "hi"}
 
     asst = msgs[1]
@@ -739,8 +743,8 @@ def test_default_reasoning_continuation_off_drops_outbound_reasoning() -> None:
     """Default ``reasoning_continuation="off"`` must NOT echo an assistant
     ThinkingBlock onto the wire: native OpenAI hides reasoning and
     DeepSeek-style gateways reject an echoed ``reasoning_content`` (HTTP 400).
-    The ContextComposer carries thinking forward neutrally; this adapter is
-    the gate that keeps it off OpenAI's wire unless explicitly opted in."""
+    The ContextComposer carries thinking forward neutrally; this adapter is the
+    gate that keeps it off OpenAI's wire unless a host opts in."""
     route = respx.post(CHAT_ENDPOINT).mock(
         return_value=httpx.Response(200, json=_chat_response())
     )
@@ -756,7 +760,6 @@ def test_default_reasoning_continuation_off_drops_outbound_reasoning() -> None:
         model="gpt-4o",
         messages=[_user_message("hi"), assistant],
     )
-    # No override → default "off".
     _make_provider().complete(request)
 
     asst = json.loads(route.calls[0].request.content)["messages"][1]
@@ -767,7 +770,7 @@ def test_default_reasoning_continuation_off_drops_outbound_reasoning() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 20. Auth + extra headers wiring
+# Auth + extra headers wiring
 # ---------------------------------------------------------------------------
 
 
@@ -789,7 +792,7 @@ def test_authorization_and_extra_headers_sent() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 21. Non-dict JSON root raises ValueError
+# Non-dict JSON root raises ValueError
 # ---------------------------------------------------------------------------
 
 
@@ -804,15 +807,15 @@ def test_json_array_root_raises_value_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 22. Bad tool_call arguments JSON raises MalformedToolArgumentsError
+# Bad tool_call arguments JSON raises MalformedToolArgumentsError
 # ---------------------------------------------------------------------------
 
 
 @respx.mock
 def test_malformed_tool_call_arguments_raises_value_error() -> None:
-    # Still a ValueError (wording/type contract unchanged), additionally a
-    # transient error so a truncated tool-call stream is retried by the runtime
-    # rather than failing the task fatally.
+    # A ValueError for callers that match on type, and additionally transient:
+    # a truncated tool-call stream is worth retrying rather than failing the
+    # task fatally.
     from noeta.protocols.errors import MalformedToolArgumentsError, TransientError
 
     payload = _chat_response(
@@ -836,7 +839,7 @@ def test_malformed_tool_call_arguments_raises_value_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 23. tool_result with non-string output is JSON-encoded
+# tool_result with non-string output is JSON-encoded
 # ---------------------------------------------------------------------------
 
 
@@ -873,7 +876,7 @@ def test_tool_result_with_dict_output_is_json_encoded() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 24. Signature-only thinking field still yields a ThinkingBlock
+# Signature-only thinking field yields a ThinkingBlock
 # ---------------------------------------------------------------------------
 
 
@@ -893,7 +896,7 @@ def test_encrypted_reasoning_only_yields_signature_thinking_block() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 25. Base URL with trailing slash is normalised
+# Base URL with trailing slash is normalised
 # ---------------------------------------------------------------------------
 
 
@@ -913,8 +916,7 @@ def test_trailing_slash_in_base_url_is_normalised() -> None:
 
 
 # ---------------------------------------------------------------------------
-# origin rendering: injected turns
-# render as system-role wire messages
+# origin rendering: injected turns render as system-role wire messages
 # ---------------------------------------------------------------------------
 
 
@@ -1016,7 +1018,7 @@ def test_thinking_silently_ignored_on_openai_compat() -> None:
 
 @respx.mock
 def test_three_fields_none_omitted_from_body() -> None:
-    """All three fields None: no related key appears in the body — existing behavior untouched."""
+    """All three fields None: no related key appears in the body at all."""
     route = respx.post(CHAT_ENDPOINT).mock(
         return_value=httpx.Response(200, json=_chat_response())
     )
@@ -1091,7 +1093,9 @@ def test_image_block_in_tool_message_raises_explicit_error() -> None:
 
 @respx.mock
 def test_image_block_in_host_injected_user_turn_raises_explicit_error() -> None:
-    """A host-injected turn (origin=system/memory) carrying an image must also raise — the injection path must not bypass the defense."""
+    """A host-injected turn (origin=system/memory) takes a different rendering
+    branch, so it needs its own case: the injection path must not bypass the
+    image defense."""
     route = respx.post(CHAT_ENDPOINT).mock(
         return_value=httpx.Response(200, json=_chat_response())
     )

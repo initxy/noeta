@@ -1,12 +1,11 @@
-"""Tests for as_messages view projection.
+"""``as_messages`` — the envelope stream projected into a message view.
 
-Covers three cases mandated by the issue:
-
-1. happy path — query() produces the 4 canonical view types
-   (UserMessage / ToolUse / ToolResultView / [AssistantMessage | Result]).
-2. empty / noise-only streams — do not crash, return empty.
-3. ToolUse dedup — same call_id does not double-appear when both
-   MessagesAppended and ToolCallStarted carry it.
+Every tool call reaches the stream twice, once as a block inside
+``MessagesAppended`` and again as its own ``ToolCallStarted`` /
+``ToolResultRecorded`` event, so the projection has to dedup by ``call_id`` or a
+transcript renders each call twice. It also has to survive streams a real run
+never produces (empty, noise-only) and flush its text buffer around blocks it
+renders nothing for, so adjacent spans are not silently glued together.
 """
 
 from __future__ import annotations
@@ -88,7 +87,7 @@ def _make_workspace(tmp_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Case 1 — happy path: view types all present
+# happy path: view types all present
 # ---------------------------------------------------------------------------
 
 
@@ -118,11 +117,7 @@ def test_as_messages_happy_path_contains_four_view_types(
         model="stub-model",
     ).messages()
 
-    # 1. Each target type appears at least once.
     type_set = {type(v).__name__ for v in view}
-    # ToolUse: at least one (from ToolUseBlock, ToolCallStarted, or both merged).
-    # ToolResultView: at least one (ToolResultRecorded or ToolResultBlock).
-    # Result (TaskCompleted) or AssistantMessage: at least one.
     assert "ToolUse" in type_set, f"ToolUse missing, types seen: {type_set}"
     assert "ToolResultView" in type_set, (
         f"ToolResultView missing, types seen: {type_set}"
@@ -133,17 +128,14 @@ def test_as_messages_happy_path_contains_four_view_types(
         "AssistantMessage" in type_set or "Result" in type_set
     ), f"no finish marker, types seen: {type_set}"
 
-    # 2. ToolUse points at edit.
     tool_uses = [v for v in view if isinstance(v, ToolUse)]
     assert tool_uses
     assert any(tu.tool_name == "edit" for tu in tool_uses)
 
-    # 3. At least one ToolResultView with success=True.
     result_views = [v for v in view if isinstance(v, ToolResultView)]
     assert result_views
     assert any(rv.success for rv in result_views)
 
-    # 4. Ordering: ToolUse comes before its ToolResultView.
     use_idx = next(
         i for i, v in enumerate(view)
         if isinstance(v, ToolUse) and v.tool_name == "edit"
@@ -157,7 +149,7 @@ def test_as_messages_happy_path_contains_four_view_types(
 
 
 # ---------------------------------------------------------------------------
-# Case 2 — empty / noise-only streams
+# empty / noise-only streams
 # ---------------------------------------------------------------------------
 
 
@@ -184,7 +176,6 @@ def test_as_messages_only_task_created() -> None:
         schema_version=1,
     )
     result = as_messages([env], cs)
-    # TaskCreated produces no view item.
     assert result == []
 
 
@@ -207,7 +198,7 @@ def test_as_messages_task_failed() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Case 3 — ToolUse dedup
+# ToolUse dedup
 # ---------------------------------------------------------------------------
 
 
@@ -249,11 +240,10 @@ def test_tool_use_dedup_across_messagesappended_and_toolcallstarted(
         outcome = client.start(goal="edit x.py")
         task_id = outcome.task_id
         stream_envelopes = list(client.events(task_id))
-        # Both MessagesAppended and ToolCallStarted are present.
+        # Precondition: both carriers of the same call are in the stream.
         type_names = {e.type for e in stream_envelopes}
         assert "MessagesAppended" in type_names
         assert "ToolCallStarted" in type_names
-        # And both share the same call_id.
         tc_started = [
             e for e in stream_envelopes if e.type == "ToolCallStarted"
         ]
@@ -265,7 +255,6 @@ def test_tool_use_dedup_across_messagesappended_and_toolcallstarted(
     finally:
         client.shutdown()
 
-    # For call_id=="dup-test", ToolUse must appear exactly once in the view.
     uses_of_interest = [
         v for v in view if isinstance(v, ToolUse) and v.call_id == call_id
     ]
@@ -343,15 +332,13 @@ def test_result_completed_shape(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ImageBlock projection — additive, must not garble neighbors
+# ImageBlock projection must not garble neighbouring text
 # ---------------------------------------------------------------------------
 
 
 def test_image_block_in_user_message_does_not_garble_adjacent_text() -> None:
-    """``ImageBlock`` is
-    not yet projected into the message view, but when sandwiched between text it
-    must still flush the buffer, so the surrounding text is not wrongly merged
-    into a single ``UserMessage``."""
+    """``ImageBlock`` renders no view item, but it must still flush the text
+    buffer so the spans around it stay separate ``UserMessage`` items."""
     from noeta.client.messages import _project_one_message
 
     msg = Message(
@@ -376,7 +363,7 @@ def test_image_block_in_user_message_does_not_garble_adjacent_text() -> None:
 
 
 def test_image_block_in_assistant_message_does_not_garble_adjacent_text() -> None:
-    """Assistant path likewise: the image must flush the text buffer to avoid merging adjacent spans."""
+    """Same on the assistant path: the image must flush the text buffer."""
     from noeta.client.messages import _project_one_message
 
     msg = Message(
@@ -400,7 +387,7 @@ def test_image_block_in_assistant_message_does_not_garble_adjacent_text() -> Non
 
 
 # ---------------------------------------------------------------------------
-# Case 4 — ToolResultView dedup (FIX B)
+# ToolResultView dedup
 # ---------------------------------------------------------------------------
 
 
@@ -445,11 +432,10 @@ def test_tool_result_dedup_across_messagesappended_and_toolresultrecorded(
         outcome = client.start(goal="edit x.py")
         task_id = outcome.task_id
         stream_envelopes = list(client.events(task_id))
-        # Both MessagesAppended and ToolResultRecorded are present.
+        # Precondition: both carriers of the same result are in the stream.
         type_names = {e.type for e in stream_envelopes}
         assert "MessagesAppended" in type_names
         assert "ToolResultRecorded" in type_names
-        # And both share the call_id (ToolResultRecorded includes the target).
         tr_recorded = [
             e for e in stream_envelopes if e.type == "ToolResultRecorded"
         ]
@@ -461,7 +447,6 @@ def test_tool_result_dedup_across_messagesappended_and_toolresultrecorded(
     finally:
         client.shutdown()
 
-    # For call_id=="dup-result-test", ToolResultView must appear once.
     results_of_interest = [
         v for v in view
         if isinstance(v, ToolResultView) and v.call_id == call_id

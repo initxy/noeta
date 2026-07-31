@@ -25,6 +25,6 @@ lives in `docs/adr/`, note whether this proposal changes it.
 
 Which package(s) does this touch?
 
-- [ ] `noeta-runtime` (engine / kernel / agent materials)
+- [ ] `noeta-runtime` (the event-sourced engine / kernel)
 - [ ] `noeta-sdk` (in-process client surface)
 - [ ] docs / other

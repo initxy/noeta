@@ -1,25 +1,13 @@
-"""Host-layer sandbox manager: provision + route into build_session_inputs.
+"""Sandbox wiring: one container per session, reachable from the fs / shell tools.
 
-The sandbox backend is *reachable* (``build_session_inputs(exec_env=...)``) and
-*runs*: the host builds a live backend from a ``SandboxProvider`` (v2) or the v1
-``HostConfig.exec_env`` attach config, and threads it into every session's Engine
-so the fs / shell tools' IO lands in the container instead of the host. Covered:
-
-* ``SandboxExecEnvManager`` — per-session ``allocate`` (fresh container + durable
-  ref), cached ``resolve`` (build once), ``attach`` reconnect, ``release`` /
-  idempotent ``teardown``;
-* per-session isolation — two ``allocate`` calls mint DISTINCT containers;
-* ``SdkHost`` default (no config) is byte-identical (LocalExecEnv + host root);
-* ``SdkHost`` with the v1 attach config routes fs tools onto the container
-  backend + a lexical container ``WorkspaceRoot`` rooted at ``workdir``;
-* ``SdkHost`` with a v2 provider provisions a per-session container and routes
-  the fs tools onto it;
-* the SEED build shares the Engine cache with the first driving turn → the same
-  backend;
-* the Client threads the config in and reaps it on shutdown.
-
-No socket is ever opened: the real ``AioSandboxExecEnv`` builds inert, and the
-end-to-end tests inject a fake backend factory / fake provider.
+The host builds a live backend from a ``SandboxProvider`` or from the
+``HostConfig.exec_env`` attach config and threads it into every session's Engine,
+so tool IO lands in the container instead of on the host. The subtle parts pinned
+here: two sessions get distinct containers, a ref this host never allocated
+reconnects against its recorded address, and the seed Engine shares the cache with
+the first driving turn — a local backend cached there would silently bypass the
+sandbox. No socket is ever opened: ``AioSandboxExecEnv`` builds inert and the
+end-to-end tests inject a fake backend factory or provider.
 """
 
 from __future__ import annotations
@@ -314,7 +302,7 @@ def test_teardown_closes_every_cached_backend() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# resolve_browser — per-session browser backend (browser subsystem, B5)
+# resolve_browser — per-session browser backend
 # --------------------------------------------------------------------------- #
 
 
@@ -352,7 +340,7 @@ def test_resolve_browser_builds_once_and_caches() -> None:
 
 
 def test_resolve_browser_unknown_ref_reconnects_via_attach() -> None:
-    # A ref never allocated on this host (resume / reclaim) is reconnected via
+    # A ref never allocated on this host (resume / reclaim) reconnects via
     # provider.attach — the browser backend addresses the RECORDED base_url, not
     # this host's default (mirrors resolve's reconnect path).
     built: list[Any] = []
@@ -385,9 +373,9 @@ def test_release_evicts_per_session_browser_cache() -> None:
 
 
 def test_release_keeps_shared_attach_backend_for_peers() -> None:
-    # Attach deployment (P3): every session shares ONE container (ref =
-    # base_url). Releasing one session must NOT evict the shared cached backend a
-    # peer is still using — only a per-session ref is evicted on release.
+    # On the attach path every session shares ONE container (ref = base_url).
+    # Releasing one session must NOT evict the shared cached backend a peer is
+    # using — only a per-session ref is evicted on release.
     cfg = SandboxExecEnvConfig(base_url="http://box:8080")
     mgr = SandboxExecEnvManager(
         provider_for_config(cfg),
@@ -431,8 +419,7 @@ def test_default_ref_fallback_for_attach_config() -> None:
 
 
 def test_config_attach_allocate_returns_bare_base_url() -> None:
-    # The attach provider mints no sandbox_id → the ref is a bare base_url,
-    # byte-identical to a v1 recording.
+    # The attach provider mints no sandbox_id → the ref is a bare base_url.
     cfg = SandboxExecEnvConfig(base_url="http://box:8080")
     mgr = SandboxExecEnvManager(
         provider_for_config(cfg),
@@ -543,7 +530,7 @@ def test_host_with_attach_config_routes_fs_tools_to_container(
         exec_env=SandboxExecEnvConfig(base_url="http://box:8080", workdir="/c/ws"),
     )
     assert host._sandbox is not None
-    # No explicit ref → the attach path's default container (v1 behaviour).
+    # No explicit ref → the attach path's default container.
     engine = _build(host, task_id="t1")
     backend = engine._tools["read"].exec_env
     for name in ("read", "write", "shell_run"):
@@ -574,9 +561,9 @@ def test_host_with_provider_routes_to_per_session_container(
 
 def test_host_with_config_uses_real_aio_adapter(tmp_path: Path) -> None:
     # No fake factory — the real one builds the AIO adapter. Building the backend
-    # is inert (no socket); a full Engine build would now read environment /
-    # skills THROUGH the container (Tier 2), so assert on the backend the manager
-    # resolves rather than driving a build that expects a live container.
+    # is inert (no socket), but a full Engine build reads environment / skills
+    # THROUGH the container, so assert on the backend the manager resolves rather
+    # than driving a build that expects a live container.
     host = _make_host(
         tmp_path,
         exec_env=SandboxExecEnvConfig(base_url="http://box:8080"),
@@ -625,12 +612,7 @@ def test_seed_build_shares_the_sandbox_backend(
 
 
 # --------------------------------------------------------------------------- #
-# Client wiring + shutdown teardown
-# --------------------------------------------------------------------------- #
-
-
-# --------------------------------------------------------------------------- #
-# execution tiers — sandbox_policy per-session opt-out (D-C / task 12)
+# execution tiers — sandbox_policy per-session opt-out, then Client teardown
 # --------------------------------------------------------------------------- #
 
 
@@ -685,7 +667,7 @@ def test_sandbox_policy_absent_is_byte_identical(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # No policy (None) ⇒ today's behaviour: a configured provider provisions.
+    # No policy (None) ⇒ a configured provider provisions unconditionally.
     monkeypatch.setattr(sandbox_mod, "_default_backend_factory", _recording_factory())
     provider = FakeProvider()
     host = _make_host(tmp_path, sandbox_provider=provider)

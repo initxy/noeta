@@ -46,7 +46,7 @@ from noeta.builtins.memory.impl.store import (
 
 
 def _inputs(ws: Path, **kwargs):
-    # Phase 3 (S4): fold legacy memory kwargs into capability_flags / plugin_config.
+    # Fold the per-feature memory kwargs into capability_flags / plugin_config.
     fold_legacy_capability_kwargs(kwargs)
     return build_session_inputs(
         **default_factory_kwargs(),

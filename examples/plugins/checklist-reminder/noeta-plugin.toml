@@ -1,5 +1,8 @@
-# The shipped static manifest (spec D1). ``python -m noeta.sdk.plugin_check``
-# verifies this file matches what ``plugin.py``'s decorators declare.
+# The shipped static manifest, mirrored from ``[tool.noeta]`` into wheel package
+# data. Reading identity and contributions from here is what lets a host list and
+# collision-check plugins without executing any of their code.
+# ``python -m noeta.sdk.plugin_check`` verifies this file against what
+# ``plugin.py``'s builder declares — edit both or neither.
 name = "checklist-reminder"
 requires-noeta = ">=0.4"
 

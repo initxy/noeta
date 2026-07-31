@@ -1,13 +1,11 @@
-"""``reminders`` — track B (D8): the three compose-time reminders.
+"""``reminders`` — the three compose-time reminders.
 
-Migrated onto the ``reminder`` surface. Each declaration carries the render
-``ref`` (into this plugin's own ``impl`` package — microkernel M2) and the
-integer ``priority`` that keeps the composed dynamic-suffix tail
-byte-identical to the pre-migration append order (todo -> delegation -> read).
-The SDK client build resolves these refs through
-:func:`noeta.client.parts.default_reminder_specs` and injects the resolved
-specs into the kernel builder (``base_reminders``) — this manifest is both the
-listing surface and the resolution source.
+Each declaration carries a render ``ref`` into this plugin's ``impl`` package
+and an integer ``priority``; the registry renders in ``(priority, name)``
+order, so these bands fix the dynamic-suffix tail as todo -> delegation ->
+read, spread by 100 to leave room for third-party reminders to interleave.
+This manifest is both the listing surface and the resolution source the SDK
+build reads before injecting the specs into the kernel builder.
 """
 
 from __future__ import annotations

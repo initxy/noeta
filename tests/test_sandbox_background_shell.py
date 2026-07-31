@@ -1,15 +1,12 @@
-"""T8 — a sandbox backend refuses a background shell launch cleanly (D5).
+"""A sandbox backend refuses a background shell launch cleanly.
 
 ``shell_run(run_in_background=True)`` hands off to the host background runner,
 which spawns a detached HOST subprocess — it cannot reach into a container, and
-AIO has no durable job handle (v1). So under a sandbox backend the launch is
-refused with a clear tool error instead of silently running on the wrong
-machine; the local backend keeps the existing background path.
-
-Teardown (D6) is host-level: ``Client.shutdown`` reaps the sandbox backend (T5).
-Per-conversation teardown is deliberately deferred — v1 shares one container per
-host, so tearing it down when a single conversation closes would break every
-other live conversation on the host (a v2 per-container concern).
+the sandbox API exposes no durable job handle to poll instead. Under a sandbox
+backend the launch is therefore refused with a clear tool error rather than
+silently running the command on the wrong machine. Only the background path is
+refused: foreground still routes through the backend, and the local backend
+keeps both.
 """
 
 from __future__ import annotations
@@ -87,8 +84,6 @@ def test_sandbox_refuses_background_shell() -> None:
 
 
 def test_sandbox_foreground_shell_still_runs() -> None:
-    # only the BACKGROUND launch is refused — foreground still routes to the
-    # backend's run_argv.
     tool = _shell_tool(_SandboxLike())
     ctx = ToolContext(artifact_store=InMemoryContentStore())
     result = tool.invoke({"command": "echo hi"}, ctx=ctx)

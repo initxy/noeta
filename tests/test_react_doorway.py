@@ -3,13 +3,12 @@
 ``noeta.client.parts.react_impl`` is a dynamic import: the SDK reaches the
 ``react`` built-in's ``OrchestrationPolicy`` / ``StructuredOutputPolicy`` /
 ``WORKFLOW_SYSTEM_PROMPT`` without a static edge into ``noeta.builtins``.
-:class:`~noeta.client.parts.ReactImpl` gives that doorway a typed shape so the
-three host call sites are checked again — but a Protocol only constrains the
-*callers*. Nothing makes the built-in satisfy it, so renaming a constructor
-kwarg over there would keep mypy green and break the workflow path at runtime.
-
-This module is the other half: it exercises the doorway exactly as the host
-does, so impl and Protocol cannot drift apart silently.
+:class:`~noeta.client.parts.ReactImpl` gives that doorway a typed shape, but a
+Protocol only constrains the *callers* — nothing makes the built-in satisfy it,
+so a changed constructor kwarg over there would keep mypy green and break the
+workflow path at runtime. These tests are the other half of the check: they
+exercise the doorway exactly as the host does, so impl and Protocol cannot
+drift apart silently.
 """
 
 from __future__ import annotations

@@ -1,11 +1,11 @@
-"""Engine end-to-end smoke against ``SqliteEventLog`` (issue 15).
+"""Engine end-to-end smoke against ``SqliteEventLog``.
 
-The contract suite proves the adapter satisfies each L0 Protocol
-behaviour in isolation. This module wires the real Engine + Dispatcher
-+ ChildLifecycleObserver stack on top of SqliteEventLog and runs a
-representative end-to-end loop so we catch any integration-level
-mismatch between adapters (idempotency keys flowing through the engine,
-observer-driven cross-stream writes triggered by the dispatcher, etc.).
+The contract suite proves the adapter satisfies each Protocol behaviour in
+isolation. This module wires the real Engine + Dispatcher +
+ChildLifecycleObserver stack on top of SqliteEventLog and runs a representative
+end-to-end loop to catch any integration-level mismatch between adapters
+(idempotency keys flowing through the engine, observer-driven cross-stream
+writes triggered by the dispatcher).
 
 Two scenarios:
 
@@ -13,11 +13,10 @@ Two scenarios:
   flow and asserts Sqlite produces the same event-type / payload /
   origin sequence as InMemory under identical inputs.
 * ``test_parent_child_subtask_loop_*`` runs the full spawn → child
-  → wake parent → finish loop. This is the canonical exercise for
+  → wake parent → finish loop — the canonical exercise for
   ``ChildLifecycleObserver`` writing ``SubtaskCompleted`` to the
-  parent stream from inside a subscriber callback — the path that
-  ``test_subscriber_can_re_emit_inline_in_callback`` covers at the
-  adapter level, now verified end-to-end with the real observer.
+  parent stream from inside a subscriber callback, verified end-to-end
+  with the real observer.
 """
 
 from __future__ import annotations

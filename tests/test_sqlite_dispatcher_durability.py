@@ -1,4 +1,4 @@
-"""File-on-disk durability smoke for ``SqliteDispatcher`` (issue 17)."""
+"""File-on-disk durability for ``SqliteDispatcher``."""
 
 from __future__ import annotations
 
@@ -59,8 +59,8 @@ def test_context_manager_closes_on_exit(tmp_path) -> None:
 
 
 def test_eventlog_emit_and_dispatcher_lifecycle_do_not_deadlock(tmp_path) -> None:
-    """Regression for the ABBA deadlock between SQLite writer lock
-    and Dispatcher Python lock (issue 17 code-review P1).
+    """The ABBA deadlock between the SQLite writer lock and the Dispatcher
+    Python lock must not recur.
 
     Setup: file-backed SqliteEventLog + SqliteDispatcher wired
     together (EventLog has Dispatcher as its lease validator). One
@@ -69,11 +69,11 @@ def test_eventlog_emit_and_dispatcher_lifecycle_do_not_deadlock(tmp_path) -> Non
     calls ``is_lease_valid``. Concurrently another thread spins
     ``enqueue / requeue_stale`` lifecycle methods, each of which
     grabs the Dispatcher Python lock and then ``BEGIN IMMEDIATE``.
-    Before the fix, EventLog would block on the Dispatcher lock
-    after grabbing the writer lock, while the lifecycle thread
-    blocked on the writer lock while holding the Dispatcher lock —
-    a textbook ABBA. The fix is the separate read connection for
-    ``is_lease_valid`` that this test exercises.
+    The hazard is a lock-order inversion: EventLog blocking on the
+    Dispatcher lock while holding the writer lock, and the lifecycle
+    thread blocking on the writer lock while holding the Dispatcher
+    lock. A separate read connection for ``is_lease_valid`` keeps the
+    two orders from crossing; this test exercises it.
     """
     db = tmp_path / "noeta.db"
     log = SqliteEventLog(db)

@@ -18,11 +18,10 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries",
 ]
-# The kernel wheel is dependency-free (stdlib only). Microkernel M4: httpx
-# moved to noeta-sdk — the kernel is transport-free; every HTTP-speaking impl
-# (providers, web, mcp, sandbox, otlp) ships there. The storage relocation
-# moved psycopg there too — the durable backends live in the ``storage``
-# built-in; the kernel keeps only the InMemory reference backend.
+# The kernel wheel is dependency-free (stdlib only). It is transport-free:
+# every HTTP-speaking impl (providers, web, mcp, sandbox, otlp) ships in
+# noeta-sdk, as do the durable storage backends — they live in the ``storage``
+# built-in, and the kernel keeps only the InMemory reference backend.
 dependencies = []
 
 [project.urls]

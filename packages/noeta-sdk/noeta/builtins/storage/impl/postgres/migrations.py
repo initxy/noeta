@@ -1,25 +1,14 @@
-"""Schema migrations shared across every Postgres backend adapter.
+"""Schema migrations for the Postgres backend, shared by all three adapters.
 
-All three adapters land in the **same** database; the migration
-sequence here is the single source of truth for its schema. A one-row
-``noeta_schema_version`` table records how far the database has been
-advanced (the ``PRAGMA user_version`` analogue); each
-:class:`Migration` is applied in one transaction under the migrations
-advisory lock, so a partial failure rolls back atomically and
-concurrent initialisers serialise instead of racing DDL.
-
-The Postgres sequence is **independent** of the sqlite one: sqlite's
-migrations 1–7 are that file format's upgrade history, while a fresh
-Postgres database starts directly at the consolidated head schema
-(version 1 below = sqlite schema version 7). Type mapping from the
-sqlite DDL: TEXT→TEXT, INTEGER→BIGINT, REAL→DOUBLE PRECISION,
-BLOB→BYTEA; ``WITHOUT ROWID`` clustering has no Postgres equivalent and
-is simply dropped. Objects are created unqualified, so they land in the
-first schema of the connection's ``search_path`` — the contract suite
-uses that for per-test schema isolation.
-
-Forward-only. Downgrades are out of scope; a backwards-incompatible
-change requires a new database and an explicit migration tool.
+The sequence here is the single source of truth for the database's schema. A
+one-row ``noeta_schema_version`` table records how far the database has been
+advanced, and each :class:`Migration` runs in one transaction under the
+migrations advisory lock, so a partial failure rolls back atomically and
+concurrent initialisers serialise instead of racing DDL. Objects are created
+unqualified and therefore land in the first schema of the connection's
+``search_path``, which is how the contract suite isolates one schema per test.
+Forward-only: a backwards-incompatible change requires a new database and an
+explicit migration tool, not a downgrade.
 """
 
 from __future__ import annotations
@@ -48,15 +37,13 @@ class Migration:
     statements: tuple[str, ...]
 
 
-# Migration 1: the consolidated head schema (= sqlite migrations 1–7).
-#
-# ``events`` stores envelope metadata column-by-column so inspect /
-# index queries stay relational; ``payload_canonical`` is the canonical
-# bytes produced by :func:`noeta.protocols.canonical.to_canonical_bytes`.
+# ``events`` stores envelope metadata column-by-column so inspect / index
+# queries stay relational; ``payload_canonical`` is the canonical bytes
+# produced by :func:`noeta.protocols.canonical.to_canonical_bytes`.
 # ``idempotency`` lives in its own table because ``lease_id`` /
 # ``idempotency_key`` are write-time concurrency metadata, not envelope
 # content — keeping the events row column set equal to the
-# :class:`noeta.protocols.events.EventEnvelope` field set keeps the
+# :class:`noeta.protocols.events.EventEnvelope` field set is what keeps the
 # adapters semantically equivalent under the contract suite.
 _MIGRATION_1_EVENTS = """
 CREATE TABLE events (
@@ -76,9 +63,8 @@ CREATE TABLE events (
 )
 """.strip()
 
-# Partial index matching the exact ``find_latest_snapshot`` predicate
-# (sqlite migration 5's widened form — TaskRewound is a snapshot-shaped
-# fold baseline too), so the lookup is an indexed single-row hit.
+# Partial index matching the exact ``find_latest_snapshot`` predicate, so
+# that lookup is an indexed single-row hit.
 _MIGRATION_1_SNAPSHOT_INDEX = (
     "CREATE INDEX ix_events_snapshot "
     "ON events (task_id, seq DESC) "
@@ -115,9 +101,7 @@ CREATE TABLE content (
 # Single row per task carrying status + lease + suspend metadata; CHECK
 # constraints physicalise the state-machine invariants (status enum,
 # ready⇔ready_order, leased⇔lease_id + lease_expires_at) so any direct
-# INSERT/UPDATE bypassing the adapter is rejected. Includes the columns
-# sqlite added incrementally: ``matched_wake_event_canonical``
-# (migration 4), ``reclaim_count`` (6), ``fire_at`` (7).
+# INSERT/UPDATE bypassing the adapter is rejected.
 _MIGRATION_1_DISPATCHER_TASKS = """
 CREATE TABLE dispatcher_tasks (
     task_id                      TEXT             PRIMARY KEY,
@@ -171,14 +155,13 @@ CREATE TABLE dispatcher_pending_wakes (
 """.strip()
 
 
-# Migration 2 (= sqlite migration 8): widen the fold-baseline index to
-# include the crash-recovery seal ``StepAttemptAbandoned`` — a partial
-# index is only chosen when its WHERE matches the query predicate
-# exactly, so it is re-created with the widened IN-list. The list is a
-# frozen literal (applied migrations are immutable); the live queries
-# render theirs from
-# ``noeta.protocols.event_log.SNAPSHOT_BASELINE_EVENT_TYPES``, so growing
-# that constant requires a NEW migration re-widening this index.
+# Migration 2: widen the fold-baseline index to include the crash-recovery
+# seal ``StepAttemptAbandoned``. A partial index is only chosen when its
+# WHERE matches the query predicate exactly, so the index has to be dropped
+# and re-created with the widened IN-list. The list is a frozen literal
+# (an applied migration is immutable) while the live queries render theirs
+# from ``noeta.protocols.event_log.SNAPSHOT_BASELINE_EVENT_TYPES``, so
+# growing that constant requires a NEW migration re-widening this index.
 _MIGRATION_2_DROP_SNAPSHOT_INDEX = "DROP INDEX IF EXISTS ix_events_snapshot"
 
 _MIGRATION_2_BASELINE_INDEX = (
@@ -188,39 +171,33 @@ _MIGRATION_2_BASELINE_INDEX = (
 )
 
 
-# Migration 3: nullable audit column recording which worker holds the
-# lease (ADR multi-host-lease-fencing.md D3). Populated by ``lease()``,
-# cleared by every transition that clears ``lease_id``. Observability
-# only — NOT a fencing token; no index, no CHECK.
+# Migration 3: nullable audit column recording which worker holds the lease
+# (see ADR multi-host-lease-fencing.md). Populated by ``lease()``, cleared by
+# every transition that clears ``lease_id``. Observability only — NOT a
+# fencing token; no index, no CHECK.
 _MIGRATION_3_WORKER_ID = (
     "ALTER TABLE dispatcher_tasks ADD COLUMN worker_id TEXT NULL"
 )
 
 
-# Migration 4 (= sqlite migration 9): targeted-lease-only guard
-# (``reserved``) for fresh subtask children. Enqueued so their delegation
-# drain / background executor can targeted-lease them, but a resident-worker
-# pool's untargeted FIFO poll must NOT steal them first (only
-# ``subtask_drain._descend_to_child`` seeds a child's goal — an untargeted
-# worker would drive it with an empty message history and the provider would
-# reject the request). The untargeted ``lease(task_id=None)`` selection filters
-# ``reserved = false`` and the FIRST successful lease clears the flag (a
-# one-shot claim). ``NOT NULL DEFAULT false`` backfills existing rows to the
-# historical "not reserved" behaviour.
+# Migration 4: targeted-lease-only guard (``reserved``) for fresh subtask
+# children. They are enqueued so their delegation drain / background executor
+# can targeted-lease them, but a resident-worker pool's untargeted FIFO poll
+# must NOT steal them first: only ``subtask_drain._descend_to_child`` seeds a
+# child's goal, so an untargeted worker would drive it with an empty message
+# history and the provider would reject the request. The untargeted
+# ``lease(task_id=None)`` selection filters ``reserved = false`` and the FIRST
+# successful lease clears the flag — a one-shot claim.
 _MIGRATION_4_RESERVED = (
     "ALTER TABLE dispatcher_tasks ADD COLUMN reserved BOOLEAN NOT NULL DEFAULT false"
 )
 
 
-# Migration 5 (= sqlite migration 10): widen the fold-baseline index to
-# include the conversation branch marker ``TaskForked`` — a fourth
-# snapshot-shaped baseline naming the history a forked task inherited from
-# the conversation it branched off (not derivable from the fork's own
-# genesis, so the marker has to be a real baseline). A partial index is only
-# chosen when its WHERE matches the query predicate exactly, so it is
-# re-created with the widened IN-list. The list is a frozen literal (applied
-# migrations are immutable); the live queries render theirs from
-# ``noeta.protocols.event_log.SNAPSHOT_BASELINE_EVENT_TYPES``.
+# Migration 5: widen the fold-baseline index to include the conversation
+# branch marker ``TaskForked``, which names the history a forked task
+# inherits from the conversation it branched off — not derivable from the
+# fork's own genesis, so the marker has to be a real baseline. Dropped and
+# re-created with the widened IN-list for the same reason as migration 2.
 _MIGRATION_5_DROP_SNAPSHOT_INDEX = "DROP INDEX IF EXISTS ix_events_snapshot"
 
 _MIGRATION_5_BASELINE_INDEX = (
@@ -285,18 +262,13 @@ SCHEMA_VERSION: int = MIGRATIONS[-1].version
 def apply_migrations(conn: psycopg.Connection) -> None:
     """Advance ``conn``'s database to :data:`SCHEMA_VERSION`.
 
-    Loop-per-step structure mirroring the sqlite runner: each iteration
-    opens a transaction, takes the migrations advisory lock, re-reads
-    the recorded version **inside** the lock, and either commits the
-    next pending migration's DDL + version bump or returns when there is
-    nothing left to do — so two connections initialising the same
-    database serialise and the loser sees the winner's bump instead of
-    re-running DDL. Each migration and its version bump are atomic;
-    re-running after success is a no-op.
-
-    The version ledger itself (``noeta_schema_version``) is created
-    idempotently outside the numbered sequence: a one-row table seeded
-    at 0, the ``PRAGMA user_version`` analogue.
+    One transaction per step: each iteration takes the migrations advisory
+    lock and re-reads the recorded version **inside** the lock, so two
+    connections initialising the same database serialise and the loser sees
+    the winner's bump instead of re-running DDL. Each migration commits
+    together with its version bump, which makes re-running after success a
+    no-op. The version ledger itself is created idempotently outside the
+    numbered sequence, since the sequence has nowhere to record itself.
     """
     while True:
         conn.execute("BEGIN")

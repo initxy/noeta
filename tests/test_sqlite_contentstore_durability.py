@@ -1,4 +1,4 @@
-"""File-on-disk durability smoke for ``SqliteContentStore`` (issue 16).
+"""File-on-disk durability for ``SqliteContentStore``.
 
 The contract suite runs an in-memory backend; this module covers the
 disk-only behaviours: ``put`` survives close+reopen and the body

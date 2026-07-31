@@ -2,11 +2,11 @@
 
 Exposes tools from operator-allowlisted local stdio / remote HTTP MCP
 servers as ordinary Noeta ``Tool``s, governed by
-the existing ``PermissionGuard`` / approval and recorded in the EventLog.
+the ``PermissionGuard`` / approval and recorded in the EventLog.
 
-Microkernel M3: moved here from ``noeta.tools.mcp``. The connector
+The connector
 *vocabulary* (``MCP_PREFIX`` / ``McpConfigError`` / ``McpError`` /
-``HttpPostFn`` / the server specs) sank into :mod:`noeta.runtime.mcp` — the
+``HttpPostFn`` / the server specs) lives in :mod:`noeta.runtime.mcp` — the
 kernel builder's reserved-prefix check and the ``noeta.sdk`` public surface
 speak it statically; this package re-exports those names so the connector's
 one import surface stays whole. The SDK host reaches ``build_mcp_tools`` /

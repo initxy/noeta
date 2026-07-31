@@ -1,23 +1,13 @@
 """Completion wake: a background exit drives a new turn.
 
-Mechanism C (DESIGN.md §"completion push (02)"). The noeta-agent product is
-request-driven (no daemon WorkerLoop), so a background command that exits while
-the session sits idle on its next-goal suspend is surfaced by **reusing the
-next-goal wake handle** and injecting an ``origin="system"`` notice prelude —
-NOT a new wake primitive. The host's background-drive thread triggers the new
-``InteractionDriver.notify_background_exit`` command at a turn boundary.
-
-Coverage:
-
-* a background job that exits while the session is idle-suspended on NEXT_GOAL
-  is driven a NEW turn without human input, and the agent's view carries a
-  system-origin notice with the summary + a ContentRef (NOT the full bytes);
-* the notice is ``origin="system"`` tagged (a human turn is ``origin=None``),
-  so the model can tell a background event from a user message;
-* idle-buffer: an exit that arrives mid-turn (the session is NOT human-suspended)
-  is a no-op now and surfaces on the next turn-suspend boundary — the
-  ``BackgroundShellExited`` event is durably recorded either way;
-* ``notified`` dedup: the registry's exit push fires exactly once.
+The host is request-driven, so an exit that lands while the session sits idle on
+its next-goal suspend is surfaced by **reusing the next-goal wake handle** and
+injecting an ``origin="system"`` notice prelude rather than by adding a wake
+primitive: the background-drive thread calls
+``InteractionDriver.notify_background_exit`` at a turn boundary. The notice must
+carry the summary plus a ``ContentRef`` and never the output bytes, must be
+distinguishable from a human turn (whose origin is ``None``), and must fire
+exactly once even when kill and natural exit race.
 """
 
 from __future__ import annotations
@@ -165,7 +155,7 @@ def test_notify_requires_next_goal_suspend(tmp_path: Path) -> None:
     driver = InteractionDriver(host)
     outcome = driver.start(goal="kick off", agent="main")
     task_id = outcome.task_id
-    driver.cancel(task_id)  # → terminal, no longer suspended on NEXT_GOAL
+    driver.cancel(task_id)  # → terminal, so not suspended on NEXT_GOAL
 
     ref = content_store.put(b"out", media_type="text/plain")
     import pytest

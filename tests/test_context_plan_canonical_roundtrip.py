@@ -1,10 +1,10 @@
-"""Canonical round-trip tests for issue 14 typed shapes.
+"""Canonical round-trip for the typed shapes that travel through ContentStore.
 
-SSOT: every new typed value that travels through ContentStore
-must declare ``__canonical_tag__`` and register a restorer so
-``to_canonical_bytes → from_canonical_bytes`` rebuilds the typed
-object. Issue 14 introduces ``ContextPlan`` and the ``ViewSegment``
-helper carried inside ``View.segments``.
+Every typed value that travels through ContentStore must declare
+``__canonical_tag__`` and register a restorer, so ``to_canonical_bytes →
+from_canonical_bytes`` rebuilds the same typed object rather than a bare dict.
+``ContextPlan`` and the ``ViewSegment`` helper carried inside ``View.segments``
+are pinned here.
 """
 
 from __future__ import annotations

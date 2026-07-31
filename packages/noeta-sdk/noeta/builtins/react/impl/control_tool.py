@@ -1,28 +1,10 @@
-"""``run_workflow`` + ``structured_output`` — the react built-in's control tools
-(control-tool-surface S2b).
+"""The ``run_workflow`` and ``structured_output`` control tools.
 
-Both control tools belong to the workflow orchestration story the ``react``
-built-in owns (``OrchestrationPolicy`` / ``StructuredOutputPolicy``), so their
-whole material moved here out of the kernel's control band
-(``noeta.policies.control_semantics``): the ``run_workflow`` schema + its
-response→``SpawnSubtaskDecision`` translate body, the ``structured_output``
-schema, and both ``.md`` descriptions (``run_workflow.md`` /
-``structured_output.md``, git-moved beside this impl). The determinism sandbox
-(``workflow_sandbox``) moved into this same package. The move is byte-preserving
-(the S0 golden pins the schema bytes).
-
-What this module imports back from the kernel is the neutral MECHANISM: the
-control-tool mount types (``noeta.execution.control_tool``), the decision-time
-``ControlTranslateContext``, the shared ack builder + string validator
-(``ack_patch_decision`` / ``validate_required_string``), and the reserved
-vocabulary the drain/resolver route on (``RUN_WORKFLOW_TOOL`` /
-``WORKFLOW_AGENT_NAME`` — see D8). The determinism check reads from the sibling
-``workflow_sandbox`` module.
-
-Reached only through the plugin loader's ``ref`` resolution (the ``react``
-manifest's two ``control_tool`` contributions); ``STRUCTURED_OUTPUT_TOOL`` is
-imported by the sibling ``orchestration`` module (its ``StructuredOutputPolicy``
-intercepts the call), which is why the constant lives here.
+Both belong to the workflow story the ``react`` built-in owns, so their schemas,
+descriptions and the ``run_workflow`` → :class:`SpawnSubtaskDecision`
+translation sit beside :class:`OrchestrationPolicy` rather than in the kernel's
+neutral control band. Neither is ever registered with the ToolRuntime: a call is
+intercepted and turned into a Decision.
 """
 
 from __future__ import annotations
@@ -65,25 +47,12 @@ __all__ = [
 ]
 
 
-# ===========================================================================
-# run_workflow — schema + translate
-# ===========================================================================
-
-
 _RUN_WORKFLOW_DESCRIPTION = load_markdown(__package__, "run_workflow")
 
 
 def run_workflow_tool_schema() -> dict[str, Any]:
-    """Provider-visible schema for :data:`RUN_WORKFLOW_TOOL`.
-
-    A **control** tool (never an Engine/ToolRuntime tool): a single
-    ``run_workflow`` call is translated into a ``SpawnSubtaskDecision`` whose
-    child carries the orchestration interpreter Policy
-    (:class:`noeta.builtins.react.impl.orchestration.OrchestrationPolicy`).
-    Added to the Composer's ``control_action_schemas`` (so it lands in
-    ``View.provider_tool_schemas`` + the stable hash) only when
-    ``workflow_enabled`` — never registered as a ToolRuntime tool.
-    """
+    """Provider-visible schema for :data:`RUN_WORKFLOW_TOOL`; a call becomes a
+    ``SpawnSubtaskDecision`` whose child carries the orchestration interpreter."""
     return {
         "type": "function",
         "function": {
@@ -113,14 +82,12 @@ def run_workflow_tool_schema() -> dict[str, Any]:
     }
 
 
-#: cap on the model-authored workflow script (recoverable over-cap,
-#: like the other control-tool input caps; keeps the SubtaskSpawned/TaskCreated
-#: inputs body bounded).
+#: Cap on the model-authored script: an over-cap call is a recoverable error,
+#: and it keeps the ``SubtaskSpawned`` / ``TaskCreated`` inputs body bounded.
 _WORKFLOW_MAX_SCRIPT_LEN = 16_000
 
-#: Fixed (model-independent) goal seeded onto the orchestration subtask. The
-#: OrchestrationPolicy reads the script from ``inputs``, not the goal — a
-#: constant keeps the recorded subtask goal stable across resume.
+#: ``OrchestrationPolicy`` reads the script from ``inputs``, never from the
+#: goal, so a constant goal keeps the recorded subtask stable across resume.
 _WORKFLOW_GOAL = "Execute workflow orchestration script."
 
 
@@ -130,21 +97,13 @@ def _maybe_workflow_decision(
     *,
     assistant_thinking: tuple[ThinkingBlock, ...] = (),
 ) -> Decision | None:
-    """Translate a `run_workflow` control-tool call into a
-    :class:`SpawnSubtaskDecision` whose child carries the orchestration
-    interpreter Policy.
+    """Translate a ``run_workflow`` call into a :class:`SpawnSubtaskDecision`.
 
-    Same family / plumbing as ``spawn_subagent`` — it just names the reserved
-    :data:`WORKFLOW_AGENT_NAME` and ferries ``{script, args}`` through
-    ``inputs`` (→ ``SubtaskSpawned`` → child ``TaskCreated.inputs``), where the
-    host's child-engine builder reads them to construct
-    :class:`noeta.builtins.react.impl.orchestration.OrchestrationPolicy`.
-
-    Sole-call rule (mirrors the sibling control tools): ``run_workflow`` must be
-    the only tool call in the turn; mixed → recoverable error ack (no subtask).
-    A missing / non-string / empty / over-cap ``script`` is likewise a
-    recoverable error. The script's deterministic-sandbox guard (AST) is applied
-    downstream (issue 03); this seam only validates the call shape.
+    ``{script, args}`` ride through ``inputs`` to the child's ``TaskCreated``,
+    where the host's child-engine builder reads them to construct the
+    orchestration interpreter Policy. ``run_workflow`` must be the sole tool call
+    in the turn; a mixed turn, or a missing / non-string / empty / over-cap
+    ``script``, is a recoverable error ack rather than a spawned subtask.
     """
     tool_uses = [b for b in response.content if isinstance(b, ToolUseBlock)]
     workflow_blocks = [b for b in tool_uses if b.tool_name == RUN_WORKFLOW_TOOL]
@@ -174,11 +133,8 @@ def _maybe_workflow_decision(
             valid=False,
         )
     assert isinstance(script_or_error, str)
-    # issue 03: deterministic-sandbox AST guard runs HERE (startup
-    # / translation time) — a non-deterministic or malformed script is rejected
-    # before any orchestration subtask is created, so a bad workflow never leaves
-    # a half-run subtask behind. The model gets a recoverable ack pointing at the
-    # offending line and may retry.
+    # The determinism guard runs at translation time so a rejected script never
+    # leaves a half-run subtask behind.
     script_error = check_workflow_script(script_or_error)
     if script_error is not None:
         return ack_patch_decision(
@@ -201,7 +157,6 @@ def _maybe_workflow_decision(
 
 
 def translate_run_workflow(ctx: ControlTranslateContext) -> Optional[Decision]:
-    """The ``run_workflow`` routing seam the mount binds into a ``ControlToolSpec``."""
     return _maybe_workflow_decision(
         ctx.response,
         ctx.assistant_message,
@@ -209,18 +164,11 @@ def translate_run_workflow(ctx: ControlTranslateContext) -> Optional[Decision]:
     )
 
 
-# ===========================================================================
-# structured_output — per-helper structured return
-# ===========================================================================
-
-#: Model-visible **control** tool name a workflow helper subtask uses to return
-#: a structured (JSON-Schema-shaped) result. Injected ONLY into the helper
-#: subtask whose ``agent(goal, schema=...)`` declared a schema;
-#: the orchestration interpreter's ``StructuredOutputPolicy`` wrapper intercepts
-#: the call and finishes that helper with the call's arguments. Distinct from
-#: the session-level ``output_schema`` (top-level final-answer shape). Lives here
-#: (not kernel-side) because ``StructuredOutputPolicy`` in the sibling
-#: ``orchestration`` module is the only thing that routes on it.
+#: How a workflow helper subtask returns a structured result. Injected only into
+#: the helper whose ``agent(goal, schema=...)`` declared a schema, and
+#: intercepted by ``StructuredOutputPolicy``, which finishes that helper with the
+#: call's arguments. Distinct from the session-level ``output_schema``, which
+#: shapes the top-level final answer.
 STRUCTURED_OUTPUT_TOOL = "structured_output"
 
 _STRUCTURED_OUTPUT_DESCRIPTION = load_markdown(__package__, "structured_output")
@@ -229,12 +177,9 @@ _STRUCTURED_OUTPUT_DESCRIPTION = load_markdown(__package__, "structured_output")
 def structured_output_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
     """Provider-visible schema for :data:`STRUCTURED_OUTPUT_TOOL`.
 
-    ``schema`` is the caller-supplied JSON Schema used verbatim as the tool's
-    ``parameters`` — so the model's call arguments ARE the structured result.
-    A **control** tool: never registered in the ToolRuntime; the helper's
-    ``StructuredOutputPolicy`` wrapper turns a call into the helper's final
-    answer. Added to the helper's ``control_action_schemas`` only when its
-    ``agent()`` declared a schema (per-helper, opt-in)."""
+    ``schema`` is used verbatim as the tool's ``parameters``, so the model's call
+    arguments ARE the structured result the helper's ``StructuredOutputPolicy``
+    finishes with."""
     return {
         "type": "function",
         "function": {
@@ -245,20 +190,14 @@ def structured_output_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# ===========================================================================
-# control_tool contribution factories (manifest ``ref`` targets)
-# ===========================================================================
-
-
 def build_run_workflow_control_tool(
     ctx: ControlToolBuildContext,
 ) -> Optional[ControlToolMount]:
     """The ``run_workflow`` ``control_tool`` contribution factory.
 
-    Self-gates on the effective ``workflow`` capability flag (mounting IS
-    enablement) and reproduces the pre-migration internal ``_run_workflow_mount``
-    exactly: routing band 500, schema band 500 — the byte order the S0 golden
-    pins.
+    Self-gates on the effective ``workflow`` flag — mounting IS enablement. The
+    priority bands decide schema order, which a golden pins byte-for-byte:
+    changing them changes the prompt.
     """
     if not ctx.flag("workflow"):
         return None
@@ -276,12 +215,9 @@ def build_structured_output_control_tool(
 ) -> Optional[ControlToolMount]:
     """The ``structured_output`` ``control_tool`` contribution factory.
 
-    Self-gates on a data-driven condition, not an activation: the per-helper
-    structured-output schema being present (``ctx.structured_output_schema is not
-    None``). It reproduces the pre-migration internal ``_structured_output_mount``
-    exactly: ``translate=None`` (react's ``StructuredOutputPolicy`` intercepts the
-    call, so the mount is excluded from the routing order) and schema band 600 —
-    the byte order the S0 golden pins.
+    Gated on data rather than an activation: the per-helper schema being
+    present. ``translate=None`` keeps the mount out of the routing order,
+    because ``StructuredOutputPolicy`` intercepts the call itself.
     """
     if ctx.structured_output_schema is None:
         return None

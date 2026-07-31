@@ -1,11 +1,11 @@
-"""D4 — ``Message.origin``: authorship tag for message-channel entries.
+"""``Message.origin``: authorship tag for message-channel entries.
 
 Three contracts:
 
 * Field + serialization: origin is recorded with ``MessagesAppended`` and
-  replayed; **when absent it does not appear in canonical serialization**, so
-  replay bytes for old recordings (no origin field) are unaffected (golden not
-  re-pinned).
+  replayed; **when absent it does not appear in canonical serialization**, so a
+  message with the default origin serializes to the same bytes as one carrying
+  no origin field at all — which keeps replay bytes stable and compact.
 * Single-writer guard: only the engine's append path
   (``Engine.append_user_message``) may set origin. Messages a Policy submits via
   a Decision (``assistant_message``, or a state patch's ``messages_before`` /
@@ -57,12 +57,10 @@ def test_origin_round_trips_through_canonical() -> None:
 
 
 def test_default_origin_omitted_canonical_bytes_pinned_to_legacy_form() -> None:
-    """A default origin stays out of serialization — bytes pinned to the
-    pre-field shape.
+    """A default origin stays out of serialization.
 
-    This is the root of zero impact on old recordings (golden stays green, not
-    re-pinned): both ``MessagesAppended`` bodies and snapshot hashes go through
-    this canonical path, so a default field showing up (even as ``null``) would
+    Both ``MessagesAppended`` bodies and snapshot hashes go through this
+    canonical path, so a default field showing up (even as ``null``) would
     break replay continuity.
     """
     msg = Message(role="user", content=[TextBlock(text="hi")])
@@ -75,7 +73,7 @@ def test_default_origin_omitted_canonical_bytes_pinned_to_legacy_form() -> None:
 
 
 def test_legacy_payload_without_origin_restores_to_none() -> None:
-    """A message dict from an old recording (no origin key) restores with origin None."""
+    """A message dict serialized without an origin key restores with origin None."""
     legacy = (
         b'{"__canonical_tag__":"message",'
         b'"content":[{"__canonical_tag__":"text_block","text":"old"}],'
@@ -111,7 +109,7 @@ def _engine_setup(
 
 
 def test_append_user_message_with_origin_lands_in_ledger_and_folds() -> None:
-    """origin is recorded via the existing ``MessagesAppended``; fold replay preserves it."""
+    """origin is recorded via ``MessagesAppended``; fold replay preserves it."""
     engine, log, cs, task_id, lease_id = _engine_setup()
     task = fold(log, cs, task_id)
     engine.append_user_message(
@@ -129,7 +127,7 @@ def test_append_user_message_with_origin_lands_in_ledger_and_folds() -> None:
 
 
 def test_append_user_message_default_origin_bytes_match_legacy() -> None:
-    """An append with no origin yields body bytes == the pre-field shape (zero impact)."""
+    """An append with no origin writes body bytes free of any origin key."""
     engine, log, cs, task_id, lease_id = _engine_setup()
     task = fold(log, cs, task_id)
     engine.append_user_message(task, content=[TextBlock(text="hello there")], lease_id=lease_id)

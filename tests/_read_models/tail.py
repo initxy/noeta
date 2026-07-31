@@ -1,8 +1,8 @@
-"""read_models.tail — `noeta code tail` event rows (generic EventLog, pure read).
+"""Tail projection: a session's raw EventLog, one line per event (pure read).
 
-Reads a session's raw EventLog stream into one short deterministic line per
-event (sequence / wall-clock / type / one-line detail gloss) for ``noeta code
-tail``. Pure: no clock, no sleep — the CLI owns the poll interval.
+Renders each event as a short deterministic gloss — sequence, wall clock, type,
+one-line detail. No clock and no sleep here: the follow loop owns its poll
+interval, which is what lets a test drive this directly and deterministically.
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class TailRow:
-    """One line of ``noeta code tail``: a sequence number, wall-clock time, the
-    event ``type``, and a short deterministic one-line ``detail`` gloss."""
+    """One tail line: sequence number, wall-clock time, event ``type``, and a
+    short deterministic one-line ``detail`` gloss."""
 
     seq: int
     occurred_at: float
@@ -50,9 +50,9 @@ def _wake_repr(wake: Any) -> str:
 def _tail_detail(env: Any) -> str:
     """Short, deterministic per-event gloss for the tail ``detail`` column.
 
-    Defensive: every field read is a ``getattr`` and the whole body is guarded
-    so an unexpected payload shape yields ``""`` rather than raising (CW6 gate
-    "detail never raises")."""
+    Every field read is a ``getattr`` and the whole body is guarded: observing a
+    stream must never raise on an unexpected payload shape, so an unknown one
+    yields ``""``."""
     payload = env.payload
     event_type = env.type
 
@@ -108,9 +108,8 @@ def tail_event_rows(
     ``None``) and return ``(rows, new_cursor)`` in append order.
 
     ``new_cursor`` is the max ``seq`` seen, or ``after_seq`` (defaulting to 0)
-    when no new events — the ``--follow`` loop feeds it straight back as the
-    next ``after_seq``. Pure: no clock / no sleep (the CLI owns the poll
-    interval), so tests call this directly and deterministically."""
+    when there were no new events, so a follow loop can feed it straight back as
+    the next ``after_seq``."""
     cursor = after_seq if after_seq is not None else 0
     rows: list[TailRow] = []
     for env in event_log.read(task_id, after_seq=after_seq):

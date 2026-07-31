@@ -1,14 +1,10 @@
-"""``providers`` — the three noeta-shape LLM adapters.
+"""``providers`` built-in — the three Noeta-shape LLM adapters.
 
-The ``provider`` surface is single-valued and **host-wired** (D3 / D6): the
-host selects exactly one adapter through ``Options.provider`` / ``HostConfig``,
-so the three adapters are NOT merged onto the single-valued surface (that
-would be a self-collision). This is a declaration-only reference manifest; the
-adapter refs are documented for host discovery:
-
-* ``noeta.providers.anthropic:AnthropicProvider``
-* ``noeta.providers.openai_compat:OpenAICompatProvider``
-* ``noeta.providers.openai_responses:OpenAIResponsesProvider``
+The ``provider`` surface is single-valued and host-wired: the host picks
+exactly one adapter through ``Options.provider`` / ``HostConfig``, so this
+manifest contributes nothing to that surface — merging three adapters onto a
+single-valued surface would be a self-collision. Hosts construct an adapter
+from ``noeta.sdk.providers``.
 """
 
 from __future__ import annotations

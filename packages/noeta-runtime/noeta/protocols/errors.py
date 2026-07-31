@@ -1,8 +1,8 @@
 """Noeta error hierarchy.
 
-Each error is mapped to a documented runtime concern. The hierarchy is
-deliberately flat: callers either need to handle these specifically or
-they propagate as programmer errors.
+The hierarchy stays deliberately flat: a caller either handles one of these
+specifically or lets it propagate as a programmer error. Each type names a
+runtime concern a caller can act on, not an implementation detail.
 """
 
 from __future__ import annotations
@@ -18,18 +18,17 @@ class NoetaError(Exception):
 class CodedError(NoetaError):
     """A :class:`NoetaError` carrying a stable, machine-matchable ``code``.
 
-    ``code`` is a byte-stable public token — never a class name, never a
-    message substring — that boundary code matches **structurally** to
-    decide client-facing handling. The product's HTTP backend reaches the
-    engine only through ``noeta.sdk`` (import-linter ``backend-only-sdk``),
-    so it cannot ``isinstance`` runtime-internal exception types; it catches
-    this one re-exported base and switches on ``exc.code`` instead of the
-    fragile ``type(exc).__name__`` / ``"...substring..." in str(exc)`` it
-    used before. The ``code`` vocabulary is part of the public surface and
-    must stay stable across releases — same discipline as the ``category``
-    constants below. Subclasses set a concrete ``code``; a subclass may also
-    inherit a stdlib exception (e.g. ``RuntimeError``) alongside this so an
-    ``except RuntimeError`` contract keeps matching.
+    ``code`` is a public token — never a class name, never a message substring
+    — that boundary code matches **structurally** to decide client-facing
+    handling. A host that reaches the engine only through ``noeta.sdk`` cannot
+    ``isinstance`` runtime-internal exception types, so it catches this one
+    re-exported base and switches on ``exc.code`` rather than the fragile
+    ``type(exc).__name__`` or a substring of ``str(exc)``. The ``code``
+    vocabulary is part of the public surface and must stay stable across
+    releases, the same discipline as the ``category`` constants below.
+    Subclasses set a concrete ``code``, and may also inherit a stdlib exception
+    (e.g. ``RuntimeError``) so an ``except RuntimeError`` contract keeps
+    matching.
     """
 
     #: Stable public error code. Subclasses override with a concrete token.
@@ -41,19 +40,11 @@ class ContentNotFound(NoetaError):
 
 
 class StaleSequence(NoetaError):
-    """EventLog.append called with an expected_seq that no longer matches.
-
-    Phase 0 surfaces the type for protocol shape only; strict enforcement
-    is the job of issue 06.
-    """
+    """EventLog.append called with an expected_seq that does not match."""
 
 
 class InvalidLease(NoetaError):
-    """Write attempted with an unknown, expired, or released lease_id.
-
-    Phase 0 surfaces the type for protocol shape only; strict enforcement
-    is the job of issue 06.
-    """
+    """Write attempted with an unknown, expired, or released lease_id."""
 
 
 class TaskCancellationRequested(NoetaError):
@@ -71,8 +62,8 @@ class TaskCancellationRequested(NoetaError):
     already terminal from the ``TaskCancelled`` event. Carries the
     offending ``task_id``.
 
-    Never raised on resume: that path injects no predicate, so
-    the poll is a no-op and recordings stay byte-identical.
+    Never raised on resume: that path injects no predicate, so the poll is a
+    no-op and recordings stay byte-identical.
     """
 
     def __init__(self, task_id: str) -> None:
@@ -83,7 +74,7 @@ class TaskCancellationRequested(NoetaError):
 class WakeConsumeMismatch(NoetaError):
     """``Dispatcher.release(consumed_wake_event=X)`` was called but ``X``
     does not equal the task's currently-stored ``matched_wake_event`` (or
-    no matched event is stored) — H2.
+    no matched event is stored).
 
     The Dispatcher raises this **and commits nothing** (the release rolls
     back) rather than clearing the wrong event or releasing without the
@@ -96,17 +87,15 @@ class WakeConsumeMismatch(NoetaError):
 class PayloadTooLarge(NoetaError):
     """EventLog.append received a payload that exceeds the EventLog payload cap.
 
-    The EventEnvelope payload ceiling is fixed at 4 KB. Any body
-    larger than that must be stored in ContentStore and referenced
-    inline via a ``ContentRef``. This error is the runtime guard that
-    keeps backend implementations honest before Phase 1's real-LLM
-    traffic starts producing large bodies.
+    The EventEnvelope payload ceiling is fixed at 4 KB; any larger body must
+    live in ContentStore and travel as an inline ``ContentRef``. This error is
+    the guard that keeps backend implementations honest about it.
     """
 
 
 class ApprovalNotPending(NoetaError):
     """``Engine.resolve_tool_approval`` was called for a ``call_id`` that
-    is not in ``governance.pending_approvals`` (Phase 4.5 Issue A).
+    is not in ``governance.pending_approvals``.
 
     This is the fail-closed guard against a stale or duplicate
     resolution: a second resolution for an already-resolved call, or a
@@ -118,27 +107,25 @@ class ApprovalNotPending(NoetaError):
 
 class UserQuestionNotPending(NoetaError):
     """``Engine.answer_user_question`` was called for a question_id that is
-    not in ``governance.pending_questions`` (CW18d)."""
+    not in ``governance.pending_questions``."""
 
 
 # ---------------------------------------------------------------------------
-# ② error recovery — provider-neutral error taxonomy (README D-2)
+# Provider-neutral error taxonomy
 # ---------------------------------------------------------------------------
 #
-# These three classes are the *Noeta-shape* error vocabulary every provider
-# adapter (sdk, L2) translates its wire-specific failures into, and that
-# the runtime LLM wrapper (``RuntimeLLMClient``) catches to decide whether
-# to retry (transient) or surface (overflow / fatal). They sit at L0 so
-# both providers (providers-only-protocols) and the runtime
-# (runtime-no-providers) can import them without violating the
-# topology, and they carry **no** vendor field — a 429 status
-# code or an OpenAI ``context_length_exceeded`` body never leaks past the
-# adapter; only the neutral class + an optional ``retry_after`` does.
+# The three classes below are the vocabulary every provider adapter translates
+# its wire-specific failures into, and that ``RuntimeLLMClient`` catches to
+# decide whether to retry (transient) or surface (overflow / fatal). They live
+# here so both providers and the runtime can import them without a topology
+# violation, and they carry **no** vendor field: a 429 status code or a
+# ``context_length_exceeded`` body never leaks past the adapter — only the
+# neutral class and an optional ``retry_after`` do.
 
 #: The closed set of error category labels. They double as the
-#: ``raw['category']`` value the runtime stamps onto an error
-#: ``LLMResponse`` (so Policy can branch without re-deriving the class) and
-#: are byte-stable so old recordings keep matching.
+#: ``raw['category']`` value the runtime stamps onto an error ``LLMResponse``
+#: (so a Policy can branch without re-deriving the class), and their spellings
+#: are byte-stable so recordings keep matching.
 CATEGORY_TRANSIENT = "transient"
 CATEGORY_OVERFLOW = "overflow"
 CATEGORY_FATAL = "fatal"
@@ -146,9 +133,9 @@ CATEGORY_FATAL = "fatal"
 
 class TransientError(NoetaError):
     """A retryable failure — rate limits (429), overloaded (529), 5xx,
-    connection / timeout errors. The runtime retries these internally
-    (LIVE-only, see README D-2d) up to a small budget before giving up
-    and translating to an error response.
+    connection / timeout errors. The runtime retries these internally, on the
+    live path only, up to a small budget before giving up and translating to an
+    error response.
 
     ``retry_after`` carries a provider-supplied delay hint in **seconds**
     (e.g. from a ``Retry-After: 5`` header) when available; ``None`` lets
@@ -166,9 +153,9 @@ class TransientError(NoetaError):
 
 class ContextOverflowError(NoetaError):
     """The request exceeded the model's context window (prompt too long /
-    ``context_length_exceeded`` / ``max tokens``). Not retryable as-is —
-    the recovery is compaction (③), driven by Policy reading
-    ``raw['category'] == 'overflow'``; the runtime does not retry it.
+    ``context_length_exceeded`` / ``max tokens``). Not retryable as-is: the
+    runtime does not retry it, and the recovery is compaction, driven by a
+    Policy reading ``raw['category'] == 'overflow'``.
     """
 
     category = CATEGORY_OVERFLOW
@@ -208,13 +195,10 @@ class MalformedToolArgumentsError(TransientError, ValueError):
     A genuinely model-malformed body simply re-samples and, if it never parses,
     still surfaces as an error once the budget is spent — bounded, not looping.
 
-    It also subclasses :class:`ValueError` so the shared codec's historical
-    contract ("raises ``ValueError`` worded ``'<label> not JSON-decodable: …'``")
-    and any ``except ValueError`` caller keep matching byte-for-byte.
+    It also subclasses :class:`ValueError` so the shared codec's contract
+    ("raises ``ValueError`` worded ``'<label> not JSON-decodable: …'``") and any
+    ``except ValueError`` caller keep matching byte-for-byte.
     """
-
-    # category + retry_after come from TransientError; ValueError contributes
-    # only the isinstance compatibility, no __init__ of its own.
 
 
 #: Exponential-backoff base (seconds) and ceiling for transient retries.
@@ -244,9 +228,9 @@ def retry_policy(
       no longer retry in unison and re-collide.
     * Anything else (overflow / fatal / a bare NoetaError) → ``None``.
 
-    The retry loop is LIVE-only and writes no events (README D-2d), so the
-    chosen delay is never observed downstream — the jitter has no fold/resume
-    consequence. ``rng`` is injectable purely so tests can pin the draw.
+    The retry loop runs live only and writes no events, so the chosen delay is
+    never observed downstream — the jitter has no fold/resume consequence.
+    ``rng`` is injectable purely so tests can pin the draw.
     """
     if not isinstance(error, TransientError):
         return None

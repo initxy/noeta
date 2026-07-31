@@ -1,25 +1,9 @@
-"""``noeta.client`` — the SDK public face.
+"""The SDK assembly layer: sugar types that compile into runtime identity.
 
-This package exposes the *library user* entrypoints with a Claude-Agent-SDK
-shape — lightweight sugar types that compile into the canonical
-``noeta.agent.spec`` identity objects the runtime hosts register and resolve.
-
-Slice 4a (this file) lands:
-
-* :class:`Options` — the human-friendly recipe dataclass.
-* :func:`compile_options` — pure function turning ``Options`` into
-  ``(main_AgentSpec, tuple_of_descendant_AgentSpecs)``.
-* :func:`builtin_tool_ref` — resolve a built-in tool name to its canonical
-  :class:`~noeta.agent.spec.ToolRef` (part of the SDK "batteries" parts table;
-  shared by :func:`compile_options` for string tool entries and by callers
-  who want to build spec tool lists manually).
-
-Future slices (4b/4c):
-
-* ``Client`` — a runtime host that wires compiled specs to a provider +
-  storage and exposes ``start``/``send_goal``/… methods.
-* ``query`` — one-shot ``Iterator[EventEnvelope]`` driver.
-* ``as_messages`` — event-envelope → human-readable message view.
+Everything here is a library-user entrypoint. :class:`Options` and friends are
+lightweight recipes; :func:`compile_options` turns them into the canonical
+``noeta.agent.spec`` objects a host registers and resolves, and
+:class:`Client` / :func:`query` drive a live engine over that identity.
 """
 
 from noeta.client.client import Client, QueryFailedError, QueryResult, query

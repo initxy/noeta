@@ -1,18 +1,17 @@
-"""Extended-thinking end-to-end acceptance (Slices B + C).
+"""Extended thinking survives a turn boundary without entering the ledger.
 
-Drives the *real* Engine + ReActPolicy + ThreeSegmentComposer over a
-two-turn run backed by a FakeLLMProvider. Turn 1 emits a ThinkingBlock
-ahead of a ``tool_use``; the Engine records it out-of-band
-(``AssistantThinkingRecorded`` → ``ContextState.thinking_by_call_id``),
-and turn 2's compose re-attaches it — so the SECOND provider request
-carries the thinking ahead of the assistant turn's ``tool_use``, exactly
-what an Anthropic extended-thinking continuation needs.
+A reasoning model's ThinkingBlock is recorded out of band
+(``AssistantThinkingRecorded`` → ``ContextState.thinking_by_call_id``) and
+re-attached at compose time, so the continuation request carries it ahead of
+the ``tool_use`` it preceded — which is exactly what Anthropic requires, and
+without which the second turn comes back as a 400. Persisted
+``runtime.messages`` must stay free of it, since that is what a fold rebuilds
+and a resume has to reproduce byte-for-byte.
 
-This closes the loop the per-layer tests pin individually:
-``react`` extraction (test_policy_react), composer re-attach
-(test_three_segment_composer), and the Engine/fold rebuild
-(thinking stays out of persisted history). Here the slice's writer and
-reader meet through a live run.
+Writer and reader are pinned per layer elsewhere (test_policy_react,
+test_three_segment_composer); this module runs them together through a real
+Engine + ReActPolicy + ThreeSegmentComposer, over the normal tool path and the
+control-tool path, which reach the recorder by different routes.
 """
 
 from __future__ import annotations
@@ -101,7 +100,8 @@ def test_thinking_reattached_into_continuation_request() -> None:
     assistant_msgs = [m for m in second.messages if m.role == "assistant"]
     assert assistant_msgs, "continuation request should carry the prior assistant turn"
     first_assistant = assistant_msgs[0]
-    # thinking is re-attached at the head, ahead of the tool_use it preceded.
+    # Head position matters: the block must sit ahead of the tool_use it
+    # preceded, not merely be present somewhere in the turn.
     assert first_assistant.content[0] == thinking
     assert any(
         isinstance(b, ToolUseBlock) and b.call_id == "c1"
@@ -124,12 +124,11 @@ def test_thinking_stays_out_of_persisted_history() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Regression: control tools (spawn / todo_write / ask / plan-mode) also carry
-# their preceding extended-thinking signature through
-# AssistantThinkingRecorded → thinking_by_call_id → composer re-attach.
-# Previously only the normal ToolCallsDecision path did this, so a reasoning
-# model that emitted a ThinkingBlock + a control tool_use in one turn would
-# lose the signature and Anthropic would return 400 on the continuation.
+# Control tools (spawn / todo_write / ask / plan-mode) carry their preceding
+# extended-thinking signature through AssistantThinkingRecorded →
+# thinking_by_call_id → composer re-attach. A reasoning model that emits a
+# ThinkingBlock + a control tool_use in one turn must not lose the signature,
+# or Anthropic returns 400 on the continuation.
 # ---------------------------------------------------------------------------
 
 

@@ -1,15 +1,9 @@
-"""capabilities — the SDK-side projections the app's ``/capabilities`` reads.
+"""What a host may offer its users: selectable modes and per-model vision.
 
-The app product drives the engine only through ``noeta.sdk``; the composer's
-selectable enums (permission /
-effort modes) and the per-model vision gate are facts the SDK already
-depends on, so they are projected here and re-exported through ``noeta.sdk``
-rather than letting the backend reach for an internal (the model catalog
-lives in the ``providers`` built-in plugin since microkernel M2, reached only
-through the loader's dynamic-import doorway).
-
-These are small, pure projections — no state, no I/O — kept together so the one
-public capabilities surface is legible.
+A host drives the engine only through ``noeta.sdk``, so the facts it needs to
+build a picker — the legal permission/effort values, whether a model accepts
+images — are projected here and re-exported rather than letting the host reach
+into an internal. Pure projections: no state, no I/O.
 """
 
 from __future__ import annotations
@@ -20,24 +14,22 @@ from noeta.client.options import EFFORT_MODES, PERMISSION_MODES
 
 
 def permission_modes() -> tuple[str, ...]:
-    """The legal :attr:`Options.permission_mode` values, sorted (composer enum)."""
+    """The legal :attr:`Options.permission_mode` values, sorted."""
     return tuple(sorted(PERMISSION_MODES))
 
 
 def effort_modes() -> tuple[str, ...]:
-    """The legal :attr:`Options.effort` values, sorted (composer enum)."""
+    """The legal :attr:`Options.effort` values, sorted."""
     return tuple(sorted(EFFORT_MODES))
 
 
 def model_capabilities(models: Sequence[str]) -> dict[str, dict[str, bool]]:
     """Per-model ``{supports_vision: bool}`` for the image-attach gate.
 
-    Parallel to the plain ``models`` string list. Each selector is resolved the
-    SAME way the Responses vision guard does
-    (``resolve_alias`` → ``CATALOG.get``): a friendly alias (``opus`` / ``sonnet``
-    / ``haiku``) maps to its real id first; an uncatalogued / unknown selector
-    (test stubs like ``stub-model``) has no spec and is conservatively reported
-    non-vision — fail-closed, never advertise vision we cannot vouch for.
+    Each selector resolves the same way the provider's vision guard resolves it
+    (``resolve_alias`` → ``CATALOG.get``), so the gate a host shows matches the
+    gate the request hits. An uncatalogued selector reports non-vision:
+    fail-closed, never advertise a capability we cannot vouch for.
     """
     import importlib
 

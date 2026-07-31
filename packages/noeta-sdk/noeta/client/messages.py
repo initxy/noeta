@@ -1,48 +1,10 @@
-"""D6 — as_messages: envelope stream → human-readable message view.
+"""Project the envelope stream into a human-readable message view.
 
-The Claude-style message view is **projection sugar** on top of the Noeta
-envelope stream — same abstraction layer as ``read_models``: given the same
-envelope stream + ContentStore, the output is deterministic. **The canonical
-record of truth is always the envelope stream itself.** Projections don't enter
-the durable record and don't touch recording; they exist only for logs, debugging,
-and quick inspection by SDK users.
-
-Folding rules
--------------
-
-Process envelopes in order, preserving the true event timeline:
-
-1. ``MessagesAppended`` → call ``noeta.core.fold.messages_from_appended`` to get
-   ``list[Message]``, then split each Message by role / content into view items:
-
-   * ``role == "assistant"``:
-     - ``TextBlock`` text is **concatenated** in order, emitting one
-       ``AssistantMessage`` at the next non-TextBlock or at message end;
-     - ``ToolUseBlock`` emits its own ``ToolUse``.
-   * ``role == "user"``:
-     - If the whole message is **entirely** ``ToolResultBlock`` (the standard
-       tool-feedback shape), emit a ``ToolResultView`` per block;
-     - Otherwise concatenate ``TextBlock`` into a ``UserMessage``, emitting a
-       ``ToolResultView`` for any interleaved ``ToolResultBlock``.
-   * ``role == "tool"``: treat all content as ``ToolResultBlock`` and emit a
-     ``ToolResultView`` per block. (Noeta's spec routes feedback through user
-     messages by default; this is a fallback.)
-   * ``role == "system"``: skip — the system prompt is request-level metadata,
-     not part of the conversation view.
-   * ``ThinkingBlock``: skip — raw reasoning is projected via the separate
-     Extended Thinking channel.
-
-2. ``ToolCallStarted`` → ``ToolUse``. **If the MessagesAppended path already
-   emitted a ToolUse for the same ``call_id``, skip this one (keep the first).**
-
-3. ``ToolResultRecorded`` → ``ToolResultView``. ``output_ref`` is dereferenced
-   from the ContentStore (decoded as str); set to ``None`` if missing or on error.
-
-4. ``TaskCompleted`` → ``Result(status="completed", answer=str(payload.answer))``.
-   ``TaskFailed`` → ``Result(status="failed", answer=payload.reason)``.
-
-All other event types are skipped. View items keep the relative order of the
-envelope stream.
+Sugar for logs, debugging, and quick inspection by SDK users: given the same
+envelopes and the ContentStore they were written against, the output is
+deterministic and preserves the stream's order. The envelope stream stays the
+record of truth — nothing here enters the durable record or records events, so
+an unresolvable body degrades to ``None`` rather than failing the whole read.
 """
 
 from __future__ import annotations
@@ -95,11 +57,6 @@ def _expect_payload(env: EventEnvelope, cls: type[_P]) -> _P:
     return payload
 
 
-# ---------------------------------------------------------------------------
-# View dataclasses (frozen, hashable for dedup if needed)
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True, slots=True)
 class AssistantMessage:
     """A plain-text reply fragment from the assistant."""
@@ -118,9 +75,9 @@ class UserMessage:
 class ToolUse:
     """The model requests a tool call.
 
-    Two sources: a ``ToolUseBlock`` inside an assistant message, or a standalone
-    ``ToolCallStarted`` event. The former wins (first occurrence wins; a later
-    one with the same call_id is dropped).
+    A ``ToolUseBlock`` inside an assistant message and a standalone
+    ``ToolCallStarted`` event describe the same call, so the first occurrence
+    of a ``call_id`` wins and any later one is dropped.
     """
 
     call_id: str
@@ -132,9 +89,8 @@ class ToolUse:
 class ToolResultView:
     """The result view of one tool call.
 
-    ``output`` is the string representation resolved from the ContentStore;
-    ``None`` when it can't be resolved. The caller can still identify the call
-    and its outcome from ``success`` + ``call_id`` + ``tool_name``.
+    ``output`` is ``None`` when the body could not be resolved; the call and its
+    outcome are still identifiable from ``success`` + ``call_id``.
     """
 
     call_id: str
@@ -147,10 +103,9 @@ class ToolResultView:
 class Result:
     """The terminal-state fold of a Task (completed / failed).
 
-    Check ``status`` before trusting ``answer``: on ``status == "failed"``,
-    ``answer`` holds the **failure reason**, not a successful answer. Callers
-    who want the exception path instead use ``QueryResult.answer()``, which
-    raises a coded ``QueryFailedError`` on a non-completed terminal.
+    Check ``status`` before trusting ``answer``: on ``"failed"`` it holds the
+    failure reason, not an answer. Callers who prefer an exception use
+    ``QueryResult.answer()``, which raises ``QueryFailedError`` instead.
     """
 
     answer: str
@@ -166,23 +121,13 @@ ViewItem = Union[
 ]
 
 
-# ---------------------------------------------------------------------------
-# Public entry
-# ---------------------------------------------------------------------------
-
-
 def _prefetch_refs(envelopes: Iterable[EventEnvelope]) -> list[ContentRef]:
     """Every ContentRef this projection will dereference, in one scan.
 
-    The four projected event types that carry a body: ``messages_ref``, an
-    offloaded ``ToolCallStarted.arguments_ref``, ``output_ref`` (this is the
-    one consumer that *does* read tool outputs — it renders them) and a spilled
-    ``TaskCompleted.answer_ref``. Types the projection skips contribute
-    nothing, and neither does ``thinking_ref``: ``ThinkingBlock`` is explicitly
-    not part of this view.
-
-    This set is intentionally not fold's — the two traversals read different
-    bodies, and a shared table would make each pay for the other's.
+    Deliberately not the same set fold prefetches: the two traversals read
+    different bodies (this is the one consumer that renders tool outputs, and
+    it never reads ``thinking_ref``), and sharing one table would make each pay
+    for the other's reads.
     """
     refs: list[ContentRef] = []
     for env in envelopes:
@@ -208,15 +153,11 @@ def as_messages(
 ) -> list[ViewItem]:
     """Project the envelope stream into a human-readable list of message views.
 
-    Pure function: same input (envelopes, content_store) → same output list.
-    Writes no state, enters no durable record, records no events.
-
     ``content_store`` must be the store **paired with** the envelope stream:
-    the envelopes carry ``ContentRef``\\ s (every ``messages_ref``, tool
-    ``output_ref``, a spilled ``answer_ref``) that only the originating host's
-    store can resolve — a fresh store deterministically loses those bodies.
-    With a ``Client``, use ``client.messages(task_id)``; with one-shot
-    ``query``, use the pre-folded ``QueryResult.messages()``.
+    the envelopes carry ``ContentRef``\\ s only the originating host's store can
+    resolve, so a fresh store deterministically loses every body. With a
+    ``Client``, use ``client.messages(task_id)``; with one-shot ``query``, use
+    the pre-folded ``QueryResult.messages()``.
     """
     # Materialised because the stream is walked twice — once to collect refs,
     # once to project — and ``envelopes`` may be a one-shot iterator.
@@ -253,14 +194,7 @@ def as_messages(
             payload = _expect_payload(env, TaskFailedPayload)
             out.append(Result(answer=payload.reason, status="failed"))
 
-        # other types silently skipped
-
     return out
-
-
-# ---------------------------------------------------------------------------
-# Per-type projectors
-# ---------------------------------------------------------------------------
 
 
 def _project_messages(
@@ -283,11 +217,10 @@ def _project_one_message(
     role = msg.role
     if role == "system":
         return
-    # One block walk for every conversational role: the assistant and
-    # user/tool branches handle each block type identically — only the text
-    # fragments' view type differs. (An all-ToolResultBlock user message —
-    # the standard tool-feedback shape — needs no special case: the walk
-    # emits exactly one ToolResultView per block and no text.)
+    # One block walk serves every conversational role: the branches handle each
+    # block type identically and only the text fragments' view type differs. An
+    # all-ToolResultBlock user message — the standard tool-feedback shape —
+    # needs no special case; the walk emits one view per block and no text.
     text_factory: Callable[[str], ViewItem] = (
         AssistantMessage if role == "assistant" else UserMessage
     )
@@ -301,16 +234,12 @@ def _walk_blocks(
     seen_tool_use: set[str],
     seen_tool_result: set[str],
 ) -> None:
-    """Project one message's blocks, concatenating text runs.
+    """Project one message's blocks, concatenating runs of text.
 
-    ``TextBlock`` runs concatenate into one ``text_factory`` item, flushed at
-    the next non-text block or at message end. ``ThinkingBlock`` is skipped
-    (raw reasoning rides the Extended Thinking channel). ``ImageBlock`` does
-    not enter the view yet but still flushes text — otherwise text on either
-    side of an image would wrongly concatenate. ``ToolUseBlock`` /
-    ``ToolResultBlock`` emit their own items, first occurrence per call_id
-    wins (``ToolUseBlock`` in a user message is defensive — the spec routes
-    tool use through assistant messages).
+    ``ThinkingBlock`` stays out of the view: raw reasoning rides the Extended
+    Thinking channel. ``ImageBlock`` also stays out, but still flushes the text
+    buffer — otherwise text on either side of an image would wrongly join into
+    one fragment.
     """
     text_buf: list[str] = []
 
@@ -362,7 +291,7 @@ def _project_tool_call_started(
     payload = _expect_payload(env, ToolCallStartedPayload)
     call_id = payload.call_id
     if call_id in seen_tool_use:
-        return  # first occurrence wins (the MessagesAppended path usually comes first)
+        return  # first occurrence of a call_id wins
     out.append(
         ToolUse(
             call_id=call_id,
@@ -381,15 +310,15 @@ def _project_tool_result_recorded(
 ) -> None:
     payload = _expect_payload(env, ToolResultRecordedPayload)
     if payload.call_id in seen_tool_result:
-        return  # first occurrence wins (the MessagesAppended path's ToolResultBlock usually comes first)
+        return  # first occurrence of a call_id wins
     output: Optional[str]
     try:
         raw = content_store.get(payload.output_ref)
         output = raw.decode("utf-8", errors="replace")
     except Exception:
-        # Documented degradation (see module docstring): an unresolvable
-        # output body renders as None. Logged so a systematically mis-paired
-        # ContentStore (every output None) leaves a trace to find.
+        # An unresolvable body renders as None rather than failing the read.
+        # Logged so a systematically mis-paired ContentStore — every output
+        # None — leaves a trace to find.
         _log.debug(
             "tool output %s unresolvable against the given ContentStore",
             payload.call_id,
@@ -408,17 +337,8 @@ def _project_tool_result_recorded(
     seen_tool_result.add(payload.call_id)
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _block_output_to_str(output: object) -> Optional[str]:
-    """ToolResultBlock.output → view string.
-
-    ``None`` is returned as-is; other scalars use ``str``; for dict/list, a
-    JSON-style repr is enough (the view is for human reading only).
-    """
+    """Render ``ToolResultBlock.output``; ``repr`` suffices — humans read this."""
     if output is None:
         return None
     return str(output)

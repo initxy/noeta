@@ -1,20 +1,19 @@
-"""Phase 4 I3 — Noeta-Code skills + context wiring.
+"""Coding-agent skills + context wiring.
 
-Three regressions wired into one file:
+Three behaviours wired into one file:
 
 * :func:`load_workspace_skills` indexes ``<workspace>/.noeta/skills`` (with an
-  optional override) using the unchanged Phase-1 ``SkillIndexer``.
+  optional override) through ``SkillIndexer``.
 * :func:`build_coding_composer` wires the registry's renderer so
   activated skill bodies enter the ``semi_stable`` segment and
   ``ContextPlan.selected_skills`` records them.
 * :func:`activate_skills` emits a **durable** ``TaskStatePatched`` event
-  through ``Engine.apply_state_patch`` (B11 + B17). The event survives
-  fold/replay, so verify reproduces the same active set without the
-  model needing to emit ``activate_skills``.
+  through ``Engine.apply_state_patch``. The event survives fold/replay, so
+  verify reproduces the same active set without the model needing to emit
+  ``activate_skills``.
 
-Plus the boundary the architect underlined (B12): Phase 4 records ONLY
-``ContextPlan.selected_skills``; ``selected_messages`` / ``dropped_messages``
-stay empty in this wiring.
+The context plan records ONLY ``ContextPlan.selected_skills`` here;
+``selected_messages`` / ``dropped_messages`` stay empty in this wiring.
 """
 
 from __future__ import annotations
@@ -177,7 +176,7 @@ def test_compose_after_activation_materialises_skill_body(tmp_path: Path) -> Non
 
     plan = _read_plan(cs, view)
     assert plan["selected_skills"] == ["fix-python-test"]
-    # Phase 4 boundary (B12): no message-selection provenance fields.
+    # No message-selection provenance fields in this wiring.
     assert plan["selected_messages"] == []
     assert plan["dropped_messages"] == []
 
@@ -196,7 +195,7 @@ def test_compose_drops_unknown_active_name(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Durable TaskStatePatched event (B11 + B17)
+# Durable TaskStatePatched event
 # ---------------------------------------------------------------------------
 
 
@@ -251,7 +250,7 @@ def test_activate_skills_emits_durable_task_state_patched_event(
 
 
 def test_activation_survives_fold_replay(tmp_path: Path) -> None:
-    """The hard B17 proof: the active set materialises out of the
+    """The active set materialises out of the
     EventLog alone, so a fresh fold (verify/replay's path) recovers it
     without any in-memory carry-over."""
     skills_dir = tmp_path / "skills"
@@ -366,12 +365,12 @@ def test_engine_apply_state_patch_records_canonical_bytes(tmp_path: Path) -> Non
 
 
 # ---------------------------------------------------------------------------
-# ContextPlan boundary (B12)
+# ContextPlan boundary
 # ---------------------------------------------------------------------------
 
 
-def test_context_plan_phase_4_records_only_selected_skills() -> None:
-    """``ContextPlan`` keeps the same L0 shape — Phase 4 only sets the
+def test_context_plan_records_only_selected_skills() -> None:
+    """``ContextPlan`` keeps the same L0 shape — this wiring only sets the
     `selected_skills` field; `selected_messages` and `dropped_messages`
     remain empty."""
     plan = ContextPlan(

@@ -6,22 +6,19 @@ by the **session root**, not by a subtask that happened to spawn it. A long
 service (``npm run dev``) must not deadlock its spawning task forever; a long
 batch (``make build``) result must not be reaped when its subtask completes.
 
-Coverage matrix (issue 04):
-
 * **ownership = session root**: a job spawned by a SUBTASK is keyed under the
   session ROOT and its ``BackgroundShell*`` events land on the ROOT stream,
-  while the ``spawned_by_task_id`` payload field keeps the real spawner
-  (lineage — AC "spawned_by_task_id records lineage correctly").
-* **common case (spawner == root) is byte-identical** to issues 01–03: the
-  resolved root equals the spawner, so the stream + keying are unchanged.
+  while the ``spawned_by_task_id`` payload field keeps the real spawner.
+* **common case (spawner == root)**: the resolved root equals the spawner, so
+  the stream + keying are unchanged.
 * **spawning task is NOT blocked**: spawning a long sleeper returns
-  immediately and the task reaches ``terminal`` normally while the job runs —
-  a background job is NOT a ``wake_on`` blocker (unlike a subtask join).
+  immediately and the task reaches ``terminal`` normally — a background job is
+  NOT a ``wake_on`` blocker (unlike a subtask join).
 * **process outlives the spawning task**: complete the (sub)task → the job is
   still running, still owned by the session root.
 * **session-close cascade**: ``InteractionDriver.close`` SIGTERM→SIGKILL reaps
-  ALL the session's background jobs (reuses issue 03's ``kill_root_task``), no
-  orphan left in the registry.
+  ALL the session's background jobs via ``kill_root_task``, no orphan left in
+  the registry.
 """
 
 from __future__ import annotations
@@ -178,18 +175,18 @@ def test_subtask_spawned_job_owned_by_session_root(tmp_path: Path) -> None:
     assert started.payload.spawned_by_task_id == "sub"
 
     # The registry keys the job under the session root, so a session kill
-    # (issue 03's primitive, reused by the close cascade) finds it there.
+    # (the same primitive the close cascade reuses) finds it there.
     assert reg.kill_root_task("sub") == []  # not keyed under the subtask
     # (already terminal → no live job to kill, but keyed under root)
 
 
 def test_common_case_spawner_is_root_byte_identical(tmp_path: Path) -> None:
     """When the spawner IS the session root (no parent), root resolution is a
-    no-op: events land on the spawner's own stream exactly as issues 01–03."""
+    no-op: events land on the spawner's own stream."""
     log = InMemoryEventLog()
     store = InMemoryContentStore()
     # No TaskCreated for "t-root" → fold yields parent_task_id=None → it IS
-    # the root (the common case, and what all the 01/02/03 tests rely on).
+    # the root (the common case).
     reg = _registry_with_chain(log, store)
     out = reg.spawn(
         argv=_py("print('root job')"),
@@ -290,7 +287,7 @@ def test_job_outlives_spawning_subtask(tmp_path: Path) -> None:
 
 def test_session_close_reaps_all_background_jobs(tmp_path: Path) -> None:
     """``InteractionDriver.close`` cascades SIGTERM→SIGKILL to ALL the session's
-    background jobs (reuses issue 03's ``kill_root_task`` via the same host seam
+    background jobs (reuses ``kill_root_task`` via the same host seam
     ``cancel`` uses) — no orphan left in the registry."""
     ws = tmp_path / "ws"
     ws.mkdir()

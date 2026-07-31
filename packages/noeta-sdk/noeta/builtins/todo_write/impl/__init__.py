@@ -1,22 +1,11 @@
-"""``todo_write`` — the durable-checklist control tool, as a built-in plugin.
+"""``todo_write`` — the durable-checklist control tool: its provider-visible
+schema, its ``todos`` validator, its translation into a neutral state-patch
+Decision, and the factory that mounts it.
 
-Control-tool-surface S2: ``todo_write``'s whole story — its provider-visible
-schema, its ``todos`` validator, its response→neutral-Decision translate body,
-and its ``.md`` description — moved out of the kernel's control band
-(``noeta.policies.control_semantics``) into this built-in, collocated the same
-way the fs / web tools collocate their impl + ``.md``. The move is
-byte-preserving (the S0 golden pins the schema bytes).
-
-What this impl imports back from the kernel is the neutral MECHANISM the tool
-builds on: the control-tool mount types (``noeta.execution.control_tool``), the
-decision-time ``ControlTranslateContext``, and the shared ack builder
-``ack_patch_decision`` (a neutral helper used by control tools in several
-plugins, so it stays kernel-side). The description loads from the sibling
-``todo_write.md`` via the shared L0 resource loader, exactly as the fs tools
-load theirs.
-
-Reached only through the plugin loader's ``ref`` resolution (the manifest's
-``control_tool`` contribution); nothing imports it statically.
+A ``todo_write`` call replace-alls ``TaskState.todos`` and is never invoked
+through the ToolRuntime; the kernel holds none of this vocabulary and reaches
+it only through the plugin loader's ``ref`` resolution. Routing and schema
+bands are a byte-order contract the control-tool schema goldens pin.
 """
 
 from __future__ import annotations
@@ -53,7 +42,7 @@ __all__ = [
 
 #: Model-visible **control** tool name for durable checklist updates.
 TODO_WRITE_TOOL = "todo_write"
-#: Allowed ``status`` values for a todo item (Claude-style).
+#: Allowed ``status`` values for a todo item.
 TODO_WRITE_STATUSES = ("pending", "in_progress", "completed")
 #: Input caps. Over-cap → malformed (recoverable, no state write).
 _TODO_MAX_ITEMS = 50
@@ -67,12 +56,9 @@ _TODO_WRITE_DESCRIPTION = load_markdown(__package__, "todo_write")
 def todo_write_tool_schema() -> dict[str, Any]:
     """Provider-visible schema for :data:`TODO_WRITE_TOOL`.
 
-    A **control** tool (never an Engine/ToolRuntime tool): a single
-    ``todo_write`` call replace-alls ``TaskState.todos`` via a
-    ``StatePatchDecision`` (``set_todos`` patch) → ``TaskStatePatched``.
-    Added to the Composer's ``control_action_schemas`` (so it lands in
-    ``View.provider_tool_schemas`` + the stable hash) only when
-    ``todo_write_enabled`` — never registered as a tool."""
+    Lands in the Composer's ``control_action_schemas`` — and thus in
+    ``View.provider_tool_schemas`` and the stable hash — only when
+    ``todo_write_enabled``; it is never registered as a ToolRuntime tool."""
     return {
         "type": "function",
         "function": {
@@ -110,9 +96,8 @@ def todo_write_tool_schema() -> dict[str, Any]:
 def validate_todos(
     arguments: Any,
 ) -> tuple[bool, "list[dict[str, Any]] | str"]:
-    """Validate a ``todo_write`` ``todos`` arg. Returns ``(True, todos)``
-    with a normalized list, or ``(False, error)``. Caps + non-empty + unique
-    ids + status enum; never raises (malformed input is data, not an error)."""
+    """Return ``(True, normalized)`` or ``(False, error)``; never raises,
+    because malformed model input is data to ack, not an error to propagate."""
     todos = arguments.get("todos") if isinstance(arguments, dict) else None
     if not isinstance(todos, list):
         return False, "todos must be a list"
@@ -151,17 +136,13 @@ def _maybe_todo_write_decision(
     *,
     assistant_thinking: tuple[ThinkingBlock, ...] = (),
 ) -> Decision | None:
-    """CW18b: translate a `todo_write` control-tool call into a neutral
-    :class:`StatePatchDecision`, or ``None`` when no `todo_write` is present.
+    """Translate a ``todo_write`` call into a neutral state-patch Decision, or
+    ``None`` when the turn holds no ``todo_write``.
 
-    Rules: `todo_write` must be the **sole** tool call in the turn (mixed
-    with any other tool → recoverable error, no state write). Input is
-    validated (list of ``{id, content, status}`` with caps + non-empty,
-    unique ids); malformed → a ``StatePatchDecision`` with ``patch=None``
-    whose ack carries the error so the model can retry (the task is NOT
-    terminated). The kernel emits ``messages_before`` (assistant tool_use)
-    → ``TaskStatePatched`` (only when ``patch`` set) → ``messages_after``
-    (ack), emitting the same assistant → patch → ack sequence each run."""
+    ``todo_write`` must be the **sole** tool call in the turn; mixing it with
+    any other call, or a malformed ``todos`` arg, yields a patch-free ack
+    carrying the error so the model can retry — the task is NOT terminated.
+    """
     tool_uses = [b for b in response.content if isinstance(b, ToolUseBlock)]
     todo_blocks = [b for b in tool_uses if b.tool_name == TODO_WRITE_TOOL]
     if not todo_blocks:
@@ -212,10 +193,9 @@ def build_todo_write_control_tool(
 ) -> Optional[ControlToolMount]:
     """The ``control_tool`` contribution factory (manifest ``ref`` target).
 
-    Self-gates on the effective ``todo_write`` capability flag (mounting IS
-    enablement) and reproduces the pre-migration internal ``_todo_write_mount``
-    exactly: routing band 200, schema band 200 — the byte-order the S0 golden
-    pins.
+    Self-gates on the effective ``todo_write`` capability flag: mounting is
+    enablement. Routing band 200 and schema band 200 are the byte-order
+    contract the control-tool schema goldens pin — do not renumber.
     """
     if not ctx.flag("todo_write"):
         return None

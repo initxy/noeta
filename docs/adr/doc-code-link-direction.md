@@ -1,28 +1,28 @@
-# Docs point to code, code never points back to docs; invariants are enforced by tests
+# Docs point at code; code carries its own rationale, and invariants are enforced by tests
 
 ## Context
 
-There was once a bidirectional-reference scheme: every governed code point referenced `docs/decisions/<slug>.md`, and a `tests/test_decisions_refs.py` asserted that every path resolved. This reference layer enforced no invariant, yet it carried the costs of polluting the source, coupling code to decision file names, and requiring its own guard to maintain. This decision fixes the single direction of references between docs and code.
+Two mechanisms could keep a decision connected to the code it governs: a reference layer that cites the decision file at every governed callsite, or tests that fail when the decision is violated. Only one of them can actually stop a violation, and maintaining both costs more than it returns.
 
 ## Decision
 
-The link between persisted docs and source is one-directional: a decision file **may** point to the code it governs (an optional "callsites this decision governs" section); **source does not point back to `docs/adr/`**. Cross-cutting invariants are enforced by structural tests (import-linter contracts, plus the decision-union / handler-AST guards), and each guard's failure message names the relevant decision, delivering the "why" exactly at the moment a change trips it. Module-local "why" is written as inline prose in the nearest docstring—stating the rationale itself directly, rather than giving a path to a decision.
+Documentation references code; code does not depend on documentation. A decision file may name the modules it governs. Nothing requires a source comment to cite a decision file, no guard checks that such citations resolve, and no behaviour depends on one existing — where a file name does turn up in a comment it is ordinary prose, a pointer rather than a contract.
 
-There is no `tests/test_decisions_refs.py`, and no rule requires code comments to reference a decision path. Old `docs/decisions/*.md` references still lingering in the source (the old name before that directory was renamed to `docs/adr/`) are harmless prose, digested naturally as files get rewritten.
+Cross-cutting invariants are carried by structural tests: the import-linter contracts, the decision-union shape test, the decision-handler AST guards. Each states the rule it protects in its failure message, so the reasoning arrives at the moment a change trips it. Module-local rationale is written out in the nearest docstring — the reason itself, not a path to where the reason is kept.
 
 ## Rationale
 
-A code-comment pointer enforces nothing—only a failing test can block a violation, and Noeta's load-bearing invariants already have such tests. The pointer's only other job, "explaining why," is more reliably delivered from a guard's failure message (at the moment of violation) or from inline local prose. So the "code → doc" reference layer carries no enforcement and only cost: it pollutes the source, couples code to decision file names, and needs its own guard (`test_decisions_refs.py`) to keep those ~2000 scattered references from rotting. Remove this layer and the whole second mechanism disappears, with no loss of enforcement.
+A comment pointer enforces nothing. Only a failing test blocks a violation, and the load-bearing invariants have such tests. The pointer's other job, explaining why, is done better by a guard's failure message — which arrives exactly when it is needed — or by local prose, which is read without a detour. A code-to-doc reference layer therefore adds no enforcement while charging real costs: it presses documentation structure into the source, couples code to file names that are free to change, and needs a guard of its own to keep the references from rotting.
 
-This asymmetry is principled: the purpose of docs is to talk about code, so "doc → code" goes with the grain; making code talk about docs is coupling against the grain, and its value is already realized elsewhere.
+The asymmetry is principled. Documentation exists to talk about code, so a doc-to-code reference runs with the grain; making code talk about documentation runs against it, in exchange for something already delivered elsewhere.
 
 ## Alternatives considered
 
-1. **Bidirectional links + a dangling-reference guard** (the old scheme: every governed code point references `docs/decisions/<slug>.md`, and `test_decisions_refs.py` asserts every path resolves). Rejected: these references enforce no invariant—structural tests do—so the reference layer plus its guard is a second mechanism doing no enforcement work, at the cost of source pollution and file-name coupling.
-2. **Rewrite all ~2000 existing references out of the source right now.** Rejected for this round: these references are woven into explanatory prose, and each deletion needs judgment and a rewritten sentence—a repo-wide change disproportionate to its harm. Let them digest naturally; the rule change only stops new ones.
+1. **Bidirectional links plus a dangling-reference guard** — every governed callsite cites its decision file, and a test asserts that each path resolves. Weighed and rejected: the citations enforce nothing, so this is a second mechanism doing no enforcement work, paid for with source pollution, file-name coupling, and a guard whose only job is to stop the layer rotting.
+2. **Coverage enforcement in the same direction** — a guard asserting that every governed callsite carries a citation. Rejected for the same reason, with a worse failure mode: it makes the reference layer mandatory, so no decision file can be renamed or merged without a repo-wide edit.
+3. **Keeping rationale only in the decision file and having code link to it rather than restate it.** Rejected: it puts the explanation an indirection away from the reader who most needs it, who is editing the line, not browsing the documentation.
 
 ## Consequences
 
-- This rule is itself the embodiment of "docs may reference code, code does not point back to docs"; all ADRs in this batch follow it—the `Consequences` section names modules in prose rather than claiming code points back to this file.
-- Cross-cutting invariants are borne by structural tests: import-linter contracts and the decision-union / handler-AST guards; each guard's failure message names the relevant decision.
-- Old `docs/decisions/*.md` references are not specially cleaned up; they digest naturally as files are rewritten.
+- An invariant that spans modules needs a structural test, not a comment. A decision without one is unenforced, whatever any file says about it.
+- A decision file's `Consequences` section names modules in prose and never claims that the code points back at it.

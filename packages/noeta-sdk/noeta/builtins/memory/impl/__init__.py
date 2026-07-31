@@ -1,18 +1,11 @@
-"""``memory`` built-in — file store, tools, and auto-recall (impl).
+"""``memory`` built-in — file store, tools, and auto-recall.
 
-Microkernel M3 → final form: ``noeta.tools.memory`` moved to
-:mod:`~noeta.builtins.memory.impl.store`, the recall provider to
-:mod:`~noeta.builtins.memory.impl.recall`, and the kernel keeps NO memory
-module: the pack contributes its content kind + init hook through the
-generic surfaces, and recall rides the host-composed
-``intake_reminder_providers`` seam.
-
-:func:`build_memory_session_pack` is this plugin's ``session_pack``
-contribution (microkernel phase 3): the SDK host resolves it from the
-manifest (``noeta.client.parts.default_session_packs``) and the kernel
-builder's generic pack loop calls it — the kernel never imports the store.
-:func:`build_memory_pack` remains the underlying kit constructor the pack
-(and the consolidation path) build from.
+The plugin reaches a session only through the generic surfaces: its content
+kind and init hook ride a ``session_pack`` contribution and recall rides the
+``intake_reminder_providers`` seam, so the kernel never imports the store.
+The entries snapshot is taken once per session and shared by the composer's
+renderer and the init hook, which is what keeps the recorded fingerprint
+equal to what the model saw.
 """
 
 from __future__ import annotations
@@ -81,14 +74,10 @@ def build_memory_pack(
 ) -> tuple[MemoryStore, MemoryEntries, dict[str, Tool]]:
     """One session's ``(store, entries-snapshot, tools)`` memory kit.
 
-    The kernel builder's ``memory_factory`` injection target. ``root`` is the
-    operator-resolved store root (explicit ``memory_dir`` override >
-    ``global_memory_dir``); ``None`` falls back to the impl's
-    ``DEFAULT_GLOBAL_MEMORY_DIR`` — read LATE off the store module so a test
-    pinning ``noeta.builtins.memory.impl.store.DEFAULT_GLOBAL_MEMORY_DIR``
-    stays hermetic. The entries snapshot is taken ONCE here: the composer's
-    renderer and the pre-loop ``record_memory_index`` share it, so the
-    recorded fingerprint always equals what the model saw.
+    ``root`` is the operator-resolved store root; ``None`` falls back to
+    ``DEFAULT_GLOBAL_MEMORY_DIR``, read LATE off the store module so a test
+    pinning that attribute stays hermetic. The entries snapshot is taken ONCE
+    here so the renderer and the init hook cannot disagree.
     """
     resolved = root if root is not None else _store_mod.DEFAULT_GLOBAL_MEMORY_DIR
     memory_store = load_memory_store(root=resolved)
@@ -96,15 +85,11 @@ def build_memory_pack(
 
 
 def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
-    """The memory pack as a ``session_pack`` contribution (microkernel phase 3).
+    """The memory pack as a ``session_pack`` contribution.
 
-    The manifest-declared factory (band 300). Self-gates on the agent's
-    ``memory`` capability flag; the store root comes from this plugin's own
-    config entry (explicit ``memory_dir`` override > ``global_memory_dir`` >
-    the impl's global default — the same precedence the kernel's memory stage
-    applied). The store handle and the load-time index snapshot ride the
-    exports so the composer's renderer and the pre-loop
-    ``record_memory_index`` share one snapshot, one fingerprint.
+    Self-gates on the agent's ``memory`` capability flag. The store root
+    resolves by precedence: explicit ``memory_dir`` > ``global_memory_dir`` >
+    the module default.
     """
     if not ctx.flag("memory"):
         return EMPTY_CONTRIBUTION
@@ -116,15 +101,11 @@ def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
     content_store = ctx.content_store
 
     def _init(rec: SessionRecorder) -> None:
-        """Pre-loop activation of the index resident (spec §4.5).
+        """Pre-loop activation of the index resident.
 
-        Serialises the SAME entries the composer's renderer holds into the
-        ContentStore and records the resulting ref, so the ledger fully
-        determines the composed index (law 2): ``ref.hash`` equals the
-        rendered-index sha256 the ``evolving`` fingerprint always carried, so
-        the ``ContextContentRecorded`` payload matches the retired
-        ``record_memory_index`` call (the envelope now attributes
-        ``actor="plugin:memory"``). Empty entries leave the ledger untouched.
+        Serialises the SAME entries the composer's renderer holds, so the
+        ledger fully determines the composed index and ``ref.hash`` is the
+        rendered-index sha256. Empty entries leave the ledger untouched.
         """
         if not entries:
             return
@@ -141,10 +122,7 @@ def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
     return PackContribution(
         tools=tools,
         content_kinds=(
-            # The index resident (kind band 200 — after skill, before
-            # instructions): rendered from the SAME entries snapshot the init
-            # hook records, so the composed bytes and the recorded fingerprint
-            # share one source.
+            # Kind band 200 — after skill, before instructions.
             ContentKindContribution(200, memory_content_kind(entries)),
         ),
         init=_init,

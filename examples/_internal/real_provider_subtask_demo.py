@@ -1,15 +1,11 @@
-"""Real-provider subtask suspend / wake-resume demo.
+"""Contributor demo — the subtask suspend / wake-resume handshake, end to end.
 
-Headline demo for Noeta's value proposition:
-
-- A real LLM (OpenAI-compat OR Anthropic) drives a child Task end-to-end
-- Parent Task suspends waiting on the child, then wakes via the wake-resume
-  path (task #26) carrying the child's ``SubtaskResult`` byte-for-byte
-
-The demo composes two Engine instances on a shared sqlite stack — one
-holding a scripted parent policy (``[SpawnSubtaskDecision, FinishDecision]``)
-and one holding ReActPolicy against the real provider. No Engine,
-Policy Protocol, Task dataclass, or fold changes are required.
+Two Engines share one sqlite stack: a scripted parent policy that spawns a
+subtask and then finishes, and a ReAct policy running a real provider for the
+child. The parent suspends on the child and wakes carrying the child's
+``SubtaskResult`` intact, which is the sequence this walkthrough exists to make
+observable — a contributor about to change a kernel mechanism can run it and
+watch the current behaviour rather than infer it.
 
 Run::
 
@@ -17,12 +13,13 @@ Run::
     NOETA_OPENAI_BASE_URL=... NOETA_OPENAI_API_KEY=... NOETA_OPENAI_MODEL=... \\
     uv run python examples/_internal/real_provider_subtask_demo.py
 
-    # Anthropic (Anthropic's API requires ``max_tokens``; demo defaults
-    # to 1024, override via ``NOETA_MAX_TOKENS``):
+    # Anthropic (its API requires ``max_tokens``; the demo defaults to 1024,
+    # override via ``NOETA_MAX_TOKENS``):
     NOETA_PROVIDER=anthropic NOETA_API_KEY=... NOETA_MODEL=claude-... \\
     uv run python examples/_internal/real_provider_subtask_demo.py
 
-A missing required variable prints ``skipped: ...`` and exits 0.
+A missing required variable prints ``skipped: ...`` and exits 0, so the script
+is safe to run unconfigured.
 """
 
 from __future__ import annotations
@@ -48,9 +45,12 @@ from noeta.tools.fake import FakeTool
 
 
 def _build_provider() -> Optional[Any]:
-    """Construct the configured real LLM provider or ``None`` if env is
-    incomplete. Built inline so the example is self-contained (provider
-    selection lives in ``noeta.agent.runner`` for the real entry point)."""
+    """The configured provider, or ``None`` when its variables are incomplete.
+
+    Selection is inlined rather than shared so the script stays runnable on its
+    own, and ``None`` rather than an exception is what lets :func:`main` skip
+    cleanly on an unconfigured machine.
+    """
     provider_kind = os.environ.get("NOETA_PROVIDER", "openai")
     if provider_kind == "openai":
         required = ("NOETA_OPENAI_BASE_URL", "NOETA_OPENAI_API_KEY", "NOETA_OPENAI_MODEL")
@@ -67,11 +67,10 @@ def _build_provider() -> Optional[Any]:
             return None
         from noeta.builtins.providers.impl.anthropic import AnthropicProvider
 
-        # Anthropic adapter fail-fasts when neither the request nor the
-        # provider carry ``max_tokens``. The demo is a quick-evaluator
-        # path — pick a small explicit default so the docstring's run
-        # command works without an extra env var. Callers who want a
-        # different ceiling can set ``NOETA_MAX_TOKENS``.
+        # The Anthropic adapter fail-fasts when neither the request nor the
+        # provider carries ``max_tokens``, so an explicit default is what makes
+        # the run command in the module docstring work without an extra
+        # variable.
         max_tokens_str = os.environ.get("NOETA_MAX_TOKENS")
         default_max_tokens = int(max_tokens_str) if max_tokens_str else 1024
         return AnthropicProvider(
@@ -105,10 +104,13 @@ def _build_echo_tool() -> Tool:
 def _assert_invariants(
     event_log: Any, parent_id: str, child_id: str
 ) -> None:
-    """Pin the parent/child relative-ordering invariants from the I1
-    issue. Lighter than a full event list — the runtime emits
-    additional bookkeeping envelopes (ContextPlanComposed, TaskSnapshot)
-    that vary by run."""
+    """Pin the parent/child relative ordering of the handshake envelopes.
+
+    Asserting relative order rather than the full event list is what keeps the
+    demo honest against a real model: the runtime interleaves bookkeeping
+    envelopes (``ContextPlanComposed``, ``TaskSnapshot``) whose count varies run
+    to run, while the handshake's order does not.
+    """
     parent_envs = event_log.read(parent_id)
     parent_types = [e.type for e in parent_envs]
     assert parent_envs[0].type == "TaskCreated", parent_types
@@ -137,7 +139,8 @@ def _assert_invariants(
     assert child_envs[0].type == "TaskCreated", child_types
     assert child_envs[0].payload.parent_task_id == parent_id
     assert child_envs[-1].type == "TaskCompleted", child_types
-    # at least one LLM trio
+    # The child really went out to the provider, rather than terminating on a
+    # policy shortcut that would make the whole run prove nothing.
     assert "LLMRequestStarted" in child_types
     assert "LLMResponseRecorded" in child_types
     assert "LLMRequestFinished" in child_types
@@ -159,7 +162,6 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="noeta-demo-") as tmp:
         sqlite_path = str(Path(tmp) / "demo.sqlite")
 
-        # ---- Storage stack + observers ----
         from noeta.sdk.storage import build_storage_stack
 
         event_log, content_store, dispatcher = build_storage_stack("sqlite", path=sqlite_path)
@@ -170,7 +172,8 @@ def main() -> int:
             system_prompt=system_prompt, tools=tools, content_store=content_store
         )
 
-        # ---- Engine_parent — scripted: spawn then finish ----
+        # The parent's decisions are scripted so the run isolates the handshake:
+        # only the child's behaviour is left to the model.
         scripted_parent = StubScriptedPolicy(
             [
                 SpawnSubtaskDecision(
@@ -188,7 +191,6 @@ def main() -> int:
             tools=tools,
         )
 
-        # ---- Engine_child — ReAct + real provider ----
         child_llm = RuntimeLLMClient(
             provider=provider, event_log=event_log, content_store=content_store
         )
@@ -207,7 +209,7 @@ def main() -> int:
             tools=tools,
         )
 
-        # ---- Parent run 1: spawn + suspend ----
+        # ---- Beat 1: the parent spawns the child and suspends on it ----
         parent_task = engine_parent.create_task(
             goal="orchestrate", policy_name="scripted_demo"
         )
@@ -232,7 +234,7 @@ def main() -> int:
         child_id = parent_after_spawn.wake_on.subtask_id
         print(f"parent {parent_task.task_id[:14]}... suspended waiting on {child_id[:14]}...")
 
-        # ---- Child run: ReAct against real provider ----
+        # ---- Beat 2: the child runs ReAct against the real provider ----
         child_lease = dispatcher.lease(
             worker_id="demo-child", lease_seconds=120.0, task_id=child_id
         )
@@ -247,7 +249,7 @@ def main() -> int:
         )
         print(f"child {child_id[:14]}... reached terminal via real LLM")
 
-        # ---- Parent run 2: wake-resume + finish ----
+        # ---- Beat 3: leasing the parent again hands back the wake event ----
         parent_wake_lease = dispatcher.lease(
             worker_id="demo-parent-resume",
             lease_seconds=60.0,
@@ -272,7 +274,6 @@ def main() -> int:
         assert woken_parent.status == "terminal"
         print(f"parent {parent_task.task_id[:14]}... resumed + terminated")
 
-        # ---- Assert event invariants ----
         _assert_invariants(event_log, parent_task.task_id, child_id)
         print("event invariants OK")
 

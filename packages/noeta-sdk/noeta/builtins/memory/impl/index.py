@@ -1,17 +1,9 @@
 """Memory index material — renderer, hash, matching, recall formatting.
 
-Phase 2c: moved here from ``noeta.context.memory`` (which keeps only the
-kind vocabulary constants and the ``MemoryEntries`` type). The kernel never
-consumes anything here: the pack contributes :func:`memory_content_kind`
-through the generic content-kind surface; the matching + recall formatting
-are consumed by this plugin's own :mod:`~noeta.builtins.memory.impl.recall`.
-
-Red line (unchanged): every function here is pure over the
-``(name, summary, type)`` entries snapshot taken at wiring time — the
-renderer closes over preloaded state and never touches the disk at compose
-time, so the same ledger always composes to the same bytes. Naive token
-matching (:func:`match_memories`) is also pure; the impure half (reading
-the store) lives in :mod:`~noeta.builtins.memory.impl.recall`.
+Red line: every function here is pure over the ``(name, summary, type)``
+entries snapshot taken at wiring time. Nothing touches the disk at compose
+time, so the same ledger always composes to the same bytes; the impure half
+(reading the store) lives in :mod:`~noeta.builtins.memory.impl.recall`.
 """
 
 from __future__ import annotations
@@ -25,16 +17,16 @@ from noeta.context.content_channel import ContentKindSpec, ContentRenderer
 from noeta.protocols.messages import Message, TextBlock
 
 
-# --- The memory kind's vocabulary (kernel final form: plugin-owned) --------
-# Moved from ``noeta.context.memory`` — the kind key is this plugin's own,
-# discriminating the generic ``ContextContentRecorded`` / ``active_content``
-# shapes; the kernel never names it.
+# --- The memory kind's vocabulary ------------------------------------------
+# The kind key is this plugin's own, discriminating the generic
+# ``ContextContentRecorded`` / ``active_content`` shapes; the kernel never
+# names it.
 
 #: The content channel kind key — matches ``TaskState.active_content``
 #: and ``ContextContentRecorded.kind``.
 MEMORY_KIND = "memory"
-#: The index resident's name. v1 has exactly one resident per store; a
-#: future sharded index would add names, not mechanisms.
+#: The index resident's name — exactly one resident per store. A sharded
+#: index would add names here, not mechanisms.
 MEMORY_INDEX_NAME = "index"
 #: Declared version of the index *shape* (not its content — content is
 #: free to evolve under the ``evolving`` policy).
@@ -82,8 +74,8 @@ _MIN_TOKEN_LEN = 2
 #: space-free script the same threshold reads as "one shared word of 3+
 #: characters, or two shared 2-character words", since an n-character run
 #: yields n-1 bigrams. That is deliberately a shade looser than the word
-#: rule, and it is affordable because a tier-2 hit now costs one index
-#: line rather than a whole memory body (see :func:`format_recall_text`).
+#: rule, and it is affordable because a tier-2 hit costs one index line
+#: rather than a whole memory body (see :func:`format_recall_text`).
 _SUMMARY_MIN_OVERLAP = 2
 
 
@@ -102,12 +94,7 @@ class RecallHit:
 
 
 def render_memory_index_text(entries: MemoryEntries) -> str:
-    """Deterministic index text — the resident's rendered body.
-
-    An entry with a type renders ``- name (type): summary``; without one
-    the v1 ``- name: summary`` / ``- name`` forms are kept byte-for-byte,
-    so a store whose files carry no frontmatter hashes exactly as before.
-    """
+    """Deterministic index text — the resident's rendered body."""
     lines = [
         "Long-term memory index. Each entry is one stored memory; call",
         "the 'memory_read' tool with a memory's name for its full text.",
@@ -124,10 +111,11 @@ def render_memory_index_text(entries: MemoryEntries) -> str:
 
 
 def memory_index_hash(entries: MemoryEntries) -> str:
-    """``sha256`` over the rendered index text — the ``content_hash`` recorded
-    on ``ContextContentRecorded`` and resolved through the generic
-    ``ContentHashesFn`` seam. Hashing the *rendered* bytes keeps one
-    source of truth: the recorded ``content_hash`` IS what the model saw."""
+    """``sha256`` over the rendered index text.
+
+    Hashing the *rendered* bytes rather than the entries keeps one source of
+    truth: the recorded ``content_hash`` IS what the model saw.
+    """
     return hashlib.sha256(
         render_memory_index_text(entries).encode("utf-8")
     ).hexdigest()
@@ -136,16 +124,13 @@ def memory_index_hash(entries: MemoryEntries) -> str:
 def build_memory_renderer(entries: MemoryEntries) -> ContentRenderer:
     """The memory index renderer — pure over (folded state, content store).
 
-    Renders one ``role="user"`` message holding the index body **resolved
-    from the ContentStore at the index resident's currently-active hash**
-    (spec §6) when the ``index`` resident is active; anything else renders
-    nothing. The ``entries`` snapshot is not read at compose time — the
-    ledger's active hash fully determines the bytes, so a refresh (the store
-    changed, a new hash recorded) shows the new index and a mutated backing
-    store on disk changes nothing. ``entries`` is retained only so the
-    sibling :func:`memory_content_kind` can share the builder call shape.
-    ``selected_skills`` stays empty: that ``RenderedContent`` field is the
-    skill kind's plan extra, not the channel contract.
+    The body is resolved from the ContentStore at the resident's active hash;
+    ``entries`` is deliberately NOT read at compose time, so a store mutated
+    on disk cannot change what a given ledger composes to, and only a freshly
+    recorded hash shows a new index. ``entries`` is retained only so the
+    sibling :func:`memory_content_kind` shares the builder call shape.
+    ``selected_skills`` stays empty: that field is the skill kind's plan
+    extra, not the channel contract.
     """
 
     def _render(names: list[str], resolve: ContentResolve) -> RenderedContent:
@@ -190,18 +175,17 @@ def memory_content_kind(entries: MemoryEntries) -> ContentKindSpec:
 def _tokens(value: str) -> set[str]:
     """Match tokens, by script.
 
-    A space-separated run is one token per word, as before. A CJK run
-    becomes its **character bigrams**, because the word rule finds nothing
-    at all in a script written without spaces: before this, a wholly
-    Chinese/Japanese/Korean message produced an empty token set, which
-    :func:`match_memories_tiered` early-returns on — recall was not merely
-    weak for those messages, it was silently dead.
+    A space-separated run is one token per word. A CJK run becomes its
+    **character bigrams**, because the word rule finds nothing at all in a
+    script written without spaces — a wholly Chinese/Japanese/Korean message
+    would yield an empty token set, which :func:`match_memories_tiered`
+    early-returns on, making recall silently dead rather than merely weak.
 
     Bigrams are the standard segmenter-free approximation ("记忆机制" →
-    ``{记忆, 忆机, 机制}``, which a "记忆" query meets), and they keep this
-    module's red line intact: pure, deterministic, no dictionary, no
-    service. A single-character run falls back to the character itself so
-    a one-character term still matches something.
+    ``{记忆, 忆机, 机制}``, which a "记忆" query meets) and keep this module's
+    red line intact: pure, deterministic, no dictionary, no service. A
+    single-character run falls back to the character itself so a
+    one-character term still matches something.
     """
     lowered = value.lower()
     tokens = {
@@ -223,23 +207,21 @@ def match_memories_tiered(
 ) -> tuple[tuple[str, bool], ...]:
     """Two-tier recall matching, pure and deterministic — with the tier.
 
-    Returns ``(name, by_name)`` pairs: ``by_name`` marks a tier-1 hit.
+    Returns ``(name, by_name)`` pairs where ``by_name`` marks a tier-1 hit.
     The tier is not bookkeeping — it is the confidence signal the injector
-    spends on, so it has to survive the call (see :func:`match_memories`
-    for the tier-blind view, and :func:`format_recall_text` for what the
-    difference buys).
+    spends on, so it has to survive the call (see :func:`format_recall_text`
+    for what the difference buys).
 
     Tier 1: a memory hits when any token of its NAME appears in the user
-    text (case-insensitive) — names are author-chosen slugs, so one shared
-    token is high-signal. Tier 2: an entry NOT already hit by name hits
-    when its SUMMARY shares at least ``_SUMMARY_MIN_OVERLAP`` distinct
-    tokens with the text (prose needs more evidence than a slug). The
-    ``type`` field never participates.
+    text — names are author-chosen slugs, so one shared token is high-signal.
+    Tier 2: an entry not already hit by name hits when its SUMMARY shares at
+    least ``_SUMMARY_MIN_OVERLAP`` distinct tokens, because prose needs more
+    evidence than a slug. The ``type`` field never participates.
 
-    Output order: all tier-1 hits in index (name-sorted) order, then all
-    tier-2 hits in index order, capped at ``max_hits`` overall. Vector /
-    semantic retrieval is out of scope (its backing service would arrive
-    behind a D1-style adapter, swapping this function).
+    Order is tier-1 hits in index order, then tier-2 hits in index order,
+    capped at ``max_hits`` overall. Vector / semantic retrieval is out of
+    scope: its backing service would arrive behind an adapter, swapping this
+    function whole.
     """
     text_tokens = _tokens(text)
     if not text_tokens:
@@ -272,7 +254,7 @@ def match_memories(
     Output order: all tier-1 hits in index (name-sorted) order, then all
     tier-2 hits in index order, capped at ``max_hits`` overall. Vector /
     semantic retrieval is out of scope (its backing service would arrive
-    behind a D1-style adapter, swapping this function).
+    behind an adapter, swapping this function).
 
     The tier-blind view: names only. :func:`match_memories_tiered` is the
     implementation, and the one to call when the tier matters.

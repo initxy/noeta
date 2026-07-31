@@ -1,21 +1,11 @@
-"""Process-local cancellation registry (cancel-cascade).
+"""Process-local set of cancelled root task ids — the cancel cascade.
 
-A live, in-process set of cancelled root task ids. The control-plane
-``cancel`` writes the durable ``TaskCancelled`` event AND marks the root
-here; the Engine polls it — through a per-call ``cancelled`` predicate the
-delegation drain binds to ``is_cancelled(root_id)`` — at its turn
-boundaries to abandon an in-flight child's result.
-
-This is a RUNTIME accelerator only. The authoritative record of a cancel
-is the ``TaskCancelled`` event in the log; this registry just lets a live
-worker thread notice the cancel in O(1) without re-folding the log on
-every turn. A resume that folds the log reconstructs state without it (no
-predicate is injected on that path), so it has zero effect on the durable
-contract.
-
-Thread-safe: the cancel arrives on one thread (an HTTP handler) while the
-workflow runs on another (the synchronous drive thread), so the set is
-guarded by a lock.
+A runtime accelerator only: the durable ``TaskCancelled`` event is the
+authoritative record, and this set merely lets a live worker thread notice a
+cancel in O(1) at a turn boundary instead of re-folding the log. A resume
+that folds the log injects no ``cancelled`` predicate, so the registry has
+zero effect on the durable contract. The cancel arrives on one thread (an
+HTTP handler) while the drive runs on another, hence the lock.
 """
 
 from __future__ import annotations
@@ -40,7 +30,7 @@ class CancellationRegistry:
             return str(task_id) in self._cancelled
 
     def discard(self, task_id: str) -> None:
-        """Drop a cancelled mark once its tree has been torn down — keeps
-        the set from growing without bound on a long-lived server."""
+        """Drop a mark once its tree is torn down — without this the set
+        grows without bound on a long-lived server."""
         with self._lock:
             self._cancelled.discard(str(task_id))

@@ -1,16 +1,12 @@
-"""Phase 4 I2 — edit primitives (`edit` / `write`) + dry-run/apply.
+"""``edit`` / ``write`` — the file-mutation primitives.
 
-Renamed the tools (``replace_text`` → ``edit``,
-``write_file`` → ``write``) and gave ``write`` a read-first precondition
-for overwriting an existing file (the class names ``ReplaceTextTool`` /
-``WriteFileTool`` are unchanged, mirroring ``ReadFileTool``).
-
-Covers the unique-match contract on ``edit``, the create-new + read-first
-overwrite contract + 64-KB cap on ``write``, the dry-run-by-default policy
-(no file moves without ``FsWriteMode.APPLY``), the unified-diff
-artifact + before/after hashes, escape rejection on every surface, the
-B1 JSON-safe ``output`` invariant, and the byte-budgeted summary +
-inline output ceilings.
+These contracts exist to stop a model from destroying work it never saw:
+``edit`` replaces a unique match (or every match under ``replace_all``) and
+refuses an ambiguous one, ``write`` may create freely but must have read an
+existing file before overwriting it, and both default to dry-run so a caller who
+forgets ``FsWriteMode.APPLY`` gets a diff artifact instead of a mutated disk.
+Writes outside the workspace need a per-task authorization grant and fail closed
+when the resolver misbehaves.
 """
 
 from __future__ import annotations
@@ -45,7 +41,7 @@ def _ctx_and_workspace(
 
 
 def _assert_output_json_safe(result: ToolResult) -> None:
-    """B1: ToolResult.output must survive stdlib json.dumps."""
+    """ToolResult.output must survive stdlib json.dumps."""
     _encode_output(result.output)
 
 
@@ -61,9 +57,7 @@ def _sha256(text: str) -> str:
 def test_build_fs_tools_includes_edit_tools(tmp_path: Path) -> None:
     _, workspace, _ = _ctx_and_workspace(tmp_path)
     tools = build_fs_tools(workspace, mode=FsWriteMode.DRY_RUN)
-    # I2 ensures the edit tools are present. I5 then extends the pack
-    # with shell/git tools, so this assertion is a subset rather than
-    # an equality check.
+    # The pack also carries shell / git tools, so this is a subset check.
     assert {
         "read",
         "glob",
@@ -71,7 +65,7 @@ def test_build_fs_tools_includes_edit_tools(tmp_path: Path) -> None:
         "edit",
         "write",
     } <= set(tools.keys())
-    # B15: provider-safe snake_case names everywhere.
+    # Provider-safe snake_case names everywhere.
     for name in tools.keys():
         assert name.islower() and " " not in name and "." not in name
 
@@ -86,9 +80,9 @@ def test_build_fs_tools_default_mode_is_dry_run(tmp_path: Path) -> None:
 
 
 def test_edit_tools_are_high_risk(tmp_path: Path) -> None:
-    """PRD D2: write-side fs tools are high-risk so PermissionGuard
-    treats them as privileged. A policy permitting medium-risk tools
-    must NOT accidentally enable file mutation."""
+    """Write-side fs tools are high-risk so PermissionGuard treats them as
+    privileged. A policy permitting medium-risk tools must NOT accidentally
+    enable file mutation."""
     _, workspace, _ = _ctx_and_workspace(tmp_path)
     tools = build_fs_tools(workspace)
     assert tools["edit"].risk_level == "high"
@@ -100,7 +94,7 @@ def test_edit_tools_are_high_risk(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# edit (formerly replace_text) — unique match + dry-run
+# edit — unique match + dry-run
 # ---------------------------------------------------------------------------
 
 
@@ -198,8 +192,8 @@ def test_edit_replace_all_replaces_every_match(tmp_path: Path) -> None:
 
 
 def test_edit_replace_all_false_still_rejects_multi_match(tmp_path: Path) -> None:
-    # Without replace_all (or explicitly false) an ambiguous N>1 match is still
-    # refused — byte-identical to the pre-replace_all behaviour.
+    # Without replace_all (or with it explicitly false) an ambiguous N>1 match
+    # is refused: the tool cannot know which occurrence was meant.
     ctx, workspace, _ = _ctx_and_workspace(tmp_path)
     target = workspace.root / "a.py"
     target.write_text("foo\nfoo\n")
@@ -290,7 +284,7 @@ def test_edit_arg_validation(tmp_path: Path, args: dict[str, object]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# write (formerly write_file) — create-new + read-first overwrite + cap
+# write — create-new + read-first overwrite + cap
 # ---------------------------------------------------------------------------
 
 
@@ -324,8 +318,8 @@ def test_write_dry_run_does_not_create(tmp_path: Path) -> None:
 
 
 def test_write_existing_path_without_read_rejected(tmp_path: Path) -> None:
-    # Overwriting an existing file you have NOT read this session
-    # is refused by the read-first precondition (no blind clobber). No write.
+    # Overwriting a file you have NOT read this session is refused by the
+    # read-first precondition — no blind clobber, and no write.
     ctx, workspace, _ = _ctx_and_workspace(tmp_path)
     (workspace.root / "exists.txt").write_text("old\n")
     tool = WriteFileTool(workspace=workspace, mode=FsWriteMode.APPLY)
@@ -337,9 +331,8 @@ def test_write_existing_path_without_read_rejected(tmp_path: Path) -> None:
 
 
 def test_write_existing_path_after_read_overwrites(tmp_path: Path) -> None:
-    # Once you have `read` the file's current contents this
-    # session, an overwrite is permitted. `read` offloads the file body into
-    # the content-addressed store, which is the precondition's evidence.
+    # `read` offloads the file body into the content-addressed store, and that
+    # blob is the evidence the precondition looks for.
     ctx, workspace, _ = _ctx_and_workspace(tmp_path)
     (workspace.root / "exists.txt").write_text("old\n")
     reader = ReadFileTool(workspace=workspace)
@@ -489,9 +482,8 @@ def test_restricted_write_guard_precedes_read_first_check(tmp_path: Path) -> Non
 
 
 def test_unrestricted_write_default_globs_empty(tmp_path: Path) -> None:
-    # Default (empty globs) = unrestricted: any in-workspace path is writable,
-    # byte-equal with pre-0040-issue-04 builds (no behaviour change for main /
-    # general-purpose, which never inject a whitelist).
+    # Default (empty globs) = unrestricted: any in-workspace path is writable.
+    # Presets that inject no whitelist (main, general-purpose) rely on this.
     ctx, workspace, _ = _ctx_and_workspace(tmp_path)
     tool = WriteFileTool(workspace=workspace, mode=FsWriteMode.APPLY)
     assert tool.allowed_path_globs == ()

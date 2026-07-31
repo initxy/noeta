@@ -1,15 +1,13 @@
 """Goal spill to the ContentStore (the ``goal_ref`` escape hatch).
 
-Four payloads inline a caller/model-controlled goal string into an event
-envelope capped at ``EVENT_PAYLOAD_MAX_BYTES``: ``TaskCreated`` /
-``SubtaskSpawned`` / ``SubtaskDenied`` / ``BackgroundSubagentStarted``.
-Before the spill landed, an oversized goal crashed the write
-(``PayloadTooLarge``) — so no pre-spill recording can contain one, and
-byte-compat only has to hold for the inline case. These tests pin the
-contract:
+A goal string is caller- or model-controlled, yet four payloads inline it into
+an event envelope capped at ``EVENT_PAYLOAD_MAX_BYTES``: ``TaskCreated`` /
+``SubtaskSpawned`` / ``SubtaskDenied`` / ``BackgroundSubagentStarted``. An
+oversized goal rides in the ContentStore under a ``goal_ref`` instead, and both
+halves of that trade are pinned here:
 
-1. inline case: canonical bytes carry no ``goal_ref`` key — byte-identical
-   to every pre-spill recording;
+1. inline case: the canonical bytes carry no ``goal_ref`` key at all — a key
+   appearing there would move the hash of every ordinary recording;
 2. spill round-trip: ``spill_goal`` keeps the payload under the cap and
    ``goal_from_payload`` returns the full text;
 3. seed path end to end (public ``Client.start``): an oversized goal is
@@ -17,8 +15,8 @@ contract:
    ``state.goal`` in full;
 4. child genesis: ``_emit_child_task_created`` spills, and the child's fold
    sees the full goal;
-5. restore tolerance: an old-shape body (no ``goal_ref``), a spilled body,
-   and a forward-shape body (unknown additive key) all restore.
+5. restore tolerance: a body without the key, a spilled body, and a body with
+   a key this reader does not know all restore.
 """
 
 from __future__ import annotations
@@ -55,7 +53,7 @@ BIG_GOAL = "g" * (GOAL_INLINE_LIMIT + 1)
 
 
 # ---------------------------------------------------------------------------
-# 1 — inline case is byte-identical to a pre-spill recording
+# 1 — the inline case carries no goal_ref key
 # ---------------------------------------------------------------------------
 
 
@@ -183,7 +181,7 @@ def test_child_task_created_spills_and_folds() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5 — restore tolerance (old shape / spilled shape / forward shape)
+# 5 — restore tolerance (no ref / spilled / unknown extra key)
 # ---------------------------------------------------------------------------
 
 

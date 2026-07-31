@@ -1,18 +1,13 @@
-"""The plugin surfaces reach the runtime — the wiring half of the D3 catalogue.
+"""A declared plugin contribution must reach the runtime, not merely merge.
 
-``tests/test_plugin_mechanism.py`` proves a manifest **loads, lists and merges**;
-``tests/test_example_new_surfaces.py`` proves each example's resolved callable
-satisfies its surface's runtime contract in isolation. Neither proves the middle:
-that :class:`~noeta.sdk.Client` actually carries a declared contribution from the
-loaded set into the engine it builds. A surface can be registered, validated,
-merged and documented and still be a total no-op — which is exactly what the
-``reminder`` / ``reminder_provider`` / ``content_kind`` surfaces were.
-
-So each test here starts from a real ``Client`` (or the compile / loader boundary
-it delegates to) and asserts the *effect*: the reminder renders into the composed
-request, the provider's output lands in the ledger, the collision is refused, the
-unactivated plugin never runs. Companion to the surface-local tests, not a
-replacement for them.
+``tests/test_plugin_mechanism.py`` proves a manifest loads, lists and merges;
+``tests/test_example_new_surfaces.py`` proves a resolved callable satisfies its
+surface's contract in isolation. Neither covers the middle, where a surface can
+be registered, validated and merged and still be a total no-op. So each test
+here starts from a real :class:`~noeta.sdk.Client` (or the compile / loader
+boundary it delegates to) and asserts the *effect*: the reminder renders into
+the composed request, the provider's output lands in the ledger, the collision
+is refused, the unactivated plugin never runs.
 """
 
 from __future__ import annotations
@@ -104,7 +99,7 @@ def _bare(**kw: Any) -> Options:
 
 
 # ===========================================================================
-# Track B — a compose-time ``reminder`` reaches the composer (D8)
+# A compose-time ``reminder`` reaches the composer
 # ===========================================================================
 
 
@@ -123,9 +118,8 @@ _REMINDER_PLUGIN = """
 def test_activated_reminder_renders_into_the_composed_request(tmp_path: Path) -> None:
     """A plugin ``reminder`` is registered on the activating agent's composer.
 
-    The whole point of track B: the render runs at the tail of the dynamic suffix
-    and its text ships in the request. Before the wiring existed the plugin loaded
-    clean, listed its contribution, and rendered nothing — ever.
+    The render runs at the tail of the dynamic suffix and its text has to ship in
+    the request; loading and listing the contribution proves nothing on its own.
     """
     plugins = load_plugins(
         builtins=False, modules=[_write_plugin(tmp_path, "nudger", _REMINDER_PLUGIN)]
@@ -143,7 +137,7 @@ def test_activated_reminder_renders_into_the_composed_request(tmp_path: Path) ->
 def test_a_reminder_does_not_leak_to_an_agent_that_did_not_activate_it(
     tmp_path: Path,
 ) -> None:
-    """Per-agent activation scoping (D6) — the same set, an agent that opted out."""
+    """Per-agent activation scoping — the same set, an agent that opted out."""
     plugins = load_plugins(
         builtins=False, modules=[_write_plugin(tmp_path, "nudger", _REMINDER_PLUGIN)]
     )
@@ -158,7 +152,7 @@ def test_a_reminder_does_not_leak_to_an_agent_that_did_not_activate_it(
 
 
 # ===========================================================================
-# Track A — a recorded ``reminder_provider`` reaches the intake seam (D7)
+# A recorded ``reminder_provider`` reaches the intake seam
 # ===========================================================================
 
 
@@ -187,7 +181,7 @@ _PROVIDER_PLUGIN = """
 def test_activated_reminder_provider_records_at_turn_intake(tmp_path: Path) -> None:
     """The provider runs once at the live intake and its reminder is recorded.
 
-    "Recorded" is the load-bearing half (D7): the text has to be in the ledger, so
+    "Recorded" is the load-bearing half: the text has to be in the ledger, so
     it composes back on every later turn without the provider being consulted
     again. Asserting it only in the request would not tell the two apart.
     """
@@ -232,7 +226,7 @@ def test_reminder_provider_is_scoped_to_the_activating_agent(tmp_path: Path) -> 
 
 
 # ===========================================================================
-# content_kind — an identity-plane surface that had no activation binding
+# content_kind — an identity-plane surface with a wiring effect
 # ===========================================================================
 
 
@@ -254,8 +248,8 @@ _CONTENT_KIND_PLUGIN = """
 def test_activated_content_kind_reaches_the_composer(tmp_path: Path) -> None:
     """``content_kind`` is an identity-plane surface with a wiring effect.
 
-    It passed validation and merge but ``identity_activations()`` had no branch
-    for it, so the value was dropped on the floor between resolve and compile.
+    Passing validation and merge is not enough — the value also has to survive
+    the projection between resolve and compile.
     """
     plugins = load_plugins(
         builtins=False,
@@ -266,13 +260,12 @@ def test_activated_content_kind_reaches_the_composer(tmp_path: Path) -> None:
 
 
 def test_an_unhandled_identity_surface_fails_loudly() -> None:
-    """The fallthrough that hid ``content_kind`` is an error — now at registration.
+    """An identity surface with no activation binding is refused at registration.
 
-    Before D11 an identity surface the loader had no branch for was caught in
-    ``identity_activations()``, i.e. only once a plugin actually contributed to
-    it. The binding is now declared on the ``SurfaceSpec`` itself, so the same
-    mistake is refused earlier — before any plugin is loaded — and the
-    projection can no longer silently drop a value.
+    Catching it at projection time would mean the mistake only surfaces once
+    some plugin actually contributes to that surface. Declaring the binding on
+    the ``SurfaceSpec`` refuses it before any plugin is loaded, so the
+    projection cannot silently drop a value.
     """
     from noeta.client.surfaces import SurfaceSpec, standard_registry
 
@@ -290,7 +283,7 @@ def test_an_unhandled_identity_surface_fails_loudly() -> None:
 def test_host_registered_identity_surface_projects_without_a_loader_edit(
     tmp_path: Path,
 ) -> None:
-    """D11 acceptance: a custom identity surface reaches ``compile_options``.
+    """A host-registered identity surface reaches ``compile_options``.
 
     The whole point of the table-driven projection: a host registers its own
     identity surface on a copy of the standard registry, declares which
@@ -385,10 +378,10 @@ _TOOL_B = _TOOL_A.replace("pack-a", "pack-b").replace('summary="a"', 'summary="b
 def test_two_plugins_contributing_one_tool_name_fail_at_client_build(
     tmp_path: Path,
 ) -> None:
-    """``PluginSet.merged()`` runs on the real path, naming both plugins.
+    """``PluginSet.merged()`` runs on the real ``Client`` path, naming both plugins.
 
-    The loader always implemented this; nothing on the ``Client`` path called it,
-    so the second contribution was silently dropped by the tool de-dup instead.
+    Without it the second contribution is swallowed by the tool de-dup — a
+    silent drop where the honest answer is a refusal.
     """
     plugins = load_plugins(
         builtins=False,
@@ -440,7 +433,7 @@ def test_a_plugin_child_agent_without_a_clash_is_compiled() -> None:
 
 
 # ===========================================================================
-# Activation scoping of *execution* — loading is not running (D5)
+# Activation scoping of *execution* — loading is not running
 # ===========================================================================
 
 
@@ -480,12 +473,11 @@ def _package_plugin(root: Path, name: str, *, sentinel: Path) -> str:
 def test_an_unactivated_plugins_refs_are_never_resolved(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """Activation gates the code, not just the effect (D5).
+    """Activation gates the code, not just the effect.
 
-    A ``Client`` build used to resolve every loaded external plugin, so ten
-    workspace plugins meant ten module bodies running even when the agent
-    activated one — and a module body is where a real plugin opens its network
-    client or reads its credentials.
+    Resolving every loaded plugin at build time would run ten module bodies for
+    ten workspace plugins when the agent activated one — and a module body is
+    where a real plugin opens its network client or reads its credentials.
     """
     sentinel = tmp_path / "IMPORTED"
     manifest = _package_plugin(tmp_path, "unactivated_pkg", sentinel=sentinel)
@@ -524,9 +516,9 @@ def test_an_activated_plugin_is_resolved(tmp_path: Path, monkeypatch) -> None:
 def test_resolution_is_memoised_per_plugin(tmp_path: Path) -> None:
     """One resolve per plugin per set, however many projections ask for it.
 
-    Measured by validator invocations rather than imports: Python caches modules,
-    so re-resolution shows up as repeated validation + attribute walking, which is
-    precisely what ``Client``'s three-projections-per-build was paying for.
+    Measured by validator invocations rather than imports: Python caches
+    modules, so re-resolution shows up only as repeated validation and attribute
+    walking, which is what a multi-projection build would otherwise pay for.
     """
     from noeta.client.surfaces import SurfaceSpec, standard_registry
 
@@ -574,10 +566,11 @@ def test_resolution_is_memoised_per_plugin(tmp_path: Path) -> None:
 
 
 def test_a_dotted_ref_resolves_like_the_colon_form(tmp_path: Path, monkeypatch) -> None:
-    """``pkg.mod.attr`` is a documented ref spelling; only ``mod:attr`` worked.
+    """``pkg.mod.attr`` and ``mod:attr`` are both valid ref spellings.
 
-    ``_derive_name`` and ``plugin_check`` both normalise the dotted form, so a
-    manifest using it passed the packaging check and then failed at resolve.
+    ``_derive_name`` and ``plugin_check`` normalise the dotted form, so a
+    manifest written that way passes the packaging check — resolution has to
+    accept it too, or the failure lands far from its cause.
     """
     package = tmp_path / "dotted_pkg"
     package.mkdir()
@@ -703,10 +696,10 @@ def test_every_builtin_plugin_is_an_activatable_name() -> None:
 
 
 def test_a_child_agent_can_be_granted_delegation() -> None:
-    """The successor to ``AgentDefinition(capabilities=Capabilities(delegation=True))``.
+    """A flat child agent obtains delegation by activating the plugin.
 
-    Removing ``Capabilities`` left delegation derivable only from an inline child
-    roster, which a flat child never has — so no child could delegate at all.
+    Deriving delegation from an inline child list alone would leave a flat
+    child — which has none — unable to delegate at all.
     """
     child = AgentDefinition(
         description="a lead", prompt="p", plugins=("delegation",)
@@ -763,13 +756,12 @@ def test_already_spawned_scan_is_skipped_for_a_non_delegating_agent() -> None:
 def test_builtinless_set_keeps_the_default_capability_surface(tmp_path: Path) -> None:
     """``builtins=False`` scopes the *loaded set*, not the SDK's own defaults.
 
-    Microkernel acceptance 9 as amended in M4: the loader knob governs which
-    plugins the session can list / resolve (the external audit surface); a bare
-    ``Options()`` still obtains its default fs/web roster through the
-    ``noeta.client.parts`` doorway, which reads the built-in catalogue directly.
-    The reference host (``examples/reference-host``) documents and relies on
-    exactly this — its example plugins load with ``builtins=False`` while the
-    preset recipe keeps noeta's own capabilities.
+    The loader knob governs which plugins the session can list / resolve — the
+    external audit surface. A bare ``Options()`` obtains its default fs/web tool
+    set through the ``noeta.client.parts`` doorway, which reads the built-in
+    catalogue directly. ``examples/reference-host`` relies on exactly this: its
+    example plugins load with ``builtins=False`` while the preset recipe keeps
+    noeta's own capabilities.
     """
     baseline = _client(tmp_path, _bare(), FakeLLMProvider(responses=[_end_turn()]))
     try:
@@ -815,12 +807,12 @@ def test_disabling_the_skills_builtin_actually_removes_the_capability(
 ) -> None:
     """``disabled_builtins=["skills"]`` reaches the engine, not just the listing.
 
-    The ``skills`` built-in contributes nothing per-agent (the manifest is
-    contribution-free), so before this the name was dropped from the catalogue
-    while the host injected ``default_skills_kit_factory()`` regardless — skills
-    stayed indexed and the ``skill`` control tool stayed on the wire. The
-    disable now travels: ``PluginSet`` records it, the host withholds the
-    factory, and the kernel's skills stage no-ops.
+    The ``skills`` built-in contributes nothing per-agent, so dropping its name
+    from the catalogue is not enough on its own — the host would inject
+    ``default_skills_kit_factory()`` regardless, leaving skills indexed and the
+    ``skill`` control tool on the wire. The disable has to travel: ``PluginSet``
+    records it, the host withholds the factory, the kernel's skills stage
+    no-ops.
 
     Asserted as a roster DIFFERENCE so the test pins the one intended effect —
     everything else about the session is untouched.
@@ -854,12 +846,13 @@ def test_a_builtinless_set_does_not_disable_skills(tmp_path: Path) -> None:
 
 
 def test_the_react_builtin_refuses_to_be_disabled() -> None:
-    """The default policy is replaceable (D10 ``policy`` surface), not removable.
+    """The default policy is replaceable through the ``policy`` surface, never
+    removable.
 
     Every compiled ``AgentSpec`` pins ``POLICY_REF ("react", "1")``, so there is
-    no identity for a policy-less agent and no parity to resume. Silently
-    accepting the disable — dropping the catalogue entry while the host wired
-    ``ReActPolicy`` anyway — was the dishonest half; refusing is the honest one.
+    no identity for a policy-less agent and no parity to resume. Accepting the
+    disable would drop the catalogue entry while the host wired ``ReActPolicy``
+    anyway — a lie the caller cannot see.
     """
     with pytest.raises(PluginError, match="'react' cannot be disabled"):
         load_plugins(builtins=True, disabled_builtins=["react"])

@@ -1,11 +1,13 @@
-"""Cost: RuntimeLLMClient pricing-callback injection → LLMRequestFinished.cost_usd
-→ fold → GovernanceState.cost_usd → BudgetGuard end-to-end (D-C4).
+"""The cost chain, end to end: pricing callback → event → fold → guard.
 
-GovernanceState already has real token fields and fold already accumulates
-cost_usd. This work item only proves the link is live: a non-``None`` pricing
-callback turns ``cost_usd=0.0`` into a real catalog-computed number, and the
-already-wired ``GovernanceState.cost_usd → BudgetGuard.max_cost_usd``
-accumulator fires under real cost.
+A spend ceiling only enforces if every link holds — RuntimeLLMClient
+stamps ``cost_usd`` on ``LLMRequestFinished`` from the injected pricing
+callback, fold accumulates it into ``GovernanceState``, and BudgetGuard
+denies against ``max_cost_usd``. A break anywhere along that path leaves
+the ceiling silently inert, which is why these drive the whole chain with
+real catalog prices instead of asserting layer by layer. With no pricing
+callback the cost must stay 0.0: an unpriced deployment must not
+accumulate fictional spend.
 """
 
 from __future__ import annotations
@@ -94,7 +96,7 @@ def test_cost_usd_is_computed_from_injected_pricing_callback() -> None:
 
 
 def test_cost_usd_falls_back_to_zero_when_no_pricing() -> None:
-    """stub / no-pricing path must not regress: cost_usd stays 0.0."""
+    """No pricing callback → cost_usd stays 0.0, never a guessed number."""
     log = InMemoryEventLog()
     cs = InMemoryContentStore()
     provider = FakeLLMProvider(responses=[_response(Usage(uncached=10, output=5))])

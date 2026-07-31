@@ -6,13 +6,11 @@ For each of ``main`` / ``explore`` / ``plan`` / ``general-purpose`` this pins:
 * ``tools`` — the allowed tool set (name + version + risk_level), the surface
   advertised to the model;
 * ``plugins`` / ``spawnable`` — the activation tuple (control surfaces /
-  delegation rights) that shapes the agent's behaviour and is its identity (D6:
-  ``Capabilities`` retired).
+  delegation rights) that shapes the agent's behaviour and is its identity.
 
-A refactor that silently changes any of these (re-words a prompt, drops a tool,
-flips an activation) fails the matching golden with a human-readable text diff.
-This is the lightweight stand-in for the deleted verify/replay byte-equality
-moat.
+An edit that silently re-words a prompt, drops a tool, or flips an activation
+fails the matching golden with a human-readable text diff, so a preset's
+model-visible bytes cannot drift unreviewed.
 
 Re-pin (regenerate goldens) with one command::
 
@@ -35,30 +33,26 @@ from noeta.presets import official_specs
 from tests._snapshot import assert_snapshot, stable_json
 
 
-# The four official preset names. Pulled from ``official_specs()`` once so a
-# new/removed preset surfaces here (missing golden / orphan) rather than being
-# silently skipped.
+# Pulled from ``official_specs()`` once, so any change to the preset set
+# surfaces here as a missing or orphaned golden rather than being skipped.
 _SPECS = official_specs()
 _PRESET_NAMES = sorted(_SPECS)
 
 
 def test_preset_set_is_the_canonical_four() -> None:
-    """Guard: the snapshot suite covers exactly the four official presets.
-
-    If a preset is added or removed this assertion flags it, prompting the
-    author to add (or drop) the corresponding golden rather than leave the new
-    agent's bytes uncovered.
-    """
+    """The snapshot suite covers exactly the four official presets, so a
+    change to the preset set forces a matching change to the goldens instead
+    of leaving an agent's bytes uncovered."""
     assert set(_PRESET_NAMES) == {"main", "explore", "plan", "general-purpose"}
 
 
 def _preset_view(spec: AgentSpec) -> dict[str, object]:
     """Build the stable, model-visible snapshot payload for one preset.
 
-    ``tools`` are already sorted by ``AgentSpec.__post_init__``; each is
-    rendered as ``{name, version, risk_level}`` — the identity surface the model
-    sees. ``plugins`` / ``spawnable`` are the activation tuple (already sorted by
-    ``__post_init__``) — the identity that shapes behaviour (D6).
+    ``tools`` and the activation tuple are already sorted by
+    ``AgentSpec.__post_init__``, which is what makes the payload stable across
+    runs; each tool is rendered as ``{name, version, risk_level}`` — the
+    identity surface the model sees.
     """
     return {
         "name": spec.name,

@@ -196,7 +196,7 @@ _避免使用：_ Author、Sender、Role。
 
 ### Memory
 
-跨任务长期记忆（v2）：**改** = `memory_write`（可选 frontmatter `description` / `type`）与 `memory_archive`（移入 `archive/` 归档，从不删除）工具，**读** = `memory_read`（按名取全文）与 `memory_search`（子串搜索、返回摘录）工具，**常驻索引** = 内容通道租户（`kind="memory"`，policy `evolving`），**自动召回** = 主机在用户消息接缝处检索（先按名字 token，再按摘要 token），**政策** = 追加在启用 memory 的 preset prompt 上的 `MEMORY_POLICY_PROMPT` 片段。由 `memory` 激活控制（`"memory" in AgentSpec.plugins`）。后台**整理（consolidation）**由隐藏的 `__consolidation__` agent 在常驻 worker 池上运行（会话停止触发、防抖），对记忆做合并 / 归档 / 补写；其开关是主机配置而非 agent 身份——见 [ADR：Memory consolidation](https://github.com/initxy/noeta/blob/main/docs/adr/memory-consolidation.md)。
+跨任务长期记忆：**改** = `memory_write`（可选 frontmatter `description` / `type`）与 `memory_archive`（移入 `archive/` 归档，从不删除）工具，**读** = `memory_read`（按名取全文）与 `memory_search`（子串搜索、返回摘录）工具，**常驻索引** = 内容通道租户（`kind="memory"`，policy `evolving`），**自动召回** = 主机在用户消息接缝处检索（先按名字 token，再按摘要 token），**政策** = 追加在启用 memory 的 preset prompt 上的 `MEMORY_POLICY_PROMPT` 片段。由 `memory` 激活控制（`"memory" in AgentSpec.plugins`）。后台**整理（consolidation）**由隐藏的 `__consolidation__` agent 在常驻 worker 池上运行（会话停止触发、防抖），对记忆做合并 / 归档 / 补写；其开关是主机配置而非 agent 身份——见 [ADR：Memory consolidation](https://github.com/initxy/noeta/blob/main/docs/adr/memory-consolidation.md)。
 _避免使用：_ 用 "Memory" 指代 TaskState（那是任务内状态；这是跨任务的）。
 
 ## 治理
@@ -225,14 +225,10 @@ _避免使用：_ Middleware、Interceptor、Filter。
 
 ### Observer
 
-订阅 EventLog 的异步钩子；其失败不影响 Task。
+订阅 EventLog 的异步钩子；其失败不影响 Task。Observer 是只读的——不得修改 ctx 或 payload；要改变行为，请改动 Policy 或 Composer。
 _避免使用：_ Listener、Subscriber。
 
 另见：[核心概念](/concepts/guard-observer)、[ADR：Guard-Observer 钩子](https://github.com/initxy/noeta/blob/main/docs/adr/guard-observer-hooks.md)
-
-### Mutator
-
-**在 Noeta v2 中已弃用。** 钩子不得修改 ctx / payload。要修改，请改为更改 Policy 或 Composer。
 
 ## 操作
 

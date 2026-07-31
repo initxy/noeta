@@ -1,16 +1,11 @@
-"""``sandbox`` — the AIO execution adapters as the first ``sandbox_provider``.
+"""``sandbox`` — the AIO container adapters on the ``sandbox_provider`` surface.
 
-The retirement-slated AIO execution adapters, migrated as the first built-in
-``sandbox_provider`` plugin (D10). The surface is host-plane and host-wired:
-the host SELECTS which loaded provider to wire through ``HostConfig``
-(``sandbox_provider`` / ``sandbox_backend_factory`` /
-``sandbox_browser_factory``, defaulting to these AIO adapters) — selection is
-host wiring, NEVER agent identity, so these declarations are NOT merged onto
-any ``AgentSpec`` and never follow per-agent activation. Secrets never appear
-here: the adapters take a live ``SandboxAuth`` strategy at wiring time (never a
-manifest / config / ledger value). This manifest is the listing / reference
-surface — the refs point at the AIO backend + browser adapter classes in this
-plugin's own ``impl`` package (microkernel M2).
+``sandbox_provider`` is host-plane: the host selects which loaded provider to
+wire through ``HostConfig`` (``sandbox_provider`` / ``sandbox_backend_factory``
+/ ``sandbox_browser_factory``, defaulting to these adapters), so these
+declarations never merge onto an ``AgentSpec`` and never follow per-agent
+activation. Secrets stay out of the manifest — the adapters take a live auth
+strategy at wiring time, never a manifest, config, or ledger value.
 """
 
 from __future__ import annotations

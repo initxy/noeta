@@ -7,13 +7,6 @@ the canonical engine-construction path for SDK callers: compiled
 :class:`~noeta.agent.spec.AgentSpec` s → per-(agent, model, ask) Engines
 with catalog pricing and the deterministic tool pack the generic
 :func:`~noeta.execution.builder.build_session_inputs` produces.
-
-Product-neutral by design: this module imports only ``noeta.execution`` /
-``noeta.agent`` / ``noeta.protocols`` / ``noeta.tools`` — never ``noeta.agent``
-(enforced by import-linter).
-:data:`_catalog_pricing` is the SDK's only implementation (the former
-``noeta.agent.wiring.engine._pricing_callback`` was deleted with the roster);
-the product references this module's constant directly — no second copy.
 """
 
 from __future__ import annotations
@@ -107,9 +100,9 @@ __all__ = ["SdkHost"]
 
 _log = logging.getLogger(__name__)
 
-#: #13 — upper bound on the in-process Engine cache shared by all sessions on
-#: this host. LRU eviction (OrderedDict.popitem(last=False)) keeps the pool
-#: from growing without bound in long-lived server processes.
+#: Upper bound on the in-process Engine cache shared by all sessions on this
+#: host. LRU eviction (OrderedDict.popitem(last=False)) keeps the pool from
+#: growing without bound in long-lived server processes.
 _MAX_CACHED_ENGINES: int = 256
 
 
@@ -118,14 +111,13 @@ _MAX_CACHED_ENGINES: int = 256
 #: :class:`McpStdioClient` subprocess / an :class:`McpHttpClient`) and those
 #: clients are retained only via the cached Engine's tools; the plain
 #: ``popitem(last=False)`` eviction in :meth:`GenericEngineResolver._engine_for_agent`
-#: drops the Engine and would orphan the subprocess + leak its fds. We can't
-#: change that eviction site (it lives in the base resolver), so we make the
-#: cache *value* carry its clients: ``_build_engine`` stages them on the host
-#: via :meth:`SdkHost._stage_mcp_clients`; ``__setitem__`` adopts the staged
-#: list for the new key, and every removal path (``__delitem__`` / ``pop`` /
-#: ``popitem``) calls ``client.shutdown()`` (idempotent, never raises) on the
-#: removed entry's clients. One bad client can't break eviction: shutdown is
-#: swallowed + logged.
+#: drops the Engine and would orphan the subprocess + leak its fds. That eviction
+#: site lives in the base resolver, so the cache *value* carries its clients:
+#: ``_build_engine`` stages them on the host via
+#: :meth:`SdkHost._stage_mcp_clients`; ``__setitem__`` adopts the staged list for
+#: the new key, and every removal path (``__delitem__`` / ``pop`` / ``popitem``)
+#: calls ``client.shutdown()`` (idempotent, never raises) on the removed entry's
+#: clients. One bad client can't break eviction: shutdown is swallowed + logged.
 class _McpReapingEngineCache(OrderedDict):  # type: ignore[type-arg]
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -133,11 +125,11 @@ class _McpReapingEngineCache(OrderedDict):  # type: ignore[type-arg]
         self._clients_by_key: dict[Any, list[Any]] = {}
         # Set by the host right before ``__setitem__`` runs (the base resolver
         # assigns ``self._engines[key] = engine`` straight after ``_build_engine``
-        # returns). Consumed-and-cleared on adoption. THREAD-LOCAL (item 3):
-        # with the per-key build locks, Engine builds for different keys run
-        # concurrently; stage → adopt pairs on the build thread (the build and
-        # its put always run on the same thread), so concurrent builds can no
-        # longer adopt each other's clients.
+        # returns). Consumed-and-cleared on adoption. THREAD-LOCAL: with the
+        # per-key build locks, Engine builds for different keys run concurrently;
+        # stage → adopt pairs on the build thread (the build and its put always
+        # run on the same thread), so concurrent builds cannot adopt each other's
+        # clients.
         self._staging = threading.local()
 
     def stage(self, clients: list[Any]) -> None:
@@ -204,12 +196,10 @@ class _McpReapingEngineCache(OrderedDict):  # type: ignore[type-arg]
             self._reap(clients)
 
 
-#: The synthetic registry name a single convenience
-#: ``provider`` is folded under in :meth:`SdkHost.__post_init__`. On the
-#: single-provider path a bound ``ModelBound`` never carries a provider name
-#: (the driver passes no selector), so this name is purely an internal table
-#: key — it never enters a durable write and changing it does not affect
-#: historical recordings.
+#: The synthetic registry name a single convenience ``provider`` is folded under
+#: in :meth:`SdkHost.__post_init__`. On the single-provider path a bound
+#: ``ModelBound`` never carries a provider name (the driver passes no selector),
+#: so this name is purely an internal table key — it never enters a durable write.
 _SINGLE_PROVIDER_NAME = "default"
 
 
@@ -217,10 +207,9 @@ _SINGLE_PROVIDER_NAME = "default"
 # Pure helpers — permission_mode → require_approval_tools (unit-testable)
 # ---------------------------------------------------------------------------
 
-#: The three "edit" tool names (``edit`` / ``write`` / ``apply_patch``) that
-#: ``acceptEdits`` exempts from the default non-low risk gate. Kept as a
-#: module-level set so tests and future permission-mode additions can refer to
-#: one canonical list.
+#: The "edit" tool names (``edit`` / ``write`` / ``apply_patch``) that
+#: ``acceptEdits`` exempts from the default non-low risk gate. One canonical
+#: module-level set so tests and permission-mode logic refer to the same list.
 _EDIT_TOOL_NAMES: frozenset[str] = frozenset({"edit", "write", "apply_patch"})
 
 
@@ -252,7 +241,7 @@ def _approval_set_for(mode: str, tool_refs: Sequence[ToolRef]) -> tuple[str, ...
     exercise every ``permission_mode`` directly without spinning up a
     :class:`SdkHost`.
 
-    Modes (simplified to three; plan removed)
+    Modes
     -----
     ``"default"``
         Every tool whose declared ``risk_level != "low"``.
@@ -261,7 +250,7 @@ def _approval_set_for(mode: str, tool_refs: Sequence[ToolRef]) -> tuple[str, ...
         (``edit`` / ``write`` / ``apply_patch``) are exempted
         even when declared high-risk.
     ``"bypassPermissions"``
-        Empty — the legacy "no tool is gated" behaviour.
+        Empty — no tool is gated.
     """
     if mode == "bypassPermissions":
         return ()
@@ -284,24 +273,20 @@ def _approval_set_for(mode: str, tool_refs: Sequence[ToolRef]) -> tuple[str, ...
 
 
 # ---------------------------------------------------------------------------
-# Catalog-pricing callback — the SDK's only implementation
-# (noeta.agent.wiring.engine._pricing_callback
-# was deleted with the roster; the product does `from noeta.client.host import
-# _catalog_pricing` directly — no second copy). If catalog.price's KeyError
-# semantics change, edit only this function.
+# Catalog-pricing callback. If catalog.price's KeyError semantics change, edit
+# only this function.
 # ---------------------------------------------------------------------------
 
 
 def _catalog_pricing(model: str, usage: Usage) -> float:
     """Price one LLM round-trip from the sdk catalog; unknown models → 0.0.
 
-    Rationale (the KeyError-or-zero policy):
-      1. Pricing comes from the sdk catalog; any model not in the catalog
-         (stub-model, an unpriced real id) counts as 0.0. KeyError-or-zero
-         lives here in the code layer, not in catalog.price (which raises
-         loudly to surface a priced model someone typed wrong) and not in
-         RuntimeLLMClient (which stays provider-neutral, seeing only the
-         injected callback).
+    The KeyError-or-zero policy:
+      1. Any model not in the catalog (stub-model, an unpriced real id) counts
+         as 0.0. This lives here in the code layer, not in catalog.price (which
+         raises loudly to surface a priced model someone typed wrong) and not in
+         RuntimeLLMClient (which stays provider-neutral, seeing only the injected
+         callback).
       2. cost is written into the event body; resume reads back the value
          recorded at the time — so updating the price table never rewrites
          historical recordings.
@@ -315,14 +300,12 @@ def _catalog_pricing(model: str, usage: Usage) -> float:
 def _spec_write_path_globs(spec: AgentSpec) -> tuple[str, ...]:
     """Read a spec's restricted-write path whitelist.
 
-    A spec may carry ``metadata["write_path_globs"]`` (e.g. ``"plans/*.md"``)
-    (metadata is excluded from the AgentSpec identity — a host-binding hint, not identity).
-    The SdkHost reads it here and forwards it into ``build_session_inputs`` so
-    that spec's ``write`` tool is built path-restricted (physically confined to
-    the whitelisted paths), while every other agent (no such metadata) keeps the
-    unrestricted ``write``. The value is a comma-separated glob list;
-    ``()`` ⇒ unrestricted. Mirrors the noeta-agent product copy in
-    ``apps/noeta-agent/.../session.py``.
+    A spec may carry ``metadata["write_path_globs"]`` (e.g. ``"plans/*.md"``);
+    metadata is excluded from the AgentSpec identity — a host-binding hint. The
+    SdkHost forwards it into ``build_session_inputs`` so that spec's ``write`` tool
+    is built path-restricted (physically confined to the whitelisted paths), while
+    every other agent (no such metadata) keeps the unrestricted ``write``. The
+    value is a comma-separated glob list; ``()`` ⇒ unrestricted.
     """
     raw = spec.metadata.get("write_path_globs")
     if not raw:
@@ -344,8 +327,7 @@ class SdkHost(GenericEngineResolver):
       names actually present in the registry (so a stale spec reference
       that was never registered cannot resolve).
     * :meth:`_build_engine` — wires the generic
-      :func:`~noeta.execution.builder.build_session_inputs` with the
-      :func:`~noeta.execution.builder.build_session_inputs` with catalog-priced
+      :func:`~noeta.execution.builder.build_session_inputs` with a catalog-priced
       :class:`RuntimeLLMClient`. ``custom_tools`` is filtered to only
       those whose names appear in the agent's declared ``spec.tools``
       (the spec is the identity authority — a tool closure supplied but
@@ -387,36 +369,32 @@ class SdkHost(GenericEngineResolver):
         straight out of here.
     custom_tools:
         Run-time closures keyed by the tool name the spec's
-        :class:`~noeta.agent.spec.ToolRef` references. D3 contract: the
-        ``AgentSpec.tools`` identity list controls which closures are
-        actually included — not the dict's keyset.
+        :class:`~noeta.agent.spec.ToolRef` references. The ``AgentSpec.tools``
+        identity list controls which closures are actually included — not the
+        dict's keyset.
     delegation_allowed:
         Host kill-switch; when ``False`` an agent's own ``"delegation"``
-        activation is masked off. Mirrors the
-        code-product ``CodeEngineResolver`` semantics exactly.
+        activation is masked off.
     policy_wrapper:
         Applied to every Engine's policy. ``None`` ⇒ one-shot behaviour
         (``query``); :func:`~noeta.execution.driver.multi_turn_policy_wrapper`
         ⇒ interactive sessions suspend on the next-goal handle (``Client``).
     unnamed_fallback:
-        Passed to the skeleton so legacy recordings labelled
-        ``agent_name="unnamed"`` can still resolve (SDK-host v1 is
-        greenfield — always ``None`` — but the field is here for
-        skeleton parity).
+        Passed to the skeleton so a recording labelled ``agent_name="unnamed"``
+        can still resolve — always ``None`` for SDK callers, but the field is
+        here for skeleton parity.
     """
 
     event_log: EventLogFull
     content_store: ContentStore
     dispatcher: Dispatcher
-    # Provider moves from a "startup single instance" to a
-    # "per-session optional set". ``provider`` (single instance) is the
-    # convenience input for single-provider callers (oneshot/lifecycle/tests +
-    # Client) — given it, ``__post_init__`` folds it into a one-entry
-    # ``providers`` table + a same-named ``default_provider`` (the name is
-    # :data:`_SINGLE_PROVIDER_NAME`). A multi-provider agent-layer deployment
-    # passes the ``providers`` table + ``default_provider`` and leaves
-    # ``provider=None``. Supply exactly one (both / neither hard-errors in
-    # ``__post_init__``).
+    # ``provider`` (single instance) is the convenience input for single-provider
+    # callers (oneshot / lifecycle / tests + Client) — given it, ``__post_init__``
+    # folds it into a one-entry ``providers`` table + a same-named
+    # ``default_provider`` (the name is :data:`_SINGLE_PROVIDER_NAME`). A
+    # multi-provider deployment passes the ``providers`` table + ``default_provider``
+    # and leaves ``provider=None``. Supply exactly one (both / neither hard-errors
+    # in ``__post_init__``).
     provider: Optional[LLMProvider] = None
     model: str = "stub-model"
     workspace_dir: Path = field(default_factory=Path.cwd)
@@ -435,8 +413,7 @@ class SdkHost(GenericEngineResolver):
     # budget's max_iterations so a long session doesn't hit the inner ReAct cap
     # first.
     max_steps: int = 200
-    # Filesystem write mode; DRY_RUN is the safe default, matching today's
-    # default behaviour.
+    # Filesystem write mode; DRY_RUN is the safe default.
     write_mode: FsWriteMode = FsWriteMode.DRY_RUN
     # shell_run allowlist / allow-all switch; ALLOWLIST by default, matching the
     # build_session_inputs default.
@@ -446,16 +423,14 @@ class SdkHost(GenericEngineResolver):
     # built-in defaults only (git/pytest/npm test etc.). Effective only when
     # shell_mode=ALLOWLIST; ignored under ARBITRARY/OFF.
     shell_allowlist: Sequence[Mapping[str, Any]] = ()
-    # Per-session background-job concurrency cap. Over the
-    # cap, ``ProcessRegistry`` **rejects** (does not queue) a
-    # ``shell_run(background)`` spawn. Configurable via HostConfig; default 8
-    # (``DEFAULT_MAX_BACKGROUND_JOBS_PER_ROOT_TASK``). Injected into the process
-    # registry built in ``__post_init__`` below.
+    # Per-session background-job concurrency cap. Over the cap, ``ProcessRegistry``
+    # **rejects** (does not queue) a ``shell_run(background)`` spawn. Injected into
+    # the process registry built in ``__post_init__`` below.
     max_background_jobs_per_root_task: int = DEFAULT_MAX_BACKGROUND_JOBS_PER_ROOT_TASK
     # Per-session background SUB-AGENT concurrency cap
     # (docs/adr/background-subagent.md). Over the cap, a
     # ``spawn_subagent(background=True)`` is rejected (not queued) before any
-    # durable write. Configurable via HostConfig; default 8.
+    # durable write.
     max_background_subagents_per_root_task: int = (
         DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_ROOT_TASK
     )
@@ -470,75 +445,67 @@ class SdkHost(GenericEngineResolver):
     # Skills dir overriding workspace_dir/.noeta/skills (workspace-local tier);
     # None uses the default load location.
     skills_dir: Optional[Path] = None
-    # Lower-priority skill tiers below the workspace-local tier,
-    # ordered built-in < global (workspace-local always wins). The product layer
-    # passes the built-in tier (the SDK doesn't know noeta-agent's
-    # BUILTIN_SKILLS_DIR); global_skills_dir defaults to None ⇒ no global tier.
-    # Empty = workspace-local tier only (byte-identical to the historical
-    # single-tier behaviour).
+    # Lower-priority skill tiers below the workspace-local tier, ordered
+    # built-in < global (workspace-local always wins). The product layer passes
+    # the built-in tier (the SDK doesn't know noeta-agent's BUILTIN_SKILLS_DIR);
+    # global_skills_dir defaults to None ⇒ no global tier. Empty = workspace-local
+    # tier only.
     builtin_skills_dirs: Tuple[Path, ...] = ()
     global_skills_dir: Optional[Path] = None
-    # Explicit memory-dir override; None uses global_memory_dir / the
-    # SDK global default. Memory is pinned to one global directory
-    # (it does not drift with the per-session workspace); the memory switch
-    # itself reads the spec's ``"memory"`` activation (the SDK host treats the
-    # activation tuple as the source of truth, same discipline as skill_invocation).
+    # Explicit memory-dir override; None uses global_memory_dir / the SDK global
+    # default. Memory is pinned to one global directory (it does not drift with the
+    # per-session workspace); the memory switch reads the spec's ``"memory"``
+    # activation (the activation tuple is the source of truth, same discipline as
+    # skill_invocation).
     memory_dir: Optional[Path] = None
-    # Global memory root (agent-layer config; defaults to the SDK's
-    # ~/.noeta/memories). An explicit memory_dir override takes priority over this
-    # field.
+    # Global memory root; defaults to the SDK's ~/.noeta/memories. An explicit
+    # memory_dir override takes priority over this field.
     global_memory_dir: Optional[Path] = None
-    # Per-task memory-root resolution seam (issue #53): given a task id, the
-    # host-injected callable returns that task's memory root, or ``None`` to
-    # fall back to the ``memory_dir`` > ``global_memory_dir`` > default chain.
-    # Lets a multi-tenant product split the store per tenant while the SDK
-    # stays tenancy-agnostic (it hands over task ids, never users). Must be
-    # cheap, total, and deterministic per task id — a resumed task must resolve
-    # the same store. ``None`` (default) ⇒ the host-level chain, byte-identical
-    # for single-tenant hosts.
+    # Per-task memory-root resolution seam: given a task id, the host-injected
+    # callable returns that task's memory root, or ``None`` to fall back to the
+    # ``memory_dir`` > ``global_memory_dir`` > default chain. Lets a multi-tenant
+    # product split the store per tenant while the SDK stays tenancy-agnostic (it
+    # hands over task ids, never users). Must be cheap, total, and deterministic
+    # per task id — a resumed task must resolve the same store. ``None`` ⇒ the
+    # host-level chain.
     memory_root_resolver: Optional[Callable[[str], Optional[Path]]] = None
-    #: Project-instructions-file switch. Like memory, this is workspace
-    #: environment material (not agent identity), so the activation tuple carries
-    #: no flag and SdkHost configures it directly. Default False. When True, looks
-    #: for NOETA.md → AGENTS.md in order; an explicit instructions_file override
-    #: reads only that path. Missing/empty file = no accounting (no instructions
-    #: event).
+    #: Project-instructions-file switch. Like memory, this is workspace environment
+    #: material (not agent identity), so the activation tuple carries no flag and
+    #: SdkHost configures it directly. When True, looks for NOETA.md → AGENTS.md in
+    #: order; an explicit instructions_file override reads only that path.
+    #: Missing/empty file = no accounting (no instructions event).
     instructions_enabled: bool = False
     instructions_file: Optional[Path] = None
-    #: `read`-triggered discovery of subdirectory ``NOETA.md``/``AGENTS.md``
-    #: files (docs/adr/anchored-content-placement.md). Like
-    #: ``instructions_enabled`` this is workspace environment material, not
-    #: agent identity. Default False ⇒ byte-identical for every existing
-    #: host. When True, a successful ``read`` inside the workspace activates
-    #: the instruction files between the read file's directory and the
-    #: workspace root; they render anchored at the point of discovery.
+    #: `read`-triggered discovery of subdirectory ``NOETA.md``/``AGENTS.md`` files
+    #: (docs/adr/anchored-content-placement.md). Like ``instructions_enabled`` this
+    #: is workspace environment material, not agent identity. When True, a
+    #: successful ``read`` inside the workspace activates the instruction files
+    #: between the read file's directory and the workspace root; they render
+    #: anchored at the point of discovery.
     instructions_discovery: bool = False
-    # Skill-tool enforcement level (off/warn/enforce); "off" by default, no
-    # intervention.
+    # Skill-tool enforcement level (off/warn/enforce); "off" ⇒ no intervention.
     skill_tool_enforcement: SkillEnforcementMode = "off"
     # Whether to load script-style run_skill_script tools under .noeta/skills;
     # off by default.
     allow_skill_scripts: bool = False
-    # Alias resolver for remote/local MCP servers (product-injected).
-    # Given an enabled alias, returns its full spec (incl. url/credentials) from
-    # the host-side config store, or None (unconfigured/skip). The SDK does not
-    # hold the config store (import-linter ``sdk-not-agent`` forbids the SDK
-    # depending back on noeta-agent); credentials live only in the product layer's
-    # store. Here we take only a **callback**: each turn it resolves the enabled
-    # aliases into connectable specs, then the SDK's ``build_mcp_tools`` actually
-    # connects them. ``None`` (default / no MCP config) ⇒ no enabled alias
-    # resolves to a spec ⇒ no live MCP is connected, byte-identical to pre-0042.
+    # Alias resolver for remote/local MCP servers (product-injected). Given an
+    # enabled alias, returns its full spec (incl. url/credentials) from the
+    # host-side config store, or None (unconfigured/skip). The SDK does not hold
+    # the config store (import-linter ``sdk-not-agent`` forbids the SDK depending
+    # back on noeta-agent); credentials live only in the product layer's store.
+    # This is a **callback**: each turn it resolves the enabled aliases into
+    # connectable specs, then the SDK's ``build_mcp_tools`` connects them. ``None``
+    # ⇒ no enabled alias resolves to a spec ⇒ no live MCP is connected.
     mcp_server_resolver: Optional[Callable[[str], Optional["McpAnyServerSpec"]]] = None
-    # Injectable HTTP POST transport for the remote MCP client. Tests
-    # pass a fake (a local stub server) so list/call run without real network;
-    # production leaves it ``None`` (the client uses stdlib ``urllib``). Pure
-    # wiring — never recorded.
+    # Injectable HTTP POST transport for the remote MCP client. Tests pass a fake
+    # (a local stub server) so list/call run without real network; production
+    # leaves it ``None`` (the client uses stdlib ``urllib``). Pure wiring — never
+    # recorded.
     mcp_http_post: Optional[HttpPostFn] = None
     # HookGuard rules for the pre-tool-use phase; an empty tuple registers no
     # extra hook.
     hooks_pre_tool_use: tuple[PreToolUseRule, ...] = ()
-    # Repeated-action detection threshold; 0 disables it, equivalent to not
-    # registering a RepetitionGuard today.
+    # Repeated-action detection threshold; 0 disables it.
     repetition_threshold: int = 0
     # Action taken when repetition_threshold is exceeded; defaults to
     # "require_approval", matching the guard default.
@@ -546,15 +513,13 @@ class SdkHost(GenericEngineResolver):
     # Repetition-detection sliding window size; defaults to 8, matching the
     # RepetitionPolicy default.
     repetition_window: int = 8
-    # Session-level budget override; None derives from AgentSpec.default_budget
-    # (today's path).
+    # Session-level budget override; None derives from AgentSpec.default_budget.
     budget: Optional[Budget] = None
     # Explicit approval-required tool names; when None, derived from
     # permission_mode — an explicit value wins.
     require_approval_tools: Optional[tuple[str, ...]] = None
-    # Map from legacy recording name → canonical registered name (e.g.
-    # {"default": "main"}); used for resuming historical recordings
-    # and product-facing alias
+    # Map from a recording name → canonical registered name (e.g.
+    # {"default": "main"}); used for resuming recordings and product-facing alias
     # support.
     aliases: Mapping[str, str] = field(default_factory=dict)
     # Wiring-only LLM request overrides. Excluded from the AgentSpec identity;
@@ -562,14 +527,13 @@ class SdkHost(GenericEngineResolver):
     output_schema: Optional[dict[str, Any]] = None
     thinking: Optional[str] = None
     effort: Optional[str] = None
-    # Microcompact — positive int or None; engine-level inline char
-    # cap for tool output. None = no truncation. A resumed session must reuse
-    # the value the original run used, or it re-derives different tool-output bytes.
+    # Positive int or None; engine-level inline char cap for tool output. None = no
+    # truncation. A resumed session must reuse the value the original run used, or
+    # it re-derives different tool-output bytes.
     tool_output_inline_limit: Optional[int] = None
-    # SDK Options extension
-    # points threaded into every Engine this host builds. All default to inert
-    # values; the SDK host feeds the SAME values to the live and resume paths
-    # (single _build_engine call site), so a resumed turn rebuilds the
+    # SDK Options extension points threaded into every Engine this host builds. All
+    # default to inert values; the SDK host feeds the SAME values to the live and
+    # resume paths (single _build_engine call site), so a resumed turn rebuilds the
     # identical policy / guard stack / content layout by construction.
     #   * policy_override: a custom decision-policy factory ``(llm) -> Policy``
     #     that fully replaces ReActPolicy (``None`` ⇒ ReAct).
@@ -583,24 +547,24 @@ class SdkHost(GenericEngineResolver):
     write_roots: Optional[Callable[[str], Sequence[str]]] = None
     extra_guards: tuple[Guard, ...] = ()
     extra_content_kinds: tuple[ContentKindSpec, ...] = ()
-    #: Per-agent ``tool_result_transform`` stages (spec D9) — ``agent name ->
-    #: ordered (priority, plugin, name) ``ToolResult -> ToolResult`` callables.
-    #: A wiring-plane surface that follows per-agent activation (D6): the Client
-    #: resolves the map from the activated plugin set, and ``_build_engine`` picks
-    #: the stages for the agent it is building. Empty default ⇒ every existing
-    #: construction records the untransformed result, byte-identical.
+    #: Per-agent ``tool_result_transform`` stages — ``agent name -> ordered
+    #: (priority, plugin, name) ``ToolResult -> ToolResult`` callables. A
+    #: wiring-plane surface that follows per-agent activation: the Client resolves
+    #: the map from the activated plugin set, and ``_build_engine`` picks the stages
+    #: for the agent it is building. Empty default ⇒ the untransformed result is
+    #: recorded.
     tool_result_transforms: Mapping[str, tuple[Callable[[Any], Any], ...]] = field(
         default_factory=dict
     )
-    #: Per-agent compose-time reminders (spec D8, track B) — ``agent name ->
-    #: ReminderSpec`` s, appended after the three built-ins in that agent's
-    #: composer reminder registry and interleaved by priority. Same per-agent
-    #: activation scoping as ``tool_result_transforms``.
+    #: Per-agent compose-time reminders — ``agent name -> ReminderSpec`` s,
+    #: appended after the three built-ins in that agent's composer reminder
+    #: registry and interleaved by priority. Same per-agent activation scoping as
+    #: ``tool_result_transforms``.
     extra_reminders: Mapping[str, tuple[ReminderSpec, ...]] = field(
         default_factory=dict
     )
-    #: Per-agent recorded reminder providers (spec D7, track A) — ``agent name ->
-    #: seam name -> ordered providers``. Read by the recording path through
+    #: Per-agent recorded reminder providers — ``agent name -> seam name ->
+    #: ordered providers``. Read by the recording path through
     #: :meth:`intake_reminder_providers`; a provider's output is *recorded*, so
     #: resume folds it back from the ledger and never re-invokes it.
     reminder_providers: Mapping[str, Mapping[str, tuple[Any, ...]]] = field(
@@ -613,106 +577,92 @@ class SdkHost(GenericEngineResolver):
     activated_content_kinds: Mapping[str, tuple[ContentKindSpec, ...]] = field(
         default_factory=dict
     )
-    #: Per-agent session packs contributed by activated external plugins
-    #: (microkernel phase 3) — appended after the built-in packs and
-    #: interleaved by priority in the kernel builder's generic loop. Empty ⇒
-    #: byte-identical to the built-in-only session.
+    #: Per-agent session packs contributed by activated external plugins — appended
+    #: after the built-in packs and interleaved by priority in the kernel builder's
+    #: generic loop.
     activated_session_packs: Mapping[str, tuple[Any, ...]] = field(default_factory=dict)
-    #: Per-agent control tools contributed by activated external plugins
-    #: (control-tool-surface S2) — merged after the built-in control tools and
-    #: re-sorted by ``(priority, name)`` with the internal entries in the
-    #: builder's mount loop. Empty ⇒ byte-identical to the built-in-only session.
+    #: Per-agent control tools contributed by activated external plugins — merged
+    #: after the built-in control tools and re-sorted by ``(priority, name)`` with
+    #: the internal entries in the builder's mount loop.
     activated_control_tools: Mapping[str, tuple[Any, ...]] = field(default_factory=dict)
-    # The agent-layer base pool root for **bare sessions** (no
-    # workspace_id). The agent layer does ``mkdir <workspace_base>/session-<uuid>``
-    # and passes the resulting absolute path as ``workspace_dir`` to the driver.
-    # ``None`` ⇒ no base pool: every session uses the host-fixed
-    # ``workspace_dir`` (the single-workspace behaviour).
-    # Named workspaces are no longer subdirs of ``workspace_base``;
-    # they are arbitrary paths in the agent-layer registry.
+    # The agent-layer base pool root for **bare sessions** (no workspace_id). The
+    # agent layer does ``mkdir <workspace_base>/session-<uuid>`` and passes the
+    # resulting absolute path as ``workspace_dir`` to the driver. ``None`` ⇒ no
+    # base pool: every session uses the host-fixed ``workspace_dir``. Named
+    # workspaces are arbitrary paths in the agent-layer registry, not subdirs of
+    # ``workspace_base``.
     workspace_base: Optional[Path] = None
-    # The provider **registry**: a name→instance table. A
-    # multi-provider agent-layer deployment passes it directly (+
-    # ``default_provider``); a single-provider caller leaves it empty and passes
-    # the convenience ``provider`` single instance instead, which
-    # ``__post_init__`` folds into a one-entry table. After folding, ``providers``
-    # is always non-empty and ``default_provider`` is always one of its keys
-    # (resolver / ``_provider_for`` read this folded table and never touch the
-    # ``provider`` convenience field).
+    # The provider **registry**: a name→instance table. A multi-provider deployment
+    # passes it directly (+ ``default_provider``); a single-provider caller leaves
+    # it empty and passes the convenience ``provider`` single instance instead,
+    # which ``__post_init__`` folds into a one-entry table. After folding,
+    # ``providers`` is always non-empty and ``default_provider`` is always one of
+    # its keys (resolver / ``_provider_for`` read this folded table and never touch
+    # the ``provider`` convenience field).
     providers: Mapping[str, LLMProvider] = field(default_factory=dict)
-    # Default provider name: bound when no per-turn provider selector is given.
-    # On the single-provider convenience path ``__post_init__`` pins it to
-    # :data:`_SINGLE_PROVIDER_NAME`; a multi-provider deployment sets it
-    # explicitly in the agent layer (the explicit ``default`` flag = the
-    # conclusion of Open Question Q1).
+    # Default provider name: bound when no per-turn provider selector is given. On
+    # the single-provider convenience path ``__post_init__`` pins it to
+    # :data:`_SINGLE_PROVIDER_NAME`; a multi-provider deployment sets it explicitly.
     default_provider: str = ""
-    # The provider→model-list table; the half read by the
-    # (provider, model) pair legality check: a session may bind ``model`` only on
-    # a pair where ``model ∈ provider_models[name]``. The agent layer builds this
-    # table from the provider registry; empty default ⇒ no restriction (the old
-    # single-provider path doesn't pass it, so the driver does no pair check —
-    # identical to that path).
+    # The provider→model-list table; the half read by the (provider, model) pair
+    # legality check: a session may bind ``model`` only on a pair where
+    # ``model ∈ provider_models[name]``. The agent layer builds this table from the
+    # provider registry; empty default ⇒ no restriction (the single-provider path
+    # passes nothing, so the driver does no pair check).
     provider_models: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     # Optional per-LLM-call HTTP headers derived from the current StepContext.
     # Product hosts use this for deployment gateway correlation headers; the SDK
     # default is None, so generic callers and resume fixtures keep plain provider
     # calls.
     provider_headers: Optional[Callable[[StepContext], Mapping[str, str]]] = None
-    # Token-streaming sink (host wiring, like ``provider_headers`` — never part
-    # of agent identity): forwarded into every session's RuntimeLLMClient so a
-    # streaming-capable provider's in-flight deltas reach the product's delta
-    # hub. ``None`` ⇒ providers are called exactly as before.
+    # Token-streaming sink (host wiring, like ``provider_headers`` — never part of
+    # agent identity): forwarded into every session's RuntimeLLMClient so a
+    # streaming-capable provider's in-flight deltas reach the product's delta hub.
+    # ``None`` ⇒ deltas are never emitted.
     delta_sink: Optional[Callable[[StepContext, str, StreamDelta], None]] = None
-    # The host's live HTML-app preview gateway. A runtime injection
-    # (like ``provider_headers`` / ``_process_registry``), NOT part of the host
-    # identity. When set, ``_build_engine`` threads it into
-    # ``build_session_inputs`` so the agent gets the ``open_app`` tool. ``None``
-    # (oneshot / lifecycle / tests / resume) ⇒ no open_app, so the prompt's tool
-    # list is unchanged.
+    # The host's live HTML-app preview gateway. A runtime injection (like
+    # ``provider_headers`` / ``_process_registry``), NOT part of the host identity.
+    # When set, ``_build_engine`` threads it into ``build_session_inputs`` so the
+    # agent gets the ``open_app`` tool. ``None`` ⇒ no open_app.
     app_gateway: Optional[AppPreviewGateway] = None
-    # Sandbox execution backend addressing (D2 host config). ``None`` (default)
-    # ⇒ the local host (``LocalExecEnv``, today's behaviour, byte-identical).
-    # When set, ``__post_init__`` builds a ``SandboxExecEnvManager`` and
-    # ``_build_engine`` routes every session's fs / shell IO into the container
-    # (the tool schemas — and thus the stable prefix — are unchanged). A host
-    # runtime injection (like ``app_gateway``), never part of any agent identity.
-    # ``exec_env`` attaches one shared container (v1); ``sandbox_provider`` +
-    # ``sandbox_spec`` provision a fresh container per root-task tree (v2, D4) and
-    # take precedence over ``exec_env`` when both are set.
+    # Sandbox execution backend addressing. ``None`` ⇒ the local host
+    # (``LocalExecEnv``). When set, ``__post_init__`` builds a
+    # ``SandboxExecEnvManager`` and ``_build_engine`` routes every session's fs /
+    # shell IO into the container (the tool schemas — and thus the stable prefix —
+    # are unchanged). A host runtime injection (like ``app_gateway``), never part
+    # of any agent identity. ``exec_env`` attaches one shared container;
+    # ``sandbox_provider`` + ``sandbox_spec`` provision a fresh container per
+    # root-task tree and take precedence over ``exec_env`` when both are set.
     exec_env: Optional[SandboxExecEnvConfig] = None
     sandbox_provider: Optional[SandboxProvider] = None
     sandbox_spec: Optional[SandboxSpec] = None
     # Per-session shell preamble source ``(exec_env_ref, argv) -> prefix``,
     # threaded into the ``SandboxExecEnvManager``: minted fresh per container exec
     # so a product can inject per-user credentials that expire mid-session. A host
-    # runtime injection, never recorded (D5); ``None`` ⇒ no preamble.
+    # runtime injection, never recorded; ``None`` ⇒ no preamble.
     sandbox_exec_preamble: Optional[Callable[[str, Sequence[str]], str]] = None
     # Optional per-session backend factories, threaded into the
-    # ``SandboxExecEnvManager``. ``None`` ⇒ the SDK defaults (the hand-written
-    # ``AioSandboxExecEnv`` / ``AioBrowserBackend``). The product injects these to
-    # swap in an alternative wire without touching the seam — e.g.
-    # ``noeta.agent.host.sdk_sandbox_exec_env.SdkSandboxExecEnv`` /
-    # ``SdkBrowserBackend`` (the official ``agent-sandbox`` client). The adapters
-    # implement the same ``ExecEnv`` / ``BrowserBackend`` surface, so the tool
-    # schemas — and the stable prefix — are unchanged.
+    # ``SandboxExecEnvManager``. ``None`` ⇒ the SDK defaults (``AioSandboxExecEnv``
+    # / ``AioBrowserBackend``). The product injects these to swap in an alternative
+    # wire without touching the seam; the adapters implement the same ``ExecEnv`` /
+    # ``BrowserBackend`` surface, so the tool schemas — and the stable prefix — are
+    # unchanged.
     sandbox_backend_factory: Optional[BackendFactory] = None
     sandbox_browser_factory: Optional[BrowserBackendFactory] = None
     # Per-session sandbox opt-out (execution tiers): ``(root_task_id,
-    # workspace_dir) -> provision?``. Consulted at the top of
-    # ``allocate_exec_env``; ``False`` ⇒ this session gets NO container (return
-    # ``None``), so the driver records no ``exec_env_ref`` and the build falls
-    # back to ``LocalExecEnv`` + the host ``WorkspaceRoot`` fence — the ``local``
-    # execution tier, reachable even while a sandbox provider is configured for
-    # other sessions. ``None`` (default) ⇒ today's behaviour, byte-identical
-    # (every session provisions when a provider is present). A host runtime
-    # injection, never part of any agent identity.
+    # workspace_dir) -> provision?``. Consulted at the top of ``allocate_exec_env``;
+    # ``False`` ⇒ this session gets NO container (return ``None``), so the driver
+    # records no ``exec_env_ref`` and the build falls back to ``LocalExecEnv`` +
+    # the host ``WorkspaceRoot`` fence — the ``local`` execution tier, reachable
+    # even while a sandbox provider is configured for other sessions. ``None`` ⇒
+    # every session provisions when a provider is present. A host runtime injection,
+    # never part of any agent identity.
     sandbox_policy: Optional[Callable[[str, Optional[str]], bool]] = None
-    # The cache key has a ``workspace`` dimension
-    # (the bound **absolute path**, or ``None`` for the host default) and a
-    # ``provider`` dimension — so two sessions on different directories or
-    # providers never share an Engine.
-    # #13: bounded LRU via OrderedDict (cap = _MAX_CACHED_ENGINES) + a threading
-    # Lock to serialise get-or-build-put under ThreadingHTTPServer concurrency.
+    # The cache key has a ``workspace`` dimension (the bound **absolute path**, or
+    # ``None`` for the host default) and a ``provider`` dimension — so two sessions
+    # on different directories or providers never share an Engine. Bounded LRU via
+    # OrderedDict (cap = _MAX_CACHED_ENGINES) + a threading Lock to serialise
+    # get-or-build-put under ThreadingHTTPServer concurrency.
     _engines: OrderedDict[
         tuple[
             str,
@@ -732,31 +682,31 @@ class SdkHost(GenericEngineResolver):
     _engines_lock: threading.Lock = field(
         default_factory=threading.Lock, init=False, repr=False, compare=False
     )
-    # item 3 — per-key Engine-build locks (see
-    # ``GenericEngineResolver._engine_for_agent``): builds run outside the
-    # global ``_engines_lock`` so one session's slow/hanging MCP connect no
-    # longer serialises every other Engine build.
+    # Per-key Engine-build locks (see
+    # ``GenericEngineResolver._engine_for_agent``): builds run outside the global
+    # ``_engines_lock`` so one session's slow/hanging MCP connect does not
+    # serialise every other Engine build.
     _engine_builds: dict[Any, threading.Lock] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
-    # Per-session permission_mode is a NON-durable,
-    # per-turn knob — the frontend sends it each turn; it is never written to the
-    # event log. The async HTTP transport seeds a turn on the request thread but
-    # resolves the Engine later on a background thread, so the per-turn mode is
-    # stashed here keyed by task_id (set by the driver before resolution, read in
-    # ``resolve_engine`` to key + build the Engine). Single writer per task (turns
-    # are serial under the dispatcher lease); overwritten each turn, never evicted
-    # (one short string per task — negligible) so a turn that suspends on approval
-    # still resolves the same mode when it resumes.
+    # Per-session permission_mode is a NON-durable, per-turn knob — the frontend
+    # sends it each turn; it is never written to the event log. The async HTTP
+    # transport seeds a turn on the request thread but resolves the Engine later on
+    # a background thread, so the per-turn mode is stashed here keyed by task_id
+    # (set by the driver before resolution, read in ``resolve_engine`` to key +
+    # build the Engine). Single writer per task (turns are serial under the
+    # dispatcher lease); overwritten each turn, never evicted (one short string per
+    # task) so a turn that suspends on approval still resolves the same mode when
+    # it resumes.
     _turn_permission_mode: dict[str, Optional[str]] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
-    # Per-turn, NON-durable enabled-MCP-alias carrier keyed by
-    # task_id. Mirrors ``_turn_permission_mode``: the driver records the turn's
-    # enabled aliases (clean list, no url/token) here before the Engine is
-    # resolved; ``resolve_engine`` reads it to thread the aliases into the cache
-    # key + ``_build_engine`` (which resolves each alias → spec via
-    # ``mcp_server_resolver`` → live MCP tools). Never written to the event log.
+    # Per-turn, NON-durable enabled-MCP-alias carrier keyed by task_id. Mirrors
+    # ``_turn_permission_mode``: the driver records the turn's enabled aliases
+    # (clean list, no url/token) here before the Engine is resolved;
+    # ``resolve_engine`` reads it to thread the aliases into the cache key +
+    # ``_build_engine`` (which resolves each alias → spec via ``mcp_server_resolver``
+    # → live MCP tools). Never written to the event log.
     _turn_mcp_aliases: dict[str, tuple[str, ...]] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
@@ -766,75 +716,72 @@ class SdkHost(GenericEngineResolver):
     _turn_effort: dict[str, Optional[str]] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
-    # cancel-cascade — process-local registry of cancelled root task ids.
-    # The driver's ``cancel`` marks the root here (alongside the durable
-    # ``TaskCancelled`` event); ``drive_pending_subtasks`` polls it per tree
-    # so an in-flight child abandons its result at the next turn boundary.
-    # Per-host singleton; never written to the event log → no resume effect.
+    # cancel-cascade — process-local registry of cancelled root task ids. The
+    # driver's ``cancel`` marks the root here (alongside the durable
+    # ``TaskCancelled`` event); ``drive_pending_subtasks`` polls it per tree so an
+    # in-flight child abandons its result at the next turn boundary. Per-host
+    # singleton; never written to the event log → no resume effect.
     _cancellation: CancellationRegistry = field(
         default_factory=CancellationRegistry, init=False, repr=False, compare=False
     )
-    # Background-shell process registry: a per-host runtime
-    # accelerator (mirrors ``_cancellation``) owning live ``Popen`` handles +
-    # watcher threads for ``shell_run(background=true)``. Constructed in
-    # ``__post_init__`` because it needs the host's shared event_log +
-    # content_store; never written to the event log (the BackgroundShell*
-    # events are the durable record) → no resume effect. Injected into every
-    # built Engine so the background shell tools reach it.
+    # Background-shell process registry: a per-host runtime accelerator (mirrors
+    # ``_cancellation``) owning live ``Popen`` handles + watcher threads for
+    # ``shell_run(background=true)``. Constructed in ``__post_init__`` because it
+    # needs the host's shared event_log + content_store; never written to the event
+    # log (the BackgroundShell* events are the durable record) → no resume effect.
+    # Injected into every built Engine so the background shell tools reach it.
     _process_registry: Optional[ProcessRegistry] = field(
         default=None, init=False, repr=False, compare=False
     )
     # Background SUB-AGENT registry (docs/adr/background-subagent.md): a per-host
     # runtime accelerator (mirrors ``_process_registry``) holding the live drive
-    # futures + per-session cap for ``spawn_subagent(background=True)``.
-    # Constructed in ``__post_init__`` (it needs the host's L0 triple + the
-    # resolver's ``_build_drain_host``); never written to the event log (the
+    # futures + per-session cap for ``spawn_subagent(background=True)``. Constructed
+    # in ``__post_init__`` (it needs the host's L0 triple + the resolver's
+    # ``_build_drain_host``); never written to the event log (the
     # ``BackgroundSubagent*`` events are the durable record) → no resume effect.
     # Threaded into a top-level interactive Engine as the launch+capacity seam.
     _background_subagents: Optional[BackgroundSubagentRegistry] = field(
         default=None, init=False, repr=False, compare=False
     )
-    # Per-turn file-checkpoint gate: a per-host runtime
-    # accelerator (mirrors ``_cancellation`` / ``_process_registry``) recording
-    # "which workspace files already have a rewind baseline stashed THIS turn",
-    # keyed by the session root task id. Needs no event_log/content_store (it is
-    # a pure in-memory path set), so a plain default_factory suffices. Injected
-    # into every built Engine so an AI ``edit`` / ``write`` stashes its baseline;
-    # never written to the event log (the ``file_baselines`` on
-    # ``ToolResultRecorded`` are the durable record) → no resume effect.
+    # Per-turn file-checkpoint gate: a per-host runtime accelerator (mirrors
+    # ``_cancellation`` / ``_process_registry``) recording "which workspace files
+    # already have a rewind baseline stashed THIS turn", keyed by the session root
+    # task id. Needs no event_log/content_store (it is a pure in-memory path set),
+    # so a plain default_factory suffices. Injected into every built Engine so an AI
+    # ``edit`` / ``write`` stashes its baseline; never written to the event log (the
+    # ``file_baselines`` on ``ToolResultRecorded`` are the durable record) → no
+    # resume effect.
     _file_checkpoint: FileCheckpointRegistry = field(
         default_factory=FileCheckpointRegistry,
         init=False,
         repr=False,
         compare=False,
     )
-    # Sandbox backend lifecycle (T5): built in ``__post_init__`` ONLY when
-    # ``exec_env`` config is present (``None`` otherwise ⇒ the local host, no
-    # behaviour change). Owns the host's shared ``AioSandboxExecEnv`` and its
-    # teardown seam; ``_build_engine`` pulls the backend from it. A runtime
-    # accelerator like ``_process_registry`` — never written to the event log.
+    # Sandbox backend lifecycle: built in ``__post_init__`` ONLY when a sandbox is
+    # configured (``None`` otherwise ⇒ the local host). Owns the host's shared
+    # ``AioSandboxExecEnv`` and its teardown seam; ``_build_engine`` pulls the
+    # backend from it. A runtime accelerator like ``_process_registry`` — never
+    # written to the event log.
     _sandbox: Optional[SandboxExecEnvManager] = field(
         default=None, init=False, repr=False, compare=False
     )
-    # The shared Mechanism-C delivery glue (docs/adr/background-subagent.md):
-    # the daemon-thread hop + parent-fold terminal check + mid-turn-deferral
-    # retry loop that BOTH the background-shell and background-sub-agent exit
-    # paths funnel through. Built in ``__post_init__`` on the host's shared L0
-    # read seams; the completion notifier (an ``InteractionDriver``) is wired
-    # late via :meth:`set_background_notifier` (the driver wraps this host, so
-    # the host can't construct it). ``None`` notifier ⇒ no push: a background
-    # exit still records its durable event, but drives no wake-and-notify turn
-    # (oneshot / lifecycle / tests).
+    # The shared background-delivery glue (docs/adr/background-subagent.md): the
+    # daemon-thread hop + parent-fold terminal check + mid-turn-deferral retry loop
+    # that BOTH the background-shell and background-sub-agent exit paths funnel
+    # through. Built in ``__post_init__`` on the host's shared L0 read seams; the
+    # completion notifier (an ``InteractionDriver``) is wired late via
+    # :meth:`set_background_notifier` (the driver wraps this host, so the host can't
+    # construct it). ``None`` notifier ⇒ no push: a background exit still records
+    # its durable event, but drives no wake-and-notify turn.
     _delivery: BackgroundDelivery = field(init=False, repr=False, compare=False)
-    # Pending woken-prelude inbox for the resident worker pool
-    # (round 3a single-host-multi-worker). When a ``seed_*`` method returns
-    # a SeededTurn with a non-durable prelude (ResolveApprovalPrelude), the
-    # client stashes it here before yielding the seed's lease back to the
-    # ready queue; a worker pops it at the start of its step and threads it
-    # into ``run_leased_task`` so the prelude runs on the worker thread
-    # (not the HTTP request thread). Process-local: a crash between seed
-    # and worker pick-up loses the prelude, which is the same benign loss
-    # mode the per-command drive thread already had (re-approve).
+    # Pending woken-prelude inbox for the resident worker pool. When a ``seed_*``
+    # method returns a SeededTurn with a non-durable prelude (ResolveApprovalPrelude),
+    # the client stashes it here before yielding the seed's lease back to the ready
+    # queue; a worker pops it at the start of its step and threads it into
+    # ``run_leased_task`` so the prelude runs on the worker thread (not the HTTP
+    # request thread). Process-local: a crash between seed and worker pick-up loses
+    # the prelude, the same benign loss mode the per-command drive thread has
+    # (re-approve).
     _pending_preludes: dict[str, Any] = field(
         default_factory=dict,
         init=False,
@@ -851,15 +798,13 @@ class SdkHost(GenericEngineResolver):
     def __post_init__(self) -> None:
         """Fold the single-provider convenience field into a ``providers`` table.
 
-        Supply exactly one: given the convenience ``provider`` single instance
-        (oneshot/lifecycle/tests + Client), fold it into a one-entry
-        ``providers`` table + a same-named ``default_provider``; a multi-provider
-        agent-layer deployment passes the ``providers`` table +
-        ``default_provider`` instead (leaving ``provider`` as ``None``). Both /
-        neither is a deployment error — hard-error. After folding, downstream
-        (the resolver cache key, ``_provider_for``, the read-only ``provider``
-        property) sees only ``providers`` / ``default_provider`` and runs the
-        same code as the multi-provider path.
+        Supply exactly one: given the convenience ``provider`` single instance,
+        fold it into a one-entry ``providers`` table + a same-named
+        ``default_provider``; a multi-provider deployment passes the ``providers``
+        table + ``default_provider`` instead (leaving ``provider`` as ``None``).
+        Both / neither hard-errors. After folding, downstream (the resolver cache
+        key, ``_provider_for``, the read-only ``provider`` property) sees only
+        ``providers`` / ``default_provider``.
         """
         if self.provider is not None:
             if self.providers:
@@ -883,7 +828,7 @@ class SdkHost(GenericEngineResolver):
                 f"SdkHost: default_provider {self.default_provider!r} is not a "
                 f"key of the providers registry {sorted(self.providers)!r}"
             )
-        # Build the shared Mechanism-C delivery glue first: both the
+        # Build the shared background-delivery glue first: both the
         # background-shell and background-sub-agent exit hooks route their
         # completion push through it. It stays inert (records the durable exit,
         # drives no turn) until the product wires a notifier via
@@ -891,31 +836,27 @@ class SdkHost(GenericEngineResolver):
         self._delivery = BackgroundDelivery(
             event_log=self.event_log, content_store=self.content_store
         )
-        # Build the background-shell registry once on the host's
-        # shared L0 triple. Lazily here (not a default_factory) because it
-        # needs event_log + content_store. issue 02 (Mechanism C): inject the
-        # dispatcher (the wake seam; 03's kill push reuses it) + the host's own
-        # ``_on_background_exit`` hook so a job that exits while the session is
-        # idle is pushed back as a next-goal notice. The hook hands off to a
-        # daemon drive thread; it is inert until the product wires a notifier
-        # via :meth:`set_background_notifier` (oneshot / lifecycle / tests never
-        # do, so they stay byte-identical — no push).
+        # Build the background-shell registry on the host's shared L0 triple
+        # (lazily here, not a default_factory, because it needs event_log +
+        # content_store). The dispatcher is the wake seam; the host's own
+        # ``_on_background_exit`` hook pushes a job that exits while the session is
+        # idle back as a next-goal notice. The hook hands off to a daemon drive
+        # thread; it is inert until the product wires a notifier via
+        # :meth:`set_background_notifier`.
         self._process_registry = ProcessRegistry(
             event_log=self.event_log,
             content_store=self.content_store,
-            # Per-session concurrency cap (HostConfig
-            # threads it here; default 8). Reject (not queue) over the cap.
+            # Per-session concurrency cap. Reject (not queue) over the cap.
             max_jobs_per_root_task=self.max_background_jobs_per_root_task,
             dispatcher=self.dispatcher,
             on_background_exit=self._on_background_exit,
         )
         # Background sub-agent registry (docs/adr/background-subagent.md). Mirrors
-        # the process registry: built lazily here on the shared L0 triple. The
+        # the process registry: built here on the shared L0 triple. The
         # ``build_host`` callback hands it the resolver's ``_build_drain_host`` so
-        # it drives one background child on the same delegation host the
-        # foreground drain uses; ``deliver`` is the Mechanism-C hook fired once a
-        # child reaches terminal. Inert until ``set_background_notifier`` wires a
-        # driver (then ``deliver`` drives the wake-and-notify turn).
+        # it drives one background child on the same delegation host the foreground
+        # drain uses; ``deliver`` fires once a child reaches terminal. Inert until
+        # ``set_background_notifier`` wires a driver.
         self._background_subagents = BackgroundSubagentRegistry(
             event_log=self.event_log,
             content_store=self.content_store,
@@ -924,10 +865,9 @@ class SdkHost(GenericEngineResolver):
             deliver=self._on_background_subagent_exit,
             max_per_root_task=self.max_background_subagents_per_root_task,
         )
-        # Sandbox backend lifecycle: only when the host configured one. Absent it
-        # (every local / oneshot / test / resume path), ``_sandbox`` stays
-        # ``None`` and ``_build_engine`` runs the local host unchanged. A v2
-        # ``sandbox_provider`` (per-session provisioning) wins over the v1
+        # Sandbox backend lifecycle: only when the host configured one. Absent it,
+        # ``_sandbox`` stays ``None`` and ``_build_engine`` runs the local host.
+        # A ``sandbox_provider`` (per-session provisioning) wins over the
         # ``exec_env`` attach config; the manager drives whichever provider.
         if self.sandbox_provider is not None:
             self._sandbox = SandboxExecEnvManager(
@@ -942,9 +882,9 @@ class SdkHost(GenericEngineResolver):
                 provider_for_config(self.exec_env),
                 spec_template=SandboxSpec(image=""),
                 default_workdir=self.exec_env.workdir,
-                # The attach path has ONE shared container: a build that
-                # carries no session-welded ref still targets it (v1
-                # behaviour), unlike the per-session provisioning path.
+                # The attach path has ONE shared container: a build that carries no
+                # session-welded ref still targets it, unlike the per-session
+                # provisioning path.
                 default_ref=self.exec_env.base_url,
                 exec_preamble=self.sandbox_exec_preamble,
                 backend_factory=self.sandbox_backend_factory,
@@ -956,22 +896,20 @@ class SdkHost(GenericEngineResolver):
     def allocate_exec_env(
         self, root_task_id: str, workspace: Optional[str] = None
     ) -> Optional[str]:
-        """Provision this session's container → the ``exec_env_ref`` to weld (D4).
+        """Provision this session's container → the ``exec_env_ref`` to weld.
 
-        Called eagerly at ``driver.seed_start`` (which pre-mints
-        ``root_task_id`` so the container is keyed by the root task id). The
-        provider builds a FRESH container mounting ``workspace`` (the session's
-        host workspace path) and the fixed skills mounts; the returned
-        ``"{base_url}#{sandbox_id}"`` ref is recorded on ``TaskHostBound`` so a
-        resumed / reclaimed session — even on another host — reconnects to the
-        SAME container. ``None`` on the local path (no sandbox configured).
-        Addressing only — the API key rides on the wire (D5)."""
+        Called eagerly at ``driver.seed_start`` (which pre-mints ``root_task_id``
+        so the container is keyed by the root task id). The provider builds a FRESH
+        container mounting ``workspace`` (the session's host workspace path) and the
+        fixed skills mounts; the returned ``"{base_url}#{sandbox_id}"`` ref is
+        recorded on ``TaskHostBound`` so a resumed / reclaimed session — even on
+        another host — reconnects to the SAME container. ``None`` on the local path
+        (no sandbox configured). Addressing only — the API key rides on the wire."""
         if self._sandbox is None:
             return None
-        # Execution-tier opt-out (D-C): a per-session policy may decline a
-        # container for THIS session even when a provider is configured. ``False``
-        # ⇒ no ref recorded ⇒ the build falls back to ``LocalExecEnv`` (the
-        # ``local`` tier). ``None`` policy = provision as before.
+        # Execution-tier opt-out: a per-session policy may decline a container for
+        # THIS session even when a provider is configured. ``False`` ⇒ no ref
+        # recorded ⇒ the build falls back to ``LocalExecEnv`` (the ``local`` tier).
         if self.sandbox_policy is not None and not self.sandbox_policy(
             root_task_id, workspace
         ):
@@ -983,19 +921,18 @@ class SdkHost(GenericEngineResolver):
     ) -> Optional[tuple[ExecEnv, Path]]:
         """The ``(backend, container root)`` for a bound ref, or ``None``.
 
-        ``None`` (a local session, or no host sandbox) means "act against the
-        host filesystem as before" — the driver keeps its byte-identical pathlib
-        path (the rewind restore, T7). When a sandbox session recorded an
-        ``exec_env_ref`` and this host has a sandbox, returns the container
-        backend + its lexical root, reconnecting to the recorded container by
-        address (creds from this host's env, D5)."""
+        ``None`` (a local session, or no host sandbox) means "act against the host
+        filesystem" — the driver keeps its pathlib path (the rewind restore). When
+        a sandbox session recorded an ``exec_env_ref`` and this host has a sandbox,
+        returns the container backend + its lexical root, reconnecting to the
+        recorded container by address (creds from this host's env)."""
         if self._sandbox is None or not exec_env_ref:
             return None
         backend, workdir = self._sandbox.resolve(exec_env_ref)
         return (backend, Path(workdir))
 
     def release_exec_env(self, root_task_id: str) -> None:
-        """Tear down a session's container at its root-task terminal (D4).
+        """Tear down a session's container at its root-task terminal.
 
         Idempotent; a no-op on the local path (no manager) or for a
         ``root_task_id`` that never allocated (a subtask, or a non-sandbox
@@ -1008,7 +945,7 @@ class SdkHost(GenericEngineResolver):
         """Reap every still-open session container (if any). Idempotent; safe on
         the local path (no manager ⇒ no-op). The Client calls this on shutdown so
         no container outlives the process — the backstop for interactive sessions
-        that rest at ``suspended`` and never reach a root terminal (D4)."""
+        that rest at ``suspended`` and never reach a root terminal."""
         if self._sandbox is not None:
             self._sandbox.teardown()
 
@@ -1057,12 +994,12 @@ class SdkHost(GenericEngineResolver):
     def kill_background_shells(self, root_task_id: str) -> list[Any]:
         """Human emergency-stop — kill ALL background jobs of one session.
 
-        The control-plane ``cancel`` (and issue 04's session-close
-        cascade) call this so a cancelled / closed conversation does not leave
-        its long-running ``shell_run(background)`` processes orphaned. Reuses the
-        ``ProcessRegistry`` per-job kill primitive (``kill_root_task`` → SIGTERM→
-        SIGKILL per job; the watchers reap + record ``BackgroundShellKilled``).
-        Safe no-op when the registry is unbuilt (returns ``[]``)."""
+        The control-plane ``cancel`` (and the session-close cascade) call this so
+        a cancelled / closed conversation does not leave its long-running
+        ``shell_run(background)`` processes orphaned. Reuses the ``ProcessRegistry``
+        per-job kill primitive (``kill_root_task`` → SIGTERM → SIGKILL per job; the
+        watchers reap + record ``BackgroundShellKilled``). Safe no-op when the
+        registry is unbuilt (returns ``[]``)."""
         registry = self._process_registry
         if registry is None:
             return []
@@ -1119,7 +1056,7 @@ class SdkHost(GenericEngineResolver):
     ) -> None:
         """ProcessRegistry watcher hook — project a shell exit, hand it to delivery.
 
-        Mechanism C. Runs on the watcher's daemon thread, so it MUST NOT block:
+        Runs on the watcher's daemon thread, so it MUST NOT block:
         :meth:`BackgroundDelivery.on_exit` spawns the drive thread and returns at
         once. The shell notice rides a pointer (``summary`` + the final
         :class:`ContentRef` + the ``job_id`` the model can ``shell_poll``); no
@@ -1181,14 +1118,13 @@ class SdkHost(GenericEngineResolver):
     ) -> None:
         """Registry deliver hook — project a finished child, hand it to delivery.
 
-        Mechanism C, mirroring :meth:`_on_background_exit`. Runs on the executor
-        worker (the drive's done-callback), so it MUST NOT block:
-        :meth:`BackgroundDelivery.on_exit` spawns the drive thread. The
-        projection reads the child's REAL terminal from its own EventLog and
-        dereferences its result into an inlined notice
-        (:meth:`_background_subagent_result`); it runs ONCE on the delivery
-        thread (not the retry loop) and returns ``None`` for a cancelled child
-        (session teardown — nothing to push)."""
+        Mirroring :meth:`_on_background_exit`. Runs on the executor worker (the
+        drive's done-callback), so it MUST NOT block:
+        :meth:`BackgroundDelivery.on_exit` spawns the drive thread. The projection
+        reads the child's REAL terminal from its own EventLog and dereferences its
+        result into an inlined notice (:meth:`_background_subagent_result`); it runs
+        ONCE on the delivery thread (not the retry loop) and returns ``None`` for a
+        cancelled child (session teardown — nothing to push)."""
 
         def _plan() -> Optional[DeliverFn]:
             result = self._background_subagent_result(child_task_id)
@@ -1279,27 +1215,25 @@ class SdkHost(GenericEngineResolver):
 
     @property
     def default_provider_instance(self) -> LLMProvider:
-        """The host default provider instance (back-compat single-provider read).
+        """The host default provider instance (single-provider read).
 
-        After ``provider`` (single instance) folds into the
-        ``providers`` table, this accessor returns the **default** provider
-        instance from the folded table — a stable entry point for readers that
-        care only about a single provider. ``_build_engine`` goes through
-        :meth:`_provider_for` to fetch the instance by bound name, not this.
-        (The name avoids the convenience input field ``provider``.)
+        After ``provider`` (single instance) folds into the ``providers`` table,
+        this accessor returns the **default** provider instance from the folded
+        table — a stable entry point for readers that care only about a single
+        provider. ``_build_engine`` goes through :meth:`_provider_for` to fetch the
+        instance by bound name, not this.
         """
         return self.providers[self.default_provider]
 
     def _provider_for(self, name: Optional[str]) -> LLMProvider:
         """Resolve a bound provider **name** → its instance.
 
-        ``None`` (no provider bound — an old recording, or a turn that only
-        switched the model) ⇒ the host :attr:`default_provider`, byte-identical
-        to the pre-I4 single-provider path. The driver/server validated the
-        ``(provider, model)`` pair against this same registry *before* any
-        durable write, so a bound name is always a configured key here.
+        ``None`` (no provider bound — a recording, or a turn that only switched the
+        model) ⇒ the host :attr:`default_provider`. The driver/server validated the
+        ``(provider, model)`` pair against this same registry *before* any durable
+        write, so a bound name is always a configured key here.
 
-        #7 resume fallback: if the name is non-empty but not found in the current
+        Resume fallback: if the name is non-empty but not found in the current
         providers table (a resume / trimmed host may not have configured the
         secondary provider used at recording time), fall back to the default
         provider rather than raising KeyError.
@@ -1325,9 +1259,7 @@ class SdkHost(GenericEngineResolver):
     # -- three resolver seams ----------------------------------------------
 
     def _lookup_agent(self, name: str, *, task_id: str) -> AgentSpec:
-        # Historical recordings +
-        # product-facing aliases: map a
-        # legacy recording name (e.g. "default") to the canonical registered name
+        # Map a recording name (e.g. "default") to the canonical registered name
         # (e.g. "main"). A name not in aliases passes through unchanged.
         name = self.aliases.get(name, name)
         try:
@@ -1350,35 +1282,32 @@ class SdkHost(GenericEngineResolver):
 
         Resolve each enabled **alias** to its host-side server spec via the
         product-injected :attr:`mcp_server_resolver` (the SDK never holds the
-        config store — credentials stay product-side, D3), then connect them all
-        with :func:`noeta.tools.mcp.build_mcp_tools` and return the discovered
-        ``mcp__{alias}__{tool}`` ``McpTool`` dict. Aliases are sorted (D7
-        determinism: alias alphabetical order → tool-name order inside
-        ``build_mcp_tools``), so the tool dict order → schema order → stable hash
-        is reproducible.
+        config store — credentials stay product-side), then connect them all with
+        :func:`noeta.tools.mcp.build_mcp_tools` and return the discovered
+        ``mcp__{alias}__{tool}`` ``McpTool`` dict. Aliases are sorted (alias
+        alphabetical order → tool-name order inside ``build_mcp_tools``), so the
+        tool dict order → schema order → stable hash is reproducible.
 
-        **D7 connection lifecycle** — this runs once per BUILT Engine (the
-        resolver caches on the 7-tuple incl. ``mcp_aliases``), so the connect +
-        the tool-set freeze happen exactly once at task start, never mid-turn.
-        Failure is **skip-on-failure (option B)**: one enabled server that cannot
-        connect / handshake / ``tools/list`` is dropped, recorded as one
-        ``McpServerSkipped`` observer event on ``task_id``'s stream (the
-        front-end surface), and the build continues with the surviving servers'
-        tools — a single bad connector never sinks the task. The alias is a clean
-        name; no url/token ever enters the event (D3).
+        Connection lifecycle: this runs once per BUILT Engine (the resolver caches
+        on the cache-key tuple incl. ``mcp_aliases``), so the connect + the tool-set
+        freeze happen exactly once at task start, never mid-turn. Failure is
+        skip-on-failure: one enabled server that cannot connect / handshake /
+        ``tools/list`` is dropped, recorded as one ``McpServerSkipped`` observer
+        event on ``task_id``'s stream, and the build continues with the surviving
+        servers' tools — a single bad connector never sinks the task. The alias is a
+        clean name; no url/token ever enters the event.
 
         Returns ``None`` when no live MCP tools resulted — empty aliases, no
         resolver wired, no alias resolved to a spec, OR every server was skipped —
         so the caller passes ``None`` as ``mcp_tools_override`` and the builder
-        merges no MCP tools (tool set unchanged from pre-0042; resume passes empty
-        aliases and so never reaches here). A returned dict takes the live override
-        path.
+        merges no MCP tools (resume passes empty aliases and so never reaches here).
+        A returned dict takes the live override path.
         """
-        # Reap any clients staged by a prior build that never reached the cache
-        # put (so a no-MCP build can never adopt stale clients, and an orphaned
-        # stdio subprocess is shut down rather than dropped). The cache
-        # consumes-and-clears on each ``__setitem__``; this guards the rare
-        # build-without-put path (e.g. an exception after staging).
+        # Reap any clients staged by a prior build that never reached the cache put
+        # (so a no-MCP build can never adopt stale clients, and an orphaned stdio
+        # subprocess is shut down rather than dropped). The cache consumes-and-clears
+        # on each ``__setitem__``; this guards the rare build-without-put path (e.g.
+        # an exception after staging).
         self._discard_staged_mcp_clients()
         resolver = self.mcp_server_resolver
         if not mcp_aliases or resolver is None:
@@ -1390,16 +1319,15 @@ class SdkHost(GenericEngineResolver):
                 specs.append(spec)
         if not specs:
             return None
-        # Record the per-task MCP provenance (enabled aliases +
-        # tool subsets, names only, NO credentials) the moment we know which
-        # servers resolved, BEFORE the connect (so a server that then fails to
-        # connect — and gets a McpServerSkipped — still shows in the provenance as
-        # "enabled this run"). Emitted in the pre-loop window (resolve_engine runs
-        # before the first step), origin observer, so the fold rebuilds the same
-        # GovernanceState.mcp_provenance from the event on resume.
-        # Only on the live connect path (task_id present); the seed/by-name build
-        # passes task_id=None and never reaches here, and resume passes empty
-        # aliases — so no provenance event, identical to pre-0042.
+        # Record the per-task MCP provenance (enabled aliases + tool subsets, names
+        # only, NO credentials) the moment we know which servers resolved, BEFORE
+        # the connect (so a server that then fails to connect — and gets a
+        # McpServerSkipped — still shows in the provenance as "enabled this run").
+        # Emitted in the pre-loop window (resolve_engine runs before the first step),
+        # origin observer, so the fold rebuilds the same GovernanceState.mcp_provenance
+        # from the event on resume. Only on the live connect path (task_id present);
+        # the seed/by-name build passes task_id=None and never reaches here, and
+        # resume passes empty aliases.
         if task_id:
             self.event_log.system_emit(
                 task_id=task_id,
@@ -1414,15 +1342,15 @@ class SdkHost(GenericEngineResolver):
             tuple(specs), http_post=self.mcp_http_post, skip_on_failure=True
         )
         # Stage the live clients so the engine cache adopts them when the base
-        # resolver puts the just-built Engine (``self._engines[key] = engine``),
-        # and shuts them down when that Engine is evicted from the LRU. Without
-        # this the McpStdioClient subprocess + its fds would leak on eviction.
+        # resolver puts the just-built Engine (``self._engines[key] = engine``), and
+        # shuts them down when that Engine is evicted from the LRU. Without this the
+        # McpStdioClient subprocess + its fds would leak on eviction.
         self._stage_mcp_clients(clients)
-        # D7: record one observer event per skipped server (front-end surface +
-        # audit trail). Only possible once the task exists; the seed/by-name build
-        # passes ``task_id=None`` and never connects MCP (see driver.start), so a
-        # skip without a task_id is not reachable on the live path. Defensive:
-        # only emit when we have a stream to write to.
+        # Record one observer event per skipped server (front-end surface + audit
+        # trail). Only possible once the task exists; the seed/by-name build passes
+        # ``task_id=None`` and never connects MCP, so a skip without a task_id is not
+        # reachable on the live path. Defensive: only emit when we have a stream to
+        # write to.
         if skipped and task_id:
             for skip in skipped:
                 self.event_log.system_emit(
@@ -1496,67 +1424,61 @@ class SdkHost(GenericEngineResolver):
         structured_output_schema: Optional[dict[str, Any]] = None,
     ) -> Engine:
         spec = agent
-        # ``workspace`` is now the per-session workspace **absolute
-        # path** (welded into durable state, expanded by the agent layer; the
-        # driver receives only the final path). ``None`` (no session workspace)
-        # keeps the host-fixed default dir, byte-identical to the
-        # single-workspace path.
+        # ``workspace`` is the per-session workspace **absolute path** (welded into
+        # durable state, expanded by the agent layer; the driver receives only the
+        # final path). ``None`` (no session workspace) keeps the host-fixed default
+        # dir.
         workspace_dir = Path(workspace) if workspace else self.workspace_dir
-        # Sandbox backend (T5): when the host configured one, every session's fs
-        # / shell IO routes into the container instead of the host. The backend
-        # is fed to ``build_session_inputs`` (which then builds the pack's tools
-        # against it AND swaps the host ``WorkspaceRoot`` for a lexical container
-        # root, D7); the host ``workspace_dir`` is meaningless inside the
-        # container, so it is replaced by the container's working directory. The
-        # SAME backend is handed to the seed build (``task_id is None``) and every
-        # driving turn — v1 is one container per host (see SandboxExecEnvManager),
-        # so this is both correct and what keeps the seed/drive Engine-cache
-        # entry from silently pinning the local backend. Absent a manager, this is
-        # a no-op and the local path is byte-identical.
+        # Sandbox backend: when the host configured one, every session's fs / shell
+        # IO routes into the container instead of the host. The backend is fed to
+        # ``build_session_inputs`` (which builds the pack's tools against it AND
+        # swaps the host ``WorkspaceRoot`` for a lexical container root); the host
+        # ``workspace_dir`` is meaningless inside the container, so it is replaced by
+        # the container's working directory. The SAME backend is handed to the seed
+        # build (``task_id is None``) and every driving turn, which keeps the
+        # seed/drive Engine-cache entry from silently pinning the local backend.
+        # Absent a manager, this is a no-op and the local path is unaffected.
         bound_exec_env: Optional[ExecEnv] = None
         bound_exec_env_ref = exec_env_ref
         if self._sandbox is not None and not bound_exec_env_ref:
-            # No session-welded ref: the attach path falls back to its single
-            # shared container (``default_ref``, v1 behaviour); the per-session
-            # provisioning path has no default (``None``) so a ref-less build
-            # keeps the local backend — a real per-session build always carries
-            # the ref the driver allocated.
+            # No session-welded ref: the attach path falls back to its single shared
+            # container (``default_ref``); the per-session provisioning path has no
+            # default (``None``) so a ref-less build keeps the local backend — a real
+            # per-session build always carries the ref the driver allocated.
             bound_exec_env_ref = self._sandbox.default_ref
         if self._sandbox is not None and bound_exec_env_ref:
             # A session bound to a specific container (``exec_env_ref``, the
             # welded/folded ``"{base_url}#{sandbox_id}"``) resolves THAT one — the
             # multi-machine reconnect criterion: a task reclaimed on another host
-            # reads its recorded ref, not this host's config default, and the
-            # manager reconnects via ``provider.attach`` when the handle is not
-            # local. The API key comes from THIS host's env (D5), never the ref.
+            # reads its recorded ref, not this host's config default, and the manager
+            # reconnects via ``provider.attach`` when the handle is not local. The API
+            # key comes from THIS host's env, never the ref.
             bound_exec_env, container_workdir = self._sandbox.resolve(
                 bound_exec_env_ref
             )
             workspace_dir = Path(container_workdir)
-        # Browser backend (sandbox-only, B5): when this agent opens the browser
-        # capability AND the session is bound to a container, vend the
-        # per-session browser backend off the SAME sandbox handle ``resolve``
-        # used. Gated on the capability so a non-browser session never builds it
-        # (and its tool set / stable prefix are untouched); ``None`` on every
-        # local / non-browser / no-sandbox path keeps the tool set byte-identical.
+        # Browser backend (sandbox-only): when this agent opens the browser
+        # capability AND the session is bound to a container, vend the per-session
+        # browser backend off the SAME sandbox handle ``resolve`` used. Gated on the
+        # capability so a non-browser session never builds it (and its tool set /
+        # stable prefix are untouched); ``None`` on every local / non-browser /
+        # no-sandbox path.
         browser_enabled = agent_activates(spec, "browser")
         browser_backend = None
         if browser_enabled and self._sandbox is not None and bound_exec_env_ref:
             browser_backend = self._sandbox.resolve_browser(bound_exec_env_ref)
-        # D3: only a custom tool explicitly named by spec.tools enters the engine.
+        # Only a custom tool explicitly named by spec.tools enters the engine.
         spec_tool_names = frozenset(r.name for r in spec.tools)
         filtered_custom = {
             n: t for n, t in self.custom_tools.items() if n in spec_tool_names
         }
-        # Derive the approval gate set from the three permission modes.
-        # A per-turn ``permission_mode`` (the frontend
-        # selector, threaded in NON-durably) has the HIGHEST priority — it must
-        # win even over an explicit host ``require_approval_tools`` (the code
-        # product wires ``()`` by default), else the per-session switch is a
-        # no-op. ``None`` (no per-turn selection: resume / daemon / CLI / every
-        # pre-#4 path) falls through to the unchanged precedence below, so those
-        # paths behave exactly as before.
-        # An explicit require_approval_tools wins over the host permission_mode.
+        # Derive the approval gate set from the permission mode. A per-turn
+        # ``permission_mode`` (the frontend selector, threaded in NON-durably) has
+        # the HIGHEST priority — it must win even over an explicit host
+        # ``require_approval_tools``, else the per-session switch is a no-op.
+        # ``None`` (no per-turn selection: resume / daemon / CLI) falls through to
+        # the precedence below. An explicit require_approval_tools wins over the
+        # host permission_mode.
         if permission_mode is not None:
             require_approval_tools = _approval_set_for(permission_mode, spec.tools)
         elif self.require_approval_tools is not None:
@@ -1587,24 +1509,23 @@ class SdkHost(GenericEngineResolver):
                     tuple(self.shell_allowlist)
                     # Sandbox mode reads the project allowlist from INSIDE the
                     # container (``workspace_dir`` is the container workdir here);
-                    # ``bound_exec_env`` is ``None`` on the local path, so the
-                    # host read is byte-identical.
+                    # ``bound_exec_env`` is ``None`` on the local path.
                     + load_project_shell_allowlist(
                         workspace_dir, exec_env=bound_exec_env
                     ),
-                    # The curated base is the fs built-in's table (phase 2c) —
-                    # the same rules the shell_run tool enforces.
+                    # The curated base is the fs built-in's table — the same rules
+                    # the shell_run tool enforces.
                     base_rules=default_shell_rules(),
                 )
                 shell_approval_predicate = _make_shell_approval_predicate(
                     effective_rules
                 )
-                # The predicate owns shell_run's gate now; drop it from the
-                # static set so an allowlisted command is NOT also force-gated.
+                # The predicate owns shell_run's gate; drop it from the static set
+                # so an allowlisted command is NOT also force-gated.
                 require_approval_tools = tuple(
                     n for n in require_approval_tools if n != "shell_run"
                 )
-        # Browser tools (B7) are flag-gated (never in ``spec.tools``), so
+        # Browser tools are flag-gated (never in ``spec.tools``), so
         # ``_approval_set_for`` never sees them. Force-gate the whole high-risk
         # browser pack here when the capability is enabled, unless the session
         # bypasses permissions. ``build_session_inputs`` filters
@@ -1621,21 +1542,19 @@ class SdkHost(GenericEngineResolver):
         )
         # Resolve the turn's enabled MCP aliases → host-side
         # server specs (with url/credentials) → LIVE ``McpTool``s, connecting each
-        # server now (deterministic alias-sorted order, following F2's
+        # server now (deterministic alias-sorted order, following the
         # fs→script→MCP→control append order). The alias list arrived NON-durably
-        # (no url/token in any request,
-        # D3); the specs come from the product-injected ``mcp_server_resolver`` (the
-        # SDK never holds the config store). ``()`` aliases / ``None`` resolver ⇒
-        # ``build_mcp_tools(())`` builds nothing (tool set unchanged from pre-0042). The
-        # connected clients are owned by the cached Engine for this session
-        # (mirroring the CLI product-runner path, which holds them for the
-        # session's life). R-1 keeps resume reconnect-free: the recorded tool spec
-        # is the durable truth, and the resume path passes empty aliases.
+        # (no url/token in any request); the specs come from the product-injected
+        # ``mcp_server_resolver`` (the SDK never holds the config store). ``()``
+        # aliases / ``None`` resolver ⇒ ``build_mcp_tools(())`` builds nothing. The
+        # connected clients are owned by the cached Engine for this session. Resume
+        # stays reconnect-free: the recorded tool spec is the durable truth, and the
+        # resume path passes empty aliases.
         mcp_tools_override = self._resolve_live_mcp_tools(mcp_aliases, task_id=task_id)
         memory_override = self._memory_root_override(task_id)
-        # The named backend bag (phase 3): live backing objects for the
-        # capability packs, keyed by the plugins' own names. Absent names
-        # mean "no live backing" — the pack contributes nothing.
+        # The named backend bag: live backing objects for the capability packs,
+        # keyed by the plugins' own names. Absent names mean "no live backing" —
+        # the pack contributes nothing.
         pack_backends: dict[str, object] = {}
         if browser_backend is not None:
             pack_backends["browser"] = browser_backend
@@ -1643,9 +1562,8 @@ class SdkHost(GenericEngineResolver):
             pack_backends["app_preview"] = self.app_gateway
         inputs = build_session_inputs(
             session_packs=self._session_packs(agent.name),
-            # Control-tool-surface S2: the built-in + this agent's activated
-            # control tools, merged with the kernel's internal entries in the
-            # builder's mount loop.
+            # The built-in + this agent's activated control tools, merged with the
+            # kernel's internal entries in the builder's mount loop.
             control_tools=self._control_tools(agent.name),
             base_reminders=default_reminder_specs(),
             guards_factory=default_guards_factory(),
@@ -1656,52 +1574,44 @@ class SdkHost(GenericEngineResolver):
             content_store=self.content_store,
             model=model,
             compaction=derive_compaction_config(model),
-            # The catalog's vendor-family judgment (microkernel M2 — the
-            # kernel holds no model opinions); the edit-tool mutex table now
-            # lives entirely inside the fs pack (phase 3).
+            # The catalog's vendor-family judgment (the kernel holds no model
+            # opinions); the edit-tool mutex table lives inside the fs pack.
             provider_family=provider_family(model),
-            # Session-level budget override; None uses today's spec-derived path.
+            # Session-level budget override; None uses the spec-derived path.
             budget=self.budget
             if self.budget is not None
             else self._budget_for(spec.default_budget),
             allowed_subtask_agents=allowed_subtask_agents,
             max_steps=self.max_steps,
-            # The write/shell safety inputs ride ``plugin_config["fs"]`` below
-            # (mechanism-slots-only context, spec §4.2) — the fs pack is their
-            # sole consumer, so they left the kernel signature.
+            # The write/shell safety inputs ride ``plugin_config["fs"]`` below — the
+            # fs pack is their sole consumer, so they left the kernel signature.
             shell_approval_predicate=shell_approval_predicate,
-            # Per-helper structured output (port of the deleted runner's
-            # ``_build_child_engine`` wiring): a workflow helper spawned via
-            # ``agent(goal, schema=...)`` mounts the ``structured_output``
-            # control schema (its ``parameters`` = the declared JSON Schema).
-            # ``None`` (every non-helper build) keeps the tool set + View
-            # stable hash byte-identical.
+            # Per-helper structured output: a workflow helper spawned via
+            # ``agent(goal, schema=...)`` mounts the ``structured_output`` control
+            # schema (its ``parameters`` = the declared JSON Schema). ``None`` (every
+            # non-helper build) leaves the tool set + View stable hash unchanged.
             structured_output_schema=structured_output_schema,
-            # When live MCP tools were resolved for this turn, they are passed as
-            # the override. ``None`` override ⇒ the builder merges no MCP tools —
-            # so resume, which passes empty aliases, gets the same tool set as
-            # before 0042.
+            # When live MCP tools were resolved for this turn, they are passed as the
+            # override. ``None`` override ⇒ the builder merges no MCP tools — so
+            # resume, which passes empty aliases, gets the same tool set.
             mcp_tools_override=mcp_tools_override,
             custom_tools=filtered_custom,
-            # The sandbox backend for this session's fs / shell tools (T5).
-            # ``None`` (no host sandbox) ⇒ the builder uses ``LocalExecEnv`` and
-            # the host ``WorkspaceRoot`` — byte-identical to the local path.
+            # The sandbox backend for this session's fs / shell tools. ``None`` (no
+            # host sandbox) ⇒ the builder uses ``LocalExecEnv`` and the host
+            # ``WorkspaceRoot``.
             exec_env=bound_exec_env,
-            # The backend bag + this agent's effective capability flags: the
-            # ONE generic bag both the session packs and the control-tool
-            # mounts self-gate on (the browser pack merges only with a live
-            # ``"browser"`` backend AND the flag; the app pack only with a live
-            # ``"app_preview"`` gateway; each control-tool mount reads its own
-            # name). The host computes every already-ANDed value here — the
-            # SDK host treats the spec's activation tuple as the source of
-            # truth (the noeta-agent product reads its own config instead,
-            # so migrating a custom spec across hosts requires aligning the
-            # two by hand). ``workflow`` mounts run_workflow only when the
-            # host enabled workflow AND this agent can delegate: a workflow's
-            # agent()/parallel() spawn real sub-agents into the same
-            # delegation allow-list, so gating on delegation keeps the tool
-            # surface honest. The reserved __workflow__ child is intercepted
-            # in _build_orchestration_engine, so it never reaches this builder.
+            # The backend bag + this agent's effective capability flags: the ONE
+            # generic bag both the session packs and the control-tool mounts
+            # self-gate on (the browser pack merges only with a live ``"browser"``
+            # backend AND the flag; the app pack only with a live ``"app_preview"``
+            # gateway; each control-tool mount reads its own name). The host computes
+            # every already-ANDed value here — the SDK host treats the spec's
+            # activation tuple as the source of truth. ``workflow`` mounts
+            # run_workflow only when the host enabled workflow AND this agent can
+            # delegate: a workflow's agent()/parallel() spawn real sub-agents into
+            # the same delegation allow-list, so gating on delegation keeps the tool
+            # surface honest. The reserved __workflow__ child is intercepted in
+            # _build_orchestration_engine, so it never reaches this builder.
             backends=pack_backends,
             capability_flags={
                 "browser": browser_enabled,
@@ -1712,9 +1622,9 @@ class SdkHost(GenericEngineResolver):
                 "skill_invocation": agent_activates(spec, "skill_invocation"),
                 "workflow": self.workflow_allowed and delegation_enabled,
             },
-            # The per-plugin config bag (phase 3): each pack parses only its
-            # own entry. The per-task memory root (issue #53) rides the
-            # top-precedence ``memory_dir`` slot so the builder's tool pack +
+            # The per-plugin config bag: each pack parses only its own entry. The
+            # per-task memory root rides the top-precedence ``memory_dir`` slot so
+            # the builder's tool pack +
             # resident index target that tenant's store; ``None`` override
             # (single-tenant / resolver fallback) keeps the host fields.
             plugin_config=self._plugin_config(
@@ -1728,30 +1638,28 @@ class SdkHost(GenericEngineResolver):
             repetition_window=self.repetition_window,
             require_approval_tools=require_approval_tools,
             subtask_agent_directory=directory,
-            # Wiring-only LLM controls: session-wide override propagated
-            # to every LLMRequest the ReActPolicy builds.
+            # Wiring-only LLM controls: session-wide override propagated to every
+            # LLMRequest the ReActPolicy builds.
             output_schema=self.output_schema,
             thinking=self.thinking,
             effort=effort if effort is not None else self.effort,
-            # Microcompact — engine-level inline truncation cap.
+            # Engine-level inline truncation cap.
             tool_output_inline_limit=self.tool_output_inline_limit,
-            # SDK Options
-            # extension points. Fed to live + resume from the same host fields.
+            # SDK Options extension points. Fed to live + resume from the same host
+            # fields.
             policy_factory_override=self.policy_override,
             extra_guards=self.extra_guards,
             # Host-wide channels (Options.content_channels) plus the ones this
-            # agent's activated plugins contribute (D6). ``()`` for both ⇒ the
-            # built-in resident layout, byte-identical.
+            # agent's activated plugins contribute.
             extra_content_kinds=self.extra_content_kinds
             + tuple(self.activated_content_kinds.get(agent.name, ())),
-            # Compose-time reminders this agent's activated plugins contribute
-            # (D8, track B), interleaved by priority with the built-in three.
+            # Compose-time reminders this agent's activated plugins contribute,
+            # interleaved by priority with the built-in three.
             extra_reminders=tuple(self.extra_reminders.get(agent.name, ())),
         )
-        # Route to the bound provider's adapter instance
-        # (``None`` ⇒ host default), so a session on a different provider runs
-        # its LLM round-trips on that adapter — the registry, not a host-fixed
-        # single instance, is the source.
+        # Route to the bound provider's adapter instance (``None`` ⇒ host default),
+        # so a session on a different provider runs its LLM round-trips on that
+        # adapter — the registry, not a host-fixed single instance, is the source.
         llm = RuntimeLLMClient(
             provider=self._provider_for(provider),
             event_log=self.event_log,
@@ -1763,12 +1671,12 @@ class SdkHost(GenericEngineResolver):
         policy: Policy = inputs.policy_factory(llm)
         if policy_wrapper is not None:
             policy = policy_wrapper(policy)
-        # Per-helper structured output: the "structured receipt"
-        # wrapper intercepts the helper's decisions — a ``structured_output``
-        # call becomes the helper's final answer; an end_turn without one is
-        # nudged (at most twice), then failed. Wrapped OUTERMOST; only the
-        # subtask drain ever passes a schema, and a child engine never carries
-        # the multi-turn ``policy_wrapper``, so the two wrappers never stack.
+        # Per-helper structured output: the "structured receipt" wrapper intercepts
+        # the helper's decisions — a ``structured_output`` call becomes the helper's
+        # final answer; an end_turn without one is nudged (at most twice), then
+        # failed. Wrapped OUTERMOST; only the subtask drain ever passes a schema, and
+        # a child engine never carries the multi-turn ``policy_wrapper``, so the two
+        # wrappers never stack.
         if structured_output_schema is not None:
             policy = react_impl().StructuredOutputPolicy(
                 inner=policy, schema=structured_output_schema
@@ -1780,51 +1688,47 @@ class SdkHost(GenericEngineResolver):
             policy=policy,
             tools=inputs.tools,
             hooks=inputs.hooks,
-            # Generation switch: mid-loop activations
-            # emit the generic ContextContentRecorded (kind="skill",
-            # policy="pinned") through the registry-derived generic seam.
-            # The pre-loop path (activate_skills helper) fires its own
-            # generic event before the patch; the engine guards against
-            # first-only re-emission so exactly one event per (task, skill).
+            # Mid-loop activations emit the generic ContextContentRecorded
+            # (kind="skill", policy="pinned") through the registry-derived seam. The
+            # pre-loop path (activate_skills helper) fires its own generic event
+            # before the patch; the engine guards against first-only re-emission so
+            # exactly one event per (task, skill).
             content_hashes=inputs.content_hashes,
             tool_output_inline_limit=inputs.tool_output_inline_limit,
             # The host's background-shell registry, so a session's
             # ``shell_run(background=true)`` reaches it through the ToolContext.
             background_runner=self._process_registry,
-            # The host's per-turn file-checkpoint gate, so an AI
-            # ``edit`` / ``write`` stashes its rewind baseline.
+            # The host's per-turn file-checkpoint gate, so an AI ``edit`` / ``write``
+            # stashes its rewind baseline.
             file_checkpoint_registry=self._file_checkpoint,
-            # background sub-agent launch+capacity seam, wired ONLY on a
-            # top-level interactive Engine (``policy_wrapper`` is the multi-turn
-            # wrapper — present only there). A child engine / oneshot host gets
-            # ``None`` so ``spawn_subagent(background=True)`` degrades to the
-            # foreground barrier spawn — which is exactly the wanted "no nested
-            # background" behaviour (docs/adr/background-subagent.md).
+            # background sub-agent launch+capacity seam, wired ONLY on a top-level
+            # interactive Engine (``policy_wrapper`` is the multi-turn wrapper —
+            # present only there). A child engine / oneshot host gets ``None`` so
+            # ``spawn_subagent(background=True)`` degrades to the foreground barrier
+            # spawn — the wanted "no nested background" behaviour
+            # (docs/adr/background-subagent.md).
             background_subagent_launcher=(
                 self._background_subagents if policy_wrapper is not None else None
             ),
             # Anchored-content seams (docs/adr/anchored-content-placement.md):
-            # ``None`` unless the host armed ``instructions_discovery``, so
-            # every existing construction is byte-identical.
+            # ``None`` unless the host armed ``instructions_discovery``.
             content_discovery=inputs.content_discovery,
             content_preloader=inputs.content_preloader,
-            # The contributed pre-loop ``init`` hooks (spec §4.5): the driver
-            # reads them off this resolved Engine and records each pack's
-            # residents at seed time (the generic successor of the feature-named
-            # seed recorders). ``()`` when no pack activates a pre-loop resident.
+            # The contributed pre-loop ``init`` hooks: the driver reads them off this
+            # resolved Engine and records each pack's residents at seed time. ``()``
+            # when no pack activates a pre-loop resident.
             content_init_hooks=inputs.init_hooks,
-            # tool_result_transform stages (D9) for THIS agent — selected by the
-            # agent's name from the per-agent map the Client resolved from the
-            # activated plugin set. ``()`` for an agent that activated no
-            # transform-bearing plugin (byte-identical recording).
+            # tool_result_transform stages for THIS agent — selected by the agent's
+            # name from the per-agent map the Client resolved from the activated
+            # plugin set. ``()`` for an agent that activated no transform-bearing
+            # plugin.
             tool_result_transforms=tuple(
                 self.tool_result_transforms.get(agent.name, ())
             ),
-            # The ask answer codec (spec §4.3: the ask mount's typed
-            # ``answer_codec``, threaded through the builder) put on the Engine so
-            # the driver's ``answer`` path can decode a submitted answer.
-            # ``None`` for a session that did not mount ``ask_user_question`` —
-            # the driver then fails loudly on an answer.
+            # The ask answer codec (the ask mount's typed ``answer_codec``, threaded
+            # through the builder) put on the Engine so the driver's ``answer`` path
+            # can decode a submitted answer. ``None`` for a session that did not
+            # mount ``ask_user_question`` — the driver then fails loudly on an answer.
             answer_codec=inputs.answer_codec,
         )
 
@@ -1833,11 +1737,11 @@ class SdkHost(GenericEngineResolver):
     ) -> Engine:
         """Build the ``__workflow__`` child's Engine.
 
-        Mirrors the runner path's ``_build_orchestration_engine``: read the
-        script/args off the child's durable ``TaskCreated.inputs`` and build an
-        Engine whose Policy is :class:`OrchestrationPolicy`. Its ``agent()`` calls
-        delegate into ``allowed_subtask_agents`` (the inherited worker set, filtered
-        to roster names); ``workflow_enabled`` is OFF (no nested workflows, v1).
+        Reads the script/args off the child's durable ``TaskCreated.inputs`` and
+        builds an Engine whose Policy is :class:`OrchestrationPolicy`. Its
+        ``agent()`` calls delegate into ``allowed_subtask_agents`` (the inherited
+        worker set, filtered to roster names); ``workflow_enabled`` is OFF (no
+        nested workflows).
         """
         wf_inputs = self._read_task_inputs(task_id)
         script = str(wf_inputs.get("script", ""))
@@ -1847,9 +1751,9 @@ class SdkHost(GenericEngineResolver):
         directory = self._subagent_directory(known)
         inputs = build_session_inputs(
             session_packs=self._session_packs(),
-            # Control-tool-surface S2: the built-in control tools (no per-agent
-            # activation on the orchestration engine); ask/todo self-gate off
-            # below, so only delegation could mount when workflow enables it.
+            # The built-in control tools (no per-agent activation on the
+            # orchestration engine); ask/todo self-gate off below, so only
+            # delegation could mount when workflow enables it.
             control_tools=self._control_tools(),
             base_reminders=default_reminder_specs(),
             guards_factory=default_guards_factory(),
@@ -1867,15 +1771,15 @@ class SdkHost(GenericEngineResolver):
             allowed_subtask_agents=known,
             subtask_agent_directory=directory,
             max_steps=self.max_steps,
-            # Delegation only: the orchestration engine spawns workers but
-            # mounts no other control tool (no nested workflows in v1, and
-            # ask/todo/skill self-gate off on their absent flags).
+            # Delegation only: the orchestration engine spawns workers but mounts no
+            # other control tool (no nested workflows, and ask/todo/skill self-gate
+            # off on their absent flags).
             capability_flags={"delegation": True},
-            # The orchestration engine runs memory off (no "memory" flag) and
-            # keeps the host's fs/skills/instructions config through the same
-            # per-plugin bag as the session path.
-            # ``spec=None`` selects the reduced orchestration environment —
-            # see :meth:`_plugin_config` for what it deliberately omits.
+            # The orchestration engine runs memory off (no "memory" flag) and keeps
+            # the host's fs/skills/instructions config through the same per-plugin
+            # bag as the session path. ``spec=None`` selects the reduced
+            # orchestration environment — see :meth:`_plugin_config` for what it
+            # deliberately omits.
             plugin_config=self._plugin_config(shell_mode=self.shell_mode),
             tool_output_inline_limit=self.tool_output_inline_limit,
         )
@@ -1906,16 +1810,13 @@ class SdkHost(GenericEngineResolver):
     def workspace_dir_for(self, workspace: Optional[str]) -> Path:
         """Resolve a per-session workspace → fs root.
 
-        ``workspace`` is now the **absolute path** welded into durable state (see
-        ``TaskHostBoundPayload.workspace_dir``); this method simply converts it to
-        a ``Path``.  ``None`` (no session workspace bound, or an old
-        legacy name-style recording that folds to ``None`` per the D7 break) ⇒ the
-        host-fixed :attr:`workspace_dir`, byte-identical to the
-        single-workspace path.
+        ``workspace`` is the **absolute path** welded into durable state (see
+        ``TaskHostBoundPayload.workspace_dir``); this converts it to a ``Path``.
+        ``None`` (no session workspace bound) ⇒ the host-fixed
+        :attr:`workspace_dir`.
 
-        Called by product-layer callers (e.g. the HTTP approval handler) that
-        need the SAME fs root the engine used — now trivially ``Path(workspace)``
-        since the path is already absolute in durable state.
+        Called by product-layer callers (e.g. the HTTP approval handler) that need
+        the SAME fs root the engine used.
         """
         if not workspace:
             return self.workspace_dir
@@ -1923,7 +1824,7 @@ class SdkHost(GenericEngineResolver):
         if p.is_absolute():
             return p
         # Fallback for any residual non-absolute value: treat as host default
-        # (defensive; should not happen once the per-session workspace path is fully wired).
+        # (defensive; the per-session workspace path is always absolute).
         return self.workspace_dir
 
     def intake_reminder_providers(
@@ -1931,38 +1832,34 @@ class SdkHost(GenericEngineResolver):
     ) -> tuple[Any, ...]:
         """``agent``'s composed ``turn_intake`` providers — the ONE intake seam.
 
-        The driver asks for the FULL ordered tuple for a turn (D6/D7) and never
-        distinguishes one provider from another; the composition rule lives
-        HERE: the built-in memory auto-recall FIRST (its recorded position is
-        pinned by the characterization goldens), then the agent's activated
+        The driver asks for the FULL ordered tuple for a turn and never
+        distinguishes one provider from another; the composition rule lives HERE:
+        the built-in memory auto-recall FIRST (its recorded position is pinned by
+        the characterization goldens), then the agent's activated
         ``reminder_provider`` plugins in their ``(plugin, name)`` order. The
-        recording path runs them before the incoming turn enters the ledger
-        and records what they return as follow-up turns — retrieval happens on
-        the WRITE side (at recording time), never at compose time, so the
-        composer stays a pure function of folded state and resume folds the
-        reminders back without re-invoking a provider.
+        recording path runs them before the incoming turn enters the ledger and
+        records what they return as follow-up turns — retrieval happens on the WRITE
+        side (at recording time), never at compose time, so the composer stays a
+        pure function of folded state and resume folds the reminders back without
+        re-invoking a provider.
 
         The recall provider joins only for an agent whose spec activates
-        ``"memory"`` (only the ``main`` preset does), so a memory-off agent's
-        stream stays byte-identical. It arrives already bound to the live
-        store (the memory built-in's ``memory_reminder_provider`` — the kernel
-        driver never sees a store), and the store root resolution is the SAME
-        precedence :func:`~noeta.execution.builder.build_session_inputs` uses
-        for the tools + resident index (:meth:`memory_root` — the per-task
-        ``memory_root_resolver`` when it resolves, else ``memory_dir`` override
-        > ``global_memory_dir`` > the SDK global default). ``task_id`` is the
-        task the goal is being recorded on; the driver passes it so a
-        multi-tenant host recalls from that tenant's store (``None`` — a
-        caller without a task — keeps the host-level chain). The global
-        default is read late off the impl module (never from-imported) so a
-        test pinning ``noeta.builtins.memory.impl.store.DEFAULT_GLOBAL_MEMORY_DIR``
-        stays hermetic. An empty / missing directory is a valid empty store:
-        recall never hits, so the default flow pays zero bytes.
+        ``"memory"``. It arrives already bound to the live store (the memory
+        built-in's ``memory_reminder_provider`` — the kernel driver never sees a
+        store), and the store root resolution is the SAME precedence
+        :func:`~noeta.execution.builder.build_session_inputs` uses for the tools +
+        resident index (:meth:`memory_root`). ``task_id`` is the task the goal is
+        being recorded on; the driver passes it so a multi-tenant host recalls from
+        that tenant's store (``None`` — a caller without a task — keeps the
+        host-level chain). The global default is read late off the impl module
+        (never from-imported) so a test pinning
+        ``noeta.builtins.memory.impl.store.DEFAULT_GLOBAL_MEMORY_DIR`` stays
+        hermetic. An empty / missing directory is a valid empty store: recall never
+        hits, so the default flow pays zero bytes.
 
-        Empty for a memory-off agent that activated no provider-bearing
-        plugin, which is what keeps a plugin-free session's ledger
-        byte-identical. Read defensively by the driver (``getattr``), so a
-        host without this seam is a clean no-op.
+        Empty for a memory-off agent that activated no provider-bearing plugin. Read
+        defensively by the driver (``getattr``), so a host without this seam is a
+        clean no-op.
         """
         providers: list[Any] = []
         if agent == "unnamed" and self.unnamed_fallback is not None:
@@ -1979,15 +1876,14 @@ class SdkHost(GenericEngineResolver):
     def memory_root(self, task_id: Optional[str] = None) -> Path:
         """The resolved memory-store root directory (pure wiring, no IO).
 
-        ONE resolution chain for every consumer — the session builder's tool
-        pack + resident index, :meth:`intake_reminder_providers`, and a product's
-        host-side memory material (e.g. the consolidation debounce marker,
-        which must sit NEXT TO the store the memory tools mutate): the
-        per-task ``memory_root_resolver`` when set AND ``task_id`` is given AND
-        it returns a root, else ``memory_dir`` override > ``global_memory_dir``
-        > the SDK global default (``~/.noeta/memories``). ``task_id=None`` (or
-        no resolver — every single-tenant host) keeps the host-level chain
-        byte-identical. The default is read late off the impl's store module
+        ONE resolution chain for every consumer — the session builder's tool pack +
+        resident index, :meth:`intake_reminder_providers`, and a product's
+        host-side memory material (e.g. the consolidation debounce marker, which
+        must sit NEXT TO the store the memory tools mutate): the per-task
+        ``memory_root_resolver`` when set AND ``task_id`` is given AND it returns a
+        root, else ``memory_dir`` override > ``global_memory_dir`` > the SDK global
+        default (``~/.noeta/memories``). ``task_id=None`` (or no resolver) keeps the
+        host-level chain. The default is read late off the impl's store module
         (never from-imported) so a test pinning
         ``noeta.builtins.memory.impl.store.DEFAULT_GLOBAL_MEMORY_DIR`` stays
         hermetic.
@@ -2008,14 +1904,12 @@ class SdkHost(GenericEngineResolver):
         """The sorted ``(name, description)`` roster ``spawn_subagent`` renders.
 
         Surfaces the delegation-allowed children to the model inside the tool's
-        JSON schema. Returns ``()`` — the byte-identical legacy shape — for an
-        empty set, or when no child carries a description (a roster of blank
-        descriptions tells the model nothing and would only churn the schema).
-        A name that no longer resolves is skipped rather than failing the
-        build: a stale spec reference must not sink an otherwise-valid session.
-
-        Shared by the session and workflow-orchestration build paths, which
-        each carried their own copy of this loop.
+        JSON schema. Returns ``()`` for an empty set, or when no child carries a
+        description (a roster of blank descriptions tells the model nothing and
+        would only churn the schema). A name that no longer resolves is skipped
+        rather than failing the build: a stale spec reference must not sink an
+        otherwise-valid session. Shared by the session and workflow-orchestration
+        build paths.
         """
         if not agents:
             return ()
@@ -2039,27 +1933,20 @@ class SdkHost(GenericEngineResolver):
     ) -> dict[str, dict[str, Any]]:
         """The per-plugin config bag a build path hands the kernel builder.
 
-        Each pack parses only its own entry. The two build paths — a session
-        Engine and the ``__workflow__`` orchestration Engine — previously
-        hand-assembled two *different* bags at two call sites, and nothing in
-        the code said which differences were deliberate. They are now one
-        builder with ONE explicit switch, ``spec``:
+        Each pack parses only its own entry. The two build paths — a session Engine
+        and the ``__workflow__`` orchestration Engine — share ONE builder with ONE
+        explicit switch, ``spec``:
 
-        * ``spec`` given (a session) — the full environment: the agent's
-          ``write`` fence (``metadata["write_path_globs"]``), the host's
-          out-of-workspace ``write_roots`` grant, the full skills tier list,
-          read-triggered instruction discovery, and the ``memory`` entry.
-        * ``spec is None`` (the orchestration engine) — the **reduced**
-          environment. A workflow driver spawns workers and calls no fs tool
-          of consequence: it has no agent spec to read a write fence off, runs
-          memory off, and mounts neither the lower skills tiers nor
-          instruction discovery. Omitting an entry (rather than passing one
-          the pack would self-gate away) is what keeps its session
-          byte-identical to the pre-refactor build.
-
-        The reduced shape is preserved exactly as it was; making it a named
-        branch here is what turns "five silent omissions" into one documented
-        decision.
+        * ``spec`` given (a session) — the full environment: the agent's ``write``
+          fence (``metadata["write_path_globs"]``), the host's out-of-workspace
+          ``write_roots`` grant, the full skills tier list, read-triggered
+          instruction discovery, and the ``memory`` entry.
+        * ``spec is None`` (the orchestration engine) — the **reduced** environment.
+          A workflow driver spawns workers and calls no fs tool of consequence: it
+          has no agent spec to read a write fence off, runs memory off, and mounts
+          neither the lower skills tiers nor instruction discovery. Omitting an
+          entry (rather than passing one the pack would self-gate away) is what
+          keeps its session correct.
         """
         reduced = spec is None
         config: dict[str, dict[str, Any]] = {
@@ -2088,10 +1975,10 @@ class SdkHost(GenericEngineResolver):
         config["skills"]["builtin_skills_dirs"] = tuple(self.builtin_skills_dirs)
         config["skills"]["global_skills_dir"] = self.global_skills_dir
         config["workspace"]["instructions_discovery"] = self.instructions_discovery
-        # The per-task memory root (issue #53) rides the top-precedence
-        # ``memory_dir`` slot so the builder's tool pack + resident index
-        # target that tenant's store; ``None`` override (single-tenant /
-        # resolver fallback) keeps the host fields.
+        # The per-task memory root rides the top-precedence ``memory_dir`` slot so
+        # the builder's tool pack + resident index target that tenant's store;
+        # ``None`` override (single-tenant / resolver fallback) keeps the host
+        # fields.
         config["memory"] = {
             "memory_dir": (
                 memory_override if memory_override is not None else self.memory_dir
@@ -2101,19 +1988,16 @@ class SdkHost(GenericEngineResolver):
         return config
 
     def _session_packs(self, agent_name: Optional[str] = None) -> tuple[Any, ...]:
-        """The kernel builder's ``session_packs`` injection (phase 3).
+        """The kernel builder's ``session_packs`` injection.
 
-        The built-in manifests' ``session_pack`` contributions, loader-
-        resolved and ``(priority, plugin, name)``-ordered, plus — when
-        ``agent_name`` is given — the packs this agent's activated external
-        plugins contribute (the Client folds them into
-        ``activated_session_packs``). The kernel builder's generic loop
-        re-sorts the merged list by ``(priority, name)``, so an external pack
-        interleaves at its declared band. A disabled ``skills`` built-in
-        simply drops its pack — the honest expression the old
-        ``None``-factory special case routed through a kernel ``if``. Both
-        build paths (session + workflow orchestration) go through here so
-        they can never disagree about which packs are wired.
+        The built-in manifests' ``session_pack`` contributions, loader-resolved and
+        ``(priority, plugin, name)``-ordered, plus — when ``agent_name`` is given —
+        the packs this agent's activated external plugins contribute (the Client
+        folds them into ``activated_session_packs``). The kernel builder's generic
+        loop re-sorts the merged list by ``(priority, name)``, so an external pack
+        interleaves at its declared band. A disabled ``skills`` built-in simply
+        drops its pack. Both build paths (session + workflow orchestration) go
+        through here so they can never disagree about which packs are wired.
         """
         disabled = frozenset() if self.skills_enabled else frozenset({"skills"})
         packs: tuple[Any, ...] = default_session_packs(disabled=disabled)
@@ -2122,18 +2006,18 @@ class SdkHost(GenericEngineResolver):
         return packs
 
     def _control_tools(self, agent_name: Optional[str] = None) -> tuple[Any, ...]:
-        """The kernel builder's ``control_tools`` injection (control-tool-surface S2).
+        """The kernel builder's ``control_tools`` injection.
 
-        The built-in manifests' ``control_tool`` contributions
-        (``todo_write`` / ``ask_user_question`` / ``delegation``), loader-resolved
-        and ``(priority, plugin, name)``-ordered, plus — when ``agent_name`` is
-        given — the control tools this agent's activated external plugins
-        contribute (the Client folds them into ``activated_control_tools``). The
-        builder MERGES these with its remaining internal entries (skill /
-        run_workflow / structured_output) and re-sorts the union by
-        ``(priority, name)`` in the mount loop, so a contributed control tool
-        mounts at its declared band. Both build paths (session + workflow
-        orchestration) go through here so they can never disagree.
+        The built-in manifests' ``control_tool`` contributions (``todo_write`` /
+        ``ask_user_question`` / ``delegation``), loader-resolved and
+        ``(priority, plugin, name)``-ordered, plus — when ``agent_name`` is given —
+        the control tools this agent's activated external plugins contribute (the
+        Client folds them into ``activated_control_tools``). The builder MERGES
+        these with its remaining internal entries (skill / run_workflow /
+        structured_output) and re-sorts the union by ``(priority, name)`` in the
+        mount loop, so a contributed control tool mounts at its declared band. Both
+        build paths (session + workflow orchestration) go through here so they can
+        never disagree.
         """
         tools: tuple[Any, ...] = default_control_tools()
         if agent_name is not None:
@@ -2159,13 +2043,12 @@ class SdkHost(GenericEngineResolver):
         """Partition the Engine cache by resolved per-task memory root.
 
         The Engine cache key deliberately omits ``task_id`` (engines are shared
-        across tasks with equal bindings), but a memory-enabled Engine bakes
-        its :class:`MemoryStore` into the tool closures + resident index — so
-        two tasks whose ``memory_root_resolver`` maps to DIFFERENT roots must
-        never share a cached Engine (tenant A's store would serve tenant B).
-        Scope = the resolved override root; ``None`` (memory-off agent, no
-        resolver, no task id, or resolver fallback) keeps the shared slot,
-        byte-equal with the pre-resolver key.
+        across tasks with equal bindings), but a memory-enabled Engine bakes its
+        :class:`MemoryStore` into the tool closures + resident index — so two tasks
+        whose ``memory_root_resolver`` maps to DIFFERENT roots must never share a
+        cached Engine (tenant A's store would serve tenant B). Scope = the resolved
+        override root; ``None`` (memory-off agent, no resolver, no task id, or
+        resolver fallback) keeps the shared slot.
         """
         if not agent_activates(agent, "memory"):
             return None
@@ -2177,14 +2060,13 @@ class SdkHost(GenericEngineResolver):
 
         Read at ``InteractionDriver.seed_start`` (mirrors the ``getattr``-guarded
         seam pattern of :meth:`intake_reminder_providers`) so ``Options(skills=[...])``
-        pre-activates through the SAME pre-loop
-        ``TaskStatePatch(activate_skills=...)`` channel a slash-command-resolved
-        ``activations`` selector already rides — one activation mechanism, two
-        sources, merged + deduped at the call site. Uses the same alias /
-        ``"unnamed"`` fallback resolution :meth:`resolve_engine_for_agent` applies
-        (via :meth:`_lookup_agent`), so the returned names always match the spec
-        that actually built the seed Engine. An agent with no declared skills
-        (the default) returns ``()`` — byte-identical to the pre-fix no-op.
+        pre-activates through the SAME pre-loop ``TaskStatePatch(activate_skills=...)``
+        channel a slash-command-resolved ``activations`` selector rides — one
+        activation mechanism, two sources, merged + deduped at the call site. Uses
+        the same alias / ``"unnamed"`` fallback resolution
+        :meth:`resolve_engine_for_agent` applies (via :meth:`_lookup_agent`), so the
+        returned names always match the spec that built the seed Engine. An agent
+        with no declared skills returns ``()``.
         """
         if agent == "unnamed" and self.unnamed_fallback is not None:
             spec = self.unnamed_fallback
@@ -2196,13 +2078,10 @@ class SdkHost(GenericEngineResolver):
     def _budget_for(spec_budget: BudgetSpec) -> Budget:
         """Translate a declared :class:`BudgetSpec` into a live :class:`Budget`.
 
-        Per-slice 4b decision (design notes §4b "when BudgetSpec is all None…"):
-        SDK path uses :class:`Budget`'s own field defaults (all
-        ``None`` caps) — not the coding-product's
-        ``default_coding_budget()``. A ``BudgetSpec`` field that is
-        ``None`` delegates to the ``Budget()`` default so the SDK path
-        can independently tighten caps without re-implementing the
-        guard.
+        The SDK path uses :class:`Budget`'s own field defaults (all ``None`` caps),
+        not a product-specific default budget. A ``BudgetSpec`` field that is
+        ``None`` delegates to the ``Budget()`` default, so the SDK path can tighten
+        caps independently without re-implementing the guard.
         """
         overrides = {
             k: v for k, v in dataclasses.asdict(spec_budget).items() if v is not None

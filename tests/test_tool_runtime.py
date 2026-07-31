@@ -1,12 +1,11 @@
-"""ToolRuntime (normal mode): records the three-event tool envelope.
+"""``ToolRuntime`` records the three-event tool envelope.
 
-Each ``invoke`` MUST produce, in order:
-    1. ``ToolCallStarted``  — call_id + tool name + arguments
-    2. ``ToolResultRecorded`` — output_ref + summary + artifacts + side_effects
-    3. ``ToolCallFinished`` — call_id
-
-The result body lives in ContentStore (per the 4-KB rule); the
-EventLog only carries the ContentRef.
+Every ``invoke`` must emit ``ToolCallStarted`` → ``ToolResultRecorded`` →
+``ToolCallFinished``, in that order and even when the tool raises: a fold that
+sees a started call with no result cannot reconstruct the turn, and the provider
+rejects an assistant ``tool_use`` with no matching ``tool_result``. Bodies and
+oversized arguments go to the ContentStore by reference, because the EventLog
+payload is capped at 4 KB.
 """
 
 from __future__ import annotations
@@ -163,13 +162,12 @@ def test_oversized_arguments_are_offloaded_and_do_not_break_the_cap() -> None:
     args = _big_args()
     call = ToolCall(tool_name="echo", arguments=args, call_id="c-big")
 
-    # Before the offload this emit raised PayloadTooLarge mid-step.
     rt.invoke(tool, call, task_id="t1", lease_id="lease-1", trace_id="trace-1")
 
     started = log.read("t1")[0]
     assert started.type == "ToolCallStarted"
-    # Arguments went by reference, not inline, and the event payload itself
-    # now sits comfortably under the EventLog's 4-KB ceiling.
+    # Arguments go by reference, not inline: emitting a whole file's worth of
+    # ``text`` would blow the EventLog's 4-KB payload ceiling mid-step.
     assert started.payload.arguments is None
     assert isinstance(started.payload.arguments_ref, ContentRef)
     assert len(to_canonical_bytes(started.payload)) <= EVENT_PAYLOAD_MAX_BYTES
@@ -192,8 +190,8 @@ def test_small_arguments_stay_inline() -> None:
 
 
 def test_build_is_deterministic() -> None:
-    # Rebuilding the payload from the same recorded ToolCall must yield
-    # byte-identical payloads (same offloaded ref) — identical args in, identical bytes out.
+    # Two hosts replaying the same recorded ToolCall must land on the same
+    # offloaded ref, or resume forks the content-addressed store.
     store_a = InMemoryContentStore()
     store_b = InMemoryContentStore()
     call = ToolCall(tool_name="echo", arguments=_big_args(), call_id="c-big")

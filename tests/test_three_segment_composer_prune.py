@@ -1,22 +1,18 @@
-"""ThreeSegmentComposer prune + compaction awareness (③ D-3e).
+"""ThreeSegmentComposer prune + compaction awareness.
 
-Prune is a deterministic, pure transform of the dynamic
-segment: tool-result outputs of messages OUTSIDE a protected tail window
-(sized by a token budget, not a hard-coded count) are cleared — the
-message stays in place with the same role / call_id / success, only its
-``output`` is replaced by the LEAN cleared-marker
-(``[tool output cleared]``) so the model
-reads "content elided", never "tool returned nothing" — and never a hash it
-cannot deref. The kept / cleared message refs are recorded in
-``ContextPlan.selected_messages`` / ``dropped_messages``, and each cleared
-output's full-body ref in ``ContextPlan.cleared_outputs`` (internal audit, off
-the prompt). When the task carries a Compacted summary slice, the covered
+Prune is a deterministic, pure transform of the dynamic segment: tool-result
+outputs of messages OUTSIDE a protected tail window (sized by a token budget,
+not a hard-coded count) are cleared — the message stays in place with the same
+role / call_id / success, only its ``output`` becomes the lean marker
+``[tool output cleared]`` so the model reads "content elided", never "tool
+returned nothing", and never a hash it cannot deref. Kept / cleared message
+refs land in ``ContextPlan.selected_messages`` / ``dropped_messages``, and each
+cleared output's full body in ``ContextPlan.cleared_outputs`` (internal audit,
+off the prompt). When the task carries a Compacted summary slice, the covered
 prefix is swapped for a single summary message.
 
-Because prune changes the composed bytes, ``COMPOSER_VERSION`` rotates to
-``three_segment.v5`` — the version tag records which composer produced a
-recording, so an older recording simply carries the older tag
-(D-3e).
+``COMPOSER_VERSION`` tags which composer produced a recording, so it is pinned
+here alongside the bytes it describes.
 """
 
 from __future__ import annotations
@@ -253,10 +249,10 @@ def test_compaction_summary_swaps_covered_prefix() -> None:
 
 
 def test_relief_valve_keeps_all_outputs_below_window() -> None:
-    """③ (D-3e relief-valve gate): a tight tail budget would clear old outputs,
-    but with the window far above the history estimate prune must NOT fire —
-    every tool output stays verbatim so the model never re-reads content it
-    already fetched. This is the fix for the explore-agent re-read thrash."""
+    """Relief-valve gate: a tight tail budget would clear old outputs, but with
+    the window far above the history estimate prune must NOT fire — every tool
+    output stays verbatim so the model never re-reads content it already
+    fetched (clearing under headroom makes an explore agent thrash)."""
     store = InMemoryContentStore()
     msgs = (
         _tool_turn("c1", "a" * 400)
@@ -316,11 +312,11 @@ def test_relief_valve_opens_on_real_tokens_not_chars_over_four() -> None:
     provider tokens — so a payload that tokenises denser than the chars/4
     heuristic assumes must still open the valve.
 
-    Measured in production: CJK + JSON + base64 thinking signatures run ~1.2
-    chars/token against the assumed 4. The estimate read ~42k while the real
-    request sat at ~182k against a ~182k window, so this gate stayed shut for an
-    entire session (0 of 99 composes cleared anything) and the only relief left
-    was a full summarize — which then re-read a file it had already fetched.
+    Measured: CJK + JSON + base64 thinking signatures run ~1.2 chars/token
+    against the assumed 4. With the estimate reading ~42k while the real request
+    sits at ~182k against a ~182k window, a gate that trusted the estimate alone
+    stays shut for an entire session and the only relief left is a full
+    summarize — which then re-reads files it already fetched.
     ``last_input_tokens`` is the provider's own count for the previous
     round-trip; the gate takes the max of the two so a dense payload cannot hide
     behind the heuristic.
@@ -355,10 +351,9 @@ def test_relief_valve_opens_on_real_tokens_not_chars_over_four() -> None:
 
 def test_no_baseline_reproduces_pure_estimate_behaviour() -> None:
     """``last_input_tokens == 0`` (first turn, or a compaction just zeroed it)
-    → the gate falls back to exactly the pre-existing chars/4 arithmetic.
-
-    This is what keeps the change byte-equal for an unobserved session, and it
-    is the same fallback the Policy's density takes.
+    → the gate falls back to pure chars/4 arithmetic, the same fallback the
+    Policy's density takes. Without a baseline an unobserved session must
+    compose exactly as if the gate had no real-token input at all.
     """
     store = InMemoryContentStore()
     msgs = (
@@ -375,4 +370,4 @@ def test_no_baseline_reproduces_pure_estimate_behaviour() -> None:
     ).compose(task)
     plan = from_canonical_bytes(store.get(view.plan_ref))
     assert isinstance(plan, ContextPlan)
-    assert plan.cleared_outputs == []  # valve stays shut, as it did before
+    assert plan.cleared_outputs == []  # valve stays shut

@@ -3,10 +3,10 @@
 Every test opens TWO PostgresDispatcher + PostgresEventLog instances
 against the same isolated schema — two hosts sharing one database. The
 scenarios pin the three ADR decisions: the in-tx ``SELECT ... FOR
-SHARE`` fence on the emit path (D1), database-clock lease expiry when
-no clock is injected (D2), and the ``worker_id`` audit column (D3) —
-plus the completion-order theorem the step-attempt-recovery seal relies
-on, exercised end-to-end with a crash on host A recovered on host B.
+SHARE`` fence on the emit path, database-clock lease expiry when no
+clock is injected, and the ``worker_id`` audit column — plus the
+completion-order theorem the step-attempt-recovery seal relies on,
+exercised end-to-end with a crash on host A recovered on host B.
 
 Postgres-only: sqlite / in-memory are single-host by definition.
 """
@@ -108,7 +108,7 @@ def _task_row(disp: Any, task_id: str) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# D3 — worker_id audit column
+# worker_id audit column
 # ---------------------------------------------------------------------------
 
 
@@ -137,7 +137,7 @@ def test_enqueue_force_clears_worker_id(schema_dsn, closing) -> None:
 
 
 # ---------------------------------------------------------------------------
-# D2 — database clock when ``now`` is not injected
+# Database clock when ``now`` is not injected
 # ---------------------------------------------------------------------------
 
 
@@ -274,13 +274,13 @@ def test_double_sweeper_fires_timer_once(schema_dsn, closing) -> None:
 
 
 # ---------------------------------------------------------------------------
-# D1 — zombie-append fencing on the emit path
+# Zombie-append fencing on the emit path
 # ---------------------------------------------------------------------------
 
 
 def test_zombie_emit_after_reclaim_is_rejected(schema_dsn, closing) -> None:
-    """G1 aftermath: once another host reclaimed the lease and started a
-    new generation, the zombie's emit raises InvalidLease and leaves no
+    """Once another host has reclaimed the lease and started a new
+    generation, the zombie's emit raises InvalidLease and leaves no
     trace on the stream."""
     a_now, b_now = [1_000.0], [1_000.0]
     disp_a = _dispatcher(closing, schema_dsn, now=lambda: a_now[0])
@@ -322,10 +322,10 @@ def test_zombie_emit_after_reclaim_is_rejected(schema_dsn, closing) -> None:
 def test_inflight_emit_blocks_reclaim_and_commits_first(
     schema_dsn, closing
 ) -> None:
-    """G1 window itself: an emit holding the FOR SHARE row lock forces a
-    concurrent ``requeue_stale`` to wait, so the in-flight write commits
-    BEFORE the reclaim — every L_i event seq-precedes every L_{i+1}
-    event (the completion-order theorem)."""
+    """The reclaim window itself: an emit holding the FOR SHARE row lock
+    forces a concurrent ``requeue_stale`` to wait, so the in-flight write
+    commits BEFORE the reclaim — every L_i event seq-precedes every
+    L_{i+1} event (the completion-order theorem)."""
     a_now, b_now = [1_000.0], [1_000.0]
 
     pause_armed = threading.Event()
@@ -485,10 +485,10 @@ def test_wedged_emit_does_not_stall_reclaim_forever(
 
 
 def test_clock_skew_emulation(schema_dsn, closing) -> None:
-    """Injected-clock documentation of the G2 shape: host A's clock runs
-    10s behind host B's. Once B reclaims, A's next emit is fenced even
-    though A's local clock still believes the lease is live. (In
-    production DB-clock mode this divergence cannot arise at all.)"""
+    """Injected-clock emulation of clock skew: host A's clock runs 10s
+    behind host B's. Once B reclaims, A's next emit is fenced even
+    though A's local clock believes the lease is live. (In production
+    DB-clock mode this divergence cannot arise at all.)"""
     a_now, b_now = [1_000.0], [1_010.0]
     disp_a = _dispatcher(closing, schema_dsn, now=lambda: a_now[0])
     disp_b = _dispatcher(closing, schema_dsn, now=lambda: b_now[0])
@@ -515,7 +515,7 @@ def test_clock_skew_emulation(schema_dsn, closing) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step-attempt recovery across hosts (acceptance criterion 7)
+# Step-attempt recovery across hosts
 # ---------------------------------------------------------------------------
 
 

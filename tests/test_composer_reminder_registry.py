@@ -1,18 +1,15 @@
-"""Track B (D8) — the compose-time reminder registry.
+"""The compose-time reminder registry — the mechanism a plugin extends.
 
-Beyond the byte-identity characterization
-(``tests/test_composer_reminders_characterization.py``, which pins that the
-three built-in reminders survive the migration unchanged), this module pins the
-new mechanism:
+Reminders are ordered by ``(priority, name)`` with duplicate names rejected, so
+that what a plugin sees is a total order it can aim at rather than an insertion
+accident. Two properties carry the weight: a plugin reminder wired through the
+builder's ``extra_reminders`` seam renders at the dynamic-suffix tail, after the
+built-ins; and reminders touch ONLY the volatile dynamic suffix, so the
+prompt-cache-friendly stable prefix keeps its hash across steps however much the
+reminders churn.
 
-* the registry orders by ``(priority, name)`` and rejects duplicate names;
-* the loader-resolved base (microkernel M2: the ``reminders`` built-in's specs,
-  via ``noeta.client.parts.default_reminder_specs``) IS the three built-ins in
-  the byte-identical order;
-* a **plugin reminder renders at the dynamic-suffix tail**, after the built-ins,
-  when wired through the builder's ``extra_reminders`` seam;
-* the **stable-prefix hash is unchanged across steps** with reminders active —
-  reminders only ever touch the volatile dynamic suffix, never the cached prefix.
+The rendered text of the three built-ins is pinned separately by
+``tests/test_composer_reminders_characterization.py``.
 """
 
 from __future__ import annotations
@@ -85,9 +82,9 @@ def test_render_all_skips_none() -> None:
 
 
 def test_default_specs_are_the_three_builtins() -> None:
-    """The loader-resolved base carries exactly the three built-ins,
-    todo->delegation->read (microkernel M2: resolved from the ``reminders``
-    manifest, never statically imported)."""
+    """The loader-resolved base carries exactly the three built-ins in the order
+    todo -> delegation -> read, resolved from the ``reminders`` manifest and
+    never statically imported."""
     registry = ReminderRegistry(default_reminder_specs())
     assert [s.name for s in registry.specs()] == [
         "unfinished-todos",

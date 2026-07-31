@@ -1,25 +1,26 @@
-# Your first agent: build an SDK agent in 20 minutes
+# Your first agent
 
-**What you'll do:** define a custom tool with `@tool`, assemble `Options`,
-drive an agent with `Client`, and inspect the resulting message stream.
-Everything runs in-process — no server, no API key. We use the
-`FakeLLMProvider` so the example is fully offline and deterministic.
+**What you'll build:** a custom tool defined with `@tool`, an `Options` recipe
+that mounts it, and a `Client` that drives one turn — then you read back the
+folded message view. Everything runs in-process against the offline
+`FakeLLMProvider`, so there is no server and no API key.
+
+Every symbol comes from `noeta.sdk`, the SDK's single public import surface.
 
 ## Prerequisites
 
 - Python 3.11+
-- `noeta-sdk` installed (`pip install noeta-sdk`)
+- `pip install noeta-sdk`
 
 ## 1. Define a tool
 
-Tools are plain functions wrapped with the `@tool` decorator. The
-function takes `(arguments: dict, ctx: ToolContext)` and returns a
-`ToolResult`. The `version` field is required — it feeds the tool's
-identity fingerprint, so changing it tells the runtime the tool's
-behavior may have changed.
+A tool is a plain function `fn(arguments, ctx) -> ToolResult` wrapped with
+`@tool`. `version` is required: `(name, version, risk_level)` is the tool's
+declared identity inside the compiled agent spec, so two behaviourally
+different tools can never share one.
 
 ```python
-from noeta.sdk import tool, ToolContext, ToolResult
+from noeta.sdk import ToolContext, ToolResult, tool
 
 _WORD_COUNT_SCHEMA = {
     "type": "object",
@@ -28,24 +29,30 @@ _WORD_COUNT_SCHEMA = {
     "additionalProperties": False,
 }
 
-@tool(name="word_count", version="1", risk_level="low",
-      input_schema=_WORD_COUNT_SCHEMA)
+
+@tool(
+    name="word_count",
+    version="1",
+    risk_level="low",
+    input_schema=_WORD_COUNT_SCHEMA,
+    description="Count the whitespace-separated words in `text`.",
+)
 def word_count(arguments: dict, ctx: ToolContext) -> ToolResult:
-    """Count whitespace-separated words."""
     text = str(arguments.get("text", ""))
-    count = len(text.split())
-    return ToolResult(success=True, output=f"{count} words")
+    return ToolResult(success=True, output=f"{len(text.split())} words")
 ```
 
-The `input_schema` is LLM-facing metadata — it tells the model what
-arguments the tool expects. It is not validated at call time; the
-function itself is responsible for handling bad input.
+`input_schema` and `description` are LLM-facing metadata rendered into the
+provider's tool schema. `arguments` is never validated against the schema at
+call time — the function handles bad input itself.
 
-## 2. Build the Options
+`@tool` returns a `DecoratedTool`: one object that is both the runnable tool
+and the carrier of its identity ref, so the two cannot drift apart.
 
-`Options` is the frozen recipe for your agent. It holds the system
-prompt, the tool allow-list, the permission mode, and any child agent
-definitions.
+## 2. Assemble the Options
+
+`Options` is the frozen recipe: the system prompt, the tool list, the
+permission mode, and any child agent definitions.
 
 ```python
 from noeta.sdk import Options
@@ -58,28 +65,32 @@ options = Options(
 )
 ```
 
-`allowed_tools` controls which tools the model can call. Pass `None` to
-select all **11** built-in tools, or pass a tuple of `DecoratedTool`
-instances (like our `word_count`) to restrict the surface.
-
-Selected is not the same as mounted: **10** of the 11 mount with no extra
-configuration, because `web_search` appears only when
-`NOETA_WEB_SEARCH_API_KEY` is set. Other tools (memory, browser, `open_app`,
-`run_skill_script`) are not in this whitelist at all — they are gated on a
-capability or a host injection instead. See the
+`allowed_tools` is replacement, not addition. A tuple means *exactly* those
+entries — decorated tools by value, built-in tools by name. `None` selects the
+full built-in set: 11 names (`read`, `glob`, `grep`, `edit`, `write`,
+`apply_patch`, `shell_run`, `shell_poll`, `shell_kill`, `webfetch`,
+`web_search`), of which 10 mount with no extra configuration —
+`web_search` is built only when `NOETA_WEB_SEARCH_API_KEY` is set. Memory,
+browser, `open_app`, `run_skill_script` and MCP tools are not in that set; they
+mount on an activation or a host injection. See the
 [tool catalog](../reference/tools.md).
 
-`permission_mode="bypassPermissions"` means tool calls are not gated —
-useful for a low-risk tool like `word_count`. For tools that write files
-or run shell commands, use `"default"` (the user must approve each call)
-or `"acceptEdits"` (edits are auto-approved, shell calls still need
-approval).
+`permission_mode` decides which calls stop for approval:
 
-## 3. Create a scripted provider
+| Mode | Gated calls |
+| --- | --- |
+| `default` | every tool whose `risk_level` is not `low` |
+| `acceptEdits` | same, minus `edit` / `write` / `apply_patch` |
+| `bypassPermissions` | none |
 
-For this tutorial we use `FakeLLMProvider` — a deterministic double that
-returns a scripted sequence of responses. In a real deployment you would
-use `AnthropicProvider` or `OpenAICompatProvider` instead.
+`word_count` is `low`, so it runs unattended under all three; we set
+`bypassPermissions` to keep the walkthrough free of an approval round-trip.
+
+## 3. Script a provider
+
+`FakeLLMProvider` returns a pre-scripted sequence of `LLMResponse` objects and
+records every request it received. A real deployment supplies a live provider
+instead — see [Configure a provider](../how-to/configure-provider.md).
 
 ```python
 from noeta.sdk import LLMResponse, TextBlock, ToolUseBlock, Usage
@@ -107,72 +118,96 @@ provider = FakeLLMProvider(
 )
 ```
 
-The scripted provider calls `word_count` once (with "hello world from
-noeta"), then finishes with "That's 4 words."
+The script calls `word_count` once, then finishes.
 
 ## 4. Drive the agent
 
 ```python
-from pathlib import Path
 import tempfile
+from pathlib import Path
+
 from noeta.sdk import Client
 
 with tempfile.TemporaryDirectory() as tmp:
-    client = Client(
+    with Client(
         options,
         provider=provider,
         workspace_dir=Path(tmp),
         model="stub-model",
         multi_turn=False,
-    )
-    try:
+    ) as client:
         outcome = client.start(goal="How many words are in 'hello world from noeta'?")
-        messages = client.messages(outcome.task_id)
-        for msg in messages:
+        for msg in client.messages(outcome.task_id):
             print(msg)
-    finally:
-        client.shutdown()
 ```
 
-`Client` is the same host machinery any embedding host uses — it
-creates a temporary task, drives it to a terminal state, and shuts down.
-`client.messages(task_id)` returns the folded human-readable view: user
-message, tool use, tool result, assistant reply.
+`Client` is the same driver an embedding host uses. As a context manager it
+guarantees `shutdown()` (observer teardown, worker stop, sandbox reap).
+`multi_turn=False` lets the turn reach a real `TaskCompleted` terminal instead
+of suspending to wait for the next goal.
 
-Run it and you should see something like:
+Output:
 
 ```
 UserMessage(text="How many words are in 'hello world from noeta'?")
 ToolUse(call_id='wc-1', tool_name='word_count', arguments={'text': 'hello world from noeta'})
-ToolResultView(call_id='wc-1', tool_name='word_count', success=True, output='4 words')
+ToolResultView(call_id='wc-1', tool_name='', success=True, output='"4 words"')
 AssistantMessage(text="That's 4 words.")
 Result(answer="That's 4 words.", status='completed')
 ```
 
+`ToolResultView.tool_name` is empty because the recorded result payload carries
+only the `call_id`; pair it with the preceding `ToolUse` to recover the name.
+
+### Or: one call instead of four lines
+
+`query` is the same thing with the client lifecycle folded in. Swap it for the
+whole block above (a scripted provider is single-use, so build a fresh one):
+
+```python
+from noeta.sdk import query
+
+with tempfile.TemporaryDirectory() as tmp:
+    result = query(
+        options,
+        "How many words are in 'hello world from noeta'?",
+        provider=provider,
+        workspace_dir=Path(tmp),
+        model="stub-model",
+    )
+
+print(result.answer())     # raises QueryFailedError if the task did not complete
+print(result.messages())   # the same folded view
+```
+
+`QueryResult` *is* the full `list[EventEnvelope]`, with `messages()` and
+`answer()` folded and dereferenced before the temporary client is torn down.
+
 ## 5. What just happened
 
-Every step — the user message, the tool call, the tool result, the
-assistant reply — was appended to an in-memory EventLog. The `messages()`
-call folded that log into the human view. If you had pointed the client
-at a SQLite file instead of `:memory:`, you could shut down the process,
-start a new one, and fold the same log to recover the exact same state.
-That is [Event sourcing](../concepts/event-sourcing.md) in action.
+Every step — user message, tool call, tool result, assistant reply — was
+appended to an event log as an immutable envelope; `messages()` folded that log
+into the human-readable view. Storage defaults to in-memory. Point the client
+at SQLite instead and the same fold recovers the same state in a fresh process:
 
-The tool call was not gated because we set
-`permission_mode="bypassPermissions"`. With `"default"`, a
-`PermissionGuard` would have intercepted the call and required explicit
-approval via `client.approve()`. See
-[Guard vs Observer](../concepts/guard-observer.md) for how this works.
+```python
+from noeta.sdk import HostConfig
+
+client = Client(options, provider=provider, workspace_dir=Path(tmp),
+                host_config=HostConfig(storage_path="noeta.sqlite"))
+```
+
+That is [event sourcing](../concepts/event-sourcing.md) at work. Gating, when
+a mode enables it, happens in a [Guard](../concepts/guard-observer.md) that
+suspends the turn until `client.approve()` or `client.deny()` resolves the
+pending call.
 
 ## Next steps
 
-- **Connect a real model** — [Configure a provider](../how-to/configure-provider.md)
-  shows how to wire Anthropic or OpenAI-compatible endpoints.
+- **Connect a real model** — [Configure a provider](../how-to/configure-provider.md).
 - **Build more tools** — [Build custom tools](../how-to/build-custom-tools.md)
-  covers `risk_level`, tool versions, and bundling tools into an MCP server.
-- **Fan out to sub-agents** — [Spawn subagents](../how-to/spawn-subagents.md)
-  demonstrates parallel task execution.
-- **Look up the full SDK surface** — [SDK reference](../reference/sdk.md)
-  documents every symbol in `noeta.sdk`.
-- **Run the examples** — `examples/sdk_minimal.py` and
-  `examples/custom_tool.py` extend this pattern with more detail.
+  covers risk levels, versioning, and bundling tools into an MCP server.
+- **Fan out to subagents** — [Spawn subagents](../how-to/spawn-subagents.md).
+- **Look up the full surface** — [SDK reference](../reference/sdk.md).
+- **Read runnable code** — `examples/sdk_minimal.py`, `examples/custom_tool.py`
+  and `examples/permission_gate.py` extend this pattern.

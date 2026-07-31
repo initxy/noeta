@@ -1,15 +1,15 @@
-"""Byte-order goldens for the session-pack migration (microkernel phase 3, S1).
+"""Byte-order goldens for the session-pack construction.
 
-These tests pin the two load-bearing orders the whole migration must preserve:
+These tests pin the two load-bearing orders the builder must preserve:
 
 * the tool dict insertion order (feeds the Engine's deterministic
   ``ToolSchemaRecorded`` emission and the composed ``provider_tool_schemas``
   half of the stable-prefix hash), and
 * the content-kind registration order (IS the semi_stable layout).
 
-Recorded against pre-migration ``main`` (phase 2c, ``c2569d7``) BEFORE any
-stage moved, then kept green through every S-milestone: a migration commit
-that reorders either list is a byte-equality regression, not a refactor.
+A change that reorders either list is a byte-equality regression, not a
+refactor — the stable-prefix prompt cache only hits when the prefix is
+byte-stable.
 
 The expected lists are LITERAL on purpose — deriving them from the code under
 test would make the golden follow the regression it exists to catch.

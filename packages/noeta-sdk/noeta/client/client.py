@@ -1,4 +1,4 @@
-"""High-level ``Client`` + one-shot ``query`` (slice 4b).
+"""High-level ``Client`` + one-shot ``query``.
 
 ``Client`` wires an :class:`~noeta.client.options.Options` recipe into a
 live :class:`SdkHost` + :class:`~noeta.execution.driver.InteractionDriver`
@@ -95,7 +95,7 @@ class DeleteTaskResult(TypedDict, total=False):
 #: Deployment model-selector allowlist the SDK applies when the host config
 #: sets no ``allowed_models``: the friendly aliases of the providers
 #: builtin's catalog (mirrors Claude Code's ``/model`` names). A product
-#: default, SDK-side since phase 2c — the kernel driver takes the allowlist
+#: default, SDK-side — the kernel driver takes the allowlist
 #: purely as an injection (``None`` there means "no deployment bound").
 DEFAULT_MODEL_ALLOWLIST: frozenset[str] = frozenset({"opus", "sonnet", "haiku"})
 
@@ -161,14 +161,14 @@ def _collect_custom_tools(
 
 
 # ---------------------------------------------------------------------------
-# Per-agent activation folding (D6 — feature surfaces follow activation)
+# Per-agent activation folding (feature surfaces follow activation)
 # ---------------------------------------------------------------------------
 
 
 def _activated_names(
     options: Options, plugins: Optional["PluginSet"]
 ) -> Optional[frozenset[str]]:
-    """Every plugin name some agent activates — the resolution scope (D5).
+    """Every plugin name some agent activates — the resolution scope.
 
     Resolving a plugin imports its refs and runs its module body, so that step is
     restricted to plugins an agent actually opted into. The set is computed in two
@@ -224,7 +224,7 @@ def _ordered_stages(
 
     Collects ``(priority, plugin, contribution name, value)`` across every plugin
     the agent activates and sorts by that triple — the ordering every
-    priority-ordered surface in the D3 table shares.
+    priority-ordered surface shares.
     """
     entries = [
         (priority, plugin, cname, value)
@@ -239,7 +239,7 @@ def _seam_providers(
     source: Mapping[str, tuple[tuple[tuple[str, ...], str, Any], ...]],
     activation: tuple[str, ...],
 ) -> dict[str, tuple[Any, ...]]:
-    """One agent's ``reminder_provider`` s, grouped by recording seam (track A, D7).
+    """One agent's ``reminder_provider`` s, grouped by recording seam.
 
     A provider may declare several seams; within a seam the order is
     ``(plugin, contribution name)`` — the order the recording path runs them in.
@@ -282,7 +282,7 @@ class Client:
 
         result = query(my_options, goal="fix my tests", provider=my_provider)
 
-    Storage defaults to in-memory, but a :class:`HostConfig` (the D3 host-level
+    Storage defaults to in-memory, but a :class:`HostConfig` (the host-level
     wiring surface) can inject an external durable triple plus the host runtime
     injections (HTML-app preview gateway, live-MCP alias resolver) without
     touching the agent identity. ``shutdown`` is idempotent: it unsubscribes the
@@ -302,7 +302,7 @@ class Client:
         plugins: Optional["PluginSet"] = None,
     ) -> None:
         # 0. Resolve provider: explicit kwarg first, then Options.provider
-        #    (D5: wiring is NOT identity — the AgentSpec identity never sees it).
+        #    (wiring is NOT identity — the AgentSpec identity never sees it).
         effective_provider: LLMProvider
         if provider is not None:
             effective_provider = provider
@@ -338,32 +338,32 @@ class Client:
         #    later as a contribution that silently went missing.
         if plugins is not None:
             plugins.merged()
-        #    Activation (D5): a loaded PluginSet supplies the identity-plane
+        #    Activation: a loaded PluginSet supplies the identity-plane
         #    contributions each activated external plugin carries; compile
         #    validates every activation name against the built-in vocabulary +
         #    this loaded set, failing loudly on an unknown name. Resolution is
         #    scoped to the activated names, so loading a plugin no agent activates
-        #    never runs its module body (D5: a set stays auditable until something
+        #    never runs its module body (a set stays auditable until something
         #    opts in).
         activated = _activated_names(options, plugins)
         activation_map = (
             plugins.identity_activations(only=activated) if plugins is not None else None
         )
         main_spec, descendant_specs = compile_options(options, plugins=activation_map)
-        # D10 policy: the runtime half of the (identity ref already baked by
+        # The runtime half of the (identity ref already baked by
         # compile) single-valued policy surface — the base Options.policy OR the
         # single active plugin policy (a collision already failed the compile
         # above). Wired as the host's process-wide policy_override, replacing the
         # old ``options.policy`` pass-through.
         effective_policy = effective_root_policy(options, activation_map)
-        # The per-agent wiring surfaces (D6: feature surfaces follow activation).
+        # The per-agent wiring surfaces (feature surfaces follow activation).
         # Each resolves the activated plugins' contributions, then folds them into
         # an ``agent name -> ordered values`` map the SdkHost selects from when it
         # builds that agent's Engine:
-        #   * tool_result_transform (D9) — ToolResult stages inside the ToolRuntime
-        #   * reminder             (D8, track B) — pure compose-time renders
-        #   * reminder_provider    (D7, track A) — recorded, per recording seam
-        #   * content_kind         (D6) — semi-stable composer residents
+        #   * tool_result_transform — ToolResult stages inside the ToolRuntime
+        #   * reminder              — pure compose-time renders
+        #   * reminder_provider     — recorded, per recording seam
+        #   * content_kind          — semi-stable composer residents
         # An agent that activates none of them gets an empty entry, which is
         # byte-identical to the pre-plugin construction.
         agent_activations = _agent_activations(
@@ -464,7 +464,7 @@ class Client:
         self._unsubscribe_default: Callable[[], None] = wire_default_observers(
             event_log, dispatcher
         )
-        # D6 effect scoping: a loaded plugin's guard / observer contributions are
+        # Effect scoping: a loaded plugin's guard / observer contributions are
         # governance authority — in force process-wide for EVERY agent regardless
         # of which plugins that agent activates. Resolved here from the loaded set
         # and folded into the process guard stack + observer subscriptions.
@@ -472,7 +472,7 @@ class Client:
         plugin_observers: tuple[Any, ...] = ()
         if plugins is not None:
             plugin_guards, plugin_observers = plugins.process_hooks()
-        # (T3) — custom Observer
+        # Custom Observer
         # extension point: subscribe each user-supplied post-commit callback
         # alongside the defaults (and the process-wide plugin observers) and
         # collect their unsubscribes for shutdown.
@@ -520,38 +520,38 @@ class Client:
             ),
             thinking=options.thinking,
             effort=options.effort,
-            # (T3) — extension points.
+            # Extension points.
             # policy: the custom Options.policy IS the ``(llm) -> Policy``
             # factory (it also carries the .ref compile_options put in the
             # spec); guards / content_channels pass through verbatim.
             policy_override=effective_policy,
-            # D6: options.guards (agent wiring) + process-wide plugin guards.
+            # options.guards (agent wiring) + process-wide plugin guards.
             extra_guards=tuple(options.guards) + plugin_guards,
             extra_content_kinds=tuple(options.content_channels),
-            # D9: per-agent tool_result_transform stages (empty ⇒ byte-identical).
+            # per-agent tool_result_transform stages (empty ⇒ byte-identical).
             tool_result_transforms=tool_result_transforms,
             # The other three per-agent activation surfaces. All empty by default,
-            # so a host with no plugins builds exactly the same engine as before.
+            # so a host with no plugins builds a plain built-in-only engine.
             extra_reminders=extra_reminders,
             reminder_providers=reminder_providers,
             activated_content_kinds=activated_content_kinds,
-            # Microkernel phase 3: external plugins' session packs, per agent —
+            # External plugins' session packs, per agent —
             # appended after the built-in packs and interleaved by priority in
             # the kernel builder's generic loop. Empty ⇒ byte-identical.
             activated_session_packs=activated_session_packs,
-            # Control-tool-surface S2: external plugins' control tools, per agent
+            # External plugins' control tools, per agent
             # — merged after the built-in control tools and re-sorted with the
             # kernel's internal entries in the builder's mount loop. Empty ⇒
             # byte-identical to the built-in-only session.
             activated_control_tools=activated_control_tools,
-            # (D3) — host-level runtime
+            # Host-level runtime
             # injections (NOT agent identity): the HTML-app preview gateway
             # (open_app) and the live-MCP alias resolver + transport. All default
             # to absent, so a bare HostConfig() leaves the tool list / wire
-            # byte-identical to today.
+            # unchanged.
             app_gateway=hc.app_gateway,
             write_roots=hc.write_roots,
-            # Sandbox execution backend (D2 host config). ``None`` (default) ⇒
+            # Sandbox execution backend (host config). ``None`` (default) ⇒
             # the local host; when set, the SdkHost builds a sandbox manager and
             # routes every session's fs / shell IO into the container. ``exec_env``
             # attaches one shared container (v1); ``sandbox_provider`` +
@@ -562,11 +562,11 @@ class Client:
             sandbox_exec_preamble=hc.sandbox_exec_preamble,
             sandbox_backend_factory=hc.sandbox_backend_factory,
             sandbox_browser_factory=hc.sandbox_browser_factory,
-            # Execution-tier per-session sandbox opt-out (D-C). ``None`` (default)
+            # Execution-tier per-session sandbox opt-out. ``None`` (default)
             # ⇒ provision as before; a policy returning False keeps a session on
             # the local backend even while a provider is configured.
             sandbox_policy=hc.sandbox_policy,
-            # Memory store addressing (issue #53): the host-level roots plus the
+            # Memory store addressing: the host-level roots plus the
             # per-task resolver seam for multi-tenant hosts. All default to
             # absent, so a bare HostConfig() keeps the SDK global default root —
             # byte-identical for every single-tenant caller.
@@ -591,7 +591,7 @@ class Client:
             instructions_enabled=hc.instructions_enabled,
             instructions_file=hc.instructions_file,
             instructions_discovery=hc.instructions_discovery,
-            # Process fs write policy (D3 host config): "apply" performs real
+            # Process fs write policy (host config): "apply" performs real
             # writes, anything else stages a dry-run diff (the safe default).
             write_mode=(
                 FsWriteMode.APPLY if hc.write_mode == "apply" else FsWriteMode.DRY_RUN
@@ -626,9 +626,9 @@ class Client:
         # deployment allowlist IS the authorized set (``allowed_models`` =
         # BackendConfig.models) — this lets real model ids (e.g. ``gpt-5.5``) pass
         # the driver's per-turn ``_authorize_selector`` without per-principal
-        # config. Absent it, pass the SDK's DEFAULT_MODEL_ALLOWLIST (phase 2c:
-        # the triple is a product default, injected — the kernel driver holds
-        # no allowlist) → byte-identical to every pre-widening caller.
+        # config. Absent it, pass the SDK's DEFAULT_MODEL_ALLOWLIST (the
+        # triple is a product default, injected — the kernel driver holds
+        # no allowlist).
         self._driver: InteractionDriver = InteractionDriver(
             self._host,
             # Note: do not pass model_selector — let host.model become the
@@ -645,13 +645,13 @@ class Client:
                 if allowed_models is not None
                 else DEFAULT_MODEL_ALLOWLIST
             ),
-            # Microkernel M2: the kernel driver holds no model catalog; the
+            # The kernel driver holds no model catalog; the
             # friendly-alias table lives in the providers built-in and is
             # injected here (identity for non-alias selectors).
             alias_resolver=resolve_model_alias,
         )
         # Wire the driver back into the host as the background-completion
-        # notifier (Mechanism C). The driver wraps the host, so the host cannot
+        # notifier. The driver wraps the host, so the host cannot
         # construct it — we set it here, after construction. This activates the
         # turn-boundary completion push for BOTH a ``shell_run(background=true)``
         # job and a ``spawn_subagent(background=True)`` sub-agent: when one
@@ -674,9 +674,6 @@ class Client:
         self._main_agent_name = main_spec.name
         self._registry = registry
         # can_use_tool callback (wiring-only, not part of the AgentSpec identity).
-        # ``Options.can_use_tool`` now carries its real callable type, so this
-        # is a plain assignment — it used to need a ``type: ignore`` purely
-        # because the field was annotated ``object``.
         self._can_use_tool: Optional[Callable[[str, dict[str, Any]], bool]] = (
             options.can_use_tool
         )
@@ -1193,7 +1190,7 @@ class Client:
     def delete_task(self, task_id: str) -> DeleteTaskResult:
         """Hard-delete a task and its subtask tree from storage.
 
-        The conversation *is* the task (D6), so "delete the session" purges each
+        The conversation *is* the task, so "delete the session" purges each
         task's event stream + dispatcher state, cascaded across the whole subtask
         tree (a subtask rides its root). Refuses with ``reason="running"`` when a
         worker is actively running any task in the tree (the purge never races an
@@ -1310,7 +1307,7 @@ class Client:
         The write-side mirror of :meth:`get_content`: a product backend that
         receives raw bytes (e.g. a base64 image attachment) puts them through
         noeta.sdk and gets back a ``ContentRef`` to wrap in an ``ImageBlock`` for
-        a user turn — without importing ``noeta.protocols`` (the D2 weld).
+        a user turn — without importing ``noeta.protocols`` (the public-surface weld).
         Content-addressed: identical bytes → identical hash.
         """
         return self._host.content_store.put(body, media_type=media_type)
@@ -1528,7 +1525,7 @@ class QueryFailedError(CodedError):
     ``approval-{call_id}`` handle no one is around to resolve). Keeping the
     failure on the exception path — instead of folding the reason into a
     ``Result.answer`` string — is what stops a caller from mistaking a failure
-    reason for a successful answer (issue #5's second footgun).
+    reason for a successful answer.
     """
 
     code = "query_failed"
@@ -1561,7 +1558,7 @@ class QueryResult(list[EventEnvelope]):
     Client's live ContentStore before shutdown** — raw envelopes reference
     their large bodies by ``ContentRef`` (``answer_ref`` / ``messages_ref`` /
     ``output_ref``), which only the originating host's store can resolve, and
-    that store is gone by the time ``query`` returns (issue #5).
+    that store is gone by the time ``query`` returns.
     """
 
     __slots__ = ("task_id", "_view", "_answer", "_failure")

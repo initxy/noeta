@@ -2,25 +2,19 @@
 
 Demonstrated SDK capability
 ---------------------------
-:func:`noeta.sdk.create_sdk_mcp_server`. Bundle a set of ``@tool`` functions
-into a single named, in-process ("sdk" transport) MCP server, then mount the
-bundle on ``Options.mcp_servers``. This is the noeta analogue of
-claude-agent-sdk's ``create_sdk_mcp_server``: the tools run in the host process
-— no subprocess to spawn, no network round-trip — and the agent calls them by
-name like any other tool.
+:func:`noeta.sdk.create_sdk_mcp_server` and ``Options.mcp_servers``. The
+returned server is a frozen value object whose tools run in the host process —
+nothing to spawn, no network round-trip — which is the reason to reach for it
+over listing loose tools in ``Options.allowed_tools``: a whole toolbox travels
+and is identified as one unit.
 
-Where ``custom_tool.py`` mounts one loose tool via ``Options.allowed_tools``,
-this groups several related tools under one server value object, so a whole
-toolbox travels (and is identified) as a unit.
+An in-process server does not namespace what it carries: the model sees the
+bare ``@tool`` names, so pick names that will not collide with a built-in. The
+``mcp__{alias}__{tool}`` prefix belongs to remote servers, where third-party
+collisions are the real risk.
 
-Here the model is scripted to call the bundled ``echo`` tool once; the example
-proves the closure ran by inspecting the ``ToolCallStarted`` envelopes.
-
-Running it
-----------
-Offline by default (:class:`FakeLLMProvider`, no API key). To drive a real
-model, swap ``_demo_provider()`` for ``OpenAICompatProvider`` /
-``AnthropicProvider`` (see ``minimal_agent.py``) and let the live model decide
+The provider is scripted so the example needs no API key; pass a live provider
+from ``noeta.sdk.providers`` to :func:`run` and a real model decides for itself
 when to call the tools.
 
     python examples/mcp_server.py
@@ -57,23 +51,21 @@ _TEXT_SCHEMA = {
 
 @tool(name="echo", version="1", risk_level="low", input_schema=_TEXT_SCHEMA)
 def echo(arguments: dict, ctx: ToolContext) -> ToolResult:
-    """Return the input text unchanged."""
     return ToolResult(success=True, output=str(arguments.get("text", "")))
 
 
 @tool(name="shout", version="1", risk_level="low", input_schema=_TEXT_SCHEMA)
 def shout(arguments: dict, ctx: ToolContext) -> ToolResult:
-    """Return the input text upper-cased."""
     return ToolResult(success=True, output=str(arguments.get("text", "")).upper())
 
 
-# Bundle both tools into one named, in-process MCP server. The returned
-# SdkMcpServer is a frozen value object — hand it to Options.mcp_servers.
+# Every entry must be a ``@tool``-decorated object; anything else raises here,
+# at authoring time, rather than yielding a server with a non-runnable tool.
 TOOLBOX = create_sdk_mcp_server("toolbox", version="1.0.0", tools=[echo, shout])
 
 
 def _demo_provider() -> FakeLLMProvider:
-    """Scripted: call the bundled ``echo`` tool once, then finish."""
+    """A network-free provider scripted to call ``echo`` once, then finish."""
     return FakeLLMProvider(
         responses=[
             LLMResponse(
@@ -97,12 +89,12 @@ def _demo_provider() -> FakeLLMProvider:
 
 
 def run(*, provider=None, workspace_dir: Path, model: str = "stub-model"):
-    """Drive one turn and return the list of tool names that ran."""
+    """Drive one turn and return the tool names the agent actually invoked."""
     options = Options(
         system_prompt="You echo or shout text when asked.",
         name="toolbox-user",
-        # Mount the whole server bundle. Its tools become available to the
-        # agent by name — no allowed_tools entry needed.
+        # Mounting the bundle is enough; its tools need no ``allowed_tools``
+        # entry of their own.
         mcp_servers=(TOOLBOX,),
         permission_mode="bypassPermissions",
     )

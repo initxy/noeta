@@ -1,9 +1,9 @@
-"""Focused tests for ``StopHandle`` + ``subscribe_with_stop`` (issue E / C4).
+"""Focused tests for ``StopHandle`` + ``subscribe_with_stop``.
 
-Pins idempotency of the helper itself plus the four observer classes
-that now delegate ``stop()`` to a :class:`StopHandle`. The exactly-
-once invariant lives in the helper; multiple ``stop()`` calls must
-not invoke the underlying :data:`Unsubscribe` more than once.
+Pins idempotency of the helper itself plus the four observer classes that
+delegate ``stop()`` to a :class:`StopHandle`. The exactly-once invariant lives
+in the helper; multiple ``stop()`` calls must not invoke the underlying
+:data:`Unsubscribe` more than once.
 """
 
 from __future__ import annotations
@@ -106,8 +106,8 @@ def _make_event() -> EventEnvelope:
 
 
 def test_audit_observer_stop_is_idempotent() -> None:
-    """rev2 B2: after stop, AuditObserver's sink must not receive
-    further records (idempotent + actually un-subscribed)."""
+    """After stop, AuditObserver's sink must not receive further records
+    (idempotent + actually un-subscribed)."""
     from noeta.observers.audit import AuditRecord
 
     log = InMemoryEventLog()
@@ -169,7 +169,7 @@ def test_event_fanout_stop_is_idempotent() -> None:
 
 
 def test_child_lifecycle_observer_stop_is_idempotent() -> None:
-    """rev2 B2: after stop, child TaskCreated events must NOT cause
+    """After stop, child TaskCreated events must NOT cause
     dispatcher.enqueue — the observer is truly unsubscribed."""
     from noeta.protocols.events import TaskCreatedPayload
 
@@ -224,12 +224,10 @@ def test_child_lifecycle_observer_stop_is_idempotent() -> None:
 
 
 def test_stop_handle_concurrent_stops_truly_exactly_once_under_slow_unsubscribe() -> None:
-    """rev2 B1: even when the underlying ``Unsubscribe`` is slow
-    enough to widen the race window, concurrent ``stop()`` calls
-    must produce exactly one unsubscribe.
-
-    Without the lock (pre-rev2) this test failed with multiple
-    unsubscribes — architect repro'd 20× with `time.sleep(0.005)`.
+    """Even when the underlying ``Unsubscribe`` is slow enough to widen the
+    race window, concurrent ``stop()`` calls must produce exactly one
+    unsubscribe. The lock is what makes this hold: without it the losing
+    threads re-enter the critical section and bump ``calls``.
     """
     import time
 

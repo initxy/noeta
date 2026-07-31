@@ -1,55 +1,21 @@
-"""``git-checkpoint`` — a first-party example Noeta manifest plugin.
+"""Undo for agent file edits: a git snapshot before every mutating tool call.
 
-Demonstrated SDK capability
----------------------------
-A **manifest plugin** (the SDK-extensibility redesign,
-``docs/implementation-specs/2026-07-28-sdk-extensibility-redesign.md``, D1)
-contributing one :class:`~noeta.sdk.Observer` on the ``observer`` surface. Like
-``guard``, an ``observer`` is *governance* authority (spec D6): loaded ⇒ in force
-process-wide for every agent, never gated on activation.
+Demonstrated SDK capability: the ``observer`` surface. An observer is a
+process-scoped subscriber on the EventLog, so loading this plugin arms
+checkpointing for every agent with no activation to forget. Observers are
+wiring, never identity — enabling one leaves the compiled agent and its cache
+prefix untouched.
 
-The plugin contributes a single :class:`~noeta.sdk.Observer`
-(a post-commit event Observer) that snapshots the workspace every time the
-agent starts a *mutating* file tool call (``write`` / ``edit`` / ``apply_patch``
-by default). Each snapshot is recorded as a commit on a dedicated ref
-(``refs/noeta/checkpoints``) so the agent's mutation history is undoable
-without ever touching the user's branch, ``HEAD``, or staging area:
+Every snapshot goes through a scratch ``GIT_INDEX_FILE`` and lands on a ref
+outside ``refs/heads/*``, because the one thing this must never do is disturb the
+user's own branch, ``HEAD``, staging area, or ``git log``. Chaining each
+checkpoint onto the previous one gives the ref an ordered history without a
+branch.
 
-* The snapshot is built through a **temporary index** (``GIT_INDEX_FILE``
-  pointing at a scratch file), so the user's real ``.git/index`` is never
-  read or written.
-* The commit is written with ``git commit-tree`` and published with
-  ``git update-ref`` onto ``refs/noeta/checkpoints`` — a ref outside
-  ``refs/heads/*``, so it is not a branch, does not move ``HEAD``, and never
-  appears in the user's ``git log``.
-* Checkpoints chain: each new checkpoint's parent is the previous checkpoint,
-  so the ref carries the full ordered snapshot history.
-
-:func:`restore_checkpoint` is the inverse: it writes a checkpoint's tree back
-into the working tree (again via a temporary index, so ``HEAD`` and the real
-index stay put). It overwrites the recorded files; files created after the
-checkpoint are left in place (a non-destructive restore).
-
-Guard-observer contract (``docs/adr/guard-observer-hooks.md``): an Observer
-failure must **never** flow back to the writer. The observer therefore
-swallows every exception (logging at ``warning``) — a broken or missing git
-repo degrades to "no checkpoint recorded", never a failed agent turn.
-:func:`restore_checkpoint`, by contrast, is an explicit operator call and
-*does* raise on failure.
-
-Configuration (environment, not per-plugin config dict)
--------------------------------------------------------
-The manifest mechanism resolves a contribution's ``ref`` to a live object and
-does not thread a per-plugin config dict; configuration is read from the
-environment when the module is imported:
-
-* ``NOETA_GIT_CHECKPOINT_REPO`` — the workspace git repo to checkpoint. Absent
-  ⇒ the process working directory (a host injects the real workspace root).
-* ``NOETA_GIT_CHECKPOINT_REF`` — the checkpoint ref (default
-  ``refs/noeta/checkpoints``).
-
-The :class:`GitCheckpointObserver` is independently constructable and
-unit-testable — the manifest only packages a configured instance.
+Per ``docs/adr/guard-observer-hooks.md`` an observer failure must never reach the
+writer, so the observer path swallows everything: a missing or broken repo
+degrades to "no checkpoint recorded", never a failed turn.
+:func:`restore_checkpoint` is an explicit operator call and does raise.
 """
 
 from __future__ import annotations
@@ -65,23 +31,20 @@ from typing import Any, Optional, Sequence
 from noeta.sdk import PluginBuilder
 
 
-#: The dedicated ref checkpoints are recorded on. Deliberately outside
-#: ``refs/heads/*`` so it is never a branch and never moves ``HEAD``.
+#: Outside ``refs/heads/*`` on purpose: not a branch, never moves ``HEAD``, never
+#: shows up in the user's ``git log``.
 DEFAULT_CHECKPOINT_REF = "refs/noeta/checkpoints"
 
-#: The built-in tool names that mutate the workspace. A checkpoint is taken
-#: when one of these starts (see ``builtin_tool_classes()`` in
-#: ``noeta.client.parts``: ``edit`` / ``write`` / ``apply_patch``).
+#: The built-in tools that mutate the workspace. Read-only tools are excluded —
+#: a snapshot per ``read`` would bury the useful checkpoints in noise.
 DEFAULT_MUTATING_TOOLS: tuple[str, ...] = ("write", "edit", "apply_patch")
 
-#: The event type a mutating tool call raises at its start
-#: (``noeta.protocols.events.ToolCallStartedPayload``).
+#: Checkpointing on *start* rather than completion is what makes the snapshot an
+#: undo point: it captures the tree the call is about to change.
 _TOOL_CALL_STARTED = "ToolCallStarted"
 
-#: The checkpoint commit's author/committer identity. Set explicitly so a
-#: checkpoint succeeds even when the repo has no ``user.name`` / ``user.email``
-#: configured, and so checkpoints are attributable and never masquerade as the
-#: user's own commits.
+#: An explicit identity, so a checkpoint succeeds in a repo with no ``user.name``
+#: configured and can never be mistaken for one of the user's own commits.
 _CHECKPOINT_AUTHOR = "noeta-checkpoint"
 _CHECKPOINT_EMAIL = "noeta-checkpoint@localhost"
 
@@ -102,9 +65,8 @@ __all__ = [
 class GitCheckpointError(RuntimeError):
     """A checkpoint or restore git operation failed.
 
-    Raised only by :func:`restore_checkpoint` (an explicit operator call).
-    The Observer path swallows this and every other exception per the
-    guard-observer ADR.
+    Only ever escapes :func:`restore_checkpoint`; the observer path swallows it
+    along with everything else, per the guard-observer ADR.
     """
 
 
@@ -116,16 +78,15 @@ def _git(
 ) -> str:
     """Run one ``git`` command in ``repo_path``; return its stripped stdout.
 
-    ``index``, when given, is exported as ``GIT_INDEX_FILE`` so the command
-    operates on a scratch index instead of the repo's real ``.git/index``.
-    ``check=False`` returns ``""`` on a non-zero exit instead of raising (used
-    to probe whether the checkpoint ref exists yet).
+    ``index`` is exported as ``GIT_INDEX_FILE`` so the command works on a scratch
+    index and the user's real ``.git/index`` is neither read nor written.
+    ``check=False`` is for probes that legitimately fail (does the ref exist
+    yet?), where a non-zero exit is an answer rather than an error.
 
-    The checkpoint identity (:data:`_CHECKPOINT_AUTHOR` /
-    :data:`_CHECKPOINT_EMAIL`) is exported on every call, so ``commit-tree``
-    succeeds in a repo with no ``user.name`` / ``user.email`` configured (where
-    git otherwise refuses to auto-detect one) and a checkpoint is never
-    attributed to the user.
+    The checkpoint identity is exported on every call rather than configured
+    once: git refuses to auto-detect an author in a repo with no ``user.name``,
+    which would make checkpointing fail exactly in the throwaway repos it is most
+    useful in.
     """
     env: dict[str, str] = {
         "GIT_AUTHOR_NAME": _CHECKPOINT_AUTHOR,
@@ -164,16 +125,14 @@ def _record_checkpoint(
 ) -> str:
     """Snapshot the working tree into a checkpoint commit; advance ``ref``.
 
-    Uses a throwaway index so the user's real index is untouched, and
-    ``update-ref`` on ``ref`` (never a branch) so ``HEAD`` and the user's
-    branch do not move. Returns the new checkpoint commit sha.
+    Returns the new checkpoint commit sha.
     """
     scratch = Path(tempfile.mkdtemp(prefix="noeta-ckpt-"))
     index = scratch / "index"
     try:
-        # Stage the entire working tree into the scratch index. Starting from
-        # an absent index, ``add -A`` records every non-ignored path, so the
-        # resulting tree is a faithful snapshot of the worktree.
+        # Starting from an *absent* index, ``add -A`` records every non-ignored
+        # path, so the tree is a faithful snapshot rather than a diff against
+        # whatever the user happened to have staged.
         _git(repo_path, "add", "-A", index=index)
         tree = _git(repo_path, "write-tree", index=index)
 
@@ -209,23 +168,17 @@ def _rmtree(path: Path) -> None:
 class GitCheckpointObserver:
     """Post-commit Observer that checkpoints the workspace on mutating tools.
 
-    An instance is a plain :class:`~noeta.protocols.event_log.Subscriber` —
-    a ``callable(EventEnvelope) -> None`` the host subscribes to the EventLog.
-    It fires on every append; it acts only on a ``ToolCallStarted`` whose
-    ``tool_name`` is in ``mutating_tools``.
+    Subscriber callbacks fire *outside* the EventLog writer lock and may run
+    concurrently from several writer threads, so the record operation is
+    serialised on an instance lock — concurrent ``update-ref`` calls would
+    otherwise interleave and break the checkpoint parent chain. Each thread
+    still snapshots into its own scratch index, so only the ref advance
+    contends.
 
-    Thread-safety mirrors the built-in Observers: subscriber callbacks fire
-    outside the EventLog writer lock and may run concurrently from several
-    writer threads, so the whole record operation runs under an instance
-    ``threading.Lock``. That serialises ``update-ref`` and keeps the parent
-    chain consistent (each thread still snapshots into its own scratch index).
-
-    Every exception is swallowed and logged at ``warning`` (guard-observer
-    ADR: an Observer must never break the writer). A missing/broken repo just
-    means no checkpoint is recorded.
+    Every exception is swallowed and logged (guard-observer ADR: an observer
+    must never break the writer).
     """
 
-    #: Stable Observer name (the built-in Observers expose ``name`` too).
     name = "git_checkpoint"
 
     def __init__(
@@ -263,8 +216,8 @@ class GitCheckpointObserver:
                 tool_name,
             )
         except Exception as exc:  # noqa: BLE001 — guard-observer: never raise
-            # An Observer failure must never flow back to the writer
-            # (docs/adr/guard-observer-hooks.md). Degrade to "no checkpoint".
+            # Degrade to "no checkpoint" rather than failing the agent's turn:
+            # losing an undo point is recoverable, losing the turn is not.
             _log.warning(
                 "git-checkpoint observer skipped a checkpoint: %s", exc
             )
@@ -276,17 +229,14 @@ def restore_checkpoint(
     ref: str = DEFAULT_CHECKPOINT_REF,
     commit: Optional[str] = None,
 ) -> str:
-    """Write a checkpoint's tree back into the working tree.
+    """Write a checkpoint's tree back into the working tree; return its sha.
 
-    Restores the tip of ``ref`` unless a specific ``commit`` (any git
-    commit-ish reachable in the repo) is given. Like the record path, this
-    uses a throwaway index, so the user's real index and ``HEAD`` are left
-    untouched — only the working-tree files recorded in the checkpoint are
-    overwritten. Files created after the checkpoint are left in place (a
-    non-destructive restore).
+    Restores the tip of ``ref`` unless a specific ``commit`` is given. Files
+    created *after* the checkpoint are left in place: an undo that also deleted
+    unrelated new work would be worse than the mistake it reverses.
 
-    Returns the restored commit sha. Unlike the Observer, this is an explicit
-    operator call and **raises** :class:`GitCheckpointError` on failure.
+    Raises :class:`GitCheckpointError` on failure — this is an explicit operator
+    call, so a silent no-op would be the dangerous outcome.
     """
     repo_path = Path(repo_path)
     target = commit if commit is not None else ref
@@ -306,13 +256,8 @@ def restore_checkpoint(
         _rmtree(scratch)
 
 
-# ---------------------------------------------------------------------------
-# Environment-sourced configuration + the manifest (spec D1).
-# ---------------------------------------------------------------------------
-
-
-#: The declarative config schema, carried on the manifest for operator tooling.
-#: Descriptive only — the mechanism never reads it (config is environment-sourced).
+#: Carried on the manifest so operator tooling can list the knobs. Descriptive
+#: only — nothing in the loader reads it, so it must be kept true by hand.
 CONFIG_SCHEMA = {
     "env": {
         "NOETA_GIT_CHECKPOINT_REPO": "workspace git repo to checkpoint (default: cwd)",
@@ -321,21 +266,21 @@ CONFIG_SCHEMA = {
 }
 
 
-#: The configured Observer the manifest ships. Built once from the environment
-#: at import; a distributed install exposes it at the ``ref`` below
-#: (``git_checkpoint:OBSERVER``), while the single-file load caches this very
-#: object so resolution never re-imports. An Observer is *wiring-layer* and
-#: never enters ``AgentSpec`` identity, so enabling checkpointing never changes
-#: the compiled agent or its cache prefix.
+#: The configured Observer the manifest ships. Built once at import, so a host
+#: must set ``NOETA_GIT_CHECKPOINT_REPO`` *before* loading the plugin — the
+#: default of ``cwd`` is rarely the workspace a real host means. A distributed
+#: install resolves it through the ``ref`` below; a single-file load caches this
+#: very object, so the two paths agree without a second import.
 OBSERVER = GitCheckpointObserver(
     os.environ.get("NOETA_GIT_CHECKPOINT_REPO", os.getcwd()),
     ref=os.environ.get("NOETA_GIT_CHECKPOINT_REF", DEFAULT_CHECKPOINT_REF),
 )
 
 
-#: The single-file manifest (decorator sugar *is* the manifest, spec D1).
-#: ``python -m noeta.sdk.plugin_check`` derives the TOML from this builder and
-#: verifies it against the shipped ``noeta-plugin.toml`` / ``[tool.noeta]``.
+#: The builder *is* this plugin's manifest, and its name is the plugin identity
+#: — the enable-list key, not the filename. ``python -m noeta.sdk.plugin_check``
+#: derives TOML from it and verifies the shipped ``noeta-plugin.toml`` matches,
+#: which is what stops the two from drifting.
 plugin = PluginBuilder(
     "git-checkpoint", requires_noeta=">=0.4", config_schema=CONFIG_SCHEMA
 )

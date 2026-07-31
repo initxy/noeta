@@ -1,28 +1,16 @@
-"""SDK example — swap the provider, keep the recipe (provider neutrality).
+"""SDK example — swap the provider, keep the recipe.
 
 Demonstrated SDK capability
 ---------------------------
-Provider neutrality. The same
-:class:`noeta.client.Options` recipe — same prompt, same tools, same
-compiled agent identity — runs unchanged against any provider. The provider
-is *wiring*, injected at :func:`query` time; it never touches the agent's
-identity. This is what lets a library user move a workload from one LLM
-vendor to another without rewriting their agent.
+Provider neutrality. The provider is wiring injected at :func:`query` time and
+:func:`noeta.sdk.compile_options` has no parameter for it, so the compiled
+agent identity — prompt, tools, fingerprint — cannot depend on which vendor
+answers. That structural fact, not a behavioural coincidence, is what makes
+moving a workload between vendors a wiring change rather than a rewrite.
 
-This example runs the identical recipe twice against two different
-provider instances and shows both produce a terminal answer. In a real
-deployment those two would be, e.g.::
-
-    from noeta.sdk.providers import OpenAICompatProvider
-    from noeta.sdk.providers import AnthropicProvider
-
-    openai = OpenAICompatProvider(base_url=..., api_key=...)
-    claude = AnthropicProvider(api_key=..., default_max_tokens=1024)
-
-Here both are offline :class:`FakeLLMProvider` instances (no API key) so
-the example — and its smoke test — run with no network. The point is
-structural: ``compile_options`` never sees the provider, so the compiled
-agent identity is identical across the two runs.
+Both providers here are network-free scripts; in a deployment they would be
+``OpenAICompatProvider`` and ``AnthropicProvider`` from ``noeta.sdk.providers``.
+Their answer texts differ only so the swap shows up in the output.
 
     python examples/swap_provider.py
 """
@@ -45,11 +33,7 @@ from noeta.sdk.testing import FakeLLMProvider
 
 
 def _provider_saying(text: str) -> FakeLLMProvider:
-    """A provider scripted to answer with ``text`` in one turn.
-
-    Stands in for a real vendor adapter; the two calls in :func:`run`
-    use two different texts purely to make the swap visible in output.
-    """
+    """A network-free stand-in for a vendor adapter, answering with ``text``."""
     return FakeLLMProvider(
         responses=[
             LLMResponse(
@@ -62,7 +46,7 @@ def _provider_saying(text: str) -> FakeLLMProvider:
 
 
 def _recipe() -> Options:
-    """The one provider-agnostic recipe used for both runs."""
+    """The single recipe both runs share — rebuilding it would prove nothing."""
     return Options(
         system_prompt="You are a concise assistant.",
         name="main",
@@ -74,14 +58,15 @@ def _recipe() -> Options:
 def run(*, workspace_dir: Path) -> tuple[str, str, bool]:
     """Run the same recipe against two providers.
 
-    Returns ``(answer_a, answer_b, identity_equal)``. The third value is the
-    headline invariant: the compiled agent identity does not depend on which
-    provider is wired in.
+    Returns ``(answer_a, answer_b, identity_equal)``; the third value is the
+    headline invariant — the compiled agent identity survives the swap.
     """
     recipe = _recipe()
 
-    # The provider is never read by compile_options — same recipe, same
-    # compiled agent identity, regardless of vendor.
+    # Compiled before either run and again after both, because the check is
+    # that driving a provider leaves nothing behind on the recipe:
+    # compile_options is referentially transparent, so an unequal result would
+    # mean a run had mutated the identity plane.
     compiled, _ = compile_options(recipe)
 
     answer_a = str(

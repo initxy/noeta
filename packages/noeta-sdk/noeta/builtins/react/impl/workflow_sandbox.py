@@ -2,8 +2,9 @@
 
 The goal is "determinism", not "security" (red line): the model writes
 the script and already holds shell/file tools, so ``exec``-ing the model's Python **adds no new attack surface** — we
-don't need a security sandbox, we need "same input resumes the same": D3's "rerun from scratch"
-requires the script to have no non-deterministic source
+don't need a security sandbox, we need "same input resumes the same": rerunning
+the script from scratch on resume
+requires it to have no non-deterministic source
 (``time`` / ``random`` / ``datetime`` / external IO).
 
 Two gates:
@@ -17,8 +18,8 @@ Two gates:
   (``agent`` / ``log`` / ``args``) plus a safe builtin set with no ``import`` / ``open`` / ``eval`` / ``exec`` /
   ``__import__``. Even if the AST check misses something, runtime can't reach ``time`` / ``random`` / ``os``.
 
-This module depends only on the stdlib ``ast`` / ``builtins``. Control-tool-surface S2b moved it out of the kernel
-(``noeta.policies``) into the ``react`` built-in beside its two consumers, so both now import it as a sibling: the
+This module depends only on the stdlib ``ast`` / ``builtins``. It lives in the ``react`` built-in beside its two
+consumers, which import it as a sibling: the
 ``control_tool`` translate (``check_workflow_script`` at translation time) and ``orchestration`` (``SAFE_BUILTINS`` at
 exec time). Public-named on purpose so those sibling modules import stable names.
 """

@@ -1,22 +1,11 @@
-"""``HostConfig`` — the SDK's host-level (process) wiring surface (D3).
+"""``HostConfig`` — the SDK's process-level wiring surface.
 
-This splits the SDK's extension face in two:
-
-* **Options** carries *agent identity + per-agent extension points* (Tool /
-  Provider / Policy / Guard / Observer / Content Channel) — see
-  :class:`~noeta.client.options.Options`.
-* **HostConfig** carries *host-level wiring* that is NOT part of any agent
-  identity and is decided once per process: the durable **storage** backend
-  (EventLog / ContentStore / Dispatcher) and the host **runtime injections**
-  (the HTML-app preview gateway, the live-MCP alias resolver). ``compile_options``
-  never sees any of this, so two clients differing only in their HostConfig
-  produce byte-identical AgentSpec identities.
-
-Every field defaults to "absent", so ``HostConfig()`` reproduces today's
-behaviour exactly: in-memory storage, no ``open_app`` tool, no live MCP. A
-product backend (``noeta.agent.backend``) passes a populated HostConfig to opt
-into durable storage / preview / MCP while still driving the engine only through
-``noeta.sdk``.
+Everything here is decided once per process and is deliberately outside every
+agent identity: the durable storage backend, the sandbox execution path, and
+the host runtime injections. ``compile_options`` never sees a HostConfig, so
+two clients differing only in theirs compile byte-identical AgentSpecs.
+Every field defaults to "absent" — a bare ``HostConfig()`` is in-memory
+storage, a local exec env, and no injections at all.
 """
 
 from __future__ import annotations
@@ -36,9 +25,8 @@ from noeta.client.otlp import OtlpHttpPost, OtlpTraceConfig
 from noeta.runtime.background_shell import DEFAULT_MAX_BACKGROUND_JOBS_PER_ROOT_TASK
 
 if TYPE_CHECKING:
-    # Only for annotations (``from __future__ import annotations`` keeps these
-    # out of the runtime import graph — ``noeta.client.sandbox`` imports this
-    # module, so a runtime import here would be circular).
+    # Annotation-only: ``noeta.client.sandbox`` imports this module, so a
+    # runtime import back would be circular.
     from noeta.client.sandbox import BackendFactory, BrowserBackendFactory
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
@@ -47,11 +35,10 @@ from noeta.protocols.messages import StreamDelta
 from noeta.protocols.step_context import StepContext
 from noeta.runtime.mcp import HttpPostFn, McpAnyServerSpec
 
-#: The preview gateway as SDK core sees it: an OPAQUE object (microkernel
-#: phase 3). The real shape is the app plugin's ``AppPreviewGateway``
-#: Protocol (``noeta.builtins.app.impl``) — the host drops the object into
-#: the kernel builder's ``backends`` bag under the ``"app_preview"`` name
-#: and only the app pack ever calls it.
+#: The preview gateway as SDK core sees it: an OPAQUE object. Its real shape is
+#: the app plugin's ``AppPreviewGateway`` Protocol (``noeta.builtins.app.impl``)
+#: — the host drops the object into the kernel builder's ``backends`` bag under
+#: the ``"app_preview"`` name and only the app pack ever calls it.
 AppPreviewGateway = Any
 
 
@@ -63,30 +50,26 @@ class SandboxExecEnvConfig:
     """Config for ATTACHING the fs / shell tools to one AIO Sandbox container.
 
     A pure, serialisable config value — it carries only *addressing*, never a
-    live client or a secret. The product host turns it into a live
-    ``AioSandboxExecEnv`` (reading the key from the environment, connecting to
-    the container) and threads that into ``build_session_inputs``; the config
-    alone is import-linter-safe for the backend to build (D2: the backend fills
-    config, the runtime instantiates the adapter).
+    live client or a secret. The host turns it into a live ``AioSandboxExecEnv``
+    (reading the key from the environment, connecting to the container) and
+    threads that into ``build_session_inputs``; the config alone is
+    import-linter-safe for a backend to build.
 
     **Attach-only.** This config addresses one already-running container that
     every session shares, and it never owns it (release is a no-op, so a stop
     here cannot break a peer that reconnected to the same address). Per-session
     *provisioning* — a fresh container allocated when a session opens and torn
     down when it ends — is a different seam entirely:
-    :class:`~noeta.client.sandbox_provider.SandboxProvider`. (There used to be a
-    ``provision`` field here offering ``"eager"``; nothing ever read it, so
-    ``"eager"`` silently attached. It was removed rather than left lying —
-    passing it now fails loudly instead of quietly doing the other thing.)
+    :class:`~noeta.client.sandbox_provider.SandboxProvider`.
 
     * ``base_url`` — the container's API root (e.g. ``http://host:8080``).
     * ``api_key_env`` — the environment variable holding the container's static
-      ``SANDBOX_API_KEY``. The key rides only on the wire, never in a log /
-      event / this config (D5). ``None`` env value ⇒ no auth header.
+      ``SANDBOX_API_KEY``. The key rides only on the wire, never in a log, an
+      event, or this config. ``None`` env value ⇒ no auth header.
     * ``workdir`` — the container's working directory. In sandbox mode this
-      *is* the fs-tools' workspace root (a lexical containment fence, D7): the
-      host path a local session would use is meaningless inside the container,
-      so the host substitutes this container path. Must be absolute.
+      *is* the fs-tools' workspace root (a lexical containment fence): the host
+      path a local session would use is meaningless inside the container, so
+      the host substitutes this container path. Must be absolute.
     """
 
     base_url: str
@@ -105,41 +88,38 @@ class SandboxExecEnvConfig:
 
 @dataclass(frozen=True)
 class HostConfig:
-    """Host-level wiring for a :class:`~noeta.client.client.Client` (D3).
+    """Host-level wiring for a :class:`~noeta.client.client.Client`.
 
     Storage triple
     --------------
     ``event_log`` / ``content_store`` / ``dispatcher`` inject an external,
-    typically durable (sqlite) storage backend. Supply **all three or none**;
-    omitting them (the default) makes the Client build its own in-memory triple,
-    byte-identical to the historical single-session behaviour. The three are
+    typically durable storage backend. Supply **all three or none**; omitting
+    them makes the Client build its own in-memory triple. The three are
     constructed together by the caller so the event log already holds the
     dispatcher as its ``lease_validator``.
 
     Runtime injections
     ------------------
     ``app_gateway`` is the live HTML-app preview gateway the ``open_app`` tool
-    mounts against; ``None`` ⇒ no ``open_app`` tool (the prompt's tool list is
-    unchanged). ``mcp_server_resolver`` resolves an enabled MCP alias to its full
-    connectable spec each turn; ``None`` ⇒ no live MCP is connected.
-    ``mcp_http_post`` is an injectable HTTP transport for the remote-MCP client
-    (tests pass a fake; production leaves it ``None`` to use stdlib urllib).
-    These are runtime objects, never part of the agent identity.
+    mounts against; ``None`` ⇒ no ``open_app`` tool at all. ``mcp_server_resolver``
+    resolves an enabled MCP alias to its full connectable spec each turn;
+    ``None`` ⇒ no live MCP is connected. ``mcp_http_post`` is an injectable HTTP
+    transport for the remote-MCP client (tests pass a fake; ``None`` uses stdlib
+    urllib). These are runtime objects, never part of the agent identity.
 
     ``workflow_allowed`` is the host kill-switch for the ``run_workflow`` control
-    tool (off by default, matching the runtime default). ``write_mode`` is the
-    process-level fs write policy (``"dry_run"`` stages a proposed diff without
-    touching disk — the safe default; ``"apply"`` performs real writes); the
-    Client maps it to the edit tools' ``FsWriteMode``.
+    tool. ``write_mode`` is the process-level fs write policy (``"dry_run"``
+    stages a proposed diff without touching disk — the safe default; ``"apply"``
+    performs real writes); the Client maps it to the edit tools' ``FsWriteMode``.
 
     ``write_roots`` answers "may this task write HERE, outside its workspace?"
     — ``task_id -> extra writable directories``, consulted per call by ``edit``
-    / ``write`` / ``apply_patch``. ``None`` (default) keeps the single-root
-    wall: an out-of-workspace write simply fails, which is the only honest
-    answer for a host with nobody to ask. A host that *can* ask (the noeta-agent
-    product suspends the call for the owner's ruling and remembers it as a
-    durable grant) wires this so the approved directory is open when the paused
-    call resumes. Reads are never fenced and never consult it.
+    / ``write`` / ``apply_patch``. ``None`` keeps the single-root wall: an
+    out-of-workspace write simply fails, which is the only honest answer for a
+    host with nobody to ask. A host that *can* ask — suspending the call for an
+    owner's ruling and remembering it as a durable grant — wires this so the
+    approved directory is open when the paused call resumes. Reads are never
+    fenced and never consult it.
     """
 
     # -- durable storage (all-or-none) -------------------------------------
@@ -150,10 +130,9 @@ class HostConfig:
     #: or ``":memory:"``. Resolved through
     #: :func:`noeta.sdk.storage.open_storage_stack`, which builds the whole
     #: triple **in the right order** (the event log needs the dispatcher as its
-    #: ``lease_validator`` — an invariant every host previously had to know and
-    #: hand-wire). Mutually exclusive with the explicit triple above: supplying
-    #: both is a loud error, because the two would disagree about which store
-    #: the session actually writes to.
+    #: ``lease_validator``). Mutually exclusive with the explicit triple above:
+    #: supplying both is a loud error, because the two would disagree about
+    #: which store the session actually writes to.
     storage_path: Optional[str] = None
 
     # -- host runtime injections -------------------------------------------
@@ -167,48 +146,42 @@ class HostConfig:
     mcp_http_post: Optional[HttpPostFn] = None
     #: Token-streaming sink: ``(ctx, call_id, delta)`` receives ephemeral
     #: ``StreamDelta``s while a streaming-capable provider call is in flight
-    #: (the product backend wires its delta hub here). ``None`` (default) ⇒
-    #: providers are called exactly as today; deltas are never persisted.
+    #: (a product backend wires its delta hub here). ``None`` ⇒ no sink; deltas
+    #: are never persisted either way.
     delta_sink: Optional[
         Callable[[StepContext, str, StreamDelta], None]
     ] = None
     #: OTLP trace export: when set, the Client wires a
     #: :class:`noeta.observers.trace_export.TraceExportObserver` with an
     #: OTLP/HTTP JSON sink at the configured endpoint and stops it on
-    #: ``shutdown``. ``None`` (default) ⇒ no trace export. A host runtime
-    #: injection like the preview gateway — never part of agent identity.
+    #: ``shutdown``. ``None`` ⇒ no trace export. A host runtime injection like
+    #: the preview gateway — never part of agent identity.
     otlp_traces: Optional[OtlpTraceConfig] = None
     #: Injectable HTTP transport for the OTLP exporter (tests pass a fake;
-    #: production leaves it ``None`` to use httpx) — the ``mcp_http_post``
-    #: pattern.
+    #: ``None`` uses httpx) — the ``mcp_http_post`` pattern.
     otlp_http_post: Optional[OtlpHttpPost] = None
     #: Per-request provider header factory: ``(ctx) -> {header: value}`` called
     #: once per LLM round-trip, merged over the provider client's static
     #: headers. The product wires a stable per-task ``root_task_id`` here so a
     #: gateway that pins prompt-cache to a single backend account (ModelHub's
     #: ``extra.root_task_id`` account-stickiness) keeps a long task on one
-    #: account and actually reuses its KV cache. ``None`` (default) ⇒ no
-    #: per-request headers — a host runtime injection, never agent identity.
+    #: account and actually reuses its KV cache. ``None`` ⇒ no per-request
+    #: headers — a host runtime injection, never agent identity.
     provider_headers: Optional[Callable[[StepContext], Mapping[str, str]]] = None
 
-    #: Sandbox execution backend for the fs / shell tools. ``None`` (default) ⇒
-    #: the local host (``LocalExecEnv``, today's behaviour). When set, the
-    #: product host provisions / attaches an AIO Sandbox container per root task
-    #: and routes fs / shell side effects into it (the tool schemas — and thus
-    #: the stable prefix — are unchanged). A host runtime injection, never part
-    #: of any agent identity.
-    #:
-    #: **v1 attach path.** ``exec_env`` names ONE pre-existing container by
-    #: ``base_url``; every session on the host attaches it (byte-identical to the
-    #: shipped v1 behaviour). The Client wraps it into an attach ``SandboxProvider``.
+    #: **Attach path.** ONE pre-existing AIO Sandbox container named by
+    #: ``base_url``; every session on the host attaches it, and the Client wraps
+    #: it into an attach ``SandboxProvider``. ``None`` ⇒ the local host
+    #: (``LocalExecEnv``). Routing fs / shell side effects into a container
+    #: leaves the tool schemas — and thus the stable prefix — untouched, which
+    #: is why this can be a host runtime injection rather than agent identity.
     exec_env: Optional[SandboxExecEnvConfig] = None
-    #: **v2 per-session path (D2/D4).** A ``SandboxProvider`` that provisions a
-    #: FRESH container per root-task tree (``LocalDockerSandboxProvider`` and
-    #: friends). ``None`` (default) ⇒ no provisioning. Takes precedence over
-    #: ``exec_env``. Paired with ``sandbox_spec`` (image / resource caps / the
-    #: built-in + global skills mounts); the manager adds the per-session
-    #: workspace mount at allocate time. A host runtime injection, never part of
-    #: any agent identity.
+    #: **Per-session path.** A ``SandboxProvider`` that provisions a FRESH
+    #: container per root-task tree. ``None`` ⇒ no provisioning. Takes
+    #: precedence over ``exec_env``. Paired with ``sandbox_spec`` (image /
+    #: resource caps / the built-in + global skills mounts); the manager adds
+    #: the per-session workspace mount at allocate time. A host runtime
+    #: injection, never part of any agent identity.
     sandbox_provider: Optional[SandboxProvider] = None
     #: The deployment-fixed half of the per-session :class:`SandboxSpec` passed
     #: to ``sandbox_provider.allocate`` — image, resource caps, and the base
@@ -223,18 +196,17 @@ class HostConfig:
     #: ``export X=Y && ``) ahead of the command — the process twin of
     #: ``SandboxAuth.connect_headers`` for HTTP. Lets a product inject per-user
     #: credentials that expire mid-session (fetched fresh each exec). ``None``
-    #: (default) ⇒ no preamble, byte-identical wire. A host runtime injection,
-    #: never LLM-controlled and never recorded (D5); the callback must be total
-    #: (return ``""`` on its own failure). Ignored when no sandbox is configured.
+    #: ⇒ no preamble. A host runtime injection, never LLM-controlled and never
+    #: recorded; the callback must be total (return ``""`` on its own failure).
+    #: Ignored when no sandbox is configured.
     sandbox_exec_preamble: Optional[Callable[[str, Sequence[str]], str]] = None
     #: Optional per-session backend factories threaded into the
-    #: ``SandboxExecEnvManager``. ``None`` (default) ⇒ the SDK's hand-written
-    #: ``AioSandboxExecEnv`` / ``AioBrowserBackend``. A product injects these to
-    #: swap the sandbox wire without touching the seam — e.g. the official
-    #: ``agent-sandbox`` SDK adapters in ``noeta.agent.host``. The adapters keep
-    #: the same ``ExecEnv`` / ``BrowserBackend`` surface, so the tool schemas —
-    #: and the stable prefix — are unchanged. Ignored when no sandbox is
-    #: configured; a host runtime injection, never part of any agent identity.
+    #: ``SandboxExecEnvManager``. ``None`` ⇒ the SDK's own ``AioSandboxExecEnv``
+    #: / ``AioBrowserBackend``. A product injects these to swap the sandbox wire
+    #: without touching the seam; the substitutes keep the same ``ExecEnv`` /
+    #: ``BrowserBackend`` surface, so the tool schemas — and the stable prefix —
+    #: are unaffected. Ignored when no sandbox is configured; a host runtime
+    #: injection, never part of any agent identity.
     sandbox_backend_factory: Optional["BackendFactory"] = None
     sandbox_browser_factory: Optional["BrowserBackendFactory"] = None
     #: Per-session sandbox opt-out for **execution tiers**: given
@@ -242,24 +214,22 @@ class HostConfig:
     #: container for THAT session. ``False`` ⇒ no container: the driver records
     #: no ``exec_env_ref`` and the build falls back to ``LocalExecEnv`` + the
     #: host ``WorkspaceRoot`` fence (the ``local`` tier), reachable even while a
-    #: ``sandbox_provider`` is configured for other sessions. ``None`` (default)
-    #: ⇒ today's behaviour, byte-identical (a configured provider provisions
-    #: every session). Consulted at the top of ``NoetaHost.allocate_exec_env``;
-    #: a host runtime injection, never part of any agent identity. Must be cheap,
-    #: total, and deterministic for a given session (a resumed/reclaimed session
-    #: must resolve the same answer).
+    #: ``sandbox_provider`` is configured for other sessions. ``None`` ⇒ a
+    #: configured provider provisions every session. Consulted at the top of
+    #: ``NoetaHost.allocate_exec_env``; a host runtime injection, never part of
+    #: any agent identity. Must be cheap, total, and deterministic for a given
+    #: session — a resumed or reclaimed session must resolve the same answer.
     sandbox_policy: Optional[Callable[[str, Optional[str]], bool]] = None
 
     # -- memory store addressing --------------------------------------------
-    #: Explicit memory-dir override forwarded to the SdkHost; ``None`` (default)
-    #: falls through to ``global_memory_dir`` / the SDK global default
-    #: (``~/.noeta/memories``). Same precedence chain as the host fields it
-    #: forwards to (``memory_dir`` > ``global_memory_dir`` > default) — one
-    #: chain for the memory tool pack, the resident index, recall, and the
-    #: consolidation marker.
+    #: Explicit memory-dir override forwarded to the SdkHost; ``None`` falls
+    #: through to ``global_memory_dir`` / the SDK global default
+    #: (``~/.noeta/memories``). One precedence chain (``memory_dir`` >
+    #: ``global_memory_dir`` > default) serves the memory tool pack, the
+    #: resident index, recall, and the consolidation marker alike.
     memory_dir: Optional[Path] = None
-    #: Deployment-level global memory root; ``None`` (default) keeps the SDK
-    #: global default. Beaten by an explicit ``memory_dir`` override.
+    #: Deployment-level global memory root; ``None`` keeps the SDK global
+    #: default. Beaten by an explicit ``memory_dir`` override.
     global_memory_dir: Optional[Path] = None
     #: Per-task memory-root resolution seam for multi-tenant hosts: given a
     #: task id, return that task's memory root, or ``None`` to fall back to the
@@ -269,8 +239,7 @@ class HostConfig:
     #: build, recall at the goal seam, ``Client.memory_root``) resolves through
     #: it first. The callable must be cheap and total (it runs on the engine
     #: build and goal paths) and deterministic for a given task id — a resumed
-    #: task must resolve the same store. ``None`` (default) ⇒ today's
-    #: host-level chain, byte-identical for single-tenant hosts.
+    #: task must resolve the same store. ``None`` ⇒ the host-level chain above.
     memory_root_resolver: Optional[Callable[[str], Optional[Path]]] = None
 
     # -- host kill-switches ------------------------------------------------
@@ -292,8 +261,7 @@ class HostConfig:
     #: Project-instructions-file switch, forwarded verbatim to
     #: ``SdkHost.instructions_enabled``. When on, the session's workspace root
     #: is searched for ``NOETA.md`` → ``AGENTS.md`` (in that order) and the file
-    #: is rendered into the stable head. ``False`` (default) keeps every
-    #: existing embedding byte-identical.
+    #: is rendered into the stable head.
     instructions_enabled: bool = False
     #: Explicit path override for the instructions file; reads ONLY that path
     #: instead of the ``NOETA.md`` → ``AGENTS.md`` search. Requires
@@ -305,13 +273,10 @@ class HostConfig:
     #: the session workspace activates every not-yet-active instruction file
     #: between the read file's directory and the workspace root; each renders
     #: anchored at its point of discovery, so a mid-task activation appends
-    #: instead of rewriting the stable head. ``False`` (default) keeps every
-    #: existing embedding byte-identical. Independent of
+    #: instead of rewriting the stable head. Independent of
     #: ``instructions_enabled``: that switch governs the workspace-ROOT file at
     #: session start, this one governs subdirectory files found while reading.
     instructions_discovery: bool = False
-    #: process fs write policy — "dry_run" (stage a diff, safe default) or
-    #: "apply" (real writes). Mapped to FsWriteMode by the Client.
     write_mode: str = "dry_run"
 
     def storage_triple(
@@ -350,7 +315,6 @@ class HostConfig:
                 "HostConfig storage is all-or-none: supply event_log, "
                 "content_store and dispatcher together, or none of them"
             )
-        # Narrowed by the explicit None checks above — no ``type: ignore``
-        # needed (mypy cannot narrow a tuple through ``all()``/``any()``,
-        # which is the only reason one used to sit here).
+        # The per-name None checks above exist because mypy cannot narrow a
+        # tuple through ``all()``/``any()``; they keep this return cast-free.
         return (event_log, content_store, dispatcher)

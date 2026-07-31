@@ -1,13 +1,10 @@
-"""tools m4 — subprocess process-group kill on timeout.
+"""``run_argv`` kills the whole process group when a command times out.
 
-``run_argv`` used to delegate to ``subprocess.run``, whose timeout kills
-only the DIRECT child: a command that backgrounds grandchildren
-(``bash -c "server & wait"``) orphaned them. The default runner is now
-Popen-based (``start_new_session=True``) and on timeout escalates
-SIGTERM → grace → SIGKILL against the whole process group.
-
-These are the first dedicated ``run_argv`` tests (real-exec, POSIX —
-matching the codebase's POSIX-only process handling).
+Killing only the direct child orphans whatever it backgrounded
+(``bash -c "server & wait"`` leaves the server running forever), so the
+default runner starts each command in its own session and escalates
+SIGTERM → grace → SIGKILL against the group. Real-exec and POSIX-only,
+matching the codebase's process handling.
 """
 
 from __future__ import annotations
@@ -45,8 +42,8 @@ def test_run_argv_happy_path_real_exec(tmp_path: Path) -> None:
 
 
 def test_run_argv_timeout_reaps_backgrounded_grandchild(tmp_path: Path) -> None:
-    """The m4 bug itself: a grandchild backgrounded by the direct child
-    must not survive the timeout kill."""
+    """A grandchild backgrounded by the direct child must not survive the
+    timeout kill — that is the whole reason for the group escalation."""
     pid_file = tmp_path / "grandchild.pid"
     # The child backgrounds a long sleep (the grandchild), records its pid,
     # then blocks — guaranteeing the timeout fires while both are alive.
@@ -84,8 +81,9 @@ def test_run_argv_timeout_preserves_partial_output(tmp_path: Path) -> None:
 
 
 def test_run_argv_injected_runner_contract_unchanged(tmp_path: Path) -> None:
-    """The ``runner`` seam keeps the ``subprocess.run``-shaped
-    ``CompletedProcess`` contract (zero churn for runner-injecting tests)."""
+    """The injected ``runner`` seam takes ``subprocess.run``'s shape and
+    returns a ``CompletedProcess``, so a caller can substitute execution
+    without spawning a real process."""
     calls: list[list[str]] = []
 
     def _runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess:

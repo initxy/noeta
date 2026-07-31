@@ -1,7 +1,8 @@
 """InMemoryEventLog: emit / read / find_latest_snapshot / subscribe.
 
-Phase 0 only checks the basic shape; full concurrency enforcement is
-issue 06.
+Covers the append-and-read shape and subscriber fan-out — monotonic seq,
+per-task stream isolation, snapshot lookup, and that a crashing subscriber
+never breaks the writer.
 """
 
 from __future__ import annotations

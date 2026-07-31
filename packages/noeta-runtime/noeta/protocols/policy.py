@@ -1,12 +1,9 @@
-"""Policy Protocol — the function "given current View, decide what's next".
+"""Policy Protocol — the function "given the current View, decide what's next".
 
-Phase 0 only ships StubFinishPolicy; ReActPolicy lands in Phase 1.
-
-The ``decide`` signature carries an explicit
-:class:`noeta.protocols.step_context.StepContext` so downstream callees
-(notably the runtime LLM client) can stamp the right ``task_id`` /
-``lease_id`` / ``trace_id`` onto recorded events without reading
-process-globals.
+``decide`` carries an explicit
+:class:`noeta.protocols.step_context.StepContext` so downstream callees (notably
+the runtime LLM client) can stamp the right ``task_id`` / ``lease_id`` /
+``trace_id`` onto recorded events without reaching for process-globals.
 """
 
 from __future__ import annotations

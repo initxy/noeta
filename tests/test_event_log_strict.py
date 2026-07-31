@@ -1,15 +1,13 @@
-"""InMemoryEventLog three-layer concurrency protection (issue 06).
+"""InMemoryEventLog three-layer concurrency protection.
 
-Augments ``test_event_log.py`` (basic shape) with the strict checks:
-
-1. ``expected_seq`` mismatch raises :class:`StaleSequence`.
-2. Invalid / expired ``lease_id`` raises :class:`InvalidLease` whenever
-   a ``lease_validator`` is bound.
-3. Same ``(lease_id, idempotency_key)`` returns the cached seq without
-   writing a second event.
-
-Plus ``system_emit``: skips lease validation for the documented
-cross-stream Engine observer path (child completion → parent stream).
+The strict checks that sit on top of ``test_event_log.py``'s basic
+shape: an ``expected_seq`` mismatch raises :class:`StaleSequence`, an
+invalid or expired ``lease_id`` raises :class:`InvalidLease` whenever a
+``lease_validator`` is bound, and the same ``(lease_id,
+idempotency_key)`` returns the cached seq without writing a second
+event. ``system_emit`` is the one documented exception: it skips lease
+validation for the cross-stream Engine observer path (child completion
+→ parent stream).
 """
 
 from __future__ import annotations
@@ -324,8 +322,7 @@ def test_idempotency_isolated_per_lease() -> None:
 
 
 # ---------------------------------------------------------------------------
-# system_emit: cross-stream system writer (replaces the
-# legacy ``bypass_lease=True`` flag with a separate method)
+# system_emit: cross-stream system writer
 # ---------------------------------------------------------------------------
 
 

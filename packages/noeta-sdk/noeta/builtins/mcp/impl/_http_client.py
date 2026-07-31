@@ -11,7 +11,7 @@ two Noeta commitments F2 fixed for stdio:
 * **request-response subset only** (``initialize`` / ``tools/list`` /
   ``tools/call``) — never the server-push half of Streamable HTTP
   (``list_changed`` / ``sampling`` / ``elicitation``), so there is no long-lived
-  stream to listen on and the conversation tool set stays frozen (D4).
+  stream to listen on and the conversation tool set stays frozen.
 
 Transport: ``urllib.request`` from the stdlib (no ``requests`` / ``httpx``
 dependency). Each call POSTs a single JSON-RPC request and parses a single JSON
@@ -21,7 +21,7 @@ Streamable HTTP spec returns even for a one-shot request-response); we read the
 first JSON-RPC object whose ``id`` matches and stop — we never hold the stream
 open to listen for pushes.
 
-Credentials (D3/D5): static headers (a Bearer token / API key / custom header)
+Credentials: static headers (a Bearer token / API key / custom header)
 are injected here from the host-side config and **never** appear in any request
 body, event, or recording. They ride only on the wire.
 
@@ -64,7 +64,7 @@ class McpHttpClient:
 
     ``url`` is the single JSON-RPC endpoint the server exposes; every method is
     POSTed there. ``headers`` are the static credential / custom headers merged
-    onto every request (D5) — they are sent on the wire only, never recorded.
+    onto every request — they are sent on the wire only, never recorded.
     """
 
     def __init__(

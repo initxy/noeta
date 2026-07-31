@@ -1,114 +1,57 @@
-# Unified context supply: a generic content channel, message origin, the append-only red line, and memory/instructions as new tenants
+# Resident context content rides one generic append-recorded channel, and the composer stays a read-only fold
 
 ## Context
 
-"Getting new content into the context" has long been loosely called a provider, but it was never something a single abstraction could unify. The real mechanism is made of three parts: writing into the event ledger (append), the rendering rule, and the fingerprint guard. Once those three are teased apart, the runtime does not need to change for each new kind of content added.
+"Getting content into the context" is three mechanisms wearing one name: an append into the event ledger, a rendering rule, and a content fingerprint. The content itself splits in two. *Material* — skills, a memory index, workspace instructions, environment facts, and whatever a deployment invents — is an open set the kernel cannot enumerate. *Mechanism* — messages, tool results, compaction summaries, re-attached thinking — is a closed set whose semantics drive the engine loop.
 
-At the same time, the content in a context naturally falls into two categories: one is "material" (unbounded kinds), the other is "mechanism" (a closed set). Expressing these two categories with different means is the through-line of this decision. The memory and instructions files are the first two external validating use cases of this unified mechanism.
-
-The meaning of "provider" is covered in `docs/adr/provider-neutral.md`; the stable-prefix constraint for prompt-cache friendliness is covered in `CONTEXT.md` (the Stable Prefix entry).
+The kernel stays neutral to material while keeping composed bytes re-derivable from the ledger alone: a resumed task rebuilds its own context, and the prompt cache depends on the stable and semi-stable segments serialising identically across steps (see the Stable Prefix entry in `CONTEXT.md`).
 
 ## Decision
 
-### Provider is narrowed to "an adapter for an external service"
+**A provider is one thing: an adapter for an external service.** Each external service (LLM, storage, vector store) implements one adapter against the matching internal Protocol (`provider-neutral.md`). Getting content into a context is not a provider; each path carries its own name — skill activation, memory recall, reminder injection.
 
-The meaning of provider is fixed to: each external service (LLM, storage, vector store, …) implements one adapter for the corresponding internal Protocol. The old entry ("dynamically-queried context source (RAG / memory / external API)") is retired. Future memory / RAG external services still follow the adapter pattern, but "getting content into the context" is **not called a provider**; each has its own mechanism name (skill invocation, memory recall, reminder injection).
+**Material rides a generic content channel.** `TaskState.active_content` is `kind → {name → content_hash}`; activation is one `ContextContentRecorded(kind, name, version, content_hash, policy)` event. The hash is last-write-wins, so re-recording a name with new bytes is a refresh; the activation anchor is first-write-wins, so a refresh moves bytes and never placement. What a kind *means* is SDK knowledge: one `ContentKindSpec` (renderer + hash resolver + drift policy) per kind, collected into a `ContentChannelRegistry` whose registration order is the semi-stable layout. Adding a kind changes no kernel code.
 
-### Separate material from mechanism: make the resident content channel a generic runtime mechanism
+**Mechanism stays typed events.** Messages, tool results, compaction and thinking are not folded into the channel: the engine loop is driven by their semantics (a user message wakes it, a tool result continues the turn), compaction carries structural semantics ("replace the covered prefix") that operate on other entries, and the typed ledger is the currency of audit. Generics for the open dimension, types for the closed one.
 
-Context content is split in two. The runtime must stay neutral to **material** (open kinds) and use typed events for **mechanism** (a closed set).
+**Renderers resolve their bytes from the recorded hash.** A renderer is `(names, resolve) -> RenderedContent`, where `resolve(kind, name)` derefs the resident's active hash through the `ContentStore`. Composed bytes are therefore a pure function of (folded state, content store): a refresh yields new bytes, and a backing file mutated on disk changes nothing until a re-record. Each recording carries its drift policy as provenance — `pinned` for skills, which render from their preloaded registry and ignore `resolve`; `evolving` for memory, instructions and environment, whose content moves day to day.
 
-- **material** (skills, memory index, future personas / example libraries, …): `TaskState` gains a generic activation table `active_content: kind → tuple of names` (the `activate_skills` patch is kept as syntactic sugar specific to skills, folded into this generic table; old recordings are unaffected). `SkillContentRecorded` is generalized into a generic content-fingerprint event `ContextContentRecorded` with two extra fields — **kind** and **drift policy** (the policy rides with the recording: `pinned` means "a hash change without a version bump is a hard failure," which skills use; `evolving` means "record the hash but allow it to change," which memory / instructions use — the policy travels with the recording rather than being hard-coded by kind in the runtime). The hash-resolution seam is widened to `ContentHashesFn((kind, name) → (version, hash))`. How each kind of material is loaded, in what format, and which segment it renders into are all replaceable parts in the SDK registry, with zero runtime change.
-- **mechanism** (messages, tool results, compaction, thinking re-attach) stays typed events and is **not** folded into the generic channel: the engine loop is driven by their semantics (a user message wakes it, a tool result continues the current turn); compaction carries structural semantics ("replace the first N entries" is an operation on other entries); the typed ledger is the currency of audit. **Use generics for the open dimension, types for the closed dimension.**
+**The append-only red line: suppliers write only on the append side.** Content is recorded into the ledger first, and the composer is a read-only fold over folded state plus the content-addressed store. No external source is called back at compose time. Injectors — memory recall, reminders, wake summaries — run before the append and may be impure (read the clock, the disk, a retrieval service); once their output is recorded, a resume re-folds the ledger and never re-runs them.
 
-### Context entries carry a source label
+**One generic write seam.** A pack's `PackContribution.init` hook runs once per build, including resume, and records its rendered bytes through the kernel-handed `SessionRecorder.record_content`, which stamps the plugin as actor and no-ops when the hash is unchanged. Mid-loop provenance (a skill activated at turn 40) resolves through the `ContentHashesFn((kind, name) → (version, hash))` seam instead.
 
-A view entry carries its own source: an entry from the message-stream channel passes through its origin; an entry from the content channel is labeled `kind:name`. From this, audit can attribute every byte in the context to a source.
+**Messages carry an origin.** `Message.origin` is `human` / `system` / `memory`, optional and omitted from canonical bytes when absent. Only the engine's append path writes it — a label stuffed into model or tool output is just text. Vendor label syntax never enters the ledger: each provider adapter maps `origin` onto its own wire form deterministically.
 
-### Add an origin field to Message; hand wire-format rendering to the adapter
+**Memory is four parts, none of them a skill.** Writing and reading are ordinary tools confined to the memory root; the resident index is a content-channel resident (kind `memory`, policy `evolving`) living in the semi-stable segment, where compaction cannot wash it out; auto-recall is a `turn_intake` reminder provider that reads the store at call time and lands its hits as one recorded turn tagged `origin="memory"`. The store is file-based, with no vector retrieval.
 
-`Message` gains an optional `origin` (`human` / `system` / `memory`; default = the natural author of that role), recorded with `MessagesAppended`. **single-writer guard**: only the engine's append path can write origin; a fake label stuffed into model / tool output is just text. Vendor label syntax does not enter the ledger (provider-neutral): the anthropic adapter renders origin=system as a `<system-reminder>` placed in the adjacent user turn; openai_compat renders it as a system-role message. Replay safety comes free: it rides on the existing message event — no new event, no new state.
+**Workspace instructions are another resident.** `NOETA.md` then `AGENTS.md` at the workspace root, first non-empty wins, rendered inside a `<workspace-instructions source="…">` block under kind `instructions`, policy `evolving`. Instructions are workspace environment material, not agent identity, so they never enter the agent's activation tuple; a host opts in, and a workspace with no such file produces zero events and zero bytes.
 
-### The append-only red line: suppliers may only write on the append side
-
-All content is **recorded into the event ledger first**; the composer is always a read-only fold over state. **No external source is called back at compose time** (pull-style middleware). Injectors (memory recall, reminders, wake-style summaries) run before append and may be impure (read the clock, read disk, retrieve) — once their output is recorded, resume only re-folds the ledger and never re-runs the injectors. Re-deriving a byte-identical context from the ledger (what both prompt cache and resume rely on) is the moat; this red line is non-negotiable. v1 does not abstract an "injector" interface; the host calls the engine's append directly (rule of two: abstract when the second and third use cases appear).
-
-### Memory v1, four parts, not disguised as a skill
-
-Writing memory = an ordinary tool (writes a file into the memory directory); reading the full text on demand = an ordinary tool (the result goes through the tool-result channel); the resident index = the second tenant of the content channel (kind `memory`, policy `evolving`, living in the semi-stable segment so compaction does not flush it out); auto-recall = a use case of the origin channel (the host retrieves at the user-message append seam, and a hit is recorded with origin=memory). Not disguised as a skill: their drift policies are opposite (an unversioned skill change is an accident; a memory change is routine), and forcing it would lose this per-kind drift distinction. v1 is file-based, with no vector retrieval.
-
-### Project instructions file = the third tenant of the content channel (kind="instructions", evolving)
-
-In the workspace root, search in the order `NOETA.md` → `AGENTS.md`; the first non-empty one wins, rendered as a user message in the semi-stable segment (wrapped in `<workspace-instructions source="...">`), with source label `instructions:<filename>` and policy evolving. **Not part of Capabilities / fingerprint** — the instructions file is workspace environment material (the same nature as the skill directory), not agent identity. *(**Current state:** `Capabilities` was retired; read this as "not part of the `AgentSpec.plugins` activation tuple" — see `control-tool-contributions-and-activation-identity.md`.)* The switch is layered: the SDK's `build_session_inputs(instructions_enabled=False)` is an explicit opt-in; the noeta-agent product defaults it on (when the file does not exist: zero events, zero byte change). This is the first external payoff of the generalization promise, with zero runtime-side change.
-
-### Request-level bindings: output_schema / thinking / effort (not in the fingerprint)
-
-`Options.output_schema` (JSON Schema) / `thinking` (adaptive/disabled) / `effort` (low..max) are pure wiring fields, in the same tier as model / provider / cwd, and excluded from the fingerprint. `LLMRequest`'s three new fields declare `__canonical_omit_none__` (like `Message.origin`); None does not enter the canonical bytes — old-recording replay is unaffected. Structured output goes through a binding, not a control-plane tool (the provider's native constraint is equally expressive and does not consume a tool slot); when a schema is present, the Policy's end_turn branch runs `json.loads` on the answer text (deterministic, replay-safe), and on failure keeps the raw text instead of raising. No local schema validation (no jsonschema dependency introduced).
-
-### Oversized tool results are truncated before append (noeta-shaped microcompact)
-
-When `tool_output_inline_limit` (host-level, default None=off) is positive, `wrap_tool_result_block` truncates the inline output to the first N characters and adds a deterministic suffix marker (three fields: dropped/total/full_ref). The truncated form goes **directly into `MessagesAppended`** — append is the fact, and replay reruns the same construction (the tool output is replayed back from `ToolResultRecorded.output_ref` + the same config), so it is byte-equivalent by construction. The full bytes always remain in `ToolResultRecorded` (audit loses nothing). `ToolResult` gains an optional `output_ref` field to hold full_ref.
+**Oversized tool results are truncated before the append.** When `tool_output_inline_limit` is positive, the inline output is cut to the first N characters and given a deterministic marker (dropped / total / full ref); the truncated form is what enters `MessagesAppended`, so replay reconstructs it by construction. The full bytes stay in `ToolResultRecorded`, and audit loses nothing.
 
 ## Rationale
 
-- **A single unified abstraction can only unify the append protocol, not the fetch callback.** The real mechanism for getting new content into the context has always been three parts — ledger append + rendering rule + fingerprint guard — not "one provider." Nailing this down means the runtime changes zero for each new kind of content added: a new kind = one SDK registry + one rendering rule + one kind registration.
-- **Use generics for the open dimension, types for the closed dimension.** Material has unbounded kinds (future AI paradigm shifts all land here), so it must be generic. Mechanism (messages / compaction / thinking) has structural semantics and drives the engine loop; anonymizing them would make the engine blind to messages, lose compaction's "replace the first N entries" semantics, and evaporate the typed ledger's audit currency — the form is generalized but the knowledge is not shrunk.
-- **The append-only red line keeps re-derivation byte-equivalent.** Calling back an external source at compose time would make the composer no longer a pure fold over state; the same ledger would compose to different bytes twice, breaking the stable-prefix prompt cache and preventing a resumed task from re-deriving its own context.
-- **Memory / instructions are not disguised as skills, because their drift policy is opposite.** An unversioned skill change is an accident; a memory / instructions change is routine. Forcing it collapses this per-kind drift distinction and pollutes the meaning of "skill = a static workflow template."
-- **origin's single-writer guard + handing vendor syntax to the adapter is a continuation of provider neutrality.** Nailing the `<system-reminder>` syntax into the ledger would bind one vendor; origin is a neutral marker, and the wire format is a deterministic mapping internal to the adapter.
-- **Don't generalize prematurely on an empty basis.** A single-tenant abstraction is a guess; memory arriving as the second tenant is the validating use case, and instructions as the third tenant fulfills the promise (rule of two / three).
-- **The request-level bindings and the truncation are both additive, touching neither identity nor the ledger protocol.** output_schema / thinking / effort are the same nature as model (environment, not identity); truncating before append lets `MessagesAppended` carry it naturally, with zero protocol expansion. identity (fingerprint) is unaffected, re-derivation from the ledger stays byte-stable, so these can ship independently.
+- **A single abstraction can unify the append protocol, never a fetch callback.** Pinning the three parts down separately means the kernel changes by zero for each new kind of content: a new kind is one registry entry, one rendering rule, one recording.
+- **Generics for the open dimension, types for the closed one.** Material has unbounded kinds, so it must be generic. Anonymising mechanism would blind the engine to messages, erase compaction's structural semantics, and evaporate the typed ledger's audit value — the form would be generalised while the knowledge stayed exactly as large.
+- **The red line is what makes re-derivation byte-equivalent.** A compose-time callback would stop the composer being a pure fold: the same ledger would compose to different bytes twice, breaking the stable-prefix prompt cache and preventing a resumed task from rebuilding its own context. Resolving bytes from the durable, content-addressed store is ledger-side reproduction, not a live fetch.
+- **Memory and instructions are not skills because their drift policy is the opposite.** An unversioned skill change is an accident; a memory or instructions change is routine. Collapsing them into one kind would erase that distinction and pollute "skill" into meaning any injected text.
+- **Origin's single-writer rule plus adapter-side wire syntax is provider neutrality applied to the message stream.** Nailing one vendor's reminder syntax into the ledger would bind the ledger to that vendor; a neutral marker plus a deterministic per-adapter mapping does not.
 
 ## Alternatives considered
 
-1. **Full anonymization (fold messages / compaction / thinking into generic content).** Rejected: the engine loop would blind itself to messages and fail to run; even anonymized, compaction still has to recognize `kind=summary` and perform the replacement — the form is generalized but the knowledge isn't shrunk, and the typed audit currency is lost.
-2. **Call back the provider at compose time (pull-style middleware).** Rejected: the composer is no longer a pure function; the same ledger composes to different bytes twice, breaking the stable-prefix prompt cache, and a resumed task can no longer re-derive the same context from its own EventLog.
-3. **Splice reminder text directly into the user-message string (Claude Code's literal form).** Rejected: once spliced in, it can never be separated again — audit can't tell human speech from system speech, prompt-injection analysis has nothing to grip, and eval can't get a clean human turn.
-4. **Give reminders their own typed event.** Rejected: it is essentially an entry in the message stream with no special structural semantics; after fold it still has to be merged back into the same message list — a duplicated mechanism.
-5. **Disguise the memory index as a dynamically-generated skill / the instructions file as a skill.** Rejected: the implementation is cheapest (one line of registration), but the cost is losing each channel's typed source label (audit can no longer tell where content came from) + semantic pollution.
-6. **Splice instructions into system_prompt.** Rejected: it loses provenance and the source label.
-7. **Abstract an injector interface now / do vector memory now.** Rejected: single-use-case abstraction, rule of two.
-8. **Make structured output a control-plane tool / validate output_schema locally.** Rejected: the provider's native constraint is equally expressive and does not consume a tool slot; no jsonschema dependency introduced, trusting the provider-side enforcement.
-9. **Truncate the tool result at compose time / give truncation its own event type.** Rejected: truncating at compose time makes the same ledger compose to different bytes twice, breaking the composer's purity (and with it prompt cache + resume re-derivation); truncating before append lets `MessagesAppended` carry it naturally, with zero protocol expansion.
+1. **Fold messages, compaction and thinking into the generic channel too.** Rejected: the engine loop would go blind to messages and fail to run, and compaction would still have to recognise a summary kind to perform its replacement — a generalised shape carrying the same special knowledge, minus the typed audit trail.
+2. **Call an external source back at compose time (pull-style middleware).** Rejected: the composer stops being a pure function, the same ledger composes to different bytes twice, and both prompt cache and resume break.
+3. **Splice reminder or recall text straight into the user message string.** Rejected: once spliced it can never be separated again — audit cannot tell human speech from system speech, prompt-injection analysis has nothing to grip, and evaluation cannot recover a clean human turn.
+4. **Give reminders their own typed event.** Rejected: a reminder is an entry in the message stream with no structural semantics of its own; after fold it must be merged back into the same message list anyway, so the event type buys a duplicated mechanism.
+5. **Register the memory index and the instructions file as dynamically generated skills.** Rejected: cheapest to implement — one registration each — but it costs the per-kind drift distinction and the typed provenance that says where a byte came from.
+6. **Splice the instructions file into the system prompt.** Rejected: it loses the file's provenance and puts volatile bytes inside the prompt-cache key.
+7. **Abstract an injector interface, or add vector retrieval, before there is a second use case.** Rejected: a single-tenant abstraction is a guess.
+8. **Truncate an oversized tool result at compose time, or give truncation its own event type.** Rejected: compose-time truncation breaks the composer's purity for the same reason a fetch does; truncating before the append lets the existing message event carry it with zero protocol expansion.
+9. **Attach per-entry source labels to the composed View.** Rejected: they enter no segment hash, no `ContextPlan` body, and no wire format, so they are View metadata with no consumer — the ledger already attributes every recorded byte to the event that recorded it.
 
 ## Consequences
 
-- Adding a kind of material only touches the SDK: register a kind in `noeta.context.content_channel` (the replaceable kind table + rendering rule), with the runtime untouched. `noeta.context.composer` handles semi-stable segment rendering, source labels, and content-channel tenants; `noeta.context.memory` is the memory-index tenant, and `noeta.context.instructions` is the third tenant, the instructions file.
-- Protocol and fold side: `Message.origin` in `noeta.protocols.messages`; the generic content-fingerprint event `ContextContentRecorded` in `noeta.protocols.events`; the generic activation table `TaskState.active_content` in `noeta.protocols.task`; the merge fold for origin / active_content in `noeta.core.fold`.
-- The origin → vendor wire-format mapping is sealed inside each adapter (`noeta.builtins.providers.impl.anthropic` / `noeta.builtins.providers.impl.openai_compat` / `noeta.builtins.providers.impl.openai_responses`), keeping the ledger neutral.
-- memory reads and writes are ordinary tools (`noeta.builtins.memory.impl.store`), and the recall injection seam is in `noeta.execution.memory`.
-- Request-level bindings are in `noeta.client.options`; the canonical `__canonical_omit_none__` is in `noeta.protocols.canonical`; tool-result truncation is carried by `wrap_tool_result_block` + `tool_output_inline_limit`.
-- How compaction cooperates with the semi-stable segment and the tail budget is covered in `docs/adr/context-compaction.md`.
-
-## Clarification (2026-07-30) — kernel final form: `active_content` carries hashes, renderers resolve
-
-The `docs/implementation-specs/archive/2026-07-30-kernel-final-form.md` spec (Shipped) advances this
-decision in two ways; the shape and phrasing above are superseded where they
-conflict.
-
-- **`active_content` is `kind → {name → content_hash}`, not `kind → tuple of names`.** The
-  hash is **last-write-wins**: re-recording a `ContextContentRecorded` with a new
-  hash is a *refresh*; an identical hash is a no-op the recorder already swallowed.
-  The activation *anchor* (placement) stays first-write-wins — refresh moves bytes,
-  never placement. This is the one place refresh semantics live, so every content
-  kind gets them for free.
-
-- **The recorded `content_hash` is load-bearing, not descriptive.** A renderer is
-  `(names, resolve) -> RenderedContent` where `resolve(kind, name)` derefs the
-  resident's *active* hash through the `ContentStore` → bytes. The composed bytes
-  are therefore a pure function of `(folded state, content store)` (law 2) — a
-  refresh yields new bytes; a mutated backing store on disk changes nothing until a
-  re-record. The append-only red line holds unchanged: resolving from the durable,
-  content-addressed `ContentStore` is ledger-side reproduction, **not** a
-  compose-time callback to a live external source. (Skills are `pinned` and render
-  from the preloaded `SkillRegistry`, ignoring `resolve`.)
-
-- **The write seam is the generic `init` hook + scoped `SessionRecorder`**, not
-  feature-named seed recorders. `PackContribution.init` runs once per build
-  (including resume) at seed time; it `put()`s its rendered bytes and records the
-  ref through the kernel-handed `SessionRecorder` (which stamps
-  `actor="plugin:<name>"` and applies the hash gate). `record_memory_index` /
-  `record_instructions` / `record_environment` and the host's
-  `content_snapshots` seam are gone. `ContentHashesFn((kind, name) →
-  (version, hash))` remains for mid-loop provenance emission (skills), but the
-  pre-loop residents put + record their own bytes.
+- Adding a kind of material touches only the SDK: build a `ContentKindSpec` and contribute it from a plugin's session pack, with a registration priority that fixes its place in the semi-stable layout.
+- The kernel side of the channel is `noeta.protocols.events` (the content event), `noeta.protocols.task` (`active_content`), `noeta.core.fold` (the merge and the anchor), `noeta.context.content_channel` (the kind registry), `noeta.context.composer` (segment rendering and the byte-deref), and `noeta.execution.session_pack` (`init` plus `SessionRecorder`).
+- The residents themselves are built-in plugins: `noeta.builtins.memory.impl` for the index and recall, `noeta.builtins.workspace.impl` for instructions and environment, `noeta.builtins.skills.impl` for skills.
+- The `origin` → wire-format mapping is sealed inside each provider adapter, keeping the ledger neutral.
+- Where mid-task activations land is `anchored-content-placement.md`; how compaction cooperates with the semi-stable segment and the tail budget is `context-compaction.md`.
