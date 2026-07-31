@@ -1709,7 +1709,6 @@ class SdkHost(GenericEngineResolver):
             # (mechanism-slots-only context, spec §4.2) — the fs pack is their
             # sole consumer, so they left the kernel signature.
             shell_approval_predicate=shell_approval_predicate,
-            skill_tool_enforcement=self.skill_tool_enforcement,
             # Per-helper structured output (port of the deleted runner's
             # ``_build_child_engine`` wiring): a workflow helper spawned via
             # ``agent(goal, schema=...)`` mounts the ``structured_output``
@@ -1782,6 +1781,7 @@ class SdkHost(GenericEngineResolver):
                     "builtin_skills_dirs": tuple(self.builtin_skills_dirs),
                     "global_skills_dir": self.global_skills_dir,
                     "allow_skill_scripts": self.allow_skill_scripts,
+                    "tool_enforcement": self.skill_tool_enforcement,
                 },
                 "workspace": {
                     "instructions_enabled": self.instructions_enabled,
@@ -1944,7 +1944,6 @@ class SdkHost(GenericEngineResolver):
             allowed_subtask_agents=known,
             subtask_agent_directory=directory,
             max_steps=self.max_steps,
-            skill_tool_enforcement=self.skill_tool_enforcement,
             # Delegation only: the orchestration engine spawns workers but
             # mounts no other control tool (no nested workflows in v1, and
             # ask/todo/skill self-gate off on their absent flags).
@@ -1961,6 +1960,7 @@ class SdkHost(GenericEngineResolver):
                 "skills": {
                     "skills_dir": self.skills_dir,
                     "allow_skill_scripts": self.allow_skill_scripts,
+                    "tool_enforcement": self.skill_tool_enforcement,
                 },
                 "workspace": {
                     "instructions_enabled": self.instructions_enabled,

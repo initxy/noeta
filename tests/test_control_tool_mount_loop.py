@@ -44,7 +44,6 @@ def _empty_build_ctx() -> ControlToolBuildContext:
         capability_flags={},
         subtask_agent_directory=(),
         structured_output_schema=None,
-        skills_kit=None,
     )
 
 

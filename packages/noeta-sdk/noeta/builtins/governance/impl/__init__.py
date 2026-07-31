@@ -39,7 +39,7 @@ from noeta.runtime.governance import (
     PreToolUseRule,
     RepetitionAction,
     RepetitionPolicy,
-    SkillEnforcementMode,
+    SkillGuardFacts,
 )
 
 
@@ -62,11 +62,8 @@ def build_default_guards(
     budget: Budget,
     require_approval_tools: tuple[str, ...],
     shell_approval_predicate: Optional[Callable[[str, Mapping[str, Any]], bool]],
-    skill_tool_enforcement: SkillEnforcementMode,
-    skill_allowed_tools: tuple[tuple[str, frozenset[str]], ...],
+    guard_facts: Optional[Any],
     allowed_subtask_agents: Optional[frozenset[str]],
-    skill_script_tools: frozenset[str],
-    skill_scripts: frozenset[tuple[str, str]],
     repetition_threshold: int,
     repetition_action: RepetitionAction,
     repetition_window: int,
@@ -79,13 +76,15 @@ def build_default_guards(
     rebuild the exact guard shape the live session ran so a resumed Engine
     reproduces guard-origin events (the approval suspend +
     ``ToolCallApprovalRequested``, or a guard deny) consistently. Registration
-    order mirrors the live runner. Every input arrives pre-shaped from the
-    kernel builder: ``tools`` is the finished assembly, ``skill_allowed_tools``
-    is already sdk-resolved (Issue B), ``allowed_subtask_agents`` is already
-    delegation-gated (``None`` when delegation is off, Issue C), and the
-    skill-script guard fields are the same pair the live session wired
-    (Issue E).
+    order mirrors the live runner. Every input arrives pre-shaped: ``tools``
+    is the finished assembly, ``allowed_subtask_agents`` is already
+    delegation-gated (``None`` when delegation is off, Issue C), and
+    ``guard_facts`` is the skills pack's :class:`SkillGuardFacts` bundle
+    (Issues B + E — grants already sdk-resolved), forwarded opaquely by the
+    kernel builder; ``None`` (no skills pack in the session) means every
+    skill-derived field keeps its off/empty default.
     """
+    facts = guard_facts if guard_facts is not None else SkillGuardFacts()
     hooks = HookManager()
     hooks.register(BudgetGuard(budget=budget))
     hooks.register(
@@ -96,11 +95,11 @@ def build_default_guards(
                     n for n in require_approval_tools if n in tools
                 ),
                 conditional_approval=shell_approval_predicate,
-                skill_tool_enforcement=skill_tool_enforcement,
-                skill_allowed_tools=skill_allowed_tools,
+                skill_tool_enforcement=facts.tool_enforcement,
+                skill_allowed_tools=facts.allowed_tools,
                 allowed_subtask_agents=allowed_subtask_agents,
-                skill_script_tools=skill_script_tools,
-                skill_scripts=skill_scripts,
+                skill_script_tools=facts.script_tools,
+                skill_scripts=facts.scripts,
             ),
             tools=tools,
         )

@@ -187,10 +187,19 @@ class PackContribution:
     # --- typed side-state fields (spec §4.3: typed fields, no stringly bag) ---
     # The kernel-consumed contributions: named, typed fields, each read by a
     # specific kernel seam. Adding one is an SPI change, reviewed as such.
-    #: The skills kit (``noeta.execution.skills.SkillsKit``): feeds the build's
-    #: skill content kind + guard grants and the ``skill`` control-tool mount's
-    #: menu (the builder threads it onto the ``ControlToolBuildContext``).
-    skills_kit: Optional[Any] = None
+    #: Control-tool entries this pack contributes (spec §4.1 session plane:
+    #: translate closures are factory outputs). Each factory typically closes
+    #: over the pack's own build state (e.g. the skill mount's menu over its
+    #: registry) — no kit crosses into kernel code (spec §5). The builder runs
+    #: them through the SAME dual-priority mount loop as the host-supplied
+    #: entries; name collisions across the two sources stay loud.
+    control_tools: tuple[Any, ...] = ()
+    #: Opaque guard-input bundle → the injected guards factory
+    #: (``GuardsFactory(guard_facts=…)``). Single-writer across the pack loop;
+    #: its shape is a producer/consumer-plugin contract
+    #: (:class:`noeta.runtime.governance.SkillGuardFacts` for the built-ins) —
+    #: the builder never reads inside it.
+    guard_facts: Optional[Any] = None
     #: The post-tool content-discovery hook → ``Engine(content_discovery=…)``.
     content_discovery: Optional[Any] = None
     #: The per-step resume preloader → ``Engine(content_preloader=…)``.
