@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Wake and resume",
+    "subtitle": "a Task suspends on a typed condition; whatever produces the wake goes through one verb, one match, one durable TaskWoken",
+    "output": "wake-resume.html"
+  },
+  "lanes": [
+    { "id": "task", "label": "Task (Engine)" },
+    { "id": "dispatcher", "label": "Dispatcher (durable)" },
+    { "id": "producers", "label": "Wake producers" },
+    { "id": "worker", "label": "Worker" },
+    { "id": "retry", "label": "If the Worker crashes first", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "wait", "label": "Suspend and wait", "fromCol": 0, "toCol": 1 },
+    { "id": "deliver", "label": "A wake arrives", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "resume", "label": "Lease, wake, resume", "fromCol": 4, "toCol": 5 }
+  ],
+  "mainPath": ["t_suspend", "d_hold", "d_match", "w_lease", "t_woken", "t_step"],
+  "nodes": [
+    { "id": "t_suspend", "lane": "task", "col": 0, "type": "backend", "label": "Suspend", "sublabel": "TaskSuspended" },
+    { "id": "t_woken", "lane": "task", "col": 4, "type": "backend", "label": "TaskWoken", "sublabel": "written first" },
+    { "id": "t_step", "lane": "task", "col": 5, "type": "backend", "label": "Resume", "sublabel": "run_one_step" },
+
+    { "id": "d_hold", "lane": "dispatcher", "col": 1, "type": "database", "label": "wake_on", "sublabel": "typed condition", "tag": "human / timer / subtask / external", "width": 164 },
+    { "id": "d_match", "lane": "dispatcher", "col": 3, "type": "database", "label": "matches_wake", "sublabel": "identity fields" },
+    { "id": "d_clear", "lane": "dispatcher", "col": 5, "type": "database", "label": "Clear wake", "sublabel": "after TaskWoken" },
+
+    { "id": "p_human", "lane": "producers", "col": 0, "type": "external", "label": "Human", "sublabel": "host answer", "width": 70 },
+    { "id": "p_timer", "lane": "producers", "col": 1, "type": "external", "label": "Timer", "sublabel": "timer poll", "width": 70 },
+    { "id": "p_child", "lane": "producers", "col": 2, "type": "external", "label": "Subtask", "sublabel": "child done", "width": 70 },
+
+    { "id": "w_lease", "lane": "worker", "col": 4, "type": "backend", "label": "Lease", "sublabel": "wake rides along" },
+
+    { "id": "r_redeliver", "lane": "retry", "col": 5, "type": "security", "label": "Re-deliver", "sublabel": "wake survives", "width": 110 }
+  ],
+  "edges": [
+    { "from": "t_suspend", "to": "d_hold", "variant": "emphasis", "route": "drop", "fromSide": "bottom", "toSide": "top" },
+    { "from": "d_hold", "to": "d_match", "variant": "emphasis", "route": "straight", "fromSide": "right", "toSide": "left" },
+
+    { "from": "p_human", "to": "d_match", "fromSide": "top", "toSide": "bottom", "via": [[88, 290], [430, 290]] },
+    { "from": "p_timer", "to": "d_match", "fromSide": "top", "toSide": "bottom", "via": [[220, 290], [430, 290]] },
+    { "from": "p_child", "to": "d_match", "label": "Dispatcher.wake", "fromSide": "top", "toSide": "bottom", "via": [[300, 290], [430, 290]], "labelSegment": 1 },
+
+    { "from": "d_match", "to": "w_lease", "label": "ready queue", "variant": "emphasis", "route": "drop", "fromSide": "bottom", "toSide": "top", "labelSegment": 1 },
+    { "from": "w_lease", "to": "t_woken", "label": "lease carries it", "variant": "emphasis", "route": "drop", "fromSide": "top", "toSide": "bottom", "labelSegment": 0 },
+    { "from": "t_woken", "to": "t_step", "variant": "emphasis", "route": "straight", "fromSide": "right", "toSide": "left" },
+    { "from": "t_step", "to": "d_clear", "label": "consumed", "route": "drop", "fromSide": "bottom", "toSide": "top", "labelSegment": 2 },
+
+    { "from": "w_lease", "to": "r_redeliver", "label": "crash first", "variant": "security", "role": "error", "route": "drop", "fromSide": "bottom", "toSide": "top", "labelSegment": 1 },
+    { "from": "r_redeliver", "to": "w_lease", "label": "same wake, next lease", "variant": "dashed", "role": "return", "route": "return-left", "fromSide": "left", "toSide": "left", "labelSegment": 1 }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "One suspend, one wake verb",
+      "items": [
+        "Waiting on a human, a timer, a subtask or an external source is one status",
+        "Dispatcher.wake(task_id, wake_event) is the single delivery verb",
+        "matches_wake projects on identity fields only; payloads ride along unread"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Durable exactly-once",
+      "items": [
+        "Leasing does not consume the wake — it outlives the lease",
+        "release(consumed_wake_event=...) clears it after TaskWoken is durable",
+        "At-least-once delivery plus idempotent consumption is exactly-once"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Producers and timing",
+      "items": [
+        "HumanResponseReceived arrives through the host's answer or approve verb",
+        "TimerFired comes from the Worker's fire_due_timers poll on the recorded deadline",
+        "SubtaskCompleted and SubtaskGroupCompleted come from ChildLifecycleObserver",
+        "A wake that arrives before the suspend is buffered and drained at the suspend"
+      ]
+    }
+  ]
+}

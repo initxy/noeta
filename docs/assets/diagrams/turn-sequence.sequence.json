@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "One turn, end to end",
+    "subtitle": "goal in, one tool round-trip inside the step loop, answer back — recorded at every hop",
+    "output": "turn-sequence.html",
+    "viewBox": [820, 780]
+  },
+  "participants": [
+    { "id": "app", "type": "external", "label": "Your code", "sublabel": "host process" },
+    { "id": "client", "type": "frontend", "label": "Client", "sublabel": "noeta.sdk" },
+    { "id": "engine", "type": "backend", "label": "Engine", "sublabel": "run_one_step" },
+    { "id": "provider", "type": "cloud", "label": "Provider", "sublabel": "LLM adapter" },
+    { "id": "tool", "type": "messagebus", "label": "Tool", "sublabel": "ToolRuntime" },
+    { "id": "log", "type": "database", "label": "EventLog", "sublabel": "append-only" }
+  ],
+  "segments": [
+    { "from": 150, "to": 280, "label": "01 / SEED THE TASK" },
+    { "from": 292, "to": 508, "label": "02 / STEP LOOP" },
+    { "from": 520, "to": 706, "label": "03 / TERMINAL" }
+  ],
+  "messages": [
+    { "from": "app", "to": "client", "y": 196, "label": "goal", "variant": "emphasis" },
+    { "from": "client", "to": "engine", "y": 232, "label": "create + drive", "variant": "emphasis" },
+    { "from": "engine", "to": "log", "y": 266, "label": "TaskCreated", "variant": "dashed" },
+
+    { "from": "engine", "to": "log", "y": 312, "label": "ContextPlanComposed", "variant": "dashed" },
+    { "from": "engine", "to": "provider", "y": 348, "label": "compose + decide", "variant": "emphasis" },
+    { "from": "provider", "to": "engine", "y": 384, "label": "tool_call", "variant": "return" },
+    { "from": "engine", "to": "tool", "y": 420, "label": "invoke", "variant": "emphasis", "note": "Guard first: allow / deny / require_approval" },
+    { "from": "tool", "to": "engine", "y": 466, "label": "ToolResult", "variant": "return" },
+    { "from": "engine", "to": "log", "y": 498, "label": "append events", "variant": "dashed" },
+
+    { "from": "engine", "to": "provider", "y": 540, "label": "ask again", "variant": "emphasis" },
+    { "from": "provider", "to": "engine", "y": 576, "label": "finish", "variant": "return" },
+    { "from": "engine", "to": "log", "y": 612, "label": "TaskCompleted", "variant": "dashed" },
+    { "from": "engine", "to": "client", "y": 648, "label": "terminal", "variant": "return" },
+    { "from": "client", "to": "app", "y": 684, "label": "answer", "variant": "return" }
+  ],
+  "activations": [
+    { "participant": "client", "from": 190, "to": 694, "type": "frontend" },
+    { "participant": "engine", "from": 226, "to": 654, "type": "backend" },
+    { "participant": "provider", "from": 342, "to": 390, "type": "cloud" },
+    { "participant": "tool", "from": 414, "to": 472, "type": "messagebus" },
+    { "participant": "provider", "from": 534, "to": 582, "type": "cloud" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "One turn, one lease",
+      "items": [
+        "run_one_step returns at the next suspend or terminal, not before",
+        "A tool_calls Decision loops in place: append results, recompose, ask again",
+        "Segment 02 repeats until the Policy stops asking for tools"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Recorded before it counts",
+      "items": [
+        "ContextPlanComposed records exactly what went into each LLM call",
+        "Parallel tool results land as one batched MessagesAppended event",
+        "Replaying the stream folds back to the same state — no hidden memory"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Provider-neutral by construction",
+      "items": [
+        "The Engine speaks one LLMProvider protocol and nothing vendor-specific",
+        "Anthropic, OpenAI-compatible and Responses adapters are built-in plugins",
+        "The kernel never imports a vendor SDK — the loader resolves adapters by ref"
+      ]
+    }
+  ]
+}

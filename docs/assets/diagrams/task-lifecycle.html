@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="generator" content="archify 2.11.0">
-  <title>Task Lifecycle Diagram</title>
+  <title>Task lifecycle Diagram</title>
   <script>
     // Resolve the theme before first paint so light-preference users don't
     // see a dark flash. The toolbar script below re-applies with UI state.
@@ -35,7 +35,7 @@
   </noscript>
   <style>
     /* ==========================================================
-       THEME VARIABLES — switch by toggling [data-theme] on the html root
+       THEME VARIABLES — switch by toggling [data-theme] on <html>
        ========================================================== */
     :root,
     [data-theme="dark"] {
@@ -525,14 +525,14 @@
     <div class="header">
       <div class="header-row">
         <div class="pulse-dot"></div>
-        <h1>Task Lifecycle</h1>
+        <h1>Task lifecycle</h1>
       </div>
-      <p class="subtitle">pending → running → suspended → terminal, with durable wake conditions</p>
+      <p class="subtitle">pending → running → suspended → terminal; one suspended status, four wake conditions</p>
     </div>
 
     <!-- Main Diagram -->
     <div class="diagram-container">
-      <svg viewBox="0 0 980 700" role="img" aria-label="Task Lifecycle — pending → running → suspended → terminal, with durable wake conditions (lifecycle diagram)">
+      <svg viewBox="0 0 980 700" role="img" aria-label="Task lifecycle — pending → running → suspended → terminal; one suspended status, four wake conditions (lifecycle diagram)">
         <!-- Definitions -->
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -557,11 +557,11 @@
 
         <!-- Lifecycle bands -->
         <path d="M 72 112 L 908 112" class="a-default" stroke-width="0.8" stroke-dasharray="3,8"/>
-        <text x="72" y="100" class="t-dim" font-size="10" font-weight="600">01 / Lifecycle</text>
+        <text x="72" y="100" class="t-dim" font-size="10" font-weight="600">01 / Task status</text>
         <path d="M 72 264 L 908 264" class="a-default" stroke-width="0.8" stroke-dasharray="3,8"/>
-        <text x="72" y="252" class="t-dim" font-size="10" font-weight="600">02 / Suspend reasons</text>
+        <text x="72" y="252" class="t-dim" font-size="10" font-weight="600">02 / Wake conditions</text>
         <path d="M 72 436 L 908 436" class="a-default" stroke-width="0.8" stroke-dasharray="3,8"/>
-        <text x="72" y="424" class="t-dim" font-size="10" font-weight="600">03 / Terminal</text>
+        <text x="72" y="424" class="t-dim" font-size="10" font-weight="600">03 / Terminal events</text>
 
         <!-- Primary lifecycle rail -->
         <path d="M 154 157 L 440 157" class="a-emphasis" stroke-width="2.2" marker-end="url(#arrowhead-emphasis)"/>
@@ -569,85 +569,78 @@
         <!-- Transition paths -->
         <path d="M 153 157 L 189 157" class="a-emphasis" stroke-width="2" marker-end="url(#arrowhead-emphasis)"/>
         <path d="M 307 157 L 343 157" class="a-emphasis" stroke-width="2" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 402 126 L 248 126" class="a-emphasis" stroke-width="2" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 248 188 L 248 309 Q 248 319 258 319 L 392 319 Q 402 319 402 329 L 402 450" class="a-emphasis" stroke-width="2" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 248 188 L 248 309 Q 248 319 258 319 L 546 319 Q 556 319 556 329 L 556 450" class="a-security" stroke-width="1.1" marker-end="url(#arrowhead-security)"/>
-        <path d="M 402 188 L 402 309 Q 402 319 412 319 L 700 319 Q 710 319 710 329 L 710 450" class="a-security" stroke-width="1.1" marker-end="url(#arrowhead-security)"/>
-        <path d="M 402 336 L 402 262 L 402 262 L 402 188" class="a-dashed" stroke-width="1.1" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 556 336 L 556 272 Q 556 262 546 262 L 412 262 Q 402 262 402 252 L 402 188" class="a-dashed" stroke-width="1.1" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 710 336 L 710 272 Q 710 262 700 262 L 412 262 Q 402 262 402 252 L 402 188" class="a-dashed" stroke-width="1.1" marker-end="url(#arrowhead-dashed)"/>
-        <path d="M 710 416 L 710 312 Q 710 302 700 302 L 412 302 Q 402 302 402 292 L 402 188" class="a-dashed" stroke-width="1.1" marker-end="url(#arrowhead-dashed)"/>
+        <path d="M 402 126 L 402 106 Q 402 96 392 96 L 258 96 Q 248 96 248 106 L 248 126" class="a-emphasis" stroke-width="2" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 248 188 L 248 404 Q 248 414 258 414 L 392 414 Q 402 414 402 424 L 402 450" class="a-emphasis" stroke-width="2" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 248 188 L 248 382 Q 248 392 258 392 L 546 392 Q 556 392 556 402 L 556 450" class="a-security" stroke-width="1.1" marker-end="url(#arrowhead-security)"/>
+        <path d="M 461 157 L 795 157 Q 805 157 805 167 L 805 469 Q 805 479 795 479 L 769 479" class="a-security" stroke-width="1.1" marker-end="url(#arrowhead-security)"/>
 
         <!-- States -->
         <rect x="35" y="126" width="118" height="62" rx="7" class="c-mask"/>
         <rect x="35" y="126" width="118" height="62" rx="7" class="c-frontend" stroke-width="1.5"/>
         <text x="45" y="140" class="t-frontend" font-size="7" font-weight="700">01</text>
         <text x="94" y="147" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Pending</text>
-        <text x="94" y="163" class="t-muted" font-size="7" text-anchor="middle">enqueued</text>
+        <text x="94" y="163" class="t-muted" font-size="7" text-anchor="middle">queued for a lease</text>
 
         <rect x="189" y="126" width="118" height="62" rx="7" class="c-mask"/>
         <rect x="189" y="126" width="118" height="62" rx="7" class="c-backend" stroke-width="1.5"/>
         <text x="199" y="140" class="t-backend" font-size="7" font-weight="700">02</text>
         <text x="248" y="147" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Running</text>
-        <text x="248" y="163" class="t-muted" font-size="7" text-anchor="middle">compose → decide → dispatch</text>
+        <text x="248" y="163" class="t-muted" font-size="7" text-anchor="middle">compose/decide/dispatch</text>
+        <text x="248" y="177" class="t-backend" font-size="7" text-anchor="middle">a Worker holds the lease</text>
 
         <rect x="343" y="126" width="118" height="62" rx="7" class="c-mask"/>
         <rect x="343" y="126" width="118" height="62" rx="7" class="c-cloud" stroke-width="1.5"/>
         <text x="353" y="140" class="t-cloud" font-size="7" font-weight="700">03</text>
         <text x="402" y="147" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Suspended</text>
-        <text x="402" y="163" class="t-muted" font-size="7" text-anchor="middle">parked on wake condition</text>
+        <text x="402" y="163" class="t-muted" font-size="7" text-anchor="middle">wake_on is set</text>
+        <text x="402" y="177" class="t-cloud" font-size="7" text-anchor="middle">no thread, no memory</text>
 
-        <rect x="339" y="278" width="126" height="58" rx="7" class="c-mask"/>
-        <rect x="339" y="278" width="126" height="58" rx="7" class="c-cloud" stroke-width="1.5"/>
-        <text x="402" y="299" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Subtask done</text>
-        <text x="402" y="315" class="t-muted" font-size="7" text-anchor="middle">SubtaskCompleted</text>
-
-        <rect x="493" y="278" width="126" height="58" rx="7" class="c-mask"/>
-        <rect x="493" y="278" width="126" height="58" rx="7" class="c-cloud" stroke-width="1.5"/>
-        <text x="556" y="299" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Human reply</text>
+        <rect x="493" y="278" width="126" height="44" rx="7" class="c-mask"/>
+        <rect x="493" y="278" width="126" height="44" rx="7" class="c-cloud" stroke-width="1.5"/>
+        <text x="556" y="299" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Human answer</text>
         <text x="556" y="315" class="t-muted" font-size="7" text-anchor="middle">HumanResponseReceived</text>
 
-        <rect x="647" y="278" width="126" height="58" rx="7" class="c-mask"/>
-        <rect x="647" y="278" width="126" height="58" rx="7" class="c-cloud" stroke-width="1.5"/>
+        <rect x="647" y="278" width="126" height="44" rx="7" class="c-mask"/>
+        <rect x="647" y="278" width="126" height="44" rx="7" class="c-cloud" stroke-width="1.5"/>
         <text x="710" y="299" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Timer fired</text>
         <text x="710" y="315" class="t-muted" font-size="7" text-anchor="middle">TimerFired</text>
 
-        <rect x="647" y="358" width="126" height="58" rx="7" class="c-mask"/>
-        <rect x="647" y="358" width="126" height="58" rx="7" class="c-cloud" stroke-width="1.5"/>
-        <text x="710" y="379" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">External event</text>
-        <text x="710" y="395" class="t-muted" font-size="7" text-anchor="middle">ExternalEvent</text>
+        <rect x="493" y="334" width="126" height="44" rx="7" class="c-mask"/>
+        <rect x="493" y="334" width="126" height="44" rx="7" class="c-cloud" stroke-width="1.5"/>
+        <text x="556" y="355" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Subtask done</text>
+        <text x="556" y="371" class="t-muted" font-size="7" text-anchor="middle">SubtaskCompleted</text>
+
+        <rect x="647" y="334" width="126" height="44" rx="7" class="c-mask"/>
+        <rect x="647" y="334" width="126" height="44" rx="7" class="c-cloud" stroke-width="1.5"/>
+        <text x="710" y="355" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">External event</text>
+        <text x="710" y="371" class="t-muted" font-size="7" text-anchor="middle">ExternalEvent</text>
 
         <rect x="343" y="450" width="118" height="58" rx="7" class="c-mask"/>
         <rect x="343" y="450" width="118" height="58" rx="7" class="c-database" stroke-width="1.5"/>
         <text x="402" y="471" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Completed</text>
-        <text x="402" y="487" class="t-muted" font-size="7" text-anchor="middle">finish decision</text>
+        <text x="402" y="487" class="t-muted" font-size="7" text-anchor="middle">TaskCompleted</text>
 
         <rect x="497" y="450" width="118" height="58" rx="7" class="c-mask"/>
         <rect x="497" y="450" width="118" height="58" rx="7" class="c-security" stroke-width="1.5"/>
         <text x="556" y="471" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Failed</text>
-        <text x="556" y="487" class="t-muted" font-size="7" text-anchor="middle">fail decision</text>
+        <text x="556" y="487" class="t-muted" font-size="7" text-anchor="middle">TaskFailed</text>
 
         <rect x="651" y="450" width="118" height="58" rx="7" class="c-mask"/>
         <rect x="651" y="450" width="118" height="58" rx="7" class="c-security" stroke-width="1.5"/>
         <text x="710" y="471" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Cancelled</text>
-        <text x="710" y="487" class="t-muted" font-size="7" text-anchor="middle">cancel / close</text>
+        <text x="710" y="487" class="t-muted" font-size="7" text-anchor="middle">TaskCancelled</text>
 
         <!-- Transition labels -->
 
-        <rect x="289.6" y="111" width="70.80000000000001" height="16" rx="4" class="c-mask"/>
-        <text x="325" y="122" class="t-backend" font-size="8" text-anchor="middle">yield / wait</text>
-        <rect x="294.5" y="80" width="61" height="16" rx="4" class="c-mask"/>
-        <text x="325" y="91" class="t-backend" font-size="8" text-anchor="middle">wake event</text>
-        <rect x="304.3" y="339" width="41.400000000000006" height="16" rx="4" class="c-mask"/>
-        <text x="325" y="350" class="t-backend" font-size="8" text-anchor="middle">finish</text>
-        <rect x="386" y="339" width="32" height="16" rx="4" class="c-mask"/>
-        <text x="402" y="350" class="t-security" font-size="8" text-anchor="middle">fail</text>
-        <rect x="535.3" y="339" width="41.400000000000006" height="16" rx="4" class="c-mask"/>
-        <text x="556" y="350" class="t-security" font-size="8" text-anchor="middle">cancel</text>
 
-
-
-
+        <rect x="309" y="75" width="32" height="16" rx="4" class="c-mask"/>
+        <text x="325" y="86" class="t-backend" font-size="8" text-anchor="middle">wake</text>
+        <rect x="304.3" y="393" width="41.400000000000006" height="16" rx="4" class="c-mask"/>
+        <text x="325" y="404" class="t-backend" font-size="8" text-anchor="middle">finish</text>
+        <rect x="386" y="371" width="32" height="16" rx="4" class="c-mask"/>
+        <text x="402" y="382" class="t-security" font-size="8" text-anchor="middle">fail</text>
+        <rect x="784.3" y="297" width="41.400000000000006" height="16" rx="4" class="c-mask"/>
+        <text x="805" y="308" class="t-security" font-size="8" text-anchor="middle">cancel</text>
 
         <!-- Legend -->
         <text x="220" y="582" class="t-primary" font-size="10" font-weight="600">Legend</text>
@@ -666,25 +659,37 @@
     <div class="cards">
       <div class="card">
         <div class="card-header">
-          <div class="card-dot emerald"></div>
-          <h3>Durable exactly-once wake</h3>
+          <div class="card-dot cyan"></div>
+          <h3>One suspended status</h3>
         </div>
         <ul>
-          <li>&bull; Dispatcher matches wake event to suspended task</li>
-          <li>&bull; Wake survives the lease — cleared only on consuming release</li>
-          <li>&bull; Crash between wake and resume re-delivers, never loses</li>
+          <li>&bull; Waiting on a human, a timer, a subtask or an external source is the same status</li>
+          <li>&bull; wake_on carries the typed WakeCondition; matches_wake is the only matcher</li>
+          <li>&bull; A fan-out join waits on SubtaskGroupCompleted through the same mechanism</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
-          <div class="card-dot cyan"></div>
-          <h3>One suspend state, many reasons</h3>
+          <div class="card-dot emerald"></div>
+          <h3>Durable exactly-once wake</h3>
         </div>
         <ul>
-          <li>&bull; Subtask, human, timer, external all share suspended</li>
-          <li>&bull; Resume path is identical whatever the reason</li>
-          <li>&bull; Waiting costs nothing while the task sleeps</li>
+          <li>&bull; The Dispatcher holds the matched wake event; leasing does not consume it</li>
+          <li>&bull; release(consumed_wake_event=...) clears it only after TaskWoken is durable</li>
+          <li>&bull; At-least-once delivery plus idempotent consumption is exactly-once</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot rose"></div>
+          <h3>Terminal is a status, not one event</h3>
+        </div>
+        <ul>
+          <li>&bull; TaskCompleted, TaskFailed and TaskCancelled all fold to status terminal</li>
+          <li>&bull; A TaskSnapshot is written ahead of each suspend and each terminal exit</li>
+          <li>&bull; ConversationClosed only archives: the Task stays suspended and reopenable</li>
         </ul>
       </div>
     </div>

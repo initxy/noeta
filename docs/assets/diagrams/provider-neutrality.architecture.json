@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Provider Neutrality",
+    "subtitle": "Engine → one internal LLM protocol → three adapters; the kernel cannot import a vendor SDK",
+    "output": "provider-neutrality.html"
+  },
+  "components": [
+    { "id": "engine", "type": "backend", "label": "Engine", "sublabel": "core · run_one_step", "pos": [40, 304], "size": [160, 72], "tag": "builds an LLMRequest" },
+    { "id": "llm", "type": "backend", "label": "RuntimeLLMClient", "sublabel": "records the round-trip", "pos": [260, 304], "size": [200, 72], "tag": "three events per call" },
+    { "id": "protocol", "type": "security", "label": "LLMProvider", "sublabel": "complete() → LLMResponse", "pos": [520, 304], "size": [190, 72], "tag": "noeta.protocols.messages" },
+
+    { "id": "anthropic", "type": "cloud", "label": "AnthropicProvider", "sublabel": "Messages API + SSE", "pos": [830, 190], "size": [210, 72], "tag": "system-reminder wrapping" },
+    { "id": "compat", "type": "cloud", "label": "OpenAICompatProvider", "sublabel": "chat completions", "pos": [830, 304], "size": [210, 72], "tag": "gateways + local models" },
+    { "id": "responses", "type": "cloud", "label": "OpenAIResponsesProvider", "sublabel": "Responses API", "pos": [830, 418], "size": [210, 72], "tag": "reasoning models" },
+
+    { "id": "api_a", "type": "external", "label": "Anthropic", "sublabel": "/v1/messages", "pos": [1120, 195], "size": [170, 62] },
+    { "id": "api_o", "type": "external", "label": "OpenAI-compatible", "sublabel": "/v1/chat/completions", "pos": [1120, 309], "size": [170, 62] },
+    { "id": "api_r", "type": "external", "label": "OpenAI Responses", "sublabel": "/v1/responses", "pos": [1120, 423], "size": [170, 62] }
+  ],
+  "boundaries": [
+    { "kind": "security-group", "label": "noeta-runtime — no vendor SDK, no httpx, stdlib only", "wraps": ["engine", "llm", "protocol"] },
+    { "kind": "region", "label": "noeta.builtins.providers — reached only by dynamic ref", "wraps": ["anthropic", "compat", "responses"] }
+  ],
+  "connections": [
+    { "from": "engine", "to": "llm", "variant": "emphasis" },
+    { "from": "llm", "to": "protocol", "variant": "emphasis" },
+    { "from": "protocol", "to": "compat", "label": "host injects one", "variant": "emphasis", "labelDy": -30 },
+    { "from": "protocol", "to": "anthropic", "fromSide": "top", "toSide": "left", "via": [[615, 226]] },
+    { "from": "protocol", "to": "responses", "fromSide": "bottom", "toSide": "left", "via": [[615, 454]] },
+    { "from": "anthropic", "to": "api_a", "variant": "dashed" },
+    { "from": "compat", "to": "api_o", "variant": "dashed" },
+    { "from": "responses", "to": "api_r", "variant": "dashed" }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "The boundary is structural",
+      "items": [
+        "noeta-runtime declares zero dependencies — no httpx, no vendor SDK, stdlib only",
+        ".importlinter's sdk-core-not-builtins contract forbids every static import of noeta.builtins",
+        "Every adapter lives in the providers built-in, so the kernel cannot reach one even by accident"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "One protocol",
+      "items": [
+        "LLMProvider is a single pure method: complete(LLMRequest) -> LLMResponse",
+        "Adapters never write the EventLog, never see a StepContext, and know nothing about resume",
+        "RuntimeLLMClient records LLMRequestStarted / LLMResponseRecorded / LLMRequestFinished, error path included"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Swapping is wiring, not identity",
+      "items": [
+        "Options.provider or Client(provider=…) — excluded from AgentSpec identity and from equality",
+        "Import path: noeta.sdk.providers, a lazy re-export so only a network host pays for httpx",
+        "CATALOG carries each model's context window, output cap, and pricing"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "What an adapter owns",
+      "items": [
+        "Translating the noeta-shape Message / Block vocabulary to and from the vendor wire",
+        "Host injections: Anthropic wraps them in system-reminder tags, openai_compat renders mid-history system turns",
+        "Streaming, retry classification, usage accounting, and context-overflow detection"
+      ]
+    }
+  ]
+}
