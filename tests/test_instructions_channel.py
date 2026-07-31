@@ -322,7 +322,8 @@ def test_instructions_disabled_default_no_change_in_builder(tmp_path: Path) -> N
         compaction=COMPACTION_OFF,
         budget=Budget(),
     )
-    assert baseline.instructions_snapshot is None
+    # The kind is absent, so the generic resolver knows no instructions name.
+    assert baseline.content_hashes(INSTRUCTIONS_KIND, "NOETA.md") is None
     # environment is always-on; instructions off ⇒ skill + environment only.
     assert baseline.composer._content_renderers.kinds() == (
         "skill",
@@ -343,7 +344,7 @@ def test_enabled_but_no_file_zero_footprint(tmp_path: Path) -> None:
         budget=Budget(),
         plugin_config={"workspace": {"instructions_enabled": True}},
     )
-    assert inputs.instructions_snapshot is None
+    assert inputs.content_hashes(INSTRUCTIONS_KIND, "NOETA.md") is None
     assert inputs.composer._content_renderers.kinds() == (
         "skill",
         ENVIRONMENT_KIND,
@@ -375,7 +376,13 @@ def test_enabled_adds_kind_after_skill_and_memory(tmp_path: Path) -> None:
     )
     resolved = inputs.content_hashes(INSTRUCTIONS_KIND, "NOETA.md")
     assert resolved is not None
-    assert resolved[1] == instructions_content_hash(inputs.instructions_snapshot)
+    # One source of truth: the resolved fingerprint equals the hash of a
+    # snapshot rebuilt independently from the on-disk file bytes.
+    expected = InstructionsSnapshot(
+        name="NOETA.md",
+        text=(tmp_path / "NOETA.md").read_text(encoding="utf-8"),
+    )
+    assert resolved[1] == instructions_content_hash(expected)
 
 
 def test_instructions_file_override_in_builder(tmp_path: Path) -> None:
@@ -394,8 +401,16 @@ def test_instructions_file_override_in_builder(tmp_path: Path) -> None:
             "workspace": {"instructions_enabled": True, "instructions_file": custom}
         },
     )
-    assert inputs.instructions_snapshot is not None
-    assert inputs.instructions_snapshot.name == "CUSTOM.md"
+    # The resident is named by the override file's basename — the generic
+    # resolver answers under "CUSTOM.md" (and knows no default name).
+    resolved = inputs.content_hashes(INSTRUCTIONS_KIND, "CUSTOM.md")
+    assert resolved is not None
+    assert resolved[1] == instructions_content_hash(
+        InstructionsSnapshot(
+            name="CUSTOM.md", text=custom.read_text(encoding="utf-8")
+        )
+    )
+    assert inputs.content_hashes(INSTRUCTIONS_KIND, "NOETA.md") is None
     assert inputs.composer._content_renderers.kinds() == (
         "skill",
         "instructions",
