@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, get_args
 
 from noeta.client.options import AgentDefinition
 from noeta.client.plugins import PluginError
@@ -86,6 +86,24 @@ ActivationBinding = Literal[
     "tool", "agent", "content_kind", "prompt_fragment", "policy", "elsewhere"
 ]
 
+#: The legal values of each ``Literal``-typed field, checked at construction
+#: and read straight off the annotations above so there is no second list to
+#: keep in agreement.
+#:
+#: A ``SurfaceSpec`` is written positionally in practice, so deleting a field
+#: from the middle of the signature (``merge_rule``) shifts every later
+#: argument one slot left — silently, because none of these enums had a runtime
+#: check: ``"append"`` landed in ``ordering`` and behaved like ``"sorted"`` by
+#: luck. Registration is a one-time, host-side act; validating it here costs
+#: nothing and turns that class of drift into an error at the line that caused
+#: it.
+_FIELD_VOCABULARY: dict[str, tuple[Any, ...]] = {
+    "plane": get_args(Plane),
+    "activation_scope": get_args(ActivationScope),
+    "collision_key": get_args(CollisionKey),
+    "ordering": get_args(Ordering),
+}
+
 
 @dataclass(frozen=True)
 class SurfaceSpec:
@@ -113,6 +131,14 @@ class SurfaceSpec:
     activation_binding: ActivationBinding | None = None
 
     def __post_init__(self) -> None:
+        for field_name, legal in _FIELD_VOCABULARY.items():
+            value = getattr(self, field_name)
+            if value not in legal:
+                raise PluginError(
+                    f"surface {self.name!r}: {field_name}={value!r} is not one "
+                    f"of {', '.join(repr(v) for v in legal)} — check the "
+                    f"positional order of the SurfaceSpec fields"
+                )
         # An identity surface with no binding would be silently dropped
         # between resolve and compile — the ``content_kind``-went-missing
         # failure. Catch it at registration, not at projection time.
@@ -129,6 +155,16 @@ class SurfaceSpec:
                 f"surface {self.name!r} is {self.plane}-plane but declares "
                 f"activation_binding={self.activation_binding!r} — only "
                 f"identity-plane surfaces bind into PluginActivation"
+            )
+        bindings = get_args(ActivationBinding)
+        if self.activation_binding is not None and (
+            self.activation_binding not in bindings
+        ):
+            raise PluginError(
+                f"surface {self.name!r}: activation_binding="
+                f"{self.activation_binding!r} names no PluginActivation "
+                f"channel — expected one of "
+                f"{', '.join(repr(b) for b in bindings)}"
             )
 
 

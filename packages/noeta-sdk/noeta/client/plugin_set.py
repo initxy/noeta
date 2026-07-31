@@ -603,12 +603,14 @@ class PluginSet:
 
         The governance set is **derived from the registry** (D11): every wiring
         surface scoped ``"process"`` is process-wide authority by definition, so
-        a host that registers its own process-scoped wiring surface has it
-        collected here without editing this method. The returned pair keeps its
-        two-bucket shape because ``Client`` wires guards and observers into
-        different runtime seams; a third process surface would need a channel of
-        its own, which is why the split is by surface name inside the derived set
-        rather than an open-ended bag.
+        a host that registers one is *seen* here without editing this method.
+        It is not silently absorbed, though: the returned pair has exactly two
+        buckets because ``Client`` wires guards and observers into two different
+        runtime seams, so a third process surface has nowhere to go and is
+        **refused loudly**. Routing it into ``guards`` by default — the shape
+        this method briefly had — hands the engine a value that is not a
+        ``Guard`` and turns a build-time configuration error into a crash on the
+        first tool call.
         """
         guards: list[Any] = []
         observers: list[Any] = []
@@ -622,8 +624,16 @@ class PluginSet:
                     continue
                 if rc.surface == "observer":
                     observers.append(rc.value)
-                else:
+                elif rc.surface == "guard":
                     guards.append(rc.value)
+                else:
+                    raise PluginError(
+                        f"plugin {p.name!r}: process-scoped wiring surface "
+                        f"{rc.surface!r} has no runtime channel — Client wires "
+                        f"only 'guard' and 'observer' process-wide. Give the "
+                        f"surface a per-agent scope, or wire its channel here "
+                        f"before registering it as process-scoped."
+                    )
         return tuple(guards), tuple(observers)
 
     def resolve(self) -> tuple[ResolvedContribution, ...]:

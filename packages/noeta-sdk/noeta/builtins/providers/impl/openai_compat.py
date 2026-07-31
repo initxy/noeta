@@ -127,6 +127,12 @@ class OpenAICompatProvider:
         argument still wins. Neither present raises here rather than letting
         the first call fail with an opaque 401. ``base_url`` stays required —
         an OpenAI-*compatible* endpoint has no conventional default.
+
+        An **empty** key is treated as absent, deliberately: the common way to
+        arrive at one is ``os.environ.get("KEY", "")``, i.e. the very
+        misconfiguration this check exists to name. A local endpoint that
+        wants no authentication passes any placeholder (``api_key="none"``);
+        the header is sent and the server ignores it.
         """
         resolved_key = api_key if api_key is not None else os.environ.get(_API_KEY_ENV)
         if not resolved_key:

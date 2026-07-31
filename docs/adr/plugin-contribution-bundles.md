@@ -95,8 +95,9 @@ surface:
 | `activation_scope` | `per-agent` \| `process` \| `host-wired` — how the effect is scoped (D6) |
 | `validator` | called on a **resolved** value; raises when it is not a legal member of the surface |
 | `collision_key` | `name` \| `kind` \| `alias` \| `single-valued` \| `none` — the namespace two contributions clash in |
-| `merge_rule` | `append` \| `single` \| `dict-merge` |
+| `merge_rule` | `append` \| `single` \| `dict-merge` — *(**superseded 2026-07-31:** deleted, never read; see the SDK-layer-cleanup Addendum)* |
 | `ordering` | `sorted` = `(plugin, name)`; `priority` = an integer `priority` param, ties broken by `(plugin, name)` |
+| `activation_binding` | *(added 2026-07-31)* identity-plane only — which `PluginActivation` channel the contribution feeds |
 
 `standard_registry()` seeds the standard catalogue (D3) — a fresh registry each
 call. A host that owns app-plane surfaces takes `registry.copy()` and
@@ -411,8 +412,9 @@ plugin contribution with zero kernel edits*:
 
 - **The catalogue is fifteen surfaces.** *(**Current state:** sixteen since control-tool-surface S1 added `control_tool`.)* `session_pack` is the fifteenth
   (plane `wiring`, `activation_scope` per-agent, `collision_key` `name`,
-  `merge_rule` `append`, ordering **`priority`** — the `reminder` /
-  `tool_result_transform` precedent). It is the **session-construction half**
+  ordering **`priority`** — the `reminder` / `tool_result_transform`
+  precedent; as written it also carried `merge_rule` `append`, deleted
+  2026-07-31 — see the SDK-layer-cleanup Addendum). It is the **session-construction half**
   of a capability: a factory `(SessionBuildContext) -> PackContribution` the
   kernel builder runs when the contributing plugin is activated for the agent.
   `PackContribution` carries `tools` + `content_kinds` (each with its **own**
@@ -514,3 +516,38 @@ backend (`noeta.storage.memory`), and the public backend SPI
   the `noeta.storage.spi` domain rules, ships a `build_stack` factory, and the
   host injects the triple through `HostConfig` — no plugin machinery, no
   registration.
+
+## Addendum — 2026-07-31: `merge_rule` → `activation_binding`, and the two process channels
+
+The SDK-layer cleanup
+(`docs/implementation-specs/2026-07-30-sdk-layer-cleanup.md`, D11) settled two
+things this ADR left ambiguous about `SurfaceSpec`.
+
+- **`merge_rule` is deleted — it was decoration.** No code ever read it: the
+  append-vs-single behaviour is fully determined by `collision_key`
+  (`single-valued` *is* the single-merge surface). A declared field promising
+  a mechanism the loader does not implement is worse than no field, so it is
+  gone rather than documented.
+- **Its slot now holds `activation_binding`, which *is* read.** An
+  identity-plane surface declares which `PluginActivation` channel its
+  contribution feeds (`tool` / `agent` / `content_kind` / `prompt_fragment` /
+  `policy`, or `elsewhere` when a per-agent projection carries it, as
+  `control_tool` does). `PluginSet.identity_activations()` dispatches on that
+  table instead of matching surface names, which is what finally makes the
+  **identity** projection as surface-agnostic as the rest of the loader: a
+  host-registered identity surface reaches `compile_options` with no loader
+  edit. The binding is required for `plane="identity"` and rejected for every
+  other plane, checked in `SurfaceSpec.__post_init__` — the
+  `content_kind`-went-missing failure now fails at registration, before any
+  plugin loads. Every enum field is validated there too, so an argument left
+  in the old `merge_rule` position raises instead of silently landing in
+  `ordering`.
+- **The wiring plane has exactly two process-wide channels.** `guard` and
+  `observer` are the only process-scoped seams `Client` wires, so a
+  process-scoped wiring surface beyond those two is **refused** by
+  `process_hooks()`. This ADR's "governance is process-wide authority" rule
+  stands; what is new is that the set is derived from the registry and a
+  surface it cannot route is an error, not a value filed under `guards` — a
+  non-`Guard` value reaching the engine turns a build-time configuration
+  error into a crash on the first tool call. A host surface that is not
+  governance takes a per-agent scope.

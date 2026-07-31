@@ -34,7 +34,8 @@ import importlib.util
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional, Sequence
+from types import ModuleType
+from typing import Any, Callable, Mapping, Optional, Sequence, Union
 
 from noeta.client.plugins import PluginError
 
@@ -653,7 +654,7 @@ class PluginBuilder:
 # ---------------------------------------------------------------------------
 
 
-def exec_plugin_file(path: Path, *, module_prefix: str) -> Any:
+def exec_plugin_file(path: Path, *, module_prefix: str) -> ModuleType:
     """Execute a single-file plugin and return its module object.
 
     The one implementation of "run a ``plugin.py`` and hand back the module",
@@ -680,7 +681,7 @@ def exec_plugin_file(path: Path, *, module_prefix: str) -> Any:
     return module
 
 
-def find_builder(module: Any, origin: Any) -> PluginBuilder:
+def find_builder(module: ModuleType, origin: Union[str, Path]) -> PluginBuilder:
     """The module-level :class:`PluginBuilder` a single-file plugin exposes.
 
     Prefers the conventional ``plugin`` name; falls back to a unique

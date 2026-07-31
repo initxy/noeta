@@ -17,7 +17,7 @@ from noeta.sdk import (
 )
 ```
 
-> `load_plugins` 是 `noeta.client.plugin_set.load_plugins` 在 `noeta.sdk` 里的名字（内部函数叫 `load_plugins`；它以 `load_plugins` 别名重新导出，以免与将被移除的 0.4.0 `load_plugins` 撞名，见[已移除的 bundle 路径](#the-retired-bundle-path)）。
+> `load_plugins` 就是 `noeta.client.plugin_set.load_plugins`，以同一个名字从 `noeta.sdk` 重新导出。过渡期的 `load_plugin_set` 别名——它只在 0.4.0 bundle 加载器还占着这个名字时存在过——已经移除，见[已移除的 bundle 路径](#the-retired-bundle-path)。
 
 > 全文不给行号——它们每次编辑都会漂移。模块路径加成员名才是稳定坐标。
 
@@ -161,11 +161,18 @@ class SurfaceSpec:
     activation_scope: "per-agent" | "process" | "host-wired"
     validator: Callable[[Any], None]   # raises on an illegal contribution value
     collision_key: "name" | "kind" | "alias" | "single-valued" | "none"
-    merge_rule: "append" | "single" | "dict-merge"
     ordering: "sorted" | "priority" = "sorted"
+    # 仅 identity plane——该贡献汇入哪一条 PluginActivation 通道；
+    # 若由某个 per-agent 投影代为承载，则写 "elsewhere"
+    activation_binding: "tool" | "agent" | "content_kind"
+                      | "prompt_fragment" | "policy" | "elsewhere" | None = None
 ```
 
-`validator` 在**已解析**的值上运行（在 `ref` 被导入之后）；列出和 manifest 级的冲突检查从不调用它，所以它们保持零执行。
+`validator` 在**已解析**的值上运行（在 `ref` 被导入之后）；列出和 manifest 级的冲突检查从不调用它，所以它们保持零执行。每个枚举字段都在构造时校验，写错的值（或落错位置的位置参数）会在注册那一行就抛 `PluginError`。
+
+`activation_binding` 正是 identity 投影保持**表驱动**的原因：identity-plane surface 自己声明汇入哪条通道，无需改动加载器就能抵达 `compile_options`。它对 `plane="identity"` **必填**，对其他 plane **禁止**——没有绑定的 identity 贡献会在 resolve 与 compile 之间被悄悄丢掉，`content_kind` 当初就是这么丢的。
+
+wiring plane 只有两条**进程级**通道：`guard` 与 `observer`。超出这两者的进程级 wiring surface 会被 `PluginSet.process_hooks()` 拒绝，而不是塞进其中一条——它没有第三个 seam 可去，而把非 `Guard` 的值交给引擎，会把构建期的配置错误变成第一次工具调用时的崩溃。这类 surface 请改用 per-agent 作用域。
 
 `standard_registry()` 返回一个以十六个标准 surface 播种的全新 `SurfaceRegistry`。宿主在加载前于一个**副本**上注册额外的 **app-plane** surface——同一套校验 / 冲突 / 排序流水线会原封不动地作用在它们上：
 
@@ -178,7 +185,7 @@ def _valid_route(value):
 
 reg = standard_registry()                       # a fresh copy
 reg.register(SurfaceSpec(
-    "http_route", "host", "host-wired", _valid_route, "name", "append",
+    "http_route", "host", "host-wired", _valid_route, "name",
 ))
 plugins = load_plugins(registry=reg, ...)    # the host's surface is live
 ```
