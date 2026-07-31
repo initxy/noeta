@@ -145,8 +145,6 @@ def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
             ContentKindContribution(200, index_kit.content_kind(entries)),
         ),
         init=_init,
-        memory_store=store,
-        memory_entries=entries,
     )
 
 
