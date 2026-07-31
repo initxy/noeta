@@ -43,15 +43,6 @@ from noeta.execution.resolver import (
     GenericEngineResolver,
     agent_name_of,
 )
-from noeta.execution.commands import (
-    CommandResolution,
-    SlashCommand,
-    first_sentence,
-    get_command,
-    list_commands,
-    render_help,
-    resolve_command,
-)
 from noeta.execution.environment import (
     EnvironmentKit,
 )
@@ -80,7 +71,6 @@ __all__ = [
     "build_session_inputs",
     "build_skill_hashes",
     "SkillsKit",
-    "CommandResolution",
     "COMPACTION_OFF",
     "CompactionConfig",
     "EnvironmentKit",
