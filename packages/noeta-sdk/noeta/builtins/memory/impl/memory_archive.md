@@ -1,0 +1,1 @@
+Retire an outdated or superseded memory: move it into the memory directory's archive/ subdirectory, removing it from the index, recall and search. Nothing is ever deleted — a human can restore the file from archive/.

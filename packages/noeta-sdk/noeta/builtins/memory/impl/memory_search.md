@@ -1,0 +1,1 @@
+Find stored memories by content: case-insensitive substring match (no regex) over memory names and full text. Returns up to 10 memories with up to 3 matching lines each; a true 'truncated' flag means more memories matched — refine the query. Use memory_read for a hit's full text. Archived memories are not searched.
