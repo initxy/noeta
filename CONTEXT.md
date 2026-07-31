@@ -291,6 +291,14 @@ _Avoid_: View Log, Dump
 Continues actual execution from a suspended state. An operational emergency-stop lever; the normal path is triggered by a wake event.
 _Avoid_: Restart, Continue
 
+**Rewind / Fork**:
+The two branch verbs, sharing one **anchor** — the seq of a user-goal `MessagesAppended` — and one fold-through boundary, the turn boundary just *before* that message. They differ only in where the resulting baseline lands. **Rewind** appends a `TaskRewound` to the same stream, so the anchored turn and everything after it become folded-over dead history (nothing is deleted — append-only holds; the marker names a new fold baseline) and the workspace files that span edited are restored. **Fork** appends a `TaskForked` to a **new** task's stream and writes nothing to the source, so both branches survive: "undo this" vs "try this instead, keeping the original". A fork is a **sibling, not a Subtask** — `parent_task_id` means delegation, so it stays `None` and lineage lives in `TaskForked.source_task_id`; only a root Task can be forked. A fork branches the *conversation*, not the workspace: both branches keep the source's `workspace_dir` and act on the same disk, which is why fork has no file-restore half.
+_Avoid_: Branch (as a noun for the Task — it is just a Task), Copy / clone / duplicate (imprecise about the anchor and about the source staying untouched), Checkpoint
+
+**Interrupt**:
+The third **human stop**, between the two that already existed: `cancel` writes `TaskCancelled` and the conversation is terminal and dead; `close` writes `ConversationClosed` and archives it; **`interrupt`** writes `TurnInterrupted` and stops only the in-flight *turn*, leaving the Task resting at its next-goal suspend, reopenable by simply typing again. It reuses the cooperative-cancel mechanism the Engine already polls at both turn boundaries, so its granularity **is** the turn boundary — it lands before the next tool call or model round and cannot abort a tool call already executing. Not a rewind: the interrupted turn's events stay on the stream as real history (the model said what it said, the tools ran what they ran), and the two verbs compose — interrupt to stop, rewind to un-say. The resulting `TaskSuspended.reason` is `"interrupted"`.
+_Avoid_: Pause (nothing resumes mid-turn — the turn is abandoned, not frozen), Abort / stop unqualified (ambiguous across the three verbs), Cancel (that is the terminal one)
+
 ## Relationships
 
 - **Task → Subtask**: one-to-many; a subtask has its own EventLog stream, related through `parent_task_id`.

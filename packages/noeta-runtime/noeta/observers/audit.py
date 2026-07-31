@@ -127,6 +127,9 @@ _SUMMARY_FIELDS_BY_EVENT: dict[str, tuple[str, ...]] = {
     # so the audit trail records the close/archive lifecycle.
     "ConversationClosed":  ("closed_by", "reason"),
     "ConversationReopened": ("reopened_by", "reason"),
+    # The human-stop marker: same class of value as the close/reopen pair
+    # above — who stopped the turn plus an optional operator note.
+    "TurnInterrupted":     ("interrupted_by", "reason"),
     # Foundation B: the continuation reason + attempt are governance metadata (a
     # fixed Noeta-shape vocabulary, no user content) — safe to project so the
     # audit trail records WHY each step had a non-default next step.
@@ -198,6 +201,10 @@ _SUMMARY_FIELDS_BY_EVENT: dict[str, tuple[str, ...]] = {
     # crash-recovery seal: the interrupted attempt's start seq, the
     # snapshot-shaped baseline ref and the machine reason — no user content.
     "StepAttemptAbandoned": ("abandoned_from_seq", "state_ref", "reason"),
+    # conversation branch: the source task + fold-through seq are the
+    # lineage an audit wants, and the baseline ref is snapshot-shaped —
+    # none of the three carries user content.
+    "TaskForked":          ("source_task_id", "source_seq", "state_ref"),
 }
 
 

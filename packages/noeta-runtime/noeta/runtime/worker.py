@@ -200,7 +200,14 @@ def _find_matching_woken_index(events: list[Any], wake_event: Any) -> Optional[i
             wake_on = getattr(e.payload, "wake_on", None)
             if wake_on is not None and matches_wake(wake_on, wake_event):
                 boundary = i
-        elif e.type == "TaskRewound":
+        elif e.type in ("TaskRewound", "TaskForked"):
+            # A TaskForked opens the window for the same reason, from the other
+            # end: a fork's baseline is inherited from ANOTHER stream, so the
+            # ``TaskSuspended`` that put it at a next-goal rest never appears
+            # here at all. Without this the branch's very first wake would find
+            # no boundary and fail as unreconcilable, even though its folded
+            # state says plainly that it is suspended and waiting for a goal.
+            #
             # A TaskRewound re-bases the stream
             # — fold treats it as a snapshot baseline and everything before it is
             # dead history. A ``TaskWoken`` stranded before this marker (a turn
@@ -855,9 +862,16 @@ def _settle_stopped_turn(
 
     * ``terminal`` — ``cancel`` already wrote ``TaskCancelled``; release the
       lease terminal. The conversation is dead (not reopenable).
-    * otherwise — ``close`` (or a bare stop): suspend on ``next_goal_handle``
-      so a later ``send_goal`` matching it resumes the conversation, then
-      release the lease ``suspended``. Reopenable by simply typing again.
+    * otherwise — ``interrupt`` / ``close`` (or a bare stop): suspend on
+      ``next_goal_handle`` so a later ``send_goal`` matching it resumes the
+      conversation, then release the lease ``suspended``. Reopenable by simply
+      typing again.
+
+    An ``interrupt`` landing records ``TaskSuspended.reason="interrupted"``
+    (the A1 channel) so the rest is self-describing — a resumable park reached
+    because a human stopped the turn, not because the model asked a question.
+    Read off the control event the stop wrote rather than passed in, because
+    the raise unwinds through the Engine and carries nothing with it.
 
     No fold-ordering race: ``cancel`` writes its durable ``TaskCancelled``
     BEFORE marking the registry, so by the time the poll trips and we re-fold
@@ -876,7 +890,11 @@ def _settle_stopped_turn(
         _discard_cancellation(rt, lease.task_id)
         return "cancelled"
     task = suspend_on_human_handle(
-        engine, task, handle=next_goal_handle, lease_id=lease.lease_id
+        engine,
+        task,
+        handle=next_goal_handle,
+        lease_id=lease.lease_id,
+        suspend_reason=_stop_suspend_reason(rt, lease.task_id),
     )
     rt.dispatcher.release(
         lease.lease_id,
@@ -886,6 +904,36 @@ def _settle_stopped_turn(
     )
     _discard_cancellation(rt, lease.task_id)
     return "stopped"
+
+
+#: ``TaskSuspended.reason`` for a rest reached by an explicit ``interrupt``.
+STOP_INTERRUPTED_SUSPEND_REASON = "interrupted"
+
+#: Where a turn begins — the scan-back boundary for "did a stop land in THIS
+#: turn". Its own copy rather than a reach into ``attempt``'s private tuple:
+#: that one bounds the crash-recovery attempt window and the two are free to
+#: drift apart.
+_TURN_OPENERS = ("TaskStarted", "TaskWoken", "TaskRewound", "TaskForked")
+
+
+def _stop_suspend_reason(rt: WorkerRuntime, task_id: str) -> Optional[str]:
+    """Which human stop landed this turn — ``"interrupted"`` or ``None``.
+
+    Scans back for the most recent stop marker on the stream: a
+    ``TurnInterrupted`` names an explicit interrupt, a ``ConversationClosed``
+    means the stop came from ``close`` (whose own event already records the
+    archive, so the suspend keeps the historical default reason). Bounded to
+    the tail after the last turn opener — an interrupt three turns ago must not
+    colour today's park.
+    """
+    for env in reversed(rt.event_log.read(task_id)):
+        if env.type in _TURN_OPENERS:
+            return None
+        if env.type == "TurnInterrupted":
+            return STOP_INTERRUPTED_SUSPEND_REASON
+        if env.type == "ConversationClosed":
+            return None
+    return None
 
 
 def _discard_cancellation(rt: WorkerRuntime, task_id: str) -> None:

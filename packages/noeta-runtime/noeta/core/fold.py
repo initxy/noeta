@@ -139,7 +139,7 @@ def _snapshot_is_legacy_for_issue18(state_dict: dict[str, object]) -> bool:
 #: here: its handler is a no-op, so its body is never dereferenced on this
 #: path — the accelerated path reads it once in ``fold`` itself, before the
 #: tail is even known. Pinned against ``_HANDLERS`` by the prefetch tests.
-_REBASE_EVENT_TYPES = ("TaskRewound", "StepAttemptAbandoned")
+_REBASE_EVENT_TYPES = ("TaskRewound", "StepAttemptAbandoned", "TaskForked")
 
 
 def _prefetch_refs(events: list[EventEnvelope]) -> list[ContentRef]:
@@ -978,6 +978,16 @@ _HANDLERS = {
     # carries the identical ``state_ref`` baseline), scoped to one
     # decide→act attempt — so the two share one handler.
     "StepAttemptAbandoned": _on_task_rewound,
+    # A fork's inherited baseline: mechanically the same re-base (a stored
+    # 4-slice body becomes the new fold base), so it shares the handler too.
+    # The difference is provenance, not fold behaviour — the body was folded
+    # from ANOTHER task's stream, which is precisely why the marker has to be
+    # a real baseline: a forked task's history is not derivable from its own
+    # genesis, on either the accelerated or the from-scratch path.
+    "TaskForked": _on_task_rewound,
+    # The human-stop marker is observational — the landing it triggers is
+    # recorded by the ordinary TaskSuspended the worker writes.
+    "TurnInterrupted": _on_noop,
     "TaskCompleted": _on_task_completed,
     "TaskFailed": _on_task_failed,
     "TaskSuspended": _on_task_suspended,

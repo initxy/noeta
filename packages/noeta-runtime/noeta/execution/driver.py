@@ -80,8 +80,10 @@ from noeta.protocols.events import (
     EventEnvelope,
     TaskCancelledPayload,
     TaskFailedPayload,
+    TaskForkedPayload,
     TaskHostBoundPayload,
     TaskRewoundPayload,
+    TurnInterruptedPayload,
 )
 from noeta.protocols.decisions import TaskStatePatch
 from noeta.protocols.messages import ImageBlock, MessageOrigin, TextBlock
@@ -221,6 +223,34 @@ class TaskAlreadyTerminalError(CodedError, RuntimeError):
         self.task_id = task_id
         self.verb = verb
         super().__init__(f"cannot {verb} task {task_id!r}: already terminal")
+
+
+class NotForkableError(CodedError, RuntimeError):
+    """``fork`` was asked to branch a conversation that cannot be branched.
+
+    Three refusals, all of them structural rather than transient — retrying
+    the same call cannot help:
+
+    * ``"no events"`` — the task id names no stream.
+    * ``"not a root task"`` — the source is a subtask. A fork inherits the
+      baseline verbatim, so forking a child would mint a task carrying a
+      ``parent_task_id`` whose parent never spawned it: the lifecycle observer
+      would treat the branch as a delegation and wake a parent that is not
+      waiting on it.
+    * ``"not a user message"`` — ``message_seq`` is not a user-goal
+      ``MessagesAppended`` on this stream, so there is no turn boundary to
+      branch at (the same anchor rule ``rewind`` enforces).
+
+    Kept a :class:`RuntimeError` too, like its siblings, so any
+    ``except RuntimeError`` contract is unaffected.
+    """
+
+    code = "not_forkable"
+
+    def __init__(self, *, task_id: str, reason: str) -> None:
+        self.task_id = task_id
+        self.reason = reason
+        super().__init__(f"cannot fork task {task_id!r}: {reason}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1637,6 +1667,97 @@ class InteractionDriver:
             forget_carriers(task_id)
         return self._outcome(task_id)
 
+    def interrupt(
+        self,
+        task_id: str,
+        *,
+        reason: Optional[str] = None,
+        interrupted_by: str = "user",
+    ) -> DriveOutcome:
+        """Stop an in-flight turn WITHOUT ending the conversation.
+
+        The third member of the human-stop family, and the one that was
+        missing. ``cancel`` kills the conversation (``TaskCancelled``,
+        terminal, not reopenable); ``close`` archives it
+        (``ConversationClosed``); this one does neither — it halts the turn the
+        model is in the middle of and leaves the task resting at its next-goal
+        suspend, live and resumable by simply typing again. What pressing Esc
+        in an interactive client should do.
+
+        Mechanically it reuses the landing the worker already implements
+        (``run_leased_task`` → ``_settle_stopped_turn``): write the durable
+        marker, mark the process-local cancel registry, and the Engine's poll
+        at its next turn boundary raises ``TaskCancellationRequested``. The
+        worker re-folds, sees no terminal, and suspends on the next-goal
+        handle. Ordering matters and matches ``cancel`` / ``close``: the
+        durable ``TurnInterrupted`` is written BEFORE the registry mark, so the
+        re-fold can never race ahead of its own reason.
+
+        Until now that landing was reachable only as a side effect of ``close``
+        (which also archives the conversation) or by poking the registry
+        directly — and a bare poke left no durable trace that a human had
+        stopped anything.
+
+        The interrupted turn's events **stay on the stream** as real history:
+        the model said what it said and the tools ran what they ran. Throwing
+        that away is :meth:`rewind`'s job, and the two compose — interrupt to
+        stop, rewind to un-say.
+
+        Granularity is the turn boundary. The cooperative-cancel poll sits at
+        the top of the loop and again right after the Policy decides, so an
+        interrupt lands before the next tool call or the next model round —
+        it cannot abort a tool call already executing.
+
+        Refuses a terminal task (:class:`TaskAlreadyTerminalError`, matching
+        ``cancel`` / ``close`` / ``reopen``). On an already-idle conversation
+        it is a clean no-op landing: the marker records the request, the
+        registry mark is consumed by the next lease, and the task stays exactly
+        as resumable as it was.
+        """
+        host = self._host
+        task = fold(host.event_log, host.content_store, task_id)
+        if task.status == "terminal":
+            raise TaskAlreadyTerminalError(task_id=task_id, verb="interrupt")
+        host.event_log.system_emit(
+            task_id=task_id,
+            type="TurnInterrupted",
+            payload=TurnInterruptedPayload(
+                reason=reason, interrupted_by=interrupted_by
+            ),
+            actor="interaction-driver",
+            origin="system",
+            trace_id=self._trace_id(task_id),
+        )
+        # AFTER the durable marker (see the docstring) — the in-flight ReAct
+        # loop polls this at its next turn boundary and abandons the round.
+        #
+        # ONLY when a turn is actually in flight. The registry mark is consumed
+        # by the settling turn and cleared there; setting it on an idle
+        # conversation would leave it armed for whatever turn came NEXT, which
+        # would then abort on its first poll — the user's following message
+        # silently swallowed by a stop they issued before sending it. cancel /
+        # close can mark unconditionally because their landing is terminal or
+        # archived; an interrupt has to leave the conversation usable.
+        if self._turn_in_flight(task_id):
+            request = getattr(host, "request_cancellation", None)
+            if callable(request):
+                request(task_id)
+        # A stopped turn must not leave its long-running ``shell_run(background)``
+        # processes running — the same teardown ``cancel`` / ``close`` do,
+        # through the same per-session kill primitive.
+        kill_bg = getattr(host, "kill_background_shells", None)
+        if callable(kill_bg):
+            kill_bg(task_id)
+        # In-flight background sub-agents abandon their drives off the mark
+        # above; this frees the registry's per-conversation tracking.
+        forget_bg = getattr(host, "forget_background_subagents", None)
+        if callable(forget_bg):
+            forget_bg(task_id)
+        # Deliberately NOT ``forget_turn_carriers``: unlike cancel / close this
+        # conversation stays live, and the next turn re-notes its own carriers
+        # anyway — dropping them here would only discard the current turn's.
+        return self._outcome(task_id)
+
     def reopen(
         self,
         task_id: str,
@@ -1726,6 +1847,141 @@ class InteractionDriver:
         self._restore_files(host, events, keep_through, baseline)
         return self._outcome(task_id)
 
+    def fork(self, task_id: str, *, message_seq: int) -> DriveOutcome:
+        """Branch the conversation into a NEW task at the user message ``message_seq``.
+
+        The fork twin of :meth:`rewind`. Both take the same anchor — the seq of
+        a user-goal ``MessagesAppended`` — and both fold the state through the
+        turn boundary right BEFORE that message opened. They differ only in
+        where the resulting baseline lands: ``rewind`` appends it to the same
+        stream (the tail becomes dead history), ``fork`` appends it to a
+        **new** task's stream and leaves the source completely alone. So a
+        rewind is "undo this and everything after", a fork is "keep both".
+
+        The returned :class:`DriveOutcome` carries the **fork's** ``task_id``.
+        Its baseline is a turn boundary, which is a next-goal suspend — so the
+        branch is immediately live and a following ``send_goal`` drives its
+        first turn down the new path.
+
+        **The source stream is never written to.** Branching a conversation
+        cannot perturb the conversation it branched from; that is the whole
+        difference from ``rewind``, and it is why the fork's inherited history
+        rides a marker on its own stream instead.
+
+        What the fork inherits: the whole folded 4-slice state — the message
+        history, the TaskState (goal / phase / todos / decisions /
+        active_content), the context plan, and governance INCLUDING accumulated
+        cost (the branch really did consume that context, so a budget guard
+        counting it is right). Plus the source's agent, policy and host binding
+        (workspace + any welded sandbox ref), so the branch runs the same way
+        the source did.
+
+        What it does **not** inherit: a separate workspace. Both branches keep
+        the source's ``workspace_dir`` and act on the same disk, so unlike
+        ``rewind`` there is no file restore — two live branches cannot each own
+        one working tree. Fork branches the conversation, not the workspace.
+
+        Refuses (:class:`NotForkableError`) an unknown stream, a subtask (only
+        a root task may be forked — see the error), and a ``message_seq`` that
+        is not a user message here.
+        """
+        host = self._host
+        events = host.event_log.read(task_id)
+        if not events:
+            raise NotForkableError(task_id=task_id, reason="no events")
+        genesis = events[0].payload
+        if getattr(genesis, "parent_task_id", None) is not None:
+            raise NotForkableError(task_id=task_id, reason="not a root task")
+        if not self._is_user_message_seq(events, message_seq):
+            raise NotForkableError(
+                task_id=task_id,
+                reason=f"seq {message_seq} is not a user message on this stream",
+            )
+        keep_through = self._rewind_keep_through(task_id, events, message_seq)
+        if keep_through == events[0].seq:
+            # The anchor is the OPENING goal (its ``MessagesAppended`` precedes
+            # the first ``TaskStarted``, so there is no prior turn opener to
+            # walk back to and the boundary falls on genesis). There is no
+            # conversation to inherit, and the empty baseline is ``pending`` —
+            # not a resting point a branch could be driven from. Starting a new
+            # task is the honest way to say this.
+            raise NotForkableError(
+                task_id=task_id,
+                reason="the opening message has no prior turn to branch from",
+            )
+        # Point-in-time state, exactly as ``rewind`` computes it (fold's own
+        # snapshot/rebase acceleration still applies inside the bounded window).
+        bounded = _BoundedEventLog(events, keep_through)
+        baseline = fold(bounded, host.content_store, task_id)
+        # Resolve off the SOURCE's folded state so the branch inherits its
+        # agent + model binding without re-deriving any of it.
+        engine = host.resolve_engine(baseline)
+        child = engine.create_task(
+            goal=baseline.state.goal,
+            policy_name=getattr(genesis, "policy_name", "react"),
+            agent_name=getattr(genesis, "agent_name", "unnamed"),
+            host_binding=self._host_binding(events),
+        )
+        # The baseline body is identity-bearing (``rehydrate_task`` reads
+        # ``task_id`` straight out of it), so it must be re-stamped for the
+        # fork before it is stored — otherwise the branch would fold back as
+        # the task it came from.
+        forked = dataclasses.replace(baseline, task_id=child.task_id)
+        state_ref = host.content_store.put(
+            serialize_task_state(forked), media_type=snapshot_media_type()
+        )
+        host.event_log.system_emit(
+            task_id=child.task_id,
+            type="TaskForked",
+            payload=TaskForkedPayload(
+                source_task_id=task_id,
+                source_seq=keep_through,
+                state_ref=state_ref,
+            ),
+            actor="interaction-driver",
+            origin="system",
+            trace_id=self._trace_id(child.task_id),
+        )
+        # Same dispatcher re-alignment a rewind does: the marker re-bases the
+        # fold, and the dispatcher row is only a lease/wake accelerator, so it
+        # has to be brought to the same lifecycle boundary. ``restore_task``
+        # upserts, so a task id the dispatcher has never seen is fine.
+        self._restore_dispatcher_to_baseline(child.task_id, forked)
+        return self._outcome(child.task_id)
+
+    def _turn_in_flight(self, task_id: str) -> bool:
+        """Is a worker currently driving ``task_id``?
+
+        The expiry-aware lease probe, so a zombie lease (TTL lapsed after its
+        worker died) reads as idle rather than making an interrupt arm a mark
+        nothing will ever consume. A dispatcher / test double without the seam
+        answers ``True``: marking an idle task is recoverable (one swallowed
+        turn), failing to mark a live one is not (the stop does nothing at all).
+        """
+        active = getattr(self._host.dispatcher, "has_active_lease", None)
+        if not callable(active):
+            return True
+        return bool(active(task_id))
+
+    @staticmethod
+    def _host_binding(
+        events: list[EventEnvelope],
+    ) -> Optional[TaskHostBoundPayload]:
+        """The source's recorded ``TaskHostBound`` payload, or ``None``.
+
+        Replayed verbatim onto a fork's genesis so the branch resolves the same
+        workspace (and reconnects to the same sandbox container) the source
+        was welded to. ``None`` for a local / non-host recording, which is the
+        no-binding genesis path.
+        """
+        for env in events:
+            if env.type == "TaskHostBound":
+                payload = env.payload
+                if isinstance(payload, TaskHostBoundPayload):
+                    return payload
+                return None
+        return None
+
     def _restore_dispatcher_to_baseline(self, task_id: str, baseline: Task) -> bool:
         """Re-align dispatcher state after a live ``TaskRewound``.
 
@@ -1752,6 +2008,24 @@ class InteractionDriver:
         return True
 
     @staticmethod
+    def _is_user_message_seq(
+        events: list[EventEnvelope], message_seq: int
+    ) -> bool:
+        """True iff ``message_seq`` is a user-goal ``MessagesAppended`` here.
+
+        The shared anchor rule for the two branch verbs: ``rewind`` re-bases
+        the stream at such a message, ``fork`` branches a new task at it. Each
+        raises its own typed refusal, so the predicate — not the error — is
+        what they share.
+        """
+        target = next((e for e in events if e.seq == message_seq), None)
+        return (
+            target is not None
+            and target.type == "MessagesAppended"
+            and bool(getattr(target.payload, "count", 0))
+        )
+
+    @staticmethod
     def _rewind_keep_through(
         task_id: str, events: list[EventEnvelope], message_seq: int
     ) -> int:
@@ -1763,11 +2037,7 @@ class InteractionDriver:
         ``TaskStarted`` for the opening turn), which is the prior next-goal
         suspend (or, for the first turn, the pre-loop header). Folding through it
         lands the conversation back at a clean turn boundary."""
-        by_seq = {e.seq: e for e in events}
-        target = by_seq.get(message_seq)
-        if target is None or target.type != "MessagesAppended" or not getattr(
-            target.payload, "count", 0
-        ):
+        if not InteractionDriver._is_user_message_seq(events, message_seq):
             raise RuntimeError(
                 f"cannot rewind task {task_id!r}: seq {message_seq} is not a "
                 f"user message on this stream"

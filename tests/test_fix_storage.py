@@ -22,6 +22,7 @@ import pytest
 
 from noeta.protocols.events import (
     TaskCreatedPayload,
+    TaskForkedPayload,
     TaskRewoundPayload,
     TaskSnapshotPayload,
     TaskStartedPayload,
@@ -123,6 +124,31 @@ def test_snapshot_after_rewound_wins(log) -> None:
     assert snap is not None
     assert snap.type == "TaskSnapshot"
     assert snap.payload.state_ref == _ref("b")
+
+
+def test_forked_baseline_round_trips_and_wins(log) -> None:
+    """A conversation branch's inherited baseline is a fold baseline like any
+    other: it must survive the payload round-trip through a durable backend
+    and be what ``find_latest_snapshot`` returns."""
+    log.emit(
+        task_id="t1",
+        type="TaskCreated",
+        payload=TaskCreatedPayload(goal="g", policy_name="p"),
+    )
+    log.emit(
+        task_id="t1",
+        type="TaskForked",
+        payload=TaskForkedPayload(
+            source_task_id="t0", source_seq=7, state_ref=_ref("d")
+        ),
+    )
+
+    snap = log.find_latest_snapshot("t1")
+    assert snap is not None
+    assert snap.type == "TaskForked"
+    assert snap.payload.state_ref == _ref("d")
+    assert snap.payload.source_task_id == "t0"
+    assert snap.payload.source_seq == 7
 
 
 def test_no_snapshot_returns_none(log) -> None:

@@ -47,21 +47,23 @@ __all__ = [
 
 #: The fold-baseline event types — every type whose payload carries a
 #: ``state_ref`` rehydration body and re-bases the fold: ``TaskSnapshot``
-#: (acceleration), ``TaskRewound`` (conversation rewind) and
-#: ``StepAttemptAbandoned`` (crash-recovery seal). This is the single
+#: (acceleration), ``TaskRewound`` (conversation rewind),
+#: ``StepAttemptAbandoned`` (crash-recovery seal) and ``TaskForked`` (the
+#: history a branched conversation inherits). This is the single
 #: source of truth for the :meth:`EventLogReader.find_latest_snapshot`
 #: contract; every adapter's lookup filters on exactly this set. The SQL
 #: adapters' partial index (``ix_events_snapshot``) must ALSO list exactly
 #: these types in its ``WHERE`` predicate — a partial index is only chosen
 #: when its predicate matches the live query — so growing this tuple
 #: requires a new migration re-widening the index (see
-#: ``storage/sqlite/migrations.py`` migration 8 /
-#: ``storage/postgres/migrations.py`` migration 2), pinned by
+#: ``storage/sqlite/migrations.py`` migration 10 /
+#: ``storage/postgres/migrations.py`` migration 5), pinned by
 #: ``tests/test_fix_storage.py``.
 SNAPSHOT_BASELINE_EVENT_TYPES: tuple[str, ...] = (
     "TaskSnapshot",
     "TaskRewound",
     "StepAttemptAbandoned",
+    "TaskForked",
 )
 
 

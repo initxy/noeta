@@ -212,6 +212,26 @@ _MIGRATION_4_RESERVED = (
 )
 
 
+# Migration 5 (= sqlite migration 10): widen the fold-baseline index to
+# include the conversation branch marker ``TaskForked`` — a fourth
+# snapshot-shaped baseline naming the history a forked task inherited from
+# the conversation it branched off (not derivable from the fork's own
+# genesis, so the marker has to be a real baseline). A partial index is only
+# chosen when its WHERE matches the query predicate exactly, so it is
+# re-created with the widened IN-list. The list is a frozen literal (applied
+# migrations are immutable); the live queries render theirs from
+# ``noeta.protocols.event_log.SNAPSHOT_BASELINE_EVENT_TYPES``.
+_MIGRATION_5_DROP_SNAPSHOT_INDEX = "DROP INDEX IF EXISTS ix_events_snapshot"
+
+_MIGRATION_5_BASELINE_INDEX = (
+    "CREATE INDEX ix_events_snapshot "
+    "ON events (task_id, seq DESC) "
+    "WHERE type IN ("
+    "'TaskSnapshot', 'TaskRewound', 'StepAttemptAbandoned', 'TaskForked'"
+    ")"
+)
+
+
 MIGRATIONS: list[Migration] = [
     Migration(
         version=1,
@@ -246,6 +266,14 @@ MIGRATIONS: list[Migration] = [
         version=4,
         description="targeted-lease-only guard (reserved) for subtask children",
         statements=(_MIGRATION_4_RESERVED,),
+    ),
+    Migration(
+        version=5,
+        description="widen snapshot index to include TaskForked",
+        statements=(
+            _MIGRATION_5_DROP_SNAPSHOT_INDEX,
+            _MIGRATION_5_BASELINE_INDEX,
+        ),
     ),
 ]
 
