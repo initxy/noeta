@@ -20,11 +20,12 @@ provider's stable-prefix prompt cache keys on). Also re-homes the reusable
 defaults from the old ``noeta.cli._common`` (``default_budget`` /
 ``permission_policy_for`` / ``default_permission_policy``).
 
-The storage-stack helpers (``is_memory_path`` / ``build_memory_stack`` /
-``build_sqlite_stack`` / ``open_storage_stack``) now live in
-:mod:`noeta.storage.stacks` (the single source of truth shared with the
-``python -m noeta.agent`` runner) and are re-exported here for existing
-importers.
+Storage wiring is inline in :func:`build_runtime`: the InMemory reference
+backend is a static ``noeta.storage.memory`` import, while the durable
+backends resolve through a call-time dynamic import of the ``storage``
+built-in's ``stack`` modules (the same discipline as the governance
+guards). Hosts and tests that need the stack builders themselves use
+:mod:`noeta.sdk.storage`.
 """
 
 from __future__ import annotations
@@ -48,13 +49,7 @@ from noeta.protocols.event_log import EventLogFull
 from noeta.protocols.messages import LLMProvider
 from noeta.protocols.tool import Tool
 from noeta.runtime.llm import RuntimeLLMClient
-from noeta.storage.stacks import (
-    is_memory_path,
-    build_memory_stack,
-    build_postgres_stack,
-    build_sqlite_stack,
-    open_storage_stack,
-)
+from noeta.storage.memory import build_stack as _build_memory_stack
 
 if TYPE_CHECKING:
     from noeta.context.composer import ThreeSegmentComposer
@@ -68,13 +63,8 @@ __all__ = [
     "build_policy_factory",
     "build_runtime",
     "build_tools",
-    "build_memory_stack",
-    "build_postgres_stack",
-    "build_sqlite_stack",
     "default_budget",
     "default_permission_policy",
-    "is_memory_path",
-    "open_storage_stack",
     "permission_policy_for",
     "resolve_tool_pack",
 ]
@@ -257,7 +247,30 @@ def build_runtime(
     budget: Budget,
     trace_file: Optional["Path"] = None,
 ) -> RuntimeBundle:
-    event_log, content_store, dispatcher = open_storage_stack(sqlite_path)
+    # Storage relocation: the durable backends live in the ``storage``
+    # built-in plugin (noeta-sdk); this test-support assembly resolves their
+    # ``build_stack`` factories through a call-time dynamic import — the same
+    # discipline as the governance guards below — so ``noeta.testing`` keeps
+    # no static edge into ``noeta.builtins`` (only the InMemory reference
+    # backend is a static kernel import; calling ``build_runtime`` with a
+    # durable path requires noeta-sdk, which every test run has).
+    # ``sqlite_path`` keeps its historical value shape: ``None`` /
+    # ``":memory:"`` → memory, ``postgresql://`` DSN → postgres, anything
+    # else → a sqlite file path.
+    if sqlite_path is None or sqlite_path == ":memory:":
+        event_log, content_store, dispatcher = _build_memory_stack()
+    else:
+        import importlib
+
+        if sqlite_path.startswith(("postgresql://", "postgres://")):
+            stack_module = "noeta.builtins.storage.impl.postgres.stack"
+            stack_config: dict[str, str] = {"dsn": sqlite_path}
+        else:
+            stack_module = "noeta.builtins.storage.impl.sqlite.stack"
+            stack_config = {"path": sqlite_path}
+        event_log, content_store, dispatcher = importlib.import_module(
+            stack_module
+        ).build_stack(**stack_config)
 
     llm = RuntimeLLMClient(
         provider=provider, event_log=event_log, content_store=content_store

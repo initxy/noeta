@@ -25,7 +25,7 @@ from noeta.protocols.events import (
 from noeta.protocols.values import ContentRef
 from noeta.read_models.sessions import list_session_summaries
 from noeta.storage.memory import InMemoryContentStore, InMemoryEventLog
-from noeta.storage.sqlite import SqliteContentStore, SqliteEventLog
+from noeta.sdk.storage import SqliteContentStore, SqliteEventLog
 
 
 def _ref(tag: str) -> ContentRef:

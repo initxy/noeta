@@ -174,12 +174,25 @@ def test_wheel_install_imports_public_surface(tmp_path: Path) -> None:
             str(py),
             "-c",
             (
+                "import sys; "
                 "import noeta.sdk, noeta.sdk.storage, noeta.presets; "
+                # Storage-backend relocation G3: the doorway is lazy — merely
+                # importing it must load neither psycopg nor any backend impl.
+                "assert 'psycopg' not in sys.modules, "
+                "'import noeta.sdk.storage alone must not load psycopg'; "
+                "leaked = [m for m in sys.modules "
+                "if m.startswith('noeta.builtins.storage.impl')]; "
+                "assert not leaked, f'lazy doorway leaked impls: {leaked}'; "
                 "from noeta.sdk import Client, Options, PluginSet, "
                 "load_plugin_set, PluginBuilder; "
                 "from noeta.client.parts import builtin_tool_classes; "
                 "n = len(builtin_tool_classes()); "
                 "assert n == 11, f'expected the 11 default tools, got {n}'; "
+                # ...and touching one lazy attribute exercises the doorway:
+                # the class arrives from the sdk wheel's storage built-in.
+                "cls = noeta.sdk.storage.SqliteEventLog; "
+                "assert cls.__module__ == "
+                "'noeta.builtins.storage.impl.sqlite.eventlog', cls.__module__; "
                 "print('ok')"
             ),
         ],
@@ -217,6 +230,7 @@ _RUNTIME_ALONE_SCRIPT = """
     import noeta.runtime.llm
     import noeta.runtime.governance
     import noeta.storage.memory
+    import noeta.storage.spi
     import noeta.context.composer
     import noeta.policies.control_semantics
     import noeta.read_models.sessions
@@ -224,13 +238,20 @@ _RUNTIME_ALONE_SCRIPT = """
     import noeta.agent.spec
     import noeta.testing.profile
 
-    # 2. No capability impls, no SDK bands, no httpx in the closure.
+    # 2. No capability impls, no SDK bands, no httpx/psycopg in the closure.
+    # The durable storage backends moved to the ``storage`` built-in
+    # (noeta-sdk) — the kernel keeps only ``noeta.storage.memory`` + the
+    # ``noeta.storage.spi`` facade, and the old module paths must be gone.
     for absent in (
         "noeta.builtins",
         "noeta.client",
         "noeta.sdk",
         "noeta.presets",
+        "noeta.storage.sqlite",
+        "noeta.storage.postgres",
+        "noeta.storage.stacks",
         "httpx",
+        "psycopg",
     ):
         assert importlib.util.find_spec(absent) is None, (
             f"{absent} must not be importable when noeta-runtime is "
@@ -354,9 +375,25 @@ def test_runtime_wheel_alone_is_a_pure_kernel(tmp_path: Path) -> None:
     assert _wheel_module_paths(runtime_wheel, "noeta/builtins/") == [], (
         "the kernel wheel must not carry capability impls"
     )
+    # Storage-backend relocation G2: the kernel wheel's dist metadata declares
+    # no psycopg requirement — the durable backends took the driver dependency
+    # with them into the noeta-sdk wheel.
+    with zipfile.ZipFile(runtime_wheel) as zf:
+        metadata_name = next(
+            n for n in zf.namelist() if n.endswith(".dist-info/METADATA")
+        )
+        runtime_metadata = zf.read(metadata_name).decode("utf-8")
+    psycopg_requires = [
+        line
+        for line in runtime_metadata.splitlines()
+        if line.startswith("Requires-Dist:") and "psycopg" in line
+    ]
+    assert psycopg_requires == [], (
+        f"noeta-runtime metadata must not require psycopg: {psycopg_requires}"
+    )
 
-    # 2. Fresh venv with the runtime wheel alone (psycopg resolves from the
-    # index / uv cache; httpx must NOT arrive — it is an sdk dependency now).
+    # 2. Fresh venv with the runtime wheel alone (httpx and psycopg must NOT
+    # arrive — both are sdk dependencies now; the kernel declares none).
     venv_dir = tmp_path / "venv"
     py = _make_venv(venv_dir)
     install = subprocess.run(
@@ -496,6 +533,33 @@ def test_httpx_is_an_sdk_dependency_not_a_runtime_one() -> None:
     )
     assert '"httpx' in sdk_text, (
         "noeta-sdk must declare the httpx dependency its capability impls use"
+    )
+
+
+def test_psycopg_is_an_sdk_dependency_not_a_runtime_one() -> None:
+    """Storage-backend relocation G2, statically (no wheel build, every dev
+    run).
+
+    The durable backends live in the ``storage`` built-in (noeta-sdk wheel),
+    so the Postgres driver is an sdk dependency; the kernel wheel keeps only
+    the InMemory reference backend + ``noeta.storage.spi`` and must not
+    declare ``psycopg``. The fresh-venv runtime-alone smoke proves the same
+    on the installed artifact; this pins the declaration itself so a stray
+    re-add fails fast.
+    """
+    runtime_text = (
+        _REPO_ROOT / "packages" / "noeta-runtime" / "pyproject.toml"
+    ).read_text(encoding="utf-8")
+    sdk_text = (
+        _REPO_ROOT / "packages" / "noeta-sdk" / "pyproject.toml"
+    ).read_text(encoding="utf-8")
+    assert '"psycopg' not in runtime_text, (
+        "noeta-runtime must not depend on psycopg (storage-backend "
+        "relocation: the kernel ships no durable backend)"
+    )
+    assert '"psycopg' in sdk_text, (
+        "noeta-sdk must declare the psycopg dependency its postgres backend "
+        "uses"
     )
 
 

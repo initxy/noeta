@@ -1,6 +1,6 @@
 """Read-only Postgres reader for list / inspect projections.
 
-The Postgres mirror of :mod:`noeta.storage.sqlite.readonly`: a read-only
+The Postgres mirror of :mod:`noeta.builtins.storage.impl.sqlite.readonly`: a read-only
 consumer must NEVER create, migrate, or otherwise mutate the store. The
 live adapters cannot give that guarantee — their constructors run
 ``apply_migrations`` (forward-migrating an older database).
@@ -14,7 +14,7 @@ An older / newer / uninitialised schema is a typed
 :class:`PostgresSchemaVersionError` (never silently read, never
 migrated). It satisfies ``EventLogReader`` + ``EventLogTaskIndex`` +
 ``ContentStore`` through plain ``SELECT``s, reusing the live adapter's
-:func:`noeta.storage.postgres.eventlog._row_to_envelope` so the read
+:func:`noeta.builtins.storage.impl.postgres.eventlog._row_to_envelope` so the read
 shape cannot drift. Like the sqlite mirror, the adapter is selected at
 the wiring layer only — read models depend on the Protocols, never on
 this class — and it is single-consumer (no adapter lock; inspect
@@ -36,8 +36,8 @@ from noeta.protocols.event_log import (
 from noeta.protocols.events import EventEnvelope
 from noeta.protocols.values import ContentRef
 
-from noeta.storage.postgres.eventlog import _row_to_envelope
-from noeta.storage.postgres.migrations import SCHEMA_VERSION
+from noeta.builtins.storage.impl.postgres.eventlog import _row_to_envelope
+from noeta.builtins.storage.impl.postgres.migrations import SCHEMA_VERSION
 
 # The ``find_latest_snapshot`` predicate, rendered once from the protocol
 # constant so the query can never drift from the contract set (the

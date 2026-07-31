@@ -43,6 +43,7 @@ from noeta.builtins.react import MANIFEST as _REACT
 from noeta.builtins.reminders import MANIFEST as _REMINDERS
 from noeta.builtins.sandbox import MANIFEST as _SANDBOX
 from noeta.builtins.skills import MANIFEST as _SKILLS
+from noeta.builtins.storage import MANIFEST as _STORAGE
 from noeta.builtins.todo_write import MANIFEST as _TODO_WRITE
 from noeta.builtins.web import MANIFEST as _WEB
 from noeta.builtins.workspace import MANIFEST as _WORKSPACE
@@ -74,6 +75,10 @@ _BUILTINS: tuple[PluginManifest, ...] = (
     _SANDBOX,
     _PRESETS,
     _WORKSPACE,
+    # Declaration-only (the ``providers`` precedent): zero contributions —
+    # storage is not a surface (ADR plugin-contribution-bundles, Alternative 5).
+    # The durable backend impls it houses are reached via ``noeta.sdk.storage``.
+    _STORAGE,
     # Control-tool built-ins (control-tool-surface S2): each contributes one
     # ``control_tool`` mount factory. ``delegation`` shares the ``spawn_subagent``
     # tool; ``todo_write`` / ``ask_user_question`` keep their tool names.

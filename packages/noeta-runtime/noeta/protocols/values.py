@@ -16,8 +16,9 @@ from noeta.protocols.canonical import register
 # ContentStore has *no* equivalent cap — bodies larger than this must
 # be put into ContentStore and referenced through :class:`ContentRef`.
 #
-# Adapter modules (``noeta.storage.memory``, ``noeta.storage.sqlite.eventlog``)
-# may re-export a local alias for backward compatibility, but the L0
+# Adapter modules (``noeta.storage.memory``,
+# ``noeta.builtins.storage.impl.sqlite.eventlog``) may re-export a local
+# alias for backward compatibility, but the L0
 # protocol surface uses only this precise name to keep the meaning
 # unambiguous.
 EVENT_PAYLOAD_MAX_BYTES = 4096

@@ -3,7 +3,7 @@
 Second persistent EventLog backend; behaviour pinned by
 :class:`noeta.storage.memory.InMemoryEventLog` and the
 storage-backend-neutral contract suite, mirroring
-:class:`noeta.storage.sqlite.eventlog.SqliteEventLog` structure-for-structure.
+:class:`noeta.builtins.storage.impl.sqlite.eventlog.SqliteEventLog` structure-for-structure.
 
 The same concurrency layers on :meth:`emit`:
 
@@ -56,16 +56,14 @@ from noeta.protocols.event_log import (
 from noeta.protocols.events import EventEnvelope, EventOrigin
 from noeta.protocols.values import EVENT_PAYLOAD_MAX_BYTES
 
-from noeta.storage._payload_restore import (
-    _enforce_payload_cap,
-    _restore_payload,
-)
-from noeta.storage.postgres._connection import (
+from noeta.storage.spi import enforce_payload_cap, restore_payload
+
+from noeta.builtins.storage.impl.postgres._connection import (
     _ADVISORY_CLASS_EVENTS,
     _DB_NOW_SQL,
     _open_connection,
 )
-from noeta.storage.postgres.migrations import apply_migrations
+from noeta.builtins.storage.impl.postgres.migrations import apply_migrations
 
 # The ``find_latest_snapshot`` predicate, rendered once from the protocol
 # constant so the query can never drift from the contract set (the
@@ -256,7 +254,7 @@ class PostgresEventLog:
                         self._conn.execute("COMMIT")
                         return existing
 
-                _enforce_payload_cap(envelope.task_id, envelope.type, body)
+                enforce_payload_cap(envelope.task_id, envelope.type, body)
 
                 next_seq_row = self._conn.execute(
                     "SELECT COALESCE(MAX(seq), -1) + 1 AS next_seq "
@@ -527,7 +525,7 @@ def _row_to_envelope(row: Mapping[str, Any]) -> EventEnvelope:
     # psycopg may hand BYTEA back as ``memoryview``; normalise to bytes
     # before the canonical decode.
     canonical_body = from_canonical_bytes(bytes(row["payload_canonical"]))
-    payload = _restore_payload(row["type"], canonical_body)
+    payload = restore_payload(row["type"], canonical_body)
     return EventEnvelope(
         id=row["id"],
         task_id=row["task_id"],

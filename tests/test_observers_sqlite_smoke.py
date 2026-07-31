@@ -5,7 +5,7 @@ from __future__ import annotations
 from noeta.observers.audit import AuditObserver, AuditRecord
 from noeta.observers.metrics import MetricsObserver
 from noeta.protocols.events import TaskCreatedPayload
-from noeta.storage.sqlite.eventlog import SqliteEventLog
+from noeta.sdk.storage import SqliteEventLog
 
 
 def test_audit_and_metrics_observers_subscribe_to_sqlite_eventlog(tmp_path) -> None:

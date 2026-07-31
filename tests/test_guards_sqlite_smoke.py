@@ -24,8 +24,7 @@ from noeta.protocols.decisions import (
 )
 from noeta.runtime.tool import ToolRuntime
 from noeta.storage.memory import InMemoryContentStore
-from noeta.storage.sqlite.dispatcher import SqliteDispatcher
-from noeta.storage.sqlite.eventlog import SqliteEventLog
+from noeta.sdk.storage import SqliteDispatcher, SqliteEventLog
 from noeta.testing.composer import trivial_three_segment
 from noeta.tools.fake import FakeTool
 

@@ -51,8 +51,9 @@ from noeta.protocols.wake import (
     SubtaskCompleted,
     SubtaskResult,
 )
+from noeta.sdk.storage import SqliteEventLog
+from noeta.storage._payload_restore import _PAYLOAD_RESTORERS
 from noeta.storage.memory import MAX_PAYLOAD_BYTES, InMemoryDispatcher, InMemoryEventLog
-from noeta.storage.sqlite.eventlog import _PAYLOAD_RESTORERS, SqliteEventLog
 from tests._pg import isolated_schema_dsn, postgres_param
 
 
@@ -99,7 +100,7 @@ def make_log(request):
     else:
 
         def builder(**kwargs):
-            from noeta.storage.postgres.eventlog import PostgresEventLog
+            from noeta.sdk.storage import PostgresEventLog
 
             dsn = stack.enter_context(isolated_schema_dsn())
             return PostgresEventLog(dsn, **kwargs)

@@ -29,7 +29,8 @@ from noeta.storage.memory import (
     InMemoryDispatcher,
     InMemoryEventLog,
 )
-from noeta.storage.sqlite.eventlog import SqliteEventLog, _restore_payload
+from noeta.sdk.storage import SqliteEventLog
+from noeta.storage.spi import restore_payload
 from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.runtime.shell_policy import ShellMode
 from noeta.runtime.workspace import FsWriteMode
@@ -149,14 +150,15 @@ def test_restore_dataclass_drops_retired_fingerprint_keys() -> None:
 
 
 def test_eventlog_decode_tolerates_old_fingerprint_payloads() -> None:
-    # The real SQLite decode dispatch (``_restore_payload``) routes AgentBound /
+    # The real decode dispatch the durable backends use
+    # (``noeta.storage.spi.restore_payload``) routes AgentBound /
     # TaskHostBound through the tolerant restorer — proves the wiring, not just
     # the helper in isolation.
-    bound = _restore_payload(
+    bound = restore_payload(
         "AgentBound", {"agent_name": "bug-fixer", "agent_fingerprint": "old"}
     )
     assert bound == AgentBoundPayload(agent_name="bug-fixer")
-    host = _restore_payload(
+    host = restore_payload(
         "TaskHostBound",
         {"host_id": "h1", "registry_fingerprint": "old",
          "host_config_fingerprint": "old"},

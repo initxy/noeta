@@ -64,8 +64,8 @@ def open_sqlite_storage(sqlite_path: str) -> tuple[StorageTriple, Callable[[], N
     ``lease_validator`` (the all-or-none triple's wiring invariant).
     """
     # Local import keeps a bare ``import noeta.agent`` cheap and confines the
-    # noeta.storage dependency to this host-side material module.
-    from noeta.storage.sqlite import (
+    # noeta.sdk.storage dependency to this host-side material module.
+    from noeta.sdk.storage import (
         SqliteContentStore,
         SqliteDispatcher,
         SqliteEventLog,
@@ -87,7 +87,7 @@ def open_postgres_storage(dsn: str) -> tuple[StorageTriple, Callable[[], None]]:
     bare ``import noeta.agent`` cheap (psycopg loads only when a Postgres
     URL was actually configured).
     """
-    from noeta.storage.postgres import (
+    from noeta.sdk.storage import (
         PostgresContentStore,
         PostgresDispatcher,
         PostgresEventLog,

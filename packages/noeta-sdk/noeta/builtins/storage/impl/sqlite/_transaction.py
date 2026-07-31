@@ -1,6 +1,6 @@
 """Generic transaction helpers for sqlite backend adapters.
 
-Issue 17 promoted this module out of :mod:`noeta.storage.sqlite.migrations`
+Issue 17 promoted this module out of :mod:`noeta.builtins.storage.impl.sqlite.migrations`
 so that both the migration runner and the dispatcher (and any future
 adapter that needs ``BEGIN IMMEDIATE`` retry semantics) consume the
 same helper instead of reaching into migration-runner internals.

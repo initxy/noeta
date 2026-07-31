@@ -187,14 +187,36 @@ def test_build_composer_returns_three_segment_composer() -> None:
 
 
 # ---------------------------------------------------------------------------
-# open_storage_stack (issue D / C5)
+# open_storage_stack (issue D / C5; since the storage-backend relocation the
+# builders live in noeta.sdk.storage — build_runtime's durable branch reaches
+# them by call-time dynamic import, covered by the sqlite build_runtime tests)
 # ---------------------------------------------------------------------------
+
+
+def test_build_storage_stack_unknown_backend_names_the_known_set() -> None:
+    from noeta.sdk.storage import build_storage_stack
+
+    with pytest.raises(ValueError) as exc:
+        build_storage_stack("filesystem")
+    message = str(exc.value)
+    assert "filesystem" in message
+    for known in ("memory", "sqlite", "postgres"):
+        assert known in message
+
+
+def test_is_postgres_url_classifies_dsn_shapes() -> None:
+    from noeta.sdk.storage import is_postgres_url
+
+    assert is_postgres_url("postgresql://u:p@h:5432/db") is True
+    assert is_postgres_url("postgres://u:p@h:5432/db") is True
+    assert is_postgres_url("/some/file.db") is False
+    assert is_postgres_url(":memory:") is False
 
 
 def test_open_storage_stack_memory_path_returns_inmemory_adapters(
     tmp_path: pytest.TempPathFactory,
 ) -> None:
-    from noeta.testing.profile import open_storage_stack
+    from noeta.sdk.storage import open_storage_stack
     from noeta.storage.memory import (
         InMemoryContentStore,
         InMemoryDispatcher,
@@ -211,11 +233,11 @@ def test_open_storage_stack_memory_path_returns_inmemory_adapters(
 def test_open_storage_stack_file_path_returns_sqlite_adapters(
     tmp_path,
 ) -> None:
-    from noeta.testing.profile import open_storage_stack
-    from noeta.storage.sqlite import (
+    from noeta.sdk.storage import (
         SqliteContentStore,
         SqliteDispatcher,
         SqliteEventLog,
+        open_storage_stack,
     )
 
     db = str(tmp_path / "store.sqlite")

@@ -541,12 +541,6 @@ wheels = [
 name = "noeta-runtime"
 version = "0.4.0"
 source = { editable = "packages/noeta-runtime" }
-dependencies = [
-    { name = "psycopg", extra = ["binary"] },
-]
-
-[package.metadata]
-requires-dist = [{ name = "psycopg", extras = ["binary"], specifier = ">=3.2" }]
 
 [[package]]
 name = "noeta-sdk"
@@ -555,12 +549,14 @@ source = { editable = "packages/noeta-sdk" }
 dependencies = [
     { name = "httpx" },
     { name = "noeta-runtime" },
+    { name = "psycopg", extra = ["binary"] },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "noeta-runtime", editable = "packages/noeta-runtime" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
 ]
 
 [[package]]

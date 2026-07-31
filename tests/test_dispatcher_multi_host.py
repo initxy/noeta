@@ -70,7 +70,7 @@ def _dispatcher(
     now: Optional[Callable[[], float]] = None,
     row_lock_timeout_ms: int = 5_000,
 ) -> Any:
-    from noeta.storage.postgres import PostgresDispatcher
+    from noeta.sdk.storage import PostgresDispatcher
 
     return closing(
         PostgresDispatcher(
@@ -87,7 +87,7 @@ def _event_log(
     clock: Optional[Callable[[], float]] = None,
     _emit_pause: Optional[Callable[[], None]] = None,
 ) -> Any:
-    from noeta.storage.postgres import PostgresEventLog
+    from noeta.sdk.storage import PostgresEventLog
 
     return closing(
         PostgresEventLog(
@@ -545,7 +545,7 @@ def test_step_attempt_recovery_across_hosts(schema_dsn, closing) -> None:
     """A crash on host A is sealed and re-driven on host B: the seal is
     a lease-checked append under B's lease, A's generation is fenced,
     and the stream completes exactly once."""
-    from noeta.storage.postgres import PostgresContentStore
+    from noeta.sdk.storage import PostgresContentStore
 
     now = [1_000_000.0]
 

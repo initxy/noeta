@@ -26,8 +26,7 @@ from noeta.protocols.events import (
     TaskCreatedPayload,
     TaskStartedPayload,
 )
-from noeta.storage.sqlite import SqliteReadOnlyStore
-from noeta.testing.profile import build_sqlite_stack
+from noeta.sdk.storage import SqliteReadOnlyStore, build_storage_stack
 
 
 def _close(*objs: Any) -> None:
@@ -38,7 +37,7 @@ def _close(*objs: Any) -> None:
 
 
 def _seed(db: Path) -> tuple[Any, Any, Any]:
-    return build_sqlite_stack(str(db))
+    return build_storage_stack("sqlite", path=str(db))
 
 
 def _emit_created_started(log: Any, task_id: str, *, agent: str = "default") -> None:

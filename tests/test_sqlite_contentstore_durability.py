@@ -7,7 +7,7 @@ returned later is byte-for-byte identical.
 
 from __future__ import annotations
 
-from noeta.storage.sqlite.contentstore import SqliteContentStore
+from noeta.sdk.storage import SqliteContentStore
 
 
 def test_blobs_survive_close_and_reopen(tmp_path) -> None:

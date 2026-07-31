@@ -54,7 +54,7 @@ from noeta.protocols.decisions import (
 )
 from noeta.protocols.events import TaskCompletedPayload, answer_from_payload
 from noeta.protocols.messages import Message, TextBlock
-from noeta.storage.sqlite import (
+from noeta.sdk.storage import (
     SqliteContentStore,
     SqliteDispatcher,
     SqliteEventLog,

@@ -17,8 +17,11 @@ the classes here are adapters that satisfy those Protocols.
   lifecycle) and ``LeaseRegistry`` (``is_lease_valid`` for EventLog
   backends) in one class.
 
-The InMemory backend is the only Phase-0 implementation; SQL / Postgres
-backends in later phases plug into the same Protocols.
+The InMemory backend is the kernel's reference backend — the executable
+definition of the Protocols' semantics. The durable backends (sqlite /
+Postgres) live in the ``storage`` built-in (noeta-sdk) and plug into the
+same Protocols; :func:`build_stack` is the uniform factory shape every
+backend ships.
 """
 
 from __future__ import annotations
@@ -32,16 +35,17 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from noeta.protocols.canonical import to_canonical_bytes
-from noeta.protocols.dispatcher import Lease, LeaseRegistry
+from noeta.protocols.content_store import ContentStore
+from noeta.protocols.dispatcher import Dispatcher, Lease, LeaseRegistry
 from noeta.protocols.errors import (
     ContentNotFound,
     InvalidLease,
-    PayloadTooLarge,
     StaleSequence,
     WakeConsumeMismatch,
 )
 from noeta.protocols.event_log import (
     SNAPSHOT_BASELINE_EVENT_TYPES,
+    EventLogFull,
     Subscriber,
     TaskStreamSummary,
     Unsubscribe,
@@ -49,8 +53,7 @@ from noeta.protocols.event_log import (
 from noeta.protocols.events import EventEnvelope, EventOrigin
 from noeta.protocols.values import EVENT_PAYLOAD_MAX_BYTES, ContentRef
 from noeta.protocols.wake import TimerFired
-from noeta.storage._reclaim import reclaim_hits_cap
-from noeta.storage._wake_match import _matches
+from noeta.storage.spi import enforce_payload_cap, reclaim_hits_cap, wake_matches
 
 
 _DEFAULT_SCHEMA_VERSION = 1
@@ -107,13 +110,12 @@ class InMemoryContentStore:
 
 
 def _enforce_payload_cap(envelope: EventEnvelope) -> None:
-    body = to_canonical_bytes(envelope.payload)
-    if len(body) > MAX_PAYLOAD_BYTES:
-        raise PayloadTooLarge(
-            f"task_id={envelope.task_id}, type={envelope.type}, "
-            f"size={len(body)}, cap={MAX_PAYLOAD_BYTES} "
-            "(large bodies must go through ContentStore)"
-        )
+    # The cap decision is the shared backend rule (``noeta.storage.spi``);
+    # the canonical bytes are computed here because the in-memory adapter
+    # never serialises the payload otherwise.
+    enforce_payload_cap(
+        envelope.task_id, envelope.type, to_canonical_bytes(envelope.payload)
+    )
 
 
 @dataclass
@@ -824,7 +826,7 @@ class InMemoryDispatcher:
             if task_id not in self._tasks:
                 self._tasks[task_id] = _DispatcherTask(task_id=task_id)
             task = self._tasks[task_id]
-            if task.status == "suspended" and _matches(task.wake_on, wake_event):
+            if task.status == "suspended" and wake_matches(task.wake_on, wake_event):
                 task.matched_wake_event = wake_event
                 task.status = "ready"
                 task.wake_on = None
@@ -971,7 +973,7 @@ class InMemoryDispatcher:
                 # No matched: drain a single matching pending wake into a
                 # NEW matched (D4 case 4 — old matched was cleared above).
                 for evt in list(task.pending_wake_events):
-                    if _matches(task.wake_on, evt):
+                    if wake_matches(task.wake_on, evt):
                         task.pending_wake_events.remove(evt)
                         task.matched_wake_event = evt
                         task.status = "ready"
@@ -986,3 +988,22 @@ class InMemoryDispatcher:
             # never matched can never drain now; GC them. The matched
             # wake (H2 exactly-once handoff) is deliberately untouched.
             task.pending_wake_events.clear()
+
+
+# ---------------------------------------------------------------------------
+# Stack factory
+# ---------------------------------------------------------------------------
+
+
+def build_stack() -> tuple[EventLogFull, ContentStore, Dispatcher]:
+    """Build the in-memory triple — the uniform backend ``build_stack``.
+
+    No config: the stack lives and dies with the process. Wires the
+    triple's one internal invariant itself (the event log takes the
+    dispatcher as ``lease_validator``), the same shape as the durable
+    backends' factories in the ``storage`` built-in.
+    """
+    dispatcher = InMemoryDispatcher()
+    event_log = InMemoryEventLog(lease_validator=dispatcher)
+    content_store = InMemoryContentStore()
+    return event_log, content_store, dispatcher

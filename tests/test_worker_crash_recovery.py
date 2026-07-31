@@ -339,7 +339,7 @@ def test_poison_task_bounded_retry_then_terminal(
     dispatcher, bounded retry caps at ``max_fail_attempts`` → the task is
     terminal (no longer leasable). Terminal is asserted from the
     **dispatcher**, the symptom only from the sink."""
-    from noeta.testing.profile import open_storage_stack
+    from noeta.sdk.storage import open_storage_stack
 
     path = ":memory:" if kind == "memory" else str(tmp_path / "poison.sqlite")
     event_log, content_store, dispatcher = open_storage_stack(path)

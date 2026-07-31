@@ -30,8 +30,7 @@ from noeta.protocols.event_log import SNAPSHOT_BASELINE_EVENT_TYPES
 from noeta.protocols.values import ContentRef
 from noeta.protocols.wake import HumanResponseReceived
 from noeta.storage.memory import InMemoryDispatcher, InMemoryEventLog
-from noeta.storage.sqlite.dispatcher import SqliteDispatcher
-from noeta.storage.sqlite.eventlog import SqliteEventLog
+from noeta.sdk.storage import SqliteDispatcher, SqliteEventLog
 
 
 def _ref(seed: str) -> ContentRef:

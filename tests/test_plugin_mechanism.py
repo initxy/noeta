@@ -511,11 +511,12 @@ def test_builtins_default_on_and_disable_individually():
     assert load_plugins(builtins=[a, b], disabled_builtins=["web"]).names() == ("fs",)
     assert load_plugins(builtins=False).names() == ()
     # Real discovery reads the noeta.builtins catalogue (M2; control-tool-surface
-    # S2 adds the three control-tool built-ins → 17).
+    # S2 adds the three control-tool built-ins → 17; the storage-backend
+    # relocation adds the declaration-only `storage` built-in → 18).
     assert set(load_plugins(builtins=True).names()) == {
         "app", "ask_user_question", "browser", "delegation", "fs", "governance",
         "mcp", "memory", "presets", "providers", "react", "reminders", "sandbox",
-        "skills", "todo_write", "web", "workspace",
+        "skills", "storage", "todo_write", "web", "workspace",
     }
 
 
@@ -669,6 +670,40 @@ def test_pluginset_lists_contributions_without_executing_then_resolve_imports(
     resolved = ps.resolve()
     assert resolved[0].value == "resolved-fragment"
     assert (pkg_dir / "EXECUTED").exists()
+
+
+def test_storage_builtin_is_declaration_only_and_lists_without_impl_import():
+    """The ``storage`` built-in is the second declaration-only member after
+    ``providers`` (storage-backend-relocation G3): its manifest carries zero
+    contributions — the durable backends are host-wired via
+    ``noeta.sdk.storage``, never merged — and discovering + listing it imports
+    no backend impl module. The manifest layer stays inert; the psycopg half
+    of the same gate is pinned on a clean interpreter by the install smoke.
+    """
+    impl_prefix = "noeta.builtins.storage.impl"
+    # Other tests may legitimately have imported the backends; forget them so
+    # the discovery/listing below would have to RE-import to be seen here.
+    saved = {
+        name: sys.modules.pop(name)
+        for name in list(sys.modules)
+        if name == impl_prefix or name.startswith(impl_prefix + ".")
+    }
+    try:
+        ps = load_plugins(builtins=True)
+        assert "storage" in ps.names()
+        listed = [(pn, c) for pn, c in ps.contributions() if pn == "storage"]
+        assert listed == [], "the storage manifest must declare zero contributions"
+        imported = [
+            name
+            for name in sys.modules
+            if name == impl_prefix or name.startswith(impl_prefix + ".")
+        ]
+        assert not imported, (
+            f"listing the storage built-in imported backend impl modules: "
+            f"{imported}"
+        )
+    finally:
+        sys.modules.update(saved)
 
 
 # ---------------------------------------------------------------------------

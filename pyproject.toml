@@ -27,6 +27,7 @@ respect-gitignore = false
 # __getattr__ (the microkernel dynamic-import doorway — no static builtins
 # edge), which F822 cannot see.
 "packages/noeta-sdk/noeta/sdk/providers.py" = ["F822"]
+"packages/noeta-sdk/noeta/sdk/storage.py" = ["F822"]
 "packages/noeta-sdk/noeta/client/parts.py" = ["F822"]
 
 [tool.pytest.ini_options]

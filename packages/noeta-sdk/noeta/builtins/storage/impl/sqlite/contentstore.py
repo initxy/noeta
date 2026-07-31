@@ -26,8 +26,8 @@ from typing import Optional, Union
 
 from noeta.protocols.errors import ContentNotFound
 from noeta.protocols.values import ContentRef
-from noeta.storage.sqlite._connection import _open_connection
-from noeta.storage.sqlite.migrations import apply_migrations
+from noeta.builtins.storage.impl.sqlite._connection import _open_connection
+from noeta.builtins.storage.impl.sqlite.migrations import apply_migrations
 
 
 __all__ = ["SqliteContentStore"]

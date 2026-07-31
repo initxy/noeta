@@ -28,7 +28,7 @@ from dataclasses import dataclass
 
 import psycopg
 
-from noeta.storage.postgres._connection import _ADVISORY_CLASS_MIGRATIONS
+from noeta.builtins.storage.impl.postgres._connection import _ADVISORY_CLASS_MIGRATIONS
 
 
 __all__ = [
