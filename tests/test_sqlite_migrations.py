@@ -1,4 +1,4 @@
-"""Tests for ``noeta.storage.sqlite.migrations`` (issue 15).
+"""Tests for ``noeta.builtins.storage.impl.sqlite.migrations`` (issue 15).
 
 Pins the two behaviours the architect explicitly called out:
 
@@ -15,9 +15,9 @@ import threading
 
 import pytest
 
-from noeta.storage.sqlite import migrations as migrations_module
-from noeta.storage.sqlite._connection import _open_connection
-from noeta.storage.sqlite.migrations import (
+from noeta.builtins.storage.impl.sqlite import migrations as migrations_module
+from noeta.builtins.storage.impl.sqlite._connection import _open_connection
+from noeta.builtins.storage.impl.sqlite.migrations import (
     MIGRATIONS,
     SCHEMA_VERSION,
     Migration,

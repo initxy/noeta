@@ -4,7 +4,7 @@ Third Postgres adapter on the same database that ``PostgresEventLog``
 and ``PostgresContentStore`` share. Behaviour is pinned by
 :class:`noeta.storage.memory.InMemoryDispatcher` and the
 storage-backend-neutral contract suite, mirroring
-:class:`noeta.storage.sqlite.dispatcher.SqliteDispatcher`
+:class:`noeta.builtins.storage.impl.sqlite.dispatcher.SqliteDispatcher`
 structure-for-structure.
 
 Where sqlite serialises every lifecycle write behind the file-wide
@@ -32,14 +32,14 @@ from noeta.protocols.canonical import from_canonical_bytes, to_canonical_bytes
 from noeta.protocols.dispatcher import Lease
 from noeta.protocols.errors import InvalidLease, WakeConsumeMismatch
 from noeta.protocols.wake import TimerFired
-from noeta.storage._reclaim import reclaim_hits_cap
-from noeta.storage._wake_match import _matches
-from noeta.storage.postgres._connection import (
+from noeta.storage.spi import reclaim_hits_cap, wake_matches
+
+from noeta.builtins.storage.impl.postgres._connection import (
     _ADVISORY_CLASS_DISPATCHER,
     _DB_NOW_SQL,
     _open_connection,
 )
-from noeta.storage.postgres.migrations import apply_migrations
+from noeta.builtins.storage.impl.postgres.migrations import apply_migrations
 
 
 __all__ = ["PostgresDispatcher"]
@@ -252,7 +252,7 @@ class PostgresDispatcher:
             (task_id,),
         ).fetchall():
             wake_event = _deserialize_wake(row["wake_event_canonical"])
-            if _matches(wake_on, wake_event):
+            if wake_matches(wake_on, wake_event):
                 self._conn.execute(
                     "DELETE FROM dispatcher_pending_wakes "
                     "WHERE task_id = %s AND arrival_seq = %s",
@@ -782,7 +782,7 @@ class PostgresDispatcher:
 
                 if row["status"] == "suspended":
                     wake_on = _deserialize_wake(row["wake_on_canonical"])
-                    if _matches(wake_on, wake_event):
+                    if wake_matches(wake_on, wake_event):
                         order = self._next_ready_order()
                         matched_blob = to_canonical_bytes(wake_event)
                         self._conn.execute(

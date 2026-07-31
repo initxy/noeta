@@ -1,14 +1,15 @@
 """Shared wake-matching helper for the storage adapters.
 
 All three Dispatcher adapters (:class:`noeta.storage.memory.InMemoryDispatcher`,
-:class:`noeta.storage.sqlite.dispatcher.SqliteDispatcher`, and
-``noeta.storage.postgres.dispatcher.PostgresDispatcher``) need to
+:class:`noeta.builtins.storage.impl.sqlite.dispatcher.SqliteDispatcher`, and
+``noeta.builtins.storage.impl.postgres.dispatcher.PostgresDispatcher``) need to
 decide whether a pending wake event satisfies a task's ``wake_on``
 condition. That decision is the projection-matching invariant and it
 lives in :mod:`noeta.protocols.wake`; the adapters MUST NOT carry their
-own match logic. This module is the single ``_matches`` all adapters
-route through so contract-suite parametrisation across the backends
-cannot drift, and so a future adapter cannot silently diverge.
+own match logic. This module is the single predicate all adapters route
+through — publicly as ``wake_matches`` on :mod:`noeta.storage.spi` — so
+contract-suite parametrisation across the backends cannot drift, and so
+a future adapter cannot silently diverge.
 """
 
 from __future__ import annotations

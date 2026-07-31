@@ -46,7 +46,7 @@ from noeta.storage.memory import (
     InMemoryDispatcher,
     InMemoryEventLog,
 )
-from noeta.storage.sqlite import SqliteContentStore, SqliteEventLog
+from noeta.sdk.storage import SqliteContentStore, SqliteEventLog
 from noeta.testing.composer import trivial_three_segment
 from noeta.tools.fake import FakeTool
 

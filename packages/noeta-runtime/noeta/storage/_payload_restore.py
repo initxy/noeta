@@ -8,11 +8,14 @@ values (``ContentRef``, ``Message``, ``WakeCondition``, ``SubtaskResult``,
 outer payload classes that do *not* carry a tag and would otherwise read
 back as plain dicts.
 
-Extracted from ``noeta.storage.sqlite.eventlog`` when the Postgres
-adapter landed, so the two backends read from the single table instead
-of drifting apart. A test in the contract suite reflects
+Extracted from the sqlite EventLog adapter when the Postgres adapter
+landed, so the two backends read from the single table instead of
+drifting apart. A test in the contract suite reflects
 ``noeta.protocols.events`` and fails CI the moment a new ``*Payload``
-class lands without a matching entry here.
+class lands without a matching entry here. Backends (built-in durable
+ones in ``noeta.builtins.storage.impl`` and third-party alike) reach
+this table only through the public facade :mod:`noeta.storage.spi`
+(``restore_payload`` / ``enforce_payload_cap``).
 """
 
 from __future__ import annotations

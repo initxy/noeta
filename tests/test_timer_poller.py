@@ -38,7 +38,7 @@ from noeta.storage.memory import (
     InMemoryDispatcher,
     InMemoryEventLog,
 )
-from noeta.storage.sqlite.dispatcher import SqliteDispatcher
+from noeta.sdk.storage import SqliteDispatcher
 from noeta.testing.composer import trivial_three_segment
 
 
@@ -166,8 +166,8 @@ def test_migration_7_backfills_fire_at_for_legacy_timer_suspend(
     never stranded across the upgrade. A non-timer suspend backfills to NULL
     (it must never surface on the timer index)."""
     from noeta.protocols.canonical import to_canonical_bytes
-    from noeta.storage.sqlite import migrations as migrations_module
-    from noeta.storage.sqlite.migrations import MIGRATIONS
+    from noeta.builtins.storage.impl.sqlite import migrations as migrations_module
+    from noeta.builtins.storage.impl.sqlite.migrations import MIGRATIONS
 
     db = tmp_path / "timer_backfill.sqlite"
     # Build a v6 DB (reclaim_count present, fire_at absent) and hand-write the
@@ -215,7 +215,7 @@ def test_fire_due_timers_idle_poll_skips_write_transaction(monkeypatch) -> None:
     """sqlite-only perf invariant: a poll with nothing due returns off the
     read-only probe WITHOUT opening ``BEGIN IMMEDIATE`` — the ~1s idle poll no
     longer takes the write lock. A due poll opens exactly one."""
-    from noeta.storage.sqlite import dispatcher as disp_mod
+    from noeta.builtins.storage.impl.sqlite import dispatcher as disp_mod
 
     calls = {"n": 0}
     real = disp_mod._begin_immediate_with_retry

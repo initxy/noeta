@@ -22,9 +22,9 @@ from noeta.protocols.messages import (
     Usage,
 )
 from noeta.runtime.worker import run_leased_task
+from noeta.sdk.storage import build_storage_stack
 from noeta.testing.profile import (
     build_runtime,
-    build_sqlite_stack,
     build_tools,
     default_budget,
     default_permission_policy,
@@ -227,7 +227,7 @@ def test_resume_skips_suspended_task_without_wake_event(tmp_path) -> None:
     parent_task_id, original_wake_on = _seed_suspended_task_in_sqlite(db_path)
     assert original_wake_on is not None
 
-    seed_log, _, seed_dispatcher = build_sqlite_stack(db_path)
+    seed_log, _, seed_dispatcher = build_storage_stack("sqlite", path=db_path)
     # Settle the stranded child (created in the seed, still ready) WITHOUT
     # waking the parent. A child created before a restart that completes after
     # the restart now correctly notifies its parent (issue #57 lineage replay),
@@ -283,7 +283,7 @@ def test_resume_skips_suspended_task_without_wake_event(tmp_path) -> None:
     # wake_on preservation: a fresh dispatcher on the same sqlite file
     # can still wake the parent with the original canonical wake_on.
     # If the skip path had cleared wake_on, this wake() would return False.
-    _, _, verify_dispatcher = build_sqlite_stack(db_path)
+    _, _, verify_dispatcher = build_storage_stack("sqlite", path=db_path)
     assert verify_dispatcher.wake(parent_task_id, original_wake_on) is True, (
         "resume must release suspended tasks with wake_on preserved; "
         "wake() returned False which means resume cleared it"
@@ -311,7 +311,7 @@ def test_resume_wakes_suspended_task_when_lease_carries_wake_event(
     assert original_wake_on is not None
     assert isinstance(original_wake_on, SubtaskCompleted)
 
-    _, _, seed_dispatcher = build_sqlite_stack(db_path)
+    _, _, seed_dispatcher = build_storage_stack("sqlite", path=db_path)
     # Wake with a result-populated event. Projection matching matches
     # by ``subtask_id`` only (result is informational); the wake_event
     # carries the result forward into the lease handoff.
@@ -349,7 +349,7 @@ def test_resume_wakes_suspended_task_when_lease_carries_wake_event(
 
     # Durable TaskWoken envelope landed in the EventLog with the exact
     # wake_event payload (projection-matching preserves result round-trip).
-    read_log, read_cs, _ = build_sqlite_stack(db_path)
+    read_log, read_cs, _ = build_storage_stack("sqlite", path=db_path)
     envelopes = read_log.read(parent_task_id)
     woken_envs = [e for e in envelopes if e.type == "TaskWoken"]
     assert len(woken_envs) >= 1, (

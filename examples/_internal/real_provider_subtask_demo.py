@@ -160,9 +160,9 @@ def main() -> int:
         sqlite_path = str(Path(tmp) / "demo.sqlite")
 
         # ---- Storage stack + observers ----
-        from noeta.testing.profile import build_sqlite_stack
+        from noeta.sdk.storage import build_storage_stack
 
-        event_log, content_store, dispatcher = build_sqlite_stack(sqlite_path)
+        event_log, content_store, dispatcher = build_storage_stack("sqlite", path=sqlite_path)
         wire_default_observers(event_log, dispatcher)
 
         tools = {"echo": _build_echo_tool()}

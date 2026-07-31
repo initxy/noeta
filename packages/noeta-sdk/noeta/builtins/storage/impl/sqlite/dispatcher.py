@@ -29,11 +29,11 @@ from noeta.protocols.canonical import from_canonical_bytes, to_canonical_bytes
 from noeta.protocols.dispatcher import Lease
 from noeta.protocols.errors import InvalidLease, WakeConsumeMismatch
 from noeta.protocols.wake import TimerFired
-from noeta.storage._reclaim import reclaim_hits_cap
-from noeta.storage._wake_match import _matches
-from noeta.storage.sqlite._connection import _open_connection
-from noeta.storage.sqlite._transaction import _begin_immediate_with_retry
-from noeta.storage.sqlite.migrations import apply_migrations
+from noeta.storage.spi import reclaim_hits_cap, wake_matches
+
+from noeta.builtins.storage.impl.sqlite._connection import _open_connection
+from noeta.builtins.storage.impl.sqlite._transaction import _begin_immediate_with_retry
+from noeta.builtins.storage.impl.sqlite.migrations import apply_migrations
 
 
 __all__ = ["SqliteDispatcher"]
@@ -172,7 +172,7 @@ class SqliteDispatcher:
             (task_id,),
         ).fetchall():
             wake_event = _deserialize_wake(row["wake_event_canonical"])
-            if _matches(wake_on, wake_event):
+            if wake_matches(wake_on, wake_event):
                 self._conn.execute(
                     "DELETE FROM dispatcher_pending_wakes "
                     "WHERE task_id = ? AND arrival_seq = ?",
@@ -664,7 +664,7 @@ class SqliteDispatcher:
 
                 if row["status"] == "suspended":
                     wake_on = _deserialize_wake(row["wake_on_canonical"])
-                    if _matches(wake_on, wake_event):
+                    if wake_matches(wake_on, wake_event):
                         order = self._next_ready_order()
                         matched_blob = to_canonical_bytes(wake_event)
                         self._conn.execute(

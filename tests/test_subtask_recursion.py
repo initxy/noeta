@@ -30,7 +30,7 @@ from noeta.protocols.hooks import GuardContext, ProposedSpawnSubtask
 from noeta.protocols.messages import LLMResponse, TextBlock, ToolUseBlock, Usage
 from noeta.protocols.wake import HumanResponseReceived, SubtaskCompleted
 from noeta.storage.memory import InMemoryContentStore, InMemoryEventLog
-from noeta.storage.sqlite.eventlog import SqliteEventLog
+from noeta.sdk.storage import SqliteEventLog
 from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.runtime.shell_policy import ShellMode
 from noeta.runtime.workspace import FsWriteMode

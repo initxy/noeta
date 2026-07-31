@@ -60,7 +60,7 @@ def test_old_shape_restores_with_defaults() -> None:
 def test_sqlite_restorer_defaults_old_selection_on_request_started() -> None:
     """The sqlite LLMRequestStarted restorer rebuilds a dict-shaped
     selection (old recording) with the new fields defaulted."""
-    from noeta.storage.sqlite.eventlog import (
+    from noeta.storage._payload_restore import (
         _restore_llm_request_started_payload,
     )
 

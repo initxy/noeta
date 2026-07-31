@@ -17,7 +17,7 @@ from noeta.protocols.events import (
 )
 from noeta.protocols.values import ContentRef
 from noeta.protocols.wake import HumanResponseReceived
-from noeta.storage.sqlite.eventlog import SqliteEventLog
+from noeta.sdk.storage import SqliteEventLog
 
 
 def test_typed_payloads_survive_close_reopen(tmp_path) -> None:

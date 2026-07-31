@@ -116,8 +116,7 @@ def test_null_plan_ref_survives_snapshot_fold_byte_equality() -> None:
 def test_null_plan_ref_roundtrips_through_sqlite_eventlog(tmp_path) -> None:
     """The persisted payload decoder restores ``plan_ref=None`` (the new
     Passthrough shape) as well as the historical non-null shape."""
-    from noeta.storage.sqlite.dispatcher import SqliteDispatcher
-    from noeta.storage.sqlite.eventlog import SqliteEventLog
+    from noeta.sdk.storage import SqliteDispatcher, SqliteEventLog
 
     db = str(tmp_path / "null_plan.sqlite")
     disp = SqliteDispatcher(db)

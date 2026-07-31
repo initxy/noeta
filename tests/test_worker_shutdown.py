@@ -169,9 +169,9 @@ def test_sigterm_during_step_finishes_step_then_exits_clean(tmp_path: Any) -> No
             proc.wait(timeout=5.0)
 
     # The step finished despite the SIGTERM → task reached terminal.
-    from noeta.testing.profile import build_sqlite_stack
+    from noeta.sdk.storage import build_storage_stack
     from noeta.core.fold import fold
 
-    event_log, content_store, _ = build_sqlite_stack(str(db))
+    event_log, content_store, _ = build_storage_stack("sqlite", path=str(db))
     folded = fold(event_log, content_store, task_id)
     assert folded.status == "terminal"

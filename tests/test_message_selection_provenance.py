@@ -42,10 +42,8 @@ from noeta.storage.memory import (
     InMemoryDispatcher,
     InMemoryEventLog,
 )
-from noeta.storage.sqlite.eventlog import (
-    SqliteEventLog,
-    _restore_llm_request_started_payload,
-)
+from noeta.sdk.storage import SqliteEventLog
+from noeta.storage._payload_restore import _restore_llm_request_started_payload
 from noeta.testing.composer import trivial_three_segment
 from noeta.testing.fake_llm import FakeLLMProvider
 from noeta.tools.fake import FakeTool

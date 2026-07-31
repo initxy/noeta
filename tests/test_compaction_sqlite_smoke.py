@@ -17,8 +17,7 @@ from noeta.protocols.events import (
 )
 from noeta.protocols.values import ContentRef
 from noeta.runtime.compaction import CompactionWorker
-from noeta.storage.sqlite.contentstore import SqliteContentStore
-from noeta.storage.sqlite.eventlog import SqliteEventLog
+from noeta.sdk.storage import SqliteContentStore, SqliteEventLog
 
 
 def _ref(tag: str, size: int = 10) -> ContentRef:

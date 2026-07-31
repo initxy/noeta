@@ -6,8 +6,7 @@ import threading
 
 from noeta.protocols.events import TaskCreatedPayload
 from noeta.protocols.wake import SubtaskCompleted
-from noeta.storage.sqlite.dispatcher import SqliteDispatcher
-from noeta.storage.sqlite.eventlog import SqliteEventLog
+from noeta.sdk.storage import SqliteDispatcher, SqliteEventLog
 
 
 def test_dispatcher_state_survives_close_reopen(tmp_path) -> None:

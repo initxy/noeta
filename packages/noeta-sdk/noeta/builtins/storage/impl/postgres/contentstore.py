@@ -22,8 +22,8 @@ from typing import Optional
 
 from noeta.protocols.errors import ContentNotFound
 from noeta.protocols.values import ContentRef
-from noeta.storage.postgres._connection import _open_connection
-from noeta.storage.postgres.migrations import apply_migrations
+from noeta.builtins.storage.impl.postgres._connection import _open_connection
+from noeta.builtins.storage.impl.postgres.migrations import apply_migrations
 
 
 __all__ = ["PostgresContentStore"]

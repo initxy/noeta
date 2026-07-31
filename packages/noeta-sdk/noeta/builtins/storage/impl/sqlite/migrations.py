@@ -20,7 +20,7 @@ from typing import Optional
 
 from noeta.protocols.canonical import from_canonical_bytes
 from noeta.protocols.wake import TimerFired
-from noeta.storage.sqlite._transaction import _begin_immediate_with_retry
+from noeta.builtins.storage.impl.sqlite._transaction import _begin_immediate_with_retry
 
 
 __all__ = [

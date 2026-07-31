@@ -1,8 +1,8 @@
 """Shared stale-reclaim cap decision for the dispatcher adapters (kernel #3).
 
 All three Dispatcher adapters (:class:`noeta.storage.memory.InMemoryDispatcher`,
-:class:`noeta.storage.sqlite.dispatcher.SqliteDispatcher`, and
-``noeta.storage.postgres.dispatcher.PostgresDispatcher``) bound the
+:class:`noeta.builtins.storage.impl.sqlite.dispatcher.SqliteDispatcher`, and
+``noeta.builtins.storage.impl.postgres.dispatcher.PostgresDispatcher``) bound the
 poison-task lease → expire → reclaim loop with the same rule: a task that
 accrues ``reclaim_max`` CONSECUTIVE no-progress stale-lease reclaims drops to
 ``terminal`` (``stale_reclaim_exceeded``) instead of requeueing forever — the

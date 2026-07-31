@@ -25,7 +25,7 @@ from noeta.protocols.wake import (
     matches_wake,
 )
 from noeta.storage.memory import InMemoryDispatcher
-from noeta.storage.sqlite.dispatcher import SqliteDispatcher
+from noeta.sdk.storage import SqliteDispatcher
 
 
 # ---------------------------------------------------------------------------

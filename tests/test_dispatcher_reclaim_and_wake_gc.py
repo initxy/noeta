@@ -26,8 +26,8 @@ import pytest
 
 from noeta.protocols.wake import HumanResponseReceived, SubtaskCompleted
 from noeta.storage.memory import InMemoryDispatcher
-from noeta.storage.sqlite.dispatcher import SqliteDispatcher
-from noeta.storage.sqlite.migrations import SCHEMA_VERSION
+from noeta.sdk.storage import SqliteDispatcher
+from noeta.builtins.storage.impl.sqlite.migrations import SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------

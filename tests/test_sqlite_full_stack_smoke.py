@@ -22,9 +22,7 @@ from noeta.policies.stub import StubScriptedPolicy
 from noeta.protocols.decisions import FinishDecision, SpawnSubtaskDecision
 from noeta.protocols.events import MessagesAppendedPayload, TaskCreatedPayload
 from noeta.protocols.wake import SubtaskCompleted
-from noeta.storage.sqlite.contentstore import SqliteContentStore
-from noeta.storage.sqlite.dispatcher import SqliteDispatcher
-from noeta.storage.sqlite.eventlog import SqliteEventLog
+from noeta.sdk.storage import SqliteContentStore, SqliteDispatcher, SqliteEventLog
 from noeta.testing.composer import trivial_three_segment
 
 

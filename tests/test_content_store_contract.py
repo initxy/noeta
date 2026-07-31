@@ -21,7 +21,7 @@ import pytest
 from noeta.protocols.errors import ContentNotFound
 from noeta.protocols.values import ContentRef
 from noeta.storage.memory import InMemoryContentStore
-from noeta.storage.sqlite.contentstore import SqliteContentStore
+from noeta.sdk.storage import SqliteContentStore
 from tests._pg import isolated_schema_dsn, postgres_param
 
 
@@ -49,7 +49,7 @@ def make_store(request):
     else:
 
         def builder():
-            from noeta.storage.postgres.contentstore import PostgresContentStore
+            from noeta.sdk.storage import PostgresContentStore
 
             dsn = stack.enter_context(isolated_schema_dsn())
             return PostgresContentStore(dsn)

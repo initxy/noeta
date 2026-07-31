@@ -39,7 +39,7 @@ from noeta.protocols.wake import (
     derive_group_id,
 )
 from noeta.storage.memory import InMemoryEventLog
-from noeta.storage.sqlite.eventlog import SqliteEventLog
+from noeta.sdk.storage import SqliteEventLog
 
 
 class _FakeDispatcher:

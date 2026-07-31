@@ -34,7 +34,7 @@ def test_compaction_requested_payload_restorer_round_trip() -> None:
     """Outer payloads are reconstructed via ``_PAYLOAD_RESTORERS`` (they
     carry no canonical tag); the canonical body is a plain dict and the
     sqlite restorer rebuilds the typed payload from it."""
-    from noeta.storage.sqlite.eventlog import _PAYLOAD_RESTORERS
+    from noeta.storage._payload_restore import _PAYLOAD_RESTORERS
 
     p = CompactionRequestedPayload(reason="overflow", estimated_tokens=900_000)
     body = from_canonical_bytes(to_canonical_bytes(p))
@@ -43,7 +43,7 @@ def test_compaction_requested_payload_restorer_round_trip() -> None:
 
 
 def test_compacted_payload_restorer_round_trip() -> None:
-    from noeta.storage.sqlite.eventlog import _PAYLOAD_RESTORERS
+    from noeta.storage._payload_restore import _PAYLOAD_RESTORERS
 
     p = CompactedPayload(
         summary_ref=_ref("sha256:abc"),
@@ -57,7 +57,7 @@ def test_compacted_payload_restorer_round_trip() -> None:
 
 
 def test_payload_restorers_registered_for_both() -> None:
-    from noeta.storage.sqlite.eventlog import _PAYLOAD_RESTORERS
+    from noeta.storage._payload_restore import _PAYLOAD_RESTORERS
 
     assert "CompactionRequested" in _PAYLOAD_RESTORERS
     assert "Compacted" in _PAYLOAD_RESTORERS

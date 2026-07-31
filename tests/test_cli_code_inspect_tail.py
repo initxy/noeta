@@ -38,9 +38,9 @@ from noeta.protocols.events import (
 )
 from noeta.protocols.messages import LLMResponse, TextBlock, Usage
 from noeta.protocols.wake import HumanResponseReceived
-from noeta.storage.sqlite import SqliteReadOnlyStore
+from noeta.sdk.storage import SqliteReadOnlyStore
 from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.testing.profile import build_sqlite_stack
+from noeta.sdk.storage import build_storage_stack
 from noeta.runtime.shell_policy import ShellMode
 from noeta.runtime.workspace import FsWriteMode
 
@@ -80,7 +80,7 @@ def _close(*objs: Any) -> None:
 
 
 def _seed(db: Path) -> tuple[Any, Any, Any]:
-    return build_sqlite_stack(str(db))
+    return build_storage_stack("sqlite", path=str(db))
 
 
 def _detail(db: Path, task_id: str) -> Any:
@@ -99,7 +99,7 @@ def _detail(db: Path, task_id: str) -> Any:
 def _record_next_goal(db: Path, ws: Path) -> str:
     """Real next-goal-suspended session (with opening ModelBound) via the
     shared InteractionDriver over a sqlite store — agent=default, model=gpt-test."""
-    log, cs, disp = build_sqlite_stack(str(db))
+    log, cs, disp = build_storage_stack("sqlite", path=str(db))
     host = SdkHost(
         event_log=log, content_store=cs, dispatcher=disp,
         provider=FakeLLMProvider(responses=[_end_turn("t1")]),
@@ -124,7 +124,7 @@ def _record_with_skill(db: Path, ws: Path) -> str:
     skills = ws / ".noeta" / "skills"
     (skills / "tidy-up").mkdir(parents=True)
     (skills / "tidy-up" / "SKILL.md").write_text(_SKILL, encoding="utf-8")
-    log, cs, disp = build_sqlite_stack(str(db))
+    log, cs, disp = build_storage_stack("sqlite", path=str(db))
     host = SdkHost(
         event_log=log, content_store=cs, dispatcher=disp,
         provider=FakeLLMProvider(responses=[_end_turn("t1")]),

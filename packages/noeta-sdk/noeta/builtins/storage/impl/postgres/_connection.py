@@ -2,7 +2,7 @@
 
 Centralises connection settings so the EventLog / ContentStore /
 Dispatcher adapters all see identical semantics, mirroring
-:mod:`noeta.storage.sqlite._connection` for the sqlite backend:
+:mod:`noeta.builtins.storage.impl.sqlite._connection` for the sqlite backend:
 
 * ``autocommit=True``       — the psycopg driver never opens implicit
                               transactions; each adapter owns its

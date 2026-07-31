@@ -44,9 +44,7 @@ from noeta.storage.memory import (
     InMemoryDispatcher,
     InMemoryEventLog,
 )
-from noeta.storage.sqlite.dispatcher import SqliteDispatcher
-from noeta.storage.sqlite.contentstore import SqliteContentStore
-from noeta.storage.sqlite.eventlog import SqliteEventLog
+from noeta.sdk.storage import SqliteDispatcher, SqliteContentStore, SqliteEventLog
 from noeta.testing.composer import trivial_three_segment
 
 

@@ -50,15 +50,10 @@ from noeta.protocols.event_log import (
 from noeta.protocols.events import EventEnvelope, EventOrigin
 from noeta.protocols.values import EVENT_PAYLOAD_MAX_BYTES
 
-from noeta.storage._payload_restore import (
-    _PAYLOAD_RESTORERS as _PAYLOAD_RESTORERS,
-    _enforce_payload_cap as _enforce_payload_cap,
-    _restore_llm_request_finished_payload as _restore_llm_request_finished_payload,
-    _restore_llm_request_started_payload as _restore_llm_request_started_payload,
-    _restore_payload as _restore_payload,
-)
-from noeta.storage.sqlite._connection import _open_connection
-from noeta.storage.sqlite.migrations import apply_migrations
+from noeta.storage.spi import enforce_payload_cap, restore_payload
+
+from noeta.builtins.storage.impl.sqlite._connection import _open_connection
+from noeta.builtins.storage.impl.sqlite.migrations import apply_migrations
 
 # The ``find_latest_snapshot`` predicate, rendered once from the protocol
 # constant so the query can never drift from the contract set (the
@@ -88,11 +83,10 @@ def _default_id_factory() -> str:
     return f"evt-{uuid.uuid4().hex}"
 
 
-# The event-type → typed-payload restore table (``_PAYLOAD_RESTORERS`` /
-# ``_restore_payload`` / ``_enforce_payload_cap``) moved to
-# :mod:`noeta.storage._payload_restore` when the Postgres adapter landed,
-# so every SQL-backed EventLog reads from the single table. Re-exported
-# above for existing importers (the contract suite's reflection test).
+# The typed-payload restore table and the emit-time payload cap are shared
+# domain rules behind :mod:`noeta.storage.spi` (``restore_payload`` /
+# ``enforce_payload_cap``), so every SQL-backed EventLog reads from the
+# single table and cannot drift from the reference backend.
 
 
 class SqliteEventLog:
@@ -241,7 +235,7 @@ class SqliteEventLog:
                         self._conn.execute("COMMIT")
                         return existing
 
-                _enforce_payload_cap(envelope.task_id, envelope.type, body)
+                enforce_payload_cap(envelope.task_id, envelope.type, body)
 
                 next_seq_row = self._conn.execute(
                     "SELECT COALESCE(MAX(seq), -1) + 1 AS next_seq "
@@ -479,7 +473,7 @@ class SqliteEventLog:
 def _row_to_envelope(row: sqlite3.Row) -> EventEnvelope:
     body_blob = row["payload_canonical"]
     canonical_body = from_canonical_bytes(body_blob)
-    payload = _restore_payload(row["type"], canonical_body)
+    payload = restore_payload(row["type"], canonical_body)
     return EventEnvelope(
         id=row["id"],
         task_id=row["task_id"],

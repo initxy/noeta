@@ -12,7 +12,7 @@ and verifies ``PRAGMA user_version == SCHEMA_VERSION`` **before** any read. An
 older / newer schema is a typed :class:`SqliteSchemaVersionError` (never silently
 read, never migrated). It satisfies ``EventLogReader`` + ``EventLogTaskIndex`` +
 ``ContentStore`` through plain ``SELECT``s, reusing the live adapter's
-:func:`noeta.storage.sqlite.eventlog._row_to_envelope` so the read shape cannot
+:func:`noeta.builtins.storage.impl.sqlite.eventlog._row_to_envelope` so the read shape cannot
 drift. The adapter is selected at the CLI wiring layer only — ``noeta.read_models``
 and ``noeta.agent.sessions`` depend on the Protocols, never on this class.
 """
@@ -31,8 +31,8 @@ from noeta.protocols.event_log import (
 from noeta.protocols.events import EventEnvelope
 from noeta.protocols.values import ContentRef
 
-from noeta.storage.sqlite.eventlog import _row_to_envelope
-from noeta.storage.sqlite.migrations import SCHEMA_VERSION
+from noeta.builtins.storage.impl.sqlite.eventlog import _row_to_envelope
+from noeta.builtins.storage.impl.sqlite.migrations import SCHEMA_VERSION
 
 # The ``find_latest_snapshot`` predicate, rendered once from the protocol
 # constant so the query can never drift from the contract set (the

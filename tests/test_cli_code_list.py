@@ -33,9 +33,9 @@ from noeta.protocols.events import (
 )
 from noeta.protocols.wake import HumanResponseReceived
 from noeta.storage.memory import InMemoryContentStore, InMemoryEventLog
-from noeta.storage.sqlite import SqliteReadOnlyStore, SqliteSchemaVersionError
-from noeta.storage.sqlite.migrations import SCHEMA_VERSION
-from noeta.testing.profile import build_sqlite_stack, is_memory_path
+from noeta.sdk.storage import SqliteReadOnlyStore, SqliteSchemaVersionError
+from noeta.builtins.storage.impl.sqlite.migrations import SCHEMA_VERSION
+from noeta.sdk.storage import build_storage_stack, is_memory_path
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +131,7 @@ def test_list_surfaces_closed_status() -> None:
 
 def _seed_code_session(db: Path) -> None:
     """Record one `default`-agent task into a real sqlite store at ``db``."""
-    event_log, content_store, dispatcher = build_sqlite_stack(str(db))
+    event_log, content_store, dispatcher = build_storage_stack("sqlite", path=str(db))
     event_log.emit(
         task_id="seeded1",
         type="TaskCreated",
@@ -196,7 +196,7 @@ def test_list_happy_path_rows(tmp_path: Path) -> None:
 def test_list_empty_store_returns_no_code_sessions(tmp_path: Path) -> None:
     db = tmp_path / "empty.db"
     # a real Noeta store, but with only a NON-code task → no code sessions
-    event_log, content_store, dispatcher = build_sqlite_stack(str(db))
+    event_log, content_store, dispatcher = build_storage_stack("sqlite", path=str(db))
     event_log.emit(
         task_id="g1",
         type="TaskCreated",
@@ -320,7 +320,7 @@ def test_filter_unknown_sort_raises() -> None:
 def _seed_multi(db: Path) -> None:
     """Three code sessions: a main (login goal), an explore scout, and a
     closed main."""
-    event_log, content_store, dispatcher = build_sqlite_stack(str(db))
+    event_log, content_store, dispatcher = build_storage_stack("sqlite", path=str(db))
     event_log.emit(
         task_id="s_default", type="TaskCreated",
         payload=TaskCreatedPayload(

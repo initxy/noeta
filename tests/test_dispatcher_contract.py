@@ -25,7 +25,7 @@ from noeta.protocols.wake import (
     TimerFired,
 )
 from noeta.storage.memory import InMemoryDispatcher
-from noeta.storage.sqlite.dispatcher import SqliteDispatcher
+from noeta.sdk.storage import SqliteDispatcher
 from tests._pg import isolated_schema_dsn, postgres_param
 
 
@@ -72,7 +72,7 @@ def make_dispatcher(request):
         heartbeat_max: int = 360,
         max_fail_attempts: int = 3,
     ) -> Any:
-        from noeta.storage.postgres.dispatcher import PostgresDispatcher
+        from noeta.sdk.storage import PostgresDispatcher
 
         dsn = stack.enter_context(isolated_schema_dsn())
         return PostgresDispatcher(
