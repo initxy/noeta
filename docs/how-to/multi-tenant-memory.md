@@ -1,12 +1,10 @@
-# Multi-tenant memory
+# Isolate memory per tenant
 
-**Goal:** run one resident `Client` whose sessions belong to different end
-users, with each tenant's long-term memory in its own store — recall, the
-memory tools, and background consolidation all scoped per tenant.
-
-**Before you start:** you understand the SDK from [Your first
-agent](../tutorials/first-agent.md) and the curation pass described in
-[Memory consolidation](https://github.com/initxy/noeta/blob/main/docs/adr/memory-consolidation.md).
+This guide shows you how to run one resident `Client` serving several end users,
+with each tenant's long-term memory in its own store — recall, the memory tools,
+and background consolidation all scoped per tenant. You need the SDK basics from
+[Your first agent](../tutorials/first-agent.md) and a backend that already knows
+which user a request belongs to.
 
 ## The two seams
 
@@ -25,7 +23,7 @@ let your backend own the task → tenant mapping.
 
 A single-tenant host sets neither and gets the host-level chain.
 
-## Wire the resolver
+## 1. Wire the resolver
 
 ```python
 from pathlib import Path
@@ -49,11 +47,20 @@ client = Client(
 )
 ```
 
-The resolver must be **cheap, total, and deterministic** per task id — it runs
-on the engine-build and goal paths, and a resumed task must resolve the same
-store.
+Check it resolves the way you expect:
 
-## Map the first turn
+```python
+print(client.memory_root(some_task_id))
+```
+
+```
+/var/lib/myapp/memories/acme-corp
+```
+
+The resolver must be **cheap, total, and deterministic** per task id — it runs on
+the engine-build and goal paths, and a resumed task must resolve the same store.
+
+## 2. Map the first turn
 
 A new session's task id is minted inside `start` / `seed_start`, so a plain
 dict lookup cannot know it yet. Two strategies:
@@ -73,7 +80,7 @@ dict lookup cannot know it yet. Two strategies:
 Engines are cached per resolved root, so two tenants never share a cached
 engine's memory store.
 
-## Consolidate per tenant
+## 3. Consolidate per tenant
 
 Run one pass per tenant. Register the `__consolidation__` agent on the recipe
 first — `run_consolidation` seeds a root task under that reserved name:
@@ -113,4 +120,13 @@ states that it was restricted to a host-selected subset.
 - Delegated subagents resolve with their own task ids. The official presets
   enable memory only on `main`, so children never touch the store; if you
   enable memory on a custom subagent, make your resolver map child ids too
-  (e.g. walk the ledger to the root session).
+  (e.g. walk the ledger to the root task).
+
+## Next steps
+
+- [Deploy a worker](deploy-worker.md) — the resident pool this runs on
+- [Spawn subagents](spawn-subagents.md) — why children resolve with their own
+  task ids
+- [SDK reference](../reference/sdk.md) — `HostConfig`, `run_consolidation`
+- [ADR: memory consolidation](https://github.com/initxy/noeta/blob/main/docs/adr/memory-consolidation.md)
+  — the curation pass in full

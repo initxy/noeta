@@ -1,10 +1,11 @@
-# Comparison: Noeta and other agent frameworks
+# Noeta compared to other agent frameworks
+
+If you are deciding whether Noeta is the right tool, this page is the honest
+version of that comparison — including the cases where it is the wrong choice.
 
 Noeta is a runtime for long-horizon, task-oriented agents: it hosts, records,
-schedules, and replays agent execution without prescribing how an agent is
-written.
-
-Every statement about Noeta below is checked against the code in this
+schedules and replays agent execution without prescribing how an agent is
+written. Every statement about Noeta below is checked against the code in this
 repository. Statements about other projects are limited to their headline
 design — for anything finer, read their own documentation.
 
@@ -153,9 +154,9 @@ small and there is no plugin marketplace. If "it works against a vendor's API
 with no operational surface" is the requirement, a hosted client library is the
 lower-friction choice.
 
-## See also
+## Next
 
-- [Event sourcing](../concepts/event-sourcing.md) — why state = fold(log)
-- [Wake & resume](../concepts/wake-resume.md) — the delivery guarantee
+- [Quickstart](../tutorials/quickstart.md) — try it in five minutes
+- [Event sourcing](../concepts/event-sourcing.md) — why state is `fold(log)`
 - [Known limitations](../operations/limitations.md) — the boundaries in detail
 - [Architecture overview](../architecture/overview.md) — the full picture

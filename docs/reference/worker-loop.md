@@ -1,20 +1,27 @@
-# WorkerLoop reference
+# WorkerLoop
 
-The resident drain loop, shipped as the library primitive
-`noeta.runtime.worker.WorkerLoop`. There is no console script and nothing
-launches it for you — an embedding host constructs and runs it, and scales by
-running several loops (each with its own `worker_id`) against one store (see
-[Deploy a worker](../how-to/deploy-worker.md)).
+A worker is the thing that picks up a waiting task and pushes it one step
+forward. `WorkerLoop` is that loop, shipped as a library primitive: it leases a
+ready task, advances it, releases, and repeats — plus heartbeats, stale-lease
+sweeps, timer polling and a bounded graceful shutdown.
+
+There is no console script and nothing launches it for you. An embedding host
+constructs and runs it, and scales by running several loops — each with its own
+`worker_id` — against one store.
 
 ```python
 from noeta.runtime.worker import WorkerLoop
 
 loop = WorkerLoop(rt, worker_id="noeta-worker")
+print(loop.running)                      # → False
 loop.run_forever(install_signals=True)   # blocks until stop()
 ```
 
-Members are named, not line-numbered — line numbers drift on every edit, so the
-module path plus the member name is the stable coordinate.
+If you only need workers inside an existing `Client`, call
+`client.start_workers(n)` instead — see [query / Client](sdk-client.md).
+
+Members below are named, not line-numbered: line numbers drift on every edit, so
+the module path plus the member name is the stable coordinate.
 
 ## `WorkerRuntime` protocol
 
@@ -159,8 +166,10 @@ past the cap the lease is force-released and the step's next write fails with
 crash-recovery scope — are catalogued in
 [known limitations](../operations/limitations.md).
 
-## See also
+## Next
 
-- [Wake & resume](../concepts/wake-resume.md) — the delivery guarantee
-- [Architecture overview](../architecture/overview.md) — the wake machinery
-- [How-to: deploy a worker](../how-to/deploy-worker.md)
+- [Deploy a worker](../how-to/deploy-worker.md) — the task-oriented guide
+- [Wake & resume](../concepts/wake-resume.md) — the durable, single-worker,
+  exactly-once delivery guarantee
+- [query / Client](sdk-client.md) — the in-process pool alternative
+- [Known limitations](../operations/limitations.md) — the boundary conditions

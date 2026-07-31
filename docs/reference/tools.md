@@ -1,15 +1,29 @@
-# Built-in Tools
+# Built-in tools
+
+This page is the catalogue of everything an agent can call out of the box: what
+each tool does, what it costs you in risk, and what has to be true before it
+appears in the model's tool list at all.
 
 Tool names are provider-safe `snake_case` and are the exact strings the model
-calls. Each tool carries a `risk_level` the `PermissionGuard` reads.
+calls. Each tool carries a `risk_level` that decides whether a call needs
+approval.
 
-`Options.allowed_tools=None` selects the 11-name **built-in whitelist** — the
-`fs` pack (`read`, `glob`, `grep`, `edit`, `write`, `apply_patch`, `shell_run`,
-`shell_poll`, `shell_kill`) plus the `web` pack (`webfetch`, `web_search`). Ten
-of them mount with no extra configuration; `web_search` needs an API key.
-Everything else on this page is gated somewhere else: memory and browser on an
-agent activation, `open_app` on a host-wired gateway, `run_skill_script` on
-`allow_skill_scripts`, MCP on a per-session registration.
+A bare `Options()` — that is, `allowed_tools=None` — mounts **eleven** tools:
+the `fs` pack (`read`, `glob`, `grep`, `edit`, `write`, `apply_patch`,
+`shell_run`, `shell_poll`, `shell_kill`) and the `web` pack (`webfetch`,
+`web_search`).
+
+```python
+from noeta.sdk import Options
+options = Options(system_prompt="…")          # allowed_tools defaults to None
+# the agent sees: read, glob, grep, edit, write, apply_patch,
+#                 shell_run, shell_poll, shell_kill, webfetch, web_search
+```
+
+Ten of those need no configuration; `web_search` needs an API key. Everything
+else on this page is gated somewhere else — memory and browser on an agent
+activation, `open_app` on a host-wired gateway, `run_skill_script` on the
+`skills` plugin config, MCP on a per-session registration.
 
 ## Filesystem tools
 
@@ -168,8 +182,21 @@ keep their **bare** `@tool` names, with no `mcp__` prefix. See
 
 ## Tool risk levels
 
+There are exactly three levels, ordered `low < medium < high`.
+
 | Level | Meaning |
 | --- | --- |
 | `low` | No side effects outside the agent's own state. Always allowed. |
-| `medium` | Mutates durable state, but only inside a confined directory (e.g. the memory store). |
-| `high` | Modifies the filesystem, spawns external processes, or reaches the live web. Subject to `PermissionGuard` approval. |
+| `medium` | Mutates durable state, but only inside a confined directory — the memory store, for example. |
+| `high` | Modifies the filesystem, spawns external processes, or reaches the live web. Goes through the approval gate. |
+
+`Options.permission_mode` decides which levels actually gate: `"default"` gates
+everything above `low`, `"acceptEdits"` exempts the three edit-class tools, and
+`"bypassPermissions"` gates nothing.
+
+## Next
+
+- [Build custom tools](../how-to/build-custom-tools.md) — add your own with `@tool`
+- [Options](sdk-options.md) — `allowed_tools`, `disallowed_tools`, permission modes
+- [Guard vs Observer](../concepts/guard-observer.md) — how a call gets denied or approved
+- [Plugin surfaces](plugin-surfaces.md) — how a tool reaches an agent through a plugin

@@ -1,20 +1,17 @@
 # Swap providers
 
-**Goal:** switch an agent from one LLM provider to another without rewriting
-any agent code.
-
-**Before you start:** you have a working agent using one provider (see
-[Configure a provider](configure-provider.md)).
+This guide shows you how to move a working agent from one LLM provider to
+another without rewriting any agent code. You need an agent already running
+against one provider — see [Configure a provider](configure-provider.md).
 
 ## The same recipe, different wiring
 
-An agent's identity — system prompt, tools, permission mode, child agents —
-does not depend on which provider serves it. The provider is **wiring**,
-injected at `Client` or `query` time (or set on `Options.provider`, which the
-explicit kwarg overrides). Swap it and the same `Options` compiles to the same
-`AgentSpec`.
+An agent's identity — system prompt, tools, permission mode, child agents — does
+not depend on which provider serves it. The provider is **wiring**, injected at
+`Client` or `query` time (or set on `Options.provider`, which the explicit kwarg
+overrides). Swap it and the same `Options` compiles to the same `AgentSpec`.
 
-## Anthropic
+## 1. Start from Anthropic
 
 ```python
 from noeta.sdk import Client, Options
@@ -41,7 +38,7 @@ model, so it takes no `model` argument. The model is chosen per session on
 `Client(model=…)` / `query(model=…)`, which lets one provider instance serve
 many models.
 
-## OpenAI-compatible
+## 2. Change one line to OpenAI-compatible
 
 ```python
 from noeta.sdk.providers import OpenAICompatProvider
@@ -60,7 +57,7 @@ client = Client(
 `noeta.sdk.providers` also ships `OpenAIResponsesProvider` for the OpenAI
 Responses API, which takes the same `base_url` / `api_key` pair.
 
-## Via `query()` (one-shot)
+The one-shot `query` takes the provider the same way:
 
 ```python
 from noeta.sdk import query
@@ -75,9 +72,9 @@ result = query(
 print(result.answer())
 ```
 
-## Verify the swap
+## 3. Verify the swap
 
-Run the same goal against both providers and confirm both produce a terminal
+Run the same goal against both providers and confirm both reach a terminal
 answer:
 
 ```python
@@ -92,7 +89,13 @@ for name, prov, model in runs:
     print(f"{name}: {result.answer()}")
 ```
 
-The exact text differs, but both reach a terminal state.
+```
+anthropic: Hello! How can I help you today?
+openai: Hi there — what can I do for you?
+```
+
+The exact wording differs, of course. What matters is that both reach a terminal
+state from the same `Options`, with no change to your code in between.
 
 ## What does not change
 
@@ -114,11 +117,12 @@ The exact text differs, but both reach a terminal state.
   requires by default. Traces therefore differ across vendors.
 - **Token counts and pricing** — different per provider.
 
-## See also
+## Next steps
 
+- [Configure a provider](configure-provider.md) — per-adapter setup and the
+  model catalog
 - [Provider neutrality](../concepts/provider-neutrality.md) — the design behind
   this
-- [Configure a provider](configure-provider.md) — setup for each provider
-- [SDK reference](../reference/sdk.md) — `Options`, `Client`, `query`
-  signatures
-- `examples/swap_provider.py` — runnable demonstration
+- [SDK reference](../reference/sdk.md) — `Options`, `Client`, `query` signatures
+
+`examples/swap_provider.py` is a runnable demonstration.

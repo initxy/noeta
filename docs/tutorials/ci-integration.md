@@ -1,19 +1,29 @@
-# Tutorial: CI integration with Noeta
+# Run Noeta in CI
 
-Run Noeta in your CI pipeline to smoke-test agent recipes, validate
-custom tools, or automate code review. This tutorial wires Noeta into
-GitHub Actions using the offline `FakeLLMProvider` — no API key needed.
+Agent recipes rot like any other code: a renamed tool, a changed permission
+mode, a provider swap. This tutorial wires Noeta into a CI pipeline so a broken
+recipe fails a build instead of a user's request.
 
-## Why a fake provider in CI?
+Everything here runs against the offline `FakeLLMProvider` — no API key, no
+network, no flakiness. The last step shows how to add a real-provider job when
+you need one.
 
-`FakeLLMProvider` is a scripted, offline LLM double: it answers with
-pre-scripted responses, needs no API key, is deterministic, and does no network
-round-trips. A real provider works in CI too (pass the gateway key as a
-secret), but the fake is the right starting point for smoke tests.
+**Prerequisites:** [Your first agent](first-agent.md), and a repository with a
+CI pipeline (the examples use GitHub Actions).
+
+## Why a fake provider in CI
+
+`FakeLLMProvider` replays a scripted list of `LLMResponse` objects. It needs no
+credentials, does no network round-trips, and returns the same thing every run —
+so a failing test means your wiring broke, not that a model had an off day.
+
+A real provider works in CI too (pass the gateway key as a secret), but scripted
+runs are what belong on every push.
 
 ## Step 1: Write a smoke test
 
-Create `tests/test_agent_smoke.py`:
+The point of a smoke test is that the recipe compiles, the turn runs, and the
+task reaches a terminal. Create `tests/test_agent_smoke.py`:
 
 ```python
 """Smoke test: run the minimal agent recipe end-to-end with the fake provider."""
@@ -33,61 +43,53 @@ def test_minimal_agent_runs():
         permission_mode="bypassPermissions",
     )
 
-    provider = FakeLLMProvider(
-        responses=[
-            LLMResponse(
-                stop_reason="end_turn",
-                content=[TextBlock(text="Smoke test passed.")],
-                usage=Usage(uncached=1, output=1),
-            )
-        ]
-    )
+    provider = FakeLLMProvider(responses=[
+        LLMResponse(
+            stop_reason="end_turn",
+            content=[TextBlock(text="Smoke test passed.")],
+            usage=Usage(uncached=1, output=1),
+        )
+    ])
 
     with tempfile.TemporaryDirectory(prefix="noeta-ci-smoke-") as tmp:
-        result = query(
-            options,
-            goal="Say hello.",
-            provider=provider,
-            workspace_dir=Path(tmp),
-            model="stub-model",
-        )
+        result = query(options, goal="Say hello.", provider=provider,
+                       workspace_dir=Path(tmp), model="stub-model")
 
-    # ``result`` IS the envelope list, so stream-level assertions still work.
+    # `result` IS the envelope list, so stream-level assertions work directly.
     types = [env.type for env in result]
     assert "TaskCreated" in types
     assert "TaskCompleted" in types
 
-    # ``.answer()`` raises QueryFailedError if the task did not complete, so a
+    # `.answer()` raises QueryFailedError if the task did not complete, so a
     # failed run can never masquerade as a passing assertion.
     assert "Smoke test passed" in str(result.answer())
 ```
 
-Run it locally:
+Run it:
 
 ```bash
 uv run pytest tests/test_agent_smoke.py -v
 ```
 
+```
+tests/test_agent_smoke.py::test_minimal_agent_runs PASSED                 [100%]
+1 passed
+```
+
 ## Step 2: Test a custom tool
 
-If your agent uses custom tools, test that they're wired correctly:
+A recipe assertion proves the agent compiled. To prove your tool actually ran,
+script the model into calling it and assert on the `ToolCallStarted` events:
 
 ```python
-"""Smoke test: custom tool gets called."""
+"""Smoke test: the custom tool gets called."""
 
 import tempfile
 from pathlib import Path
 
 from noeta.sdk import (
-    LLMResponse,
-    Options,
-    TextBlock,
-    ToolContext,
-    ToolResult,
-    ToolUseBlock,
-    Usage,
-    query,
-    tool,
+    LLMResponse, Options, TextBlock, ToolContext, ToolResult, ToolUseBlock,
+    Usage, query, tool,
 )
 from noeta.sdk.testing import FakeLLMProvider
 
@@ -96,11 +98,9 @@ from noeta.sdk.testing import FakeLLMProvider
     name="ping",
     version="1",
     risk_level="low",
-    input_schema={
-        "type": "object",
-        "properties": {},
-        "additionalProperties": False,
-    },
+    description="Return pong.",
+    input_schema={"type": "object", "properties": {},
+                  "additionalProperties": False},
 )
 def ping(arguments: dict, ctx: ToolContext) -> ToolResult:
     return ToolResult(success=True, output="pong")
@@ -114,44 +114,32 @@ def test_custom_tool_called():
         permission_mode="bypassPermissions",
     )
 
-    provider = FakeLLMProvider(
-        responses=[
-            LLMResponse(
-                stop_reason="tool_use",
-                content=[
-                    ToolUseBlock(
-                        call_id="p1",
-                        tool_name="ping",
-                        arguments={},
-                    )
-                ],
-                usage=Usage(uncached=1, output=1),
-            ),
-            LLMResponse(
-                stop_reason="end_turn",
-                content=[TextBlock(text="Pinged.")],
-                usage=Usage(uncached=1, output=1),
-            ),
-        ]
-    )
+    provider = FakeLLMProvider(responses=[
+        LLMResponse(
+            stop_reason="tool_use",
+            content=[ToolUseBlock(call_id="p1", tool_name="ping", arguments={})],
+            usage=Usage(uncached=1, output=1),
+        ),
+        LLMResponse(
+            stop_reason="end_turn",
+            content=[TextBlock(text="Pinged.")],
+            usage=Usage(uncached=1, output=1),
+        ),
+    ])
 
     with tempfile.TemporaryDirectory() as tmp:
-        envelopes = list(query(
-            options,
-            goal="Ping.",
-            provider=provider,
-            workspace_dir=Path(tmp),
-        ))
+        result = query(options, goal="Ping.", provider=provider,
+                       workspace_dir=Path(tmp), model="stub-model")
 
-    tool_calls = [
-        e.payload.tool_name
-        for e in envelopes
-        if e.type == "ToolCallStarted"
-    ]
-    assert "ping" in tool_calls, f"Expected ping in {tool_calls}"
+    called = [e.payload.tool_name for e in result if e.type == "ToolCallStarted"]
+    assert called == ["ping"], f"expected ping, got {called}"
 ```
 
-## Step 3: Wire into GitHub Actions
+Because the whole run is a recorded event stream, every CI assertion you might
+want — which tools ran, which guards denied, how many turns it took — is a list
+comprehension over `result`.
+
+## Step 3: Wire it into GitHub Actions
 
 Add a job to `.github/workflows/ci.yml`:
 
@@ -174,15 +162,15 @@ Add a job to `.github/workflows/ci.yml`:
         run: uv run pytest tests/test_agent_smoke.py -v
 ```
 
-SDK smoke tests exercise the library in-process — no server and no
-frontend build.
+No services, no ports, no frontend build: the SDK is in-process, so a smoke job
+is a plain Python test job.
 
-## Step 4: Run the full test suite in CI
+## Step 4: Borrow Noeta's own gates
 
-Noeta's own CI runs these checks. Reference them for your own pipeline:
+Noeta's CI runs the checks below. Take whichever fit your project:
 
 ```bash
-# Core test suite with coverage
+# Test suite with coverage
 uv run pytest --cov=noeta --cov-report=term --cov-fail-under=85
 
 # Fresh-venv two-wheel install smoke (opt-in via the install_smoke marker)
@@ -191,7 +179,7 @@ uv run pytest -v -m install_smoke tests/test_install_smoke.py
 # Naming lint (forbidden class names per CONTEXT.md)
 uv run python scripts/lint-naming.py
 
-# Import topology lint (L0..L3 layer boundaries)
+# Import topology lint (the layer boundaries in .importlinter)
 uv run lint-imports --config .importlinter
 
 # mypy strict on protocol definitions
@@ -201,12 +189,13 @@ MYPYPATH=packages/noeta-runtime \
     packages/noeta-runtime/noeta/protocols
 ```
 
-`make check` runs the coverage, mypy, and lint gates together.
+`make check` runs the coverage, mypy, naming, and import-topology gates
+together; `make lint` is the fast static-only subset.
 
-## Step 5: Using a real provider in CI (optional)
+## Step 5 (optional): A real-provider job
 
-When you need a real model in CI (e.g. for integration tests against
-actual LLM behaviour):
+When you need real model behaviour — prompt regressions, tool-calling
+formats — add a second job that reads credentials from secrets:
 
 ```yaml
   agent-integration:
@@ -227,8 +216,8 @@ actual LLM behaviour):
         run: uv run pytest tests/test_integration.py -v -m live
 ```
 
-Build the provider from those secrets and mark the test `live` so a
-gateway-less run skips it:
+Build the provider from those secrets and mark the test `live`, so a
+gateway-less checkout skips it instead of failing:
 
 ```python
 import os
@@ -251,25 +240,17 @@ def test_agent_with_real_llm():
     ...  # drive query(..., provider=provider, model=os.environ["LLM_MODEL"])
 ```
 
-## Key points
+Declare the marker in your own `pyproject.toml` and decide how it is selected.
+Noeta's root config excludes both `live` and `install_smoke` by default
+(`addopts = "-ra -m 'not install_smoke and not live'"`), so a live test runs only
+when you ask for it with `-m live`. Keep the `skipif` regardless — it is what
+makes the opt-in run degrade to a skip rather than an error on a machine with no
+gateway.
 
-- **Fake provider for smoke tests.** `FakeLLMProvider` is exported from
-  `noeta.sdk.testing` — the public home for offline doubles. No secrets,
-  no network.
-- **`uv run pytest`** is the test entry point; the workspace-root
-  `pyproject.toml` sets `testpaths = ["tests"]`.
-- **The `live` marker does not skip on its own.** It is declared in
-  `pyproject.toml`, but the default `addopts` excludes only `install_smoke`.
-  Gate a live test with `@pytest.mark.skipif` on the required env vars so it
-  self-skips when the gateway is absent, or select with `-m "not live"`.
+## Next steps
 
-## Source
-
-- `.github/workflows/ci.yml` — the repo's own CI pipeline
-- `Makefile` — `make install`, `make test`, `make lint`, `make check`
-- `pyproject.toml` — pytest config (`testpaths`, `markers`, `addopts`)
-- `packages/noeta-runtime/noeta/testing/fake_llm.py` — `FakeLLMProvider`,
-  re-exported at `noeta.sdk.testing`
-- See also: [Your first agent](first-agent.md),
-  [Swap providers](../how-to/swap-providers.md),
-  [Engine & execution](../concepts/engine-execution.md)
+- **Build the agent you are testing** — [Your first agent](first-agent.md).
+- **Point CI at your gateway** — [Swap providers](../how-to/swap-providers.md).
+- **Understand what the ledger records** — [Engine & execution](../concepts/engine-execution.md).
+- **Look up the doubles** — [SDK reference](../reference/sdk.md);
+  `FakeLLMProvider` lives at `noeta.sdk.testing`.

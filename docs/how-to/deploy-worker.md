@@ -1,10 +1,9 @@
 # Deploy a worker
 
-**Goal:** run a resident pool of workers that continuously drains a durable
-store, so tasks progress after the request that created them is gone.
-
-**Before you start:** you understand the SDK from [Your first
-agent](../tutorials/first-agent.md).
+This guide shows you how to run a resident pool of workers that continuously
+drains a durable store, so tasks keep progressing after the request that created
+them is gone. You need the SDK basics from
+[Your first agent](../tutorials/first-agent.md).
 
 ## Why you need one
 
@@ -20,7 +19,7 @@ queue. Nothing launches that drain for you. Without a running worker:
 A worker is the deployment shape for anything that must outlive the request
 that created it.
 
-## Use durable storage
+## 1. Use durable storage
 
 Cross-process handoff only works through shared on-disk state, so a resident
 pool needs real storage. `HostConfig.storage_path` takes one string — a SQLite
@@ -64,13 +63,18 @@ event_log, content_store, dispatcher = build_storage_stack(
 `content_store` / `dispatcher` fields of `HostConfig` — all three or none;
 mixing them with `storage_path` raises `ValueError`.
 
-## Start and stop the pool
+## 2. Start and stop the pool
 
 ```python
 with client:
     client.start_workers(4)
     ...
-    client.stop_workers(timeout=30.0)
+    stopped = client.stop_workers(timeout=30.0)
+    print("all workers exited:", stopped)
+```
+
+```
+all workers exited: True
 ```
 
 Each worker runs on its own daemon thread with its own `worker_id`, and all of
@@ -85,7 +89,7 @@ deliberately keeps the pool tracked, so a retry can finish the job instead of
 stacking a second pool on the first. `Client.shutdown` (and therefore leaving
 the `with` block) stops the pool before tearing anything else down.
 
-### Knobs
+## 3. Tune the knobs
 
 | Parameter | Default | What it does |
 | --- | --- | --- |
@@ -141,10 +145,11 @@ primitive directly. See the [WorkerLoop
 reference](../reference/worker-loop.md) for the `WorkerRuntime` protocol it
 expects and every constructor parameter, method, and outcome type.
 
-## See also
+## Next steps
 
 - [WorkerLoop reference](../reference/worker-loop.md) — the loop primitive in
   full
+- [Deploy with Docker](docker-deployment.md) — packaging the pool as an image
 - [Wake & resume](../concepts/wake-resume.md) — the delivery guarantee the
   worker implements
 - [Known limitations](../operations/limitations.md) — the SQLite single-host

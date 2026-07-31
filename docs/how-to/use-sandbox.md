@@ -1,18 +1,18 @@
-# Use a sandbox execution environment
+# Use a sandbox
 
-**Goal:** run an agent's fs / shell / browser side effects inside a per-session
-container, so an untrusted agent cannot touch the host directly. Noeta ships the
-seam (`ExecEnv`, `SandboxProvider`) and the container-wire adapters; the host
-provisions the container.
+This guide shows you how to route an agent's file, shell, and browser side
+effects into a container, so an untrusted agent never touches the host directly.
+You need to be able to drive an agent with `Client`
+([Your first agent](../tutorials/first-agent.md)) and a container runtime.
 
-**Before you start:** you can drive an agent with `Client` from
-[Your first agent](../tutorials/first-agent.md) and you understand
-[HostConfig](../reference/sdk.md) wiring.
+Noeta ships the seam (`ExecEnv`, `SandboxProvider`) and the container-wire
+adapters. **Provisioning the container is the host's job** — the library runs no
+`docker` for you.
 
-## Two ways to wire a sandbox
+## Pick a mode
 
-Noeta gives you two entry points on `HostConfig`, depending on whether you want
-one shared container or a fresh container per session:
+Two entry points on `HostConfig`, depending on whether you want one shared
+container or a fresh one per session:
 
 | Mode | `HostConfig` field | When to use |
 | --- | --- | --- |
@@ -21,7 +21,7 @@ one shared container or a fresh container per session:
 
 `SandboxProvider` takes precedence when both are set.
 
-## Attach mode — point at a running container
+## Mode A — attach to a running container
 
 The fastest path: start a container yourself (e.g. an
 [AIO Sandbox](https://github.com/bytedance/aio-sandbox) image), then tell Noeta
@@ -55,10 +55,16 @@ event. Set it before the first turn:
 export SANDBOX_API_KEY=your-container-key
 ```
 
+Verify the routing by asking the agent to run something that reveals where it is:
+
+```
+shell_run(command="hostname")  →  a1b2c3d4e5f6   # the container, not your host
+```
+
 In attach mode every session shares the same container. `release` is a no-op
 because the SDK does not own the container's lifecycle.
 
-## Provision mode — implement `SandboxProvider`
+## Mode B — provision one per session
 
 For per-session isolation, implement the three-method `SandboxProvider`
 protocol and pass it as `HostConfig.sandbox_provider`. The SDK calls
@@ -66,10 +72,8 @@ protocol and pass it as `HostConfig.sandbox_provider`. The SDK calls
 `release` when the root task reaches a terminal state.
 
 ```python
-from dataclasses import dataclass
 from noeta.sdk import (
-    SandboxProvider, SandboxSpec, SandboxHandle,
-    StaticApiKeyAuth, encode_exec_env_ref, decode_exec_env_ref,
+    SandboxSpec, SandboxHandle, StaticApiKeyAuth, decode_exec_env_ref,
 )
 
 class DockerSandboxProvider:
@@ -94,7 +98,7 @@ class DockerSandboxProvider:
         # 2. Probe readiness, then return the handle. base_url must be the
         #    container's API root; workdir is the container-side workspace.
         return SandboxHandle(
-            base_url=f"http://localhost:8080",
+            base_url="http://localhost:8080",
             sandbox_id=container_id,
             auth=StaticApiKeyAuth(env_name="SANDBOX_API_KEY"),
             workdir="/workspace",
@@ -179,9 +183,9 @@ stays browser-free and delegates page work to it. Opt in with
 `sandbox_browser_options()`:
 
 ```python
-from noeta.presets import sandbox_browser_options
+from noeta.sdk import presets
 
-options = sandbox_browser_options()   # main + the web subagent, browser on
+options = presets.sandbox_browser_options()   # main + the web subagent, browser on
 ```
 
 ## Knobs
@@ -202,8 +206,12 @@ options = sandbox_browser_options()   # main + the web subagent, browser on
 - `shell_run`'s `timeout` is enforced client-side under a sandbox — the command
   keeps running in the container after the call returns.
 
-## See also
+## Next steps
 
-- [SDK reference — sandbox surface](../reference/sdk.md) — the full API
-- [ADR: execution environment seam](https://github.com/initxy/noeta/blob/main/docs/adr/execution-environment-seam.md) — the design rationale
-- [Known limitations](../operations/limitations.md) — the sandbox boundaries in detail
+- [Deploy with Docker](docker-deployment.md) — running the host itself in a
+  container alongside the sandbox
+- [Known limitations](../operations/limitations.md) — the sandbox boundaries in
+  detail
+- [SDK reference](../reference/sdk.md) — the full sandbox surface
+- [ADR: execution environment seam](https://github.com/initxy/noeta/blob/main/docs/adr/execution-environment-seam.md)
+  — the design rationale
