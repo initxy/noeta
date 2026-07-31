@@ -39,17 +39,15 @@ class MyRuntime:
 跨进程入队仅通过共享的磁盘状态工作。不要为常驻 worker 使用 `:memory:`：
 
 ```python
-from noeta.storage.sqlite import (
-    SqliteEventLog, SqliteContentStore, SqliteDispatcher,
-)
+from noeta.sdk.storage import build_storage_stack
 
 db_path = "./worker.sqlite"
-event_log = SqliteEventLog(db_path)
-content_store = SqliteContentStore(db_path)
-dispatcher = SqliteDispatcher(db_path)
+event_log, content_store, dispatcher = build_storage_stack(
+    "sqlite", path=db_path,
+)
 ```
 
-三者必须指向同一个 SQLite 文件（或至少同一个磁盘数据库），这样调度器才能与 EventLog 协调。
+`build_storage_stack` 会让三个组件指向同一个 SQLite 文件，并接好它们之间的内部协调。适配器类（`SqliteEventLog` / `SqliteContentStore` / `SqliteDispatcher`）也从 `noeta.sdk.storage` 再导出，供直接构造它们的 host 使用——请保持它们指向同一个磁盘数据库，这样调度器才能与 EventLog 协调。
 
 ## 构造并运行
 

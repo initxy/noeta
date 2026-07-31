@@ -52,18 +52,20 @@ Cross-process enqueue only works through shared on-disk state. Do not
 use `:memory:` for a resident worker:
 
 ```python
-from noeta.storage.sqlite import (
-    SqliteEventLog, SqliteContentStore, SqliteDispatcher,
-)
+from noeta.sdk.storage import build_storage_stack
 
 db_path = "./worker.sqlite"
-event_log = SqliteEventLog(db_path)
-content_store = SqliteContentStore(db_path)
-dispatcher = SqliteDispatcher(db_path)
+event_log, content_store, dispatcher = build_storage_stack(
+    "sqlite", path=db_path,
+)
 ```
 
-All three must point to the same SQLite file (or at least the same
-on-disk database) so the dispatcher can coordinate with the event log.
+`build_storage_stack` points all three components at the same SQLite
+file and wires their internal coordination. The adapter classes
+(`SqliteEventLog` / `SqliteContentStore` / `SqliteDispatcher`) are also
+re-exported from `noeta.sdk.storage` for hosts that construct them
+directly — keep them on the same on-disk database so the dispatcher can
+coordinate with the event log.
 
 ## Construct and run
 
