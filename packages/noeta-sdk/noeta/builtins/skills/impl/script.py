@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from noeta.protocols.resources import load_markdown
 from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.tools.invocation import require_str
 from noeta.tools.limits import (
@@ -104,14 +105,8 @@ class RunSkillScriptTool:
     #: cwd = the container workspace root.
     exec_env: Optional[ExecEnv] = None
     name: str = SKILL_SCRIPT_TOOL_NAME
-    description: str = (
-        "Run an active skill's bundled script via an allowlisted interpreter "
-        "(bash, python3, or node). The script must already be discovered under "
-        "an active skill in the workspace; argv is built by Noeta (interpreter + "
-        "real path + validated args), never from a free-form command string, "
-        "and args may not contain shell metacharacters. cwd is the workspace "
-        "root; bounded timeout and output cap apply; not sandboxed (trusted "
-        "workspace only)."
+    description: str = field(
+        default=load_markdown(__package__, "run_skill_script")
     )
     risk_level: str = "high"
     input_schema: dict[str, Any] = field(

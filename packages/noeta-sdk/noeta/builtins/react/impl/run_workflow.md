@@ -10,8 +10,8 @@ sandbox exposing exactly these names:
   Each item is a goal string, or a `{"goal": ..., "agent": ...}` dict to pick a
   specific sub-agent per item. Use this for the fan-out step INSIDE a workflow —
   when you also need a loop / branch / dependency chain around it. For plain
-  one-shot parallelism you do NOT need a workflow: just emit several
-  `spawn_subagent` calls in one turn and they run concurrently.
+  one-shot parallelism you do NOT need a workflow: batch the goals into one
+  `spawn_subagent` call's `spawns` array and they run concurrently.
 - `agent(goal, agent="general-purpose")`: spawn ONE sub-agent, wait for it, and
   return its final answer (a string). Sequential `agent()` calls run one after
   another, so chain them ONLY when a later call needs an earlier result; for
@@ -31,16 +31,16 @@ suspend and resume across many sub-agent spawns and survive a crash.
   `agent()`), or fan-out batches you then loop over or combine.
 
 For PLAIN parallelism — several independent sub-agents, no loop / branch /
-dependency — do NOT reach for a workflow: emit multiple `spawn_subagent` calls
-in one turn and they run concurrently.
+dependency — do NOT reach for a workflow: batch the goals into one
+`spawn_subagent` call's `spawns` array and they run concurrently.
 
 ## When NOT to use
 
 - For a single one-off delegation — just use `spawn_subagent` instead; reaching
   for a whole script to wrap one spawn is overkill.
-- For plain parallelism with no loop / branch / dependency — emit several
-  `spawn_subagent` calls in one turn instead; they fan out concurrently without
-  a workflow.
+- For plain parallelism with no loop / branch / dependency — batch the goals
+  into one `spawn_subagent` call's `spawns` array instead; they fan out
+  concurrently without a workflow.
 - For work you can do yourself with the file/search/shell tools; the sub-agents
   you spawn do the actual I/O, so a workflow only pays off when the work is
   multi-step or branches across agents.
@@ -57,7 +57,7 @@ in one turn and they run concurrently.
 
 A dependency chain — scout first, then fan the result out and combine. THIS is
 what needs a workflow (the fan-out depends on the scout's output); plain
-parallelism would just be several `spawn_subagent` calls in one turn:
+parallelism would just be one `spawn_subagent` call with several `spawns` entries:
 
     modules = agent(
         'List the modules missing a docstring, one bare name per line.',

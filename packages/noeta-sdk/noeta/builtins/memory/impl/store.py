@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from noeta.protocols.resources import load_markdown
 from noeta.protocols.tool import Tool, ToolContext, ToolResult
 from noeta.tools.limits import INLINE_CONTENT_MAX_BYTES, truncate_bytes
 
@@ -281,15 +282,8 @@ class MemoryWriteTool:
 
     store: MemoryStore
     name: str = MEMORY_WRITE_TOOL_NAME
-    description: str = (
-        "Persist a named memory as a markdown file (reusing a name overwrites "
-        "it). Names must be slugs (letters, digits, '.', '_', '-'; no path "
-        "separators; max 128 chars). Optional 'description' (a one-line "
-        "summary shown in the memory index) and 'type' (one of: user, "
-        "project, procedural, reference) are stored as frontmatter — pass "
-        "them as parameters instead of writing a frontmatter block yourself. "
-        "Without a description the first non-empty body line becomes the "
-        "index summary. Writes are confined to the memory directory."
+    description: str = field(
+        default=load_markdown(__package__, "memory_write")
     )
     risk_level: str = "medium"
     input_schema: dict[str, Any] = field(
@@ -391,10 +385,8 @@ class MemoryReadTool:
 
     store: MemoryStore
     name: str = MEMORY_READ_TOOL_NAME
-    description: str = (
-        "Load the full markdown body of a named memory on demand. If the body "
-        "exceeds the inline byte budget, truncated=True is returned with only a "
-        "prefix inline."
+    description: str = field(
+        default=load_markdown(__package__, "memory_read")
     )
     risk_level: str = "low"
     input_schema: dict[str, Any] = field(
@@ -438,12 +430,8 @@ class MemorySearchTool:
 
     store: MemoryStore
     name: str = MEMORY_SEARCH_TOOL_NAME
-    description: str = (
-        "Find stored memories by content: case-insensitive substring match "
-        "(no regex) over memory names and full text. Returns up to 10 "
-        "memories with up to 3 matching lines each; a true 'truncated' flag "
-        "means more memories matched — refine the query. Use memory_read "
-        "for a hit's full text. Archived memories are not searched."
+    description: str = field(
+        default=load_markdown(__package__, "memory_search")
     )
     risk_level: str = "low"
     input_schema: dict[str, Any] = field(
@@ -496,11 +484,8 @@ class MemoryArchiveTool:
 
     store: MemoryStore
     name: str = MEMORY_ARCHIVE_TOOL_NAME
-    description: str = (
-        "Retire an outdated or superseded memory: move it into the memory "
-        "directory's archive/ subdirectory, removing it from the index, "
-        "recall and search. Nothing is ever deleted — a human can restore "
-        "the file from archive/."
+    description: str = field(
+        default=load_markdown(__package__, "memory_archive")
     )
     risk_level: str = "medium"
     input_schema: dict[str, Any] = field(
