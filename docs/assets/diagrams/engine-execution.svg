@@ -1,8 +1,8 @@
-<svg viewBox="0 0 720 652" role="img" aria-label="Engine Execution — one step — compose → decide → dispatch; tool_calls loops, other decisions suspend or terminate (workflow diagram)">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 652" role="img" aria-label="Engine Execution — one step — compose → decide → dispatch; tool_calls loops, other decisions suspend or terminate (workflow diagram)">
 <style>
 
     /* ==========================================================
-       THEME VARIABLES — switch by toggling [data-theme] on <html>
+       THEME VARIABLES — switch by toggling [data-theme] on the html root
        ========================================================== */
     svg, :root, [data-theme="dark"] {
       --bg: #020617;

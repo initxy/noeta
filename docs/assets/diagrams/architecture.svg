@@ -1,8 +1,8 @@
-<svg viewBox="0 0 1060 560" role="img" aria-label="Noeta Architecture — Two libraries — noeta-sdk (public surface + builtins) over noeta-runtime (pure kernel) (architecture diagram)">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 560" role="img" aria-label="Noeta Architecture — Two libraries — noeta-sdk (public surface + builtins) over noeta-runtime (pure kernel) (architecture diagram)">
 <style>
 
     /* ==========================================================
-       THEME VARIABLES — switch by toggling [data-theme] on <html>
+       THEME VARIABLES — switch by toggling [data-theme] on the html root
        ========================================================== */
     svg, :root, [data-theme="dark"] {
       --bg: #020617;

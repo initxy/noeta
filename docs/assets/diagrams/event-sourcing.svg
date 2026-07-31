@@ -1,8 +1,8 @@
-<svg viewBox="0 0 1100 720" role="img" aria-label="Event Sourcing — state = fold(log) — Append-only EventLog + content-addressed ContentStore → fold → four state slices (data-flow diagram)">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 720" role="img" aria-label="Event Sourcing — state = fold(log) — Append-only EventLog + content-addressed ContentStore → fold → four state slices (data-flow diagram)">
 <style>
 
     /* ==========================================================
-       THEME VARIABLES — switch by toggling [data-theme] on <html>
+       THEME VARIABLES — switch by toggling [data-theme] on the html root
        ========================================================== */
     svg, :root, [data-theme="dark"] {
       --bg: #020617;
