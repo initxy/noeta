@@ -26,7 +26,6 @@ from noeta.context.content_channel import (
     ContentKindSpec,
 )
 from noeta.execution.session_pack import (
-    EXPORT_SKILLS_KIT,
     ContentKindContribution,
     PackContribution,
     SessionBuildContext,
@@ -489,5 +488,5 @@ def build_skills_session_pack(ctx: SessionBuildContext) -> PackContribution:
     return PackContribution(
         tools=tools,
         content_kinds=(ContentKindContribution(100, kit.content_kind),),
-        exports={EXPORT_SKILLS_KIT: kit},
+        skills_kit=kit,
     )

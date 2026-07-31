@@ -85,7 +85,6 @@ from noeta.protocols.decisions import TaskStatePatch
 from noeta.protocols.messages import ImageBlock, MessageOrigin, TextBlock
 from noeta.protocols.policy import Policy
 from noeta.protocols.task import Task
-from noeta.execution.control_tool import CONTROL_EXPORT_ASK_ANSWER_CODEC
 from noeta.protocols.canonical import from_canonical_bytes
 from noeta.protocols.values import LOCAL_PRINCIPAL, ContentRef, Principal
 from noeta.protocols.wake import (
@@ -1425,10 +1424,10 @@ class InteractionDriver:
 
         The ask answer codec (``question_handle`` / ``load_questions_body`` /
         ``normalize_answer_document``) is no longer a kernel import: it moved into
-        the ``ask_user_question`` built-in and reaches this driver as the
-        session's ``CONTROL_EXPORT_ASK_ANSWER_CODEC`` mount export (D8), read off
-        the resolved Engine. A session that never mounted ``ask_user_question``
-        carries no codec and answering it fails loudly.
+        the ``ask_user_question`` built-in and reaches this driver on the mount's
+        typed ``answer_codec`` field (spec §4.3), threaded onto the resolved
+        Engine. A session that never mounted ``ask_user_question`` carries no
+        codec and answering it fails loudly.
         """
         codec = self._answer_codec(task_id)
         handle = codec.question_handle(question_id)
@@ -1456,14 +1455,13 @@ class InteractionDriver:
     def _answer_codec(self, task_id: str) -> Any:
         """The session's ask answer codec (D8), read off the resolved Engine.
 
-        The ``ask_user_question`` built-in's mount publishes an
-        :class:`~noeta.execution.control_tool.AskAnswerCodec` under
-        :data:`~noeta.execution.control_tool.CONTROL_EXPORT_ASK_ANSWER_CODEC`; the
-        SDK host threads it onto every Engine whose session mounted the tool. We
-        fold the task, resolve its Engine (cached — the drive that follows reuses
-        it), and read the codec structurally. A session that never mounted
-        ``ask_user_question`` has no codec, so answering it fails loudly here
-        rather than silently mis-decoding.
+        The ``ask_user_question`` built-in's mount carries an
+        :class:`~noeta.execution.control_tool.AskAnswerCodec` on its typed
+        ``answer_codec`` field; the SDK host threads it onto every Engine whose
+        session mounted the tool. We fold the task, resolve its Engine (cached —
+        the drive that follows reuses it), and read the codec structurally. A
+        session that never mounted ``ask_user_question`` has no codec, so
+        answering it fails loudly here rather than silently mis-decoding.
         """
         host = self._host
         task = fold(host.event_log, host.content_store, task_id)
@@ -1473,8 +1471,8 @@ class InteractionDriver:
             raise RuntimeError(
                 f"task {task_id!r}: this session's Engine carries no ask answer "
                 f"codec — the 'ask_user_question' control tool was not mounted, so "
-                f"its {CONTROL_EXPORT_ASK_ANSWER_CODEC!r} mount export is absent "
-                f"and a submitted answer cannot be decoded"
+                f"its answer_codec is absent and a submitted answer cannot be "
+                f"decoded"
             )
         return codec
 

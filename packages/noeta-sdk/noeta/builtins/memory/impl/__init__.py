@@ -48,8 +48,6 @@ from noeta.context.memory import (
 )
 from noeta.execution.session_pack import (
     EMPTY_CONTRIBUTION,
-    EXPORT_MEMORY_ENTRIES,
-    EXPORT_MEMORY_STORE,
     ContentKindContribution,
     PackContribution,
     SessionBuildContext,
@@ -147,10 +145,8 @@ def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
             ContentKindContribution(200, index_kit.content_kind(entries)),
         ),
         init=_init,
-        exports={
-            EXPORT_MEMORY_STORE: store,
-            EXPORT_MEMORY_ENTRIES: entries,
-        },
+        memory_store=store,
+        memory_entries=entries,
     )
 
 

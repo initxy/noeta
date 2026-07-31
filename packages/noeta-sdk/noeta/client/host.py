@@ -35,7 +35,6 @@ from noeta.context.content_channel import ContentKindSpec
 from noeta.context.memory import MemoryEntries
 from noeta.context.reminders import ReminderSpec
 from noeta.execution.builder import build_session_inputs
-from noeta.execution.control_tool import CONTROL_EXPORT_ASK_ANSWER_CODEC
 from noeta.execution.host import AgentRegistryProtocol
 from noeta.execution.reminders import TURN_INTAKE
 from noeta.execution.resolver import GenericEngineResolver
@@ -1888,14 +1887,12 @@ class SdkHost(GenericEngineResolver):
             tool_result_transforms=tuple(
                 self.tool_result_transforms.get(agent.name, ())
             ),
-            # The ask answer codec (control-tool-surface S2, D8): read off this
-            # session's collected control-tool exports and threaded onto the
-            # Engine so the driver's ``answer`` path can decode a submitted
-            # answer. ``None`` for a session that did not mount
-            # ``ask_user_question`` — the driver then fails loudly on an answer.
-            answer_codec=inputs.control_exports.get(
-                CONTROL_EXPORT_ASK_ANSWER_CODEC
-            ),
+            # The ask answer codec (spec §4.3: the ask mount's typed
+            # ``answer_codec``, threaded through the builder) put on the Engine so
+            # the driver's ``answer`` path can decode a submitted answer.
+            # ``None`` for a session that did not mount ``ask_user_question`` —
+            # the driver then fails loudly on an answer.
+            answer_codec=inputs.answer_codec,
         )
 
     def _build_orchestration_engine(
