@@ -1,55 +1,59 @@
 # 配置 Provider
 
-**目标：** 让你的 SDK Agent 指向真实的 LLM —— Anthropic，或任一 OpenAI 兼容 / OpenAI-Responses 端点。
+本指南教你把一个 agent 指向真实的 LLM —— Anthropic，或任一 OpenAI 兼容 / OpenAI-Responses 端点。你需要一套可用的 `noeta.sdk` 环境、一个端点和一个 API key。
 
-**开始之前：** 你已经跑过离线、零凭证的示例（见[你的第一个 Agent](../tutorials/first-agent.md)），并且手上有一个 Provider 端点和一个 API key。
+<p align="center">
+  <img src="../../assets/diagrams/provider-neutrality.svg" alt="Provider 中立 —— Engine 只讲一种 LLM 协议；三个适配器在边缘做翻译" width="820">
+</p>
 
 ## Provider 是接线，不是身份
 
-`compile_options` 从不读取 `Options.provider`，这个字段也被排除在相等性判断之外。两份只在 Provider 上不同的配方会编译成同一个 Agent 身份，所以换厂商不会动到 Agent 代码、工具，以及已记录的历史。
+`compile_options` 从不读取 `Options.provider`，这个字段也被排除在相等性判断之外。两份只在 provider 上不同的配方会编译成*同一个* agent 身份，所以换厂商不会动到你的 agent 代码、工具，以及已记录的历史。
 
-各适配器位于 `noeta.sdk.providers` 这个子模块里 —— 之所以做成子模块，是为了让导入 SDK 时不会拉进 `httpx`，除非你真的要构建一个网络 Provider：
+这也是为什么它是一篇操作指南而不是一份迁移文档：挑一个适配器，交给客户端，完事。
+
+## 1. 构建一个适配器
+
+各适配器住在 `noeta.sdk.providers` 这个惰性子模块里 —— 导入 `noeta.sdk` 并不会把 `httpx` 拉进来，除非你真的构建一个网络 provider。
+
+**Anthropic。** 省略 `api_key` 时回退到 `ANTHROPIC_API_KEY` 环境变量，并且会立即抛错，而不是交还一个在首次调用时以一个不透明的 401 失败的客户端。
 
 ```python
-from noeta.sdk import Options
 from noeta.sdk.providers import AnthropicProvider
 
-options = Options(
-    system_prompt="You are a helpful assistant.",
-    name="my-agent",
-    provider=AnthropicProvider(api_key="sk-ant-…"),
-)
+anthropic = AnthropicProvider(api_key="sk-ant-…")
 ```
 
-省略 `api_key` 时，`AnthropicProvider` 会回退到 `ANTHROPIC_API_KEY` 环境变量；它会直接抛错，而不是构造出一个在首次调用时以一个不透明的 401 失败的客户端。
-
-对接 OpenAI 风格的 `/chat/completions` 端点，用 `OpenAICompatProvider`；对接 Responses API，用 `OpenAIResponsesProvider`，它的 `base_url` 是**完整的** responses 端点（原样 POST，不会再追加任何路径）：
+**OpenAI 兼容的 `/chat/completions`。** `base_url` 是必填的（一个*兼容*端点没有约定俗成的默认值）；key 回退到 `OPENAI_API_KEY`，并以 `Authorization: Bearer …` 的形式发送。
 
 ```python
-from noeta.sdk.providers import OpenAICompatProvider, OpenAIResponsesProvider
+from noeta.sdk.providers import OpenAICompatProvider
 
-chat = OpenAICompatProvider(
-    base_url="https://api.openai.com/v1",
-    api_key="sk-…",
-)
+chat = OpenAICompatProvider(base_url="https://api.openai.com/v1", api_key="sk-…")
+```
+
+**OpenAI Responses API。** 需要同时给出 `base_url` 和 `api_key`，并以 `api-key` 头的形式发送凭证。它的 `base_url` 是**完整的** responses 端点 —— 原样 POST，不会再追加任何路径。
+
+```python
+from noeta.sdk.providers import OpenAIResponsesProvider
+
 responses = OpenAIResponsesProvider(
     base_url="https://api.openai.com/v1/responses",
     api_key="sk-…",
 )
 ```
 
-`OpenAICompatProvider` 需要 `base_url`，凭证回退到 `OPENAI_API_KEY`，并以 `Authorization: Bearer …` 的形式发送。`OpenAIResponsesProvider` 需要同时给出 `base_url` 和 `api_key`，并以 `api-key` 头的形式发送凭证。三者都接受 `extra_headers`，用于网关或代理专用的头。
+三者都接受 `extra_headers`，用于网关或代理专用的头。适配器**构造一次就反复复用**：每个都持有一个共享的 `httpx.Client`，而模型是每次调用时选定的，不是每个适配器绑定一个。
 
-Provider 构造一次即可复用：每个都持有一个共享的 `httpx.Client`，而模型是每次调用时从请求里选定的。
+## 2. 把它交给客户端
 
-## 把它传给客户端
-
-要么如上设置 `Options.provider`，要么直接交给 `Client` / `query` —— 显式参数优先；两者都不给时，`Client` 构造函数会抛 `ValueError`：
+要么设置 `Options.provider`，要么直接传给 `Client` / `query`。显式参数优先；两者都不给时，`Client` 构造函数会抛 `ValueError`。
 
 ```python
 from pathlib import Path
+from noeta.sdk import Client, Options
 
-from noeta.sdk import Client
+options = Options(system_prompt="You are a helpful assistant.", name="my-agent")
 
 client = Client(
     options,
@@ -59,42 +63,58 @@ client = Client(
 )
 ```
 
-`workspace_dir` 和 `model` 都是可选的。`workspace_dir` 回退到 `Options.cwd`，再回退到进程工作目录；`model` 回退到 `Options.model`，再回退到 `"sonnet"`。生产环境请显式传 `model` —— 那个回退值只有在你的端点碰巧提供该 id 时才有用。
+`workspace_dir` 和 `model` 都是可选的。`workspace_dir` 回退到 `Options.cwd`，再回退到进程工作目录；`model` 回退到 `Options.model`，再回退到 `"sonnet"`。**生产环境请显式传 `model`** —— 那个回退值只有在你的端点碰巧提供该 id 时才有用。
 
-## 离线测试
+## 3. 验证它
 
-确定性替身位于 `noeta.sdk.testing`，特意放在 `noeta.sdk` 根之外，好让生产代码的导入永远不会意外拉进测试材料：
+驱动一轮用完即弃的对话，把答案打印出来：
 
 ```python
-from noeta.sdk.testing import FakeLLMProvider
+from noeta.sdk import query
+
+result = query(options, goal="Reply with the word OK.", provider=chat,
+               model="gpt-4o")
+print(result.answer())
 ```
 
-用公共消息类型（`LLMResponse`、`TextBlock`、`Usage` —— 都在 `noeta.sdk` 上）脚本化它的 `responses`，一整次运行就无需网络。`examples/` 的 smoke 测试就是这么跑的。
+```
+OK
+```
+
+如果你拿到的是异常，看下面的故障排查表。
+
+## 4. 注册目录里没有的模型
+
+compaction 的各项参数和成本核算都是从模型目录推导出来的。目录未描述的模型会被**关闭** compaction，价格记为 `0.0` —— 这两种退化都不抛异常，所以没有任何东西告诉你。为任何网关模型、微调模型或自托管 id 添加一行：
+
+```python
+from noeta.sdk.providers import CATALOG, ModelSpec
+
+CATALOG["my-gateway-model"] = ModelSpec(
+    real_model_id="my-gateway-model",
+    context_window=200_000,
+    max_output_tokens=8_192,
+    input_price_per_mtok=3.0,
+    output_price_per_mtok=15.0,
+    cache_read_price_per_mtok=0.3,
+    cache_write_price_per_mtok=3.75,
+)
+```
+
+如果你只关心 compaction，把价格留在 `0.0` 即可。
 
 ## 故障排查
 
-- **401 / 认证错误** —— 检查你传给适配器的 key，或它回退到的环境变量。适配器使用 `httpx`，所以环境里的 `HTTPS_PROXY` 会被尊重，可用于公司代理。
-- **模型未找到** —— 你传的 `model` 必须是端点提供的 id。Anthropic 的 id 带日期后缀，例如 `claude-sonnet-4-5-20250929`。
-- **上下文一直增长、没有 compaction** —— compaction 的各项参数是从模型目录推导出来的，而目录里没有描述的模型会被关闭 compaction。注册你自己的一行：
+| 现象 | 修法 |
+| --- | --- |
+| 构造时抛 `ValueError` | 适配器没找到 key。传 `api_key=`，或设置它回退到的那个环境变量。 |
+| 401 / 认证错误 | key 不对或已过期。适配器使用 `httpx`，所以企业代理可以通过 `HTTPS_PROXY` 生效。 |
+| 模型未找到 | `model` 必须是端点提供的 id。Anthropic 的 id 带日期后缀，例如 `claude-sonnet-4-5-20250929`。 |
+| 上下文一直增长，成本却停在 `$0.00` | 该模型不在 `CATALOG` 里 —— 见第 4 步。 |
 
-  ```python
-  from noeta.sdk.providers import CATALOG, ModelSpec
+## 下一步
 
-  CATALOG["my-gateway-model"] = ModelSpec(
-      real_model_id="my-gateway-model",
-      context_window=200_000,
-      max_output_tokens=8_192,
-      input_price_per_mtok=3.0,
-      output_price_per_mtok=15.0,
-      cache_read_price_per_mtok=0.3,
-      cache_write_price_per_mtok=3.75,
-  )
-  ```
-
-  同一行也驱动按运行计的成本核算；如果你不需要，把价格留在 `0.0` 即可。
-
-## 另请参阅
-
+- [切换 Provider](swap-providers.md) —— 把已有的 agent 迁到另一个厂商
 - [Provider 中立](../concepts/provider-neutrality.md) —— 为什么内部协议与厂商无关
 - [SDK 参考](../reference/sdk.md) —— 完整的 `Options` 面
-- [切换 Provider](swap-providers.md) —— 前后对比的代码示例
+- [故障排查](../operations/troubleshooting.md) —— provider 错误的上下文

@@ -1,39 +1,29 @@
-# 插件参考
+# 插件
 
-插件机制——**在一个 surface registry 之上、由 manifest 声明的贡献包**，并把**宿主级的加载（load）与代理级的激活（activation）**拆成两步。一个插件携带一份列出其贡献的静态 manifest；加载会把这些 manifest 读取（其间不运行任何插件代码）进一个 `PluginSet`；随后某个代理再通过 `Options.plugins` *激活*它要用的插件。事实来源：`packages/noeta-sdk/noeta/client/{plugin_manifest,surfaces,plugin_set}.py`。
+一个插件是一个包——或者一个单独的 `.py` 文件——它携带一份**静态 manifest**，列出它向 Noeta 贡献了什么。加载一个插件就是读取这些 manifest；它不运行任何插件代码。随后某个 agent 再去*激活*它想要的插件。这两步拆分就是全部要点：宿主决定什么是可用的，agent 决定它用什么。
 
-```python
-from noeta.sdk import (
-    # the manifest + the single-file builder
-    PluginManifest, ManifestContribution, PluginBuilder,
-    # the surface registry (the generality mechanism)
-    SurfaceSpec, SurfaceRegistry, standard_registry,
-    # the loader + the loaded set
-    load_plugins, PluginSet,
-    # activation
-    PluginActivation, DEFAULT_PLUGINS,
-    # trust + errors
-    grant_trust, is_trusted, PluginError,
-)
-```
+Noeta 自己的能力也是这样发布的。11 个默认工具、默认的那组 guard、三条 compose 时的 reminder，全都是内置插件，经由与你所写之物完全相同的 loader 解析。（provider 适配器同样随 SDK 发布，但 host 直接从 `noeta.sdk.providers` 构造它们——`providers` 内置插件不向任何 surface 贡献内容。）
 
-## 一屏看懂模型
+<p align="center"><img src="../../assets/diagrams/plugin-system.svg" alt="插件系统：manifest 到 loader 到 registry 再到按 agent 的激活，跨三个平面与十六个 Surface" width="820"></p>
 
-- 一个**插件（Plugin）**是一个包（或单个 `.py` 文件），携带一份**静态 manifest**：一个 `name`、一个 `requires-noeta` 版本范围、一个可选的 `config-schema`，以及一组**贡献（contribution）**——每条贡献指明一个 **surface**，外加一个 `ref`（import 字符串）或 `path`（资源）。
-- 一个 **Surface** 是一个扩展点——`tool`、`guard`、`policy`、`reminder`……每个 surface 都有一个 `SurfaceSpec`，描述对它的贡献如何校验、如何判冲突、如何排序。加载器是**与 surface 无关的（surface-agnostic）**：它只查询 registry、别无其他，所以宿主可以注册自己的 surface。
-- **加载（Load，宿主级）**：`load_plugins(...) -> PluginSet`——决定进程里有哪些插件*代码*可用。一个 `PluginSet` **无需执行任何插件代码**就能被列出并做冲突检查。
-- **激活（Activate，代理级）**：`Options.plugins: tuple[str, ...]` 和 `AgentDefinition.plugins`——决定*这个代理*使用哪些已加载的插件。激活会进入 `AgentSpec` 身份。`Client(options, plugins=<PluginSet>)` 把两者绑在一起；一个不在已加载集合里的激活名会让构建失败。
+## 三个平面
 
-## Manifest 格式
+每一个贡献都落在十六个 **Surface** 之一上，而每个 Surface 又坐落在三个平面之一上。平面决定这个贡献在哪里生效。
 
-manifest 是惰性数据——读取它**不会**导入任何插件代码。它有两种形态。
+| 平面 | Surface | 效果 |
+| --- | --- | --- |
+| **identity** | `tool`、`agent`、`content_kind`、`prompt_fragment`、`policy`、`control_tool` | 进入被记录的 `AgentSpec`；跟随按 agent 的激活 |
+| **wiring** | `guard`、`observer`、`provider`、`reminder_provider`、`reminder`、`tool_result_transform`、`session_pack` | 是行为，不是身份。`guard` 和 `observer` 一经加载即进程级生效——治理属于运维方的权限，不是 agent 作者可以选择开启的东西 |
+| **host** | `mcp_server`、`skills`、`sandbox_provider` | 由宿主挑选并绑定；从不按 agent |
 
-### 分发形态 —— `[tool.noeta]` / `noeta-plugin.toml`
+每个 Surface 的完整契约以及一个可照做的示例：[插件 Surface](plugin-surfaces.md)。
 
-一个已安装的包在 `pyproject.toml` 的 `[tool.noeta]` 下声明它的 manifest，并**把它作为 package data `noeta-plugin.toml` 镜像进 wheel**，通过分发元数据定位。`read_distribution_manifest`（`plugin_manifest.py`）在常规安装下直接从磁盘读取那个文件，在 editable 安装下回退到 `importlib.util.find_spec`（它不导入就能定位一个包）——两种情形下零执行保证都成立。
+## 一个最小的插件
+
+两个文件。manifest 声明贡献；模块放代码。
 
 ```toml
-# pyproject.toml — the plugin's manifest lives under [tool.noeta]
+# pyproject.toml
 [tool.noeta]
 name = "house-style"
 requires-noeta = ">=0.4"
@@ -44,316 +34,52 @@ name    = "house-style"
 text    = "Answer in at most three sentences."
 
 [[tool.noeta.contributions]]
-surface  = "tool"
-ref      = "house_style.tools:LintTool"     # module:attr import string
+surface = "tool"
+ref     = "house_style.tools:LintTool"    # module:attr import string
 ```
 
-`parse_manifest_text` 按优先级接受三种 TOML 形态：`[tool.noeta]`（一个同时携带插件的 `pyproject.toml`）、`[noeta]`，以及裸的顶层键（镜像出来的 `noeta-plugin.toml`）。
-
-### Manifest 字段
-
-| 字段 | 形状 | 含义 |
-| --- | --- | --- |
-| `name` | `str`，必填 | 插件的身份——加载期去重的键，也是激活名 |
-| `requires-noeta` | `str \| None` | 一个版本范围（仅作提示） |
-| `config-schema` | `table \| None` | 运维方配置的可选 schema |
-| `contributions` | table 数组 | 每条贡献一项 |
-
-每条贡献是一个 `ManifestContribution`：
-
-| 键 | 形状 | 含义 |
-| --- | --- | --- |
-| `surface` | `str`，必填 | 一个已注册的 surface 名（见[目录](#surface-catalog)） |
-| `name` | `str` | 冲突/排序的键**兼**列出时的标签；省略时从 `ref` / `path` 推导 |
-| `ref` | `str \| None` | 一个 `module` 或 `module:qualname` import 字符串——**仅**在执行边界解析 |
-| `path` | `str \| None` | 一个资源路径（用于像 `skills` 这类只有资源的 surface） |
-| `params` | 其余键 | surface 特定的参数，原样保留（`reminder` 的 `priority`、`reminder_provider` 的 `seams`、字面量取值的 `prompt_fragment` 的 `text`） |
-
-省略 `name` 时，它从 `ref` 的最后一个属性（或模块的最后一段）推导，否则从 `path` 的 basename 推导。`(surface, name)` 在同一份 manifest 内必须唯一；重复会抛出 `PluginError` 并点名两个条目。
-
-### 单文件形态 —— `PluginBuilder`
-
-一个本地 `.py` 插件声明一个模块级的 `PluginBuilder`，并用装饰器标注它的贡献；这个 builder **就是** manifest。这是可接受的，因为本地文件反正都要过一道显式的信任门槛。
+加载它，然后在某个 agent 上激活它：
 
 ```python
-# brevity.py — a single-file plugin
-from noeta.sdk import PluginBuilder
+from noeta.sdk import Client, DEFAULT_PLUGINS, Options, load_plugins
 
-plugin = PluginBuilder("brevity", requires_noeta=">=0.4")
-
-plugin.prompt_fragment("Answer in at most three sentences.", name="be-brief")
-
-@plugin.reminder(priority=500)
-def stay_brief(view):
-    return None  # a real reminder returns str | None from the folded projection
-```
-
-`PluginBuilder(name, *, requires_noeta=None, config_schema=None)` 为每个 surface 暴露一个装饰器/方法——每个都转发到通用的 `contribute(surface, value, *, name=None, ref=None, path=None, **params)`，它也覆盖那些没有专用方法的 surface（`agent`、`content_kind`、`mcp_server`、`skills`、`provider`）：
-
-| 方法 | Surface | 参数 |
-| --- | --- | --- |
-| `tool(fn=None, *, name=None)` | `tool` | — |
-| `reminder(fn=None, *, name=None, priority=0)` | `reminder` | `priority` |
-| `reminder_provider(fn=None, *, name=None, seams=())` | `reminder_provider` | `seams` |
-| `tool_result_transform(fn=None, *, name=None, priority=0)` | `tool_result_transform` | `priority` |
-| `guard(obj=None, *, name=None)` | `guard` | — |
-| `observer(fn=None, *, name=None)` | `observer` | — |
-| `prompt_fragment(text, *, name)` | `prompt_fragment` | `text` |
-| `policy(factory=None, *, name=None)` | `policy` | — |
-| `sandbox_provider(obj=None, *, name=None)` | `sandbox_provider` | — |
-| `session_pack(factory=None, *, name=None, priority=0)` | `session_pack` | `priority` |
-| `control_tool(factory=None, *, name=None, priority=0)` | `control_tool` | `priority` |
-
-`manifest()` 返回等价的 `PluginManifest`；被装饰的对象还会被缓存（`resolved_objects`），于是加载器无需二次导入就能解析单文件插件的贡献。`python -m noeta.sdk.plugin_check`（**没有** console script）在发布时从装饰器推导并校验 TOML。
-
-## Surface 目录 {#surface-catalog}
-
-标准目录有十六个 surface（`noeta.client.surfaces.STANDARD_SURFACES`）。每一行是一个 `SurfaceSpec`：它落在哪个**平面（plane）**上、它的效果如何在各代理间**限定作用域（scope）**、它的**冲突键（collision key）**，以及它的**排序（ordering）**。
-
-| Surface | Plane | Scope | Collision key | Ordering | 备注 |
-| --- | --- | --- | --- | --- | --- |
-| `tool` | identity | per-agent | `name` | `(plugin, name)` | 一个内置工具名，或一个带 `.ref` 的工具 |
-| `agent` | identity | per-agent | `name` | `(plugin, name)` | 一个 `AgentDefinition` |
-| `content_kind` | identity | per-agent | `kind` | `(plugin, name)` | 一个 `ContentKindSpec` |
-| `prompt_fragment` | identity | per-agent | `name` | `(plugin, name)` | 一个字面字符串，追加在 prompt 之后 |
-| `policy` | identity | per-agent | **single-valued** | — | base + 已激活插件，或两个插件，= 错误 |
-| `guard` | wiring | **process** | none | `(plugin, name)` | 治理——见[作用域](#effect-scoping) |
-| `observer` | wiring | **process** | none | `(plugin, name)` | 治理——见[作用域](#effect-scoping) |
-| `provider` | wiring | host-wired | **single-valued** | — | `Options.provider` 冲突 = 错误 |
-| `reminder_provider` | wiring | per-agent | `name` | `(plugin, name)` | 在一个具名 seam 上的记录型注入 |
-| `reminder` | wiring | per-agent | `name` | **priority** | compose 期、纯函数 |
-| `tool_result_transform` | wiring | per-agent | `name` | **priority** | 记录前的 ToolRuntime 阶段 |
-| `mcp_server` | host | host-wired | `alias` | `(plugin, name)` | 可连接的 server spec |
-| `skills` | host | host-wired | none | `(plugin, name)` | 只有资源（`path`） |
-| `sandbox_provider` | host | host-wired | `name` | `(plugin, name)` | 宿主从中选一个 |
-| `session_pack` | wiring | per-agent | `name` | **priority** | 会话构造工厂 `(SessionBuildContext) -> PackContribution` |
-| `control_tool` | identity | per-agent | `name` | **priority** | 控制工具工厂 `(ControlToolBuildContext) -> ControlToolMount \| None` |
-
-- **Collision key** 为 `none` 表示该 surface 从不冲突（guard / observer / 技能目录）。`single-valued` 表示在整个已加载集合里至多一个。
-- **Ordering** 为 `priority` 时，先按整数 `priority` 参数排序，同分再按 `(plugin, name)` 打破平手。其余一律按 `(plugin, name)` 排序，所以发现顺序从不改变结果。
-
-宿主自定义的 surface 会扩展这张表（见 [SurfaceRegistry](#surfacespec--surfaceregistry)）。
-
-### 效果作用域 {#effect-scoping}
-
-这里有一处刻意为之的不对称——哪些 surface 跟随按代理的激活，哪些是进程级的：
-
-| Surface | 规则 |
-| --- | --- |
-| `tool` `agent` `content_kind` `prompt_fragment` `policy` `reminder_provider` `reminder` `tool_result_transform` `session_pack` `control_tool` | **跟随按代理的激活**——特性语义：一个没有激活该插件的代理不会得到它们 |
-| `guard` `observer` | **一旦加载 ⇒ 对进程内的每个代理都生效。** 治理是运维方的权威；代理作者不得通过省略激活来跳过拦截或审计 |
-| `provider` `sandbox_provider` `mcp_server` `skills` | 宿主接线；由宿主选择并绑定，绝不按代理 |
-
-## `SurfaceSpec` / `SurfaceRegistry`
-
-registry 是那套通用化机制——加载器只查询它、别无其他，所以**新增一个 surface 就是注册一个 `SurfaceSpec`，而不是改动加载器**。
-
-```python
-@dataclass(frozen=True)
-class SurfaceSpec:
-    name: str
-    plane: "identity" | "wiring" | "host"
-    activation_scope: "per-agent" | "process" | "host-wired"
-    validator: Callable[[Any], None]   # raises on an illegal contribution value
-    collision_key: "name" | "kind" | "alias" | "single-valued" | "none"
-    ordering: "sorted" | "priority" = "sorted"
-    # identity-plane only — which PluginActivation channel the contribution
-    # feeds; "elsewhere" when a per-agent projection carries it instead
-    activation_binding: "tool" | "agent" | "content_kind"
-                      | "prompt_fragment" | "policy" | "elsewhere" | None = None
-```
-
-`validator` 在**已解析**的值上运行（在 `ref` 被导入之后）；列出和 manifest 级的冲突检查从不调用它，所以它们保持零执行。每个枚举字段都在构造时校验，写错的值（或落错位置的位置参数）会在注册那一行就抛 `PluginError`。
-
-`activation_binding` 正是 identity 投影保持**表驱动**的原因：identity-plane surface 自己声明汇入哪条通道，无需改动加载器就能抵达 `compile_options`。它对 `plane="identity"` **必填**（没有绑定的 identity 贡献会在 resolve 与 compile 之间被悄悄丢掉），对其他每个 plane **禁止**。
-
-wiring plane 恰好只有两条**进程级**通道：`guard` 与 `observer`。`PluginSet.process_hooks()` 拒绝第三条，而不是把它塞进其中一条：把一个非 `Guard` 的值交给引擎，会把构建期的配置错误变成第一次工具调用时的崩溃。这类 surface 请改用 per-agent 作用域。
-
-`standard_registry()` 返回一个以十六个标准 surface 播种的全新 `SurfaceRegistry`。宿主在加载前于一个**副本**上注册额外的 surface——同一套校验 / 冲突 / 排序流水线会原封不动地作用在它们上：
-
-```python
-from noeta.sdk import standard_registry, SurfaceSpec, PluginError, load_plugins
-
-def _valid_route(value):
-    if not callable(value):
-        raise PluginError("http_route must be callable")
-
-reg = standard_registry()                       # a fresh copy
-reg.register(SurfaceSpec(
-    "http_route", "host", "host-wired", _valid_route, "name",
-))
-plugins = load_plugins(registry=reg)            # the host's surface is live
-```
-
-`SurfaceRegistry` 的方法：`register(spec)`（重复的名字会抛错）、`get(name)`、`names()`、`__contains__`、`copy()`。
-
-## 来源与加载流水线
-
-五种来源，每种都有自己的门槛。发现顺序**从不**影响结果（只影响错误归属）。
-
-| # | 来源 | `load_plugins` 参数 | 门槛 |
-| --- | --- | --- | --- |
-| 0 | 内置插件（`noeta.builtins`） | `builtins=True`（默认） | 默认开启；用 `disabled_builtins` 按名禁用 |
-| 1 | entry point（`noeta.plugins` 组） | `entry_points=True` | `enabled` allow-list，在**任何导入之前**生效 |
-| 2 | 显式的 module / 文件路径 | `modules=[...]` | 调用方指定 = 已授权 |
-| 3 | `~/.noeta/plugins/`（或任意目录） | `user_dirs=[...]` | 用户自己的机器 = 受信任 |
-| 4 | 工作区 `.noeta/plugins/` | `workspace_dirs=[...]` | 信任存储（不受信任的目录 → 大声警告 + 跳过） |
-
-每个候选的流水线：**读取 manifest**（对包 / `.toml` 形态零执行）→ **`enabled` 门槛，在任何导入之前** → **信任门槛**（仅来源 4）→ **冲突检查** → 按 `(plugin, contribution)` 排序的**确定性合并**。解析 `ref` 与运行每个 surface 的 `validator` 只在调用方触及执行边界（`PluginSet.resolve` 及其同类）时才发生；列出和合并只在静态 manifest 上运行。
-
-### `load_plugins(...) -> PluginSet`
-
-```python
-load_plugins(
-    *,
-    builtins=True,               # bool | Iterable[PluginManifest]
-    disabled_builtins=(),        # Iterable[str]
-    entry_points=False,          # bool | Iterable[entry-point-like]
-    modules=(),                  # Sequence[str] — dotted modules or file/dir/.toml paths
-    user_dirs=(),                # Sequence[path] — scanned unconditionally
-    workspace_dirs=(),           # Sequence[path] — scanned only when trusted
-    enabled=None,                # Iterable[str] | None — allow-list of plugin names
-    trust_store=None,            # Path | None — defaults to ~/.noeta/trust.json
-    registry=None,               # SurfaceRegistry | None — defaults to standard_registry()
-    entry_point_group="noeta.plugins",
-) -> PluginSet
-```
-
-- `builtins=True` 发现内置目录；传入一个 `PluginManifest` 的可迭代对象可注入一套自定义集合（测试用的 seam）。`disabled_builtins` 按名丢弃内置插件，并且这个禁用会被**记录**在返回的集合上（`PluginSet.disabled_builtins`），这样宿主也能在没有任何 contribution 表达它的地方兑现它——禁用 `skills` 正是 `Client` 不再注入 skills kit 的依据（不索引、没有 `skill` 控制工具、没有 skill content kind）。「不在集合里」不等于「被禁用」：`builtins=False` 限定的是*被加载的集合*，从不影响 SDK 自身的能力。
-- `react` **不能**被禁用——`disabled_builtins=["react"]` 会抛 `PluginError`。它提供默认的决策 policy，而每个编译出的 `AgentSpec` 都把这个身份钉为 `POLICY_REF ("react", "1")`。默认的大脑是*可替换*的，而不是可移除的：激活一个贡献 `policy` surface 的插件，它的 ref 就会同时接管身份与被接线的 factory。
-- `entry_points=True` 通过 `importlib.metadata` 发现 `noeta.plugins` 组；一个由类 entry-point 对象（`.name` + `.dist`）组成的可迭代对象会把它们注入进来。一个分发里没有随附 `noeta-plugin.toml` 的 entry point 会大声失败。
-- `modules` 里的条目可以是点分模块（导入它即是授权）、一个 `.py` 文件、一个目录（像来源 3/4 的目录那样扫描），或一个 `.toml` manifest。
-- `user_dirs` 无条件加载；`workspace_dirs` 仅当目录被记录在信任存储里时才加载，否则带 `UntrustedPluginDirWarning` 跳过。两者都会扫描携带 `noeta-plugin.toml` 的子目录（零执行）**以及**顶层的 `*.py` 单文件插件（会被执行——一个受信任的目录），并跳过以 `_` 开头的文件。
-
-跨来源的重复插件**名**是一个错误，会点名两个来源。
-
-## `PluginSet`
-
-已加载的、宿主级的集合（`plugin_set.py`）。冻结的；持有发现到的 `LoadedPlugin`，以及它们所依据加载的那个 surface registry。下方每个投影都会记忆它的解析结果，所以一次构建对每个 `ref` 至多导入一次。
-
-| 成员 | 返回 | 执行插件代码？ |
-| --- | --- | --- |
-| `names()` / `__iter__` / `__len__` / `__contains__` / `get(name)` | 列出 | 否 |
-| `contributions(surface=None)` | `((plugin_name, ManifestContribution), …)`——每一条贡献，可选地限定一个 surface | **否** |
-| `merged()` | `MergedContributions`——已做冲突检查、确定性排序 | **否** |
-| `disabled_builtins` | `frozenset[str]`——调用方关掉的内置插件 | 否 |
-| `resolve()` | `(ResolvedContribution, …)`——每条贡献，其 `ref` 已导入并校验 | **是**——执行边界 |
-| `identity_activations(only=None)` | `dict[str, PluginActivation]`——每个**外部**插件的身份平面贡献（tools / agents / content kinds / prompt fragments / policy） | 是 |
-| `activation_transforms(only=None)` | `dict[str, ((priority, name, fn), …)]`——`tool_result_transform` 阶段 | 是 |
-| `activation_reminders(only=None)` | `dict[str, ((priority, name, render), …)]`——compose 期的 `reminder` render | 是 |
-| `activation_reminder_providers(only=None)` | `dict[str, ((seams, name, provider), …)]`——记录型 `reminder_provider` | 是 |
-| `activation_session_packs(only=None)` | `dict[str, ((priority, name, factory), …)]`——`session_pack` 工厂 | 是 |
-| `activation_control_tools(only=None)` | `dict[str, ((priority, name, factory), …)]`——`control_tool` 工厂 | 是 |
-| `process_hooks()` | `(guards, observers)`——每个**外部**插件的治理 hook，按 `(plugin, name)` 顺序 | 是 |
-
-`contributions()` 就是列出保证：调用方无需运行插件的任何代码，就能确切看到一个已安装插件贡献了什么。
-
-```python
-pset = load_plugins()                    # built-ins on
-for plugin_name, contribution in pset.contributions("tool"):
-    print(plugin_name, contribution.name)   # no plugin body imported
-
-pset.get("memory").manifest.requires_noeta  # ">=0.4"
-```
-
-`Client` 在构建期间调用这些激活投影和 `process_hooks`，绝不在会话中途某一轮。内置插件被它们全部排除——它们的特性效果搭乘 `compile_options` 按名处理的激活词汇表，而默认的 guard / observer 栈是引擎自带的。`only=` 参数把解析限定到某个代理实际激活的那些名字，所以一个已加载但未激活的插件的模块体从不运行。
-
-## 激活
-
-加载让插件代码*可用*；**激活**决定一个代理使用哪些已加载的插件。激活名存在于 `Options.plugins` 和 `AgentDefinition.plugins` 上，并进入 `AgentSpec` 身份。
-
-```python
-from noeta.sdk import Options, Client, load_plugins, DEFAULT_PLUGINS
-
-pset = load_plugins(modules=["./brevity.py"])   # built-ins + the local plugin
+pset = load_plugins(entry_points=True)      # built-ins + installed plugins
+print(pset.names())
+# → ('app', 'ask_user_question', …, 'house-style', …)
 
 options = Options(
     system_prompt="You are a coding agent.",
-    plugins=DEFAULT_PLUGINS + ("memory", "brevity"),
+    plugins=DEFAULT_PLUGINS + ("house-style",),
 )
-
-client = Client(options, provider=..., workspace_dir=".", plugins=pset)
+client = Client(options, provider=my_provider, workspace_dir=".", plugins=pset)
 ```
 
-一个激活名必须是以下之一：
+manifest 的形状、loader 的五个来源、信任门与版本约束：[插件 manifest](plugin-manifest.md)。
 
-- 一个折叠进 `AgentSpec.plugins` 激活元组的**内置特性 bundle**：`memory`、`browser`、`mcp`、`todo_write`、`ask_user_question`、`skill_invocation`、`delegation`。激活其中之一只会把它的名字加入元组、别无其他；`agent_activates(agent, plugin)` 就是成员判断。`todo_write` / `ask_user_question` / `delegation` 同时是**真正的内置插件**，在 `control_tool` surface 上做贡献；`skill_invocation` 是一个被识别的非插件激活（它在 `skills` 内置插件内部门控 `skill` 控制工具）。`delegation` 还额外是*推导出来的*——带 `agents` 的根代理会委派，扁平子代理不会——所以指名它只会把它**打开**，给一个子代理授予 spawn 权限。`spawnable` 仍然只从 `agents` 字典推导——激活无法指名某个代理；
-- 一个**对身份无影响的内置项**，之所以被识别，是为了让打错的名字仍然大声失败、但不产生任何 compile 效果：`app`、`fs`、`governance`、`presets`、`providers`、`react`、`reminders`、`sandbox`、`skills`、`storage`、`web`、`workspace`；
-- 交给 `Client` 的那个 `PluginSet` 里某个**已加载插件的名字**——它的身份平面贡献（额外的 tool / 子代理 / content kind / prompt fragment / policy）会折叠进来。
+## 先加载，再激活
 
-`DEFAULT_PLUGINS = ("fs", "web")` 是 `Options.plugins` 的默认值；两者都对身份无影响（默认的 11 个工具集来自 `builtin_tool_classes()`，它读取 `fs` 和 `web` 的 manifest），所以一个裸的 `Options()` 无论带不带它们都会编译成相同的 `AgentSpec`。`AgentDefinition.plugins` 默认为 `()`——子代理的工具来自它自己的 `tools` 字段。
-
-一个未知的激活名会让编译以 `ValueError` 失败，并点名那个惹事的名字以及它出现的位置（`Options` 或子代理），同时列出内置词汇表和已加载集合——激活前先加载它，或者改正名字。
-
-## 内置插件
-
-noeta 把自己的能力表达为 `packages/noeta-sdk/noeta/builtins/` 里的内置插件——栈顶那条 band，与 `noeta.presets` 并列。每个目录同时持有 manifest **和**实现：`__init__.py` 是零执行的 `MANIFEST`（一个 `PluginManifest`，其贡献携带 `ref` 字符串），`impl/` 是代码，`ref` 指向同目录下的 impl 模块。manifest 层不导入任何 impl，所以列出一个内置插件运行零能力代码。加载器通过一次**动态**导入（`builtin_manifests()`）触及目录，而 `.importlinter` 的 `sdk-core-not-builtins` 契约保证每一条 band——包括内核——都没有通往 `noeta.builtins` 的静态边。
-
-十八个内置插件，一个目录一个，是 manifest 声明的权威范例语料：
-
-| 内置插件 | 贡献 |
-| --- | --- |
-| `fs` | 九个 `tool`（`read`、`glob`、`grep`、`edit`、`write`、`apply_patch`、`shell_run`、`shell_poll`、`shell_kill`）+ 一个 `session_pack` |
-| `web` | `webfetch` / `web_search` 两个 `tool` + 一个 `session_pack` |
-| `memory` | 四个 memory `tool`、一个 `prompt_fragment`、一个 `reminder_provider`、一个 `session_pack` |
-| `browser` | 一个 `session_pack`（sandbox 支撑的浏览器工具） |
-| `app` | 一个 `session_pack`（受 gateway 门控的 `open_app` 工具） |
-| `skills` | 一个 `session_pack` |
-| `react` | `run_workflow` / `structured_output` 两个 `control_tool` |
-| `reminders` | 三个 `reminder` |
-| `governance` | 四个 `guard` + 一个 `observer` |
-| `sandbox` | 两个 `sandbox_provider` |
-| `presets` | `web` 和 `__consolidation__` 两个 `agent` |
-| `workspace` | 两个 `session_pack`（instructions、environment） |
-| `todo_write` | 一个 `control_tool` |
-| `ask_user_question` | 一个 `control_tool` |
-| `delegation` | `spawn_subagent` 这个 `control_tool` |
-| `mcp`、`providers`、`storage` | 只做声明（零贡献）；它们的代码通过 SDK 自己的 accessor 触及 |
-
-新增一个第一方能力就是在这里加一个目录，只有当确实需要一个全新的 surface 时才额外注册一个 `SurfaceSpec`。
-
-## 信任存储
-
-工作区目录的信任存储是一个 JSON 文件——`{"trusted": [abs path, …]}`——默认在 `DEFAULT_TRUST_STORE`（`~/.noeta/trust.json`）。只有 `workspace_dirs` 会查询它；`user_dirs` 总是被扫描。
-
-| 函数 | 签名 | 行为 |
+| 步骤 | 在哪里 | 它决定什么 |
 | --- | --- | --- |
-| `is_trusted(path, store=None)` | `→ bool` | `path` 的规范形式是否被记录；缺失的存储 ⇒ `False`，绝不报错 |
-| `grant_trust(path, store=None)` | `→ None` | 记录 `path` 的规范形式（幂等）；若存储及其父目录不存在则创建 |
+| **加载** | `load_plugins(...) -> PluginSet`，宿主层 | 这个进程里有哪些插件 *代码*可用 |
+| **激活** | `Options.plugins` / `AgentDefinition.plugins`，agent 层 | *这个 agent* 用哪些已加载的插件 |
 
-两侧用同一套规则规范化路径——展开 `~`、取绝对、解析符号链接——所以路径怎么拼写从不影响信任判定。格式损坏（非 JSON）的存储在读取时会抛 `PluginError`。
+`Client(options, plugins=<PluginSet>)` 把两者绑在一起。一个不在加载集里的激活名会让构建失败——大声地、在启动时，绝不在某一轮的中途。激活会进入 `AgentSpec` 身份，因此一个多了某个插件的 agent，在记录里就是另一个 agent。完整的激活词汇见 [Options](sdk-options.md#plugin-激活)。
 
-```python
-from noeta.sdk import grant_trust, load_plugins
-
-grant_trust("./workspace/.noeta/plugins")                      # writes ~/.noeta/trust.json
-pset = load_plugins(workspace_dirs=["./workspace/.noeta/plugins"])
-```
-
-## 失败语义
-
-加载故障是**大声的**，会在启动时让 client 构建失败——绝不拖到会话中途某一轮：
-
-- 一份坏掉或缺失的 manifest、一个损坏的文件、一个无法导入的 `ref`、一个缺失的 `ref` 属性，或一个通不过其 surface `validator` 的值，都会抛出 `PluginError` 并点名该插件。
-- **任何冲突**——两个插件宣称了同一个键；跨来源的重复插件名；第二个 `policy` / `provider`——都会抛出 `PluginError` 并**点名两个来源。没有覆盖开关。**（与基础 `Options.policy` / `Options.provider` 的冲突由 `compile_options` / `Client` 构建捕获。）
-- 一个**未知的激活名**会在 compile 时抛出 `ValueError`。
-
-唯一不抛异常的跳过是一个**不受信任的 `workspace_dirs`** 条目，它会以 `UntrustedPluginDirWarning` 警告并被跳过。
+一个 `PluginSet` 是**在不执行任何插件代码的前提下可列举、可查冲突的**：`.contributions()` 和 `.merged()` 只读静态 manifest，而 `.resolve()` 是唯一的 import 边界，在 client 构建时调用一次。
 
 ```python
-from noeta.sdk import load_plugins, PluginError
-
-pset = load_plugins(builtins=[m_a, m_b])   # both contribute prompt_fragment "frag"
-try:
-    pset.merged()
-except PluginError as exc:
-    #  prompt_fragment 'frag' on surface 'prompt_fragment' is contributed by both
-    #  plugin 'a' and plugin 'b' — no override
-    ...
+for plugin_name, contribution in pset.contributions("tool"):
+    print(plugin_name, contribution.name)   # no plugin body imported
+# → fs read
+# → fs glob
+# → …
 ```
 
-## 另请参阅
+## 接下来去哪儿
 
-- [编写插件](../how-to/write-a-plugin.md) — 任务导向的指南
-- [SDK 参考](sdk.md) — `Options.plugins` 激活，以及 `Client` / `query` 的 `plugins=` 参数
-- [ADR：插件贡献包](https://github.com/initxy/noeta/blob/main/docs/adr/plugin-contribution-bundles.md) — 长期的设计理由
+| 页面 | 涵盖 |
+| --- | --- |
+| [插件 manifest](plugin-manifest.md) | `[tool.noeta]` 各个表、`PluginBuilder`、`load_plugins`、信任存储、`requires-noeta`、打包 |
+| [插件 Surface](plugin-surfaces.md) | 全部十六个 Surface，每个一节，附上演示它的那个内置插件 |
+| [编写插件](../how-to/write-a-plugin.md) | 面向任务的指南 |
+| [扩展平面](../architecture/extension-planes.md) | 这些平面为什么画在现在的位置 |

@@ -1,12 +1,10 @@
-# 派生子代理
+# 生成子代理
 
-**目标：** 在 `Options.agents` 中定义子代理，让父代理把工作扇出（fan out）给它们。
+本指南教你在 `Options.agents` 里定义子 agent，并让父 agent 把工作分发给它们。你需要[你的第一个 agent](../tutorials/first-agent.md) 里的 SDK 基础。
 
-**开始之前：** 你已通过[你的第一个代理](../tutorials/first-agent.md)熟悉了 SDK。
+## 1. 定义子 agent
 
-## 定义子代理
-
-子代理在 `Options.agents` 中以 `AgentDefinition` 条目声明。每个子代理是一份扁平配方——有自己的 prompt、工具和模型。子代理是叶子节点：`AgentDefinition` 没有 `agents` 字段，编译出的 `spawnable` 为空，因此它无法再向下委托。
+子 agent 以 `AgentDefinition` 条目的形式声明在 `Options.agents` 里。每个子 agent 都是一份扁平的配方 —— 自己的提示词、工具和模型。子 agent 是叶子：`AgentDefinition` 没有 `agents` 字段，编译出来的 `spawnable` 是空的，因此它无法继续往下委派。
 
 ```python
 from noeta.sdk import Options, AgentDefinition
@@ -25,26 +23,26 @@ options = Options(
 )
 ```
 
-这就是全部的 opt-in：填充 `agents` 会让 `compile_options` 把 `"delegation"` 折进父代理的身份，并把子代理名并入它的 `spawnable`，于是 `spawn_subagent` 控制工具挂载起来，且 `researcher` 出现在它 schema 的 enum 里。
+这就是全部的开启动作：填上 `agents` 会让 `compile_options` 把 `"delegation"` 折进父 agent 的身份，并把子 agent 的名字并入它的 `spawnable`，从而挂上 `spawn_subagent` 控制工具，并在它的 schema 枚举里带上 `researcher`。
 
-## 派生如何工作
+## 2. 理解一次 spawn 记录了什么
 
-`spawn_subagent` 接受一个必填的 `spawns` 数组，元素为 `{agent, goal}`。一个元素是一次「委托并等待」；同一次调用里的多个元素是一次并发扇出——扇出的形状就是这个批量数组，而不是重复的工具调用。
+`spawn_subagent` 接收一个必填的 `spawns` 数组，元素是 `{agent, goal}`。一个条目就是一次"委派并等待"；同一次调用里的多个条目是一次并发扇出 —— 扇出的形状体现在批量数组上，而不是靠重复的工具调用。
 
-当父模型调用它时，运行时：
+当父 agent 的模型调用它时，运行时会：
 
-1. 为每个元素创建一个子任务（Task），各自按其指名的代理定义配置，并在父级流上记录一个 `SubtaskSpawned` 事件。
-2. 在一个屏障上挂起父代理（`TaskSuspended`）。
-3. 将子任务运行至终止状态（完成、失败或取消），并为每个子任务在父级流上记录一个 `SubtaskCompleted`。
-4. 唤醒父代理（`TaskWoken`），附带子任务的结果。
+1. 为每个条目创建一个子 Task，各自按其具名的 agent 定义配置，并在父 Task 的流上记录一个 `SubtaskSpawned` 事件。
+2. 把父 Task 挂在一个屏障上（`TaskSuspended`）。
+3. 把子 Task 跑到终态（完成、失败或取消），并为每一个在父 Task 的流上记录一个 `SubtaskCompleted`。
+4. 带着子 Task 的结果唤醒父 Task（`TaskWoken`）。
 
-所以一次两元素的扇出会记录 `SubtaskSpawned`、`SubtaskSpawned`、`TaskSuspended`、`SubtaskCompleted`、`SubtaskCompleted`、`TaskWoken`。每个子任务都是独立的事件溯源任务，有自己的 trace、工具调用和 LLM 轮次；父代理只看到最终结果。
+所以一次两条目的扇出会记录 `SubtaskSpawned`、`SubtaskSpawned`、`TaskSuspended`、`SubtaskCompleted`、`SubtaskCompleted`、`TaskWoken`。每个子 Task 都是一个独立的事件溯源 Task，有自己的 trace、工具调用和 LLM 轮次；父 Task 只看到最终结果。
 
-同一批的子任务并发运行。把 `NOETA_SUBTASK_CONCURRENCY` 设为 `0`、`false`、`off` 或 `no`，则强制改为顺序逐个排空。
+同一批次里的子 Task 在一个有界的进程内池上并发运行（`min(8, CPU count)`）。两个环境变量可以调它：`NOETA_MAX_SUBTASK_CONCURRENCY` 直接覆盖上限，而把 `NOETA_SUBTASK_CONCURRENCY` 设为 `0`、`false`、`off` 或 `no` 则强制改为顺序排空。
 
-一次调用也可以带上 `background=true` 且只有单个 spawn：父代理不被挂起，它拿到一张「已启动」回执，子任务的结果稍后作为一条 notice 到达——见 [Background subagents](https://github.com/initxy/noeta/blob/main/docs/adr/background-subagent.md)。
+一次调用也可以在只有单个 spawn 时传 `background=true`：父 Task 不会挂起，它拿到一张"已启动"的回执，子 Task 的结果稍后以通知的形式到达 —— 见[后台子代理](https://github.com/initxy/noeta/blob/main/docs/adr/background-subagent.md)。
 
-## 检查子任务流
+## 3. 查看子 Task 的事件流
 
 ```python
 from noeta.sdk import Client
@@ -52,22 +50,27 @@ from noeta.sdk import Client
 client = Client(options, provider=my_provider, workspace_dir="./")
 outcome = client.start(goal="Analyze the codebase and report findings.")
 
-# The parent's messages
-parent_msgs = client.messages(outcome.task_id)
-
 # Child task ids come off the envelope stream: SubtaskSpawned carries the
 # child's id in payload.subtask_id; SubtaskCompleted carries its result.
 envelopes = client.events(outcome.task_id)
-spawned = [e for e in envelopes if e.type == "SubtaskSpawned"]
-child_ids = [e.payload.subtask_id for e in spawned]
+child_ids = [e.payload.subtask_id for e in envelopes if e.type == "SubtaskSpawned"]
+print(child_ids)
 
-# A child's own stream reads like any other task's
-child_msgs = client.messages(child_ids[0])
+# A child's own stream reads like any other task's.
+for item in client.messages(child_ids[0]):
+    print(item)
 ```
 
-## 用 FakeLLMProvider 离线测试
+```
+['task-3f9c1a7e4b2d4c8f9a1e6b0d5c7a2e13']
+UserMessage(text='analyze the auth module')
+AssistantMessage(text='researcher: auth looks fine')
+Result(answer='researcher: auth looks fine', status='completed')
+```
 
-一个 host 只有一个 provider，而子任务不过是它上面的一个普通 Task，所以脚本化测试不需要第二个 provider——把父代理和子任务的轮次按被消费的顺序写进同一个 `responses` 列表即可：
+## 4. 离线测试它
+
+每个 host 只有一个 provider，而子 Task 只是它上面的一个普通 Task，所以脚本化测试不需要第二个 provider —— 把父 Task 和各子 Task 的轮次按被消费的顺序写进同一个 `responses` 列表：
 
 ```python
 from noeta.sdk import LLMResponse, TextBlock, ToolUseBlock, Usage
@@ -107,12 +110,13 @@ provider = FakeLLMProvider(
 )
 ```
 
-这里唯一的深层 import 是 `SPAWN_SUBAGENT_TOOL`：控制工具的 wire 名属于运行时词汇，不是配方 surface 的一部分，所以只有伪造模型工具调用的脚本才需要它。
+`SPAWN_SUBAGENT_TOOL` 是这里唯一一处深层导入：控制工具的线上名字属于运行时词汇，不属于配方面，所以只有需要伪造模型工具调用的脚本才会用到它。
 
-可运行的单 spawn 版本见 `examples/spawn_subtask.py`。
+可运行的单次 spawn 版本见 `examples/spawn_subtask.py`。
 
-## 另请参阅
+## 下一步
 
-- [任务模型](../concepts/task-model.md) — 父子任务关系
-- [唤醒与恢复](../concepts/wake-resume.md) — `SubtaskCompleted` 如何唤醒父代理
-- [SDK 参考](../reference/sdk.md) — `AgentDefinition`、`Options.agents`
+- [任务模型](../concepts/task-model.md) —— 父子 Task 的关系
+- [唤醒与恢复](../concepts/wake-resume.md) —— `SubtaskCompleted` 如何唤醒父 Task
+- [扩展平面](../architecture/extension-planes.md) —— 为什么 `delegation` 是一个 activation
+- [SDK 参考](../reference/sdk.md) —— `AgentDefinition`、`Options.agents`
