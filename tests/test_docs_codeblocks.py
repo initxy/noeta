@@ -141,10 +141,14 @@ def test_docs_dont_promise_pypi_install_paths() -> None:
     entirely. An "Out of scope" section is stripped before the scan — that is
     the one place a page may name such a line in order to disclaim it.
     """
-    forbidden_phrases = (
-        "uv add noeta",
-        "pip install noeta\n",  # trailing \n so `pip install noeta-sdk` passes
-        "pypi.org/project/noeta",
+    # Only the *bare* name ``noeta`` is forbidden: a ``-sdk`` / ``-runtime``
+    # suffix makes the path correct, so each pattern refuses to match when a
+    # distribution-name character follows. (The plain substring the old tuple
+    # used for pypi.org matched ``pypi.org/project/noeta-sdk`` too.)
+    forbidden_patterns = (
+        r"uv add noeta(?![-\w])",
+        r"pip install noeta(?![-\w])",
+        r"pypi\.org/project/noeta(?![-\w])",
     )
 
     md_paths = _user_facing_doc_pages()
@@ -162,9 +166,10 @@ def test_docs_dont_promise_pypi_install_paths() -> None:
             text,
             flags=re.DOTALL,
         )
-        for phrase in forbidden_phrases:
-            assert phrase not in scrubbed, (
-                f"{md} names the bare ``noeta`` install path ({phrase!r}) "
+        for pattern in forbidden_patterns:
+            hit = re.search(pattern, scrubbed)
+            assert hit is None, (
+                f"{md} names the bare ``noeta`` install path ({hit.group(0)!r}) "
                 f"outside its 'Out of scope' section; that dist name belongs "
                 f"to an unrelated package — install ``noeta-sdk`` instead."
             )
