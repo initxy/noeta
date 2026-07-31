@@ -968,7 +968,13 @@ def handle_yield_for_human(
     enforces any schema/caps), folds it into ``governance.pending_questions``,
     then suspends on the anchor's ``handle``. The SDK owns the schema /
     caps / validators / codec behind ``questions_ref``.
+
+    ``decision.suspend_reason`` overrides the recorded ``TaskSuspended.reason``
+    tag (default ``waiting_human``) on both branches, so a yield standing in for
+    something else — a failed multi-turn turn parked for the human — is legible
+    in the ledger instead of reading as an ordinary pause.
     """
+    suspend_reason = decision.suspend_reason or "waiting_human"
     anchor = decision.request_anchor
     if anchor is not None:
         env = ctx.emit(
@@ -989,7 +995,7 @@ def handle_yield_for_human(
             ctx,
             task,
             wake_on=HumanResponseReceived(handle=anchor.handle),
-            reason="waiting_human",
+            reason=suspend_reason,
             lease_id=lease_id,
             trace_id=trace_id,
         )
@@ -1000,7 +1006,7 @@ def handle_yield_for_human(
         ctx,
         task,
         wake_on=HumanResponseReceived(handle=handle),
-        reason="waiting_human",
+        reason=suspend_reason,
         lease_id=lease_id,
         trace_id=trace_id,
     )

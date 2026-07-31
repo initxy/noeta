@@ -46,3 +46,15 @@ At step entry, the Engine constructs `StepContext(task_id, lease_id, trace_id)` 
 - The engine lands in `noeta.core.engine`'s `run_one_step` dispatch (state_patch first, then assistant_message, then the branches).
 - The client lands in `noeta.runtime.llm` (`RuntimeLLMClient.complete(req, ctx)`, at per-task instance granularity); the Policies in `noeta.policies` are merely ctx "porters"—they forward it and never read or write it.
 - Constraints and cautions: Decision fields and StepContext fields must each hold their boundary (the former only grows slice-write intents, the latter stays read-only pass-down), and the dispatch order must not change, or the determinism of fold/resume and the stability of the content hash will be broken.
+
+## Addendum — 2026-07-31: `YieldForHumanDecision.suspend_reason`, and a failed turn as a suspend
+
+Two things settled while making a multi-turn conversation survive a failed turn.
+
+- **A Policy may now name the suspend it is asking for.** `YieldForHumanDecision.suspend_reason` (optional, last field, defaulted → byte-safe for existing recordings) replaces the hardcoded `waiting_human` tag on `TaskSuspended.reason`. This stays inside the boundary above: it is a typed payload that maps to a field of the event the handler already emits, exactly as `request_anchor` does — not Policy internal state, not audit metadata looking for a home. Nothing branches on the tag; it is a legibility field, so producers may add values without a protocol bump (`waiting_subtask_group` already did).
+
+- **In a multi-turn conversation a failed turn suspends instead of terminating.** `TaskFailed` is terminal: it seals the ledger. Passing a `FailDecision` through on a non-final turn therefore spent the entire conversation — and every bit of context the person had built up in it — on one transient fault, leaving "start a new task" as the only move. `MultiTurnReActPolicy` now translates it to the same next-goal suspend an ordinary turn rests on, tagged `turn_failed: <reason>`. No new event type, no Engine or fold change: the substitution reuses the wake-resume primitive the wrapper already drives between turns.
+
+  **`retryable` is deliberately not the gate.** The flag answers "would re-driving this same step help?" — a question about the terminal path, and it is `False` for precisely the failures a human *can* clear (`llm_error` is where a transient provider 5xx lands; `llm_empty_response`, `react_max_steps_exceeded`, and a spent structured-output nudge budget all resolve when the person rephrases). Gating on it would have kept terminating the motivating case. Once a turn is parked the next input is a *new* turn rather than a re-drive, so the flag has no consumer on this path and is not carried forward; its reason text is, in `TaskSuspended.reason`.
+
+  A `final=True` turn still terminates — there is no next human turn to park for.

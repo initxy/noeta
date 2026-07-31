@@ -29,6 +29,7 @@ import pytest
 from noeta.execution.driver import NotResumableError
 from noeta.execution.multi_turn import (
     NEXT_GOAL_WAKE_HANDLE,
+    TURN_FAILED_SUSPEND_TAG,
     MultiTurnReActPolicy,
 )
 from noeta.protocols.decisions import (
@@ -151,10 +152,50 @@ def test_wrapper_passes_non_finish_decisions_through_in_either_mode() -> None:
         wrapper = MultiTurnReActPolicy(inner, final=final)
         assert wrapper.decide(_ctx(), _view()) is inner.next_decision
 
+
+def test_wrapper_parks_a_failed_turn_instead_of_terminating() -> None:
+    """A failed turn is not a failed conversation.
+
+    ``TaskFailed`` seals the ledger, so passing a FailDecision through on a
+    non-final turn would throw away the whole session over one transient fault.
+    The wrapper translates it to the same next-goal suspend an ordinary turn
+    rests on, carrying the reason so the human can see what happened.
+    """
+    inner = _FakeInnerPolicy()
+    wrapper = MultiTurnReActPolicy(inner, final=False)
+    patch = TaskStatePatch(set_phase="turn1-failed")
+    msg = Message(role="assistant", content=[TextBlock(text="partial output")])
+    inner.next_decision = FailDecision(
+        reason="llm_error", retryable=False, state_patch=patch, assistant_message=msg
+    )
+    result = wrapper.decide(_ctx(), _view())
+    assert isinstance(result, YieldForHumanDecision)
+    assert result.prompt == NEXT_GOAL_WAKE_HANDLE
+    assert result.suspend_reason == f"{TURN_FAILED_SUSPEND_TAG}: llm_error"
+    # Whatever the failed turn did produce is preserved verbatim, exactly as on
+    # the finish path — the wrapper never synthesises an assistant turn.
+    assert result.state_patch is patch
+    assert result.assistant_message is msg
+
+
+def test_retryable_is_not_the_gate() -> None:
+    """Both flags park. ``retryable`` answers "would re-driving this step
+    help?" — a terminal-path question. It is ``False`` for exactly the faults a
+    human rescues (the transient provider error arrives as non-retryable
+    ``llm_error``), so gating on it would keep killing the motivating case."""
+    inner = _FakeInnerPolicy()
+    wrapper = MultiTurnReActPolicy(inner, final=False)
+    for retryable in (False, True):
+        inner.next_decision = FailDecision(reason="boom", retryable=retryable)
+        assert isinstance(wrapper.decide(_ctx(), _view()), YieldForHumanDecision)
+
+
+def test_final_turn_still_terminates_on_failure() -> None:
+    """No next human turn to park for, so the native terminal stands."""
+    inner = _FakeInnerPolicy()
+    wrapper = MultiTurnReActPolicy(inner, final=True)
     inner.next_decision = FailDecision(reason="boom")
-    for final in (False, True):
-        wrapper = MultiTurnReActPolicy(inner, final=final)
-        assert wrapper.decide(_ctx(), _view()) is inner.next_decision
+    assert wrapper.decide(_ctx(), _view()) is inner.next_decision
 
 
 def test_wrapper_set_final_is_mutable_post_construction() -> None:
@@ -229,6 +270,65 @@ def test_wrapper_state_patch_lands_on_engine_event_log(tmp_path: Path) -> None:
                 if isinstance(block, TextBlock):
                     assistant_texts.append(block.text)
     assert "turn1 closing" in assistant_texts
+
+
+def test_failed_turn_parks_and_the_fold_agrees(tmp_path: Path) -> None:  # noqa: ARG001
+    """The suspend a failed turn produces is an ordinary, replayable one.
+
+    Task-lifecycle semantics change, so the pin is on the ledger: no terminal
+    event, the reason is legible, and re-folding the stream reproduces the live
+    state exactly (a suspend recorded mid-failure must not fold differently).
+    """
+    from noeta.core.engine import Engine
+    from noeta.core.fold import fold
+    from noeta.storage.memory import (
+        InMemoryContentStore,
+        InMemoryDispatcher,
+        InMemoryEventLog,
+    )
+    from noeta.testing.composer import trivial_three_segment
+
+    dispatcher = InMemoryDispatcher()
+    event_log = InMemoryEventLog(lease_validator=dispatcher)
+    cs = InMemoryContentStore()
+
+    class _FailingPolicy:
+        def decide(self, ctx: StepContext, view: View) -> Any:
+            return FailDecision(
+                reason="llm_error",
+                retryable=False,
+                state_patch=TaskStatePatch(set_phase="turn1-failed"),
+            )
+
+    engine = Engine(
+        event_log=event_log,
+        content_store=cs,
+        composer=trivial_three_segment(cs),
+        policy=MultiTurnReActPolicy(_FailingPolicy(), final=False),
+    )
+    task = engine.create_task(goal="g", policy_name="scripted")
+    dispatcher.enqueue(task.task_id)
+    lease = dispatcher.lease(worker_id="w", lease_seconds=60.0)
+    assert lease is not None
+    engine.append_user_message(
+        task, content=[TextBlock(text="g")], lease_id=lease.lease_id
+    )
+    task = engine.run_one_step(task, lease_id=lease.lease_id)
+
+    assert task.status == "suspended"
+    assert isinstance(task.wake_on, HumanResponseReceived)
+    assert task.wake_on.handle == NEXT_GOAL_WAKE_HANDLE
+    events = event_log.read(task.task_id)
+    assert "TaskFailed" not in [env.type for env in events]
+    suspended = [env for env in events if env.type == "TaskSuspended"]
+    assert suspended[-1].payload.reason == f"{TURN_FAILED_SUSPEND_TAG}: llm_error"
+    # The failed turn's state_patch still landed — parking is not a rollback.
+    assert task.state.phase == "turn1-failed"
+
+    replayed = fold(event_log, cs, task.task_id)
+    assert replayed.status == task.status
+    assert replayed.wake_on == task.wake_on
+    assert replayed.state.phase == task.state.phase
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +407,68 @@ def test_two_turn_run_lifecycle_emits_expected_events(tmp_path: Path) -> None:
     woken = next(env for env in events if env.type == "TaskWoken")
     assert isinstance(woken.payload.wake_event, HumanResponseReceived)
     assert woken.payload.wake_event.handle == NEXT_GOAL_WAKE_HANDLE
+
+
+def _error_response() -> LLMResponse:
+    """A fatal provider error — what ReActPolicy turns into
+    ``FailDecision(reason="llm_error", retryable=False)``."""
+    return LLMResponse(
+        stop_reason="error",
+        content=[],
+        usage=Usage(uncached=1, output=0),
+        raw={"category": "fatal"},
+    )
+
+
+def test_a_failed_turn_does_not_end_the_conversation(tmp_path: Path) -> None:
+    """The motivating case, end to end through the real driver.
+
+    Turn 1 hits a provider error. Before, that sealed the task: the ledger
+    closed, every bit of context the person had built up was void, and the only
+    way forward was a brand-new task. Now the same conversation carries on — so
+    this also proves the park released its lease (``send_goal`` could not
+    otherwise acquire one) and kept the accounting for the turn that failed.
+    """
+    from noeta.core.fold import fold
+
+    workspace = _make_workspace(tmp_path)
+    host, driver = _multi_turn_session(
+        workspace, [_error_response(), _end_turn("recovered")]
+    )
+
+    first = driver.start(goal="do the thing", agent="main")
+    assert first.status == "suspended"
+    assert first.wake_handle == NEXT_GOAL_WAKE_HANDLE
+    events = host.event_log.read(first.task_id)
+    assert "TaskFailed" not in [env.type for env in events]
+    suspended = [env for env in events if env.type == "TaskSuspended"]
+    assert suspended[-1].payload.reason.startswith(TURN_FAILED_SUSPEND_TAG)
+    assert "llm_error" in suspended[-1].payload.reason
+
+    # Budget accounting is not rolled back by the failure: the turn burned a
+    # compose and a provider call, and the ledger still says so.
+    after_failure = fold(host.event_log, host.content_store, first.task_id)
+    assert after_failure.governance.iterations >= 1
+
+    # The human retries in the SAME task, and it runs.
+    second = driver.send_goal(first.task_id, goal="try again")
+    assert second.task_id == first.task_id
+    assert second.status == "suspended"
+    types = [env.type for env in host.event_log.read(first.task_id)]
+    assert "TaskWoken" in types
+    assert "TaskFailed" not in types
+    # Turn 1's context survived into turn 2 rather than starting from zero.
+    resumed = fold(host.event_log, host.content_store, first.task_id)
+    user_texts = [
+        block.text
+        for msg in resumed.runtime.messages
+        if msg.role == "user"
+        for block in msg.content
+        if isinstance(block, TextBlock)
+    ]
+    assert any("do the thing" in t for t in user_texts)
+    assert any("try again" in t for t in user_texts)
+    assert resumed.governance.iterations > after_failure.governance.iterations
 
 
 def test_per_turn_result_slices_only_that_turn(tmp_path: Path) -> None:

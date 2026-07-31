@@ -26,7 +26,10 @@ from typing import Any
 
 import pytest
 
-from noeta.execution.multi_turn import NEXT_GOAL_WAKE_HANDLE
+from noeta.execution.multi_turn import (
+    NEXT_GOAL_WAKE_HANDLE,
+    TURN_FAILED_SUSPEND_TAG,
+)
 from noeta.execution.driver import (
     InteractionDriver,
     ModelSelectorError,
@@ -463,10 +466,13 @@ def test_cancel_refuses_already_terminal(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_fail_turn_still_terminates(tmp_path: Path) -> None:
-    """``_multi_turn_policy`` only rewrites a FinishDecision — a failing turn
-    (here: max-steps exhaustion → TaskFailed) keeps its native terminal
-    semantics."""
+def test_fail_turn_parks_for_the_human(tmp_path: Path) -> None:
+    """``multi_turn_policy_wrapper`` rewrites a FailDecision too: a failing turn
+    (here: max-steps exhaustion, not a provider fault) parks on the next-goal
+    handle instead of sealing the conversation.
+
+    The old behaviour terminated, which meant one turn that ran long cost the
+    person the entire session and every bit of context in it."""
     ws = tmp_path / "ws"
     ws.mkdir()
     # A provider that loops a non-finishing tool call forever; with
@@ -492,11 +498,16 @@ def test_fail_turn_still_terminates(tmp_path: Path) -> None:
         require_approval_tools=(),)
     driver = InteractionDriver(host)
     out = driver.start(goal="loop", agent="main")
-    assert out.status == "terminal"
+    assert out.status == "suspended"
     types = [e.type for e in event_log.read(out.task_id)]
-    assert "TaskFailed" in types
-    # A fail turn does NOT suspend on the next-goal handle.
-    assert out.wake_handle is None
+    assert "TaskFailed" not in types
+    # It rests on the same next-goal handle an ordinary turn does, so the next
+    # message the human sends resumes this task.
+    assert out.wake_handle == NEXT_GOAL_WAKE_HANDLE
+    suspended = [e for e in event_log.read(out.task_id) if e.type == "TaskSuspended"]
+    assert suspended[-1].payload.reason == (
+        f"{TURN_FAILED_SUSPEND_TAG}: react_max_steps_exceeded"
+    )
 
 
 # ---------------------------------------------------------------------------

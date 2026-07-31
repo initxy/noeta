@@ -42,8 +42,10 @@ Interactive turns run ``final=False`` ("Interactive sessions
 terminate on a trailing suspend"): a normally-finishing turn suspends on
 the next-goal handle instead of completing, so the conversation's durable
 end-state is a trailing suspend. The resolver wraps each agent's policy in
-``MultiTurnReActPolicy(final=False)``; ``fail`` / ``approval`` / ``subtask``
-keep their native semantics (a failed turn still terminates).
+``MultiTurnReActPolicy(final=False)``, which parks a *failed* turn on the same
+suspend (``TaskSuspended.reason`` = ``"turn_failed: <reason>"``) rather than
+sealing the conversation over one transient fault; ``approval`` / ``subtask``
+keep their native semantics.
 """
 
 from __future__ import annotations
