@@ -1,11 +1,11 @@
 """``memory`` built-in — file store, tools, and auto-recall (impl).
 
-Microkernel M3: ``noeta.tools.memory`` moved to
-:mod:`~noeta.builtins.memory.impl.store` and the store-touching half of
-``noeta.execution.memory`` moved to
-:mod:`~noeta.builtins.memory.impl.recall`; the kernel keeps only the seams
-(``record_memory_index``, the generic ``turn_intake`` provider composition,
-and the ``RecallGoalPrelude``).
+Microkernel M3 → final form: ``noeta.tools.memory`` moved to
+:mod:`~noeta.builtins.memory.impl.store`, the recall provider to
+:mod:`~noeta.builtins.memory.impl.recall`, and the kernel keeps NO memory
+module: the pack contributes its content kind + init hook through the
+generic surfaces, and recall rides the host-composed
+``intake_reminder_providers`` seam.
 
 :func:`build_memory_session_pack` is this plugin's ``session_pack``
 contribution (microkernel phase 3): the SDK host resolves it from the
@@ -22,7 +22,7 @@ from typing import Optional, cast
 
 from noeta.builtins.memory.impl import store as _store_mod
 from noeta.builtins.memory.impl.index import (
-    build_memory_index_kit,
+    memory_content_kind,
     render_memory_index_text,
 )
 from noeta.builtins.memory.impl.recall import (
@@ -63,7 +63,7 @@ __all__ = [
     "MemoryStore",
     "MemoryWriteTool",
     "append_user_message_with_recall",
-    "build_memory_index_kit",
+    "memory_content_kind",
     "build_memory_pack",
     "build_memory_session_pack",
     "build_memory_tools",
@@ -111,10 +111,6 @@ def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
     root = memory_dir if memory_dir is not None else global_memory_dir
     store, entries, tools = build_memory_pack(root=cast(Optional[Path], root))
     content_store = ctx.content_store
-    # The index resident (kind band 200 — after skill, before instructions):
-    # rendered from the SAME entries snapshot the exports carry, so the
-    # composed bytes and the recorded fingerprint share one source.
-    index_kit = build_memory_index_kit()
 
     def _init(rec: SessionRecorder) -> None:
         """Pre-loop activation of the index resident (spec §4.5).
@@ -142,7 +138,11 @@ def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
     return PackContribution(
         tools=tools,
         content_kinds=(
-            ContentKindContribution(200, index_kit.content_kind(entries)),
+            # The index resident (kind band 200 — after skill, before
+            # instructions): rendered from the SAME entries snapshot the init
+            # hook records, so the composed bytes and the recorded fingerprint
+            # share one source.
+            ContentKindContribution(200, memory_content_kind(entries)),
         ),
         init=_init,
     )

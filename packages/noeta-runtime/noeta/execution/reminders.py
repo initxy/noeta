@@ -36,8 +36,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
+from typing import Any, Callable, ClassVar, Iterable, Mapping, Optional, Sequence
 
+from noeta.protocols.decisions import TaskStatePatch
 from noeta.protocols.messages import Block, MessageOrigin, TextBlock
 
 
@@ -45,6 +46,7 @@ __all__ = [
     "TURN_INTAKE",
     "TASK_SEED",
     "REMINDER_SEAMS",
+    "IntakeGoalPrelude",
     "Reminder",
     "RecallView",
     "ReminderProvider",
@@ -234,3 +236,54 @@ def record_intake_reminders(
             origin=reminder.origin,
         )
     return task
+
+
+@dataclass(frozen=True, slots=True)
+class IntakeGoalPrelude:
+    """``send_goal`` prelude routing the goal through the ``turn_intake`` seam.
+
+    Drop-in sibling of :class:`noeta.runtime.worker.AppendMessagePrelude` for
+    a session with any ``turn_intake`` providers: a follow-up goal enters the
+    ledger through :func:`record_intake_reminders`, so resume turns get the
+    same intake the opening turn got. A goal whose providers all return
+    nothing ledgers exactly the plain-prelude bytes.
+
+    ``origin`` / ``attachment_texts`` / ``activate_skills`` mirror
+    ``AppendMessagePrelude`` field-for-field (attachments seed BEFORE the goal
+    as their own ``origin="system"`` messages and never feed the recall key;
+    the skill-activation patch lands AFTER, goal-then-patch order) — only the
+    goal append itself is routed through the recording seam.
+
+    ``providers`` is the FULL composed tuple for this turn — the host owns the
+    composition rule (its built-in recall first, then the activated plugins'
+    providers, the order the characterization goldens pin); the kernel never
+    distinguishes one provider from another.
+    """
+
+    content: list[Block]
+    providers: tuple[ReminderProvider, ...] = ()
+    origin: Optional[MessageOrigin] = None
+    attachment_texts: tuple[str, ...] = ()
+    activate_skills: tuple[str, ...] = ()
+
+    #: Providers read live state then append — seed-time safe (D6).
+    durable_at_seed: ClassVar[bool] = True
+
+    def __call__(self, engine: Any, task: Any, *, lease_id: str) -> Any:
+        for text in self.attachment_texts:
+            engine.append_user_message(
+                task, content=[TextBlock(text=text)], lease_id=lease_id,
+                origin="system",
+            )
+        task = record_intake_reminders(
+            engine, task, content=self.content, lease_id=lease_id,
+            providers=self.providers,
+            origin=self.origin,
+        )
+        if self.activate_skills:
+            task = engine.apply_state_patch(
+                task,
+                patch=TaskStatePatch(activate_skills=list(self.activate_skills)),
+                lease_id=lease_id,
+            )
+        return task

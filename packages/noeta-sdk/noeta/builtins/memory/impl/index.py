@@ -1,11 +1,10 @@
 """Memory index material — renderer, hash, matching, recall formatting.
 
 Phase 2c: moved here from ``noeta.context.memory`` (which keeps only the
-kind vocabulary constants and the ``MemoryEntries`` type). The kernel
-consumes the renderer/hash solely through the injected
-:class:`noeta.execution.memory.MemoryIndexKit`; the matching + recall
-formatting are consumed by this plugin's own
-:mod:`~noeta.builtins.memory.impl.recall`.
+kind vocabulary constants and the ``MemoryEntries`` type). The kernel never
+consumes anything here: the pack contributes :func:`memory_content_kind`
+through the generic content-kind surface; the matching + recall formatting
+are consumed by this plugin's own :mod:`~noeta.builtins.memory.impl.recall`.
 
 Red line (unchanged): every function here is pure over the
 ``(name, summary, type)`` entries snapshot taken at wiring time — the
@@ -30,14 +29,12 @@ from noeta.context.memory import (
     MEMORY_KIND,
     MemoryEntries,
 )
-from noeta.execution.memory import MemoryIndexKit
 from noeta.protocols.messages import Message, TextBlock
 
 
 __all__ = [
     "DEFAULT_RECALL_MAX_HITS",
     "RecallHit",
-    "build_memory_index_kit",
     "build_memory_renderer",
     "format_recall_text",
     "match_memories",
@@ -168,14 +165,6 @@ def memory_content_kind(entries: MemoryEntries) -> ContentKindSpec:
         renderer=build_memory_renderer(entries),
         hashes=_hashes,
         policy=MEMORY_DRIFT_POLICY,
-    )
-
-
-def build_memory_index_kit() -> MemoryIndexKit:
-    """The kernel builder's ``memory_index_kit`` injection (phase 2c)."""
-    return MemoryIndexKit(
-        content_kind=memory_content_kind,
-        content_hash=memory_index_hash,
     )
 
 

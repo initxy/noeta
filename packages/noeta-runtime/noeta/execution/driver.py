@@ -61,12 +61,12 @@ from noeta.execution.multi_turn import (
     MultiTurnReActPolicy,
 )
 from noeta.execution.host import ResidentHost
-from noeta.execution.memory import (
-    RecallGoalPrelude,
-    intake_providers,
-)
 from noeta.execution.recorder import run_content_init
-from noeta.execution.reminders import ReminderProvider, record_intake_reminders
+from noeta.execution.reminders import (
+    IntakeGoalPrelude,
+    ReminderProvider,
+    record_intake_reminders,
+)
 from noeta.execution.resolver import agent_name_of
 from noeta.execution.subtask_drain import UnsupportedSubtaskSuspend
 from noeta.core.engine import suspend_on_human_handle
@@ -280,16 +280,23 @@ def multi_turn_policy_wrapper(policy: Policy) -> Policy:
     return MultiTurnReActPolicy(policy, final=False)
 
 
-def _intake_providers_for(host: Any, agent: str) -> tuple[ReminderProvider, ...]:
-    """``agent``'s activated ``turn_intake`` reminder providers (D7, track A).
+def _intake_providers_for(
+    host: Any, agent: str, task_id: Optional[str] = None
+) -> tuple[ReminderProvider, ...]:
+    """``agent``'s composed ``turn_intake`` reminder providers (D6/D7).
 
-    Read through the ``getattr``-guarded host seam, the same pattern
-    ``memory_recall_context`` / ``declared_skill_activations`` use — a host that
-    does not implement it (test doubles, control-plane-only hosts) is a clean
-    no-op rather than an attribute error.
+    ONE generic host seam: the host returns the FULL ordered tuple for this
+    turn — its built-in memory recall (bound to the live store, memory-active
+    agents only) ahead of the activated plugins' providers; the composition
+    rule is the host's, and the kernel never distinguishes one provider from
+    another. ``task_id`` rides along for per-task store resolution
+    (multi-tenant hosts); a single-tenant host ignores it. Read through the
+    ``getattr``-guarded pattern ``declared_skill_activations`` also uses — a
+    host that does not implement it (test doubles, control-plane-only hosts)
+    is a clean no-op rather than an attribute error.
     """
     seam = getattr(host, "intake_reminder_providers", None)
-    return tuple(seam(agent)) if callable(seam) else ()
+    return tuple(seam(agent, task_id=task_id)) if callable(seam) else ()
 
 
 def _background_exit_notice(summary: str, ref: ContentRef, job_id: str) -> str:
@@ -730,33 +737,6 @@ class InteractionDriver:
         # Seed the goal as the first user turn (durable, resume-safe) BEFORE
         # the step — same shape the in-process CodeSessionRunner uses.
         engine = host.resolve_engine(task)
-        # Memory auto-recall (the deleted runner's prepare-time D5/D6 wiring,
-        # ported onto the seed path). The host seam resolves the
-        # (recall-provider, entries) pair ONLY for an agent whose spec enables
-        # the ``"memory"`` activation (``None`` otherwise) — a memory-off agent's
-        # stream stays byte-identical, and the ``getattr`` guard keeps hosts
-        # without the seam (test doubles / control-plane-only hosts) a clean
-        # no-op. Microkernel M3: the provider arrives already bound to a live
-        # store by the host (the memory built-in's ``memory_reminder_provider``)
-        # — the kernel driver never sees a store. Runner-prepare order: the
-        # index resident is recorded FIRST (one ``ContextContentRecorded``
-        # kind=memory, policy=evolving; empty entries no-op), then the goal
-        # enters through the recall seam below. Retrieval runs on the WRITE
-        # side (now, at recording time), never at compose time — hits land as
-        # ONE ``origin="memory"`` turn right after the human goal, and resume
-        # folds them back without re-retrieving.
-        recall_provider = None
-        recall_context = getattr(host, "memory_recall_context", None)
-        if callable(recall_context):
-            # The task id rides along so a host with a per-task
-            # memory_root_resolver recalls from THIS task's store; a
-            # single-tenant host ignores it (same resolution chain).
-            memory = recall_context(agent, task_id=task.task_id)
-            if memory is not None:
-                # The index resident is recorded by the memory pack's init hook
-                # (below) — recall_context now yields only the auto-recall
-                # provider; its load-time entries snapshot is unused here.
-                recall_provider, _ = memory
         # Pre-loop activation of every contributed resident (spec §4.5) — the
         # generic successor of the three feature-named seed recorders. Each
         # pack's init hook (memory index, workspace instructions + environment)
@@ -790,15 +770,14 @@ class InteractionDriver:
         # being a recorded message, resume reads it back and never re-expands.
         # A session with any ``turn_intake`` provider routes the goal through the
         # recording seam: identical goal bytes, plus one recorded follow-up turn
-        # per reminder a provider returns. Two provider sources compose here — the
-        # built-in memory recall (bound to the live store above) and the providers
-        # this agent's activated plugins contribute (D7, track A), read through the
-        # ``getattr``-guarded host seam so a host without it is a clean no-op. No
-        # providers, or providers that all return nothing ⇒ exactly the plain
-        # ``append_user_message`` bytes.
-        providers = intake_providers(
-            recall_provider, _intake_providers_for(host, agent)
-        )
+        # per reminder a provider returns. The host composes the full provider
+        # tuple (its built-in memory recall, bound to the live store, ahead of
+        # the activated plugins' providers — D6/D7) behind ONE generic seam;
+        # retrieval runs on the WRITE side (now, at recording time), never at
+        # compose time, and resume folds the recorded reminders back without
+        # re-retrieving. No providers, or providers that all return nothing ⇒
+        # exactly the plain ``append_user_message`` bytes.
+        providers = _intake_providers_for(host, agent, task_id=task.task_id)
         if providers:
             task = record_intake_reminders(
                 engine, task,
@@ -824,8 +803,8 @@ class InteractionDriver:
         #
         # Declared skills (``Options.skills`` → ``AgentSpec.skills``) ride the
         # SAME channel: the host seam ``declared_skill_activations`` (mirrors
-        # ``memory_recall_context`` — ``getattr``-guarded, so a host without the
-        # seam is a clean no-op) resolves the spec's declared skill names, merged
+        # ``intake_reminder_providers`` — ``getattr``-guarded, so a host without
+        # the seam is a clean no-op) resolves the spec's declared skill names, merged
         # ahead of the explicit ``activations`` and de-duplicated (order-preserving)
         # into the ONE ``apply_state_patch`` call below — so a skill that is both
         # declared on the spec and separately activated (e.g. a slash command)
@@ -1097,12 +1076,12 @@ class InteractionDriver:
         # re-expanding).
         # The unified ``@`` mention snapshots seed ahead of the goal
         # as their own ``origin="system"`` messages (see AppendMessagePrelude).
-        # A memory-enabled agent (host seam, ``None`` for a memory-off spec —
-        # byte-identical stream) swaps in ``RecallGoalPrelude``: the SDK port of
-        # the runner's ``_goal_prelude`` seam, so a resume goal gets the same
-        # recall intake the opening turn got. The recall reads the store live
-        # inside the woken window, so a memory written by an EARLIER turn's
-        # ``memory_write`` is immediately recallable.
+        # A session with any ``turn_intake`` provider swaps in
+        # ``IntakeGoalPrelude`` — the same host-composed provider tuple the
+        # seed path used, so a resume goal gets the same intake the opening
+        # turn got. The providers read live state inside the woken window, so
+        # a memory written by an EARLIER turn's ``memory_write`` is
+        # immediately recallable. No providers ⇒ the plain prelude, unchanged.
         append: WokenPrelude = AppendMessagePrelude(
             content=[TextBlock(text=goal), *images],
             origin=goal_origin,
@@ -1110,23 +1089,13 @@ class InteractionDriver:
             activate_skills=tuple(activations),
         )
         turn_agent = agent_name_of(self._host.event_log, task_id)
-        recall_provider = None
-        recall_context = getattr(self._host, "memory_recall_context", None)
-        if callable(recall_context):
-            # task_id rides along for per-task memory-root resolution
-            # (multi-tenant hosts); the single-tenant chain is unchanged.
-            memory = recall_context(turn_agent, task_id=task_id)
-            if memory is not None:
-                recall_provider, _memory_entries = memory
-        # Same two provider sources as the seed path (built-in recall + the
-        # agent's activated ``turn_intake`` plugins), so a follow-up turn gets the
-        # intake the opening turn got. Neither ⇒ the plain prelude, unchanged.
-        plugin_providers = _intake_providers_for(self._host, turn_agent)
-        if recall_provider is not None or plugin_providers:
-            append = RecallGoalPrelude(
+        providers = _intake_providers_for(
+            self._host, turn_agent, task_id=task_id
+        )
+        if providers:
+            append = IntakeGoalPrelude(
                 content=[TextBlock(text=goal), *images],
-                recall=recall_provider,
-                providers=plugin_providers,
+                providers=providers,
                 origin=goal_origin,
                 attachment_texts=tuple(attachment_texts),
                 activate_skills=tuple(activations),

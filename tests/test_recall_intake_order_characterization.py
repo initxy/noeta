@@ -44,7 +44,7 @@ from noeta.builtins.memory.impl.recall import (
     memory_reminder_provider,
 )
 from noeta.builtins.memory.impl.store import MemoryStore
-from noeta.execution.memory import RecallGoalPrelude
+from noeta.execution.reminders import IntakeGoalPrelude
 from noeta.protocols.messages import Block, MessageOrigin, TextBlock
 
 from tests._snapshot import assert_snapshot, stable_json
@@ -149,14 +149,15 @@ def test_intake_order_no_hit_is_plain_append(store: MemoryStore) -> None:
 
 
 def test_recall_goal_prelude_full_order(store: MemoryStore) -> None:
-    """The full ``RecallGoalPrelude`` order: attachments (system) -> goal
+    """The full ``IntakeGoalPrelude`` order: attachments (system) -> goal
     (its origin) -> recall follow-up (memory) -> activate_skills patch last."""
     engine = _RecordingEngine()
-    prelude = RecallGoalPrelude(
+    prelude = IntakeGoalPrelude(
         content=[TextBlock(text=_GOAL_WITH_HIT)],
-        # Microkernel M3: the prelude takes the bound provider, not a store —
-        # the host binds the memory built-in's provider exactly like this.
-        recall=memory_reminder_provider(store),
+        # The prelude takes the host-composed provider tuple, not a store —
+        # the host binds the memory built-in's provider exactly like this,
+        # recall first.
+        providers=(memory_reminder_provider(store),),
         origin="system",
         attachment_texts=("attachment one", "attachment two"),
         activate_skills=("skill-a",),
@@ -176,11 +177,12 @@ def test_prelude_order_invariants(store: MemoryStore) -> None:
     recall follow-up, then the state patch last.
     """
     engine = _RecordingEngine()
-    prelude = RecallGoalPrelude(
+    prelude = IntakeGoalPrelude(
         content=[TextBlock(text=_GOAL_WITH_HIT)],
-        # Microkernel M3: the prelude takes the bound provider, not a store —
-        # the host binds the memory built-in's provider exactly like this.
-        recall=memory_reminder_provider(store),
+        # The prelude takes the host-composed provider tuple, not a store —
+        # the host binds the memory built-in's provider exactly like this,
+        # recall first.
+        providers=(memory_reminder_provider(store),),
         origin="system",
         attachment_texts=("attachment one", "attachment two"),
         activate_skills=("skill-a",),
