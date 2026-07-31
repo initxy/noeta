@@ -1,15 +1,14 @@
 # Deploy with Docker
 
-**Goal:** package a Noeta host as a container image and run it — single-host
-with SQLite, or multi-host with Postgres. Noeta ships no Dockerfile of its own
-(the library is in-process and has no daemon), so this page shows the canonical
-shape a host's container takes.
+This guide shows you how to package a Noeta host as a container image and run
+it — single-host with SQLite, or multi-host with Postgres. You need a host
+program that drives `Client` (see [Your first agent](../tutorials/first-agent.md)
+and [`examples/reference-host`](https://github.com/initxy/noeta/tree/main/examples/reference-host)).
 
-**Before you start:** you have a host that drives `Client` (see
-[Your first agent](../tutorials/first-agent.md) and
-[`examples/reference-host`](https://github.com/initxy/noeta/tree/main/examples/reference-host)).
+Noeta ships no Dockerfile of its own — the library is in-process and has no
+daemon — so what follows is the canonical shape a host's container takes.
 
-## The image
+## 1. Build the image
 
 Noeta is a pure-Python library. Your image installs `noeta-sdk`, copies your
 host code, and runs it. The runtime is in-process — there is no Noeta daemon to
@@ -52,7 +51,11 @@ docker run --rm -it \
     my-noeta-host
 ```
 
-## Single-host: SQLite
+```
+Successfully tagged my-noeta-host:latest
+```
+
+## 2. Single-host: SQLite
 
 For one container (or one host process), SQLite is the default durable store.
 Point `HostConfig.storage_path` at a file on a mounted volume:
@@ -78,7 +81,7 @@ docker run -v noeta-data:/data -v "$(pwd)/workspace:/workspace" my-noeta-host
 SQLite is **single-host only** — there is no cross-process write fencing. For
 multiple containers sharing one store, use Postgres.
 
-## Multi-host: Postgres
+## 3. Multi-host: Postgres
 
 Postgres gives you lease-fenced writes across multiple host processes, even on
 different machines. Point `storage_path` at a `postgresql://` DSN:
@@ -132,11 +135,19 @@ Scale the worker pool horizontally:
 docker compose up --scale worker=4
 ```
 
+```
+ ✔ Container noeta-postgres-1  Healthy
+ ✔ Container noeta-worker-1    Started
+ ✔ Container noeta-worker-2    Started
+ ✔ Container noeta-worker-3    Started
+ ✔ Container noeta-worker-4    Started
+```
+
 Every worker drains the same Postgres-backed dispatcher. Lease fencing
 (`FOR SHARE` row checks against the database clock) guarantees that a task
 whose lease was reclaimed cannot write behind the new generation.
 
-## Running a sandbox inside the container
+## 4. Optional: run a sandbox inside the container
 
 If your host provisions per-session containers (see
 [Use a sandbox execution environment](use-sandbox.md)), the host container needs
@@ -159,6 +170,8 @@ Run the sandbox container as a sidecar in the same pod / compose stack and
 attach to it via `SandboxExecEnvConfig`:
 
 ```python
+from noeta.sdk import HostConfig, SandboxExecEnvConfig
+
 host_config = HostConfig(
     exec_env=SandboxExecEnvConfig(
         base_url="http://sandbox:8080",
@@ -198,8 +211,11 @@ hard-code them.
 | `NOETA_WEB_SEARCH_API_KEY` | `web_search` tool |
 | `SANDBOX_API_KEY` | Sandbox container auth (read at connect time) |
 
-## See also
+## Next steps
 
 - [Deploy a worker](deploy-worker.md) — the resident worker pool and its knobs
-- [Use a sandbox execution environment](use-sandbox.md) — the `ExecEnv` / `SandboxProvider` seam
-- [Known limitations](../operations/limitations.md) — the SQLite single-host boundary
+- [Use a sandbox](use-sandbox.md) — the `ExecEnv` / `SandboxProvider` seam
+- [Known limitations](../operations/limitations.md) — the SQLite single-host
+  boundary
+- [Troubleshooting](../operations/troubleshooting.md) — shutdown and lease
+  symptoms in production

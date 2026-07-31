@@ -1,12 +1,11 @@
 # Build custom tools
 
-**Goal:** define your own tools with `@tool`, wire them into an agent, and
-optionally bundle them as an in-process MCP server.
+This guide shows you how to define your own tools with `@tool`, wire them into an
+agent, and bundle several of them as one in-process MCP server. You need to be
+comfortable with `Options` and `Client` from
+[Your first agent](../tutorials/first-agent.md).
 
-**Before you start:** you have run through [Your first agent](../tutorials/first-agent.md)
-and are comfortable with `Options` and `Client`.
-
-## Define a tool with `@tool`
+## 1. Define a tool with `@tool`
 
 A tool is a plain function `fn(arguments: dict, ctx: ToolContext) ->
 ToolResult`, wrapped with the `@tool` decorator:
@@ -72,7 +71,7 @@ into the ContentStore with `ctx.artifact_store.put(body, media_type=...)` and
 reference them here. `output_ref` is assigned by the runtime after it offloads
 the output; tools never set it.
 
-## Wire it into your agent
+## 2. Wire it into your agent
 
 Pass the tool object by value in `Options.allowed_tools`:
 
@@ -94,7 +93,7 @@ selects the 11-name built-in whitelist and picks up nothing custom.
 `disallowed_tools` subtracts names from the parsed list; it never adds
 anything.
 
-## Risk levels and permissions
+## 3. Pick the right risk level
 
 `risk_level` interacts with `Options.permission_mode`:
 
@@ -110,9 +109,9 @@ tools (`edit`, `write`, `apply_patch`); it changes nothing for a custom tool.
 Mark tools that write files, run commands, or make external API calls as
 `"high"`. Read-only lookups are `"low"`.
 
-## Bundle tools into an in-process MCP server
+## 4. Optional: bundle several tools as one server
 
-To ship several related tools as one unit, bundle them with
+To ship several related tools as a unit, bundle them with
 `create_sdk_mcp_server`:
 
 ```python
@@ -146,7 +145,7 @@ tool set directly; they need no `allowed_tools` entry.
 > host connects per turn — see [Connect MCP](connect-mcp.md). Those are
 > namespaced because independent third-party servers do collide on tool names.
 
-## Test your tool offline
+## 5. Test it offline
 
 Script a call with `FakeLLMProvider` and drive one turn with `query`, which
 returns the full envelope list — so the assertion proves the closure ran:
@@ -184,20 +183,24 @@ result = query(
     model="stub-model",
 )
 
-assert [e.payload.tool_name for e in result if e.type == "ToolCallStarted"] == [
-    "fetch_weather"
-]
+called = [e.payload.tool_name for e in result if e.type == "ToolCallStarted"]
+print(called)
+assert called == ["fetch_weather"]
 ```
 
-`examples/custom_tool.py` and `examples/mcp_server.py` are runnable versions
-of both halves of this page.
+```
+['fetch_weather']
+```
 
-## See also
+`examples/custom_tool.py` and `examples/mcp_server.py` are runnable versions of
+both halves of this page.
 
-- [SDK reference](../reference/sdk.md) — `@tool`, `create_sdk_mcp_server`,
-  `ToolResult` full signatures
+## Next steps
+
+- [Connect MCP](connect-mcp.md) — remote MCP servers and their `mcp__` namespace
 - [Built-in tools](../reference/tools.md) — the 11-name whitelist and its risk
   levels
-- [Connect MCP](connect-mcp.md) — remote MCP servers
-- [Guard vs Observer](../concepts/guard-observer.md) — how the permission
-  system works
+- [Guard vs Observer](../concepts/guard-observer.md) — how the permission system
+  decides
+- [SDK reference](../reference/sdk.md) — `@tool`, `create_sdk_mcp_server`, and
+  `ToolResult` in full

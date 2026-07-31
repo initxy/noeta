@@ -1,10 +1,24 @@
 # Known limitations
 
-Boundaries of what the shipped code can do. Each entry says what the boundary
-is, when you hit it, and the workaround if there is one. None of these is a
-bug — they are places where the design stops.
+Boundaries of what the shipped code can do. Every entry says what the boundary
+is, when you hit it, and the workaround if there is one.
 
-## The libraries run no process for you
+**None of these is a bug.** They are places where the design deliberately stops —
+usually because going further would require the library to own something a host
+should own. If you are chasing a fault instead, start at
+[troubleshooting](troubleshooting.md).
+
+Six groups:
+[what the library will not run](#what-the-library-will-not-run-for-you) ·
+[durability](#durability-boundaries) ·
+[observability](#observability-gaps) ·
+[growth and cost](#growth-and-cost) ·
+[sandbox](#sandbox-boundaries) ·
+[closed extension points](#closed-extension-points).
+
+## What the library will not run for you
+
+### The libraries run no process for you
 
 **What it means:** `noeta-runtime` and `noeta-sdk` are libraries. There is no
 CLI, no console script, no HTTP or SSE server, and no scheduler daemon. The
@@ -20,7 +34,9 @@ and nothing advanced.
 `examples/reference-host` is the smallest one, assembled from the public
 surface alone.
 
-## Multi-host coordination requires Postgres
+## Durability boundaries
+
+### Multi-host coordination requires Postgres
 
 **What it means:** Single-host multi-worker is supported — one process runs a
 resident `WorkerLoop` pool and several tasks' turns progress at once. Multiple
@@ -42,7 +58,7 @@ draining another.
 
 See [ADR: Multi-host lease fencing](https://github.com/initxy/noeta/blob/main/docs/adr/multi-host-lease-fencing.md).
 
-## Crash recovery does not undo side effects
+### Crash recovery does not undo side effects
 
 **What it means:** A worker crash mid-step (`kill -KILL`, power loss) is
 recovered on the next lease: the interrupted attempt is sealed with a durable
@@ -65,7 +81,7 @@ interrupted. Verify whether those operations applied fully, partially, or not
 at all, then type to continue (the turn resumes from the clean pre-attempt
 baseline) or re-approve the pending call.
 
-## Shutdown can abandon a step that keeps running
+### Shutdown can abandon a step that keeps running
 
 **What it means:** On `stop()`, `WorkerLoop` waits up to `shutdown_grace_s` for
 the in-flight step to complete. If it does not finish, the loop **abandons** the
@@ -81,7 +97,7 @@ lease expires, and `requeue_stale()` reclaims the task on the next start.
 `shutdown_grace_s=None` (or `<= 0`) waits unboundedly — then a stuck step needs
 an external `kill -KILL <pid>`.
 
-## The heartbeat keepalive window is capped
+### The heartbeat keepalive window is capped
 
 **What it means:** The heartbeat keeps a slow step's lease alive, but not
 forever. The dispatcher caps heartbeat extensions at `heartbeat_max` (360 by
@@ -97,7 +113,9 @@ rare.
 recovery path. The loop logs it and continues to the next task, but the capped
 task may need inspection: check whether it is still viable or should be closed.
 
-## Reliability events are process-local
+## Observability gaps
+
+### Reliability events are process-local
 
 **What it means:** The worker emits `ReliabilityEvent`s — `stale_requeued`,
 `suspended_without_wake`, `step_failed_retryable`, `heartbeat_invalid_lease`,
@@ -113,7 +131,7 @@ monitoring system. Each event is named for what the worker can prove from the
 dispatcher seam — `heartbeat_invalid_lease`, for instance, is a symptom whose
 cause may be the cap, expiry, or a requeue.
 
-## Nothing notifies anyone that a task is waiting on a human
+### Nothing notifies anyone that a task is waiting on a human
 
 **What it means:** Human-in-the-loop is fully wired in-band: the engine
 suspends on a `HumanResponseReceived` wake condition and the `answer` client
@@ -127,7 +145,9 @@ The task waits durably, which is the point, but nothing tells anyone.
 EventLog, forward `UserQuestionRequested` events to your own notification
 channel, and deliver the reply with `answer`.
 
-## An uncatalogued model silently disables compaction and pricing
+## Growth and cost
+
+### An uncatalogued model silently disables compaction and pricing
 
 **What it means:** Compaction knobs and cost are both derived from the model
 catalog in the `providers` built-in. For a model the catalog does not describe,
@@ -145,7 +165,7 @@ re-exported from `noeta.sdk.providers`; a row supplies `context_window`,
 `max_output_tokens`, and the price fields, which is everything both derivations
 read.
 
-## Content is never garbage-collected
+### Content is never garbage-collected
 
 **What it means:** The ContentStore is content-addressed and append-only, and
 no GC ships. `Client.delete_task` purges a task's event stream and dispatcher
@@ -161,7 +181,9 @@ offline sweep against your backend that walks the remaining streams' refs.
 `delete_task` also refuses with `reason="running"` while any task in the tree
 holds a live lease, so a purge never races an in-flight turn.
 
-## The library ships no sandbox provisioner
+## Sandbox boundaries
+
+### The library ships no sandbox provisioner
 
 **What it means:** `SandboxProvider` is a protocol the SDK defines and drives
 (through `SandboxExecEnvManager`), not an implementation it ships. The only
@@ -180,7 +202,7 @@ addressing plus a live `SandboxAuth` strategy; `attach` reconnects to the
 session finds its container again. Whether that reconnect works across machines
 is a property of the provider you write, not of the SDK.
 
-## Sandbox side effects are not fenced across worker generations
+### Sandbox side effects are not fenced across worker generations
 
 **What it means:** When a session runs in a sandbox container, its file and
 shell side effects go to the container over HTTP — outside the shared Postgres
@@ -199,7 +221,7 @@ issues one more container call.
 **Workaround:** None automatic. It is bounded by the same step-attempt re-drive
 and human review that cover crashed-step side effects above.
 
-## Sandbox `shell_run` has no remote hard-kill
+### Sandbox `shell_run` has no remote hard-kill
 
 **What it means:** On the host, `shell_run`'s `timeout` maps to a real
 subprocess timeout that kills the process. Under a sandbox there is no remote
@@ -217,7 +239,7 @@ running"; a follow-up command can observe or clean up its partial effects. Give
 genuinely long commands an explicit larger `timeout` so the client does not cut
 the call off early.
 
-## Background shell is host-only
+### Background shell is host-only
 
 **What it means:** `shell_run(run_in_background=true)` hands the validated argv
 to the host's background runner and returns a job id that `shell_poll` and
@@ -231,7 +253,7 @@ watcher.
 **Workaround:** Run the command in the foreground with a generous `timeout`, or
 run the session outside the sandbox when background jobs are essential.
 
-## The sandbox browser is text-level and container-scoped
+### The sandbox browser is text-level and container-scoped
 
 **What it means:** A sandbox session can drive the container's headless browser
 through five Noeta-owned tools (`browser_navigate`, `browser_click`,
@@ -254,7 +276,9 @@ one that needs to browse without a container.
 **Workaround:** Prefer `browser_extract` for content and `webfetch` for pages
 that need no interaction; use `browser_screenshot` when a human needs to look.
 
-## The composer cannot be replaced
+## Closed extension points
+
+### The composer cannot be replaced
 
 **What it means:** `ContextComposer` is a closed extension point on the user
 surface. Stable-prefix KV-cache reproducibility is a hard constraint, so
@@ -269,12 +293,11 @@ prefix.
 the decision into a custom `Policy`, which *is* replaceable through the
 `policy` surface.
 
-## See also
+## Next steps
 
-- [Troubleshooting](troubleshooting.md) — symptom → cause → resolution
-- [Wake & resume](../concepts/wake-resume.md) — the delivery guarantee and its
-  scope
+- [Troubleshooting](troubleshooting.md) — symptom → cause → fix for actual faults
+- [Architecture overview](../architecture/overview.md) — the full system picture
+- [State and writers](../architecture/state-and-writers.md) — the invariants
+  these boundaries follow from
 - [WorkerLoop reference](../reference/worker-loop.md) — constructor knobs and
   shutdown behavior
-- [Architecture overview](../architecture/overview.md) — the full system
-  picture

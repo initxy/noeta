@@ -1,11 +1,12 @@
-# Agent Presets
+# Agent presets
 
-`noeta.presets` ships four official agents: a conversational root, `main`, and
-the three subagents it delegates to.
+You do not have to design an agent from scratch. `noeta.presets` ships four
+ready-made ones: a conversational root called `main`, and the three subagents it
+delegates to. Most hosts start from `main` and adjust.
 
-These are an **SDK-level** surface: you pick one by building its `Options`
-(`presets.main_options()`) and handing that to a `Client` / `query`. Custom
-agents go through the flat `Options.agents` dict.
+These are an **SDK-level** surface — you pick one by building its `Options`
+(`presets.main_options()`) and handing that to `Client` or `query`. Custom
+agents go through the flat `Options.agents` dict instead.
 
 ## The quartet
 
@@ -95,6 +96,7 @@ result = query(
     model="claude-sonnet-4-5-20250929",
 )
 print(result.answer())
+# → 'Replaced the three call sites in module X with Y and ran the tests.'
 ```
 
 Or compile all four agents as specs:
@@ -103,7 +105,10 @@ Or compile all four agents as specs:
 from noeta.presets import official_specs
 
 specs = official_specs()
-# → {"main": AgentSpec, "general-purpose": AgentSpec, "explore": AgentSpec, "plan": AgentSpec}
+print(sorted(specs))
+# → ['explore', 'general-purpose', 'main', 'plan']
+print(specs["explore"].plugins)
+# → ('skill_invocation',)
 ```
 
 ## Custom agents
@@ -129,6 +134,13 @@ options = Options(
 
 - Presets: `packages/noeta-sdk/noeta/presets/__init__.py`
 - Prompts: `packages/noeta-sdk/noeta/presets/prompts/`
-- Options / AgentDefinition: `packages/noeta-sdk/noeta/client/options.py`
-- Tool catalog: `packages/noeta-sdk/noeta/builtins/`
-- See also: [ADR: Tool and agent catalog](https://github.com/initxy/noeta/blob/main/docs/adr/tool-and-agent-catalog.md), [ADR: Library-SDK architecture](https://github.com/initxy/noeta/blob/main/docs/adr/library-sdk-architecture.md)
+- `Options` / `AgentDefinition`: `packages/noeta-sdk/noeta/client/options.py`
+- Tool catalogue: `packages/noeta-sdk/noeta/builtins/`
+- [ADR: Tool and agent catalog](https://github.com/initxy/noeta/blob/main/docs/adr/tool-and-agent-catalog.md)
+
+## Next
+
+- [Your first agent](../tutorials/first-agent.md) — build one from a preset
+- [Spawn subagents](../how-to/spawn-subagents.md) — using the roster in practice
+- [Options](sdk-options.md) — every field a preset sets for you
+- [Built-in tools](tools.md) — what each preset's tool list contains

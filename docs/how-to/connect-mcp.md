@@ -1,13 +1,10 @@
 # Connect MCP servers
 
-**Goal:** give your SDK agent access to MCP (Model Context Protocol) servers —
-external `stdio` / `http` servers, or your own tools bundled into an in-process
-server.
+This guide shows you how to give an agent access to MCP (Model Context Protocol)
+servers — external `stdio` / `http` servers, or your own tools bundled into an
+in-process one. You need a working `noeta.sdk` setup and a server to connect.
 
-**Before you start:** a working `noeta.sdk` setup and an MCP server you want to
-connect.
-
-There are two mechanisms, and they are not interchangeable:
+Pick the right mechanism first; they are not interchangeable:
 
 | | External servers | In-process server |
 | --- | --- | --- |
@@ -16,7 +13,7 @@ There are two mechanisms, and they are not interchangeable:
 | Tool names | `mcp__{alias}__{tool}` | the bare `@tool` names |
 | Runs in | a subprocess or over HTTP | your process |
 
-## External servers (`stdio` / `http`)
+## Option A — external servers (`stdio` / `http`)
 
 The host never hands the SDK a config store. It supplies a **resolver** —
 `alias -> spec | None` — and names the aliases to connect on each turn. That
@@ -48,6 +45,14 @@ client = Client(
 outcome = client.start(goal="list the data directory", enabled_mcp=("fs",))
 ```
 
+With the `fs` alias enabled, the two subset tools reach the model under their
+namespaced names:
+
+```
+mcp__fs__read_file
+mcp__fs__list_directory
+```
+
 `enabled_mcp` is a per-turn, non-durable knob. Every turn-driving verb accepts
 it (`start`, `send_goal`, `seed_start`, `seed_send_goal`), so a conversation
 can enable a server for one turn and not the next. `query` has no `enabled_mcp`
@@ -75,10 +80,9 @@ permission Guard with no special casing.
 If one server fails to connect at turn start, it is dropped and the rest of
 the turn proceeds; a duplicate alias is always a hard `McpConfigError`.
 
-## In-process SDK MCP server
+## Option B — an in-process SDK MCP server
 
-To bundle your own tools into an MCP-shaped server, use
-`create_sdk_mcp_server`:
+To bundle your own tools into an MCP-shaped server, use `create_sdk_mcp_server`:
 
 ```python
 from noeta.sdk import Options, ToolContext, ToolResult, create_sdk_mcp_server, tool
@@ -113,10 +117,14 @@ with no subprocess and no network round-trip, and they keep their **bare**
 name groups the bundle; it does not namespace it, so choose names that will
 not collide with a built-in tool.
 
-## See also
+## Next steps
 
-- [Build custom tools](build-custom-tools.md) — define tools with `@tool`
-  and bundle them into SDK MCP servers
-- [ADR: MCP connectors](https://github.com/initxy/noeta/blob/main/docs/adr/mcp-connectors.md) — the scope of the client
-  and where credentials live
-- `examples/mcp_server.py` — a runnable in-process MCP example
+- [Build custom tools](build-custom-tools.md) — define the tools you are
+  bundling
+- [Use a sandbox](use-sandbox.md) — MCP stays host-side even under a container
+- [SDK reference](../reference/sdk.md) — `McpServerSpec`, `McpHttpServerSpec`,
+  `HostConfig`
+- [ADR: MCP connectors](https://github.com/initxy/noeta/blob/main/docs/adr/mcp-connectors.md)
+  — the scope of the client and where credentials live
+
+`examples/mcp_server.py` is a runnable in-process MCP example.
