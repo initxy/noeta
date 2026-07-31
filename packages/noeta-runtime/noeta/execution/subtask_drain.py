@@ -1,6 +1,6 @@
 """Host-neutral in-process sub-agent delegation drain (Issue C / SR1/SR2).
 
-Extracted verbatim from :class:`noeta.agent.execution.runner.CodeSessionRunner`
+Extracted verbatim from the agent product's in-process runner
 (Part B slice S3a) so a later slice (S3b) can drive the same delegation tree
 on the server path. **Pure, behaviour-preserving refactor** — the moved state
 machine is byte-identical to the runner method it came from; the only change is
@@ -191,7 +191,7 @@ class DrainHost:
 
     Carries the storage/lease seam plus the engine-construction callbacks the
     drain needs. Keeps the drain ignorant of *who* owns the runtime (the
-    in-process ``CodeSessionRunner`` today; the server worker in S3b), so the
+    in-process product runner today; the server worker in S3b), so the
     same state machine drives delegation on either path.
     """
 

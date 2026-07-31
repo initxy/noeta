@@ -19,7 +19,7 @@ steps put a plugin to work:
 
 1. **Declare** — write the manifest (a `[tool.noeta]` table, or `PluginBuilder`
    decorators in a single file).
-2. **Load** — `load_plugin_set(...)` reads the manifests into a `PluginSet`
+2. **Load** — `load_plugins(...)` reads the manifests into a `PluginSet`
    *without running any plugin code*. This is a host-level step: it decides which
    plugin code is available in the process.
 3. **Activate** — name the plugins an agent uses in `Options.plugins`, and hand
@@ -49,9 +49,9 @@ it by path — `builtins=False` keeps the built-in catalog out so you see only y
 plugin:
 
 ```python
-from noeta.sdk import load_plugin_set
+from noeta.sdk import load_plugins
 
-pset = load_plugin_set(builtins=False, modules=["./brevity.py"])
+pset = load_plugins(builtins=False, modules=["./brevity.py"])
 print(pset.names())               # ('brevity',)
 print(pset.contributions())       # every contribution — no plugin code ran
 ```
@@ -68,7 +68,7 @@ its name to `Options.plugins` and pass the loaded set to `Client`:
 from noeta.sdk import Options, Client, DEFAULT_PLUGINS
 
 # built-ins on, plus the local plugin
-pset = load_plugin_set(modules=["./brevity.py"])
+pset = load_plugins(modules=["./brevity.py"])
 
 options = Options(
     system_prompt="You are a coding agent.",
@@ -138,7 +138,7 @@ plugin.guard(BlockShellGuard(), name="block_shell")
 ```
 
 ```python
-pset = load_plugin_set(modules=["./block_shell.py"])
+pset = load_plugins(modules=["./block_shell.py"])
 client = Client(options, provider=..., workspace_dir=".", plugins=pset)
 # the guard gates shell_run for every agent — no activation needed
 ```
@@ -214,7 +214,7 @@ allow-list — only approved plugins load, everything else is skipped **before i
 imported**:
 
 ```python
-pset = load_plugin_set(entry_points=True, enabled=["house-style"])
+pset = load_plugins(entry_points=True, enabled=["house-style"])
 ```
 
 ## Loading from a directory, and trust
@@ -234,10 +234,10 @@ There are two directory sources, differing by trust:
   with a loud `UntrustedPluginDirWarning`, never silently.
 
 ```python
-from noeta.sdk import grant_trust, load_plugin_set
+from noeta.sdk import grant_trust, load_plugins
 
 grant_trust("./workspace/.noeta/plugins")           # writes ~/.noeta/trust.json
-pset = load_plugin_set(workspace_dirs=["./workspace/.noeta/plugins"])
+pset = load_plugins(workspace_dirs=["./workspace/.noeta/plugins"])
 ```
 
 > A directory plugin is arbitrary Python the host process runs. The trust gate
@@ -252,15 +252,15 @@ internals. Listing is execution-free, so you can assert on a plugin's
 contributions without running it:
 
 ```python
-from noeta.sdk import load_plugin_set
+from noeta.sdk import load_plugins
 
 def test_block_shell_declares_its_guard():
-    pset = load_plugin_set(builtins=False, modules=["./block_shell.py"])
+    pset = load_plugins(builtins=False, modules=["./block_shell.py"])
     listed = [(c.surface, c.name) for _plugin, c in pset.contributions()]
     assert ("guard", "block_shell") in listed
 
 def test_guard_is_process_wide():
-    pset = load_plugin_set(builtins=False, modules=["./block_shell.py"])
+    pset = load_plugins(builtins=False, modules=["./block_shell.py"])
     guards, _observers = pset.process_hooks()
     assert [type(g).__name__ for g in guards] == ["BlockShellGuard"]
 ```

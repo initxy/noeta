@@ -19,8 +19,7 @@ identity fingerprint, so changing it tells the runtime the tool's
 behavior may have changed.
 
 ```python
-from noeta.sdk import tool
-from noeta.protocols.tool import ToolContext, ToolResult
+from noeta.sdk import tool, ToolContext, ToolResult
 
 _WORD_COUNT_SCHEMA = {
     "type": "object",
@@ -83,10 +82,8 @@ returns a scripted sequence of responses. In a real deployment you would
 use `AnthropicProvider` or `OpenAICompatProvider` instead.
 
 ```python
-from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.protocols.messages import (
-    LLMResponse, TextBlock, ToolUseBlock, Usage,
-)
+from noeta.sdk import LLMResponse, TextBlock, ToolUseBlock, Usage
+from noeta.sdk.testing import FakeLLMProvider
 
 provider = FakeLLMProvider(
     responses=[

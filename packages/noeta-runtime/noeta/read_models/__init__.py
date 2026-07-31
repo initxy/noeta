@@ -12,7 +12,7 @@ This is the shared seam so no surface owns the read model privately (pre-CW5a th
 list lived inside one surface's private helper and poked adapter privates).
 """
 
-from noeta.read_models.sessions import list_session_summaries
+from noeta.read_models.tasks import list_task_summaries
 
 
-__all__ = ["list_session_summaries"]
+__all__ = ["list_task_summaries"]

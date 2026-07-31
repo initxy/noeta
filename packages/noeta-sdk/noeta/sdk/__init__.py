@@ -79,7 +79,7 @@ from noeta.client.plugins import (
 )
 # Manifest-plugin mechanism (SDK-extensibility redesign): the surface registry,
 # the static manifest reader, the five-source loader / PluginSet, and the
-# activation contributions type. ``load_plugin_set`` is the manifest-based
+# activation contributions type. ``load_plugins`` is the manifest-based
 # loader a host binds to.
 from noeta.client.plugin_manifest import (
     ManifestContribution,
@@ -87,7 +87,7 @@ from noeta.client.plugin_manifest import (
     PluginManifest,
 )
 from noeta.client.plugin_set import PluginSet
-from noeta.client.plugin_set import load_plugins as load_plugin_set
+from noeta.client.plugin_set import load_plugins
 from noeta.client.surfaces import (
     SurfaceRegistry,
     SurfaceSpec,
@@ -318,7 +318,7 @@ __all__ = [
     "ManifestContribution",
     "PluginBuilder",
     "PluginSet",
-    "load_plugin_set",
+    "load_plugins",
     "PluginActivation",
     "DEFAULT_PLUGINS",
     # official factory content

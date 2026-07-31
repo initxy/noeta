@@ -15,7 +15,7 @@ from noeta.sdk import (
     # the surface registry (the generality mechanism)
     SurfaceSpec, SurfaceRegistry, standard_registry,
     # the loader + the loaded set
-    load_plugin_set, PluginSet,
+    load_plugins, PluginSet,
     # activation
     PluginActivation, DEFAULT_PLUGINS,
     # trust + errors
@@ -23,9 +23,9 @@ from noeta.sdk import (
 )
 ```
 
-> `load_plugin_set` is the `noeta.sdk` name for `noeta.client.plugin_set.load_plugins`
+> `load_plugins` is the `noeta.sdk` name for `noeta.client.plugin_set.load_plugins`
 > (the internal function is `load_plugins`; it is re-exported under the
-> `load_plugin_set` alias so it does not collide with the retiring 0.4.0
+> `load_plugins` alias so it does not collide with the retiring 0.4.0
 > `load_plugins`, see [The retired bundle path](#the-retired-bundle-path)).
 
 > Line numbers are omitted throughout — they drift on every edit. The module path
@@ -46,7 +46,7 @@ redesign](https://github.com/initxy/noeta/blob/main/docs/implementation-specs/20
   validated, how it collides, how it merges, and how it orders. The loader is
   **surface-agnostic**: it consults the registry and nothing else, so a host can
   register its own surfaces.
-- **Load** (`D5`, host level): `load_plugin_set(...) -> PluginSet` — which plugin
+- **Load** (`D5`, host level): `load_plugins(...) -> PluginSet` — which plugin
   *code* is available in the process. A `PluginSet` is listable and
   collision-checkable **without executing plugin code**.
 - **Activate** (`D5`, agent level): `Options.plugins: list[str]` and
@@ -234,7 +234,7 @@ reg = standard_registry()                       # a fresh copy
 reg.register(SurfaceSpec(
     "http_route", "host", "host-wired", _valid_route, "name", "append",
 ))
-plugins = load_plugin_set(registry=reg, ...)    # the host's surface is live
+plugins = load_plugins(registry=reg, ...)    # the host's surface is live
 ```
 
 `SurfaceRegistry` methods: `register(spec)` (a duplicate name raises),
@@ -245,7 +245,7 @@ plugins = load_plugin_set(registry=reg, ...)    # the host's surface is live
 Five sources, each with its own gate. Discovery order **never** affects the
 result (only error attribution).
 
-| # | Source | `load_plugin_set` argument | Gate |
+| # | Source | `load_plugins` argument | Gate |
 | --- | --- | --- | --- |
 | 0 | built-in plugins (`noeta.builtins`) | `builtins=True` (default) | on by default; disable per-name with `disabled_builtins` |
 | 1 | entry points (`noeta.plugins` group) | `entry_points=True` | `enabled` allow-list, applied **before any import** |
@@ -261,10 +261,10 @@ Resolution / validation only happen when a caller reaches the execution boundary
 (`PluginSet.resolve` and friends); listing and merge run over the static
 manifests alone.
 
-### `load_plugin_set(...) -> PluginSet`
+### `load_plugins(...) -> PluginSet`
 
 ```python
-load_plugin_set(
+load_plugins(
     *,
     builtins=True,               # bool | Iterable[PluginManifest]
     disabled_builtins=(),        # Iterable[str]
@@ -326,7 +326,7 @@ The loaded, host-level set (`plugin_set.py`). Frozen; holds the discovered
 installed plugin contributes without any of its code running.
 
 ```python
-pset = load_plugin_set()                    # built-ins on
+pset = load_plugins()                    # built-ins on
 for plugin_name, contribution in pset.contributions("tool"):
     print(plugin_name, contribution.name)   # no plugin body imported
 
@@ -346,9 +346,9 @@ plugins an agent uses. Activation names live on `Options.plugins` and
 `AgentDefinition.plugins`, and enter `AgentSpec` identity.
 
 ```python
-from noeta.sdk import Options, Client, load_plugin_set, DEFAULT_PLUGINS
+from noeta.sdk import Options, Client, load_plugins, DEFAULT_PLUGINS
 
-pset = load_plugin_set(modules=["./brevity.py"])   # built-ins + the local plugin
+pset = load_plugins(modules=["./brevity.py"])   # built-ins + the local plugin
 
 options = Options(
     system_prompt="You are a coding agent.",
@@ -382,7 +382,7 @@ An activation name must be one of:
   policy) fold in.
 
 `DEFAULT_PLUGINS = ("fs", "web")` is the default of `Options.plugins`; both are
-identity-inert (the default 11-tool set still comes from `BUILTIN_TOOL_CLASSES`),
+identity-inert (the default 11-tool set still comes from `builtin_tool_classes()`),
 so a **bare `Options()` compiles byte-identically** to the pre-redesign spec — the
 parity contract. `AgentDefinition.plugins` defaults to `()` (a child's tools come
 from its own `tools` field).
@@ -438,10 +438,10 @@ resolved — so how a path is spelled never decides trust. A malformed (non-JSON
 store raises `PluginError` on read.
 
 ```python
-from noeta.sdk import grant_trust, load_plugin_set
+from noeta.sdk import grant_trust, load_plugins
 
 grant_trust("./workspace/.noeta/plugins")                      # writes ~/.noeta/trust.json
-pset = load_plugin_set(workspace_dirs=["./workspace/.noeta/plugins"])
+pset = load_plugins(workspace_dirs=["./workspace/.noeta/plugins"])
 ```
 
 ## Failure semantics
@@ -462,9 +462,9 @@ The single non-raising skip is an **untrusted `workspace_dirs`** entry, which
 warns with `UntrustedPluginDirWarning` and is skipped.
 
 ```python
-from noeta.sdk import load_plugin_set, PluginError
+from noeta.sdk import load_plugins, PluginError
 
-pset = load_plugin_set(builtins=[m_a, m_b])   # both contribute prompt_fragment "frag"
+pset = load_plugins(builtins=[m_a, m_b])   # both contribute prompt_fragment "frag"
 try:
     pset.merged()
 except PluginError as exc:

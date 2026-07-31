@@ -95,7 +95,7 @@ class BackgroundDelivery:
     def on_exit(
         self,
         *,
-        session_id: str,
+        task_id: str,
         plan: PlanFn,
         thread_name: str,
         retry_timeout_s: float = DEFAULT_DELIVER_TIMEOUT_S,
@@ -112,7 +112,7 @@ class BackgroundDelivery:
             return
         threading.Thread(
             target=self.drive,
-            args=(notifier, session_id, plan),
+            args=(notifier, task_id, plan),
             kwargs={"retry_timeout_s": retry_timeout_s, "poll_s": poll_s},
             name=thread_name,
             daemon=True,
@@ -121,7 +121,7 @@ class BackgroundDelivery:
     def drive(
         self,
         notifier: Any,
-        session_id: str,
+        task_id: str,
         plan: PlanFn,
         *,
         retry_timeout_s: float = DEFAULT_DELIVER_TIMEOUT_S,
@@ -148,7 +148,7 @@ class BackgroundDelivery:
             return  # cancelled / nothing to deliver
         deadline = time.monotonic() + retry_timeout_s
         while True:
-            task = fold(self._event_log, self._content_store, session_id)
+            task = fold(self._event_log, self._content_store, task_id)
             if task.status == "terminal":
                 return  # no turn to wake — the exit event stands for audit
             try:
@@ -159,7 +159,7 @@ class BackgroundDelivery:
                     _log.debug(
                         "background completion for session %s deferred (not "
                         "idle-suspended on next-goal within %.1fs)",
-                        session_id,
+                        task_id,
                         retry_timeout_s,
                     )
                     return

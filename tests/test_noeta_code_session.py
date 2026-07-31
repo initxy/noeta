@@ -140,7 +140,7 @@ def test_default_agent_exposes_full_fs_pack() -> None:
 
     The background shell triplet (shell_run/shell_poll/
     shell_kill) is part of the full pack now that shell_poll/shell_kill are
-    registered in BUILTIN_TOOL_CLASSES.
+    registered in builtin_tool_classes().
     (phase 2): ``webfetch`` joined the built-in catalog (a web
     tool, not an fs tool), so main's tools=None full set now includes it.
     ``web_search`` (the noeta-executed search tool) likewise joined the catalog,

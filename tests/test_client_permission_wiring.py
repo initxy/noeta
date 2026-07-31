@@ -427,15 +427,25 @@ def test_cwd_uses_options_cwd_when_kwarg_missing(tmp_path: Path):
         client.shutdown()
 
 
-def test_cwd_missing_everywhere_raises(tmp_path: Path):
+def test_cwd_missing_everywhere_falls_back_to_the_process_cwd(tmp_path: Path):
+    """No ``workspace_dir`` and no ``Options.cwd`` ⇒ the process working directory.
+
+    This used to raise. ``SdkHost.workspace_dir`` has always defaulted to
+    ``Path.cwd()``, so the hard error was the two layers disagreeing about
+    whether a default exists — and it made an agent that never touches the
+    filesystem still demand a directory before it could answer anything.
+    """
     provider = FakeLLMProvider(responses=[_end("hi")])
     options = Options(
         system_prompt=_PROMPT,
         allowed_tools=("read",),
         permission_mode="bypassPermissions",
     )
-    with pytest.raises(ValueError, match="workspace directory is required"):
-        Client(options, provider=provider, model="stub-model")
+    client = Client(options, provider=provider, model="stub-model")
+    try:
+        assert client._host.workspace_dir == Path.cwd()
+    finally:
+        client.shutdown()
 
 
 def test_cwd_explicit_kwarg_takes_precedence(tmp_path: Path):

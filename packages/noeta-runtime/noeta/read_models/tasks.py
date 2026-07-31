@@ -1,4 +1,4 @@
-"""Session / task list read-model (CW5a Phase 1).
+"""Task list read-model (CW5a Phase 1).
 
 Builds the ``GET /tasks`` summary rows the Web SPAs display. Extracted verbatim
 (same shape, same order) from the former private list helper so the move is
@@ -17,10 +17,10 @@ from noeta.protocols.content_store import ContentStore
 from noeta.protocols.event_log import EventLogReader, EventLogTaskIndex
 
 
-__all__ = ["list_session_summaries"]
+__all__ = ["list_task_summaries"]
 
 
-def list_session_summaries(
+def list_task_summaries(
     task_index: EventLogTaskIndex,
     event_log: EventLogReader,
     content_store: ContentStore,
@@ -47,7 +47,7 @@ def list_session_summaries(
 
     ``background_jobs`` is the session's append-only list of
     background-shell jobs, folded from the ``BackgroundShell*`` events. Issue 04
-    emits those on the SESSION ROOT stream, so folding the root row surfaces
+    emits those on the ROOT-TASK stream, so folding the root row surfaces
     every job — incl. ones a subtask spawned. Each entry carries
     ``{job_id, command, status, spawned_by_task_id, ref?, exit_code?, signal?}``;
     the front-end chip reads it and derefs ``ref`` for the job's output.

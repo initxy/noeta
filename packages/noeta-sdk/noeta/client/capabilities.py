@@ -16,17 +16,17 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from noeta.client.options import _EFFORT_MODES, _PERMISSION_MODES
+from noeta.client.options import EFFORT_MODES, PERMISSION_MODES
 
 
 def permission_modes() -> tuple[str, ...]:
     """The legal :attr:`Options.permission_mode` values, sorted (composer enum)."""
-    return tuple(sorted(_PERMISSION_MODES))
+    return tuple(sorted(PERMISSION_MODES))
 
 
 def effort_modes() -> tuple[str, ...]:
     """The legal :attr:`Options.effort` values, sorted (composer enum)."""
-    return tuple(sorted(_EFFORT_MODES))
+    return tuple(sorted(EFFORT_MODES))
 
 
 def model_capabilities(models: Sequence[str]) -> dict[str, dict[str, bool]]:

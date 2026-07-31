@@ -29,7 +29,7 @@ from pathlib import Path
 import pytest
 
 from noeta.protocols.events import EventEnvelope, ToolCallStartedPayload
-from noeta.sdk import PluginBuilder, load_plugin_set
+from noeta.sdk import PluginBuilder, load_plugins
 
 
 _PLUGIN_PATH = (
@@ -307,7 +307,7 @@ def test_observer_swallows_non_git_path(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 6. Manifest wiring through the new loader (load_plugin_set + process_hooks)
+# 6. Manifest wiring through the new loader (load_plugins + process_hooks)
 # ---------------------------------------------------------------------------
 
 
@@ -329,8 +329,8 @@ def test_module_exposes_builder_and_configured_observer():
     assert mod.OBSERVER.name == "git_checkpoint"
 
 
-def test_load_plugin_set_lists_the_observer_without_execution():
-    pset = load_plugin_set(builtins=False, modules=[str(_PLUGIN_PATH)])
+def test_load_plugins_lists_the_observer_without_execution():
+    pset = load_plugins(builtins=False, modules=[str(_PLUGIN_PATH)])
     assert pset.names() == ("git-checkpoint",)
     listed = pset.contributions("observer")
     assert [(p, c.surface, c.name) for p, c in listed] == [
@@ -348,7 +348,7 @@ def test_process_hooks_resolves_env_configured_observer(tmp_path):
     os.environ["NOETA_GIT_CHECKPOINT_REPO"] = str(repo)
     os.environ["NOETA_GIT_CHECKPOINT_REF"] = _CHECKPOINT_REF
     try:
-        pset = load_plugin_set(builtins=False, modules=[str(_PLUGIN_PATH)])
+        pset = load_plugins(builtins=False, modules=[str(_PLUGIN_PATH)])
         guards, observers = pset.process_hooks()
     finally:
         for k, v in saved.items():

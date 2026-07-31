@@ -109,6 +109,6 @@ conflict.
   ref through the kernel-handed `SessionRecorder` (which stamps
   `actor="plugin:<name>"` and applies the hash gate). `record_memory_index` /
   `record_instructions` / `record_environment` and the host's
-  `session_content_snapshots` seam are gone. `ContentHashesFn((kind, name) →
+  `content_snapshots` seam are gone. `ContentHashesFn((kind, name) →
   (version, hash))` remains for mid-loop provenance emission (skills), but the
   pre-loop residents put + record their own bytes.

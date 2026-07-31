@@ -70,7 +70,7 @@ from noeta.sdk import PluginBuilder
 DEFAULT_CHECKPOINT_REF = "refs/noeta/checkpoints"
 
 #: The built-in tool names that mutate the workspace. A checkpoint is taken
-#: when one of these starts (see ``BUILTIN_TOOL_CLASSES`` in
+#: when one of these starts (see ``builtin_tool_classes()`` in
 #: ``noeta.client.parts``: ``edit`` / ``write`` / ``apply_patch``).
 DEFAULT_MUTATING_TOOLS: tuple[str, ...] = ("write", "edit", "apply_patch")
 

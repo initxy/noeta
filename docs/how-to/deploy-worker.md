@@ -67,6 +67,21 @@ re-exported from `noeta.sdk.storage` for hosts that construct them
 directly — keep them on the same on-disk database so the dispatcher can
 coordinate with the event log.
 
+If you only need durable storage for a `Client` (not a standalone worker
+loop), skip the triple entirely and hand `HostConfig` the path — it runs the
+same resolution, including the ordering invariant:
+
+```python
+from noeta.sdk import Client, HostConfig
+
+client = Client(options, provider=provider,
+                host_config=HostConfig(storage_path="./worker.sqlite"))
+```
+
+`storage_path` accepts a SQLite file path, a `postgresql://` DSN, or
+`":memory:"`; `query(..., host_config=...)` takes the same config, so even a
+one-shot run can be recorded durably.
+
 ## Construct and run
 
 ```python

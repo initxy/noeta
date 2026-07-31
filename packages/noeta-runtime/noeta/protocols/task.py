@@ -295,7 +295,7 @@ class GovernanceState:
     skill_content_versions: dict[str, str] = field(default_factory=dict)
     # (issue 05) — the session's background-shell jobs, folded from
     # the ``BackgroundShell*`` observer events (which issue 04 emits on the
-    # SESSION ROOT stream, so folding the root surfaces every job incl. the
+    # ROOT-TASK stream, so folding the root surfaces every job incl. the
     # subtask-spawned ones). Append-only audit, mirror of ``subtask_results``:
     # a job is APPENDED on ``Started`` and its entry only UPDATED (never
     # removed) on poll / exit / kill so the trail survives for inspect + the

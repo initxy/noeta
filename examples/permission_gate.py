@@ -33,15 +33,17 @@ import sys
 import tempfile
 from pathlib import Path
 
+from noeta.sdk import LLMResponse, TextBlock, ToolUseBlock, Usage
+
+# The one deep import here: event PAYLOAD types are the durable ledger's
+# vocabulary, not the recipe surface, so they have no ``noeta.sdk`` home. This
+# example asserts on the recorded approval decision — reading the ledger
+# directly is the point. An application that only wants the conversation reads
+# ``Client.messages()`` / ``QueryResult.messages()`` instead and never touches
+# a payload type.
 from noeta.protocols.events import ToolCallApprovalResolvedPayload
-from noeta.protocols.messages import (
-    LLMResponse,
-    TextBlock,
-    ToolUseBlock,
-    Usage,
-)
 from noeta.sdk import Options, query
-from noeta.testing.fake_llm import FakeLLMProvider
+from noeta.sdk.testing import FakeLLMProvider
 
 
 def _demo_provider() -> FakeLLMProvider:

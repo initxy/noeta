@@ -13,7 +13,7 @@ from the product.
 single backend keyed by that URL — every session on the host shared it. v2 makes
 the container **per root-task tree**:
 
-* :meth:`allocate` provisions a fresh container for a ``session_root_id``
+* :meth:`allocate` provisions a fresh container for a ``root_task_id``
   (eagerly, at ``driver.seed_start``) and returns the durable ``exec_env_ref``
   (``"{base_url}#{sandbox_id}"``) welded onto ``TaskHostBound``.
 * :meth:`resolve` builds (and caches) the ``ExecEnv`` backend for a recorded
@@ -38,8 +38,8 @@ from __future__ import annotations
 import dataclasses
 import logging
 import threading
-from collections.abc import Sequence
-from typing import Any, Callable, Optional
+from collections.abc import Callable, Sequence
+from typing import Any, Optional
 
 from noeta.client.host_config import SandboxExecEnvConfig
 from noeta.client.sandbox_provider import (
@@ -98,9 +98,12 @@ BackendFactory = Callable[[SandboxHandle, Optional[BoundPreamble]], ExecEnv]
 #: Builds a live browser backend from a session's sandbox handle. Injected by
 #: tests (a fake that opens no socket) or by the product (an alternative wire —
 #: e.g. the official-SDK adapter); production defaults to
-#: :func:`_default_browser_factory`. Typed against the ``BrowserBackend``
-#: Protocol — the seam admits any implementation, not just the hand-written AIO
-#: adapter. The container browser is addressed off the handle's ``base_url``
+#: :func:`_default_browser_factory`. The return type is the OPAQUE
+#: :data:`BrowserBackend` alias (``Any``) — conceptually the browser
+#: built-in's ``BrowserBackend`` Protocol (``noeta.builtins.browser.impl``),
+#: which SDK core cannot name statically (the microkernel import ban above),
+#: so a factory's return value is checked only where the browser pack consumes
+#: it. The container browser is addressed off the handle's ``base_url``
 #: (built inside the adapter) and authed with the handle's live
 #: :class:`SandboxAuth` as a per-call header factory (D8) — the same
 #: secret-on-the-wire discipline the ExecEnv backend uses.
@@ -184,12 +187,12 @@ class _ConfigAttachProvider:
             workdir=self._config.workdir,
         )
 
-    def allocate(self, session_root_id: str, spec: SandboxSpec) -> SandboxHandle:
-        del session_root_id, spec  # attach ignores per-session provisioning
+    def allocate(self, root_task_id: str, spec: SandboxSpec) -> SandboxHandle:
+        del root_task_id, spec  # attach ignores per-session provisioning
         return self._handle(self._config.base_url)
 
-    def release(self, session_root_id: str) -> None:
-        del session_root_id  # never owns the container
+    def release(self, root_task_id: str) -> None:
+        del root_task_id  # never owns the container
 
     def attach(self, exec_env_ref: str) -> SandboxHandle:
         # Reconnect to the RECORDED address (multi-machine criterion): a task
@@ -291,9 +294,9 @@ class SandboxExecEnvManager:
     # -- provisioning (D4) ------------------------------------------------- #
 
     def allocate(
-        self, session_root_id: str, *, host_workspace: Optional[str] = None
+        self, root_task_id: str, *, host_workspace: Optional[str] = None
     ) -> str:
-        """Provision a fresh container for ``session_root_id`` → its durable ref.
+        """Provision a fresh container for ``root_task_id`` → its durable ref.
 
         Assembles the per-session :class:`SandboxSpec` (the template's fixed
         mounts + the session's workspace mount at ``default_workdir``), calls
@@ -313,23 +316,23 @@ class SandboxExecEnvManager:
                 )
             )
         spec = dataclasses.replace(self._spec_template, mounts=tuple(mounts))
-        handle = self._provider.allocate(session_root_id, spec)
+        handle = self._provider.allocate(root_task_id, spec)
         ref = encode_exec_env_ref(handle.base_url, handle.sandbox_id)
         with self._lock:
-            self._handles_by_root[session_root_id] = handle
+            self._handles_by_root[root_task_id] = handle
             self._handles_by_ref[ref] = handle
-            self._refs_by_root[session_root_id] = ref
+            self._refs_by_root[root_task_id] = ref
         # Fire product-side lifecycle listeners (preview gateway mounts, etc.).
         for on_alloc, _ in self._lifecycle_listeners:
             try:
-                on_alloc(session_root_id, handle)
+                on_alloc(root_task_id, handle)
             except Exception:
                 # Listener failures must not break provisioning — but they
                 # must be visible: a silently-dead listener (e.g. the preview
                 # mount) is otherwise undiagnosable from the frontend's 404s.
                 _log.warning(
                     "sandbox allocate listener failed for root %s",
-                    session_root_id,
+                    root_task_id,
                     exc_info=True,
                 )
         return ref
@@ -401,7 +404,7 @@ class SandboxExecEnvManager:
 
     # -- lifecycle (D4) ---------------------------------------------------- #
 
-    def release(self, session_root_id: str) -> None:
+    def release(self, root_task_id: str) -> None:
         """Tear down one session's container (idempotent — unknown id is a no-op).
 
         Drops the cached handle / backend for that root and calls
@@ -412,17 +415,17 @@ class SandboxExecEnvManager:
         # clean up while the container is still reachable.
         for _, on_rel in self._lifecycle_listeners:
             try:
-                on_rel(session_root_id)
+                on_rel(root_task_id)
             except Exception:
                 _log.warning(
                     "sandbox release listener failed for root %s",
-                    session_root_id,
+                    root_task_id,
                     exc_info=True,
                 )
         evicted: list[object] = []
         with self._lock:
-            ref = self._refs_by_root.pop(session_root_id, None)
-            self._handles_by_root.pop(session_root_id, None)
+            ref = self._refs_by_root.pop(root_task_id, None)
+            self._handles_by_root.pop(root_task_id, None)
             # Evict the cached backend/handle only for a per-session ref this
             # root uniquely owns. The attach path's shared ``default_ref`` is
             # referenced by EVERY peer session, so dropping it here would force
@@ -435,7 +438,7 @@ class SandboxExecEnvManager:
                 evicted.append(self._backends_by_ref.pop(ref, None))
                 evicted.append(self._browser_by_ref.pop(ref, None))
         self._close_backends(evicted)
-        self._provider.release(session_root_id)
+        self._provider.release(root_task_id)
 
     def teardown(self) -> None:
         """Release every still-open session container. Idempotent shutdown reap.

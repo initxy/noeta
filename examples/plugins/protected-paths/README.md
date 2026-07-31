@@ -73,10 +73,10 @@ manifest **without importing any plugin code**:
 
 ```python
 import os
-from noeta.sdk import Client, load_plugin_set, presets
+from noeta.sdk import Client, load_plugins, presets
 
 os.environ["NOETA_PROTECTED_PATHS_ROOTS"] = "/srv/workspace"
-pset = load_plugin_set(entry_points=True, enabled=["protected-paths"])
+pset = load_plugins(entry_points=True, enabled=["protected-paths"])
 client = Client(presets.main_options(), plugins=pset)  # guard is process-wide
 ```
 
@@ -85,11 +85,11 @@ client = Client(presets.main_options(), plugins=pset)  # guard is process-wide
 ```python
 import os
 from pathlib import Path
-from noeta.sdk import Client, load_plugin_set, presets
+from noeta.sdk import Client, load_plugins, presets
 
 here = Path(__file__).parent
 os.environ["NOETA_PROTECTED_PATHS_ROOTS"] = str(here / "workspace")
-pset = load_plugin_set(builtins=False, modules=[str(here / "plugin.py")])
+pset = load_plugins(builtins=False, modules=[str(here / "plugin.py")])
 client = Client(presets.main_options(), plugins=pset)
 ```
 

@@ -161,3 +161,96 @@ def test_real_repo_is_clean() -> None:
     """Run the script against the actual repo: it must pass."""
     result = _run(REPO_ROOT)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Session-as-identity ban (CONTEXT.md `Flagged ambiguities` -> "Session").
+# Identity is banned, construction scope is not; see the CONTEXT.md entry.
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "session_id",
+        "session_root_id",
+        "list_session_summaries",
+        "max_background_jobs_per_session",
+        "kill_session",
+        "SessionCatalog",
+    ],
+)
+def test_session_identity_names_are_rejected(tmp_path: Path, name: str) -> None:
+    pkg = tmp_path / "packages" / "noeta-runtime" / "noeta"
+    pkg.mkdir(parents=True)
+    (pkg / "bad.py").write_text(f"{name} = 1\n")
+    result = _run(tmp_path)
+    assert result.returncode != 0, result.stdout
+    assert name in result.stdout
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        # The construction-scope vocabulary phase 3 promoted to core terms.
+        "session_pack",
+        "default_session_packs",
+        "build_fs_session_pack",
+        "_SESSION_PACK_CACHE",
+        "SessionBuildContext",
+        "SessionPackEntry",
+        "SessionRecorder",
+        "SessionInputs",
+        "build_session_inputs",
+        # subprocess.Popen's own keyword.
+        "start_new_session",
+    ],
+)
+def test_session_scope_vocabulary_is_allowed(tmp_path: Path, name: str) -> None:
+    pkg = tmp_path / "packages" / "noeta-runtime" / "noeta"
+    pkg.mkdir(parents=True)
+    (pkg / "ok.py").write_text(f"{name} = 1\n")
+    result = _run(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_bare_session_word_in_prose_is_allowed(tmp_path: Path) -> None:
+    """"session" as a scope adjective is legal — only compounds are identities."""
+    pkg = tmp_path / "packages" / "noeta-runtime" / "noeta"
+    pkg.mkdir(parents=True)
+    (pkg / "ok.py").write_text("# one container per session, torn down at the end\n")
+    result = _run(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_session_rule_does_not_apply_to_tests_dir(tmp_path: Path) -> None:
+    """A test harness stands in for a host, and a host may own the concept."""
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "helper.py").write_text("def _sdk_session():\n    return 1\n")
+    result = _run(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_session_rule_applies_to_examples(tmp_path: Path) -> None:
+    examples = tmp_path / "examples" / "reference-host"
+    examples.mkdir(parents=True)
+    (examples / "app.py").write_text("session_id = 'x'\n")
+    result = _run(tmp_path)
+    assert result.returncode != 0
+    assert "session_id" in result.stdout
+
+
+def test_changelog_is_exempt_as_released_history(tmp_path: Path) -> None:
+    (tmp_path / "CHANGELOG.md").write_text(
+        "## [0.3.2]\n- `HostConfig.sandbox_session_policy` added.\n"
+    )
+    result = _run(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_archived_specs_are_exempt(tmp_path: Path) -> None:
+    archive = tmp_path / "docs" / "implementation-specs" / "archive"
+    archive.mkdir(parents=True)
+    (archive / "old.md").write_text("The `session_root_id` seam shipped here.\n")
+    result = _run(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr

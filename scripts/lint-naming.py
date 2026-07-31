@@ -57,6 +57,72 @@ BANNED: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
     (name, re.compile(rf"\b{re.escape(name)}\b")) for name in _BANNED_IDENTIFIERS
 )
 
+# ---------------------------------------------------------------------------
+# Session-as-identity ban (CONTEXT.md `Flagged ambiguities` -> "Session").
+#
+# The bare word "session" is fine in prose: CONTEXT.md itself says "per-session
+# workspace" when it means "for the lifetime of one root-task tree". What is
+# banned is naming an *identity* after it -- a `session_id`, a sessions list, a
+# session-keyed cap -- because the engine knows only Tasks and the concept
+# already has a name (`task_id` / `root_task_id`).
+#
+# So this rule fires only on COMPOUND tokens (an identifier joined by `_` or a
+# camelCase hump), never on a standalone `session` / `sessions` word. The
+# allow-list below is the construction-scope vocabulary CONTEXT.md promoted to
+# real terms in microkernel phase 3 -- a "session pack" builds one task's tool
+# set, which is a scope, not an identity.
+_SESSION_ALLOWED_EXACT: frozenset[str] = frozenset(
+    {
+        "SessionBuildContext",
+        "SessionPackEntry",
+        "SessionPackFactory",
+        "SessionRecorder",
+        "SessionInputs",
+        "build_session_inputs",
+        # subprocess.Popen's own keyword -- stdlib, not ours to rename.
+        "start_new_session",
+    }
+)
+#: Any token containing this substring is construction-scope vocabulary
+#: (`build_fs_session_pack`, `default_session_packs`, `session_pack_map`, ...).
+_SESSION_ALLOWED_SUBSTRING = "session_pack"
+
+_SESSION_TOKEN = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+
+#: Where the session-as-identity ban applies. CONTEXT.md scopes it to
+#: "engine/SDK code ... below-app identifiers" — i.e. the shipped wheels and the
+#: reference host. ``tests/`` is deliberately OUT: a test harness stands in for
+#: a host (``tests/_sdk_session`` builds a client and drives turns), and a host
+#: is exactly the layer CONTEXT.md says may own the concept.
+SESSION_RULE_REL_DIRS: tuple[tuple[str, ...], ...] = (
+    ("packages",),
+    ("examples",),
+)
+
+
+def _is_compound(token: str) -> bool:
+    """A token that names something, as opposed to the prose word "session"."""
+    if "_" in token:
+        return True
+    # camelCase / PascalCase hump around the word, e.g. ``SessionStore``.
+    return token not in {"session", "Session", "sessions", "Sessions"}
+
+
+def session_identity_violations(line: str) -> list[str]:
+    """Return every session-as-identity token on ``line``."""
+    found: list[str] = []
+    for token in _SESSION_TOKEN.findall(line):
+        if "session" not in token.lower():
+            continue
+        if not _is_compound(token):
+            continue
+        if token in _SESSION_ALLOWED_EXACT:
+            continue
+        if _SESSION_ALLOWED_SUBSTRING in token.lower():
+            continue
+        found.append(token)
+    return found
+
 # Files / directories that are *allowed* to mention the banned names
 # because they catalogue the bans themselves (CONTEXT.md, ADRs, the
 # Phase 0 PRD/issues, the SDD).
@@ -66,6 +132,10 @@ EXEMPT_FILE_NAMES: frozenset[str] = frozenset(
         # The lint script itself catalogues the bans, as does its test.
         "lint-naming.py",
         "test_lint_naming.py",
+        # Released history: an entry records the name that actually shipped at
+        # that version, so renaming it would falsify the record. The rename is
+        # recorded as a new breaking-change entry instead.
+        "CHANGELOG.md",
     }
 )
 EXEMPT_DIR_PARTS: frozenset[str] = frozenset(
@@ -95,6 +165,16 @@ EXEMPT_DIR_PARTS: frozenset[str] = frozenset(
 EXEMPT_REL_DIRS: tuple[tuple[str, ...], ...] = (
     ("docs", "adr"),
     ("docs", "design"),
+    # Archived specs are a historical record of what was built at the time —
+    # rewriting their vocabulary would falsify them (same reason as CHANGELOG).
+    ("docs", "implementation-specs", "archive"),
+    # An APP-LAYER fixture: a vendored mirror of the agent product's read-model
+    # layer (a separate repo). CONTEXT.md puts "session" squarely inside a
+    # host's own vocabulary — "a host that groups turns into a user-visible
+    # session owns that concept itself" — so these names are correct where they
+    # live, and renaming them would only make the mirror diverge from the code
+    # it mirrors. The ban is on ENGINE/SDK identifiers, which this is not.
+    ("tests", "_read_models"),
 )
 
 # Suffixes worth scanning. We deliberately stay narrow so binary
@@ -137,10 +217,17 @@ def scan(root: Path) -> list[tuple[Path, int, str, str]]:
             text = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
+        rel_parts = path.relative_to(root).parts
+        session_rule_applies = any(
+            _is_under(rel_parts, prefix) for prefix in SESSION_RULE_REL_DIRS
+        )
         for lineno, line in enumerate(text.splitlines(), start=1):
             for display, pattern in BANNED:
                 if pattern.search(line):
                     violations.append((path, lineno, display, line.rstrip()))
+            if session_rule_applies:
+                for token in session_identity_violations(line):
+                    violations.append((path, lineno, token, line.rstrip()))
     return violations
 
 

@@ -26,10 +26,44 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Protocol
 
 from noeta.core.fold import messages_from_appended
+from noeta.protocols.content_store import ContentStore
+from noeta.protocols.event_log import EventEnvelope, TaskStreamSummary
 from noeta.protocols.messages import TextBlock
+
+
+class _ConsolidationHost(Protocol):
+    """The slice of ``Client`` this module drives — named, not duck-typed.
+
+    Everything here used to be reached through ``client: Any`` plus
+    ``getattr(obj, "attr", default)``, which meant a renamed accessor degraded
+    into "the digest is silently empty" instead of a type error, and nothing
+    told a future caller what a valid ``client`` even is.
+
+    The two private members are deliberate, documented couplings rather than
+    accidents, so they are declared here instead of being reached for behind a
+    ``noqa``:
+
+    * ``_host.content_store`` — ``MessagesAppendedPayload.messages_ref`` bodies
+      resolve against the paired store and no other, so there is no public
+      accessor by design.
+    * ``_yield_seeded_lease`` — the background-drive handoff a consolidation
+      run rides; the public verbs drive the turn on the caller's thread, which
+      is the one thing a curation pass must not do.
+    """
+
+    def task_streams(self) -> list[TaskStreamSummary]: ...
+
+    def events(self, task_id: str) -> list[EventEnvelope]: ...
+
+    def seed_start(self, **kwargs: Any) -> Any: ...
+
+    def _yield_seeded_lease(self, seeded: Any) -> None: ...
+
+    @property
+    def _host(self) -> Any: ...
 
 
 __all__ = [
@@ -67,8 +101,8 @@ DEFAULT_DEBOUNCE_HOURS = 24.0
 #: Digest caps (spec risk note: conservative initial values). Both are stated
 #: inside the digest itself so the consolidation agent never mistakes the
 #: window for the whole history.
-DEFAULT_MAX_SESSIONS = 10
-DEFAULT_MAX_CHARS_PER_SESSION = 16_000
+DEFAULT_MAX_ROOT_TASKS = 10
+DEFAULT_MAX_CHARS_PER_ROOT_TASK = 16_000
 
 #: The brief instruction prepended to the digest to form the run's goal (the
 #: full curation contract lives in the preset's system prompt).
@@ -163,7 +197,7 @@ def _genesis_payload(envelopes: list[Any]) -> Optional[Any]:
     return None
 
 
-def _session_transcript(
+def _root_task_transcript(
     envelopes: list[Any], content_store: Any, *, max_chars: int
 ) -> str:
     """Role-labeled conversational text of one session, tail-truncated.
@@ -205,11 +239,11 @@ def _session_transcript(
 
 
 def build_consolidation_digest(
-    client: Any,
+    client: _ConsolidationHost,
     *,
     since: Optional[datetime] = None,
-    max_sessions: int = DEFAULT_MAX_SESSIONS,
-    max_chars_per_session: int = DEFAULT_MAX_CHARS_PER_SESSION,
+    max_root_tasks: int = DEFAULT_MAX_ROOT_TASKS,
+    max_chars_per_root_task: int = DEFAULT_MAX_CHARS_PER_ROOT_TASK,
     include_task: Optional[Callable[[str], bool]] = None,
 ) -> Optional[str]:
     """A capped digest of recent root-session activity, or ``None`` when empty.
@@ -217,10 +251,10 @@ def build_consolidation_digest(
     Enumerates the client's task streams, keeps ROOT sessions (genesis
     ``parent_task_id`` is ``None`` — a subtask rides its root) with envelope
     activity strictly after ``since`` (``None`` ⇒ all history), newest first,
-    capped at ``max_sessions``. Sessions driven by a reserved (``__``-prefixed)
+    capped at ``max_root_tasks``. Sessions driven by a reserved (``__``-prefixed)
     agent — the consolidation agent itself — are excluded so a run never
     digests its own predecessors. Each kept session contributes its
-    role-labeled text (see :func:`_session_transcript`); sessions yielding no
+    role-labeled text (see :func:`_root_task_transcript`); sessions yielding no
     conversational text are skipped without consuming (or overflowing) the
     cap, so the dropped count is exact.
 
@@ -246,15 +280,13 @@ def build_consolidation_digest(
     other store).
     """
     since_ts = _as_utc(since).timestamp() if since is not None else None
-    summaries = [
-        s for s in client.task_streams() if isinstance(getattr(s, "task_id", None), str)
-    ]
+    summaries = list(client.task_streams())
     if since_ts is not None:
-        summaries = [
-            s for s in summaries if getattr(s, "last_event_time", 0.0) > since_ts
-        ]
-    summaries.sort(key=lambda s: getattr(s, "last_event_time", 0.0), reverse=True)
-    content_store = client._host.content_store  # noqa: SLF001 — see docstring
+        summaries = [s for s in summaries if s.last_event_time > since_ts]
+    summaries.sort(key=lambda s: s.last_event_time, reverse=True)
+    # Declared on the _ConsolidationHost Protocol (see its docstring): refs are
+    # resolvable only against the store that minted them.
+    content_store: ContentStore = client._host.content_store
 
     sections: list[str] = []
     omitted = 0
@@ -270,16 +302,16 @@ def build_consolidation_digest(
         # Transcript before cap check: the envelopes are already in memory
         # (no extra IO), and it keeps the header's dropped count exact —
         # only sessions with digestible text consume or overflow the cap.
-        transcript = _session_transcript(
-            envelopes, content_store, max_chars=max_chars_per_session
+        transcript = _root_task_transcript(
+            envelopes, content_store, max_chars=max_chars_per_root_task
         )
         if not transcript:
             continue
-        if len(sections) >= max_sessions:
+        if len(sections) >= max_root_tasks:
             omitted += 1
             continue
         last_iso = datetime.fromtimestamp(
-            getattr(summary, "last_event_time", 0.0), tz=timezone.utc
+            summary.last_event_time, tz=timezone.utc
         ).isoformat()
         sections.append(
             f"## Session {summary.task_id} (last activity {last_iso})\n{transcript}"
@@ -296,7 +328,7 @@ def build_consolidation_digest(
         window += ", restricted to a host-selected subset of sessions"
     dropped = (
         f"; {omitted} more session(s) with digestible activity in the window "
-        f"were omitted (session cap {max_sessions})"
+        f"were omitted (session cap {max_root_tasks})"
         if omitted
         else ""
     )
@@ -305,7 +337,7 @@ def build_consolidation_digest(
         f"Window: {window}.\n"
         f"Sessions: {len(sections)} shown, newest first{dropped}.\n"
         f"Per-session transcripts are tail-truncated to "
-        f"{max_chars_per_session} characters."
+        f"{max_chars_per_root_task} characters."
     )
     return header + "\n\n" + "\n\n".join(sections) + "\n"
 
@@ -316,14 +348,14 @@ def build_consolidation_digest(
 
 
 def run_consolidation(
-    client: Any,
+    client: _ConsolidationHost,
     *,
     memory_root: Path,
     now: Optional[datetime] = None,
     debounce: bool = True,
     debounce_hours: float = DEFAULT_DEBOUNCE_HOURS,
-    max_sessions: int = DEFAULT_MAX_SESSIONS,
-    max_chars_per_session: int = DEFAULT_MAX_CHARS_PER_SESSION,
+    max_root_tasks: int = DEFAULT_MAX_ROOT_TASKS,
+    max_chars_per_root_task: int = DEFAULT_MAX_CHARS_PER_ROOT_TASK,
     include_task: Optional[Callable[[str], bool]] = None,
     on_seeded: Optional[Callable[[str], None]] = None,
 ) -> bool:
@@ -370,8 +402,8 @@ def run_consolidation(
     digest = build_consolidation_digest(
         client,
         since=since,
-        max_sessions=max_sessions,
-        max_chars_per_session=max_chars_per_session,
+        max_root_tasks=max_root_tasks,
+        max_chars_per_root_task=max_chars_per_root_task,
         include_task=include_task,
     )
     if digest is None:
@@ -385,5 +417,6 @@ def run_consolidation(
     # resolve the curation Engine against it.
     if on_seeded is not None:
         on_seeded(seeded.task_id)
-    client._yield_seeded_lease(seeded)  # noqa: SLF001 — the background-verb path
+    # Declared on the _ConsolidationHost Protocol — the background-drive path.
+    client._yield_seeded_lease(seeded)
     return True

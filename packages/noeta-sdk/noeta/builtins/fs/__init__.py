@@ -2,7 +2,7 @@
 
 The 9 fs tool classes; the refs point at the real tool classes so
 ``resolve()`` yields callable tool objects. NB: the *default* tool set of a
-bare ``Options`` still comes from ``BUILTIN_TOOL_CLASSES`` in the compile path
+bare ``Options`` still comes from ``builtin_tool_classes()`` in the compile path
 (byte-identity), so activating ``fs`` is identity-inert — this declaration is
 the reference manifest and the listing surface, not a second source of the
 default tools.

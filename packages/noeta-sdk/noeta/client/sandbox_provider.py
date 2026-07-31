@@ -43,8 +43,9 @@ an attach deployment's recordings are unchanged.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Mapping, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 
 __all__ = [
@@ -193,7 +194,7 @@ class SandboxProvider(Protocol):
     K8s API"); consumed only by the SDK's
     :class:`~noeta.client.sandbox.SandboxExecEnvManager`.
 
-    * :meth:`allocate` — build a **fresh** container for ``session_root_id`` from
+    * :meth:`allocate` — build a **fresh** container for ``root_task_id`` from
       ``spec`` and return its live :class:`SandboxHandle` (after a readiness
       probe). Called once, eagerly, at session open (``driver.seed_start``).
     * :meth:`release` — tear the container down (idempotent — releasing an
@@ -207,9 +208,9 @@ class SandboxProvider(Protocol):
       backend removes (D5-NAS / R2).
     """
 
-    def allocate(self, session_root_id: str, spec: SandboxSpec) -> SandboxHandle: ...
+    def allocate(self, root_task_id: str, spec: SandboxSpec) -> SandboxHandle: ...
 
-    def release(self, session_root_id: str) -> None: ...
+    def release(self, root_task_id: str) -> None: ...
 
     def attach(self, exec_env_ref: str) -> SandboxHandle: ...
 

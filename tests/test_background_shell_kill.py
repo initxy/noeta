@@ -14,7 +14,7 @@ Walks the kill half of the background-execution spine:
 * the ``shell_kill`` tool: happy path, no-runner error, unknown job_id.
 * Permission Guard gates ``shell_kill`` (``risk_level="high"``) — a policy that
   denies it blocks the call exactly as it gates ``shell_run``.
-* the human emergency-stop: ``kill_session`` stops ALL of a session's jobs.
+* the human emergency-stop: ``kill_root_task`` stops ALL of a session's jobs.
 """
 
 from __future__ import annotations
@@ -224,7 +224,7 @@ def test_kill_vs_natural_exit_race_one_terminal_one_push(tmp_path: Path) -> None
     Killed and an Exited (or a double push)."""
     pushes: list[str] = []
 
-    def _on_exit(session_id: str, job_id: str, summary: str, ref: ContentRef) -> None:
+    def _on_exit(root_task_id: str, job_id: str, summary: str, ref: ContentRef) -> None:
         pushes.append(job_id)
 
     for i in range(20):
@@ -252,7 +252,7 @@ def test_kill_vs_natural_exit_race_one_terminal_one_push(tmp_path: Path) -> None
 
 
 # ---------------------------------------------------------------------------
-# kill_session — human emergency-stop of ALL a session's jobs
+# kill_root_task — human emergency-stop of ALL a session's jobs
 # ---------------------------------------------------------------------------
 
 
@@ -270,7 +270,7 @@ def test_kill_session_stops_all_jobs(tmp_path: Path) -> None:
         )
         job_ids.append(out["job_id"])
     time.sleep(0.1)
-    killed = reg.kill_session("sess-1")
+    killed = reg.kill_root_task("sess-1")
     assert set(j["job_id"] for j in killed) == set(job_ids)
     for jid in job_ids:
         state = _await_terminal(reg, jid)
@@ -281,7 +281,7 @@ def test_kill_session_stops_all_jobs(tmp_path: Path) -> None:
 
 def test_kill_session_unknown_is_clean_noop(tmp_path: Path) -> None:
     reg, _, _ = _registry()
-    assert reg.kill_session("no-such-session") == []
+    assert reg.kill_root_task("no-such-session") == []
 
 
 # ---------------------------------------------------------------------------
@@ -301,8 +301,8 @@ def _end_turn(text: str = "done") -> LLMResponse:
 def test_driver_cancel_kills_session_background_jobs(tmp_path: Path) -> None:
     """Human emergency-stop: a control-plane ``cancel`` (the same
     call the web UI's ``POST /tasks/{id}/cancel`` makes) kills the session's
-    background shell jobs via ``SdkHost.kill_background_session`` → the registry
-    ``kill_session`` primitive (so a cancelled conversation leaves no orphan
+    background shell jobs via ``SdkHost.kill_background_shells`` → the registry
+    ``kill_root_task`` primitive (so a cancelled conversation leaves no orphan
     process). issue 04's session-close cascade reuses the SAME primitive."""
     ws = tmp_path / "ws"
     ws.mkdir()

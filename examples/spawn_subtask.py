@@ -30,15 +30,23 @@ import sys
 import tempfile
 from pathlib import Path
 
-from noeta.client import AgentDefinition, Client, Options
-from noeta.policies.control_semantics import SPAWN_SUBAGENT_TOOL
-from noeta.protocols.messages import (
+from noeta.sdk import (
+    AgentDefinition,
+    Client,
     LLMResponse,
+    Options,
     TextBlock,
     ToolUseBlock,
     Usage,
 )
-from noeta.testing.fake_llm import FakeLLMProvider
+from noeta.sdk.testing import FakeLLMProvider
+
+# The one deep import in this file: ``spawn_subagent`` is a CONTROL tool, whose
+# wire name is runtime vocabulary rather than part of the recipe surface, so it
+# has no ``noeta.sdk`` home. Only a script that fakes a model's tool call needs
+# it — a real agent never names it, the runtime mounts it. Importing the
+# constant beats hardcoding the string, which would drift silently on a rename.
+from noeta.policies.control_semantics import SPAWN_SUBAGENT_TOOL
 
 
 def _spawn_call(agent: str, goal: str) -> LLMResponse:

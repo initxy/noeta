@@ -642,15 +642,15 @@ class InteractionDriver:
         # ``None`` (the local path, byte-identical: ``task_id`` stays ``None`` so
         # ``create_task`` mints it, exactly as before). Addressing only (D5).
         pre_minted_task_id: Optional[str] = None
-        session_exec_env_ref: Optional[str] = None
+        bound_exec_env_ref: Optional[str] = None
         allocate = getattr(host, "allocate_exec_env", None)
         if callable(allocate):
             pre_minted_task_id = f"task-{uuid.uuid4().hex}"
-            session_exec_env_ref = allocate(pre_minted_task_id, workspace_dir)
+            bound_exec_env_ref = allocate(pre_minted_task_id, workspace_dir)
         seed_engine = host.resolve_engine_for_agent(
             agent, model=bound_model, workspace=workspace_dir, provider=bound_provider,
             permission_mode=permission_mode, effort=effort,
-            exec_env_ref=session_exec_env_ref,
+            exec_env_ref=bound_exec_env_ref,
         )
         # Record the per-session workspace absolute path AND the sandbox
         # container address on the durable ``TaskHostBound`` so a resumed /
@@ -660,18 +660,18 @@ class InteractionDriver:
         # passes no binding) mint a binding carrying whichever is set. Both
         # ``None`` keeps the no-binding path untouched (byte-identical).
         bound_host_binding = host_binding
-        if workspace_dir or session_exec_env_ref:
+        if workspace_dir or bound_exec_env_ref:
             if bound_host_binding is None:
                 bound_host_binding = TaskHostBoundPayload(
                     host_id="",
                     workspace_dir=workspace_dir,
-                    exec_env_ref=session_exec_env_ref,
+                    exec_env_ref=bound_exec_env_ref,
                 )
             else:
                 bound_host_binding = dataclasses.replace(
                     bound_host_binding,
                     workspace_dir=workspace_dir,
-                    exec_env_ref=session_exec_env_ref,
+                    exec_env_ref=bound_exec_env_ref,
                 )
         task = seed_engine.create_task(
             goal=goal,
@@ -735,7 +735,7 @@ class InteractionDriver:
             provider=bound_provider,
         )
         # Seed the goal as the first user turn (durable, resume-safe) BEFORE
-        # the step — same shape the in-process CodeSessionRunner uses.
+        # the step — same shape the in-process product runner uses.
         engine = host.resolve_engine(task)
         # Pre-loop activation of every contributed resident (spec §4.5) — the
         # generic successor of the three feature-named seed recorders. Each
@@ -827,7 +827,7 @@ class InteractionDriver:
         # activated by the workspace pack's init hooks (spec §4.5), run through
         # the SeedRecorder above alongside the memory index — replacing the
         # three feature-named seed recorders and the host's
-        # ``session_content_snapshots`` seam. The workspace factory captures the
+        # ``content_snapshots`` seam. The workspace factory captures the
         # SAME snapshot its renderer holds, so the recorded fingerprint still
         # equals the composed bytes by construction.
         return SeededTurn(task_id=task.task_id, lease=lease, prelude=None)
@@ -947,7 +947,7 @@ class InteractionDriver:
         # jobs, same as cancel/close (an orphaned ``npm run dev`` outlives the
         # task that started it). ``getattr`` so a host without background
         # execution (test doubles) is a clean no-op.
-        kill_bg = getattr(host, "kill_background_session", None)
+        kill_bg = getattr(host, "kill_background_shells", None)
         if callable(kill_bg):
             kill_bg(task_id)
 
@@ -1546,8 +1546,8 @@ class InteractionDriver:
         # conversation must not leave orphans). Reuses the per-job kill primitive
         # via the host seam; ``getattr`` so a host without background execution
         # (test doubles) is a clean no-op. issue 04's session-CLOSE cascade
-        # reuses the SAME ``kill_background_session`` primitive.
-        kill_bg = getattr(host, "kill_background_session", None)
+        # reuses the SAME ``kill_background_shells`` primitive.
+        kill_bg = getattr(host, "kill_background_shells", None)
         if callable(kill_bg):
             kill_bg(task_id)
         # background sub-agent cascade (docs/adr/background-subagent.md): the
@@ -1620,7 +1620,7 @@ class InteractionDriver:
         # record ``BackgroundShellKilled`` on the session-root stream).
         # ``getattr`` so a host without background execution (test doubles) is a
         # clean no-op. ``task_id`` here is the session root the jobs are keyed by.
-        kill_bg = getattr(host, "kill_background_session", None)
+        kill_bg = getattr(host, "kill_background_shells", None)
         if callable(kill_bg):
             kill_bg(task_id)
         # background sub-agent cascade (mirrors ``cancel``): free the registry's
@@ -1948,7 +1948,7 @@ class InteractionDriver:
     ) -> DriveOutcome:
         """Wake + lease + drive — the one-call woken seam (seed-then-drive).
 
-        Identical machine to ``CodeSessionRunner._drive_woken_command`` — the
+        Identical machine to the product runner's woken-command drive — the
         woken-command-prelude seam (issue 01) so the H2 ``consumed_wake_event``
         release discipline and the ``note_woken → prelude → run_one_step``
         ordering are NOT re-inlined per surface. The split halves are
@@ -2098,7 +2098,7 @@ class InteractionDriver:
         """Refuse a command whose task is not suspended on ``handle``; return
         the folded task on success.
 
-        Mirrors ``CodeSessionRunner.resume_with_goal`` /
+        Mirrors the product runner's goal-resume path /
         ``resolve_tool_approval`` guards: appending a goal / resolving an
         approval must not silently consume an unrelated wake condition. The
         folded task is returned so a caller (``send_goal``) can read the

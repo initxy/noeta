@@ -8,6 +8,41 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING — "session" is no longer an identity in engine/SDK names.**
+  `CONTEXT.md` bans naming a thing after a session (the engine knows only
+  Tasks), but the ban had drifted: a `session_id` that was really a task id, a
+  session-keyed cap, a sessions list. Every such name is renamed to the task
+  vocabulary it always meant, with **no compatibility aliases**. On the public
+  surface:
+  - `noeta.read_models.list_session_summaries` → `list_task_summaries` (the
+    module `noeta.read_models.sessions` → `noeta.read_models.tasks`); it always
+    returned one row per **task** stream.
+  - `HostConfig.max_background_jobs_per_session` →
+    `max_background_jobs_per_root_task`;
+    `HostConfig.max_background_subagents_per_session` →
+    `max_background_subagents_per_root_task`;
+    `HostConfig.sandbox_session_policy` → `sandbox_policy`.
+  - `SandboxProvider.allocate(session_root_id, …)` / `release(session_root_id)`
+    → `root_task_id` (a Protocol third-party hosts implement).
+  - `SdkHost.kill_background_session` / `purge_background_session` →
+    `kill_background_shells` / `purge_background_shells`.
+
+  The **durable wire is untouched** — no recorded event or state schema ever
+  carried a session field, so there is no migration: existing event logs fold
+  unchanged.
+
+  The construction-scope vocabulary is unaffected and now explicitly sanctioned:
+  `session_pack` / `SessionBuildContext` / `SessionInputs` /
+  `build_session_inputs` keep their names (a session pack builds one task's tool
+  set — a scope, not an identity).
+
+- `scripts/lint-naming.py` now enforces the rule instead of only banning
+  `class Session` / `SessionStore`: inside `packages/` and `examples/`, any
+  compound identifier containing "session" fails unless allow-listed. This is
+  what let the drift accumulate unnoticed.
+
 ## [0.4.0] - 2026-07-26
 
 ### Added

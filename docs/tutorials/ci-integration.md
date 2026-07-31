@@ -27,11 +27,8 @@ Create `tests/test_agent_smoke.py`:
 import tempfile
 from pathlib import Path
 
-from noeta.protocols.events import TaskCompletedPayload, answer_from_payload
-from noeta.protocols.messages import LLMResponse, TextBlock, Usage
-from noeta.sdk import Options, query
-from noeta.storage.memory import InMemoryContentStore
-from noeta.testing.fake_llm import FakeLLMProvider
+from noeta.sdk import LLMResponse, Options, TextBlock, Usage, query
+from noeta.sdk.testing import FakeLLMProvider
 
 
 def test_minimal_agent_runs():
@@ -55,28 +52,23 @@ def test_minimal_agent_runs():
     )
 
     with tempfile.TemporaryDirectory(prefix="noeta-ci-smoke-") as tmp:
-        envelopes = list(query(
+        result = query(
             options,
             goal="Say hello.",
             provider=provider,
             workspace_dir=Path(tmp),
             model="stub-model",
-        ))
+        )
 
-    # Verify we got a terminal state
-    types = [env.type for env in envelopes]
+    # ``result`` IS the envelope list, so stream-level assertions still work.
+    types = [env.type for env in result]
     assert "TaskCreated" in types, "Agent should create a task"
     assert "TaskCompleted" in types, "Agent should reach terminal state"
 
-    # Verify the answer is extractable
-    store = InMemoryContentStore()
-    answer = ""
-    for env in envelopes:
-        if env.type == "TaskCompleted":
-            assert isinstance(env.payload, TaskCompletedPayload)
-            answer = str(answer_from_payload(env.payload, store))
-
-    assert "Smoke test passed" in answer, f"Unexpected answer: {answer}"
+    # The terminal answer is already folded (and deref'd) onto the result;
+    # ``.answer()`` raises QueryFailedError if the task did not complete, so a
+    # failed run can never masquerade as a passing assertion.
+    assert "Smoke test passed" in str(result.answer())
 ```
 
 Run it locally:
@@ -95,12 +87,18 @@ If your agent uses custom tools, test that they're wired correctly:
 import tempfile
 from pathlib import Path
 
-from noeta.protocols.messages import (
-    LLMResponse, TextBlock, ToolUseBlock, Usage,
+from noeta.sdk import (
+    LLMResponse,
+    Options,
+    TextBlock,
+    ToolContext,
+    ToolResult,
+    ToolUseBlock,
+    Usage,
+    query,
+    tool,
 )
-from noeta.protocols.tool import ToolContext, ToolResult
-from noeta.sdk import Options, query, tool
-from noeta.testing.fake_llm import FakeLLMProvider
+from noeta.sdk.testing import FakeLLMProvider
 
 
 @tool(

@@ -9,7 +9,7 @@
 一个插件是一个包（或单个 `.py` 文件），它携带一份**静态 manifest**——一个名字，加上一组*贡献*，每条贡献指明一个 **surface**（`tool`、`guard`、`reminder`……）并指向填充它的代码。三步就能让一个插件干活：
 
 1. **声明（Declare）**——写下 manifest（一个 `[tool.noeta]` 表，或单文件里的 `PluginBuilder` 装饰器）。
-2. **加载（Load）**——`load_plugin_set(...)` 把 manifest 读进一个 `PluginSet`，*其间不运行任何插件代码*。这是宿主级的一步：它决定进程里有哪些插件代码可用。
+2. **加载（Load）**——`load_plugins(...)` 把 manifest 读进一个 `PluginSet`，*其间不运行任何插件代码*。这是宿主级的一步：它决定进程里有哪些插件代码可用。
 3. **激活（Activate）**——在 `Options.plugins` 里点名一个代理使用的插件，并把已加载的集合交给 `Client(options, plugins=...)`。激活是按代理的，并进入代理的身份。
 
 一个插件不给引擎**增添任何新能力**——它只是填充那些已经存在的扩展 surface。它带给你的是发现能力、一次零执行的列出、一次确定性的、经过冲突检查的合并，以及按代理的激活。
@@ -31,9 +31,9 @@ plugin.prompt_fragment("Answer in at most three sentences.", name="be-brief")
 `PluginBuilder(name)` 就是 manifest；每个方法记录一条贡献。按路径加载它——`builtins=False` 把内置目录挡在外面，于是你只看到自己的插件：
 
 ```python
-from noeta.sdk import load_plugin_set
+from noeta.sdk import load_plugins
 
-pset = load_plugin_set(builtins=False, modules=["./brevity.py"])
+pset = load_plugins(builtins=False, modules=["./brevity.py"])
 print(pset.names())               # ('brevity',)
 print(pset.contributions())       # every contribution — no plugin code ran
 ```
@@ -48,7 +48,7 @@ print(pset.contributions())       # every contribution — no plugin code ran
 from noeta.sdk import Options, Client, DEFAULT_PLUGINS
 
 # built-ins on, plus the local plugin
-pset = load_plugin_set(modules=["./brevity.py"])
+pset = load_plugins(modules=["./brevity.py"])
 
 options = Options(
     system_prompt="You are a coding agent.",
@@ -107,7 +107,7 @@ plugin.guard(BlockShellGuard(), name="block_shell")
 ```
 
 ```python
-pset = load_plugin_set(modules=["./block_shell.py"])
+pset = load_plugins(modules=["./block_shell.py"])
 client = Client(options, provider=..., workspace_dir=".", plugins=pset)
 # the guard gates shell_run for every agent — no activation needed
 ```
@@ -165,7 +165,7 @@ house_style/
 宿主用 `entry_points=True` 发现每一个已安装的插件。已安装的插件是任意代码，所以服务端风格的宿主还会传一个 `enabled` allow-list——只有获批的插件会加载，其余的在**被导入之前**就跳过：
 
 ```python
-pset = load_plugin_set(entry_points=True, enabled=["house-style"])
+pset = load_plugins(entry_points=True, enabled=["house-style"])
 ```
 
 ## 从目录加载，以及信任
@@ -181,10 +181,10 @@ pset = load_plugin_set(entry_points=True, enabled=["house-style"])
 - **`workspace_dirs`**——代理所操作的某个检出（checkout）下的 `.noeta/plugins`。因为这个目录是跟着不可信代码一起来的，所以**只有**当它的绝对路径被记录在信任存储里时才会被扫描；否则它会带着一个大声的 `UntrustedPluginDirWarning` 被跳过，绝不静默。
 
 ```python
-from noeta.sdk import grant_trust, load_plugin_set
+from noeta.sdk import grant_trust, load_plugins
 
 grant_trust("./workspace/.noeta/plugins")           # writes ~/.noeta/trust.json
-pset = load_plugin_set(workspace_dirs=["./workspace/.noeta/plugins"])
+pset = load_plugins(workspace_dirs=["./workspace/.noeta/plugins"])
 ```
 
 > 目录插件是宿主进程要运行的任意 Python 代码。信任门槛让加载它成为一个有意为之的动作，但它**不是**沙箱——只对你愿意从中运行代码的工作区授予信任。服务端风格的宿主应当坚持用 entry point 加上 `enabled` allow-list，别开启目录来源。
@@ -194,15 +194,15 @@ pset = load_plugin_set(workspace_dirs=["./workspace/.noeta/plugins"])
 端到端地加载，并对 `PluginSet` 做断言——全是公开面，不碰发现机制的内部。列出是零执行的，所以你可以在不运行插件的情况下对它的贡献做断言：
 
 ```python
-from noeta.sdk import load_plugin_set
+from noeta.sdk import load_plugins
 
 def test_block_shell_declares_its_guard():
-    pset = load_plugin_set(builtins=False, modules=["./block_shell.py"])
+    pset = load_plugins(builtins=False, modules=["./block_shell.py"])
     listed = [(c.surface, c.name) for _plugin, c in pset.contributions()]
     assert ("guard", "block_shell") in listed
 
 def test_guard_is_process_wide():
-    pset = load_plugin_set(builtins=False, modules=["./block_shell.py"])
+    pset = load_plugins(builtins=False, modules=["./block_shell.py"])
     guards, _observers = pset.process_hooks()
     assert [type(g).__name__ for g in guards] == ["BlockShellGuard"]
 ```

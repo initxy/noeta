@@ -203,7 +203,7 @@ def test_normal_client_passes_task_id_provider_headers_without_changing_request(
         event_log=log,
         content_store=cs,
         provider_headers=lambda ctx: {
-            "extra": f'{{"session_id":"{ctx.task_id}"}}',
+            "extra": f'{{"root_task_id":"{ctx.task_id}"}}',
             "X-TT-logid": ctx.task_id,
         },
     )
@@ -212,14 +212,14 @@ def test_normal_client_passes_task_id_provider_headers_without_changing_request(
 
     assert provider.headers == [
         {
-            "extra": '{"session_id":"task-abc"}',
+            "extra": '{"root_task_id":"task-abc"}',
             "X-TT-logid": "task-abc",
         }
     ]
     started = log.read("task-abc")[0]
     body = cs.get(started.payload.request_ref)
     assert body == to_canonical_bytes(_req())
-    assert "session_id" not in body.decode("utf-8")
+    assert "root_task_id" not in body.decode("utf-8")
 
 
 def test_normal_client_emits_three_events_on_provider_exception() -> None:

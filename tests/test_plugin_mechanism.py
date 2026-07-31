@@ -96,7 +96,7 @@ def test_standard_registry_has_all_sixteen_surfaces():
     assert len(STANDARD_SURFACES) == 16
     # A spot-check of the D3 table cells that carry mechanism meaning.
     assert reg.get("policy").collision_key == "single-valued"
-    assert reg.get("provider").merge_rule == "single"
+    assert reg.get("provider").collision_key == "single-valued"
     assert reg.get("reminder").ordering == "priority"
     assert reg.get("session_pack").ordering == "priority"
     assert reg.get("session_pack").activation_scope == "per-agent"
@@ -110,6 +110,16 @@ def test_standard_registry_has_all_sixteen_surfaces():
     assert reg.get("guard").collision_key == "none"
     assert reg.get("tool").plane == "identity"
     assert reg.get("mcp_server").collision_key == "alias"
+    # D11: every identity surface names the PluginActivation channel it feeds,
+    # which is what makes ``identity_activations`` table-driven. ``control_tool``
+    # is identity-plane but carried by its own per-agent projection.
+    assert reg.get("tool").activation_binding == "tool"
+    assert reg.get("content_kind").activation_binding == "content_kind"
+    assert reg.get("policy").activation_binding == "policy"
+    assert reg.get("control_tool").activation_binding == "elsewhere"
+    # Non-identity surfaces never bind into PluginActivation.
+    assert reg.get("guard").activation_binding is None
+    assert reg.get("session_pack").activation_binding is None
 
 
 def test_registry_is_fresh_each_call():
@@ -118,10 +128,31 @@ def test_registry_is_fresh_each_call():
 
 def test_registry_rejects_duplicate_surface_and_bad_type():
     reg = standard_registry()
-    with pytest.raises(PluginError):
-        reg.register(SurfaceSpec("tool", "identity", "per-agent", lambda v: None, "name", "append"))
+    duplicate = SurfaceSpec(
+        "tool", "identity", "per-agent", lambda v: None, "name",
+        activation_binding="tool",
+    )
+    with pytest.raises(PluginError, match="already registered"):
+        reg.register(duplicate)
     with pytest.raises(PluginError):
         reg.register(object())  # type: ignore[arg-type]
+
+
+def test_identity_surface_must_declare_an_activation_binding():
+    """D11: the binding is mandatory at construction, not discovered at projection.
+
+    An identity contribution with no binding would be dropped between resolve
+    and compile — how ``content_kind`` once went missing. ``SurfaceSpec``
+    refuses it before any plugin is loaded.
+    """
+    with pytest.raises(PluginError, match="declares no activation_binding"):
+        SurfaceSpec("gizmo", "identity", "per-agent", lambda v: None, "name")
+    # The mirror rule: a non-identity surface may not claim a binding.
+    with pytest.raises(PluginError, match="only\\s+identity-plane"):
+        SurfaceSpec(
+            "gadget", "wiring", "process", lambda v: None, "none",
+            activation_binding="tool",
+        )
 
 
 def test_registry_get_unknown_surface_names_it():

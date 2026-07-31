@@ -18,9 +18,10 @@ and tears everything down.
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional, TypedDict
 
 from noeta.agent.registry import AgentRegistry
 from noeta.context.reminders import ReminderSpec
@@ -35,7 +36,7 @@ from noeta.execution import (
 )
 from noeta.client.messages import ViewItem, as_messages
 from noeta.client.parts import resolve_model_alias
-from noeta.execution.driver import DriveOutcome
+from noeta.execution.driver import DriveOutcome, SeededTurn
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.dispatcher import Dispatcher
 from noeta.protocols.errors import CodedError
@@ -72,7 +73,23 @@ from noeta.client.options import (
 from noeta.client.plugin_set import PluginSet
 
 
-__all__ = ["Client", "QueryFailedError", "QueryResult", "query"]
+__all__ = ["Client", "DeleteTaskResult", "QueryFailedError", "QueryResult", "query"]
+
+
+class DeleteTaskResult(TypedDict, total=False):
+    """The typed shape :meth:`Client.delete_task` returns.
+
+    ``ok`` and ``task_id`` are always present; ``deleted`` lists the purged
+    task ids (the root plus its subtask tree) and ``reason`` appears only on a
+    refusal (``"running"`` / ``"not_found"``). Declared so a caller mapping
+    the result onto an HTTP status gets the keys checked rather than guessing
+    at a bare ``dict[str, Any]``.
+    """
+
+    ok: bool
+    task_id: str
+    deleted: list[str]
+    reason: str
 
 
 #: Deployment model-selector allowlist the SDK applies when the host config
@@ -246,20 +263,24 @@ def _seam_providers(
 class Client:
     """High-level conversation driver over an ``Options`` recipe.
 
-    Typical use::
+    Typical use — as a context manager, so ``shutdown`` (observer teardown,
+    worker stop, sandbox reap) cannot be forgotten::
 
-        client = Client(my_options, provider=my_provider,
-                        workspace_dir=Path("."))
-        try:
+        with Client(my_options, provider=my_provider) as client:
             outcome = client.start(goal="fix my tests", agent="main")
             # read events, or follow up with send_goal / approve / deny / answer / …
+
+    The explicit form is equivalent::
+
+        client = Client(my_options, provider=my_provider)
+        try:
+            outcome = client.start(goal="fix my tests")
         finally:
             client.shutdown()
 
     Or the one-shot sugar::
 
-        envelopes = query(my_options, goal="fix my tests",
-                          provider=my_provider, workspace_dir=Path("."))
+        result = query(my_options, goal="fix my tests", provider=my_provider)
 
     Storage defaults to in-memory, but a :class:`HostConfig` (the D3 host-level
     wiring surface) can inject an external durable triple plus the host runtime
@@ -293,27 +314,20 @@ class Client:
                 " kwarg or set Options.provider"
             )
 
-        # 0b. Resolve workspace_dir: explicit kwarg > Options.cwd
-        #     (both treated as wiring-only, never inspected by compile_options).
+        # 0b. Resolve workspace_dir: explicit kwarg > Options.cwd > CWD.
+        #     (Both fields are wiring-only, never inspected by compile_options.)
+        #     Falling back to the process working directory matches the
+        #     ``SdkHost.workspace_dir`` field default: an agent that never
+        #     touches the filesystem should not have to be handed a directory
+        #     to answer a question, and the two layers disagreeing about
+        #     whether a default exists was the only reason this raised.
         effective_workspace_dir: Path
         if workspace_dir is not None:
             effective_workspace_dir = Path(workspace_dir)
         elif options.cwd is not None:
-            # ``Options.cwd`` is typed ``object`` (it is wiring, excluded from
-            # the identity hash), so this is a real input check, not a typing
-            # narrowing — it must not be an ``assert`` that ``python -O``
-            # strips into a confusing ``Path()`` TypeError.
-            if not isinstance(options.cwd, (str, Path)):
-                raise TypeError(
-                    "Options.cwd must be a str or Path, got "
-                    f"{type(options.cwd).__name__}"
-                )
             effective_workspace_dir = Path(options.cwd)
         else:
-            raise ValueError(
-                "a workspace directory is required — pass one via the "
-                "Client(workspace_dir=...) kwarg or set Options.cwd"
-            )
+            effective_workspace_dir = Path.cwd()
 
         # 1. Compile + register (including child agents).
         #    Manifest-level collision detection first (zero execution): duplicate
@@ -551,7 +565,7 @@ class Client:
             # Execution-tier per-session sandbox opt-out (D-C). ``None`` (default)
             # ⇒ provision as before; a policy returning False keeps a session on
             # the local backend even while a provider is configured.
-            sandbox_session_policy=hc.sandbox_session_policy,
+            sandbox_policy=hc.sandbox_policy,
             # Memory store addressing (issue #53): the host-level roots plus the
             # per-task resolver seam for multi-tenant hosts. All default to
             # absent, so a bare HostConfig() keeps the SDK global default root —
@@ -566,9 +580,9 @@ class Client:
             workflow_allowed=hc.workflow_allowed,
             # Per-session background concurrency caps (shell jobs / sub-agents).
             # Both default to 8, so a bare HostConfig() is unchanged.
-            max_background_jobs_per_session=hc.max_background_jobs_per_session,
-            max_background_subagents_per_session=(
-                hc.max_background_subagents_per_session
+            max_background_jobs_per_root_task=hc.max_background_jobs_per_root_task,
+            max_background_subagents_per_root_task=(
+                hc.max_background_subagents_per_root_task
             ),
             # Workspace instruction files: the root NOETA.md / AGENTS.md at
             # session start, and the subdirectory files discovered as the model
@@ -642,28 +656,29 @@ class Client:
         # turn-boundary completion push for BOTH a ``shell_run(background=true)``
         # job and a ``spawn_subagent(background=True)`` sub-agent: when one
         # finishes while the session is idle, the host's drive thread wakes the
-        # session and injects an ``origin="system"`` notice. ``getattr`` so a host
-        # without the seam (a test double) is a clean no-op.
-        set_notifier = getattr(self._host, "set_background_notifier", None)
-        if callable(set_notifier):
-            set_notifier(self._driver)
+        # session and injects an ``origin="system"`` notice. Called directly:
+        # ``self._host`` is the SdkHost this constructor just built, so probing
+        # for the seam with ``getattr`` only made a typo'd method name look
+        # like a disabled feature.
+        self._host.set_background_notifier(self._driver)
         # Crash recovery (docs/adr/background-subagent.md): now that the notifier
         # is wired, re-activate background sub-agents orphaned by a prior host
         # crash — re-drive any ``spawn_subagent(background=True)`` child with a
         # ``BackgroundSubagentStarted`` but no ``BackgroundSubagentDelivered``
         # (it resumes from its own EventLog), or re-deliver a terminal one whose
         # turn-boundary notice was lost. A one-shot startup side effect (never
-        # resumed); a no-op for an in-memory ``query()`` Client (no prior
-        # streams) and for a host without the seam (test double / no policy
-        # wrapper → registry unbuilt). ``getattr`` keeps both cases clean.
-        recover = getattr(self._host, "recover_background_subagents", None)
-        if callable(recover):
-            recover()
+        # resumed); an internal no-op for an in-memory ``query()`` Client (no
+        # prior streams) and when the registry is unbuilt (no policy wrapper),
+        # which the host itself handles — the caller needs no guard.
+        self._host.recover_background_subagents()
         self._main_agent_name = main_spec.name
         self._registry = registry
-        # can_use_tool callback (wiring-only, not part of the AgentSpec identity)
+        # can_use_tool callback (wiring-only, not part of the AgentSpec identity).
+        # ``Options.can_use_tool`` now carries its real callable type, so this
+        # is a plain assignment — it used to need a ``type: ignore`` purely
+        # because the field was annotated ``object``.
         self._can_use_tool: Optional[Callable[[str, dict[str, Any]], bool]] = (
-            options.can_use_tool  # type: ignore[assignment]
+            options.can_use_tool
         )
 
     # -- 1:1 pass-throughs to driver ----------------------------------------
@@ -742,7 +757,7 @@ class Client:
         workspace_dir: Optional[str] = None,
         effort: Optional[str] = None,
         activations: tuple[str, ...] = (),
-    ) -> Any:
+    ) -> DriveOutcome:
         """Create a Task and drive the first turn (driver ``start``).
 
         ``agent`` defaults to the Options-compiled main spec's name
@@ -795,7 +810,7 @@ class Client:
         enabled_mcp: tuple[str, ...] = (),
         effort: Optional[str] = None,
         activations: tuple[str, ...] = (),
-    ) -> Any:
+    ) -> DriveOutcome:
         """Append a new user turn (driver ``send_goal``).
 
         ``images`` rides the appended user turn alongside the goal text
@@ -833,7 +848,7 @@ class Client:
         call_id: str,
         reason: Optional[str] = None,
         resolver: str = "client",
-    ) -> Any:
+    ) -> DriveOutcome:
         """Approve a pending gated tool call (driver ``approve``).
 
         The resumed turn drains through ``can_use_tool`` like every other
@@ -854,7 +869,7 @@ class Client:
         call_id: str,
         reason: Optional[str] = None,
         resolver: str = "client",
-    ) -> Any:
+    ) -> DriveOutcome:
         """Deny a pending gated tool call (driver ``deny``).
 
         The resumed turn drains through ``can_use_tool`` (see :meth:`approve`).
@@ -871,7 +886,7 @@ class Client:
         question_id: str,
         answers: dict[str, Any],
         answered_by: str = "client",
-    ) -> Any:
+    ) -> DriveOutcome:
         """Answer a pending structured user question (driver ``answer``).
 
         The resumed turn drains through ``can_use_tool`` (see :meth:`approve`).
@@ -890,7 +905,7 @@ class Client:
         *,
         event_kind: str,
         payload: Any = None,
-    ) -> Any:
+    ) -> DriveOutcome:
         """Deliver an external event to a ``wait_external``-suspended task
         (driver ``deliver_event``).
 
@@ -929,7 +944,7 @@ class Client:
         workspace_dir: Optional[str] = None,
         effort: Optional[str] = None,
         activations: tuple[str, ...] = (),
-    ) -> Any:
+    ) -> SeededTurn:
         """Create + validate + lease a first turn WITHOUT driving it
         (driver ``seed_start``); pass the result to :meth:`drive_seeded`.
 
@@ -961,7 +976,7 @@ class Client:
         enabled_mcp: tuple[str, ...] = (),
         effort: Optional[str] = None,
         activations: tuple[str, ...] = (),
-    ) -> Any:
+    ) -> SeededTurn:
         """Validate + seed a follow-up user turn WITHOUT driving it
         (driver ``seed_send_goal``).
 
@@ -987,7 +1002,7 @@ class Client:
         call_id: str,
         reason: Optional[str] = None,
         resolver: str = "client",
-    ) -> Any:
+    ) -> SeededTurn:
         """Validate + seed an approve-and-resume turn (driver ``seed_approve``)."""
         return self._driver.seed_approve(
             task_id, call_id=call_id, reason=reason, resolver=resolver
@@ -1000,7 +1015,7 @@ class Client:
         call_id: str,
         reason: Optional[str] = None,
         resolver: str = "client",
-    ) -> Any:
+    ) -> SeededTurn:
         """Validate + seed a deny-and-resume turn (driver ``seed_deny``)."""
         return self._driver.seed_deny(
             task_id, call_id=call_id, reason=reason, resolver=resolver
@@ -1013,7 +1028,7 @@ class Client:
         question_id: str,
         answers: dict[str, Any],
         answered_by: str = "client",
-    ) -> Any:
+    ) -> SeededTurn:
         """Validate + seed an answer-and-resume turn (driver ``seed_answer``)."""
         return self._driver.seed_answer(
             task_id,
@@ -1028,14 +1043,14 @@ class Client:
         *,
         event_kind: str,
         payload: Any = None,
-    ) -> Any:
+    ) -> SeededTurn:
         """Validate + seed an external-event resume turn (driver
         ``seed_deliver_event``)."""
         return self._driver.seed_deliver_event(
             task_id, event_kind=event_kind, payload=payload
         )
 
-    def drive_seeded(self, seeded: Any) -> Any:
+    def drive_seeded(self, seeded: SeededTurn) -> DriveOutcome:
         """Drive a seeded turn to its trailing suspend / terminal (driver
         ``drive_seeded``), then loop-resolve ``can_use_tool`` approvals —
         the same tail the one-call verbs run."""
@@ -1048,7 +1063,7 @@ class Client:
         *,
         reason: str = "cancelled",
         cascade: bool = False,
-    ) -> Any:
+    ) -> DriveOutcome:
         """Cancel a conversation (driver ``cancel``)."""
         return self._driver.cancel(task_id=task_id, reason=reason, cascade=cascade)
 
@@ -1058,7 +1073,7 @@ class Client:
         *,
         closed_by: str = "user",
         reason: Optional[str] = None,
-    ) -> Any:
+    ) -> DriveOutcome:
         """Close / archive a conversation (driver ``close``)."""
         return self._driver.close(task_id=task_id, closed_by=closed_by, reason=reason)
 
@@ -1068,7 +1083,7 @@ class Client:
         *,
         reopened_by: str = "user",
         reason: Optional[str] = None,
-    ) -> Any:
+    ) -> DriveOutcome:
         """Explicitly reopen a closed conversation (driver ``reopen``)."""
         return self._driver.reopen(
             task_id=task_id, reopened_by=reopened_by, reason=reason
@@ -1119,7 +1134,7 @@ class Client:
         """
         return list(self._host.event_log.list_task_streams())
 
-    def delete_task(self, task_id: str) -> dict[str, Any]:
+    def delete_task(self, task_id: str) -> DeleteTaskResult:
         """Hard-delete a task and its subtask tree from storage.
 
         The conversation *is* the task (D6), so "delete the session" purges each
@@ -1176,27 +1191,26 @@ class Client:
                 return {"ok": False, "reason": "running", "task_id": tid, "deleted": []}
         purge_events = getattr(event_log, "purge_task", None)
         purge_disp = getattr(dispatcher, "purge_task", None)
+        # ``purge_task`` stays ``getattr``-probed: the event log and dispatcher
+        # are Protocol-typed INJECTIONS, and a storage backend legitimately may
+        # not implement a hard purge. The host accelerators below are not —
+        # they are methods on the SdkHost this Client built, so they are called
+        # directly.
+        #
         # In-memory host accelerators keyed by task/session id (per-turn
         # carriers, retained background-shell job handles, background sub-agent
         # tracking) are NOT storage, so the storage purge above leaves them
         # resident — a leak for the lifetime of the process across many deleted
-        # conversations. Reclaim them here too, per subtree target (the seams
-        # no-op for a tid they hold nothing for). getattr keeps the purge working
-        # against a host/backend that lacks a given accelerator.
-        forget_carriers = getattr(self._host, "forget_turn_carriers", None)
-        purge_bg_jobs = getattr(self._host, "purge_background_session", None)
-        forget_bg_agents = getattr(self._host, "forget_background_subagents", None)
+        # conversations. Reclaim them here too, per subtree target (each seam
+        # no-ops for a tid it holds nothing for).
         for tid in targets:
             if callable(purge_events):
                 purge_events(tid)
             if callable(purge_disp):
                 purge_disp(tid)
-            if callable(forget_carriers):
-                forget_carriers(tid)
-            if callable(purge_bg_jobs):
-                purge_bg_jobs(tid)
-            if callable(forget_bg_agents):
-                forget_bg_agents(tid)
+            self._host.forget_turn_carriers(tid)
+            self._host.purge_background_shells(tid)
+            self._host.forget_background_subagents(tid)
         return {"ok": True, "task_id": task_id, "deleted": targets}
 
     def _genesis_parent(self, task_id: str) -> Optional[str]:
@@ -1336,13 +1350,11 @@ class Client:
             return True
         for loop in self._worker_loops:
             loop.stop()
-        deadline = (
-            None if timeout is None else (__import__("time").monotonic() + timeout)
-        )
+        deadline = None if timeout is None else (time.monotonic() + timeout)
         for th in self._worker_threads:
             remaining = None
             if deadline is not None:
-                remaining = max(0.0, deadline - __import__("time").monotonic())
+                remaining = max(0.0, deadline - time.monotonic())
             th.join(timeout=remaining)
         all_joined = all(not t.is_alive() for t in self._worker_threads)
         if not all_joined:
@@ -1384,11 +1396,27 @@ class Client:
         """
         self._host.add_sandbox_lifecycle_listener(on_allocate, on_release)
 
+    # -- context manager ---------------------------------------------------
+
+    def __enter__(self) -> "Client":
+        """Enter a ``with`` block; the client is already fully constructed."""
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        """Always :meth:`shutdown` on the way out — including on an exception.
+
+        ``shutdown`` is what unsubscribes observers, stops the worker pool and
+        reaps a sandbox container, so leaking it leaks a container per Client.
+        Never suppresses the exception (returns ``None``).
+        """
+        self.shutdown()
+
     def shutdown(self) -> None:
         """Stop resident workers (if any), then unsubscribe observers.
 
-        Idempotent. Does **not** explicitly close in-memory stores
-        (they are process-owned).
+        Idempotent, so it is safe to call explicitly inside a ``with`` block.
+        Does **not** explicitly close in-memory stores (they are
+        process-owned).
         """
         if self._shutdown:
             return
@@ -1518,6 +1546,20 @@ class QueryResult(list[EventEnvelope]):
             raise self._failure
         return self._answer
 
+    def __repr__(self) -> str:
+        """A compact summary, not the whole envelope stream.
+
+        ``QueryResult`` *is* a ``list[EventEnvelope]``, so the inherited repr
+        dumps every envelope — unreadable at a REPL, which is exactly where a
+        one-shot result gets printed. This reports what the caller actually
+        wants to see; the stream is still there by iteration.
+        """
+        state = "failed" if self._failure is not None else "completed"
+        return (
+            f"QueryResult(task_id={self.task_id!r}, status={state!r}, "
+            f"events={len(self)}, messages={len(self._view)})"
+        )
+
 
 def _materialize_query_result(client: Client, outcome: Any) -> QueryResult:
     """Fold everything ref-carrying against the live host store.
@@ -1578,6 +1620,7 @@ def query(
     model: Optional[str] = None,
     images: Sequence[ImageBlock] = (),
     plugins: Optional[PluginSet] = None,
+    host_config: Optional[HostConfig] = None,
 ) -> QueryResult:
     """One-shot SDK query: single turn, all envelopes + folded projections.
 
@@ -1592,10 +1635,14 @@ def query(
     ``output_ref``) that only the temporary Client's ContentStore could
     resolve — never hand them to ``as_messages`` with a fresh store.
 
-    Parameters match the ``Client`` constructor + a ``goal`` string.
-    Callers who need multi-turn interactions (``send_goal`` /
-    ``approve`` / …) or access to the compiled registry should
-    instantiate ``Client`` directly instead of going through ``query``.
+    Parameters match the ``Client`` constructor + a ``goal`` string —
+    including ``host_config``, so the sugar path is **not** limited to
+    in-memory storage: ``query(..., host_config=HostConfig(storage_path=
+    "noeta.sqlite"))`` records the run durably, and the same one-shot call can
+    opt into any other host wiring (preview gateway, MCP resolver, memory
+    roots). Callers who need multi-turn interactions (``send_goal`` /
+    ``approve`` / …) or access to the compiled registry should instantiate
+    ``Client`` directly instead of going through ``query``.
     """
     client = Client(
         options,
@@ -1604,6 +1651,7 @@ def query(
         model=model,
         multi_turn=False,
         plugins=plugins,
+        host_config=host_config,
     )
     try:
         outcome = client.start(goal=goal, images=images)

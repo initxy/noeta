@@ -27,7 +27,6 @@ compared. Exit status is ``0`` when every path is consistent, ``1`` otherwise.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,10 +35,12 @@ from typing import Any, Mapping, Optional, Sequence
 from noeta.client.plugin_manifest import (
     MANIFEST_BASENAME,
     ManifestContribution,
-    PluginBuilder,
     PluginManifest,
+    exec_plugin_file,
+    find_builder,
     parse_manifest_text,
     read_manifest_file,
+    ref_attr_name,
 )
 from noeta.client.plugins import PluginError
 
@@ -67,39 +68,9 @@ def derive_manifest(plugin_py: Path) -> PluginManifest:
     (the same trust class the single-file loader assumes). A missing / duplicate
     ``PluginBuilder`` raises :class:`PluginError`, naming the file.
     """
-    module = _exec_module(plugin_py)
-    builder = _find_builder(module, plugin_py)
+    module = exec_plugin_file(plugin_py, module_prefix="_noeta_plugin_check_")
+    builder = find_builder(module, plugin_py)
     return builder.manifest()
-
-
-def _exec_module(path: Path) -> Any:
-    spec = importlib.util.spec_from_file_location(f"_noeta_plugin_check_{path.stem}", path)
-    if spec is None or spec.loader is None:
-        raise PluginError(f"plugin file {path} could not be loaded")
-    module = importlib.util.module_from_spec(spec)
-    try:
-        spec.loader.exec_module(module)
-    except Exception as exc:  # noqa: BLE001 — surface any import fault, named
-        raise PluginError(f"plugin file {path} failed to import: {exc}") from exc
-    return module
-
-
-def _find_builder(module: Any, origin: Path) -> PluginBuilder:
-    candidate = getattr(module, "plugin", None)
-    if isinstance(candidate, PluginBuilder):
-        return candidate
-    found = [v for v in vars(module).values() if isinstance(v, PluginBuilder)]
-    if len(found) == 1:
-        return found[0]
-    if not found:
-        raise PluginError(
-            f"plugin {origin}: no module-level PluginBuilder found "
-            f"(assign one to `plugin`)"
-        )
-    raise PluginError(
-        f"plugin {origin}: multiple PluginBuilder instances found — expose one "
-        f"as `plugin`"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -130,28 +101,41 @@ def find_shipped_manifest(directory: Path) -> Optional[tuple[PluginManifest, Pat
 # ---------------------------------------------------------------------------
 
 
-def _ref_attr(ref: Optional[str]) -> Optional[str]:
-    """The attribute portion of a ``ref`` (after ``:`` / final dotted component)."""
-    if ref is None:
-        return None
-    _module, sep, attr = ref.partition(":")
-    tail = attr if sep else ref
-    return tail.rsplit(".", 1)[-1] or None
-
-
 def _norm_scalar(value: Any) -> Any:
     return list(value) if isinstance(value, (list, tuple)) else value
 
 
+#: Ordering / binding params the **loader** defaults when a manifest omits
+#: them, paired with the value that omission means. A hand-written
+#: ``noeta-plugin.toml`` that leaves ``priority`` out is byte-identical in
+#: runtime effect to one that writes ``priority = 0`` — the decorators always
+#: stamp the explicit value — so comparing them raw reported drift for two
+#: manifests that behave identically. Normalizing to "absent" on BOTH sides
+#: keeps the verifier honest about what actually differs.
+#:
+#: The values mirror ``plugin_set._priority`` / ``plugin_set._seams``; a change
+#: there must be reflected here (the pair is small and pinned by a test).
+_DEFAULTED_PARAMS: Mapping[str, Any] = {
+    "priority": 0,
+    "seams": [],
+}
+
+
 def _norm_params(params: Mapping[str, Any]) -> dict[str, Any]:
-    return {k: _norm_scalar(v) for k, v in params.items()}
+    out: dict[str, Any] = {}
+    for key, value in params.items():
+        normalized = _norm_scalar(value)
+        if key in _DEFAULTED_PARAMS and normalized == _DEFAULTED_PARAMS[key]:
+            continue  # an explicit default is the same manifest as an omission
+        out[key] = normalized
+    return out
 
 
 def _norm_contribution(c: ManifestContribution) -> dict[str, Any]:
     return {
         "surface": c.surface,
         "name": c.name,
-        "ref_attr": _ref_attr(c.ref),
+        "ref_attr": ref_attr_name(c.ref),
         "path": c.path,
         "params": _norm_params(c.params),
     }

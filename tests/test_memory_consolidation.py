@@ -22,7 +22,7 @@ from noeta.agent.spec import agent_activates
 from noeta.client.consolidation import (
     CONSOLIDATION_AGENT_NAME,
     CONSOLIDATION_MARKER_FILENAME,
-    _session_transcript,
+    _root_task_transcript,
     build_consolidation_digest,
     consolidation_due,
     read_consolidation_marker,
@@ -236,7 +236,7 @@ def test_digest_session_cap_newest_first_and_dropped_stated(tmp_path: Path) -> N
         client.start(goal="goal-one oldest")
         client.start(goal="goal-two middle")
         client.start(goal="goal-three newest")
-        digest = build_consolidation_digest(client, max_sessions=2)
+        digest = build_consolidation_digest(client, max_root_tasks=2)
     finally:
         client.shutdown()
     assert digest is not None
@@ -281,7 +281,7 @@ def test_transcript_skips_system_injected_and_non_text_turns() -> None:
             Message(role="assistant", content=[TextBlock(text="assistant text")]),
         ],
     )
-    text = _session_transcript([env], store, max_chars=10_000)
+    text = _root_task_transcript([env], store, max_chars=10_000)
     assert text == "user: real user text\nassistant: assistant text"
 
 
@@ -293,7 +293,7 @@ def test_transcript_tail_truncation_keeps_recent_turns() -> None:
         )
         for i in range(100)
     ]
-    text = _session_transcript(envs, store, max_chars=200)
+    text = _root_task_transcript(envs, store, max_chars=200)
     assert text.startswith("[... earlier turns omitted]\n")
     assert "turn-0099" in text  # the tail (most recent) survives
     assert "turn-0000" not in text  # the head is dropped

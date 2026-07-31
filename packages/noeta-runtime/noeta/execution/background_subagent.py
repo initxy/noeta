@@ -52,18 +52,18 @@ _log = logging.getLogger(__name__)
 
 
 __all__ = [
-    "DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_SESSION",
+    "DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_ROOT_TASK",
     "BackgroundSubagentRegistry",
 ]
 
 
 #: Per-session background sub-agent concurrency cap (mirrors the background-shell
-#: ``DEFAULT_MAX_BACKGROUND_JOBS_PER_SESSION`` job cap). ``capacity`` REJECTS the
+#: ``DEFAULT_MAX_BACKGROUND_JOBS_PER_ROOT_TASK`` job cap). ``capacity`` REJECTS the
 #: next launch over this ceiling (it does NOT queue — a clear "let one finish"
 #: refusal is more direct for an agent than an invisible wait). v1 default;
 #: ``HostConfig`` overrides it. A runtime accelerator: the count is recomputed
 #: from the live table, never the log, so a rejected launch writes no event.
-DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_SESSION = 8
+DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_ROOT_TASK = 8
 
 
 #: ``(parent_task_id) -> DrainHost`` — build the delegation host for a parent's
@@ -89,14 +89,14 @@ class BackgroundSubagentRegistry:
         dispatcher: Dispatcher,
         build_host: BuildHostFn,
         deliver: DeliverFn,
-        max_per_session: int = DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_SESSION,
+        max_per_root_task: int = DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_ROOT_TASK,
     ) -> None:
         self._event_log = event_log
         self._content_store = content_store
         self._dispatcher = dispatcher
         self._build_host = build_host
         self._deliver = deliver
-        self._max_per_session = max_per_session
+        self._max_per_root_task = max_per_root_task
         self._lock = threading.Lock()
         # session-root task id -> set of in-flight background child ids.
         self._inflight: dict[str, set[str]] = {}
@@ -109,10 +109,10 @@ class BackgroundSubagentRegistry:
         over-cap launch leaves no trace (reject, don't queue)."""
         with self._lock:
             running = len(self._inflight.get(parent_task_id, ()))
-        if running >= self._max_per_session:
+        if running >= self._max_per_root_task:
             return (
                 f"too many background sub-agents "
-                f"({running}/{self._max_per_session}) running for this session; "
+                f"({running}/{self._max_per_root_task}) running for this session; "
                 "let one finish before starting another"
             )
         return None
@@ -218,7 +218,7 @@ class BackgroundSubagentRegistry:
 
     # -- session teardown --------------------------------------------------
 
-    def forget_session(self, parent_task_id: str) -> None:
+    def forget_root_task(self, parent_task_id: str) -> None:
         """Drop a session's in-flight tracking (cancel / close cascade).
 
         The drive itself is torn down cooperatively by the ``cancel_check`` the

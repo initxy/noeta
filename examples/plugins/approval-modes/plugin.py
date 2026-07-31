@@ -52,9 +52,9 @@ Installed as a package it is discovered via its ``noeta.plugins`` entry point +
 its shipped ``noeta-plugin.toml`` (see ``pyproject.toml``). In this repository
 it is loaded by explicit path — no install::
 
-    from noeta.sdk import Client, load_plugin_set, presets
+    from noeta.sdk import Client, load_plugins, presets
 
-    pset = load_plugin_set(
+    pset = load_plugins(
         builtins=False,
         modules=["examples/plugins/approval-modes/plugin.py"],
     )

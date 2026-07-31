@@ -9,7 +9,7 @@ from noeta.sdk import (
     # the surface registry (the generality mechanism)
     SurfaceSpec, SurfaceRegistry, standard_registry,
     # the loader + the loaded set
-    load_plugin_set, PluginSet,
+    load_plugins, PluginSet,
     # activation
     PluginActivation, DEFAULT_PLUGINS,
     # trust + errors
@@ -17,7 +17,7 @@ from noeta.sdk import (
 )
 ```
 
-> `load_plugin_set` 是 `noeta.client.plugin_set.load_plugins` 在 `noeta.sdk` 里的名字（内部函数叫 `load_plugins`；它以 `load_plugin_set` 别名重新导出，以免与将被移除的 0.4.0 `load_plugins` 撞名，见[已移除的 bundle 路径](#the-retired-bundle-path)）。
+> `load_plugins` 是 `noeta.client.plugin_set.load_plugins` 在 `noeta.sdk` 里的名字（内部函数叫 `load_plugins`；它以 `load_plugins` 别名重新导出，以免与将被移除的 0.4.0 `load_plugins` 撞名，见[已移除的 bundle 路径](#the-retired-bundle-path)）。
 
 > 全文不给行号——它们每次编辑都会漂移。模块路径加成员名才是稳定坐标。
 
@@ -27,7 +27,7 @@ from noeta.sdk import (
 
 - 一个**插件（Plugin）**（`D1`）是一个包（或单个 `.py` 文件），携带一份**静态 manifest**：一个 `name`、一个 `requires-noeta` 版本范围、一个可选的 `config-schema`，以及一组**贡献（contribution）**——每条贡献指明一个 **surface**，外加一个 `ref`（import 字符串）或 `path`（资源）。
 - 一个 **Surface**（`D2`/`D3`）是一个扩展点——`tool`、`guard`、`policy`、`reminder`……每个 surface 都有一个 `SurfaceSpec`，描述对它的贡献如何校验、如何判冲突、如何合并、如何排序。加载器是**与 surface 无关的（surface-agnostic）**：它只查询 registry、别无其他，所以宿主可以注册自己的 surface。
-- **加载（Load）**（`D5`，宿主级）：`load_plugin_set(...) -> PluginSet`——决定进程里有哪些插件*代码*可用。一个 `PluginSet` **无需执行任何插件代码**就能被列出并做冲突检查。
+- **加载（Load）**（`D5`，宿主级）：`load_plugins(...) -> PluginSet`——决定进程里有哪些插件*代码*可用。一个 `PluginSet` **无需执行任何插件代码**就能被列出并做冲突检查。
 - **激活（Activate）**（`D5`，代理级）：`Options.plugins: list[str]` 和 `AgentDefinition.plugins`——决定*这个代理*使用哪些已加载的插件。激活会进入 `AgentSpec` 身份。`Client(options, plugins=<PluginSet>)` 把两者绑在一起；一个不在已加载集合里的激活名会让构建失败。
 
 ## Manifest 格式（`D1`）
@@ -180,7 +180,7 @@ reg = standard_registry()                       # a fresh copy
 reg.register(SurfaceSpec(
     "http_route", "host", "host-wired", _valid_route, "name", "append",
 ))
-plugins = load_plugin_set(registry=reg, ...)    # the host's surface is live
+plugins = load_plugins(registry=reg, ...)    # the host's surface is live
 ```
 
 `SurfaceRegistry` 的方法：`register(spec)`（重复的名字会抛错）、`get(name)`、`names()`、`__contains__`、`copy()`。
@@ -189,7 +189,7 @@ plugins = load_plugin_set(registry=reg, ...)    # the host's surface is live
 
 五种来源，每种都有自己的门槛。发现顺序**从不**影响结果（只影响错误归属）。
 
-| # | 来源 | `load_plugin_set` 参数 | 门槛 |
+| # | 来源 | `load_plugins` 参数 | 门槛 |
 | --- | --- | --- | --- |
 | 0 | 内置插件（`noeta.builtins`） | `builtins=True`（默认） | 默认开启；用 `disabled_builtins` 按名禁用 |
 | 1 | entry point（`noeta.plugins` 组） | `entry_points=True` | `enabled` allow-list，在**任何导入之前**生效 |
@@ -199,10 +199,10 @@ plugins = load_plugin_set(registry=reg, ...)    # the host's surface is live
 
 每个候选的流水线：**读取 manifest**（对包 / `.toml` 形态零执行）→ **`enabled` 门槛，在任何导入之前** → **信任门槛**（仅来源 4）→ **解析 `ref`** → **按 `SurfaceSpec` 校验** → **冲突检查** → 按 `(plugin, contribution)` 排序的**确定性合并**。解析 / 校验只在调用方触及执行边界（`PluginSet.resolve` 及其同类）时才发生；列出和合并只在静态 manifest 上运行。
 
-### `load_plugin_set(...) -> PluginSet`
+### `load_plugins(...) -> PluginSet`
 
 ```python
-load_plugin_set(
+load_plugins(
     *,
     builtins=True,               # bool | Iterable[PluginManifest]
     disabled_builtins=(),        # Iterable[str]
@@ -242,7 +242,7 @@ load_plugin_set(
 `contributions()` 就是 acceptance-2 的保证：调用方无需运行插件的任何代码，就能确切看到一个已安装插件贡献了什么。
 
 ```python
-pset = load_plugin_set()                    # built-ins on
+pset = load_plugins()                    # built-ins on
 for plugin_name, contribution in pset.contributions("tool"):
     print(plugin_name, contribution.name)   # no plugin body imported
 
@@ -256,9 +256,9 @@ pset.get("memory").manifest.requires_noeta  # ">=0.4"
 加载让插件代码*可用*；**激活**决定一个代理使用哪些已加载的插件。激活名存在于 `Options.plugins` 和 `AgentDefinition.plugins` 上，并进入 `AgentSpec` 身份。
 
 ```python
-from noeta.sdk import Options, Client, load_plugin_set, DEFAULT_PLUGINS
+from noeta.sdk import Options, Client, load_plugins, DEFAULT_PLUGINS
 
-pset = load_plugin_set(modules=["./brevity.py"])   # built-ins + the local plugin
+pset = load_plugins(modules=["./brevity.py"])   # built-ins + the local plugin
 
 options = Options(
     system_prompt="You are a coding agent.",
@@ -275,7 +275,7 @@ client = Client(options, provider=..., workspace_dir=".", plugins=pset)
 - 一个**对身份无影响的内置项**，之所以被识别，是为了让打错的名字仍然大声失败、但不产生任何 compile 效果：`fs`、`web`、`skills`、`reminders`、`governance`、`providers`、`presets`、`sandbox`、`workspace`；
 - 交给 `Client` 的那个 `PluginSet` 里某个**已加载插件的名字**——它的身份平面贡献（额外的 tool / 子代理 / prompt fragment / policy）会折叠进来。
 
-`DEFAULT_PLUGINS = ("fs", "web")` 是 `Options.plugins` 的默认值；两者都对身份无影响（默认的 11 个工具集仍来自 `BUILTIN_TOOL_CLASSES`），所以一个**裸的 `Options()` 会字节级相同地编译**成重新设计之前的 spec——这就是对等契约（parity contract）。`AgentDefinition.plugins` 默认为 `()`（子代理的工具来自它自己的 `tools` 字段）。
+`DEFAULT_PLUGINS = ("fs", "web")` 是 `Options.plugins` 的默认值；两者都对身份无影响（默认的 11 个工具集仍来自 `builtin_tool_classes()`），所以一个**裸的 `Options()` 会字节级相同地编译**成重新设计之前的 spec——这就是对等契约（parity contract）。`AgentDefinition.plugins` 默认为 `()`（子代理的工具来自它自己的 `tools` 字段）。
 
 `Capabilities` 已被**删除**——而不仅仅是作为激活词汇表退役。`Capabilities(memory=True)` 变成 `plugins=["memory"]`，官方 preset 也以这种方式声明它们的激活集（`presets/__init__.py`）。`Options.capabilities` / `AgentDefinition.capabilities` 这两个编写字段已被**移除**——`plugins=` 是唯一的激活路径，编译出的 `AgentSpec` 直接携带解析后的 `plugins` 元组 + `spawnable`：身份**就是**这个元组，而 `agent_activates(agent, plugin)` 就是成员判断。
 
@@ -299,10 +299,10 @@ noeta 把自己的能力表达为 `noeta/builtins/` 里的内置插件（栈顶�
 两侧用同一套规则规范化路径——展开 `~`、取绝对、解析符号链接——所以路径怎么拼写从不影响信任判定。格式损坏（非 JSON）的存储在读取时会抛 `PluginError`。
 
 ```python
-from noeta.sdk import grant_trust, load_plugin_set
+from noeta.sdk import grant_trust, load_plugins
 
 grant_trust("./workspace/.noeta/plugins")                      # writes ~/.noeta/trust.json
-pset = load_plugin_set(workspace_dirs=["./workspace/.noeta/plugins"])
+pset = load_plugins(workspace_dirs=["./workspace/.noeta/plugins"])
 ```
 
 ## 失败语义
@@ -316,9 +316,9 @@ pset = load_plugin_set(workspace_dirs=["./workspace/.noeta/plugins"])
 唯一不抛异常的跳过是一个**不受信任的 `workspace_dirs`** 条目，它会以 `UntrustedPluginDirWarning` 警告并被跳过。
 
 ```python
-from noeta.sdk import load_plugin_set, PluginError
+from noeta.sdk import load_plugins, PluginError
 
-pset = load_plugin_set(builtins=[m_a, m_b])   # both contribute prompt_fragment "frag"
+pset = load_plugins(builtins=[m_a, m_b])   # both contribute prompt_fragment "frag"
 try:
     pset.merged()
 except PluginError as exc:

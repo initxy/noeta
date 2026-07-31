@@ -1,6 +1,6 @@
 """Golden snapshot of every built-in tool's model-visible schema.
 
-For each tool in ``BUILTIN_TOOL_CLASSES`` (read / glob / grep / edit / write /
+For each tool in ``builtin_tool_classes()`` (read / glob / grep / edit / write /
 apply_patch / shell_run / shell_poll / shell_kill / webfetch) this pins the
 exact metadata the LLM adapter advertises to the model:
 
@@ -35,7 +35,7 @@ from __future__ import annotations
 import dataclasses
 from typing import Any
 
-from noeta.client.parts import BUILTIN_TOOL_CLASSES
+from noeta.client.parts import builtin_tool_classes
 
 from tests._snapshot import assert_snapshot, stable_json
 
@@ -65,7 +65,7 @@ def _static_default(cls: type, field_name: str) -> Any:
 def _tool_schema_view() -> list[dict[str, object]]:
     """Build the stable snapshot payload for every built-in tool, name-sorted."""
     out: list[dict[str, object]] = []
-    for name, cls in sorted(BUILTIN_TOOL_CLASSES.items()):
+    for name, cls in sorted(builtin_tool_classes().items()):
         out.append(
             {
                 "name": str(_static_default(cls, "name")),
@@ -87,10 +87,10 @@ def test_builtin_tool_schemas_snapshot() -> None:
 def test_snapshot_covers_all_builtin_tools() -> None:
     """Guard: the golden carries exactly the current built-in tool set.
 
-    Catches a tool added to (or removed from) ``BUILTIN_TOOL_CLASSES`` that the
+    Catches a tool added to (or removed from) ``builtin_tool_classes()`` that the
     snapshot author forgot to re-pin — the count/name set is asserted directly
     so a drift in coverage is loud, not silent.
     """
     captured = {entry["name"] for entry in _tool_schema_view()}
-    assert captured == set(BUILTIN_TOOL_CLASSES)
-    assert len(captured) == len(BUILTIN_TOOL_CLASSES)
+    assert captured == set(builtin_tool_classes())
+    assert len(captured) == len(builtin_tool_classes())

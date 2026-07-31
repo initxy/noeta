@@ -47,8 +47,9 @@ envelope stream.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from typing import Iterable, Optional, Union
+from typing import Callable, Iterable, Optional, TypeVar, Union
 
 from noeta.core.fold import messages_from_appended
 from noeta.protocols.content_store import ContentStore
@@ -69,6 +70,27 @@ from noeta.protocols.messages import (
     ToolUseBlock,
 )
 from noeta.protocols.tool_args import resolve_tool_call_arguments
+
+
+_log = logging.getLogger(__name__)
+
+_P = TypeVar("_P")
+
+
+def _expect_payload(env: EventEnvelope, cls: type[_P]) -> _P:
+    """Narrow ``env.payload`` to the payload class its ``type`` promises.
+
+    A mismatch means the stream itself is malformed (an envelope whose
+    ``type`` says one event but whose payload is another) — raised as
+    ``TypeError`` rather than ``assert`` so the guard survives ``python -O``.
+    """
+    payload = env.payload
+    if not isinstance(payload, cls):
+        raise TypeError(
+            f"envelope type {env.type!r} carries a "
+            f"{type(payload).__name__} payload; expected {cls.__name__}"
+        )
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -182,14 +204,12 @@ def as_messages(
             )
 
         elif t == "TaskCompleted":
-            payload = env.payload
-            assert isinstance(payload, TaskCompletedPayload)
+            payload = _expect_payload(env, TaskCompletedPayload)
             answer = answer_from_payload(payload, content_store)
             out.append(Result(answer=str(answer), status="completed"))
 
         elif t == "TaskFailed":
-            payload = env.payload
-            assert isinstance(payload, TaskFailedPayload)
+            payload = _expect_payload(env, TaskFailedPayload)
             out.append(Result(answer=payload.reason, status="failed"))
 
         # other types silently skipped
@@ -204,7 +224,7 @@ def as_messages(
 
 def _project_messages(
     env: EventEnvelope,
-    content_store: ContentStore,  # noqa: ARG001  — kept for signature symmetry
+    content_store: ContentStore,
     out: list[ViewItem],
     seen_tool_use: set[str],
     seen_tool_result: set[str],
@@ -220,81 +240,42 @@ def _project_one_message(
     seen_tool_result: set[str],
 ) -> None:
     role = msg.role
-    blocks = msg.content
-
     if role == "system":
         return
-
-    if role == "assistant":
-        text_buf: list[str] = []
-
-        def flush_text() -> None:
-            if text_buf:
-                out.append(AssistantMessage(text="".join(text_buf)))
-                text_buf.clear()
-
-        for block in blocks:
-            if isinstance(block, TextBlock):
-                text_buf.append(block.text)
-            elif isinstance(block, ThinkingBlock):
-                # ThinkingBlock does not enter the normal message view
-                continue
-            elif isinstance(block, ImageBlock):
-                # Images don't enter the message view yet, but text
-                # must still be flushed — otherwise text on either side of the image gets wrongly concatenated. Full image rendering is left for later.
-                flush_text()
-                continue
-            elif isinstance(block, ToolUseBlock):
-                flush_text()
-                if block.call_id not in seen_tool_use:
-                    out.append(
-                        ToolUse(
-                            call_id=block.call_id,
-                            tool_name=block.tool_name,
-                            arguments=dict(block.arguments or {}),
-                        )
-                    )
-                    seen_tool_use.add(block.call_id)
-            elif isinstance(block, ToolResultBlock):
-                flush_text()
-                if block.call_id not in seen_tool_result:
-                    out.append(
-                        ToolResultView(
-                            call_id=block.call_id,
-                            tool_name="",
-                            success=block.success,
-                            output=_block_output_to_str(block.output),
-                        )
-                    )
-                    seen_tool_result.add(block.call_id)
-        flush_text()
-        return
-
-    # user / tool roles
-    all_tool_result = all(isinstance(b, ToolResultBlock) for b in blocks) and bool(
-        blocks
+    # One block walk for every conversational role: the assistant and
+    # user/tool branches handle each block type identically — only the text
+    # fragments' view type differs. (An all-ToolResultBlock user message —
+    # the standard tool-feedback shape — needs no special case: the walk
+    # emits exactly one ToolResultView per block and no text.)
+    text_factory: Callable[[str], ViewItem] = (
+        AssistantMessage if role == "assistant" else UserMessage
     )
+    _walk_blocks(msg.content, text_factory, out, seen_tool_use, seen_tool_result)
 
-    if all_tool_result:
-        for block in blocks:
-            assert isinstance(block, ToolResultBlock)
-            if block.call_id not in seen_tool_result:
-                out.append(
-                    ToolResultView(
-                        call_id=block.call_id,
-                        tool_name="",
-                        success=block.success,
-                        output=_block_output_to_str(block.output),
-                    )
-                )
-                seen_tool_result.add(block.call_id)
-        return
 
-    text_buf = []
+def _walk_blocks(
+    blocks: Iterable[object],
+    text_factory: Callable[[str], ViewItem],
+    out: list[ViewItem],
+    seen_tool_use: set[str],
+    seen_tool_result: set[str],
+) -> None:
+    """Project one message's blocks, concatenating text runs.
 
-    def flush_text2() -> None:
+    ``TextBlock`` runs concatenate into one ``text_factory`` item, flushed at
+    the next non-text block or at message end. ``ThinkingBlock`` is skipped
+    (raw reasoning rides the Extended Thinking channel). ``ImageBlock`` does
+    not enter the view yet but still flushes text — otherwise text on either
+    side of an image would wrongly concatenate. ``ToolUseBlock`` /
+    ``ToolResultBlock`` emit their own items, first occurrence per call_id
+    wins (``ToolUseBlock`` in a user message is defensive — the spec routes
+    tool use through assistant messages).
+    """
+    text_buf: list[str] = []
+
+    def flush_text() -> None:
         if text_buf:
-            out.append(UserMessage(text="".join(text_buf)))
+            out.append(text_factory("".join(text_buf)))
             text_buf.clear()
 
     for block in blocks:
@@ -303,24 +284,10 @@ def _project_one_message(
         elif isinstance(block, ThinkingBlock):
             continue
         elif isinstance(block, ImageBlock):
-            # Images don't enter the message view yet, but flush text to avoid concatenating adjacent text.
-            flush_text2()
+            flush_text()
             continue
-        elif isinstance(block, ToolResultBlock):
-            flush_text2()
-            if block.call_id not in seen_tool_result:
-                out.append(
-                    ToolResultView(
-                        call_id=block.call_id,
-                        tool_name="",
-                        success=block.success,
-                        output=_block_output_to_str(block.output),
-                    )
-                )
-                seen_tool_result.add(block.call_id)
         elif isinstance(block, ToolUseBlock):
-            # a user message should not contain ToolUseBlock in theory; defensive handling
-            flush_text2()
+            flush_text()
             if block.call_id not in seen_tool_use:
                 out.append(
                     ToolUse(
@@ -330,7 +297,19 @@ def _project_one_message(
                     )
                 )
                 seen_tool_use.add(block.call_id)
-    flush_text2()
+        elif isinstance(block, ToolResultBlock):
+            flush_text()
+            if block.call_id not in seen_tool_result:
+                out.append(
+                    ToolResultView(
+                        call_id=block.call_id,
+                        tool_name="",
+                        success=block.success,
+                        output=_block_output_to_str(block.output),
+                    )
+                )
+                seen_tool_result.add(block.call_id)
+    flush_text()
 
 
 def _project_tool_call_started(
@@ -339,8 +318,7 @@ def _project_tool_call_started(
     out: list[ViewItem],
     seen_tool_use: set[str],
 ) -> None:
-    payload = env.payload
-    assert isinstance(payload, ToolCallStartedPayload)
+    payload = _expect_payload(env, ToolCallStartedPayload)
     call_id = payload.call_id
     if call_id in seen_tool_use:
         return  # first occurrence wins (the MessagesAppended path usually comes first)
@@ -360,8 +338,7 @@ def _project_tool_result_recorded(
     out: list[ViewItem],
     seen_tool_result: set[str],
 ) -> None:
-    payload = env.payload
-    assert isinstance(payload, ToolResultRecordedPayload)
+    payload = _expect_payload(env, ToolResultRecordedPayload)
     if payload.call_id in seen_tool_result:
         return  # first occurrence wins (the MessagesAppended path's ToolResultBlock usually comes first)
     output: Optional[str]
@@ -369,6 +346,14 @@ def _project_tool_result_recorded(
         raw = content_store.get(payload.output_ref)
         output = raw.decode("utf-8", errors="replace")
     except Exception:
+        # Documented degradation (see module docstring): an unresolvable
+        # output body renders as None. Logged so a systematically mis-paired
+        # ContentStore (every output None) leaves a trace to find.
+        _log.debug(
+            "tool output %s unresolvable against the given ContentStore",
+            payload.call_id,
+            exc_info=True,
+        )
         output = None
     out.append(
         ToolResultView(

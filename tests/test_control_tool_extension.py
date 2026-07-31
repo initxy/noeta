@@ -57,7 +57,7 @@ from noeta.protocols.messages import (
     ToolUseBlock,
     Usage,
 )
-from noeta.sdk import Client, load_plugin_set
+from noeta.sdk import Client, load_plugins
 from noeta.testing.fake_llm import FakeLLMProvider
 
 
@@ -290,7 +290,7 @@ def test_projection_surfaces_the_external_control_tool(tmp_path: Path) -> None:
     loader and the host — its shape and ordering values are what the builder's
     mount loop later sorts on.
     """
-    plugins = load_plugin_set(
+    plugins = load_plugins(
         builtins=False,
         modules=[_write_plugin(tmp_path, "ctltoy", _CONTROL_TOOL_PLUGIN)],
     )
@@ -410,7 +410,7 @@ def test_activated_control_tool_reaches_the_session_and_scopes_to_the_agent(
     exactly — the same discipline every other per-agent surface honours.
     """
     plugin = _write_plugin(tmp_path, "ctltoy", _CONTROL_TOOL_PLUGIN)
-    plugins = load_plugin_set(builtins=False, modules=[plugin])
+    plugins = load_plugins(builtins=False, modules=[plugin])
 
     # Activated: the agent pulls in the control tool, its schema composes on the wire.
     active_provider = FakeLLMProvider(responses=[_end_turn()])

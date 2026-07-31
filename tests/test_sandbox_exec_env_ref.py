@@ -103,9 +103,9 @@ class FakeProvider:
         self.allocated: list[str] = []
         self.released: list[str] = []
 
-    def allocate(self, session_root_id: str, spec: SandboxSpec) -> SandboxHandle:
+    def allocate(self, root_task_id: str, spec: SandboxSpec) -> SandboxHandle:
         self._counter += 1
-        self.allocated.append(session_root_id)
+        self.allocated.append(root_task_id)
         return SandboxHandle(
             base_url=f"http://{self._tag}-{self._counter}:8080",
             sandbox_id=f"sid-{self._tag}-{self._counter}",
@@ -113,8 +113,8 @@ class FakeProvider:
             workdir="/workspace",
         )
 
-    def release(self, session_root_id: str) -> None:
-        self.released.append(session_root_id)
+    def release(self, root_task_id: str) -> None:
+        self.released.append(root_task_id)
 
     def attach(self, exec_env_ref: str) -> SandboxHandle:
         base_url, sandbox_id = decode_exec_env_ref(exec_env_ref)

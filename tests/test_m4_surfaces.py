@@ -371,7 +371,7 @@ _SANDBOX_PROVIDER_PLUGIN = textwrap.dedent(
         def __init__(self):
             self._n = 0
 
-        def allocate(self, session_root_id, spec):
+        def allocate(self, root_task_id, spec):
             self._n += 1
             return SandboxHandle(
                 base_url=f"http://box-{self._n}:8080",
@@ -380,7 +380,7 @@ _SANDBOX_PROVIDER_PLUGIN = textwrap.dedent(
                 workdir="/workspace",
             )
 
-        def release(self, session_root_id):
+        def release(self, root_task_id):
             pass
 
         def attach(self, exec_env_ref):

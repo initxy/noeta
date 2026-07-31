@@ -20,7 +20,7 @@ Coverage matrix (issue 04):
 * **process outlives the spawning task**: complete the (sub)task → the job is
   still running, still owned by the session root.
 * **session-close cascade**: ``InteractionDriver.close`` SIGTERM→SIGKILL reaps
-  ALL the session's background jobs (reuses issue 03's ``kill_session``), no
+  ALL the session's background jobs (reuses issue 03's ``kill_root_task``), no
   orphan left in the registry.
 """
 
@@ -179,7 +179,7 @@ def test_subtask_spawned_job_owned_by_session_root(tmp_path: Path) -> None:
 
     # The registry keys the job under the session root, so a session kill
     # (issue 03's primitive, reused by the close cascade) finds it there.
-    assert reg.kill_session("sub") == []  # not keyed under the subtask
+    assert reg.kill_root_task("sub") == []  # not keyed under the subtask
     # (already terminal → no live job to kill, but keyed under root)
 
 
@@ -277,7 +277,7 @@ def test_job_outlives_spawning_subtask(tmp_path: Path) -> None:
     # by the session root and keeps running.
     assert reg.poll(job_id)["status"] == "running"
     # A session-root kill reaps it (proves ownership is the root).
-    killed = reg.kill_session("root")
+    killed = reg.kill_root_task("root")
     assert len(killed) == 1
     _await_terminal(reg, job_id)
     assert reg.poll(job_id)["status"] == "killed"
@@ -290,7 +290,7 @@ def test_job_outlives_spawning_subtask(tmp_path: Path) -> None:
 
 def test_session_close_reaps_all_background_jobs(tmp_path: Path) -> None:
     """``InteractionDriver.close`` cascades SIGTERM→SIGKILL to ALL the session's
-    background jobs (reuses issue 03's ``kill_session`` via the same host seam
+    background jobs (reuses issue 03's ``kill_root_task`` via the same host seam
     ``cancel`` uses) — no orphan left in the registry."""
     ws = tmp_path / "ws"
     ws.mkdir()

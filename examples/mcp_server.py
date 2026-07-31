@@ -32,15 +32,19 @@ import sys
 import tempfile
 from pathlib import Path
 
-from noeta.protocols.messages import (
+from noeta.sdk import (
     LLMResponse,
+    Options,
     TextBlock,
+    ToolContext,
+    ToolResult,
     ToolUseBlock,
     Usage,
+    create_sdk_mcp_server,
+    query,
+    tool,
 )
-from noeta.protocols.tool import ToolContext, ToolResult
-from noeta.sdk import Options, create_sdk_mcp_server, query, tool
-from noeta.testing.fake_llm import FakeLLMProvider
+from noeta.sdk.testing import FakeLLMProvider
 
 
 _TEXT_SCHEMA = {

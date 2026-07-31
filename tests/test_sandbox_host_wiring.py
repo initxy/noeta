@@ -123,9 +123,9 @@ class FakeProvider:
         self.allocated: list[tuple[str, SandboxSpec]] = []
         self.released: list[str] = []
 
-    def allocate(self, session_root_id: str, spec: SandboxSpec) -> SandboxHandle:
+    def allocate(self, root_task_id: str, spec: SandboxSpec) -> SandboxHandle:
         self._counter += 1
-        self.allocated.append((session_root_id, spec))
+        self.allocated.append((root_task_id, spec))
         return SandboxHandle(
             base_url=f"http://sbx-{self._counter}:8080",
             sandbox_id=f"sid-{self._counter}",
@@ -133,8 +133,8 @@ class FakeProvider:
             workdir=self._workdir,
         )
 
-    def release(self, session_root_id: str) -> None:
-        self.released.append(session_root_id)
+    def release(self, root_task_id: str) -> None:
+        self.released.append(root_task_id)
 
     def attach(self, exec_env_ref: str) -> SandboxHandle:
         base_url, sandbox_id = decode_exec_env_ref(exec_env_ref)
@@ -630,7 +630,7 @@ def test_seed_build_shares_the_sandbox_backend(
 
 
 # --------------------------------------------------------------------------- #
-# execution tiers — sandbox_session_policy per-session opt-out (D-C / task 12)
+# execution tiers — sandbox_policy per-session opt-out (D-C / task 12)
 # --------------------------------------------------------------------------- #
 
 
@@ -649,7 +649,7 @@ def test_sandbox_policy_false_declines_container_and_falls_back_local(
         return False  # the local tier: no container for this session
 
     host = _make_host(
-        tmp_path, sandbox_provider=provider, sandbox_session_policy=policy
+        tmp_path, sandbox_provider=provider, sandbox_policy=policy
     )
     assert host._sandbox is not None  # a provider IS configured
     ref = host.allocate_exec_env("task-root", str(tmp_path / "ws"))
@@ -672,7 +672,7 @@ def test_sandbox_policy_true_provisions_as_usual(
     host = _make_host(
         tmp_path,
         sandbox_provider=provider,
-        sandbox_session_policy=lambda root_id, ws: True,
+        sandbox_policy=lambda root_id, ws: True,
     )
     ref = host.allocate_exec_env("task-root", str(tmp_path / "ws"))
     assert ref is not None
@@ -689,7 +689,7 @@ def test_sandbox_policy_absent_is_byte_identical(
     monkeypatch.setattr(sandbox_mod, "_default_backend_factory", _recording_factory())
     provider = FakeProvider()
     host = _make_host(tmp_path, sandbox_provider=provider)
-    assert host.sandbox_session_policy is None
+    assert host.sandbox_policy is None
     assert host.allocate_exec_env("task-root", str(tmp_path / "ws")) is not None
     assert provider.allocated
 

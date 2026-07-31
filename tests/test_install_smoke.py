@@ -184,7 +184,7 @@ def test_wheel_install_imports_public_surface(tmp_path: Path) -> None:
                 "if m.startswith('noeta.builtins.storage.impl')]; "
                 "assert not leaked, f'lazy doorway leaked impls: {leaked}'; "
                 "from noeta.sdk import Client, Options, PluginSet, "
-                "load_plugin_set, PluginBuilder; "
+                "load_plugins, PluginBuilder; "
                 "from noeta.client.parts import builtin_tool_classes; "
                 "n = len(builtin_tool_classes()); "
                 "assert n == 11, f'expected the 11 default tools, got {n}'; "
@@ -233,7 +233,7 @@ _RUNTIME_ALONE_SCRIPT = """
     import noeta.storage.spi
     import noeta.context.composer
     import noeta.policies.control_semantics
-    import noeta.read_models.sessions
+    import noeta.read_models.tasks
     import noeta.observers.audit
     import noeta.agent.spec
     import noeta.testing.profile

@@ -24,7 +24,7 @@ build an agent, a third-party host can too.
 | --- | --- | --- |
 | Durable storage | `noeta.sdk.storage` — the sqlite triple | `SqliteEventLog` / `SqliteDispatcher` / `SqliteContentStore` over one file, injected via `HostConfig` |
 | Token streaming | `HostConfig.delta_sink` + `StreamDelta` | `StdoutDeltaSink` — writes live token deltas to stdout |
-| Manifest plugins | `load_plugin_set` → `PluginSet` | the example plugins are loaded, then handed to `Client(plugins=…)`, which wires them per the D6 effect-scoping rules (governance guards/observer process-wide; the `redaction` transform activated per-agent) |
+| Manifest plugins | `load_plugins` → `PluginSet` | the example plugins are loaded, then handed to `Client(plugins=…)`, which wires them per the D6 effect-scoping rules (governance guards/observer process-wide; the `redaction` transform activated per-agent) |
 | Plugin config | the environment (`apply_plugin_env`) | config is orthogonal to identity in the manifest mechanism, so the host injects it via env (points `protected-paths` at the workspace) |
 | Agent identity | `noeta.presets.main_options()` | the official `main` agent as the base recipe |
 | Session driving | `noeta.sdk.Client` | `ReferenceHost.run(goal)` drives one turn |

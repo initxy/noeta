@@ -265,28 +265,63 @@ def test_activated_content_kind_reaches_the_composer(tmp_path: Path) -> None:
     assert [k.kind for k in activation.content_kinds] == ["house_rules"]
 
 
-def test_an_unhandled_identity_surface_fails_loudly(tmp_path: Path) -> None:
-    """The fallthrough that hid ``content_kind`` is now an error, not a shrug."""
+def test_an_unhandled_identity_surface_fails_loudly() -> None:
+    """The fallthrough that hid ``content_kind`` is an error — now at registration.
+
+    Before D11 an identity surface the loader had no branch for was caught in
+    ``identity_activations()``, i.e. only once a plugin actually contributed to
+    it. The binding is now declared on the ``SurfaceSpec`` itself, so the same
+    mistake is refused earlier — before any plugin is loaded — and the
+    projection can no longer silently drop a value.
+    """
+    from noeta.client.surfaces import SurfaceSpec, standard_registry
+
+    with pytest.raises(PluginError, match="declares no activation_binding"):
+        SurfaceSpec("gizmo", "identity", "per-agent", lambda v: None, "name")
+    # Registration of a *bound* surface is fine — that is the supported path.
+    standard_registry().register(
+        SurfaceSpec(
+            "gizmo", "identity", "per-agent", lambda v: None, "name",
+            activation_binding="tool",
+        )
+    )
+
+
+def test_host_registered_identity_surface_projects_without_a_loader_edit(
+    tmp_path: Path,
+) -> None:
+    """D11 acceptance: a custom identity surface reaches ``compile_options``.
+
+    The whole point of the table-driven projection: a host registers its own
+    identity surface on a copy of the standard registry, declares which
+    ``PluginActivation`` channel it feeds, and the contribution flows through
+    ``identity_activations`` — with **no** edit to ``plugin_set.py``.
+    """
     from noeta.client.surfaces import SurfaceSpec, standard_registry
 
     registry = standard_registry()
+    # An app-plane "house prompt" surface that binds into the prompt-fragment
+    # channel — a channel the loader never mentions by this surface's name.
     registry.register(
-        SurfaceSpec("gizmo", "identity", "per-agent", lambda v: None, "name", "append")
+        SurfaceSpec(
+            "house_prompt", "identity", "per-agent", lambda v: None, "name",
+            activation_binding="prompt_fragment",
+        )
     )
     body = """
-        noeta_plugin_name = "gizmos"
+        noeta_plugin_name = "house"
         from noeta.sdk import PluginBuilder
 
-        plugin = PluginBuilder("gizmos")
-        plugin.contribute("gizmo", "anything", name="g")
+        plugin = PluginBuilder("house")
+        plugin.contribute("house_prompt", "Follow the house style.", name="style")
     """
     plugins = load_plugins(
         builtins=False,
-        modules=[_write_plugin(tmp_path, "gizmos", body)],
+        modules=[_write_plugin(tmp_path, "house", body)],
         registry=registry,
     )
-    with pytest.raises(PluginError, match="has no activation binding"):
-        plugins.identity_activations()
+    activation = plugins.identity_activations()["house"]
+    assert activation.prompt_fragments == (("style", "Follow the house style."),)
 
 
 # ===========================================================================
