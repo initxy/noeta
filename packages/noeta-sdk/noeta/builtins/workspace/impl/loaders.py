@@ -27,18 +27,11 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, MutableMapping, Optional
 
-from noeta.context.environment import EnvironmentSnapshot
-from noeta.context.instructions import (
-    INSTRUCTIONS_DRIFT_POLICY,
-    INSTRUCTIONS_KIND,
-    INSTRUCTIONS_VERSION,
-    InstructionsSnapshot,
-)
-from noeta.execution.instructions import InstructionsKit
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.decisions import ToolCall
 from noeta.protocols.events import ContextContentRecordedPayload
@@ -49,12 +42,100 @@ from noeta.runtime.workspace import WorkspaceRoot, path_within
 
 
 __all__ = [
+    "ENVIRONMENT_DRIFT_POLICY",
+    "ENVIRONMENT_KIND",
+    "ENVIRONMENT_NAME",
+    "ENVIRONMENT_VERSION",
+    "EnvironmentSnapshot",
+    "INSTRUCTIONS_DRIFT_POLICY",
+    "INSTRUCTIONS_KIND",
+    "INSTRUCTIONS_VERSION",
+    "InstructionsSnapshot",
     "build_instructions_discovery",
     "build_instructions_preloader",
     "discover_instructions",
     "load_environment",
     "load_instructions",
 ]
+
+
+# --- The two residents' vocabulary (kernel final form: plugin-owned) -------
+# Moved from ``noeta.context.instructions`` / ``noeta.context.environment`` —
+# the kind keys are this plugin's own, discriminating the generic
+# ``ContextContentRecorded`` / ``active_content`` shapes; the kernel never
+# names them.
+
+#: The instructions channel kind key — matches ``TaskState.active_content``
+#: and ``ContextContentRecorded.kind``.
+INSTRUCTIONS_KIND = "instructions"
+#: Declared shape version of the rendered body (not its content — content
+#: is free to evolve under the ``evolving`` policy).
+INSTRUCTIONS_VERSION = "1"
+#: The drift policy instructions recordings carry: hash recorded, drift
+#: allowed (advisory-only) — the file evolves day to day with the repo.
+INSTRUCTIONS_DRIFT_POLICY = "evolving"
+
+
+@dataclass(frozen=True, slots=True)
+class InstructionsSnapshot:
+    """Preloaded instructions file contents captured at wiring time.
+
+    ``name`` is the file's basename (e.g. ``"NOETA.md"``) so the View
+    source label reads ``instructions:NOETA.md``; ``text`` is the file
+    body as read from disk (UTF-8 decoded, unmodified — the wrapping
+    tag is the renderer's job, not the loader's). ``None`` is never a
+    legal field value; callers that want "no instructions" must
+    short-circuit and omit this kind entirely.
+    """
+
+    name: str
+    text: str
+
+
+#: The environment channel kind key — matches ``TaskState.active_content``
+#: and ``ContextContentRecorded.kind``.
+ENVIRONMENT_KIND = "environment"
+#: The single resident name (a workspace has exactly one environment
+#: block). The View source label reads ``environment:workspace``.
+ENVIRONMENT_NAME = "workspace"
+#: Declared shape version of the rendered body (not its content — content
+#: is free to evolve under the ``evolving`` policy). Bumped to ``"2"`` when
+#: the git branch / status / capture-date lines joined the rendered block.
+ENVIRONMENT_VERSION = "2"
+#: The drift policy environment recordings carry: hash recorded, drift
+#: allowed (advisory-only) — an absolute path moves across machines. (Why a
+#: content-channel resident and NOT the system prompt: the system prompt is
+#: the composer's stable prefix, whose hash is the prompt-cache key; the
+#: volatile workspace path belongs in ``semi_stable`` instead.)
+ENVIRONMENT_DRIFT_POLICY = "evolving"
+
+
+@dataclass(frozen=True, slots=True)
+class EnvironmentSnapshot:
+    """Preloaded, session-static workspace facts captured at wiring time.
+
+    ``workspace_display`` is the directory string the model is told it is
+    working in (relative fs-tool paths resolve against it); ``is_git_repo``
+    is whether a ``.git`` entry exists at the root; ``platform`` is the
+    host platform tag (``sys.platform``).
+
+    ``git_branch`` / ``git_status`` / ``captured_date`` are a once-at-start
+    snapshot of the git branch, ``git status --short`` (truncated) and the
+    host date/time, captured at wiring time alongside the rest. They are
+    session-static by deliberate choice — memoized at session start, NOT
+    refreshed per turn (mirrors Claude Code's memoized git status), so the
+    rendered bytes stay stable and never churn the prompt cache; a model
+    that wants live state runs ``git status`` itself. Each is the empty
+    string when capture fails or does not apply (non-git workspace), and an
+    empty line is omitted from the rendered block.
+    """
+
+    workspace_display: str
+    is_git_repo: bool
+    platform: str
+    git_branch: str = ""
+    git_status: str = ""
+    captured_date: str = ""
 
 
 def load_instructions(
@@ -174,7 +255,7 @@ def build_instructions_discovery(
     workspace: WorkspaceRoot,
     snapshots: MutableMapping[str, InstructionsSnapshot],
     *,
-    kit: InstructionsKit,
+    filenames: tuple[str, ...],
     content_store: ContentStore,
     render_text: Callable[[InstructionsSnapshot], str],
     exec_env: Optional[ExecEnv] = None,
@@ -214,7 +295,7 @@ def build_instructions_discovery(
         for snapshot in discover_instructions(
             workspace.root,
             resolved,
-            filenames=kit.filenames,
+            filenames=filenames,
             active=tuple(active),
             exec_env=exec_env,
         ):

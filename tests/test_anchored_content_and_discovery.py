@@ -29,7 +29,6 @@ from noeta.core.fold import fold
 from noeta.builtins.workspace.impl import (
     DEFAULT_INSTRUCTIONS_FILENAMES as _FILENAMES,
     build_instructions_discovery,
-    build_instructions_kit,
     discover_instructions,
     render_instructions_text,
 )
@@ -360,7 +359,7 @@ def test_discovery_callable_fills_mapping_and_builds_payloads(
     discover = build_instructions_discovery(
         WorkspaceRoot.from_path(ws),
         snapshots,
-        kit=build_instructions_kit(),
+        filenames=_FILENAMES,
         content_store=cs,
         render_text=render_instructions_text,
     )
@@ -391,7 +390,7 @@ def test_discovery_callable_ignores_non_read_failures_and_outside(
     discover = build_instructions_discovery(
         WorkspaceRoot.from_path(ws),
         snapshots,
-        kit=build_instructions_kit(),
+        filenames=_FILENAMES,
         content_store=InMemoryContentStore(),
         render_text=render_instructions_text,
     )

@@ -32,7 +32,7 @@ from tests._session_inputs import (
     default_factory_kwargs,
     fold_legacy_capability_kwargs,
 )
-from noeta.context.memory import MEMORY_INDEX_NAME, MEMORY_KIND
+from noeta.builtins.memory.impl import MEMORY_INDEX_NAME, MEMORY_KIND
 from noeta.execution.builder import COMPACTION_OFF, build_session_inputs
 from noeta.builtins.memory.impl.index import memory_index_hash
 from noeta.builtins.memory.impl.store import (

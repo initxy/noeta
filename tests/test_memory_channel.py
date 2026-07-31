@@ -19,13 +19,11 @@ from pathlib import Path
 
 from noeta.context.composer import ThreeSegmentComposer
 from noeta.context.content_channel import ContentChannelRegistry
-from noeta.context.memory import (
+from noeta.builtins.memory.impl.index import (
     MEMORY_DRIFT_POLICY,
     MEMORY_INDEX_NAME,
     MEMORY_INDEX_VERSION,
     MEMORY_KIND,
-)
-from noeta.builtins.memory.impl.index import (
     RecallHit,
     _tokens,
     build_memory_renderer,

@@ -22,14 +22,33 @@ from dataclasses import dataclass
 
 from noeta.context.composer import ContentResolve, RenderedContent
 from noeta.context.content_channel import ContentKindSpec, ContentRenderer
-from noeta.context.memory import (
-    MEMORY_DRIFT_POLICY,
-    MEMORY_INDEX_NAME,
-    MEMORY_INDEX_VERSION,
-    MEMORY_KIND,
-    MemoryEntries,
-)
 from noeta.protocols.messages import Message, TextBlock
+
+
+# --- The memory kind's vocabulary (kernel final form: plugin-owned) --------
+# Moved from ``noeta.context.memory`` — the kind key is this plugin's own,
+# discriminating the generic ``ContextContentRecorded`` / ``active_content``
+# shapes; the kernel never names it.
+
+#: The content channel kind key — matches ``TaskState.active_content``
+#: and ``ContextContentRecorded.kind``.
+MEMORY_KIND = "memory"
+#: The index resident's name. v1 has exactly one resident per store; a
+#: future sharded index would add names, not mechanisms.
+MEMORY_INDEX_NAME = "index"
+#: Declared version of the index *shape* (not its content — content is
+#: free to evolve under the ``evolving`` policy).
+MEMORY_INDEX_VERSION = "1"
+#: The drift policy memory recordings carry: hash recorded, drift allowed
+#: (an ``evolving`` resident — a memory edit is daily business, which is why
+#: memories are NOT disguised as ``pinned`` dynamically-generated skills).
+MEMORY_DRIFT_POLICY = "evolving"
+
+#: The index source shape: ``(name, summary, type)`` triples, sorted by
+#: name (``MemoryStore.entries()`` produces exactly this). ``summary`` is
+#: the frontmatter description or the first non-empty body line; ``type``
+#: is the validated frontmatter type or ``""``.
+MemoryEntries = tuple[tuple[str, str, str], ...]
 
 
 __all__ = [

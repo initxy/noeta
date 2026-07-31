@@ -820,7 +820,7 @@ def test_e2e_preloop_skill_coexists_with_midloop_skill(
     """
     from noeta.core.engine import Engine
     from noeta.core.wiring import wire_default_observers
-    from noeta.execution.skills import activate_skills
+    from noeta.builtins.skills.impl import activate_skills
     from noeta.runtime.llm import RuntimeLLMClient
     from noeta.runtime.tool import ToolRuntime
     from noeta.storage.memory import (

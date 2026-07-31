@@ -11,7 +11,7 @@ channel, the runtime is untouched.
 * :class:`MemoryStore` — the file-per-memory store. Names are strict
   slugs (no separators, no leading dot), so a model-supplied name can
   never escape the memory directory. ``entries()`` is the deterministic
-  (sorted) index source consumed by ``noeta.context.memory``;
+  (sorted) index source the index renderer consumes;
   ``search()`` / ``archive()`` are the store halves of the v2 tools.
 * :class:`MemoryWriteTool` / :class:`MemoryReadTool` /
   :class:`MemorySearchTool` / :class:`MemoryArchiveTool` — the same
@@ -25,10 +25,8 @@ keeps the v1 first-line behavior byte-for-byte.
 
 Layering note: this module deliberately knows nothing about the content
 channel — the store hands over plain ``(name, summary, type)`` tuples; the
-pure index pieces live kernel-side in ``noeta.context.memory`` and the
-recall glue lives beside this module in
-``noeta.builtins.memory.impl.recall`` (microkernel M3: both halves moved
-here from ``noeta.tools.memory`` / ``noeta.execution.memory``).
+pure index pieces live beside it in ``noeta.builtins.memory.impl.index``
+and the recall glue in ``noeta.builtins.memory.impl.recall``.
 """
 
 from __future__ import annotations

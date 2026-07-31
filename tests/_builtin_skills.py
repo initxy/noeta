@@ -3,15 +3,15 @@
 The built-in coding skills (commit/review/init/handoff/verify/simplify)
 are PRODUCT content — they ship inside the noeta-agent namespace at
 ``noeta/agent/skills_builtin/<name>/SKILL.md``. The skill *machine*
-(indexer/renderer/activation) lives in the SDK (``noeta.builtins.skills.impl``
-+ ``noeta.execution.skills``); this module only anchors the product's
+(indexer/renderer/activation) lives in the SDK
+(``noeta.builtins.skills.impl``); this module only anchors the product's
 bundled pack on disk.
 
 ``Path(__file__)`` anchoring (not ``importlib.resources``) is deliberate:
 ``noeta.agent`` is a PEP 420 namespace package and
 ``importlib.resources.files()`` only gained namespace-package support in
 Python 3.12, while this project supports 3.11+. The same pattern the old
-``noeta.execution.skills.BUILTIN_SKILLS_DIR`` used.
+``BUILTIN_SKILLS_DIR`` constant used.
 """
 
 from __future__ import annotations

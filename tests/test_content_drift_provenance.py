@@ -18,7 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from noeta.builtins.skills.impl import load_workspace_skills
-from noeta.execution.skills import skill_content_hash
+from noeta.builtins.skills.impl import skill_content_hash
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.core.wiring import wire_default_observers
