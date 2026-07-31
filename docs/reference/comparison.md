@@ -102,27 +102,30 @@ of time. Temporal fits when you know the shape of the work; Noeta fits when the
 model discovers it as it goes. Noeta keeps `Workflow` out of its vocabulary —
 fixed procedures are expressed as a deterministic Policy plus `spawn_subtask`.
 
-## Noeta and Pi Agent
+## Noeta and Pi Harness
 
-Pi Agent is a computer-use framework: it gives an LLM control of a mouse,
-keyboard, and screen capture so the agent can drive a desktop GUI. It is a
-control layer over the physical computer, not an agent runtime.
+[Pi](https://github.com/earendil-works/pi) (the "Pi Agent Harness") is a
+TypeScript monorepo for building terminal agents: a unified multi-provider
+model API, an agent loop with tool calling and state management, a TUI
+library, and an interactive coding-agent CLI. It is a harness for agents you
+drive in a terminal — safety boundaries are delegated to external
+containerization (Docker or a micro-VM), not built into the harness itself.
 
-| Concern | Pi Agent | Noeta |
+| Concern | Pi Harness | Noeta |
 | --- | --- | --- |
-| **Deployment** | Desktop process | Multi-worker pool; multi-host on Postgres |
-| **What it does** | Lets an LLM click, type, and read the screen | Hosts, records, and schedules agent execution |
-| **Persistence** | Ephemeral — no durable execution model | Event-sourced ledger, crash-safe and replayable |
-| **Suspend / wake** | Not applicable | First-class: human, timer, subtask, external |
-| **Model** | Any LLM (it's a control layer) | Any provider behind `LLMProvider` |
-| **Tools** | Mouse / keyboard / screenshot primitives | fs, web, memory, browser, MCP, your plugins |
-| **Audit** | None | Full event log |
+| **Deployment** | Single process in your terminal | Multi-worker pool; multi-host on Postgres |
+| **What it does** | Runs interactive coding/agent CLIs | Hosts, records, and schedules agent execution |
+| **Persistence** | Ephemeral — session state in memory | Event-sourced ledger, crash-safe and replayable |
+| **Suspend / wake** | Interrupt and continue in the TUI | First-class: human, timer, subtask, external |
+| **Model** | Any provider behind its unified API | Any provider behind `LLMProvider` |
+| **Safety boundary** | External containers (Docker / micro-VM) | Optional sandbox plugin; guarded tool calls |
+| **Audit** | Session transcript | Full event log |
 
-Pi Agent and Noeta solve different layers. Pi Agent answers "how does the
-agent interact with a GUI?" Noeta answers "how does the agent's running become
-a durable, auditable ledger?" They are complementary: a Noeta task could
-invoke Pi Agent-style computer-use tools through the `browser` built-in or a
-custom tool plugin.
+Pi Harness and Noeta answer different questions. Pi Harness is about driving
+an agent in your terminal. Noeta is about running unattended agents durably on
+your own infrastructure — and recording what they did. They are complementary:
+a CLI built with Pi could very well front a task running on a Noeta worker
+pool.
 
 ## When Noeta is the wrong choice
 
