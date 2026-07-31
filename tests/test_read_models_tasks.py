@@ -1,4 +1,4 @@
-"""CW5a Phase 1 — `noeta.read_models.sessions` list projection.
+"""CW5a Phase 1 — `noeta.read_models.tasks` list projection.
 
 Pins the shared session/task read-model that the management CLI, code CLI, and
 Web surfaces consume (extracted from the former `server._list_tasks`). It
@@ -23,7 +23,7 @@ from noeta.protocols.events import (
     TaskStartedPayload,
 )
 from noeta.protocols.values import ContentRef
-from noeta.read_models.sessions import list_session_summaries
+from noeta.read_models.tasks import list_task_summaries
 from noeta.storage.memory import InMemoryContentStore, InMemoryEventLog
 from noeta.sdk.storage import SqliteContentStore, SqliteEventLog
 
@@ -74,7 +74,7 @@ def test_summary_shape_status_and_closed(
         payload=ConversationClosedPayload(closed_by="leo", reason=None),
     )
 
-    rows = list_session_summaries(log, log, cs)
+    rows = list_task_summaries(log, log, cs)
     assert len(rows) == 1
     row = rows[0]
     assert set(row) == {
@@ -124,7 +124,7 @@ def test_row_carries_welded_workspace_dir(
             workspace_dir="/abs/projects/noeta",
         ),
     )
-    rows = list_session_summaries(log, log, cs)
+    rows = list_task_summaries(log, log, cs)
     assert rows[0]["workspace_dir"] == "/abs/projects/noeta"
 
 
@@ -146,7 +146,7 @@ def test_subtask_row_carries_parent_task_id(
             goal="sub", policy_name="p", parent_task_id="root", subtask_depth=1
         ),
     )
-    rows = {r["task_id"]: r for r in list_session_summaries(log, log, cs)}
+    rows = {r["task_id"]: r for r in list_task_summaries(log, log, cs)}
     assert rows["root"]["parent_task_id"] is None
     assert rows["child"]["parent_task_id"] == "root"
 
@@ -176,7 +176,7 @@ def test_summary_carries_created_time_for_tree_order(
         payload=TaskStartedPayload(lease_id="lease-1"),
     )
 
-    rows = {r["task_id"]: r for r in list_session_summaries(log, log, cs)}
+    rows = {r["task_id"]: r for r in list_task_summaries(log, log, cs)}
     assert rows["parent"]["created_event_time"] == 1.0
     assert rows["parent"]["last_event_time"] == 3.0
     assert rows["child"]["created_event_time"] == 2.0
@@ -194,7 +194,7 @@ def test_order_recency_desc_then_task_id(
             payload=TaskCreatedPayload(goal="g", policy_name="p"),
         )
 
-    rows = list_session_summaries(log, log, cs)
+    rows = list_task_summaries(log, log, cs)
     assert [r["task_id"] for r in rows] == ["tb", "tc", "ta"]
 
 
@@ -202,7 +202,7 @@ def test_empty_store_returns_empty_list(
     stack: Callable[..., tuple[Any, Any]],
 ) -> None:
     log, cs = stack()
-    assert list_session_summaries(log, log, cs) == []
+    assert list_task_summaries(log, log, cs) == []
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +231,7 @@ def test_running_background_job_listed_in_session_row(
             ref=_ref("a"),
         ),
     )
-    rows = {r["task_id"]: r for r in list_session_summaries(log, log, cs)}
+    rows = {r["task_id"]: r for r in list_task_summaries(log, log, cs)}
     jobs = rows["root"]["background_jobs"]
     assert len(jobs) == 1
     assert jobs[0]["job_id"] == "j1"
@@ -266,7 +266,7 @@ def test_exited_background_job_updates_status_and_exit_code(
             job_id="j1", exit_code=0, final_ref=_ref("b"), summary="done",
         ),
     )
-    rows = {r["task_id"]: r for r in list_session_summaries(log, log, cs)}
+    rows = {r["task_id"]: r for r in list_task_summaries(log, log, cs)}
     jobs = rows["root"]["background_jobs"]
     # Audit trail: still exactly one entry, not deleted.
     assert len(jobs) == 1
@@ -298,7 +298,7 @@ def test_killed_background_job_updates_status_and_signal(
         type="BackgroundShellKilled",
         payload=BackgroundShellKilledPayload(job_id="j1", signal=15),
     )
-    rows = {r["task_id"]: r for r in list_session_summaries(log, log, cs)}
+    rows = {r["task_id"]: r for r in list_task_summaries(log, log, cs)}
     jobs = rows["root"]["background_jobs"]
     assert len(jobs) == 1
     assert jobs[0]["status"] == "killed"
@@ -328,7 +328,7 @@ def test_poll_advances_background_job_ref(
         type="BackgroundShellPolled",
         payload=BackgroundShellPolledPayload(job_id="j1", ref=_ref("c"), offset=42),
     )
-    rows = {r["task_id"]: r for r in list_session_summaries(log, log, cs)}
+    rows = {r["task_id"]: r for r in list_task_summaries(log, log, cs)}
     jobs = rows["root"]["background_jobs"]
     assert len(jobs) == 1
     assert jobs[0]["status"] == "running"
@@ -365,7 +365,7 @@ def test_subtask_spawned_job_shows_under_root_session(
             ref=_ref("a"),
         ),
     )
-    rows = {r["task_id"]: r for r in list_session_summaries(log, log, cs)}
+    rows = {r["task_id"]: r for r in list_task_summaries(log, log, cs)}
     root_jobs = rows["root"]["background_jobs"]
     assert [j["job_id"] for j in root_jobs] == ["jsub"]
     assert root_jobs[0]["spawned_by_task_id"] == "child"

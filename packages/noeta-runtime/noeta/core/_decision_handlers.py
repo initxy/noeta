@@ -580,7 +580,7 @@ def _validate_tool_output_inline_limit(
 ) -> None:
     """Raise ``ValueError`` if ``limit`` is non-``None`` and not positive.
 
-    Centralised so Engine, SdkHost, and CodeSessionConfig all share the
+    Centralised so Engine, SdkHost, and the agent product's own config all share the
     same check + message.
     """
     if limit is not None and limit <= 0:

@@ -348,14 +348,14 @@ def test_request_headers_merge_with_default_headers() -> None:
     provider.complete_with_headers(
         _basic_request(),
         {
-            "extra": '{"session_id":"task-abc"}',
+            "extra": '{"root_task_id":"task-abc"}',
             "X-TT-logid": "task-abc",
         },
     )
 
     req = route.calls[0].request
     assert req.headers["x-static"] == "static"
-    assert req.headers["extra"] == '{"session_id":"task-abc"}'
+    assert req.headers["extra"] == '{"root_task_id":"task-abc"}'
     assert req.headers["x-tt-logid"] == "task-abc"
 
 

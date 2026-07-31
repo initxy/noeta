@@ -2,8 +2,9 @@
 
 Part of the SDK public face (slice 4a, D2/D6) and surface alignment
 (Claude Agent SDK shape). ``Options`` is **only** a recipe:
-lightweight, mutable-feeling on the surface (though frozen for hashability),
-written by a library user. :func:`compile_options` turns it into a frozen
+lightweight, frozen for immutability (NOT hashable — it carries
+mapping-valued fields), written by a library user. :func:`compile_options`
+turns it into a frozen
 :class:`~noeta.agent.spec.AgentSpec` + flat list of descendant ``AgentSpec`` s
 that a runtime host can register.
 
@@ -21,12 +22,15 @@ Design notes:
   ``Options`` as **optional fallbacks** (D5: identity vs host binding).
   :func:`compile_options` and the identity path **completely ignore**
   them; :class:`~noeta.client.client.Client` constructor kwargs take
-  precedence when supplied.
+  precedence when supplied. Wiring fields are also excluded from
+  ``Options`` **equality** (``field(compare=False)``, sdk-layer-cleanup
+  D1): two recipes differing only in wiring compare equal, matching the
+  identity story their docstrings tell.
 * :func:`compile_options` is **pure**: no registry mutation, no side
   effects, deterministic identity for equal inputs. Registration is
   left to ``Client`` (slice 4b).
 * Bare ``Options`` (no explicit tool fields) defaults to the full
-  built-in tool set (``BUILTIN_TOOL_CLASSES`` — the 11 tools read/glob/grep,
+  built-in tool set (``builtin_tool_classes()`` — the 11 tools read/glob/grep,
   edit/write/apply_patch, shell_run/shell_poll/shell_kill, webfetch/web_search),
   matching Claude Agent SDK's "agent gets every tool" default. To opt out, set
   ``allowed_tools=()``.
@@ -41,7 +45,8 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional
+from pathlib import Path
+from typing import Any, Callable, Mapping, Optional, Protocol
 
 from noeta.agent.spec import (
     AgentSpec,
@@ -49,6 +54,7 @@ from noeta.agent.spec import (
     ComponentRef,
     ToolRef,
 )
+from noeta.client.mcp_server import SdkMcpServer
 from noeta.client.parts import (
     COMPOSER_REF,
     POLICY_REF,
@@ -59,18 +65,58 @@ from noeta.context.content_channel import ContentKindSpec
 from noeta.protocols.event_log import Subscriber
 from noeta.protocols.hooks import Guard
 from noeta.protocols.messages import LLMProvider
+from noeta.protocols.policy import Policy
 
 
 __all__ = [
     "AgentDefinition",
+    "EFFORT_MODES",
     "Options",
+    "PERMISSION_MODES",
+    "PolicyFactory",
     "SystemPromptPreset",
     "PluginActivation",
+    "ToolLike",
     "DEFAULT_PLUGINS",
     "compile_options",
     "effective_root_policy",
     "register_preset_prompt",
 ]
+
+
+class ToolLike(Protocol):
+    """The object form of a tool entry: anything exposing a ``.ref`` identity.
+
+    Tool entries on :attr:`Options.allowed_tools` /
+    :attr:`AgentDefinition.tools` / :attr:`PluginActivation.tools` are either
+    built-in tool **name strings** or objects satisfying this Protocol
+    (:class:`~noeta.tools.decorator.DecoratedTool` is the canonical
+    implementation). :func:`compile_options` reads only ``.ref``; the runnable
+    closure travels separately (the ``Client`` gathers ``DecoratedTool``
+    instances into the host's ``custom_tools``).
+    """
+
+    @property
+    def ref(self) -> ToolRef: ...
+
+
+class PolicyFactory(Protocol):
+    """The custom decision-policy contract (``Options.policy``, plugin D10).
+
+    A factory ``(llm) -> Policy`` carrying its identity as ``.ref``: the ref
+    enters the compiled :class:`~noeta.agent.spec.AgentSpec` (a swapped brain
+    is a distinct agent) while the **same** factory object is wired as the
+    host's runtime ``policy_override``. Previously this contract lived only in
+    prose (``Optional[Any]`` + ``getattr`` duck-typing); the Protocol restores
+    the static check — the loud runtime validation in
+    :func:`_resolve_policy_ref` stays, because a Protocol cannot refuse a
+    misconfigured object at compile time.
+    """
+
+    @property
+    def ref(self) -> ComponentRef: ...
+
+    def __call__(self, llm: Any) -> Policy: ...
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +126,7 @@ __all__ = [
 
 #: The pinned default activation set for a bare ``Options()`` — the ``fs`` and
 #: ``web`` built-in tool packs. Both are **identity-inert** in compilation (the
-#: default 11-tool set still comes from ``BUILTIN_TOOL_CLASSES`` so a bare
+#: default 11-tool set still comes from ``builtin_tool_classes()`` so a bare
 #: ``Options()`` is byte-identical — the parity golden pins this), so listing
 #: them here documents the conceptual default without perturbing the compiled
 #: ``AgentSpec``. Memory / browser stay off, matching the parity contract.
@@ -133,6 +179,10 @@ _INERT_BUILTIN_ACTIVATIONS: frozenset[str] = frozenset(
 #: Every recognised built-in activation name (no plugin code executes to know
 #: them — they are the SDK's own feature vocabulary).
 #:
+#: (A private ``_BUILTIN_ACTIVATIONS`` alias used to shadow this name for this
+#: module's own call sites. It was a back-compat stub for a rename that had
+#: already landed everywhere, so it is gone — this is the only spelling.)
+#:
 #: This is a superset of the built-in plugin **catalogue**
 #: (``noeta.builtins.BUILTIN_PLUGIN_NAMES``): the catalogue names the plugins
 #: that ship declarations, this set additionally carries the capability flags
@@ -144,9 +194,6 @@ _INERT_BUILTIN_ACTIVATIONS: frozenset[str] = frozenset(
 BUILTIN_ACTIVATIONS: frozenset[str] = (
     frozenset(_ACTIVATION_CAPABILITY_FLAG) | _INERT_BUILTIN_ACTIVATIONS
 )
-
-#: Backwards-compatible private alias (this module's own call sites).
-_BUILTIN_ACTIVATIONS = BUILTIN_ACTIVATIONS
 
 
 @dataclass(frozen=True)
@@ -165,12 +212,12 @@ class PluginActivation:
     """
 
     #: Tool entries (built-in name strings or ``.ref``-bearing tool objects).
-    tools: tuple[Any, ...] = ()
+    tools: tuple[str | ToolLike, ...] = ()
     #: ``(agent_name, AgentDefinition)`` child agents.
     agents: tuple[tuple[str, "AgentDefinition"], ...] = ()
     #: ``ContentKindSpec`` semi-stable residents, in contribution-name order. The
     #: ``Client`` appends these to the activating agent's content channels.
-    content_kinds: tuple[Any, ...] = ()
+    content_kinds: tuple[ContentKindSpec, ...] = ()
     #: ``(contribution_name, text)`` prompt fragments, appended after the prompt.
     prompt_fragments: tuple[tuple[str, str], ...] = ()
     #: Extra identity feature flags this plugin's activation forces on. There is
@@ -186,7 +233,7 @@ class PluginActivation:
     #: ``(llm) -> Policy`` factory exposing a ``.ref`` — or ``None``. Combined
     #: with the base ``Options.policy`` at compile: a base plus an active plugin
     #: policy, or two active plugin policies, is a loud single-valued collision.
-    policy: Optional[Any] = None
+    policy: Optional[PolicyFactory] = None
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +306,7 @@ class AgentDefinition:
         ``AgentSpec.instructions`` verbatim. Required.
     tools:
         Tool list for this child. ``None`` ⇒ every built-in tool
-        (``BUILTIN_TOOL_CLASSES``). Same mixed-entry shape as
+        (``builtin_tool_classes()``). Same mixed-entry shape as
         :attr:`Options.allowed_tools`: strings for built-in names, or
         ``DecoratedTool`` instances exposing a ``.ref`` property.
     model:
@@ -298,7 +345,7 @@ class AgentDefinition:
 # ---------------------------------------------------------------------------
 
 
-_PERMISSION_MODES = frozenset(
+PERMISSION_MODES = frozenset(
     {"default", "acceptEdits", "bypassPermissions"}
 )
 """Legal values for :attr:`Options.permission_mode`.
@@ -307,7 +354,7 @@ Three modes: default / acceptEdits / bypassPermissions (plan removed).
 """
 
 
-_EFFORT_MODES = frozenset({"low", "medium", "high", "xhigh", "max"})
+EFFORT_MODES = frozenset({"low", "medium", "high", "xhigh", "max"})
 """Legal values for :attr:`Options.effort` (reasoning-effort override).
 
 The single source of truth for the effort enum: ``__post_init__`` validates
@@ -361,7 +408,7 @@ class Options:
         Explicit tool allow-list. Entries may be built-in tool name
         strings or ``DecoratedTool`` instances (anything with a ``.ref``
         returning :class:`ToolRef`). ``None`` ⇒ **all 11 built-in tools**
-        (D2 default; ``BUILTIN_TOOL_CLASSES``). Empty tuple ⇒ no tools.
+        (D2 default; ``builtin_tool_classes()``). Empty tuple ⇒ no tools.
     disallowed_tools:
         Tool names (by :class:`ToolRef.name`) to subtract from the parsed
         allow-list. Names that are not present are silently ignored.
@@ -374,11 +421,11 @@ class Options:
         ``budget.max_iterations`` and ``max_turns`` raises ``ValueError``
         (ambiguous).
     cwd:
-        Optional working directory hint (``str | Path | None``). Purely
-        wiring-layer — **explicitly excluded from identity**
-        (same treatment as ``provider`` and ``metadata``).
-        :func:`compile_options` never inspects it so two otherwise-equal
-        ``Options`` differing only in ``cwd`` share an identity.
+        Optional working directory hint. Purely wiring-layer —
+        **excluded from identity and from equality** (``compare=False``, same
+        treatment as ``provider`` and ``metadata``). :func:`compile_options`
+        never inspects it, so two ``Options`` differing only in ``cwd`` share
+        an identity *and* compare equal.
     can_use_tool:
         Optional per-tool-call callback used to auto-approve or -deny a
         gated tool call before the task suspends waiting for a human.
@@ -468,29 +515,43 @@ class Options:
     #: loudly (built-in vocabulary + the loaded ``PluginSet`` handed to
     #: ``Client``).
     plugins: tuple[str, ...] = DEFAULT_PLUGINS
-    model: Optional[str] = None
-    metadata: Mapping[str, str] = field(default_factory=dict)
-    provider: Optional[LLMProvider] = None
     agents: Mapping[str, AgentDefinition] = field(default_factory=dict)
-    allowed_tools: tuple[Any, ...] | None = None
+    allowed_tools: tuple[str | ToolLike, ...] | None = None
     disallowed_tools: tuple[str, ...] = ()
     permission_mode: str = "default"
     max_turns: int | None = None
-    cwd: object = None
-    can_use_tool: object = None
-    output_schema: Optional[Mapping[str, Any]] = None
-    thinking: Optional[str] = None
-    effort: Optional[str] = None
+    # --- wiring, excluded from identity AND from equality (D1) --------------
+    #
+    # Every field below is declared "wiring, not identity" by this class'
+    # docstring: :func:`compile_options` never reads it, so two recipes
+    # differing only here compile to the same ``AgentSpec``. They are
+    # therefore ``compare=False`` — ``Options`` equality now says the same
+    # thing the identity story does. (``cwd`` / ``can_use_tool`` used to be
+    # typed ``object`` in an attempt to express this; that only disabled type
+    # checking — dataclass equality still compared them. Real types + an
+    # explicit ``compare=False`` is the honest form. ``hash`` follows
+    # ``compare``, and ``Options`` is unhashable regardless because of its
+    # mapping-valued fields.)
+    model: Optional[str] = field(default=None, compare=False)
+    metadata: Mapping[str, str] = field(default_factory=dict, compare=False)
+    provider: Optional[LLMProvider] = field(default=None, compare=False)
+    cwd: str | Path | None = field(default=None, compare=False)
+    can_use_tool: Optional[Callable[[str, dict[str, Any]], bool]] = field(
+        default=None, compare=False
+    )
+    output_schema: Optional[Mapping[str, Any]] = field(default=None, compare=False)
+    thinking: Optional[str] = field(default=None, compare=False)
+    effort: Optional[str] = field(default=None, compare=False)
     # --- (T3) extension points -----
-    policy: Optional[Any] = None
-    guards: tuple[Guard, ...] = ()
-    observers: tuple[Subscriber, ...] = ()
-    content_channels: tuple[ContentKindSpec, ...] = ()
-    mcp_servers: tuple[Any, ...] = ()
-    #: Runtime LLM provider. This is a wiring (host-binding) concern — D5 — and
-    #: is **explicitly excluded** from identity. See docstring.
-    #: ``cwd``, ``can_use_tool``, ``output_schema``, ``thinking`` and
-    #: ``effort`` are treated identically (wiring, not identity).
+    #: Identity-bearing (its ``.ref`` enters the compiled spec), so it stays
+    #: in the comparison — unlike the wiring block above.
+    policy: Optional[PolicyFactory] = None
+    guards: tuple[Guard, ...] = field(default=(), compare=False)
+    observers: tuple[Subscriber, ...] = field(default=(), compare=False)
+    content_channels: tuple[ContentKindSpec, ...] = field(default=(), compare=False)
+    #: Identity-bearing: an in-process server's tools are added to the agent's
+    #: tool set, so they enter the compiled ``AgentSpec`` like any other tool.
+    mcp_servers: tuple[SdkMcpServer, ...] = ()
 
     def __post_init__(self) -> None:
         if self.thinking is not None and self.thinking not in (
@@ -501,10 +562,10 @@ class Options:
                 f"Options.thinking must be 'adaptive', 'disabled', or None; "
                 f"got {self.thinking!r}"
             )
-        if self.effort is not None and self.effort not in _EFFORT_MODES:
+        if self.effort is not None and self.effort not in EFFORT_MODES:
             raise ValueError(
                 f"Options.effort must be one of "
-                f"{tuple(sorted(_EFFORT_MODES))} or None; "
+                f"{tuple(sorted(EFFORT_MODES))} or None; "
                 f"got {self.effort!r}"
             )
         if self.output_schema is not None and not isinstance(
@@ -558,36 +619,44 @@ def _resolve_policy_ref(policy: object) -> ComponentRef:
     return ref
 
 
-def _mcp_server_tool_entries(mcp_servers: tuple[Any, ...]) -> tuple[Any, ...]:
-    """Flatten the in-process ``mcp_servers`` (SdkMcpServer) into tool entries.
+def _mcp_server_tool_entries(
+    mcp_servers: tuple[SdkMcpServer, ...],
+) -> tuple[str | ToolLike, ...]:
+    """Flatten the in-process ``mcp_servers`` into tool entries.
 
-    Each server is duck-typed by its ``.tools`` attribute (the SDK
-    ``SdkMcpServer`` value object) — keeping ``noeta.client`` free of an
-    upward import on ``noeta.sdk`` where ``SdkMcpServer`` is defined.
+    ``SdkMcpServer`` is named directly now that it lives in
+    :mod:`noeta.client.mcp_server` (below this module in the import bands).
+    It used to be duck-typed through ``getattr(server, "tools", ())`` purely
+    to avoid an upward import on ``noeta.sdk``, which cost the type of every
+    entry it produced.
     """
-    entries: list[Any] = []
+    entries: list[str | ToolLike] = []
     for server in mcp_servers:
-        entries.extend(getattr(server, "tools", ()))
+        entries.extend(server.tools)
     return tuple(entries)
 
 
-def _resolve_system_prompt(sp: str | SystemPromptPreset) -> str:
+def _resolve_system_prompt(
+    sp: str | SystemPromptPreset, presets: Mapping[str, str]
+) -> str:
     """Resolve ``Options.system_prompt`` into a concrete instructions string.
 
-    Plain strings pass through. :class:`SystemPromptPreset` looks up
-    ``_PRESET_PROMPTS[preset]``; a missing preset raises ``ValueError``
-    enumerating the registered names.
+    Plain strings pass through. :class:`SystemPromptPreset` looks the name up
+    in ``presets``; a missing preset raises ``ValueError`` enumerating the
+    registered names. The registry is a **parameter** (D15) so
+    :func:`compile_options` stays a pure function of its inputs — the global
+    ``_PRESET_PROMPTS`` is merely its default.
     """
     if isinstance(sp, str):
         return sp
-    if sp.preset not in _PRESET_PROMPTS:
-        registered = ", ".join(sorted(_PRESET_PROMPTS)) or "(none)"
+    if sp.preset not in presets:
+        registered = ", ".join(sorted(presets)) or "(none)"
         raise ValueError(
             f"Unknown system-prompt preset {sp.preset!r}. "
             f"Registered presets: {registered}. "
             f"Use register_preset_prompt(name, prompt) to register one."
         )
-    base = _PRESET_PROMPTS[sp.preset]
+    base = presets[sp.preset]
     if sp.append is not None:
         return base + "\n\n" + sp.append
     return base
@@ -739,7 +808,7 @@ def _resolve_activation(
 ) -> tuple[frozenset[str], tuple[tuple[str, PluginActivation], ...]]:
     """Split an activation list into capability flags + external contributions.
 
-    Every name must be a recognised built-in activation (:data:`_BUILTIN_ACTIVATIONS`)
+    Every name must be a recognised built-in activation (:data:`BUILTIN_ACTIVATIONS`)
     or the name of a loaded plugin in ``plugins`` — anything else raises
     ``ValueError`` naming both the offending name and ``where`` (spec D5: unknown
     activation fails compilation loudly). Built-in feature bundles resolve to the
@@ -761,7 +830,7 @@ def _resolve_activation(
             external.append((name, act))
             flags.update(act.capability_flags)
         else:
-            known = ", ".join(sorted(_BUILTIN_ACTIVATIONS))
+            known = ", ".join(sorted(BUILTIN_ACTIVATIONS))
             loaded = (
                 ", ".join(sorted(plugins)) if plugins else "<none loaded>"
             )
@@ -836,6 +905,7 @@ def compile_options(
     options: Options,
     *,
     plugins: Optional[Mapping[str, PluginActivation]] = None,
+    preset_prompts: Optional[Mapping[str, str]] = None,
 ) -> tuple[AgentSpec, tuple[AgentSpec, ...]]:
     """Pure-compile an :class:`Options` recipe into ``(main, descendants)``.
 
@@ -855,6 +925,15 @@ def compile_options(
         recognised — any other activation name fails loudly. Activation is
         identity-affecting; wiring-plane plugin effects (guard / observer /
         provider / …) do not pass through here.
+    preset_prompts:
+        The ``name -> prompt`` registry a :class:`SystemPromptPreset` resolves
+        against. ``None`` (the default) reads the process-wide registry
+        :func:`register_preset_prompt` populates — the documented,
+        last-writer-wins convenience. Passing an explicit mapping makes the
+        compile a pure function of its arguments, which is what a caller
+        wanting a hermetic compile (a test, a host with its own preset set)
+        needs: without it, whether a recipe compiles at all depended on
+        whichever module had been imported first.
 
     Returns
     -------
@@ -864,13 +943,14 @@ def compile_options(
         — see the module-level docstring).
     """
     # -- Seed the global name set ------------------------------------------
+    presets = _PRESET_PROMPTS if preset_prompts is None else preset_prompts
     seen_names: set[str] = set()
     seen_names.add(options.name)
     descendant_specs: list[AgentSpec] = []
 
     # -- permission_mode validation ----------------------------------------
-    if options.permission_mode not in _PERMISSION_MODES:
-        legal = ", ".join(sorted(_PERMISSION_MODES))
+    if options.permission_mode not in PERMISSION_MODES:
+        legal = ", ".join(sorted(PERMISSION_MODES))
         raise ValueError(
             f"Invalid permission_mode {options.permission_mode!r}. "
             f"Must be one of: {legal}."
@@ -979,7 +1059,7 @@ def compile_options(
 
     # -- 2. Resolve system_prompt (+ activation prompt fragments) ----------
     instructions = _append_fragments(
-        _resolve_system_prompt(options.system_prompt), root_external
+        _resolve_system_prompt(options.system_prompt, presets), root_external
     )
 
     # -- 3. Resolve tools (replacement branch only) ----------------------------

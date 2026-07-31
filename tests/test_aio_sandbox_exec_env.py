@@ -69,7 +69,7 @@ def _ok(data: dict[str, Any]) -> dict[str, Any]:
 def _exec_ok(
     *, exit_code: int = 0, output: str = "", full_output_file_path: str = ""
 ) -> dict[str, Any]:
-    data: dict[str, Any] = {"session_id": "s1", "status": "completed",
+    data: dict[str, Any] = {"root_task_id": "s1", "status": "completed",
                             "exit_code": exit_code, "output": output}
     if full_output_file_path:
         # AIO sets this only when it truncated the inline ``output`` and

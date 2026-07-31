@@ -94,7 +94,7 @@ _READ_FILE_MEDIA_TYPE = "text/plain"
 _sha256 = file_hash
 
 
-def _was_read_this_session(ctx: ToolContext, raw: bytes) -> bool:
+def _was_read_this_task(ctx: ToolContext, raw: bytes) -> bool:
     """Whether ``raw`` (an existing file's current bytes) was ``read`` this
     session.
 
@@ -366,7 +366,7 @@ class WriteFileTool:
             # ``read`` its CURRENT contents earlier this session — otherwise
             # the write is a blind clobber. (A brand-new file has no such
             # precondition; you cannot have read what did not exist.)
-            if not _was_read_this_session(ctx, existing_raw):
+            if not _was_read_this_task(ctx, existing_raw):
                 return tool_error(
                     self.name,
                     f"must read {path!r} before overwriting it "

@@ -325,7 +325,7 @@ def test_capture_created_file_is_exempt_from_size_and_binary_check() -> None:
 
 def _log_with_parents(parents: dict[str, str | None]) -> SimpleNamespace:
     """A minimal read-only event_log: each task's stream is a lone TaskCreated
-    carrying its ``parent_task_id`` (what ``_session_root`` walks)."""
+    carrying its ``parent_task_id`` (what ``_root_task_id`` walks)."""
     streams = {
         tid: [
             SimpleNamespace(
@@ -347,9 +347,9 @@ def test_session_root_walks_parent_chain() -> None:
         content_store=store,
         file_checkpoint_registry=FileCheckpointRegistry(),
     )
-    assert runtime._session_root("grand") == "root"  # walks all the way up
-    assert runtime._session_root("child") == "root"
-    assert runtime._session_root("root") == "root"   # a root resolves to itself
+    assert runtime._root_task_id("grand") == "root"  # walks all the way up
+    assert runtime._root_task_id("child") == "root"
+    assert runtime._root_task_id("root") == "root"   # a root resolves to itself
 
 
 def test_capture_shares_one_gate_across_a_delegation_tree() -> None:

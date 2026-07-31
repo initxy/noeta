@@ -265,7 +265,7 @@ def resolve_engine(rt: WorkerRuntime, task: Any) -> Any:
     ``build_engine_for_agent`` fold lives (in L3, so L2 never imports the
     Agent registry). An **unknown** agent raises there at lease time — a
     hard error, never a silent no-op (D2). A single-Agent host
-    (the degenerate ``CodeSessionRunner`` / the daemon over one Agent) has
+    (the degenerate product runner / the daemon over one Agent) has
     no ``resolve_engine`` and falls back to its single ``rt.engine``.
     """
     resolver = getattr(rt, "resolve_engine", None)
@@ -282,7 +282,7 @@ def resolve_engine(rt: WorkerRuntime, task: Any) -> Any:
 # But the real product commands inject a step **between** ``note_woken`` and
 # ``run_one_step``: ``send_goal`` appends the new turn's user message; an
 # approval resolution runs/denies the pending tool call. Without a seam, the
-# CLI ``CodeSessionRunner`` re-implemented the whole lease→note_woken→<prelude>
+# The CLI product runner re-implemented the whole lease→note_woken→<prelude>
 # →run_one_step→release machine inline (including the H2
 # ``consumed_wake_event`` release discipline) — the CLI/web divergence source.
 #
@@ -331,7 +331,7 @@ class AppendMessagePrelude:
     """``send_goal`` prelude — seed the new turn's first user message.
 
     Mirrors ``engine.append_user_message(task, content, lease_id)`` (the
-    step formerly inlined in ``CodeSessionRunner.resume_with_goal``).
+    step formerly inlined in the product runner's goal-resume path).
     D5: carries the typed ``content: list[Block]`` (a text-only
     follow-up goal passes ``[TextBlock(goal)]``; images ride along).
 
@@ -392,7 +392,7 @@ class ResolveApprovalPrelude:
     """Approval prelude — run the approved tool call or append the denial.
 
     Mirrors ``engine.resolve_tool_approval(...)`` (the step formerly inlined
-    in ``CodeSessionRunner.resolve_tool_approval``). NOT ``durable_at_seed``:
+    in the product runner's approval resolver). NOT ``durable_at_seed``:
     it executes the approved tool, which must not block the command's
     request thread."""
 
@@ -731,7 +731,7 @@ def run_leased_task(
     re-runs the prelude (the command's bytes are already recorded).
 
     Single source of truth for the resume machine: the daemon
-    :class:`WorkerLoop` and the in-process ``CodeSessionRunner`` both route
+    :class:`WorkerLoop` and the in-process product runner both route
     through here so their semantics cannot drift.
     """
     task = fold(rt.event_log, rt.content_store, lease.task_id)

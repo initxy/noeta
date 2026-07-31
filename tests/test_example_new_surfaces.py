@@ -13,7 +13,7 @@ One exemplar per new extension surface opened by the SDK-extensibility redesign
   impure (recorded) provider at the ``turn_intake`` seam, with a stub retriever.
 
 Each is checked at the manifest boundary (loads / lists / resolves through
-``load_plugin_set``) and at the runtime-contract boundary (the resolved callable
+``load_plugins``) and at the runtime-contract boundary (the resolved callable
 behaves as its surface's runtime registry expects). Tests may reach runtime
 internals for the registries; the *examples* stay on the public surface (verified
 by ``tests/test_public_surface.py``).

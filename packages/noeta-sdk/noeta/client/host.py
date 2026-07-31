@@ -58,11 +58,11 @@ from noeta.protocols.tool import Tool
 from noeta.protocols.values import ContentRef
 from noeta.execution.background_delivery import BackgroundDelivery, DeliverFn
 from noeta.execution.background_subagent import (
-    DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_SESSION,
+    DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_ROOT_TASK,
     BackgroundSubagentRegistry,
 )
 from noeta.runtime.background_shell import (
-    DEFAULT_MAX_BACKGROUND_JOBS_PER_SESSION,
+    DEFAULT_MAX_BACKGROUND_JOBS_PER_ROOT_TASK,
     ProcessRegistry,
 )
 from noeta.runtime.cancellation import CancellationRegistry
@@ -449,15 +449,15 @@ class SdkHost(GenericEngineResolver):
     # Per-session background-job concurrency cap. Over the
     # cap, ``ProcessRegistry`` **rejects** (does not queue) a
     # ``shell_run(background)`` spawn. Configurable via HostConfig; default 8
-    # (``DEFAULT_MAX_BACKGROUND_JOBS_PER_SESSION``). Injected into the process
+    # (``DEFAULT_MAX_BACKGROUND_JOBS_PER_ROOT_TASK``). Injected into the process
     # registry built in ``__post_init__`` below.
-    max_background_jobs_per_session: int = DEFAULT_MAX_BACKGROUND_JOBS_PER_SESSION
+    max_background_jobs_per_root_task: int = DEFAULT_MAX_BACKGROUND_JOBS_PER_ROOT_TASK
     # Per-session background SUB-AGENT concurrency cap
     # (docs/adr/background-subagent.md). Over the cap, a
     # ``spawn_subagent(background=True)`` is rejected (not queued) before any
     # durable write. Configurable via HostConfig; default 8.
-    max_background_subagents_per_session: int = (
-        DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_SESSION
+    max_background_subagents_per_root_task: int = (
+        DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_ROOT_TASK
     )
     #: Whether the ``skills`` built-in is wired at all. ``False`` (the host
     #: honouring ``load_plugins(disabled_builtins=["skills"])``) passes NO
@@ -617,16 +617,12 @@ class SdkHost(GenericEngineResolver):
     #: (microkernel phase 3) — appended after the built-in packs and
     #: interleaved by priority in the kernel builder's generic loop. Empty ⇒
     #: byte-identical to the built-in-only session.
-    activated_session_packs: Mapping[str, tuple[Any, ...]] = field(
-        default_factory=dict
-    )
+    activated_session_packs: Mapping[str, tuple[Any, ...]] = field(default_factory=dict)
     #: Per-agent control tools contributed by activated external plugins
     #: (control-tool-surface S2) — merged after the built-in control tools and
     #: re-sorted by ``(priority, name)`` with the internal entries in the
     #: builder's mount loop. Empty ⇒ byte-identical to the built-in-only session.
-    activated_control_tools: Mapping[str, tuple[Any, ...]] = field(
-        default_factory=dict
-    )
+    activated_control_tools: Mapping[str, tuple[Any, ...]] = field(default_factory=dict)
     # The agent-layer base pool root for **bare sessions** (no
     # workspace_id). The agent layer does ``mkdir <workspace_base>/session-<uuid>``
     # and passes the resulting absolute path as ``workspace_dir`` to the driver.
@@ -701,7 +697,7 @@ class SdkHost(GenericEngineResolver):
     # schemas — and the stable prefix — are unchanged.
     sandbox_backend_factory: Optional[BackendFactory] = None
     sandbox_browser_factory: Optional[BrowserBackendFactory] = None
-    # Per-session sandbox opt-out (execution tiers): ``(session_root_task_id,
+    # Per-session sandbox opt-out (execution tiers): ``(root_task_id,
     # workspace_dir) -> provision?``. Consulted at the top of
     # ``allocate_exec_env``; ``False`` ⇒ this session gets NO container (return
     # ``None``), so the driver records no ``exec_env_ref`` and the build falls
@@ -710,7 +706,7 @@ class SdkHost(GenericEngineResolver):
     # other sessions. ``None`` (default) ⇒ today's behaviour, byte-identical
     # (every session provisions when a provider is present). A host runtime
     # injection, never part of any agent identity.
-    sandbox_session_policy: Optional[Callable[[str, Optional[str]], bool]] = None
+    sandbox_policy: Optional[Callable[[str, Optional[str]], bool]] = None
     # The cache key has a ``workspace`` dimension
     # (the bound **absolute path**, or ``None`` for the host default) and a
     # ``provider`` dimension — so two sessions on different directories or
@@ -871,10 +867,8 @@ class SdkHost(GenericEngineResolver):
                     "SdkHost: pass EITHER provider (single, convenience) OR "
                     "providers (registry table) — not both"
                 )
-            object.__setattr__(
-                self, "providers", {_SINGLE_PROVIDER_NAME: self.provider}
-            )
-            object.__setattr__(self, "default_provider", _SINGLE_PROVIDER_NAME)
+            self.providers = {_SINGLE_PROVIDER_NAME: self.provider}
+            self.default_provider = _SINGLE_PROVIDER_NAME
         elif not self.providers:
             raise ValueError(
                 "SdkHost: one of provider (single) or providers (registry "
@@ -894,12 +888,8 @@ class SdkHost(GenericEngineResolver):
         # completion push through it. It stays inert (records the durable exit,
         # drives no turn) until the product wires a notifier via
         # :meth:`set_background_notifier`.
-        object.__setattr__(
-            self,
-            "_delivery",
-            BackgroundDelivery(
-                event_log=self.event_log, content_store=self.content_store
-            ),
+        self._delivery = BackgroundDelivery(
+            event_log=self.event_log, content_store=self.content_store
         )
         # Build the background-shell registry once on the host's
         # shared L0 triple. Lazily here (not a default_factory) because it
@@ -910,18 +900,14 @@ class SdkHost(GenericEngineResolver):
         # daemon drive thread; it is inert until the product wires a notifier
         # via :meth:`set_background_notifier` (oneshot / lifecycle / tests never
         # do, so they stay byte-identical — no push).
-        object.__setattr__(
-            self,
-            "_process_registry",
-            ProcessRegistry(
-                event_log=self.event_log,
-                content_store=self.content_store,
-                # Per-session concurrency cap (HostConfig
-                # threads it here; default 8). Reject (not queue) over the cap.
-                max_jobs_per_session=self.max_background_jobs_per_session,
-                dispatcher=self.dispatcher,
-                on_background_exit=self._on_background_exit,
-            ),
+        self._process_registry = ProcessRegistry(
+            event_log=self.event_log,
+            content_store=self.content_store,
+            # Per-session concurrency cap (HostConfig
+            # threads it here; default 8). Reject (not queue) over the cap.
+            max_jobs_per_root_task=self.max_background_jobs_per_root_task,
+            dispatcher=self.dispatcher,
+            on_background_exit=self._on_background_exit,
         )
         # Background sub-agent registry (docs/adr/background-subagent.md). Mirrors
         # the process registry: built lazily here on the shared L0 triple. The
@@ -930,17 +916,13 @@ class SdkHost(GenericEngineResolver):
         # foreground drain uses; ``deliver`` is the Mechanism-C hook fired once a
         # child reaches terminal. Inert until ``set_background_notifier`` wires a
         # driver (then ``deliver`` drives the wake-and-notify turn).
-        object.__setattr__(
-            self,
-            "_background_subagents",
-            BackgroundSubagentRegistry(
-                event_log=self.event_log,
-                content_store=self.content_store,
-                dispatcher=self.dispatcher,
-                build_host=self._drain_host_for_id,
-                deliver=self._on_background_subagent_exit,
-                max_per_session=self.max_background_subagents_per_session,
-            ),
+        self._background_subagents = BackgroundSubagentRegistry(
+            event_log=self.event_log,
+            content_store=self.content_store,
+            dispatcher=self.dispatcher,
+            build_host=self._drain_host_for_id,
+            deliver=self._on_background_subagent_exit,
+            max_per_root_task=self.max_background_subagents_per_root_task,
         )
         # Sandbox backend lifecycle: only when the host configured one. Absent it
         # (every local / oneshot / test / resume path), ``_sandbox`` stays
@@ -948,44 +930,36 @@ class SdkHost(GenericEngineResolver):
         # ``sandbox_provider`` (per-session provisioning) wins over the v1
         # ``exec_env`` attach config; the manager drives whichever provider.
         if self.sandbox_provider is not None:
-            object.__setattr__(
-                self,
-                "_sandbox",
-                SandboxExecEnvManager(
-                    self.sandbox_provider,
-                    spec_template=self.sandbox_spec or SandboxSpec(image=""),
-                    exec_preamble=self.sandbox_exec_preamble,
-                    backend_factory=self.sandbox_backend_factory,
-                    browser_factory=self.sandbox_browser_factory,
-                ),
+            self._sandbox = SandboxExecEnvManager(
+                self.sandbox_provider,
+                spec_template=self.sandbox_spec or SandboxSpec(image=""),
+                exec_preamble=self.sandbox_exec_preamble,
+                backend_factory=self.sandbox_backend_factory,
+                browser_factory=self.sandbox_browser_factory,
             )
         elif self.exec_env is not None:
-            object.__setattr__(
-                self,
-                "_sandbox",
-                SandboxExecEnvManager(
-                    provider_for_config(self.exec_env),
-                    spec_template=SandboxSpec(image=""),
-                    default_workdir=self.exec_env.workdir,
-                    # The attach path has ONE shared container: a build that
-                    # carries no session-welded ref still targets it (v1
-                    # behaviour), unlike the per-session provisioning path.
-                    default_ref=self.exec_env.base_url,
-                    exec_preamble=self.sandbox_exec_preamble,
-                    backend_factory=self.sandbox_backend_factory,
-                    browser_factory=self.sandbox_browser_factory,
-                ),
+            self._sandbox = SandboxExecEnvManager(
+                provider_for_config(self.exec_env),
+                spec_template=SandboxSpec(image=""),
+                default_workdir=self.exec_env.workdir,
+                # The attach path has ONE shared container: a build that
+                # carries no session-welded ref still targets it (v1
+                # behaviour), unlike the per-session provisioning path.
+                default_ref=self.exec_env.base_url,
+                exec_preamble=self.sandbox_exec_preamble,
+                backend_factory=self.sandbox_backend_factory,
+                browser_factory=self.sandbox_browser_factory,
             )
 
     # -- sandbox backend lifecycle -----------------------------------------
 
     def allocate_exec_env(
-        self, session_root_id: str, workspace: Optional[str] = None
+        self, root_task_id: str, workspace: Optional[str] = None
     ) -> Optional[str]:
         """Provision this session's container → the ``exec_env_ref`` to weld (D4).
 
         Called eagerly at ``driver.seed_start`` (which pre-mints
-        ``session_root_id`` so the container is keyed by the root task id). The
+        ``root_task_id`` so the container is keyed by the root task id). The
         provider builds a FRESH container mounting ``workspace`` (the session's
         host workspace path) and the fixed skills mounts; the returned
         ``"{base_url}#{sandbox_id}"`` ref is recorded on ``TaskHostBound`` so a
@@ -998,11 +972,11 @@ class SdkHost(GenericEngineResolver):
         # container for THIS session even when a provider is configured. ``False``
         # ⇒ no ref recorded ⇒ the build falls back to ``LocalExecEnv`` (the
         # ``local`` tier). ``None`` policy = provision as before.
-        if self.sandbox_session_policy is not None and not self.sandbox_session_policy(
-            session_root_id, workspace
+        if self.sandbox_policy is not None and not self.sandbox_policy(
+            root_task_id, workspace
         ):
             return None
-        return self._sandbox.allocate(session_root_id, host_workspace=workspace)
+        return self._sandbox.allocate(root_task_id, host_workspace=workspace)
 
     def exec_env_for_ref(
         self, exec_env_ref: Optional[str]
@@ -1020,15 +994,15 @@ class SdkHost(GenericEngineResolver):
         backend, workdir = self._sandbox.resolve(exec_env_ref)
         return (backend, Path(workdir))
 
-    def release_exec_env(self, session_root_id: str) -> None:
+    def release_exec_env(self, root_task_id: str) -> None:
         """Tear down a session's container at its root-task terminal (D4).
 
         Idempotent; a no-op on the local path (no manager) or for a
-        ``session_root_id`` that never allocated (a subtask, or a non-sandbox
+        ``root_task_id`` that never allocated (a subtask, or a non-sandbox
         session). The driver calls this when a ROOT task reaches a terminal; the
         process-shutdown backstop is :meth:`teardown_exec_env`."""
         if self._sandbox is not None:
-            self._sandbox.release(session_root_id)
+            self._sandbox.release(root_task_id)
 
     def teardown_exec_env(self) -> None:
         """Reap every still-open session container (if any). Idempotent; safe on
@@ -1080,31 +1054,31 @@ class SdkHost(GenericEngineResolver):
 
     # -- background-shell emergency-stop ---------------
 
-    def kill_background_session(self, session_root_task_id: str) -> list[Any]:
+    def kill_background_shells(self, root_task_id: str) -> list[Any]:
         """Human emergency-stop — kill ALL background jobs of one session.
 
         The control-plane ``cancel`` (and issue 04's session-close
         cascade) call this so a cancelled / closed conversation does not leave
         its long-running ``shell_run(background)`` processes orphaned. Reuses the
-        ``ProcessRegistry`` per-job kill primitive (``kill_session`` → SIGTERM→
+        ``ProcessRegistry`` per-job kill primitive (``kill_root_task`` → SIGTERM→
         SIGKILL per job; the watchers reap + record ``BackgroundShellKilled``).
         Safe no-op when the registry is unbuilt (returns ``[]``)."""
         registry = self._process_registry
         if registry is None:
             return []
-        return registry.kill_session(session_root_task_id)
+        return registry.kill_root_task(root_task_id)
 
-    def purge_background_session(self, session_root_task_id: str) -> None:
+    def purge_background_shells(self, root_task_id: str) -> None:
         """Drop a *deleted* session's retained job handles (memory reclaim).
 
         Called by ``Client.delete_task`` when a conversation is hard-deleted.
-        Unlike ``kill_background_session`` (which reaps the OS processes but
+        Unlike ``kill_background_shells`` (which reaps the OS processes but
         keeps handles pollable for a still-inspectable closed conversation),
         this reclaims the handles that would otherwise leak for the process
         lifetime. Safe no-op when the registry is unbuilt."""
         registry = self._process_registry
         if registry is not None:
-            registry.purge_session(session_root_task_id)
+            registry.purge_root_task(root_task_id)
 
     # -- background-shell crash recovery ---------------
 
@@ -1141,7 +1115,7 @@ class SdkHost(GenericEngineResolver):
         self._delivery.set_notifier(notifier)
 
     def _on_background_exit(
-        self, session_id: str, job_id: str, summary: str, ref: ContentRef
+        self, root_task_id: str, job_id: str, summary: str, ref: ContentRef
     ) -> None:
         """ProcessRegistry watcher hook — project a shell exit, hand it to delivery.
 
@@ -1154,13 +1128,13 @@ class SdkHost(GenericEngineResolver):
         def _plan() -> DeliverFn:
             def _deliver(notifier: Any) -> None:
                 notifier.notify_background_exit(
-                    session_id, summary=summary, ref=ref, job_id=job_id
+                    root_task_id, summary=summary, ref=ref, job_id=job_id
                 )
 
             return _deliver
 
         self._delivery.on_exit(
-            session_id=session_id,
+            task_id=root_task_id,
             plan=_plan,
             thread_name=f"noeta-bg-notify-{job_id}",
         )
@@ -1191,7 +1165,7 @@ class SdkHost(GenericEngineResolver):
             return []
         return registry.recover()
 
-    def forget_background_subagents(self, session_root_task_id: str) -> None:
+    def forget_background_subagents(self, root_task_id: str) -> None:
         """Drop a session's background sub-agent tracking (cancel/close cascade).
 
         The in-flight drives are torn down cooperatively by the cancel registry
@@ -1200,7 +1174,7 @@ class SdkHost(GenericEngineResolver):
         clean. Safe no-op when the registry is unbuilt."""
         registry = self._background_subagents
         if registry is not None:
-            registry.forget_session(session_root_task_id)
+            registry.forget_root_task(root_task_id)
 
     def _on_background_subagent_exit(
         self, parent_task_id: str, child_task_id: str
@@ -1234,7 +1208,7 @@ class SdkHost(GenericEngineResolver):
             return _deliver
 
         self._delivery.on_exit(
-            session_id=parent_task_id,
+            task_id=parent_task_id,
             plan=_plan,
             thread_name=f"noeta-bg-subagent-notify-{child_task_id}",
         )
@@ -1276,8 +1250,7 @@ class SdkHost(GenericEngineResolver):
             return (
                 "completed",
                 ref,
-                f'Background sub-agent "{agent_name}" finished. '
-                "Here is its result:",
+                f'Background sub-agent "{agent_name}" finished. Here is its result:',
             )
         # failed, or no terminal (stuck on an unsupported suspend).
         detail = reason or (
@@ -1540,23 +1513,25 @@ class SdkHost(GenericEngineResolver):
         # so this is both correct and what keeps the seed/drive Engine-cache
         # entry from silently pinning the local backend. Absent a manager, this is
         # a no-op and the local path is byte-identical.
-        session_exec_env: Optional[ExecEnv] = None
-        session_ref = exec_env_ref
-        if self._sandbox is not None and not session_ref:
+        bound_exec_env: Optional[ExecEnv] = None
+        bound_exec_env_ref = exec_env_ref
+        if self._sandbox is not None and not bound_exec_env_ref:
             # No session-welded ref: the attach path falls back to its single
             # shared container (``default_ref``, v1 behaviour); the per-session
             # provisioning path has no default (``None``) so a ref-less build
             # keeps the local backend — a real per-session build always carries
             # the ref the driver allocated.
-            session_ref = self._sandbox.default_ref
-        if self._sandbox is not None and session_ref:
+            bound_exec_env_ref = self._sandbox.default_ref
+        if self._sandbox is not None and bound_exec_env_ref:
             # A session bound to a specific container (``exec_env_ref``, the
             # welded/folded ``"{base_url}#{sandbox_id}"``) resolves THAT one — the
             # multi-machine reconnect criterion: a task reclaimed on another host
             # reads its recorded ref, not this host's config default, and the
             # manager reconnects via ``provider.attach`` when the handle is not
             # local. The API key comes from THIS host's env (D5), never the ref.
-            session_exec_env, container_workdir = self._sandbox.resolve(session_ref)
+            bound_exec_env, container_workdir = self._sandbox.resolve(
+                bound_exec_env_ref
+            )
             workspace_dir = Path(container_workdir)
         # Browser backend (sandbox-only, B5): when this agent opens the browser
         # capability AND the session is bound to a container, vend the
@@ -1565,9 +1540,9 @@ class SdkHost(GenericEngineResolver):
         # (and its tool set / stable prefix are untouched); ``None`` on every
         # local / non-browser / no-sandbox path keeps the tool set byte-identical.
         browser_enabled = agent_activates(spec, "browser")
-        session_browser_backend = None
-        if browser_enabled and self._sandbox is not None and session_ref:
-            session_browser_backend = self._sandbox.resolve_browser(session_ref)
+        browser_backend = None
+        if browser_enabled and self._sandbox is not None and bound_exec_env_ref:
+            browser_backend = self._sandbox.resolve_browser(bound_exec_env_ref)
         # D3: only a custom tool explicitly named by spec.tools enters the engine.
         spec_tool_names = frozenset(r.name for r in spec.tools)
         filtered_custom = {
@@ -1612,10 +1587,10 @@ class SdkHost(GenericEngineResolver):
                     tuple(self.shell_allowlist)
                     # Sandbox mode reads the project allowlist from INSIDE the
                     # container (``workspace_dir`` is the container workdir here);
-                    # ``session_exec_env`` is ``None`` on the local path, so the
+                    # ``bound_exec_env`` is ``None`` on the local path, so the
                     # host read is byte-identical.
                     + load_project_shell_allowlist(
-                        workspace_dir, exec_env=session_exec_env
+                        workspace_dir, exec_env=bound_exec_env
                     ),
                     # The curated base is the fs built-in's table (phase 2c) —
                     # the same rules the shell_run tool enforces.
@@ -1637,26 +1612,13 @@ class SdkHost(GenericEngineResolver):
         # clean no-op when browser is off (no backend ⇒ no browser tools).
         if browser_enabled and effective_permission != "bypassPermissions":
             require_approval_tools = tuple(require_approval_tools) + tuple(
-                n
-                for n in browser_tool_names()
-                if n not in require_approval_tools
+                n for n in browser_tool_names() if n not in require_approval_tools
             )
-        # Build a sorted (name, description) directory of
-        # the delegation-allowed sub-agents so spawn_subagent's JSON schema
-        # surfaces the roster to the model. Keep the schema unchanged from
-        # legacy sessions when no description is available (or the set is empty)
-        # by passing the empty-tuple default.
-        directory: tuple[tuple[str, str], ...] = ()
-        if delegation_enabled and allowed_subtask_agents:
-            entries = []
-            for n in sorted(allowed_subtask_agents):
-                try:
-                    child = self.registry.resolve(n)
-                except Exception:
-                    continue
-                entries.append((n, str(child.metadata.get("description", ""))))
-            if any(d for _, d in entries):
-                directory = tuple(entries)
+        directory = (
+            self._subagent_directory(allowed_subtask_agents)
+            if delegation_enabled
+            else ()
+        )
         # Resolve the turn's enabled MCP aliases → host-side
         # server specs (with url/credentials) → LIVE ``McpTool``s, connecting each
         # server now (deterministic alias-sorted order, following F2's
@@ -1666,7 +1628,7 @@ class SdkHost(GenericEngineResolver):
         # SDK never holds the config store). ``()`` aliases / ``None`` resolver ⇒
         # ``build_mcp_tools(())`` builds nothing (tool set unchanged from pre-0042). The
         # connected clients are owned by the cached Engine for this session
-        # (mirroring the CLI ``AgentSessionRunner`` path, which holds them for the
+        # (mirroring the CLI product-runner path, which holds them for the
         # session's life). R-1 keeps resume reconnect-free: the recorded tool spec
         # is the durable truth, and the resume path passes empty aliases.
         mcp_tools_override = self._resolve_live_mcp_tools(mcp_aliases, task_id=task_id)
@@ -1674,11 +1636,11 @@ class SdkHost(GenericEngineResolver):
         # The named backend bag (phase 3): live backing objects for the
         # capability packs, keyed by the plugins' own names. Absent names
         # mean "no live backing" — the pack contributes nothing.
-        session_backends: dict[str, object] = {}
-        if session_browser_backend is not None:
-            session_backends["browser"] = session_browser_backend
+        pack_backends: dict[str, object] = {}
+        if browser_backend is not None:
+            pack_backends["browser"] = browser_backend
         if self.app_gateway is not None:
-            session_backends["app_preview"] = self.app_gateway
+            pack_backends["app_preview"] = self.app_gateway
         inputs = build_session_inputs(
             session_packs=self._session_packs(agent.name),
             # Control-tool-surface S2: the built-in + this agent's activated
@@ -1724,7 +1686,7 @@ class SdkHost(GenericEngineResolver):
             # The sandbox backend for this session's fs / shell tools (T5).
             # ``None`` (no host sandbox) ⇒ the builder uses ``LocalExecEnv`` and
             # the host ``WorkspaceRoot`` — byte-identical to the local path.
-            exec_env=session_exec_env,
+            exec_env=bound_exec_env,
             # The backend bag + this agent's effective capability flags: the
             # ONE generic bag both the session packs and the control-tool
             # mounts self-gate on (the browser pack merges only with a live
@@ -1732,7 +1694,7 @@ class SdkHost(GenericEngineResolver):
             # ``"app_preview"`` gateway; each control-tool mount reads its own
             # name). The host computes every already-ANDed value here — the
             # SDK host treats the spec's activation tuple as the source of
-            # truth (the noeta-agent product reads CodeSessionConfig instead,
+            # truth (the noeta-agent product reads its own config instead,
             # so migrating a custom spec across hosts requires aligning the
             # two by hand). ``workflow`` mounts run_workflow only when the
             # host enabled workflow AND this agent can delegate: a workflow's
@@ -1740,7 +1702,7 @@ class SdkHost(GenericEngineResolver):
             # delegation allow-list, so gating on delegation keeps the tool
             # surface honest. The reserved __workflow__ child is intercepted
             # in _build_orchestration_engine, so it never reaches this builder.
-            backends=session_backends,
+            backends=pack_backends,
             capability_flags={
                 "browser": browser_enabled,
                 "memory": agent_activates(spec, "memory"),
@@ -1755,39 +1717,11 @@ class SdkHost(GenericEngineResolver):
             # top-precedence ``memory_dir`` slot so the builder's tool pack +
             # resident index target that tenant's store; ``None`` override
             # (single-tenant / resolver fallback) keeps the host fields.
-            plugin_config={
-                # The fs pack's own write/shell safety inputs. ``shell_mode``
-                # is the permission-derived effective value; ``write_path_globs``
-                # a spec carrying metadata["write_path_globs"] gets its ``write``
-                # built path-restricted (e.g. plans/*.md), other specs ⇒ ().
-                "fs": {
-                    "write_mode": self.write_mode,
-                    "shell_mode": shell_mode,
-                    "shell_allowlist": self.shell_allowlist,
-                    "write_path_globs": _spec_write_path_globs(spec),
-                    "write_roots": self.write_roots,
-                },
-                "memory": {
-                    "memory_dir": (
-                        memory_override
-                        if memory_override is not None
-                        else self.memory_dir
-                    ),
-                    "global_memory_dir": self.global_memory_dir,
-                },
-                "skills": {
-                    "skills_dir": self.skills_dir,
-                    "builtin_skills_dirs": tuple(self.builtin_skills_dirs),
-                    "global_skills_dir": self.global_skills_dir,
-                    "allow_skill_scripts": self.allow_skill_scripts,
-                    "tool_enforcement": self.skill_tool_enforcement,
-                },
-                "workspace": {
-                    "instructions_enabled": self.instructions_enabled,
-                    "instructions_file": self.instructions_file,
-                    "instructions_discovery": self.instructions_discovery,
-                },
-            },
+            plugin_config=self._plugin_config(
+                shell_mode=shell_mode,
+                spec=spec,
+                memory_override=memory_override,
+            ),
             hooks_pre_tool_use=self.hooks_pre_tool_use,
             repetition_threshold=self.repetition_threshold,
             repetition_action=self.repetition_action,
@@ -1910,17 +1844,7 @@ class SdkHost(GenericEngineResolver):
         raw_args = wf_inputs.get("args")
         wf_args = dict(raw_args) if isinstance(raw_args, dict) else {}
         known = self._spawnable_set(allowed_subtask_agents)
-        directory: tuple[tuple[str, str], ...] = ()
-        if known:
-            entries = []
-            for n in sorted(known):
-                try:
-                    child = self.registry.resolve(n)
-                except Exception:
-                    continue
-                entries.append((n, str(child.metadata.get("description", ""))))
-            if any(d for _, d in entries):
-                directory = tuple(entries)
+        directory = self._subagent_directory(known)
         inputs = build_session_inputs(
             session_packs=self._session_packs(),
             # Control-tool-surface S2: the built-in control tools (no per-agent
@@ -1950,22 +1874,9 @@ class SdkHost(GenericEngineResolver):
             # The orchestration engine runs memory off (no "memory" flag) and
             # keeps the host's fs/skills/instructions config through the same
             # per-plugin bag as the session path.
-            plugin_config={
-                "fs": {
-                    "write_mode": self.write_mode,
-                    "shell_mode": self.shell_mode,
-                    "shell_allowlist": self.shell_allowlist,
-                },
-                "skills": {
-                    "skills_dir": self.skills_dir,
-                    "allow_skill_scripts": self.allow_skill_scripts,
-                    "tool_enforcement": self.skill_tool_enforcement,
-                },
-                "workspace": {
-                    "instructions_enabled": self.instructions_enabled,
-                    "instructions_file": self.instructions_file,
-                },
-            },
+            # ``spec=None`` selects the reduced orchestration environment —
+            # see :meth:`_plugin_config` for what it deliberately omits.
+            plugin_config=self._plugin_config(shell_mode=self.shell_mode),
             tool_output_inline_limit=self.tool_output_inline_limit,
         )
         policy: Policy = react_impl().OrchestrationPolicy(script=script, args=wf_args)
@@ -2091,6 +2002,104 @@ class SdkHost(GenericEngineResolver):
         default_root: Path = memory_impl().DEFAULT_GLOBAL_MEMORY_DIR
         return default_root
 
+    def _subagent_directory(
+        self, agents: frozenset[str]
+    ) -> tuple[tuple[str, str], ...]:
+        """The sorted ``(name, description)`` roster ``spawn_subagent`` renders.
+
+        Surfaces the delegation-allowed children to the model inside the tool's
+        JSON schema. Returns ``()`` — the byte-identical legacy shape — for an
+        empty set, or when no child carries a description (a roster of blank
+        descriptions tells the model nothing and would only churn the schema).
+        A name that no longer resolves is skipped rather than failing the
+        build: a stale spec reference must not sink an otherwise-valid session.
+
+        Shared by the session and workflow-orchestration build paths, which
+        each carried their own copy of this loop.
+        """
+        if not agents:
+            return ()
+        entries: list[tuple[str, str]] = []
+        for name in sorted(agents):
+            try:
+                child = self.registry.resolve(name)
+            except Exception:
+                continue
+            entries.append((name, str(child.metadata.get("description", ""))))
+        if not any(description for _name, description in entries):
+            return ()
+        return tuple(entries)
+
+    def _plugin_config(
+        self,
+        *,
+        shell_mode: ShellMode,
+        spec: Optional[AgentSpec] = None,
+        memory_override: Optional[Path] = None,
+    ) -> dict[str, dict[str, Any]]:
+        """The per-plugin config bag a build path hands the kernel builder.
+
+        Each pack parses only its own entry. The two build paths — a session
+        Engine and the ``__workflow__`` orchestration Engine — previously
+        hand-assembled two *different* bags at two call sites, and nothing in
+        the code said which differences were deliberate. They are now one
+        builder with ONE explicit switch, ``spec``:
+
+        * ``spec`` given (a session) — the full environment: the agent's
+          ``write`` fence (``metadata["write_path_globs"]``), the host's
+          out-of-workspace ``write_roots`` grant, the full skills tier list,
+          read-triggered instruction discovery, and the ``memory`` entry.
+        * ``spec is None`` (the orchestration engine) — the **reduced**
+          environment. A workflow driver spawns workers and calls no fs tool
+          of consequence: it has no agent spec to read a write fence off, runs
+          memory off, and mounts neither the lower skills tiers nor
+          instruction discovery. Omitting an entry (rather than passing one
+          the pack would self-gate away) is what keeps its session
+          byte-identical to the pre-refactor build.
+
+        The reduced shape is preserved exactly as it was; making it a named
+        branch here is what turns "five silent omissions" into one documented
+        decision.
+        """
+        reduced = spec is None
+        config: dict[str, dict[str, Any]] = {
+            # The fs pack's own write/shell safety inputs. ``shell_mode`` is the
+            # permission-derived effective value on the session path and the raw
+            # host mode on the orchestration path (which runs no approval gate).
+            "fs": {
+                "write_mode": self.write_mode,
+                "shell_mode": shell_mode,
+                "shell_allowlist": self.shell_allowlist,
+            },
+            "skills": {
+                "skills_dir": self.skills_dir,
+                "allow_skill_scripts": self.allow_skill_scripts,
+                "tool_enforcement": self.skill_tool_enforcement,
+            },
+            "workspace": {
+                "instructions_enabled": self.instructions_enabled,
+                "instructions_file": self.instructions_file,
+            },
+        }
+        if reduced:
+            return config
+        config["fs"]["write_path_globs"] = _spec_write_path_globs(spec)
+        config["fs"]["write_roots"] = self.write_roots
+        config["skills"]["builtin_skills_dirs"] = tuple(self.builtin_skills_dirs)
+        config["skills"]["global_skills_dir"] = self.global_skills_dir
+        config["workspace"]["instructions_discovery"] = self.instructions_discovery
+        # The per-task memory root (issue #53) rides the top-precedence
+        # ``memory_dir`` slot so the builder's tool pack + resident index
+        # target that tenant's store; ``None`` override (single-tenant /
+        # resolver fallback) keeps the host fields.
+        config["memory"] = {
+            "memory_dir": (
+                memory_override if memory_override is not None else self.memory_dir
+            ),
+            "global_memory_dir": self.global_memory_dir,
+        }
+        return config
+
     def _session_packs(self, agent_name: Optional[str] = None) -> tuple[Any, ...]:
         """The kernel builder's ``session_packs`` injection (phase 3).
 
@@ -2106,14 +2115,10 @@ class SdkHost(GenericEngineResolver):
         build paths (session + workflow orchestration) go through here so
         they can never disagree about which packs are wired.
         """
-        disabled = (
-            frozenset() if self.skills_enabled else frozenset({"skills"})
-        )
+        disabled = frozenset() if self.skills_enabled else frozenset({"skills"})
         packs: tuple[Any, ...] = default_session_packs(disabled=disabled)
         if agent_name is not None:
-            packs = packs + tuple(
-                self.activated_session_packs.get(agent_name, ())
-            )
+            packs = packs + tuple(self.activated_session_packs.get(agent_name, ()))
         return packs
 
     def _control_tools(self, agent_name: Optional[str] = None) -> tuple[Any, ...]:
@@ -2132,9 +2137,7 @@ class SdkHost(GenericEngineResolver):
         """
         tools: tuple[Any, ...] = default_control_tools()
         if agent_name is not None:
-            tools = tools + tuple(
-                self.activated_control_tools.get(agent_name, ())
-            )
+            tools = tools + tuple(self.activated_control_tools.get(agent_name, ()))
         return tools
 
     def _memory_root_override(self, task_id: Optional[str]) -> Optional[Path]:

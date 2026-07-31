@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from typing import Any, Callable, Literal, Optional
 
 import httpx
@@ -98,6 +99,9 @@ __all__ = ["AnthropicProvider"]
 
 
 _API_VERSION_DEFAULT = "2023-06-01"
+
+#: The conventional environment variable an omitted ``api_key`` falls back to.
+_API_KEY_ENV = "ANTHROPIC_API_KEY"
 _MESSAGES_ENDPOINT = "/v1/messages"
 
 _STOP_REASON_MAP: dict[str, Literal["tool_use", "end_turn", "max_tokens", "error"]] = {
@@ -155,7 +159,7 @@ class AnthropicProvider:
 
     def __init__(
         self,
-        api_key: str,
+        api_key: Optional[str] = None,
         *,
         base_url: str = "https://api.anthropic.com",
         anthropic_version: str = _API_VERSION_DEFAULT,
@@ -164,10 +168,24 @@ class AnthropicProvider:
         extra_headers: Optional[dict[str, str]] = None,
         image_resolver: Optional[ImageResolver] = None,
     ) -> None:
+        """``api_key`` defaults to the ``ANTHROPIC_API_KEY`` environment variable.
+
+        Reading the conventional env var matches what every other Anthropic
+        client does (and what a user arriving from claude-agent-sdk expects:
+        "just set the env var"). An explicit argument still wins. When neither
+        is present this raises rather than constructing a client that would
+        fail on its first call with an opaque 401.
+        """
+        resolved_key = api_key if api_key is not None else os.environ.get(_API_KEY_ENV)
+        if not resolved_key:
+            raise ValueError(
+                "AnthropicProvider needs an API key: pass api_key=... or set "
+                f"the {_API_KEY_ENV} environment variable"
+            )
         self._default_max_tokens = default_max_tokens
         self._image_resolver = image_resolver
         headers: dict[str, str] = {
-            "x-api-key": api_key,
+            "x-api-key": resolved_key,
             "anthropic-version": anthropic_version,
             "content-type": "application/json",
         }

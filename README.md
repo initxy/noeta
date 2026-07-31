@@ -90,9 +90,17 @@ adapters are exported through `noeta.sdk.providers`:
 from noeta.sdk import Options
 from noeta.sdk.providers import AnthropicProvider, OpenAICompatProvider
 
-anthropic = Options(system_prompt="…", provider=AnthropicProvider(api_key="sk-ant-…"))
-openai = Options(system_prompt="…", provider=OpenAICompatProvider(
-    base_url="https://api.openai.com/v1", api_key="sk-…"))
+# api_key falls back to ANTHROPIC_API_KEY / OPENAI_API_KEY when omitted.
+# Anthropic requires a token budget: pass default_max_tokens here, or set
+# max_tokens per request.
+anthropic = Options(
+    system_prompt="…",
+    provider=AnthropicProvider(default_max_tokens=1024),
+)
+openai = Options(
+    system_prompt="…",
+    provider=OpenAICompatProvider(base_url="https://api.openai.com/v1"),
+)
 ```
 
 See [Configure a provider](https://initxy.github.io/noeta/how-to/configure-provider/)

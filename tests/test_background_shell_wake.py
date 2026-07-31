@@ -227,8 +227,8 @@ def test_exit_invokes_host_callback_once(tmp_path: Path) -> None:
     store = InMemoryContentStore()
     calls: list[tuple[str, str, str]] = []
 
-    def _on_exit(session_id: str, job_id: str, summary: str, ref: ContentRef) -> None:
-        calls.append((session_id, job_id, summary))
+    def _on_exit(root_task_id: str, job_id: str, summary: str, ref: ContentRef) -> None:
+        calls.append((root_task_id, job_id, summary))
 
     reg = ProcessRegistry(
         event_log=log,
@@ -250,8 +250,8 @@ def test_exit_invokes_host_callback_once(tmp_path: Path) -> None:
     while time.monotonic() < deadline and not calls:
         time.sleep(0.01)
     assert len(calls) == 1
-    session_id, cb_job, summary = calls[0]
-    assert session_id == "t-cb"
+    root_task_id, cb_job, summary = calls[0]
+    assert root_task_id == "t-cb"
     assert cb_job == job_id
     assert "background" in summary
 
@@ -263,7 +263,7 @@ def test_exit_callback_carries_session_and_ref(tmp_path: Path) -> None:
     store = InMemoryContentStore()
     seen: list[ContentRef] = []
 
-    def _on_exit(session_id: str, job_id: str, summary: str, ref: ContentRef) -> None:
+    def _on_exit(root_task_id: str, job_id: str, summary: str, ref: ContentRef) -> None:
         seen.append(ref)
 
     reg = ProcessRegistry(

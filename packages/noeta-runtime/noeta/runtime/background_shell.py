@@ -58,7 +58,7 @@ from noeta.runtime._proc_group import send_group_signal
 
 #: The host completion-push callback. The watcher calls it
 #: once, AFTER the durable ``BackgroundShellExited``, with
-#: ``(session_id, job_id, summary, final_ref)``. The host hands it off to its
+#: ``(root_task_id, job_id, summary, final_ref)``. The host hands it off to its
 #: background-drive thread (it MUST NOT block the watcher) to inject the
 #: completion notice at a turn boundary (Mechanism C). Default ``None`` keeps
 #: the issue-01 registry byte-identical (no push).
@@ -103,7 +103,7 @@ PidKiller = Callable[[int], None]
 __all__ = [
     "DEFAULT_BACKGROUND_OUTPUT_CAP",
     "DEFAULT_KILL_GRACE_S",
-    "DEFAULT_MAX_BACKGROUND_JOBS_PER_SESSION",
+    "DEFAULT_MAX_BACKGROUND_JOBS_PER_ROOT_TASK",
     "BackgroundExitCallback",
     "IdentityProbe",
     "PidKiller",
@@ -125,7 +125,7 @@ DEFAULT_BACKGROUND_OUTPUT_CAP = 256 * 1024  # 256 KB
 #: A runtime accelerator like the rest of the registry: a rejected spawn writes
 #: no event, so it is invisible to resume (the count is recomputed from the
 #: live table, never the log).
-DEFAULT_MAX_BACKGROUND_JOBS_PER_SESSION = 8
+DEFAULT_MAX_BACKGROUND_JOBS_PER_ROOT_TASK = 8
 
 #: Grace between SIGTERM and the escalation to SIGKILL (kill). Long
 #: enough for a well-behaved process to flush + exit on SIGTERM, short enough
@@ -161,7 +161,7 @@ class _JobHandle:
     #: ride this stream; the registry keys ``_jobs`` by it; the close / cancel
     #: cascade kills by it. For a root-spawned job this equals
     #: ``spawned_by_task_id`` (the common case → byte-identical to 01–03).
-    session_root: str
+    root_task_id: str
     #: LINEAGE only (a label, never a wake_on blocker): the task
     #: that actually ran ``shell_run(background)``. Recorded in the
     #: ``BackgroundShellStarted`` payload so the frontend can show "dev started
@@ -208,7 +208,7 @@ class _Orphan:
     start time to defend against PID reuse)."""
 
     job_id: str
-    session_root: str
+    root_task_id: str
     pid: int
     command: str
     started_at: float
@@ -224,7 +224,7 @@ class ProcessRegistry:
         event_log: EventLogWriter,
         content_store: ContentStore,
         output_cap: int = DEFAULT_BACKGROUND_OUTPUT_CAP,
-        max_jobs_per_session: int = DEFAULT_MAX_BACKGROUND_JOBS_PER_SESSION,
+        max_jobs_per_root_task: int = DEFAULT_MAX_BACKGROUND_JOBS_PER_ROOT_TASK,
         dispatcher: Optional[Dispatcher] = None,
         on_background_exit: Optional[BackgroundExitCallback] = None,
         identity_probe: Optional[IdentityProbe] = None,
@@ -241,7 +241,7 @@ class ProcessRegistry:
         self._identity_probe = identity_probe or _posix_identity_probe
         self._kill_pid = kill_pid or _posix_kill_pid
         # Per-session RUNNING-job ceiling (reject over it).
-        self._max_jobs_per_session = max_jobs_per_session
+        self._max_jobs_per_root_task = max_jobs_per_root_task
         # Mechanism C completion push. The dispatcher is the
         # wake seam (kept for issue 03's kill push + symmetry with the
         # cancellation registry); ``on_background_exit`` is the host hook the
@@ -252,7 +252,7 @@ class ProcessRegistry:
         self._dispatcher = dispatcher
         self._on_background_exit = on_background_exit
         self._lock = threading.Lock()
-        # Keyed by the SESSION ROOT task (not the
+        # Keyed by the ROOT TASK (not the
         # spawning task): a subtask-spawned job is owned by the session, so it
         # survives the subtask's terminal and the close / cancel cascade reaps
         # it by the root. In the common case (spawner == root) this is the same
@@ -279,16 +279,16 @@ class ProcessRegistry:
         allowlist validation, so the registry just spawns.
 
         If the session already has
-        ``max_jobs_per_session`` RUNNING jobs, the spawn is REJECTED (not
+        ``max_jobs_per_root_task`` RUNNING jobs, the spawn is REJECTED (not
         queued): returns ``{"rejected": True, "reason": ...}`` and records NO
         ``BackgroundShellStarted`` event / starts NO process. The caller
         (``ShellRunTool``) surfaces the reason as a clean tool failure.
         """
         job_id = f"bg-{uuid.uuid4().hex[:12]}"
-        # Resolve the SESSION ROOT from the spawning task: the job
+        # Resolve the ROOT-TASK from the spawning task: the job
         # is owned by the session, not by the (possibly sub-)task that ran the
         # command. Common case (root spawner) → root == spawner → byte-identical.
-        session_root = self._resolve_session_root(spawned_by_task_id)
+        root_task_id = self._resolve_root_task_id(spawned_by_task_id)
         # Refuse over the per-session concurrency cap BEFORE
         # any event. Count only RUNNING jobs so a session that has killed /
         # drained earlier jobs regains its budget. The count-check AND the table
@@ -316,7 +316,7 @@ class ProcessRegistry:
             job_id=job_id,
             popen=popen,
             command=command,
-            session_root=session_root,
+            root_task_id=root_task_id,
             spawned_by_task_id=spawned_by_task_id,
             trace_id=trace_id,
             output_cap=self._output_cap,
@@ -324,10 +324,10 @@ class ProcessRegistry:
         with self._lock:
             running = sum(
                 1
-                for h in self._jobs.get(session_root, {}).values()
+                for h in self._jobs.get(root_task_id, {}).values()
                 if h.status == "running"
             )
-            if running >= self._max_jobs_per_session:
+            if running >= self._max_jobs_per_root_task:
                 # Over the ceiling — reject. The process was just spawned to
                 # avoid holding the lock across a (slow) Popen, so kill it here
                 # before returning; no event was emitted, so resume never sees
@@ -341,20 +341,20 @@ class ProcessRegistry:
                     "rejected": True,
                     "reason": (
                         f"too many background jobs "
-                        f"({running}/{self._max_jobs_per_session}); kill one with "
+                        f"({running}/{self._max_jobs_per_root_task}); kill one with "
                         f"shell_kill first"
                     ),
                 }
-            self._jobs.setdefault(session_root, {})[job_id] = handle
+            self._jobs.setdefault(root_task_id, {})[job_id] = handle
 
         # An empty content-addressed snapshot — every later snapshot grows
         # from it (Started carries a ref, not bytes).
         ref = self._snapshot(handle)
-        # Emit on the SESSION ROOT stream so issue 05's per-session read model
+        # Emit on the ROOT-TASK stream so issue 05's per-session read model
         # lists every job of the session; the payload's ``spawned_by_task_id``
         # keeps the real spawner for lineage (AC: blood-line correct).
         self._event_log.system_emit(
-            task_id=session_root,
+            task_id=root_task_id,
             type="BackgroundShellStarted",
             payload=BackgroundShellStartedPayload(
                 job_id=job_id,
@@ -399,7 +399,7 @@ class ProcessRegistry:
             status = handle.status
             exit_code = handle.exit_code
         self._event_log.system_emit(
-            task_id=handle.session_root,
+            task_id=handle.root_task_id,
             type="BackgroundShellPolled",
             payload=BackgroundShellPolledPayload(
                 job_id=job_id,
@@ -467,26 +467,26 @@ class ProcessRegistry:
             timer.start()
         return {"job_id": job_id, "status": "killing"}
 
-    def kill_session(self, session_root_task_id: str) -> list[dict[str, Any]]:
+    def kill_root_task(self, root_task_id: str) -> list[dict[str, Any]]:
         """Human emergency-stop — kill ALL background jobs of one session.
 
         "A human can emergency-stop one or all
         background jobs via the kill-switch / cancel cascade." Reuses the per-job :meth:`kill` primitive (so issue 04's
         session-CLOSE cascade reuses the SAME primitive — it just calls this).
         Returns the per-job kill results. Unknown / empty session → ``[]``.
-        Jobs are keyed by the SESSION ROOT (issue 04), so this kills every job
+        Jobs are keyed by the ROOT-TASK (issue 04), so this kills every job
         of the session — including ones a subtask spawned."""
         with self._lock:
-            job_ids = list(self._jobs.get(session_root_task_id, {}).keys())
+            job_ids = list(self._jobs.get(root_task_id, {}).keys())
         return [self.kill(job_id) for job_id in job_ids]
 
-    def purge_session(self, session_root_task_id: str) -> None:
+    def purge_root_task(self, root_task_id: str) -> None:
         """Drop all retained job handles for a session — the memory-reclaim
         seam for a *permanently deleted* conversation.
 
         A ``_JobHandle`` (with its tail buffer, up to ``output_cap``) is kept
         resident after a job exits so a late ``poll`` can still report the job's
-        terminal status + final output — that is why ``kill_session`` / close
+        terminal status + final output — that is why ``kill_root_task`` / close
         deliberately do NOT drop handles (a closed conversation is reopenable
         and inspectable). But once a conversation is *deleted*, its jobs are
         gone for good and never polled again, so retaining their handles is a
@@ -495,7 +495,7 @@ class ProcessRegistry:
         nothing (delete follows close/cancel, which already reaped the OS
         processes)."""
         with self._lock:
-            self._jobs.pop(session_root_task_id, None)
+            self._jobs.pop(root_task_id, None)
 
     # -- crash recovery / orphan reaping (issue 06) ------------------------
 
@@ -568,7 +568,7 @@ class ProcessRegistry:
             if env.type == "BackgroundShellStarted":
                 started[env.payload.job_id] = _Orphan(
                     job_id=env.payload.job_id,
-                    session_root=task_id,
+                    root_task_id=task_id,
                     pid=env.payload.pid,
                     command=env.payload.command,
                     started_at=env.occurred_at,
@@ -585,7 +585,7 @@ class ProcessRegistry:
     def _mark_lost(self, orphan: _Orphan) -> None:
         """Emit the MANDATORY ``BackgroundShellLost`` on the orphan's stream."""
         self._event_log.system_emit(
-            task_id=orphan.session_root,
+            task_id=orphan.root_task_id,
             type="BackgroundShellLost",
             payload=BackgroundShellLostPayload(job_id=orphan.job_id),
             actor=_ACTOR,
@@ -699,9 +699,9 @@ class ProcessRegistry:
         if killed:
             # issue 03 — the terminal event for a killed job. One terminal event
             # per job: a killed job records Killed, never also Exited. issue 04
-            # — emitted on the SESSION ROOT stream (lifetime owner).
+            # — emitted on the ROOT-TASK stream (lifetime owner).
             self._event_log.system_emit(
-                task_id=handle.session_root,
+                task_id=handle.root_task_id,
                 type="BackgroundShellKilled",
                 payload=BackgroundShellKilledPayload(
                     job_id=handle.job_id, signal=kill_signal
@@ -712,7 +712,7 @@ class ProcessRegistry:
             )
         else:
             self._event_log.system_emit(
-                task_id=handle.session_root,
+                task_id=handle.root_task_id,
                 type="BackgroundShellExited",
                 payload=BackgroundShellExitedPayload(
                     job_id=handle.job_id,
@@ -733,23 +733,23 @@ class ProcessRegistry:
         # ``notified`` dedup above guards exactly-once (kill (03) + natural exit
         # cannot both push). The callback MUST NOT block the watcher — the host
         # contract is to enqueue the drive onto its own background-drive thread.
-        # issue 04 — the first arg is the SESSION ROOT (the stream the host
+        # issue 04 — the first arg is the ROOT-TASK (the stream the host
         # suspends on / drives ``notify_background_exit`` against), so a
         # subtask-spawned job wakes the ROOT session, never a dead subtask.
         if self._on_background_exit is not None:
             self._on_background_exit(
-                handle.session_root, handle.job_id, summary, final_ref
+                handle.root_task_id, handle.job_id, summary, final_ref
             )
 
     # -- helpers -----------------------------------------------------------
 
-    def _resolve_session_root(self, task_id: str) -> str:
+    def _resolve_root_task_id(self, task_id: str) -> str:
         """Walk the ``parent_task_id`` chain to the session root.
 
         The canonical lineage edge is ``fold(...).parent_task_id`` (the same one
         ``read_models/sessions`` reads from ``TaskCreated.parent_task_id``); a
         root conversation folds to ``parent_task_id is None``. We follow it to
-        the top so a subtask-spawned job is owned by the SESSION, not the
+        the top so a subtask-spawned job is owned by the ROOT TASK, not the
         subtask. The registry is a runtime accelerator and ``fold`` is a pure
         read of the same log — no new chain-walk primitive is invented.
 

@@ -65,15 +65,15 @@ a non-list `low_risk_tools`, so a misconfiguration fails loudly.
 
 Installed as a package it is discovered through its `[tool.noeta]` manifest +
 `noeta.plugins` entry point (see [`pyproject.toml`](./pyproject.toml)) with
-`load_plugin_set(entry_points=True)`. In this repository it is loaded by
+`load_plugins(entry_points=True)`. In this repository it is loaded by
 **explicit path**, no install:
 
 ```python
 import os
-from noeta.sdk import Client, load_plugin_set, presets
+from noeta.sdk import Client, load_plugins, presets
 
 os.environ["NOETA_APPROVAL_MODE"] = "smart_approve"
-pset = load_plugin_set(builtins=False, modules=["examples/plugins/approval-modes/plugin.py"])
+pset = load_plugins(builtins=False, modules=["examples/plugins/approval-modes/plugin.py"])
 client = Client(presets.main_options(), plugins=pset)  # guard is process-wide
 ```
 

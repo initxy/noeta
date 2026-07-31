@@ -38,7 +38,7 @@ from noeta.client import (
     register_preset_prompt,
 )
 from noeta.client.options import DEFAULT_PLUGINS
-from noeta.client.parts import BUILTIN_TOOL_CLASSES, COMPOSER_REF, POLICY_REF
+from noeta.client.parts import COMPOSER_REF, POLICY_REF, builtin_tool_classes
 from noeta.presets import official_specs
 from noeta.tools.decorator import tool
 
@@ -267,7 +267,7 @@ def test_policy_and_composer_match_roster_constants() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Extra: builtin_tool_ref surface + BUILTIN_TOOL_CLASSES inventory
+# Extra: builtin_tool_ref surface + builtin_tool_classes() inventory
 # ---------------------------------------------------------------------------
 
 def test_builtin_tool_ref_inventory_complete() -> None:
@@ -288,7 +288,7 @@ def test_builtin_tool_ref_inventory_complete() -> None:
         # the catalog entry is the addressable name, gated at build time.
         "web_search",
     }
-    assert set(BUILTIN_TOOL_CLASSES) == expected_names
+    assert set(builtin_tool_classes()) == expected_names
     # Each name produces a ToolRef with version="1".
     for name in expected_names:
         ref = builtin_tool_ref(name)
@@ -435,7 +435,7 @@ def test_agents_child_tools_default_to_full_builtin_set() -> None:
         Options(system_prompt="root", name="main", agents={"c": defn})
     )
     # None → full set of 13 built-ins.
-    assert {t.name for t in kids[0].tools} == set(BUILTIN_TOOL_CLASSES)
+    assert {t.name for t in kids[0].tools} == set(builtin_tool_classes())
 
 
 def test_agents_child_tools_explicit_list() -> None:
@@ -459,7 +459,7 @@ def test_bare_options_defaults_to_all_builtin_tools() -> None:
     """Bare Options(system_prompt=…) defaults to full set of
     built-in tools (no `allowed_tools` override)."""
     main, _ = compile_options(Options(system_prompt="hi", name="main"))
-    assert {t.name for t in main.tools} == set(BUILTIN_TOOL_CLASSES)
+    assert {t.name for t in main.tools} == set(builtin_tool_classes())
 
 
 def test_builtin_tool_whitelist_is_pinned() -> None:
@@ -468,7 +468,7 @@ def test_builtin_tool_whitelist_is_pinned() -> None:
     mount without extra configuration — ``web_search`` needs an API key). It
     had drifted to a documented 13. Pin the set so the next change to it has
     to come back and update the prose."""
-    assert set(BUILTIN_TOOL_CLASSES) == {
+    assert set(builtin_tool_classes()) == {
         "apply_patch",
         "edit",
         "glob",
@@ -483,7 +483,7 @@ def test_builtin_tool_whitelist_is_pinned() -> None:
     }
     # Everything else — memory, browser, open_app, run_skill_script — is
     # capability- or host-injection-gated, never part of this whitelist.
-    assert len(BUILTIN_TOOL_CLASSES) == 11
+    assert len(builtin_tool_classes()) == 11
 
 
 def test_allowed_tools_explicit_list() -> None:
@@ -513,7 +513,7 @@ def test_disallowed_tools_subtracts_from_builtin_set() -> None:
     names = {t.name for t in main.tools}
     assert "shell_run" not in names
     assert "edit" not in names
-    assert len(names) == len(BUILTIN_TOOL_CLASSES) - 2
+    assert len(names) == len(builtin_tool_classes()) - 2
 
 
 def test_disallowed_tools_missing_names_are_silently_ignored() -> None:
@@ -524,7 +524,7 @@ def test_disallowed_tools_missing_names_are_silently_ignored() -> None:
             disallowed_tools=("does_not_exist", "also_bogus"),
         )
     )
-    assert {t.name for t in main.tools} == set(BUILTIN_TOOL_CLASSES)
+    assert {t.name for t in main.tools} == set(builtin_tool_classes())
 
 
 def test_disallowed_tools_with_explicit_allowed_tools() -> None:

@@ -28,11 +28,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Tuple
 
 from noeta.client.sandbox_provider import SandboxProvider, SandboxSpec
+from noeta.client.storage_resolve import open_storage_stack
 from noeta.execution.background_subagent import (
-    DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_SESSION,
+    DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_ROOT_TASK,
 )
 from noeta.client.otlp import OtlpHttpPost, OtlpTraceConfig
-from noeta.runtime.background_shell import DEFAULT_MAX_BACKGROUND_JOBS_PER_SESSION
+from noeta.runtime.background_shell import DEFAULT_MAX_BACKGROUND_JOBS_PER_ROOT_TASK
 
 if TYPE_CHECKING:
     # Only for annotations (``from __future__ import annotations`` keeps these
@@ -145,6 +146,15 @@ class HostConfig:
     event_log: Optional[EventLogFull] = None
     content_store: Optional[ContentStore] = None
     dispatcher: Optional[Dispatcher] = None
+    #: One-string durable storage: a sqlite file path, a ``postgresql://`` DSN,
+    #: or ``":memory:"``. Resolved through
+    #: :func:`noeta.sdk.storage.open_storage_stack`, which builds the whole
+    #: triple **in the right order** (the event log needs the dispatcher as its
+    #: ``lease_validator`` — an invariant every host previously had to know and
+    #: hand-wire). Mutually exclusive with the explicit triple above: supplying
+    #: both is a loud error, because the two would disagree about which store
+    #: the session actually writes to.
+    storage_path: Optional[str] = None
 
     # -- host runtime injections -------------------------------------------
     app_gateway: Optional[AppPreviewGateway] = None
@@ -174,9 +184,9 @@ class HostConfig:
     otlp_http_post: Optional[OtlpHttpPost] = None
     #: Per-request provider header factory: ``(ctx) -> {header: value}`` called
     #: once per LLM round-trip, merged over the provider client's static
-    #: headers. The product wires a stable per-task ``session_id`` here so a
+    #: headers. The product wires a stable per-task ``root_task_id`` here so a
     #: gateway that pins prompt-cache to a single backend account (ModelHub's
-    #: ``extra.session_id`` account-stickiness) keeps a long task on one
+    #: ``extra.root_task_id`` account-stickiness) keeps a long task on one
     #: account and actually reuses its KV cache. ``None`` (default) ⇒ no
     #: per-request headers — a host runtime injection, never agent identity.
     provider_headers: Optional[Callable[[StepContext], Mapping[str, str]]] = None
@@ -228,7 +238,7 @@ class HostConfig:
     sandbox_backend_factory: Optional["BackendFactory"] = None
     sandbox_browser_factory: Optional["BrowserBackendFactory"] = None
     #: Per-session sandbox opt-out for **execution tiers**: given
-    #: ``(session_root_task_id, workspace_dir)`` return whether to provision a
+    #: ``(root_task_id, workspace_dir)`` return whether to provision a
     #: container for THAT session. ``False`` ⇒ no container: the driver records
     #: no ``exec_env_ref`` and the build falls back to ``LocalExecEnv`` + the
     #: host ``WorkspaceRoot`` fence (the ``local`` tier), reachable even while a
@@ -238,7 +248,7 @@ class HostConfig:
     #: a host runtime injection, never part of any agent identity. Must be cheap,
     #: total, and deterministic for a given session (a resumed/reclaimed session
     #: must resolve the same answer).
-    sandbox_session_policy: Optional[Callable[[str, Optional[str]], bool]] = None
+    sandbox_policy: Optional[Callable[[str, Optional[str]], bool]] = None
 
     # -- memory store addressing --------------------------------------------
     #: Explicit memory-dir override forwarded to the SdkHost; ``None`` (default)
@@ -266,18 +276,18 @@ class HostConfig:
     # -- host kill-switches ------------------------------------------------
     workflow_allowed: bool = False
     #: Per-session background-job concurrency cap, forwarded to
-    #: ``SdkHost.max_background_jobs_per_session``. Over the cap a
+    #: ``SdkHost.max_background_jobs_per_root_task``. Over the cap a
     #: ``shell_run(run_in_background=True)`` spawn is **rejected** (not queued)
     #: with a "kill one first" refusal the model can act on; no event is
     #: recorded, so the cap is invisible to resume. Default 8.
-    max_background_jobs_per_session: int = DEFAULT_MAX_BACKGROUND_JOBS_PER_SESSION
+    max_background_jobs_per_root_task: int = DEFAULT_MAX_BACKGROUND_JOBS_PER_ROOT_TASK
     #: Per-session background SUB-AGENT concurrency cap, forwarded to
-    #: ``SdkHost.max_background_subagents_per_session``
+    #: ``SdkHost.max_background_subagents_per_root_task``
     #: (docs/adr/background-subagent.md). Over the cap a
     #: ``spawn_subagent(background=True)`` is rejected before any durable write.
     #: Default 8.
-    max_background_subagents_per_session: int = (
-        DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_SESSION
+    max_background_subagents_per_root_task: int = (
+        DEFAULT_MAX_BACKGROUND_SUBAGENTS_PER_ROOT_TASK
     )
     #: Project-instructions-file switch, forwarded verbatim to
     #: ``SdkHost.instructions_enabled``. When on, the session's workspace root
@@ -309,21 +319,38 @@ class HostConfig:
     ) -> Optional[Tuple[EventLogFull, ContentStore, Dispatcher]]:
         """The injected ``(event_log, content_store, dispatcher)``, or ``None``.
 
-        ``None`` ⇒ no external storage supplied (the Client builds in-memory).
-        Raises :class:`ValueError` if only some of the triple is set — the three
-        must be constructed and supplied together.
+        Two ways to supply it: :attr:`storage_path` (one string, resolved
+        through :func:`noeta.sdk.storage.open_storage_stack`) or the explicit
+        triple. ``None`` ⇒ neither was given, so the Client builds its
+        in-memory triple.
+
+        Raises :class:`ValueError` when both forms are supplied (they would
+        name different stores) or when only some of the explicit triple is set
+        — the three must be constructed and supplied together, since the event
+        log takes the dispatcher as its ``lease_validator``.
         """
-        parts = (self.event_log, self.content_store, self.dispatcher)
-        if all(p is None for p in parts):
-            return None
-        if any(p is None for p in parts):
-            raise ValueError(
-                "HostConfig storage is all-or-none: supply event_log, "
-                "content_store and dispatcher together, or none of them"
-            )
-        # mypy: narrowed by the all/any guards above.
-        return (  # type: ignore[return-value]
+        event_log, content_store, dispatcher = (
             self.event_log,
             self.content_store,
             self.dispatcher,
         )
+        explicit = (event_log, content_store, dispatcher)
+        if self.storage_path is not None:
+            if any(p is not None for p in explicit):
+                raise ValueError(
+                    "HostConfig: pass EITHER storage_path (the one-string "
+                    "form) OR an explicit event_log/content_store/dispatcher "
+                    "triple — not both"
+                )
+            return open_storage_stack(self.storage_path)
+        if all(p is None for p in explicit):
+            return None
+        if event_log is None or content_store is None or dispatcher is None:
+            raise ValueError(
+                "HostConfig storage is all-or-none: supply event_log, "
+                "content_store and dispatcher together, or none of them"
+            )
+        # Narrowed by the explicit None checks above — no ``type: ignore``
+        # needed (mypy cannot narrow a tuple through ``all()``/``any()``,
+        # which is the only reason one used to sit here).
+        return (event_log, content_store, dispatcher)

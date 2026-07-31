@@ -277,9 +277,9 @@ class EventLogSubscriber(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class TaskStreamSummary:
-    """One row of the task/session catalog (CW5a).
+    """One row of the task catalog (CW5a).
 
-    The minimal, transport-neutral enumeration shape the sessions/tasks list
+    The minimal, transport-neutral enumeration shape the task list
     needs — ``task_id`` plus the stream-tail bookmarks used for ordering. Pure
     stdlib types (no storage-adapter types leak through this seam); the richer
     lifecycle fields (status / closed / …) are derived by ``noeta.read_models``
@@ -299,7 +299,7 @@ class EventLogTaskIndex(Protocol):
     ability to enumerate *every* task. Only genuine storage-backed logs (the
     InMemory / Sqlite adapters) implement this; the narrow per-task readers
     deliberately do not.
-    :func:`noeta.read_models` consumes this to build the sessions list without
+    :func:`noeta.read_models` consumes this to build the task list without
     reaching into adapter internals.
     """
 

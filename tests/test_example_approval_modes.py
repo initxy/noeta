@@ -4,12 +4,12 @@ Covers the spec's acceptance criterion for ``approval-modes``: the four
 goose-style modes produce the expected verdicts (``chat`` denies tools;
 ``approve`` requires approval on all; ``smart_approve`` allows low-risk and
 requires approval otherwise; ``auto`` allows), with per-tool overrides winning;
-plus config validation and loading through ``load_plugin_set`` + ``process_hooks``
+plus config validation and loading through ``load_plugins`` + ``process_hooks``
 end-to-end via the loader's explicit-path mechanism (no install).
 
 The plugin is loaded twice under two module objects: once here by explicit
 ``importlib`` to reach its classes (``ApprovalModesGuard`` / ``build_policy``),
-and once inside ``load_plugin_set`` for the end-to-end path. Those two module
+and once inside ``load_plugins`` for the end-to-end path. Those two module
 loads carry *distinct* class objects, so the end-to-end assertions identify the
 resolved guard by its ``name`` attribute and exercise ``check`` directly rather
 than by ``isinstance`` (``Verdict`` / ``VerdictResult`` come from the shared
@@ -33,7 +33,7 @@ from noeta.protocols.hooks import (
     ProposedToolCall,
     Verdict,
 )
-from noeta.sdk import PluginBuilder, load_plugin_set
+from noeta.sdk import PluginBuilder, load_plugins
 
 
 _PLUGIN_PATH = (
@@ -218,8 +218,8 @@ def _sole_guard(pset):
     return guards[0]
 
 
-def test_load_plugin_set_lists_the_guard_without_execution():
-    pset = load_plugin_set(builtins=False, modules=[str(_PLUGIN_PATH)])
+def test_load_plugins_lists_the_guard_without_execution():
+    pset = load_plugins(builtins=False, modules=[str(_PLUGIN_PATH)])
     assert pset.names() == ("approval-modes",)
     listed = pset.contributions("guard")
     assert [(p, c.surface, c.name) for p, c in listed] == [
@@ -231,7 +231,7 @@ def test_process_hooks_resolves_env_configured_mode():
     # NOETA_APPROVAL_MODE selects the mode when the plugin module is executed.
     os.environ["NOETA_APPROVAL_MODE"] = "smart_approve"
     try:
-        pset = load_plugin_set(builtins=False, modules=[str(_PLUGIN_PATH)])
+        pset = load_plugins(builtins=False, modules=[str(_PLUGIN_PATH)])
         guard = _sole_guard(pset)
     finally:
         os.environ.pop("NOETA_APPROVAL_MODE", None)
@@ -241,7 +241,7 @@ def test_process_hooks_resolves_env_configured_mode():
 
 def test_shipped_default_mode_is_approve():
     # No env ⇒ the shipped guard defaults to "approve" (require approval on all).
-    pset = load_plugin_set(builtins=False, modules=[str(_PLUGIN_PATH)])
+    pset = load_plugins(builtins=False, modules=[str(_PLUGIN_PATH)])
     guard = _sole_guard(pset)
     assert _verdict(guard, "read") is Verdict.REQUIRE_APPROVAL
     assert _verdict(guard, "write") is Verdict.REQUIRE_APPROVAL

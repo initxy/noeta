@@ -184,7 +184,7 @@ axis:
   only authoring path. A
   `DEFAULT_PLUGINS = ("fs", "web")` constant makes a bare `Options()` compile
   **byte-identically** to the pre-redesign spec: `fs` / `web` are identity-inert
-  (the default 11-tool set still comes from `BUILTIN_TOOL_CLASSES`), memory /
+  (the default 11-tool set still comes from `builtin_tool_classes()`), memory /
   browser stay off, and a parity golden pins the exact `AgentSpec`.
 
   **Current state:** the `Capabilities` dataclass this D5 kept as the folded

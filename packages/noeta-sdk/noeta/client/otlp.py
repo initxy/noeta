@@ -217,7 +217,7 @@ class _SpanAssembler:
 
     # -- feed --------------------------------------------------------------
 
-    def feed(self, record: AuditRecord) -> list[dict[str, Any]]:  # noqa: C901
+    def feed(self, record: AuditRecord) -> list[dict[str, Any]]:
         handler = _HANDLERS.get(record.type)
         if handler is None:
             return []

@@ -108,7 +108,7 @@ HOST_CONTRACT: dict[str, tuple[str, ...]] = {
         # Plugins (manifest mechanism: the loader / set a host binds to, the
         # builder an authored plugin uses, plus the trust-store + error surface)
         "PluginError",
-        "load_plugin_set",
+        "load_plugins",
         "PluginSet",
         "PluginBuilder",
         "grant_trust",

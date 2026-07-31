@@ -7,7 +7,7 @@
 # distribution.
 #
 # In THIS repository the plugin is NOT installed; the tests load it by explicit
-# path via ``load_plugin_set(modules=[".../plugin.py"])``. When packaged for
+# path via ``load_plugins(modules=[".../plugin.py"])``. When packaged for
 # real, the ``approval-modes`` directory becomes the importable
 # ``approval_modes`` package (dashes are not valid in a Python module name), so
 # ``ref`` resolves to ``approval_modes:GUARD``.

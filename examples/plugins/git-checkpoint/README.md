@@ -58,16 +58,16 @@ not an installed distribution):
 
 ```python
 import os
-from noeta.sdk import Client, load_plugin_set, presets
+from noeta.sdk import Client, load_plugins, presets
 
 os.environ["NOETA_GIT_CHECKPOINT_REPO"] = "/path/to/workspace"
-pset = load_plugin_set(builtins=False, modules=["examples/plugins/git-checkpoint/plugin.py"])
+pset = load_plugins(builtins=False, modules=["examples/plugins/git-checkpoint/plugin.py"])
 client = Client(presets.main_options(), plugins=pset)  # observer subscribed process-wide
 ```
 
 A real distribution ships the `[tool.noeta]` manifest + a `noeta.plugins` entry
 point (see [`pyproject.toml`](./pyproject.toml)); the loader then discovers it
-via `load_plugin_set(entry_points=True)`. Verify the shipped manifest with
+via `load_plugins(entry_points=True)`. Verify the shipped manifest with
 `python -m noeta.sdk.plugin_check examples/plugins/git-checkpoint`.
 
 ## Restoring

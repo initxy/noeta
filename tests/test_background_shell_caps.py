@@ -3,7 +3,7 @@ output-size cap surfaced as a ``truncated`` flag (replay/deref-consistent).
 
 Two axes, both runtime accelerators that never perturb replay bytes:
 
-* **Concurrency cap** — ``max_jobs_per_session`` (default 8). ``spawn`` counts
+* **Concurrency cap** — ``max_jobs_per_root_task`` (default 8). ``spawn`` counts
   the session root's currently-RUNNING jobs; the (cap+1)th is **rejected**
   (NOT queued) with a clear refusal the model can act on, records NO
   ``BackgroundShellStarted`` event, and starts no process. After one of the
@@ -32,7 +32,7 @@ from noeta.protocols.events import (
 )
 from noeta.protocols.tool import ToolContext
 from noeta.runtime.background_shell import (
-    DEFAULT_MAX_BACKGROUND_JOBS_PER_SESSION,
+    DEFAULT_MAX_BACKGROUND_JOBS_PER_ROOT_TASK,
     ProcessRegistry,
 )
 from noeta.storage.memory import InMemoryContentStore, InMemoryEventLog
@@ -92,7 +92,7 @@ def _await_terminal(reg: ProcessRegistry, job_id: str, timeout_s: float = 5.0) -
 def test_spawn_up_to_cap_succeeds(tmp_path: Path) -> None:
     log = InMemoryEventLog()
     store = InMemoryContentStore()
-    reg = ProcessRegistry(event_log=log, content_store=store, max_jobs_per_session=3)
+    reg = ProcessRegistry(event_log=log, content_store=store, max_jobs_per_root_task=3)
     jobs = [_spawn_blocker(reg, tmp_path) for _ in range(3)]
     assert all("job_id" in j and not j.get("rejected") for j in jobs)
     # exactly 3 Started events on the session stream, no rejection trace
@@ -106,7 +106,7 @@ def test_spawn_up_to_cap_succeeds(tmp_path: Path) -> None:
 def test_spawn_over_cap_is_rejected_no_process_no_event(tmp_path: Path) -> None:
     log = InMemoryEventLog()
     store = InMemoryContentStore()
-    reg = ProcessRegistry(event_log=log, content_store=store, max_jobs_per_session=2)
+    reg = ProcessRegistry(event_log=log, content_store=store, max_jobs_per_root_task=2)
     ok = [_spawn_blocker(reg, tmp_path) for _ in range(2)]
     # The (cap+1)th is REJECTED (not queued): a refusal dict, no job_id, no ref.
     rejected = _spawn_blocker(reg, tmp_path)
@@ -125,7 +125,7 @@ def test_spawn_over_cap_is_rejected_no_process_no_event(tmp_path: Path) -> None:
 def test_spawn_accepted_again_after_one_terminal(tmp_path: Path) -> None:
     log = InMemoryEventLog()
     store = InMemoryContentStore()
-    reg = ProcessRegistry(event_log=log, content_store=store, max_jobs_per_session=2)
+    reg = ProcessRegistry(event_log=log, content_store=store, max_jobs_per_root_task=2)
     a = _spawn_blocker(reg, tmp_path)
     b = _spawn_blocker(reg, tmp_path)
     assert _spawn_blocker(reg, tmp_path).get("rejected") is True  # at cap
@@ -144,7 +144,7 @@ def test_concurrency_cap_is_per_session_not_global(tmp_path: Path) -> None:
     root has its own budget (jobs keyed by session root, issue 04)."""
     log = InMemoryEventLog()
     store = InMemoryContentStore()
-    reg = ProcessRegistry(event_log=log, content_store=store, max_jobs_per_session=1)
+    reg = ProcessRegistry(event_log=log, content_store=store, max_jobs_per_root_task=1)
     a = _spawn_blocker(reg, tmp_path, task_id="sess-A")
     # sess-A is full, but sess-B has its own budget.
     assert _spawn_blocker(reg, tmp_path, task_id="sess-A").get("rejected") is True
@@ -156,7 +156,7 @@ def test_concurrency_cap_is_per_session_not_global(tmp_path: Path) -> None:
 
 
 def test_default_cap_is_eight() -> None:
-    assert DEFAULT_MAX_BACKGROUND_JOBS_PER_SESSION == 8
+    assert DEFAULT_MAX_BACKGROUND_JOBS_PER_ROOT_TASK == 8
 
 
 def test_shell_run_tool_surfaces_cap_rejection(tmp_path: Path) -> None:
@@ -164,7 +164,7 @@ def test_shell_run_tool_surfaces_cap_rejection(tmp_path: Path) -> None:
     failure the model can act on (kill one first), not a crash."""
     log = InMemoryEventLog()
     store = InMemoryContentStore()
-    reg = ProcessRegistry(event_log=log, content_store=store, max_jobs_per_session=1)
+    reg = ProcessRegistry(event_log=log, content_store=store, max_jobs_per_root_task=1)
     ws = _ws(tmp_path)
     tool = ShellRunTool(workspace=ws, mode=ShellMode.ARBITRARY)
     ctx = ToolContext(
@@ -299,7 +299,7 @@ def test_sdkhost_threads_cap_into_registry(tmp_path: Path) -> None:
         dispatcher=InMemoryDispatcher(),
         provider=_StubProvider(),
         workspace_dir=tmp_path,
-        max_background_jobs_per_session=1,
+        max_background_jobs_per_root_task=1,
     )
     reg = host._process_registry  # noqa: SLF001
     assert reg is not None

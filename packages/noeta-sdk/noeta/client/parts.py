@@ -27,7 +27,6 @@ from noeta.protocols.policy import Policy
 
 
 __all__ = [
-    "BUILTIN_TOOL_CLASSES",
     "COMPOSER_REF",
     "POLICY_REF",
     "ReactImpl",
@@ -479,12 +478,11 @@ def default_reminder_specs() -> tuple[ReminderSpec, ...]:
     return _REMINDER_SPEC_CACHE
 
 
-def __getattr__(name: str) -> Any:
-    # Compatibility surface: ``BUILTIN_TOOL_CLASSES`` stays importable as a
-    # module attribute, now backed by the loader-resolved table.
-    if name == "BUILTIN_TOOL_CLASSES":
-        return builtin_tool_classes()
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+# NOTE: a module ``__getattr__`` used to vend ``BUILTIN_TOOL_CLASSES`` as a
+# lazy attribute alias for :func:`builtin_tool_classes`. It was a
+# back-compat shim for the pre-microkernel static table; every caller now
+# calls the function (which is the honest shape — the table is resolved from
+# the built-in manifests, not a constant), so the alias is gone.
 
 
 #: ReAct decision-mapping behaviour version — SDK single source
@@ -526,7 +524,7 @@ def builtin_tool_ref(name: str) -> ToolRef:
     Raises
     ------
     KeyError
-        If ``name`` is not in :data:`BUILTIN_TOOL_CLASSES`. The message
+        If ``name`` is not in :func:`builtin_tool_classes`. The message
         enumerates the valid names.
     """
     classes = builtin_tool_classes()

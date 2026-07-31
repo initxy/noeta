@@ -28,20 +28,22 @@ import sys
 import tempfile
 from pathlib import Path
 
-from noeta.sdk import Client, Options, tool
-
-# The scripted provider + the ToolContext/ToolResult tool types are runtime
-# building blocks, not part of the user-facing recipe surface — a real
-# deployment supplies a live provider and never scripts one. noeta.testing is
-# the public home for the offline fake.
-from noeta.protocols.messages import (
+from noeta.sdk import (
+    Client,
     LLMResponse,
+    Options,
     TextBlock,
+    ToolContext,
+    ToolResult,
     ToolUseBlock,
     Usage,
+    tool,
 )
-from noeta.protocols.tool import ToolContext, ToolResult
-from noeta.testing.fake_llm import FakeLLMProvider
+
+# The scripted provider is a runtime building block, not part of the
+# user-facing recipe surface — a real deployment supplies a live provider and
+# never scripts one. ``noeta.sdk.testing`` is its public home.
+from noeta.sdk.testing import FakeLLMProvider
 
 
 _GREET_SCHEMA = {

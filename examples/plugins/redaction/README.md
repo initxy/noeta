@@ -15,9 +15,9 @@ agent that activates this plugin gets the stage.
 
 ```python
 import dataclasses
-from noeta.sdk import Client, load_plugin_set, presets
+from noeta.sdk import Client, load_plugins, presets
 
-pset = load_plugin_set(builtins=False, modules=["examples/plugins/redaction/plugin.py"])
+pset = load_plugins(builtins=False, modules=["examples/plugins/redaction/plugin.py"])
 base = presets.main_options()
 options = dataclasses.replace(base, plugins=tuple(base.plugins) + ("redaction",))
 client = Client(options, plugins=pset)   # the main agent now scrubs tool results

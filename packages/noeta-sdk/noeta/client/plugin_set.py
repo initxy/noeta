@@ -21,9 +21,10 @@ package / ``.toml`` forms) → ``enabled`` gate **before any import** → trust 
 contribution)``. Collisions — including cross-source duplicate plugin names —
 are **errors naming both sides; there is no override**.
 
-This is the M1 mechanism core, built additively next to the still-live 0.4.0
-``noeta.client.plugins`` module (whose trust store this module reuses). Wiring
-activation into ``compile_options`` and retiring ``Capabilities`` is M2.
+This is the mechanism core. The 0.4.0 contribution-bundle path it replaced is
+gone; ``noeta.client.plugins`` retains only the trust store (which this module
+reuses) and the shared error surface. Activation is wired into
+``compile_options`` and ``Capabilities`` is retired.
 """
 
 from __future__ import annotations
@@ -41,11 +42,13 @@ from noeta.client.plugin_manifest import (
     LITERAL_PARAM,
     MANIFEST_BASENAME,
     ManifestContribution,
-    PluginBuilder,
     PluginManifest,
     declared_plugin_name,
+    exec_plugin_file,
+    find_builder,
     read_distribution_manifest,
     read_manifest_file,
+    split_ref,
 )
 from noeta.client.options import PluginActivation
 from noeta.client.plugins import (
@@ -141,11 +144,14 @@ class LoadedPlugin:
     def _import_ref(self, ref: str) -> tuple[ModuleType, tuple[str, ...]]:
         """Import ``ref``'s module half and return it with the attribute path.
 
-        Both manifest ref spellings resolve here, matching what
-        ``plugin_manifest._derive_name`` and ``plugin_check`` already accept:
+        The **spelling** is parsed by the shared
+        :func:`~noeta.client.plugin_manifest.split_ref` (one implementation for
+        the loader, the manifest name-derivation, and the verifier); what lives
+        here is the part only an importer can do — resolving the dotted form's
+        module boundary:
 
-        * ``pkg.mod:attr.sub`` — the explicit form; everything left of ``:`` is
-          the module.
+        * ``pkg.mod:attr.sub`` — the explicit form; ``split_ref`` already told
+          us which half is the module.
         * ``pkg.mod.attr`` — the dotted form; the longest importable prefix is
           the module and the rest is the attribute path.
 
@@ -155,12 +161,10 @@ class LoadedPlugin:
         raising module body) propagates as itself — never silently reinterpreted
         as "that was an attribute, not a module".
         """
-        module_name, sep, attr = ref.partition(":")
-        if sep:
-            return self._import_module(module_name, ref), tuple(
-                p for p in attr.split(".") if p
-            )
-        parts = ref.split(".")
+        module_name, attr_parts = split_ref(ref)
+        if module_name is not None:
+            return self._import_module(module_name, ref), attr_parts
+        parts = list(attr_parts)
         for i in range(len(parts), 0, -1):
             candidate = ".".join(parts[:i])
             try:
@@ -372,6 +376,19 @@ class PluginSet:
             if self.registry.get(name).plane == "identity"
         )
 
+    def _process_surfaces(self) -> "frozenset[str]":
+        """Wiring surfaces whose effect is process-wide (governance authority).
+
+        Derived from the registry rather than hardcoded, so :meth:`process_hooks`
+        collects a host-registered process-scoped surface too (D11).
+        """
+        return frozenset(
+            name
+            for name in self.registry.names()
+            if self.registry.get(name).plane == "wiring"
+            and self.registry.get(name).activation_scope == "process"
+        )
+
     def identity_activations(
         self, only: Optional[Iterable[str]] = None
     ) -> dict[str, "PluginActivation"]:
@@ -385,17 +402,32 @@ class PluginSet:
         capability-flag vocabulary compile handles by name); ``only`` restricts
         resolution to the activated names (see :meth:`_external`).
 
+        The per-surface routing is **table-driven** (D11): each identity surface
+        declares an ``activation_binding`` naming the ``PluginActivation``
+        channel it feeds, so a host-registered identity surface projects
+        without editing this method. ``SurfaceSpec`` refuses an identity
+        surface that declares no binding at registration, which is where the
+        old "``identity_activations()`` must learn to carry it" failure moved
+        to — the ``content_kind``-went-missing lesson is now enforced one step
+        earlier, before any plugin is even loaded.
+
         This executes plugin code (resolve imports the refs) — the Client build
         boundary, never a mid-session turn.
         """
         out: dict[str, PluginActivation] = {}
         identity = self._identity_surfaces()
         for p in self._external(only):
-            tools: list[Any] = []
-            agents: list[tuple[str, Any]] = []
-            kinds: list[tuple[str, Any]] = []
-            frags: list[tuple[str, str]] = []
-            policy: Any = None
+            # One bucket per ``PluginActivation`` channel, keyed by the binding
+            # a surface declares. ``"elsewhere"`` has no bucket: the surface is
+            # identity-plane but a per-agent projection owns its resolution
+            # (``control_tool`` rides :meth:`activation_control_tools`).
+            bound: dict[str, list[Any]] = {
+                "tool": [],
+                "agent": [],
+                "content_kind": [],
+                "prompt_fragment": [],
+                "policy": [],
+            }
             # Every activated external plugin gets an entry — ``compile_options``
             # reads this map as the "is that a known activation name?" vocabulary,
             # so a plugin with only wiring contributions must still appear. Only
@@ -405,45 +437,38 @@ class PluginSet:
                 spec = self.registry.get(rc.surface)
                 if spec.plane != "identity":
                     continue
-                if rc.surface == "tool":
-                    tools.append(rc.value)
-                elif rc.surface == "agent":
-                    agents.append((rc.name, rc.value))
-                elif rc.surface == "content_kind":
-                    kinds.append((rc.name, rc.value))
-                elif rc.surface == "prompt_fragment":
-                    frags.append((rc.name, rc.value))
-                elif rc.surface == "control_tool":
-                    # ``control_tool`` is declared identity-plane (it enters
-                    # durable identity in S3), but it is RESOLVED the same wiring
-                    # way as ``session_pack`` — a per-agent projection through
-                    # :meth:`activation_control_tools`, merged with the built-in +
-                    # internal entries in the builder's mount loop. So it is not
-                    # carried here (that projection owns it); skipping keeps this
-                    # method from choking on an identity-plane surface it does not
-                    # bind (control-tool-surface S2).
+                binding = spec.activation_binding
+                if binding == "elsewhere":
                     continue
-                elif rc.surface == "policy":
-                    # Single-valued surface: at most one per plugin (the merge
-                    # would already reject two). Cross-plugin collisions with the
-                    # base ``Options.policy`` / another active plugin are caught at
-                    # compile (D10).
-                    policy = rc.value
-                else:
-                    # A host-registered identity surface with no branch here would
-                    # otherwise be dropped between resolve and compile, exactly
-                    # how ``content_kind`` went missing. Fail instead.
+                # A registered identity surface always carries a legal binding
+                # (SurfaceSpec.__post_init__ enforces it), so this lookup is
+                # total; the guard keeps a hand-built spec from failing silently.
+                bucket = bound.get(binding) if binding is not None else None
+                if bucket is None:
                     raise PluginError(
                         f"plugin {p.name!r}: identity-plane surface "
-                        f"{rc.surface!r} has no activation binding — "
-                        f"identity_activations() must learn to carry it"
+                        f"{rc.surface!r} declares activation_binding="
+                        f"{binding!r}, which names no PluginActivation channel"
                     )
+                # ``tool`` / ``policy`` carry the bare value; the named channels
+                # keep ``(contribution name, value)`` so downstream ordering can
+                # sort by name.
+                if binding in ("tool", "policy"):
+                    bucket.append(rc.value)
+                else:
+                    bucket.append((rc.name, rc.value))
+            # Single-valued surface: at most one per plugin (the merge would
+            # already reject two). Cross-plugin collisions with the base
+            # ``Options.policy`` / another active plugin are caught at compile (D10).
+            policies = bound["policy"]
             out[p.name] = PluginActivation(
-                tools=tuple(tools),
-                agents=tuple(agents),
-                content_kinds=tuple(v for _n, v in sorted(kinds, key=lambda e: e[0])),
-                prompt_fragments=tuple(frags),
-                policy=policy,
+                tools=tuple(bound["tool"]),
+                agents=tuple(bound["agent"]),
+                content_kinds=tuple(
+                    v for _n, v in sorted(bound["content_kind"], key=lambda e: e[0])
+                ),
+                prompt_fragments=tuple(bound["prompt_fragment"]),
+                policy=policies[0] if policies else None,
             )
         return out
 
@@ -575,19 +600,30 @@ class PluginSet:
         be governance authority. It is still limited to the plugins whose static
         manifest *declares* a guard or observer, so a loaded plugin that governs
         nothing is not imported to discover that.
+
+        The governance set is **derived from the registry** (D11): every wiring
+        surface scoped ``"process"`` is process-wide authority by definition, so
+        a host that registers its own process-scoped wiring surface has it
+        collected here without editing this method. The returned pair keeps its
+        two-bucket shape because ``Client`` wires guards and observers into
+        different runtime seams; a third process surface would need a channel of
+        its own, which is why the split is by surface name inside the derived set
+        rather than an open-ended bag.
         """
         guards: list[Any] = []
         observers: list[Any] = []
-        governance = frozenset({"guard", "observer"})
+        governance = self._process_surfaces()
         for p in sorted(self._external(None), key=lambda x: x.name):
             if not self._declares(p, governance):
                 continue
             resolved = sorted(self._resolve_plugin(p), key=lambda r: r.name)
             for rc in resolved:
-                if rc.surface == "guard":
-                    guards.append(rc.value)
-                elif rc.surface == "observer":
+                if rc.surface not in governance:
+                    continue
+                if rc.surface == "observer":
                     observers.append(rc.value)
+                else:
+                    guards.append(rc.value)
         return tuple(guards), tuple(observers)
 
     def resolve(self) -> tuple[ResolvedContribution, ...]:
@@ -904,7 +940,7 @@ def _read_explicit(spec: str, enabled_set: Optional[set]) -> Iterator[_Candidate
         return
     # A dotted module: importing it is authorized (explicit source, D4 gate).
     module = _import_module(spec)
-    builder = _find_builder(module, spec)
+    builder = find_builder(module, spec)
     manifest = builder.manifest()
     if _enabled_pass(enabled_set, manifest.name):
         yield _Candidate(
@@ -952,8 +988,8 @@ def _load_py_file(
     declared = declared_plugin_name(path)
     if declared is not None and not _enabled_pass(enabled_set, declared):
         return None
-    module = _exec_file(path)
-    builder = _find_builder(module, str(path))
+    module = exec_plugin_file(path, module_prefix="_noeta_plugin_")
+    builder = find_builder(module, str(path))
     manifest = builder.manifest()
     if not _enabled_pass(enabled_set, manifest.name):
         return None
@@ -966,22 +1002,10 @@ def _load_py_file(
     )
 
 
-def _find_builder(module: ModuleType, origin: str) -> PluginBuilder:
-    candidate = getattr(module, "plugin", None)
-    if isinstance(candidate, PluginBuilder):
-        return candidate
-    found = [v for v in vars(module).values() if isinstance(v, PluginBuilder)]
-    if len(found) == 1:
-        return found[0]
-    if not found:
-        raise PluginError(
-            f"plugin {origin}: no module-level PluginBuilder found "
-            f"(assign one to `plugin`)"
-        )
-    raise PluginError(
-        f"plugin {origin}: multiple PluginBuilder instances found — expose one "
-        f"as `plugin`"
-    )
+# NOTE: builder discovery and single-file execution live in
+# :mod:`noeta.client.plugin_manifest` (``find_builder`` / ``exec_plugin_file``),
+# shared with ``noeta.sdk.plugin_check`` so the loader and the verifier can
+# never disagree about which builder a plugin file exposes.
 
 
 def _looks_like_path(spec: str) -> bool:
@@ -1003,13 +1027,3 @@ def _import_module(spec: str) -> ModuleType:
         ) from exc
 
 
-def _exec_file(path: Path) -> ModuleType:
-    modspec = importlib.util.spec_from_file_location(f"_noeta_plugin_{path.stem}", path)
-    if modspec is None or modspec.loader is None:
-        raise PluginError(f"plugin file {path} could not be loaded")
-    module = importlib.util.module_from_spec(modspec)
-    try:
-        modspec.loader.exec_module(module)
-    except Exception as exc:  # noqa: BLE001
-        raise PluginError(f"plugin file {path} failed to import: {exc}") from exc
-    return module

@@ -22,7 +22,7 @@ What it wires
   flight (the deltas are previews only — never persisted).
 * **Plugins** — the first-party example **manifest plugins** under
   ``examples/plugins/*`` are loaded by explicit path
-  (:func:`~noeta.sdk.load_plugin_set` → a :class:`~noeta.sdk.PluginSet`) and
+  (:func:`~noeta.sdk.load_plugins` → a :class:`~noeta.sdk.PluginSet`) and
   handed to :class:`~noeta.sdk.Client` as ``plugins=``. The Client wires them
   per the effect-scoping rules (spec D6): the ``guard`` / ``observer`` plugins
   (``protected-paths`` / ``approval-modes`` / ``git-checkpoint``) are governance
@@ -71,7 +71,7 @@ from noeta.sdk import (
     StreamDelta,
     TextBlock,
     Usage,
-    load_plugin_set,
+    load_plugins,
     presets,
 )
 from noeta.sdk.storage import (
@@ -155,7 +155,7 @@ def default_plugin_modules() -> list[str]:
     A server host discovers plugins via entry points + an operator enable-list;
     in this repo the example plugins are not installed, so the reference host
     loads them by explicit file path — the ``modules=[...]`` seam of
-    :func:`~noeta.sdk.load_plugin_set`. Load order never affects the compiled
+    :func:`~noeta.sdk.load_plugins`. Load order never affects the compiled
     ``AgentSpec`` (the merge is deterministic), but we sort here anyway so the
     discovered set is stable.
     """
@@ -204,7 +204,7 @@ def plugin_env_scope(workspace_dir: Path) -> Iterator[dict[str, str]]:
     """:func:`apply_plugin_env` for the duration of a block, then restored.
 
     The plugin modules read their config at import, so the variables only have to
-    be in force while :func:`~noeta.sdk.load_plugin_set` runs — after that the
+    be in force while :func:`~noeta.sdk.load_plugins` runs — after that the
     guards are built and the values have done their job. Restoring on exit is
     what keeps one build's workspace path out of the next one's environment.
     """
@@ -360,7 +360,7 @@ def build_reference_host(
         else default_plugin_modules()
     )
     with plugin_env_scope(workspace_dir):
-        plugins = load_plugin_set(builtins=False, modules=modules)
+        plugins = load_plugins(builtins=False, modules=modules)
 
     # 3. The agent recipe + per-agent activation. The governance guards /
     #    observer apply process-wide once loaded; ``redaction`` is a per-agent

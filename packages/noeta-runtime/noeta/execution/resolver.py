@@ -665,7 +665,7 @@ class GenericEngineResolver:
         :func:`drive_pending_subtasks` state machine.
 
         Child inheritance (BYTE-EQUAL gate, mirroring
-        ``CodeSessionRunner._build_child_engine``): every child Engine is built
+        the product runner's child-engine build): every child Engine is built
         with delegation INHERITED — ``delegation_enabled=True`` + the **root
         parent's** ``spawnable`` set + the same depth-capped Budget — NOT
         sourced from the leaf child agent's own (possibly delegation-free)
@@ -855,7 +855,7 @@ class GenericEngineResolver:
             # allowlist) — but delegation is INHERITED from the root, not read
             # from this leaf agent's identity (gate #2). No policy_wrapper:
             # children are one-shot, never multi-turn wrapped, exactly as
-            # ``CodeSessionRunner._build_child_engine``. ``ask_user_question``
+            # the product runner's child-engine build. ``ask_user_question``
             # is OFF for children (depth>0), mirroring the resolve_engine mask.
             # the child runs on its agent's declared
             # default model when one exists, else the root session's inherited

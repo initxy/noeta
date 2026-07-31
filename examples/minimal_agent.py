@@ -39,11 +39,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-from noeta.client import Options, query
-from noeta.protocols.events import TaskCompletedPayload, answer_from_payload
-from noeta.protocols.messages import LLMResponse, TextBlock, Usage
-from noeta.storage.memory import InMemoryContentStore
-from noeta.testing.fake_llm import FakeLLMProvider
+from noeta.sdk import LLMResponse, Options, TextBlock, Usage, query
+from noeta.sdk.testing import FakeLLMProvider
 
 
 def _demo_provider() -> FakeLLMProvider:
@@ -76,7 +73,7 @@ def run(*, provider=None, workspace_dir: Path, model: str = "stub-model") -> str
         permission_mode="bypassPermissions",
     )
 
-    envelopes = query(
+    result = query(
         options,
         goal="Say hello.",
         provider=provider if provider is not None else _demo_provider(),
@@ -84,16 +81,12 @@ def run(*, provider=None, workspace_dir: Path, model: str = "stub-model") -> str
         model=model,
     )
 
-    # The final answer rides the terminal TaskCompleted envelope. The
-    # FakeLLMProvider answers inline, so an empty store suffices to deref
-    # it; a real run resolves the same way against the live store.
-    answer = ""
-    store = InMemoryContentStore()
-    for env in envelopes:
-        if env.type == "TaskCompleted":
-            assert isinstance(env.payload, TaskCompletedPayload)
-            answer = str(answer_from_payload(env.payload, store))
-    return answer
+    # ``result`` IS the full envelope list, but the terminal answer is already
+    # folded onto it — dereferenced against the live store before ``query``
+    # tore it down, so a spilled answer resolves too. ``.answer()`` raises
+    # ``QueryFailedError`` if the task did not complete, so a failure reason
+    # can never be mistaken for an answer.
+    return str(result.answer())
 
 
 def main() -> int:

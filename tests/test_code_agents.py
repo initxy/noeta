@@ -39,7 +39,7 @@ from tests._read_models.result import (
     _last_shell_result,
 )
 from noeta.agent.spec import agent_activates
-from noeta.client.parts import BUILTIN_TOOL_CLASSES
+from noeta.client.parts import builtin_tool_classes
 from noeta.presets import official_specs
 from noeta.protocols.messages import LLMResponse, TextBlock, ToolUseBlock, Usage
 from noeta.testing.fake_llm import FakeLLMProvider
@@ -258,7 +258,7 @@ def test_general_purpose_has_full_builtin_set() -> None:
     full built-in tool surface (same as main), so grep/glob/apply_patch/webfetch
     are present rather than dropped."""
     gp_tools = _tools(GENERAL_PURPOSE_SPEC)
-    assert gp_tools == frozenset(BUILTIN_TOOL_CLASSES)
+    assert gp_tools == frozenset(builtin_tool_classes())
     # The previously-dropped search/patch/web tools are now present.
     assert {"grep", "glob", "apply_patch", "webfetch"} <= gp_tools
 
@@ -267,7 +267,7 @@ def test_main_and_general_purpose_tools_now_equal() -> None:
     """CC alignment: general-purpose's tool surface now equals main's — both
     are the full built-in catalog (gp is no longer a strict subset)."""
     assert _tools(GENERAL_PURPOSE_SPEC) == _tools(MAIN_SPEC)
-    assert _tools(MAIN_SPEC) == frozenset(BUILTIN_TOOL_CLASSES)
+    assert _tools(MAIN_SPEC) == frozenset(builtin_tool_classes())
 
 
 def test_explore_is_read_only() -> None:

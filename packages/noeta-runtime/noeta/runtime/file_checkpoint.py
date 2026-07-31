@@ -15,7 +15,7 @@ record of a turn's baselines is the ``file_baselines`` field on the
 re-stashing the same file twice in one turn without re-folding the log. It is
 **never written to the log**, so it has zero effect on the persisted record.
 
-Keyed by the SESSION ROOT (not the editing task) so the subtask
+Keyed by the ROOT-TASK (not the editing task) so the subtask
 cascade can share ONE gate across a whole delegation tree: a parent that edited
 X, then a subtask that edits the same X, must not stash a SECOND (mid-turn,
 dirty) baseline for X. v1 subtasks run same-process / sequential / one lease at

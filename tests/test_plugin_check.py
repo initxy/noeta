@@ -392,3 +392,88 @@ def test_runs_as_python_dash_m_module():
     )
     assert proc.returncode == 0, proc.stderr
     assert "OK" in proc.stdout
+
+
+# ---------------------------------------------------------------------------
+# D12c — default-valued ordering params are not drift
+# ---------------------------------------------------------------------------
+
+
+def test_omitting_a_defaulted_param_is_not_reported_as_drift():
+    """A TOML that omits ``priority = 0`` behaves identically — so it must verify.
+
+    The decorators always stamp the explicit default (``priority=0`` /
+    ``seams=()``), while a hand-written manifest naturally leaves it out. The
+    loader defaults both the same way (``plugin_set._priority`` / ``_seams``),
+    so reporting the pair as a mismatch flagged two manifests that produce
+    byte-identical runtime wiring.
+    """
+    derived = PluginManifest(
+        name="p",
+        contributions=(
+            ManifestContribution(
+                surface="reminder", name="r", ref="pkg.mod:r", params={"priority": 0}
+            ),
+            ManifestContribution(
+                surface="reminder_provider", name="s", ref="pkg.mod:s",
+                params={"seams": []},
+            ),
+        ),
+    )
+    shipped = PluginManifest(
+        name="p",
+        contributions=(
+            ManifestContribution(surface="reminder", name="r", ref="pkg.mod:r"),
+            ManifestContribution(
+                surface="reminder_provider", name="s", ref="pkg.mod:s"
+            ),
+        ),
+    )
+    assert diff_manifests(derived, shipped) == []
+
+
+def test_a_non_default_ordering_param_is_still_drift():
+    """The tolerance is for the DEFAULT value only — a real difference still fails."""
+    derived = PluginManifest(
+        name="p",
+        contributions=(
+            ManifestContribution(
+                surface="reminder", name="r", ref="pkg.mod:r", params={"priority": 50}
+            ),
+        ),
+    )
+    shipped = PluginManifest(
+        name="p",
+        contributions=(
+            ManifestContribution(surface="reminder", name="r", ref="pkg.mod:r"),
+        ),
+    )
+    diffs = diff_manifests(derived, shipped)
+    assert len(diffs) == 1 and "params" in diffs[0]
+
+
+# ---------------------------------------------------------------------------
+# D12b — (surface, name) uniqueness, matching PluginBuilder's rule
+# ---------------------------------------------------------------------------
+
+
+def test_toml_manifest_rejects_a_duplicate_surface_name_pair():
+    """The static form now refuses what ``PluginBuilder.contribute`` always did.
+
+    Before this, a *distributed* plugin could ship two identically-keyed
+    contributions (the second silently shadowing the first in every by-key
+    projection) while the same plugin's single-file form was rejected.
+    """
+    text = """
+        name = "dup"
+        [[contributions]]
+        surface = "reminder"
+        name = "same"
+        ref = "pkg.mod:one"
+        [[contributions]]
+        surface = "reminder"
+        name = "same"
+        ref = "pkg.mod:two"
+    """
+    with pytest.raises(Exception, match="must be unique"):
+        parse_manifest_text(textwrap.dedent(text), origin="dup-manifest")

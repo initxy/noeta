@@ -2,7 +2,7 @@
 
 * #28 — the per-session concurrency cap must hold ONE lock across the
   count-check AND the table insert, so concurrent spawns on one session can
-  never overrun ``max_jobs_per_session`` (the old code read the count under the
+  never overrun ``max_jobs_per_root_task`` (the old code read the count under the
   lock, released it, then inserted under a separate later lock → two racing
   spawns at cap-1 could both pass the ceiling).
 * #10 — ``poll`` snapshots ``status`` + ``exit_code`` together under the per-job
@@ -57,7 +57,7 @@ def test_concurrent_spawns_never_overrun_cap(tmp_path: Path) -> None:
     log = InMemoryEventLog()
     store = InMemoryContentStore()
     cap = 4
-    reg = ProcessRegistry(event_log=log, content_store=store, max_jobs_per_session=cap)
+    reg = ProcessRegistry(event_log=log, content_store=store, max_jobs_per_root_task=cap)
 
     # Fill the session to cap-1 RUNNING jobs first.
     base = [_spawn_blocker(reg, tmp_path) for _ in range(cap - 1)]

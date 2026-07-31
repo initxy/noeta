@@ -155,7 +155,7 @@ superseded (its record above stays for history). See the implementation spec
 **A `SandboxProvider` seam splits *provisioning* from *mechanism*.** v1 addressed
 one pre-existing container by `base_url`; v2 provisions a **fresh container per
 root-task tree**. The SDK defines a `SandboxProvider` Protocol
-(`allocate(session_root_id, spec)` / `release` / `attach`) plus the value types it
+(`allocate(root_task_id, spec)` / `release` / `attach`) plus the value types it
 exchanges (`SandboxHandle` = durable addressing + a live `SandboxAuth` strategy
 never serialized; `SandboxSpec` / `MountSpec` = the configurable image / caps /
 mount list). The agent product implements it — `LocalDockerSandboxProvider`
@@ -426,8 +426,8 @@ repository. The seam below is shipped and useful on its own: it is what lets any
 host keep some sessions off the sandbox while a provider serves the rest.)
 
 **Decision.** Add exactly one host-config seam:
-`HostConfig.sandbox_session_policy: Optional[Callable[[str, Optional[str]], bool]]`
-— `(session_root_task_id, workspace_dir) -> provision?`. It is consulted at the
+`HostConfig.sandbox_policy: Optional[Callable[[str, Optional[str]], bool]]`
+— `(root_task_id, workspace_dir) -> provision?`. It is consulted at the
 top of `NoetaHost.allocate_exec_env`: a `False` return makes `allocate` return
 `None` *without* calling `provider.allocate`, so the driver records no
 `exec_env_ref` and `_build_engine` takes the existing ref-less branch —

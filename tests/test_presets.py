@@ -10,7 +10,7 @@ import pytest
 
 from noeta.agent.spec import agent_activates
 from noeta.client.options import Options, SystemPromptPreset, compile_options
-from noeta.client.parts import BUILTIN_TOOL_CLASSES
+from noeta.client.parts import builtin_tool_classes
 from noeta.presets import (
     MAIN_SYSTEM_PROMPT,
     MEMORY_POLICY_PROMPT,
@@ -100,7 +100,7 @@ def test_main_has_all_builtin_tools() -> None:
     specs = official_specs()
     main = specs["main"]
     names = {t.name for t in main.tools}
-    assert names == set(BUILTIN_TOOL_CLASSES)
+    assert names == set(builtin_tool_classes())
     # the full builtin set now carries the shell triplet, so
     # main (tools=None catchall) gets all three.
     assert {"shell_run", "shell_poll", "shell_kill"} <= names
@@ -110,7 +110,7 @@ def test_webfetch_in_main_and_all_subagents() -> None:
     # CC alignment: webfetch is now in main AND all three subagents — CC's
     # general-purpose has the full toolset, and its Explore/Plan agents have
     # every tool except the write family (so WebFetch is available to them).
-    assert "webfetch" in BUILTIN_TOOL_CLASSES
+    assert "webfetch" in builtin_tool_classes()
     specs = official_specs()
     for name in ("main", "explore", "plan", "general-purpose"):
         sub_names = {t.name for t in specs[name].tools}
@@ -126,13 +126,13 @@ def test_webfetch_builtin_ref_low_risk() -> None:
 
 
 def test_shell_triplet_registered_in_builtin_catalog() -> None:
-    # shell_poll / shell_kill joined BUILTIN_TOOL_CLASSES so
+    # shell_poll / shell_kill joined builtin_tool_classes() so
     # they are addressable by name in a preset whitelist (shell_run was already
     # there). risk is read straight off the tool class defaults.
     from noeta.client.parts import builtin_tool_ref
 
     for name in ("shell_run", "shell_poll", "shell_kill"):
-        assert name in BUILTIN_TOOL_CLASSES
+        assert name in builtin_tool_classes()
     assert builtin_tool_ref("shell_run").risk_level == "high"
     assert builtin_tool_ref("shell_kill").risk_level == "high"
     assert builtin_tool_ref("shell_poll").risk_level == "low"
@@ -155,7 +155,7 @@ def test_builtin_tools_have_nonempty_description() -> None:
     # every shipping built-in tool carries a hand-written, LLM-facing
     # description — the model's single source of tool semantics, rendered into
     # the provider tool schema instead of being restated in the system prompt.
-    for name, cls in BUILTIN_TOOL_CLASSES.items():
+    for name, cls in builtin_tool_classes().items():
         desc = getattr(cls, "description", "")
         assert isinstance(desc, str) and desc.strip(), f"{name} is missing a description"
 
@@ -246,7 +246,7 @@ def test_general_purpose_whitelist_is_full_builtin_set() -> None:
     # and batch-edits with apply_patch instead of falling back to shell.
     specs = official_specs()
     names = {t.name for t in specs["general-purpose"].tools}
-    assert names == set(BUILTIN_TOOL_CLASSES)
+    assert names == set(builtin_tool_classes())
     # The previously-dropped search/patch/web tools are now present.
     assert {"grep", "glob", "apply_patch", "webfetch"} <= names
     # gp's tool surface now equals main's (both the full built-in catalog).

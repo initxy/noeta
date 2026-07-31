@@ -30,6 +30,7 @@ manifest-level collision detection run with zero plugin execution.
 from __future__ import annotations
 
 import ast
+import importlib.util
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -48,6 +49,10 @@ __all__ = [
     "read_manifest_file",
     "read_distribution_manifest",
     "declared_plugin_name",
+    "exec_plugin_file",
+    "find_builder",
+    "ref_attr_name",
+    "split_ref",
 ]
 
 
@@ -150,6 +155,24 @@ def _manifest_from_table(table: Mapping[str, Any], origin: str) -> PluginManifes
     contributions = tuple(
         _contribution_from(raw, origin, i) for i, raw in enumerate(raw_contribs)
     )
+    # ``(surface, name)`` is the collision / ordering key the whole mechanism
+    # is built on, so a manifest declaring it twice is malformed — the second
+    # entry would shadow the first in every by-key projection. ``PluginBuilder``
+    # has always rejected this for the single-file form; the TOML form used to
+    # accept it silently, which let a *distributed* plugin ship a duplicate the
+    # same plugin's single-file form would have refused (a manifest/loader
+    # drift the whole static-manifest guarantee depends on not having).
+    seen: dict[tuple[str, str], int] = {}
+    for index, c in enumerate(contributions):
+        key = (c.surface, c.name)
+        first = seen.get(key)
+        if first is not None:
+            raise PluginError(
+                f"{origin}: contribution #{index} duplicates #{first} — "
+                f"surface {c.surface!r} already declares {c.name!r}; "
+                f"(surface, name) must be unique within a manifest"
+            )
+        seen[key] = index
     return PluginManifest(
         name=name,
         requires_noeta=requires,
@@ -187,14 +210,49 @@ def _contribution_from(raw: Any, origin: str, index: int) -> ManifestContributio
     return ManifestContribution(surface=surface, name=name, ref=ref, path=path, params=params)
 
 
+def split_ref(ref: str) -> tuple[Optional[str], tuple[str, ...]]:
+    """Split a manifest ``ref`` into its module half and attribute path.
+
+    The **one** place the two ref spellings are parsed (previously
+    reimplemented in three modules, whose docstrings had to promise by hand
+    that they stayed in agreement):
+
+    * ``pkg.mod:attr.sub`` — the explicit form. Everything left of ``:`` is
+      the module; returns ``("pkg.mod", ("attr", "sub"))``.
+    * ``pkg.mod.attr`` — the dotted form. The module boundary is not knowable
+      without trying imports, so the module half is ``None`` and every
+      component is returned: ``(None, ("pkg", "mod", "attr"))``. The importer
+      (:meth:`LoadedPlugin._import_ref`) resolves the boundary by backing off
+      one component at a time.
+
+    Empty components are dropped, so a stray ``"pkg.mod:"`` yields no
+    attribute path rather than an empty-string component.
+    """
+    module, sep, attr = ref.partition(":")
+    if sep:
+        return module, tuple(p for p in attr.split(".") if p)
+    return None, tuple(p for p in ref.split(".") if p)
+
+
+def ref_attr_name(ref: Optional[str]) -> Optional[str]:
+    """The final attribute component of a ``ref`` — its natural contribution name.
+
+    ``"pkg.mod:attr.sub"`` and ``"pkg.mod.attr.sub"`` both yield ``"sub"``.
+    ``None`` for a missing ref or one with no usable component.
+    """
+    if not ref:
+        return None
+    _module, parts = split_ref(ref)
+    if not parts:
+        return None
+    return parts[-1].strip() or None
+
+
 def _derive_name(ref: Optional[str], path: Optional[str]) -> Optional[str]:
     """Derive a contribution name from its ``ref`` attribute or ``path`` basename."""
-    if ref:
-        _mod, sep, attr = ref.partition(":")
-        candidate = attr if sep else ref.rsplit(".", 1)[-1]
-        candidate = candidate.strip()
-        if candidate:
-            return candidate.rsplit(".", 1)[-1]
+    candidate = ref_attr_name(ref)
+    if candidate:
+        return candidate
     if path:
         stem = Path(path).name.strip()
         if stem:
@@ -588,3 +646,63 @@ class PluginBuilder:
             config_schema=self._config_schema,
             contributions=tuple(self._contributions),
         )
+
+
+# ---------------------------------------------------------------------------
+# Single-file plugin loading — shared by the loader and the verifier
+# ---------------------------------------------------------------------------
+
+
+def exec_plugin_file(path: Path, *, module_prefix: str) -> Any:
+    """Execute a single-file plugin and return its module object.
+
+    The one implementation of "run a ``plugin.py`` and hand back the module",
+    shared by the loader (:mod:`noeta.client.plugin_set`) and the manifest
+    verifier (:mod:`noeta.sdk.plugin_check`). They differ only in the synthetic
+    module name they register under, which is what ``module_prefix`` carries —
+    the verifier must not collide with a module the loader already executed in
+    the same process.
+
+    Any import fault inside the file surfaces as a named :class:`PluginError`
+    rather than an opaque traceback: a plugin that cannot be imported is a
+    build-time configuration error, not an engine crash.
+    """
+    modspec = importlib.util.spec_from_file_location(
+        f"{module_prefix}{path.stem}", path
+    )
+    if modspec is None or modspec.loader is None:
+        raise PluginError(f"plugin file {path} could not be loaded")
+    module = importlib.util.module_from_spec(modspec)
+    try:
+        modspec.loader.exec_module(module)
+    except Exception as exc:  # noqa: BLE001 — surface any import fault, named
+        raise PluginError(f"plugin file {path} failed to import: {exc}") from exc
+    return module
+
+
+def find_builder(module: Any, origin: Any) -> PluginBuilder:
+    """The module-level :class:`PluginBuilder` a single-file plugin exposes.
+
+    Prefers the conventional ``plugin`` name; falls back to a unique
+    module-level builder. Zero builders and two-or-more builders are both
+    errors naming ``origin`` (a path or a module label) — guessing which of two
+    builders the author meant would silently ship half a plugin.
+
+    Shared by the loader and the verifier so the discovery rule cannot drift
+    between "what gets loaded" and "what gets verified".
+    """
+    candidate = getattr(module, "plugin", None)
+    if isinstance(candidate, PluginBuilder):
+        return candidate
+    found = [v for v in vars(module).values() if isinstance(v, PluginBuilder)]
+    if len(found) == 1:
+        return found[0]
+    if not found:
+        raise PluginError(
+            f"plugin {origin}: no module-level PluginBuilder found "
+            f"(assign one to `plugin`)"
+        )
+    raise PluginError(
+        f"plugin {origin}: multiple PluginBuilder instances found — expose one "
+        f"as `plugin`"
+    )

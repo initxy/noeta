@@ -188,7 +188,7 @@ forbidden_modules =
 ; engine/wiring/observers; the ONE allowed core edge — the fold projection —
 ; is whitelisted precisely (CW5a P1: lock the boundary, don't leave core open).
 ignore_imports =
-    noeta.read_models.sessions -> noeta.core.fold
+    noeta.read_models.tasks -> noeta.core.fold
 
 [importlinter:contract:storage-adapters-isolated]
 name = production code talks to storage Protocols, never to InMemory adapters

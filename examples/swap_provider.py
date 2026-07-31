@@ -33,11 +33,15 @@ import sys
 import tempfile
 from pathlib import Path
 
-from noeta.client import Options, compile_options, query
-from noeta.protocols.events import TaskCompletedPayload, answer_from_payload
-from noeta.protocols.messages import LLMResponse, TextBlock, Usage
-from noeta.storage.memory import InMemoryContentStore
-from noeta.testing.fake_llm import FakeLLMProvider
+from noeta.sdk import (
+    LLMResponse,
+    Options,
+    TextBlock,
+    Usage,
+    compile_options,
+    query,
+)
+from noeta.sdk.testing import FakeLLMProvider
 
 
 def _provider_saying(text: str) -> FakeLLMProvider:
@@ -67,15 +71,6 @@ def _recipe() -> Options:
     )
 
 
-def _answer_from(envelopes) -> str:
-    store = InMemoryContentStore()
-    for env in envelopes:
-        if env.type == "TaskCompleted":
-            assert isinstance(env.payload, TaskCompletedPayload)
-            return str(answer_from_payload(env.payload, store))
-    return ""
-
-
 def run(*, workspace_dir: Path) -> tuple[str, str, bool]:
     """Run the same recipe against two providers.
 
@@ -89,23 +84,23 @@ def run(*, workspace_dir: Path) -> tuple[str, str, bool]:
     # compiled agent identity, regardless of vendor.
     compiled, _ = compile_options(recipe)
 
-    answer_a = _answer_from(
+    answer_a = str(
         query(
             recipe,
             goal="Say hello.",
             provider=_provider_saying("Hello from provider A (e.g. OpenAI)."),
             workspace_dir=workspace_dir,
             model="model-a",
-        )
+        ).answer()
     )
-    answer_b = _answer_from(
+    answer_b = str(
         query(
             recipe,
             goal="Say hello.",
             provider=_provider_saying("Hello from provider B (e.g. Claude)."),
             workspace_dir=workspace_dir,
             model="model-b",
-        )
+        ).answer()
     )
 
     compiled_again, _ = compile_options(recipe)

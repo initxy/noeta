@@ -29,16 +29,18 @@ import sys
 import tempfile
 from pathlib import Path
 
-from noeta.client import Options, query
-from noeta.protocols.messages import (
+from noeta.sdk import (
     LLMResponse,
+    Options,
     TextBlock,
+    ToolContext,
+    ToolResult,
     ToolUseBlock,
     Usage,
+    query,
+    tool,
 )
-from noeta.protocols.tool import ToolContext, ToolResult
-from noeta.testing.fake_llm import FakeLLMProvider
-from noeta.tools import tool
+from noeta.sdk.testing import FakeLLMProvider
 
 
 _WORD_COUNT_SCHEMA = {

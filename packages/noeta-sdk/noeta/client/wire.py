@@ -16,6 +16,7 @@ durable bytes, so a folding frontend and a server-side fold agree.
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 
 from noeta.protocols.canonical import to_canonical
@@ -26,18 +27,18 @@ __all__ = ["envelope_to_dict"]
 
 
 def envelope_to_dict(env: EventEnvelope) -> dict[str, Any]:
-    """Render one :class:`EventEnvelope` as a JSON-serializable dict."""
+    """Render one :class:`EventEnvelope` as a JSON-serializable dict.
+
+    Driven by ``dataclasses.fields`` so a field added to the envelope is
+    carried automatically — this module's whole contract is "a folding
+    frontend sees every field the durable record holds", and a hand-written
+    field list would silently drop a new one. ``payload`` is the one field
+    that needs rendering (canonicalisation); every other field is a JSON
+    scalar already.
+    """
     return {
-        "id": env.id,
-        "task_id": env.task_id,
-        "seq": env.seq,
-        "type": env.type,
-        "schema_version": env.schema_version,
-        "occurred_at": env.occurred_at,
-        "actor": env.actor,
-        "trace_id": env.trace_id,
-        "correlation_id": env.correlation_id,
-        "causation_id": env.causation_id,
-        "origin": env.origin,
-        "payload": to_canonical(env.payload),
+        f.name: (
+            to_canonical(getattr(env, f.name)) if f.name == "payload" else getattr(env, f.name)
+        )
+        for f in dataclasses.fields(env)
     }

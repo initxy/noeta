@@ -43,6 +43,7 @@ the Anthropic protocol — those are explicitly Out of Scope for issue
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Callable, Literal, Optional
 
 import httpx
@@ -72,6 +73,9 @@ from noeta.builtins.providers.impl.codecs import (
     parse_retry_after,
 )
 
+
+#: The conventional environment variable an omitted ``api_key`` falls back to.
+_API_KEY_ENV = "OPENAI_API_KEY"
 
 _FINISH_REASON_MAP: dict[str, Literal["tool_use", "end_turn", "max_tokens", "error"]] = {
     "stop": "end_turn",
@@ -111,16 +115,29 @@ class OpenAICompatProvider:
     def __init__(
         self,
         base_url: str,
-        api_key: str,
+        api_key: Optional[str] = None,
         *,
         timeout_seconds: float = 60.0,
         extra_headers: Optional[dict[str, str]] = None,
         reasoning_continuation: ReasoningContinuation = "off",
     ) -> None:
+        """``api_key`` defaults to the ``OPENAI_API_KEY`` environment variable.
+
+        The conventional fallback every OpenAI-shape client offers; an explicit
+        argument still wins. Neither present raises here rather than letting
+        the first call fail with an opaque 401. ``base_url`` stays required —
+        an OpenAI-*compatible* endpoint has no conventional default.
+        """
+        resolved_key = api_key if api_key is not None else os.environ.get(_API_KEY_ENV)
+        if not resolved_key:
+            raise ValueError(
+                "OpenAICompatProvider needs an API key: pass api_key=... or "
+                f"set the {_API_KEY_ENV} environment variable"
+            )
         self._base_url = base_url.rstrip("/")
         self._reasoning_continuation = reasoning_continuation
         headers: dict[str, str] = {
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {resolved_key}",
             "Content-Type": "application/json",
         }
         if extra_headers:

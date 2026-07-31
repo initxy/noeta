@@ -9,7 +9,7 @@ Covered:
 * deny-glob precedence (a glob denies even inside an allowed root) and
   deny-glob-only mode (no roots);
 * the manifest ships a configured guard built from the environment;
-* the new loading API — ``load_plugin_set`` lists the ``guard`` contribution
+* the new loading API — ``load_plugins`` lists the ``guard`` contribution
   without executing plugin code, and ``process_hooks`` resolves the configured
   guard (governance, process-wide, D6).
 
@@ -32,7 +32,7 @@ from noeta.protocols.hooks import (
     ProposedToolCall,
     Verdict,
 )
-from noeta.sdk import PluginBuilder, load_plugin_set
+from noeta.sdk import PluginBuilder, load_plugins
 
 
 # ---------------------------------------------------------------------------
@@ -271,12 +271,12 @@ def test_default_config_protects_cwd_not_nothing():
 
 
 # ---------------------------------------------------------------------------
-# End-to-end — the new manifest loading API (load_plugin_set + process_hooks)
+# End-to-end — the new manifest loading API (load_plugins + process_hooks)
 # ---------------------------------------------------------------------------
 
 
-def test_load_plugin_set_lists_the_guard_without_execution(tmp_path):
-    pset = load_plugin_set(builtins=False, modules=[str(PLUGIN_PATH)])
+def test_load_plugins_lists_the_guard_without_execution(tmp_path):
+    pset = load_plugins(builtins=False, modules=[str(PLUGIN_PATH)])
     assert pset.names() == ("protected-paths",)
     # Listing reads only the static manifest.
     listed = pset.contributions("guard")
@@ -289,7 +289,7 @@ def test_process_hooks_resolves_the_configured_guard(tmp_path):
     # Env is read when the plugin module is executed by the loader.
     os.environ["NOETA_PROTECTED_PATHS_ROOTS"] = str(tmp_path)
     try:
-        pset = load_plugin_set(builtins=False, modules=[str(PLUGIN_PATH)])
+        pset = load_plugins(builtins=False, modules=[str(PLUGIN_PATH)])
         guards, observers = pset.process_hooks()
     finally:
         os.environ.pop("NOETA_PROTECTED_PATHS_ROOTS", None)

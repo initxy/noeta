@@ -269,7 +269,7 @@ set; all `None` ⇒ in-memory.
 | `sandbox_spec` | `None` | deployment-fixed half of the per-session `SandboxSpec` (image, caps, base mounts) |
 | `sandbox_exec_preamble` | `None` | `(exec_env_ref, argv) → prefix`, re-invoked per container command |
 | `sandbox_backend_factory` / `sandbox_browser_factory` | `None` | swap the sandbox wire without touching the seam |
-| `sandbox_session_policy` | `None` | `(root_task_id, workspace_dir) → bool` per-session opt-out |
+| `sandbox_policy` | `None` | `(root_task_id, workspace_dir) → bool` per-session opt-out |
 
 **Memory** — precedence `memory_root_resolver` > `memory_dir` >
 `global_memory_dir` > `~/.noeta/memories`. See
@@ -285,8 +285,8 @@ set; all `None` ⇒ in-memory.
 | Field | Default | Purpose |
 | --- | --- | --- |
 | `workflow_allowed` | `False` | expose `run_workflow` (also requires delegation) |
-| `max_background_jobs_per_session` | `8` | over the cap a background `shell_run` is rejected, not queued |
-| `max_background_subagents_per_session` | `8` | same for `spawn_subagent(background=True)` |
+| `max_background_jobs_per_root_task` | `8` | over the cap a background `shell_run` is rejected, not queued |
+| `max_background_subagents_per_root_task` | `8` | same for `spawn_subagent(background=True)` |
 | `instructions_enabled` | `False` | load the workspace-root `NOETA.md` → `AGENTS.md` |
 | `instructions_file` | `None` | read only this path instead of the search |
 | `instructions_discovery` | `False` | `read`-triggered discovery of subdirectory instruction files ([Composer & cache](../concepts/composer-and-cache.md)) |
@@ -357,7 +357,7 @@ host-level **load** / agent-level **activation** split. Full contract in the
 | `PluginManifest` / `ManifestContribution` | the static manifest (`name`, `requires-noeta`, contributions) | `client/plugin_manifest.py` |
 | `PluginBuilder` | single-file decorator sugar that *is* a manifest | `client/plugin_manifest.py` |
 | `SurfaceSpec` / `SurfaceRegistry` / `standard_registry` | the surface registry (plane, scope, validator, collision, merge, ordering) | `client/surfaces.py` |
-| `load_plugin_set(...) → PluginSet` | the five-source loader (built-ins / entry points / modules / user dirs / workspace dirs) | `client/plugin_set.py` |
+| `load_plugins(...) → PluginSet` | the five-source loader (built-ins / entry points / modules / user dirs / workspace dirs) | `client/plugin_set.py` |
 | `PluginSet` | the loaded set — listable / collision-checkable **without executing plugin code** | `client/plugin_set.py` |
 | `PluginActivation` | one external plugin's identity-plane contributions (built by `Client`) | `client/options.py` |
 | `DEFAULT_PLUGINS` | `("fs", "web")` — the default of `Options.plugins` (identity-inert) | `client/options.py` |
@@ -368,7 +368,7 @@ Activate loaded plugins per-agent through `Options.plugins` /
 `AgentDefinition.plugins`, and hand the `PluginSet` to `Client(options,
 plugins=…)` or `query(…, plugins=…)`. Governance surfaces (`guard` / `observer`)
 apply process-wide once loaded; every other surface follows activation.
-`load_plugin_set` is the `noeta.sdk` name for `client.plugin_set.load_plugins`.
+`load_plugins` is the `noeta.sdk` name for `client.plugin_set.load_plugins`.
 
 > The 0.4.0 `noeta_plugin(api)` bundle path (`PluginAPI`, `load_plugins`,
 > `merge_plugins`, `merged_mcp_servers`, `merged_skill_dirs`, `LoadedPlugin`,

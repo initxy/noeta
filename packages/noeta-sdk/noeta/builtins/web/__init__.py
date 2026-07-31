@@ -1,7 +1,7 @@
 """``web`` — the default web tool pack (fetch + search).
 
 Like ``fs``, activating ``web`` is identity-inert: the default tool set of a
-bare ``Options`` still comes from ``BUILTIN_TOOL_CLASSES`` in the compile path
+bare ``Options`` still comes from ``builtin_tool_classes()`` in the compile path
 (byte-identity). This declaration is the reference manifest and the listing
 surface.
 """

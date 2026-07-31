@@ -85,9 +85,9 @@ class ToolRuntime:
         # no ``file_baselines`` are recorded — byte-identical to a pre-0043
         # ToolResultRecorded.
         self._file_checkpoint_registry = file_checkpoint_registry
-        # memo of editing-task → SESSION-ROOT task id (immutable
+        # memo of editing-task → root-task id (immutable
         # durable parent graph). Lets the per-turn gate key a whole delegation
-        # tree under ONE root (see ``_session_root``). Live-only capture path.
+        # tree under ONE root (see ``_root_task_id``). Live-only capture path.
         self._root_cache: dict[str, str] = {}
 
     # -- normal-mode invoke ----------------------------------------------
@@ -238,7 +238,7 @@ class ToolRuntime:
         For each file the call mutated (surfaced on ``result.file_changes`` by
         the write-side fs tools), ask the per-turn gate whether this is the
         FIRST edit of that path this turn; only then stash a baseline. The gate
-        is keyed by the SESSION ROOT (``_session_root``) so a whole delegation
+        is keyed by the ROOT-TASK (``_root_task_id``) so a whole delegation
         tree shares ONE gate (D8): a parent that edited X then a subtask that
         edits the same X must not stash a SECOND (mid-turn, dirty) baseline. For
         a top-level turn the editing task IS the root, so this is byte-identical
@@ -257,7 +257,7 @@ class ToolRuntime:
         changes = result.file_changes
         if registry is None or not changes:
             return None
-        root = self._session_root(task_id)
+        root = self._root_task_id(task_id)
         baselines: list[FileBaseline] = []
         for change in changes:
             path = change["path"]
@@ -284,8 +284,8 @@ class ToolRuntime:
             baselines.append(FileBaseline(path=path, content_ref=ref))
         return baselines or None
 
-    def _session_root(self, task_id: str) -> str:
-        """The SESSION-ROOT task id of the (possibly subtask)
+    def _root_task_id(self, task_id: str) -> str:
+        """The root-task id of the (possibly subtask)
         editing task, so a whole delegation tree shares ONE per-turn gate.
 
         Walks ``TaskCreated.parent_task_id`` up to the root (``parent_task_id``
