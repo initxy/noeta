@@ -25,6 +25,7 @@ Rule of thumb: the wider the impact (spanning multiple modules), the more it bel
 **Engine & execution**:
 [engine-policy-dataflow](engine-policy-dataflow.md) ·
 [worker-lease-model](worker-lease-model.md) ·
+[worker-queue-routing](worker-queue-routing.md) ·
 [step-attempt-recovery](step-attempt-recovery.md) ·
 [multi-host-lease-fencing](multi-host-lease-fencing.md) ·
 [subtask-fanout-and-durable-wake](subtask-fanout-and-durable-wake.md) ·

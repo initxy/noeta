@@ -109,8 +109,11 @@ class BackgroundSubagentRegistry:
         # ``reserved=True`` keeps it targeted-lease-only: only the descent that
         # seeds the child's goal may claim it, so a resident-worker pool's
         # untargeted poll cannot steal the unseeded child and drive it with an
-        # empty message history.
-        self._dispatcher.enqueue(child_task_id, reserved=True)
+        # empty message history. ``parent_task_id`` routes the child onto its
+        # parent's queue for the re-enqueues after its first claim.
+        self._dispatcher.enqueue(
+            child_task_id, reserved=True, parent_task_id=parent_task_id
+        )
         host = self._build_host(parent_task_id)
         future = _global_executor().submit(
             _drive_member_to_terminal, host, child_task_id

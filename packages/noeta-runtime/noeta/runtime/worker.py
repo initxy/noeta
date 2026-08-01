@@ -22,6 +22,7 @@ from typing import Any, Callable, ClassVar, Iterator, Literal, Optional, Protoco
 from noeta.core.engine import abandon_step_attempt, suspend_on_human_handle
 from noeta.core.fold import BoundedEventLog, fold
 from noeta.protocols.decisions import TaskStatePatch
+from noeta.protocols.dispatcher import DEFAULT_QUEUE
 from noeta.protocols.errors import InvalidLease, TaskCancellationRequested
 from noeta.protocols.events import SUSPEND_REASON_INTERRUPTED
 from noeta.protocols.messages import (
@@ -1473,10 +1474,16 @@ class WorkerLoop:
         reliability_sink: Optional[ReliabilitySink] = None,
         step_poll_s: float = 0.05,
         next_goal_handle: Optional[str] = None,
+        queue: str = DEFAULT_QUEUE,
     ) -> None:
         self._rt = rt
         self._worker_id = worker_id
         self._lease_seconds = lease_seconds
+        #: The only queue this loop's untargeted poll claims from — a pool
+        #: never drives work routed to another pool's configuration (ADR
+        #: ``worker-queue-routing``). The maintenance sweeps below stay
+        #: queue-agnostic: they flip status, never ownership.
+        self._queue = queue
         self._poll_interval = poll_interval
         self._heartbeat_interval = heartbeat_interval
         self._stale_sweep_interval = stale_sweep_interval
@@ -1562,6 +1569,7 @@ class WorkerLoop:
             worker_id=self._worker_id,
             lease_seconds=self._lease_seconds,
             task_id=None,
+            queue=self._queue,
         )
         if lease is None:
             return False

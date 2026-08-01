@@ -209,6 +209,27 @@ _MIGRATION_5_BASELINE_INDEX = (
 )
 
 
+# Migration 6: worker queue routing (ADR ``worker-queue-routing``). Every row
+# carries the worker-pool name whose untargeted ``lease(task_id=None)`` poll
+# may claim it — assigned once at row birth (explicit / inherited from the
+# parent row / ``DEFAULT_QUEUE``), immutable afterwards; targeted leases and
+# the maintenance sweeps ignore it. The ready index is re-created as
+# ``(queue, ready_order)`` so the per-queue FIFO selection stays an index
+# walk. The literal default is frozen here; live code renders
+# ``noeta.protocols.dispatcher.DEFAULT_QUEUE``.
+_MIGRATION_6_QUEUE_COLUMN = (
+    "ALTER TABLE dispatcher_tasks "
+    "ADD COLUMN queue TEXT NOT NULL DEFAULT 'default'"
+)
+
+_MIGRATION_6_DROP_READY_INDEX = "DROP INDEX IF EXISTS ix_dispatcher_ready"
+
+_MIGRATION_6_READY_INDEX = (
+    "CREATE INDEX ix_dispatcher_ready "
+    "ON dispatcher_tasks (queue, ready_order) WHERE status = 'ready'"
+)
+
+
 MIGRATIONS: list[Migration] = [
     Migration(
         version=1,
@@ -250,6 +271,15 @@ MIGRATIONS: list[Migration] = [
         statements=(
             _MIGRATION_5_DROP_SNAPSHOT_INDEX,
             _MIGRATION_5_BASELINE_INDEX,
+        ),
+    ),
+    Migration(
+        version=6,
+        description="worker queue routing (queue column + per-queue ready index)",
+        statements=(
+            _MIGRATION_6_QUEUE_COLUMN,
+            _MIGRATION_6_DROP_READY_INDEX,
+            _MIGRATION_6_READY_INDEX,
         ),
     ),
 ]

@@ -30,9 +30,9 @@
 
 **什么时候撞上：** 你想让多台机器上的 worker 进程排空一个共享存储。
 
-**绕过办法：** 多主机部署请用 Postgres 后端。在 SQLite 上，保持单主机（在那台主机上跑一个多 worker 池是没问题的），或者给不同的工作负载画像各自的 SQLite 文件 —— 就绪队列里没有跨存储的路由，所以一个存储里的 Task 对排空另一个存储的 worker 是不可见的。
+**绕过办法：** 多主机部署请用 Postgres 后端。在 SQLite 上，保持单主机 —— 在那台主机上跑一个多 worker 池是没问题的，而且**同一进程内**任意多个配置各异的 client 可以共享同一个存储三元组：每个 client 起自己的 `queue` 名（`HostConfig.queue`），根任务出生在播种它的 client 的队列上，子任务继承队列，无目标的 worker 轮询绝不跨队列 —— 所以 client 之间不可能驱动彼此的工作。单主机限制针对的是*进程*，不是 client。
 
-见 [ADR：Multi-host lease fencing](https://github.com/initxy/noeta/blob/main/docs/adr/multi-host-lease-fencing.md)。
+见 [ADR：Multi-host lease fencing](https://github.com/initxy/noeta/blob/main/docs/adr/multi-host-lease-fencing.md) 与 [ADR：Worker queue routing](https://github.com/initxy/noeta/blob/main/docs/adr/worker-queue-routing.md)。
 
 ### 崩溃恢复不会撤销副作用
 

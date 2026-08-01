@@ -221,13 +221,16 @@ def test_resume_skips_suspended_task_without_wake_event(tmp_path) -> None:
 
     seed_log, _, seed_dispatcher = build_storage_stack("sqlite", path=db_path)
     # Settle the stranded child (created in the seed, still ready) WITHOUT
-    # waking the parent. A child that finishes after a restart notifies its
-    # parent through lineage replay, which would otherwise mask the lost-wake
-    # skip path this test targets.
-    # Mark the child terminal on BOTH the log (so the restarted observer's
-    # lineage replay treats it as already-notified) and the dispatcher (so it
-    # is not re-leased), on an observer-free stack so no SubtaskCompleted /
-    # wake is generated for the parent.
+    # waking the parent, on an observer-free stack. The restarted observer
+    # derives the handoff from the log and durably dedupes against the parent
+    # stream, so the fabricated state must match the REAL lost-wake shape:
+    # child terminal AND its ``SubtaskCompleted`` already recorded on the
+    # parent (the pre-crash observer emitted it; only the matched wake was
+    # lost afterwards). Without that record, recovery would repair the
+    # handoff and wake the parent — masking the skip path this test targets.
+    from noeta.protocols.events import SubtaskCompletedPayload
+    from noeta.protocols.wake import SubtaskResult
+
     child_id = original_wake_on.subtask_id
     child_lease = seed_dispatcher.lease(
         worker_id="settle", lease_seconds=60.0, task_id=child_id
@@ -242,6 +245,18 @@ def test_resume_skips_suspended_task_without_wake_event(tmp_path) -> None:
         payload=TaskFailedPayload(reason="settled before resume"),
         actor="test",
         origin="system",
+    )
+    seed_log.system_emit(
+        task_id=parent_task_id,
+        type="SubtaskCompleted",
+        payload=SubtaskCompletedPayload(
+            subtask_id=child_id,
+            result=SubtaskResult(
+                status="failed", error="settled before resume"
+            ),
+        ),
+        actor="test",
+        origin="observer",
     )
     # Force the task back onto the ready queue WITHOUT going through
     # wake() — this is the at-most-once-loss shape (e.g. a previous

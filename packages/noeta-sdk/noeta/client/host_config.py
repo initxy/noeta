@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     # runtime import back would be circular.
     from noeta.client.sandbox import BackendFactory, BrowserBackendFactory
 from noeta.protocols.content_store import ContentStore
-from noeta.protocols.dispatcher import Dispatcher
+from noeta.protocols.dispatcher import DEFAULT_QUEUE, Dispatcher
 from noeta.protocols.event_log import EventLogFull
 from noeta.protocols.messages import StreamDelta
 from noeta.protocols.step_context import StepContext
@@ -140,6 +140,13 @@ class HostConfig:
     #: supplying both is a loud error, because the two would disagree about
     #: which store the session actually writes to.
     storage_path: Optional[str] = None
+    #: This client's worker queue over the (possibly shared) store: root tasks
+    #: it seeds are born on this queue, children inherit it, and its resident
+    #: worker pool claims ONLY it — so differently-configured clients sharing
+    #: one storage triple can never drive each other's work (ADR
+    #: ``worker-queue-routing``). A wiring concern, never part of identity;
+    #: single-store single-client setups keep the default and never see it.
+    queue: str = DEFAULT_QUEUE
 
     # -- host runtime injections -------------------------------------------
     app_gateway: Optional[AppPreviewGateway] = None

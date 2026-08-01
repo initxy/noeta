@@ -51,12 +51,15 @@ host processes at one SQLite file is unsafe.
 draining a shared store.
 
 **Workaround:** Use the Postgres backend for multi-host deployments. On SQLite,
-keep to a single host (a multi-worker pool on that host is fine), or give
-separate workload profiles their own SQLite files — there is no cross-store
-routing in the ready queue, so tasks in one store are invisible to workers
-draining another.
+keep to a single host — a multi-worker pool on that host is fine, and
+**within one process** any number of differently-configured clients may share
+one storage triple: each names its own `queue` (`HostConfig.queue`), roots are
+born on their seeding client's queue, children inherit it, and an untargeted
+worker poll never crosses queues — so clients cannot drive each other's work.
+The single-host limit is about *processes*, not clients.
 
-See [ADR: Multi-host lease fencing](https://github.com/initxy/noeta/blob/main/docs/adr/multi-host-lease-fencing.md).
+See [ADR: Multi-host lease fencing](https://github.com/initxy/noeta/blob/main/docs/adr/multi-host-lease-fencing.md)
+and [ADR: Worker queue routing](https://github.com/initxy/noeta/blob/main/docs/adr/worker-queue-routing.md).
 
 ### Crash recovery does not undo side effects
 
