@@ -33,6 +33,7 @@ from noeta.protocols.messages import (
     Usage,
 )
 from noeta.protocols.values import ContentRef
+from noeta.builtins.providers.impl.codecs import HOST_INJECTED_PREAMBLE
 from noeta.builtins.providers.impl.openai_compat import OpenAICompatProvider
 
 
@@ -916,7 +917,9 @@ def test_trailing_slash_in_base_url_is_normalised() -> None:
 
 
 # ---------------------------------------------------------------------------
-# origin rendering: injected turns render as system-role wire messages
+# origin rendering: injected turns render as system-role wire messages, led by
+# the self-describing preamble (the role alone does not tell an arbitrary
+# model "this is not the user speaking")
 # ---------------------------------------------------------------------------
 
 
@@ -939,7 +942,10 @@ def test_origin_system_renders_as_system_role_wire_message() -> None:
     wire = _origin_wire_messages([_user_message("real human words"), injected])
     assert wire == [
         {"role": "user", "content": "real human words"},
-        {"role": "system", "content": "host says hi"},
+        {
+            "role": "system",
+            "content": f"{HOST_INJECTED_PREAMBLE}\nhost says hi",
+        },
     ]
 
 
@@ -952,7 +958,10 @@ def test_origin_memory_renders_as_system_role_wire_message() -> None:
     )
     wire = _origin_wire_messages([recalled, _user_message("the actual ask")])
     assert wire == [
-        {"role": "system", "content": "recalled note"},
+        {
+            "role": "system",
+            "content": f"{HOST_INJECTED_PREAMBLE}\nrecalled note",
+        },
         {"role": "user", "content": "the actual ask"},
     ]
 

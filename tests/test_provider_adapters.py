@@ -2,9 +2,9 @@
 
 * openai_responses ``_message_to_responses`` renders by ``message.origin``:
   host-injected turns (origin system/memory) become ``role:"system"`` input
-  items — the counterpart of openai_compat raising a system role and anthropic
-  wrapping ``<system-reminder>`` — while a human's own words stay
-  ``role:"user"``.
+  items led by ``HOST_INJECTED_PREAMBLE`` — the counterpart of openai_compat
+  prefixing a system role and anthropic wrapping ``<system-reminder>`` — while
+  a human's own words stay ``role:"user"`` with no preamble.
 * catalog ``price`` / ``spec_for`` ``resolve_alias`` first, so a friendly alias
   (e.g. ``"opus"``) prices identically to its real id instead of raising
   KeyError.
@@ -20,6 +20,7 @@ import httpx
 from noeta.protocols.messages import Message, TextBlock, Usage
 from noeta.builtins.providers.impl.anthropic import _is_context_overflow
 from noeta.builtins.providers.impl.catalog import price, spec_for
+from noeta.builtins.providers.impl.codecs import HOST_INJECTED_PREAMBLE
 from noeta.builtins.providers.impl.openai_responses import _message_to_responses
 
 
@@ -37,7 +38,10 @@ def test_host_injected_user_turn_renders_as_system_input_item() -> None:
             {
                 "type": "message",
                 "role": "system",
-                "content": [{"type": "input_text", "text": "be brief"}],
+                "content": [
+                    {"type": "input_text", "text": HOST_INJECTED_PREAMBLE},
+                    {"type": "input_text", "text": "be brief"},
+                ],
             }
         ]
 
@@ -46,6 +50,8 @@ def test_genuine_user_turn_stays_role_user() -> None:
     for origin in ("human", None):
         items = _message_to_responses(_user("hi there", origin), "off", None)
         assert items[0]["role"] == "user"
+        # A human's own words carry no preamble — it marks host injections only.
+        assert items[0]["content"] == [{"type": "input_text", "text": "hi there"}]
 
 
 # --- catalog: alias pricing -------------------------------------------------

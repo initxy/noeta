@@ -44,6 +44,7 @@ from noeta.protocols.values import ContentRef
 from noeta.builtins.providers.impl import catalog
 from noeta.builtins.providers.impl._sse import iter_sse_events
 from noeta.builtins.providers.impl.codecs import (
+    HOST_INJECTED_PREAMBLE,
     decode_tool_arguments,
     encode_tool_arguments,
     parse_retry_after,
@@ -792,7 +793,8 @@ def _message_to_responses(
       (``origin`` system/memory
       are host-injected turns; Responses natively supports a mid-history
       ``system``-role input item, so it is rendered as a ``role:"system"``
-      input item here — equivalent to openai_compat raising a system role and
+      input item with ``HOST_INJECTED_PREAMBLE`` prepended as the first
+      segment — equivalent to openai_compat prefixing a system role and
       anthropic wrapping ``<system-reminder>``; ``human`` / ``None`` are the
       user's own words, rendered as ``role:"user"``.)
     * assistant → reasoning echo (if enabled) as ``reasoning`` items,
@@ -812,13 +814,25 @@ def _message_to_responses(
     if message.role == "user":
         # Host-injected turns (``origin`` system / memory) ride the user channel
         # in the ledger but render as a mid-history ``system`` role input item —
-        # Responses supports that natively, so no tag syntax leaks into the wire.
+        # Responses supports that natively. The role alone does not reliably
+        # tell an arbitrary model "this is not the user speaking", so
+        # ``HOST_INJECTED_PREAMBLE`` rides in front of the content.
         # ``human`` / ``None`` mean the human's own words → user.
-        role = "system" if message.origin in ("system", "memory") else "user"
+        if message.origin in ("system", "memory"):
+            return [
+                {
+                    "type": "message",
+                    "role": "system",
+                    "content": [
+                        {"type": "input_text", "text": HOST_INJECTED_PREAMBLE},
+                        *_content_segments(message, "input_text", image_resolver),
+                    ],
+                }
+            ]
         return [
             {
                 "type": "message",
-                "role": role,
+                "role": "user",
                 "content": _content_segments(message, "input_text", image_resolver),
             }
         ]

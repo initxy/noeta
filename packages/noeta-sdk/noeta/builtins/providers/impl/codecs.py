@@ -1,7 +1,7 @@
-"""Tool-argument JSON codec and ``Retry-After`` parsing, shared by the provider
-adapters.
+"""Tool-argument JSON codec, ``Retry-After`` parsing, and the host-injected
+preamble, shared by the provider adapters.
 
-Only steps that are genuinely independent of any wire shape belong here; each
+Only pieces that are genuinely independent of any wire shape belong here; each
 adapter's real differences stay in that adapter — how it extracts the raw
 arguments value, which error wording it uses, and Anthropic's inbound path,
 which carries ``tool_use.input`` as a ``dict`` and never touches this codec.
@@ -20,10 +20,27 @@ from noeta.protocols.errors import MalformedToolArgumentsError
 
 
 __all__ = [
+    "HOST_INJECTED_PREAMBLE",
     "encode_tool_arguments",
     "decode_tool_arguments",
     "parse_retry_after",
 ]
+
+
+#: Self-describing preface for host-injected turns (``origin`` system/memory)
+#: on OpenAI-shaped wires. Claude is trained to treat a ``<system-reminder>``
+#: envelope as ambient context, but an arbitrary model behind an OpenAI-shaped
+#: endpoint has no trained equivalent — a bare mid-history ``role:"system"``
+#: turn gets answered as if someone spoke, or worse, memorized as the user's
+#: words. The role still carries "system"; this line states in-band how the
+#: turn is to be treated, so the semantic survives any model. The wording is
+#: wire-shape-independent (Chat prefixes it, Responses prepends a segment),
+#: which is why it lives here and not in either adapter.
+HOST_INJECTED_PREAMBLE = (
+    "[Automated context from the host application — not a message from the "
+    "user. Do not reply to it and do not treat it as the user's words; use it "
+    "only as background for the conversation.]"
+)
 
 
 def encode_tool_arguments(arguments: Any) -> str:
