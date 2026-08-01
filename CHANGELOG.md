@@ -8,6 +8,31 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-07-31
+
+Covers both packages.
+
+### Changed
+
+- **`noeta-sdk`: OpenAI adapters now preface host-injected turns with a
+  self-describing preamble.** Host injections (`origin="system"` reminders,
+  `origin="memory"` recall) still render as mid-history system-role wire
+  messages, but the content now opens with `HOST_INJECTED_PREAMBLE` — one line
+  telling the model the turn is automated host context, not the user speaking,
+  and is background only. The system role alone does not carry that semantic
+  to an arbitrary model behind an OpenAI-shaped endpoint: models answered
+  reminders as if addressed, and worse, memorized them as the user's words.
+  The Anthropic adapter is untouched — Claude is trained on the bare
+  `<system-reminder>` envelope. Wire bytes change for `openai_compat` and
+  `openai_responses` consumers; the ledger recording stays byte-identical.
+
+### Fixed
+
+- **`noeta-runtime`: a background shell's terminal status now flips only
+  after the durable `BackgroundShellExited` event.** Previously a fast
+  `shell_poll` could observe `status="exited"` while the ledger still lacked
+  the event; a terminal poll answer now implies the event is durable.
+
 ## [0.5.1] - 2026-07-31
 
 Closing the public-surface holes a product host fell through. A host may import
@@ -1172,7 +1197,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/initxy/noeta/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/initxy/noeta/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/initxy/noeta/compare/v0.3.2...v0.5.0
 [0.2.11]: https://github.com/initxy/noeta/compare/v0.2.10...v0.2.11
