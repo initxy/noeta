@@ -8,6 +8,10 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-08-01
+
+Covers both packages.
+
 ### Changed
 
 - **Worker queue routing — named queues on the Dispatcher** (ADR
@@ -31,6 +35,14 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
   `wire_default_observers` is idempotent per event log — N clients over one
   shared triple get exactly one default observer, owned by the store's
   lifetime (`Client.close()` no longer stops it).
+
+### Documentation
+
+- `noeta-runtime`: corrected the `ShellMode` enum docstring — `ALLOWLIST`
+  runs a metachar-free command as a direct argv with no shell, and
+  `ARBITRARY` runs it through a real `bash -c` (which is why pipes and
+  redirects are permitted). The prior text wrongly described `ARBITRARY` as
+  metachar-free.
 
 ## [0.5.2] - 2026-07-31
 
@@ -1221,7 +1233,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/initxy/noeta/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/initxy/noeta/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/initxy/noeta/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/initxy/noeta/compare/v0.3.2...v0.5.0
