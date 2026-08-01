@@ -59,8 +59,10 @@ class ShellMode(str, Enum):
     """Pre-run shell policy, bound when the fs tools are constructed.
 
     * :attr:`OFF` — ``shell_run`` is not in the tool set at all.
-    * :attr:`ALLOWLIST` — only the structural allowlist is permitted.
-    * :attr:`ARBITRARY` — any metachar-free command runs (high-risk).
+    * :attr:`ALLOWLIST` — metachar-free commands matching the structural
+      allowlist run as a direct argv, with no shell.
+    * :attr:`ARBITRARY` — the command runs through a real ``bash -c``, so
+      pipes, redirects, and other metacharacters are permitted (high-risk).
     """
 
     OFF = "off"
