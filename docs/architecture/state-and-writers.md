@@ -70,9 +70,10 @@ one, so a Policy cannot pass off its own text as a human turn. A marker forged
 in model or tool output is just text — it never reaches the field.
 
 Vendor tag syntax never enters the ledger either. The Anthropic adapter wraps
-`system` / `memory` injections in `<system-reminder>` on the wire; the
-OpenAI-compatible adapter renders them as mid-history system messages. The
-recording stays neutral.
+`system` / `memory` injections in `<system-reminder>` on the wire; the OpenAI
+adapters render them as mid-history system messages led by a self-describing
+preamble line, because the system role alone does not tell an arbitrary model
+"this is not the user speaking". The recording stays neutral.
 
 ## The lease is the enforcement
 

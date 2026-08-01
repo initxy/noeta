@@ -39,6 +39,7 @@ from noeta.protocols.messages import (
 )
 from noeta.builtins.providers.impl._sse import iter_sse_events
 from noeta.builtins.providers.impl.codecs import (
+    HOST_INJECTED_PREAMBLE,
     decode_tool_arguments,
     encode_tool_arguments,
     parse_retry_after,
@@ -562,11 +563,19 @@ def _message_to_openai(
             _reject_image_block(block)
         # Host-injected turns ride the user channel in the ledger but render as
         # a mid-history ``system`` wire message, which OpenAI's chat shape
-        # supports natively — so no tag syntax is needed. ``human`` / ``None``
-        # mean the role's natural author, i.e. a plain user turn.
+        # supports natively. The role alone does not reliably tell an arbitrary
+        # model "this is not the user speaking" — mid-history system turns get
+        # answered as if addressed — so the preamble states it in-band.
+        # ``human`` / ``None`` mean the role's natural author, i.e. a plain
+        # user turn.
         if message.origin in ("system", "memory"):
             return [
-                {"role": "system", "content": _flatten_text_blocks(message)}
+                {
+                    "role": "system",
+                    "content": (
+                        f"{HOST_INJECTED_PREAMBLE}\n{_flatten_text_blocks(message)}"
+                    ),
+                }
             ]
         return [{"role": "user", "content": _flatten_text_blocks(message)}]
     if message.role == "assistant":
