@@ -47,6 +47,7 @@ from noeta.execution.subtask_drain import UnsupportedSubtaskSuspend
 from noeta.core.engine import suspend_on_human_handle
 from noeta.core.fold import BoundedEventLog, fold
 from noeta.core.snapshot import serialize_task_state, snapshot_media_type
+from noeta.protocols.dispatcher import DEFAULT_QUEUE
 from noeta.protocols.errors import CodedError, InvalidLease
 from noeta.protocols.events import (
     BackgroundSubagentDeliveredPayload,
@@ -456,10 +457,16 @@ class InteractionDriver:
         model_allowlist: Optional[frozenset[str]] = None,
         default_model: Optional[str] = None,
         alias_resolver: Optional[Callable[[str], str]] = None,
+        queue: str = DEFAULT_QUEUE,
     ) -> None:
         self._host = host
         self._worker_id = worker_id
         self._lease_seconds = lease_seconds
+        #: The queue this driver's root tasks are born on — the same name the
+        #: host's resident worker pool claims, so a seeded task yielded to the
+        #: pool lands with its own workers (ADR ``worker-queue-routing``).
+        #: Children inherit it row-to-row; the driver never re-stamps.
+        self._queue = queue
         #: Who is acting + which models they may bind. An in-process embedding
         #: uses the ⊤ local principal; a web backend an authenticated session.
         self._principal = principal
@@ -709,7 +716,9 @@ class InteractionDriver:
         # it through this seed path. Once seeded, the SDK's ``dispatch_seeded``
         # handoff calls ``release_yield``, returning it to the pool as an
         # ordinary untargeted-leaseable task.
-        host.dispatcher.enqueue(task.task_id, reserved=True)
+        host.dispatcher.enqueue(
+            task.task_id, reserved=True, queue=self._queue
+        )
         lease = host.dispatcher.lease(
             worker_id=self._worker_id,
             lease_seconds=self._lease_seconds,

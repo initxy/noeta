@@ -20,7 +20,12 @@ from typing import Any, Callable, Iterable
 
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.content_store import ContentStore
-from noeta.protocols.dispatcher import Dispatcher, Lease, LeaseRegistry
+from noeta.protocols.dispatcher import (
+    DEFAULT_QUEUE,
+    Dispatcher,
+    Lease,
+    LeaseRegistry,
+)
 from noeta.protocols.errors import (
     ContentNotFound,
     InvalidLease,
@@ -392,6 +397,10 @@ class _DispatcherTask:
     # claim it. One-shot — the first successful lease clears it, so a later
     # suspend/resume re-enqueue is an ordinary leaseable task.
     reserved: bool = False
+    # Routing: which worker pool's untargeted poll may claim this row.
+    # Assigned once at row birth (explicit / inherited from the parent row /
+    # DEFAULT_QUEUE) and immutable afterwards — see Dispatcher.enqueue.
+    queue: str = DEFAULT_QUEUE
 
 
 class InMemoryDispatcher:
@@ -528,7 +537,14 @@ class InMemoryDispatcher:
 
     # -- Dispatcher lifecycle --------------------------------------------
 
-    def enqueue(self, task_id: str, *, reserved: bool = False) -> None:
+    def enqueue(
+        self,
+        task_id: str,
+        *,
+        reserved: bool = False,
+        queue: str | None = None,
+        parent_task_id: str | None = None,
+    ) -> None:
         """Mark ``task_id`` as ready-to-lease.
 
         Idempotent: enqueueing a task that is already ``ready`` is a
@@ -544,12 +560,20 @@ class InMemoryDispatcher:
         produced it.
 
         ``reserved`` (see :meth:`Dispatcher.enqueue`) marks the task
-        targeted-lease-only until its first lease claims it.
+        targeted-lease-only until its first lease claims it. ``queue`` /
+        ``parent_task_id`` pick a NEW row's queue (explicit > inherited >
+        default) and are ignored for an existing row — a row's queue is
+        immutable after birth.
         """
         with self._lock:
             if task_id not in self._tasks:
+                if queue is None and parent_task_id is not None:
+                    parent = self._tasks.get(parent_task_id)
+                    queue = parent.queue if parent is not None else None
                 self._tasks[task_id] = _DispatcherTask(
-                    task_id=task_id, reserved=reserved
+                    task_id=task_id,
+                    reserved=reserved,
+                    queue=queue if queue is not None else DEFAULT_QUEUE,
                 )
             else:
                 task = self._tasks[task_id]
@@ -572,15 +596,17 @@ class InMemoryDispatcher:
         worker_id: str,
         lease_seconds: float = 30.0,
         task_id: str | None = None,
+        queue: str = DEFAULT_QUEUE,
     ) -> Lease | None:
         """Lease a ready task.
 
-        ``task_id=None``: pick any ready task in FIFO order (insertion
-        order of ``self._ready``).
-        ``task_id=<id>``: targeted — only succeed if that specific task
-        is currently ready. Returns ``None`` for not-found / not-ready /
-        already-leased / suspended / terminal (no exception — diagnosis
-        is the caller's job; see ADR ``Dispatcher.lease`` docstring).
+        ``task_id=None``: pick the first ready task **on ``queue``** in FIFO
+        order (insertion order of ``self._ready``); an untargeted poll never
+        crosses queues. ``task_id=<id>``: targeted, ``queue`` ignored — only
+        succeed if that specific task is currently ready. Returns ``None``
+        for not-found / not-ready / already-leased / suspended / terminal
+        (no exception — diagnosis is the caller's job; see ADR
+        ``Dispatcher.lease`` docstring).
 
         On success, any ``matched_wake_event`` queued by a prior
         :meth:`wake` (or by the pending-wake-drain in
@@ -600,8 +626,13 @@ class InMemoryDispatcher:
                     candidate = self._tasks[ready_id]
                     # ``reserved`` tasks are targeted-lease-only (a fresh
                     # subtask child its drain/executor must claim first) —
-                    # an untargeted FIFO poll skips them.
-                    if candidate.status == "ready" and not candidate.reserved:
+                    # an untargeted FIFO poll skips them, and it never
+                    # crosses queues (ADR ``worker-queue-routing``).
+                    if (
+                        candidate.status == "ready"
+                        and not candidate.reserved
+                        and candidate.queue == queue
+                    ):
                         target_idx = idx
                         target_task = candidate
                         break

@@ -497,9 +497,15 @@ class Client:
             dispatcher = InMemoryDispatcher()
             event_log = InMemoryEventLog(lease_validator=dispatcher)
             content_store = InMemoryContentStore()
-        self._unsubscribe_default: Callable[[], None] = wire_default_observers(
-            event_log, dispatcher
-        )
+        # Idempotent per event log instance: N clients over one shared triple
+        # get exactly ONE default observer, owned by the store's lifetime —
+        # so ``close()`` below deliberately does not stop it (another client
+        # may still depend on the parent↔child handoff).
+        wire_default_observers(event_log, dispatcher)
+        #: This client's worker queue over the (possibly shared) store —
+        #: stamps seeded roots (driver) and scopes the resident pool's claims
+        #: (``start_workers``). See ``HostConfig.queue``.
+        self._queue: str = hc.queue
         # Effect scoping: a loaded plugin's guard / observer contributions are
         # governance authority — in force process-wide for EVERY agent regardless
         # of which plugins that agent activates. Resolved here from the loaded set
@@ -685,6 +691,9 @@ class Client:
             # friendly-alias table lives in the providers built-in and is
             # injected here (identity for non-alias selectors).
             alias_resolver=resolve_model_alias,
+            # Root tasks are born on this client's queue so a seed yielded to
+            # the pool lands with this client's own workers.
+            queue=self._queue,
         )
         # Wire the driver back into the host as the background-completion
         # notifier. The driver wraps the host, so the host cannot
@@ -1485,6 +1494,9 @@ class Client:
                 timer_poll_interval=timer_poll_interval,
                 shutdown_grace_s=shutdown_grace_s,
                 next_goal_handle=NEXT_GOAL_WAKE_HANDLE,
+                # The pool claims only this client's queue — on a shared
+                # store it can never drive another client's work.
+                queue=self._queue,
             )
             self._worker_loops.append(loop)
             th = threading.Thread(
@@ -1605,11 +1617,10 @@ class Client:
                 self.stop_workers(timeout=10.0)
             except Exception:
                 pass
-        try:
-            self._unsubscribe_default()
-        except Exception:
-            # Observer unsubscribe must never raise; swallow defensively.
-            pass
+        # The default ChildLifecycleObserver is deliberately NOT stopped here:
+        # it is wired once per event log instance and belongs to the store's
+        # lifetime — on a shared triple another client's handoffs still ride
+        # it. Only this client's own observers unsubscribe.
         for unsub in self._unsubscribe_observers:
             try:
                 unsub()

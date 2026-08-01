@@ -21,7 +21,9 @@ class _FakeDispatcher:
         self.enqueued: list[str] = []
         self.woken: list[tuple[str, Any]] = []
 
-    def enqueue(self, task_id: str) -> None:
+    def enqueue(
+        self, task_id: str, *, parent_task_id: Any = None
+    ) -> None:
         self.enqueued.append(task_id)
 
     def wake(self, task_id: str, wake_event: Any) -> bool:

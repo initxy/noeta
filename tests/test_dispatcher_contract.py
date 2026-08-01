@@ -734,3 +734,82 @@ def test_concurrent_leases_across_multiple_tasks(make_dispatcher) -> None:
     )
     # Queue is empty after all leases claimed.
     assert disp.lease(worker_id="probe") is None
+
+
+# ---------------------------------------------------------------------------
+# Worker queue routing (ADR worker-queue-routing)
+# ---------------------------------------------------------------------------
+
+
+def test_untargeted_lease_never_crosses_queues(make_dispatcher) -> None:
+    """A row is born on its queue and only that queue's untargeted poll may
+    claim it — the cross-client steal is structurally impossible."""
+    disp = make_dispatcher()
+    disp.enqueue("a1", queue="a")
+    disp.enqueue("b1", queue="b")
+    # Queue "b" sees only its own task, whatever arrived first.
+    assert disp.lease(worker_id="wb", queue="b").task_id == "b1"
+    assert disp.lease(worker_id="wb", queue="b") is None
+    # Queue "a" likewise; the default queue sees neither.
+    assert disp.lease(worker_id="wd") is None
+    assert disp.lease(worker_id="wa", queue="a").task_id == "a1"
+
+
+def test_enqueue_defaults_to_default_queue(make_dispatcher) -> None:
+    disp = make_dispatcher()
+    disp.enqueue("t1")
+    assert disp.lease(worker_id="w", queue="other") is None
+    assert disp.lease(worker_id="w").task_id == "t1"
+
+
+def test_child_inherits_parent_queue(make_dispatcher) -> None:
+    """``parent_task_id`` routes a child onto its parent's queue, so a task
+    tree runs on the pool that seeded its root."""
+    disp = make_dispatcher()
+    disp.enqueue("root", queue="a")
+    disp.enqueue("child", parent_task_id="root")
+    assert disp.lease(worker_id="w") is None  # not on the default queue
+    got = {
+        disp.lease(worker_id="w", queue="a").task_id,
+        disp.lease(worker_id="w", queue="a").task_id,
+    }
+    assert got == {"root", "child"}
+
+
+def test_unknown_parent_falls_back_to_default_queue(make_dispatcher) -> None:
+    disp = make_dispatcher()
+    disp.enqueue("orphan", parent_task_id="never-enqueued")
+    assert disp.lease(worker_id="w").task_id == "orphan"
+
+
+def test_queue_is_immutable_after_birth(make_dispatcher) -> None:
+    """Re-enqueueing an existing row ignores ``queue`` — including the
+    non-ready -> ready transition, which must not re-home the task."""
+    disp = make_dispatcher()
+    disp.enqueue("t1", queue="a")
+    lease = disp.lease(worker_id="w", queue="a")
+    assert lease.task_id == "t1"
+    # Force-enqueue out of ``leased`` with a different queue: ignored.
+    disp.enqueue("t1", queue="b")
+    assert disp.lease(worker_id="w", queue="b") is None
+    assert disp.lease(worker_id="w", queue="a").task_id == "t1"
+
+
+def test_targeted_lease_ignores_queue(make_dispatcher) -> None:
+    disp = make_dispatcher()
+    disp.enqueue("t1", queue="a")
+    lease = disp.lease(worker_id="w", task_id="t1")
+    assert lease is not None and lease.task_id == "t1"
+
+
+def test_requeue_stale_preserves_queue(make_dispatcher) -> None:
+    """The maintenance sweep flips status, never ownership: an expired lease
+    returns the row to ITS queue, not the default one."""
+    fake_now = [1000.0]
+    disp = make_dispatcher(now=lambda: fake_now[0])
+    disp.enqueue("t1", queue="a")
+    assert disp.lease(worker_id="w", lease_seconds=5.0, queue="a") is not None
+    fake_now[0] += 10.0
+    assert disp.requeue_stale() == ["t1"]
+    assert disp.lease(worker_id="w") is None
+    assert disp.lease(worker_id="w", queue="a").task_id == "t1"

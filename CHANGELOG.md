@@ -8,6 +8,30 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **Worker queue routing — named queues on the Dispatcher** (ADR
+  `worker-queue-routing`). Every dispatcher row now carries a `queue` name,
+  assigned once at row birth (explicit / inherited from the parent row /
+  `DEFAULT_QUEUE`) and immutable afterwards; an untargeted `lease` claims FIFO
+  **within one queue** — there is no wildcard claim. Roots are born on their
+  seeding client's queue (`HostConfig.queue`), children inherit it, and a
+  resident worker pool claims only its own — so differently-configured clients
+  sharing one storage triple (same process; SQLite included) can no longer
+  drive each other's work. Targeted leases and the maintenance sweeps are
+  queue-agnostic. **Breaking** for third-party `Dispatcher` adapters:
+  `enqueue` gains `queue=` / `parent_task_id=`, `lease` gains `queue=`
+  (sqlite migration 11, postgres migration 6).
+- **The parent↔child handoff is now derived from the log, not process
+  memory.** `ChildLifecycleObserver` finds the parent by reading the child
+  stream's `TaskCreated` and durably dedupes against the parent stream, so the
+  handoff fires correctly in whichever process commits the terminal;
+  construction is a recovery pass that emits any handoff a crashed process
+  left missing (previously that crash window stranded the parent forever).
+  `wire_default_observers` is idempotent per event log — N clients over one
+  shared triple get exactly one default observer, owned by the store's
+  lifetime (`Client.close()` no longer stops it).
+
 ## [0.5.2] - 2026-07-31
 
 Covers both packages.

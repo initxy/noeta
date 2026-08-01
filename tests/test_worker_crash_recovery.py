@@ -49,7 +49,10 @@ class _FakeDispatcher:
         self._requeue = list(requeue or [])
         self.calls: list[Any] = []
 
-    def lease(self, *, worker_id: str, lease_seconds: float, task_id: Any = None) -> Any:
+    def lease(
+        self, *, worker_id: str, lease_seconds: float,
+        task_id: Any = None, queue: str = "default",
+    ) -> Any:
         self.calls.append("lease")
         return self._leases.pop(0) if self._leases else None
 

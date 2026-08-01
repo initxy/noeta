@@ -11,10 +11,15 @@ dependency graph acyclic. A single class may implement both Protocols.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional, Protocol
+from typing import Any, Final, Optional, Protocol
 
 
-__all__ = ["Dispatcher", "Lease", "LeaseRegistry"]
+__all__ = ["DEFAULT_QUEUE", "Dispatcher", "Lease", "LeaseRegistry"]
+
+
+#: The queue a task lands on when no explicit queue is given and no parent row
+#: exists to inherit from. Single-pool deployments never see another name.
+DEFAULT_QUEUE: Final[str] = "default"
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,10 +85,26 @@ class Dispatcher(Protocol):
     which is the single source of truth.
     """
 
-    def enqueue(self, task_id: str, *, reserved: bool = False) -> None:
+    def enqueue(
+        self,
+        task_id: str,
+        *,
+        reserved: bool = False,
+        queue: Optional[str] = None,
+        parent_task_id: Optional[str] = None,
+    ) -> None:
         """Mark ``task_id`` as ready-to-lease.
 
         Idempotent: enqueueing an already-ready task is a no-op.
+
+        ``queue`` / ``parent_task_id`` decide the queue a **new** row is born
+        on (see :data:`DEFAULT_QUEUE`): an explicit ``queue`` wins; else the
+        stored queue of ``parent_task_id``'s row (child inheritance — the
+        observer and the background-subagent submit pass it); else the
+        default. A row's queue is **immutable after birth** — both arguments
+        are ignored for an existing row, whatever its status. Routing is
+        dispatcher-local state, never task identity (ADR
+        ``worker-queue-routing``).
 
         ``reserved=True`` marks the task as **targeted-lease-only**: an
         untargeted ``lease(task_id=None)`` FIFO poll SKIPS it, so only a
@@ -109,11 +130,17 @@ class Dispatcher(Protocol):
         worker_id: str,
         lease_seconds: float = 30.0,
         task_id: Optional[str] = None,
+        queue: str = DEFAULT_QUEUE,
     ) -> Optional[Lease]:
         """Try to acquire a lease on a ready Task.
 
-        ``task_id=None`` (default): pick any ready Task in FIFO order
-        (``ready_order`` ascending).
+        ``task_id=None`` (default): pick the first ready Task **on
+        ``queue``** in FIFO order (``ready_order`` ascending). There is no
+        wildcard claim — an untargeted poll never crosses queues, so a pool
+        can only ever drive work routed to it (ADR ``worker-queue-routing``).
+
+        ``task_id=<id>``: targeted lease — ``queue`` is ignored; the caller
+        already knows exactly which task it wants.
 
         ``task_id=<id>``: targeted lease — return a :class:`Lease`
         only if that specific Task is in the ready queue and not

@@ -245,7 +245,7 @@ class _RaisingDispatcher:
         self._fail_raises = fail_raises
 
     def lease(self, *, worker_id: str, lease_seconds: float = 30.0,
-              task_id: Any = None) -> Any:
+              task_id: Any = None, queue: str = "default") -> Any:
         if self._handed:
             return None
         self._handed = True

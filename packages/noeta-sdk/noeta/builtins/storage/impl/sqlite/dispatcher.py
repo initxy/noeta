@@ -21,7 +21,7 @@ from types import TracebackType
 from typing import Any, Callable, Optional, Union
 
 from noeta.protocols.canonical import from_canonical_bytes, to_canonical_bytes
-from noeta.protocols.dispatcher import Lease
+from noeta.protocols.dispatcher import DEFAULT_QUEUE, Lease
 from noeta.protocols.errors import InvalidLease, WakeConsumeMismatch
 from noeta.protocols.wake import TimerFired
 from noeta.storage.spi import reclaim_hits_cap, wake_matches
@@ -174,18 +174,28 @@ class SqliteDispatcher:
     # Dispatcher Protocol
     # ------------------------------------------------------------------
 
-    def enqueue(self, task_id: str, *, reserved: bool = False) -> None:
+    def enqueue(
+        self,
+        task_id: str,
+        *,
+        reserved: bool = False,
+        queue: Optional[str] = None,
+        parent_task_id: Optional[str] = None,
+    ) -> None:
         """Mark ``task_id`` as ready-to-lease.
 
         Three paths matching the Protocol's idempotency promise:
 
-        * No row → INSERT with a fresh ``ready_order``.
+        * No row → INSERT with a fresh ``ready_order``, born on its queue
+          (explicit ``queue`` > ``parent_task_id``'s stored queue >
+          ``DEFAULT_QUEUE``).
         * Existing row already in ``ready`` → no-op, preserving both the
           original ``ready_order`` and the existing ``reserved`` flag so FIFO
           is not reshuffled.
         * Existing row in any non-ready status → transition to ready,
           clearing all non-ready columns and assigning a fresh
-          ``ready_order``.
+          ``ready_order``. The stored ``queue`` is untouched — a row's queue
+          is immutable after birth.
 
         ``reserved`` (see :meth:`Dispatcher.enqueue`) marks the task
         targeted-lease-only until its first lease claims it.
@@ -196,15 +206,23 @@ class SqliteDispatcher:
             try:
                 row = self._fetch_task(task_id)
                 if row is None:
+                    if queue is None and parent_task_id is not None:
+                        parent = self._fetch_task(parent_task_id)
+                        queue = parent["queue"] if parent is not None else None
                     order = self._next_ready_order()
                     self._conn.execute(
                         "INSERT INTO dispatcher_tasks ("
                         " task_id, status, lease_id, lease_expires_at,"
                         " heartbeat_count, fail_attempts,"
                         " wake_on_canonical, suspend_reason, ready_order,"
-                        " reserved"
-                        ") VALUES (?, 'ready', NULL, NULL, 0, 0, NULL, NULL, ?, ?)",
-                        (task_id, order, reserved_val),
+                        " reserved, queue"
+                        ") VALUES (?, 'ready', NULL, NULL, 0, 0, NULL, NULL, ?, ?, ?)",
+                        (
+                            task_id,
+                            order,
+                            reserved_val,
+                            queue if queue is not None else DEFAULT_QUEUE,
+                        ),
                     )
                 elif row["status"] == "ready":
                     # No-op; FIFO must not be reshuffled.
@@ -243,9 +261,10 @@ class SqliteDispatcher:
         worker_id: str,
         lease_seconds: float = 30.0,
         task_id: Optional[str] = None,
+        queue: str = DEFAULT_QUEUE,
     ) -> Optional[Lease]:
-        """Lease a ready task — FIFO when ``task_id is None``, targeted
-        otherwise.
+        """Lease a ready task — per-``queue`` FIFO when ``task_id is None``,
+        targeted (``queue`` ignored) otherwise.
 
         Targeted-lease semantics (``task_id=<id>``): returns ``None`` if the
         task does not exist or is not currently ``ready``. Never raises —
@@ -269,12 +288,15 @@ class SqliteDispatcher:
                 if task_id is None:
                     # ``reserved`` tasks are targeted-lease-only (a fresh
                     # subtask child its drain/executor must claim first) —
-                    # skip them in the untargeted FIFO selection.
+                    # skip them in the untargeted FIFO selection, which never
+                    # crosses queues (ADR ``worker-queue-routing``).
                     row = self._conn.execute(
                         "SELECT task_id, matched_wake_event_canonical "
                         "FROM dispatcher_tasks "
                         "WHERE status = 'ready' AND reserved = 0 "
-                        "ORDER BY ready_order LIMIT 1"
+                        " AND queue = ? "
+                        "ORDER BY ready_order LIMIT 1",
+                        (queue,),
                     ).fetchone()
                 else:
                     row = self._conn.execute(

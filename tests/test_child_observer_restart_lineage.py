@@ -1,19 +1,15 @@
 """ChildLifecycleObserver must survive a process restart.
 
-The observer builds its ``_lineage`` (``child_id -> parent_id``) from live
-``TaskCreated`` events, so a child created before a restart that reaches
-terminal after it would have no lineage entry: its ``TaskCompleted`` /
-``TaskFailed`` / ``TaskCancelled`` would be a no-op in ``_on_terminal``, the
-parent stream would never get ``SubtaskCompleted``, and a parent suspended on
-``SubtaskCompleted`` / ``SubtaskGroupCompleted`` would wait forever. At
-construction the observer therefore replays the persisted event log (via
-``list_task_streams`` + ``read``) to seed ``_lineage`` for every
-not-yet-terminal, non-background child.
+Lineage is derived from the log, not process memory: ``_on_terminal`` reads
+the child stream's ``TaskCreated`` to find the parent and durably dedupes
+against the parent stream, so a child created before a restart that reaches
+terminal after it still notifies its parent — and a handoff the pre-restart
+process already recorded is never duplicated. Construction runs a recovery
+pass over the persisted log for terminals no live callback will ever re-fire.
 
 A restart is simulated by dropping the first observer and constructing a fresh
-one on the *same* log. Parametrized over InMemory and SQLite so the replay
-contract is pinned on a real storage backend, not only the in-memory reference
-adapter.
+one on the *same* log. Parametrized over InMemory and SQLite so the contract
+is pinned on a real storage backend, not only the in-memory reference adapter.
 """
 
 from __future__ import annotations
@@ -43,7 +39,9 @@ class _FakeDispatcher:
         self.enqueued: list[str] = []
         self.woken: list[tuple[str, Any]] = []
 
-    def enqueue(self, task_id: str) -> None:
+    def enqueue(
+        self, task_id: str, *, parent_task_id: Any = None
+    ) -> None:
         self.enqueued.append(task_id)
 
     def wake(self, task_id: str, wake_event: Any) -> bool:
@@ -118,7 +116,7 @@ def test_single_child_completes_after_restart_wakes_parent(log: Any) -> None:
     assert dispatcher.enqueued == [child_id]
     pre.stop()  # simulate restart
 
-    # Post-restart observer on the SAME log (empty lineage at construction).
+    # Post-restart observer on the SAME log.
     post = ChildLifecycleObserver(event_log=log, dispatcher=dispatcher)
     try:
         _emit_completed(log, child_id)
@@ -159,9 +157,8 @@ def test_already_terminal_child_is_not_double_notified_after_restart(log: Any) -
     assert len(_parent_subtask_completed(log, parent_id)) == 1
     assert len(dispatcher.woken) == 1
 
-    # Restart: fresh observer on the same log. The already-terminal child must
-    # NOT be re-seeded — otherwise a (impossible) second terminal would
-    # double-notify, and the lineage entry would leak.
+    # Restart: fresh observer on the same log. The recovery pass must see the
+    # handoff already recorded on the parent stream and not duplicate it.
     post = ChildLifecycleObserver(event_log=log, dispatcher=dispatcher)
     post.stop()
 
@@ -198,8 +195,8 @@ def test_group_last_member_completes_after_restart_fires_group_wake(log: Any) ->
     assert len(_parent_subtask_completed(log, parent_id)) == 2
     assert dispatcher.woken == []  # group not yet full
 
-    # Restart: fresh observer; the third (not-yet-terminal) member is seeded
-    # into _lineage from the persisted log.
+    # Restart: fresh observer; the third member's later terminal derives its
+    # parent from the persisted log.
     post = ChildLifecycleObserver(event_log=log, dispatcher=dispatcher)
     try:
         _emit_completed(log, children[2])

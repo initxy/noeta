@@ -75,8 +75,19 @@ def _steal_at_enqueue(host, stolen: list) -> None:
     dispatcher = host.dispatcher
     real_enqueue = dispatcher.enqueue
 
-    def enqueue_then_poll(task_id: str, *, reserved: bool = False) -> None:
-        real_enqueue(task_id, reserved=reserved)
+    def enqueue_then_poll(
+        task_id: str,
+        *,
+        reserved: bool = False,
+        queue: str | None = None,
+        parent_task_id: str | None = None,
+    ) -> None:
+        real_enqueue(
+            task_id,
+            reserved=reserved,
+            queue=queue,
+            parent_task_id=parent_task_id,
+        )
         thief = dispatcher.lease(
             worker_id="thief", lease_seconds=30.0, task_id=None
         )

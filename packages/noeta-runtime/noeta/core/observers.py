@@ -1,20 +1,25 @@
 """Child-lifecycle observer: the parent ↔ child handoff, off the Engine's path.
 
-A child's ``TaskCreated`` enqueues it and records the lineage; the child's
-terminal event appends ``SubtaskCompleted`` to the parent stream and wakes the
-parent. :class:`noeta.protocols.event_log.EventLogSubscriber` pins the
-delivery: callbacks run synchronously after the child's append commits and
+A child's ``TaskCreated`` enqueues it (inheriting its parent's queue); the
+child's terminal event appends ``SubtaskCompleted`` to the parent stream and
+wakes the parent. :class:`noeta.protocols.event_log.EventLogSubscriber` pins
+the delivery: callbacks run synchronously after the child's append commits and
 outside the adapter's writer lock, so the parent's notification is durable
 before the child's emit returns (the causal order fold relies on) while the
 cross-stream ``system_emit`` can take its own lock without re-entrancy.
-Construction replays the persisted log so a child that outlives a process
-restart still notifies its parent.
+
+Lineage is **derived from the log, not process memory** (ADR
+``worker-queue-routing``): the terminal handler reads the child stream's
+``TaskCreated`` to find the parent, and the parent stream to decide whether
+this child's handoff was already recorded. That makes the handoff correct in
+whichever process commits the terminal, and makes construction a *recovery*
+pass — any handoff a crashed process left missing is emitted then.
 """
 
 from __future__ import annotations
 
 import threading
-from typing import Any, Protocol
+from typing import Any, Optional, Protocol
 
 from noeta.protocols.event_log import EventLogFull, subscribe_with_stop
 from noeta.protocols.events import (
@@ -29,16 +34,59 @@ from noeta.protocols.wake import (
 
 
 class _Dispatcher(Protocol):
-    def enqueue(self, task_id: str) -> None: ...
+    def enqueue(
+        self, task_id: str, *, parent_task_id: Optional[str] = None
+    ) -> None: ...
 
     def wake(self, task_id: str, wake_event: Any) -> bool: ...
+
+
+#: A child whose stream carries one of these has finished; the handoff decision
+#: is then durable-deduped against the parent stream, never process memory.
+_TERMINAL_TYPES = ("TaskCompleted", "TaskFailed", "TaskCancelled")
+
+
+def _result_of(env: EventEnvelope) -> Optional[SubtaskResult]:
+    """The ``SubtaskResult`` a terminal envelope hands the parent, or ``None``
+    for a non-terminal envelope."""
+    if env.type == "TaskCompleted":
+        # Carry a spilled ContentRef (a large answer) through as the result
+        # output rather than the inline value, so the parent's
+        # SubtaskCompleted stays under the payload cap too; the Engine
+        # derefs it when rendering the paired tool_result.
+        answer_ref = getattr(env.payload, "answer_ref", None)
+        output = (
+            answer_ref
+            if answer_ref is not None
+            else getattr(env.payload, "answer", None)
+        )
+        return SubtaskResult(status="completed", output=output)
+    if env.type == "TaskFailed":
+        return SubtaskResult(
+            status="failed",
+            error=getattr(env.payload, "reason", None),
+        )
+    if env.type == "TaskCancelled":
+        # A child that reaches terminal via cancellation (not a full-tree
+        # cascade that also cancels the parent) must STILL notify its
+        # parent, or a parent suspended on ``SubtaskCompleted`` /
+        # ``SubtaskGroupCompleted`` waits forever on a wake that never
+        # fires. ``SubtaskResult`` has no ``cancelled`` status, so surface
+        # it as a ``failed`` outcome carrying the cancel reason.
+        reason = getattr(env.payload, "reason", None)
+        return SubtaskResult(
+            status="failed",
+            error=f"cancelled: {reason}" if reason else "cancelled",
+        )
+    return None
 
 
 class ChildLifecycleObserver:
     """Wires the parent ↔ child handoff without Engine touching Dispatcher.
 
-    Construction self-subscribes to ``event_log`` and replays the persisted
-    log to rebuild its lineage; :meth:`stop` unsubscribes.
+    Construction self-subscribes to ``event_log`` and then runs a recovery
+    pass — emitting the handoff for any already-terminal child the parent
+    stream does not record yet; :meth:`stop` unsubscribes.
     """
 
     def __init__(
@@ -51,65 +99,53 @@ class ChildLifecycleObserver:
         self._log = event_log
         self._dispatcher = dispatcher
         self._actor = actor
-        # child task_id -> parent task_id; built lazily from TaskCreated.
-        self._lineage: dict[str, str] = {}
         # Under the concurrent drain N children of one group terminate on N
         # different OS threads, so this callback runs concurrently. ``_lock``
-        # serialises the lineage mutation and the read-count-decide-wake
-        # critical section, so two siblings completing at once cannot both
-        # observe a full group and double-fire the barrier wake (nor race the
-        # lineage dict). ``_group_woken`` is keyed by ``group_id``, NOT
-        # ``parent_id`` — a parent spawns a fresh group each turn — and claims
-        # the barrier exactly once.
+        # serialises the read-count-decide-wake critical section, so two
+        # siblings completing at once cannot both observe a full group and
+        # double-fire the barrier wake. ``_group_woken`` is keyed by
+        # ``group_id``, NOT ``parent_id`` — a parent spawns a fresh group each
+        # turn — and claims the barrier exactly once per process; cross-process
+        # duplicates are absorbed by wake matching (a stale buffered group
+        # wake never matches a fresh group_id).
         self._lock = threading.Lock()
         self._group_woken: set[str] = set()
         self._handle = subscribe_with_stop(event_log, self._on_event)
-        # A restarted process starts with an empty ``_lineage`` (the live
-        # ``TaskCreated`` events are never re-emitted), so without this seed a
-        # terminal arriving after the restart is a no-op in ``_on_terminal``
-        # and a parent suspended on ``SubtaskCompleted`` /
-        # ``SubtaskGroupCompleted`` waits forever. Seeded AFTER subscribing so
-        # a live terminal firing during the replay is still caught.
-        self._replay_lineage()
+        # Recovery: a crash between a child's terminal commit and the handoff
+        # emit would otherwise strand the parent forever — the terminal event
+        # is never re-emitted, so no live callback will ever fire for it
+        # again. Subscribe FIRST so a terminal committing during the scan is
+        # caught either way (the durable dedupe absorbs the overlap).
+        self._recover_pending_handoffs()
 
     def stop(self) -> None:
         self._handle.stop()
 
-    # -- lineage replay ----------------------------------------------------
+    # -- recovery ----------------------------------------------------------
 
-    # A child whose stream already carries one of these was notified by the
-    # observer that saw it terminate, so it must NOT be re-seeded into
-    # ``_lineage`` — that would leak the entry and risk a duplicate parent
-    # notification.
-    _TERMINAL_TYPES = ("TaskCompleted", "TaskFailed", "TaskCancelled")
+    def _recover_pending_handoffs(self) -> None:
+        """Emit the handoff for every non-background child that is terminal
+        but not yet recorded on its parent stream.
 
-    def _replay_lineage(self) -> None:
-        """Seed ``_lineage`` from the persisted log for not-yet-terminal children.
-
-        The whole scan runs under ``_lock`` so a concurrent live
-        ``TaskCreated`` / terminal event (delivered through ``_on_event``,
-        which also takes ``_lock``) serialises cleanly: at worst the same key
-        is written twice with the same value, and a terminal event's ``pop``
-        is idempotent.
+        Runs at construction, over the persisted log. The per-child decision
+        is the same durable dedupe the live path uses, so re-running it (N
+        restarts, N instances) converges instead of stacking duplicates. A
+        second instance starting while the committing instance is mid-emit
+        can still double-write one handoff — accepted: group barriers count
+        distinct members and a stale buffered wake never matches a fresh
+        condition (ADR ``worker-queue-routing``).
         """
-        with self._lock:
-            for summary in self._log.list_task_streams():
-                parent_id: str | None = None
-                is_background = False
-                terminal = False
-                for env in self._log.read(summary.task_id):
-                    if env.type == "TaskCreated":
-                        parent_id = getattr(env.payload, "parent_task_id", None)
-                        is_background = bool(
-                            getattr(env.payload, "background", None)
-                        )
-                    elif env.type in self._TERMINAL_TYPES:
-                        terminal = True
-                if parent_id is None or is_background or terminal:
-                    continue
-                # ``setdefault`` so a live ``_on_task_created`` that raced the
-                # replay (and already wrote the same value) is not clobbered.
-                self._lineage.setdefault(summary.task_id, parent_id)
+        for summary in self._log.list_task_streams():
+            terminal_env: Optional[EventEnvelope] = None
+            for env in self._log.read(summary.task_id):
+                if env.type in _TERMINAL_TYPES:
+                    terminal_env = env
+                    break
+            if terminal_env is None:
+                continue
+            result = _result_of(terminal_env)
+            if result is not None:
+                self._on_terminal(terminal_env, result)
 
     # -- callback --------------------------------------------------------
 
@@ -117,46 +153,9 @@ class ChildLifecycleObserver:
         if env.type == "TaskCreated":
             self._on_task_created(env)
             return
-        if env.type == "TaskCompleted":
-            # Carry a spilled ContentRef (a large answer) through as the result
-            # output rather than the inline value, so the parent's
-            # SubtaskCompleted stays under the payload cap too; the Engine
-            # derefs it when rendering the paired tool_result.
-            answer_ref = getattr(env.payload, "answer_ref", None)
-            output = (
-                answer_ref
-                if answer_ref is not None
-                else getattr(env.payload, "answer", None)
-            )
-            self._on_terminal(
-                env,
-                SubtaskResult(status="completed", output=output),
-            )
-            return
-        if env.type == "TaskFailed":
-            self._on_terminal(
-                env,
-                SubtaskResult(
-                    status="failed",
-                    error=getattr(env.payload, "reason", None),
-                ),
-            )
-            return
-        if env.type == "TaskCancelled":
-            # A child that reaches terminal via cancellation (not a full-tree
-            # cascade that also cancels the parent) must STILL notify its
-            # parent, or a parent suspended on ``SubtaskCompleted`` /
-            # ``SubtaskGroupCompleted`` waits forever on a wake that never
-            # fires. ``SubtaskResult`` has no ``cancelled`` status, so surface
-            # it as a ``failed`` outcome carrying the cancel reason.
-            reason = getattr(env.payload, "reason", None)
-            self._on_terminal(
-                env,
-                SubtaskResult(
-                    status="failed",
-                    error=f"cancelled: {reason}" if reason else "cancelled",
-                ),
-            )
+        result = _result_of(env)
+        if result is not None:
+            self._on_terminal(env, result)
 
     def _on_task_created(self, env: EventEnvelope) -> None:
         parent_id = getattr(env.payload, "parent_task_id", None)
@@ -167,22 +166,44 @@ class ChildLifecycleObserver:
         # suspended on it, so the auto-handoff — ``SubtaskCompleted`` on the
         # parent stream + a ``wake`` — would be a phantom completion and a
         # non-matching wake; the background-subagent driver owns that child's
-        # whole lifecycle instead. Skipping ``_lineage`` here also makes
-        # ``_on_terminal`` a clean no-op for it (the lineage pop misses).
+        # whole lifecycle instead (``_child_parent`` skips it symmetrically,
+        # so ``_on_terminal`` is a clean no-op for it too).
         if getattr(env.payload, "background", None):
             return
-        with self._lock:
-            self._lineage[env.task_id] = parent_id
-        self._dispatcher.enqueue(env.task_id)
+        # ``parent_task_id`` routes the child onto its parent's queue, so a
+        # task tree runs on the pool that seeded its root.
+        self._dispatcher.enqueue(env.task_id, parent_task_id=parent_id)
+
+    def _child_parent(self, child_id: str) -> Optional[str]:
+        """The parent this child must notify, from the child's own stream —
+        ``None`` for a root task and for a background child."""
+        for env in self._log.read(child_id):
+            if env.type == "TaskCreated":
+                if getattr(env.payload, "background", None):
+                    return None
+                parent: Optional[str] = getattr(
+                    env.payload, "parent_task_id", None
+                )
+                return parent
+        return None
 
     def _on_terminal(self, env: EventEnvelope, result: SubtaskResult) -> None:
-        # The lineage pop is the atomic claim of this child, so a duplicate
-        # terminal (or a concurrent sibling racing the dict) is a clean no-op
-        # the second time.
-        with self._lock:
-            parent_id = self._lineage.pop(env.task_id, None)
+        parent_id = self._child_parent(env.task_id)
         if parent_id is None:
             return
+        # Durable dedupe + post-terminal guard, one scan: skip when the parent
+        # stream already records this child's handoff (a duplicate terminal, a
+        # recovery overlapping the live path), and when the parent itself is
+        # terminal (a cascade cancel) — a terminal stream takes no appends and
+        # its wake could never be consumed.
+        for e in self._log.read(parent_id):
+            if (
+                e.type == "SubtaskCompleted"
+                and getattr(e.payload, "subtask_id", None) == env.task_id
+            ):
+                return
+            if e.type in _TERMINAL_TYPES:
+                return
         # Record the child's completion on the parent stream first, keyed by
         # subtask_id — the source of truth for both the single wake and the
         # group result assembly. Emitted OUTSIDE ``_lock``: ``system_emit``
