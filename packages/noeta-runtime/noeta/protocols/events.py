@@ -251,10 +251,6 @@ class InjectionRequestedPayload:
     messages_ref: ContentRef
     count: int
 
-    consumes_injection: Optional[str] = None
-
-    __canonical_omit_none__ = frozenset({"consumes_injection"})
-
 
 @dataclass(frozen=True, slots=True)
 class TaskSnapshotPayload:
