@@ -75,6 +75,7 @@ from noeta.protocols.messages import (
     ToolResultBlock,
     ToolUseBlock,
 )
+from noeta.protocols.resources import load_markdown
 from noeta.protocols.step_context import StepContext
 from noeta.protocols.tool import Tool
 from noeta.protocols.view import View
@@ -94,6 +95,15 @@ __all__ = [
 #: built-in — ``todo_write`` / ``ask_user_question`` / ``spawn_subagent``,
 #: ``skill`` (skills), and ``run_workflow`` / ``structured_output`` (this
 #: built-in's ``control_tool`` module).
+
+#: The compaction summarize call's system prompt, externalized to
+#: ``summarize.md`` beside this module (byte-identical to the former inline
+#: literal, so a resumed run still rebuilds the identical summarize request).
+#: Its closing HARD RULE is the model-facing half of the verbatim rule: the
+#: deterministic post-check (:func:`enforce_verbatim_constraints`) is the
+#: actual guarantee; the prompt nudges the model so the common case produces a
+#: clean summary without the appended block.
+_SUMMARIZE_SYSTEM_PROMPT = load_markdown(__package__, "summarize")
 
 #: ``ReActPolicy._last_input_tokens_at_call`` sentinel: a compaction collapsed
 #: the history, so no recorded input count describes it any more. Distinct from
@@ -404,54 +414,7 @@ class ReActPolicy:
         """
         summary_system = Message(
             role="system",
-            content=[
-                TextBlock(
-                    text=(
-                        "Summarize the conversation so far into a durable,"
-                        " structured note. The note will REPLACE the older"
-                        " messages of this conversation while the most recent"
-                        " messages are kept verbatim, so focus on what would"
-                        " otherwise be lost — the early intent and accumulated"
-                        " context — NOT the immediate latest state (that is"
-                        " already preserved).\n"
-                        "Organize the note under exactly these sections (omit a"
-                        " section only if it is genuinely empty):\n"
-                        "1. Primary Request & Intent: the user's original"
-                        " goal(s) and overall intent, stated as fully as"
-                        " possible — this is the first thing a long session"
-                        " loses.\n"
-                        "2. Key Technical Concepts: the technologies, patterns,"
-                        " and domain ideas that matter to the work.\n"
-                        "3. Files & Code: a LIST OF RELEVANT FILE PATHS touched"
-                        " or discussed. List the paths only — do NOT copy file"
-                        " contents; the current version of any file can be"
-                        " re-read with the read tool when needed.\n"
-                        "4. Errors & Fixes: problems encountered and how they"
-                        " were resolved.\n"
-                        "5. All user messages: a faithful list of what the user"
-                        " asked for across the conversation.\n"
-                        "6. Pending Tasks: work explicitly requested but not yet"
-                        " completed.\n"
-                        "7. Decisions & Constraints: decisions made and any"
-                        " rules or limits agreed on.\n"
-                        "Do NOT add any section restating what is happening"
-                        " right now or what to do next — the latest state is"
-                        " kept verbatim outside this note, so duplicating it"
-                        " here is wasteful. Output only the note.\n"
-                        # the model-facing half of the verbatim
-                        # rule. The deterministic post-check
-                        # (``enforce_verbatim_constraints``) is the actual
-                        # guarantee; this nudges the model so the common case
-                        # produces a clean summary without the appended block.
-                        "HARD RULE: any safety or permission constraint "
-                        "(e.g. \"do not touch X\", \"never edit Y\", "
-                        "\"禁止访问 …\", \"不得修改 …\") MUST be copied into "
-                        "the note VERBATIM — word for word, including the "
-                        "exact path or name it protects. Do NOT paraphrase, "
-                        "soften, or omit any such constraint."
-                    )
-                )
-            ],
+            content=[TextBlock(text=_SUMMARIZE_SYSTEM_PROMPT)],
         )
         return LLMRequest(
             model=self._model,
