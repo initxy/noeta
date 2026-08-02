@@ -8,6 +8,14 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`InjectionRequestedPayload` drops its dead `consumes_injection` field**
+  (noeta-runtime). The field was copied in from `MessagesAppendedPayload`
+  (where it is the exactly-once consume key) but was never written on the
+  request side, and `__canonical_omit_none__` kept it out of every recorded
+  byte stream — so removing it changes no recording and no fold behavior.
+
 ### Changed
 
 - **Model-facing prompts deduplicated and tightened** (noeta-sdk; prompt bytes
