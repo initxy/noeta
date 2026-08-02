@@ -105,9 +105,7 @@ DEFAULT_MAX_CHARS_PER_ROOT_TASK = 16_000
 _GOAL_PREAMBLE = (
     "Memory consolidation run: curate the long-term memory store.\n"
     "Review the session-activity digest below against your memory index and "
-    "apply your curation duties: merge near-duplicate memories, archive "
-    "memories shown to be wrong or superseded, and write clearly-missed "
-    "durable facts. Finish with a one-paragraph summary of the actions taken."
+    "apply your curation duties."
 )
 
 

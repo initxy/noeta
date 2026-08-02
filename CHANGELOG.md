@@ -8,6 +8,22 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **Model-facing prompts deduplicated and tightened** (noeta-sdk; prompt bytes
+  change, so stable-prefix hashes and `AgentSpec` identities shift). The
+  `main` / `main-web` preset prompts drop the "Your strengths" section — its
+  delegation guidance folds into rule 10, and `main-web` now carries the
+  browser-delegation instruction as a dedicated rule, locked to "`main.md`
+  plus exactly one extra line" by the prompt/roster lockstep test. The
+  `spawn_subagent` and `run_workflow` descriptions lose their intra-document
+  restatements of the batch-for-parallel rule (one clear statement per
+  surface remains; the cross-surface repetition — rule 10, tool description,
+  `spawns` property, delegation reminder — is deliberate and kept). `plan`'s
+  read-only command list gains `git status` (matching `explore`), rule 3 now
+  reads "run the relevant tests", and the consolidation goal preamble defers
+  the curation contract to the preset's system prompt instead of restating it.
+
 ## [0.5.4] - 2026-08-01
 
 Covers both packages.
