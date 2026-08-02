@@ -59,6 +59,7 @@ from noeta.runtime.background_shell import (
     ProcessRegistry,
 )
 from noeta.runtime.cancellation import CancellationRegistry
+from noeta.runtime.injection import InjectionInbox
 from noeta.runtime.file_checkpoint import FileCheckpointRegistry
 from noeta.client.parts import (
     browser_tool_names,
@@ -723,6 +724,14 @@ class SdkHost(GenericEngineResolver):
     # singleton; never written to the event log → no resume effect.
     _cancellation: CancellationRegistry = field(
         default_factory=CancellationRegistry, init=False, repr=False, compare=False
+    )
+    # mid-turn injection — process-local inbox of pending injections keyed by
+    # task id (mirrors ``_cancellation``). The driver's ``inject_goal`` submits
+    # here alongside the durable ``InjectionRequested`` event; the worker's drain
+    # reads it each turn boundary. Per-host singleton; never written to the event
+    # log → no resume effect (the durable ``InjectionRequested`` is the record).
+    _injection_inbox: InjectionInbox = field(
+        default_factory=InjectionInbox, init=False, repr=False, compare=False
     )
     # Background-shell process registry: a per-host runtime accelerator (mirrors
     # ``_cancellation``) owning live ``Popen`` handles + watcher threads for
@@ -1730,6 +1739,11 @@ class SdkHost(GenericEngineResolver):
             # can decode a submitted answer. ``None`` for a session that did not
             # mount ``ask_user_question`` — the driver then fails loudly on an answer.
             answer_codec=inputs.answer_codec,
+            # mid-turn goal injection — the per-host inbox the driver's
+            # ``inject_goal`` submits to and this Engine's step loop drains at
+            # each turn boundary. Same singleton every built Engine shares
+            # (mirrors ``background_runner``); never resumed from.
+            injection_inbox=self._injection_inbox,
         )
 
     def _build_orchestration_engine(

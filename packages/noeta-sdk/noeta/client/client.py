@@ -54,7 +54,7 @@ from noeta.protocols.events import (
     answer_from_payload,
     parse_suspend_reason,
 )
-from noeta.protocols.messages import ImageBlock, LLMProvider
+from noeta.protocols.messages import ImageBlock, LLMProvider, MessageOrigin
 from noeta.protocols.tool import Tool
 from noeta.protocols.tool_args import resolve_tool_call_arguments
 from noeta.protocols.values import ContentRef
@@ -882,6 +882,34 @@ class Client:
             activations=activations,
         )
         return self._drain_approvals(task_id, outcome)
+
+    def inject_goal(
+        self,
+        task_id: str,
+        *,
+        goal: str,
+        images: Sequence[ImageBlock] = (),
+        goal_origin: Optional[MessageOrigin] = None,
+    ) -> DriveOutcome:
+        """Deliver a user message mid-turn, or as a follow-up (driver ``inject_goal``).
+
+        One verb, status-dispatched by the driver:
+
+        * a **running** task takes the message mid-turn — a durable
+          ``InjectionRequested`` is written and the running step loop delivers it
+          at its next turn boundary; this call returns immediately with the
+          still-``running`` outcome, taking no lease and driving nothing (so,
+          unlike :meth:`send_goal`, it does NOT drain further approvals);
+        * a task **suspended on the next-goal handle** falls through to
+          :meth:`send_goal` (wake + lease + drive), the ordinary follow-up turn;
+        * any other state raises the typed ``NotResumableError``.
+
+        The caller never branches on task status — use this whenever the message
+        should reach the task "now if it's running, else next turn".
+        """
+        return self._driver.inject_goal(
+            task_id=task_id, goal=goal, images=images, goal_origin=goal_origin
+        )
 
     def approve(
         self,

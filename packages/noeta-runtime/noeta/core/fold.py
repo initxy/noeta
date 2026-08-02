@@ -268,6 +268,28 @@ def _on_messages_appended(
     # Frozen Messages need no defensive copy.
     for m in messages_from_appended(env, content_store):
         task.runtime.messages.append(m)
+    # Exactly-once close for mid-turn injection: when this append is the Engine
+    # consuming a pending injection, pop its marker in the SAME reduction that
+    # appends the message. A resume refolds this event and pops again (idempotent
+    # ``.pop(..., None)``), so the drain never re-delivers a consumed injection.
+    consumed = getattr(env.payload, "consumes_injection", None)
+    if consumed is not None:
+        task.governance.pending_injections.pop(consumed, None)
+
+
+def _on_injection_requested(
+    task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
+) -> None:
+    # The durable request marker: record the pending injection keyed by its id.
+    # The Engine reads this dict at the next turn boundary, delivers the message
+    # via a consuming ``MessagesAppended``, and ``_on_messages_appended`` pops it.
+    # Bodies stay behind ``messages_ref`` in the ContentStore, so durable state
+    # never grows with the message size (mirrors ``pending_questions``).
+    payload = env.payload
+    task.governance.pending_injections[payload.injection_id] = {
+        "messages_ref": payload.messages_ref,
+        "count": payload.count,
+    }
 
 
 def _on_task_snapshot(
@@ -907,6 +929,8 @@ _HANDLERS = {
     "TaskStarted": _on_task_started,
     "TaskStatePatched": _on_task_state_patched,
     "MessagesAppended": _on_messages_appended,
+    # Mid-turn goal injection request marker (written lease-free by the driver).
+    "InjectionRequested": _on_injection_requested,
     "TaskSnapshot": _on_task_snapshot,
     # Conversation rewind baseline (snapshot-shaped marker).
     "TaskRewound": _on_task_rewound,
