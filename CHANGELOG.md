@@ -8,6 +8,10 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-08-02
+
+Covers both packages.
+
 ### Fixed
 
 - **`InjectionRequestedPayload` drops its dead `consumes_injection` field**
@@ -1279,7 +1283,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.5.5...HEAD
+[0.5.5]: https://github.com/initxy/noeta/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/initxy/noeta/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/initxy/noeta/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/initxy/noeta/compare/v0.5.1...v0.5.2
