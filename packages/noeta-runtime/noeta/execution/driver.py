@@ -45,6 +45,7 @@ from noeta.execution.reminders import (
 from noeta.execution.resolver import agent_name_of
 from noeta.execution.subtask_drain import UnsupportedSubtaskSuspend
 from noeta.core.engine import suspend_on_human_handle
+from noeta.core._decision_handlers import put_messages
 from noeta.core.fold import BoundedEventLog, fold
 from noeta.core.snapshot import serialize_task_state, snapshot_media_type
 from noeta.protocols.dispatcher import DEFAULT_QUEUE
@@ -52,6 +53,7 @@ from noeta.protocols.errors import CodedError, InvalidLease
 from noeta.protocols.events import (
     BackgroundSubagentDeliveredPayload,
     EventEnvelope,
+    InjectionRequestedPayload,
     TaskCancelledPayload,
     TaskFailedPayload,
     TaskForkedPayload,
@@ -60,7 +62,7 @@ from noeta.protocols.events import (
     TurnInterruptedPayload,
 )
 from noeta.protocols.decisions import TaskStatePatch
-from noeta.protocols.messages import ImageBlock, MessageOrigin, TextBlock
+from noeta.protocols.messages import ImageBlock, Message, MessageOrigin, TextBlock
 from noeta.protocols.policy import Policy
 from noeta.protocols.task import Task
 from noeta.protocols.canonical import from_canonical_bytes
@@ -1016,6 +1018,119 @@ class InteractionDriver:
             )
         )
 
+    def inject_goal(
+        self,
+        task_id: str,
+        *,
+        goal: str,
+        images: Sequence[ImageBlock] = (),
+        goal_origin: Optional[MessageOrigin] = None,
+    ) -> DriveOutcome:
+        """Deliver a user message to a task **mid-turn** — one verb, two landings.
+
+        Status-dispatched on the folded task:
+
+        * **running** — the interactive path this verb exists for. The caller
+          holds no lease, so it cannot write ``MessagesAppended`` without racing
+          the Engine's single ``RuntimeState`` writer. Instead it writes a
+          durable ``InjectionRequested`` marker through ``system_emit`` (the same
+          lease-free control-plane seam ``cancel`` uses) and pokes the host's
+          in-memory inbox so the running step loop notices at its next turn
+          boundary. Returns immediately with the still-``running`` outcome — the
+          message lands within the same turn, at the next top-of-loop drain, as
+          an ``origin`` -tagged ``user`` message the Policy sees on its next
+          ``decide``. No lease is taken here.
+        * **suspended on the next-goal handle** — there is no turn in flight to
+          inject into, so this transparently falls through to :meth:`send_goal`
+          (wake + lease + drive), i.e. the ordinary follow-up turn. One verb the
+          caller can use without branching on task status.
+        * **anything else** (terminal, or suspended on a different handle such as
+          an approval / question) — raises the typed :class:`NotResumableError`,
+          exactly as the other human commands do for a wrong wake.
+
+        ``images`` ride the injected user turn alongside the goal text.
+        ``goal_origin`` tags the message's author source (``None`` ⇒ a human
+        follow-up; ``"system"`` ⇒ host-injected content the transcript
+        attributes and a recorded-message resume reads back).
+        """
+        host = self._host
+        task = fold(host.event_log, host.content_store, task_id)
+        if task.status == "running":
+            return self._inject_running(
+                task_id, goal=goal, images=images, goal_origin=goal_origin
+            )
+        wake_on = getattr(task, "wake_on", None)
+        if (
+            task.status == "suspended"
+            and isinstance(wake_on, HumanResponseReceived)
+            and wake_on.handle == NEXT_GOAL_WAKE_HANDLE
+        ):
+            return self.send_goal(task_id, goal=goal, images=images,
+                                  goal_origin=goal_origin)
+        # Terminal, or suspended on some other handle (approval / question):
+        # there is no running turn to inject into and no next-goal turn to
+        # append — the same wrong-wake refusal the other human commands give.
+        task_status = getattr(host.dispatcher, "task_status", None)
+        raise NotResumableError(
+            task_id=task_id,
+            handle=NEXT_GOAL_WAKE_HANDLE,
+            status=task.status,
+            wake_on=wake_on,
+            dispatcher_status=(
+                task_status(task_id) if callable(task_status) else None
+            ),
+            expected="a running turn or the next-goal handle",
+        )
+
+    def _inject_running(
+        self,
+        task_id: str,
+        *,
+        goal: str,
+        images: Sequence[ImageBlock],
+        goal_origin: Optional[MessageOrigin],
+    ) -> DriveOutcome:
+        """Write the durable ``InjectionRequested`` + poke the inbox, no lease.
+
+        The ``running`` branch of :meth:`inject_goal`. The message bodies spill
+        to the ContentStore behind ``messages_ref`` (via :func:`put_messages`),
+        so the ``InjectionRequested`` envelope stays under the payload cap and
+        the consuming ``MessagesAppended`` the Engine emits reuses the identical
+        content-addressed ref. ``injection_id`` is the exactly-once key fold
+        keys the pending marker on.
+        """
+        host = self._host
+        injection_id = f"inj-{uuid.uuid4().hex}"
+        message = Message(
+            role="user",
+            content=[TextBlock(text=goal), *images],
+            origin=goal_origin,
+        )
+        payload = put_messages(host.content_store, [message])
+        host.event_log.system_emit(
+            task_id=task_id,
+            type="InjectionRequested",
+            payload=InjectionRequestedPayload(
+                injection_id=injection_id,
+                messages_ref=payload.messages_ref,
+                count=payload.count,
+            ),
+            actor="interaction-driver",
+            origin="system",
+            trace_id=self._trace_id(task_id),
+        )
+        # Poke the process-local inbox AFTER the durable write, so a running loop
+        # that reads the inbox always has the log entry behind it. A host without
+        # the seam (test double) is a no-op: the durable event still drives a
+        # resume's drain via ``governance.pending_injections``.
+        submit = getattr(host, "submit_injection", None)
+        if callable(submit):
+            submit(task_id, injection_id, {
+                "messages_ref": payload.messages_ref,
+                "count": payload.count,
+            })
+        return self._outcome(task_id)
+
     def seed_send_goal(
         self,
         task_id: str,
@@ -1563,6 +1678,13 @@ class InteractionDriver:
         forget_carriers = getattr(host, "forget_turn_carriers", None)
         if callable(forget_carriers):
             forget_carriers(task_id)
+        # Free any pending mid-turn injections queued for this cancelled tree
+        # (mirror of ``discard_cancellation``): a cancel abandons the turn, so an
+        # undrained injection must not survive to a later resume. ``getattr`` so
+        # a host without the inbox seam is a no-op.
+        discard_inj = getattr(host, "discard_injections", None)
+        if callable(discard_inj):
+            discard_inj(task_id)
         return self._outcome(task_id)
 
     def close(
@@ -1631,6 +1753,13 @@ class InteractionDriver:
         forget_carriers = getattr(host, "forget_turn_carriers", None)
         if callable(forget_carriers):
             forget_carriers(task_id)
+        # Free the pending-injection inbox too (memory hygiene). Safe against a
+        # later reopen: the inbox is only the accelerator — the durable
+        # ``InjectionRequested`` survives close, so a reopened turn's drain still
+        # folds and delivers it from ``governance.pending_injections``.
+        discard_inj = getattr(host, "discard_injections", None)
+        if callable(discard_inj):
+            discard_inj(task_id)
         return self._outcome(task_id)
 
     def interrupt(
