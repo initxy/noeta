@@ -208,10 +208,52 @@ class MessagesAppendedPayload:
     ref plus a count, so the event stays well under the 4 KB ceiling however
     large the messages are. The ref is content-addressed, so identical message
     bodies always produce the same ``messages_ref``.
+
+    ``consumes_injection`` closes the exactly-once loop for mid-turn goal
+    injection (see :class:`InjectionRequestedPayload`): when the Engine drains a
+    pending injection at a turn boundary it emits *this* event carrying the
+    injection's id, and fold both appends the messages **and** pops the matching
+    ``pending_injections`` entry in the same reduction. A resume that refolds the
+    prefix therefore sees the injection already consumed and never re-drains it.
+    ``None`` (every ordinary append) is kept out of the byte stream by
+    ``__canonical_omit_none__``, so no existing recording's bytes move.
     """
 
     messages_ref: ContentRef
     count: int
+    consumes_injection: Optional[str] = None
+
+    __canonical_omit_none__ = frozenset({"consumes_injection"})
+
+
+@dataclass(frozen=True, slots=True)
+class InjectionRequestedPayload:
+    """A user message handed to a **running** task, to be delivered mid-turn.
+
+    The durable half of mid-turn goal injection. A caller (an HTTP handler)
+    holds no lease, so it cannot write ``MessagesAppended`` itself without
+    racing the Engine's single ``RuntimeState`` writer — instead it writes this
+    request marker through ``system_emit`` (the same lease-free control-plane
+    seam ``cancel`` uses for ``TaskCancelled``). The Engine, inside its own loop
+    while it holds the lease, drains the pending marker at a turn boundary and
+    emits the real ``MessagesAppended`` carrying ``consumes_injection=id``.
+
+    ``injection_id`` is the exactly-once key: fold accumulates the marker into
+    ``GovernanceState.pending_injections`` and pops it when the paired
+    ``MessagesAppended`` folds, so a crash between request and consume replays
+    the injection exactly once, and a re-delivered / already-consumed request
+    never duplicates the message. The message bodies ride ``messages_ref`` into
+    the ContentStore (content-addressed, so the consuming ``MessagesAppended``
+    reuses the identical ref), keeping this envelope under the 4 KB cap.
+    """
+
+    injection_id: str
+    messages_ref: ContentRef
+    count: int
+
+    consumes_injection: Optional[str] = None
+
+    __canonical_omit_none__ = frozenset({"consumes_injection"})
 
 
 @dataclass(frozen=True, slots=True)

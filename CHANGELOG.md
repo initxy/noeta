@@ -8,6 +8,28 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-08-01
+
+Covers both packages.
+
+### Added
+
+- **Mid-turn goal injection** (ADR `mid-turn-goal-injection`). A new verb
+  `Client.inject_goal` / `InteractionDriver.inject_goal` delivers a user message
+  to a task **while its turn is running**, instead of requiring it to be
+  suspended first. It is status-dispatched: a **running** task takes the message
+  mid-turn — a durable `InjectionRequested` is written lease-free (the same
+  control-plane seam `cancel` uses) and the running Engine drains it at its next
+  turn boundary, so the injected message is delivered without tearing down the
+  turn; a task **suspended on the next-goal handle** falls through to
+  `send_goal`; any other state raises the typed `NotResumableError`. Delivery is
+  exactly-once and crash-safe (the injection folds into
+  `GovernanceState.pending_injections` and is popped only by its consuming
+  `MessagesAppended`), and an injected message can never split a
+  `tool_use`/`tool_result` pair. Additive: a turn with nothing to inject is
+  byte-identical to a pre-injection recording.
+
+
 ## [0.5.3] - 2026-08-01
 
 Covers both packages.
@@ -1233,7 +1255,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/initxy/noeta/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/initxy/noeta/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/initxy/noeta/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/initxy/noeta/compare/v0.5.0...v0.5.1

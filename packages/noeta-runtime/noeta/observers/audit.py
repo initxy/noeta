@@ -121,6 +121,7 @@ _SUMMARY_FIELDS_BY_EVENT: dict[str, tuple[str, ...]] = {
     "McpProvenanceRecorded": ("servers",),
     "ContextPlanComposed": ("plan_ref",),
     "MessagesAppended":    ("count", "messages_ref"),
+    "InjectionRequested":  ("injection_id", "count", "messages_ref"),
     "TaskSnapshot":        ("state_ref",),
     "TaskRewound":         ("target_seq", "state_ref"),
     "StepAttemptAbandoned": ("abandoned_from_seq", "state_ref", "reason"),

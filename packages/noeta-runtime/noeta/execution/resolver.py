@@ -34,6 +34,7 @@ from noeta.protocols.event_log import EventLogFull
 from noeta.protocols.policy import Policy
 from noeta.protocols.wake import SubtaskCompleted, SubtaskGroupCompleted
 from noeta.runtime.cancellation import CancellationRegistry
+from noeta.runtime.injection import InjectionInbox
 
 
 __all__ = [
@@ -156,6 +157,14 @@ class GenericEngineResolver:
     #: binds a per-tree predicate off it so a child mid-flight abandons its result
     #: at the next turn boundary. Storage supplied by the @dataclass subclass.
     _cancellation: CancellationRegistry
+    #: mid-turn injection — process-local inbox of pending injections keyed by
+    #: task id. The driver's ``inject_goal`` submits here (via
+    #: :meth:`submit_injection`) alongside the durable ``InjectionRequested``
+    #: event; the worker's drain reads it at each turn boundary (via
+    #: :meth:`pending_injections`) and drops each once its consuming
+    #: ``MessagesAppended`` is durable (via :meth:`consume_injection`). Storage
+    #: supplied by the @dataclass subclass; never resumed from.
+    _injection_inbox: InjectionInbox
 
     # --- abstract seams ---------------------------------------------------
     def _lookup_agent(self, name: str, *, task_id: str) -> Any:
@@ -378,6 +387,39 @@ class GenericEngineResolver:
         reg = getattr(self, "_cancellation", None)
         if reg is not None:
             reg.discard(task_id)
+
+    def submit_injection(
+        self, task_id: str, injection_id: str, descriptor: dict[str, Any]
+    ) -> None:
+        """mid-turn injection — record a pending injection in the process-local
+        inbox so the running drive notices it at the next turn boundary. Called
+        by ``inject_goal`` right after it writes the durable ``InjectionRequested``
+        event. Guarded so a subclass without the field is a no-op."""
+        inbox = getattr(self, "_injection_inbox", None)
+        if inbox is not None:
+            inbox.submit(task_id, injection_id, descriptor)
+
+    def pending_injections(self, task_id: str) -> dict[str, dict[str, Any]]:
+        """mid-turn injection — the pending injections for ``task_id`` (arrival
+        order), for the worker's drain. Empty when none / no inbox seam."""
+        inbox = getattr(self, "_injection_inbox", None)
+        return inbox.snapshot(task_id) if inbox is not None else {}
+
+    def consume_injection(self, task_id: str, injection_id: str) -> None:
+        """mid-turn injection — drop one injection from the inbox once its
+        consuming ``MessagesAppended`` is durable. Idempotent; no-op without
+        the seam."""
+        inbox = getattr(self, "_injection_inbox", None)
+        if inbox is not None:
+            inbox.consume(task_id, injection_id)
+
+    def discard_injections(self, task_id: str) -> None:
+        """mid-turn injection — drop every pending injection for ``task_id`` at
+        conversation teardown (mirror of :meth:`discard_cancellation`).
+        Idempotent; no-op without the seam."""
+        inbox = getattr(self, "_injection_inbox", None)
+        if inbox is not None:
+            inbox.discard(task_id)
 
     def resolve_engine(self, task: Any) -> Engine:
         """Resolve the Engine driving ``task`` by its folded state.

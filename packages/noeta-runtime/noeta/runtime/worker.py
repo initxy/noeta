@@ -1075,6 +1075,25 @@ def _recover_interrupted_attempt(
     # an attempt the re-drive itself would allow.
     bounded = BoundedEventLog(events, attempt.attempt_start_seq - 1)
     baseline = fold(bounded, rt.content_store, lease.task_id)
+    # mid-turn injection preservation across the seal: an ``InjectionRequested``
+    # that arrived DURING the interrupted attempt (seq >= attempt_start_seq,
+    # e.g. mid-LLM-round) is excluded by the bounded baseline, so a bare re-base
+    # would drop it and a resume would silently lose the user's injected message.
+    # No consume ever lands in the dead window — the drain only runs at
+    # top-of-loop, before the attempt's ``ContextPlanComposed`` anchor — so the
+    # full-stream fold's ``pending_injections`` is exactly the not-yet-delivered
+    # set and a superset of the baseline's. Carry it onto the sealed baseline so
+    # the re-drive (or the resumed park) re-delivers it exactly once. Guarded by
+    # a cheap type scan so a recovery with no injections pays no extra fold.
+    if any(e.type == "InjectionRequested" for e in events):
+        full = fold(
+            BoundedEventLog(events, events[-1].seq),
+            rt.content_store,
+            lease.task_id,
+        )
+        baseline.governance.pending_injections = dict(
+            full.governance.pending_injections
+        )
     classification = classify_attempt(
         attempt.tail,
         engine=engine,
