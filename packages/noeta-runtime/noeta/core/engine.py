@@ -71,6 +71,7 @@ from noeta.protocols.events import (
     ContextContentRecordedPayload,
     ConversationReopenedPayload,
     EventEnvelope,
+    MessagesAppendedPayload,
     ModelBoundPayload,
     StepAttemptAbandonedPayload,
     TaskCreatedPayload,
@@ -216,6 +217,7 @@ class Engine:
         content_init_hooks: tuple[Any, ...] = (),
         tool_result_transforms: tuple[Any, ...] = (),
         answer_codec: Optional[Any] = None,
+        injection_inbox: Optional[Any] = None,
     ) -> None:
         self._event_log = event_log
         self._content_store = content_store
@@ -274,6 +276,16 @@ class Engine:
         # Impure host hook run at the top of each step to re-supply renderer
         # state the ledger says is active.
         self._content_preloader = content_preloader
+        # mid-turn goal injection — the process-local inbox an HTTP-thread
+        # ``inject_goal`` submits to. The step loop drains it at each turn
+        # boundary (next to the cancel poll) and delivers each pending injection
+        # as a real ``MessagesAppended``. ``None`` (resume double / test host
+        # without the seam) ⇒ the loop still drains the DURABLE
+        # ``governance.pending_injections`` folded from the log, so a resumed
+        # turn re-delivers an injection the crash interrupted; the inbox is only
+        # the live-path accelerator. Duck-typed (``snapshot`` / ``consume``) so
+        # the kernel never imports the runtime inbox class.
+        self._injection_inbox = injection_inbox
         # Pre-loop ``init`` hooks the driver runs at seed time; the Engine
         # itself never invokes them. ``()`` ⇒ no pre-loop residents.
         self._content_init_hooks = content_init_hooks
@@ -759,6 +771,57 @@ class Engine:
         """Append the audit-symmetric ``ConversationReopened``."""
         return _note_conversation_reopened(self, task, reopened_by=reopened_by, reason=reason, trace_id=trace_id)
 
+    def _drain_injections(
+        self, task: Task, *, lease_id: str, trace_id: str
+    ) -> Task:
+        """Deliver every pending mid-turn injection as a real ``MessagesAppended``.
+
+        Called at the top-of-loop boundary in :meth:`run_one_step`. The pending
+        set is the **union** of two sources, deduped by ``injection_id``:
+
+        * the live process-local inbox (``self._injection_inbox``) — an HTTP
+          thread's ``inject_goal`` wrote ``InjectionRequested`` to the log and
+          poked the inbox, but the Engine's in-memory ``task`` never folded that
+          cross-thread event, so the inbox is the only live-path signal;
+        * the DURABLE ``task.governance.pending_injections`` folded from the log
+          — the resume source (a fresh process has an empty inbox) and the
+          re-scan a crash-interrupted turn needs.
+
+        Anything still in either source genuinely needs delivery: a durable
+        marker is popped only by its consuming ``MessagesAppended`` (see
+        ``_on_messages_appended``), so its presence means "not yet delivered".
+        Each is delivered in arrival order as a ``MessagesAppended`` carrying
+        ``consumes_injection=id`` and the stored ``messages_ref``
+        (content-addressed → reused, never re-put); fold appends the message and
+        pops the marker in one reduction — exactly-once by construction.
+        ``apply_event`` folds it onto the live task so the next ``compose`` sees
+        it and a fresh fold matches. Nothing pending ⇒ no emit ⇒ byte-identical.
+        """
+        inbox = self._injection_inbox
+        live = inbox.snapshot(task.task_id) if inbox is not None else {}
+        # Durable set first (fold preserves arrival order), then any live inbox
+        # entries not yet folded onto this in-memory task. dict union keeps
+        # first-seen order and dedups on ``injection_id``.
+        pending = {**task.governance.pending_injections, **live}
+        if not pending:
+            return task
+        for injection_id, descriptor in pending.items():
+            env = self._emit(
+                task_id=task.task_id,
+                type_="MessagesAppended",
+                payload=MessagesAppendedPayload(
+                    messages_ref=descriptor["messages_ref"],
+                    count=descriptor["count"],
+                    consumes_injection=injection_id,
+                ),
+                lease_id=lease_id,
+                trace_id=trace_id,
+            )
+            apply_event(task, env, self._content_store)
+            if inbox is not None:
+                inbox.consume(task.task_id, injection_id)
+        return task
+
     # -- main loop --------------------------------------------------------
 
     def run_one_step(
@@ -819,6 +882,19 @@ class Engine:
             # HERE, before the decision is acted on: the in-flight result is
             # abandoned (no assistant message, no tools, no next turn).
             _raise_if_cancelled(cancelled, task.task_id)
+            # mid-turn goal injection: deliver any pending injected user
+            # message HERE, at the clean top-of-loop boundary — the prior
+            # iteration's tool_calls handler has already appended its
+            # tool_result(s) before ``continue``, so the last message is never a
+            # dangling ``tool_use`` and an injected ``user`` message can never
+            # split a tool_use/tool_result pair. Each delivery is a real
+            # ``MessagesAppended`` carrying the injection's id, so fold appends
+            # the message and pops the pending marker in one reduction; the next
+            # ``compose`` below sees it. A turn with nothing pending emits
+            # nothing → byte-identical to the pre-injection recording.
+            task = self._drain_injections(
+                task, lease_id=lease_id, trace_id=trace_id
+            )
             # rebuild StepContext each turn so the compaction trigger sees the
             # REAL input-token usage fold projected from the PREVIOUS
             # round-trip's ``LLMRequestFinished`` (``0`` on the first turn → the

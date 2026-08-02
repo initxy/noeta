@@ -160,6 +160,15 @@ class GovernanceState:
     # stay in the ContentStore so durable state never grows with them.
     pending_questions: dict[str, dict[str, Any]] = field(default_factory=dict)
     question_answers: list[dict[str, Any]] = field(default_factory=list)
+    # Mid-turn goal injection. ``pending_injections`` is keyed by
+    # ``injection_id`` and holds the requested message's ``{messages_ref, count}``
+    # between ``InjectionRequested`` (inserts — written lease-free by an HTTP
+    # handler) and the consuming ``MessagesAppended`` (pops — written by the
+    # Engine at a turn boundary). It is the durable exactly-once anchor: a crash
+    # between request and consume leaves the entry here, so the resumed turn's
+    # drain re-delivers it exactly once. Insertion order is preserved (dict is
+    # ordered) so the drain delivers injections in arrival order.
+    pending_injections: dict[str, dict[str, Any]] = field(default_factory=dict)
     # The current model binding, folded from the latest ``ModelBound``.
     # ``model_binding`` is the selector / model id the resolver keys the Engine
     # on; ``principal_identity`` is the authorizing Principal, i.e. the audit
