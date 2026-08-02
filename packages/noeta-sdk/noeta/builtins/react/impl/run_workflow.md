@@ -9,9 +9,7 @@ sandbox exposing exactly these names:
   once, wait for them all, and return their answers as a list in spawn order.
   Each item is a goal string, or a `{"goal": ..., "agent": ...}` dict to pick a
   specific sub-agent per item. Use this for the fan-out step INSIDE a workflow —
-  when you also need a loop / branch / dependency chain around it. For plain
-  one-shot parallelism you do NOT need a workflow: batch the goals into one
-  `spawn_subagent` call's `spawns` array and they run concurrently.
+  when you also need a loop / branch / dependency chain around it.
 - `agent(goal, agent="general-purpose")`: spawn ONE sub-agent, wait for it, and
   return its final answer (a string). Sequential `agent()` calls run one after
   another, so chain them ONLY when a later call needs an earlier result; for
@@ -29,10 +27,6 @@ suspend and resume across many sub-agent spawns and survive a crash.
   the next call on a prior result, or chain steps where each one feeds the next.
 - The work is multi-step across agents — a dependency chain (`agent()` feeding
   `agent()`), or fan-out batches you then loop over or combine.
-
-For PLAIN parallelism — several independent sub-agents, no loop / branch /
-dependency — do NOT reach for a workflow: batch the goals into one
-`spawn_subagent` call's `spawns` array and they run concurrently.
 
 ## When NOT to use
 
@@ -56,8 +50,7 @@ dependency — do NOT reach for a workflow: batch the goals into one
 ## Example
 
 A dependency chain — scout first, then fan the result out and combine. THIS is
-what needs a workflow (the fan-out depends on the scout's output); plain
-parallelism would just be one `spawn_subagent` call with several `spawns` entries:
+what needs a workflow (the fan-out depends on the scout's output):
 
     modules = agent(
         'List the modules missing a docstring, one bare name per line.',

@@ -19,10 +19,8 @@ NOT shown to the user, so relay what matters.
 - You have SEVERAL independent goals: put them ALL in the `spawns` array of a
   single call — that is what makes them run in parallel. **If the user asks to
   run sub-agents "in parallel", you MUST batch the goals into one call's
-  `spawns` array.** A call with a single entry suspends you until that one
-  child returns, so one-entry-per-turn is strictly sequential — never parallel.
-  Spawning one, then "the next after it finishes", does NOT fan out; batch
-  them.
+  `spawns` array** — a call with a single entry suspends you until that one
+  child returns, so one-entry-per-turn is strictly sequential, never parallel.
 
 ## When NOT to use
 

@@ -84,23 +84,24 @@ class TestPromptRosterLockstep:
         assert opts.system_prompt == MAIN_WEB_SYSTEM_PROMPT
         assert "`web` specialist" in MAIN_WEB_SYSTEM_PROMPT
 
-    def test_web_prompt_differs_only_in_delegation_bullet(self) -> None:
-        """``main-web.md`` is ``main.md`` with the web wording in exactly ONE
-        line (the delegation bullet); any other drift between the two files
-        is a sync bug — edits to main's prompt must land in both."""
+    def test_web_prompt_is_main_plus_one_browser_rule(self) -> None:
+        """``main-web.md`` is ``main.md`` plus exactly ONE extra line (the
+        browser-delegation rule); any other drift between the two files is a
+        sync bug — edits to main's prompt must land in both."""
         base_lines = MAIN_SYSTEM_PROMPT.splitlines()
         web_lines = MAIN_WEB_SYSTEM_PROMPT.splitlines()
-        assert len(base_lines) == len(web_lines), (
-            "main.md and main-web.md must stay line-for-line in sync "
-            "(apart from the delegation bullet's wording)"
+        assert len(web_lines) == len(base_lines) + 1, (
+            "main-web.md must stay main.md plus exactly one extra line "
+            "(the browser-delegation rule)"
         )
-        diffs = [(a, b) for a, b in zip(base_lines, web_lines) if a != b]
-        assert len(diffs) == 1, (
-            f"expected exactly one differing line, got {len(diffs)}: {diffs!r}"
+        split = next(
+            (i for i, (a, b) in enumerate(zip(base_lines, web_lines)) if a != b),
+            len(base_lines),
         )
-        base_bullet, web_bullet = diffs[0]
-        assert "Delegating heavy or self-contained work" in base_bullet
-        assert "`web` specialist" in web_bullet
+        assert web_lines[:split] + web_lines[split + 1 :] == base_lines, (
+            "main-web.md and main.md diverge beyond the single extra line"
+        )
+        assert "`web` specialist" in web_lines[split]
 
 
 # -- Non-activation invariant (stable prefix) ----------------------------- #
