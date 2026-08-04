@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Tuple
 
@@ -254,6 +254,21 @@ class HostConfig:
     #: build and goal paths) and deterministic for a given task id — a resumed
     #: task must resolve the same store. ``None`` ⇒ the host-level chain above.
     memory_root_resolver: Optional[Callable[[str], Optional[Path]]] = None
+
+    # -- plugin operator config ---------------------------------------------
+    #: Operator config per plugin: ``plugin name -> {key: value}``, reaching a
+    #: ``session_pack`` factory as ``SessionBuildContext.config("<plugin
+    #: name>")``. This is the channel a manifest's ``config-schema`` describes,
+    #: and the one thing a third-party pack cannot obtain any other way — the
+    #: SDK host derives entries only for the built-ins it knows by name.
+    #:
+    #: Merge rule, per plugin name: a name the host alone supplies passes
+    #: through verbatim; a name the SDK also derives (``fs`` / ``skills`` /
+    #: ``workspace`` / ``memory``) is a **shallow per-key overlay** — the
+    #: host's keys win, the derived keys it does not mention survive. Wiring,
+    #: never identity: two clients differing only here compile the same
+    #: ``AgentSpec``.
+    plugin_config: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
     # -- host kill-switches ------------------------------------------------
     workflow_allowed: bool = False

@@ -241,6 +241,12 @@ def _v_content_kind(value: Any) -> None:
 
 
 def _v_path(value: Any) -> None:
+    """A resource-only ``skills`` contribution: a non-empty path.
+
+    Absoluteness is checked where the surface is *consumed*
+    (:meth:`~noeta.client.plugin_set.PluginSet.host_skills_dirs`), not here, so
+    the refusal can name the plugin — a validator sees only the value.
+    """
     if not isinstance(value, (str, Path)) or not str(value).strip():
         _reject("skills", value, "must be a non-empty path")
 
@@ -256,6 +262,19 @@ def _v_path(value: Any) -> None:
 #: and ``control_tool`` is a
 #: ``(ControlToolBuildContext) -> ControlToolMount | None`` it runs in the
 #: post-tools dual-priority mount loop (``noeta.execution.control_tool``).
+#:
+#: The four host-plane surfaces split in two. ``skills`` and ``mcp_server`` are
+#: **consumed automatically** at the ``Client`` build, through
+#: :meth:`~noeta.client.plugin_set.PluginSet.host_skills_dirs` /
+#: :meth:`~noeta.client.plugin_set.PluginSet.host_mcp_servers`: a skills path
+#: joins the lowest tier of the skill merge, an ``SdkMcpServer`` joins the
+#: effective ``Options.mcp_servers``. ``provider`` and ``sandbox_provider`` are
+#: **host-resolved listings**: declaring one makes it discoverable and
+#: collision-checked without executing plugin code, and the host picks and wires
+#: the one it wants by hand (``PluginSet.get(...).resolve(...)``). Nothing
+#: auto-binds them — a process has exactly one LLM provider and one sandbox
+#: backend, and which one that is belongs to the deployment, not to whichever
+#: plugin happened to be installed.
 STANDARD_SURFACES: tuple[SurfaceSpec, ...] = (
     SurfaceSpec(
         "tool", "identity", "per-agent", _v_tool, "name",

@@ -15,6 +15,8 @@ from typing import Any, Mapping, Optional
 
 __all__ = [
     "PluginError",
+    "PluginVersionWarning",
+    "UnnamedPluginFileWarning",
     "UntrustedPluginDirWarning",
     "grant_trust",
     "is_trusted",
@@ -42,6 +44,28 @@ class PluginError(RuntimeError):
 
 class UntrustedPluginDirWarning(UserWarning):
     """A workspace plugin directory was skipped because it is not trusted."""
+
+
+class UnnamedPluginFileWarning(UserWarning):
+    """A single-file plugin was skipped: no static name under an allow-list.
+
+    The ``enabled`` allow-list authorizes plugin *names*, and a file whose name
+    can only be learned by running it offers no name to authorize. Skipping is
+    the honest reading of "not on the list"; executing it to discover what it
+    would have been called defeats the gate.
+    """
+
+
+class PluginVersionWarning(UserWarning):
+    """A plugin's ``requires-noeta`` range is unsatisfied, or unreadable.
+
+    A warning rather than a refusal by default: a range is the author's claim
+    about which SDK they tested against, and an over-strict host would break
+    working deployments on a patch bump. ``load_plugins(strict=True)`` turns
+    the same finding into a :class:`PluginError`. An unparseable specifier is
+    always a warning — refusing to load over a spelling this SDK does not
+    recognise would punish a plugin for a syntax the loader never promised.
+    """
 
 
 def _read_trusted(store: Path) -> list[str]:

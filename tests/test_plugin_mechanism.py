@@ -34,6 +34,7 @@ from noeta.client.plugin_set import (
 )
 from noeta.client.plugins import (
     PluginError,
+    UnnamedPluginFileWarning,
     UntrustedPluginDirWarning,
     grant_trust,
     is_trusted,
@@ -935,14 +936,30 @@ def test_resolve_resource_only_and_bare_module_ref():
     assert resolved.value.__name__ == "noeta.client.plugin_set"
 
 
-def test_priority_non_int_param_treated_as_zero():
+def test_priority_absent_defaults_to_zero():
+    """No ``priority`` param at all is the surface's documented default, 0."""
     ps = _set(
-        _manifest("a", _contrib("reminder", "x", ref="a:x", priority="high")),
-        _manifest("b", _contrib("reminder", "y", ref="b:y", priority=2)),
+        _manifest("a", _contrib("reminder", "x", ref="a:x")),
+        _manifest("b", _contrib("reminder", "y", ref="b:y", priority=-2)),
     )
     order = [e.contribution.name for e in ps.merged().for_surface("reminder")]
-    # "x" has a non-int priority -> 0, so it sorts before y(2).
-    assert order == ["x", "y"]
+    assert order == ["y", "x"]
+
+
+@pytest.mark.parametrize("bad", ["high", 1.5, True, None])
+def test_priority_present_but_non_int_is_a_loud_error(bad):
+    """A *declared* non-integer priority raises instead of coercing to 0.
+
+    Silent coercion put the contribution at the front of a band its author meant
+    to sit at the back of, and every symptom showed up somewhere else. This is
+    the same strictness ``noeta.client.parts`` already applies to the built-in
+    manifests; ``True`` is not an integer here either.
+    """
+    ps = _set(_manifest("a", _contrib("reminder", "x", ref="a:x", priority=bad)))
+    with pytest.raises(PluginError) as exc:
+        ps.merged()
+    assert "'a'" in str(exc.value) and "'x'" in str(exc.value)
+    assert "priority" in str(exc.value)
 
 
 def test_multiple_builders_without_plugin_alias_fails(tmp_path):
@@ -960,9 +977,9 @@ def test_multiple_builders_without_plugin_alias_fails(tmp_path):
     assert "PluginBuilder" in str(exc.value)
 
 
-def test_single_file_without_static_name_execs_then_gates(tmp_path):
-    # No declared name literal -> loader must exec the trusted file to learn the
-    # name, then apply the allow-list on the real name.
+def test_single_file_without_static_name_execs_when_no_allowlist(tmp_path):
+    # No declared name literal and NO allow-list -> the trusted file is executed
+    # to learn its name, and it loads. This is the unchanged path.
     _write_py(
         tmp_path,
         "anon",
@@ -974,8 +991,42 @@ def test_single_file_without_static_name_execs_then_gates(tmp_path):
         """,
     )
     assert declared_plugin_name(tmp_path / "anon.py") is None
-    assert load_plugins(user_dirs=[tmp_path], enabled=["runtime-named"]).names() == ("runtime-named",)
+    assert load_plugins(builtins=False, user_dirs=[tmp_path]).names() == (
+        "runtime-named",
+    )
+
+
+def test_unreadable_name_under_allowlist_is_skipped_not_executed(tmp_path):
+    """An allow-list authorizes NAMES, so a file with no readable name is skipped.
+
+    Previously the loader executed such a file to learn what it would have been
+    called and only then applied the gate — which is the gate defeating itself:
+    the code an operator did not authorize had already run. The file writes a
+    sentinel at import so non-execution is proved, not assumed.
+    """
+    sentinel = tmp_path / "EXECUTED"
+    _write_py(
+        tmp_path,
+        "anon",
+        f"""
+        import pathlib
+        import noeta.client.plugin_manifest as pm
+
+        pathlib.Path({str(sentinel)!r}).write_text("ran", encoding="utf-8")
+        plugin = pm.PluginBuilder('runtime' + '-named')
+        plugin.prompt_fragment('x', name='f')
+        """,
+    )
+    assert declared_plugin_name(tmp_path / "anon.py") is None
+
+    with pytest.warns(UnnamedPluginFileWarning, match="no statically readable"):
+        loaded = load_plugins(user_dirs=[tmp_path], enabled=["runtime-named"])
+    assert loaded.names() == ()
+    assert not sentinel.exists()
+
+    # A name that IS statically readable still gates on the list, as before.
     assert load_plugins(user_dirs=[tmp_path], enabled=["nope"]).names() == ()
+    assert not sentinel.exists()
 
 
 def test_dir_subpackage_manifest_and_missing_builder(tmp_path):
