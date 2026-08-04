@@ -98,25 +98,26 @@ def test_parse_malformed_returns_none_not_widened() -> None:
 
 def test_alias_map_is_exact_1to1() -> None:
     assert _CLAUDE_TO_NOETA_TOOL == {
-        "Read": "read",
-        "Glob": "glob",
-        "Grep": "grep",
+        "Read": "Read",
+        "Glob": "Glob",
+        "Grep": "Grep",
         "Write": "write",
         "Edit": "edit",
         "Bash": "shell_run",
     }
 
 
-def test_no_claude_name_appears_in_noeta_tool_set() -> None:
-    claude_names = set(_CLAUDE_TO_NOETA_TOOL)
-    noeta_names = set(_CLAUDE_TO_NOETA_TOOL.values())
-    assert claude_names.isdisjoint(noeta_names)
+def test_renamed_tools_map_to_themselves() -> None:
+    # The tool surface now carries the reference names natively, so the
+    # already-renamed entries are identity; the rest still translate.
+    for claude, noeta in _CLAUDE_TO_NOETA_TOOL.items():
+        assert noeta in set(_CLAUDE_TO_NOETA_TOOL) | {"write", "edit", "shell_run"}
 
 
 def test_guard_unknown_claude_name_grants_nothing() -> None:
     g = _guard(raw=(("s", "[Bogus]"),))
     # 's' active, declared but maps to nothing → write gated.
-    assert _check(g, "read", ("s",)) is Verdict.REQUIRE_APPROVAL
+    assert _check(g, "Read", ("s",)) is Verdict.REQUIRE_APPROVAL
 
 
 def test_partial_unknown_invalidates_whole_declaration() -> None:
@@ -124,7 +125,7 @@ def test_partial_unknown_invalidates_whole_declaration() -> None:
     Bogus]` must NOT keep `read` allowed; a typo in a security-relevant grant
     gates everything until fixed."""
     g = _guard(raw=(("s", "[Read, Bogus]"),))
-    assert _check(g, "read", ("s",)) is Verdict.REQUIRE_APPROVAL
+    assert _check(g, "Read", ("s",)) is Verdict.REQUIRE_APPROVAL
     g_deny = _guard(raw=(("s", "[Read, Bogus]"),), mode="deny")
     assert _check(g_deny, "read", ("s",)) is Verdict.DENY
 
@@ -136,13 +137,13 @@ def test_partial_unknown_invalidates_whole_declaration() -> None:
 
 def test_granted_tool_allows_other_requires_approval() -> None:
     g = _guard(raw=(("s", "[Read]"),))
-    assert _check(g, "read", ("s",)) is Verdict.ALLOW
+    assert _check(g, "Read", ("s",)) is Verdict.ALLOW
     assert _check(g, "write", ("s",)) is Verdict.REQUIRE_APPROVAL
 
 
 def test_deny_mode_fails_closed() -> None:
     g = _guard(raw=(("s", "[Read]"),), mode="deny")
-    assert _check(g, "read", ("s",)) is Verdict.ALLOW
+    assert _check(g, "Read", ("s",)) is Verdict.ALLOW
     assert _check(g, "write", ("s",)) is Verdict.DENY
 
 
@@ -155,17 +156,17 @@ def test_no_declaring_active_skill_enforcement_off() -> None:
 
 def test_union_over_multiple_active_skills() -> None:
     g = _guard(raw=(("a", "[Read]"), ("b", "[Write]")))
-    # union grants read + write; grep is outside → gated.
-    assert _check(g, "read", ("a", "b")) is Verdict.ALLOW
+    # union grants Read + write; Grep is outside → gated.
+    assert _check(g, "Read", ("a", "b")) is Verdict.ALLOW
     assert _check(g, "write", ("a", "b")) is Verdict.ALLOW
-    assert _check(g, "grep", ("a", "b")) is Verdict.REQUIRE_APPROVAL
+    assert _check(g, "Grep", ("a", "b")) is Verdict.REQUIRE_APPROVAL
 
 
 def test_malformed_declaration_grants_nothing_enforcement_on() -> None:
     g = _guard(raw=(("s", "not-a-list: x"),))
     # declared (so enforcement ON) but parse failed → empty grant →
     # every tool gated.
-    assert _check(g, "read", ("s",)) is Verdict.REQUIRE_APPROVAL
+    assert _check(g, "Read", ("s",)) is Verdict.REQUIRE_APPROVAL
 
 
 def test_mode_off_never_gates() -> None:

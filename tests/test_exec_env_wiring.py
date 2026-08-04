@@ -143,16 +143,16 @@ class RecordingExecEnv:
 def test_build_fs_tools_default_uses_local_exec_env(tmp_path: Path) -> None:
     ws = WorkspaceRoot.from_path(tmp_path)
     tools = build_fs_tools(ws)
-    assert isinstance(tools["read"].exec_env, LocalExecEnv)
+    assert isinstance(tools["Read"].exec_env, LocalExecEnv)
     # one shared instance across the pack
-    assert tools["read"].exec_env is tools["write"].exec_env
+    assert tools["Read"].exec_env is tools["write"].exec_env
 
 
 def test_build_fs_tools_threads_injected_backend() -> None:
     ws = WorkspaceRoot.for_container("/c/ws")
     fake = RecordingExecEnv()
     tools = build_fs_tools(ws, exec_env=fake)
-    for name in ("read", "glob", "grep", "edit", "write", "apply_patch", "shell_run"):
+    for name in ("Read", "Glob", "Grep", "edit", "write", "apply_patch", "shell_run"):
         assert tools[name].exec_env is fake
 
 
@@ -161,7 +161,7 @@ def test_build_fs_tools_pack_reads_through_injected_backend() -> None:
     fake = RecordingExecEnv({"/c/ws/f.txt": b"remote-bytes"})
     tools = build_fs_tools(ws, exec_env=fake)
     ctx = ToolContext(artifact_store=InMemoryContentStore())
-    result = tools["read"].invoke({"path": "f.txt"}, ctx=ctx)
+    result = tools["Read"].invoke({"file_path": "f.txt"}, ctx=ctx)
     assert result.success
     assert fake.reads == ["/c/ws/f.txt"]
 
@@ -213,7 +213,7 @@ def _session(*, workspace_dir: Path, exec_env: ExecEnv | None):
         **default_factory_kwargs(),
         workspace_dir=workspace_dir,
         system_prompt=_SYSTEM,
-        allowed_tools=frozenset({"read", "write", "edit", "shell_run"}),
+        allowed_tools=frozenset({"Read", "write", "edit", "shell_run"}),
         content_store=InMemoryContentStore(),
         model="stub-model",
         compaction=derive_compaction_config("stub-model"),
@@ -228,7 +228,7 @@ def test_session_with_sandbox_backend_uses_lexical_container_workspace() -> None
     # lexical container root instead.
     fake = RecordingExecEnv()
     inputs = _session(workspace_dir=Path("/home/gem/workspace"), exec_env=fake)
-    read = inputs.tools["read"]
+    read = inputs.tools["Read"]
     assert read.workspace.lexical is True
     assert read.workspace.root == Path("/home/gem/workspace")
     assert read.exec_env is fake
@@ -238,7 +238,7 @@ def test_default_session_keeps_host_workspace_and_local_backend(tmp_path: Path) 
     ws = tmp_path / "ws"
     ws.mkdir()
     inputs = _session(workspace_dir=ws, exec_env=None)
-    read = inputs.tools["read"]
+    read = inputs.tools["Read"]
     assert read.workspace.lexical is False
     assert isinstance(read.exec_env, LocalExecEnv)
 
@@ -247,6 +247,6 @@ def test_session_pack_reads_through_sandbox_backend() -> None:
     fake = RecordingExecEnv({"/home/gem/workspace/note.md": b"in-container"})
     inputs = _session(workspace_dir=Path("/home/gem/workspace"), exec_env=fake)
     ctx = ToolContext(artifact_store=InMemoryContentStore())
-    result = inputs.tools["read"].invoke({"path": "note.md"}, ctx=ctx)
+    result = inputs.tools["Read"].invoke({"file_path": "note.md"}, ctx=ctx)
     assert result.success
     assert fake.reads == ["/home/gem/workspace/note.md"]

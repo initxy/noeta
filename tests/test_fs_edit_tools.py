@@ -59,15 +59,17 @@ def test_build_fs_tools_includes_edit_tools(tmp_path: Path) -> None:
     tools = build_fs_tools(workspace, mode=FsWriteMode.DRY_RUN)
     # The pack also carries shell / git tools, so this is a subset check.
     assert {
-        "read",
-        "glob",
-        "grep",
+        "Read",
+        "Glob",
+        "Grep",
         "edit",
         "write",
     } <= set(tools.keys())
-    # Provider-safe snake_case names everywhere.
+    # Provider-safe names everywhere: letters/digits/underscore, no dots.
+    import re as _re
+
     for name in tools.keys():
-        assert name.islower() and " " not in name and "." not in name
+        assert _re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name)
 
 
 def test_build_fs_tools_default_mode_is_dry_run(tmp_path: Path) -> None:
@@ -336,7 +338,7 @@ def test_write_existing_path_after_read_overwrites(tmp_path: Path) -> None:
     ctx, workspace, _ = _ctx_and_workspace(tmp_path)
     (workspace.root / "exists.txt").write_text("old\n")
     reader = ReadFileTool(workspace=workspace)
-    read_result = reader.invoke({"path": "exists.txt"}, ctx)
+    read_result = reader.invoke({"file_path": "exists.txt"}, ctx)
     assert read_result.success is True
     tool = WriteFileTool(workspace=workspace, mode=FsWriteMode.APPLY)
     result = tool.invoke({"path": "exists.txt", "content": "new\n"}, ctx)

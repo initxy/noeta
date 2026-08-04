@@ -125,7 +125,7 @@ def test_explore_runner_drops_write_tools_from_pack(
     assert "write" not in engine_tools
     assert "apply_patch" not in engine_tools
     # The scout tools (incl. read-only shell + webfetch) are present.
-    for present in ("read", "glob", "grep", "shell_run", "shell_poll", "webfetch"):
+    for present in ("Read", "Glob", "Grep", "shell_run", "shell_poll", "webfetch"):
         assert present in engine_tools
 
 
@@ -150,7 +150,7 @@ def test_plan_runner_pack_is_readonly_scout_no_write(
     for absent in ("edit", "write", "apply_patch"):
         assert absent not in engine_tools
     # The scout tools (incl. read-only shell + webfetch) are present.
-    for present in ("read", "glob", "grep", "shell_run", "shell_poll", "webfetch"):
+    for present in ("Read", "Glob", "Grep", "shell_run", "shell_poll", "webfetch"):
         assert present in engine_tools
 
 
@@ -238,7 +238,7 @@ def test_general_purpose_has_full_builtin_set() -> None:
     """``general-purpose`` carries the whole built-in tool surface."""
     gp_tools = _tools(GENERAL_PURPOSE_SPEC)
     assert gp_tools == frozenset(builtin_tool_classes())
-    assert {"grep", "glob", "apply_patch", "webfetch"} <= gp_tools
+    assert {"Grep", "Glob", "apply_patch", "webfetch"} <= gp_tools
 
 
 def test_main_and_general_purpose_tools_now_equal() -> None:
@@ -265,7 +265,7 @@ def test_plan_whitelist_and_capabilities() -> None:
     for mutating in ("edit", "write", "apply_patch"):
         assert mutating not in plan_tools
     assert plan_tools == frozenset(
-        {"read", "grep", "glob", "shell_run", "shell_poll", "shell_kill", "webfetch"}
+        {"Read", "Grep", "Glob", "shell_run", "shell_poll", "shell_kill", "webfetch"}
     )
     assert agent_activates(PLAN_SPEC, "todo_write") is False
     assert agent_activates(PLAN_SPEC, "ask_user_question") is True
@@ -330,7 +330,7 @@ def _bug_fixer_script() -> list[LLMResponse]:
             content=[
                 ToolUseBlock(
                     call_id="bf-3",
-                    tool_name="read",
+                    tool_name="Read",
                     arguments={"path": "src/math_ops.py"},
                 )
             ],

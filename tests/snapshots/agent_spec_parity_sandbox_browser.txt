@@ -31,17 +31,17 @@
       "spawnable": [],
       "tools": [
         {
-          "name": "glob",
+          "name": "Glob",
           "risk_level": "low",
           "version": "1"
         },
         {
-          "name": "grep",
+          "name": "Grep",
           "risk_level": "low",
           "version": "1"
         },
         {
-          "name": "read",
+          "name": "Read",
           "risk_level": "low",
           "version": "1"
         },
@@ -99,6 +99,21 @@
       "spawnable": [],
       "tools": [
         {
+          "name": "Glob",
+          "risk_level": "low",
+          "version": "1"
+        },
+        {
+          "name": "Grep",
+          "risk_level": "low",
+          "version": "1"
+        },
+        {
+          "name": "Read",
+          "risk_level": "low",
+          "version": "1"
+        },
+        {
           "name": "apply_patch",
           "risk_level": "high",
           "version": "1"
@@ -106,21 +121,6 @@
         {
           "name": "edit",
           "risk_level": "high",
-          "version": "1"
-        },
-        {
-          "name": "glob",
-          "risk_level": "low",
-          "version": "1"
-        },
-        {
-          "name": "grep",
-          "risk_level": "low",
-          "version": "1"
-        },
-        {
-          "name": "read",
-          "risk_level": "low",
           "version": "1"
         },
         {
@@ -186,17 +186,17 @@
       "spawnable": [],
       "tools": [
         {
-          "name": "glob",
+          "name": "Glob",
           "risk_level": "low",
           "version": "1"
         },
         {
-          "name": "grep",
+          "name": "Grep",
           "risk_level": "low",
           "version": "1"
         },
         {
-          "name": "read",
+          "name": "Read",
           "risk_level": "low",
           "version": "1"
         },
@@ -254,17 +254,17 @@
       "spawnable": [],
       "tools": [
         {
-          "name": "glob",
+          "name": "Glob",
           "risk_level": "low",
           "version": "1"
         },
         {
-          "name": "grep",
+          "name": "Grep",
           "risk_level": "low",
           "version": "1"
         },
         {
-          "name": "read",
+          "name": "Read",
           "risk_level": "low",
           "version": "1"
         },
@@ -337,6 +337,21 @@
     ],
     "tools": [
       {
+        "name": "Glob",
+        "risk_level": "low",
+        "version": "1"
+      },
+      {
+        "name": "Grep",
+        "risk_level": "low",
+        "version": "1"
+      },
+      {
+        "name": "Read",
+        "risk_level": "low",
+        "version": "1"
+      },
+      {
         "name": "apply_patch",
         "risk_level": "high",
         "version": "1"
@@ -344,21 +359,6 @@
       {
         "name": "edit",
         "risk_level": "high",
-        "version": "1"
-      },
-      {
-        "name": "glob",
-        "risk_level": "low",
-        "version": "1"
-      },
-      {
-        "name": "grep",
-        "risk_level": "low",
-        "version": "1"
-      },
-      {
-        "name": "read",
-        "risk_level": "low",
         "version": "1"
       },
       {

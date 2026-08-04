@@ -55,7 +55,7 @@ DEFAULT_MODE = "approve"
 #: The ``smart_approve`` allow set. Deliberately conservative — a tool absent
 #: from this set asks, so a classification gap fails towards the human rather
 #: than towards an unreviewed call. An operator replaces the set wholesale.
-DEFAULT_LOW_RISK_TOOLS: frozenset[str] = frozenset({"read", "grep", "glob", "ls"})
+DEFAULT_LOW_RISK_TOOLS: frozenset[str] = frozenset({"Read", "Grep", "Glob", "ls"})
 
 
 @dataclass(frozen=True, slots=True)

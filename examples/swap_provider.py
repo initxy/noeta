@@ -50,7 +50,7 @@ def _recipe() -> Options:
     return Options(
         system_prompt="You are a concise assistant.",
         name="main",
-        allowed_tools=("read",),
+        allowed_tools=("Read",),
         permission_mode="bypassPermissions",
     )
 

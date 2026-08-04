@@ -112,9 +112,9 @@ def _empty_renderer(names: list[str], resolve=None) -> RenderedContent:
 
 def test_allowed_tools_is_replacement_style() -> None:
     main, _ = compile_options(
-        Options(system_prompt="x", allowed_tools=("read", "grep"))
+        Options(system_prompt="x", allowed_tools=("Read", "Grep"))
     )
-    assert {r.name for r in main.tools} == {"read", "grep"}
+    assert {r.name for r in main.tools} == {"Read", "Grep"}
 
 
 def test_custom_policy_sets_agent_identity_ref() -> None:
@@ -139,12 +139,12 @@ def test_mcp_server_tools_enter_identity() -> None:
     main, _ = compile_options(
         Options(
             system_prompt="x",
-            allowed_tools=("read",),
+            allowed_tools=("Read",),
             mcp_servers=(server,),
         )
     )
-    # Replacement base ("read") PLUS the in-process server's tool ("echo").
-    assert {r.name for r in main.tools} == {"read", "echo"}
+    # Replacement base ("Read") PLUS the in-process server's tool ("echo").
+    assert {r.name for r in main.tools} == {"Read", "echo"}
 
 
 # ---------------------------------------------------------------------------

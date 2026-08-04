@@ -254,12 +254,12 @@ def test_sdkhost_description_flows_to_schema(tmp_path: Path) -> None:
     opts = Options(
         system_prompt="You are the parent agent.",
         name="main",
-        allowed_tools=("read",),
+        allowed_tools=("Read",),
         agents={
             "helper": AgentDefinition(
                 description="search code",
                 prompt="you search",
-                tools=("read",),
+                tools=("Read",),
             ),
         },
     )

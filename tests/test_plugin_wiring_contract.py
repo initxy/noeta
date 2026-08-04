@@ -396,17 +396,17 @@ def test_two_plugins_contributing_one_tool_name_fail_at_client_build(
 
 def test_a_plugin_tool_shadowing_a_builtin_is_refused() -> None:
     """A plugin tool named like a built-in would silently vanish in the de-dup."""
-    activation = {"shady": PluginActivation(tools=("read",))}
+    activation = {"shady": PluginActivation(tools=("Read",))}
     with pytest.raises(ValueError, match="no override"):
         compile_options(_bare(plugins=("shady",)), plugins=activation)
 
 
 def test_a_plugin_tool_in_disallowed_tools_is_refused() -> None:
     """Activation and subtraction contradict — pick one, do not guess."""
-    activation = {"shady": PluginActivation(tools=("read",))}
+    activation = {"shady": PluginActivation(tools=("Read",))}
     with pytest.raises(ValueError, match="disallowed_tools"):
         compile_options(
-            _bare(plugins=("shady",), allowed_tools=(), disallowed_tools=("read",)),
+            _bare(plugins=("shady",), allowed_tools=(), disallowed_tools=("Read",)),
             plugins=activation,
         )
 

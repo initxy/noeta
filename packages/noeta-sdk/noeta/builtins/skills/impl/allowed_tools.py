@@ -30,9 +30,9 @@ _log = logging.getLogger(__name__)
 #: ``Glob`` / ``Grep``), and Claude's ``LS`` has no Noeta equivalent, so an
 #: ``LS`` token degrades the whole declaration.
 CLAUDE_TO_NOETA_TOOL: dict[str, str] = {
-    "Read": "read",
-    "Glob": "glob",
-    "Grep": "grep",
+    "Read": "Read",
+    "Glob": "Glob",
+    "Grep": "Grep",
     "Write": "write",
     "Edit": "edit",
     "Bash": "shell_run",

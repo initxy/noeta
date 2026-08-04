@@ -3,11 +3,14 @@
   "provider_tool_schemas": [
     {
       "function": {
-        "description": "Reads a file's contents, optionally sliced by line.\n\n- `path` is workspace-relative, or absolute to read anywhere on this machine — a neighbouring checkout, a skill's `Base directory for this skill:` (shown when a skill activates), a system file. Reading is not fenced; only writing is.\n- Reads the whole file by default. `offset` (1-based line) and `limit` (line count) take a slice — use them for large files.\n- The full body is always offloaded as an artifact (`content_ref`); when inline output would exceed the byte budget you get a bounded excerpt plus the ref, never a silently truncated middle.\n- A text target must be valid UTF-8; non-image binary files are rejected (use the right tool for those).\n- Reads image files too (png, jpg, gif, webp): the image is presented to you visually, so you can read screenshots, diagrams, and photos directly.\n- Don't guess a path — locate it first with `grep` (by content) or `glob` (by name).",
-        "name": "read",
+        "description": "Reads a file from the filesystem.\n\n- `file_path` is workspace-relative, or absolute to read anywhere on this machine — a neighbouring checkout, a skill's `Base directory for this skill:` (shown when a skill activates), a system file. Reading is not fenced; only writing is.\n- Reads up to 2000 lines from the beginning by default. `offset` (1-based line) and `limit` (line count) page through larger files. Lines longer than 2000 characters are truncated with a marker.\n- Output uses `cat -n` format: a right-aligned line number, a tab, then the line. Use the numbers to pick `offset` values and to cross-reference `Grep` results — never copy them into text you pass to `Edit` or `Write`.\n- A file must be Read before `Edit` or `Write` may modify it.\n- Reads images too (png, jpg, gif, webp): the image is presented to you visually. A text target must be valid UTF-8; PDFs and other binary files are rejected.\n- Don't guess a path — locate it first with `Grep` (by content) or `Glob` (by name).",
+        "name": "Read",
         "parameters": {
           "additionalProperties": false,
           "properties": {
+            "file_path": {
+              "type": "string"
+            },
             "limit": {
               "minimum": 1,
               "type": "integer"
@@ -15,13 +18,10 @@
             "offset": {
               "minimum": 1,
               "type": "integer"
-            },
-            "path": {
-              "type": "string"
             }
           },
           "required": [
-            "path"
+            "file_path"
           ],
           "type": "object"
         }
@@ -30,8 +30,8 @@
     },
     {
       "function": {
-        "description": "Matches a glob pattern against file names and returns the matching paths.\n\n- Standard glob semantics — `**` matches recursively (e.g. \"**/*.py\", \"src/**/test_*\"). Results are sorted and capped — narrow the pattern if truncated.\n- Scope with `path` (the directory to search, default: the whole workspace).\n- `path` is workspace-relative, or absolute to search outside the workspace (a neighbouring checkout). Results are workspace-relative POSIX paths, or absolute when the search was rooted outside it.\n- `pattern` is always relative to `path`: no leading `/` and no `..`. Matches whose real path escapes the searched directory via symlink are dropped.\n- To search by file content rather than name use `grep`; to read a known file use `read`.",
-        "name": "glob",
+        "description": "Matches a glob pattern against file names and returns the matching paths.\n\n- Standard glob semantics — `**` matches recursively (e.g. \"**/*.py\", \"src/**/test_*\"). Results are sorted by modification time, newest first, and capped with a notice — narrow the pattern if truncated.\n- Scope with `path` (the directory to search, default: the whole workspace). `path` is workspace-relative, or absolute to search outside the workspace (a neighbouring checkout). Results are workspace-relative POSIX paths, or absolute when the search was rooted outside it.\n- `pattern` is always relative to `path`: no leading `/` and no `..`. Hidden directories and dependency/cache trees (node_modules, __pycache__, …) are skipped; matches escaping the searched directory via symlink are dropped.\n- To search by file content rather than name use `Grep`; to read a known file use `Read`.",
+        "name": "Glob",
         "parameters": {
           "additionalProperties": false,
           "properties": {
@@ -52,12 +52,45 @@
     },
     {
       "function": {
-        "description": "Searches file contents across the workspace with a regular expression (Python `re` syntax).\n\n- Returns each match as file path + line number + the matching line. Locate files-with-matches first, then `read` the surrounding lines to keep search noise low.\n- Scope with `path` (a file or sub-directory) and filter with `glob` (e.g. \"**/*.py\").\n- `pattern` is a Python `re` regular expression. Binary files are skipped automatically.\n- `path` is workspace-relative, or absolute to search outside the workspace (a neighbouring checkout). Symlinks are not followed, so one walk stays in one tree.\n- To match by filename rather than content use `glob`; to read a known file use `read`.",
-        "name": "grep",
+        "description": "Searches file contents with a regular expression (Python `re` syntax).\n\n- `pattern` matches line by line (or across lines with `multiline: true`). Scope with `path` (a file or sub-directory; workspace-relative, or absolute to search outside the workspace) and filter with `glob` (e.g. \"**/*.py\").\n- `output_mode`: \"files_with_matches\" (the default) lists the files that contain a match; \"content\" shows the matching lines; \"count\" shows per-file match counts.\n- In content mode, `-n: true` adds line numbers (they align with `Read`'s), `-A`/`-B`/`-C` add context lines, and overlong lines are clipped with a marker.\n- `-i: true` matches case-insensitively. `head_limit` caps how many results return.\n- Hidden directories and dependency/cache trees (node_modules, __pycache__, …) are skipped; binary and unreadable files are skipped silently. Symlinks are not followed, so one walk stays in one tree.\n- Workflow: find the files with the default mode first, then `Read` the surroundings — it keeps search noise out of your context. To match by filename use `Glob`.",
+        "name": "Grep",
         "parameters": {
           "additionalProperties": false,
           "properties": {
+            "-A": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "-B": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "-C": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "-i": {
+              "type": "boolean"
+            },
+            "-n": {
+              "type": "boolean"
+            },
             "glob": {
+              "type": "string"
+            },
+            "head_limit": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "multiline": {
+              "type": "boolean"
+            },
+            "output_mode": {
+              "enum": [
+                "files_with_matches",
+                "content",
+                "count"
+              ],
               "type": "string"
             },
             "path": {
@@ -440,7 +473,7 @@
         }
       ],
       "name": "stable_prefix",
-      "segment_hash": "44c545ded83bb0a0002404fca163e2d32c06bab765fa5ba45c7c414a190a2f7d"
+      "segment_hash": "df5b2d640871781feefc39b5d021d6b641e45a41b3a13b39fc386d839daf6f7c"
     },
     {
       "content": [],

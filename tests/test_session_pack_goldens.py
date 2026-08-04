@@ -31,9 +31,9 @@ from noeta.presets import official_specs
 #: pack (main opens the memory capability); no skill indexed in a bare tmp
 #: workspace, so no script tool.
 GOLDEN_DEFAULT_TOOLS: list[str] = [
-    "read",
-    "glob",
-    "grep",
+    "Read",
+    "Glob",
+    "Grep",
     "edit",
     "write",
     "apply_patch",

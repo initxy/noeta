@@ -49,7 +49,7 @@ def _session(
     *,
     browser_backend,
     browser_enabled,
-    allowed_tools=frozenset({"read"}),
+    allowed_tools=frozenset({"Read"}),
 ):
     return build_session_inputs(
         **default_factory_kwargs(),
@@ -103,9 +103,9 @@ def test_browser_tools_are_flag_gated_not_whitelist_filtered(tmp_path: Path) -> 
         tmp_path,
         browser_backend=_FakeBrowser(),
         browser_enabled=True,
-        allowed_tools=frozenset({"read"}),
+        allowed_tools=frozenset({"Read"}),
     )
-    assert "read" in inputs.tools
+    assert "Read" in inputs.tools
     for name in BROWSER_TOOL_NAMES:
         assert name in inputs.tools
 

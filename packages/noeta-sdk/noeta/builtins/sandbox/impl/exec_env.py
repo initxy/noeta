@@ -317,6 +317,11 @@ class AioSandboxExecEnv:
     def is_symlink(self, path: Path) -> bool:
         return self._test("-L", path)
 
+    def mtime(self, path: Path) -> float:
+        # One container stat per path is a round-trip too many for a walk;
+        # ``Glob`` degrades to its alphabetical tiebreak in sandbox mode.
+        return 0.0
+
     # -- directory walk --------------------------------------------------- #
 
     def glob(self, base: Path, pattern: str) -> Iterable[Path]:

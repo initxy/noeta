@@ -56,7 +56,7 @@ class CodeStubProvider:
                 content=[
                     ToolUseBlock(
                         call_id=_FIRST_TURN_CALL_ID,
-                        tool_name="glob",
+                        tool_name="Glob",
                         arguments={"pattern": "*"},
                     )
                 ],

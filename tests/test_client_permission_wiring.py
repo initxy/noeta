@@ -77,9 +77,9 @@ def _types(events):
 
 
 _ALL_TOOL_NAMES = [
-    "read",
-    "glob",
-    "grep",
+    "Read",
+    "Glob",
+    "Grep",
     "write",
     "edit",
     "apply_patch",
@@ -111,7 +111,7 @@ def test_approval_set_bypass_empty():
 
 
 def test_approval_set_honours_custom_tool_risk_level():
-    refs = _builtin_refs(["read"]) + [
+    refs = _builtin_refs(["Read"]) + [
         ToolRef(name="delete_db", version="1", risk_level="high"),
         ToolRef(name="check_status", version="1", risk_level="low"),
     ]
@@ -123,7 +123,7 @@ def test_approval_set_honours_custom_tool_risk_level():
 
 def test_approval_set_rejects_unknown_mode():
     with pytest.raises(ValueError, match="Unsupported permission_mode"):
-        _approval_set_for("bogus", _builtin_refs(["read"]))
+        _approval_set_for("bogus", _builtin_refs(["Read"]))
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +230,7 @@ def test_accept_edits_write_runs_without_approval(tmp_path: Path):
 
 def test_accept_edits_pure_function_still_gates_shell_run():
     refs = _builtin_refs(["write", "edit", "apply_patch", "shell_run",
-                          "read"])
+                          "Read"])
     got = _approval_set_for("acceptEdits", refs)
     assert set(got) == {"shell_run"}
 
@@ -391,7 +391,7 @@ def test_cwd_uses_options_cwd_when_kwarg_missing(tmp_path: Path):
     provider = FakeLLMProvider(responses=[_end("hi")])
     options = Options(
         system_prompt=_PROMPT,
-        allowed_tools=("read",),
+        allowed_tools=("Read",),
         permission_mode="bypassPermissions",
         cwd=str(ws),  # str is wrapped by Path()
     )
@@ -412,7 +412,7 @@ def test_cwd_missing_everywhere_falls_back_to_the_process_cwd(tmp_path: Path):
     provider = FakeLLMProvider(responses=[_end("hi")])
     options = Options(
         system_prompt=_PROMPT,
-        allowed_tools=("read",),
+        allowed_tools=("Read",),
         permission_mode="bypassPermissions",
     )
     client = Client(options, provider=provider, model="stub-model")
@@ -430,7 +430,7 @@ def test_cwd_explicit_kwarg_takes_precedence(tmp_path: Path):
     provider = FakeLLMProvider(responses=[_end("hi")])
     options = Options(
         system_prompt=_PROMPT,
-        allowed_tools=("read",),
+        allowed_tools=("Read",),
         permission_mode="bypassPermissions",
         cwd=ws_option,
     )
@@ -452,7 +452,7 @@ def test_query_uses_options_cwd(tmp_path: Path):
     provider = FakeLLMProvider(responses=[_end("hi")])
     options = Options(
         system_prompt=_PROMPT,
-        allowed_tools=("read",),
+        allowed_tools=("Read",),
         permission_mode="bypassPermissions",
         cwd=ws,
     )
@@ -471,10 +471,10 @@ def test_identity_invariant_to_cwd_and_can_use_tool():
 
     from noeta.client import compile_options
 
-    base = Options(system_prompt=_PROMPT, allowed_tools=("read",))
+    base = Options(system_prompt=_PROMPT, allowed_tools=("Read",))
     with_wiring = Options(
         system_prompt=_PROMPT,
-        allowed_tools=("read",),
+        allowed_tools=("Read",),
         cwd="/some/path",
         can_use_tool=allow,
     )

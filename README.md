@@ -36,7 +36,7 @@ provider = FakeLLMProvider(responses=[
 
 result = query(
     Options(system_prompt="You are concise.",
-            allowed_tools=("read",),
+            allowed_tools=("Read",),
             permission_mode="bypassPermissions"),
     goal="Say hello.",
     provider=provider,
@@ -132,7 +132,7 @@ def get_weather(city: str) -> str:
     """Get the current weather for a city."""
     return f"{city}: sunny, 22°C"
 
-opts = Options(system_prompt="…", allowed_tools=("read", get_weather))
+opts = Options(system_prompt="…", allowed_tools=("Read", get_weather))
 ```
 
 `allowed_tools` takes tool names and tool objects side by side, so a custom tool joins the built-in set without any registration step.

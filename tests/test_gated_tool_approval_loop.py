@@ -66,7 +66,7 @@ def _run_with_approval(
             allow_write=False, yes=False, read_only=False
         ),
         shell_mode=resolve_shell_mode(allow_shell=False),
-        require_approval_tools=("glob",),
+        require_approval_tools=("Glob",),
     )
     driver = make_driver(host)
     out = driver.start(goal="smoke", agent="main")
