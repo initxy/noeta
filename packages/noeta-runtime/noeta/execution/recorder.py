@@ -68,8 +68,10 @@ class SeedRecorder:
 
         No-ops on an empty triple or when ``(kind, name)`` is already active
         with this exact hash; a new hash records a refresh (hash
-        last-write-wins). ``init`` reruns every drive, so an unchanged store
-        appends nothing and a changed store records exactly one refresh.
+        last-write-wins). This gate is what lets the callers rerun ``init``
+        freely: it runs at task seed, at a subtask drain, and again whenever a
+        new goal is seeded onto a resumed task, so an unchanged source appends
+        nothing and a changed one records exactly one refresh.
         """
         if not kind or not name or not ref.hash:
             return
