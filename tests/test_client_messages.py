@@ -99,20 +99,20 @@ def test_as_messages_happy_path_contains_four_view_types(
     ws = _make_workspace(tmp_path)
     provider = FakeLLMProvider(
         responses=_scripted_tooluse_then_finish(
-            tool_name="edit",
-            arguments={"path": "x.py", "old": "foo", "new": "bar"},
-            answer="replacement done",
+            tool_name="Read",
+            arguments={"file_path": "x.py"},
+            answer="read done",
         )
     )
     options = Options(
         system_prompt=_PROMPT,
         name="main",
-        allowed_tools=("Read", "edit"),
+        allowed_tools=("Read", "Edit"),
         permission_mode="bypassPermissions",
     )
     view = query(
         options,
-        goal="change foo to bar in x.py",
+        goal="read x.py",
         provider=provider,
         workspace_dir=ws,
         model="stub-model",
@@ -131,7 +131,7 @@ def test_as_messages_happy_path_contains_four_view_types(
 
     tool_uses = [v for v in view if isinstance(v, ToolUse)]
     assert tool_uses
-    assert any(tu.tool_name == "edit" for tu in tool_uses)
+    assert any(tu.tool_name == "Read" for tu in tool_uses)
 
     result_views = [v for v in view if isinstance(v, ToolResultView)]
     assert result_views
@@ -139,7 +139,7 @@ def test_as_messages_happy_path_contains_four_view_types(
 
     use_idx = next(
         i for i, v in enumerate(view)
-        if isinstance(v, ToolUse) and v.tool_name == "edit"
+        if isinstance(v, ToolUse) and v.tool_name == "Read"
     )
     res_idx = next(
         i for i, v in enumerate(view) if isinstance(v, ToolResultView)
@@ -218,7 +218,7 @@ def test_tool_use_dedup_across_messagesappended_and_toolcallstarted(
     options = Options(
         system_prompt=_PROMPT,
         name="main",
-        allowed_tools=("edit",),
+        allowed_tools=("Edit",),
         permission_mode="bypassPermissions",
     )
 
@@ -228,8 +228,8 @@ def test_tool_use_dedup_across_messagesappended_and_toolcallstarted(
         options,
         provider=FakeLLMProvider(
             responses=_scripted_tooluse_then_finish(
-                tool_name="edit",
-                arguments={"path": "x.py", "old": "foo", "new": "bar"},
+                tool_name="Edit",
+                arguments={"file_path": "x.py", "old_string": "foo", "new_string": "bar"},
                 call_id=call_id,
             )
         ),
@@ -465,7 +465,7 @@ def test_tool_result_dedup_across_messagesappended_and_toolresultrecorded(
     options = Options(
         system_prompt=_PROMPT,
         name="main",
-        allowed_tools=("edit",),
+        allowed_tools=("Edit",),
         permission_mode="bypassPermissions",
     )
 
@@ -475,8 +475,8 @@ def test_tool_result_dedup_across_messagesappended_and_toolresultrecorded(
         options,
         provider=FakeLLMProvider(
             responses=_scripted_tooluse_then_finish(
-                tool_name="edit",
-                arguments={"path": "x.py", "old": "foo", "new": "bar"},
+                tool_name="Edit",
+                arguments={"file_path": "x.py", "old_string": "foo", "new_string": "bar"},
                 call_id=call_id,
             )
         ),

@@ -92,7 +92,7 @@ _WEB_PROMPT = _load_prompt("web")
 
 
 #: The read-mostly tool set shared by explore and plan: every built-in tool
-#: except the write family (edit / write / apply_patch). ``shell_run`` is in the
+#: except the write family (Edit / Write). ``shell_run`` is in the
 #: allowlist because read-only investigation needs it (ls / git log / git diff /
 #: find / cat …); "no writes" is enforced by the prompt, with the approval gate
 #: on ``high``-risk shell as the backstop.
@@ -108,13 +108,12 @@ _SCOUT_TOOLS = (
 
 
 #: general-purpose's tool allowlist: the full built-in set, the same surface as
-#: main, so it searches with ``grep`` / ``glob``, batch-edits with
-#: ``apply_patch``, and fetches with ``webfetch`` instead of being forced back
-#: through ``shell_run``. Its ``delegation`` capability stays off — a leaf
+#: main, so it searches with ``Grep`` / ``Glob``, edits with ``Edit``, and
+#: fetches with ``webfetch`` instead of being forced back through
+#: ``shell_run``. Its ``delegation`` capability stays off — a leaf
 #: worker that spawns nothing further cannot fan out without bound.
 _GENERAL_PURPOSE_TOOLS = (
-    "apply_patch",
-    "edit",
+    "Edit",
     "Glob",
     "Grep",
     "Read",
@@ -123,7 +122,7 @@ _GENERAL_PURPOSE_TOOLS = (
     "shell_run",
     "web_search",
     "webfetch",
-    "write",
+    "Write",
 )
 
 
@@ -131,9 +130,9 @@ _GENERAL_PURPOSE_TOOLS = (
 #: around browsing: read/write to save findings, read-only shell, and
 #: ``webfetch`` for a raw fetch when no interaction is needed. The browser pack
 #: (``browser_*``) is deliberately absent: it is gated by the ``browser``
-#: activation plus a live sandbox backend, not by this whitelist. No ``edit`` /
-#: ``apply_patch`` either — a browser worker writes fresh notes rather than
-#: batch-editing a codebase.
+#: activation plus a live sandbox backend, not by this whitelist. No ``Edit``
+#: either — a browser worker writes fresh notes rather than editing a
+#: codebase.
 _WEB_TOOLS = (
     "Glob",
     "Grep",
@@ -142,7 +141,7 @@ _WEB_TOOLS = (
     "shell_poll",
     "shell_run",
     "webfetch",
-    "write",
+    "Write",
 )
 
 

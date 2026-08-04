@@ -106,12 +106,12 @@ def test_mutating_call_records_checkpoint_and_ref_advances(tmp_path):
 
     assert not _ref_exists(repo)
 
-    observer(_started("write", 1))
+    observer(_started("Write", 1))
     c1 = _ref_tip(repo)
     assert c1
 
     (repo / "a.txt").write_text("v2\n", encoding="utf-8")
-    observer(_started("edit", 2))
+    observer(_started("Edit", 2))
     c2 = _ref_tip(repo)
 
     assert c2 != c1
@@ -121,14 +121,6 @@ def test_mutating_call_records_checkpoint_and_ref_advances(tmp_path):
     # Each checkpoint captured the worktree as it stood at that call.
     assert _git(repo, "show", f"{c1}:a.txt") == "v1"
     assert _git(repo, "show", f"{c2}:a.txt") == "v2"
-
-
-def test_apply_patch_also_triggers_a_checkpoint(tmp_path):
-    mod = _load_module()
-    repo = _init_repo(tmp_path)
-    observer = mod.GitCheckpointObserver(repo)
-    observer(_started("apply_patch", 1))
-    assert _ref_exists(repo)
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +138,7 @@ def test_user_branch_and_index_untouched(tmp_path):
     index_before = (repo / ".git" / "index").read_bytes()
 
     (repo / "a.txt").write_text("v2\n", encoding="utf-8")
-    observer(_started("write", 1))
+    observer(_started("Write", 1))
 
     assert _git(repo, "rev-parse", "HEAD") == head_before
     assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD") == branch_before
@@ -181,7 +173,7 @@ def test_non_started_event_records_nothing(tmp_path):
     other = EventEnvelope.build(
         task_id="task-1",
         type="ToolResultRecorded",
-        payload=ToolCallStartedPayload(call_id="c", tool_name="write"),
+        payload=ToolCallStartedPayload(call_id="c", tool_name="Write"),
     )
     observer(other)
     assert not _ref_exists(repo)
@@ -197,7 +189,7 @@ def test_restore_tip_rewrites_worktree_without_touching_head_or_index(tmp_path):
     repo = _init_repo(tmp_path)
     observer = mod.GitCheckpointObserver(repo)
 
-    observer(_started("write", 1))
+    observer(_started("Write", 1))
 
     head_before = _git(repo, "rev-parse", "HEAD")
     index_before = (repo / ".git" / "index").read_bytes()
@@ -218,10 +210,10 @@ def test_restore_specific_commit(tmp_path):
     repo = _init_repo(tmp_path)
     observer = mod.GitCheckpointObserver(repo)
 
-    observer(_started("write", 1))
+    observer(_started("Write", 1))
     c1 = _ref_tip(repo)
     (repo / "a.txt").write_text("v2\n", encoding="utf-8")
-    observer(_started("edit", 2))
+    observer(_started("Edit", 2))
 
     # Worktree stands at v2; restoring c1 must reach past the ref tip.
     restored = mod.restore_checkpoint(repo, commit=c1)
@@ -268,7 +260,7 @@ def test_checkpoint_records_in_a_repo_with_no_configured_identity(
     _git(repo, "init", "-q")
     (repo / "a.txt").write_text("v1\n", encoding="utf-8")
 
-    mod.GitCheckpointObserver(repo)(_started("write", 1))
+    mod.GitCheckpointObserver(repo)(_started("Write", 1))
 
     tip = _ref_tip(repo)
     assert tip, "no checkpoint recorded in a repo without a git identity"
@@ -291,7 +283,7 @@ def test_observer_swallows_non_git_path(tmp_path):
     observer = mod.GitCheckpointObserver(not_a_repo)
 
     # Must not raise, and must not create a ref.
-    observer(_started("write", 1))
+    observer(_started("Write", 1))
     assert not _ref_exists(not_a_repo)
 
 
@@ -356,7 +348,7 @@ def test_process_hooks_resolves_env_configured_observer(tmp_path):
     assert observer.repo_path == repo
     assert observer.ref == _CHECKPOINT_REF
     # Resolved, not just listed: the observer the loader handed back works.
-    observer(_started("write", 1))
+    observer(_started("Write", 1))
     assert _ref_exists(repo)
 
 
@@ -365,9 +357,9 @@ def test_custom_mutating_tools_via_direct_construction(tmp_path):
     # default set); construct the Observer directly to narrow it.
     mod = _load_module()
     repo = _init_repo(tmp_path)
-    observer = mod.GitCheckpointObserver(repo, mutating_tools=["write"])
+    observer = mod.GitCheckpointObserver(repo, mutating_tools=["Write"])
 
-    observer(_started("edit", 1))  # "edit" not in the custom set → ignored
+    observer(_started("Edit", 1))  # "Edit" not in the custom set → ignored
     assert not _ref_exists(repo)
-    observer(_started("write", 2))
+    observer(_started("Write", 2))
     assert _ref_exists(repo)

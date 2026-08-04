@@ -236,7 +236,7 @@ def test_builtin_tool_ref_inventory_complete() -> None:
         # fs read
         "Read", "Glob", "Grep",
         # fs edit
-        "edit", "write", "apply_patch",
+        "Edit", "Write",
         # fs shell — the background triplet is catalogued together so
         # ``tools=None`` can whitelist all three at once.
         "shell_run", "shell_poll", "shell_kill",
@@ -413,12 +413,11 @@ def test_bare_options_defaults_to_all_builtin_tools() -> None:
 
 
 def test_builtin_tool_whitelist_is_pinned() -> None:
-    """``docs/tutorials/first-agent.md`` quotes this count in prose (11 names,
-    of which 10 mount without extra configuration — ``web_search`` needs an API
+    """``docs/tutorials/first-agent.md`` quotes this count in prose (10 names,
+    of which 9 mount without extra configuration — ``web_search`` needs an API
     key). Pinning the set forces any change to come back and update the doc."""
     assert set(builtin_tool_classes()) == {
-        "apply_patch",
-        "edit",
+        "Edit",
         "Glob",
         "Grep",
         "Read",
@@ -427,11 +426,11 @@ def test_builtin_tool_whitelist_is_pinned() -> None:
         "shell_run",
         "web_search",
         "webfetch",
-        "write",
+        "Write",
     }
     # Everything else — memory, browser, open_app, run_skill_script — is
     # capability- or host-injection-gated, never part of this whitelist.
-    assert len(builtin_tool_classes()) == 11
+    assert len(builtin_tool_classes()) == 10
 
 
 def test_allowed_tools_explicit_list() -> None:
@@ -454,12 +453,12 @@ def test_disallowed_tools_subtracts_from_builtin_set() -> None:
     main, _ = compile_options(
         Options(
             system_prompt="hi",
-            disallowed_tools=("shell_run", "edit"),
+            disallowed_tools=("shell_run", "Edit"),
         )
     )
     names = {t.name for t in main.tools}
     assert "shell_run" not in names
-    assert "edit" not in names
+    assert "Edit" not in names
     assert len(names) == len(builtin_tool_classes()) - 2
 
 
@@ -477,11 +476,11 @@ def test_disallowed_tools_with_explicit_allowed_tools() -> None:
     main, _ = compile_options(
         Options(
             system_prompt="hi",
-            allowed_tools=("Read", "Glob", "apply_patch", "Grep"),
+            allowed_tools=("Read", "Glob", "Edit", "Grep"),
             disallowed_tools=("Glob", "Grep"),
         )
     )
-    assert {t.name for t in main.tools} == {"Read", "apply_patch"}
+    assert {t.name for t in main.tools} == {"Read", "Edit"}
 
 
 def test_allowed_tools_dedup_preserves_first_occurrence() -> None:

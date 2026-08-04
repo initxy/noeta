@@ -108,18 +108,18 @@ def test_query_happy_path_builtin_tools(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path)
     provider = FakeLLMProvider(
         responses=_scripted_tooluse_then_finish(
-            tool_name="edit",
+            tool_name="Edit",
             arguments={
                 "path": "x.py",
-                "old": "foo",
-                "new": "bar",
+                "old_string": "foo",
+                "new_string": "bar",
             },
         )
     )
     options = Options(
         system_prompt=_PROMPT,
         name="main",
-        allowed_tools=("Read", "edit"),
+        allowed_tools=("Read", "Edit"),
         permission_mode="bypassPermissions",
     )
     compiled_main, _ = compile_options(options)
@@ -157,7 +157,7 @@ def test_query_happy_path_builtin_tools(tmp_path: Path) -> None:
     started = _envelopes_of_type(envelopes, "ToolCallStarted")
     assert len(started) == 1
     assert isinstance(started[0].payload, ToolCallStartedPayload)
-    assert started[0].payload.tool_name == "edit"
+    assert started[0].payload.tool_name == "Edit"
 
     # Dry-run never writes x.py, so the recorded result is the only evidence
     # the edit ran.
@@ -230,20 +230,20 @@ def test_client_multi_turn(tmp_path: Path) -> None:
 
     # 4 responses total: start turn tooluse+finish, send_goal turn tooluse+finish
     responses = _scripted_tooluse_then_finish(
-        tool_name="edit",
-        arguments={"path": "x.py", "old": "foo", "new": "bar"},
+        tool_name="Edit",
+        arguments={"file_path": "x.py", "old_string": "foo", "new_string": "bar"},
         call_id="t1",
         answer="first turn done",
     ) + _scripted_tooluse_then_finish(
-        tool_name="edit",
-        arguments={"path": "x.py", "old": "bar", "new": "baz"},
+        tool_name="Edit",
+        arguments={"file_path": "x.py", "old_string": "bar", "new_string": "baz"},
         call_id="t2",
         answer="second turn done",
     )
     provider = FakeLLMProvider(responses=responses)
     options = Options(
         system_prompt=_PROMPT,
-        allowed_tools=("edit",),
+        allowed_tools=("Edit",),
         permission_mode="bypassPermissions",
     )
 
@@ -297,12 +297,12 @@ def test_options_vs_handwritten_spec_identity() -> None:
     identity sugar."""
     tools = (
         builtin_tool_ref("Read"),
-        builtin_tool_ref("edit"),
+        builtin_tool_ref("Edit"),
     )
     options = Options(
         system_prompt=_PROMPT,
         name="main",
-        allowed_tools=("Read", "edit"),
+        allowed_tools=("Read", "Edit"),
         budget=BudgetSpec(max_iterations=5),
     )
     compiled, descendants = compile_options(options)

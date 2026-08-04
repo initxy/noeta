@@ -145,14 +145,14 @@ def test_build_fs_tools_default_uses_local_exec_env(tmp_path: Path) -> None:
     tools = build_fs_tools(ws)
     assert isinstance(tools["Read"].exec_env, LocalExecEnv)
     # one shared instance across the pack
-    assert tools["Read"].exec_env is tools["write"].exec_env
+    assert tools["Read"].exec_env is tools["Write"].exec_env
 
 
 def test_build_fs_tools_threads_injected_backend() -> None:
     ws = WorkspaceRoot.for_container("/c/ws")
     fake = RecordingExecEnv()
     tools = build_fs_tools(ws, exec_env=fake)
-    for name in ("Read", "Glob", "Grep", "edit", "write", "apply_patch", "shell_run"):
+    for name in ("Read", "Glob", "Grep", "Edit", "Write", "shell_run"):
         assert tools[name].exec_env is fake
 
 
@@ -213,7 +213,7 @@ def _session(*, workspace_dir: Path, exec_env: ExecEnv | None):
         **default_factory_kwargs(),
         workspace_dir=workspace_dir,
         system_prompt=_SYSTEM,
-        allowed_tools=frozenset({"Read", "write", "edit", "shell_run"}),
+        allowed_tools=frozenset({"Read", "Write", "Edit", "shell_run"}),
         content_store=InMemoryContentStore(),
         model="stub-model",
         compaction=derive_compaction_config("stub-model"),

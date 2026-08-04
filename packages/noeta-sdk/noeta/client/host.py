@@ -208,10 +208,10 @@ _SINGLE_PROVIDER_NAME = "default"
 # Pure helpers — permission_mode → require_approval_tools (unit-testable)
 # ---------------------------------------------------------------------------
 
-#: The "edit" tool names (``edit`` / ``write`` / ``apply_patch``) that
+#: The "edit" tool names (``Edit`` / ``Write``) that
 #: ``acceptEdits`` exempts from the default non-low risk gate. One canonical
 #: module-level set so tests and permission-mode logic refer to the same list.
-_EDIT_TOOL_NAMES: frozenset[str] = frozenset({"edit", "write", "apply_patch"})
+_EDIT_TOOL_NAMES: frozenset[str] = frozenset({"Edit", "Write"})
 
 
 def _make_shell_approval_predicate(
@@ -248,7 +248,7 @@ def _approval_set_for(mode: str, tool_refs: Sequence[ToolRef]) -> tuple[str, ...
         Every tool whose declared ``risk_level != "low"``.
     ``"acceptEdits"``
         Same rule as ``default`` but the three edit-class tools
-        (``edit`` / ``write`` / ``apply_patch``) are exempted
+        (``Edit`` / ``Write``) are exempted
         even when declared high-risk.
     ``"bypassPermissions"``
         Empty — no tool is gated.

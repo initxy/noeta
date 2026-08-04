@@ -374,10 +374,10 @@ def test_approve_runs_gated_tool_then_suspends(tmp_path: Path) -> None:
     host, _, event_log = _host(
         ws,
         responses=[
-            _tool_call("c1", "write", {"path": "a.py", "content": "x\n"}),
+            _tool_call("c1", "Write", {"file_path": "a.py", "content": "x\n"}),
             _end_turn("wrote it"),
         ],
-        require_approval_tools=("write",),
+        require_approval_tools=("Write",),
     )
     driver = InteractionDriver(host)
 
@@ -404,10 +404,10 @@ def test_deny_skips_gated_tool_then_suspends(tmp_path: Path) -> None:
     host, _, event_log = _host(
         ws,
         responses=[
-            _tool_call("c1", "write", {"path": "a.py", "content": "x\n"}),
+            _tool_call("c1", "Write", {"file_path": "a.py", "content": "x\n"}),
             _end_turn("ok, skipped"),
         ],
-        require_approval_tools=("write",),
+        require_approval_tools=("Write",),
     )
     driver = InteractionDriver(host)
     started = driver.start(goal="write a.py", agent="main")

@@ -46,8 +46,8 @@ def _demo_provider() -> FakeLLMProvider:
                 content=[
                     ToolUseBlock(
                         call_id="w1",
-                        tool_name="write",
-                        arguments={"path": "secret.txt", "content": "oops\n"},
+                        tool_name="Write",
+                        arguments={"file_path": "secret.txt", "content": "oops\n"},
                     )
                 ],
                 usage=Usage(uncached=1, output=1),
@@ -62,7 +62,7 @@ def _demo_provider() -> FakeLLMProvider:
 
 
 def _deny_writes(tool_name: str, arguments: dict) -> bool:
-    return tool_name != "write"
+    return tool_name != "Write"
 
 
 def run(*, provider=None, workspace_dir: Path, model: str = "stub-model"):
@@ -75,7 +75,7 @@ def run(*, provider=None, workspace_dir: Path, model: str = "stub-model"):
     options = Options(
         system_prompt="You may write files when asked.",
         name="gated",
-        allowed_tools=("write",),
+        allowed_tools=("Write",),
         # ``bypassPermissions`` would gate nothing and the callback would never
         # be consulted.
         permission_mode="default",

@@ -18,11 +18,6 @@ from noeta.builtins.fs.impl.edit import (
     ReplaceTextTool,
     WriteFileTool,
 )
-from noeta.builtins.fs.impl.patch import (
-    MAX_PATCH_CANONICAL_BYTES,
-    MAX_PATCH_EDITS,
-    ApplyPatchTool,
-)
 from noeta.builtins.fs.impl.read import GlobTool, GrepTool, ReadFileTool
 from noeta.builtins.fs.impl.shell import (
     ShellKillTool,
@@ -42,12 +37,9 @@ from noeta.runtime.workspace import (
 
 
 __all__ = [
-    "ApplyPatchTool",
     "FsToolPack",
     "GlobTool",
     "GrepTool",
-    "MAX_PATCH_CANONICAL_BYTES",
-    "MAX_PATCH_EDITS",
     "ReadFileTool",
     "ReplaceTextTool",
     "ShellKillTool",
@@ -76,13 +68,13 @@ def build_fs_tools(
     nothing lands on disk) and ``ALLOWLIST`` shell — so a host that forgets to
     opt in cannot mutate anything by accident.
 
-    ``write_path_globs`` confines ``write`` to workspace-relative paths matching
+    ``write_path_globs`` confines ``Write`` to workspace-relative paths matching
     one of the globs (empty ⇒ unrestricted); it deliberately does not constrain
-    ``edit`` / ``apply_patch``. ``write_roots`` is the host's authorization seam
-    for writes OUTSIDE the workspace, consulted per call by ``edit`` / ``write``
-    / ``apply_patch``: ``None`` keeps the single-root wall, while a host able to
-    obtain a human grant passes a resolver so the approved directory is open on
-    the resumed call. Reads are never fenced and ignore both.
+    ``Edit``. ``write_roots`` is the host's authorization seam for writes
+    OUTSIDE the workspace, consulted per call by ``Edit`` / ``Write``: ``None``
+    keeps the single-root wall, while a host able to obtain a human grant
+    passes a resolver so the approved directory is open on the resumed call.
+    Reads are never fenced and ignore both.
 
     ``exec_env`` is the backend the pack's real IO routes through; a sandbox
     backend paired with a container ``workspace`` moves the whole pack into a
@@ -106,9 +98,6 @@ def build_fs_tools(
             allowed_path_globs=write_path_globs,
             exec_env=env,
         ),
-        ApplyPatchTool(
-            workspace=workspace, mode=mode, write_roots=write_roots, exec_env=env
-        ),
     ]
     if shell_mode is not ShellMode.OFF:
         tools.append(
@@ -129,16 +118,6 @@ def build_fs_tools(
 
 
 FsToolPack = build_fs_tools
-
-#: Which of this pack's two mutually-exclusive batch/precise edit tools to DROP
-#: for a bound model's vendor family (Anthropic ships ``edit``, OpenAI / GPT
-#: ships ``apply_patch``). The fs built-in owns the table because it ships both
-#: tools; the model→family judgment lives in the providers built-in's catalog.
-#: An unrecognised family drops nothing, so both tools stay.
-PROVIDER_EDIT_TOOL_MUTEX: Mapping[str, tuple[str, ...]] = {
-    "anthropic": ("apply_patch",),
-    "openai": ("edit",),
-}
 
 
 def build_fs_session_pack(ctx: SessionBuildContext) -> PackContribution:
@@ -166,9 +145,6 @@ def build_fs_session_pack(ctx: SessionBuildContext) -> PackContribution:
         ),
         exec_env=ctx.exec_env,
     )
-    if ctx.provider_family is not None:
-        for _drop in PROVIDER_EDIT_TOOL_MUTEX.get(ctx.provider_family, ()):
-            pack.pop(_drop, None)
     return PackContribution(
         tools={
             name: tool

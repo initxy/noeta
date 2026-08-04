@@ -119,8 +119,8 @@ def derive_compaction_config(model: str) -> CompactionConfig:
 def provider_family(model: str) -> Optional[str]:
     """The bound model's vendor family; ``None`` for an uncatalogued selector.
 
-    Injected into ``build_session_inputs(provider_family=…)`` for the
-    edit↔apply_patch assembly mutex.
+    Injected into ``build_session_inputs(provider_family=…)`` so assembly
+    stages can branch on the bound vendor family when they must.
     """
     family: Optional[str] = _catalog().provider_family(model)
     return family

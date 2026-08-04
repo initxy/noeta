@@ -51,13 +51,27 @@ priority: 50
 
 def _replace_then_finish(*, path: str = "x.py", old: str = "foo", new: str = "bar") -> list[LLMResponse]:
     return [
+        # The Read satisfies Edit's read-first precondition, as a real
+        # session's flow would.
+        LLMResponse(
+            stop_reason="tool_use",
+            content=[
+                ToolUseBlock(
+                    call_id="rt-0",
+                    tool_name="Read",
+                    arguments={"file_path": path},
+                )
+            ],
+            usage=Usage(uncached=1, output=1),
+            raw={"id": "resp-0"},
+        ),
         LLMResponse(
             stop_reason="tool_use",
             content=[
                 ToolUseBlock(
                     call_id="rt-1",
-                    tool_name="edit",
-                    arguments={"path": path, "old": old, "new": new},
+                    tool_name="Edit",
+                    arguments={"file_path": path, "old_string": old, "new_string": new},
                 )
             ],
             usage=Usage(uncached=1, output=1),
@@ -138,9 +152,8 @@ def test_default_agent_exposes_full_fs_pack() -> None:
         "Read",
         "Glob",
         "Grep",
-        "edit",
-        "write",
-        "apply_patch",
+        "Edit",
+        "Write",
         "shell_run",
         "shell_poll",
         "shell_kill",
@@ -205,11 +218,9 @@ def test_runner_apply_edits_workspace(tmp_path: Path) -> None:
     assert target.read_text() == "bar\n"
     assert len(result.files_changed) == 1
     change = result.files_changed[0]
-    assert change["tool"] == "edit"
+    assert change["tool"] == "Edit"
     assert change["path"] == "x.py"
     assert change["applied"] is True
-    assert change["added"] == 1
-    assert change["removed"] == 1
     assert result.last_shell is None  # no shell calls scripted
 
 
@@ -229,7 +240,6 @@ def test_runner_dry_run_does_not_edit_workspace(tmp_path: Path) -> None:
     # But the proposed-diff was recorded.
     assert len(result.files_changed) == 1
     assert result.files_changed[0]["applied"] is False
-    assert result.files_changed[0]["added"] == 1
 
 
 # ---------------------------------------------------------------------------

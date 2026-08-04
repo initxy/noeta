@@ -99,6 +99,11 @@
       "spawnable": [],
       "tools": [
         {
+          "name": "Edit",
+          "risk_level": "high",
+          "version": "1"
+        },
+        {
           "name": "Glob",
           "risk_level": "low",
           "version": "1"
@@ -114,12 +119,7 @@
           "version": "1"
         },
         {
-          "name": "apply_patch",
-          "risk_level": "high",
-          "version": "1"
-        },
-        {
-          "name": "edit",
+          "name": "Write",
           "risk_level": "high",
           "version": "1"
         },
@@ -146,11 +146,6 @@
         {
           "name": "webfetch",
           "risk_level": "low",
-          "version": "1"
-        },
-        {
-          "name": "write",
-          "risk_level": "high",
           "version": "1"
         }
       ]
@@ -263,6 +258,11 @@
     ],
     "tools": [
       {
+        "name": "Edit",
+        "risk_level": "high",
+        "version": "1"
+      },
+      {
         "name": "Glob",
         "risk_level": "low",
         "version": "1"
@@ -278,12 +278,7 @@
         "version": "1"
       },
       {
-        "name": "apply_patch",
-        "risk_level": "high",
-        "version": "1"
-      },
-      {
-        "name": "edit",
+        "name": "Write",
         "risk_level": "high",
         "version": "1"
       },
@@ -310,11 +305,6 @@
       {
         "name": "webfetch",
         "risk_level": "low",
-        "version": "1"
-      },
-      {
-        "name": "write",
-        "risk_level": "high",
         "version": "1"
       }
     ]

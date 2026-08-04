@@ -54,8 +54,8 @@ def _responses() -> list[LLMResponse]:
     return [
         _tool_call(
             WRITE_CALL_ID,
-            "write",
-            {"path": "new.py", "content": "print('hi')\n"},
+            "Write",
+            {"file_path": "new.py", "content": "print('hi')\n"},
         ),
         _end_turn("done"),
     ]
@@ -64,7 +64,7 @@ def _responses() -> list[LLMResponse]:
 def _session(workspace: Path):
     """A one-shot (multi_turn=False) SDK host + driver that gates ``write``.
 
-    ``require_approval_tools=("write",)`` is the host-level override — highest
+    ``require_approval_tools=("Write",)`` is the host-level override — highest
     precedence after a per-turn ``permission_mode``, which these tests never
     pass — so ``write`` and nothing else is gated.
     """
@@ -76,7 +76,7 @@ def _session(workspace: Path):
         multi_turn=False,
         write_mode=FsWriteMode.APPLY,
         shell_mode=ShellMode.OFF,
-        require_approval_tools=("write",),
+        require_approval_tools=("Write",),
     )
     return host, make_driver(host)
 

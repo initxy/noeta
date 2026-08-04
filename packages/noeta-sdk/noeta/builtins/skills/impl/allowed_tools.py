@@ -33,8 +33,8 @@ CLAUDE_TO_NOETA_TOOL: dict[str, str] = {
     "Read": "Read",
     "Glob": "Glob",
     "Grep": "Grep",
-    "Write": "write",
-    "Edit": "edit",
+    "Write": "Write",
+    "Edit": "Edit",
     "Bash": "shell_run",
 }
 

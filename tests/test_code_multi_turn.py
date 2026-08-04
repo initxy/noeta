@@ -325,14 +325,16 @@ def test_failed_turn_parks_and_the_fold_agrees(tmp_path: Path) -> None:  # noqa:
 
 
 def _two_turn_responses() -> list[LLMResponse]:
-    """Turn 1: replace foo→bar then end_turn (→ next-goal suspend).
+    """Turn 1: Read then replace foo→bar then end_turn (→ next-goal suspend);
+       the Read satisfies Edit's read-first precondition, as in a real session.
        Turn 2: read x.py then end_turn (→ next-goal suspend)."""
     return [
         # Turn 1
+        _tool_call("t1-r0", "Read", {"file_path": "x.py"}),
         _tool_call(
             "t1-r1",
-            "edit",
-            {"path": "x.py", "old": "foo", "new": "bar"},
+            "Edit",
+            {"file_path": "x.py", "old_string": "foo", "new_string": "bar"},
         ),
         _end_turn("turn1 done"),
         # Turn 2
@@ -575,7 +577,7 @@ def test_resume_with_goal_refuses_non_next_goal_wake(tmp_path: Path) -> None:
         multi_turn=True,
         write_mode=FsWriteMode.APPLY,
         shell_mode=ShellMode.OFF,
-        require_approval_tools=("edit",),
+        require_approval_tools=("Edit",),
     )
     driver = make_driver(host)
     first = driver.start(goal="rename foo to bar", agent="main")

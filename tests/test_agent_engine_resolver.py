@@ -148,8 +148,8 @@ def test_build_engine_for_agent_filters_tools_to_allowlist(tmp_path: Path) -> No
     assert "Glob" in tools
     assert "shell_run" in tools  # read-only shell, CC-aligned
     # Provably absent — the moat: a write-tempting goal cannot reach these.
-    assert "write" not in tools
-    assert "edit" not in tools
+    assert "Write" not in tools
+    assert "Edit" not in tools
     assert "apply_patch" not in tools
 
 
@@ -195,8 +195,8 @@ def test_build_engine_for_agent_distinct_agents_distinct_tool_sets(
     assert set(explorer._tools) != set(general._tools)
     # general-purpose carries the write family; explore does not (the
     # load-bearing distinction after the CC alignment, since both now have shell).
-    assert "edit" in set(general._tools)
-    assert "edit" not in set(explorer._tools)
+    assert "Edit" in set(general._tools)
+    assert "Edit" not in set(explorer._tools)
 
 
 def test_build_engine_for_agent_applies_policy_wrapper(tmp_path: Path) -> None:
@@ -320,8 +320,8 @@ def test_resolver_dispatches_on_recorded_agent_name(tmp_path: Path) -> None:
     assert gp_engine is not exp_engine
     assert gp_engine._policy._system_prompt == official_specs()["general-purpose"].instructions
     assert exp_engine._policy._system_prompt == official_specs()["explore"].instructions
-    assert "edit" in set(gp_engine._tools)
-    assert "edit" not in set(exp_engine._tools)
+    assert "Edit" in set(gp_engine._tools)
+    assert "Edit" not in set(exp_engine._tools)
 
 
 def test_resolver_caches_one_engine_per_agent(tmp_path: Path) -> None:

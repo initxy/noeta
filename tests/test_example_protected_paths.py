@@ -95,40 +95,40 @@ def _tool_verdict(guard, tool_name: str, arguments: dict):
 
 def test_write_relative_inside_root_allows(tmp_path):
     guard = ProtectedPathsGuard(allowed_roots=[tmp_path])
-    v = _tool_verdict(guard, "write", {"path": "notes/x.md", "content": "hi"})
+    v = _tool_verdict(guard, "Write", {"file_path": "notes/x.md", "content": "hi"})
     assert v.verdict is Verdict.ALLOW
 
 
 def test_write_absolute_inside_root_allows(tmp_path):
     guard = ProtectedPathsGuard(allowed_roots=[tmp_path])
     target = str(tmp_path / "a.txt")
-    v = _tool_verdict(guard, "write", {"path": target, "content": "hi"})
+    v = _tool_verdict(guard, "Write", {"file_path": target, "content": "hi"})
     assert v.verdict is Verdict.ALLOW
 
 
 def test_relative_dotdot_traversal_denies(tmp_path):
     guard = ProtectedPathsGuard(allowed_roots=[tmp_path])
-    v = _tool_verdict(guard, "write", {"path": "../outside.txt", "content": "x"})
+    v = _tool_verdict(guard, "Write", {"file_path": "../outside.txt", "content": "x"})
     assert v.verdict is Verdict.DENY
     assert "protected-paths" in (v.reason or "")
 
 
 def test_deep_traversal_denies(tmp_path):
     guard = ProtectedPathsGuard(allowed_roots=[tmp_path])
-    v = _tool_verdict(guard, "edit", {"path": "../../../etc/passwd", "old": "a", "new": "b"})
+    v = _tool_verdict(guard, "Edit", {"file_path": "../../../etc/passwd", "old_string": "a", "new_string": "b"})
     assert v.verdict is Verdict.DENY
 
 
 def test_absolute_path_outside_roots_denies(tmp_path):
     guard = ProtectedPathsGuard(allowed_roots=[tmp_path])
-    v = _tool_verdict(guard, "write", {"path": "/etc/passwd", "content": "x"})
+    v = _tool_verdict(guard, "Write", {"file_path": "/etc/passwd", "content": "x"})
     assert v.verdict is Verdict.DENY
 
 
 def test_dotdot_that_stays_inside_allows(tmp_path):
     # ``sub/../a.txt`` collapses to ``a.txt`` — still inside the root.
     guard = ProtectedPathsGuard(allowed_roots=[tmp_path])
-    v = _tool_verdict(guard, "write", {"path": "sub/../a.txt", "content": "x"})
+    v = _tool_verdict(guard, "Write", {"file_path": "sub/../a.txt", "content": "x"})
     assert v.verdict is Verdict.ALLOW
 
 
@@ -136,35 +136,8 @@ def test_second_allowed_root_permits(tmp_path):
     root_a = tmp_path / "a"
     root_b = tmp_path / "b"
     guard = ProtectedPathsGuard(allowed_roots=[root_a, root_b])
-    v = _tool_verdict(guard, "write", {"path": str(root_b / "ok.txt"), "content": "x"})
+    v = _tool_verdict(guard, "Write", {"file_path": str(root_b / "ok.txt"), "content": "x"})
     assert v.verdict is Verdict.ALLOW
-
-
-# ---------------------------------------------------------------------------
-# Guard verdicts — apply_patch (batch) + scope
-# ---------------------------------------------------------------------------
-
-
-def test_apply_patch_all_inside_allows(tmp_path):
-    guard = ProtectedPathsGuard(allowed_roots=[tmp_path])
-    args = {
-        "edits": [
-            {"op": "replace", "path": "one.txt", "old": "a", "new": "b"},
-            {"op": "create", "path": "sub/two.txt", "content": "c"},
-        ]
-    }
-    assert _tool_verdict(guard, "apply_patch", args).verdict is Verdict.ALLOW
-
-
-def test_apply_patch_any_escaping_edit_denies(tmp_path):
-    guard = ProtectedPathsGuard(allowed_roots=[tmp_path])
-    args = {
-        "edits": [
-            {"op": "replace", "path": "ok.txt", "old": "a", "new": "b"},
-            {"op": "create", "path": "../evil.txt", "content": "c"},
-        ]
-    }
-    assert _tool_verdict(guard, "apply_patch", args).verdict is Verdict.DENY
 
 
 def test_non_mutating_tool_is_ignored(tmp_path):
@@ -194,7 +167,7 @@ def test_missing_path_defers_to_tool(tmp_path):
     # No readable path ⇒ the guard has nothing to rule on and allows (the tool
     # rejects the malformed call; no write happens).
     guard = ProtectedPathsGuard(allowed_roots=[tmp_path])
-    assert _tool_verdict(guard, "write", {"content": "x"}).verdict is Verdict.ALLOW
+    assert _tool_verdict(guard, "Write", {"content": "x"}).verdict is Verdict.ALLOW
 
 
 # ---------------------------------------------------------------------------
@@ -204,25 +177,23 @@ def test_missing_path_defers_to_tool(tmp_path):
 
 def test_deny_glob_wins_inside_allowed_root(tmp_path):
     guard = ProtectedPathsGuard(allowed_roots=[tmp_path], deny_globs=["*.env"])
-    v = _tool_verdict(guard, "write", {"path": "config.env", "content": "x"})
+    v = _tool_verdict(guard, "Write", {"file_path": "config.env", "content": "x"})
     assert v.verdict is Verdict.DENY
     assert "deny glob" in (v.reason or "")
 
 
 def test_deny_glob_basename_match(tmp_path):
     guard = ProtectedPathsGuard(allowed_roots=[tmp_path], deny_globs=["id_rsa"])
-    v = _tool_verdict(guard, "write", {"path": "keys/id_rsa", "content": "x"})
+    v = _tool_verdict(guard, "Write", {"file_path": "keys/id_rsa", "content": "x"})
     assert v.verdict is Verdict.DENY
 
 
 def test_deny_glob_only_mode_without_roots():
     # No allowed_roots ⇒ containment disabled; only deny globs bite.
     guard = ProtectedPathsGuard(deny_globs=["id_rsa"])
-    assert _tool_verdict(
-        guard, "write", {"path": "/home/u/.ssh/id_rsa", "content": "x"}
+    assert _tool_verdict(guard, "Write", {"file_path": "/home/u/.ssh/id_rsa", "content": "x"}
     ).verdict is Verdict.DENY
-    assert _tool_verdict(
-        guard, "write", {"path": "/home/u/ok.txt", "content": "x"}
+    assert _tool_verdict(guard, "Write", {"file_path": "/home/u/ok.txt", "content": "x"}
     ).verdict is Verdict.ALLOW
 
 
@@ -242,11 +213,9 @@ def test_manifest_guard_fences_the_env_configured_root(tmp_path):
     mod = _load_with_env(NOETA_PROTECTED_PATHS_ROOTS=str(tmp_path))
     guard = mod.GUARD
     # Configured from NOETA_PROTECTED_PATHS_ROOTS: inside allows, outside denies.
-    assert _tool_verdict(
-        guard, "write", {"path": str(tmp_path / "a.txt"), "content": "x"}
+    assert _tool_verdict(guard, "Write", {"file_path": str(tmp_path / "a.txt"), "content": "x"}
     ).verdict is Verdict.ALLOW
-    assert _tool_verdict(
-        guard, "write", {"path": "/etc/passwd", "content": "x"}
+    assert _tool_verdict(guard, "Write", {"file_path": "/etc/passwd", "content": "x"}
     ).verdict is Verdict.DENY
 
 
@@ -256,10 +225,10 @@ def test_manifest_deny_globs_from_env(tmp_path):
         NOETA_PROTECTED_PATHS_DENY_GLOBS="*.env,id_rsa",
     )
     assert _tool_verdict(
-        mod.GUARD, "write", {"path": str(tmp_path / "config.env"), "content": "x"}
+        mod.GUARD, "Write", {"file_path": str(tmp_path / "config.env"), "content": "x"}
     ).verdict is Verdict.DENY
     assert _tool_verdict(
-        mod.GUARD, "write", {"path": str(tmp_path / "ok.txt"), "content": "x"}
+        mod.GUARD, "Write", {"file_path": str(tmp_path / "ok.txt"), "content": "x"}
     ).verdict is Verdict.ALLOW
 
 
@@ -298,9 +267,7 @@ def test_process_hooks_resolves_the_configured_guard(tmp_path):
     assert len(guards) == 1  # governance: in force process-wide, no activation
     guard = guards[0]
     assert guard.name == "protected_paths"
-    assert _tool_verdict(
-        guard, "write", {"path": str(tmp_path / "a.txt"), "content": "x"}
+    assert _tool_verdict(guard, "Write", {"file_path": str(tmp_path / "a.txt"), "content": "x"}
     ).verdict is Verdict.ALLOW
-    assert _tool_verdict(
-        guard, "write", {"path": "/etc/passwd", "content": "x"}
+    assert _tool_verdict(guard, "Write", {"file_path": "/etc/passwd", "content": "x"}
     ).verdict is Verdict.DENY

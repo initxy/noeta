@@ -121,8 +121,8 @@ def test_explore_runner_drops_write_tools_from_pack(
     )
     # The Engine's tool dict is filtered to the agent's allow-list.
     engine_tools = host.resolve_engine_for_agent("explore", model="gpt-test")._tools  # type: ignore[union-attr]
-    assert "edit" not in engine_tools
-    assert "write" not in engine_tools
+    assert "Edit" not in engine_tools
+    assert "Write" not in engine_tools
     assert "apply_patch" not in engine_tools
     # The scout tools (incl. read-only shell + webfetch) are present.
     for present in ("Read", "Glob", "Grep", "shell_run", "shell_poll", "webfetch"):
@@ -147,7 +147,7 @@ def test_plan_runner_pack_is_readonly_scout_no_write(
         shell_mode=ShellMode.ARBITRARY,
     )
     engine_tools = host.resolve_engine_for_agent("plan", model="gpt-test")._tools  # type: ignore[union-attr]
-    for absent in ("edit", "write", "apply_patch"):
+    for absent in ("Edit", "Write", "apply_patch"):
         assert absent not in engine_tools
     # The scout tools (incl. read-only shell + webfetch) are present.
     for present in ("Read", "Glob", "Grep", "shell_run", "shell_poll", "webfetch"):
@@ -164,11 +164,11 @@ def _edit_tempted_response() -> list[LLMResponse]:
             content=[
                 ToolUseBlock(
                     call_id="tempt-1",
-                    tool_name="edit",
+                    tool_name="Edit",
                     arguments={
-                        "path": "src/math_ops.py",
-                        "old": "return a - b",
-                        "new": "return a + b",
+                        "file_path": "src/math_ops.py",
+                        "old_string": "return a - b",
+                        "new_string": "return a + b",
                     },
                 )
             ],
@@ -238,7 +238,7 @@ def test_general_purpose_has_full_builtin_set() -> None:
     """``general-purpose`` carries the whole built-in tool surface."""
     gp_tools = _tools(GENERAL_PURPOSE_SPEC)
     assert gp_tools == frozenset(builtin_tool_classes())
-    assert {"Grep", "Glob", "apply_patch", "webfetch"} <= gp_tools
+    assert {"Grep", "Glob", "webfetch"} <= gp_tools
 
 
 def test_main_and_general_purpose_tools_now_equal() -> None:
@@ -252,7 +252,7 @@ def test_explore_is_read_only() -> None:
     # Explore excludes the write family; shell_run stays, prompt-restricted to
     # read-only commands.
     ex_tools = _tools(EXPLORE_SPEC)
-    for mutating in ("edit", "write", "apply_patch"):
+    for mutating in ("Edit", "Write", "apply_patch"):
         assert mutating not in ex_tools
     assert "shell_run" in ex_tools
 
@@ -262,7 +262,7 @@ def test_plan_whitelist_and_capabilities() -> None:
     # read/grep/glob + shell triplet + webfetch — and NO write family at all.
     # Activation opens ONLY ask_user_question (no todo_write).
     plan_tools = _tools(PLAN_SPEC)
-    for mutating in ("edit", "write", "apply_patch"):
+    for mutating in ("Edit", "Write", "apply_patch"):
         assert mutating not in plan_tools
     assert plan_tools == frozenset(
         {"Read", "Grep", "Glob", "shell_run", "shell_poll", "shell_kill", "webfetch"}
@@ -331,7 +331,7 @@ def _bug_fixer_script() -> list[LLMResponse]:
                 ToolUseBlock(
                     call_id="bf-3",
                     tool_name="Read",
-                    arguments={"path": "src/math_ops.py"},
+                    arguments={"file_path": "src/math_ops.py"},
                 )
             ],
             usage=Usage(uncached=1, output=1),
@@ -343,11 +343,11 @@ def _bug_fixer_script() -> list[LLMResponse]:
             content=[
                 ToolUseBlock(
                     call_id="bf-4",
-                    tool_name="edit",
+                    tool_name="Edit",
                     arguments={
-                        "path": "src/math_ops.py",
-                        "old": "return a - b",
-                        "new": "return a + b",
+                        "file_path": "src/math_ops.py",
+                        "old_string": "return a - b",
+                        "new_string": "return a + b",
                     },
                 )
             ],
@@ -458,7 +458,7 @@ def test_bug_fixer_fake_llm_full_loop_fixes_failing_test(
     # The actual fix landed.
     assert "return a + b" in target.read_text()
     # Files-changed surfaces the single edit application.
-    edit_changes = [c for c in result.files_changed if c["tool"] == "edit"]
+    edit_changes = [c for c in result.files_changed if c["tool"] == "Edit"]
     assert len(edit_changes) == 1
     assert edit_changes[0]["applied"] is True
     assert edit_changes[0]["path"] == "src/math_ops.py"
