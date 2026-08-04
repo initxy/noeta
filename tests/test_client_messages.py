@@ -15,6 +15,7 @@ from pathlib import Path
 
 from noeta.client import (
     AssistantMessage,
+    InjectedMessage,
     Options,
     Result,
     ToolResultView,
@@ -384,6 +385,61 @@ def test_image_block_in_assistant_message_does_not_garble_adjacent_text() -> Non
     assistant_msgs = [v for v in out if isinstance(v, AssistantMessage)]
     texts = [v.text for v in assistant_msgs]
     assert texts == ["hello ", "world"], f"text around image wrongly merged: {texts}"
+
+
+# ---------------------------------------------------------------------------
+# host-injected turns: InjectedMessage, never UserMessage
+# ---------------------------------------------------------------------------
+
+
+def test_host_injected_turn_projects_as_injected_message() -> None:
+    """A user-role turn with origin "memory" / "system" (memory recall, host
+    reminders) is the host speaking, not the human — it must project as
+    ``InjectedMessage`` carrying its origin, and never as ``UserMessage``."""
+    from noeta.client.messages import _project_one_message
+
+    for origin in ("memory", "system"):
+        msg = Message(
+            role="user",
+            content=[TextBlock(text="Possibly relevant memories: ...")],
+            origin=origin,
+        )
+        out: list = []
+        _project_one_message(msg, out, set(), set())
+
+        assert [type(v).__name__ for v in out] == ["InjectedMessage"], (
+            f"origin={origin!r} projected as {[type(v).__name__ for v in out]}"
+        )
+        item = out[0]
+        assert isinstance(item, InjectedMessage)
+        assert item.origin == origin
+        assert item.text == "Possibly relevant memories: ..."
+
+
+def test_plain_user_turn_still_projects_as_user_message() -> None:
+    """No origin (the human's own words) keeps the UserMessage projection."""
+    from noeta.client.messages import _project_one_message
+
+    msg = Message(role="user", content=[TextBlock(text="hello")])
+    out: list = []
+    _project_one_message(msg, out, set(), set())
+
+    assert len(out) == 1
+    assert isinstance(out[0], UserMessage)
+    assert out[0].text == "hello"
+
+
+def test_is_host_injected_draws_the_line_on_role_and_origin() -> None:
+    """The shared predicate: user-role + origin system/memory, nothing else."""
+    from noeta.protocols.messages import is_host_injected
+
+    assert is_host_injected(Message(role="user", content=[], origin="memory"))
+    assert is_host_injected(Message(role="user", content=[], origin="system"))
+    # None / "human" mean the role's natural author — a plain user turn.
+    assert not is_host_injected(Message(role="user", content=[]))
+    assert not is_host_injected(Message(role="user", content=[], origin="human"))
+    assert not is_host_injected(Message(role="assistant", content=[]))
+    assert not is_host_injected(Message(role="tool", content=[]))
 
 
 # ---------------------------------------------------------------------------

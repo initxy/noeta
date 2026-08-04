@@ -95,6 +95,8 @@ Message projection and serialization helpers.
 
 ::: noeta.sdk.AssistantMessage
 
+::: noeta.sdk.InjectedMessage
+
 ::: noeta.sdk.ToolUse
 
 ::: noeta.sdk.ToolResultView

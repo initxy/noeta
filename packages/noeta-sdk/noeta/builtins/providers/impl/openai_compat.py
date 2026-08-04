@@ -36,6 +36,7 @@ from noeta.protocols.messages import (
     ToolResultBlock,
     ToolUseBlock,
     Usage,
+    is_host_injected,
 )
 from noeta.builtins.providers.impl._sse import iter_sse_events
 from noeta.builtins.providers.impl.codecs import (
@@ -568,7 +569,7 @@ def _message_to_openai(
         # answered as if addressed — so the preamble states it in-band.
         # ``human`` / ``None`` mean the role's natural author, i.e. a plain
         # user turn.
-        if message.origin in ("system", "memory"):
+        if is_host_injected(message):
             return [
                 {
                     "role": "system",

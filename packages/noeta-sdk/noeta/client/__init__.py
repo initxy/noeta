@@ -10,6 +10,7 @@ from noeta.client.client import Client, QueryFailedError, QueryResult, query
 from noeta.client.host import SdkHost
 from noeta.client.messages import (
     AssistantMessage,
+    InjectedMessage,
     Result,
     ToolResultView,
     ToolUse,
@@ -30,6 +31,7 @@ __all__ = [
     "AgentDefinition",
     "AssistantMessage",
     "Client",
+    "InjectedMessage",
     "Options",
     "QueryFailedError",
     "QueryResult",

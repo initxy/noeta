@@ -5,12 +5,20 @@ envelopes and the ContentStore they were written against, the output is
 deterministic and preserves the stream's order. The envelope stream stays the
 record of truth — nothing here enters the durable record or records events, so
 an unresolvable body degrades to ``None`` rather than failing the whole read.
+
+The view answers "who said what": each item's *type* is its author. A
+host-injected user-channel turn (``origin`` ``"system"`` / ``"memory"`` —
+reminders, memory recall) therefore projects as :class:`InjectedMessage`,
+never :class:`UserMessage` — the same split every wire adapter makes when it
+reroutes those turns out of the user voice. What the view drops, it drops on
+purpose: thinking, images, and the raw block structure.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from functools import partial
 from typing import Callable, Iterable, Optional, TypeVar, Union
 
 from noeta.core.fold import messages_from_appended
@@ -27,10 +35,12 @@ from noeta.protocols.events import (
 from noeta.protocols.messages import (
     ImageBlock,
     Message,
+    MessageOrigin,
     TextBlock,
     ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
+    is_host_injected,
 )
 from noeta.protocols.tool_args import resolve_tool_call_arguments
 from noeta.protocols.values import ContentRef
@@ -66,9 +76,29 @@ class AssistantMessage:
 
 @dataclass(frozen=True, slots=True)
 class UserMessage:
-    """A plain-text input fragment from the user (goal / send_goal / follow-up)."""
+    """A plain-text input fragment from the user (goal / send_goal / follow-up).
+
+    Always the human's own words: a host-injected turn riding the same
+    user channel projects as :class:`InjectedMessage` instead.
+    """
 
     text: str
+
+
+@dataclass(frozen=True, slots=True)
+class InjectedMessage:
+    """A host-injected fragment riding the user channel of the conversation.
+
+    ``origin`` names the seam that authored it: ``"memory"`` for cross-task
+    recall, ``"system"`` for host-injected context (reminders,
+    ``inject_goal(goal_origin=...)``). The human never typed this — render it
+    as ambient context or drop it, never as a user turn. ``origin`` is
+    trustworthy: only the Engine's recording seam writes ``Message.origin``,
+    so a forged marker in model or tool output stays plain text.
+    """
+
+    text: str
+    origin: MessageOrigin
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +145,7 @@ class Result:
 ViewItem = Union[
     AssistantMessage,
     UserMessage,
+    InjectedMessage,
     ToolUse,
     ToolResultView,
     Result,
@@ -221,9 +252,14 @@ def _project_one_message(
     # block type identically and only the text fragments' view type differs. An
     # all-ToolResultBlock user message — the standard tool-feedback shape —
     # needs no special case; the walk emits one view per block and no text.
-    text_factory: Callable[[str], ViewItem] = (
-        AssistantMessage if role == "assistant" else UserMessage
-    )
+    text_factory: Callable[[str], ViewItem]
+    if is_host_injected(msg):
+        # The predicate guarantees origin is "system" or "memory" — never None.
+        text_factory = partial(InjectedMessage, origin=msg.origin)
+    elif role == "assistant":
+        text_factory = AssistantMessage
+    else:
+        text_factory = UserMessage
     _walk_blocks(msg.content, text_factory, out, seen_tool_use, seen_tool_result)
 
 

@@ -29,7 +29,7 @@ from typing import Any, Callable, Optional, Protocol
 from noeta.core.fold import messages_from_appended
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.event_log import EventEnvelope, TaskStreamSummary
-from noeta.protocols.messages import TextBlock
+from noeta.protocols.messages import TextBlock, is_host_injected
 
 
 class _ConsolidationHost(Protocol):
@@ -212,7 +212,7 @@ def _root_task_transcript(
             # A pruned/unresolvable body must not sink the whole digest.
             continue
         for msg in messages:
-            if msg.role == "system" or msg.origin in ("memory", "system"):
+            if msg.role == "system" or is_host_injected(msg):
                 continue
             body = "\n".join(
                 block.text

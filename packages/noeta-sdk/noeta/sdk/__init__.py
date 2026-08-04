@@ -51,6 +51,7 @@ from noeta.client.sandbox_provider import (
 from noeta.client.otlp import OtlpTraceConfig
 from noeta.client.messages import (
     AssistantMessage,
+    InjectedMessage,
     Result,
     ToolResultView,
     ToolUse,
@@ -271,6 +272,9 @@ __all__ = [
     "SUSPEND_REASON_TURN_FAILED",
     "AssistantMessage",
     "UserMessage",
+    # a host-injected user-channel turn (origin "system" / "memory") — kept
+    # out of UserMessage so an isinstance filter never mistakes it for the human
+    "InjectedMessage",
     "ToolUse",
     "ToolResultView",
     "Result",

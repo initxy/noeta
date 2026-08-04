@@ -107,15 +107,23 @@ is a pure projection of an envelope stream into the human-readable view. The
 `content_store` must be the one **paired with** that stream, because the
 projection dereferences large bodies through it.
 
-`ViewItem` is the union of five frozen types:
+`ViewItem` is the union of six frozen types:
 
 | Type | Fields |
 | --- | --- |
 | `AssistantMessage` | `text` |
 | `UserMessage` | `text` |
+| `InjectedMessage` | `text`, `origin` |
 | `ToolUse` | `call_id`, `tool_name`, `arguments` |
 | `ToolResultView` | `call_id`, `tool_name`, `success`, `output: str \| None` |
 | `Result` | `answer`, `status` — on `"failed"`, `answer` holds the failure reason |
+
+Each item's type is its author. A user-channel turn the host injected
+(`origin` `"system"` for reminders / injected context, `"memory"` for
+cross-task recall) projects as `InjectedMessage`, never `UserMessage` — so
+separating real user input from ambient host context is an `isinstance`
+check, and a transcript UI that renders only `UserMessage` /
+`AssistantMessage` shows injected context by opting in, not by accident.
 
 `Client.messages(task_id)` and `QueryResult.messages()` call this for you
 against the right store, so reach for `as_messages` only when you hold the

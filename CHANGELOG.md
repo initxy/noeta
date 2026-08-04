@@ -8,6 +8,24 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`as_messages` no longer renders host-injected turns as `UserMessage`**
+  (noeta-sdk). A user-channel turn the host authored (`origin` `"system"` /
+  `"memory"` — reminders, memory recall, `inject_goal(goal_origin=...)`) now
+  projects as the new `InjectedMessage(text, origin)` view type in the
+  `ViewItem` union. Consumers matching `UserMessage` stop seeing recall and
+  reminder text as the human speaking without any code change; showing
+  injected context is the opt-in of handling the new type. An exhaustive
+  match over `ViewItem` needs a new branch.
+
+### Added
+
+- **`noeta.protocols.is_host_injected(message)`** (noeta-runtime): the shared
+  predicate for "user-channel turn authored by the host rather than the
+  human", replacing four hand-rolled copies (the three provider adapters and
+  the consolidation digest). Wire behavior is unchanged.
+
 ## [0.5.5] - 2026-08-02
 
 Covers both packages.
