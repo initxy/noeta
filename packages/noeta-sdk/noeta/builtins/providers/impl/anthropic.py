@@ -43,7 +43,10 @@ from noeta.protocols.messages import (
 from noeta.protocols.values import ContentRef
 from noeta.builtins.providers.impl import catalog
 from noeta.builtins.providers.impl._sse import iter_sse_events
-from noeta.builtins.providers.impl.codecs import parse_retry_after
+from noeta.builtins.providers.impl.codecs import (
+    parse_retry_after,
+    render_tool_result_body,
+)
 
 
 #: The adapter's only image dependency: a narrow ``ContentRef → bytes`` deref
@@ -704,17 +707,11 @@ def _tool_result_content(
 
 
 def _tool_result_text(block: ToolResultBlock) -> str:
-    """The string rendering of ``ToolResultBlock.output``: JSON-encode non-string
-    outputs; prefix an ``error`` string so Noeta's two-field success/error split
-    survives Anthropic's one-field tool_result body."""
-    output = block.output
-    if isinstance(output, str):
-        body = output
-    else:
-        body = json.dumps(output)
-    if block.error:
-        return f"[error] {block.error}\n{body}"
-    return body
+    """The string rendering of ``ToolResultBlock.output`` — the shared
+    :func:`render_tool_result_body` convention (string outputs verbatim,
+    ``ensure_ascii=False`` for structured ones, error text leading), on top of
+    which Anthropic additionally carries ``is_error`` on the wire."""
+    return render_tool_result_body(block.output, block.error)
 
 
 #: The single ephemeral cache breakpoint marker reused on every stamp site.

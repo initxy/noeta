@@ -207,7 +207,7 @@ def test_webfetch_private_url_failure_names_the_cause() -> None:
 
 
 def test_webfetch_large_page_truncates_inline_keeps_full_artifact() -> None:
-    big = "<html><body>" + ("<p>word here</p>" * 12000) + "</body></html>"
+    big = "<html><body>" + ("<p>word here</p>" * 120000) + "</body></html>"
     transport = FakeFetchTransport(pages_by_url={"https://big": big})
     ctx, store = _ctx()
     result = WebFetchTool(transport=transport).invoke({"url": "https://big"}, ctx)

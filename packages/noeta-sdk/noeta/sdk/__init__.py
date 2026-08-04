@@ -154,7 +154,12 @@ from noeta.protocols.values import ContentRef
 # ``noeta.builtins``.
 from noeta.protocols.wake import NEXT_GOAL_WAKE_HANDLE
 from noeta.protocols.step_context import StepContext
-from noeta.protocols.tool import Tool, ToolContext, ToolResult
+from noeta.protocols.tool import (
+    FileReadRegistry,
+    Tool,
+    ToolContext,
+    ToolResult,
+)
 from noeta.protocols.view import View
 
 # --- Host-level wiring --------------------------------------------------------
@@ -287,6 +292,7 @@ __all__ = [
     "create_sdk_mcp_server",
     "SdkMcpServer",
     "Tool",
+    "FileReadRegistry",
     "ToolContext",
     "ToolResult",
     # The containment predicate the fs write fence uses, published so a host

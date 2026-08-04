@@ -97,10 +97,9 @@ def test_read_file_offset_limit_slice(tmp_path: Path) -> None:
 
 def test_read_file_offload_when_large(tmp_path: Path) -> None:
     ctx, workspace = _ctx_and_workspace(tmp_path)
-    # Many short lines whose TOTAL bytes cleanly exceed the inline budget
-    # (each line stays under the per-line clip, so this exercises the total
-    # ceiling, not the per-line path).
-    big = ("x" * 100 + "\n") * 1500  # ~151 KB, well over 64 KB
+    # Lines under the per-line clip whose TOTAL bytes cleanly exceed the
+    # inline budget (this exercises the total ceiling, not the per-line path).
+    big = ("x" * 1999 + "\n") * 1500  # ~3 MB, well over the 1 MiB ceiling
     (workspace.root / "big.txt").write_text(big)
     result = ReadFileTool(workspace=workspace).invoke({"path": "big.txt"}, ctx)
     assert result.success is True

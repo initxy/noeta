@@ -502,9 +502,9 @@ def test_role_tool_with_non_tool_result_block_raises() -> None:
 
 @respx.mock
 def test_tool_result_error_prefixed_to_content() -> None:
-    """ToolResultBlock.error str is prefixed to content to keep
-    Noeta's two-field success/error split visible in Anthropic's
-    one-field tool_result body."""
+    """ToolResultBlock.error text leads the content so the failure survives
+    Anthropic's one-field tool_result body (no [error] prefix — the wire
+    already carries is_error)."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
         return_value=httpx.Response(200, json=_anthropic_response())
     )
@@ -524,7 +524,7 @@ def test_tool_result_error_prefixed_to_content() -> None:
 
     body = json.loads(route.calls.last.request.content.decode("utf-8"))
     tr = body["messages"][1]["content"][0]
-    assert tr["content"].startswith("[error] boom\n")
+    assert tr["content"].startswith("boom\n")
     assert tr["is_error"] is True
 
 

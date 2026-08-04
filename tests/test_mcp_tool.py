@@ -202,7 +202,7 @@ def test_result_mapping_is_error() -> None:
 
 
 def test_result_mapping_large_text_offloads() -> None:
-    big = "z" * (80 * 1024)  # over the 64 KB content budget
+    big = "z" * (1200 * 1024)  # over the 1 MiB content budget
     res = _result_to_tool_result(
         "mcp__x__t", {"content": [{"type": "text", "text": big}]}, _ctx()
     )
