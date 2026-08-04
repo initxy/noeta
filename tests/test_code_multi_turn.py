@@ -495,10 +495,10 @@ def test_per_turn_last_shell_is_not_cumulative(
 
     responses = [
         # Turn 1: pytest (rc=0) then end_turn → suspend.
-        _tool_call("t1-s", "shell_run", {"command": "pytest -q"}),
+        _tool_call("t1-s", "Bash", {"command": "pytest -q"}),
         _end_turn("turn 1"),
         # Turn 2: pytest (rc=3) then end_turn → suspend.
-        _tool_call("t2-s", "shell_run", {"command": "pytest -q"}),
+        _tool_call("t2-s", "Bash", {"command": "pytest -q"}),
         _end_turn("turn 2"),
     ]
     host, driver = _multi_turn_session(

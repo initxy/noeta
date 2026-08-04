@@ -171,9 +171,12 @@ def test_shell_run_tool_surfaces_cap_rejection(tmp_path: Path) -> None:
     second = tool.invoke({"command": "sleep 30", "run_in_background": True}, ctx)
     assert second.success is False
     assert "too many background jobs" in second.summary
-    assert "shell_kill" in second.summary
-    reg.kill(first.output["job_id"])
-    _await_terminal(reg, first.output["job_id"])
+    assert "KillShell" in second.summary
+    import re as _re
+
+    first_id = _re.search(r"background with ID: (\S+)", first.output).group(1)
+    reg.kill(first_id)
+    _await_terminal(reg, first_id)
 
 
 # ---------------------------------------------------------------------------

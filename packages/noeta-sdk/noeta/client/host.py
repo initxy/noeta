@@ -219,13 +219,13 @@ def _make_shell_approval_predicate(
 ) -> Callable[[str, Mapping[str, Any]], bool]:
     """Build the per-call shell gate: ``True`` ⇒ this shell_run needs approval.
 
-    A ``shell_run`` whose command is already in ``rules`` (the effective
+    A ``Bash`` call whose command is already in ``rules`` (the effective
     allowlist) runs silently; anything else (or a malformed command) is gated.
     Non-shell tools are never affected.
     """
 
     def _needs_approval(tool_name: str, arguments: Mapping[str, Any]) -> bool:
-        if tool_name != "shell_run":
+        if tool_name != "Bash":
             return False
         command = arguments.get("command")
         if not isinstance(command, str) or not command.strip():
@@ -1523,16 +1523,16 @@ class SdkHost(GenericEngineResolver):
                         workspace_dir, exec_env=bound_exec_env
                     ),
                     # The curated base is the fs built-in's table — the same rules
-                    # the shell_run tool enforces.
+                    # the Bash tool enforces.
                     base_rules=default_shell_rules(),
                 )
                 shell_approval_predicate = _make_shell_approval_predicate(
                     effective_rules
                 )
-                # The predicate owns shell_run's gate; drop it from the static set
+                # The predicate owns Bash's gate; drop it from the static set
                 # so an allowlisted command is NOT also force-gated.
                 require_approval_tools = tuple(
-                    n for n in require_approval_tools if n != "shell_run"
+                    n for n in require_approval_tools if n != "Bash"
                 )
         # Browser tools are flag-gated (never in ``spec.tools``), so
         # ``_approval_set_for`` never sees them. Force-gate the whole high-risk

@@ -1,5 +1,51 @@
 [
   {
+    "description": "Executes a shell command in the workspace and returns its output.\n\n- Runs with `cwd` at the workspace root and a scrubbed (secret-free) environment. Output is stdout (plus a labeled stderr section when both streams have content), capped at 30000 characters with the middle elided; the full streams are recorded for audit.\n- `timeout` is in milliseconds: default 120000, max 600000. A non-zero exit or a timeout comes back as an error carrying the same output.\n- Provide a short `description` (5–10 words) of what the command does — it is shown to the user while the command runs.\n- `run_in_background: true` launches the command detached (a server, a long build or test run): you get a shell ID back immediately and keep working. Read its incremental output with `BashOutput`, stop it with `KillShell`. A background job's lifetime follows the session, not this task.\n- On a strict host the command must match an allowlist (git status/diff, pytest, npm/pnpm test, and read-only grep/rg/find/ls) and shell metacharacters are rejected; otherwise the full command runs through bash (pipes, redirection, chaining) and anything not on the allowlist needs a one-time approval.\n- The process is not sandboxed — it runs real workspace code, so use only in a trusted workspace.\n- To read a file, search content, or list files, prefer `Read` / `Grep` / `Glob` — they are cheaper and need no approval. Avoid `cat`/`grep`/`find` here for those jobs.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "run_in_background": {
+          "type": "boolean"
+        },
+        "timeout": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    "name": "Bash",
+    "risk_level": "high"
+  },
+  {
+    "description": "Retrieves the output of a background shell started with `Bash` `run_in_background: true`.\n\n- Give the `bash_id` the launch returned. Each call returns ONLY the output produced since your previous check (like tailing a log), plus a status line (`running`, or `exited`/`killed` with the exit code).\n- Optional `filter`: a regular expression applied per line — only matching lines of the new output are returned.\n- A buffer-overflow note means the job printed faster than you polled and the oldest undelivered output was dropped.\n- Safe and cheap to call repeatedly. To stop the job use `KillShell`.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "bash_id": {
+          "type": "string"
+        },
+        "filter": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bash_id"
+      ],
+      "type": "object"
+    },
+    "name": "BashOutput",
+    "risk_level": "low"
+  },
+  {
     "description": "Performs an exact string replacement in an existing file.\n\n- You must have `Read` the file this session before editing it, and its content must not have changed since — otherwise the call fails and you Read it again first.\n- `old_string` must match the file contents exactly — including whitespace and indentation — and must match exactly once. Zero matches or several matches fail and write nothing; include more surrounding context to make it unique. Never include `Read`'s line-number prefix in `old_string` or `new_string`.\n- `old_string` and `new_string` must differ. `new_string` may be empty to delete the matched region.\n- Set `replace_all` to true to replace every occurrence instead — use it for renames of a recurring string.\n- `file_path` is workspace-relative. A path outside the workspace needs the owner's authorization — the call pauses for their ruling on the directory.\n- On success you get a `cat -n` snippet of the edited region to verify the result. The change is also recorded as a unified diff artifact.\n- Creating a new file or replacing a whole file body is `Write`'s job, not this one's.",
     "input_schema": {
       "additionalProperties": false,
@@ -104,6 +150,23 @@
     "risk_level": "low"
   },
   {
+    "description": "Kills a background shell started with `Bash` `run_in_background: true`.\n\n- Give the `shell_id` the launch returned. Sends SIGTERM, then SIGKILL after a short grace. The call returns immediately; the job's exit is reported through the usual background-completion notice.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "shell_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "shell_id"
+      ],
+      "type": "object"
+    },
+    "name": "KillShell",
+    "risk_level": "high"
+  },
+  {
     "description": "Reads a file from the filesystem.\n\n- `file_path` is workspace-relative, or absolute to read anywhere on this machine — a neighbouring checkout, a skill's `Base directory for this skill:` (shown when a skill activates), a system file. Reading is not fenced; only writing is.\n- Reads up to 2000 lines from the beginning by default. `offset` (1-based line) and `limit` (line count) page through larger files. Lines longer than 2000 characters are truncated with a marker.\n- Output uses `cat -n` format: a right-aligned line number, a tab, then the line. Use the numbers to pick `offset` values and to cross-reference `Grep` results — never copy them into text you pass to `Edit` or `Write`.\n- A file must be Read before `Edit` or `Write` may modify it.\n- Reads images too (png, jpg, gif, webp): the image is presented to you visually. A text target must be valid UTF-8; PDFs and other binary files are rejected.\n- Don't guess a path — locate it first with `Grep` (by content) or `Glob` (by name).",
     "input_schema": {
       "additionalProperties": false,
@@ -147,66 +210,6 @@
       "type": "object"
     },
     "name": "Write",
-    "risk_level": "high"
-  },
-  {
-    "description": "Stops a background shell job you started.\n\n- Give the `job_id` from a `shell_run` call with `run_in_background: true`. Sends SIGTERM, then SIGKILL after a short grace. The call returns immediately; the job's final output snapshot stays readable via its ref.\n- Use it to stop a server, build, or test run you launched and no longer need (e.g. started on the wrong port and want to restart).\n- To only check status or read output, use `shell_poll` instead.\n- Privileged: an operator policy may require approval or deny it.",
-    "input_schema": {
-      "additionalProperties": false,
-      "properties": {
-        "job_id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "job_id"
-      ],
-      "type": "object"
-    },
-    "name": "shell_kill",
-    "risk_level": "high"
-  },
-  {
-    "description": "Checks the status and latest output of a background shell job.\n\n- Give the `job_id` returned by `shell_run` with `run_in_background: true`. Returns the status (`running` or `exited`), an `exit_code` once finished, and a ref to a fresh snapshot of the output so far — dereference the ref to read the bytes.\n- `truncated: true` means the output overflowed the cap and the snapshot is the most-recent tail (oldest output dropped). Safe and cheap to call repeatedly.\n- To stop the job use `shell_kill`; to start a new command use `shell_run`.",
-    "input_schema": {
-      "additionalProperties": false,
-      "properties": {
-        "job_id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "job_id"
-      ],
-      "type": "object"
-    },
-    "name": "shell_poll",
-    "risk_level": "low"
-  },
-  {
-    "description": "Executes a shell command in the workspace and returns its output.\n\n- Runs with `cwd` at the workspace root, a scrubbed (secret-free) environment, and capped output — the full stdout/stderr are offloaded as artifacts and you get the tail inline plus the return code.\n- `timeout` is in milliseconds: default 120000, max 600000.\n- `run_in_background: true` launches the command detached (a server, a long build or test run): the call returns a `job_id` and an output ref immediately and you keep working. Read its output with `shell_poll`, stop it with `shell_kill`. A background job's lifetime follows the session, not this task.\n- On a strict host the command must match an allowlist (git status/diff, pytest, npm/pnpm test, and read-only grep/rg/find/ls) and shell metacharacters are rejected; otherwise the full command runs through bash (pipes, redirection, chaining) and anything not on the allowlist needs a one-time approval.\n- The process is not sandboxed — it runs real workspace code, so use only in a trusted workspace.\n- To only read a file, search content, or list files, prefer `read` / `grep` / `glob` — they are cheaper and need no approval.",
-    "input_schema": {
-      "additionalProperties": false,
-      "properties": {
-        "command": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        },
-        "run_in_background": {
-          "type": "boolean"
-        },
-        "timeout": {
-          "type": "number"
-        }
-      },
-      "required": [
-        "command"
-      ],
-      "type": "object"
-    },
-    "name": "shell_run",
     "risk_level": "high"
   },
   {

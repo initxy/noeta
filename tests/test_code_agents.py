@@ -125,7 +125,7 @@ def test_explore_runner_drops_write_tools_from_pack(
     assert "Write" not in engine_tools
     assert "apply_patch" not in engine_tools
     # The scout tools (incl. read-only shell + webfetch) are present.
-    for present in ("Read", "Glob", "Grep", "shell_run", "shell_poll", "webfetch"):
+    for present in ("Read", "Glob", "Grep", "Bash", "BashOutput", "webfetch"):
         assert present in engine_tools
 
 
@@ -150,7 +150,7 @@ def test_plan_runner_pack_is_readonly_scout_no_write(
     for absent in ("Edit", "Write", "apply_patch"):
         assert absent not in engine_tools
     # The scout tools (incl. read-only shell + webfetch) are present.
-    for present in ("Read", "Glob", "Grep", "shell_run", "shell_poll", "webfetch"):
+    for present in ("Read", "Glob", "Grep", "Bash", "BashOutput", "webfetch"):
         assert present in engine_tools
 
 
@@ -254,7 +254,7 @@ def test_explore_is_read_only() -> None:
     ex_tools = _tools(EXPLORE_SPEC)
     for mutating in ("Edit", "Write", "apply_patch"):
         assert mutating not in ex_tools
-    assert "shell_run" in ex_tools
+    assert "Bash" in ex_tools
 
 
 def test_plan_whitelist_and_capabilities() -> None:
@@ -265,7 +265,7 @@ def test_plan_whitelist_and_capabilities() -> None:
     for mutating in ("Edit", "Write", "apply_patch"):
         assert mutating not in plan_tools
     assert plan_tools == frozenset(
-        {"Read", "Grep", "Glob", "shell_run", "shell_poll", "shell_kill", "webfetch"}
+        {"Read", "Grep", "Glob", "Bash", "BashOutput", "KillShell", "webfetch"}
     )
     assert agent_activates(PLAN_SPEC, "todo_write") is False
     assert agent_activates(PLAN_SPEC, "ask_user_question") is True
@@ -302,7 +302,7 @@ def _bug_fixer_script() -> list[LLMResponse]:
             content=[
                 ToolUseBlock(
                     call_id="bf-1",
-                    tool_name="shell_run",
+                    tool_name="Bash",
                     arguments={"command": "pytest -q"},
                 )
             ],
@@ -317,7 +317,7 @@ def _bug_fixer_script() -> list[LLMResponse]:
             content=[
                 ToolUseBlock(
                     call_id="bf-2",
-                    tool_name="shell_run",
+                    tool_name="Bash",
                     arguments={"command": "grep -rn 'def add' src/"},
                 )
             ],
@@ -360,7 +360,7 @@ def _bug_fixer_script() -> list[LLMResponse]:
             content=[
                 ToolUseBlock(
                     call_id="bf-5",
-                    tool_name="shell_run",
+                    tool_name="Bash",
                     arguments={"command": "pytest -q"},
                 )
             ],

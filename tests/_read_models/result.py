@@ -9,6 +9,7 @@ failed-edits / last-shell / selected-skills out of ``ToolResultRecorded`` and
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -69,7 +70,7 @@ class CodeSessionResult:
 
 
 _EDIT_TOOLS = frozenset({"Edit", "Write"})
-_SHELL_TOOLS = frozenset({"shell_run", "git_status", "git_diff"})
+_SHELL_TOOLS = frozenset({"Bash", "git_status", "git_diff"})
 
 
 def _iter_tool_results(
@@ -222,18 +223,32 @@ def _last_shell_result(
     """Compact summary of the final shell / test tool call, if any.
 
     Serves as the session's "test result" line: the LLM chooses what to run,
-    this projection only surfaces the last thing it ran."""
+    this projection only surfaces the last thing it ran. The tool output is
+    plain text now, so ``command`` comes from the recorded arguments and the
+    exit facts from the success flag + summary ("Exit code N" on failure,
+    "timed out" on a timeout)."""
     last: Optional[dict[str, Any]] = None
-    for tool_name, output in _iter_tool_results(events, content_store):
-        if tool_name not in _SHELL_TOOLS:
-            continue
-        last = {
-            "tool": tool_name,
-            "command": output.get("command"),
-            "returncode": output.get("returncode"),
-            "duration_ms": output.get("duration_ms"),
-            "timed_out": output.get("timed_out"),
-        }
+    call_id_to_started: dict[str, Any] = {}
+    for env in events:
+        if env.type == "ToolCallStarted":
+            call_id_to_started[env.payload.call_id] = env.payload
+        elif env.type == "ToolResultRecorded":
+            payload = env.payload
+            started = call_id_to_started.get(payload.call_id)
+            if started is None or started.tool_name not in _SHELL_TOOLS:
+                continue
+            args = resolve_tool_call_arguments(started, content_store)
+            summary = payload.summary or ""
+            returncode: Optional[int] = 0 if payload.success else None
+            match = re.search(r"Exit code (\d+)", summary)
+            if match:
+                returncode = int(match.group(1))
+            last = {
+                "tool": started.tool_name,
+                "command": args.get("command"),
+                "returncode": returncode,
+                "timed_out": "timed out" in summary,
+            }
     return last
 
 

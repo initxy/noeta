@@ -103,7 +103,7 @@ def test_alias_map_is_exact_1to1() -> None:
         "Grep": "Grep",
         "Write": "Write",
         "Edit": "Edit",
-        "Bash": "shell_run",
+        "Bash": "Bash",
     }
 
 
@@ -111,7 +111,7 @@ def test_renamed_tools_map_to_themselves() -> None:
     # The tool surface now carries the reference names natively, so the
     # already-renamed entries are identity; the rest still translate.
     for claude, noeta in _CLAUDE_TO_NOETA_TOOL.items():
-        assert noeta in set(_CLAUDE_TO_NOETA_TOOL) | {"Write", "Edit", "shell_run"}
+        assert noeta in set(_CLAUDE_TO_NOETA_TOOL) | {"Write", "Edit", "Bash"}
 
 
 def test_guard_unknown_claude_name_grants_nothing() -> None:

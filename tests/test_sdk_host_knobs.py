@@ -90,7 +90,7 @@ def _simple_main_spec(
         tools = (
             ToolRef(name="read_file", risk_level="low", version="1"),
             ToolRef(name="Write", risk_level="high", version="1"),
-            ToolRef(name="shell_run", risk_level="high", version="1"),
+            ToolRef(name="Bash", risk_level="high", version="1"),
         )
     return AgentSpec(
         name="main",
@@ -213,12 +213,12 @@ def test_require_approval_tools_none_follows_permission_mode(tmp_path: Path) -> 
     assert "read_file" not in require_approve_set
     assert "Write" in require_approve_set
     # shell_run moves to the per-call closure, no longer in the static set
-    assert "shell_run" not in require_approve_set
+    assert "Bash" not in require_approve_set
     pred = perm_guard._policy.conditional_approval
     assert pred is not None
     # Unknown command → needs approval; built-in allowlist hit → passes; non-shell tools unaffected
-    assert pred("shell_run", {"command": "rm -rf /"}) is True
-    assert pred("shell_run", {"command": "git status"}) is False
+    assert pred("Bash", {"command": "rm -rf /"}) is True
+    assert pred("Bash", {"command": "git status"}) is False
     assert pred("Write", {"path": "x"}) is False
 
 
@@ -379,7 +379,7 @@ def test_sdk_host_plan_pack_has_no_write(tmp_path: Path) -> None:
     for absent in ("Write", "Edit", "apply_patch"):
         assert absent not in engine._tools
     # Read-only scout tools (incl. read-only shell) are present.
-    for present in ("Read", "Glob", "Grep", "shell_run"):
+    for present in ("Read", "Glob", "Grep", "Bash"):
         assert present in engine._tools
 
 

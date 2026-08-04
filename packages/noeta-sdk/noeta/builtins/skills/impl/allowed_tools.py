@@ -35,7 +35,7 @@ CLAUDE_TO_NOETA_TOOL: dict[str, str] = {
     "Grep": "Grep",
     "Write": "Write",
     "Edit": "Edit",
-    "Bash": "shell_run",
+    "Bash": "Bash",
 }
 
 

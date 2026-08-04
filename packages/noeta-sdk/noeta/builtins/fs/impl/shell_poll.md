@@ -1,5 +1,6 @@
-Checks the status and latest output of a background shell job.
+Retrieves the output of a background shell started with `Bash` `run_in_background: true`.
 
-- Give the `job_id` returned by `shell_run` with `run_in_background: true`. Returns the status (`running` or `exited`), an `exit_code` once finished, and a ref to a fresh snapshot of the output so far — dereference the ref to read the bytes.
-- `truncated: true` means the output overflowed the cap and the snapshot is the most-recent tail (oldest output dropped). Safe and cheap to call repeatedly.
-- To stop the job use `shell_kill`; to start a new command use `shell_run`.
+- Give the `bash_id` the launch returned. Each call returns ONLY the output produced since your previous check (like tailing a log), plus a status line (`running`, or `exited`/`killed` with the exit code).
+- Optional `filter`: a regular expression applied per line — only matching lines of the new output are returned.
+- A buffer-overflow note means the job printed faster than you polled and the oldest undelivered output was dropped.
+- Safe and cheap to call repeatedly. To stop the job use `KillShell`.

@@ -86,7 +86,7 @@ def test_exit_while_idle_suspended_drives_new_turn_with_system_notice(
 ) -> None:
     """A background exit while the session is idle-suspended on NEXT_GOAL drives
     a NEW turn with no human input, and the agent's view carries a system-origin
-    notice with the summary + ref (not the full bytes)."""
+    notice with the summary + the job's actual output tail inline."""
     ws = tmp_path / "ws"
     ws.mkdir()
     # Two end-turns: the opening goal turn, then the wake-driven notice turn.
@@ -114,10 +114,11 @@ def test_exit_while_idle_suspended_drives_new_turn_with_system_notice(
     notice = after[-1]
     text = "".join(b.text for b in notice.content if isinstance(b, TextBlock))
     assert summary in text
-    # The ref / job handle rides the notice so the model can deref / poll, but
-    # the FULL bytes never inline.
-    assert "the full background output bytes" not in text
-    assert ref.hash in text or "bg-abc123" in text
+    # The job handle + the ACTUAL output ride the notice inline; the hash is
+    # audit-side only (the model has no ref-deref tool).
+    assert "the full background output bytes" in text
+    assert "bg-abc123" in text
+    assert ref.hash not in text
 
 
 def test_notice_is_system_origin_not_human(tmp_path: Path) -> None:
@@ -326,4 +327,4 @@ def test_host_wired_real_exit_drives_notice_turn_end_to_end(tmp_path: Path) -> N
     text = "".join(b.text for b in notice.content if isinstance(b, TextBlock))
     assert "background" in text
     assert job["job_id"] in text
-    assert "e2e bg done" not in text  # full bytes never inline
+    assert "e2e bg done" in text  # the actual output rides inline now

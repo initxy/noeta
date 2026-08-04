@@ -92,7 +92,7 @@ _WEB_PROMPT = _load_prompt("web")
 
 
 #: The read-mostly tool set shared by explore and plan: every built-in tool
-#: except the write family (Edit / Write). ``shell_run`` is in the
+#: except the write family (Edit / Write). ``Bash`` is in the
 #: allowlist because read-only investigation needs it (ls / git log / git diff /
 #: find / cat …); "no writes" is enforced by the prompt, with the approval gate
 #: on ``high``-risk shell as the backstop.
@@ -100,9 +100,9 @@ _SCOUT_TOOLS = (
     "Glob",
     "Grep",
     "Read",
-    "shell_kill",
-    "shell_poll",
-    "shell_run",
+    "Bash",
+    "BashOutput",
+    "KillShell",
     "webfetch",
 )
 
@@ -110,16 +110,16 @@ _SCOUT_TOOLS = (
 #: general-purpose's tool allowlist: the full built-in set, the same surface as
 #: main, so it searches with ``Grep`` / ``Glob``, edits with ``Edit``, and
 #: fetches with ``webfetch`` instead of being forced back through
-#: ``shell_run``. Its ``delegation`` capability stays off — a leaf
+#: ``Bash``. Its ``delegation`` capability stays off — a leaf
 #: worker that spawns nothing further cannot fan out without bound.
 _GENERAL_PURPOSE_TOOLS = (
     "Edit",
     "Glob",
     "Grep",
     "Read",
-    "shell_kill",
-    "shell_poll",
-    "shell_run",
+    "Bash",
+    "BashOutput",
+    "KillShell",
     "web_search",
     "webfetch",
     "Write",
@@ -137,9 +137,9 @@ _WEB_TOOLS = (
     "Glob",
     "Grep",
     "Read",
-    "shell_kill",
-    "shell_poll",
-    "shell_run",
+    "Bash",
+    "BashOutput",
+    "KillShell",
     "webfetch",
     "Write",
 )

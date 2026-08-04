@@ -152,7 +152,7 @@ def test_build_fs_tools_threads_injected_backend() -> None:
     ws = WorkspaceRoot.for_container("/c/ws")
     fake = RecordingExecEnv()
     tools = build_fs_tools(ws, exec_env=fake)
-    for name in ("Read", "Glob", "Grep", "Edit", "Write", "shell_run"):
+    for name in ("Read", "Glob", "Grep", "Edit", "Write", "Bash"):
         assert tools[name].exec_env is fake
 
 
@@ -213,7 +213,7 @@ def _session(*, workspace_dir: Path, exec_env: ExecEnv | None):
         **default_factory_kwargs(),
         workspace_dir=workspace_dir,
         system_prompt=_SYSTEM,
-        allowed_tools=frozenset({"Read", "Write", "Edit", "shell_run"}),
+        allowed_tools=frozenset({"Read", "Write", "Edit", "Bash"}),
         content_store=InMemoryContentStore(),
         model="stub-model",
         compaction=derive_compaction_config("stub-model"),

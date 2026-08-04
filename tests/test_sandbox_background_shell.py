@@ -65,7 +65,7 @@ class _SandboxLike:
 def _shell_tool(exec_env):
     ws = WorkspaceRoot.for_container("/c/ws")
     tools = build_fs_tools(ws, shell_mode=ShellMode.ARBITRARY, exec_env=exec_env)
-    return tools["shell_run"]
+    return tools["Bash"]
 
 
 def test_concrete_backends_report_background_capability() -> None:

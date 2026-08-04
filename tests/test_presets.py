@@ -103,7 +103,7 @@ def test_main_has_all_builtin_tools() -> None:
     assert names == set(builtin_tool_classes())
     # the full builtin set now carries the shell triplet, so
     # main (tools=None catchall) gets all three.
-    assert {"shell_run", "shell_poll", "shell_kill"} <= names
+    assert {"Bash", "BashOutput", "KillShell"} <= names
 
 
 def test_webfetch_in_main_and_all_subagents() -> None:
@@ -131,11 +131,11 @@ def test_shell_triplet_registered_in_builtin_catalog() -> None:
     # there). risk is read straight off the tool class defaults.
     from noeta.client.parts import builtin_tool_ref
 
-    for name in ("shell_run", "shell_poll", "shell_kill"):
+    for name in ("Bash", "BashOutput", "KillShell"):
         assert name in builtin_tool_classes()
-    assert builtin_tool_ref("shell_run").risk_level == "high"
-    assert builtin_tool_ref("shell_kill").risk_level == "high"
-    assert builtin_tool_ref("shell_poll").risk_level == "low"
+    assert builtin_tool_ref("Bash").risk_level == "high"
+    assert builtin_tool_ref("KillShell").risk_level == "high"
+    assert builtin_tool_ref("BashOutput").risk_level == "low"
 
 
 def test_explore_and_plan_have_shell_but_no_write_family() -> None:
@@ -146,7 +146,7 @@ def test_explore_and_plan_have_shell_but_no_write_family() -> None:
     specs = official_specs()
     for name in ("explore", "plan"):
         names = {t.name for t in specs[name].tools}
-        assert {"shell_run", "shell_poll", "shell_kill"} <= names, name
+        assert {"Bash", "BashOutput", "KillShell"} <= names, name
         # The write family is still physically excluded from both.
         assert names.isdisjoint({"edit", "write", "apply_patch"}), name
 
@@ -215,15 +215,15 @@ def test_shell_triplet_descriptions_load_from_resources() -> None:
     assert ShellKillTool.description == load_markdown("noeta.builtins.fs.impl", "shell_kill")
     # Semantics still present in the text (detached handle + job_id).
     assert "run_in_background" in ShellRunTool.description
-    assert "job_id" in ShellPollTool.description
-    assert "job_id" in ShellKillTool.description
+    assert "bash_id" in ShellPollTool.description
+    assert "shell_id" in ShellKillTool.description
 
 
 def test_explore_and_plan_whitelist_is_all_but_write_family() -> None:
     # CC alignment: Explore and Plan share the same read-mostly whitelist —
     # every built-in tool EXCEPT the write family (edit/write/apply_patch).
     # That is glob/grep/read + the shell triplet + webfetch.
-    expected = {"Glob", "Grep", "Read", "shell_run", "shell_poll", "shell_kill", "webfetch"}
+    expected = {"Glob", "Grep", "Read", "Bash", "BashOutput", "KillShell", "webfetch"}
     specs = official_specs()
     for name in ("explore", "plan"):
         names = {t.name for t in specs[name].tools}

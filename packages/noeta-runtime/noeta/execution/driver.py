@@ -65,6 +65,7 @@ from noeta.protocols.decisions import TaskStatePatch
 from noeta.protocols.messages import ImageBlock, Message, MessageOrigin, TextBlock
 from noeta.protocols.policy import Policy
 from noeta.protocols.task import Task
+from noeta.tools.limits import SHELL_INLINE_MAX_CHARS, elide_middle
 from noeta.protocols.canonical import from_canonical_bytes
 from noeta.protocols.values import LOCAL_PRINCIPAL, ContentRef, Principal
 from noeta.protocols.wake import (
@@ -304,16 +305,20 @@ def _intake_providers_for(
     return tuple(seam(agent, task_id=task_id)) if callable(seam) else ()
 
 
-def _background_exit_notice(summary: str, ref: ContentRef, job_id: str) -> str:
+def _background_exit_notice(summary: str, output_tail: str, job_id: str) -> str:
     """Render the background-completion notice body.
 
-    One line of human summary + the content-addressed ``ref`` (so the model can
-    deref the full output it never sees inline) + the ``job_id`` (so the model
-    can ``shell_poll`` it). Kept tiny and pointer-only on purpose — the bytes
-    live in the ContentStore."""
+    One line of human summary + the job's ACTUAL output tail inline, wrapped in
+    a ``<background-job>`` provenance tag carrying the ``job_id``. The model
+    has no ref-deref tool, so an opaque hash here would be dead weight — the
+    same reasoning :func:`_background_subagent_notice` already applies; the
+    ContentRef stays on the durable ``BackgroundShellExited`` event for audit.
+    """
+    if not output_tail.strip():
+        return f'{summary}\n<background-job id="{job_id}">(no output)</background-job>'
     return (
         f"{summary}\n"
-        f'<background-job id="{job_id}" ref="{ref.hash}" size="{ref.size}"/>'
+        f'<background-job id="{job_id}">\n{output_tail}\n</background-job>'
     )
 
 
@@ -1309,11 +1314,11 @@ class InteractionDriver:
         ``send_goal``'s append-message prelude. The session is driven a new turn
         with NO human input, so the agent can react to the completion on its own.
 
-        The notice carries ONLY the one-line ``summary`` + the final
-        :class:`ContentRef` (and the ``job_id`` so the model can ``shell_poll``):
-        the full output never inlines — the model derefs the ref itself
-        (pass a pointer, not the full text). ``origin="system"`` lets the model tell a
-        background event from a user message (source label).
+        The notice carries the one-line ``summary`` plus the job's ACTUAL
+        output tail inline (dereferenced from ``ref`` at delivery time, capped
+        by the Bash inline rule) and the ``job_id`` so the model can
+        ``BashOutput`` / ``KillShell`` it. ``origin="system"`` lets the model
+        tell a background event from a user message (source label).
 
         Requires the conversation to be suspended on the next-goal handle (a
         normally-finishing interactive turn); a task that is mid-turn or terminal
@@ -1346,7 +1351,14 @@ class InteractionDriver:
         (it is not a human turn).
         """
         self._require_human_suspend(task_id, NEXT_GOAL_WAKE_HANDLE)
-        notice = _background_exit_notice(summary, ref, job_id)
+        # Deref the final output BEFORE seeding, mirroring the sub-agent path:
+        # a content fault raised here retries idempotently, and the model sees
+        # the real tail inline instead of a hash it cannot read. The elision
+        # rule matches Bash's inline cap.
+        body = self._host.content_store.get(ref).decode("utf-8", errors="replace")
+        notice = _background_exit_notice(
+            summary, elide_middle(body, SHELL_INLINE_MAX_CHARS), job_id
+        )
         return self._seed_woken(
             task_id,
             handle=NEXT_GOAL_WAKE_HANDLE,

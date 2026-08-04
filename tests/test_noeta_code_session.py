@@ -154,9 +154,9 @@ def test_default_agent_exposes_full_fs_pack() -> None:
         "Grep",
         "Edit",
         "Write",
-        "shell_run",
-        "shell_poll",
-        "shell_kill",
+        "Bash",
+        "BashOutput",
+        "KillShell",
         "webfetch",
         "web_search",
     }
@@ -288,7 +288,7 @@ def test_runner_shell_off_removes_shell_run_from_pack(tmp_path: Path) -> None:
             content=[
                 ToolUseBlock(
                     call_id="s-1",
-                    tool_name="shell_run",
+                    tool_name="Bash",
                     arguments={"command": "pytest -q"},
                 )
             ],
@@ -417,7 +417,7 @@ def test_runner_summary_captures_last_shell(
             content=[
                 ToolUseBlock(
                     call_id="s-1",
-                    tool_name="shell_run",
+                    tool_name="Bash",
                     arguments={"command": "git status --short"},
                 )
             ],
@@ -439,5 +439,5 @@ def test_runner_summary_captures_last_shell(
     result = session_result(host, out)
     assert result.status == "terminal"
     assert result.last_shell is not None
-    assert result.last_shell["tool"] == "shell_run"
+    assert result.last_shell["tool"] == "Bash"
     assert result.last_shell["returncode"] == 0
