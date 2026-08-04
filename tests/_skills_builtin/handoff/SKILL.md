@@ -10,7 +10,8 @@ Distill everything that matters about the current task into a self-contained han
 document, so a fresh agent with none of this conversation's context can pick up exactly
 where you left off.
 
-Extra focus or output target from the user (optional): $ARGUMENTS
+Take any focus or output target from the conversation; with none given, cover
+the whole task so far.
 
 ## Steps
 

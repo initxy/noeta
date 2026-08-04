@@ -4,7 +4,7 @@ The dialect is deliberately narrow: stdlib only (no pyyaml) and values captured
 verbatim as opaque strings — an inline ``allowed-tools: [Read, Bash]`` stays the
 literal ``"[Read, Bash]"`` — so parsing the same disk state always yields the
 same fields and the composer's ``semi_stable`` segment stays cache-friendly.
-Any key parses, not just the semantic four, so a typo of a known key
+Any key parses, not just the semantic ones, so a typo of a known key
 (``descrption:``) degrades to metadata instead of failing the file. Only a
 structural violation raises :class:`FrontmatterError`, and callers log and skip
 it so one bad SKILL.md cannot take down the registry build.
@@ -19,8 +19,19 @@ from typing import Iterable
 __all__ = ["FrontmatterError", "KNOWN_KEYS", "parse"]
 
 
+#: The keys :class:`~noeta.builtins.skills.impl.indexer.SkillIndexer` reads as
+#: semantics rather than filing under opaque ``metadata``.
+#: ``disable-model-invocation`` is Claude Code's own key and gates whether the
+#: skill enters the model's menu at all, so leaving it in metadata made a skill
+#: that declared it callable anyway — a semantic violation, not a gap.
 KNOWN_KEYS: frozenset[str] = frozenset(
-    {"name", "description", "version", "priority"}
+    {
+        "name",
+        "description",
+        "version",
+        "priority",
+        "disable-model-invocation",
+    }
 )
 
 _LINE_PATTERN = re.compile(r"^([A-Za-z][A-Za-z0-9_-]*)[ \t]*:[ \t]*(.*?)[ \t]*$")

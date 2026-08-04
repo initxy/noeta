@@ -1,7 +1,7 @@
 """Skill ``allowed-tools`` enforcement (unit level).
 
-Covers the conservative parser, the exact 1:1 Claude→Noeta alias map, and
-the `PermissionGuard` enforcement decision driven by
+Covers the conservative parser, the recognised model-visible tool vocabulary,
+and the `PermissionGuard` enforcement decision driven by
 `GuardContext.active_skills`. End-to-end harness + replay live in
 `test_code_skill_enforcement.py`.
 """
@@ -14,7 +14,7 @@ import noeta.builtins.governance.impl.permission as permission_mod
 from noeta.builtins.governance.impl.permission import PermissionGuard
 from noeta.runtime.governance import PermissionPolicy
 from noeta.builtins.skills.impl.allowed_tools import (
-    CLAUDE_TO_NOETA_TOOL as _CLAUDE_TO_NOETA_TOOL,
+    RECOGNIZED_TOOL_NAMES,
     parse_allowed_tools as _parse_allowed_tools,
     resolve_skill_allowed_tools,
 )
@@ -91,43 +91,130 @@ def test_parse_malformed_returns_none_not_widened() -> None:
     assert _parse_allowed_tools("Read Bash") is None
 
 
+def test_parse_argument_spec_yields_bare_name(
+    caplog,  # type: ignore[no-untyped-def]
+) -> None:
+    """(c) ``Bash(git:*)`` grants ``Bash`` and says out loud that the
+    argument-level spec is not what gates the call."""
+    caplog.set_level(
+        logging.WARNING, logger="noeta.builtins.skills.impl.allowed_tools"
+    )
+    assert _parse_allowed_tools("[Bash(git:*)]", skill="s") == frozenset(
+        {"Bash"}
+    )
+    assert any(
+        "argument-level" in r.getMessage() and "not enforced" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_parse_argument_spec_comma_does_not_split_the_entry() -> None:
+    """A comma inside a spec belongs to the spec, not to the list."""
+    assert _parse_allowed_tools(
+        "[Bash(git status:*, git diff:*), Read]"
+    ) == frozenset({"Bash", "Read"})
+
+
 # ---------------------------------------------------------------------------
-# alias map — no Claude name leaks into the Noeta namespace
+# recognition set — the model-visible vocabulary a session can mount
 # ---------------------------------------------------------------------------
 
 
-def test_alias_map_is_exact_1to1() -> None:
-    assert _CLAUDE_TO_NOETA_TOOL == {
-        "Read": "Read",
-        "Glob": "Glob",
-        "Grep": "Grep",
-        "Write": "Write",
-        "Edit": "Edit",
-        "Bash": "Bash",
-    }
+def test_recognition_set_covers_the_mountable_surface() -> None:
+    """The set is "every model-visible tool name a session can mount", not the
+    six fs names it started as: a real Claude Code skill routinely names
+    ``WebFetch`` / ``TodoWrite``, and a browser or memory session mounts more."""
+    assert {
+        "Read",
+        "Glob",
+        "Grep",
+        "Edit",
+        "Write",
+        "Bash",
+        "BashOutput",
+        "KillShell",
+        "WebFetch",
+        "WebSearch",
+        "TodoWrite",
+        "AskUserQuestion",
+        "Task",
+        "skill",
+        "run_skill_script",
+        "open_app",
+        "memory_write",
+        "memory_read",
+        "memory_search",
+        "memory_archive",
+        "browser_navigate",
+        "browser_click",
+        "browser_type",
+        "browser_extract",
+        "browser_screenshot",
+    } == set(RECOGNIZED_TOOL_NAMES)
 
 
-def test_renamed_tools_map_to_themselves() -> None:
-    # The tool surface now carries the reference names natively, so the
-    # already-renamed entries are identity; the rest still translate.
-    for claude, noeta in _CLAUDE_TO_NOETA_TOOL.items():
-        assert noeta in set(_CLAUDE_TO_NOETA_TOOL) | {"Write", "Edit", "Bash"}
+def test_recognition_set_matches_the_live_tool_names() -> None:
+    """Pinned against the tool classes themselves, so a rename on the tool
+    surface cannot silently turn a valid grant into a dropped one."""
+    from noeta.builtins.fs.impl.read import GlobTool, GrepTool, ReadFileTool
+    from noeta.builtins.fs.impl.edit import ReplaceTextTool, WriteFileTool
+    from noeta.builtins.fs.impl.shell import (
+        ShellKillTool,
+        ShellPollTool,
+        ShellRunTool,
+    )
+    from noeta.builtins.web.impl.fetch import WebFetchTool
+    from noeta.builtins.web.impl.search import WebSearchTool
+
+    for cls in (
+        ReadFileTool,
+        GlobTool,
+        GrepTool,
+        ReplaceTextTool,
+        WriteFileTool,
+        ShellRunTool,
+        ShellPollTool,
+        ShellKillTool,
+        WebFetchTool,
+        WebSearchTool,
+    ):
+        assert cls.name in RECOGNIZED_TOOL_NAMES
 
 
-def test_guard_unknown_claude_name_grants_nothing() -> None:
+def test_guard_unrecognized_name_grants_nothing() -> None:
     g = _guard(raw=(("s", "[Bogus]"),))
-    # 's' active, declared but maps to nothing → write gated.
+    # 's' active, declared but every entry dropped → nothing granted.
     assert _check(g, "Read", ("s",)) is Verdict.REQUIRE_APPROVAL
 
 
-def test_partial_unknown_invalidates_whole_declaration() -> None:
-    """A single unknown token degrades the WHOLE grant to empty — `[Read,
-    Bogus]` must NOT keep `read` allowed; a typo in a security-relevant grant
-    gates everything until fixed."""
+def test_unrecognized_entry_is_dropped_and_the_rest_stands() -> None:
+    """Per-name fail-safe (D11): ``[Read, Bogus]`` keeps ``Read`` and drops
+    ``Bogus``. This deliberately replaces the old whole-declaration-empty rule,
+    which gated every legitimate call of any skill that named one tool this
+    build does not mount — a harsher penalty than the typo it caught."""
     g = _guard(raw=(("s", "[Read, Bogus]"),))
-    assert _check(g, "Read", ("s",)) is Verdict.REQUIRE_APPROVAL
+    assert _check(g, "Read", ("s",)) is Verdict.ALLOW
+    # ...and enforcement stays ON: the dropped name grants nothing.
+    assert _check(g, "Write", ("s",)) is Verdict.REQUIRE_APPROVAL
     g_deny = _guard(raw=(("s", "[Read, Bogus]"),), mode="deny")
-    assert _check(g_deny, "read", ("s",)) is Verdict.DENY
+    assert _check(g_deny, "Write", ("s",)) is Verdict.DENY
+
+
+def test_current_vocabulary_names_are_granted() -> None:
+    """(b) ``allowed-tools: [Read, WebFetch]`` grants both — the whole point of
+    replacing the six-entry map."""
+    g = _guard(raw=(("s", "[Read, WebFetch]"),))
+    assert _check(g, "Read", ("s",)) is Verdict.ALLOW
+    assert _check(g, "WebFetch", ("s",)) is Verdict.ALLOW
+    assert _check(g, "Write", ("s",)) is Verdict.REQUIRE_APPROVAL
+
+
+def test_argument_spec_grant_reaches_the_guard() -> None:
+    """(c) end of the chain: ``Bash(git:*)`` gates on ``Bash``, and the spec
+    itself is not a second, narrower gate here."""
+    g = _guard(raw=(("s", "[Bash(git:*)]"),))
+    assert _check(g, "Bash", ("s",)) is Verdict.ALLOW
+    assert _check(g, "Read", ("s",)) is Verdict.REQUIRE_APPROVAL
 
 
 # ---------------------------------------------------------------------------

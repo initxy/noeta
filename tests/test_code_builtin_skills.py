@@ -181,3 +181,25 @@ def test_activated_builtin_skill_renders_through_composer() -> None:
     first_block = semi_stable.content[0].content[0]
     assert isinstance(first_block, TextBlock)
     assert "Activated skill: review" in first_block.text
+
+
+# ---------------------------------------------------------------------------
+# $ARGUMENTS never reaches the model
+# ---------------------------------------------------------------------------
+
+
+def test_no_builtin_skill_renders_an_argument_placeholder() -> None:
+    """Noeta's ``skill`` control tool takes a name and nothing else, so there
+    is no argument channel to substitute ``$ARGUMENTS`` from. The bodies here
+    are written argument-free, and the renderer is the backstop for any skill
+    (published or workspace-local) that still carries the placeholder."""
+    registry = load_builtin_skills()
+    for name in registry.names():
+        rendered = registry.render([name])
+        for message in rendered.messages:
+            for block in message.content:
+                assert isinstance(block, TextBlock)
+                assert "$ARGUMENTS" not in block.text, (
+                    f"built-in skill {name!r} renders an unsubstituted "
+                    f"argument placeholder"
+                )

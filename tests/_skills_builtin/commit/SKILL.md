@@ -9,7 +9,8 @@ argument-hint: [extra intent, e.g. "only the parser fix" or a message hint]
 Stage the relevant changes and write a single, well-scoped git commit that explains
 *why* the change was made, not just what changed.
 
-Extra intent from the user (optional scope or message hint): $ARGUMENTS
+Take any scope or message hint from the conversation; with none given, cover all
+uncommitted changes.
 
 ## Steps
 

@@ -15,7 +15,11 @@ from pathlib import Path
 import pytest
 
 from noeta.builtins.skills.impl import SkillIndexer
-from noeta.builtins.skills.impl.indexer import SkillRegistry
+from noeta.protocols.messages import TextBlock
+from noeta.builtins.skills.impl.indexer import (
+    DEFAULT_SKILL_PRIORITY,
+    SkillRegistry,
+)
 
 
 def _write(path: Path, content: str) -> None:
@@ -177,17 +181,105 @@ def test_invalid_name_format_skipped(
     assert any("invalid 'name' value" in r.getMessage() for r in caplog.records)
 
 
-def test_invalid_priority_skipped(
+def test_invalid_priority_degrades_to_default_and_keeps_skill(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """(e) A non-integer ``priority:`` warns and falls back to the default —
+    it does NOT delete the skill. Render order is cosmetic; deleting the skill
+    was a harsher failure mode than any other field's, and it made a skill
+    silently vanish from the model's menu over a typo."""
     _write(
         tmp_path / "p" / "SKILL.md",
-        "---\nname: p\ndescription: pdesc\npriority: not-a-number\n---\n",
+        "---\nname: p\ndescription: pdesc\npriority: high\n---\nbody\n",
     )
     caplog.set_level(logging.WARNING, logger="noeta.builtins.skills.impl.indexer")
     registry = SkillIndexer(tmp_path).index()
-    assert registry.names() == ()
+    p = registry.get("p")
+    assert p is not None
+    assert p.priority == DEFAULT_SKILL_PRIORITY == 100
     assert any("invalid 'priority'" in r.getMessage() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# disable-model-invocation — semantic, not opaque metadata
+# ---------------------------------------------------------------------------
+
+
+def test_disable_model_invocation_is_semantic_not_metadata(
+    tmp_path: Path,
+) -> None:
+    """Claude Code's key gates behaviour, so it is read as semantics and does
+    not land in the opaque ``metadata`` tuple."""
+    _write(
+        tmp_path / "d" / "SKILL.md",
+        "---\nname: d\ndescription: dd\ndisable-model-invocation: true\n---\nb\n",
+    )
+    desc = SkillIndexer(tmp_path).index().get("d")
+    assert desc is not None
+    assert desc.model_invocable is False
+    assert "disable-model-invocation" not in {k for k, _ in desc.metadata}
+
+
+def test_disable_model_invocation_defaults_to_invocable(tmp_path: Path) -> None:
+    """Absent (or ``false``) ⇒ the skill stays model-invocable; the key only
+    ever subtracts, so an existing workspace is unaffected."""
+    _write(tmp_path / "a" / "SKILL.md", _skill_doc("a", "aa"))
+    _write(
+        tmp_path / "b" / "SKILL.md",
+        "---\nname: b\ndescription: bb\ndisable-model-invocation: FALSE\n---\n",
+    )
+    registry = SkillIndexer(tmp_path).index()
+    for name in ("a", "b"):
+        desc = registry.get(name)
+        assert desc is not None
+        assert desc.model_invocable is True
+
+
+def test_disable_model_invocation_accepts_the_yaml_boolean_dialect(
+    tmp_path: Path,
+) -> None:
+    """``yes``/``on``/``1`` and a quoted ``"true"`` are legitimate YAML truthy
+    spellings an author will write; the no-YAML frontmatter parser keeps them
+    (quotes included) verbatim, so the flag reader widens instead. The falsy
+    set maps symmetrically."""
+    truthy = ("yes", "On", "1", '"true"', "'TRUE'")
+    falsy = ("no", "Off", "0", '"false"')
+    for i, value in enumerate(truthy):
+        _write(
+            tmp_path / f"t{i}" / "SKILL.md",
+            f"---\nname: t{i}\ndescription: d\ndisable-model-invocation: {value}\n---\n",
+        )
+    for i, value in enumerate(falsy):
+        _write(
+            tmp_path / f"f{i}" / "SKILL.md",
+            f"---\nname: f{i}\ndescription: d\ndisable-model-invocation: {value}\n---\n",
+        )
+    registry = SkillIndexer(tmp_path).index()
+    for i in range(len(truthy)):
+        desc = registry.get(f"t{i}")
+        assert desc is not None
+        assert desc.model_invocable is False, truthy[i]
+    for i in range(len(falsy)):
+        desc = registry.get(f"f{i}")
+        assert desc is not None
+        assert desc.model_invocable is True, falsy[i]
+
+
+def test_disable_model_invocation_unreadable_value_warns_and_is_false(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    _write(
+        tmp_path / "q" / "SKILL.md",
+        "---\nname: q\ndescription: qq\ndisable-model-invocation: maybe\n---\n",
+    )
+    caplog.set_level(logging.WARNING, logger="noeta.builtins.skills.impl.indexer")
+    desc = SkillIndexer(tmp_path).index().get("q")
+    assert desc is not None
+    assert desc.model_invocable is True
+    assert any(
+        "invalid 'disable-model-invocation'" in r.getMessage()
+        for r in caplog.records
+    )
 
 
 def test_typo_of_known_key_skipped_for_missing_required(
@@ -407,3 +499,72 @@ def test_crlf_skill_md_produces_lf_body(tmp_path: Path) -> None:
     assert win is not None
     assert "\r" not in win.body
     assert win.body == "line1\nline2\n"
+
+
+# ---------------------------------------------------------------------------
+# $ARGUMENTS — stripped at render, kept verbatim on the description
+# ---------------------------------------------------------------------------
+
+
+def _rendered_text(registry: SkillRegistry, name: str) -> str:
+    rendered = registry.render([name])
+    block = rendered.messages[0].content[0]
+    assert isinstance(block, TextBlock)
+    return block.text
+
+
+def test_arguments_placeholder_dropped_from_the_rendered_body(
+    tmp_path: Path,
+) -> None:
+    """There is no argument channel — the ``skill`` tool takes a name and
+    nothing else — so an unsubstituted ``$ARGUMENTS`` would reach the model as
+    an instruction it cannot satisfy. The line goes, its blank line collapses,
+    and the surrounding body is untouched."""
+    _write(
+        tmp_path / "s" / "SKILL.md",
+        _skill_doc(
+            "s",
+            "sd",
+            "Intro line.\n\nScope from the user: $ARGUMENTS\n\n## Steps\n\n1. Go.\n",
+        ),
+    )
+    registry = SkillIndexer(tmp_path).index()
+    desc = registry.get("s")
+    assert desc is not None
+    # The parsed body stays verbatim — stripping is a render-time concern, so
+    # the recorded/audited text still matches the file on disk.
+    assert "$ARGUMENTS" in desc.body
+
+    text = _rendered_text(registry, "s")
+    assert "$ARGUMENTS" not in text
+    assert "Scope from the user" not in text
+    assert "Intro line.\n\n## Steps\n\n1. Go.\n" in text
+
+
+def test_body_without_the_placeholder_renders_unchanged(tmp_path: Path) -> None:
+    """The strip is a no-op for every skill that never used the placeholder, so
+    it cannot perturb the ``semi_stable`` bytes of an existing workspace."""
+    body = "Intro.\n\n## Steps\n\n1. Go.\n"
+    _write(tmp_path / "p" / "SKILL.md", _skill_doc("p", "pd", body))
+    assert body in _rendered_text(SkillIndexer(tmp_path).index(), "p")
+
+
+def test_arguments_placeholder_excised_from_the_rendered_description(
+    tmp_path: Path,
+) -> None:
+    """A Claude Code-ism puts ``$ARGUMENTS`` in the frontmatter description
+    too. The description is one line, so the body's whole-line rule would
+    erase it — the token is excised in place instead, and the parsed
+    description stays verbatim for audit exactly like the body."""
+    _write(
+        tmp_path / "s2" / "SKILL.md",
+        _skill_doc("s2", "Summarize $ARGUMENTS into a report", "b\n"),
+    )
+    registry = SkillIndexer(tmp_path).index()
+    desc = registry.get("s2")
+    assert desc is not None
+    assert "$ARGUMENTS" in desc.description
+
+    text = _rendered_text(registry, "s2")
+    assert "$ARGUMENTS" not in text
+    assert "Summarize into a report" in text

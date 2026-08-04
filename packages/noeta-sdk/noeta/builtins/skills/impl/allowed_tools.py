@@ -1,21 +1,30 @@
-"""Skill ``allowed-tools`` resolution — the Claude→Noeta alias map + parser.
+"""Skill ``allowed-tools`` resolution — the recognised vocabulary + parser.
 
 The permission guard operates only on **neutral** Noeta tool names, so the
-product (Claude) vocabulary and its alias map live here, in the one layer that
-knows both. Stdlib-only on purpose: nothing here may reach into the guard
-implementations.
+model-visible tool vocabulary and the parser that reads a skill author's
+declaration against it live here, in the one layer that knows both.
+Stdlib-only on purpose: nothing here may reach into the guard implementations.
+
+The vocabulary is a **recognition set**, not a translation table: since the tool
+surface adopted the Claude Code names natively (see ``CONTEXT.md``,
+"Model-visible tool names"), a declared name either is a tool this session can
+mount or it is nothing. Recognition is per name — an entry outside the set is
+dropped from the grant while the rest of the declaration stands — because
+degrading the whole declaration punished every real Claude Code skill that
+happened to name ``WebFetch`` or ``TodoWrite``.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 
 __all__ = [
-    "CLAUDE_TO_NOETA_TOOL",
+    "RECOGNIZED_TOOL_NAMES",
     "parse_allowed_tools",
-    "alias_to_noeta",
+    "filter_recognized_tools",
     "resolve_skill_allowed_tools",
 ]
 
@@ -23,30 +32,77 @@ __all__ = [
 _log = logging.getLogger(__name__)
 
 
-#: The **exact 1:1** Claude→Noeta tool-name alias map. Claude tool names from a
-#: skill's ``allowed-tools`` never enter the Noeta tool namespace; each expands
-#: to its Noeta equivalent and an unknown Claude name grants nothing.
-#: Deliberately narrow: ``Read`` maps to ``read`` alone (Claude has separate
-#: ``Glob`` / ``Grep``), and Claude's ``LS`` has no Noeta equivalent, so an
-#: ``LS`` token degrades the whole declaration.
-CLAUDE_TO_NOETA_TOOL: dict[str, str] = {
-    "Read": "Read",
-    "Glob": "Glob",
-    "Grep": "Grep",
-    "Write": "Write",
-    "Edit": "Edit",
-    "Bash": "Bash",
-}
+#: Every model-visible tool name a session can mount, across the built-ins that
+#: contribute one: ``fs`` (read/edit/shell), ``web``, the control tools, and the
+#: activation-gated ``memory`` / ``browser`` / ``app`` / ``skills`` packs. A
+#: name outside this set cannot name a tool the guard will ever see, so granting
+#: it would be granting nothing under a plausible-looking spelling.
+#:
+#: MCP tools are deliberately absent: their names are host-configured aliases
+#: (``<alias>__<tool>``), not a fixed vocabulary, so no static set can carry
+#: them.
+RECOGNIZED_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        # fs
+        "Read",
+        "Glob",
+        "Grep",
+        "Edit",
+        "Write",
+        "Bash",
+        "BashOutput",
+        "KillShell",
+        # web
+        "WebFetch",
+        "WebSearch",
+        # control tools
+        "TodoWrite",
+        "AskUserQuestion",
+        "Task",
+        "skill",
+        # skills
+        "run_skill_script",
+        # app
+        "open_app",
+        # memory
+        "memory_write",
+        "memory_read",
+        "memory_search",
+        "memory_archive",
+        # browser
+        "browser_navigate",
+        "browser_click",
+        "browser_type",
+        "browser_extract",
+        "browser_screenshot",
+    }
+)
 
 
-def parse_allowed_tools(value: str) -> Optional[frozenset[str]]:
-    """Parse a skill's opaque ``allowed-tools`` string into **Claude** names.
+#: ``Bash(git:*)`` — a Claude Code argument-level spec. The name is honoured,
+#: the parenthesised spec is not (that boundary is the shell allowlist's).
+_SPEC_ENTRY = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*)\((.*)\)$", re.DOTALL)
 
-    Accepts only the simple forms — an inline list ``[Read, Glob, Bash]`` or a
-    bare comma list ``Read, Bash`` — and returns ``None`` for anything else
-    (nested / quoted / colon / brace tokens); there is no YAML here. A caller
-    must read ``None`` as a **fail-safe empty grant**, never as "all tools
-    allowed".
+#: A bare tool name. Anything else in a token (quotes, a colon, a brace, an
+#: inner space) means a syntax this parser does not read, and the whole value
+#: degrades — there is no YAML here.
+_BARE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
+
+
+def parse_allowed_tools(
+    value: str, *, skill: str = "<unknown>"
+) -> Optional[frozenset[str]]:
+    """Parse a skill's opaque ``allowed-tools`` string into tool names.
+
+    Accepts the simple forms — an inline list ``[Read, Glob, Bash]``, a bare
+    comma list ``Read, Bash`` — plus Claude Code's ``Name(spec)`` entries
+    (``Bash(git:*)``), which parse to ``Name`` with a warning: argument-level
+    specs are **not** enforced here, because narrowing *what* a command may do
+    is the shell allowlist's job, not a frontmatter grant's.
+
+    Returns ``None`` for anything else (nested / quoted / colon / brace tokens).
+    A caller must read ``None`` as a **fail-safe empty grant**, never as "all
+    tools allowed".
     """
     inner = value.strip()
     if inner.startswith("[") and inner.endswith("]"):
@@ -54,34 +110,71 @@ def parse_allowed_tools(value: str) -> Optional[frozenset[str]]:
     if inner.strip() == "":
         return frozenset()
     names: set[str] = set()
-    for raw_tok in inner.split(","):
+    for raw_tok in _split_entries(inner):
         tok = raw_tok.strip()
         if tok == "":
             continue
-        if any(c in tok for c in " \t'\":{}[]"):
+        spec = _SPEC_ENTRY.match(tok)
+        if spec is not None:
+            base = spec.group(1)
+            _log.warning(
+                "skill %r: allowed-tools entry %r carries an argument-level "
+                "spec; granting %r — argument-level specs are not enforced by "
+                "this grant (the shell allowlist is that boundary)",
+                skill,
+                tok,
+                base,
+            )
+            names.add(base)
+            continue
+        if _BARE_NAME.match(tok) is None:
             return None
         names.add(tok)
     return frozenset(names)
 
 
-def alias_to_noeta(claude_names: frozenset[str], *, skill: str) -> frozenset[str]:
-    """Map Claude tool names to Noeta tool names via the exact 1:1 table.
+def _split_entries(inner: str) -> list[str]:
+    """Split on commas that are **not** inside a ``(...)`` argument spec, so
+    ``Bash(git status:*), Read`` yields two entries instead of tearing the spec
+    in half at its own comma."""
+    parts: list[str] = []
+    current: list[str] = []
+    depth = 0
+    for ch in inner:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif ch == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+            continue
+        current.append(ch)
+    parts.append("".join(current))
+    return parts
 
-    Fail-safe: if **any** entry has no Noeta mapping the **whole** declaration
-    degrades to an empty grant. A typo in a security-relevant grant
-    (``[Read, Bogus]``) must not silently keep the rest of it — gating every
-    call until the typo is fixed is the safe direction.
+
+def filter_recognized_tools(
+    names: frozenset[str], *, skill: str
+) -> frozenset[str]:
+    """Keep the entries naming a tool a session can mount, drop the rest.
+
+    Fail-safe **per name**: an unrecognised entry grants nothing and is logged,
+    while the recognised entries stand and enforcement stays ON for the
+    declaring skill. The alternative — degrading the whole declaration to an
+    empty grant on one unknown token — gated every legitimate call of a skill
+    that merely named a tool this build does not mount, which is a harsher
+    penalty than the typo it was meant to catch.
     """
-    unknown = sorted(n for n in claude_names if n not in CLAUDE_TO_NOETA_TOOL)
+    unknown = sorted(n for n in names if n not in RECOGNIZED_TOOL_NAMES)
     if unknown:
         _log.warning(
-            "skill %r: allowed-tools has unmapped entries %r; degrading "
-            "the whole declaration to an empty grant (fail-safe)",
+            "skill %r: allowed-tools names %r are not tools this session can "
+            "mount; dropping them from the grant (the rest stands)",
             skill,
             unknown,
         )
-        return frozenset()
-    return frozenset(CLAUDE_TO_NOETA_TOOL[n] for n in claude_names)
+    return frozenset(n for n in names if n in RECOGNIZED_TOOL_NAMES)
 
 
 def resolve_skill_allowed_tools(
@@ -97,7 +190,7 @@ def resolve_skill_allowed_tools(
     """
     resolved: list[tuple[str, frozenset[str]]] = []
     for skill_name, raw_value in raw_pairs:
-        parsed = parse_allowed_tools(raw_value)
+        parsed = parse_allowed_tools(raw_value, skill=skill_name)
         if parsed is None:
             _log.warning(
                 "skill %r: unparseable allowed-tools value %r; "
@@ -107,5 +200,7 @@ def resolve_skill_allowed_tools(
             )
             resolved.append((skill_name, frozenset()))
         else:
-            resolved.append((skill_name, alias_to_noeta(parsed, skill=skill_name)))
+            resolved.append(
+                (skill_name, filter_recognized_tools(parsed, skill=skill_name))
+            )
     return tuple(resolved)

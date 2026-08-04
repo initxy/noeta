@@ -9,7 +9,7 @@ argument-hint: [what to verify, e.g. "the new login retry logic"]
 Confirm that a code change truly does what it's supposed to — by running it and
 observing real behavior, not just by reading the diff.
 
-What to verify (the claim/feature under test): $ARGUMENTS
+Take the claim or feature under test from the conversation.
 
 ## Steps
 
