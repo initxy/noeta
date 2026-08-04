@@ -409,3 +409,115 @@ def test_product_resume_recalls_memory_written_earlier(tmp_path: Path) -> None:
         b.text for b in recall_msgs[-1].content if hasattr(b, "text")
     )
     assert "Tag, build, publish." in joined
+
+
+def test_index_resident_refreshes_on_the_next_turn(tmp_path: Path) -> None:
+    """D9 — a memory written mid-conversation reaches the index resident on
+    the NEXT turn of the SAME task.
+
+    Before: ``run_content_init`` ran at ``seed_start`` only, and the pack's
+    init hook closed over an ``entries()`` snapshot taken when the Engine was
+    built — so the index the model reads was frozen at task start (and, through
+    the warm Engine cache, could be older still). Now the hook re-reads at
+    invocation and the new-goal path re-runs it.
+
+    The refresh is a REFRESH, not a re-activation: the hash moves, the
+    activation anchor does not (first-write-wins), so the resident's placement
+    is untouched.
+    """
+    from noeta.protocols.messages import LLMResponse, ToolUseBlock, Usage
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    mem = tmp_path / "global-memories"
+    _seed_memory(mem)  # deploy-notes exists before the task starts
+    write_call = LLMResponse(
+        stop_reason="tool_use",
+        content=[
+            ToolUseBlock(
+                call_id="mw1",
+                tool_name=MEMORY_WRITE_TOOL_NAME,
+                arguments={
+                    "name": "release-steps",
+                    "text": "# Release\nTag, build, publish.\n",
+                },
+            )
+        ],
+        usage=Usage(uncached=1, output=1),
+        raw={"id": "w"},
+    )
+    host, driver = _memory_session(
+        ws,
+        [write_call, _end_response("saved"), _end_response("done")],
+        memory=True,
+        mem_dir=mem,
+        multi_turn=True,
+    )
+    first = driver.start(goal="save the release steps", agent="main")
+    assert first.status == "suspended"
+
+    from noeta.core.fold import fold
+
+    seeded = fold(host.event_log, host.content_store, first.task_id)
+    seed_hash = seeded.state.active_content[MEMORY_KIND][MEMORY_INDEX_NAME]
+    seed_anchor = dict(seeded.context.content_anchors)
+    # The seed index knows only the pre-existing memory.
+    assert "release-steps" not in host.content_store.get(
+        _ref_for(host, seed_hash)
+    ).decode("utf-8")
+
+    driver.send_goal(first.task_id, goal="anything at all")
+
+    folded = fold(host.event_log, host.content_store, first.task_id)
+    live_hash = folded.state.active_content[MEMORY_KIND][MEMORY_INDEX_NAME]
+    assert live_hash != seed_hash
+    assert live_hash == memory_index_hash(load_memory_store(root=mem).entries())
+    index_text = host.content_store.get(_ref_for(host, live_hash)).decode("utf-8")
+    assert "release-steps" in index_text
+    assert "deploy-notes" in index_text  # a refresh, not a replacement
+    # Exactly one refresh event — the second turn re-records once, and only
+    # because the store actually changed.
+    recordings = [
+        e for e in host.event_log.read(first.task_id)
+        if e.type == "ContextContentRecorded"
+        and getattr(e.payload, "kind", "") == MEMORY_KIND
+    ]
+    assert [e.payload.content_hash for e in recordings] == [seed_hash, live_hash]
+    # Bytes moved, placement did not.
+    assert dict(folded.context.content_anchors) == seed_anchor
+
+
+def test_index_resident_refresh_is_a_no_op_when_unchanged(tmp_path: Path) -> None:
+    """The rerun costs nothing on an untouched store: the recorder drops a
+    re-record whose hash is unchanged, so the follow-up turn is byte-identical
+    to what it was before D9."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    mem = tmp_path / "global-memories"
+    _seed_memory(mem)
+    host, driver = _memory_session(
+        ws,
+        [_end_response("one"), _end_response("two")],
+        memory=True,
+        mem_dir=mem,
+        multi_turn=True,
+    )
+    first = driver.start(goal="hello", agent="main")
+    driver.send_goal(first.task_id, goal="hello again")
+    recordings = [
+        e for e in host.event_log.read(first.task_id)
+        if e.type == "ContextContentRecorded"
+        and getattr(e.payload, "kind", "") == MEMORY_KIND
+    ]
+    assert len(recordings) == 1
+
+
+def _ref_for(host, content_hash: str):
+    """A :class:`ContentRef` addressing ``content_hash`` in the host's store.
+
+    The resident's recorded hash IS the content address of its rendered bytes
+    (that is the content channel's whole point), so a bare ref reads them back.
+    """
+    from noeta.protocols.values import ContentRef
+
+    return ContentRef(hash=content_hash, size=0, media_type="text/markdown")

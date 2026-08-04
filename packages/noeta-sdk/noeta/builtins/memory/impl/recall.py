@@ -17,6 +17,8 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from noeta.builtins.memory.impl.index import (
+    RECALL_BODY_MAX_BYTES,
+    RECALL_TOTAL_MAX_BYTES,
     RecallHit,
     format_recall_text,
     match_memories_tiered,
@@ -54,17 +56,34 @@ def recall_memories(store: MemoryStore, text: str) -> tuple[RecallHit, ...]:
     calls ``memory_read``. A memory whose file has gone missing is dropped
     from either tier; a tier-2 entry with an empty summary still rides as
     a bare name, which is enough to read by.
+
+    **And a body is budgeted.** Recall is uninvited context: the model did
+    not ask for these bytes and cannot decline them, so a tier-1 hit rides
+    inline only while it fits ``RECALL_BODY_MAX_BYTES`` on its own AND
+    inside the turn's remaining ``RECALL_TOTAL_MAX_BYTES``. Over either
+    line it degrades WHOLE to its index line — the same pointer a tier-2
+    hit rides, naming ``memory_read`` for the rest — because half a memory
+    reads exactly like a complete one. Budget is spent in hit order, so the
+    high-confidence early hits keep their bodies and the tail degrades.
     """
     entries = store.entries()
     summaries = {name: summary for name, summary, _type in entries}
     hits: list[RecallHit] = []
+    spent = 0
     for name, by_name in match_memories_tiered(entries, text):
-        if not by_name:
-            hits.append(RecallHit(name=name, text=summaries.get(name, ""), full=False))
-            continue
-        body = store.read(name)
-        if body is not None:
-            hits.append(RecallHit(name=name, text=body, full=True))
+        if by_name:
+            body = store.read(name)
+            if body is None:
+                continue
+            size = len(body.encode("utf-8"))
+            if (
+                size <= RECALL_BODY_MAX_BYTES
+                and spent + size <= RECALL_TOTAL_MAX_BYTES
+            ):
+                spent += size
+                hits.append(RecallHit(name=name, text=body, full=True))
+                continue
+        hits.append(RecallHit(name=name, text=summaries.get(name, ""), full=False))
     return tuple(hits)
 
 
