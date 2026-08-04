@@ -1,6 +1,6 @@
 [project]
 name = "noeta-sdk"
-version = "0.5.5"
+version = "0.6.0"
 description = "Noeta SDK: build AI agents that run on the server. Import noeta.sdk, define your tools and policy — durable event-sourced execution, multi-worker scheduling, provider-neutral, no vendor lock-in."
 license = "Apache-2.0"
 authors = [{ name = "The Noeta Authors" }]
@@ -36,7 +36,7 @@ dependencies = [
     # installed at skewed versions. Under 0.x a minor bump is the breaking one,
     # so the SDK tracks the kernel minor-for-minor rather than failing at first
     # build.
-    "noeta-runtime>=0.5.5,<0.6.0",
+    "noeta-runtime>=0.6.0,<0.7.0",
 ]
 
 [project.urls]

@@ -8,6 +8,11 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-03
+
+Covers both packages (lockstep). Minor bump: the model-facing tool surface is
+a hard break (names, schemas, result rendering, host-side answer contract).
+
 ### Changed — Claude Code tool-surface alignment (BREAKING)
 
 The whole model-facing tool surface now follows Claude Code (see
@@ -1350,6 +1355,7 @@ Initial preview release.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
 [Unreleased]: https://github.com/initxy/noeta/compare/v0.5.5...HEAD
+[0.6.0]: https://github.com/initxy/noeta/compare/v0.5.5...v0.6.0
 [0.5.5]: https://github.com/initxy/noeta/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/initxy/noeta/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/initxy/noeta/compare/v0.5.2...v0.5.3
