@@ -122,6 +122,51 @@ requires_live = pytest.mark.skipif(
 
 
 # --------------------------------------------------------------------------- #
+# Network opt-in — the web tools hit the real internet
+# --------------------------------------------------------------------------- #
+
+
+def have_live_web() -> bool:
+    """True iff the caller opted into real-network web tests (``NOETA_LIVE_WEB``).
+
+    Kept separate from :func:`have_live_env`: the rest of the live suite talks
+    only to the configured gateway, but the web tools reach arbitrary public
+    hosts, so hitting the network is a second, explicit opt-in — a developer
+    with a ``.env`` still does not fetch example.com unless they ask for it.
+    """
+    return os.environ.get("NOETA_LIVE_WEB", "").strip() not in ("", "0", "false")
+
+
+def have_web_search_key() -> bool:
+    """True iff ``NOETA_WEB_SEARCH_API_KEY`` is set — the WebSearch on/off switch.
+
+    Without it the ``WebSearch`` tool is not even built into the tool set
+    (``noeta.builtins.web.impl.search`` gates on it), so a WebSearch live test
+    has nothing to drive and must skip.
+    """
+    return bool(os.environ.get("NOETA_WEB_SEARCH_API_KEY", "").strip())
+
+
+#: Guard for the WebFetch chain — needs the gateway env AND the network opt-in.
+requires_live_web = pytest.mark.skipif(
+    not (have_live_env() and have_live_web()),
+    reason=(
+        "web live tests hit the real network — set NOETA_LIVE_WEB=1 (plus the "
+        "usual NOETA_LIVE_* gateway env) to opt in. Skipped in CI and by default."
+    ),
+)
+
+#: Guard for the WebSearch chain — additionally needs the search API key.
+requires_live_web_search = pytest.mark.skipif(
+    not (have_live_env() and have_live_web() and have_web_search_key()),
+    reason=(
+        "WebSearch live test needs NOETA_LIVE_WEB=1 AND NOETA_WEB_SEARCH_API_KEY "
+        "(the tool is omitted from the set without the key). Skipped otherwise."
+    ),
+)
+
+
+# --------------------------------------------------------------------------- #
 # Provider factories — reuse the shipping adapters unchanged
 # --------------------------------------------------------------------------- #
 
