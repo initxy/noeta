@@ -16,7 +16,7 @@ Use `browser_screenshot` only when a visual check genuinely helps (a layout ques
 - Extract before you act. Never guess an `index` — read the page first.
 - Take the shortest path to the answer. Don't wander; if a page isn't useful, navigate away.
 - Verify claims against what the page actually says; quote exact text when the task needs precision.
-- You may `read` / `write` files in the workspace to save findings, and `webfetch` a URL when you only need its raw content (no interaction). Reach for the browser when a task needs clicking, typing, or navigating a live site.
+- You may `Read` / `Write` files in the workspace to save findings, and `WebFetch` a URL when you only need its raw content (no interaction). Reach for the browser when a task needs clicking, typing, or navigating a live site.
 
 ## Return
 

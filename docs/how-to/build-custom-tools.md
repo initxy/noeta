@@ -104,7 +104,7 @@ anything.
 | `high` | requires approval | requires approval | auto-approved |
 
 `acceptEdits` differs from `default` only by exempting the three built-in edit
-tools (`edit`, `write`, `apply_patch`); it changes nothing for a custom tool.
+tools (`Edit`, `Write`); it changes nothing for a custom tool.
 
 Mark tools that write files, run commands, or make external API calls as
 `"high"`. Read-only lookups are `"low"`.
@@ -138,7 +138,7 @@ options = Options(
 An in-process server's tools keep their **bare** `@tool` name — the model sees
 `fetch_weather`, not `mcp__weather-tools__fetch_weather`. The server name is a
 grouping label, not a namespace, so pick tool names that will not collide with
-a built-in (`fetch_weather`, not `read`). Its tools are added to the agent's
+a built-in (`fetch_weather`, not `Read`). Its tools are added to the agent's
 tool set directly; they need no `allowed_tools` entry.
 
 > The `mcp__{alias}__{tool}` prefix belongs to **remote** MCP servers, which a

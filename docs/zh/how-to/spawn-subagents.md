@@ -12,7 +12,7 @@ from noeta.sdk import Options, AgentDefinition
 researcher = AgentDefinition(
     description="Read-only researcher that finds and reports facts.",
     prompt="You are a researcher. Read files and report what you find. Do not edit anything.",
-    tools=("read", "glob", "grep", "shell_run"),  # read-only subset
+    tools=("Read", "Glob", "Grep", "Bash"),  # read-only subset
     model=None,  # inherits the host default
 )
 
@@ -23,11 +23,11 @@ options = Options(
 )
 ```
 
-这就是全部的开启动作：填上 `agents` 会让 `compile_options` 把 `"delegation"` 折进父 agent 的身份，并把子 agent 的名字并入它的 `spawnable`，从而挂上 `spawn_subagent` 控制工具，并在它的 schema 枚举里带上 `researcher`。
+这就是全部的开启动作：填上 `agents` 会让 `compile_options` 把 `"delegation"` 折进父 agent 的身份，并把子 agent 的名字并入它的 `spawnable`，从而挂上 `Task` 控制工具，并在它的 schema 枚举里带上 `researcher`。
 
 ## 2. 理解一次 spawn 记录了什么
 
-`spawn_subagent` 接收一个必填的 `spawns` 数组，元素是 `{agent, goal}`。一个条目就是一次"委派并等待"；同一次调用里的多个条目是一次并发扇出 —— 扇出的形状体现在批量数组上，而不是靠重复的工具调用。
+`Task` 接收一个必填的 `spawns` 数组，元素是 `{agent, goal}`。一个条目就是一次"委派并等待"；同一次调用里的多个条目是一次并发扇出 —— 扇出的形状体现在批量数组上，而不是靠重复的工具调用。
 
 当父 agent 的模型调用它时，运行时会：
 

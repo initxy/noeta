@@ -73,7 +73,7 @@ noeta/builtins/memory/
 
 | agent | 角色 | 工具面 | 会委派吗？ |
 | --- | --- | --- | --- |
-| `main` | 对话控制器 | 完整内置工具 + `todo_write` / `ask_user_question` / `skill_invocation` / `memory` / `mcp` | 会 |
+| `main` | 对话控制器 | 完整内置工具 + `TodoWrite` / `AskUserQuestion` / `skill_invocation` / `memory` / `mcp` | 会 |
 | `general-purpose` | 自包含的执行者 | read / write / edit + shell + web | 不会 —— 叶子 |
 | `explore` | 只读侦察 | 只读工具 | 不会 |
 | `plan` | 只读规划 | 只读工具 | 不会 —— 产出一份计划 |

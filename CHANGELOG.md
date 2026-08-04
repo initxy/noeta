@@ -8,6 +8,54 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Changed — Claude Code tool-surface alignment (BREAKING)
+
+The whole model-facing tool surface now follows Claude Code (see
+`docs/implementation-specs/claude-code-tool-alignment.md`); models hit their
+strongest trained prior instead of a JSON-wrapped, ref-bearing dialect.
+
+- **Plain-text tool results.** Every builtin tool renders a plain string —
+  `Read` in `cat -n` form with true line numbers, `Bash` as raw streams,
+  `Grep` in ripgrep-style lines, `Glob` as a path list, `WebFetch`/`WebSearch`
+  as Markdown. The JSON envelopes and every model-visible
+  `content_ref`/`stdout_ref`/`ref` hash are gone (the model has no deref tool;
+  the audit layer keeps its refs). The wire fallback for structured host/MCP
+  outputs uses `ensure_ascii=False`, ending the ~6x CJK escape expansion, and
+  the OpenAI-shaped adapters now carry a failed call's error text (previously
+  dropped silently).
+- **Reference names and parameters.** read/glob/grep/edit/write/shell_run/
+  shell_poll/shell_kill/webfetch/web_search/todo_write/ask_user_question/
+  spawn_subagent → `Read`/`Glob`/`Grep`/`Edit`/`Write`/`Bash`/`BashOutput`/
+  `KillShell`/`WebFetch`/`WebSearch`/`TodoWrite`/`AskUserQuestion`/`Task`,
+  with the matching parameter names (`file_path`, `old_string`/`new_string`,
+  `bash_id`, `shell_id`, …). Capability flags and plugin identifiers keep
+  their snake_case names.
+- **Capacity alignment.** `Write`'s 64 KB cap → 8 MiB guard; `Read` truncates
+  by its 2000-line window only (1 MiB safety fence); `Bash` inlines up to
+  30000 chars (was 2 KB/1 KB tails) with middle elision; `Grep`/`Glob`
+  budgets 4 KB → 32 KB.
+- **Logic parity.** `Edit` gains the read-first precondition (session
+  `FileReadRegistry` — file `Read` this session and unchanged since; replaces
+  the content-store probe and its cross-session false positives), rejects
+  `old_string == new_string`, and returns a `cat -n` snippet. `Write` creates
+  missing parent directories. `Glob` sorts by mtime (newest first). `Grep`
+  gains `output_mode`/`-i`/`-n`/`-A`/`-B`/`-C`/`head_limit`/`multiline` and
+  skips hidden + dependency/cache directories. `BashOutput` returns only the
+  output since the last poll (plus optional `filter`); background-job output
+  and exit notices now inline real text instead of an unreadable hash.
+- **Control tools.** `TodoWrite` items are `{content, status, activeForm}`
+  and may be batched with runtime tool calls in one turn (no extra round
+  trip). `AskUserQuestion` takes 1–4 `{question, header, options, multiSelect}`
+  questions with label-based answers (`{selected, other}` — a breaking
+  host-side answer contract). `Task` is one sub-agent per call
+  (`{description, prompt, subagent_type}`); parallelism is several `Task`
+  calls in one assistant turn; the `spawns` array form is removed.
+- **Removed:** `apply_patch` (no reference counterpart; `Edit` is the single
+  precise-edit tool) and the per-provider edit-tool mutex.
+- **Replay note:** outbound request bytes changed, so byte-equivalent
+  replay-verify against pre-0.6 recordings reports drift. New recordings are
+  self-consistent.
+
 ### Fixed
 
 - **`as_messages` no longer renders host-injected turns as `UserMessage`**

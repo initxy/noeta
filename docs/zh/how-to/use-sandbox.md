@@ -48,7 +48,7 @@ export SANDBOX_API_KEY=your-container-key
 让 agent 跑点能暴露自己所在位置的东西，来验证这条路由：
 
 ```
-shell_run(command="hostname")  →  a1b2c3d4e5f6   # the container, not your host
+Bash(command="hostname")  →  a1b2c3d4e5f6   # the container, not your host
 ```
 
 在 attach 模式下，每个会话共用同一个容器。`release` 是空操作，因为 SDK 并不拥有该容器的生命周期。
@@ -140,9 +140,9 @@ host_config = HostConfig(
 
 在 sandbox 下，这些副作用会经由会话的 `ExecEnv` 路由：
 
-- **fs 工具** —— `read`、`write`、`edit`、`glob`、`grep`、`apply_patch`
-- **前台 shell** —— `shell_run`（后台 shell 在 host 侧，在容器下会被拒绝）
-- **网络出口** —— `webfetch` / `web_search` 经由容器内的 `curl` 出去
+- **fs 工具** —— `Read`、`Write`、`Edit`、`Glob`、`Grep`
+- **前台 shell** —— `Bash`（后台 shell 在 host 侧，在容器下会被拒绝）
+- **网络出口** —— `WebFetch` / `WebSearch` 经由容器内的 `curl` 出去
 - **skill 索引** —— `tree_snapshot` 把整次遍历打包成一次往返
 - **浏览器工具** —— `browser_navigate`、`browser_click`、…… 经由 `BrowserBackend` 线
 
@@ -175,7 +175,7 @@ options = presets.sandbox_browser_options()   # main + the web subagent, browser
 
 - 库**不提供置备器** —— 跑 `docker`、调 K8s API 或对接远程会话服务，都是 host 的活。开箱的 provider 只做 attach。
 - sandbox 的副作用在 worker 世代之间**没有围栏**：一个 lease 已过期的 worker 仍然可以往容器 `POST`。它受限于与崩溃 Step 副作用相同的那套 Step attempt 重驱动机制。
-- 在 sandbox 下，`shell_run` 的 `timeout` 是客户端侧强制的 —— 调用返回之后，命令仍在容器里继续跑。
+- 在 sandbox 下，`Bash` 的 `timeout` 是客户端侧强制的 —— 调用返回之后，命令仍在容器里继续跑。
 
 ## 下一步
 

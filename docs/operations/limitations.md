@@ -212,7 +212,7 @@ shell side effects go to the container over HTTP — outside the shared Postgres
 transaction that fences EventLog writes. A worker fenced out of the log (a GC
 pause, a `SIGSTOP` then revive) can still `POST` to the container. The sandbox
 side effect is therefore at-least-once and unfenced, the same class as a
-half-run `shell_run` on the host: a reclaiming worker reconnects to the same
+half-run `Bash` on the host: a reclaiming worker reconnects to the same
 container and re-drives the step, but a slow zombie can pollute the container in
 the meantime. Because a container belongs to one root-task tree, a zombie
 pollutes only its own session.
@@ -224,9 +224,9 @@ issues one more container call.
 **Workaround:** None automatic. It is bounded by the same step-attempt re-drive
 and human review that cover crashed-step side effects above.
 
-### Sandbox `shell_run` has no remote hard-kill
+### Sandbox `Bash` has no remote hard-kill
 
-**What it means:** On the host, `shell_run`'s `timeout` maps to a real
+**What it means:** On the host, `Bash`'s `timeout` maps to a real
 subprocess timeout that kills the process. Under a sandbox there is no remote
 cancel verb, so the timeout is enforced *client side* by the HTTP read timeout
 of that one call. The `timeout` you pass is honoured — a command that runs past
@@ -234,19 +234,19 @@ it is reported to the model as a timed-out run at the requested budget — but
 the command **keeps running in the container** after the call returns. Its side
 effects may land after the tool has already reported a timeout.
 
-**When you hit it:** A sandbox `shell_run` whose command exceeds its `timeout`
+**When you hit it:** A sandbox `Bash` whose command exceeds its `timeout`
 — a hanging build or test run.
 
-**Workaround:** Treat a timed-out sandbox `shell_run` as "may still be
+**Workaround:** Treat a timed-out sandbox `Bash` as "may still be
 running"; a follow-up command can observe or clean up its partial effects. Give
 genuinely long commands an explicit larger `timeout` so the client does not cut
 the call off early.
 
 ### Background shell is host-only
 
-**What it means:** `shell_run(run_in_background=true)` hands the validated argv
-to the host's background runner and returns a job id that `shell_poll` and
-`shell_kill` then address. A sandbox `ExecEnv` reports that it does not support
+**What it means:** `Bash(run_in_background=true)` hands the validated argv
+to the host's background runner and returns a job id that `BashOutput` and
+`KillShell` then address. A sandbox `ExecEnv` reports that it does not support
 background execution, and the tool returns an error rather than running the
 command in the foreground.
 
@@ -276,7 +276,7 @@ through five Noeta-owned tools (`browser_navigate`, `browser_click`,
 **When you hit it:** A task that must read a chart rendered only as pixels, or
 one that needs to browse without a container.
 
-**Workaround:** Prefer `browser_extract` for content and `webfetch` for pages
+**Workaround:** Prefer `browser_extract` for content and `WebFetch` for pages
 that need no interaction; use `browser_screenshot` when a human needs to look.
 
 ## Closed extension points

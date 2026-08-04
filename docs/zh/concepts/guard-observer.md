@@ -31,7 +31,7 @@ class Guard(Protocol):
 它返回一个 `VerdictResult`，携带三种裁决之一以及一个可选的理由：
 
 ```python
-VerdictResult.deny("shell_run is disabled for this agent")
+VerdictResult.deny("Bash is disabled for this agent")
 ```
 
 `REQUIRE_APPROVAL` 不会开启一条平行的生命周期。Engine 把它映射到 `YieldForHumanDecision` 走的那个人类挂起出口，因此审批复用同一个唤醒句柄和同一条恢复分支（见[唤醒与恢复](wake-resume.md)）。

@@ -17,7 +17,7 @@ from noeta.sdk import Options, AgentDefinition
 researcher = AgentDefinition(
     description="Read-only researcher that finds and reports facts.",
     prompt="You are a researcher. Read files and report what you find. Do not edit anything.",
-    tools=("read", "glob", "grep", "shell_run"),  # read-only subset
+    tools=("Read", "Glob", "Grep", "Bash"),  # read-only subset
     model=None,  # inherits the host default
 )
 
@@ -30,12 +30,12 @@ options = Options(
 
 That is the whole opt-in: populating `agents` makes `compile_options` fold
 `"delegation"` into the parent's identity and union the child names into its
-`spawnable`, which mounts the `spawn_subagent` control tool with `researcher`
+`spawnable`, which mounts the `Task` control tool with `researcher`
 in its schema enum.
 
 ## 2. Understand what a spawn records
 
-`spawn_subagent` takes a required `spawns` array of `{agent, goal}` entries.
+`Task` takes a required `spawns` array of `{agent, goal}` entries.
 One entry is a single delegate-and-wait; several entries in the same call are a
 concurrent fan-out — the batch array is the fan-out shape, not repeated tool
 calls.

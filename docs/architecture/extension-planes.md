@@ -125,7 +125,7 @@ Four official agents ship, each with a deliberately trimmed surface:
 
 | Agent | Role | Tool surface | Delegates? |
 | --- | --- | --- | --- |
-| `main` | the conversational controller | full built-ins + `todo_write` / `ask_user_question` / `skill_invocation` / `memory` / `mcp` | yes |
+| `main` | the conversational controller | full built-ins + `TodoWrite` / `AskUserQuestion` / `skill_invocation` / `memory` / `mcp` | yes |
 | `general-purpose` | a self-contained worker | read / write / edit + shell + web | no — a leaf |
 | `explore` | a read-only scout | read-only tools | no |
 | `plan` | a read-only planner | read-only tools | no — produces a plan |

@@ -65,7 +65,7 @@ policy and composer refs, tools, skills, budget, activated plugins, and the
 names it may spawn. **Not a runtime entity**: it is the "class" of a task,
 identity only, normalized so two specs differing just in author ordering compare
 equal. A child agent's `description` is required and non-blank, because it is
-rendered into the `spawn_subagent` schema so the model knows who to delegate to.
+rendered into the `Task` schema so the model knows who to delegate to.
 → [Presets](presets.md)
 
 ### Options
@@ -122,8 +122,8 @@ What `Policy.decide` returns and what Engine dispatch consumes. The variants are
 deliberately neutral mechanisms: `tool_calls`, `spawn_subtask`,
 `spawn_subtasks`, `yield_for_human`, `wait_timer`, `wait_external`,
 `state_patch`, `compaction_requested`, `finish`, `fail`. Product control tools
-get no variant of their own — `todo_write` and `skill` are expressed as
-`state_patch`, `ask_user_question` as `yield_for_human`.
+get no variant of their own — `TodoWrite` and `skill` are expressed as
+`state_patch`, `AskUserQuestion` as `yield_for_human`.
 → [Engine & execution](../concepts/engine-execution.md)
 
 ### Policy
@@ -152,7 +152,7 @@ optionally with resource files. Three tiers merge low to high: built-in, global
 one-line summary) is rendered into the `skill` control-tool schema, and only the
 selected skill's body enters the semi-stable segment, which compaction does not
 flush. Bundled resources are reached on demand: the renderer prepends
-`Base directory for this skill: <dir>` and the model reads files with `read`.
+`Base directory for this skill: <dir>` and the model reads files with `Read`.
 **Not a Tool.**
 
 ### Provider
@@ -266,13 +266,12 @@ to change behaviour, change the Policy or the Composer.
 
 ### Write fence
 
-The path-containment seam the **write** fs tools (`edit`, `write`,
-`apply_patch`) resolve through: a target must land under the session workspace
+The path-containment seam the **write** fs tools (`Edit`, `Write`) resolve through: a target must land under the session workspace
 or an extra root the host authorized. Containment is component-wise
 (`path_within`), never string-prefix, so `/srv/app-old` is not inside
 `/srv/app`. **Reads are not fenced**, and the widening resolver
 (`HostConfig.write_roots`) fails closed in every degenerate case. This is a
-deliberate-mutation boundary, not process confinement — `shell_run` reaches the
+deliberate-mutation boundary, not process confinement — `Bash` reaches the
 whole filesystem.
 
 ### ExecEnv

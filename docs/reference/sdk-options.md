@@ -61,7 +61,7 @@ are compared for equality.
 | Mode | Which tools require approval |
 | --- | --- |
 | `"default"` | every tool whose declared `risk_level` is not `low` |
-| `"acceptEdits"` | the same rule, minus the three edit-class tools `edit` / `write` / `apply_patch` |
+| `"acceptEdits"` | the same rule, minus the three edit-class tools `Edit` / `Write` |
 | `"bypassPermissions"` | none — for trusted, non-interactive runs |
 
 The mode only chooses the gated set. A `Guard` may still deny, and
@@ -106,7 +106,7 @@ compile_options(Options(system_prompt="x", plugins=()))[0].plugins # → ()
 A name must be one of three things, or compilation fails loudly:
 
 - a **built-in feature bundle** that carries identity — `memory`, `browser`,
-  `mcp`, `todo_write`, `ask_user_question`, `skill_invocation`, `delegation`;
+  `mcp`, `TodoWrite`, `AskUserQuestion`, `skill_invocation`, `delegation`;
 - an **identity-inert built-in** name, recognised so a typo still fails —
   `app`, `fs`, `governance`, `presets`, `providers`, `react`, `reminders`,
   `sandbox`, `skills`, `storage`, `web`, `workspace`;
@@ -138,7 +138,7 @@ compiled `AgentSpec.spawnable`.
 
 | Field | Notes |
 | --- | --- |
-| `description` | **required, non-blank** — it is rendered into the `spawn_subagent` schema so the model knows who to hand work to |
+| `description` | **required, non-blank** — it is rendered into the `Task` schema so the model knows who to hand work to |
 | `prompt` | required |
 | `tools` | `None` ⇒ all built-ins |
 | `model` | routing hint |
@@ -222,11 +222,11 @@ Supplying both forms raises `ValueError`, as does a partial explicit triple. All
 | Field | Default | Purpose |
 | --- | --- | --- |
 | `workflow_allowed` | `False` | expose `run_workflow` (also requires delegation) |
-| `max_background_jobs_per_root_task` | `8` | over the cap a background `shell_run` is rejected, not queued |
-| `max_background_subagents_per_root_task` | `8` | the same for `spawn_subagent(background=True)` |
+| `max_background_jobs_per_root_task` | `8` | over the cap a background `Bash` is rejected, not queued |
+| `max_background_subagents_per_root_task` | `8` | the same for `Task(background=True)` |
 | `instructions_enabled` | `False` | load the workspace-root `NOETA.md`, else `AGENTS.md` |
 | `instructions_file` | `None` | read only this path instead of searching |
-| `instructions_discovery` | `False` | `read`-triggered discovery of subdirectory instruction files |
+| `instructions_discovery` | `False` | `Read`-triggered discovery of subdirectory instruction files |
 | `write_mode` | `"dry_run"` | `"apply"` performs real writes |
 
 ## Sandbox and storage wiring types

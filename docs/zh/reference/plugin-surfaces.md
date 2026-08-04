@@ -14,7 +14,7 @@ loader 是**与 Surface 无关的**——它只咨询一个 `SurfaceRegistry`，
 
 ### `tool`
 
-identity · per-agent · 冲突 `name` · sorted。一个内置工具名，或一个暴露 `.ref` 的对象——一个被 `@tool` 装饰的函数，或一个 Tool 类。内置语料：`fs` 声明九个（`read`、`glob`、`grep`、`edit`、`write`、`apply_patch`、`shell_run`、`shell_poll`、`shell_kill`），`web` 两个，`memory` 四个。
+identity · per-agent · 冲突 `name` · sorted。一个内置工具名，或一个暴露 `.ref` 的对象——一个被 `@tool` 装饰的函数，或一个 Tool 类。内置语料：`fs` 声明八个（`Read`、`Glob`、`Grep`、`Edit`、`Write`、`Bash`、`BashOutput`、`KillShell`），`web` 两个，`memory` 四个。
 
 ```toml
 [[tool.noeta.contributions]]
@@ -65,7 +65,7 @@ ref     = "house_style.policy:build_fsm_policy"
 
 ### `control_tool`
 
-identity · per-agent · 冲突 `name` · **priority**。一个面向模型的 schema，它翻译成一个 engine 决策，而不是一次 `Tool.invoke`。`ref` 是一个 `(ControlToolBuildContext) -> ControlToolMount | None` 工厂，它**自我门控**，不适用时返回 `None`——挂载*本身*就是启用。内置语料，按 schema 渲染顺序（由字节相等的 golden 锁定，因为这个顺序会喂进稳定前缀的哈希）：`spawn_subagent`（100，`delegation`）、`todo_write`（200）、`ask_user_question`（300）、`run_workflow`（500）和 `structured_output`（600，后两者都来自 `react`）。
+identity · per-agent · 冲突 `name` · **priority**。一个面向模型的 schema，它翻译成一个 engine 决策，而不是一次 `Tool.invoke`。`ref` 是一个 `(ControlToolBuildContext) -> ControlToolMount | None` 工厂，它**自我门控**，不适用时返回 `None`——挂载*本身*就是启用。内置语料，按 schema 渲染顺序（由字节相等的 golden 锁定，因为这个顺序会喂进稳定前缀的哈希）：`Task`（100，`delegation`）、`TodoWrite`（200）、`AskUserQuestion`（300）、`run_workflow`（500）和 `structured_output`（600，后两者都来自 `react`）。
 
 ```toml
 [[tool.noeta.contributions]]
@@ -215,7 +215,7 @@ plugins = load_plugins(registry=reg)          # the host's surface is live
 
 ## 内置语料
 
-Noeta 的十八个内置项就是参考 manifest，每个一个目录，位于 `packages/noeta-sdk/noeta/builtins/<name>/__init__.py`：`app`、`ask_user_question`、`browser`、`delegation`、`fs`、`governance`、`mcp`、`memory`、`presets`、`providers`、`react`、`reminders`、`sandbox`、`skills`、`storage`、`todo_write`、`web`、`workspace`。上面每一节都点名了演示它的那些内置项；`mcp`、`providers` 和 `storage` 是纯声明的，贡献数为零。新增一项第一方能力，就是在那里新增一个目录。
+Noeta 的十八个内置项就是参考 manifest，每个一个目录，位于 `packages/noeta-sdk/noeta/builtins/<name>/__init__.py`：`app`、`AskUserQuestion`、`browser`、`delegation`、`fs`、`governance`、`mcp`、`memory`、`presets`、`providers`、`react`、`reminders`、`sandbox`、`skills`、`storage`、`TodoWrite`、`web`、`workspace`。上面每一节都点名了演示它的那些内置项；`mcp`、`providers` 和 `storage` 是纯声明的，贡献数为零。新增一项第一方能力，就是在那里新增一个目录。
 
 ## 下一步
 

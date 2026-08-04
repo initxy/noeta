@@ -102,7 +102,7 @@ Two details make it safe:
 ### Instruction files are discovered as the model reads
 
 A default-off host switch (`HostConfig.instructions_discovery`) arms a
-post-tool hook. After a successful `read` of a file **inside the workspace**,
+post-tool hook. After a successful `Read` of a file **inside the workspace**,
 the runtime walks from the workspace root down to that file's directory —
 shallowest first, the root itself excluded, since the root file is loaded
 pre-loop — and activates the first `NOETA.md` / `AGENTS.md` it finds in each
@@ -113,7 +113,7 @@ activation is an ordinary content-channel event emitted after the turn's tool
 results, so it anchors right after the read that triggered it and appends
 instead of rewriting the head.
 
-Discovery is fenced to the workspace even though `read` itself is not (see
+Discovery is fenced to the workspace even though `Read` itself is not (see
 [built-in tools](../reference/tools.md)). Reading is observation; instructions
 steer the agent. Auto-loading them from any path the model happens to glance at
 would let an arbitrary directory program the agent, so the auto-load scope

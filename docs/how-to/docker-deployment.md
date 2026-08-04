@@ -208,7 +208,7 @@ hard-code them.
 | --- | --- |
 | `ANTHROPIC_API_KEY` | Anthropic provider |
 | `OPENAI_API_KEY` | OpenAI-compatible provider |
-| `NOETA_WEB_SEARCH_API_KEY` | `web_search` tool |
+| `NOETA_WEB_SEARCH_API_KEY` | `WebSearch` tool |
 | `SANDBOX_API_KEY` | Sandbox container auth (read at connect time) |
 
 ## Next steps

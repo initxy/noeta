@@ -52,7 +52,7 @@ Noeta 用到的每个术语，只定义一次。每条词目都是一段平实�
 
 ### Agent
 
-一个具名的、可派生的配置——一个 `AgentSpec`，携带指令、policy 与 composer 的 ref、工具、skill、预算、被激活的插件，以及它可以派生的名字。**不是运行时实体**：它是一个任务的"类"，只有身份，并且经过归一化，因此两份仅在作者书写顺序上不同的 spec 比较相等。子 agent 的 `description` 必填且非空，因为它会被渲染进 `spawn_subagent` 的 schema，好让模型知道该委派给谁。
+一个具名的、可派生的配置——一个 `AgentSpec`，携带指令、policy 与 composer 的 ref、工具、skill、预算、被激活的插件，以及它可以派生的名字。**不是运行时实体**：它是一个任务的"类"，只有身份，并且经过归一化，因此两份仅在作者书写顺序上不同的 spec 比较相等。子 agent 的 `description` 必填且非空，因为它会被渲染进 `Task` 的 schema，好让模型知道该委派给谁。
 → [预设代理](presets.md)
 
 ### Options
@@ -84,7 +84,7 @@ Noeta 用到的每个术语，只定义一次。每条词目都是一段平实�
 
 ### Decision
 
-`Policy.decide` 的返回值，也是 Engine 分发的输入。这些变体是刻意中立的机制：`tool_calls`、`spawn_subtask`、`spawn_subtasks`、`yield_for_human`、`wait_timer`、`wait_external`、`state_patch`、`compaction_requested`、`finish`、`fail`。产品级的 control tool 不会有自己的变体——`todo_write` 和 `skill` 表达为 `state_patch`，`ask_user_question` 表达为 `yield_for_human`。
+`Policy.decide` 的返回值，也是 Engine 分发的输入。这些变体是刻意中立的机制：`tool_calls`、`spawn_subtask`、`spawn_subtasks`、`yield_for_human`、`wait_timer`、`wait_external`、`state_patch`、`compaction_requested`、`finish`、`fail`。产品级的 control tool 不会有自己的变体——`TodoWrite` 和 `skill` 表达为 `state_patch`，`AskUserQuestion` 表达为 `yield_for_human`。
 → [引擎与执行](../concepts/engine-execution.md)
 
 ### Policy
@@ -99,7 +99,7 @@ agent 可以调用的一个外部动作。`name` / `input_schema` / `description
 
 ### Skill
 
-一个本地的、静态的 LLM 工作流模板，位于 `.noeta/skills/<name>/SKILL.md`，可以附带资源文件。三个层级由低到高合并：内置、全局 `~/.noeta/skills`，然后是工作区。加载分两阶段——*菜单*（名字加一行摘要）被渲染进 `skill` control tool 的 schema，而只有被选中的那个 skill 的正文才会进入半稳定段，压缩不会把它冲掉。捆绑的资源按需取用：渲染器会在前面加上 `Base directory for this skill: <dir>`，模型再用 `read` 去读文件。**不是 Tool。**
+一个本地的、静态的 LLM 工作流模板，位于 `.noeta/skills/<name>/SKILL.md`，可以附带资源文件。三个层级由低到高合并：内置、全局 `~/.noeta/skills`，然后是工作区。加载分两阶段——*菜单*（名字加一行摘要）被渲染进 `skill` control tool 的 schema，而只有被选中的那个 skill 的正文才会进入半稳定段，压缩不会把它冲掉。捆绑的资源按需取用：渲染器会在前面加上 `Base directory for this skill: <dir>`，模型再用 `Read` 去读文件。**不是 Tool。**
 
 ### Provider
 
@@ -163,7 +163,7 @@ agent 可以调用的一个外部动作。`name` / `input_schema` / `description
 
 ### Write fence
 
-**写**类 fs 工具（`edit`、`write`、`apply_patch`）解析时所经过的那个路径包含接缝：目标必须落在会话工作区之内，或者落在宿主授权的一个额外根之下。包含判定是按路径分量进行的（`path_within`），绝不是字符串前缀，因此 `/srv/app-old` 不在 `/srv/app` 之内。**读取不受围栏限制**，而那个用于放宽的 resolver（`HostConfig.write_roots`）在每一种退化情形下都 fail closed。这是一条"刻意改动"的边界，不是进程隔离——`shell_run` 能触及整个文件系统。
+**写**类 fs 工具（`Edit`、`Write`）解析时所经过的那个路径包含接缝：目标必须落在会话工作区之内，或者落在宿主授权的一个额外根之下。包含判定是按路径分量进行的（`path_within`），绝不是字符串前缀，因此 `/srv/app-old` 不在 `/srv/app` 之内。**读取不受围栏限制**，而那个用于放宽的 resolver（`HostConfig.write_roots`）在每一种退化情形下都 fail closed。这是一条"刻意改动"的边界，不是进程隔离——`Bash` 能触及整个文件系统。
 
 ### ExecEnv
 

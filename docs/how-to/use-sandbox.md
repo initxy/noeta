@@ -58,7 +58,7 @@ export SANDBOX_API_KEY=your-container-key
 Verify the routing by asking the agent to run something that reveals where it is:
 
 ```
-shell_run(command="hostname")  →  a1b2c3d4e5f6   # the container, not your host
+Bash(command="hostname")  →  a1b2c3d4e5f6   # the container, not your host
 ```
 
 In attach mode every session shares the same container. `release` is a no-op
@@ -158,10 +158,10 @@ reconnecting host rebuilds `SandboxAuth` from its own environment.
 
 Under a sandbox, these side effects route through the session's `ExecEnv`:
 
-- **fs tools** — `read`, `write`, `edit`, `glob`, `grep`, `apply_patch`
-- **foreground shell** — `shell_run` (background shell is host-side and refused
+- **fs tools** — `Read`, `Write`, `Edit`, `Glob`, `Grep`
+- **foreground shell** — `Bash` (background shell is host-side and refused
   under a container)
-- **web egress** — `webfetch` / `web_search` go out via `curl` inside the
+- **web egress** — `WebFetch` / `WebSearch` go out via `curl` inside the
   container
 - **skill indexing** — `tree_snapshot` batches the walk into one round-trip
 - **browser tools** — `browser_navigate`, `browser_click`, … via the
@@ -203,7 +203,7 @@ options = presets.sandbox_browser_options()   # main + the web subagent, browser
 - Sandbox side effects are **not fenced** across worker generations: a worker
   whose lease expired can still `POST` to the container. Bounded by the same
   step-attempt re-drive as crashed-step side effects.
-- `shell_run`'s `timeout` is enforced client-side under a sandbox — the command
+- `Bash`'s `timeout` is enforced client-side under a sandbox — the command
   keeps running in the container after the call returns.
 
 ## Next steps

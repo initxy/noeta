@@ -40,13 +40,13 @@
 
 **症状。** Task 挂起而不是运行工具；原因写着 `tool 'X' requires human approval`。
 
-**原因。** `permission_mode` 选定了一个审批集合。`default` 对每一个声明 `risk_level` 不为 `low` 的工具设门；`acceptEdits` 应用同样的规则，但豁免 `edit`、`write` 和 `apply_patch`；`bypassPermissions` 不设任何门。一个命令落在生效 shell 白名单之外的 `shell_run` 会按调用设门，与模式无关。
+**原因。** `permission_mode` 选定了一个审批集合。`default` 对每一个声明 `risk_level` 不为 `low` 的工具设门；`acceptEdits` 应用同样的规则，但豁免 `Edit` 和 `Write`；`bypassPermissions` 不设任何门。一个命令落在生效 shell 白名单之外的 `Bash` 会按调用设门，与模式无关。
 
 **修法。** 用 `Client.approve` / `Client.deny` 处理它，或者用一个编程式的 `Options.can_use_tool` 回调，它的裁决会被记录成一个普通的审批事件。如果整类调用都应该无人值守地运行，就改 `permission_mode`。
 
 ### 写入被拒：路径解析到工作区之外
 
-**症状。** `edit`、`write` 或 `apply_patch` 返回一个错误，说路径解析到工作区之外，或落在可写白名单之外。
+**症状。** `Edit` 或 `Write` 返回一个错误，说路径解析到工作区之外，或落在可写白名单之外。
 
 **原因。** 写入工具通过 `WorkspaceRoot` 围栏解析。目标会被规范化 —— 因此 `..` 和符号链接逃逸已经被折叠 —— 并且必须落在会话工作区之内，或落在 host 授权的某个额外根目录之内。包含判断是按路径分量进行的，因此 `/srv/app-old` 不在 `/srv/app` 之内。读取不设围栏；只有写入设围栏。
 

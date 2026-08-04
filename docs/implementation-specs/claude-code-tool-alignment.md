@@ -1,6 +1,6 @@
 # Claude Code tool-surface alignment
 
-Status: draft — awaiting owner review
+Status: S0–S5 implemented 2026-08-03 (gates green per slice); S6 release pending
 Owner: initxy
 
 ## Goal
@@ -69,11 +69,11 @@ Once done, the following are true:
   solely as a fallback for host/MCP tools that still return dicts.
 - **D2 — Rename to Claude Code names.** Provider-visible `name` strings only;
   plugin/builtin directory names, capability flags, and event vocabulary keep
-  their current identifiers. `read`→`Read`, `write`→`Write`, `edit`→`Edit`,
-  `glob`→`Glob`, `grep`→`Grep`, `shell_run`→`Bash`, `shell_poll`→`BashOutput`,
-  `shell_kill`→`KillShell`, `todo_write`→`TodoWrite`,
-  `ask_user_question`→`AskUserQuestion`, `webfetch`→`WebFetch`,
-  `web_search`→`WebSearch`, `spawn_subagent`→`Task`. The `Task` tool name
+  their current identifiers. read→`Read`, write→`Write`, edit→`Edit`,
+  glob→`Glob`, grep→`Grep`, shell_run→`Bash`, shell_poll→`BashOutput`,
+  shell_kill→`KillShell`, todo_write→`TodoWrite`,
+  ask_user_question→`AskUserQuestion`, webfetch→`WebFetch`,
+  web_search→`WebSearch`, spawn_subagent→`Task`. The `Task` tool name
   coexists with the kernel `Task` primitive — docs always say "the Task tool".
 - **D3 — Delete `apply_patch`.** Claude Code has no such tool, and
   `edit.py:99` already argues against a diff applier. Hard removal.
@@ -143,11 +143,11 @@ The cross-cutting slice; everything after it is per-tool.
   pass through verbatim; residual dict outputs (host/MCP tools) use
   `json.dumps(..., ensure_ascii=False)`. Drop the `[error] ` prefix — the
   error text plus the wire-level error flag is the whole contract.
-- `read`/`shell`/`webfetch`/`web_search` stop emitting `content_ref` /
+- `Read`/`shell`/`WebFetch`/`WebSearch` stop emitting `content_ref` /
   `stdout_ref` / `stderr_ref` / `ref` fields in `output`; artifacts continue to
   carry the refs for audit.
 - `_background_exit_notice` inlines the output tail (Bash truncation rules)
-  instead of the hash; `shell_poll` inlines new output (full shape in S3).
+  instead of the hash; `BashOutput` inlines new output (full shape in S3).
 - Every `.md` loses its ref/deref/artifact language in the same commit.
 - Acceptance: a grep over `packages/noeta-sdk/noeta/builtins/**/*.md` and the
   model-facing rendering paths finds no `content_ref`/`deref`/`hash` mention;
@@ -197,7 +197,7 @@ The cross-cutting slice; everything after it is per-tool.
   item, sequenced last inside this slice).
 - `AskUserQuestion` schema and rename (D6); answer codec re-shaped; solo
   constraint kept.
-- `Task` rename and per-call shape (D8); `spawn_subagent`'s spawns-array form
+- `Task` rename and per-call shape (D8); `Task`'s spawns-array form
   is removed (hard break, matching the repo's no-compat convention).
 - Acceptance: control-tool schema goldens regenerated once per final shape;
   a turn mixing `TodoWrite` + `Read` patches todos and runs the read with every
@@ -233,7 +233,7 @@ The cross-cutting slice; everything after it is per-tool.
 - **Glob**: newline-separated workspace-relative paths (Noeta keeps relative —
   cheaper and unambiguous inside a workspace); truncation notice on cap.
 - **Grep** `content` mode: `path:line:content` per match, `-A/-B/-C` context
-  separated by `--`; `files_with_matches`: paths; `count`: `count:path` lines.
+  separated by `--`; `files_with_matches`: paths; `count`: `path:count` lines.
 - **Bash**: raw stdout; stderr appended (with a `stderr:` label only when both
   streams are non-empty); truncation per S2; exit-code line only on failure.
 - **BashOutput**: `status: running|exited(exit_code=N)` line, then new output.
