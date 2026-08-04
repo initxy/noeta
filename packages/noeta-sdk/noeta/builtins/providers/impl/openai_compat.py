@@ -234,6 +234,13 @@ class OpenAICompatProvider:
         }
         if request.tools:
             body["tools"] = request.tools
+        # ``LLMRequest`` has no tool_choice field — it rides ``metadata``, same
+        # pass-through as the Responses adapter (the summarize round-trip sets
+        # ``"none"`` so the summarizer cannot answer with a tool call). The
+        # neutral bare-string spelling is already the OpenAI wire shape.
+        tool_choice = request.metadata.get("tool_choice")
+        if tool_choice is not None:
+            body["tool_choice"] = tool_choice
         if request.temperature is not None:
             body["temperature"] = request.temperature
         if request.max_tokens is not None:

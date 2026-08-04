@@ -58,14 +58,24 @@ def test_genuine_user_turn_stays_role_user() -> None:
 
 
 def test_price_resolves_alias() -> None:
+    from noeta.builtins.providers.impl.catalog import ALIASES
+
     usage = Usage(uncached=1_000_000, cache_read=0, cache_write=0, output=0)
-    # alias and resolved real id price identically, byte for byte, no KeyError.
-    assert price("opus", usage) == price("claude-opus-4-8", usage)
+    # alias and resolved real id price identically, byte for byte. Written
+    # against the alias TABLE, not a pinned id: two generations can share a
+    # price, which would make a hard-coded id pass for the wrong reason.
+    assert price("opus", usage) == price(ALIASES["opus"], usage)
+    assert price("opus", usage) > 0.0
 
 
 def test_spec_for_resolves_alias() -> None:
-    assert spec_for("opus").real_model_id == "claude-opus-4-8"
-    assert spec_for("sonnet") is spec_for("claude-sonnet-4-6")
+    # The aliases track the current generation (see ``ALIASES``); what this
+    # case pins is that ``spec_for`` goes THROUGH the table rather than around
+    # it, so it is written against the table instead of a frozen id.
+    from noeta.builtins.providers.impl.catalog import ALIASES
+
+    assert spec_for("opus").real_model_id == ALIASES["opus"]
+    assert spec_for("sonnet") is spec_for(ALIASES["sonnet"])
 
 
 # --- anthropic: overflow marker tightening ----------------------------------

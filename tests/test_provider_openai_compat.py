@@ -66,6 +66,7 @@ def _basic_request(
     output_schema: dict[str, Any] | None = None,
     thinking: str | None = None,
     effort: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> LLMRequest:
     return LLMRequest(
         model=model,
@@ -77,6 +78,7 @@ def _basic_request(
         output_schema=output_schema,
         thinking=thinking,
         effort=effort,
+        metadata=metadata or {},
     )
 
 
@@ -615,6 +617,31 @@ def test_system_field_is_prepended_to_outbound_messages() -> None:
         "content": "be terse\nanswer in en",
     }
     assert body["messages"][1] == {"role": "user", "content": "hello"}
+
+
+# ---------------------------------------------------------------------------
+# tool_choice metadata pass-through
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+def test_metadata_tool_choice_rides_the_wire_verbatim() -> None:
+    """``LLMRequest`` has no tool_choice field; the summarize round-trip sets
+    ``metadata["tool_choice"] = "none"`` so the summarizer cannot answer with a
+    tool call. The neutral bare-string spelling is already the OpenAI wire
+    shape, and a request without the metadata key sends no ``tool_choice``."""
+    route = respx.post(CHAT_ENDPOINT).mock(
+        return_value=httpx.Response(200, json=_chat_response())
+    )
+
+    provider = _make_provider()
+    provider.complete(_basic_request(metadata={"tool_choice": "none"}))
+    provider.complete(_basic_request())
+
+    with_choice = json.loads(route.calls[0].request.content)
+    without = json.loads(route.calls[1].request.content)
+    assert with_choice["tool_choice"] == "none"
+    assert "tool_choice" not in without
 
 
 # ---------------------------------------------------------------------------

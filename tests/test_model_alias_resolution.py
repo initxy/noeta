@@ -80,7 +80,10 @@ def test_start_resolves_alias_to_real_model_id_in_model_bound(
     bound = [e for e in event_log.read(out.task_id) if e.type == "ModelBound"]
     assert len(bound) == 1
     # The friendly alias 'opus' is resolved to its real id before binding.
-    assert bound[0].payload.model == resolve_alias("opus") == "claude-opus-4-8"
+    # Asserted against the alias TABLE (which tracks the current generation),
+    # plus the fact that the friendly name itself never reaches the ledger.
+    assert bound[0].payload.model == resolve_alias("opus")
+    assert bound[0].payload.model != "opus"
 
 
 def test_bound_model_matches_resolver_lookup(tmp_path: Path) -> None:

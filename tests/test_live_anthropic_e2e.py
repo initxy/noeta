@@ -239,15 +239,15 @@ def test_live_anthropic_subagent_delegation(tmp_path: Path) -> None:
 def test_live_anthropic_image_input() -> None:
     from noeta.builtins.providers.impl.anthropic import (
         AnthropicProvider,
-        _model_supports_vision,
+        _model_admits_images,
     )
 
     vision_model = _live_env.live_vision_model()
-    if not vision_model or not _model_supports_vision(vision_model):
+    if not vision_model or not _model_admits_images(vision_model):
         pytest.skip(
-            "image chain needs NOETA_LIVE_VISION_MODEL set to a catalog "
-            f"vision-capable model (got {vision_model!r}); the adapter guard "
-            "refuses images to non-vision models"
+            "image chain needs NOETA_LIVE_VISION_MODEL set to an image-"
+            f"admitting model (got {vision_model!r}); the adapter guard "
+            "refuses images to catalogued non-vision models"
         )
     # The ContentStore holds the real bytes; only the small ImageBlock(ContentRef)
     # handle travels through the request until the adapter dereferences it.

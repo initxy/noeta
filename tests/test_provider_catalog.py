@@ -12,12 +12,15 @@ leak in as a field name, or the cost math would fork per vendor.
 from __future__ import annotations
 
 import inspect
+import logging
 
 import pytest
 
 from noeta.protocols.messages import Usage
+from noeta.builtins.providers.impl import catalog as catalog_mod
 from noeta.builtins.providers.impl.catalog import (
     ALIASES,
+    CATALOG,
     ModelSpec,
     price,
     resolve_alias,
@@ -109,7 +112,13 @@ def test_claude_rows_are_vision_capable() -> None:
     """Modern Claude models are multimodal: opus / sonnet / haiku all carry
     supports_vision=True so the Anthropic adapter's vision guard recognises they
     can read images (otherwise an image chain would always degrade/block)."""
-    for model_id in ("claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"):
+    for model_id in (
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-opus-4-8",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+    ):
         assert spec_for(model_id).supports_vision is True
 
 
@@ -135,6 +144,46 @@ def test_aliases_cover_opus_sonnet_haiku() -> None:
     for alias in ("opus", "sonnet", "haiku"):
         assert resolve_alias(alias) == ALIASES[alias]
         assert spec_for(resolve_alias(alias)).real_model_id == ALIASES[alias]
+
+
+def test_aliases_point_at_the_current_generation() -> None:
+    """``opus`` / ``sonnet`` follow the vendor forward so a host that binds the
+    friendly name gets the current model without a code change. ``haiku`` stays
+    on 4.5 — there is no haiku 5."""
+    assert ALIASES["opus"] == "claude-opus-5"
+    assert ALIASES["sonnet"] == "claude-sonnet-5"
+    assert ALIASES["haiku"] == "claude-haiku-4-5"
+
+
+def test_superseded_rows_stay_addressable_by_full_id() -> None:
+    """Repointing an alias must not retire the generation it left behind: a
+    caller who deliberately pinned ``claude-opus-4-8`` keeps its real window,
+    output cap and prices."""
+    for model_id in ("claude-opus-4-8", "claude-sonnet-4-6"):
+        spec = spec_for(model_id)
+        assert spec.real_model_id == model_id
+        assert spec.context_window > 0
+        assert spec.is_priced
+
+
+def test_5_generation_rows_carry_window_output_and_prices() -> None:
+    """The new rows are complete: guards, budget math and cost accounting all
+    read from them, and a half-filled row degrades each of those silently."""
+    for model_id in ("claude-opus-5", "claude-sonnet-5"):
+        spec = spec_for(model_id)
+        assert spec.real_model_id == model_id
+        assert spec.context_window == 1_000_000
+        assert spec.max_output_tokens == 128_000
+        assert spec.is_reasoning is True
+        assert spec.supports_vision is True
+        assert spec.is_priced
+        # Anthropic's published tiering: read ≈ 0.1x input, write ≈ 1.25x.
+        assert spec.cache_read_price_per_mtok == pytest.approx(
+            spec.input_price_per_mtok * 0.1
+        )
+        assert spec.cache_write_price_per_mtok == pytest.approx(
+            spec.input_price_per_mtok * 1.25
+        )
 
 
 def test_resolve_alias_passes_through_unknown_value() -> None:
@@ -190,12 +239,83 @@ def test_price_empty_usage_is_zero() -> None:
     assert price("claude-opus-4-8", Usage()) == 0.0
 
 
-def test_price_unknown_model_raises_keyerror() -> None:
-    """Unknown model-id semantics are fixed: spec_for / price raise KeyError."""
+def test_spec_for_unknown_model_raises_keyerror() -> None:
+    """``spec_for`` stays strict — it hands back a spec or nothing, and every
+    caller that can survive a miss goes through ``CATALOG.get`` instead."""
     with pytest.raises(KeyError):
         spec_for("totally-unknown-model")
-    with pytest.raises(KeyError):
-        price("totally-unknown-model", Usage(uncached=10))
+
+
+# ---------------------------------------------------------------------------
+# Unknown / unpriced models: warn, never silently charge $0
+# ---------------------------------------------------------------------------
+
+
+def _price_warnings(
+    caplog: pytest.LogCaptureFixture, model: str, usage: Usage
+) -> list[str]:
+    """Price ``model`` twice with a cleared warn-once slot; return the lines."""
+    catalog_mod._WARNED.discard(("pricing", resolve_alias(model)))
+    caplog.clear()
+    with caplog.at_level(
+        logging.WARNING, logger="noeta.builtins.providers.impl.catalog"
+    ):
+        price(model, usage)
+        price(model, usage)
+    return [r.getMessage() for r in caplog.records if model in r.getMessage()]
+
+
+def test_price_uncatalogued_model_warns_once_and_charges_zero(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """0.0 keeps the return type and the fold arithmetic stable — the WARNING
+    is what stops "unknown" from being indistinguishable from "free". Once per
+    model id, not once per round-trip, or a long session drowns in it."""
+    usage = Usage(uncached=1_000_000, output=1_000_000)
+    assert price("totally-unknown-model", usage) == 0.0
+    lines = _price_warnings(caplog, "totally-unknown-model", usage)
+    assert len(lines) == 1
+    assert "not in the catalog" in lines[0]
+
+
+def test_price_catalogued_but_unpriced_row_warns_once_and_charges_zero(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The gateway rows carry a window and a vision bit but no rate card. They
+    used to fake $0.00, which reads as "this model is free"; absent prices are
+    now a distinct state that takes the same warn-and-zero path as an
+    uncatalogued id."""
+    spec = spec_for("gpt-5.5-2026-04-24")
+    assert spec.is_priced is False
+    assert spec.input_price_per_mtok is None
+    usage = Usage(uncached=1_000_000, output=1_000_000)
+    assert price("gpt-5.5-2026-04-24", usage) == 0.0
+    lines = _price_warnings(caplog, "gpt-5.5-2026-04-24", usage)
+    assert len(lines) == 1
+    assert "without published prices" in lines[0]
+
+
+def test_priced_rows_do_not_warn(caplog: pytest.LogCaptureFixture) -> None:
+    """The warning is scoped to the unknown states: a fully-priced row must
+    stay silent, or the signal is worthless."""
+    usage = Usage(uncached=1_000_000, output=1_000_000)
+    lines = _price_warnings(caplog, "claude-opus-5", usage)
+    assert lines == []
+
+
+def test_every_catalogued_row_is_either_priced_or_wholly_unpriced() -> None:
+    """``is_priced`` is a row-level state, so a half-filled row (two rates set,
+    two absent) would charge 0.0 while looking priced at a glance. None exist."""
+    for model_id, spec in CATALOG.items():
+        rates = (
+            spec.input_price_per_mtok,
+            spec.output_price_per_mtok,
+            spec.cache_read_price_per_mtok,
+            spec.cache_write_price_per_mtok,
+        )
+        assert all(r is None for r in rates) or all(r is not None for r in rates), (
+            f"{model_id} is partially priced"
+        )
 
 
 # ---------------------------------------------------------------------------

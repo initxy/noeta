@@ -767,8 +767,12 @@ def test_output_schema_thinking_effort_excluded_from_identity() -> None:
     opts_c = Options(
         system_prompt="be terse",
         name="main",
+        # ``disabled`` + a top-of-ramp effort is now rejected at construction
+        # (a hard 400 on current Anthropic models), so the identity check uses
+        # the highest legal pairing instead — the point of the case is the
+        # *different* wiring values, not the specific effort level.
         thinking="disabled",
-        effort="max",
+        effort="high",
         output_schema={"type": "array"},
     )
     main_a, _ = compile_options(opts_a)
@@ -796,6 +800,53 @@ def test_effort_invalid_value_raises_valueerror() -> None:
     # Valid values.
     for v in ("low", "medium", "high", "xhigh", "max", None):
         Options(system_prompt="hi", effort=v)
+
+
+def test_thinking_disabled_with_top_effort_raises_valueerror() -> None:
+    """``thinking='disabled'`` above effort ``high`` is a documented hard 400 on
+    current Anthropic models. Both fields ride EVERY LLMRequest of the session,
+    so the pair is not one bad call but a wall the whole session hits — it has
+    to fail at construction, where the message can name both fields and say
+    why, instead of surfacing as an opaque provider error on the first turn.
+    """
+    for bad in ("xhigh", "max"):
+        with pytest.raises(ValueError) as excinfo:
+            Options(system_prompt="hi", thinking="disabled", effort=bad)
+        message = str(excinfo.value)
+        # Names BOTH fields and the reason, so the fix is readable off the error.
+        assert "thinking" in message
+        assert "effort" in message
+        assert bad in message
+        assert "400" in message
+
+
+def test_every_other_thinking_effort_combination_is_accepted() -> None:
+    """The guard is scoped to exactly the illegal pair: disabled thinking is
+    fine up to ``high``, and adaptive / unset thinking is fine at every level.
+    """
+    for effort in ("low", "medium", "high", "xhigh", "max", None):
+        Options(system_prompt="hi", thinking="adaptive", effort=effort)
+        Options(system_prompt="hi", thinking=None, effort=effort)
+    for effort in ("low", "medium", "high", None):
+        Options(system_prompt="hi", thinking="disabled", effort=effort)
+
+
+def test_compaction_model_is_wiring_not_identity() -> None:
+    """``compaction_model`` picks a cheaper model for the summarize round-trip.
+    Which model condensed a summary does not change what the agent IS, so it
+    rides the same wiring channel as ``model``: out of the compiled spec, and
+    out of ``Options`` equality.
+    """
+    plain = Options(system_prompt="be terse", name="main")
+    cheap = Options(
+        system_prompt="be terse", name="main", compaction_model="haiku"
+    )
+    assert cheap.compaction_model == "haiku"
+    assert plain.compaction_model is None
+    assert plain == cheap
+    main_plain, _ = compile_options(plain)
+    main_cheap, _ = compile_options(cheap)
+    assert main_plain == main_cheap
 
 
 def test_output_schema_non_mapping_raises_valueerror() -> None:

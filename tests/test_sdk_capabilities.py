@@ -52,9 +52,17 @@ def test_model_capabilities_projects_catalog_vision() -> None:
     # Exactly one key, named the way the provider's own vision guard names it.
     # Pinned because the reference docs once promised `vision` plus "…more".
     assert set(caps[vision_ids[0]]) == {"supports_vision"}
-    # The known vision id reports True; the uncatalogued stub fails closed.
+    # The known vision id reports True. The uncatalogued stub ALSO reports
+    # True: the adapter admits an unknown model's images and defers to the
+    # provider, so the gate must match what the request would accept. Only a
+    # catalogued supports_vision=False row refuses.
     assert caps[vision_ids[0]]["supports_vision"] is True
-    assert caps["stub-model"]["supports_vision"] is False
+    assert caps["stub-model"]["supports_vision"] is True
+    non_vision = [k for k, v in catalog.CATALOG.items() if not v.supports_vision]
+    assert non_vision, "catalog should carry at least one non-vision row"
+    assert model_capabilities([non_vision[0]])[non_vision[0]][
+        "supports_vision"
+    ] is False
 
 
 def test_model_capabilities_empty_list() -> None:
