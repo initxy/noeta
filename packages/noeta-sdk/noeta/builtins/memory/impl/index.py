@@ -45,6 +45,8 @@ MemoryEntries = tuple[tuple[str, str, str], ...]
 
 __all__ = [
     "DEFAULT_RECALL_MAX_HITS",
+    "RECALL_BODY_MAX_BYTES",
+    "RECALL_TOTAL_MAX_BYTES",
     "RecallHit",
     "build_memory_renderer",
     "format_recall_text",
@@ -59,16 +61,54 @@ __all__ = [
 #: Recall injection cap — keeps a chatty match from flooding the turn.
 DEFAULT_RECALL_MAX_HITS = 5
 
+#: Per-body inline cap. A tier-1 hit whose file is larger than this does NOT
+#: ride inline: it degrades WHOLE to its index line (the tier-2 pointer
+#: shape), so the model still learns the memory exists and pays for the text
+#: only by calling ``memory_read`` — which caps at ``INLINE_CONTENT_MAX_BYTES``
+#: and reports the trim. Truncating mid-body was rejected: a half memory reads
+#: as a complete one, and a note whose second half contradicts its first is
+#: exactly the shape long memories take.
+RECALL_BODY_MAX_BYTES = 4096
+#: Total inline budget for ONE recall turn, across every tier-1 body. Once it
+#: is spent the remaining hits ride as pointer lines, so a five-hit turn has a
+#: bounded worst case instead of five whole files.
+RECALL_TOTAL_MAX_BYTES = 16384
+
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 #: Scripts written without spaces (CJK ideographs, kana, hangul). The word
 #: rule finds *nothing* in them, so they are tokenised separately.
 _CJK_RUN_RE = re.compile(
     r"[぀-ヿ㐀-䶿一-鿿豈-﫿가-힯]+"
 )
-#: Name tokens shorter than this never match (single letters are noise);
-#: two-letter slugs like ``ci`` / ``db`` stay recallable. Applies to the
-#: word rule only — a CJK bigram is always 2 characters by construction.
-_MIN_TOKEN_LEN = 2
+#: Word tokens shorter than this never match. Applies to the WORD rule only
+#: — a CJK bigram is 2 characters by construction and must stay exempt, or
+#: recall goes silently dead for every space-free script. Three (not two)
+#: because a tier-1 hit spends a whole memory body on ONE shared token, and
+#: two-letter fragments (``db``, ``ci``, the tail of a hyphenated slug) share
+#: far too easily with ordinary prose; a two-letter term is still reachable
+#: through ``memory_search``.
+_MIN_TOKEN_LEN = 3
+
+#: Word tokens too common to be evidence of anything. Same reasoning as the
+#: length floor and the same blast radius: without it a memory named
+#: ``user-preferences`` fires tier-1 — a whole body inline — on any message
+#: containing "user". Deliberately small and closed: a stopword list is a
+#: precision knob, not a language model, and every entry here is a word no
+#: author would choose as the distinguishing half of a memory slug. The CJK
+#: path never consults it.
+_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "about", "after", "again", "all", "and", "any", "are", "been",
+        "before", "being", "but", "can", "could", "did", "does", "for",
+        "from", "had", "has", "have", "her", "him", "his", "how", "into",
+        "its", "just", "like", "may", "more", "much", "not", "now", "one",
+        "only", "other", "our", "out", "over", "please", "same", "she",
+        "should", "some", "such", "than", "that", "the", "their", "them",
+        "then", "there", "these", "they", "this", "those", "too", "use",
+        "very", "was", "were", "what", "when", "where", "which", "who",
+        "why", "will", "with", "would", "you", "your",
+    }
+)
 #: Tier-2 (summary) matching needs this many distinct overlapping tokens
 #: — a single shared prose word is too noisy to recall on. In a
 #: space-free script the same threshold reads as "one shared word of 3+
@@ -175,11 +215,19 @@ def memory_content_kind(entries: MemoryEntries) -> ContentKindSpec:
 def _tokens(value: str) -> set[str]:
     """Match tokens, by script.
 
-    A space-separated run is one token per word. A CJK run becomes its
-    **character bigrams**, because the word rule finds nothing at all in a
-    script written without spaces — a wholly Chinese/Japanese/Korean message
-    would yield an empty token set, which :func:`match_memories_tiered`
-    early-returns on, making recall silently dead rather than merely weak.
+    A space-separated run is one token per word, **filtered**: a word shorter
+    than :data:`_MIN_TOKEN_LEN` or listed in :data:`_STOPWORDS` is not
+    evidence, so it never reaches either tier. The filter is what keeps
+    tier-1's threshold of one honest — one shared token buys a whole memory
+    body, so that token has to mean something.
+
+    A CJK run becomes its **character bigrams**, because the word rule finds
+    nothing at all in a script written without spaces — a wholly
+    Chinese/Japanese/Korean message would yield an empty token set, which
+    :func:`match_memories_tiered` early-returns on, making recall silently
+    dead rather than merely weak. The length floor and the stopword set are
+    the word rule's alone and MUST NOT touch bigrams: every bigram is exactly
+    2 characters, so a shared floor would delete the space-free path outright.
 
     Bigrams are the standard segmenter-free approximation ("记忆机制" →
     ``{记忆, 忆机, 机制}``, which a "记忆" query meets) and keep this module's
@@ -189,7 +237,9 @@ def _tokens(value: str) -> set[str]:
     """
     lowered = value.lower()
     tokens = {
-        t for t in _TOKEN_RE.findall(lowered) if len(t) >= _MIN_TOKEN_LEN
+        t
+        for t in _TOKEN_RE.findall(lowered)
+        if len(t) >= _MIN_TOKEN_LEN and t not in _STOPWORDS
     }
     for run in _CJK_RUN_RE.findall(lowered):
         if len(run) == 1:
@@ -213,9 +263,12 @@ def match_memories_tiered(
     for what the difference buys).
 
     Tier 1: a memory hits when any token of its NAME appears in the user
-    text — names are author-chosen slugs, so one shared token is high-signal.
-    Tier 2: an entry not already hit by name hits when its SUMMARY shares at
-    least ``_SUMMARY_MIN_OVERLAP`` distinct tokens, because prose needs more
+    text — names are author-chosen slugs, so one *filtered* shared token is
+    high-signal (:func:`_tokens` has already dropped stopwords and words
+    under :data:`_MIN_TOKEN_LEN`, which is what stops a slug like
+    ``deploy-the-thing`` from firing on "the"). Tier 2: an entry not already
+    hit by name hits when its SUMMARY shares at least
+    ``_SUMMARY_MIN_OVERLAP`` distinct tokens, because prose needs more
     evidence than a slug. The ``type`` field never participates.
 
     Order is tier-1 hits in index order, then tier-2 hits in index order,
@@ -280,6 +333,13 @@ def format_recall_text(hits: tuple[RecallHit, ...]) -> str:
     from spending five whole memories of context on a maybe, which is what
     makes the looser space-free-script matching in :func:`_tokens`
     affordable.
+
+    Depth is also **budgeted**: a hit that arrives with ``full=False``
+    renders as a pointer whatever its tier, which is how
+    :func:`~noeta.builtins.memory.impl.recall.recall_memories` degrades a
+    body over :data:`RECALL_BODY_MAX_BYTES` (or one that would overrun
+    :data:`RECALL_TOTAL_MAX_BYTES`) without this renderer needing to know
+    why. Nothing here ever truncates: the split is whole-hit.
 
     Either way the injected text is copied verbatim from the store. A
     closing frame line marks the whole turn as fallible background — a

@@ -3,9 +3,14 @@
 The plugin reaches a session only through the generic surfaces: its content
 kind and init hook ride a ``session_pack`` contribution and recall rides the
 ``intake_reminder_providers`` seam, so the kernel never imports the store.
-The entries snapshot is taken once per session and shared by the composer's
-renderer and the init hook, which is what keeps the recorded fingerprint
-equal to what the model saw.
+
+Freshness is the init hook's job, not the renderer's. The hook re-reads the
+store every time it is invoked — at task seed, at a subtask drain, and at each
+new goal on a resumed task — and records what it finds; the recorder drops a
+re-record whose hash is unchanged, so the common case appends nothing. The
+renderer stays pure over ``(folded state, content store)``: it composes the
+bytes the ledger's active hash resolves to and never looks at disk, so the same
+ledger always composes to the same View.
 """
 
 from __future__ import annotations
@@ -76,8 +81,11 @@ def build_memory_pack(
 
     ``root`` is the operator-resolved store root; ``None`` falls back to
     ``DEFAULT_GLOBAL_MEMORY_DIR``, read LATE off the store module so a test
-    pinning that attribute stays hermetic. The entries snapshot is taken ONCE
-    here so the renderer and the init hook cannot disagree.
+    pinning that attribute stays hermetic. The entries snapshot is the
+    **build-time** index fingerprint (what :func:`memory_content_kind` reports
+    through the generic ``content_hashes`` seam); what actually enters context
+    is whatever the init hook records, which it re-reads from ``store`` at
+    invocation.
     """
     resolved = root if root is not None else _store_mod.DEFAULT_GLOBAL_MEMORY_DIR
     memory_store = load_memory_store(root=resolved)
@@ -101,15 +109,27 @@ def build_memory_session_pack(ctx: SessionBuildContext) -> PackContribution:
     content_store = ctx.content_store
 
     def _init(rec: SessionRecorder) -> None:
-        """Pre-loop activation of the index resident.
+        """Pre-loop activation of the index resident — re-read at invocation.
 
-        Serialises the SAME entries the composer's renderer holds, so the
-        ledger fully determines the composed index and ``ref.hash`` is the
-        rendered-index sha256. Empty entries leave the ledger untouched.
+        The store is scanned HERE, not closed over from build time: this hook
+        reruns whenever a turn is seeded, and a memory the model wrote mid-task
+        must reach the index on the next turn. A build-time snapshot could not
+        — the Engine is cached across turns (and across tasks), so the closure
+        would keep re-recording the same stale bytes for the life of the cache
+        entry.
+
+        The recorded ``ref.hash`` is the rendered-index sha256, so the ledger
+        fully determines the composed index and the renderer stays pure.
+        Rerunning is cheap and idempotent: an unchanged store re-renders the
+        same bytes and the recorder drops the re-record; a changed store
+        records exactly one refresh, which moves bytes but never placement
+        (the activation anchor is first-write-wins). An empty store leaves the
+        ledger untouched.
         """
-        if not entries:
+        live_entries = store.entries()
+        if not live_entries:
             return
-        body = render_memory_index_text(entries).encode("utf-8")
+        body = render_memory_index_text(live_entries).encode("utf-8")
         ref = content_store.put(body, media_type="text/markdown")
         rec.record_content(
             kind=MEMORY_KIND,

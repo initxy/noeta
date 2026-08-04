@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
 from tests._session_inputs import default_factory_kwargs
 from noeta.agent.spec import agent_activates
@@ -30,6 +31,7 @@ from noeta.client.consolidation import (
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.events import EventEnvelope, MessagesAppendedPayload
 from noeta.protocols.messages import LLMResponse, Message, TextBlock, Usage
+from noeta.client.options import DEFAULT_PLUGINS
 from noeta.sdk import AgentDefinition, Client, HostConfig, Options
 from noeta.storage.memory import (
     InMemoryContentStore,
@@ -64,7 +66,15 @@ def _internal_agent() -> AgentDefinition:
     )
 
 
-def _client(tmp_path: Path, responses, *, agents=None, clock=None) -> Client:
+def _client(
+    tmp_path: Path,
+    responses,
+    *,
+    agents=None,
+    clock=None,
+    plugins: tuple[str, ...] = (),
+    memory_dir: Optional[Path] = None,
+) -> Client:
     dispatcher = InMemoryDispatcher()
     event_log = InMemoryEventLog(lease_validator=dispatcher, clock=clock)
     options = Options(
@@ -73,6 +83,7 @@ def _client(tmp_path: Path, responses, *, agents=None, clock=None) -> Client:
         allowed_tools=(),
         permission_mode="bypassPermissions",
         agents=dict(agents or {}),
+        plugins=plugins or DEFAULT_PLUGINS,
     )
     return Client(
         options,
@@ -83,6 +94,7 @@ def _client(tmp_path: Path, responses, *, agents=None, clock=None) -> Client:
             event_log=event_log,
             content_store=InMemoryContentStore(),
             dispatcher=dispatcher,
+            memory_dir=memory_dir,
         ),
     )
 
@@ -498,3 +510,90 @@ def test_consolidation_tool_surface_is_memory_pack_only(tmp_path: Path) -> None:
         MEMORY_SEARCH_TOOL_NAME,
         MEMORY_ARCHIVE_TOOL_NAME,
     }
+
+
+# ---------------------------------------------------------------------------
+# 5. Auto-recall is not wired for the curator (D10)
+# ---------------------------------------------------------------------------
+
+
+def _memory_curator() -> AgentDefinition:
+    """The consolidation agent's shape: memory-only, like the real preset."""
+    return AgentDefinition(
+        description="internal curation stand-in",
+        prompt="curate the store",
+        tools=(),
+        plugins=("memory",),
+    )
+
+
+def test_consolidation_seed_carries_no_recall(tmp_path: Path) -> None:
+    """The curator's goal is a digest of sessions, not a user message, so
+    recall must not run against it.
+
+    Left wired, every consolidation run opens by matching the whole digest
+    against the store and injecting the memories it is there to curate — the
+    digest quotes the sessions that wrote them, so it hits, and it hits wide.
+    The identical goal on ``main`` still recalls, which is what makes this a
+    rule about the reserved agent rather than a broken switch.
+    """
+    mem = tmp_path / "memories"
+    mem.mkdir()
+    (mem / "deploy-notes.md").write_text(
+        "# Deploy notes\nAlways run smoke tests.\n", encoding="utf-8"
+    )
+    goal = "Memory consolidation run: the digest mentions deploy-notes."
+
+    client = _client(
+        tmp_path,
+        [_end("curated")],
+        agents={CONSOLIDATION_AGENT_NAME: _memory_curator()},
+        memory_dir=mem,
+    )
+    try:
+        out = client.start(goal=goal, agent=CONSOLIDATION_AGENT_NAME)
+        curator_items = client.messages(out.task_id)
+    finally:
+        client.shutdown()
+    assert not [
+        item for item in curator_items
+        if getattr(item, "origin", None) == "memory"
+    ]
+
+    # Control: the same goal, the same store, an ordinary memory-on agent.
+    control = _client(
+        tmp_path,
+        [_end("answered")],
+        plugins=("fs", "memory"),
+        memory_dir=mem,
+    )
+    try:
+        out = control.start(goal=goal)
+        main_items = control.messages(out.task_id)
+    finally:
+        control.shutdown()
+    recalled = [
+        item for item in main_items
+        if getattr(item, "origin", None) == "memory"
+    ]
+    assert recalled, "the control agent must still recall on the same goal"
+
+
+def test_intake_providers_skip_only_the_reserved_curator(tmp_path: Path) -> None:
+    """The seam itself: same host, same store, two agents — the curator gets
+    an empty provider tuple, an ordinary memory agent gets the recall
+    provider. Pinned here because the rule lives in one ``if``."""
+    from tests._sdk_session import make_host, make_registry, runner_main_spec
+    import dataclasses
+
+    main_spec = runner_main_spec("main", memory=True)
+    curator_spec = dataclasses.replace(main_spec, name=CONSOLIDATION_AGENT_NAME)
+    host = make_host(
+        make_registry(main_spec, curator_spec),
+        workspace_dir=tmp_path,
+        provider=FakeLLMProvider(responses=[]),
+        model="stub-model",
+        global_memory_dir=tmp_path / "memories",
+    )
+    assert host.intake_reminder_providers("main")
+    assert host.intake_reminder_providers(CONSOLIDATION_AGENT_NAME) == ()

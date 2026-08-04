@@ -20,10 +20,13 @@ from pathlib import Path
 from noeta.context.composer import ThreeSegmentComposer
 from noeta.context.content_channel import ContentChannelRegistry
 from noeta.builtins.memory.impl.index import (
+    DEFAULT_RECALL_MAX_HITS,
     MEMORY_DRIFT_POLICY,
     MEMORY_INDEX_NAME,
     MEMORY_INDEX_VERSION,
     MEMORY_KIND,
+    RECALL_BODY_MAX_BYTES,
+    RECALL_TOTAL_MAX_BYTES,
     RecallHit,
     _tokens,
     build_memory_renderer,
@@ -175,10 +178,27 @@ def test_match_multiple_hits_keep_index_order_and_cap() -> None:
     assert hits == ("topic-0", "topic-1", "topic-2")
 
 
-def test_match_short_name_tokens_still_hit() -> None:
-    assert match_memories(
-        (("ci-pipeline", "CI notes", ""),), "the ci failed"
-    ) == ("ci-pipeline",)
+def test_match_two_letter_name_token_no_longer_hits() -> None:
+    """The token floor is 3: a two-letter slug fragment is not evidence.
+
+    Was 2, which let ``ci`` / ``db`` / any hyphenated tail fire tier-1 — a
+    whole memory body inline — off a passing mention. The memory stays
+    reachable through its real token, and through ``memory_search``.
+    """
+    entries = (("ci-pipeline", "CI notes", ""),)
+    assert match_memories(entries, "the ci failed") == ()
+    assert match_memories(entries, "the pipeline failed") == ("ci-pipeline",)
+
+
+def test_match_ignores_stopword_only_overlap() -> None:
+    """A message sharing only stopwords with a memory injects nothing.
+
+    Both tiers read the same filtered tokens, so ``how-we-deploy`` does not
+    hit on "how" (stopword) or "we" (two letters) — only on "deploy".
+    """
+    entries = (("how-we-deploy", "what the team should do for a release", ""),)
+    assert match_memories(entries, "how are you? what should we do?") == ()
+    assert match_memories(entries, "how do we deploy?") == ("how-we-deploy",)
 
 
 def test_match_summary_needs_two_distinct_tokens() -> None:
@@ -385,6 +405,53 @@ def test_recall_tier1_keeps_the_body_inline(tmp_path: Path) -> None:
     hits = recall_memories(store, "how is pgbouncer-setup configured?")
     assert [(h.name, h.full) for h in hits] == [("pgbouncer-setup", True)]
     assert "Use pgbouncer." in format_recall_text(hits)
+
+
+def test_recall_oversized_body_degrades_to_a_pointer(tmp_path: Path) -> None:
+    """A tier-1 hit bigger than the per-body cap rides as its index line.
+
+    Recall is uninvited context, so an unbounded body is the model's problem
+    and not its choice. The degradation is WHOLE — no truncated body — and it
+    keeps the ``memory_read`` affordance, so nothing is lost but the bytes.
+    """
+    store = MemoryStore(root=tmp_path / "memories")
+    big = "x" * (RECALL_BODY_MAX_BYTES + 1)
+    store.write(
+        "huge-runbook",
+        f"---\ndescription: the long runbook\n---\n{big}",
+    )
+    hits = recall_memories(store, "walk me through the huge-runbook")
+    assert [(h.name, h.full) for h in hits] == [("huge-runbook", False)]
+    assert hits[0].text == "the long runbook"
+    rendered = format_recall_text(hits)
+    assert "Possibly relevant memories" in rendered
+    assert "memory_read" in rendered
+    assert big not in rendered
+    # A body at exactly the cap still rides inline (the boundary is inclusive).
+    store.write("just-fits", "y" * RECALL_BODY_MAX_BYTES)
+    fitted = recall_memories(store, "check just-fits")
+    assert [(h.name, h.full) for h in fitted] == [("just-fits", True)]
+
+
+def test_recall_total_budget_degrades_the_tail(tmp_path: Path) -> None:
+    """The turn's total inline budget is spent in hit order: the early
+    (highest-confidence) hits keep their bodies, the tail degrades."""
+    store = MemoryStore(root=tmp_path / "memories")
+    body = "z" * (RECALL_BODY_MAX_BYTES - 100)
+    for i in range(5):
+        store.write(
+            f"budget-note-{i}",
+            f"---\ndescription: note {i}\n---\n{body}",
+        )
+    hits = recall_memories(store, "review every budget-note please")
+    assert len(hits) == DEFAULT_RECALL_MAX_HITS
+    inline = [h for h in hits if h.full]
+    # 4 * (4096 - 100 + frontmatter) fits under 16384; the 5th cannot.
+    assert [h.name for h in inline] == [f"budget-note-{i}" for i in range(4)]
+    assert hits[4].name == "budget-note-4" and hits[4].full is False
+    assert sum(len(h.text.encode("utf-8")) for h in inline) <= (
+        RECALL_TOTAL_MAX_BYTES
+    )
 
 
 def test_recall_pointer_survives_an_empty_summary(tmp_path: Path) -> None:
@@ -613,10 +680,19 @@ def test_cjk_text_produces_bigram_tokens() -> None:
     assert _tokens("钱") == {"钱"}  # a lone character still tokenises
 
 
-def test_ascii_tokenisation_is_unchanged() -> None:
+def test_ascii_tokenisation_drops_stopwords_and_short_words() -> None:
+    # "the" is a stopword, "ci" and "a" are under the 3-character floor.
     assert _tokens("Deploy the CI pipeline, a step") == {
-        "deploy", "the", "ci", "pipeline", "step",
-    }  # single-letter "a" still dropped
+        "deploy", "pipeline", "step",
+    }
+
+
+def test_token_filters_never_touch_cjk_bigrams() -> None:
+    """The floor is the WORD rule's alone — every bigram is 2 characters, so
+    sharing the filter would delete the space-free path outright."""
+    assert _tokens("记忆机制") == {"记忆", "忆机", "机制"}
+    # Mixed text: the word half is filtered, the CJK half is not.
+    assert _tokens("the 记忆 and deploy") == {"deploy", "记忆"}
 
 
 def test_mixed_script_text_tokenises_both_halves() -> None:

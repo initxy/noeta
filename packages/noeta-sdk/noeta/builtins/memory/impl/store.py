@@ -31,7 +31,9 @@ and the recall glue in ``noeta.builtins.memory.impl.recall``.
 
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -174,9 +176,38 @@ class MemoryStore:
         return self.root / f"{name}{MEMORY_FILE_SUFFIX}"
 
     def write(self, name: str, text: str) -> Path:
+        """Replace ``<name>.md`` atomically — write a sibling temp, then rename.
+
+        A plain ``write_text`` truncates first, so a reader that lands in the
+        window (``entries()`` on every session build, ``search()``, recall on
+        every turn intake) sees a half file and the model reads a memory that
+        never existed. The consolidation agent curates the same store a live
+        session writes, so that window is real, not theoretical. ``os.replace``
+        makes the swap atomic on POSIX and Windows alike; the temp file is a
+        dot-name outside the ``*.md`` glob, so a crash mid-write can leave
+        litter but can never leave a visible broken memory. The ADR's accepted
+        weakness stays exactly what it was — last writer wins — with torn
+        reads no longer part of it.
+
+        Permissions: ``mkstemp`` fixes the temp file at 0o600 (umask ignored)
+        and ``os.replace`` carries that mode onto the destination — a
+        deliberate tightening over ``write_text``'s umask default; memory
+        notes are single-user data.
+        """
         path = self.path_for(name)
         self.root.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+        fd, tmp_name = tempfile.mkstemp(
+            dir=self.root, prefix=f".{name}.", suffix=".tmp"
+        )
+        try:
+            # Text mode with the default newline handling, so the bytes on
+            # disk are identical to what ``write_text`` produced.
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            os.replace(tmp_name, path)
+        except BaseException:
+            Path(tmp_name).unlink(missing_ok=True)
+            raise
         return path
 
     def read(self, name: str) -> Optional[str]:

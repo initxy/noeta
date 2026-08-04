@@ -71,6 +71,37 @@ def test_store_write_overwrites_existing_memory(tmp_path: Path) -> None:
     assert len(list(store.root.iterdir())) == 1
 
 
+def test_store_write_never_truncates_the_live_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The replace is atomic: the live memory is whole until the rename lands.
+
+    Truncate-then-write left a window where a concurrent reader (``entries()``
+    on every session build, recall on every turn intake, the consolidation
+    curator) saw half a memory — and half a memory reads as a whole one. Here
+    the rename is forced to fail: the previous version must survive intact and
+    the temp file must not linger as store litter.
+    """
+    import os as _os
+
+    store = _store(tmp_path)
+    store.write("note", "the durable version")
+
+    def _boom(src, dst):  # noqa: ANN001 - stub signature mirrors os.replace
+        raise OSError("no rename today")
+
+    monkeypatch.setattr(_os, "replace", _boom)
+    try:
+        store.write("note", "the doomed version")
+    except OSError:
+        pass
+    else:  # pragma: no cover - the stub always raises
+        raise AssertionError("the failed replace should have propagated")
+    monkeypatch.undo()
+    assert store.read("note") == "the durable version"
+    assert [p.name for p in store.root.iterdir()] == ["note.md"]
+
+
 def test_store_read_unknown_name_returns_none(tmp_path: Path) -> None:
     store = _store(tmp_path)
     store.write("known", "x")
