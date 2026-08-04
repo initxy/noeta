@@ -17,6 +17,7 @@ and tears everything down.
 
 from __future__ import annotations
 
+import dataclasses
 import threading
 import time
 from collections.abc import Sequence
@@ -77,6 +78,7 @@ from noeta.client.options import (
     effective_root_policy,
 )
 from noeta.client.plugin_set import PluginSet
+from noeta.client.plugins import PluginError
 
 
 __all__ = [
@@ -234,6 +236,44 @@ def _activated_names(
                     names.update(defn.plugins)
 
 
+def _merge_plugin_mcp_servers(
+    options: Options, plugins: Optional["PluginSet"]
+) -> Options:
+    """Fold the loaded set's ``mcp_server`` contributions into ``options``.
+
+    The ``mcp_server`` surface is **host-wired**: a loaded plugin's in-process
+    server is in force for the whole process, so it joins ``Options.mcp_servers``
+    rather than following any agent's activation list. From there it takes the
+    existing path — ``compile_options`` flattens its ``@tool`` closures into the
+    agent's tool set (so they enter identity, as any declared tool does) and
+    ``_collect_custom_tools`` hands the closures to the host.
+
+    Aliases share one namespace with ``Options.mcp_servers`` (whose alias is a
+    server's own ``name``), and a clash is a loud :class:`PluginError` naming
+    both sides — the same "no override" rule the manifest merge applies between
+    two plugins. Returns ``options`` unchanged when nothing is contributed, so a
+    client with no MCP-contributing plugin compiles byte-identically.
+    """
+    if plugins is None:
+        return options
+    contributed = plugins.host_mcp_servers()
+    if not contributed:
+        return options
+    claimed = {server.name: "Options.mcp_servers" for server in options.mcp_servers}
+    for alias, plugin, _server in contributed:
+        prior = claimed.get(alias)
+        if prior is not None:
+            raise PluginError(
+                f"mcp alias {alias!r} is contributed by plugin {plugin!r} and "
+                f"already claimed by {prior} — no override. Rename one of them."
+            )
+        claimed[alias] = f"plugin {plugin!r}"
+    return dataclasses.replace(
+        options,
+        mcp_servers=options.mcp_servers + tuple(s for _a, _p, s in contributed),
+    )
+
+
 def _agent_activations(
     options: Options,
     plugin_agents: Mapping[str, AgentDefinition],
@@ -374,6 +414,12 @@ class Client:
         #    later as a contribution that silently went missing.
         if plugins is not None:
             plugins.merged()
+        #    Host-plane ``mcp_server`` contributions fold into the recipe BEFORE
+        #    compile: the surface is host-wired, so a loaded plugin's in-process
+        #    server is part of every session this client builds, and its bundled
+        #    tools enter the compiled identity exactly like an ``Options``-declared
+        #    one. An alias claimed twice is refused, never overridden.
+        options = _merge_plugin_mcp_servers(options, plugins)
         #    Activation: a loaded PluginSet supplies the identity-plane
         #    contributions each activated external plugin carries; compile
         #    validates every activation name against the built-in vocabulary +
@@ -562,6 +608,7 @@ class Client:
             ),
             thinking=options.thinking,
             effort=options.effort,
+            compaction_model=options.compaction_model,
             # Extension points.
             # policy: the custom Options.policy IS the ``(llm) -> Policy``
             # factory (it also carries the .ref compile_options put in the
@@ -647,6 +694,18 @@ class Client:
             skills_enabled=(
                 plugins is None or "skills" not in plugins.disabled_builtins
             ),
+            # Host-plane ``skills`` contributions: every loaded plugin's skill
+            # pack directories, joining the lowest tier of the three-tier merge
+            # (below the user's global and workspace packs). Host-wired, so they
+            # are NOT scoped to activation. Empty ⇒ the tier list is unchanged.
+            plugin_skills_dirs=(
+                plugins.host_skills_dirs() if plugins is not None else ()
+            ),
+            # Operator config per plugin: overlaid onto the SDK-derived entries
+            # for the four built-ins it knows, passed through verbatim for every
+            # other plugin name — the channel a third-party session pack reads
+            # through ``SessionBuildContext.config``. Empty by default.
+            plugin_config_overrides=hc.plugin_config,
         )
 
         # OTLP trace export (host config): a lifecycle-owning observer the

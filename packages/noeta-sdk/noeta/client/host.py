@@ -75,7 +75,9 @@ from noeta.client.parts import (
     derive_compaction_config,
     memory_impl,
     provider_family,
+    resolve_model_alias,
 )
+from noeta.client.consolidation import CONSOLIDATION_AGENT_NAME
 from noeta.client.host_config import SandboxExecEnvConfig
 from noeta.client.sandbox import (
     BackendFactory,
@@ -247,9 +249,8 @@ def _approval_set_for(mode: str, tool_refs: Sequence[ToolRef]) -> tuple[str, ...
     ``"default"``
         Every tool whose declared ``risk_level != "low"``.
     ``"acceptEdits"``
-        Same rule as ``default`` but the three edit-class tools
-        (``Edit`` / ``Write``) are exempted
-        even when declared high-risk.
+        Same rule as ``default`` but the two edit-class tools
+        (``Edit`` / ``Write``) are exempted even when declared high-risk.
     ``"bypassPermissions"``
         Empty — no tool is gated.
     """
@@ -274,23 +275,20 @@ def _approval_set_for(mode: str, tool_refs: Sequence[ToolRef]) -> tuple[str, ...
 
 
 # ---------------------------------------------------------------------------
-# Catalog-pricing callback. If catalog.price's KeyError semantics change, edit
-# only this function.
+# Catalog-pricing callback. Unknown-model handling lives inside catalog.price
+# (warn-once + 0.0); this wrapper only keeps the injected-callback seam.
 # ---------------------------------------------------------------------------
 
 
 def _catalog_pricing(model: str, usage: Usage) -> float:
-    """Price one LLM round-trip from the sdk catalog; unknown models → 0.0.
+    """Price one LLM round-trip from the sdk catalog.
 
-    The KeyError-or-zero policy:
-      1. Any model not in the catalog (stub-model, an unpriced real id) counts
-         as 0.0. This lives here in the code layer, not in catalog.price (which
-         raises loudly to surface a priced model someone typed wrong) and not in
-         RuntimeLLMClient (which stays provider-neutral, seeing only the injected
-         callback).
-      2. cost is written into the event body; resume reads back the value
-         recorded at the time — so updating the price table never rewrites
-         historical recordings.
+    ``catalog.price`` itself handles uncatalogued and price-less models
+    (warn-once, then 0.0), so the warning surfaces however the callback is
+    reached. The ``KeyError`` guard is retained purely as a defensive backstop
+    for a third-party catalog impl that still raises. cost is written into the
+    event body; resume reads back the value recorded at the time — so updating
+    the price table never rewrites historical recordings.
     """
     try:
         return catalog_price(model, usage)
@@ -452,6 +450,14 @@ class SdkHost(GenericEngineResolver):
     # global_skills_dir defaults to None ⇒ no global tier. Empty = workspace-local
     # tier only.
     builtin_skills_dirs: Tuple[Path, ...] = ()
+    #: Skill directories loaded plugins contribute on the ``skills`` surface
+    #: (``PluginSet.host_skills_dirs``, folded in by the ``Client``). They ride
+    #: the SAME lowest tier as ``builtin_skills_dirs`` and are indexed AFTER it,
+    #: so an operator-installed plugin's pack shadows a same-named shipped skill
+    #: while still losing to the user's global and workspace tiers. Host-wired,
+    #: never per-agent: the surface is host-plane, so every agent in the process
+    #: sees the same catalogue.
+    plugin_skills_dirs: Tuple[Path, ...] = ()
     global_skills_dir: Optional[Path] = None
     # Explicit memory-dir override; None uses global_memory_dir / the SDK global
     # default. Memory is pinned to one global directory (it does not drift with the
@@ -484,7 +490,7 @@ class SdkHost(GenericEngineResolver):
     #: between the read file's directory and the workspace root; they render
     #: anchored at the point of discovery.
     instructions_discovery: bool = False
-    # Skill-tool enforcement level (off/warn/enforce); "off" ⇒ no intervention.
+    # Skill-tool enforcement level (off/approval/deny); "off" ⇒ no intervention.
     skill_tool_enforcement: SkillEnforcementMode = "off"
     # Whether to load script-style run_skill_script tools under .noeta/skills;
     # off by default.
@@ -519,6 +525,13 @@ class SdkHost(GenericEngineResolver):
     # Explicit approval-required tool names; when None, derived from
     # permission_mode — an explicit value wins.
     require_approval_tools: Optional[tuple[str, ...]] = None
+    #: Host-supplied operator config per plugin (``HostConfig.plugin_config``),
+    #: overlaid onto the bag ``_plugin_config`` derives for the built-ins and
+    #: passed through verbatim for every other plugin name. This is how a
+    #: third-party ``session_pack`` reaches its own ``ctx.config("<name>")``.
+    plugin_config_overrides: Mapping[str, Mapping[str, Any]] = field(
+        default_factory=dict
+    )
     # Map from a recording name → canonical registered name (e.g.
     # {"default": "main"}); used for resuming recordings and product-facing alias
     # support.
@@ -528,6 +541,9 @@ class SdkHost(GenericEngineResolver):
     output_schema: Optional[dict[str, Any]] = None
     thinking: Optional[str] = None
     effort: Optional[str] = None
+    # Wiring-only summarizer model override (Options.compaction_model): when set,
+    # the ReActPolicy routes ONLY the compaction summarize call to this model.
+    compaction_model: Optional[str] = None
     # Positive int or None; engine-level inline char cap for tool output. None = no
     # truncation. A resumed session must reuse the value the original run used, or
     # it re-derives different tool-output bytes.
@@ -1652,6 +1668,23 @@ class SdkHost(GenericEngineResolver):
             output_schema=self.output_schema,
             thinking=self.thinking,
             effort=effort if effort is not None else self.effort,
+            # Alias resolution happens here (the react built-in must not import
+            # the providers built-in); None rides through untouched.
+            compaction_model=(
+                resolve_model_alias(self.compaction_model)
+                if self.compaction_model
+                else None
+            ),
+            # The summarize request's ``max_tokens`` must be valid for the
+            # model that SERVES it: derive the compaction model's own catalog
+            # ceiling here, for the same layering reason alias resolution
+            # lives here. ``None`` (no compaction model) keeps the main
+            # model's cap.
+            compaction_max_output_tokens=(
+                derive_compaction_config(self.compaction_model).max_output_tokens
+                if self.compaction_model
+                else None
+            ),
             # Engine-level inline truncation cap.
             tool_output_inline_limit=self.tool_output_inline_limit,
             # SDK Options extension points. Fed to live + resume from the same host
@@ -1871,6 +1904,14 @@ class SdkHost(GenericEngineResolver):
         hermetic. An empty / missing directory is a valid empty store: recall never
         hits, so the default flow pays zero bytes.
 
+        The one exception is the reserved ``__consolidation__`` curator: its
+        "goal" is a host-built digest of whole sessions, not a user message, so
+        auto-recall against it is a category error — it matches on the transcript's
+        own words and would inject the store back into the agent that is there to
+        curate the store, spending the recall budget before the run starts. It
+        reads memories the way it writes them, through the memory tools. The
+        resident index it already carries is untouched.
+
         Empty for a memory-off agent that activated no provider-bearing plugin. Read
         defensively by the driver (``getattr``), so a host without this seam is a
         clean no-op.
@@ -1880,7 +1921,7 @@ class SdkHost(GenericEngineResolver):
             spec = self.unnamed_fallback
         else:
             spec = self._lookup_agent(agent, task_id="<unbound>")
-        if agent_activates(spec, "memory"):
+        if agent != CONSOLIDATION_AGENT_NAME and agent_activates(spec, "memory"):
             impl = memory_impl()
             store = impl.load_memory_store(root=self.memory_root(task_id))
             providers.append(impl.memory_reminder_provider(store))
@@ -1961,6 +2002,11 @@ class SdkHost(GenericEngineResolver):
           neither the lower skills tiers nor instruction discovery. Omitting an
           entry (rather than passing one the pack would self-gate away) is what
           keeps its session correct.
+
+        :attr:`plugin_config_overrides` (the host's ``HostConfig.plugin_config``)
+        is applied last, over whichever of the two shapes was built — see
+        :meth:`_apply_plugin_config_overrides` for why that ordering is the safe
+        one.
         """
         reduced = spec is None
         config: dict[str, dict[str, Any]] = {
@@ -1983,10 +2029,16 @@ class SdkHost(GenericEngineResolver):
             },
         }
         if reduced:
-            return config
+            return self._apply_plugin_config_overrides(config)
         config["fs"]["write_path_globs"] = _spec_write_path_globs(spec)
         config["fs"]["write_roots"] = self.write_roots
-        config["skills"]["builtin_skills_dirs"] = tuple(self.builtin_skills_dirs)
+        # The lowest skill tier: the host's own built-in dirs first, then the
+        # dirs loaded plugins contribute on the ``skills`` surface. Both sit
+        # below ``global_skills_dir`` and the workspace pack, which the skills
+        # pack appends after these.
+        config["skills"]["builtin_skills_dirs"] = tuple(self.builtin_skills_dirs) + tuple(
+            self.plugin_skills_dirs
+        )
         config["skills"]["global_skills_dir"] = self.global_skills_dir
         config["workspace"]["instructions_discovery"] = self.instructions_discovery
         # The per-task memory root rides the top-precedence ``memory_dir`` slot so
@@ -1999,6 +2051,38 @@ class SdkHost(GenericEngineResolver):
             ),
             "global_memory_dir": self.global_memory_dir,
         }
+        return self._apply_plugin_config_overrides(config)
+
+    def _apply_plugin_config_overrides(
+        self, config: dict[str, dict[str, Any]]
+    ) -> dict[str, dict[str, Any]]:
+        """Overlay :attr:`plugin_config_overrides` onto a derived config bag.
+
+        Two rules, one per case:
+
+        * a plugin name the SDK derives nothing for (every third party) — the
+          host mapping is the whole entry, verbatim. This is the channel
+          ``docs/how-to/write-a-plugin.md`` documents and the only way a pack
+          that the SDK has never heard of gets configured at all.
+        * a name the SDK does derive (``fs`` / ``skills`` / ``workspace`` /
+          ``memory``) — a **shallow per-key overlay**: start from the derived
+          mapping, write the host's keys over it. Replacing the whole entry
+          would make supplying one key silently delete the rest (a host that
+          set ``{"fs": {"shell_allowlist": …}}`` would lose ``write_mode``),
+          and deep-merging would promise a nesting rule none of these entries
+          have.
+
+        Applied AFTER the reduced/full split rather than inside it, so the
+        orchestration engine's deliberate omissions stay omitted unless the host
+        names those keys itself — an override is an explicit act, not a
+        reinstatement of an environment that path chose not to build.
+        """
+        for name, entry in self.plugin_config_overrides.items():
+            derived = config.get(name)
+            if derived is None:
+                config[name] = dict(entry)
+            else:
+                derived.update(entry)
         return config
 
     def _session_packs(self, agent_name: Optional[str] = None) -> tuple[Any, ...]:

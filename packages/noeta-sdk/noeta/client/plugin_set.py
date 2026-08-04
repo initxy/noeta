@@ -24,6 +24,8 @@ from __future__ import annotations
 import importlib
 import importlib.metadata
 import importlib.util
+import logging
+import re
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,11 +44,14 @@ from noeta.client.plugin_manifest import (
     read_manifest_file,
     split_ref,
 )
+from noeta.client.mcp_server import SdkMcpServer
 from noeta.client.options import PluginActivation
 from noeta.client.plugins import (
     DEFAULT_TRUST_STORE,
     PLUGIN_ENTRY_POINT_GROUP,
     PluginError,
+    PluginVersionWarning,
+    UnnamedPluginFileWarning,
     UntrustedPluginDirWarning,
     is_trusted,
 )
@@ -61,6 +66,9 @@ __all__ = [
     "ResolvedContribution",
     "load_plugins",
 ]
+
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -304,7 +312,11 @@ class PluginSet:
             spec = self.registry.get(surface)
             if spec.ordering == "priority":
                 items.sort(
-                    key=lambda e: (_priority(e.contribution), e.plugin, e.contribution.name)
+                    key=lambda e: (
+                        _priority(e.contribution, e.plugin),
+                        e.plugin,
+                        e.contribution.name,
+                    )
                 )
             else:
                 items.sort(key=lambda e: (e.plugin, e.contribution.name))
@@ -535,14 +547,15 @@ class PluginSet:
     def _activation_params(
         self,
         surface: str,
-        param: Callable[[ManifestContribution], Any],
+        param: Callable[[ManifestContribution, str], Any],
         only: Optional[Iterable[str]],
     ) -> dict[str, tuple[tuple[Any, str, Any], ...]]:
         """Shared body of the per-agent wiring projections.
 
         Each returns ``plugin -> ((<ordering param>, contribution name, value), …)``
         for one surface; ``param`` reads the surface's ordering / binding param off
-        the static manifest entry.
+        the static manifest entry, and is scoped to ``surface`` so a defect in an
+        unrelated contribution's params is that surface's problem, not this one's.
         """
         out: dict[str, tuple[tuple[Any, str, Any], ...]] = {}
         wanted = frozenset({surface})
@@ -550,7 +563,9 @@ class PluginSet:
             if not self._declares(p, wanted):
                 continue
             by_key = {
-                (c.surface, c.name): param(c) for c in p.manifest.contributions
+                (c.surface, c.name): param(c, p.name)
+                for c in p.manifest.contributions
+                if c.surface == surface
             }
             entries = [
                 (by_key.get((rc.surface, rc.name)), rc.name, rc.value)
@@ -609,6 +624,100 @@ class PluginSet:
                     )
         return tuple(guards), tuple(observers)
 
+    # -- host-plane projections (host-wired, never activation-scoped) ------
+
+    def _host_surface(
+        self, surface: str
+    ) -> Iterator[tuple[LoadedPlugin, ResolvedContribution]]:
+        """Every external plugin's contributions to one **host-wired** surface.
+
+        Host-plane surfaces do not follow per-agent activation — the host binds
+        them once for the process — so the scope is every loaded external plugin
+        (built-ins excluded the same way every other projection excludes them),
+        with no ``only`` filter. Resolution is still limited to plugins whose
+        static manifest declares the surface, so a plugin that ships no skills
+        is never imported to discover that.
+        """
+        wanted = frozenset({surface})
+        for p in sorted(self._external(None), key=lambda x: x.name):
+            if not self._declares(p, wanted):
+                continue
+            for rc in sorted(self._resolve_plugin(p), key=lambda r: r.name):
+                if rc.surface == surface:
+                    yield p, rc
+
+    def host_skills_dirs(self) -> tuple[Path, ...]:
+        """Resolve every external plugin's ``skills`` path contributions.
+
+        Returns the directories in ``(plugin, contribution name)`` order. The
+        host appends them to the **lowest** tier of the skill merge (the
+        built-in tier), so a plugin's skill pack is shadowed by a same-named
+        global (``~/.noeta/skills``) or workspace (``.noeta/skills``) skill —
+        the user's own definition always wins — while still being visible in
+        every session the host builds.
+
+        **Paths must be absolute.** A manifest is read from several shapes (a
+        distribution's package data, a bare ``.toml``, a single ``.py``), and
+        those roots disagree about what a relative path would even be relative
+        to, so resolving one would silently point at different directories
+        depending on how the plugin was installed. A relative path is a loud
+        :class:`PluginError` naming the plugin; an author writes
+        ``str(Path(__file__).parent / "skills")`` in the single-file form, or
+        resolves the path against ``__file__`` in the package form.
+
+        A path that does not exist on disk is **not** an error: the indexer
+        treats a missing root as an empty tier, so a plugin whose skills ship
+        only in some installs degrades to contributing nothing.
+        """
+        out: list[Path] = []
+        for plugin, rc in self._host_surface("skills"):
+            path = Path(str(rc.value))
+            if not path.is_absolute():
+                raise PluginError(
+                    f"plugin {plugin.name!r}: skills contribution {rc.name!r} "
+                    f"declares the relative path {str(rc.value)!r} — a skills "
+                    f"path must be ABSOLUTE, because a manifest read from a "
+                    f"wheel, a .toml or a single .py file has no single "
+                    f"directory to resolve it against. Build it from the "
+                    f"module's own location (e.g. "
+                    f"str(Path(__file__).parent / 'skills'))."
+                )
+            out.append(path)
+        return tuple(out)
+
+    def host_mcp_servers(self) -> tuple[tuple[str, str, SdkMcpServer], ...]:
+        """Resolve every external plugin's ``mcp_server`` contributions.
+
+        Returns ``((alias, plugin name, server), …)`` in ``(plugin, alias)``
+        order, where the **alias** is the contribution's manifest name (the
+        surface's ``alias`` collision key, so two plugins claiming one alias
+        already failed at :meth:`merged`). ``Client`` folds these into the
+        effective ``Options.mcp_servers`` and refuses an alias the recipe
+        already uses — the same "no override" rule the merge applies.
+
+        The value must be an :class:`~noeta.client.mcp_server.SdkMcpServer`,
+        exactly what ``Options.mcp_servers`` carries: an in-process bundle of
+        ``@tool`` functions. Enforced here rather than in the surface validator
+        so the error names the plugin. A **remote** MCP server stays a host
+        concern — it is addressed per turn by alias through
+        ``HostConfig.mcp_server_resolver``, whose specs carry credentials a
+        static manifest must never hold.
+        """
+        out: list[tuple[str, str, SdkMcpServer]] = []
+        for plugin, rc in self._host_surface("mcp_server"):
+            if not isinstance(rc.value, SdkMcpServer):
+                raise PluginError(
+                    f"plugin {plugin.name!r}: mcp_server contribution "
+                    f"{rc.name!r} resolved to {type(rc.value).__name__}, not an "
+                    f"SdkMcpServer — an mcp_server contribution carries the same "
+                    f"value Options.mcp_servers takes (build it with "
+                    f"noeta.sdk.create_sdk_mcp_server). A REMOTE server is not a "
+                    f"plugin contribution: wire it through "
+                    f"HostConfig.mcp_server_resolver."
+                )
+            out.append((rc.name, plugin.name, rc.value))
+        return tuple(out)
+
     def resolve(self) -> tuple[ResolvedContribution, ...]:
         """Resolve + validate every contribution (imports plugin code).
 
@@ -657,16 +766,37 @@ def _collision_error(spec: Any, c: ManifestContribution, a: str, b: str) -> Plug
     )
 
 
-def _priority(c: ManifestContribution) -> int:
-    value = c.params.get("priority", 0)
-    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+def _priority(c: ManifestContribution, plugin: str) -> int:
+    """A priority-ordered contribution's integer ``priority`` param.
+
+    An absent ``priority`` is 0 — the surface's documented default. A *present*
+    one that is not an integer is a loud :class:`PluginError`, the same
+    strictness the built-in accessors (:mod:`noeta.client.parts`) apply to the
+    first-party manifests: silently coercing ``priority = "high"`` to 0 puts the
+    contribution at the front of a band the author meant to sit at the back of,
+    and every symptom of that shows up somewhere else (a reminder rendering
+    first, a pack's tools inserted before another's) with nothing pointing back
+    at the manifest. ``True`` is not an integer here for the same reason it is
+    not one in the built-in path.
+    """
+    if "priority" not in c.params:
+        return 0
+    value = c.params["priority"]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise PluginError(
+            f"plugin {plugin!r}: contribution {c.name!r} to surface "
+            f"{c.surface!r} declares priority={value!r}, which is not an "
+            f"integer — a priority-ordered surface orders on an int, so this "
+            f"contribution has no defined position. Declare an integer band."
+        )
+    return value
 
 
 #: The recording seam a ``reminder_provider`` binds to when its manifest names none.
 DEFAULT_REMINDER_SEAM = "turn_intake"
 
 
-def _seams(c: ManifestContribution) -> tuple[str, ...]:
+def _seams(c: ManifestContribution, plugin: str) -> tuple[str, ...]:  # noqa: ARG001
     """A ``reminder_provider``'s declared recording seams.
 
     ``seams`` may arrive as a TOML array or a single string; an entry that
@@ -681,6 +811,152 @@ def _seams(c: ManifestContribution) -> tuple[str, ...]:
         if named:
             return named
     return (DEFAULT_REMINDER_SEAM,)
+
+
+# ---------------------------------------------------------------------------
+# ``requires-noeta`` — enforced as a warning, refused under ``strict``
+# ---------------------------------------------------------------------------
+
+
+#: The distribution whose installed version ``requires-noeta`` is compared to.
+#: The manifest field names *noeta*, and the SDK is the package a plugin
+#: actually contributes surfaces to.
+_SDK_DISTRIBUTION = "noeta-sdk"
+
+#: One clause of a ``requires-noeta`` specifier: an operator plus a dotted
+#: release. Whitespace anywhere is tolerated; a clause this does not match makes
+#: the WHOLE specifier unrecognised (a half-understood range is worse than an
+#: unenforced one).
+_CLAUSE = re.compile(r"^\s*(>=|<=|==|!=|>|<)\s*([0-9]+(?:\.[0-9]+)*)\s*$")
+
+
+def _release(text: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in text.split("."))
+
+
+def _padded(a: tuple[int, ...], b: tuple[int, ...]) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """Both releases at equal length, so ``0.5`` and ``0.5.0`` compare equal."""
+    width = max(len(a), len(b))
+    return a + (0,) * (width - len(a)), b + (0,) * (width - len(b))
+
+
+def _clause_holds(op: str, installed: tuple[int, ...], bound: tuple[int, ...]) -> bool:
+    left, right = _padded(installed, bound)
+    if op == ">=":
+        return left >= right
+    if op == "<=":
+        return left <= right
+    if op == "==":
+        return left == right
+    if op == "!=":
+        return left != right
+    if op == ">":
+        return left > right
+    return left < right
+
+
+def _installed_release(installed: str) -> Optional[tuple[int, ...]]:
+    """``installed`` as a release tuple, or ``None`` when it does not parse.
+
+    A ``+local`` tail and one ``-suffix`` are stripped first; what remains must
+    be dotted numerics, so a run-together pre-release (``1.0.0rc1``,
+    ``0.6.1.dev3`` — the canonical forms ``importlib.metadata`` returns) reads
+    as unparseable rather than guessed at.
+    """
+    try:
+        return _release(installed.split("+", 1)[0].split("-", 1)[0])
+    except ValueError:
+        return None
+
+
+def _specifier_satisfied(spec: str, installed: str) -> Optional[bool]:
+    """Whether ``installed`` satisfies ``spec``; ``None`` when either side is
+    unrecognised (a specifier this evaluator does not parse, or an installed
+    version ``_installed_release`` cannot read).
+
+    A deliberately minimal, dependency-free evaluator — ``>=X.Y[.Z]``, ``<``,
+    ``>``, ``<=``, ``==``, ``!=``, AND-joined by commas. It exists so
+    ``requires-noeta`` can mean something without dragging ``packaging`` into
+    the SDK's install for one field; anything richer (extras, epochs,
+    pre-release markers, ``~=``) reads as unrecognised and is reported as such
+    rather than guessed at.
+    """
+    clauses = [part for part in spec.split(",") if part.strip()]
+    if not clauses:
+        return None
+    current = _installed_release(installed)
+    if current is None:
+        return None
+    satisfied = True
+    for clause in clauses:
+        match = _CLAUSE.match(clause)
+        if match is None:
+            return None
+        op, bound = match.group(1), match.group(2)
+        satisfied = satisfied and _clause_holds(op, current, _release(bound))
+    return satisfied
+
+
+def _installed_sdk_version() -> Optional[str]:
+    """The installed ``noeta-sdk`` version, or ``None`` when it has no metadata.
+
+    An in-repo checkout run straight off the source tree has no distribution
+    metadata; there is no version to compare against, so every range counts as
+    satisfied and the miss is logged at debug rather than warned — a developer
+    running the tree is not the audience for a packaging warning.
+    """
+    try:
+        return importlib.metadata.version(_SDK_DISTRIBUTION)
+    except importlib.metadata.PackageNotFoundError:
+        _log.debug(
+            "plugin: %s has no installed distribution metadata; "
+            "requires-noeta ranges are treated as satisfied",
+            _SDK_DISTRIBUTION,
+        )
+        return None
+
+
+def _check_requires_noeta(
+    manifest: PluginManifest, origin: str, *, strict: bool
+) -> None:
+    """Evaluate one manifest's ``requires-noeta``; warn, or raise under ``strict``."""
+    declared = manifest.requires_noeta
+    if not declared or not declared.strip():
+        return
+    installed = _installed_sdk_version()
+    if installed is None:
+        return
+    verdict = _specifier_satisfied(declared, installed)
+    if verdict is None:
+        # Name the side that actually failed: an unparseable INSTALLED version
+        # (a pre-release like ``1.0.0rc1``) is not the plugin author's doing,
+        # and a warning blaming their specifier sends whoever debugs it to the
+        # wrong file. Either way enforcement is skipped, never guessed at.
+        if _installed_release(installed) is None:
+            warnings.warn(
+                f"plugin {manifest.name!r} ({origin}): requires-noeta "
+                f"{declared!r} not enforced — installed {_SDK_DISTRIBUTION} "
+                f"version {installed!r} is unparseable",
+                PluginVersionWarning,
+                stacklevel=2,
+            )
+        else:
+            warnings.warn(
+                f"plugin {manifest.name!r} ({origin}): unrecognized "
+                f"requires-noeta specifier {declared!r} — not enforced",
+                PluginVersionWarning,
+                stacklevel=2,
+            )
+        return
+    if verdict:
+        return
+    message = (
+        f"plugin {manifest.name!r} ({origin}) requires noeta {declared}, but "
+        f"{_SDK_DISTRIBUTION} {installed} is installed"
+    )
+    if strict:
+        raise PluginError(message + " — refused (load_plugins(strict=True))")
+    warnings.warn(message, PluginVersionWarning, stacklevel=2)
 
 
 # ---------------------------------------------------------------------------
@@ -725,6 +1001,7 @@ def load_plugins(
     trust_store: Optional[Path] = None,
     registry: Optional[SurfaceRegistry] = None,
     entry_point_group: str = PLUGIN_ENTRY_POINT_GROUP,
+    strict: bool = False,
 ) -> PluginSet:
     """Discover plugins from the five sources and return a :class:`PluginSet`.
 
@@ -749,9 +1026,18 @@ def load_plugins(
     file is executed. A candidate whose declared name is not on the list is
     skipped **without importing**.
 
+    Every accepted candidate's ``requires-noeta`` range is evaluated against the
+    installed ``noeta-sdk`` version. An unsatisfied range warns
+    (:class:`~noeta.client.plugins.PluginVersionWarning`) and the plugin still
+    loads; ``strict=True`` turns that warning into a :class:`PluginError`, which
+    is the setting a deployment uses when "tested against this SDK" is a release
+    gate rather than a hint. A specifier this loader cannot parse always warns
+    and is never enforced, in either mode.
+
     A load fault (bad manifest, missing manifest, a broken file) raises
     :class:`PluginError` naming the plugin — never a silent skip, except the
-    untrusted-workspace warning above.
+    untrusted-workspace warning above and a single-file plugin whose name cannot
+    be read statically while an ``enabled`` allow-list is in force.
     """
     reg = registry if registry is not None else standard_registry()
     enabled_set = set(enabled) if enabled is not None else None
@@ -772,6 +1058,7 @@ def load_plugins(
                 f"{seen[cand.name]} and {cand.origin}"
             )
         seen[cand.name] = cand.origin
+        _check_requires_noeta(cand.manifest, cand.origin, strict=strict)
         loaded.append(
             LoadedPlugin(
                 name=cand.name,
@@ -966,8 +1253,25 @@ def _load_py_file(
 ) -> Optional[_Candidate]:
     # Gate on a statically declared name BEFORE executing the file. When the file
     # declares no static name, executing a trusted file to read its manifest is
-    # acceptable; the real name is gated after.
+    # acceptable — but ONLY when there is no allow-list. An ``enabled`` list is
+    # an authorization decision made per name, so a file whose name cannot be
+    # read without running it has no name to authorize: executing it to find out
+    # what it would have been called is exactly the "code from an unauthorized
+    # source runs anyway" hole the static-name extraction exists to close. Skip
+    # it, loudly enough that a legitimate plugin's author learns to declare a
+    # ``noeta_plugin_name`` literal.
     declared = declared_plugin_name(path)
+    if declared is None and enabled_set is not None:
+        warnings.warn(
+            f"skipping plugin file {path}: an 'enabled' allow-list is in force "
+            f"and this file declares no statically readable plugin name, so it "
+            f"cannot be authorized without executing it. Add a module-level "
+            f"noeta_plugin_name = \"...\" literal (or a "
+            f"PluginBuilder(\"...\") literal) to make it gateable.",
+            UnnamedPluginFileWarning,
+            stacklevel=2,
+        )
+        return None
     if declared is not None and not _enabled_pass(enabled_set, declared):
         return None
     module = exec_plugin_file(path, module_prefix="_noeta_plugin_")

@@ -124,3 +124,85 @@ def test_effort_threads_into_every_turn_request(tmp_path: Path) -> None:
         assert provider.received_requests[-1].effort == "low"
     finally:
         client.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Options.compaction_model bridges Client -> SdkHost -> summarize request
+# ---------------------------------------------------------------------------
+
+
+def test_compaction_model_bridges_options_to_the_summarize_request(
+    tmp_path: Path,
+) -> None:
+    """The one end-to-end proof of the D7 bridge: ``Options.compaction_model``
+    reaches the ReActPolicy through ``Client`` -> ``SdkHost`` ->
+    ``build_session_inputs`` with the ALIAS RESOLVED at the host boundary, and
+    routes ONLY the summarize round-trip.
+
+    Also exercises the unknown-model fallback: the uncatalogued ``gpt-test``
+    still owns a compaction window (the conservative 128K), so proactive
+    compaction is live for it. The FakeLLM reports ~1 input token per turn, so
+    the density clamp floors at 0.25 and the protected tail spans ~146K
+    estimate tokens — the loop below simply feeds big goals until the raw
+    history outgrows that and the proactive pass produces a real summarize
+    call (earlier passes short-circuit on ``compaction_no_progress``, which
+    the driver converts to a next-goal suspend, so the conversation survives
+    them)."""
+
+    def _summarize_call(req) -> bool:  # noqa: ANN001 — request shape
+        if req.system is None or not req.system.content:
+            return False
+        return getattr(req.system.content[0], "text", "").startswith(
+            "Summarize the conversation"
+        )
+
+    def _responder(req):  # noqa: ANN001 — responder shape
+        if _summarize_call(req):
+            return LLMResponse(
+                stop_reason="end_turn",
+                content=[TextBlock(text="1. Primary Request & Intent: hi")],
+                usage=Usage(uncached=1, output=1),
+                raw={"id": "note"},
+            )
+        return _end_turn(req)
+
+    provider = FakeLLMProvider(responder=_responder)
+    client = Client(
+        Options(
+            system_prompt="test agent", name="main", compaction_model="haiku"
+        ),
+        provider=provider,
+        workspace_dir=_ws(tmp_path, "compaction_ws"),
+        model="gpt-test",
+    )
+    try:
+        # ~12K estimate tokens per goal.
+        filler = "lorem ipsum dolor sit amet " * 1800
+        out = client.start(goal=filler)
+
+        def _summaries() -> list:
+            return [
+                req
+                for req in provider.received_requests
+                if _summarize_call(req)
+            ]
+
+        for _ in range(24):
+            if _summaries():
+                break
+            client.send_goal(out.task_id, goal=filler)
+        summarize_calls = _summaries()
+        models = [req.model for req in provider.received_requests]
+        assert summarize_calls, f"no summarize round-trip observed: {models}"
+        # The alias resolved at the host boundary, not the raw "haiku" string.
+        assert all(
+            req.model == "claude-haiku-4-5" for req in summarize_calls
+        ), models
+        # Every non-summarize (decide) turn keeps the session model.
+        assert all(
+            req.model == "gpt-test"
+            for req in provider.received_requests
+            if not _summarize_call(req)
+        ), models
+    finally:
+        client.shutdown()

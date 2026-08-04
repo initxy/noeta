@@ -70,6 +70,8 @@ from noeta.client.options import (
 )
 from noeta.client.plugins import (
     PluginError,
+    PluginVersionWarning,
+    UnnamedPluginFileWarning,
     UntrustedPluginDirWarning,
     grant_trust,
     is_trusted,
@@ -326,6 +328,8 @@ __all__ = [
     "Observer",
     "ContentKindSpec",
     "PluginError",
+    "PluginVersionWarning",
+    "UnnamedPluginFileWarning",
     "UntrustedPluginDirWarning",
     "grant_trust",
     "is_trusted",
