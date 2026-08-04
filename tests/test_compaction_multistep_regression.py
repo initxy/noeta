@@ -154,7 +154,9 @@ def _composer(content_store: Any) -> ThreeSegmentComposer:
     )
 
 
-def _run() -> tuple[str, InMemoryEventLog, InMemoryContentStore, Any]:
+def _run() -> tuple[
+    str, InMemoryEventLog, InMemoryContentStore, Any, _MultiCompactionProvider
+]:
     dispatcher = InMemoryDispatcher()
     event_log = InMemoryEventLog(lease_validator=dispatcher)
     content_store = InMemoryContentStore()
@@ -182,7 +184,7 @@ def _run() -> tuple[str, InMemoryEventLog, InMemoryContentStore, Any]:
     for text in _seed_long_history(14):
         engine.append_user_message(task, content=[TextBlock(text=text)], lease_id=lease.lease_id)
     final = engine.run_one_step(task, lease_id=lease.lease_id)
-    return task.task_id, event_log, content_store, final
+    return task.task_id, event_log, content_store, final, provider
 
 
 def test_two_legit_compactions_around_real_tool_work_complete() -> None:
@@ -192,7 +194,7 @@ def test_two_legit_compactions_around_real_tool_work_complete() -> None:
     than by boundary progress kills this session even though the second
     boundary strictly advanced.
     """
-    task_id, log, _cs, final = _run()
+    task_id, log, _cs, final, _provider = _run()
     types = [e.type for e in log.read(task_id)]
 
     # Two compactions actually landed (each summarised a NEW, larger prefix).
@@ -209,6 +211,37 @@ def test_two_legit_compactions_around_real_tool_work_complete() -> None:
     assert "TaskCompleted" in types
     assert "TaskFailed" not in types
     assert final.status == "terminal"
+
+
+def test_second_summarize_input_is_previous_summary_plus_delta() -> None:
+    """The bounded summarize input: the SECOND compaction's summarize request
+    must open with the previous summary message (summary-of-summary), not
+    re-send the whole raw prefix from index 0 — the unbounded shape is what let
+    the Nth summarize call itself outgrow the window. This is the one place
+    that notices if a Composer change breaks
+    ``_previous_summary_message``'s shape-detection: that failure degrades
+    SILENTLY to the unbounded input (deliberately — lossless is the safe
+    direction), so the loop test above keeps passing either way."""
+    _task_id, _log, _cs, _final, provider = _run()
+
+    summarize_requests = [
+        req
+        for req in provider.calls
+        if req.system is not None
+        and any(
+            _SUMMARY_MARKER in b.text
+            for b in req.system.content
+            if isinstance(b, TextBlock)
+        )
+    ]
+    assert len(summarize_requests) >= 2
+
+    head = summarize_requests[1].messages[0]
+    assert head.role == "user"
+    head_text = "".join(
+        b.text for b in head.content if isinstance(b, TextBlock)
+    )
+    assert "CONDENSED-SUMMARY" in head_text
 
 
 def test_stuck_compaction_with_no_boundary_progress_still_fails() -> None:

@@ -112,6 +112,24 @@ _SUMMARIZE_SYSTEM_PROMPT = load_markdown(__package__, "summarize")
 #: See :meth:`ReActPolicy._real_baseline`.
 _BASELINE_INVALIDATED = -1
 
+#: Sanity band for :meth:`ReActPolicy._observed_density` — real provider tokens
+#: per chars/4 estimated token. The heuristic's honest spread on real payloads
+#: runs from ~0.5 (long-word prose) through ~2 (dense JSON) up to ~4–7 for
+#: pure-CJK text (the chars/4 estimator counts code points, and CJK tokenizes
+#: at ~1–1.7 tokens per character), so the band must sit ABOVE that spread: a
+#: clamp that binds on a genuine CJK measurement over-protects the tail by the
+#: clamped factor and makes CJK-heavy sessions compact more often than needed.
+#: The band exists only to stop a NON-measurement from propagating: the
+#: numerator is whatever the provider reported, and a gateway that reports
+#: ``input_tokens=10`` for a ~2600-token request yields ~0.004 — which divides
+#: the tail budget by 250, protects a "tail" bigger than the whole history,
+#: pins the summary boundary at 0, and kills every compaction with
+#: ``compaction_no_progress``. Kept numerically identical to the Composer's
+#: ``_density`` band (they clamp the same quantity on different inputs) but
+#: deliberately NOT imported from it: the two bands do not import each other.
+_DENSITY_MIN = 0.25
+_DENSITY_MAX = 8.0
+
 
 def _carries_tool_result(message: Message) -> bool:
     """True when ``message`` is a tool-result turn (a ``role="tool"`` message,
@@ -176,6 +194,18 @@ class ReActPolicy:
         output_schema: Optional[dict[str, Any]] = None,
         thinking: Optional[str] = None,
         effort: Optional[str] = None,
+        #: Optional cheaper model for the summarize round-trip ONLY (decide
+        #: turns always use ``model``). Already alias-resolved by the host, for
+        #: the same reason ``model`` is: the alias table lives in the providers
+        #: built-in and this module never imports it.
+        compaction_model: Optional[str] = None,
+        #: The compaction model's OWN output ceiling (catalog-derived by the
+        #: host, like ``compaction_model`` itself). The summarize request's
+        #: ``max_tokens`` must be valid for the model that serves it —
+        #: forwarding the MAIN model's cap to a smaller summarizer is a
+        #: provider 400. ``None`` (no compaction model / old caller) keeps
+        #: the main model's cap.
+        compaction_max_output_tokens: Optional[int] = None,
     ) -> None:
         self._llm = llm
         self._tools = tools
@@ -251,6 +281,20 @@ class ReActPolicy:
         self._output_schema = output_schema
         self._thinking = thinking
         self._effort = effort
+        # The summarize round-trip's model, when the host opted into a cheaper
+        # one. ``None`` ⇒ ``self._model``, i.e. exactly the pre-knob request.
+        # Pure configuration pinned at construction, so a resumed run rebuilds
+        # the identical summarize request (determinism is what makes the
+        # recorded summary reproducible).
+        self._compaction_model = compaction_model
+        # The summarize request's output cap: the compaction model's own
+        # ceiling when a compaction model is set (and the host supplied it),
+        # else the main model's. Pinned here so ``_summary_prompt_request``
+        # stays a pure function of construction state — same determinism
+        # argument as ``_compaction_model`` above.
+        self._summary_max_tokens = (
+            compaction_max_output_tokens if compaction_model else None
+        ) or max_output_tokens
 
     # ------------------------------------------------------------------
     # Policy Protocol
@@ -289,11 +333,15 @@ class ReActPolicy:
         self._last_estimate_at_call = estimated
         # …and pin the real count that came back with it, so the next step in
         # THIS tool loop mixes against a live baseline instead of a frozen
-        # fold projection. Only the main round-trip counts: the summarize call
-        # inside ``_compaction_decision`` measures a different request and must
-        # not become the baseline. An error response carries an empty Usage
-        # (``input == 0``) and correctly leaves the baseline untouched.
-        if response.usage.input > 0:
+        # fold projection. Only a SUCCESSFUL main round-trip counts: the
+        # summarize call inside ``_compaction_decision`` measures a different
+        # request, and an errored response must not move the baseline either.
+        # The exception-shaped errors do carry an empty Usage (``input == 0``),
+        # but a 200-shape overflow arrives as ``stop_reason="error"`` WITH the
+        # provider's real count for a request that is about to be compacted
+        # away — pinning it would leave correctness hanging on the downstream
+        # ``_BASELINE_INVALIDATED`` reset, so gate on the stop_reason here.
+        if response.stop_reason != "error" and response.usage.input > 0:
             self._last_input_tokens_at_call = response.usage.input
         # ③ (D-3b) passive trigger: the provider returned an overflow error
         # (②'s category). Compact before retrying instead of failing. The mix
@@ -385,7 +433,7 @@ class ReActPolicy:
         return window is not None and estimated >= window
 
     def _summary_prompt_request(
-        self, history: list[Message]
+        self, history: list[Message], tools: list[dict[str, Any]]
     ) -> LLMRequest:
         """Build the deterministic summarize round-trip request.
 
@@ -405,9 +453,40 @@ class ReActPolicy:
         agent that is actively editing — so we record the relevant paths and let
         the model fetch the CURRENT version with ``read`` when it needs them.
 
-        Fully deterministic (same history → same request) so a resumed run
-        rebuilds the identical summarize call and the prompt prefix stays
-        stable (prefix-cache friendly). Provider-neutral: the wording
+        ``tools`` is the SAME provider tool schema list a normal turn carries
+        (``view.provider_tool_schemas``), and sending it is load-bearing rather
+        than cosmetic. The collapsed prefix still contains the ``tool_use`` /
+        ``tool_result`` blocks the model actually produced — stripping them
+        would rewrite what was said and lose the grounding the note is built
+        from — and a provider handed tool blocks with no tool definitions
+        rejects the whole request (Anthropic: 400), which the empty-summary
+        guard below then turns into a non-retryable
+        ``compaction_summary_failed``: the FIRST real proactive compaction would
+        kill the task. Carrying the live schemas also keeps the summarize call
+        on the same cached system+tools prefix as the main loop instead of
+        forfeiting it for one round-trip. Sending the schemas has a flip side,
+        though: a summarizer that SEES live tools may answer with a tool call
+        instead of the note — a history ending on a tool result invites exactly
+        that — and an only-``tool_use`` response has no text, so the same
+        empty-summary guard would kill the task. ``metadata["tool_choice"] =
+        "none"`` closes that at the wire for the first-party adapters (each
+        maps it to its vendor spelling; ``tool_choice`` sits below the
+        tools+system cache tiers, so the shared prefix survives), and the
+        prompt's closing no-tools instruction covers any third-party adapter
+        that ignores the metadata.
+
+        The MODEL is the one thing this request may not share with a normal
+        turn: ``compaction_model`` (when the host set it) routes the summarize
+        call to a cheaper model, because condensing text the strong model
+        already produced is the one mechanical step in the loop. It is a
+        per-session constant, so determinism is unaffected — but note the
+        trade-off it makes on purpose: a different model means a different
+        cached prefix for this one round-trip, paying a cache miss to save on
+        rate. ``None`` keeps the main model and the shared prefix.
+
+        Fully deterministic (same history + same tools → same request) so a
+        resumed run rebuilds the identical summarize call and the prompt prefix
+        stays stable (prefix-cache friendly). Provider-neutral: the wording
         names no vendor and no vendor-specific mechanism — it works for any
         provider. Goes through the same ``_llm`` as a normal turn, so it records
         LLMRequestStarted/Recorded/Finished.
@@ -417,24 +496,67 @@ class ReActPolicy:
             content=[TextBlock(text=_SUMMARIZE_SYSTEM_PROMPT)],
         )
         return LLMRequest(
-            model=self._model,
+            model=self._compaction_model or self._model,
             messages=list(history),
-            tools=[],
+            tools=list(tools),
             system=summary_system,
-            # Forward the model's output ceiling exactly as a normal turn does
-            # (see ``_make_request``). Without it a gateway that caps output at a
-            # stingy default when the client sends no ``max_tokens`` (the aidp
-            # Responses gateway caps at 1000) starves the summary: a reasoning
-            # model spends the whole default budget on hidden reasoning and comes
-            # back ``stop_reason="max_tokens"`` with an EMPTY text body, which the
+            # The summarize round-trip must not tool-call (see the docstring):
+            # first-party adapters map this to their vendor tool_choice.
+            metadata={"tool_choice": "none"},
+            # Forward an output ceiling for the model that SERVES this request.
+            # Without one, a gateway that caps output at a stingy default when
+            # the client sends no ``max_tokens`` (the aidp Responses gateway
+            # caps at 1000) starves the summary: a reasoning model spends the
+            # whole default budget on hidden reasoning and comes back
+            # ``stop_reason="max_tokens"`` with an EMPTY text body, which the
             # empty-summary guard below then (correctly) turns into a
             # ``compaction_summary_failed`` FailDecision — killing the task on
-            # every proactive compaction. ``0`` (host didn't inject) ⇒ ``None`` ⇒
-            # omitted from canonical bytes, so a session's summarize prompt
-            # prefix is byte-identical and the request stays deterministic on
-            # resume.
-            max_tokens=self._max_output_tokens or None,
+            # every proactive compaction. But the MAIN model's cap is only
+            # valid on the main model: when ``compaction_model`` routes this
+            # call to a smaller summarizer, a larger cap is a provider 400 with
+            # the same task-killing outcome, so ``_summary_max_tokens`` is the
+            # compaction model's own catalog ceiling whenever one is set. ``0``
+            # (host didn't inject) ⇒ ``None`` ⇒ omitted from canonical bytes,
+            # so a session's summarize prompt prefix is byte-identical and the
+            # request stays deterministic on resume.
+            max_tokens=self._summary_max_tokens or None,
         )
+
+    def _previous_summary_message(self, view: View) -> Optional[Message]:
+        """The summary message standing in for the already-collapsed prefix, or
+        ``None`` when nothing has been collapsed yet.
+
+        The bounded summarize input (previous summary + delta) needs the
+        previous summary TEXT, and it is already on the View the Policy holds:
+        when ``ContextState.summary_ref`` is set, the Composer's
+        ``_apply_summary`` replaces ``rolling_history[:summary_boundary]`` with
+        exactly ONE message at the HEAD of the dynamic suffix, and the anchored
+        placement pass clamps every mid-task resident to index ≥ 1 precisely so
+        nothing can precede it (the tail prune clears outputs in place and drops
+        no message; the compose-time reminders append at the tail).
+        ``summary_boundary > 0`` is the View-visible signal that the swap
+        happened — the boundary only ever advances through a ``Compacted``, and
+        a ``Compacted`` always carries a summary.
+
+        Reading it off the View is what keeps the Policy pure: no ContentStore
+        deref, and no Policy-private carry-over (a resumed run builds a fresh
+        Policy instance, so instance state would silently change the summarize
+        request across a resume — the one thing determinism forbids). Anything
+        that does not look like that message returns ``None`` and the caller
+        falls back to summarising the whole raw prefix: lossless, merely
+        unbounded, i.e. the safe direction to degrade in.
+        """
+        if view.summary_boundary <= 0 or len(view.segments) < 3:
+            return None
+        dynamic = view.segments[2].content
+        if not dynamic:
+            return None
+        head = dynamic[0]
+        if head.role != "user" or head.origin is not None:
+            return None
+        if len(head.content) != 1 or not isinstance(head.content[0], TextBlock):
+            return None
+        return head
 
     def _compaction_decision(
         self,
@@ -454,11 +576,26 @@ class ReActPolicy:
         post-prune, skill-prefixed and tail-truncated). That way the boundary
         the policy records is a raw-history index that the Composer's
         ``_apply_summary`` (which does ``rolling_history[:boundary]``) applies
-        to exactly the same messages. The summary therefore covers the whole
-        raw prefix ``rolling_history[:boundary]`` (the Composer always replaces
-        the entire ``[:boundary]`` with one summary, so re-summarising from the
-        raw prefix each time keeps the result deterministic and the summary
-        faithful even when a prior summary already collapsed part of it).
+        to exactly the same messages.
+
+        **Bounded summarize input (previous summary + delta).** The recorded
+        boundary stays cumulative-from-zero — it is the Composer's slice index
+        and nothing here changes that — but what is SENT to the summarizer is
+        the previous summary message followed by
+        ``rolling_history[previous_boundary:boundary]``, i.e. a
+        summary-of-summary. Re-summarising ``[:boundary]`` from index 0 on every
+        compaction is what makes the Nth summarize input grow with N: the raw
+        history is never trimmed while the trigger compares the *composed*
+        (post-summary) size, so by the second or third compaction the summarize
+        call itself exceeds the window and dies as
+        ``compaction_summary_failed`` — a non-retryable task death. Feeding the
+        previous note back in keeps every pass roughly one window wide and loses
+        nothing that the previous note preserved. The input is still a pure
+        function of the composed View, so a resumed run rebuilds it identically;
+        when no previous summary is reachable the whole raw prefix is sent, as
+        before. (One residual gap, deliberately not closed here: the delta is
+        RAW, so a turn whose tool output the Composer cleared to a marker still
+        contributes its full body to the summarize input.)
 
         The boundary is computed deterministically from ``tail_token_budget``
         (the same budget the Composer prunes against), so a resumed run derives
@@ -497,8 +634,24 @@ class ReActPolicy:
             return FailDecision(
                 reason="compaction_no_progress", retryable=False
             )
-        to_summarize = history[:boundary]
-        summary_req = self._summary_prompt_request(to_summarize)
+        previous_summary = self._previous_summary_message(view)
+        if previous_summary is None:
+            # First compaction (or a View whose head is not the Composer's
+            # summary message): the whole raw prefix is the input.
+            to_summarize = history[:boundary]
+        else:
+            # Summary-of-summary: the note already covering
+            # ``[:view.summary_boundary]`` plus only the messages appended
+            # since. The slice starts on a self-contained turn — the previous
+            # boundary was itself snapped forward past every tool-result
+            # message — so the delta never opens on an orphan ``tool_result``.
+            to_summarize = [
+                previous_summary,
+                *history[view.summary_boundary : boundary],
+            ]
+        summary_req = self._summary_prompt_request(
+            to_summarize, view.provider_tool_schemas
+        )
         # The summarize round-trip is not user-facing output: opt out of
         # token streaming so a live UI never previews compaction internals.
         summary_resp = self._llm.complete(summary_req, ctx, allow_stream=False)
@@ -525,11 +678,15 @@ class ReActPolicy:
             )
         # the model is *asked* (via the summarize prompt) to keep
         # safety/permission directives verbatim, but cannot be trusted to. Run
-        # the deterministic post-check over the SAME prefix we collapsed: any
+        # the deterministic post-check over the SAME input we summarized: any
         # detected constraint that the model dropped or paraphrased is appended
-        # back word-for-word. Pure over ``(to_summarize, summary)`` so the
-        # recorded summary stays a deterministic function of the recorded
-        # response → a resumed run rebuilds the identical summary.
+        # back word-for-word. That input begins with the previous summary
+        # whenever one exists, so a constraint first stated long before the
+        # current delta — and preserved by the earlier pass — is re-detected and
+        # keeps binding across arbitrarily many compactions. Pure over
+        # ``(to_summarize, summary)`` so the recorded summary stays a
+        # deterministic function of the recorded response → a resumed run
+        # rebuilds the identical summary.
         summary = enforce_verbatim_constraints(
             summary, extract_safety_constraints(to_summarize)
         )
@@ -587,12 +744,23 @@ class ReActPolicy:
         live. ``_BASELINE_INVALIDATED`` (post-compaction) also yields ``1.0``:
         with no count describing the collapsed history, the honest fallback is
         to trust the estimate as written.
+
+        Clamped to ``[_DENSITY_MIN, _DENSITY_MAX]`` for the reason those
+        constants document: the numerator is a PROVIDER-reported count, and a
+        gateway that reports a nonsense one (a flat ``input_tokens=10`` for a
+        multi-thousand-token request) drives the ratio toward zero, which
+        divides ``tail_token_budget`` by an arbitrary factor and inflates the
+        protected tail past the whole history — the boundary then cannot
+        advance and every compaction dies on ``compaction_no_progress``. The
+        clamp bounds the damage to a factor of four in either direction, which
+        the tail budget absorbs.
         """
         if self._last_estimate_at_call <= 0:
             return 1.0
         if self._last_input_tokens_at_call <= 0:
             return 1.0
-        return self._last_input_tokens_at_call / self._last_estimate_at_call
+        ratio = self._last_input_tokens_at_call / self._last_estimate_at_call
+        return min(_DENSITY_MAX, max(_DENSITY_MIN, ratio))
 
     def _summary_boundary(self, history: list[Message]) -> int:
         """How many leading RAW-history messages to collapse — everything older
@@ -917,6 +1085,19 @@ _CONSTRAINT_TRIGGERS: tuple[str, ...] = (
 )
 
 
+#: List-bullet markers stripped off a detected constraint line before it is
+#: recorded. The summarize input begins with the PREVIOUS summary whenever one
+#: exists, and a constraint the previous model dropped was re-injected there as
+#: ``- <line>`` by :func:`enforce_verbatim_constraints`. Without this
+#: normalisation each pass would detect the bulleted form, find it missing from
+#: the fresh note, and re-inject it one bullet deeper (``- - <line>``,
+#: ``- - - <line>``, …). Stripping the marker makes the round-trip idempotent:
+#: the detected text is the constraint itself, which the re-injected block
+#: contains verbatim, so the next pass matches and adds nothing. Pure and
+#: deterministic; a line that carries no marker is unaffected.
+_BULLET_PREFIXES: tuple[str, ...] = ("- ", "* ", "+ ")
+
+
 def _line_is_constraint(line: str) -> bool:
     """True iff ``line`` carries a safety/permission directive trigger.
 
@@ -935,9 +1116,10 @@ def extract_safety_constraints(messages: list[Message]) -> list[str]:
     binding the session after its turn is collapsed into a compaction summary.
     This is the detector — it walks every ``TextBlock`` of every message, splits
     on newlines, and keeps each line whose text contains a constraint trigger
-    (:data:`_CONSTRAINT_TRIGGERS`), STRIPPED of surrounding whitespace but
-    otherwise verbatim (so the exact wording — including the path it protects —
-    is preserved for re-injection).
+    (:data:`_CONSTRAINT_TRIGGERS`), STRIPPED of surrounding whitespace and of a
+    leading list bullet (:data:`_BULLET_PREFIXES`) but otherwise verbatim (so
+    the exact wording — including the path it protects — is preserved for
+    re-injection).
 
     Pure + deterministic + provider-neutral: same messages → same list, no
     clock / randomness / network, no provider field. Order is first-appearance;
@@ -953,6 +1135,10 @@ def extract_safety_constraints(messages: list[Message]) -> list[str]:
                 continue
             for raw_line in block.text.split("\n"):
                 line = raw_line.strip()
+                for bullet in _BULLET_PREFIXES:
+                    if line.startswith(bullet):
+                        line = line[len(bullet) :].strip()
+                        break
                 if not line or not _line_is_constraint(line):
                     continue
                 if line in seen:

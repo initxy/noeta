@@ -184,6 +184,8 @@ class PolicyFactoryBuilder(Protocol):
         output_schema: Optional[dict[str, Any]],
         thinking: Optional[str],
         effort: Optional[str],
+        compaction_model: Optional[str],
+        compaction_max_output_tokens: Optional[int],
     ) -> Callable[[Any], Policy]: ...
 
 
@@ -236,6 +238,8 @@ class _BuildSpec:
     output_schema: Optional[dict[str, Any]]
     thinking: Optional[str]
     effort: Optional[str]
+    compaction_model: Optional[str]
+    compaction_max_output_tokens: Optional[int]
     tool_output_inline_limit: Optional[int]
     #: Loader-resolved built-in compose-time reminders: the renders the
     #: ``reminders`` built-in plugin declares, resolved by the SDK host and
@@ -552,6 +556,20 @@ def build_session_inputs(
     output_schema: Optional[dict[str, Any]] = None,
     thinking: Optional[str] = None,
     effort: Optional[str] = None,
+    #: Optional cheaper model for the compaction summarize round-trip ONLY;
+    #: decide turns always use ``model``. Already alias-resolved by the caller
+    #: (same table ``model`` went through) — the kernel owns no alias table.
+    #: ``None`` ⇒ the summarize call uses ``model``, byte-identically to
+    #: before this parameter existed.
+    compaction_model: Optional[str] = None,
+    #: The compaction model's OWN output ceiling (catalog-derived by the
+    #: caller, alias-resolved like ``compaction_model`` — the kernel owns no
+    #: catalog). The summarize request's ``max_tokens`` must be valid for the
+    #: model that serves it: forwarding the MAIN model's cap to a smaller
+    #: summarizer is a provider 400 → non-retryable
+    #: ``compaction_summary_failed`` on every proactive compaction. ``None``
+    #: (no compaction model, or an old caller) keeps the main model's cap.
+    compaction_max_output_tokens: Optional[int] = None,
     # microcompact — engine-level truncation limit for inline
     # tool output in messages. ``None`` (default) = no truncation.
     tool_output_inline_limit: Optional[int] = None,
@@ -676,6 +694,8 @@ def build_session_inputs(
         output_schema=output_schema,
         thinking=thinking,
         effort=effort,
+        compaction_model=compaction_model,
+        compaction_max_output_tokens=compaction_max_output_tokens,
         tool_output_inline_limit=tool_output_inline_limit,
     )
 
@@ -845,8 +865,9 @@ def build_session_inputs(
     # factory fully replaces the default. ``None`` ⇒ the loader-resolved
     # default (the ReAct construction lives in the ``react`` built-in; the
     # injected builder receives exactly the kernel-computed facts). Wiring-only
-    # LLM request overrides (output_schema / thinking / effort) ride through;
-    # omitted from canonical bytes when unset so recordings resume byte-equal.
+    # LLM request overrides (output_schema / thinking / effort /
+    # compaction_model) ride through; omitted from canonical bytes when unset
+    # so recordings resume byte-equal.
     policy_factory: Callable[[Any], Policy]
     if policy_factory_override is not None:
         policy_factory = policy_factory_override
@@ -874,6 +895,8 @@ def build_session_inputs(
             output_schema=output_schema,
             thinking=thinking,
             effort=effort,
+            compaction_model=compaction_model,
+            compaction_max_output_tokens=compaction_max_output_tokens,
         )
 
     hooks = _build_guards(spec, tools, guard_facts)
