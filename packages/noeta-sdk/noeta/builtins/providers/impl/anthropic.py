@@ -5,11 +5,18 @@ Messages API; every loss of fidelity caused by that wire shape is contained to
 this file, so Engine and Policy only ever see Noeta-shape types. The provider
 pins no model — ``LLMRequest.model`` is forwarded per call — and ``max_tokens``
 is fail-fast rather than silently defaulted, because Anthropic requires it and
-a guessed cap truncates answers invisibly. Two wire concerns are stamped on the
-outbound body only and never enter ``LLMRequest`` or the recorded
-``request_ref``: the ephemeral prompt-cache breakpoints, and the
+a guessed cap truncates answers invisibly. Three wire concerns are stamped on
+the outbound body only and never enter ``LLMRequest`` or the recorded
+``request_ref``: the ephemeral prompt-cache breakpoints, the
 ``<system-reminder>`` tagging that Anthropic needs because it has no
-mid-history system role.
+mid-history system role, and the ``stream`` flag.
+
+**Every request is transported over SSE.** ``complete`` /
+``complete_with_headers`` delegate to ``complete_streaming`` with a discarding
+sink, so the only difference between them is whether fragments reach a caller
+— the wire body, the parse, the error taxonomy and the recorded bytes are one
+code path. See :meth:`AnthropicProvider.complete_with_headers` for why the
+non-streaming POST had to go.
 """
 
 from __future__ import annotations
@@ -22,6 +29,7 @@ from typing import Any, Callable, Literal, Optional
 import httpx
 
 from noeta.protocols.errors import (
+    CATEGORY_OVERFLOW,
     ContextOverflowError,
     FatalError,
     TransientError,
@@ -63,11 +71,26 @@ _API_VERSION_DEFAULT = "2023-06-01"
 _API_KEY_ENV = "ANTHROPIC_API_KEY"
 _MESSAGES_ENDPOINT = "/v1/messages"
 
+#: The stop_reason a current model returns when the *input* overflowed the
+#: context window on an otherwise-successful HTTP 200 turn. It is the same
+#: failure the 400 body sniffer catches, arriving over a different transport,
+#: so it must reach Policy in the same neutral shape — ``stop_reason="error"``
+#: plus ``raw["category"] == "overflow"`` — which is what the compaction
+#: policy's passive path keys on. Left unrecognised it falls through to a bare
+#: ``"error"`` → ``FailDecision(llm_error, retryable=False)``, killing the task
+#: exactly where compaction would have rescued it.
+_OVERFLOW_STOP_REASON = "model_context_window_exceeded"
+
 _STOP_REASON_MAP: dict[str, Literal["tool_use", "end_turn", "max_tokens", "error"]] = {
     "end_turn": "end_turn",
     "tool_use": "tool_use",
     "max_tokens": "max_tokens",
     "stop_sequence": "end_turn",
+    # Neutral ``error``, but a *recoverable* one: ``_parse_response`` stamps the
+    # overflow category onto ``raw`` so the Policy compacts and retries instead
+    # of failing. Listed explicitly (rather than left to the fall-through) so
+    # the mapping is a decision on the record, not an accident.
+    _OVERFLOW_STOP_REASON: "error",
     # A safety-classifier ``refusal`` is a *completed* HTTP-200 turn whose
     # content carries the refusal text. The neutral vocabulary has no
     # ``refusal``, so it maps to ``end_turn``: the refusal reaches the caller as
@@ -78,6 +101,17 @@ _STOP_REASON_MAP: dict[str, Literal["tool_use", "end_turn", "max_tokens", "error
     # be resumed; an absent key falls through to ``error``.
     "refusal": "end_turn",
 }
+
+
+def _discard_delta(delta: StreamDelta) -> None:
+    """The ``on_delta`` :meth:`AnthropicProvider.complete_with_headers` passes.
+
+    A named no-op rather than a lambda so the intent is on the record: the
+    non-streaming entry point uses the streaming *transport* and drops every
+    fragment, which is what keeps ``HostConfig.delta_sink`` the only surface
+    through which a delta can reach a host.
+    """
+    return None
 
 
 class AnthropicProvider:
@@ -152,39 +186,34 @@ class AnthropicProvider:
         request: LLMRequest,
         request_headers: Optional[dict[str, str]],
     ) -> LLMResponse:
+        """Blocking one-shot completion — transported over SSE, not a batch POST.
+
+        The externally visible contract is unchanged: one ``LLMResponse``,
+        the same parse, the same neutral error taxonomy, and **no deltas
+        anywhere** (the sink below discards). Only the transport moved, because
+        the non-streaming POST holds one socket idle for the whole generation
+        and dies on the client timeout: ReAct forwards the catalog's
+        ``max_output_tokens`` as ``max_tokens`` on every turn, so a long answer
+        on a 128 K cap reliably outran the default 60 s and then burned the
+        runtime's retry budget re-running the same doomed call. A streamed
+        connection keeps producing bytes, so the timeout measures silence
+        rather than total generation time.
+
+        This changes no recorded bytes. ``request_ref`` is the canonical
+        serialization of the NEUTRAL ``LLMRequest``
+        (``noeta.runtime.llm._put_request`` → ``to_canonical_bytes(req)``); the
+        wire body — including ``stream: true`` and the ``cache_control``
+        breakpoints — is assembled here and never travels back. Prompt-cache
+        keys are unaffected for the same reason the header-merge path is: the
+        cached prefix is ``tools``/``system``/``messages``, which are
+        byte-identical between the two transports.
+        """
         # ``request_headers`` merges over the constructor headers, so
         # ``x-api-key`` / ``anthropic-version`` survive unless deliberately
-        # overridden. The guard runs before any wire assembly: a top-level
-        # ``ImageBlock`` bound for a non-vision model is a misroute and must be
-        # loud. Tool-result images ride ``ToolResultBlock.images`` rather than a
-        # top-level block, so the guard cannot see them — their non-vision
-        # degrade belongs to the tool renderer instead.
-        _guard_vision_capability(request)
-        body = self._build_request_body(request)
-        # Every wire-shape failure is translated into the neutral Noeta error
-        # taxonomy here, so the runtime never sees an httpx type.
-        post_kwargs: dict[str, Any] = {"json": body}
-        if request_headers is not None:
-            post_kwargs["headers"] = request_headers
-        try:
-            http_response = self._client.post(_MESSAGES_ENDPOINT, **post_kwargs)
-            http_response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise _translate_http_error(exc) from exc
-        except (httpx.TimeoutException, httpx.TransportError) as exc:
-            raise TransientError(str(exc)) from exc
-        try:
-            payload = http_response.json()
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"Anthropic response was not valid JSON: {exc}"
-            ) from exc
-        if not isinstance(payload, dict):
-            raise ValueError(
-                f"Anthropic response root was not a JSON object: "
-                f"type={type(payload).__name__}"
-            )
-        return self._parse_response(payload)
+        # overridden. The vision guard and the wire assembly both live in
+        # ``complete_streaming``; delegating whole (rather than duplicating the
+        # pre-flight) is what keeps the two entry points from drifting.
+        return self.complete_streaming(request, _discard_delta, request_headers)
 
     def complete_streaming(
         self,
@@ -194,9 +223,10 @@ class AnthropicProvider:
     ) -> LLMResponse:
         # Still the blocking one-shot contract of ``complete``: the full
         # ``LLMResponse`` is the return value and ``on_delta`` only fires as a
-        # side effect. The body is built by the exact same path as the batch
-        # call, so streamed and batch requests are byte-identical on the wire
-        # apart from the stream flag.
+        # side effect. This IS the transport for both entry points —
+        # ``complete_with_headers`` calls straight into here with a discarding
+        # sink — so the wire body, the parse and the error taxonomy cannot
+        # drift between a previewed turn and a silent one.
         _guard_vision_capability(request)
         body = self._build_request_body(request)
         body["stream"] = True
@@ -239,7 +269,7 @@ class AnthropicProvider:
         # One catalog lookup for the whole request: the tool renderer consults
         # this to inline tool-result images or degrade them to string content.
         # Top-level images were already settled by the guard.
-        vision = _model_supports_vision(request.model)
+        vision = _model_admits_images(request.model)
 
         # Anthropic has no mid-history system role, so a host-injected turn
         # renders as <system-reminder>-wrapped text and merges into the
@@ -277,6 +307,19 @@ class AnthropicProvider:
             body["system"] = _flatten_text_blocks(request.system)
         if request.tools:
             body["tools"] = _translate_tools(request.tools)
+        # ``LLMRequest`` has no tool_choice field — it rides ``metadata`` (the
+        # summarize round-trip sets ``"none"`` so the summarizer cannot answer
+        # with a tool call; see react.py ``_summary_prompt_request``). The
+        # neutral spelling is a bare string, which Anthropic wants wrapped as
+        # ``{"type": ...}``; a dict rides through verbatim for callers that
+        # already speak the vendor shape.
+        tool_choice = request.metadata.get("tool_choice")
+        if tool_choice is not None:
+            body["tool_choice"] = (
+                {"type": tool_choice}
+                if isinstance(tool_choice, str)
+                else tool_choice
+            )
         # ``cache_control`` is an Anthropic wire concern and must never reach
         # LLMRequest / request_ref, so it is stamped on the just-built body.
         _apply_cache_control(body)
@@ -355,11 +398,19 @@ class AnthropicProvider:
         usage_raw = payload.get("usage") or {}
         usage = _translate_usage(usage_raw)
 
+        raw: dict[str, Any] = payload
+        if raw_stop == _OVERFLOW_STOP_REASON:
+            # Same neutral shape the 400 path produces (a ``ContextOverflowError``
+            # the runtime renders as ``raw['category'] == 'overflow'``), so both
+            # transports converge on the Policy's one passive-compaction branch.
+            # Copied, never mutated in place: ``payload`` is the recorded body.
+            raw = {**payload, "category": CATEGORY_OVERFLOW}
+
         return LLMResponse(
             stop_reason=stop_reason,
             content=content,
             usage=usage,
-            raw=payload,
+            raw=raw,
         )
 
 
@@ -480,14 +531,27 @@ def _translate_usage(usage_raw: Any) -> Usage:
 # ---------------------------------------------------------------------------
 
 
-def _model_supports_vision(model: str) -> bool:
-    """Whether ``model`` is catalogued as vision-capable.
+def _model_admits_images(model: str) -> bool:
+    """Whether an image may be sent to ``model``.
 
-    An unregistered model counts as not vision-capable: the conservative
-    reading keeps images away from a model that may be unable to read them.
+    Three states collapse into two answers, and the middle one is the whole
+    point of this helper:
+
+    * catalogued with ``supports_vision=True`` — yes.
+    * catalogued with ``supports_vision=False`` — no. Somebody decided this
+      model is text-only, so the adapter refuses locally with a clear message
+      instead of paying a round-trip for a vendor 4xx.
+    * **absent from the catalog — yes.** Nobody decided anything; the model is
+      unknown, not text-only. Treating unknown as non-vision made an
+      uncatalogued gateway model refuse every image locally, with no signal
+      that the catalog (rather than the model) was the thing saying no. The
+      provider is the authority on its own capabilities and answers with a
+      clear error if the model truly cannot read images.
     """
     spec = catalog.CATALOG.get(catalog.resolve_alias(model))
-    return bool(spec is not None and spec.supports_vision)
+    if spec is None:
+        return True
+    return bool(spec.supports_vision)
 
 
 def _request_has_image(request: LLMRequest) -> bool:
@@ -505,21 +569,23 @@ def _request_has_image(request: LLMRequest) -> bool:
 
 
 def _guard_vision_capability(request: LLMRequest) -> None:
-    """A top-level ``ImageBlock`` bound for a non-vision model → :class:`FatalError`.
+    """A top-level ``ImageBlock`` bound for a **catalogued** non-vision model →
+    :class:`FatalError`.
 
     Refusing before wire assembly beats letting the gateway answer with a
-    cryptic 4xx or, worse, silently ignore the image. The catalog is consulted
-    only when an image is actually present, so the text-only path pays nothing.
+    cryptic 4xx or, worse, silently ignore the image. An *uncatalogued* model
+    is not refused — see :func:`_model_admits_images` for why the two cases
+    part company. The catalog is consulted only when an image is actually
+    present, so the text-only path pays nothing.
     """
     if not _request_has_image(request):
         return
-    if _model_supports_vision(request.model):
+    if _model_admits_images(request.model):
         return
     raise FatalError(
-        f"request carries an ImageBlock but model {request.model!r} is not "
-        "vision-capable (catalog supports_vision is False or model is "
-        "unregistered); refusing to send the image to a model that cannot "
-        "read it."
+        f"request carries an ImageBlock but model {request.model!r} is "
+        "catalogued with supports_vision=False; refusing to send the image to "
+        "a model that cannot read it."
     )
 
 
@@ -723,17 +789,27 @@ def _apply_cache_control(body: dict[str, Any]) -> None:
     """Stamp ephemeral prompt-cache breakpoints onto the outbound wire body.
 
     Mutates ``body`` in place; the caller passes the just-built wire dict, so
-    no LLMRequest / request_ref bytes are touched. Breakpoints (≤4):
+    no LLMRequest / request_ref bytes are touched.
 
+    Anthropic renders the prefix in the order ``tools`` → ``system`` →
+    ``messages``, and a breakpoint caches everything *before* it, so each of
+    the three stamps below (≤4 is the vendor cap) covers strictly more than the
+    one above it:
+
+    * **last tool**: stamp the final tool dict — caches the tool schemas
+      (which render first, so this breakpoint covers tools ONLY, not system).
     * **system**: if present, lift the flat string into block form
       ``[{"type":"text","text":...,"cache_control":...}]`` — Anthropic requires
-      block (not bare-string) shape to carry cache_control. Caches the system
-      preamble.
-    * **last tool**: stamp the final tool dict — caches the whole system+tools
-      prefix (the bulk of the stable bytes).
+      block (not bare-string) shape to carry cache_control. Caches
+      tools + system, i.e. the bulk of the stable bytes.
     * **last message's last content block**: stamp the final content block —
-      caches the growing conversation up to that point. Every wire content
-      block is already a dict here, so it can carry the field directly.
+      caches tools + system + the growing conversation up to that point. Every
+      wire content block is already a dict here, so it can carry the field
+      directly.
+
+    (The stamps are applied system-first below purely because the system block
+    needs re-shaping first; order of application is irrelevant — only wire
+    position is.)
     """
     system = body.get("system")
     if isinstance(system, str):
@@ -1001,6 +1077,12 @@ class _StreamAccumulator:
                 self._message["stop_reason"] = delta.get("stop_reason")
             if "stop_sequence" in delta:
                 self._message["stop_sequence"] = delta.get("stop_sequence")
+            if "stop_details" in delta:
+                # Capture only — nothing branches on it. The batch path carries
+                # it for free (``raw`` is the whole payload); without this line
+                # the streamed reconstruction would silently drop the vendor's
+                # explanation of WHY the turn stopped.
+                self._message["stop_details"] = delta.get("stop_details")
         usage = payload.get("usage")
         if isinstance(usage, dict):
             merged = self._message.get("usage")

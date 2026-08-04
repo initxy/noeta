@@ -351,11 +351,12 @@ class OpenAIResponsesProvider:
         input_items: list[dict[str, Any]] = []
         # Resolve the bound model's vision capability **once** (the whole
         # request targets one model). Only the tool-result image branch reads
-        # it: a vision model inlines tool-surfaced images into
-        # ``function_call_output``, a non-vision model degrades to text — and a
-        # tool-result image is invisible to ``_guard_vision_capability`` (which
-        # only scans top-level ImageBlocks), so this flag is its dedicated gate.
-        model_supports_vision = _model_supports_vision(request.model)
+        # it: an image-admitting model inlines tool-surfaced images into
+        # ``function_call_output``, a catalogued non-vision model degrades to
+        # text — and a tool-result image is invisible to
+        # ``_guard_vision_capability`` (which only scans top-level
+        # ImageBlocks), so this flag is its dedicated gate.
+        model_admits_images = _model_admits_images(request.model)
         for message in request.messages:
             if message.role == "system":
                 raise ValueError(
@@ -371,7 +372,7 @@ class OpenAIResponsesProvider:
                     message,
                     self._reasoning_continuation,
                     self._image_resolver,
-                    model_supports_vision,
+                    model_admits_images,
                 )
             )
 
@@ -706,33 +707,24 @@ def _strip_reasoning_input(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _guard_vision_capability(request: LLMRequest) -> None:
-    """Request contains an ``ImageBlock`` but the target model is not vision-
-    capable → :class:`FatalError` before going on the wire.
+    """An ``ImageBlock`` bound for a **catalogued** non-vision model →
+    :class:`FatalError` before going on the wire.
 
-    Don't send an image to a model that can't read it. Look up ``request.model``
-    in ``catalog.CATALOG`` (after ``resolve_alias`` translates a friendly alias
-    to the real id); treat these as **not vision-capable** and error out on any
-    image:
-
-      * model not in the catalog (unregistered → can't tell if it sees images,
-        conservatively no);
-      * model in the catalog but ``supports_vision`` is False.
-
-    Requests with no ``ImageBlock`` (pure text/tools) pass straight through —
-    the guard hits the catalog only when an image is actually present, so the
-    text-only path has zero overhead.
+    Refusing before wire assembly beats letting the gateway answer with a
+    cryptic 4xx or, worse, silently ignore the image. An *uncatalogued* model
+    is not refused — see :func:`_model_admits_images` for why the two cases
+    part company. Requests with no ``ImageBlock`` (pure text/tools) pass
+    straight through — the catalog is consulted only when an image is actually
+    present, so the text-only path pays nothing.
     """
     if not _request_has_image(request):
         return
-    real_id = catalog.resolve_alias(request.model)
-    spec = catalog.CATALOG.get(real_id)
-    if spec is not None and spec.supports_vision:
+    if _model_admits_images(request.model):
         return
     raise FatalError(
-        f"request carries an ImageBlock but model {request.model!r} is not "
-        "vision-capable (catalog supports_vision is False or model is "
-        "unregistered); refusing to send the image to a model that cannot "
-        "read it."
+        f"request carries an ImageBlock but model {request.model!r} is "
+        "catalogued with supports_vision=False; refusing to send the image to "
+        "a model that cannot read it."
     )
 
 
@@ -746,20 +738,33 @@ def _request_has_image(request: LLMRequest) -> bool:
     )
 
 
-def _model_supports_vision(model: str) -> bool:
-    """Whether ``model`` is registered as vision-capable in the catalog.
+def _model_admits_images(model: str) -> bool:
+    """Whether an image may be sent to ``model``.
 
-    Same lookup as the vision guard (``resolve_alias`` → ``CATALOG`` →
-    ``supports_vision``), so one place can't pass an image while another
-    rejects it: an unregistered model, or a registered one with
-    ``supports_vision`` False, is **not** vision-capable. This gates the tool-
-    result image branch (a tool-surfaced image rides ``ToolResultBlock.images``,
-    not a top-level ImageBlock, so ``_guard_vision_capability`` never sees it —
-    this flag is its dedicated check).
+    Three states collapse into two answers, and the middle one is the whole
+    point of this helper:
+
+    * catalogued with ``supports_vision=True`` — yes.
+    * catalogued with ``supports_vision=False`` — no. Somebody decided this
+      model is text-only, so the adapter refuses locally with a clear message
+      instead of paying a round-trip for a vendor 4xx.
+    * **absent from the catalog — yes.** Nobody decided anything; the model is
+      unknown, not text-only. Treating unknown as non-vision made an
+      uncatalogued gateway model refuse every image locally, with no signal
+      that the catalog (rather than the model) was the thing saying no. The
+      provider is the authority on its own capabilities and answers with a
+      clear error if the model truly cannot read images.
+
+    Shared by :func:`_guard_vision_capability` and the tool-result image branch
+    (a tool-surfaced image rides ``ToolResultBlock.images``, not a top-level
+    ImageBlock, so the guard never sees it — this flag is its dedicated check),
+    so one place can't pass an image while the other rejects it.
     """
     real_id = catalog.resolve_alias(model)
     spec = catalog.CATALOG.get(real_id)
-    return spec is not None and spec.supports_vision
+    if spec is None:
+        return True
+    return bool(spec.supports_vision)
 
 
 # ---------------------------------------------------------------------------
@@ -782,7 +787,7 @@ def _message_to_responses(
     message: Message,
     reasoning_continuation: ReasoningContinuation,
     image_resolver: Optional[ImageResolver],
-    model_supports_vision: bool = False,
+    model_admits_images: bool = False,
 ) -> list[dict[str, Any]]:
     """One Noeta Message → a sequence of Responses ``input`` items.
 
@@ -844,7 +849,7 @@ def _message_to_responses(
         )
     if message.role == "tool":
         return _tool_message_to_responses(
-            message, image_resolver, model_supports_vision
+            message, image_resolver, model_admits_images
         )
     raise ValueError(f"unsupported message role: {message.role!r}")
 
@@ -1007,7 +1012,7 @@ def _thinking_block_to_reasoning(block: ThinkingBlock) -> dict[str, Any]:
 def _tool_message_to_responses(
     message: Message,
     image_resolver: Optional[ImageResolver],
-    model_supports_vision: bool,
+    model_admits_images: bool,
 ) -> list[dict[str, Any]]:
     """Each ``ToolResultBlock`` on a tool-role message → one
     ``function_call_output`` item.
@@ -1033,7 +1038,7 @@ def _tool_message_to_responses(
                     rendered,
                     block.images,
                     image_resolver,
-                    model_supports_vision,
+                    model_admits_images,
                 ),
             }
         )
@@ -1044,22 +1049,23 @@ def _tool_result_output(
     rendered: str,
     images: Optional[list[ImageBlock]],
     image_resolver: Optional[ImageResolver],
-    model_supports_vision: bool,
+    model_admits_images: bool,
 ) -> Any:
     """Build the ``function_call_output.output`` value for one tool result.
 
     * No images → the plain string ``rendered``.
-    * Images + vision model + a configured ``image_resolver`` → a content-part
-      **array**: the rendered text as one ``input_text`` segment, followed by
-      one ``input_image`` data-URI segment per image (the wire shape the gateway
-      accepts so the model actually sees the image).
-    * Images but the model is **not** vision-capable, or no ``image_resolver``
-      is configured → degrade to the plain string ``rendered`` with a short
-      note appended; **never crash** — the text result still reaches the model.
+    * Images + an image-admitting model + a configured ``image_resolver`` → a
+      content-part **array**: the rendered text as one ``input_text`` segment,
+      followed by one ``input_image`` data-URI segment per image (the wire
+      shape the gateway accepts so the model actually sees the image).
+    * Images but the model is **catalogued non-vision**, or no
+      ``image_resolver`` is configured → degrade to the plain string
+      ``rendered`` with a short note appended; **never crash** — the text
+      result still reaches the model.
     """
     if not images:
         return rendered
-    if not model_supports_vision or image_resolver is None:
+    if not model_admits_images or image_resolver is None:
         return rendered + "\n[image omitted: model is not vision-capable]"
     segments: list[dict[str, Any]] = [{"type": "input_text", "text": rendered}]
     for image in images:

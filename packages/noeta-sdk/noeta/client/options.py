@@ -325,6 +325,15 @@ intensity ramp and not the alphabet.
 """
 
 
+#: The effort levels at which turning thinking OFF is a documented hard 400 on
+#: current Anthropic models — the top of the ramp, where the model is expected
+#: to reason. Derived from :data:`EFFORT_MODES` rather than spelled out, so
+#: extending the ramp cannot silently leave a new top level unguarded.
+_THINKING_REQUIRED_EFFORTS: frozenset[str] = frozenset(
+    EFFORT_MODES[EFFORT_MODES.index("high") + 1 :]
+)
+
+
 @dataclass(frozen=True)
 class Options:
     """Human-friendly recipe for compiling one or more :class:`AgentSpec` s.
@@ -356,6 +365,18 @@ class Options:
     model:
         Preferred LLM model id. A host routing hint — excluded from
         identity.
+    compaction_model:
+        Optional cheaper model (alias or real id) for the compaction
+        summarize round-trip only; every decide turn keeps :attr:`model`.
+        Summarizing is a mechanical read-and-condense over text the strong
+        model already produced, so it is the one call in the loop where a
+        smaller model costs little and saves a lot. ``None`` (the default)
+        means the summarize call uses :attr:`model`, byte-identically to
+        having no such knob. Resolved through the same alias table as
+        :attr:`model`. A host routing hint — **excluded from identity**, for
+        the same reason :attr:`model` is: which model condensed a summary does
+        not change what the agent *is*, and the summary itself is recorded, so
+        a resumed run replays the recorded note rather than re-deriving it.
     metadata:
         Observational labels. Also excluded from identity.
     provider:
@@ -486,6 +507,7 @@ class Options:
     # story does. ``hash`` follows ``compare``, and ``Options`` is unhashable
     # regardless because of its mapping-valued fields.
     model: Optional[str] = field(default=None, compare=False)
+    compaction_model: Optional[str] = field(default=None, compare=False)
     metadata: Mapping[str, str] = field(default_factory=dict, compare=False)
     provider: Optional[LLMProvider] = field(default=None, compare=False)
     cwd: str | Path | None = field(default=None, compare=False)
@@ -520,6 +542,22 @@ class Options:
                 f"Options.effort must be one of "
                 f"{EFFORT_MODES} or None; "
                 f"got {self.effort!r}"
+            )
+        # The one illegal COMBINATION of two individually-legal values. Both
+        # fields ride every LLMRequest of the session, so an unvalidated pair
+        # is not one bad call: it is a 400 on the first turn and on every
+        # retry, discovered as an opaque provider error rather than as the
+        # configuration mistake it is. Checked here (construction time, next to
+        # the per-field checks) so it fails at the same place and in the same
+        # shape as ``thinking='nonsense'``, long before any wire assembly.
+        if self.thinking == "disabled" and self.effort in _THINKING_REQUIRED_EFFORTS:
+            raise ValueError(
+                "Options.thinking='disabled' cannot be combined with "
+                f"Options.effort={self.effort!r}: current Anthropic models "
+                "accept disabled thinking only at effort 'high' or below and "
+                "reject the pair with a hard 400. Either raise thinking to "
+                "'adaptive' (or leave it unset) or lower effort to "
+                f"{EFFORT_MODES[EFFORT_MODES.index('high')]!r} or below."
             )
         if self.output_schema is not None and not isinstance(
             self.output_schema, Mapping

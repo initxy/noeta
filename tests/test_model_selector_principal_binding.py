@@ -254,7 +254,10 @@ def test_start_emits_opening_model_bound_for_allowed_selector(
     assert len(bound) == 1
     # The driver resolves the 'opus' alias to its real model-id before
     # binding, so ModelBound records the real id (not the friendly alias).
-    assert bound[0].payload.model == "claude-opus-4-8"
+    # Written against the alias table, not a pinned id: what is under test is
+    # that resolution HAPPENED, and the table follows the vendor's generations.
+    assert bound[0].payload.model == resolve_model_alias("opus")
+    assert bound[0].payload.model != "opus"
     assert bound[0].payload.principal_identity == "bob"
     # Opening ModelBound sits in the pre-loop window: after TaskCreated,
     # before TaskStarted.
@@ -373,8 +376,8 @@ def test_per_turn_switch_records_two_model_bounds(tmp_path: Path) -> None:
     bound = [e for e in all_events if e.type == "ModelBound"]
     # aliases resolve to real ids before binding.
     assert [b.payload.model for b in bound] == [
-        "claude-opus-4-8",
-        "claude-haiku-4-5",
+        resolve_model_alias("opus"),
+        resolve_model_alias("haiku"),
     ]
     assert all(b.payload.principal_identity == "carol" for b in bound)
 
@@ -394,8 +397,16 @@ def test_per_turn_switch_records_two_model_bounds(tmp_path: Path) -> None:
     # both switches were model-only ⇒ ``provider`` is None
     # on each audit entry (the host default provider sticks across both turns).
     assert folded.governance.model_bindings == [
-        {"model": "claude-opus-4-8", "principal_identity": "carol", "provider": None},
-        {"model": "claude-haiku-4-5", "principal_identity": "carol", "provider": None},
+        {
+            "model": resolve_model_alias("opus"),
+            "principal_identity": "carol",
+            "provider": None,
+        },
+        {
+            "model": resolve_model_alias("haiku"),
+            "principal_identity": "carol",
+            "provider": None,
+        },
     ]
 
 
@@ -424,7 +435,7 @@ def test_send_goal_rejects_switch_outside_allowlist_leaves_no_bound(
     assert len(after) == before  # no second binding written
     # opening binding stays at the resolved opus id; the rejected switch left
     # no trace.
-    assert after[-1].payload.model == "claude-opus-4-8"
+    assert after[-1].payload.model == resolve_model_alias("opus")
 
 
 # ---------------------------------------------------------------------------

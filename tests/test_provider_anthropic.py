@@ -20,6 +20,7 @@ import pytest
 import respx
 
 from noeta.protocols.errors import (
+    CATEGORY_OVERFLOW,
     ContextOverflowError,
     FatalError,
     TransientError,
@@ -74,6 +75,7 @@ def _basic_request(
     output_schema: dict[str, Any] | None = None,
     thinking: str | None = None,
     effort: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> LLMRequest:
     return LLMRequest(
         model=model,
@@ -85,6 +87,7 @@ def _basic_request(
         output_schema=output_schema,
         thinking=thinking,
         effort=effort,
+        metadata=metadata or {},
     )
 
 
@@ -117,6 +120,54 @@ def _anthropic_response(
     return body
 
 
+def _sse_body(message: dict[str, Any]) -> bytes:
+    """Render a complete Anthropic message dict as the SSE frames that produce it.
+
+    ``complete`` no longer speaks the non-streaming JSON shape — it delegates to
+    the SSE transport with a discarding sink (D6), so a fixture that served a
+    whole ``message`` body has to arrive as a stream instead. Each content block
+    is delivered whole on its ``content_block_start`` (the accumulator copies it
+    and only mutates on deltas), which keeps this a pure re-encoding of the same
+    payload: the reconstructed message, and therefore the parsed
+    ``LLMResponse``, is what the old JSON body produced. Fragmented delivery —
+    text/thinking/tool-argument deltas — is the streaming suite's subject, not
+    this one's.
+    """
+    head = {key: value for key, value in message.items() if key != "content"}
+    frames: list[tuple[str, dict[str, Any]]] = [
+        ("message_start", {"type": "message_start", "message": head})
+    ]
+    content = message.get("content")
+    if isinstance(content, list):
+        for index, block in enumerate(content):
+            frames.append(
+                (
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": index,
+                        "content_block": block,
+                    },
+                )
+            )
+            frames.append(
+                ("content_block_stop", {"type": "content_block_stop", "index": index})
+            )
+    frames.append(("message_stop", {"type": "message_stop"}))
+    return "".join(
+        f"event: {name}\ndata: {json.dumps(payload)}\n\n" for name, payload in frames
+    ).encode("utf-8")
+
+
+def _stream(message: dict[str, Any]) -> httpx.Response:
+    """A 200 SSE response carrying ``message`` — the fixture ``complete`` reads."""
+    return httpx.Response(
+        200,
+        content=_sse_body(message),
+        headers={"content-type": "text/event-stream"},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Plain text round-trip
 # ---------------------------------------------------------------------------
@@ -125,8 +176,7 @@ def _anthropic_response(
 @respx.mock
 def test_plain_text_response_maps_to_end_turn_textblock() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200, json=_anthropic_response(content=[{"type": "text", "text": "hello"}])
+        return_value=_stream(_anthropic_response(content=[{"type": "text", "text": "hello"}])
         )
     )
 
@@ -150,7 +200,7 @@ def test_plain_text_response_maps_to_end_turn_textblock() -> None:
 @respx.mock
 def test_request_uses_x_api_key_and_anthropic_version_headers() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
 
     provider = _make_provider(anthropic_version="2026-01-01")
@@ -167,7 +217,7 @@ def test_request_uses_x_api_key_and_anthropic_version_headers() -> None:
 @respx.mock
 def test_extra_headers_are_forwarded() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
 
     provider = _make_provider(extra_headers={"anthropic-beta": "extended-cache-2026"})
@@ -191,7 +241,7 @@ def test_provider_satisfies_header_aware_protocol() -> None:
 @respx.mock
 def test_complete_with_headers_merges_over_client_headers() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
 
     provider = _make_provider(anthropic_version="2026-01-01")
@@ -211,7 +261,7 @@ def test_complete_with_headers_merges_over_client_headers() -> None:
 @respx.mock
 def test_complete_with_headers_none_matches_plain_complete() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
 
     provider = _make_provider()
@@ -232,7 +282,7 @@ def test_complete_with_headers_none_matches_plain_complete() -> None:
 @respx.mock
 def test_max_tokens_fail_fast_when_neither_request_nor_default() -> None:
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = AnthropicProvider(
         api_key="k", base_url=BASE_URL, default_max_tokens=None
@@ -244,7 +294,7 @@ def test_max_tokens_fail_fast_when_neither_request_nor_default() -> None:
 @respx.mock
 def test_max_tokens_request_wins_over_default() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider(default_max_tokens=2048)
     provider.complete(_basic_request(max_tokens=512))
@@ -256,7 +306,7 @@ def test_max_tokens_request_wins_over_default() -> None:
 @respx.mock
 def test_max_tokens_uses_constructor_default_when_request_missing() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider(default_max_tokens=2048)
     provider.complete(_basic_request(max_tokens=None))
@@ -268,13 +318,53 @@ def test_max_tokens_uses_constructor_default_when_request_missing() -> None:
 @respx.mock
 def test_max_tokens_request_only_works_without_default() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = AnthropicProvider(api_key="k", base_url=BASE_URL)
     provider.complete(_basic_request(max_tokens=999))
 
     body = json.loads(route.calls.last.request.content.decode("utf-8"))
     assert body["max_tokens"] == 999
+
+
+# ---------------------------------------------------------------------------
+# tool_choice metadata pass-through
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+def test_metadata_tool_choice_string_wraps_to_vendor_shape() -> None:
+    """``LLMRequest`` has no tool_choice field; the summarize round-trip sets
+    ``metadata["tool_choice"] = "none"`` so the summarizer cannot answer with a
+    tool call. The neutral bare-string spelling becomes Anthropic's
+    ``{"type": ...}`` object, and a request without the metadata key sends no
+    ``tool_choice`` at all."""
+    route = respx.post(MESSAGES_ENDPOINT).mock(
+        return_value=_stream(_anthropic_response())
+    )
+    provider = _make_provider()
+    provider.complete(_basic_request(metadata={"tool_choice": "none"}))
+    provider.complete(_basic_request())
+
+    with_choice = json.loads(route.calls[0].request.content.decode("utf-8"))
+    without = json.loads(route.calls[1].request.content.decode("utf-8"))
+    assert with_choice["tool_choice"] == {"type": "none"}
+    assert "tool_choice" not in without
+
+
+@respx.mock
+def test_metadata_tool_choice_dict_passes_verbatim() -> None:
+    """A caller that already speaks the vendor shape is not double-wrapped."""
+    route = respx.post(MESSAGES_ENDPOINT).mock(
+        return_value=_stream(_anthropic_response())
+    )
+    provider = _make_provider()
+    provider.complete(
+        _basic_request(metadata={"tool_choice": {"type": "tool", "name": "echo"}})
+    )
+
+    body = json.loads(route.calls.last.request.content.decode("utf-8"))
+    assert body["tool_choice"] == {"type": "tool", "name": "echo"}
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +375,7 @@ def test_max_tokens_request_only_works_without_default() -> None:
 @respx.mock
 def test_system_field_lifted_to_top_level() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     sys = Message(
@@ -310,7 +400,7 @@ def test_system_field_lifted_to_top_level() -> None:
 @respx.mock
 def test_system_in_messages_array_raises() -> None:
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     bad = Message(role="system", content=[TextBlock(text="oops")])
@@ -321,7 +411,7 @@ def test_system_in_messages_array_raises() -> None:
 @respx.mock
 def test_system_none_omits_top_level_system_field() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     provider.complete(_basic_request(system=None))
@@ -340,7 +430,7 @@ def test_assistant_content_regrouped_thinking_text_tool_use() -> None:
     """Assistant blocks are regrouped as ThinkingBlock* → TextBlock* → ToolUseBlock*
     whatever order the caller supplied; Anthropic rejects other orderings."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     # Deliberately mis-ordered input:
@@ -367,7 +457,7 @@ def test_assistant_content_stable_sort_within_group() -> None:
     """Regrouping is stable: same-type blocks keep caller order, so TextBlocks A then B
     stay A then B even with a tool_use sitting between them on input."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     assistant = Message(
@@ -394,7 +484,7 @@ def test_assistant_content_stable_sort_within_group() -> None:
 @respx.mock
 def test_tool_use_block_outbound_translation() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     assistant = Message(
@@ -425,7 +515,7 @@ def test_role_tool_message_becomes_user_with_tool_result_only() -> None:
     """role='tool' folds into one user message whose content is
     exclusively tool_result blocks in input order."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     tool_msg = Message(
@@ -464,7 +554,7 @@ def test_role_user_with_tool_result_block_raises() -> None:
     """Placement defense: ToolResultBlock is forbidden inside
     role='user' Message; caller must use role='tool'."""
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     bad_user = Message(
@@ -485,7 +575,7 @@ def test_role_tool_with_non_tool_result_block_raises() -> None:
     """Placement defense: role='tool' Message must contain only
     ToolResultBlock; anything else raises."""
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     bad_tool = Message(
@@ -506,7 +596,7 @@ def test_tool_result_error_prefixed_to_content() -> None:
     Anthropic's one-field tool_result body (no [error] prefix — the wire
     already carries is_error)."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     tool_msg = Message(
@@ -532,9 +622,7 @@ def test_tool_result_error_prefixed_to_content() -> None:
 def test_tool_use_block_inbound_translation() -> None:
     """Inbound: tool_use response block → ToolUseBlock with same ID/name/input."""
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            json=_anthropic_response(
+        return_value=_stream(_anthropic_response(
                 content=[
                     {
                         "type": "tool_use",
@@ -563,9 +651,7 @@ def test_tool_use_block_inbound_translation() -> None:
 @respx.mock
 def test_thinking_block_inbound_translation() -> None:
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            json=_anthropic_response(
+        return_value=_stream(_anthropic_response(
                 content=[
                     {
                         "type": "thinking",
@@ -591,9 +677,7 @@ def test_redacted_thinking_block_inbound_translation() -> None:
     ``ThinkingBlock`` carrying the opaque ``data`` blob — NOT silently dropped
     (dropping it strands a tool-use turn whose reasoning the API expects back)."""
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            json=_anthropic_response(
+        return_value=_stream(_anthropic_response(
                 content=[
                     {"type": "redacted_thinking", "data": "ENCRYPTED=="},
                     {"type": "text", "text": "answer"},
@@ -616,9 +700,7 @@ def test_redacted_thinking_block_without_data_is_dropped() -> None:
     would re-emit an empty ``{"type":"thinking","thinking":""}`` block outbound,
     which the API 400s. Only the real text block survives."""
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            json=_anthropic_response(
+        return_value=_stream(_anthropic_response(
                 content=[
                     {"type": "redacted_thinking"},            # no 'data'
                     {"type": "redacted_thinking", "data": 123},  # non-str
@@ -638,7 +720,7 @@ def test_redacted_thinking_block_outbound_translation() -> None:
     ``redacted_thinking`` wire type verbatim — never as an (invalid) empty
     ``thinking`` block."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     assistant = Message(
@@ -659,7 +741,7 @@ def test_redacted_thinking_block_outbound_translation() -> None:
 @respx.mock
 def test_thinking_block_outbound_translation_with_signature() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     assistant = Message(
@@ -685,7 +767,7 @@ def test_thinking_block_outbound_without_signature_omits_field() -> None:
     written as null) so Anthropic returns its own reject — adapter
     never silently drops the thinking block."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     assistant = Message(
@@ -714,7 +796,7 @@ def test_thinking_block_outbound_without_signature_omits_field() -> None:
 @respx.mock
 def test_provider_tool_schemas_openai_shape_unpacks_to_anthropic_shape() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     provider.complete(
@@ -752,7 +834,7 @@ def test_provider_tool_schemas_openai_shape_unpacks_to_anthropic_shape() -> None
 @respx.mock
 def test_provider_tool_schemas_missing_description_defaults_to_empty() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     provider.complete(
@@ -775,7 +857,7 @@ def test_provider_tool_schemas_missing_description_defaults_to_empty() -> None:
 @respx.mock
 def test_tools_empty_omits_tools_field() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     provider.complete(_basic_request(tools=[]))
@@ -786,7 +868,7 @@ def test_tools_empty_omits_tools_field() -> None:
 @respx.mock
 def test_tools_missing_function_key_raises() -> None:
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     with pytest.raises(ValueError, match="missing 'function' dict"):
@@ -796,7 +878,7 @@ def test_tools_missing_function_key_raises() -> None:
 @respx.mock
 def test_tools_missing_parameters_raises() -> None:
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     with pytest.raises(ValueError, match="missing/invalid 'parameters'"):
@@ -815,7 +897,7 @@ def test_tools_missing_parameters_raises() -> None:
 @respx.mock
 def test_tools_invalid_parameters_type_raises() -> None:
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     with pytest.raises(ValueError, match="missing/invalid 'parameters'"):
@@ -837,7 +919,7 @@ def test_tools_invalid_parameters_type_raises() -> None:
 @respx.mock
 def test_tools_empty_name_raises() -> None:
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     with pytest.raises(ValueError, match="missing/invalid 'name'"):
@@ -861,7 +943,7 @@ def test_tools_empty_name_raises() -> None:
 @respx.mock
 def test_stop_reason_end_turn_maps_directly() -> None:
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response(stop_reason="end_turn"))
+        return_value=_stream(_anthropic_response(stop_reason="end_turn"))
     )
     provider = _make_provider()
     response = provider.complete(_basic_request())
@@ -871,9 +953,7 @@ def test_stop_reason_end_turn_maps_directly() -> None:
 @respx.mock
 def test_stop_reason_max_tokens_maps_directly() -> None:
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            json=_anthropic_response(
+        return_value=_stream(_anthropic_response(
                 content=[{"type": "text", "text": "trunc"}], stop_reason="max_tokens"
             ),
         )
@@ -888,8 +968,7 @@ def test_stop_sequence_maps_to_end_turn() -> None:
     """Anthropic stop_sequence → Noeta end_turn (Noeta has no
     stop_sequence enum)."""
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200, json=_anthropic_response(stop_reason="stop_sequence")
+        return_value=_stream(_anthropic_response(stop_reason="stop_sequence")
         )
     )
     provider = _make_provider()
@@ -904,9 +983,7 @@ def test_stop_reason_refusal_maps_to_end_turn() -> None:
     answer) rather than ``error`` (which would fail the task non-retryably and
     discard the refusal). ``claude-opus-4-8`` can return this."""
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            json=_anthropic_response(
+        return_value=_stream(_anthropic_response(
                 content=[{"type": "text", "text": "I can't help with that."}],
                 stop_reason="refusal",
             ),
@@ -919,13 +996,66 @@ def test_stop_reason_refusal_maps_to_end_turn() -> None:
 
 
 @respx.mock
+def test_context_window_exceeded_stop_reason_carries_overflow_category() -> None:
+    """A context overflow can arrive as an HTTP-200 ``stop_reason`` instead of a
+    400 body. It must reach Policy in the SAME neutral shape the 400 sniffer
+    produces — ``stop_reason="error"`` plus ``raw['category'] == 'overflow'`` —
+    or the compaction path never sees it and the task dies on ``llm_error``."""
+    respx.post(MESSAGES_ENDPOINT).mock(
+        return_value=_stream(_anthropic_response(
+                content=[],
+                stop_reason="model_context_window_exceeded",
+            ),
+        )
+    )
+    provider = _make_provider()
+    response = provider.complete(_basic_request())
+    assert response.stop_reason == "error"
+    assert response.raw is not None
+    assert response.raw["category"] == CATEGORY_OVERFLOW
+    # The vendor body is preserved alongside the neutral category.
+    assert response.raw["id"] == "msg_test"
+    assert response.raw["stop_reason"] == "model_context_window_exceeded"
+
+
+@respx.mock
+def test_stop_details_are_captured_into_raw() -> None:
+    """``stop_details`` rides through to ``raw`` for diagnostics. Capture only —
+    nothing branches on it."""
+    respx.post(MESSAGES_ENDPOINT).mock(
+        return_value=_stream({
+                **_anthropic_response(stop_reason="end_turn"),
+                "stop_details": {"type": "end_turn"},
+            },
+        )
+    )
+    provider = _make_provider()
+    response = provider.complete(_basic_request())
+    assert response.raw is not None
+    assert response.raw["stop_details"] == {"type": "end_turn"}
+
+
+@respx.mock
+def test_ordinary_stop_reason_carries_no_category_key() -> None:
+    """The overflow stamp is scoped to the overflow stop_reason: a normal turn's
+    ``raw`` stays the untouched vendor body."""
+    respx.post(MESSAGES_ENDPOINT).mock(
+        return_value=_stream(_anthropic_response(stop_reason="end_turn")
+        )
+    )
+    provider = _make_provider()
+    response = provider.complete(_basic_request())
+    assert response.raw is not None
+    assert "category" not in response.raw
+
+
+@respx.mock
 def test_unknown_stop_reason_maps_to_error_without_raising() -> None:
     """Unknown / future stop_reason maps to
     LLMResponse.stop_reason='error' without raising (mirrors
     OpenAICompatProvider behaviour)."""
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200, json=_anthropic_response(stop_reason="weird-future-value")
+        return_value=_stream(_anthropic_response(stop_reason="weird-future-value")
         )
     )
     provider = _make_provider()
@@ -937,7 +1067,7 @@ def test_unknown_stop_reason_maps_to_error_without_raising() -> None:
 def test_missing_stop_reason_maps_to_error_without_raising() -> None:
     """Missing stop_reason maps to error (not raise)."""
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response(stop_reason=None))
+        return_value=_stream(_anthropic_response(stop_reason=None))
     )
     provider = _make_provider()
     response = provider.complete(_basic_request())
@@ -952,9 +1082,7 @@ def test_missing_stop_reason_maps_to_error_without_raising() -> None:
 @respx.mock
 def test_inconsistent_stop_reason_tool_use_with_no_tool_use_block_raises() -> None:
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            json=_anthropic_response(
+        return_value=_stream(_anthropic_response(
                 content=[{"type": "text", "text": "hi"}], stop_reason="tool_use"
             ),
         )
@@ -967,9 +1095,7 @@ def test_inconsistent_stop_reason_tool_use_with_no_tool_use_block_raises() -> No
 @respx.mock
 def test_inconsistent_stop_reason_end_turn_with_tool_use_block_raises() -> None:
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            json=_anthropic_response(
+        return_value=_stream(_anthropic_response(
                 content=[
                     {
                         "type": "tool_use",
@@ -995,8 +1121,7 @@ def test_inconsistent_stop_reason_end_turn_with_tool_use_block_raises() -> None:
 @respx.mock
 def test_response_type_not_message_raises() -> None:
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200, json=_anthropic_response(response_type="completion")
+        return_value=_stream(_anthropic_response(response_type="completion")
         )
     )
     provider = _make_provider()
@@ -1007,21 +1132,28 @@ def test_response_type_not_message_raises() -> None:
 @respx.mock
 def test_response_role_not_assistant_raises() -> None:
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response(role="user"))
+        return_value=_stream(_anthropic_response(role="user"))
     )
     provider = _make_provider()
     with pytest.raises(ValueError, match="'role' was not 'assistant'"):
         provider.complete(_basic_request())
 
 
-@respx.mock
 def test_response_content_not_a_list_raises() -> None:
+    """The shared parse both entry points converge on still rejects a
+    non-list ``content``.
+
+    Asserted against ``_parse_response`` rather than through the transport
+    because the SSE accumulator always rebuilds ``content`` as a list, so no
+    wire body can reach the guard any more. The guard stays because the parse
+    is the shape contract for every payload handed to it — including the
+    accumulator's reconstruction, which a future bug could malform.
+    """
     payload = _anthropic_response()
     payload["content"] = "not-a-list"
-    respx.post(MESSAGES_ENDPOINT).mock(return_value=httpx.Response(200, json=payload))
     provider = _make_provider()
     with pytest.raises(ValueError, match="'content' must be a list"):
-        provider.complete(_basic_request())
+        provider._parse_response(payload)
 
 
 @respx.mock
@@ -1036,9 +1168,7 @@ def test_unknown_response_block_type_is_silently_skipped_intentional() -> None:
     well-meaning future edit.
     """
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            json=_anthropic_response(
+        return_value=_stream(_anthropic_response(
                 content=[
                     {"type": "text", "text": "before"},
                     {"type": "future_block_type", "payload": "unknown"},
@@ -1059,9 +1189,7 @@ def test_unknown_response_block_type_is_silently_skipped_intentional() -> None:
 @respx.mock
 def test_response_tool_use_input_not_dict_raises() -> None:
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            json=_anthropic_response(
+        return_value=_stream(_anthropic_response(
                 content=[
                     {
                         "type": "tool_use",
@@ -1080,9 +1208,33 @@ def test_response_tool_use_input_not_dict_raises() -> None:
 
 
 @respx.mock
-def test_response_invalid_json_raises() -> None:
+def test_unparseable_success_body_raises_loudly() -> None:
+    """A 200 whose body is not the expected protocol raises rather than
+    returning a hollow response.
+
+    The failure mode moved with the transport (D6): a non-SSE 200 yields no
+    events at all, so the accumulator has no ``message_start`` to rebuild from.
+    What matters is unchanged — a garbage success body is a loud ``ValueError``,
+    never an empty ``LLMResponse`` the policy would treat as a real turn.
+    """
     respx.post(MESSAGES_ENDPOINT).mock(
         return_value=httpx.Response(200, content=b"not-json")
+    )
+    provider = _make_provider()
+    with pytest.raises(ValueError, match="without a message_start"):
+        provider.complete(_basic_request())
+
+
+@respx.mock
+def test_malformed_sse_frame_raises_loudly() -> None:
+    """A well-formed frame carrying non-JSON data is the other half of the
+    same guarantee."""
+    respx.post(MESSAGES_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            content=b"event: message_start\ndata: {not json}\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
     )
     provider = _make_provider()
     with pytest.raises(ValueError, match="not valid JSON"):
@@ -1125,9 +1277,7 @@ def test_http_5xx_translates_to_transient() -> None:
 @respx.mock
 def test_usage_passes_through_with_cache_fields() -> None:
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            json=_anthropic_response(
+        return_value=_stream(_anthropic_response(
                 usage={
                     "input_tokens": 100,
                     "output_tokens": 200,
@@ -1153,9 +1303,7 @@ def test_usage_passes_through_with_cache_fields() -> None:
 @respx.mock
 def test_usage_without_cache_fields_input_equals_uncached() -> None:
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            json=_anthropic_response(
+        return_value=_stream(_anthropic_response(
                 usage={"input_tokens": 40, "output_tokens": 12}
             ),
         )
@@ -1173,7 +1321,7 @@ def test_usage_missing_yields_empty_usage_without_raising() -> None:
     body = _anthropic_response()
     del body["usage"]
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=body)
+        return_value=_stream(body)
     )
     provider = _make_provider()
     response = provider.complete(_basic_request())
@@ -1190,9 +1338,7 @@ def test_same_request_and_mock_produces_byte_equal_response() -> None:
     """Adapter is pure translation — same LLMRequest + same mock
     response → byte-equal LLMResponse twice in a row."""
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            json=_anthropic_response(
+        return_value=_stream(_anthropic_response(
                 content=[
                     {"type": "thinking", "thinking": "...", "signature": "s"},
                     {"type": "text", "text": "hi"},
@@ -1215,7 +1361,7 @@ def test_same_request_and_mock_produces_byte_equal_response() -> None:
 @respx.mock
 def test_temperature_passed_through() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     provider.complete(_basic_request(temperature=0.5))
@@ -1226,7 +1372,7 @@ def test_temperature_passed_through() -> None:
 @respx.mock
 def test_temperature_none_omits_field() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     provider.complete(_basic_request(temperature=None))
@@ -1242,7 +1388,7 @@ def test_temperature_none_omits_field() -> None:
 @respx.mock
 def test_unsupported_role_raises() -> None:
     respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     # Construct via raw fields to bypass Literal check (this is a
@@ -1378,7 +1524,7 @@ def _injected(text: str, origin: str) -> Message:
 
 def _wire_messages(messages: list[Message]) -> list[dict[str, Any]]:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     _make_provider().complete(_basic_request(messages=messages))
     body = json.loads(route.calls.last.request.content.decode("utf-8"))
@@ -1500,7 +1646,7 @@ def test_origin_human_renders_as_plain_user_turn() -> None:
 @respx.mock
 def test_output_schema_wired_to_output_config_json_schema() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     schema = {"type": "object", "properties": {"n": {"type": "number"}}}
     provider = _make_provider()
@@ -1514,7 +1660,7 @@ def test_output_schema_wired_to_output_config_json_schema() -> None:
 @respx.mock
 def test_effort_wired_to_output_config_effort() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     provider.complete(_basic_request(effort="high"))
@@ -1526,7 +1672,7 @@ def test_effort_wired_to_output_config_effort() -> None:
 def test_output_schema_and_effort_merge_inside_output_config() -> None:
     """Both fields set: they merge inside output_config without overwriting each other."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     schema = {"type": "string"}
     provider = _make_provider()
@@ -1541,7 +1687,7 @@ def test_output_schema_and_effort_merge_inside_output_config() -> None:
 @respx.mock
 def test_thinking_wired_to_top_level_thinking() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     provider.complete(_basic_request(thinking="adaptive"))
@@ -1553,7 +1699,7 @@ def test_thinking_wired_to_top_level_thinking() -> None:
 def test_all_three_fields_none_omitted_from_body() -> None:
     """All three fields None: no related key appears in the body."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     provider.complete(_basic_request(text="hi"))
@@ -1569,14 +1715,23 @@ def test_all_three_fields_none_omitted_from_body() -> None:
 # A vision-capable model (catalog supports_vision=True) gets images on the wire:
 # a top-level ``ImageBlock`` (user/assistant content) becomes an ``image`` block,
 # and a ``ToolResultBlock``'s ``images`` ride the ``tool_result.content`` array.
-# A non-vision model degrades tool-result images to string content; a top-level
-# image bound for a non-vision model is a loud misroute → FatalError up front
-# (no HTTP request sent). The default ``_basic_request`` model (``claude-opus-4-7``)
-# is NOT in the catalog, so it counts as non-vision; ``claude-opus-4-8`` is the
-# vision-capable model.
+# A CATALOGUED non-vision model degrades tool-result images to string content,
+# and a top-level image bound for one is a loud misroute → FatalError up front
+# (no HTTP request sent).
+#
+# "Catalogued" is load-bearing and is what changed: an *absent* model is
+# unknown, not text-only, and images now pass through for the provider to judge
+# (see ``_model_admits_images``). The default ``_basic_request`` model
+# (``claude-opus-4-7``) is absent from the catalog and therefore exercises the
+# unknown path; ``_NON_VISION_MODEL`` has to be a row that actually declares
+# ``supports_vision=False``, and the only such rows are OpenAI-family ones. That
+# is fine here — the adapter pins no model, it just reads the catalog bit off
+# whatever ``LLMRequest.model`` says.
 
 _IMG_REF = ContentRef(hash="sha256:img", size=3, media_type="image/png")
 _VISION_MODEL = "claude-opus-4-8"
+_NON_VISION_MODEL = "gpt-4o"
+_UNKNOWN_MODEL = "claude-opus-4-7"
 _PNG_BYTES = b"\x89PNG\r\n\x1a\nFAKEPNGDATA"
 
 
@@ -1607,7 +1762,7 @@ def test_tool_result_with_images_vision_model_emits_image_content_array() -> Non
     content as an ARRAY — a text block (the original string output) followed by
     one base64 image block per image."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider(image_resolver=_const_resolver(_PNG_BYTES))
     img = ImageBlock(source=_IMG_REF)
@@ -1649,12 +1804,12 @@ def test_tool_result_with_images_vision_model_emits_image_content_array() -> Non
 
 @respx.mock
 def test_tool_result_with_images_non_vision_model_stays_string() -> None:
-    """Non-vision model: tool-result images degrade — content stays the plain
-    string (byte-identical to the image-less path), and the resolver is never
-    invoked. The guard does NOT fire (the images are nested on the
+    """Catalogued non-vision model: tool-result images degrade — content stays
+    the plain string (byte-identical to the image-less path), and the resolver
+    is never invoked. The guard does NOT fire (the images are nested on the
     ToolResultBlock, not a top-level ImageBlock)."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     calls: list[Any] = []
 
@@ -1672,8 +1827,11 @@ def test_tool_result_with_images_non_vision_model_stays_string() -> None:
             )
         ],
     )
-    # default model claude-opus-4-7 is not catalogued -> non-vision
-    provider.complete(_basic_request(messages=[_user("read it"), tool_msg]))
+    provider.complete(
+        _basic_request(
+            model=_NON_VISION_MODEL, messages=[_user("read it"), tool_msg]
+        )
+    )
 
     body = json.loads(route.calls.last.request.content.decode("utf-8"))
     tr = body["messages"][1]["content"][0]
@@ -1687,7 +1845,7 @@ def test_image_block_in_user_message_vision_model_translates() -> None:
     """Vision model: a top-level ImageBlock in a user message becomes an
     Anthropic base64 ``image`` content block, after the text block."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider(image_resolver=_const_resolver(_PNG_BYTES))
     request = _basic_request(
@@ -1718,7 +1876,7 @@ def test_image_block_in_assistant_message_vision_model_translates() -> None:
     """Vision model: a top-level ImageBlock in an assistant message is regrouped
     after text and before tool_use, as a base64 ``image`` content block."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider(image_resolver=_const_resolver(_PNG_BYTES))
     assistant = Message(
@@ -1740,21 +1898,22 @@ def test_image_block_in_assistant_message_vision_model_translates() -> None:
 
 @respx.mock
 def test_image_block_in_user_message_non_vision_model_guards_fatal() -> None:
-    """Non-vision model + a top-level user ImageBlock is a loud misroute →
-    FatalError before any HTTP request is sent."""
+    """A CATALOGUED non-vision model + a top-level user ImageBlock is a loud
+    misroute → FatalError before any HTTP request is sent."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider(image_resolver=_const_resolver(_PNG_BYTES))
     request = _basic_request(
+        model=_NON_VISION_MODEL,
         messages=[
             Message(
                 role="user",
                 content=[TextBlock(text="look at this"), ImageBlock(source=_IMG_REF)],
             )
-        ]
+        ],
     )
-    with pytest.raises(FatalError, match="not vision-capable"):
+    with pytest.raises(FatalError, match="supports_vision=False"):
         provider.complete(request)
     assert not route.called
 
@@ -1762,13 +1921,14 @@ def test_image_block_in_user_message_non_vision_model_guards_fatal() -> None:
 @respx.mock
 def test_image_block_in_assistant_message_non_vision_model_guards_fatal() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider(image_resolver=_const_resolver(_PNG_BYTES))
     request = _basic_request(
-        messages=[Message(role="assistant", content=[ImageBlock(source=_IMG_REF)])]
+        model=_NON_VISION_MODEL,
+        messages=[Message(role="assistant", content=[ImageBlock(source=_IMG_REF)])],
     )
-    with pytest.raises(FatalError, match="not vision-capable"):
+    with pytest.raises(FatalError, match="supports_vision=False"):
         provider.complete(request)
     assert not route.called
 
@@ -1778,15 +1938,76 @@ def test_image_block_in_tool_message_non_vision_model_guards_fatal() -> None:
     """A top-level ImageBlock placed directly in a tool message is still a
     top-level image, so the vision guard catches it on a non-vision model."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider(image_resolver=_const_resolver(_PNG_BYTES))
     request = _basic_request(
-        messages=[Message(role="tool", content=[ImageBlock(source=_IMG_REF)])]
+        model=_NON_VISION_MODEL,
+        messages=[Message(role="tool", content=[ImageBlock(source=_IMG_REF)])],
     )
-    with pytest.raises(FatalError, match="not vision-capable"):
+    with pytest.raises(FatalError, match="supports_vision=False"):
         provider.complete(request)
     assert not route.called
+
+
+@respx.mock
+def test_image_block_on_unknown_model_passes_the_guard() -> None:
+    """An UNCATALOGUED model is unknown, not text-only: the image goes on the
+    wire and the provider gets to judge its own capabilities.
+
+    The old behaviour — refuse anything absent from the table — meant a
+    self-hosted or gateway model nobody wrote a row for could never be sent an
+    image, and the error blamed the model rather than the catalog. A catalogued
+    ``supports_vision=False`` still refuses cleanly (the cases above); only the
+    unknown case changed.
+    """
+    route = respx.post(MESSAGES_ENDPOINT).mock(
+        return_value=_stream(_anthropic_response())
+    )
+    provider = _make_provider(image_resolver=_const_resolver(_PNG_BYTES))
+    request = _basic_request(
+        model=_UNKNOWN_MODEL,
+        messages=[
+            Message(
+                role="user",
+                content=[TextBlock(text="look at this"), ImageBlock(source=_IMG_REF)],
+            )
+        ],
+    )
+    provider.complete(request)
+
+    assert route.called
+    body = json.loads(route.calls.last.request.content.decode("utf-8"))
+    assert [b["type"] for b in body["messages"][0]["content"]] == ["text", "image"]
+
+
+@respx.mock
+def test_tool_result_images_inlined_on_unknown_model() -> None:
+    """The same unknown-is-not-a-refusal rule on the nested path: a tool
+    result's images ride the ``tool_result.content`` array instead of being
+    silently dropped to a bare string."""
+    route = respx.post(MESSAGES_ENDPOINT).mock(
+        return_value=_stream(_anthropic_response())
+    )
+    provider = _make_provider(image_resolver=_const_resolver(_PNG_BYTES))
+    tool_msg = Message(
+        role="tool",
+        content=[
+            ToolResultBlock(
+                call_id="c1",
+                output="saw a chart",
+                success=True,
+                images=[ImageBlock(source=_IMG_REF)],
+            )
+        ],
+    )
+    provider.complete(
+        _basic_request(model=_UNKNOWN_MODEL, messages=[_user("read it"), tool_msg])
+    )
+
+    body = json.loads(route.calls.last.request.content.decode("utf-8"))
+    content = body["messages"][1]["content"][0]["content"]
+    assert [b["type"] for b in content] == ["text", "image"]
 
 
 @respx.mock
@@ -1794,7 +2015,7 @@ def test_image_block_vision_model_without_resolver_raises_loud() -> None:
     """Vision model but no image_resolver configured = incomplete config → a
     loud ValueError, never a silently dropped image."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()  # no image_resolver
     request = _basic_request(
@@ -1819,7 +2040,7 @@ def test_image_block_vision_model_without_resolver_raises_loud() -> None:
 @respx.mock
 def test_cache_control_stamped_on_system_tools_and_last_message() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     sys = Message(role="system", content=[TextBlock(text="you are helpful")])
@@ -1869,7 +2090,7 @@ def test_cache_control_omitted_when_no_system_and_no_tools() -> None:
     """No system, no tools: only the last message's last block is stamped —
     nothing crashes on the absent system/tools fields."""
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     provider.complete(_basic_request(text="just a message", system=None, tools=[]))
@@ -1891,7 +2112,7 @@ def test_cache_control_does_not_enter_recorded_request_bytes() -> None:
     from noeta.runtime.llm import _serialize_request
 
     route = respx.post(MESSAGES_ENDPOINT).mock(
-        return_value=httpx.Response(200, json=_anthropic_response())
+        return_value=_stream(_anthropic_response())
     )
     provider = _make_provider()
     sys = Message(role="system", content=[TextBlock(text="sys")])
@@ -1919,3 +2140,167 @@ def test_cache_control_does_not_enter_recorded_request_bytes() -> None:
     assert b"cache_control" not in recorded_after
     assert recorded_before == recorded_after
 
+
+
+# ---------------------------------------------------------------------------
+# Transport: complete() speaks SSE (D6)
+# ---------------------------------------------------------------------------
+#
+# ``complete`` used to be a non-streaming POST that held one socket idle for
+# the whole generation. ReAct forwards the catalog's ``max_output_tokens`` as
+# ``max_tokens`` on every turn, so on a 128 K cap a long answer reliably
+# outran the 60 s client timeout and then burned the runtime's retry budget
+# re-running the same doomed call. The transport moved to SSE; the *contract*
+# did not — same parse, same errors, same recorded bytes, no deltas anywhere.
+
+
+@respx.mock
+def test_complete_sets_the_stream_flag_on_the_wire() -> None:
+    route = respx.post(MESSAGES_ENDPOINT).mock(
+        return_value=_stream(_anthropic_response())
+    )
+    _make_provider().complete(_basic_request())
+
+    body = json.loads(route.calls.last.request.content.decode("utf-8"))
+    assert body["stream"] is True
+
+
+@respx.mock
+def test_complete_and_complete_streaming_send_identical_bodies() -> None:
+    """One body-building path for both entry points — they now differ only in
+    whether fragments reach a caller, so any wire divergence is a bug."""
+    route = respx.post(MESSAGES_ENDPOINT).mock(
+        side_effect=[
+            _stream(_anthropic_response()),
+            _stream(_anthropic_response()),
+        ]
+    )
+    provider = _make_provider()
+    sys = Message(role="system", content=[TextBlock(text="sys")])
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "t", "parameters": {"type": "object"}},
+        }
+    ]
+    request = _basic_request(system=sys, tools=tools, text="hello")
+
+    provider.complete(request)
+    provider.complete_streaming(request, lambda delta: None)
+
+    first = route.calls[0].request.content
+    second = route.calls[1].request.content
+    assert first == second
+
+
+@respx.mock
+def test_complete_assembles_a_fragmented_stream() -> None:
+    """Proof it really consumes SSE rather than a whole-message body: the
+    response is delivered as text / tool-argument fragments and ``complete``
+    still returns the assembled ``LLMResponse``."""
+    frames = [
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_frag",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-opus-4-7",
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 11, "output_tokens": 1},
+                },
+            },
+        ),
+        (
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
+        ),
+        (
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "Hel"},
+            },
+        ),
+        (
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "lo!"},
+            },
+        ),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 4},
+            },
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+    body = "".join(
+        f"event: {name}\ndata: {json.dumps(payload)}\n\n" for name, payload in frames
+    ).encode("utf-8")
+    respx.post(MESSAGES_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200, content=body, headers={"content-type": "text/event-stream"}
+        )
+    )
+
+    response = _make_provider().complete(_basic_request())
+    assert response.stop_reason == "end_turn"
+    assert response.content == [TextBlock(text="Hello!")]
+    assert response.usage == Usage(uncached=11, output=4)
+
+
+@respx.mock
+def test_complete_translates_a_mid_stream_error_frame() -> None:
+    """An ``error`` frame after the stream opened translates into the neutral
+    taxonomy exactly as it does on the explicit streaming entry point — the
+    HTTP status was already 200, so only the frame carries the failure."""
+    body = (
+        b'event: message_start\ndata: {"type":"message_start","message":'
+        b'{"id":"m","type":"message","role":"assistant","content":[],'
+        b'"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}\n\n'
+        b'event: error\ndata: {"type":"error","error":'
+        b'{"type":"overloaded_error","message":"overloaded"}}\n\n'
+    )
+    respx.post(MESSAGES_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200, content=body, headers={"content-type": "text/event-stream"}
+        )
+    )
+    with pytest.raises(TransientError):
+        _make_provider().complete(_basic_request())
+
+
+@respx.mock
+def test_complete_still_sniffs_the_initial_400_for_overflow() -> None:
+    """The status error is raised before any frame is read, and the body is
+    still read back for the overflow sniff — the one place the streaming
+    transport had to be careful, and the path compaction depends on."""
+    respx.post(MESSAGES_ENDPOINT).mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "prompt is too long: 250000 tokens > 200000 maximum",
+                },
+            },
+        )
+    )
+    with pytest.raises(ContextOverflowError):
+        _make_provider().complete(_basic_request())

@@ -36,8 +36,10 @@ def model_capabilities(models: Sequence[str]) -> dict[str, dict[str, bool]]:
 
     Each selector resolves the same way the provider's vision guard resolves it
     (``resolve_alias`` → ``CATALOG.get``), so the gate a host shows matches the
-    gate the request hits. An uncatalogued selector reports non-vision:
-    fail-closed, never advertise a capability we cannot vouch for.
+    gate the request hits. An uncatalogued selector reports vision-capable: the
+    adapter admits its images and lets the provider be the authority, so the
+    gate must not block what the request would accept. Only a catalogued
+    ``supports_vision=False`` row refuses.
     """
     import importlib
 
@@ -47,6 +49,6 @@ def model_capabilities(models: Sequence[str]) -> dict[str, dict[str, bool]]:
     for model in models:
         spec = catalog.CATALOG.get(catalog.resolve_alias(model))
         out[model] = {
-            "supports_vision": bool(spec is not None and spec.supports_vision)
+            "supports_vision": bool(spec is None or spec.supports_vision)
         }
     return out

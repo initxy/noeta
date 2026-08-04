@@ -207,17 +207,54 @@ def test_text_stream_emits_ordered_deltas_and_batch_shaped_response() -> None:
 
 
 @respx.mock
-def test_stream_request_body_matches_batch_body_plus_stream_flag() -> None:
-    batch_body = {
-        "id": "msg_batch",
-        "type": "message",
-        "role": "assistant",
-        "model": "claude-opus-4-7",
-        "content": [{"type": "text", "text": "ok"}],
-        "stop_reason": "end_turn",
-        "stop_sequence": None,
-        "usage": dict(_DEFAULT_USAGE),
+def test_streamed_overflow_stop_reason_carries_overflow_category() -> None:
+    """The 200-shape context overflow has to translate the same way over SSE as
+    over the batch path: neutral ``error`` plus the overflow category, so the
+    Policy compacts instead of failing. ``stop_details`` is captured alongside
+    it — the accumulator would otherwise drop the vendor's explanation of why
+    the turn stopped."""
+    body = _sse(
+        _message_start(),
+        _block_start(0, {"type": "text", "text": ""}),
+        _block_stop(0),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {
+                    "stop_reason": "model_context_window_exceeded",
+                    "stop_sequence": None,
+                    "stop_details": {"type": "model_context_window_exceeded"},
+                },
+                "usage": {"output_tokens": 0},
+            },
+        ),
+        _MESSAGE_STOP,
+    )
+    respx.post(MESSAGES_ENDPOINT).mock(return_value=_sse_response(body))
+
+    response = _make_provider().complete_streaming(
+        _basic_request(), _DeltaRecorder()
+    )
+
+    assert response.stop_reason == "error"
+    assert response.raw is not None
+    assert response.raw["category"] == "overflow"
+    assert response.raw["stop_details"] == {
+        "type": "model_context_window_exceeded"
     }
+
+
+@respx.mock
+def test_both_entry_points_send_byte_identical_bodies() -> None:
+    """``complete`` and ``complete_streaming`` are one transport now (D6): the
+    former delegates to the latter with a discarding sink, so the bodies are
+    identical rather than merely differing by the ``stream`` flag.
+
+    That equality is the whole safety argument for the change — a previewed
+    turn and a silent one cannot drift in prompt bytes, so they cannot land on
+    different prompt-cache prefixes either.
+    """
     stream_body = _sse(
         _message_start(),
         _block_start(0, {"type": "text", "text": ""}),
@@ -228,7 +265,7 @@ def test_stream_request_body_matches_batch_body_plus_stream_flag() -> None:
     )
     route = respx.post(MESSAGES_ENDPOINT).mock(
         side_effect=[
-            httpx.Response(200, json=batch_body),
+            _sse_response(stream_body),
             _sse_response(stream_body),
         ]
     )
@@ -238,11 +275,9 @@ def test_stream_request_body_matches_batch_body_plus_stream_flag() -> None:
     provider.complete(request)
     provider.complete_streaming(request, _DeltaRecorder())
 
-    batch_sent = json.loads(route.calls[0].request.content.decode("utf-8"))
-    stream_sent = json.loads(route.calls[1].request.content.decode("utf-8"))
-    # Same request-body building path — the only difference is the flag.
-    assert stream_sent.pop("stream") is True
-    assert stream_sent == batch_sent
+    assert route.calls[0].request.content == route.calls[1].request.content
+    sent = json.loads(route.calls[0].request.content.decode("utf-8"))
+    assert sent["stream"] is True
 
 
 @respx.mock
@@ -546,10 +581,12 @@ def test_vision_guard_applies_before_stream_open() -> None:
     )
     ref = ContentRef(hash="sha256:img", size=3, media_type="image/png")
     request = LLMRequest(
-        model="claude-opus-4-7",
+        # Must be a CATALOGUED non-vision row: an absent model is unknown, not
+        # text-only, and images now pass through for the provider to judge.
+        model="gpt-4o",
         messages=[Message(role="user", content=[ImageBlock(source=ref)])],
     )
-    with pytest.raises(FatalError, match="not vision-capable"):
+    with pytest.raises(FatalError, match="supports_vision=False"):
         _make_provider().complete_streaming(request, _DeltaRecorder())
     assert not route.called
 
@@ -560,31 +597,42 @@ def test_vision_guard_applies_before_stream_open() -> None:
 
 
 @respx.mock
-def test_streamed_response_matches_batch_parse_of_equivalent_body() -> None:
-    """The recording invariant: a streamed exchange parses to the same
-    ``LLMResponse`` fields as the batch parse of the equivalent non-streaming
-    body. ``raw`` is diagnostics-only (not part of the recording), so the
-    invariant covers stop_reason / content / usage."""
+def test_fragmented_stream_matches_whole_block_delivery() -> None:
+    """The recording invariant: a FRAGMENTED exchange parses to the same
+    ``LLMResponse`` fields as the same message delivered whole.
+
+    The reference used to be ``complete`` against a non-streaming JSON body,
+    but ``complete`` is the same SSE transport now (D6) — so the invariant is
+    restated against the only remaining axis of variation: whether text,
+    signatures and tool arguments arrive as deltas or complete on their
+    ``content_block_start``. ``raw`` is diagnostics-only (not part of the
+    recording), so the invariant covers stop_reason / content / usage.
+    """
     usage = {
         "input_tokens": 100,
         "cache_read_input_tokens": 25,
         "cache_creation_input_tokens": 50,
         "output_tokens": 7,
     }
-    batch_body = {
-        "id": "msg_stream",
-        "type": "message",
-        "role": "assistant",
-        "model": "claude-opus-4-7",
-        "content": [
-            {"type": "thinking", "thinking": "hm", "signature": "sig"},
-            {"type": "text", "text": "Hello!"},
-            {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "Paris"}},
-        ],
-        "stop_reason": "tool_use",
-        "stop_sequence": None,
-        "usage": usage,
-    }
+    whole_body = _sse(
+        _message_start(usage=dict(usage)),
+        _block_start(0, {"type": "thinking", "thinking": "hm", "signature": "sig"}),
+        _block_stop(0),
+        _block_start(1, {"type": "text", "text": "Hello!"}),
+        _block_stop(1),
+        _block_start(
+            2,
+            {
+                "type": "tool_use",
+                "id": "toolu_01",
+                "name": "get_weather",
+                "input": {"city": "Paris"},
+            },
+        ),
+        _block_stop(2),
+        _message_delta("tool_use", output_tokens=7),
+        _MESSAGE_STOP,
+    )
     stream_body = _sse(
         _message_start(usage={**usage, "output_tokens": 1}),
         _block_start(0, {"type": "thinking", "thinking": "", "signature": ""}),
@@ -606,19 +654,19 @@ def test_streamed_response_matches_batch_parse_of_equivalent_body() -> None:
     )
     respx.post(MESSAGES_ENDPOINT).mock(
         side_effect=[
-            httpx.Response(200, json=batch_body),
+            _sse_response(whole_body),
             _sse_response(stream_body),
         ]
     )
 
     provider = _make_provider()
     request = _basic_request()
-    batch = provider.complete(request)
+    whole = provider.complete(request)
     streamed = provider.complete_streaming(request, _DeltaRecorder())
 
-    assert streamed.stop_reason == batch.stop_reason
-    assert streamed.content == batch.content
-    assert streamed.usage == batch.usage
+    assert streamed.stop_reason == whole.stop_reason
+    assert streamed.content == whole.content
+    assert streamed.usage == whole.usage
 
 
 # ---------------------------------------------------------------------------

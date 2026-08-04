@@ -227,14 +227,14 @@ def test_live_responses_reasoning_continuation_across_tool_call() -> None:
 
 @requires_live
 def test_live_responses_image_input() -> None:
-    from noeta.builtins.providers.impl.openai_responses import _model_supports_vision
+    from noeta.builtins.providers.impl.openai_responses import _model_admits_images
 
     vision_model = _live_env.live_vision_model()
-    if not vision_model or not _model_supports_vision(vision_model):
+    if not vision_model or not _model_admits_images(vision_model):
         pytest.skip(
-            "image chain needs NOETA_LIVE_VISION_MODEL set to a catalog "
-            f"vision-capable model (got {vision_model!r}); the adapter guard "
-            "refuses images to non-vision models"
+            "image chain needs NOETA_LIVE_VISION_MODEL set to an image-"
+            f"admitting model (got {vision_model!r}); the adapter guard "
+            "refuses images to catalogued non-vision models"
         )
     # The ContentStore holds the real bytes; only the small
     # ImageBlock(ContentRef) handle travels through the request.
@@ -242,7 +242,7 @@ def test_live_responses_image_input() -> None:
     ref = content_store.put(_SAMPLE_PNG, media_type="image/png")
     provider = _build_provider(content_store=content_store)
     request = LLMRequest(
-        model=vision_model,  # catalog supports_vision=True, checked above
+        model=vision_model,  # image-admitting per the gate above
         messages=[
             Message(
                 role="user",

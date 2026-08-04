@@ -1916,10 +1916,12 @@ def test_image_bytes_not_written_back_resolver_called_per_request() -> None:
 # 15. Vision capability guard
 # ---------------------------------------------------------------------------
 #
-# A request carrying an image whose target model cannot read images fails with FatalError before
-# anything goes on the wire, instead of burning a call the model would answer blind. The guard
-# resolves request.model against catalog.CATALOG (after alias resolution); an unknown model or
-# supports_vision False counts as non-vision.
+# A request carrying an image whose target model is CATALOGUED as non-vision fails with FatalError
+# before anything goes on the wire, instead of burning a call the model would answer blind. The
+# guard resolves request.model against catalog.CATALOG (after alias resolution); only a catalogued
+# supports_vision=False refuses — a model absent from the catalog is unknown, not text-only, so it
+# passes through and the provider stays the authority on its own capabilities
+# (see _model_admits_images).
 
 
 @respx.mock
@@ -1943,8 +1945,10 @@ def test_image_with_non_vision_model_raises_fatal_before_request() -> None:
 
 
 @respx.mock
-def test_image_with_unregistered_model_raises_fatal() -> None:
-    """Model not in the catalog (unregistered) → conservatively treated as non-vision; an image means FatalError, no request sent."""
+def test_image_with_unregistered_model_passes_through() -> None:
+    """Model not in the catalog (unregistered) → fail-open: nobody decided it is text-only, so the
+    guard passes and the image goes on the wire inlined as input_image; the provider answers with
+    its own error if the model truly cannot read images."""
     route = respx.post(ENDPOINT).mock(
         return_value=httpx.Response(200, json=_responses_payload(texts=["ok"]))
     )
@@ -1955,9 +1959,22 @@ def test_image_with_unregistered_model_raises_fatal() -> None:
         model="totally-unknown-model",
         messages=[Message(role="user", content=[ImageBlock(source=_PNG_REF)])],
     )
-    with pytest.raises(FatalError, match="vision"):
-        provider.complete(request)
-    assert not route.called
+    provider.complete(request)
+
+    assert route.called
+    body = json.loads(route.calls[0].request.content)
+    assert body["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_image",
+                    "image_url": _data_uri("image/png", _PNG_BYTES),
+                }
+            ],
+        }
+    ]
 
 
 @respx.mock
@@ -2033,12 +2050,13 @@ def test_text_only_request_with_unregistered_model_passes_guard() -> None:
 # 16. Tool-result images: ToolResultBlock.images → function_call_output array
 # ---------------------------------------------------------------------------
 #
-# The read tool opening a .png surfaces the image on ToolResultBlock.images. For a vision-capable
-# model the provider deref→base64-inlines each image and the function_call_output's output becomes a
-# content-part array [{input_text}, {input_image}, ...] instead of a plain string. A non-vision model
-# or a missing resolver degrades to the plain string with a note appended, never a crash. These
-# images ride inside ToolResultBlock.images rather than as top-level ImageBlocks, so
-# _guard_vision_capability cannot see them and the degrade path is their only gate.
+# The read tool opening a .png surfaces the image on ToolResultBlock.images. For an image-admitting
+# model (catalogued vision-capable OR absent from the catalog — same fail-open contract as the
+# guard) the provider deref→base64-inlines each image and the function_call_output's output becomes
+# a content-part array [{input_text}, {input_image}, ...] instead of a plain string. A catalogued
+# non-vision model or a missing resolver degrades to the plain string with a note appended, never a
+# crash. These images ride inside ToolResultBlock.images rather than as top-level ImageBlocks, so
+# _guard_vision_capability cannot see them and _model_admits_images is their dedicated gate.
 
 
 def _tool_message_with_image(
@@ -2126,6 +2144,28 @@ def test_tool_result_multiple_images_all_inlined_after_text() -> None:
         {"type": "input_text", "text": "two images"},
         {"type": "input_image", "image_url": _data_uri("image/png", _PNG_BYTES)},
         {"type": "input_image", "image_url": _data_uri("image/jpeg", _JPEG_BYTES)},
+    ]
+
+
+@respx.mock
+def test_tool_result_image_with_unregistered_model_becomes_input_image_array() -> None:
+    """A ToolResultBlock carrying an image + a model absent from the catalog → same fail-open
+    answer as the guard: the image is inlined as an input_image segment, not silently dropped to
+    the degrade string."""
+    route = respx.post(ENDPOINT).mock(
+        return_value=httpx.Response(200, json=_responses_payload(texts=["ok"]))
+    )
+    provider = _make_provider(image_resolver=_fake_resolver({_PNG_REF: _PNG_BYTES}))
+    request = _basic_request(
+        model="totally-unknown-model",
+        messages=[_tool_message_with_image()],
+    )
+    provider.complete(request)
+
+    body = json.loads(route.calls[0].request.content)
+    assert body["input"][0]["output"] == [
+        {"type": "input_text", "text": "read /tmp/pic.png (image, 70 bytes)"},
+        {"type": "input_image", "image_url": _data_uri("image/png", _PNG_BYTES)},
     ]
 
 
