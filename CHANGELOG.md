@@ -8,6 +8,148 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-08-04
+
+Covers both packages (lockstep). Patch bump: bug fixes plus additive API
+(new plugin surfaces, `Options.compaction_model`, `requires-noeta`).
+
+Claude Code mechanism alignment (see
+`docs/implementation-specs/claude-code-mechanism-alignment.md`): compaction,
+catalog/adapters, memory recall, skill frontmatter semantics, and the plugin
+surface closure.
+
+### Fixed — sandbox file reads were corrupt (adapter/API contract mismatch)
+
+- `AioSandboxExecEnv.read_bytes` sent `encoding="base64"` to `/v1/file/read`
+  and base64-decoded the response — but `FileReadRequest` has no `encoding`
+  field (confirmed against the v1.11.0 OpenAPI; read is asymmetric with
+  write, which does take it), so the server returned plain text and every
+  sandbox read either failed loudly or silently returned corrupt bytes;
+  binary reads were impossible. `read_bytes` now transfers via `base64 -w0`
+  through `/v1/shell/exec` (byte-exact for any content, spill-aware, stat
+  guards refine missing/unreadable into `FileNotFoundError` /
+  `PermissionError`), and `read_text` reads `/v1/file/read` natively as the
+  text endpoint it is. The guard runs in a subshell — the exec session's
+  shell is persistent, and a bare `exit` wedges the request. Caught by the
+  live container E2E (`TestLiveExecEnv`), which now pins text, binary
+  (every byte value), and missing-file round-trips.
+
+### Fixed — compaction survives real traffic
+
+- The summarize request now carries the live tool schemas (was `tools=[]`
+  against tool_use-bearing history — a provider 400 that killed the task on the
+  first real proactive compaction — and it forfeited the cached prefix).
+- Bounded summarize input: each compaction summarizes the previous note plus
+  the delta since it (was: the full raw history from index 0, which grew
+  without bound and overflowed the summarize call itself by the 2nd–3rd pass).
+  Verbatim-preserved safety constraints survive re-summarization as a fixed
+  point (no bullet accumulation).
+- The Anthropic `model_context_window_exceeded` stop_reason now routes to the
+  passive compaction path (was: an unmapped `"error"` → non-retryable task
+  failure); `stop_details` is captured into `raw`.
+- The observed token-density ratio is clamped to `[0.25, 8.0]` at both
+  consumers, so a gateway reporting garbage usage can no longer inflate the
+  protected tail ~250x and pin compaction on `compaction_no_progress`. (The
+  ceiling sits above the ~4–7 genuine density of pure-CJK payloads, so the
+  clamp never binds on a real measurement.)
+- The summarize request's `max_tokens` is now the **compaction model's own**
+  catalog ceiling when `Options.compaction_model` is set (was: the main
+  model's cap, a provider 400 on a smaller summarizer that killed the task on
+  every proactive compaction). New `compaction_max_output_tokens` rides the
+  `compaction_model` path host → builder → react factory; third-party
+  `PolicyFactoryBuilder` implementations must accept the new keyword.
+- The summarize request sets `metadata["tool_choice"] = "none"` and the
+  summarize prompt states the no-tools rule: a summarizer that saw the live
+  tool schemas could answer with a tool call, and an only-`tool_use` response
+  has no text — a non-retryable `compaction_summary_failed`. All three
+  first-party adapters pass the metadata through (Anthropic wraps the neutral
+  string as `{"type": ...}`; the OpenAI-shape adapters send it verbatim).
+- An errored round-trip no longer pins the compaction trigger baseline: a
+  200-shape overflow arrives as `stop_reason="error"` **with** real usage, and
+  the baseline must only come from a successful turn.
+
+### Changed — catalog and Anthropic adapter
+
+- Catalog rows for `claude-opus-5` / `claude-sonnet-5`; the `opus` / `sonnet`
+  aliases now resolve to them (4.x rows stay addressable by full id).
+- An uncatalogued model warns once and falls back to conservative compaction
+  knobs (128K window / 16K output) instead of silently disabling compaction;
+  pricing warns once and charges $0 instead of silently; its images are
+  admitted (the provider is the authority) instead of hard-refused —
+  `model_capabilities` reports the same. Placeholder rows lost their fake
+  $0.00 (explicit unpriced state). The OpenAI Responses adapter now carries
+  the same fail-open vision contract (`_model_admits_images`): an uncatalogued
+  model's images pass through — including tool-result images, which previously
+  degraded silently to text — and only a catalogued `supports_vision=False`
+  model refuses.
+- `complete()` on the Anthropic adapter transports via SSE internally and
+  accumulates (identical parsed response and recorded bytes), removing the
+  non-streaming 60 s wall against 128K `max_tokens` turns. `delta_sink`
+  remains the only external streaming surface.
+- `thinking="disabled"` with `effort ∈ {xhigh, max}` (a documented provider
+  400) is rejected at `Options` construction.
+
+### Changed — prompts, allowlist, model-visible text
+
+- `run_workflow`'s description no longer teaches the deleted `spawn_subagent`
+  tool or its removed `spawns` array; `AskUserQuestion` ack/error strings use
+  the reference name.
+- The explore/plan preset prompts route reading through `Read`/`Glob`/`Grep`
+  (no more `cat`/`head`/`tail`, which the shell allowlist would suspend on);
+  `git log` (curated flags; `--ext-diff` excluded) joined the default shell
+  allowlist; `main`/`main-web` gained a TodoWrite planning rule.
+
+### Changed — memory freshness and recall budget
+
+- The memory index resident re-records at every seed — task seed, subtask
+  seeding, and each new goal on a resumed task — so a memory written
+  mid-conversation appears in the index on the next turn (was: recorded once
+  at task creation, stale for the task's life and across the warm Engine
+  cache).
+- Auto-recall matching gained an English stopword list and a 3-char minimum
+  on ASCII tokens (CJK bigrams unchanged); recalled bodies are budgeted
+  (4 KiB per body, 16 KiB per turn; over-budget hits degrade to index lines);
+  the `__consolidation__` curator no longer receives recall against its own
+  digest. `memory_write` is atomic (temp file + `os.replace`).
+
+### Changed — skill frontmatter semantics
+
+- `disable-model-invocation: true` now removes a skill from the model's menu
+  (host preload still works); the flag accepts the YAML 1.1 boolean dialect
+  (`yes`/`no`, `on`/`off`, `1`/`0`, case-insensitive) and one layer of
+  surrounding quotes. `allowed-tools` recognizes the full mountable
+  tool vocabulary; an unrecognized name is dropped per-name (was: the whole
+  declaration degraded to an empty grant); `Bash(git:*)`-style specifiers
+  grant the bare tool with a not-enforced warning. Roster descriptions are
+  truncated at 1024 chars; a non-integer `priority` degrades to the default
+  100 instead of deleting the skill; `$ARGUMENTS` placeholder lines are
+  stripped at render, and the `$ARGUMENTS` token is excised from the
+  frontmatter description on both model-visible surfaces (activation render
+  and the skill tool's menu).
+
+### Added — plugin closure
+
+- The `skills` plugin surface is consumed: a plugin's skill-pack directory
+  joins the lowest tier of the three-tier merge (below the user's global and
+  workspace tiers). Paths must be absolute; a relative path is a loud
+  `PluginError`.
+- The `mcp_server` plugin surface is consumed: contributed in-process servers
+  merge into `Options.mcp_servers` with loud alias collisions, entering agent
+  identity through the existing path. `provider` / `sandbox_provider` are
+  documented as host-resolved listings.
+- `HostConfig.plugin_config` opens the config channel to third-party session
+  packs (`ctx.config("<plugin>")`); for the four SDK-derived entries, host
+  keys overlay per-key.
+- `requires-noeta` is now evaluated (warn on unsatisfied; `load_plugins(...,
+  strict=True)` refuses; unrecognized specifiers warn and never enforce — and
+  the skip-enforcement warning names the actual unparseable side, so an
+  installed pre-release like `1.0.0rc1` is no longer misreported as an
+  "unrecognized specifier").
+  `Options.compaction_model` routes the compaction summarize call to a cheaper
+  model. A third-party non-int contribution `priority` is a loud `PluginError`
+  (was: silent 0); an unnamed single-file plugin under an `enabled` allowlist
+  is skipped, not executed.
+
 ## [0.6.0] - 2026-08-03
 
 Covers both packages (lockstep). Minor bump: the model-facing tool surface is
@@ -1355,6 +1497,7 @@ Initial preview release.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
 [Unreleased]: https://github.com/initxy/noeta/compare/v0.5.5...HEAD
+[0.6.1]: https://github.com/initxy/noeta/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/initxy/noeta/compare/v0.5.5...v0.6.0
 [0.5.5]: https://github.com/initxy/noeta/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/initxy/noeta/compare/v0.5.3...v0.5.4
