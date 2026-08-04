@@ -110,18 +110,18 @@ def test_webfetch_in_main_and_all_subagents() -> None:
     # CC alignment: webfetch is now in main AND all three subagents — CC's
     # general-purpose has the full toolset, and its Explore/Plan agents have
     # every tool except the write family (so WebFetch is available to them).
-    assert "webfetch" in builtin_tool_classes()
+    assert "WebFetch" in builtin_tool_classes()
     specs = official_specs()
     for name in ("main", "explore", "plan", "general-purpose"):
         sub_names = {t.name for t in specs[name].tools}
-        assert "webfetch" in sub_names, f"{name} should whitelist webfetch"
+        assert "WebFetch" in sub_names, f"{name} should whitelist webfetch"
 
 
 def test_webfetch_builtin_ref_low_risk() -> None:
     # risk is read straight off the tool class defaults.
     from noeta.client.parts import builtin_tool_ref
 
-    ref = builtin_tool_ref("webfetch")
+    ref = builtin_tool_ref("WebFetch")
     assert ref.risk_level == "low"
 
 
@@ -223,7 +223,7 @@ def test_explore_and_plan_whitelist_is_all_but_write_family() -> None:
     # CC alignment: Explore and Plan share the same read-mostly whitelist —
     # every built-in tool EXCEPT the write family (edit/write/apply_patch).
     # That is glob/grep/read + the shell triplet + webfetch.
-    expected = {"Glob", "Grep", "Read", "Bash", "BashOutput", "KillShell", "webfetch"}
+    expected = {"Glob", "Grep", "Read", "Bash", "BashOutput", "KillShell", "WebFetch"}
     specs = official_specs()
     for name in ("explore", "plan"):
         names = {t.name for t in specs[name].tools}
@@ -247,7 +247,7 @@ def test_general_purpose_whitelist_is_full_builtin_set() -> None:
     names = {t.name for t in specs["general-purpose"].tools}
     assert names == set(builtin_tool_classes())
     # The previously-dropped search/patch/web tools are now present.
-    assert {"Grep", "Glob", "webfetch"} <= names
+    assert {"Grep", "Glob", "WebFetch"} <= names
     # gp's tool surface now equals main's (both the full built-in catalog).
     main_names = {t.name for t in specs["main"].tools}
     assert names == main_names

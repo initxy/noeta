@@ -61,7 +61,7 @@
           "version": "1"
         },
         {
-          "name": "webfetch",
+          "name": "WebFetch",
           "risk_level": "low",
           "version": "1"
         }
@@ -134,18 +134,18 @@
           "version": "1"
         },
         {
+          "name": "WebFetch",
+          "risk_level": "low",
+          "version": "1"
+        },
+        {
+          "name": "WebSearch",
+          "risk_level": "low",
+          "version": "1"
+        },
+        {
           "name": "Write",
           "risk_level": "high",
-          "version": "1"
-        },
-        {
-          "name": "web_search",
-          "risk_level": "low",
-          "version": "1"
-        },
-        {
-          "name": "webfetch",
-          "risk_level": "low",
           "version": "1"
         }
       ]
@@ -211,7 +211,7 @@
           "version": "1"
         },
         {
-          "name": "webfetch",
+          "name": "WebFetch",
           "risk_level": "low",
           "version": "1"
         }
@@ -293,18 +293,18 @@
         "version": "1"
       },
       {
+        "name": "WebFetch",
+        "risk_level": "low",
+        "version": "1"
+      },
+      {
+        "name": "WebSearch",
+        "risk_level": "low",
+        "version": "1"
+      },
+      {
         "name": "Write",
         "risk_level": "high",
-        "version": "1"
-      },
-      {
-        "name": "web_search",
-        "risk_level": "low",
-        "version": "1"
-      },
-      {
-        "name": "webfetch",
-        "risk_level": "low",
         "version": "1"
       }
     ]

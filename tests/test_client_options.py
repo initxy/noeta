@@ -241,10 +241,10 @@ def test_builtin_tool_ref_inventory_complete() -> None:
         # ``tools=None`` can whitelist all three at once.
         "Bash", "BashOutput", "KillShell",
         # web — not an fs tool, but catalogued so ``tools=None`` includes it.
-        "webfetch",
+        "WebFetch",
         # web_search is only built when NOETA_WEB_SEARCH_API_KEY is set; the
         # catalogue entry is the addressable name, gated at build time.
-        "web_search",
+        "WebSearch",
     }
     assert set(builtin_tool_classes()) == expected_names
     for name in expected_names:
@@ -424,8 +424,8 @@ def test_builtin_tool_whitelist_is_pinned() -> None:
         "KillShell",
         "BashOutput",
         "Bash",
-        "web_search",
-        "webfetch",
+        "WebSearch",
+        "WebFetch",
         "Write",
     }
     # Everything else — memory, browser, open_app, run_skill_script — is

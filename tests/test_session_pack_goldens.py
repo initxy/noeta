@@ -39,7 +39,7 @@ GOLDEN_DEFAULT_TOOLS: list[str] = [
     "Bash",
     "BashOutput",
     "KillShell",
-    "webfetch",
+    "WebFetch",
     "memory_write",
     "memory_read",
     "memory_search",

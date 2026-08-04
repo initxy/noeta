@@ -5,8 +5,8 @@
 with a small in-tree heuristic (headings → ``#``, anchors → ``[text](href)``,
 list items → ``- ``, paragraphs preserved; script/style/head stripped, tags
 otherwise dropped, entities unescaped, whitespace collapsed), offloads the
-**full** rendering to a ContentStore artifact, and returns a small inline
-object ``{url, title, content, content_ref, truncated}``.
+**full** rendering to a ContentStore audit artifact, and returns the page as
+plain text: a ``Title:`` / ``URL:`` header, then the Markdown body.
 
 ``webfetch`` has ``risk_level="low"`` (a read-only GET; no workspace mutation).
 
@@ -34,10 +34,7 @@ import httpx
 
 from noeta.protocols.tool import Tool, ToolContext, ToolResult
 from noeta.tools.limits import (
-    INLINE_CONTENT_MAX_BYTES,
     SUMMARY_EMBED_MAX_BYTES,
-    encoded_len,
-    fit_output_fields,
     truncate_bytes,
 )
 from noeta.protocols.resources import load_markdown
@@ -57,6 +54,9 @@ __all__ = [
 _FETCH_MEDIA_TYPE = "text/markdown"
 _MAX_URL_BYTES = 512
 _MAX_TITLE_BYTES = 200
+#: Inline cap on the rendered page body — generous for real articles; the
+#: fence exists so one enormous page cannot swamp the context.
+_INLINE_PAGE_MAX_CHARS = 100_000
 
 # Blocks whose *text content* is not body text: scripts, styles, the document
 # title (surfaced separately), and the whole <head>.
@@ -148,7 +148,7 @@ class WebFetchTool:
     """Fetch a public URL and return its body rendered to Markdown."""
 
     transport: FetchTransport
-    name: str = "webfetch"
+    name: str = "WebFetch"
     description: str = field(default=load_markdown(__package__, "webfetch"))
     risk_level: str = "low"
     input_schema: dict[str, Any] = field(
@@ -164,41 +164,31 @@ class WebFetchTool:
         url = arguments.get("url")
         if not isinstance(url, str) or not url.strip():
             return ToolResult(
-                success=False, summary="webfetch requires a non-empty 'url'"
+                success=False, summary="WebFetch requires a non-empty 'url'"
             )
         try:
             raw = self.transport.fetch(url)
         except Exception as exc:  # noqa: BLE001 — degrade, don't crash the step
-            return ToolResult(success=False, summary=f"webfetch failed: {exc}")
+            return ToolResult(success=False, summary=f"WebFetch failed: {exc}")
 
         title = _extract_title(raw)
         markdown = html_to_markdown(raw)
-        # The full Markdown is the artifact; a bounded view rides inline. The
-        # model can deref the ref for the rest of a long page.
+        # The full Markdown is the audit artifact; the model reads the page
+        # directly — a Title/URL header, then the body, truncated with a notice
+        # when a page is pathologically long.
         ref = ctx.artifact_store.put(
             markdown.encode("utf-8"), media_type=_FETCH_MEDIA_TYPE
         )
-        output: dict[str, Any] = {
-            "url": truncate_bytes(url, _MAX_URL_BYTES),
-            "title": truncate_bytes(title, _MAX_TITLE_BYTES),
-            "content": markdown,
-            "content_ref": {
-                "hash": ref.hash,
-                "size": ref.size,
-                "media_type": ref.media_type,
-            },
-            "truncated": False,
-        }
-        # Hard canonical-encoded ceiling: if the inline ``content`` does not
-        # fit, shrink it to an excerpt and mark truncated (the full body is the
-        # artifact; the model derefs ``content_ref`` for the rest).
-        if encoded_len(output) > INLINE_CONTENT_MAX_BYTES:
-            output["truncated"] = True
-            output = fit_output_fields(
-                output,
-                shrink_order=["content", "title", "url"],
-                max_bytes=INLINE_CONTENT_MAX_BYTES,
+        body = markdown
+        if len(body) > _INLINE_PAGE_MAX_CHARS:
+            total = len(body)
+            body = body[:_INLINE_PAGE_MAX_CHARS] + (
+                f"\n(Content truncated: showing the first "
+                f"{_INLINE_PAGE_MAX_CHARS} of {total} characters.)"
             )
+        head_title = truncate_bytes(title, _MAX_TITLE_BYTES)
+        head_url = truncate_bytes(url, _MAX_URL_BYTES)
+        output = f"Title: {head_title}\nURL: {head_url}\n\n{body}"
         summary_url = truncate_bytes(url, SUMMARY_EMBED_MAX_BYTES)
         return ToolResult(
             success=True,
