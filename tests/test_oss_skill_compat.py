@@ -98,15 +98,18 @@ def test_example_command_frontmatter_metadata_captured() -> None:
 
 
 def test_refactor_guide_semantic_vs_metadata_split() -> None:
-    """Semantic keys drive behavior; everything else is metadata."""
+    """Semantic keys drive behavior; everything else is metadata.
+
+    ``disable-model-invocation`` moved across that line in D11: it gates
+    whether the skill enters the model's menu, so it is read as semantics
+    (``model_invocable``) and no longer files under opaque metadata.
+    """
     desc = _registry().get("refactor-guide")
     assert desc is not None
     assert desc.version == "2"
     assert desc.priority == 50
-    assert desc.metadata == (
-        ("disable-model-invocation", "false"),
-        ("license", "Apache-2.0"),
-    )
+    assert desc.model_invocable is True  # the file declares `false`
+    assert desc.metadata == (("license", "Apache-2.0"),)
 
 
 # ---------------------------------------------------------------------------
@@ -324,3 +327,27 @@ def test_bundled_script_is_recorded_but_not_executed(
     assert f"Base directory for this skill: {rg_dir}" in _semi_stable_text(view)
     plan = _read_plan(cs, view)
     assert plan["retrieved_resources"] == []
+
+
+# ---------------------------------------------------------------------------
+# $ARGUMENTS — the published file keeps it, the model never sees it
+# ---------------------------------------------------------------------------
+
+
+def test_published_skill_keeps_arguments_but_never_renders_it() -> None:
+    """``example-command`` ships ``$ARGUMENTS`` verbatim (it is a real
+    published slash-command-style skill). Noeta has no argument channel to
+    substitute from, so the placeholder must survive on the parsed
+    ``SkillDescription`` — the fixture stays byte-for-byte as published — and
+    be dropped on the way to the model."""
+    registry = _registry()
+    desc = registry.get("example-command")
+    assert desc is not None
+    assert "$ARGUMENTS" in desc.body
+
+    rendered = registry.render(["example-command"])
+    block = rendered.messages[0].content[0]
+    assert isinstance(block, TextBlock)
+    assert "$ARGUMENTS" not in block.text
+    # Only the placeholder line goes; the surrounding body is untouched.
+    assert "## Instructions" in block.text

@@ -33,8 +33,11 @@ from noeta.protocols.messages import (
 )
 from noeta.protocols.resources import load_markdown
 
+from .indexer import strip_argument_placeholder
+
 
 __all__ = [
+    "MENU_DESCRIPTION_MAX_CHARS",
     "SKILL_TOOL",
     "skill_tool_schema",
     "make_skill_translate",
@@ -44,6 +47,16 @@ __all__ = [
 
 #: Model-visible **control** tool name for model-driven skill menu selection.
 SKILL_TOOL = "skill"
+
+
+#: Per-skill budget for the roster line. Every menu description concatenates
+#: into ONE property description that sits inside the stable-prefix hash, so an
+#: author's unbounded ``description:`` is unbounded prompt on every single turn
+#: of every session that indexes it. The cap is per skill, not per menu: the
+#: entry count is bounded by the workspace, the description length is not.
+MENU_DESCRIPTION_MAX_CHARS = 1024
+
+_TRUNCATION_MARKER = "… (truncated)"
 
 
 _SKILL_DESCRIPTION = load_markdown(__package__, "skill")
@@ -183,6 +196,23 @@ def make_skill_translate(
     return translate
 
 
+def _menu_description(text: str) -> str:
+    """Fit one skill's description into the roster budget.
+
+    Truncation is a suffix marker rather than a hard cut, so the model can tell
+    a clipped summary from a terse one and knows the body holds the rest. The
+    result is exactly :data:`MENU_DESCRIPTION_MAX_CHARS` characters, marker
+    included. ``$ARGUMENTS`` is excised first — the menu is a model-visible
+    surface and Noeta has no argument channel to substitute from (same rule as
+    the activation render; see ``indexer.strip_argument_placeholder``).
+    """
+    text = strip_argument_placeholder(text)
+    if len(text) <= MENU_DESCRIPTION_MAX_CHARS:
+        return text
+    keep = MENU_DESCRIPTION_MAX_CHARS - len(_TRUNCATION_MARKER)
+    return text[:keep] + _TRUNCATION_MARKER
+
+
 def _skill_menu(
     registry: Any,
 ) -> tuple[tuple[tuple[str, str], ...], frozenset[str]]:
@@ -193,16 +223,22 @@ def _skill_menu(
     ``menu_names`` is the frozenset the translate closure validates against —
     and the mount's gate. An empty index reads the same as no registry: the
     tool is not grown.
+
+    A skill whose frontmatter declares ``disable-model-invocation: true`` is
+    excluded from **both**, so the model can neither see it nor name it. It
+    stays in the Registry, which is what keeps the host preload channel
+    (``Options.skills``, a seed activation) able to load it — the same split
+    Claude Code draws between what the model may invoke and what the user may.
     """
     if registry is not None:
-        skill_names = registry.names()
-        if skill_names:
-            menu = tuple(
-                (name, desc.description)
-                for name in sorted(skill_names)
-                if (desc := registry.get(name)) is not None
-            )
-            return menu, frozenset(skill_names)
+        entries: list[tuple[str, str]] = []
+        for name in sorted(registry.names()):
+            desc = registry.get(name)
+            if desc is None or not getattr(desc, "model_invocable", True):
+                continue
+            entries.append((name, _menu_description(desc.description)))
+        if entries:
+            return tuple(entries), frozenset(name for name, _ in entries)
     return (), frozenset()
 
 

@@ -28,8 +28,24 @@ from noeta.execution.builder import (
     build_session_inputs,
 )
 from noeta.runtime.governance import Budget
-from noeta.builtins.skills.impl import SKILL_TOOL, skill_tool_schema
-from noeta.protocols.messages import Usage
+from noeta.builtins.skills.impl import (
+    SKILL_TOOL,
+    load_workspace_skills,
+    make_skills_control_tool,
+    skill_tool_schema,
+)
+from noeta.builtins.skills.impl.control_tool import MENU_DESCRIPTION_MAX_CHARS
+from noeta.policies.control_semantics import ControlTranslateContext
+from noeta.protocols.decisions import TaskStatePatch
+from noeta.protocols.task import Task, TaskState
+from noeta.protocols.messages import (
+    LLMResponse,
+    Message,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    Usage,
+)
 from noeta.storage.memory import (
     InMemoryContentStore,
     InMemoryDispatcher,
@@ -312,3 +328,178 @@ def test_sdkhost_capability_off_masks_schema_even_with_skills(
     )
 
     assert _skill_schema_from_engine(engine) is None
+
+
+# ---------------------------------------------------------------------------
+# D11 — disable-model-invocation, and the per-skill roster budget
+# ---------------------------------------------------------------------------
+
+
+def _write_skill_raw(ws: Path, name: str, frontmatter: str, body: str) -> None:
+    skill_dir = ws / ".noeta" / "skills" / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {name}\n{frontmatter}---\n{body}", encoding="utf-8"
+    )
+
+
+def test_disable_model_invocation_skill_is_absent_from_the_menu(
+    tmp_path: Path,
+) -> None:
+    """(a) first half — a skill declaring ``disable-model-invocation: true``
+    never enters the model's menu, while its neighbours still do."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    write_skill(ws, "visible", "on the menu")
+    _write_skill_raw(
+        ws,
+        "hidden",
+        "description: user-invoked only\ndisable-model-invocation: true\n",
+        "Body of the hidden skill.\n",
+    )
+    schemas = _build_composer_schemas(ws, skill_invocation_enabled=True)
+    schema = _find_skill_schema(schemas)
+    assert schema is not None
+    prop = schema["function"]["parameters"]["properties"]["skill"]
+    assert prop["enum"] == ["visible"]
+    assert "hidden" not in prop["description"]
+
+
+def test_disable_model_invocation_skill_still_preloads_and_renders(
+    tmp_path: Path,
+) -> None:
+    """(a) second half — the same skill stays in the Registry, so the host
+    preload channel (``Options.skills`` / a seed activation, both of which land
+    as ``TaskStatePatch(activate_skills=...)``) loads it and it renders
+    normally. Off the menu is not out of the workspace."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    _write_skill_raw(
+        ws,
+        "hidden",
+        "description: user-invoked only\ndisable-model-invocation: true\n",
+        "Body of the hidden skill.\n",
+    )
+    inputs = build_session_inputs(
+        **default_factory_kwargs(),
+        workspace_dir=ws,
+        system_prompt="you are helpful",
+        allowed_tools=frozenset({"read"}),
+        content_store=InMemoryContentStore(),
+        model="stub-model",
+        compaction=COMPACTION_OFF,
+        budget=Budget(),
+        capability_flags={"skill_invocation": True},
+        plugin_config={
+            "fs": {"write_mode": FsWriteMode.DRY_RUN, "shell_mode": ShellMode.OFF},
+        },
+    )
+    # The tool is not grown at all here: the only skill on disk is off-menu.
+    assert _find_skill_schema(list(inputs.composer._control_action_schemas)) is None
+
+    task = Task(task_id="t-hidden", status="running", state=TaskState(goal="g"))
+    TaskStatePatch(activate_skills=["hidden"]).apply(task.state)
+    view = inputs.composer.compose(task)
+
+    semi_stable = next(s for s in view.segments if s.name == "semi_stable")
+    text = " ".join(
+        b.text
+        for m in semi_stable.content
+        for b in m.content
+        if isinstance(b, TextBlock)
+    )
+    assert "Activated skill: hidden" in text
+    assert "Body of the hidden skill." in text
+
+
+class _FlagCtx:
+    """Minimal ``ControlToolBuildContext`` stand-in: the mount reads one flag."""
+
+    def flag(self, name: str) -> bool:
+        return name == "skill_invocation"
+
+
+def test_hidden_skill_cannot_be_named_by_the_model(tmp_path: Path) -> None:
+    """The translate validates against the SAME set the enum was built from, so
+    a model that guesses the name gets a recoverable error rather than a
+    back door into an off-menu skill."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    write_skill(ws, "visible", "on the menu")
+    _write_skill_raw(
+        ws,
+        "hidden",
+        "description: user-invoked only\ndisable-model-invocation: true\n",
+        "b\n",
+    )
+    registry = load_workspace_skills(ws)
+    assert set(registry.names()) == {"hidden", "visible"}
+
+    mount = make_skills_control_tool(registry)(_FlagCtx())
+    assert mount is not None
+    response = LLMResponse(
+        stop_reason="tool_use",
+        content=[
+            ToolUseBlock(
+                call_id="c1", tool_name=SKILL_TOOL, arguments={"skill": "hidden"}
+            )
+        ],
+    )
+    decision = mount.translate(
+        ControlTranslateContext(
+            response=response,
+            assistant_message=Message(role="assistant", content=list(response.content)),
+            assistant_thinking=(),
+            content_store=None,
+        )
+    )
+    assert decision is not None
+    assert decision.patch is None
+    block = decision.messages_after[0].content[0]
+    assert isinstance(block, ToolResultBlock)
+    assert "unknown skill 'hidden'" in block.output
+    assert "available: visible" in block.output
+
+
+def test_oversized_description_is_truncated_in_the_roster(tmp_path: Path) -> None:
+    """(d) One skill's description is capped at 1024 chars in the roster.
+
+    Every description concatenates into ONE property description that sits
+    inside the stable-prefix hash, so an unbounded ``description:`` is unbounded
+    prompt on every turn.
+    """
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    long_description = "x" * 5000
+    write_skill(ws, "verbose", long_description)
+    write_skill(ws, "terse", "short one")
+
+    schemas = _build_composer_schemas(ws, skill_invocation_enabled=True)
+    schema = _find_skill_schema(schemas)
+    assert schema is not None
+    desc = schema["function"]["parameters"]["properties"]["skill"]["description"]
+    roster = desc.split("Available: ", 1)[1]
+    entries = dict(
+        entry.split(" — ", 1) for entry in roster.split("; ") if " — " in entry
+    )
+    assert len(entries["verbose"]) == MENU_DESCRIPTION_MAX_CHARS == 1024
+    assert entries["verbose"].startswith("x" * 100)
+    assert entries["verbose"].endswith("(truncated)")
+    # A description inside the budget is untouched.
+    assert entries["terse"] == "short one"
+
+
+def test_arguments_placeholder_excised_from_the_roster(tmp_path: Path) -> None:
+    """The menu is a model-visible surface: a description carrying
+    ``$ARGUMENTS`` (a Claude Code-ism) has the token excised, same rule as the
+    activation render — Noeta has no argument channel to substitute from."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    write_skill(ws, "argy", "Summarize $ARGUMENTS into a report")
+
+    schemas = _build_composer_schemas(ws, skill_invocation_enabled=True)
+    schema = _find_skill_schema(schemas)
+    assert schema is not None
+    desc = schema["function"]["parameters"]["properties"]["skill"]["description"]
+    assert "$ARGUMENTS" not in desc
+    assert "Summarize into a report" in desc

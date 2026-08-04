@@ -174,7 +174,8 @@ def extract_skill_allowed_tools_raw(
     ``(skill_name, raw_allowed_tools_value)`` map.
 
     Only skills that **declare** an ``allowed-tools`` key contribute one entry
-    (the verbatim opaque metadata string). Parsing + Claude→Noeta aliasing is
+    (the verbatim opaque metadata string). Parsing + recognising the names
+    against the mountable tool vocabulary is
     :func:`resolve_skill_allowed_tools`'s job, applied at the
     ``PermissionPolicy`` build site; the kernel guard receives the
     already-resolved neutral grants. This extraction lives beside the indexer so
@@ -245,11 +246,13 @@ def load_workspace_skills(
     is indexed.
 
     ``lower_skill_dirs`` are the **lower-precedence** tiers below the
-    workspace-local pack, ordered low→high (the built-in pack first, then the
-    global ``~/.noeta/skills`` pack). Each dir is indexed independently and
-    folded with :func:`merge_skill_registries` (overlay wins on name clash), so
-    the final precedence is **built-in < global < workspace** — a
-    workspace-local skill always shadows a same-named global / built-in one.
+    workspace-local pack, ordered low→high (the built-in pack first — including
+    the directories loaded plugins contribute on the ``skills`` surface, which
+    ride that same lowest tier — then the global ``~/.noeta/skills`` pack). Each
+    dir is indexed independently and folded with :func:`merge_skill_registries`
+    (overlay wins on name clash), so the final precedence is **built-in <
+    global < workspace** — a workspace-local skill always shadows a same-named
+    global / built-in / plugin-contributed one.
 
     Missing directories produce an **empty** Registry rather than an error — a
     workspace with no skills is still a valid coding session, and a fresh empty
@@ -416,7 +419,12 @@ def build_skills_session_pack(ctx: SessionBuildContext) -> PackContribution:
     The manifest-declared factory. Reads this plugin's own config entry —
     ``skills_dir`` (workspace override), ``builtin_skills_dirs`` +
     ``global_skills_dir`` (the lower tiers), ``allow_skill_scripts``,
-    ``tool_enforcement`` — and assembles the three-tier kit. The kit stays
+    ``tool_enforcement`` — and assembles the three-tier kit.
+    ``builtin_skills_dirs`` is the whole lowest tier as the host assembled it:
+    its own built-in packs plus every directory a loaded plugin contributed on
+    the ``skills`` surface. A directory that does not exist indexes to an empty
+    registry, so a plugin whose pack is absent in some install contributes
+    nothing rather than failing the build. The kit stays
     INSIDE this factory (no kit crosses into kernel code): the ``skill`` control
     tool rides ``control_tools`` as a closure over the merged registry, the
     guard inputs ride the opaque ``guard_facts`` bundle, and the

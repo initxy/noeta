@@ -9,7 +9,8 @@ argument-hint: [scope, e.g. a file path or "since main"]
 Review the changed code purely for quality — reuse, simplification, and efficiency —
 and apply the cleanups. This is NOT a bug hunt; do not change behavior.
 
-Scope from the user (default to uncommitted changes if empty): $ARGUMENTS
+Take the scope from the conversation; with none given, work over the
+uncommitted changes.
 
 ## Steps
 

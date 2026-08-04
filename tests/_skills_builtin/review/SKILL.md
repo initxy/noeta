@@ -9,7 +9,8 @@ argument-hint: [base ref or scope, e.g. "since main" or a file path]
 Act as an expert code reviewer for the current working changes. Be concise but
 thorough, and focus on what actually matters.
 
-Scope / base ref from the user (default to uncommitted changes if empty): $ARGUMENTS
+Take the scope / base ref from the conversation; with none given, review the
+uncommitted changes.
 
 ## Steps
 

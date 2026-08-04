@@ -24,16 +24,28 @@ from . import _frontmatter
 
 
 __all__ = [
+    "ARGUMENTS_PLACEHOLDER",
+    "DEFAULT_SKILL_PRIORITY",
     "SkillDescription",
     "SkillIndexer",
     "SkillRegistry",
     "build_skill_renderer",
+    "strip_argument_placeholder",
 ]
 
 
 _log = logging.getLogger(__name__)
 
 _NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+#: Render-order default when ``priority:`` is absent or unreadable.
+DEFAULT_SKILL_PRIORITY = 100
+
+#: Claude Code's argument placeholder. Noeta's ``skill`` control tool takes a
+#: name and nothing else (docs/adr/model-driven-skill-invocation.md), so there
+#: is no argument channel to substitute and the literal would otherwise reach
+#: the model verbatim. Lines carrying it are dropped at render.
+ARGUMENTS_PLACEHOLDER = "$ARGUMENTS"
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +54,13 @@ class SkillDescription:
 
     ``priority`` drives render order (ascending, ties broken by ``name``);
     ``version`` is recorded but never filters.
+
+    ``model_invocable`` is the negation of Claude Code's
+    ``disable-model-invocation`` frontmatter key. ``False`` keeps the skill in
+    the Registry — fully preloadable and renderable through the host channel
+    (``Options.skills``, a seed/``send_goal`` activation) — while removing it
+    from the ``skill`` control tool's menu, which is the same split Claude Code
+    draws: the model cannot reach for it, the user still can.
 
     ``source_path``'s **parent directory** is rendered as the ``Base directory
     for this skill:`` line, so the path influences the canonical ``Message``
@@ -62,7 +81,8 @@ class SkillDescription:
     description: str
     body: str
     version: str = "1"
-    priority: int = 100
+    priority: int = DEFAULT_SKILL_PRIORITY
+    model_invocable: bool = True
     source_path: Optional[Path] = None
     metadata: tuple[tuple[str, str], ...] = ()
     resources: tuple[str, ...] = ()
@@ -240,17 +260,25 @@ class SkillIndexer:
             return None
 
         version = fields.get("version", "1")
-        priority_raw = fields.get("priority", "100")
+        priority_raw = fields.get("priority", str(DEFAULT_SKILL_PRIORITY))
         try:
             priority = int(priority_raw)
         except ValueError:
+            # Degrade, never delete: render order is cosmetic, so an unreadable
+            # value must not cost the user the skill itself the way a missing
+            # 'name' does.
             _log.warning(
                 "skill: %s: invalid 'priority' value %r "
-                "(must be integer); skipped",
+                "(must be an integer); using the default %d",
                 path,
                 priority_raw,
+                DEFAULT_SKILL_PRIORITY,
             )
-            return None
+            priority = DEFAULT_SKILL_PRIORITY
+
+        model_invocable = not self._parse_disabled_flag(
+            fields.get("disable-model-invocation"), path
+        )
 
         metadata = tuple(
             sorted(
@@ -267,10 +295,41 @@ class SkillIndexer:
             body=body,
             version=version,
             priority=priority,
+            model_invocable=model_invocable,
             source_path=path,
             metadata=metadata,
             resources=resources,
         )
+
+    @staticmethod
+    def _parse_disabled_flag(raw: Optional[str], path: Path) -> bool:
+        """Read ``disable-model-invocation`` leniently: the YAML 1.1 boolean
+        dialect — ``true``/``false``, ``yes``/``no``, ``on``/``off``,
+        ``1``/``0``, case-insensitive, one layer of surrounding quotes
+        tolerated (the frontmatter parser keeps quotes verbatim, and
+        ``disable-model-invocation: "true"`` is legitimate YAML an author will
+        write). Anything else is warned and read as ``false``.
+
+        Absent ⇒ ``False`` (the skill stays on the menu), so the key only ever
+        subtracts — a workspace that has never heard of it is unaffected.
+        """
+        if raw is None:
+            return False
+        token = raw.strip()
+        if len(token) >= 2 and token[0] == token[-1] and token[0] in "'\"":
+            token = token[1:-1].strip()
+        token = token.lower()
+        if token in ("true", "yes", "on", "1"):
+            return True
+        if token in ("false", "no", "off", "0"):
+            return False
+        _log.warning(
+            "skill: %s: invalid 'disable-model-invocation' value %r "
+            "(expected true/false); treating as false",
+            path,
+            raw,
+        )
+        return False
 
     def _discover_resources(self, skill_md: Path) -> tuple[str, ...]:
         """List files bundled beside ``skill_md``.
@@ -374,6 +433,13 @@ class SkillRegistry:
         :class:`SkillRegistry` (its environment-specific base-directory line is
         not content-addressed) and skills are ``pinned``, so there is no
         refresh to dereference.
+
+        A body line carrying :data:`ARGUMENTS_PLACEHOLDER` is dropped here
+        rather than at index time, so ``SkillDescription.body`` stays the
+        verbatim file text for audit while the model never reads an
+        unsubstituted placeholder. The one-line ``description`` gets the same
+        treatment via :func:`strip_argument_placeholder` (token excision, not
+        line dropping — dropping would empty it).
         """
         resolved = self.resolve(active)
         messages: list[Message] = []
@@ -391,8 +457,8 @@ class SkillRegistry:
             )
             text = (
                 f"Activated skill: {description.name}\n\n"
-                f"{description.description}\n\n"
-                f"{base}{description.body}"
+                f"{strip_argument_placeholder(description.description)}\n\n"
+                f"{base}{_strip_argument_lines(description.body)}"
             )
             messages.append(
                 Message(role="user", content=[TextBlock(text=text)])
@@ -402,6 +468,47 @@ class SkillRegistry:
             messages=messages,
             selected_skills=selected,
         )
+
+
+def strip_argument_placeholder(text: str) -> str:
+    """Excise :data:`ARGUMENTS_PLACEHOLDER` from a one-line description.
+
+    Same rationale as :func:`_strip_argument_lines` — Noeta has no argument
+    channel, so the literal must never reach the model — but scoped to the
+    frontmatter ``description``, where the whole-line rule would erase the
+    only line there is. The token is removed in place and the whitespace it
+    leaves behind collapsed. ``SkillDescription.description`` stays verbatim;
+    this runs at the two model-visible surfaces (activation render, skill-tool
+    menu).
+    """
+    if ARGUMENTS_PLACEHOLDER not in text:
+        return text
+    return re.sub(r"\s{2,}", " ", text.replace(ARGUMENTS_PLACEHOLDER, "")).strip()
+
+
+def _strip_argument_lines(body: str) -> str:
+    """Drop every body line carrying :data:`ARGUMENTS_PLACEHOLDER`.
+
+    Claude Code substitutes ``$ARGUMENTS`` with the slash-command tail; Noeta's
+    ``skill`` tool has no argument channel to substitute from, so the literal
+    would be handed to the model as an instruction it cannot satisfy. The blank
+    line the dropped line leaves behind is collapsed, so a body written with the
+    placeholder reads as if it had been written without one.
+
+    Whole-line, not in-place: the placeholder always sits on its own directive
+    line ("Scope from the user: $ARGUMENTS"), and blanking it mid-sentence would
+    leave a dangling label.
+    """
+    if ARGUMENTS_PLACEHOLDER not in body:
+        return body
+    kept: list[str] = []
+    for line in body.split("\n"):
+        if ARGUMENTS_PLACEHOLDER in line:
+            if kept and kept[-1].strip() == "":
+                kept.pop()
+            continue
+        kept.append(line)
+    return "\n".join(kept)
 
 
 def build_skill_renderer(registry: SkillRegistry) -> ContentRenderer:

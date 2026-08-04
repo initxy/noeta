@@ -9,7 +9,7 @@ argument-hint: [extra focus, e.g. "only the runtime package"]
 Generate or refresh the repository's `CONTEXT.md` so future agents can be productive
 fast. Keep it concise — only include what an agent would get wrong without it.
 
-Extra instructions from the user: $ARGUMENTS
+Follow any extra instructions the user gave in the conversation.
 
 ## Steps
 
