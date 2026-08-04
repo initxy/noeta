@@ -150,12 +150,12 @@ def _code_responses() -> list[LLMResponse]:
                 ToolUseBlock(
                     call_id="rt-1",
                     tool_name="edit",
-                    arguments={"path": "x.py", "old": "foo", "new": "bar"},
+                    arguments={"file_path": "x.py", "old_string": "foo", "new_string": "bar"},
                 ),
                 ToolUseBlock(
                     call_id="rt-2",
                     tool_name="edit",
-                    arguments={"path": "x.py", "old": "bar", "new": "baz"},
+                    arguments={"file_path": "x.py", "old_string": "bar", "new_string": "baz"},
                 ),
             ],
             usage=Usage(uncached=1, output=1),

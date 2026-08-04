@@ -1,5 +1,33 @@
 [
   {
+    "description": "Performs an exact string replacement in an existing file.\n\n- You must have `Read` the file this session before editing it, and its content must not have changed since — otherwise the call fails and you Read it again first.\n- `old_string` must match the file contents exactly — including whitespace and indentation — and must match exactly once. Zero matches or several matches fail and write nothing; include more surrounding context to make it unique. Never include `Read`'s line-number prefix in `old_string` or `new_string`.\n- `old_string` and `new_string` must differ. `new_string` may be empty to delete the matched region.\n- Set `replace_all` to true to replace every occurrence instead — use it for renames of a recurring string.\n- `file_path` is workspace-relative. A path outside the workspace needs the owner's authorization — the call pauses for their ruling on the directory.\n- On success you get a `cat -n` snippet of the edited region to verify the result. The change is also recorded as a unified diff artifact.\n- Creating a new file or replacing a whole file body is `Write`'s job, not this one's.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "file_path": {
+          "type": "string"
+        },
+        "new_string": {
+          "type": "string"
+        },
+        "old_string": {
+          "type": "string"
+        },
+        "replace_all": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "file_path",
+        "old_string",
+        "new_string"
+      ],
+      "type": "object"
+    },
+    "name": "Edit",
+    "risk_level": "high"
+  },
+  {
     "description": "Matches a glob pattern against file names and returns the matching paths.\n\n- Standard glob semantics — `**` matches recursively (e.g. \"**/*.py\", \"src/**/test_*\"). Results are sorted by modification time, newest first, and capped with a notice — narrow the pattern if truncated.\n- Scope with `path` (the directory to search, default: the whole workspace). `path` is workspace-relative, or absolute to search outside the workspace (a neighbouring checkout). Results are workspace-relative POSIX paths, or absolute when the search was rooted outside it.\n- `pattern` is always relative to `path`: no leading `/` and no `..`. Hidden directories and dependency/cache trees (node_modules, __pycache__, …) are skipped; matches escaping the searched directory via symlink are dropped.\n- To search by file content rather than name use `Grep`; to read a known file use `Read`.",
     "input_schema": {
       "additionalProperties": false,
@@ -101,86 +129,24 @@
     "risk_level": "low"
   },
   {
-    "description": "Applies a batch of up to 16 file edits atomically — all succeed or none do.\n\n- Each edit is `replace` (swap a unique substring in an existing file) or `create` (write a brand-new file). All are validated in memory first; an apply-phase failure rolls the whole batch back.\n- Paths are workspace-relative. A path outside the workspace needs the owner's authorization: the whole batch pauses for their ruling on the directory, since a patch applies atomically. A `replace` target's `old` must occur exactly once — include enough surrounding context to make it unique, and copy it verbatim (indentation, trailing spaces, and newlines must match). A `create` target must not exist yet under an existing parent.\n- Several `replace` edits may target the **same file** to change multiple places in one call; they apply in array order, and each `old` is matched against the file *as left by the earlier edits in this same call* (so don't include text a previous edit already removed). A `create` cannot be combined with any other edit on the same path — a create writes the whole file, so put its final content in one create. Two different spellings of one path that differ only in case or unicode form are rejected.\n- `old`/`new` and `content` each cap at 64 KB (the same safety ceiling as `write`); an absurdly large whole call is rejected — split it into separate calls.\n- Leave `before_sha256` unset. It is an optional staleness guard; if set it must be the SHA-256 of the **entire current file** from a recent read — an empty value is ignored, a wrong one fails the edit.\n- For a single change to one file, prefer `edit`.",
+    "description": "Writes a file to the workspace, creating it or overwriting an existing one.\n\n- Creating a new file always works, and missing parent directories are created. Overwriting an existing file requires you to have `Read` it this session (and its content not to have changed since), so you never blindly clobber a file you haven't seen.\n- `file_path` is workspace-relative. A path outside the workspace (absolute, `..`, or through a symlink) needs the owner's authorization: the call pauses, they approve the directory once, and it stays open afterwards. Don't route around a pause — say what you need and why.\n- `content` is UTF-8 text and always the FULL file body — never write a partial file or use placeholders. The change is recorded as a unified diff artifact.\n- For a small change to an existing file, prefer `Edit` — it replaces a surgical region instead of the whole body.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
-        "edits": {
-          "items": {
-            "additionalProperties": false,
-            "properties": {
-              "before_sha256": {
-                "maxLength": 64,
-                "type": "string"
-              },
-              "content": {
-                "maxLength": 65536,
-                "type": "string"
-              },
-              "new": {
-                "maxLength": 65536,
-                "type": "string"
-              },
-              "old": {
-                "maxLength": 65536,
-                "type": "string"
-              },
-              "op": {
-                "enum": [
-                  "replace",
-                  "create"
-                ],
-                "type": "string"
-              },
-              "path": {
-                "maxLength": 120,
-                "type": "string"
-              }
-            },
-            "required": [
-              "op",
-              "path"
-            ],
-            "type": "object"
-          },
-          "maxItems": 16,
-          "type": "array"
+        "content": {
+          "type": "string"
+        },
+        "file_path": {
+          "type": "string"
         }
       },
       "required": [
-        "edits"
+        "file_path",
+        "content"
       ],
       "type": "object"
     },
-    "name": "apply_patch",
-    "risk_level": "high"
-  },
-  {
-    "description": "Replaces an exact, unique `old` string in an existing file with `new`.\n\n- `old` must match exactly once — zero matches or more than one fails and writes nothing. Include enough surrounding context to make it unique, or target a region that already is.\n- Set `replace_all` to true to replace every occurrence of `old` instead — use this for renames or repeated edits where the same string recurs and you want them all changed.\n- `path` is workspace-relative and must be an existing UTF-8 text file. A path outside the workspace needs the owner's authorization — the call pauses for their ruling on the directory.\n- `new` may be empty to delete the matched region. The change is offloaded as a unified diff with before/after hashes.\n- Creating a new file or replacing a whole file body is `write`'s job, not this one's.",
-    "input_schema": {
-      "additionalProperties": false,
-      "properties": {
-        "new": {
-          "type": "string"
-        },
-        "old": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
-        },
-        "replace_all": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "path",
-        "old",
-        "new"
-      ],
-      "type": "object"
-    },
-    "name": "edit",
+    "name": "Write",
     "risk_level": "high"
   },
   {
@@ -279,26 +245,5 @@
     },
     "name": "webfetch",
     "risk_level": "low"
-  },
-  {
-    "description": "Writes a file to the workspace, creating it or overwriting one you've already read.\n\n- `path` is workspace-relative and its parent directory must already exist. A path outside the workspace (absolute, `..`, or through a symlink) needs the owner's authorization: the call pauses, they approve the directory once, and it stays open afterwards. Don't route around a pause — say what you need and why.\n- Creating a new file always works. Overwriting an existing file requires you to have `read` it earlier in this session, so you never blindly clobber a file you haven't seen.\n- `content` is UTF-8 text, max 64 KB. The change is offloaded as a unified diff with before/after hashes.\n- For a small change to an existing file, prefer `edit` — it sends a surgical diff instead of replacing the whole body.",
-    "input_schema": {
-      "additionalProperties": false,
-      "properties": {
-        "content": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "path",
-        "content"
-      ],
-      "type": "object"
-    },
-    "name": "write",
-    "risk_level": "high"
   }
 ]

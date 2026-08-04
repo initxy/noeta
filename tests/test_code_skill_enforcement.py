@@ -47,8 +47,8 @@ def _responses() -> list[LLMResponse]:
             content=[
                 ToolUseBlock(
                     call_id=WRITE_CALL_ID,
-                    tool_name="write",
-                    arguments={"path": "new.py", "content": "x=1\n"},
+                    tool_name="Write",
+                    arguments={"file_path": "new.py", "content": "x=1\n"},
                 )
             ],
             usage=Usage(uncached=1, output=1),

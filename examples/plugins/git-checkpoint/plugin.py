@@ -37,7 +37,7 @@ DEFAULT_CHECKPOINT_REF = "refs/noeta/checkpoints"
 
 #: The built-in tools that mutate the workspace. Read-only tools are excluded —
 #: a snapshot per ``read`` would bury the useful checkpoints in noise.
-DEFAULT_MUTATING_TOOLS: tuple[str, ...] = ("write", "edit", "apply_patch")
+DEFAULT_MUTATING_TOOLS: tuple[str, ...] = ("Write", "Edit")
 
 #: Checkpointing on *start* rather than completion is what makes the snapshot an
 #: undo point: it captures the tree the call is about to change.

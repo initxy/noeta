@@ -398,8 +398,8 @@ def test_child_approval_resolution_resumes_stranded_parent(
         LLMResponse(
             stop_reason="tool_use",
             content=[ToolUseBlock(
-                call_id="w1", tool_name="write",
-                arguments={"path": "new.py", "content": "print('hi')\n"},
+                call_id="w1", tool_name="Write",
+                arguments={"file_path": "new.py", "content": "print('hi')\n"},
             )],
             usage=Usage(uncached=1, output=1),
             raw={"id": "w1"},
@@ -419,7 +419,7 @@ def test_child_approval_resolution_resumes_stranded_parent(
         write_mode=FsWriteMode.APPLY,
         shell_mode=ShellMode.OFF,
         budget=coding_replay_budget(3),
-        require_approval_tools=("write",),
+        require_approval_tools=("Write",),
     )
     driver = make_driver(host)
 

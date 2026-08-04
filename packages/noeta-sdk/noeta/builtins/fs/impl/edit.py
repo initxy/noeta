@@ -1,13 +1,12 @@
-"""``edit`` / ``write`` — exact-match replace and read-first whole-file write.
+"""``Edit`` / ``Write`` — exact-match replace and read-first whole-file write.
 
 The write mode is **bound at construction** (``DRY_RUN`` / ``APPLY``) because
 the Engine never pauses mid-flight to ask: confirmation is a pre-run policy, and
-a dry run emits the unified diff as an artifact with ``applied=False`` while
-nothing on disk moves. Neither tool can clobber content the model has not seen —
-``edit`` refuses unless its ``old`` segment matches **exactly once**, and
-overwriting an existing file requires that file's current bytes to have been
-``read`` earlier in the session, a precondition served by probing the
-content-addressed store rather than by any new runtime primitive or tool field.
+a dry run emits the unified diff as an artifact with nothing on disk moving.
+Neither tool can clobber content the model has not seen: both consult the
+session's :class:`FileReadRegistry` — the file must have been ``Read`` this
+session AND its bytes must still match what was read. A successful mutation
+re-records the new digest, so consecutive edits chain without a re-read.
 """
 
 from __future__ import annotations
@@ -15,19 +14,15 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
-from noeta.protocols.errors import ContentNotFound
-from noeta.protocols.tool import ToolContext, ToolResult
-from noeta.protocols.values import ContentRef
+from noeta.protocols.tool import FileReadRegistry, ToolContext, ToolResult
 from noeta.tools.invocation import require_str, resolve_existing_file
 from noeta.tools.limits import (
-    INLINE_OUTPUT_MAX_BYTES,
     SUMMARY_EMBED_MAX_BYTES,
-    fit_output_fields,
     truncate_bytes,
 )
-from noeta.tools.refs import ref_json
 from noeta.protocols.resources import load_markdown
 from noeta.builtins.fs.impl._diff import (
     DIFF_MEDIA_TYPE,
@@ -54,46 +49,88 @@ __all__ = [
 ]
 
 
-#: Hard cap on a ``write`` body — a safety bound against a runaway file.
-WRITE_FILE_MAX_BYTES = 65_536
+#: Hard cap on a ``Write`` body — a runaway-file guard, far above any source
+#: file a model legitimately authors in one call.
+WRITE_FILE_MAX_BYTES = 8 * 1024 * 1024
 
-#: The media type ``read`` offloads file bodies under. ``write``'s read-first
-#: precondition reconstructs the same content-addressed ``ContentRef`` to ask
-#: "has this exact body been read this session?", so this must stay identical
-#: to ``read``'s own ``_READ_FILE_MEDIA_TYPE``.
-_READ_FILE_MEDIA_TYPE = "text/plain"
+#: Lines of surrounding context in the post-edit ``cat -n`` snippet.
+_SNIPPET_CONTEXT_LINES = 4
 
 #: Re-exported so callers can take the hash helper from this module.
 _sha256 = file_hash
 
 
-def _was_read_this_task(ctx: ToolContext, raw: bytes) -> bool:
-    """Whether ``raw`` (an existing file's current bytes) was ``read`` this
-    session.
+def _read_precondition_error(
+    registry: Optional[FileReadRegistry],
+    resolved: Path,
+    raw: bytes,
+    *,
+    tool_name: str,
+    verb: str,
+) -> Optional[ToolResult]:
+    """The read-first check both mutating tools share.
 
-    ``read`` offloads every file body into the content-addressed store, so
-    "was this file read?" reduces to "are these exact bytes already stored?" —
-    reconstruct the ``ContentRef`` ``read`` would have minted and probe ``get``,
-    which keys on the hash alone. The hash must be taken over the **raw bytes**,
-    the same key ``put`` computed, so the probe still matches a file whose bytes
-    are not a clean utf-8 round-trip.
+    The file must have been ``Read`` this session (a registry entry exists for
+    the canonical path) and its current bytes must still hash to what was
+    read — otherwise the model would mutate content it has not seen. ``None``
+    registry ⇒ no enforcement (a hand-built ToolContext in a host test); the
+    ToolRuntime always wires one.
     """
-    probe = ContentRef(
-        hash=hashlib.sha256(raw).hexdigest(),
-        size=len(raw),
-        media_type=_READ_FILE_MEDIA_TYPE,
+    if registry is None:
+        return None
+    recorded = registry.digest(str(resolved))
+    if recorded is None:
+        return tool_error(
+            tool_name,
+            f"File has not been read yet. Read it first before {verb} it.",
+        )
+    if recorded != hashlib.sha256(raw).hexdigest():
+        return tool_error(
+            tool_name,
+            "File has been modified since it was read. Read it again before "
+            f"{verb} it.",
+        )
+    return None
+
+
+def _record_mutation(
+    registry: Optional[FileReadRegistry], resolved: Path, body: bytes
+) -> None:
+    """Re-record the digest after a successful mutation, so consecutive edits
+    chain without an intervening re-read (the model has seen exactly what it
+    just wrote)."""
+    if registry is not None:
+        registry.record(str(resolved), hashlib.sha256(body).hexdigest())
+
+
+def _cat_n_snippet(after_lines: list[str], center: int, span: int) -> str:
+    """``cat -n`` rendering of the edited region ± context lines.
+
+    ``center`` is the 0-based first changed line in the AFTER text; ``span``
+    is how many lines the replacement occupies (0 for a pure deletion — the
+    snippet then shows the seam).
+    """
+    lo = max(0, center - _SNIPPET_CONTEXT_LINES)
+    hi = min(len(after_lines), center + max(span, 1) + _SNIPPET_CONTEXT_LINES)
+    return "\n".join(
+        f"{i + 1:>6}\t{after_lines[i]}" for i in range(lo, hi)
     )
-    try:
-        ctx.artifact_store.get(probe)
-    except ContentNotFound:
-        return False
-    return True
+
+
+def _first_changed_line(before: str, after: str) -> int:
+    """0-based index of the first line where ``after`` differs from ``before``."""
+    b_lines = before.splitlines()
+    a_lines = after.splitlines()
+    for i, (b, a) in enumerate(zip(b_lines, a_lines)):
+        if b != a:
+            return i
+    return min(len(b_lines), len(a_lines))
 
 
 @dataclass
 class ReplaceTextTool:
-    """Replace a unique ``old`` segment in ``path`` with ``new`` (tool name
-    ``edit``).
+    """Replace a unique ``old_string`` in ``file_path`` with ``new_string``
+    (tool name ``Edit``).
 
     The match must be exactly-once — 0 or N>1 matches return
     ``success=False`` and **never** write. There is deliberately no
@@ -107,7 +144,7 @@ class ReplaceTextTool:
     #: (see ``authorized_workspace``). ``None`` ⇒ single-root wall.
     write_roots: Optional[WriteRootsResolver] = None
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
-    name: str = "edit"
+    name: str = "Edit"
     description: str = field(default=load_markdown(__package__, "edit"))
     # High risk so PermissionGuard treats this as privileged: a policy that
     # permits medium-risk tools must not accidentally allow file mutation.
@@ -116,27 +153,36 @@ class ReplaceTextTool:
         default_factory=lambda: {
             "type": "object",
             "properties": {
-                "path": {"type": "string"},
-                "old": {"type": "string"},
-                "new": {"type": "string"},
+                "file_path": {"type": "string"},
+                "old_string": {"type": "string"},
+                "new_string": {"type": "string"},
                 "replace_all": {"type": "boolean"},
             },
-            "required": ["path", "old", "new"],
+            "required": ["file_path", "old_string", "new_string"],
             "additionalProperties": False,
         }
     )
 
     def invoke(self, arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         err = lambda m: tool_error(self.name, m)  # noqa: E731
-        path = require_str(arguments, "path", err, message="requires non-empty 'path'")
+        path = require_str(
+            arguments, "file_path", err, message="requires non-empty 'file_path'"
+        )
         if isinstance(path, ToolResult):
             return path
-        old = require_str(arguments, "old", err, message="requires non-empty 'old'")
+        old = require_str(
+            arguments, "old_string", err,
+            message="requires non-empty 'old_string'",
+        )
         if isinstance(old, ToolResult):
             return old
-        new = arguments.get("new")
+        new = arguments.get("new_string")
         if not isinstance(new, str):
-            return tool_error(self.name, "requires string 'new'")
+            return tool_error(self.name, "requires string 'new_string'")
+        if old == new:
+            return tool_error(
+                self.name, "old_string and new_string must be different"
+            )
         replace_all = bool(arguments.get("replace_all"))
         workspace = authorized_workspace(self.workspace, self.write_roots, ctx)
         resolved = resolve_existing_file(
@@ -153,15 +199,26 @@ class ReplaceTextTool:
         except UnicodeDecodeError:
             return tool_error(self.name, f"{path!r} is not utf-8 text")
 
+        precondition = _read_precondition_error(
+            ctx.file_read_registry, resolved, raw,
+            tool_name=self.name, verb="editing",
+        )
+        if precondition is not None:
+            return precondition
+
         count = before.count(old)
         if count == 0:
-            return tool_error(self.name, f"'old' not found in {path!r}")
+            return tool_error(self.name, "String to replace not found in file.")
         # Without ``replace_all``, an ambiguous (N>1) match is refused so a
         # single edit can never silently touch a region the model did not
         # intend.
         if count > 1 and not replace_all:
             return tool_error(
-                self.name, f"'old' matches {count} times in {path!r}; must be unique"
+                self.name,
+                f"Found {count} matches of the string to replace, but "
+                "replace_all is false. To replace all occurrences, set "
+                "replace_all to true. To replace only one, provide more "
+                "surrounding context to uniquely identify the instance.",
             )
         after = before.replace(old, new) if replace_all else before.replace(old, new, 1)
         rel = workspace.relative(resolved)
@@ -173,35 +230,41 @@ class ReplaceTextTool:
 
         applied = False
         file_changes: list[dict[str, Any]] | None = None
+        after_bytes = after.encode("utf-8")
         if self.mode is FsWriteMode.APPLY:
             try:
-                self.exec_env.write_bytes(resolved, after.encode("utf-8"))
+                self.exec_env.write_bytes(resolved, after_bytes)
             except OSError as exc:
                 return tool_error(self.name, f"write failed: {exc}")
             applied = True
+            _record_mutation(ctx.file_read_registry, resolved, after_bytes)
             # The PRE-edit bytes are the ToolRuntime's rewind baseline for this
-            # turn. ``edit`` only ever touches an EXISTING file, so this is
+            # turn. ``Edit`` only ever touches an EXISTING file, so this is
             # never ``None`` — that marker means "did not exist" and only
-            # ``write`` can produce it.
+            # ``Write`` can produce it.
             file_changes = [{"path": rel, "before": raw}]
 
-        output: dict[str, Any] = {
-            "path": rel,
-            "applied": applied,
-            "before_sha256": file_hash(before),
-            "after_sha256": file_hash(after),
-            "added": added,
-            "removed": removed,
-            "diff_ref": ref_json(diff_ref),
-        }
-        output = fit_output_fields(
-            output, shrink_order=["path"], max_bytes=INLINE_OUTPUT_MAX_BYTES
+        after_lines = after.splitlines()
+        snippet = _cat_n_snippet(
+            after_lines,
+            _first_changed_line(before, after),
+            len(new.splitlines()),
         )
+        if applied:
+            head = (
+                f"The file {rel} has been updated. Here's the result of "
+                "running `cat -n` on a snippet of the edited file:"
+            )
+        else:
+            head = (
+                f"Proposed edit to {rel} (dry run — nothing written). Here's "
+                "a `cat -n` snippet of the result:"
+            )
         summary_path = truncate_bytes(rel, SUMMARY_EMBED_MAX_BYTES)
         mode_label = "applied" if applied else "proposed"
         return ToolResult(
             success=True,
-            output=output,
+            output=f"{head}\n{snippet}",
             artifacts=[diff_ref],
             summary=f"edit {summary_path} +{added}/-{removed} ({mode_label})",
             file_changes=file_changes,
@@ -210,13 +273,13 @@ class ReplaceTextTool:
 
 @dataclass
 class WriteFileTool:
-    """Create a new file, or overwrite one already read this session (tool
-    name ``write``).
+    """Create a file, or overwrite one already read this session (tool name
+    ``Write``).
 
     Creating a brand-new file always works — you cannot have read what did not
-    exist. Overwriting an **existing** file is gated by the read-first
-    precondition, so the model can never blindly clobber a file it has not
-    seen, and the body is capped at ``WRITE_FILE_MAX_BYTES``.
+    exist — and missing parent directories are created. Overwriting an
+    **existing** file is gated by the read-first precondition, so the model can
+    never blindly clobber a file it has not seen.
 
     ``allowed_path_globs`` is how an ``AgentSpec`` physically confines a writer
     to e.g. ``plans/*.md``: a construction-time injection on the concrete tool
@@ -232,7 +295,7 @@ class WriteFileTool:
     #: (see ``authorized_workspace``). ``None`` ⇒ single-root wall.
     write_roots: Optional[WriteRootsResolver] = None
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
-    name: str = "write"
+    name: str = "Write"
     description: str = field(default=load_markdown(__package__, "write"))
     # High risk so PermissionGuard treats this as privileged: a policy that
     # permits medium-risk tools must not accidentally allow file creation.
@@ -244,10 +307,10 @@ class WriteFileTool:
         default_factory=lambda: {
             "type": "object",
             "properties": {
-                "path": {"type": "string"},
+                "file_path": {"type": "string"},
                 "content": {"type": "string"},
             },
-            "required": ["path", "content"],
+            "required": ["file_path", "content"],
             "additionalProperties": False,
         }
     )
@@ -264,8 +327,8 @@ class WriteFileTool:
 
     def invoke(self, arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         path = require_str(
-            arguments, "path", lambda m: tool_error(self.name, m),
-            message="requires non-empty 'path'",
+            arguments, "file_path", lambda m: tool_error(self.name, m),
+            message="requires non-empty 'file_path'",
         )
         if isinstance(path, ToolResult):
             return path
@@ -310,24 +373,16 @@ class WriteFileTool:
             except OSError as exc:
                 return tool_error(self.name, f"read failed: {exc}")
             before_bytes = existing_raw
-            # Overwriting requires having ``read`` the file's CURRENT contents
-            # earlier this session; otherwise the write is a blind clobber.
-            if not _was_read_this_task(ctx, existing_raw):
-                return tool_error(
-                    self.name,
-                    f"must read {path!r} before overwriting it "
-                    "(read-first precondition)",
-                )
+            precondition = _read_precondition_error(
+                ctx.file_read_registry, resolved, existing_raw,
+                tool_name=self.name, verb="overwriting",
+            )
+            if precondition is not None:
+                return precondition
             try:
                 before_text = existing_raw.decode("utf-8")
             except UnicodeDecodeError:
                 return tool_error(self.name, f"{path!r} is not utf-8 text")
-        else:
-            parent = resolved.parent
-            if not self.exec_env.is_dir(parent):
-                return tool_error(
-                    self.name, f"parent directory not found for {path!r}"
-                )
 
         rel = workspace.relative(resolved)
         diff = compute_diff(before_text, content, rel)
@@ -339,26 +394,34 @@ class WriteFileTool:
         applied = False
         file_changes: list[dict[str, Any]] | None = None
         if self.mode is FsWriteMode.APPLY:
+            parent = resolved.parent
+            if not self.exec_env.is_dir(parent):
+                # Missing parents are created, not errored: a brand-new module
+                # usually starts with its first file.
+                try:
+                    self.exec_env.mkdir(parent)
+                except OSError as exc:
+                    return tool_error(self.name, f"mkdir failed: {exc}")
             try:
                 self.exec_env.write_bytes(resolved, body)
             except OSError as exc:
                 return tool_error(self.name, f"write failed: {exc}")
             applied = True
+            _record_mutation(ctx.file_read_registry, resolved, body)
             file_changes = [{"path": rel, "before": before_bytes}]
 
-        output: dict[str, Any] = {
-            "path": rel,
-            "applied": applied,
-            "before_sha256": file_hash(before_text),
-            "after_sha256": file_hash(content),
-            "bytes": len(body),
-            "added": added,
-            "removed": removed,
-            "diff_ref": ref_json(diff_ref),
-        }
-        output = fit_output_fields(
-            output, shrink_order=["path"], max_bytes=INLINE_OUTPUT_MAX_BYTES
-        )
+        if applied:
+            output = (
+                f"The file {rel} has been updated."
+                if overwrite
+                else f"File created successfully at: {rel}"
+            )
+        else:
+            verb_label = "overwrite of" if overwrite else "write to"
+            output = (
+                f"Proposed {verb_label} {rel} (dry run — nothing written; "
+                f"{len(body)} bytes, +{added}/-{removed})."
+            )
         summary_path = truncate_bytes(rel, SUMMARY_EMBED_MAX_BYTES)
         mode_label = "applied" if applied else "proposed"
         verb = "overwrite" if overwrite else "write"

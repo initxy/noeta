@@ -121,9 +121,12 @@ def test_three_file_edit_sequence_all_applied(tmp_path: Path) -> None:
         {"a.py": "alpha\n", "b.py": "beta\n", "c.py": "gamma\n"},
     )
     responses = [
-        _tool_call("e1", "edit", {"path": "a.py", "old": "alpha", "new": "A1"}),
-        _tool_call("e2", "edit", {"path": "b.py", "old": "beta", "new": "B1"}),
-        _tool_call("e3", "edit", {"path": "c.py", "old": "gamma", "new": "C1"}),
+        _tool_call("r1", "Read", {"file_path": "a.py"}),
+        _tool_call("e1", "Edit", {"file_path": "a.py", "old_string": "alpha", "new_string": "A1"}),
+        _tool_call("r2", "Read", {"file_path": "b.py"}),
+        _tool_call("e2", "Edit", {"file_path": "b.py", "old_string": "beta", "new_string": "B1"}),
+        _tool_call("r3", "Read", {"file_path": "c.py"}),
+        _tool_call("e3", "Edit", {"file_path": "c.py", "old_string": "gamma", "new_string": "C1"}),
         _end_turn(),
     ]
     result = _run(workspace, responses)
@@ -145,8 +148,9 @@ def test_three_file_edit_sequence_all_applied(tmp_path: Path) -> None:
 def test_same_file_two_edits_both_recorded(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path, {"x.py": "one\ntwo\n"})
     responses = [
-        _tool_call("e1", "edit", {"path": "x.py", "old": "one", "new": "ONE"}),
-        _tool_call("e2", "edit", {"path": "x.py", "old": "two", "new": "TWO"}),
+        _tool_call("r1", "Read", {"file_path": "x.py"}),
+        _tool_call("e1", "Edit", {"file_path": "x.py", "old_string": "one", "new_string": "ONE"}),
+        _tool_call("e2", "Edit", {"file_path": "x.py", "old_string": "two", "new_string": "TWO"}),
         _end_turn(),
     ]
     result = _run(workspace, responses)
@@ -177,9 +181,12 @@ def test_partial_failure_does_not_abort_or_roll_back(tmp_path: Path) -> None:
         },
     )
     responses = [
-        _tool_call("e1", "edit", {"path": "a.py", "old": "alpha", "new": "A1"}),
-        _tool_call("e2", "edit", {"path": "b.py", "old": "two", "new": "TWO"}),
-        _tool_call("e3", "edit", {"path": "c.py", "old": "gamma", "new": "C1"}),
+        _tool_call("r1", "Read", {"file_path": "a.py"}),
+        _tool_call("e1", "Edit", {"file_path": "a.py", "old_string": "alpha", "new_string": "A1"}),
+        _tool_call("r2", "Read", {"file_path": "b.py"}),
+        _tool_call("e2", "Edit", {"file_path": "b.py", "old_string": "two", "new_string": "TWO"}),
+        _tool_call("r3", "Read", {"file_path": "c.py"}),
+        _tool_call("e3", "Edit", {"file_path": "c.py", "old_string": "gamma", "new_string": "C1"}),
         _end_turn(),
     ]
     result = _run(workspace, responses)
@@ -199,14 +206,14 @@ def test_partial_failure_does_not_abort_or_roll_back(tmp_path: Path) -> None:
     # failed_edits carries the architect-pinned row shape.
     assert len(result.failed_edits) == 1
     failed = result.failed_edits[0]
-    assert failed["tool"] == "edit"
+    assert failed["tool"] == "Edit"
     assert failed["path"] == "b.py"
     assert failed["success"] is False
     # `reason` is the structured tail; `summary` keeps the verbatim
     # EventLog summary. Both surface the must-be-unique guidance.
-    assert "matches 2 times" in failed["reason"]
-    assert "must be unique" in failed["reason"]
-    assert failed["summary"].startswith("edit: ")
+    assert "Found 2 matches" in failed["reason"]
+    assert "replace_all" in failed["reason"]
+    assert failed["summary"].startswith("Edit: ")
     assert isinstance(failed["call_id"], str) and failed["call_id"]
 
 
@@ -218,7 +225,8 @@ def test_partial_failure_does_not_abort_or_roll_back(tmp_path: Path) -> None:
 def test_to_json_round_trips_failed_edits_field(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path, {"b.py": "two\ntwo\n"})
     responses = [
-        _tool_call("e1", "edit", {"path": "b.py", "old": "two", "new": "TWO"}),
+        _tool_call("r1", "Read", {"file_path": "b.py"}),
+        _tool_call("e1", "Edit", {"file_path": "b.py", "old_string": "two", "new_string": "TWO"}),
         _end_turn(),
     ]
     result = _run(workspace, responses)
@@ -232,7 +240,7 @@ def test_to_json_round_trips_failed_edits_field(tmp_path: Path) -> None:
     for required in ("tool", "path", "success", "reason", "summary", "call_id"):
         assert required in row, row
     assert row["success"] is False
-    assert row["tool"] == "edit"
+    assert row["tool"] == "Edit"
     assert row["path"] == "b.py"
     # JSON survives a full encode/decode round trip — the architect's
     # tooling contract.
@@ -243,7 +251,8 @@ def test_to_json_round_trips_failed_edits_field(tmp_path: Path) -> None:
 def test_to_json_failed_edits_empty_list_when_no_failures(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path, {"a.py": "alpha\n"})
     responses = [
-        _tool_call("e1", "edit", {"path": "a.py", "old": "alpha", "new": "A1"}),
+        _tool_call("r1", "Read", {"file_path": "a.py"}),
+        _tool_call("e1", "Edit", {"file_path": "a.py", "old_string": "alpha", "new_string": "A1"}),
         _end_turn(),
     ]
     result = _run(workspace, responses)
@@ -265,8 +274,9 @@ def test_multiple_failed_edits_all_recorded(tmp_path: Path) -> None:
         },
     )
     responses = [
-        _tool_call("e1", "edit", {"path": "b.py", "old": "two", "new": "TWO"}),
-        _tool_call("e2", "edit", {"path": "d.py", "old": "four", "new": "FOUR"}),
+        _tool_call("r1", "Read", {"file_path": "b.py"}),
+        _tool_call("e1", "Edit", {"file_path": "b.py", "old_string": "two", "new_string": "TWO"}),
+        _tool_call("e2", "Edit", {"file_path": "d.py", "old_string": "four", "new_string": "FOUR"}),
         _end_turn(),
     ]
     result = _run(workspace, responses)
@@ -275,4 +285,4 @@ def test_multiple_failed_edits_all_recorded(tmp_path: Path) -> None:
     assert {row["path"] for row in blob["failed_edits"]} == {"b.py", "d.py"}
     for row in blob["failed_edits"]:
         assert row["success"] is False
-        assert row["tool"] == "edit"
+        assert row["tool"] == "Edit"

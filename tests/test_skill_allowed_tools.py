@@ -101,8 +101,8 @@ def test_alias_map_is_exact_1to1() -> None:
         "Read": "Read",
         "Glob": "Glob",
         "Grep": "Grep",
-        "Write": "write",
-        "Edit": "edit",
+        "Write": "Write",
+        "Edit": "Edit",
         "Bash": "shell_run",
     }
 
@@ -111,7 +111,7 @@ def test_renamed_tools_map_to_themselves() -> None:
     # The tool surface now carries the reference names natively, so the
     # already-renamed entries are identity; the rest still translate.
     for claude, noeta in _CLAUDE_TO_NOETA_TOOL.items():
-        assert noeta in set(_CLAUDE_TO_NOETA_TOOL) | {"write", "edit", "shell_run"}
+        assert noeta in set(_CLAUDE_TO_NOETA_TOOL) | {"Write", "Edit", "shell_run"}
 
 
 def test_guard_unknown_claude_name_grants_nothing() -> None:
@@ -138,27 +138,27 @@ def test_partial_unknown_invalidates_whole_declaration() -> None:
 def test_granted_tool_allows_other_requires_approval() -> None:
     g = _guard(raw=(("s", "[Read]"),))
     assert _check(g, "Read", ("s",)) is Verdict.ALLOW
-    assert _check(g, "write", ("s",)) is Verdict.REQUIRE_APPROVAL
+    assert _check(g, "Write", ("s",)) is Verdict.REQUIRE_APPROVAL
 
 
 def test_deny_mode_fails_closed() -> None:
     g = _guard(raw=(("s", "[Read]"),), mode="deny")
     assert _check(g, "Read", ("s",)) is Verdict.ALLOW
-    assert _check(g, "write", ("s",)) is Verdict.DENY
+    assert _check(g, "Write", ("s",)) is Verdict.DENY
 
 
 def test_no_declaring_active_skill_enforcement_off() -> None:
     g = _guard(raw=(("s", "[Read]"),))
     # 's' is NOT active → no declaring active skill → enforcement off.
-    assert _check(g, "write", ("other",)) is Verdict.ALLOW
-    assert _check(g, "write", ()) is Verdict.ALLOW
+    assert _check(g, "Write", ("other",)) is Verdict.ALLOW
+    assert _check(g, "Write", ()) is Verdict.ALLOW
 
 
 def test_union_over_multiple_active_skills() -> None:
     g = _guard(raw=(("a", "[Read]"), ("b", "[Write]")))
     # union grants Read + write; Grep is outside → gated.
     assert _check(g, "Read", ("a", "b")) is Verdict.ALLOW
-    assert _check(g, "write", ("a", "b")) is Verdict.ALLOW
+    assert _check(g, "Write", ("a", "b")) is Verdict.ALLOW
     assert _check(g, "Grep", ("a", "b")) is Verdict.REQUIRE_APPROVAL
 
 
@@ -171,7 +171,7 @@ def test_malformed_declaration_grants_nothing_enforcement_on() -> None:
 
 def test_mode_off_never_gates() -> None:
     g = _guard(raw=(("s", "[Read]"),), mode="off")
-    assert _check(g, "write", ("s",)) is Verdict.ALLOW
+    assert _check(g, "Write", ("s",)) is Verdict.ALLOW
 
 
 def test_malformed_diagnostic_logged_once(caplog) -> None:  # type: ignore[no-untyped-def]
@@ -181,7 +181,7 @@ def test_malformed_diagnostic_logged_once(caplog) -> None:  # type: ignore[no-un
     g = _guard(raw=(("s", "bad: value"),))
     # Already resolved once; multiple checks must not re-log.
     _check(g, "read", ("s",))
-    _check(g, "write", ("s",))
+    _check(g, "Write", ("s",))
     warnings = [
         r for r in caplog.records if "unparseable allowed-tools" in r.getMessage()
     ]

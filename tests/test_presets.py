@@ -168,7 +168,6 @@ _CC_STYLE_TOOLS = (
     "read",
     "write",
     "edit",
-    "apply_patch",
     "grep",
     "glob",
     "shell_run",
@@ -248,7 +247,7 @@ def test_general_purpose_whitelist_is_full_builtin_set() -> None:
     names = {t.name for t in specs["general-purpose"].tools}
     assert names == set(builtin_tool_classes())
     # The previously-dropped search/patch/web tools are now present.
-    assert {"Grep", "Glob", "apply_patch", "webfetch"} <= names
+    assert {"Grep", "Glob", "webfetch"} <= names
     # gp's tool surface now equals main's (both the full built-in catalog).
     main_names = {t.name for t in specs["main"].tools}
     assert names == main_names

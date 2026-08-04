@@ -68,7 +68,7 @@ class CodeSessionResult:
 # ---------------------------------------------------------------------------
 
 
-_EDIT_TOOLS = frozenset({"edit", "write"})
+_EDIT_TOOLS = frozenset({"Edit", "Write"})
 _SHELL_TOOLS = frozenset({"shell_run", "git_status", "git_diff"})
 
 
@@ -111,40 +111,33 @@ def _collect_files_changed(
 ) -> tuple[dict[str, Any], ...]:
     """Summarise the files the edit tools touched.
 
-    ``applied=False`` rows are kept: a proposed diff is still part of the
-    session record."""
+    The tools' model-facing output is plain text now, so the machine fields
+    come from the durable records instead: ``path`` from the recorded
+    ``ToolCallStarted`` arguments and ``applied`` from the event summary's
+    ``(applied)`` / ``(…, applied)`` marker. ``applied=False`` rows are kept:
+    a proposed diff is still part of the session record."""
     out: list[dict[str, Any]] = []
-    for tool_name, output in _iter_tool_results(events, content_store):
-        if tool_name == "apply_patch":
-            # One batch tool result fans out to one row per edit in the batch.
-            for e in output.get("edits") or []:
-                if not isinstance(e, dict):
-                    continue
-                out.append(
-                    {
-                        "tool": "apply_patch",
-                        "path": e.get("path"),
-                        "applied": e.get("applied"),
-                        "added": e.get("added"),
-                        "removed": e.get("removed"),
-                        "before_sha256": e.get("before_sha256"),
-                        "after_sha256": e.get("after_sha256"),
-                    }
-                )
-            continue
-        if tool_name not in _EDIT_TOOLS:
-            continue
-        out.append(
-            {
-                "tool": tool_name,
-                "path": output.get("path"),
-                "applied": output.get("applied"),
-                "added": output.get("added"),
-                "removed": output.get("removed"),
-                "before_sha256": output.get("before_sha256"),
-                "after_sha256": output.get("after_sha256"),
-            }
-        )
+    call_id_to_started: dict[str, Any] = {}
+    for env in events:
+        if env.type == "ToolCallStarted":
+            call_id_to_started[env.payload.call_id] = env.payload
+        elif env.type == "ToolResultRecorded":
+            payload = env.payload
+            if not payload.success:
+                continue
+            started = call_id_to_started.get(payload.call_id)
+            if started is None or started.tool_name not in _EDIT_TOOLS:
+                continue
+            args = resolve_tool_call_arguments(started, content_store)
+            path_raw = args.get("file_path")
+            summary = payload.summary or ""
+            out.append(
+                {
+                    "tool": started.tool_name,
+                    "path": path_raw if isinstance(path_raw, str) else None,
+                    "applied": summary.rstrip().endswith("applied)"),
+                }
+            )
     return tuple(out)
 
 
@@ -182,7 +175,7 @@ def _collect_failed_edits(
             if payload.success:
                 continue
             tool_name = call_id_to_name.get(payload.call_id)
-            if tool_name != "edit":
+            if tool_name != "Edit":
                 continue
             started = call_id_to_started.get(payload.call_id)
             args = (
@@ -190,7 +183,7 @@ def _collect_failed_edits(
                 if started is not None
                 else {}
             )
-            path_raw = args.get("path")
+            path_raw = args.get("file_path")
             path = path_raw if isinstance(path_raw, str) else None
             reason = _extract_reason(payload, tool_name)
             out.append(

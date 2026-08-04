@@ -120,7 +120,7 @@ class HostConfig:
 
     ``write_roots`` answers "may this task write HERE, outside its workspace?"
     — ``task_id -> extra writable directories``, consulted per call by ``edit``
-    / ``write`` / ``apply_patch``. ``None`` keeps the single-root wall: an
+    / ``Write``. ``None`` keeps the single-root wall: an
     out-of-workspace write simply fails, which is the only honest answer for a
     host with nobody to ask. A host that *can* ask — suspending the call for an
     owner's ruling and remembering it as a durable grant — wires this so the

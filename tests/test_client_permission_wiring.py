@@ -80,9 +80,8 @@ _ALL_TOOL_NAMES = [
     "Read",
     "Glob",
     "Grep",
-    "write",
-    "edit",
-    "apply_patch",
+    "Write",
+    "Edit",
     "shell_run",
 ]
 
@@ -95,10 +94,10 @@ def test_approval_set_default_gates_high_risk_only():
     refs = _builtin_refs()
     got = _approval_set_for("default", refs)
     # The high-risk built-ins, and only those.
-    assert set(got) == {"write", "edit", "apply_patch", "shell_run"}
+    assert set(got) == {"Write", "Edit", "shell_run"}
 
 
-def test_approval_set_accept_edits_exempts_three_editors():
+def test_approval_set_accept_edits_exempts_the_editors():
     refs = _builtin_refs()
     got = _approval_set_for("acceptEdits", refs)
     # Edit-class tools are exempted; shell_run stays gated.
@@ -135,13 +134,13 @@ def test_default_mode_write_suspends_then_approve_runs(tmp_path: Path):
     ws = _ws(tmp_path)
     provider = FakeLLMProvider(
         responses=[
-            _tooluse("w1", "write", {"path": "new.txt", "content": "hi\n"}),
+            _tooluse("w1", "Write", {"file_path": "new.txt", "content": "hi\n"}),
             _end("done"),
         ]
     )
     options = Options(
         system_prompt=_PROMPT,
-        allowed_tools=("write",),
+        allowed_tools=("Write",),
         permission_mode="default",
     )
     client = Client(options, provider=provider, workspace_dir=ws,
@@ -172,13 +171,13 @@ def test_bypass_mode_write_runs_without_approval(tmp_path: Path):
     ws = _ws(tmp_path)
     provider = FakeLLMProvider(
         responses=[
-            _tooluse("w1", "write", {"path": "new.txt", "content": "hi\n"}),
+            _tooluse("w1", "Write", {"file_path": "new.txt", "content": "hi\n"}),
             _end("done"),
         ]
     )
     options = Options(
         system_prompt=_PROMPT,
-        allowed_tools=("write",),
+        allowed_tools=("Write",),
         permission_mode="bypassPermissions",
     )
     envelopes = query(
@@ -204,13 +203,13 @@ def test_accept_edits_write_runs_without_approval(tmp_path: Path):
     ws = _ws(tmp_path)
     provider = FakeLLMProvider(
         responses=[
-            _tooluse("w1", "write", {"path": "new.txt", "content": "hi\n"}),
+            _tooluse("w1", "Write", {"file_path": "new.txt", "content": "hi\n"}),
             _end("done"),
         ]
     )
     options = Options(
         system_prompt=_PROMPT,
-        allowed_tools=("write", "shell_run"),
+        allowed_tools=("Write", "shell_run"),
         permission_mode="acceptEdits",
     )
     envelopes = query(
@@ -224,13 +223,12 @@ def test_accept_edits_write_runs_without_approval(tmp_path: Path):
     assert "ToolCallApprovalRequested" not in types
     assert "TaskCompleted" in types
     started = [e for e in envelopes if e.type == "ToolCallStarted"]
-    assert any(e.payload.tool_name == "write" for e in started
+    assert any(e.payload.tool_name == "Write" for e in started
                if hasattr(e.payload, "tool_name"))
 
 
 def test_accept_edits_pure_function_still_gates_shell_run():
-    refs = _builtin_refs(["write", "edit", "apply_patch", "shell_run",
-                          "Read"])
+    refs = _builtin_refs(["Write", "Edit", "shell_run", "Read"])
     got = _approval_set_for("acceptEdits", refs)
     assert set(got) == {"shell_run"}
 
@@ -248,7 +246,7 @@ def test_bypass_mode_pure_function_stores_empty_gate(tmp_path: Path):
     )
     try:
         assert client._host.permission_mode == "bypassPermissions"
-        refs = [builtin_tool_ref(n) for n in ["write", "shell_run"]]
+        refs = [builtin_tool_ref(n) for n in ["Write", "shell_run"]]
         assert _approval_set_for("bypassPermissions", refs) == ()
     finally:
         client.shutdown()
@@ -263,7 +261,7 @@ def test_can_use_tool_allow_completes_and_records_resolver(tmp_path: Path):
     ws = _ws(tmp_path)
     provider = FakeLLMProvider(
         responses=[
-            _tooluse("w1", "write", {"path": "new.txt", "content": "hi\n"}),
+            _tooluse("w1", "Write", {"file_path": "new.txt", "content": "hi\n"}),
             _end("done"),
         ]
     )
@@ -275,7 +273,7 @@ def test_can_use_tool_allow_completes_and_records_resolver(tmp_path: Path):
 
     options = Options(
         system_prompt=_PROMPT,
-        allowed_tools=("write",),
+        allowed_tools=("Write",),
         permission_mode="default",
         can_use_tool=allow_all,
     )
@@ -287,7 +285,7 @@ def test_can_use_tool_allow_completes_and_records_resolver(tmp_path: Path):
         model="stub-model",
     )
     types = _types(envelopes)
-    assert calls == [("write", {"path": "new.txt", "content": "hi\n"})]
+    assert calls == [("Write", {"file_path": "new.txt", "content": "hi\n"})]
     resolved = [
         e.payload for e in envelopes
         if e.type == "ToolCallApprovalResolved"
@@ -298,7 +296,7 @@ def test_can_use_tool_allow_completes_and_records_resolver(tmp_path: Path):
     assert r.approved is True
     assert r.resolver == "can_use_tool"
     assert r.call_id == "w1"
-    assert r.tool_name == "write"
+    assert r.tool_name == "Write"
     assert "ToolResultRecorded" in types
     assert "TaskCompleted" in types
 
@@ -307,7 +305,7 @@ def test_can_use_tool_deny_records_and_tool_never_runs(tmp_path: Path):
     ws = _ws(tmp_path)
     provider = FakeLLMProvider(
         responses=[
-            _tooluse("w1", "write", {"path": "new.txt", "content": "hi\n"}),
+            _tooluse("w1", "Write", {"file_path": "new.txt", "content": "hi\n"}),
             _end("refusal handled"),
         ]
     )
@@ -317,7 +315,7 @@ def test_can_use_tool_deny_records_and_tool_never_runs(tmp_path: Path):
 
     options = Options(
         system_prompt=_PROMPT,
-        allowed_tools=("write",),
+        allowed_tools=("Write",),
         permission_mode="default",
         can_use_tool=deny_all,
     )
@@ -347,8 +345,8 @@ def test_can_use_tool_drains_multiple_approvals_in_series(tmp_path: Path):
     ws = _ws(tmp_path)
     provider = FakeLLMProvider(
         responses=[
-            _tooluse("w1", "write", {"path": "a.txt", "content": "a\n"}),
-            _tooluse("w2", "write", {"path": "b.txt", "content": "b\n"}),
+            _tooluse("w1", "Write", {"file_path": "a.txt", "content": "a\n"}),
+            _tooluse("w2", "Write", {"file_path": "b.txt", "content": "b\n"}),
             _end("done"),
         ]
     )
@@ -360,7 +358,7 @@ def test_can_use_tool_drains_multiple_approvals_in_series(tmp_path: Path):
 
     options = Options(
         system_prompt=_PROMPT,
-        allowed_tools=("write",),
+        allowed_tools=("Write",),
         permission_mode="default",
         can_use_tool=allow,
     )
@@ -372,7 +370,7 @@ def test_can_use_tool_drains_multiple_approvals_in_series(tmp_path: Path):
         model="stub-model",
     )
     # Both pending approvals were auto-resolved, no suspend leaks out.
-    assert calls == ["write", "write"]
+    assert calls == ["Write", "Write"]
     resolved = [
         e for e in envelopes if e.type == "ToolCallApprovalResolved"
     ]

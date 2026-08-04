@@ -44,7 +44,7 @@ from noeta.sdk import (
 #: Only the file-mutating built-in fs tools. Read-only tools are out of scope
 #: because this fence is about where writes land, and ``shell_run`` is out of
 #: scope because a shell escapes any path fence.
-MUTATING_FS_TOOLS: frozenset[str] = frozenset({"edit", "write", "apply_patch"})
+MUTATING_FS_TOOLS: frozenset[str] = frozenset({"Edit", "Write"})
 
 
 def _iter_target_paths(
@@ -57,18 +57,10 @@ def _iter_target_paths(
     ruled on arguments it cannot read would deny on tool-schema changes it has
     no opinion about.
     """
-    if tool_name in ("edit", "write"):
-        p = arguments.get("path")
+    if tool_name in ("Edit", "Write"):
+        p = arguments.get("file_path")
         if isinstance(p, str) and p:
             yield p
-    elif tool_name == "apply_patch":
-        edits = arguments.get("edits")
-        if isinstance(edits, list):
-            for edit in edits:
-                if isinstance(edit, Mapping):
-                    p = edit.get("path")
-                    if isinstance(p, str) and p:
-                        yield p
 
 
 def _lexical_abspath(raw: str, base: Path) -> Path:
