@@ -44,6 +44,7 @@ from noeta.builtins.providers.impl.codecs import (
     decode_tool_arguments,
     encode_tool_arguments,
     parse_retry_after,
+    render_tool_result_body,
 )
 
 
@@ -637,8 +638,7 @@ def _tool_message_to_openai(message: Message) -> list[dict[str, Any]]:
         _reject_image_block(block)  # a misroute must be loud, not silent
         if not isinstance(block, ToolResultBlock):
             continue
-        output = block.output
-        content = output if isinstance(output, str) else json.dumps(output)
+        content = render_tool_result_body(block.output, block.error)
         expanded.append(
             {
                 "role": "tool",

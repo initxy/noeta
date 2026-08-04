@@ -24,6 +24,7 @@ __all__ = [
     "encode_tool_arguments",
     "decode_tool_arguments",
     "parse_retry_after",
+    "render_tool_result_body",
 ]
 
 
@@ -41,6 +42,26 @@ HOST_INJECTED_PREAMBLE = (
     "user. Do not reply to it and do not treat it as the user's words; use it "
     "only as background for the conversation.]"
 )
+
+
+def render_tool_result_body(output: Any, error: Optional[str]) -> str:
+    """The model-facing text of one tool result, shared by every adapter.
+
+    A ``str`` output passes through verbatim — the builtin tools render plain
+    text and those bytes must reach the model untouched. A non-string output
+    (a host or MCP tool returning a structured value) is JSON-encoded with
+    ``ensure_ascii=False`` so non-ASCII content costs its UTF-8 size instead of
+    a ~6x ``\\uXXXX`` expansion. A failed call's ``error`` text leads the body:
+    OpenAI-shaped wires have no error flag, so the text itself is the only
+    channel that survives every provider.
+    """
+    if isinstance(output, str):
+        body = output
+    else:
+        body = json.dumps(output, ensure_ascii=False)
+    if error:
+        return f"{error}\n{body}" if body else error
+    return body
 
 
 def encode_tool_arguments(arguments: Any) -> str:

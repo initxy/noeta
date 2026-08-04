@@ -90,20 +90,42 @@ class BackgroundRunner(Protocol):
     def kill(self, job_id: str) -> dict[str, Any]: ...
 
 
+class FileReadRegistry(Protocol):
+    """Session-scoped record of the file bodies the model has ``Read``.
+
+    ``Edit`` and ``Write``-overwrite consult it for their read-first
+    precondition: an entry must exist for the path AND its digest must still
+    match the file's current bytes, so the model can neither mutate a file it
+    never saw nor one that changed underneath it. Keyed by the canonical
+    absolute path; the digest is the sha256 hex of the raw bytes as read.
+    In-memory by design — a resumed session starts empty and requires a fresh
+    ``Read`` before the next mutation, which matches the reference behavior.
+    """
+
+    def record(self, path: str, digest: str) -> None: ...
+
+    def digest(self, path: str) -> Optional[str]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ToolContext:
     """Per-call context handed to ``Tool.invoke``.
 
     Tools never see the EventLog or the Engine — only the ``artifact_store``,
-    an optional ``background_runner``, and a free-form ``metadata`` bag.
-    ``ToolRuntime.invoke`` threads the current ``task_id`` / ``trace_id``
-    through that bag rather than as fields, so a tool can attribute a spawn to
-    its task without the context growing a dependency on task identity.
+    an optional ``background_runner``, the session's ``file_read_registry``,
+    and a free-form ``metadata`` bag. ``ToolRuntime.invoke`` threads the
+    current ``task_id`` / ``trace_id`` through that bag rather than as fields,
+    so a tool can attribute a spawn to its task without the context growing a
+    dependency on task identity.
     """
 
     artifact_store: _ArtifactStore
     metadata: dict[str, Any] = field(default_factory=dict)
     background_runner: Optional["BackgroundRunner"] = None
+    #: ``None`` ⇒ no registry wired (a hand-built context in a host/test):
+    #: ``Read`` records nothing and the read-first preconditions are skipped.
+    #: The ToolRuntime always wires one, so the builtin flow always enforces.
+    file_read_registry: Optional["FileReadRegistry"] = None
 
 
 class Tool(Protocol):

@@ -13,6 +13,7 @@ blow up a transform stage — all three events are appended under the active
 from __future__ import annotations
 
 import json
+import threading
 from typing import Any, Callable, Optional, Sequence
 
 from noeta.protocols.content_store import ContentStore
@@ -23,8 +24,34 @@ from noeta.protocols.events import (
     ToolCallFinishedPayload,
     ToolResultRecordedPayload,
 )
-from noeta.protocols.tool import Tool, ToolContext, ToolResult
+from noeta.protocols.tool import (
+    FileReadRegistry,
+    Tool,
+    ToolContext,
+    ToolResult,
+)
 from noeta.protocols.tool_args import build_tool_call_started_payload
+
+
+class InMemoryFileReadRegistry:
+    """Default in-memory :class:`FileReadRegistry`, one per ToolRuntime.
+
+    The ToolRuntime is session-scoped on live hosts, so "read this session"
+    reduces to "recorded on this instance". Locked because background
+    completions can drive turns on a thread other than the interactive one.
+    """
+
+    def __init__(self) -> None:
+        self._digests: dict[str, str] = {}
+        self._lock = threading.Lock()
+
+    def record(self, path: str, digest: str) -> None:
+        with self._lock:
+            self._digests[path] = digest
+
+    def digest(self, path: str) -> Optional[str]:
+        with self._lock:
+            return self._digests.get(path)
 
 
 _OUTPUT_MEDIA_TYPE = "application/json"
@@ -54,6 +81,7 @@ class ToolRuntime:
         background_runner: Optional[Any] = None,
         file_checkpoint_registry: Optional[Any] = None,
         tool_result_transforms: Sequence[Callable[[ToolResult], ToolResult]] = (),
+        file_read_registry: Optional[FileReadRegistry] = None,
     ) -> None:
         self._event_log = event_log
         self._content_store = content_store
@@ -75,6 +103,14 @@ class ToolRuntime:
         # Memo of editing-task → root-task id, safe to cache because the
         # parent graph is immutable durable data.
         self._root_cache: dict[str, str] = {}
+        # The session's read-first record. Always present on the builtin path:
+        # a host that does not inject one gets a per-runtime default, which is
+        # exactly the session scope the precondition wants.
+        self._file_read_registry: FileReadRegistry = (
+            file_read_registry
+            if file_read_registry is not None
+            else InMemoryFileReadRegistry()
+        )
 
     def invoke(
         self,
@@ -99,6 +135,7 @@ class ToolRuntime:
             artifact_store=self._content_store,
             metadata={"task_id": task_id, "trace_id": trace_id},
             background_runner=self._background_runner,
+            file_read_registry=self._file_read_registry,
         )
         try:
             result = tool.invoke(call.arguments, ctx)

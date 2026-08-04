@@ -736,7 +736,13 @@ def test_outbound_thinking_block_round_trips_into_reasoning_fields() -> None:
     ]
 
     assert msgs[2] == {"role": "tool", "tool_call_id": "call_x", "content": "ok"}
-    assert msgs[3] == {"role": "tool", "tool_call_id": "call_y", "content": "bad"}
+    # A failed call's error text leads the body — OpenAI wires have no
+    # is_error flag, so the text is the only channel that carries the failure.
+    assert msgs[3] == {
+        "role": "tool",
+        "tool_call_id": "call_y",
+        "content": "boom\nbad",
+    }
 
 
 @respx.mock

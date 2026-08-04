@@ -49,6 +49,7 @@ from noeta.builtins.providers.impl.codecs import (
     decode_tool_arguments,
     encode_tool_arguments,
     parse_retry_after,
+    render_tool_result_body,
 )
 
 
@@ -1011,8 +1012,9 @@ def _tool_message_to_responses(
     """Each ``ToolResultBlock`` on a tool-role message → one
     ``function_call_output`` item.
 
-    ``output`` is kept as-is if already a str; otherwise JSON-serialized (same
-    convention as the Chat-compatible adapter).
+    ``output`` renders through the shared :func:`render_tool_result_body`
+    convention (string outputs verbatim, ``ensure_ascii=False`` for structured
+    ones, a failed call's error text leading the body).
 
     Tool-result images (e.g. the ``read`` tool reading a ``.png``): when
     ``block.images`` is non-empty the ``output`` may become a content-part
@@ -1022,8 +1024,7 @@ def _tool_message_to_responses(
     for block in message.content:
         if not isinstance(block, ToolResultBlock):
             continue
-        output = block.output
-        rendered = output if isinstance(output, str) else json.dumps(output)
+        rendered = render_tool_result_body(block.output, block.error)
         items.append(
             {
                 "type": "function_call_output",

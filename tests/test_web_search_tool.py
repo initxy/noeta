@@ -247,7 +247,7 @@ def test_web_search_large_result_truncates_inline_keeps_full_artifact() -> None:
         SearchResult(
             title=f"Result {i}",
             url=f"https://example.com/{i}",
-            snippet="word here " * 2000,
+            snippet="word here " * 8000,
         )
         for i in range(20)
     ]
