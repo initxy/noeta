@@ -107,7 +107,7 @@ def test_as_messages_happy_path_contains_four_view_types(
     options = Options(
         system_prompt=_PROMPT,
         name="main",
-        allowed_tools=("read", "edit"),
+        allowed_tools=("Read", "edit"),
         permission_mode="bypassPermissions",
     )
     view = query(

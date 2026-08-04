@@ -47,7 +47,7 @@ def run(*, provider=None, workspace_dir: Path, model: str = "stub-model") -> str
     options = Options(
         system_prompt="You are a concise assistant.",
         name="main",
-        allowed_tools=("read",),
+        allowed_tools=("Read",),
         permission_mode="bypassPermissions",
     )
 

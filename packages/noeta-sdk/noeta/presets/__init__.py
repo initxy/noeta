@@ -97,9 +97,9 @@ _WEB_PROMPT = _load_prompt("web")
 #: find / cat …); "no writes" is enforced by the prompt, with the approval gate
 #: on ``high``-risk shell as the backstop.
 _SCOUT_TOOLS = (
-    "glob",
-    "grep",
-    "read",
+    "Glob",
+    "Grep",
+    "Read",
     "shell_kill",
     "shell_poll",
     "shell_run",
@@ -115,9 +115,9 @@ _SCOUT_TOOLS = (
 _GENERAL_PURPOSE_TOOLS = (
     "apply_patch",
     "edit",
-    "glob",
-    "grep",
-    "read",
+    "Glob",
+    "Grep",
+    "Read",
     "shell_kill",
     "shell_poll",
     "shell_run",
@@ -135,9 +135,9 @@ _GENERAL_PURPOSE_TOOLS = (
 #: ``apply_patch`` either — a browser worker writes fresh notes rather than
 #: batch-editing a codebase.
 _WEB_TOOLS = (
-    "glob",
-    "grep",
-    "read",
+    "Glob",
+    "Grep",
+    "Read",
     "shell_kill",
     "shell_poll",
     "shell_run",

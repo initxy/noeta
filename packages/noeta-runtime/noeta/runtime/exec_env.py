@@ -156,6 +156,13 @@ class ExecEnv(Protocol):
 
     def is_symlink(self, path: Path) -> bool: ...
 
+    def mtime(self, path: Path) -> float:
+        """Modification time (seconds since epoch), ``0.0`` when the backend
+        cannot stat it. ``Glob`` sorts newest-first on this; a backend without
+        cheap stat may return a constant and degrade to the alphabetical
+        tiebreak."""
+        ...
+
     # -- directory walk ----------------------------------------------------
     def glob(self, base: Path, pattern: str) -> Iterable[Path]:
         """Match :meth:`pathlib.Path.glob` semantics exactly."""
@@ -269,6 +276,12 @@ class LocalExecEnv:
 
     def is_symlink(self, path: Path) -> bool:
         return path.is_symlink()
+
+    def mtime(self, path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
 
     def glob(self, base: Path, pattern: str) -> Iterable[Path]:
         return base.glob(pattern)

@@ -135,9 +135,9 @@ def test_default_agent_exposes_full_fs_pack() -> None:
     materialises it when a search API key is configured.
     """
     expected = {
-        "read",
-        "glob",
-        "grep",
+        "Read",
+        "Glob",
+        "Grep",
         "edit",
         "write",
         "apply_patch",

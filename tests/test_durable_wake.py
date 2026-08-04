@@ -456,8 +456,8 @@ def test_approval_resume_consumes_wake(tmp_path: Any) -> None:
     def _tool(call_id: str) -> Any:
         return LLMResponse(
             stop_reason="tool_use",
-            content=[ToolUseBlock(call_id=call_id, tool_name="read",
-                                  arguments={"path": "x.py"})],
+            content=[ToolUseBlock(call_id=call_id, tool_name="Read",
+                                  arguments={"file_path": "x.py"})],
             usage=Usage(uncached=1, output=1), raw={"id": call_id},
         )
 
@@ -466,7 +466,7 @@ def test_approval_resume_consumes_wake(tmp_path: Any) -> None:
     (ws / "x.py").write_text("foo\n")
     host, driver = _coding_session(
         ws, [_tool("c1"), _end_turn("done")],
-        require_approval_tools=("read",),
+        require_approval_tools=("Read",),
     )
     dispatcher = host.dispatcher
     out = driver.start(goal="g", agent="main")

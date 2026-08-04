@@ -17,9 +17,9 @@ MANIFEST = PluginManifest(
     name="fs",
     requires_noeta=">=0.4",
     contributions=(
-        c("tool", "read", "noeta.builtins.fs.impl.read:ReadFileTool"),
-        c("tool", "glob", "noeta.builtins.fs.impl.read:GlobTool"),
-        c("tool", "grep", "noeta.builtins.fs.impl.read:GrepTool"),
+        c("tool", "Read", "noeta.builtins.fs.impl.read:ReadFileTool"),
+        c("tool", "Glob", "noeta.builtins.fs.impl.read:GlobTool"),
+        c("tool", "Grep", "noeta.builtins.fs.impl.read:GrepTool"),
         c("tool", "edit", "noeta.builtins.fs.impl.edit:ReplaceTextTool"),
         c("tool", "write", "noeta.builtins.fs.impl.edit:WriteFileTool"),
         c("tool", "apply_patch", "noeta.builtins.fs.impl.patch:ApplyPatchTool"),

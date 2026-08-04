@@ -359,7 +359,7 @@ def test_discovery_callable_fills_mapping_and_builds_payloads(
         render_text=render_instructions_text,
     )
     task = Task(task_id="t1")
-    call = ToolCall(tool_name="read", arguments={"path": "src/pkg/x.py"}, call_id="c")
+    call = ToolCall(tool_name="Read", arguments={"file_path": "src/pkg/x.py"}, call_id="c")
     payloads = discover(task, call, ToolResult(success=True))
     assert [p.name for p in payloads] == ["src/AGENTS.md"]
     assert payloads[0].kind == "instructions"
@@ -391,14 +391,14 @@ def test_discovery_callable_ignores_non_read_failures_and_outside(
     )
     task = Task(task_id="t1")
     read_call = ToolCall(
-        tool_name="read", arguments={"path": "src/x.py"}, call_id="c"
+        tool_name="Read", arguments={"file_path": "src/x.py"}, call_id="c"
     )
     grep_call = ToolCall(
-        tool_name="grep", arguments={"path": "src/x.py"}, call_id="c"
+        tool_name="Grep", arguments={"path": "src/x.py"}, call_id="c"
     )
     outside_call = ToolCall(
-        tool_name="read",
-        arguments={"path": str(outside / "x.py")},
+        tool_name="Read",
+        arguments={"file_path": str(outside / "x.py")},
         call_id="c",
     )
     assert discover(task, grep_call, ToolResult(success=True)) == []
@@ -417,7 +417,7 @@ def _read_call(path: str, call_id: str = "r1") -> LLMResponse:
         stop_reason="tool_use",
         content=[
             ToolUseBlock(
-                call_id=call_id, tool_name="read", arguments={"path": path}
+                call_id=call_id, tool_name="Read", arguments={"file_path": path}
             )
         ],
         usage=Usage(uncached=1, output=1),
@@ -457,7 +457,7 @@ def _build_discovery_engine(ws: Path, responses: list[LLMResponse]):
             **default_factory_kwargs(),
             workspace_dir=ws,
             system_prompt="sys",
-            allowed_tools=frozenset({"read"}),
+            allowed_tools=frozenset({"Read"}),
             content_store=cs,
             model="stub-model",
             compaction=COMPACTION_OFF,
@@ -631,7 +631,7 @@ def test_discovery_off_by_default_no_seams(tmp_path: Path) -> None:
         **default_factory_kwargs(),
         workspace_dir=ws,
         system_prompt="sys",
-        allowed_tools=frozenset({"read"}),
+        allowed_tools=frozenset({"Read"}),
         content_store=InMemoryContentStore(),
         model="stub-model",
         compaction=COMPACTION_OFF,

@@ -81,7 +81,7 @@ from noeta.sdk import Client, Options
 options = Options(
     system_prompt="You are a weather assistant.",
     name="weather-bot",
-    allowed_tools=("read", "grep", fetch_weather),
+    allowed_tools=("Read", "Grep", fetch_weather),
 )
 
 client = Client(options, provider=my_provider, workspace_dir="./")

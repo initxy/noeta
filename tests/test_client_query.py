@@ -119,7 +119,7 @@ def test_query_happy_path_builtin_tools(tmp_path: Path) -> None:
     options = Options(
         system_prompt=_PROMPT,
         name="main",
-        allowed_tools=("read", "edit"),
+        allowed_tools=("Read", "edit"),
         permission_mode="bypassPermissions",
     )
     compiled_main, _ = compile_options(options)
@@ -296,13 +296,13 @@ def test_options_vs_handwritten_spec_identity() -> None:
     hand-written one with the same fields. Proves the pure-compile path is just
     identity sugar."""
     tools = (
-        builtin_tool_ref("read"),
+        builtin_tool_ref("Read"),
         builtin_tool_ref("edit"),
     )
     options = Options(
         system_prompt=_PROMPT,
         name="main",
-        allowed_tools=("read", "edit"),
+        allowed_tools=("Read", "edit"),
         budget=BudgetSpec(max_iterations=5),
     )
     compiled, descendants = compile_options(options)

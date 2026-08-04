@@ -51,7 +51,7 @@ def _base_options() -> Options:
     return Options(
         system_prompt="You are a test agent.",
         name="main",
-        allowed_tools=("read", my_tool),
+        allowed_tools=("Read", my_tool),
         skills=("search", "plan"),
         budget=BudgetSpec(max_iterations=42),
         plugins=DEFAULT_PLUGINS + ("todo_write",),
@@ -84,7 +84,7 @@ def test_substantive_system_prompt_changes_identity() -> None:
 
 def test_substantive_tools_changes_identity() -> None:
     base, _ = compile_options(_base_options())
-    mutated, _ = compile_options(dataclasses.replace(_base_options(), allowed_tools=("read", my_tool, "glob")))
+    mutated, _ = compile_options(dataclasses.replace(_base_options(), allowed_tools=("Read", my_tool, "Glob")))
     assert base != mutated
 
 
@@ -129,10 +129,10 @@ def test_mixed_tools_refs_correct_and_cross_package_consistent() -> None:
     main, _ = compile_options(_base_options())
 
     # AgentSpec normalises tool order, so compare as a set.
-    assert {t.name for t in main.tools} == {"my_tool", "read"}
+    assert {t.name for t in main.tools} == {"my_tool", "Read"}
 
     my_ref = next(t for t in main.tools if t.name == "my_tool")
-    read_ref = next(t for t in main.tools if t.name == "read")
+    read_ref = next(t for t in main.tools if t.name == "Read")
 
     assert my_ref == my_tool.ref
     assert my_ref == ToolRef(name="my_tool", version="2", risk_level="medium")
@@ -140,7 +140,7 @@ def test_mixed_tools_refs_correct_and_cross_package_consistent() -> None:
     # Both tables must declare the same ref for a shared built-in name; drift
     # here goes unnoticed until an agent fingerprint moves.
     roster_spec = official_specs()["main"]
-    roster_read = next(t for t in roster_spec.tools if t.name == "read")
+    roster_read = next(t for t in roster_spec.tools if t.name == "Read")
     assert read_ref == roster_read
 
 
@@ -154,7 +154,7 @@ def test_unknown_builtin_name_raises_keyerror() -> None:
     msg = str(exc.value)
     assert "not_a_tool" in msg
     # Enumeration must include every builtin (spot-check two representatives).
-    assert "read" in msg
+    assert "Read" in msg
     assert "shell_run" in msg
 
 
@@ -234,7 +234,7 @@ def test_builtin_tool_ref_inventory_complete() -> None:
     # ``tools=None`` expands to — so membership is a behaviour, not a detail.
     expected_names = {
         # fs read
-        "read", "glob", "grep",
+        "Read", "Glob", "Grep",
         # fs edit
         "edit", "write", "apply_patch",
         # fs shell — the background triplet is catalogued together so
@@ -393,12 +393,12 @@ def test_agents_child_tools_explicit_list() -> None:
     defn = AgentDefinition(
         description="d",
         prompt="p",
-        tools=("read", "glob"),
+        tools=("Read", "Glob"),
     )
     _, kids = compile_options(
         Options(system_prompt="root", name="main", agents={"c": defn})
     )
-    assert {t.name for t in kids[0].tools} == {"read", "glob"}
+    assert {t.name for t in kids[0].tools} == {"Read", "Glob"}
 
 
 # ---------------------------------------------------------------------------
@@ -419,9 +419,9 @@ def test_builtin_tool_whitelist_is_pinned() -> None:
     assert set(builtin_tool_classes()) == {
         "apply_patch",
         "edit",
-        "glob",
-        "grep",
-        "read",
+        "Glob",
+        "Grep",
+        "Read",
         "shell_kill",
         "shell_poll",
         "shell_run",
@@ -438,10 +438,10 @@ def test_allowed_tools_explicit_list() -> None:
     main, _ = compile_options(
         Options(
             system_prompt="hi",
-            allowed_tools=("read", "glob", my_tool),
+            allowed_tools=("Read", "Glob", my_tool),
         )
     )
-    assert {t.name for t in main.tools} == {"read", "glob", "my_tool"}
+    assert {t.name for t in main.tools} == {"Read", "Glob", "my_tool"}
 
 
 def test_allowed_tools_empty_tuple_means_no_tools() -> None:
@@ -477,25 +477,25 @@ def test_disallowed_tools_with_explicit_allowed_tools() -> None:
     main, _ = compile_options(
         Options(
             system_prompt="hi",
-            allowed_tools=("read", "glob", "apply_patch", "grep"),
-            disallowed_tools=("glob", "grep"),
+            allowed_tools=("Read", "Glob", "apply_patch", "Grep"),
+            disallowed_tools=("Glob", "Grep"),
         )
     )
-    assert {t.name for t in main.tools} == {"read", "apply_patch"}
+    assert {t.name for t in main.tools} == {"Read", "apply_patch"}
 
 
 def test_allowed_tools_dedup_preserves_first_occurrence() -> None:
     main, _ = compile_options(
         Options(
             system_prompt="hi",
-            allowed_tools=("read", "glob", "read", my_tool, my_tool),
+            allowed_tools=("Read", "Glob", "Read", my_tool, my_tool),
         )
     )
     # Order preserved on first occurrence; AgentSpec __post_init__ re-sorts
     # alphabetically, so we just assert count + name set.
     names = [t.name for t in main.tools]
     assert len(names) == 3
-    assert set(names) == {"read", "glob", "my_tool"}
+    assert set(names) == {"Read", "Glob", "my_tool"}
 
 
 # ---------------------------------------------------------------------------
@@ -632,11 +632,11 @@ def test_purity_new_fields_equal_inputs_equal_spec() -> None:
             "coder": AgentDefinition(
                 description="Writes code.",
                 prompt="You write code.",
-                tools=("read",),
+                tools=("Read",),
             )
         },
-        allowed_tools=("read", "glob"),
-        disallowed_tools=("glob",),
+        allowed_tools=("Read", "Glob"),
+        disallowed_tools=("Glob",),
         permission_mode="acceptEdits",
         max_turns=42,
     )

@@ -35,7 +35,7 @@ from noeta.storage.memory import InMemoryContentStore
 # A whitelist carrying BOTH edit candidates (edit + apply_patch) so the
 # assembly-layer mutex actually has both to choose between.
 _FULL_EDIT_TOOLS = frozenset(
-    {"read", "glob", "grep", "edit", "write", "apply_patch", "shell_run"}
+    {"Read", "Glob", "Grep", "edit", "write", "apply_patch", "shell_run"}
 )
 
 
@@ -148,7 +148,7 @@ def test_mutex_filter_only_touches_edit_pair() -> None:
     # The read-only + write + shell tools are unaffected by the family swap.
     a = _tool_names(model="claude-opus-4-8")
     o = _tool_names(model="gpt-4o")
-    unaffected = {"read", "glob", "grep", "write", "shell_run"}
+    unaffected = {"Read", "Glob", "Grep", "write", "shell_run"}
     assert unaffected <= a
     assert unaffected <= o
 
@@ -156,10 +156,10 @@ def test_mutex_filter_only_touches_edit_pair() -> None:
 def test_readonly_whitelist_never_grows_an_edit_tool() -> None:
     # An explore-style whitelist (read/grep/glob) gains no edit tool from the
     # filter on EITHER family — the mutex only removes, never adds.
-    readonly = frozenset({"read", "glob", "grep"})
+    readonly = frozenset({"Read", "Glob", "Grep"})
     for model in ("claude-opus-4-8", "gpt-4o", "gpt-test"):
         names = _tool_names(model=model, allowed=readonly)
-        assert names == {"read", "glob", "grep"}
+        assert names == {"Read", "Glob", "Grep"}
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +175,7 @@ def test_model_swap_does_not_touch_agent_definition_or_prompt() -> None:
             "worker": AgentDefinition(
                 description="worker",
                 prompt="do the task",
-                tools=("read", "edit", "apply_patch"),
+                tools=("Read", "edit", "apply_patch"),
             )
         },
     )

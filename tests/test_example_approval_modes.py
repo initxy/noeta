@@ -105,20 +105,20 @@ def test_chat_mode_denies_all_tool_calls():
 
 def test_approve_mode_requires_approval_on_all():
     guard = _guard(mode="approve")
-    assert _verdict(guard, "read") is Verdict.REQUIRE_APPROVAL
+    assert _verdict(guard, "Read") is Verdict.REQUIRE_APPROVAL
     assert _verdict(guard, "write") is Verdict.REQUIRE_APPROVAL
 
 
 def test_default_mode_is_approve():
     # Empty config → default "approve" (require approval on every tool).
     guard = _guard()
-    assert _verdict(guard, "read") is Verdict.REQUIRE_APPROVAL
+    assert _verdict(guard, "Read") is Verdict.REQUIRE_APPROVAL
     assert _verdict(guard, "write") is Verdict.REQUIRE_APPROVAL
 
 
 def test_smart_approve_allows_low_risk_asks_otherwise():
     guard = _guard(mode="smart_approve")
-    for low in ("read", "grep", "glob", "ls"):
+    for low in ("Read", "Grep", "Glob", "ls"):
         assert _verdict(guard, low) is Verdict.ALLOW
     assert _verdict(guard, "write") is Verdict.REQUIRE_APPROVAL
     assert _verdict(guard, "shell_run") is Verdict.REQUIRE_APPROVAL
@@ -159,10 +159,10 @@ def test_override_never_beats_auto_allow():
 
 
 def test_override_ask_beats_smart_approve_allow():
-    guard = _guard(mode="smart_approve", overrides={"read": "ask"})
+    guard = _guard(mode="smart_approve", overrides={"Read": "ask"})
     # 'read' is low-risk (would allow) but the override forces approval.
-    assert _verdict(guard, "read") is Verdict.REQUIRE_APPROVAL
-    assert _verdict(guard, "grep") is Verdict.ALLOW  # unaffected low-risk tool
+    assert _verdict(guard, "Read") is Verdict.REQUIRE_APPROVAL
+    assert _verdict(guard, "Grep") is Verdict.ALLOW  # unaffected low-risk tool
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +235,7 @@ def test_process_hooks_resolves_env_configured_mode():
         guard = _sole_guard(pset)
     finally:
         os.environ.pop("NOETA_APPROVAL_MODE", None)
-    assert _verdict(guard, "read") is Verdict.ALLOW  # low-risk under smart_approve
+    assert _verdict(guard, "Read") is Verdict.ALLOW  # low-risk under smart_approve
     assert _verdict(guard, "shell_run") is Verdict.REQUIRE_APPROVAL
 
 
@@ -243,5 +243,5 @@ def test_shipped_default_mode_is_approve():
     # No env ⇒ the shipped guard defaults to "approve" (require approval on all).
     pset = load_plugins(builtins=False, modules=[str(_PLUGIN_PATH)])
     guard = _sole_guard(pset)
-    assert _verdict(guard, "read") is Verdict.REQUIRE_APPROVAL
+    assert _verdict(guard, "Read") is Verdict.REQUIRE_APPROVAL
     assert _verdict(guard, "write") is Verdict.REQUIRE_APPROVAL

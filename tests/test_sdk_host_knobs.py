@@ -379,7 +379,7 @@ def test_sdk_host_plan_pack_has_no_write(tmp_path: Path) -> None:
     for absent in ("write", "edit", "apply_patch"):
         assert absent not in engine._tools
     # Read-only scout tools (incl. read-only shell) are present.
-    for present in ("read", "glob", "grep", "shell_run"):
+    for present in ("Read", "Glob", "Grep", "shell_run"):
         assert present in engine._tools
 
 

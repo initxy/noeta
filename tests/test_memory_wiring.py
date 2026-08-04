@@ -52,7 +52,7 @@ def _inputs(ws: Path, **kwargs):
         **default_factory_kwargs(),
         workspace_dir=ws,
         system_prompt="p",
-        allowed_tools=frozenset({"read"}),
+        allowed_tools=frozenset({"Read"}),
         content_store=__import__("noeta.storage.memory", fromlist=["InMemoryContentStore"]).InMemoryContentStore(),
         model="stub-model",
         compaction=COMPACTION_OFF,
@@ -122,7 +122,7 @@ def test_memory_enabled_adds_tools_in_fixed_order(tmp_path: Path) -> None:
     ]
     assert all(name in names for name in pack)
     # Order contract: fs(read) → memory(write→read→search→archive).
-    assert names.index("read") < names.index(MEMORY_WRITE_TOOL_NAME)
+    assert names.index("Read") < names.index(MEMORY_WRITE_TOOL_NAME)
     assert [names.index(n) for n in pack] == sorted(
         names.index(n) for n in pack
     )

@@ -224,7 +224,7 @@ def test_explore_and_plan_whitelist_is_all_but_write_family() -> None:
     # CC alignment: Explore and Plan share the same read-mostly whitelist —
     # every built-in tool EXCEPT the write family (edit/write/apply_patch).
     # That is glob/grep/read + the shell triplet + webfetch.
-    expected = {"glob", "grep", "read", "shell_run", "shell_poll", "shell_kill", "webfetch"}
+    expected = {"Glob", "Grep", "Read", "shell_run", "shell_poll", "shell_kill", "webfetch"}
     specs = official_specs()
     for name in ("explore", "plan"):
         names = {t.name for t in specs[name].tools}
@@ -248,7 +248,7 @@ def test_general_purpose_whitelist_is_full_builtin_set() -> None:
     names = {t.name for t in specs["general-purpose"].tools}
     assert names == set(builtin_tool_classes())
     # The previously-dropped search/patch/web tools are now present.
-    assert {"grep", "glob", "apply_patch", "webfetch"} <= names
+    assert {"Grep", "Glob", "apply_patch", "webfetch"} <= names
     # gp's tool surface now equals main's (both the full built-in catalog).
     main_names = {t.name for t in specs["main"].tools}
     assert names == main_names

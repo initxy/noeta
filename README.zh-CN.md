@@ -35,7 +35,7 @@ provider = FakeLLMProvider(responses=[
 
 result = query(
     Options(system_prompt="You are concise.",
-            allowed_tools=("read",),
+            allowed_tools=("Read",),
             permission_mode="bypassPermissions"),
     goal="Say hello.",
     provider=provider,
@@ -131,7 +131,7 @@ def get_weather(city: str) -> str:
     """Get the current weather for a city."""
     return f"{city}: sunny, 22°C"
 
-opts = Options(system_prompt="…", allowed_tools=("read", get_weather))
+opts = Options(system_prompt="…", allowed_tools=("Read", get_weather))
 ```
 
 `allowed_tools` 里工具名和工具对象可以并排放，所以自定义工具无需任何注册步骤就能加入内置工具集。

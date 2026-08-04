@@ -465,7 +465,7 @@ def _fs_spec() -> AgentSpec:
         policy=ComponentRef("react", "1"),
         composer=ComponentRef("three_segment", "v3"),
         tools=(
-            ToolRef(name="read", risk_level="low", version="1"),
+            ToolRef(name="Read", risk_level="low", version="1"),
             ToolRef(name="write", risk_level="high", version="1"),
             ToolRef(name="shell_run", risk_level="high", version="1"),
         ),
@@ -515,7 +515,7 @@ def test_host_without_config_uses_local_backend(tmp_path: Path) -> None:
     host = _make_host(tmp_path)
     assert host._sandbox is None
     engine = _build(host, task_id="t1")
-    read = engine._tools["read"]
+    read = engine._tools["Read"]
     assert isinstance(read.exec_env, LocalExecEnv)
     assert read.workspace.lexical is False
 
@@ -532,12 +532,12 @@ def test_host_with_attach_config_routes_fs_tools_to_container(
     assert host._sandbox is not None
     # No explicit ref → the attach path's default container.
     engine = _build(host, task_id="t1")
-    backend = engine._tools["read"].exec_env
-    for name in ("read", "write", "shell_run"):
+    backend = engine._tools["Read"].exec_env
+    for name in ("Read", "write", "shell_run"):
         assert engine._tools[name].exec_env is backend
     assert backend.base_url == "http://box:8080"
     # the fs root is the lexical CONTAINER workdir, not the host workspace_dir
-    read = engine._tools["read"]
+    read = engine._tools["Read"]
     assert read.workspace.lexical is True
     assert read.workspace.root == Path("/c/ws")
 
@@ -553,7 +553,7 @@ def test_host_with_provider_routes_to_per_session_container(
     ref = host.allocate_exec_env("task-root", str(tmp_path / "ws"))
     assert provider.allocated  # a container was provisioned
     engine = _build(host, task_id="task-root", exec_env_ref=ref)
-    read = engine._tools["read"]
+    read = engine._tools["Read"]
     assert read.exec_env.base_url == "http://sbx-1:8080"
     assert read.workspace.lexical is True
     assert read.workspace.root == Path("/workspace")
@@ -584,7 +584,7 @@ def test_read_flows_through_injected_backend(
     )
     engine = _build(host, task_id="t1")
     ctx = ToolContext(artifact_store=InMemoryContentStore())
-    result = engine._tools["read"].invoke({"path": "note.md"}, ctx=ctx)
+    result = engine._tools["Read"].invoke({"file_path": "note.md"}, ctx=ctx)
     assert result.success
     assert fake.reads == ["/c/ws/note.md"]
 
@@ -605,7 +605,7 @@ def test_seed_build_shares_the_sandbox_backend(
         exec_env=SandboxExecEnvConfig(base_url="http://box:8080", workdir="/c/ws"),
     )
     seed = host.resolve_engine_for_agent("main")
-    assert seed._tools["read"].exec_env is fake
+    assert seed._tools["Read"].exec_env is fake
     # The driving resolve reuses the cached Engine → same backend, not Local.
     again = host.resolve_engine_for_agent("main")
     assert again is seed
@@ -640,7 +640,7 @@ def test_sandbox_policy_false_declines_container_and_falls_back_local(
     assert seen == [("task-root", str(tmp_path / "ws"))]
     # The build with no ref falls back to the local backend + host root fence.
     engine = _build(host, task_id="task-root", exec_env_ref=None)
-    read = engine._tools["read"]
+    read = engine._tools["Read"]
     assert isinstance(read.exec_env, LocalExecEnv)
     assert read.workspace.lexical is False
 
@@ -660,7 +660,7 @@ def test_sandbox_policy_true_provisions_as_usual(
     assert ref is not None
     assert provider.allocated  # provisioned exactly as without a policy
     engine = _build(host, task_id="task-root", exec_env_ref=ref)
-    assert engine._tools["read"].exec_env.base_url == "http://sbx-1:8080"
+    assert engine._tools["Read"].exec_env.base_url == "http://sbx-1:8080"
 
 
 def test_sandbox_policy_absent_is_byte_identical(

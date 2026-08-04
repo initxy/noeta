@@ -45,7 +45,7 @@ provider = FakeLLMProvider(
 result = query(
     Options(
         system_prompt="You are concise.",
-        allowed_tools=("read",),
+        allowed_tools=("Read",),
         permission_mode="bypassPermissions",
     ),
     goal="Say hello.",
@@ -73,7 +73,7 @@ from noeta.sdk.testing import FakeLLMProvider
 result = query(
     Options(
         system_prompt="You are concise.",
-        allowed_tools=("read",),
+        allowed_tools=("Read",),
         permission_mode="bypassPermissions",
     ),
     goal="Say hello.",

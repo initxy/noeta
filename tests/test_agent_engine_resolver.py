@@ -144,8 +144,8 @@ def test_build_engine_for_agent_filters_tools_to_allowlist(tmp_path: Path) -> No
         workspace_dir=tmp_path,
     )
     tools = set(engine._tools)
-    assert "read" in tools
-    assert "glob" in tools
+    assert "Read" in tools
+    assert "Glob" in tools
     assert "shell_run" in tools  # read-only shell, CC-aligned
     # Provably absent — the moat: a write-tempting goal cannot reach these.
     assert "write" not in tools

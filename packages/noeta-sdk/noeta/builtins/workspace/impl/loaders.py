@@ -276,9 +276,9 @@ def build_instructions_discovery(
     def _discover(
         task: Task, call: ToolCall, result: ToolResult
     ) -> list[ContextContentRecordedPayload]:
-        if call.tool_name != "read" or not result.success:
+        if call.tool_name != "Read" or not result.success:
             return []
-        target = call.arguments.get("path")
+        target = call.arguments.get("file_path")
         if not isinstance(target, str) or not target:
             return []
         try:
