@@ -1,16 +1,21 @@
-"""Live-container end-to-end for the sandbox browser subsystem.
+"""Live-container end-to-end for the sandbox subsystem (browser + ExecEnv).
 
 Starts a real AIO Sandbox container via Docker, serves a fixture HTML page from
-a host-reachable http server, and drives the real
-:class:`~noeta.builtins.sandbox.impl.browser.AioBrowserBackend` through all five
-noeta-owned browser verbs — navigate / extract / type / click / screenshot. It
-also pins the container's ``/mcp`` browser tool names against the backend's wire
-constants, so an image that renames a tool fails loudly here instead of quietly
-perturbing the model-facing schema.
+a host-reachable http server, and drives BOTH container adapters the ``sandbox``
+built-in owns:
 
-This is the only place live return shapes and live tool names are pinned: the
-fake-transport contract tests in ``test_browser_backend.py`` assert what we
-*send*, never what a real server *returns*.
+* :class:`~noeta.builtins.sandbox.impl.browser.AioBrowserBackend` through all
+  five noeta-owned browser verbs — navigate / extract / type / click /
+  screenshot — plus pinning the container's ``/mcp`` browser tool names against
+  the backend's wire constants, so an image that renames a tool fails loudly
+  here instead of quietly perturbing the model-facing schema.
+* :class:`~noeta.builtins.sandbox.impl.exec_env.AioSandboxExecEnv` through its
+  file IO (``/v1/file/{read,write}``) and process execution (``/v1/shell/exec``)
+  against the same container — the half the fake-transport tests in
+  ``test_aio_sandbox_exec_env.py`` cannot prove, since they assert only what we
+  *send*, never what a real container *returns*.
+
+This is the only place live return shapes and live tool names are pinned.
 
 Gated: skipped unless ``NOETA_TEST_AIO_BROWSER=1`` is set (needs a local Docker
 daemon and the AIO Sandbox image). ``NOETA_TEST_AIO_IMAGE`` overrides the image
@@ -27,10 +32,12 @@ import tempfile
 import threading
 import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
 from noeta.builtins.sandbox.impl.browser import AioBrowserBackend, AioBrowserError
+from noeta.builtins.sandbox.impl.exec_env import AioSandboxExecEnv
 from noeta.builtins.browser.impl import BROWSER_TOOL_NAMES
 from noeta.builtins.mcp.impl._http_client import McpHttpClient
 
@@ -51,6 +58,25 @@ pytestmark = pytest.mark.skipif(
     not os.environ.get(_GATE_ENV),
     reason=f"set {_GATE_ENV}=1 to run live-container browser e2e (needs Docker + AIO image)",
 )
+
+
+def _element_index(extract_text: str, tag: str) -> int | None:
+    """The leading ``[N]`` index of the first clickable line whose tag matches.
+
+    The container renders each interactive element as ``[N] [descriptor] <tag>…``
+    — the descriptor and the spacing around ``<tag>`` are the image's format, not
+    noeta's (``AioBrowserBackend.extract`` passes the list through verbatim), so
+    match the ``<tag>`` anywhere on the line rather than pinning ``]<tag``. ``tag``
+    is a prefix like ``"<a"`` or ``"<input"``.
+    """
+    for line in extract_text.split("\n"):
+        s = line.strip()
+        if not s.startswith("["):
+            continue
+        head = s[1 : s.find("]")] if "]" in s else ""
+        if tag in s and head.strip().isdigit():
+            return int(head.strip())
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -292,15 +318,7 @@ class TestLiveVerbs:
         browser_backend.navigate(fixture_url)
         ext = browser_backend.extract()
         # find the input index in the clickable list
-        input_idx = None
-        for line in ext.split("\n"):
-            s = line.strip()
-            if s.startswith("[") and "]<input" in s:
-                try:
-                    input_idx = int(s.split("]", 1)[0].lstrip("["))
-                    break
-                except ValueError:
-                    pass
+        input_idx = _element_index(ext, "<input")
         assert input_idx is not None, f"no <input> found in clickable list; got:\n{ext}"
         result = browser_backend.type(input_idx, "noeta-e2e", submit=True)
         assert "Successfully filled" in result or "filled" in result.lower()
@@ -312,15 +330,7 @@ class TestLiveVerbs:
     def test_click(self, browser_backend: AioBrowserBackend, fixture_url: str) -> None:
         browser_backend.navigate(fixture_url)
         ext = browser_backend.extract()
-        link_idx = None
-        for line in ext.split("\n"):
-            s = line.strip()
-            if s.startswith("[") and "]<a" in s:
-                try:
-                    link_idx = int(s.split("]", 1)[0].lstrip("["))
-                    break
-                except ValueError:
-                    pass
+        link_idx = _element_index(ext, "<a")
         assert link_idx is not None, f"no <a> found in clickable list; got:\n{ext}"
         result = browser_backend.click(link_idx)
         assert "Clicked" in result or "clicked" in result.lower()
@@ -341,3 +351,85 @@ class TestLiveVerbs:
         with pytest.raises(AioBrowserError):
             # navigate to a scheme the container browser cannot resolve.
             browser_backend.navigate("http://invalid.invalid.example.nxdomain/page")
+
+
+# --------------------------------------------------------------------------- #
+# Sandbox ExecEnv — the file + shell half of the same container
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture(scope="module")
+def exec_env(live_sandbox: dict) -> AioSandboxExecEnv:
+    return AioSandboxExecEnv(
+        base_url=live_sandbox["base_url"],
+        auth_headers=lambda: {"X-AIO-API-Key": live_sandbox["key"]},
+        timeout_s=60.0,
+    )
+
+
+class TestLiveExecEnv:
+    """Drive the real ``AioSandboxExecEnv`` (file IO + shell) against the container.
+
+    The fake-transport contract in ``test_aio_sandbox_exec_env.py`` pins what we
+    *send*; only a real container proves the write→read round-trip, the shell
+    exit code / stdout, and the in-band file-fault → ``OSError`` refinement.
+    """
+
+    def test_write_then_read_round_trips(self, exec_env: AioSandboxExecEnv) -> None:
+        path = Path("/tmp/noeta_execenv_e2e.txt")
+        body = b"ahoy from the container\n"
+        exec_env.write_bytes(path, body)
+        # Bytes and text views both reconstruct what we wrote. This is the
+        # regression gate for the read contract: /v1/file/read is text-only
+        # (FileReadRequest has no ``encoding`` field — v1.11.0 OpenAPI), so
+        # ``read_bytes`` must ride the shell ``base64`` path, and an adapter
+        # that base64-decodes the text endpoint's response corrupts every read.
+        assert exec_env.read_bytes(path) == body
+        assert exec_env.read_text(path) == body.decode("utf-8")
+
+    def test_binary_write_then_read_round_trips(
+        self, exec_env: AioSandboxExecEnv
+    ) -> None:
+        # Byte fidelity for content the text endpoint cannot represent at all:
+        # NULs, invalid UTF-8, and enough volume that a truncated-inline-echo
+        # (spill) response, if the container chooses one, must also round-trip.
+        path = Path("/tmp/noeta_execenv_e2e.bin")
+        body = bytes(range(256)) * 512  # 128 KiB, every byte value
+        exec_env.write_bytes(path, body)
+        assert exec_env.read_bytes(path) == body
+
+    def test_shell_exec_reports_stdout_and_exit(self, exec_env: AioSandboxExecEnv) -> None:
+        outcome = exec_env.run_argv(
+            ["python3", "-c", "print(6*7)"],
+            cwd=Path("/tmp"),
+            timeout_s=30,
+            output_cap=64 * 1024,
+        )
+        assert outcome.returncode == 0
+        assert not outcome.timed_out
+        assert b"42" in outcome.stdout
+
+    def test_shell_nonzero_exit_is_reported_not_raised(
+        self, exec_env: AioSandboxExecEnv
+    ) -> None:
+        outcome = exec_env.run_argv(
+            ["python3", "-c", "import sys; sys.exit(3)"],
+            cwd=Path("/tmp"),
+            timeout_s=30,
+            output_cap=64 * 1024,
+        )
+        # A controlled non-zero exit is data, not an exception.
+        assert outcome.returncode == 3
+        assert not outcome.timed_out
+
+    def test_read_missing_file_maps_to_filenotfounderror(
+        self, exec_env: AioSandboxExecEnv
+    ) -> None:
+        # Both read paths refine a missing file into the stdlib subclass the
+        # local backend raises: read_bytes via its shell stat guard,
+        # read_text via the endpoint's in-band error_type=not_found.
+        missing = Path("/tmp/noeta_does_not_exist_e2e.txt")
+        with pytest.raises(FileNotFoundError):
+            exec_env.read_bytes(missing)
+        with pytest.raises(FileNotFoundError):
+            exec_env.read_text(missing)
