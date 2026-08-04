@@ -1,31 +1,8 @@
-Ask the user to resolve a decision only they can make, offering preset choices.
+Use this tool only when you are blocked on a decision that is genuinely the user's to make: one you cannot resolve from the request, the code, or sensible defaults.
 
-## What it does
+- Presents 1–4 questions at once. Each question has the complete `question` text (ending with a question mark), a very short `header` chip (max 12 chars, e.g. "Auth method"), 2–4 `options` (each `{label, description}` — concise label, trade-off in the description), and `multiSelect` (true when several answers may be picked together).
+- Do not add an "Other" option — the user can always type a custom answer; it is provided automatically.
+- If you recommend an option, put it first and append "(Recommended)" to its label.
+- The user's selections are returned so you can proceed.
 
-Presents 1–3 questions at once. Each question has a short `header` chip, the
-`question` text, and optional `choices` (each `{id, label, description}`). When
-`allow_freeform` is true (the default) the user may type their own answer instead
-of picking a choice. An optional top-level `reason` says why you are asking. The
-user's selections are returned so you can proceed.
-
-## When to use
-
-- You are genuinely blocked on a decision that is the user's to make — one you
-  cannot settle from the request, the code, or sensible defaults — AND guessing
-  wrong would cost more than the round-trip.
-- A fork where the options are mutually exclusive and you can enumerate them.
-
-## When NOT to use
-
-- A reasonable default or guess exists: make it, state the assumption, and keep
-  working — do not stop to ask.
-- Do not ask "should I proceed?" / "is this right?", and do not ask for facts you
-  can verify yourself in the codebase or decisions that have a conventional
-  default.
-
-## Preconditions
-
-- The `ask_user_question` capability must be enabled for this agent, otherwise
-  the tool is not offered.
-- At most 3 questions, each with at most 5 choices; a question that supplies no
-  choices MUST allow freeform answers.
+When NOT to use: a reasonable default exists (make it, state the assumption, keep working); "should I proceed?" / "is this right?" check-ins; facts you can verify yourself in the codebase.

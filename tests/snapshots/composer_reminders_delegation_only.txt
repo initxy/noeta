@@ -7,6 +7,6 @@
   {
     "origin": "system",
     "role": "user",
-    "text": "When you delegate independent work to sub-agents, batch ALL the goals into ONE spawn_subagent call's spawns array so they run concurrently and the results return together. Spawning one per turn is sequential, not parallel."
+    "text": "When you delegate independent work to sub-agents, emit ALL the Task calls in ONE assistant turn so they run concurrently and the results return together. Issuing one Task per turn is sequential, not parallel."
   }
 ]

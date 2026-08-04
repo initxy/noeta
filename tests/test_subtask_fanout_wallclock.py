@@ -91,15 +91,15 @@ class _Probe:
                     stop_reason="tool_use",
                     content=[
                         ToolUseBlock(
-                            call_id="spawn",
+                            call_id=f"spawn-{i}",
                             tool_name=SPAWN_SUBAGENT_TOOL,
                             arguments={
-                                "spawns": [
-                                    {"agent": "general-purpose", "goal": g}
-                                    for g in self.member_goals
-                                ]
+                                "description": "fan out",
+                                "prompt": g,
+                                "subagent_type": "general-purpose",
                             },
                         )
+                        for i, g in enumerate(self.member_goals)
                     ],
                     usage=Usage(uncached=1, output=1),
                     raw={"id": "spawn"},

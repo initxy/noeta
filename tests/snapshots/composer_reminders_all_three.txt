@@ -7,12 +7,12 @@
   {
     "origin": "system",
     "role": "user",
-    "text": "Your current todo list (unfinished items only). Keep it updated as you make progress — mark items in_progress / completed via todo_write so it stays accurate:\n- [pending] First step\n- [in_progress] Second step"
+    "text": "Your current todo list (unfinished items only). Keep it updated as you make progress — mark items in_progress / completed via TodoWrite so it stays accurate:\n- [pending] First step\n- [in_progress] Second step"
   },
   {
     "origin": "system",
     "role": "user",
-    "text": "When you delegate independent work to sub-agents, batch ALL the goals into ONE spawn_subagent call's spawns array so they run concurrently and the results return together. Spawning one per turn is sequential, not parallel."
+    "text": "When you delegate independent work to sub-agents, emit ALL the Task calls in ONE assistant turn so they run concurrently and the results return together. Issuing one Task per turn is sequential, not parallel."
   },
   {
     "origin": "system",

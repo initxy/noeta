@@ -341,7 +341,7 @@ def test_mixed_spawn_batch_returns_recoverable_ack() -> None:
         assert isinstance(b, ToolResultBlock)
         assert b.success is False
         assert b.error is not None
-        assert "spawn_subagent cannot be mixed with other tool calls" in b.output
+        assert "Task cannot be mixed with other tool calls" in b.output
 
 
 def test_delegation_disabled_treats_spawn_as_normal_tool() -> None:

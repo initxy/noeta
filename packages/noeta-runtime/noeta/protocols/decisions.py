@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field, fields
 from typing import TYPE_CHECKING, Any, Optional, Union
 
-from noeta.protocols.messages import Message, ThinkingBlock
+from noeta.protocols.messages import Message, ThinkingBlock, ToolResultBlock
 from noeta.protocols.values import ContentRef
 
 if TYPE_CHECKING:
@@ -177,6 +177,12 @@ class ToolCallsDecision:
     #: signature on an Anthropic continuation request. Empty for non-reasoning
     #: models.
     assistant_thinking: tuple[ThinkingBlock, ...] = ()
+    #: Tool-result blocks for tool_use blocks a CONTROL tool already answered
+    #: in this same turn (e.g. a ``TodoWrite`` acked by its translator while
+    #: the remaining calls run through the ToolRuntime). ``handle_tool_calls``
+    #: seeds the batched result message with them, so every tool_use the model
+    #: emitted still gets exactly one result. Empty for ordinary turns.
+    preacked_results: tuple[ToolResultBlock, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

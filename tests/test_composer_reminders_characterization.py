@@ -60,7 +60,7 @@ _TODOS = [
 # A prior spawn_subagent call in history — suppresses the delegation nudge
 # (self-limiting once the first sub-agent has been spawned).
 _SPAWN_HISTORY_BLOCK = ToolUseBlock(
-    call_id="c1", tool_name="spawn_subagent", arguments={"agent": "explore"}
+    call_id="c1", tool_name="Task", arguments={"agent": "explore"}
 )
 
 
@@ -193,5 +193,5 @@ def test_all_three_relative_order_is_todo_delegation_read() -> None:
     reminders = suffix[1:]
     assert [m["origin"] for m in reminders] == ["system", "system", "system"]
     assert "todo list" in reminders[0]["text"]
-    assert "spawn_subagent" in reminders[1]["text"]
+    assert "Task" in reminders[1]["text"]
     assert "reading strategy" in reminders[2]["text"]

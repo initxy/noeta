@@ -208,7 +208,7 @@ def test_spawned_child_inherits_turn_effort(tmp_path: Path) -> None:
         provider=FakeLLMProvider(
             responses=[
                 _tool_call(
-                    "s1", "spawn_subagent", {"agent": "explore", "goal": "scout"}
+                    "s1", "Task", {"agent": "explore", "goal": "scout"}
                 ),
                 _end_turn("scouted"),
                 _end_turn("done"),

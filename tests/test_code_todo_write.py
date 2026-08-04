@@ -31,10 +31,10 @@ from noeta.runtime.workspace import FsWriteMode
 from tests._sdk_session import make_driver, make_host, make_registry, runner_main_spec
 
 
-_T1 = [{"id": "1", "content": "fix the login bug", "status": "pending"}]
+_T1 = [{"content": "fix the login bug", "status": "pending", "activeForm": "fixing the login bug"}]
 _T2 = [
-    {"id": "1", "content": "fix the login bug", "status": "completed"},
-    {"id": "2", "content": "add a regression test", "status": "in_progress"},
+    {"content": "fix the login bug", "status": "completed", "activeForm": "fixing the login bug"},
+    {"content": "add a regression test", "status": "in_progress", "activeForm": "adding a regression test"},
 ]
 
 
@@ -127,7 +127,7 @@ def _folded_todos(host, task_id: str) -> list[dict[str, Any]]:
 
 def test_set_todos_replace_all_apply() -> None:
     state = TaskState()
-    state.todos.extend([{"id": "old", "content": "x", "status": "pending"}])
+    state.todos.extend([{"content": "x", "status": "pending", "activeForm": "doing x"}])
     TaskStatePatch(set_todos=_T1).apply(state)
     assert state.todos == _T1  # replaced, not appended
     TaskStatePatch(set_todos=[]).apply(state)

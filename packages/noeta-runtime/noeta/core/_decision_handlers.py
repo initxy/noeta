@@ -1264,7 +1264,7 @@ def handle_spawn_subtask(
 #: locally (a plain string literal) so ``noeta.core`` never imports
 #: ``noeta.policies`` (the policy that produces ``SpawnSubtaskDecision``); the
 #: value mirrors ``noeta.policies.control_semantics.SPAWN_SUBAGENT_TOOL``.
-_SPAWN_SUBAGENT_TOOL = "spawn_subagent"
+_SPAWN_SUBAGENT_TOOL = "Task"
 
 
 def _pending_background_spawn_call_id(task: Task) -> Optional[str]:
@@ -1904,7 +1904,10 @@ def handle_tool_calls(
     if ctx.tool_invoker is None:
         raise RuntimeError("Engine got tool_calls but no ToolRuntime.")
 
-    result_blocks: list[ToolResultBlock] = []
+    # Acks a control tool already produced for tool_use blocks it consumed in
+    # this same turn (a mixed TodoWrite batch) — every model-emitted tool_use
+    # must get exactly one result, so they ride the same batched message.
+    result_blocks: list[ToolResultBlock] = list(decision.preacked_results)
     executed: list[tuple[ToolCall, ToolResult]] = []
     for idx, call in enumerate(decision.calls):
         verdict = ctx.guard(ProposedToolCall(call=call), task)

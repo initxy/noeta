@@ -58,52 +58,29 @@ _REFERENCE_SCHEMA: dict[str, Any] = {
         "parameters": {
             "type": "object",
             "properties": {
-                "spawns": {
-                    "type": "array",
-                    "minItems": 1,
+                "description": {
+                    "type": "string",
+                    "description": "A short (3-5 word) description of the task.",
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "The task for the agent to perform.",
+                },
+                "subagent_type": {
+                    "type": "string",
                     "description": (
-                        "The sub-agents to spawn. ONE entry delegates and "
-                        "waits for that single result. SEVERAL entries fan "
-                        "out and run CONCURRENTLY; their results return "
-                        "together, in entry order. Always batch independent "
-                        "goals into one call — spawning one entry per turn "
-                        "is strictly sequential, never parallel."
+                        "The type of specialized agent to use for this task."
                     ),
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "agent": {
-                                "type": "string",
-                                "description": "Named sub-agent to delegate to.",
-                            },
-                            "goal": {
-                                "type": "string",
-                                "description": (
-                                    "The focused goal for this sub-agent."
-                                ),
-                            },
-                        },
-                        "required": ["agent", "goal"],
-                    },
                 },
                 "background": {
                     "type": "boolean",
-                    "description": (
-                        "Run the sub-agent in the background instead of "
-                        "waiting for it. With background=true you immediately "
-                        "get a 'started' acknowledgement and keep working; the "
-                        "sub-agent runs concurrently and its result is "
-                        "delivered to you automatically when it finishes — you "
-                        "never poll or wait. Use it for independent, "
-                        "longer-running work (research, a broad scan) you want "
-                        "off the critical path. Omit it (the default) to "
-                        "delegate and wait for the result inline. Only valid "
-                        "with exactly ONE spawns entry (a fan-out batch is "
-                        "always foreground)."
+                    "description": load_markdown(
+                        "noeta.builtins.delegation.impl",
+                        "spawn_subagent_background",
                     ),
                 },
             },
-            "required": ["spawns"],
+            "required": ["description", "prompt", "subagent_type"],
         },
     },
 }
@@ -114,10 +91,9 @@ def _canonical(obj: Any) -> str:
 
 
 def _agent_prop_of(schema: dict[str, Any]) -> dict[str, Any]:
-    """The roster-annotated ``agent`` property — nested per spawn entry under
-    ``spawns.items`` in the batch-form schema."""
+    """The roster-annotated ``subagent_type`` property."""
     parameters = schema["function"]["parameters"]
-    return parameters["properties"]["spawns"]["items"]["properties"]["agent"]
+    return parameters["properties"]["subagent_type"]
 
 
 def test_empty_dir_matches_reference_no_arg() -> None:
@@ -150,7 +126,7 @@ def test_nonempty_dir_enum_and_description_full() -> None:
     # enum order == input order (sorted by caller before passing in)
     assert agent_prop["enum"] == ["coder", "reviewer"]
     desc = agent_prop["description"]
-    assert desc.startswith("Named sub-agent to delegate to.")
+    assert desc.startswith("The type of specialized agent to use for this task.")
     assert "Available: " in desc
     roster = desc.split("Available: ", 1)[1]
     assert "coder — Writes Python code" in roster

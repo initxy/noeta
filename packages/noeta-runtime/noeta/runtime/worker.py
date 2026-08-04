@@ -398,7 +398,7 @@ class AnswerUserQuestionPrelude:
 # would reject the request.
 # ---------------------------------------------------------------------------
 
-_SPAWN_TOOL_NAMES = frozenset({"spawn_subagent", "run_workflow"})
+_SPAWN_TOOL_NAMES = frozenset({"Task", "run_workflow"})
 
 
 def _render_subtask_wake(

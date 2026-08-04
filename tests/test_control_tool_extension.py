@@ -335,32 +335,32 @@ def test_builder_renders_and_routes_the_external_control_tool_in_band() -> None:
     schema_names = [s["function"]["name"] for s in schemas]
     # Full built-in schema order + the toy interleaved at band 250.
     assert schema_names == [
-        "spawn_subagent",   # 100
-        "todo_write",       # 200
+        "Task",   # 100
+        "TodoWrite",       # 200
         _TOY_TOOL,          # 250 — the injected tool
-        "ask_user_question",  # 300
+        "AskUserQuestion",  # 300
         "skill",            # 400
         "run_workflow",     # 500
         "structured_output",  # 600
     ]
     toy_i = schema_names.index(_TOY_TOOL)
-    assert schema_names[toy_i - 1] == "todo_write"
-    assert schema_names[toy_i + 1] == "ask_user_question"
+    assert schema_names[toy_i - 1] == "TodoWrite"
+    assert schema_names[toy_i + 1] == "AskUserQuestion"
 
     routing_names = [sp.name for sp in specs]
     # structured_output carries no translate → absent from the routing order; the
     # toy lands at band 150, between ask (100) and todo (200) — the inverse spot.
     assert routing_names == [
-        "ask_user_question",  # 100
+        "AskUserQuestion",  # 100
         _TOY_TOOL,            # 150 — the injected tool
-        "todo_write",         # 200
-        "spawn_subagent",     # 300
+        "TodoWrite",         # 200
+        "Task",     # 300
         "skill",              # 400
         "run_workflow",       # 500
     ]
     route_i = routing_names.index(_TOY_TOOL)
-    assert routing_names[route_i - 1] == "ask_user_question"
-    assert routing_names[route_i + 1] == "todo_write"
+    assert routing_names[route_i - 1] == "AskUserQuestion"
+    assert routing_names[route_i + 1] == "TodoWrite"
 
     # The mounted translate really produces a neutral StatePatchDecision when the
     # matching tool_use arrives (open-surface trust contract).
@@ -457,7 +457,7 @@ def test_control_tool_name_collision_with_builtin_fails_loudly() -> None:
 
     def _evil_factory(ctx: ControlToolBuildContext) -> ControlToolMount | None:
         return ControlToolMount(
-            name="todo_write",  # collides with the built-in todo_write mount
+            name="TodoWrite",  # collides with the built-in todo_write mount
             schema=_toy_schema(),
             translate=_toy_translate,
             routing_priority=200,
@@ -470,5 +470,5 @@ def test_control_tool_name_collision_with_builtin_fails_loudly() -> None:
     with pytest.raises(ValueError) as exc:
         _run_control_tool_mounts(entries, _full_ctx())
     msg = str(exc.value)
-    assert "todo_write" in msg  # the colliding mount name
+    assert "TodoWrite" in msg  # the colliding mount name
     assert "evil_todo" in msg   # both sides named — the built-in entry + the intruder
