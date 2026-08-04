@@ -45,22 +45,19 @@ from tests._sdk_session import make_driver, make_host, make_registry, runner_mai
 
 _QUESTIONS = [
     {
-        "id": "target",
         "question": "Which deploy target should I use?",
         "header": "Target",
-        "choices": [
+        "options": [
             {
-                "id": "staging",
                 "label": "Staging",
                 "description": "Use the staging deployment.",
             },
             {
-                "id": "prod",
                 "label": "Production",
                 "description": "Use the production deployment.",
             },
         ],
-        "allow_freeform": False,
+        "multiSelect": False,
     }
 ]
 
@@ -69,7 +66,7 @@ def _ask(
     *,
     call_id: str = "q1",
     questions: Any = _QUESTIONS,
-    reason: Any = "need target",
+    reason: Any = None,
 ) -> LLMResponse:
     args: dict[str, Any] = {"questions": questions}
     if reason is not None:
@@ -118,11 +115,11 @@ def _end(text: str = "done") -> LLMResponse:
 
 
 def _answer_text(text: str = "staging") -> dict[str, dict[str, str]]:
-    return {"target": {"text": text}}
+    return {"0": {"other": text}}
 
 
-def _answer_choice(choice: str = "staging") -> dict[str, dict[str, str]]:
-    return {"target": {"choice_id": choice}}
+def _answer_choice(choice: str = "Staging") -> dict[str, dict[str, str]]:
+    return {"0": {"selected": [choice]}}
 
 
 def _make_ws(tmp_path: Path) -> Path:
@@ -207,7 +204,9 @@ def test_valid_ask_records_ref_payload_and_suspends(tmp_path: Path) -> None:
     assert request.question_count == 1
     assert to_canonical_bytes(request)
     assert len(to_canonical_bytes(request)) < EVENT_PAYLOAD_MAX_BYTES
-    assert load_questions_body(host.content_store, request.questions_ref) == _QUESTIONS
+    assert load_questions_body(host.content_store, request.questions_ref) == [
+        {**_QUESTIONS[0], "id": "0"}
+    ]
 
     folded = fold(host.event_log, host.content_store, out.task_id)
     assert sorted(folded.governance.pending_questions) == ["q1"]
@@ -217,22 +216,20 @@ def test_max_size_question_stays_out_of_event_payload(tmp_path: Path) -> None:
     ws = _make_ws(tmp_path)
     long_questions = [
         {
-            "id": f"q{i}",
             "question": "Q" * 500,
-            "header": "H" * 40,
-            "choices": [
+            "header": "H" * 12,
+            "options": [
                 {
-                    "id": f"c{i}_{j}",
-                    "label": "L" * 80,
+                    "label": "L" * 79 + str(j),
                     "description": "D" * 300,
                 }
-                for j in range(5)
+                for j in range(4)
             ],
-            "allow_freeform": False,
+            "multiSelect": False,
         }
-        for i in range(3)
+        for i in range(4)
     ]
-    host, driver, _provider = _session(ws, [_ask(questions=long_questions, reason="R" * 500)])
+    host, driver, _provider = _session(ws, [_ask(questions=long_questions)])
     out = driver.start(goal="do the work", agent="main")
     request = next(
         e.payload for e in host.event_log.read(out.task_id)
@@ -281,9 +278,10 @@ def test_unanswerable_question_is_recoverable_without_pending_or_suspend(
     ws = _make_ws(tmp_path)
     unanswerable = [
         {
-            "id": "q1",
             "question": "Need a valid answer control?",
-            "allow_freeform": False,
+            "header": "Control",
+            "options": [{"label": "only-one", "description": "x"}],
+            "multiSelect": False,
         }
     ]
     host, driver, _provider = _session(ws, [_ask(questions=unanswerable), _end()])
@@ -298,7 +296,7 @@ def test_unanswerable_question_is_recoverable_without_pending_or_suspend(
     assert tool_msgs
     block = tool_msgs[-1].content[0]
     assert isinstance(block, ToolResultBlock)
-    assert "must provide choices or allow freeform" in str(block.error)
+    assert "options must contain 2-4 items" in str(block.error)
 
 
 def test_answer_records_audit_tool_result_and_continues(tmp_path: Path) -> None:
@@ -308,7 +306,7 @@ def test_answer_records_audit_tool_result_and_continues(tmp_path: Path) -> None:
     result = driver.answer(
         out.task_id,
         question_id="q1",
-        answers=_answer_choice("staging"),
+        answers=_answer_choice("Staging"),
         answered_by="tester",
     )
     assert result.status == "terminal"
@@ -328,7 +326,7 @@ def test_answer_records_audit_tool_result_and_continues(tmp_path: Path) -> None:
     assert block.success is True
     assert block.output == {
         "question_id": "q1",
-        "answers": {"target": {"choice_id": "staging", "text": None}},
+        "answers": {"0": {"selected": ["Staging"], "other": None}},
     }
 
     resumed_request = provider.received_requests[-1]
@@ -344,13 +342,12 @@ def test_answer_accepts_choice_and_freeform_together(tmp_path: Path) -> None:
     # A choice AND a freeform note resume the task, and the recorded tool
     # result carries both fields — the model decides how to use them.
     ws = _make_ws(tmp_path)
-    freeform_q = [{**_QUESTIONS[0], "allow_freeform": True}]
-    host, driver, _provider = _session(ws, [_ask(questions=freeform_q), _end("answered")])
+    host, driver, _provider = _session(ws, [_ask(), _end("answered")])
     out = driver.start(goal="do the work", agent="main")
     result = driver.answer(
         out.task_id,
         question_id="q1",
-        answers={"target": {"choice_id": "staging", "text": "but only the EU region"}},
+        answers={"0": {"selected": ["Staging"], "other": "but only the EU region"}},
         answered_by="tester",
     )
     assert result.status == "terminal"
@@ -360,15 +357,13 @@ def test_answer_accepts_choice_and_freeform_together(tmp_path: Path) -> None:
     assert isinstance(block, ToolResultBlock)
     assert block.output == {
         "question_id": "q1",
-        "answers": {"target": {"choice_id": "staging", "text": "but only the EU region"}},
+        "answers": {"0": {"selected": ["Staging"], "other": "but only the EU region"}},
     }
 
 
 def test_answer_payload_cap_uses_content_store(tmp_path: Path) -> None:
     ws = _make_ws(tmp_path)
-    host, driver, _provider = _session(
-        ws, [_ask(questions=[{**_QUESTIONS[0], "allow_freeform": True}]), _end()]
-    )
+    host, driver, _provider = _session(ws, [_ask(), _end()])
     out = driver.start(goal="do the work", agent="main")
     driver.answer(
         out.task_id,

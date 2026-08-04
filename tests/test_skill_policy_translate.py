@@ -74,7 +74,7 @@ def _mixed_skill_and_other_call() -> LLMResponse:
         content=[
             ToolUseBlock(
                 call_id="s1",
-                tool_name="spawn_subagent",
+                tool_name="Task",
                 arguments={"agent": "main", "goal": "child"},
             ),
             ToolUseBlock(
@@ -304,7 +304,7 @@ def test_translate_spawn_mixed_with_skill_recoverable_with_both_toggles() -> Non
         # Routing order mirrors the mount loop: spawn is offered the batch
         # first, so its error text is the one the model sees.
         specs=(
-            ControlToolSpec("spawn_subagent", translate_spawn_subagent),
+            ControlToolSpec("Task", translate_spawn_subagent),
             ControlToolSpec(SKILL_TOOL, make_skill_translate(_MENU)),
         ),
     )
@@ -320,7 +320,7 @@ def test_translate_spawn_mixed_with_skill_recoverable_with_both_toggles() -> Non
         assert isinstance(b, ToolResultBlock)
         assert b.success is False
         assert b.error is not None
-        assert "spawn_subagent cannot be mixed with other tool calls" in b.output
+        assert "Task cannot be mixed with other tool calls" in b.output
 
 
 # ---------------------------------------------------------------------------

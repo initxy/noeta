@@ -69,7 +69,7 @@ _SUMMARY_ROLE = "user"
 #: duplicated as a literal to keep the Composer free of a ``noeta.policies``
 #: import. The delegation reminder gates on this name appearing in
 #: ``provider_tool_schemas``.
-_SPAWN_SUBAGENT_TOOL_NAME = "spawn_subagent"
+_SPAWN_SUBAGENT_TOOL_NAME = "Task"
 
 
 @dataclass(frozen=True, slots=True)

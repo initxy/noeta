@@ -251,44 +251,36 @@
     },
     {
       "function": {
-        "description": "Delegate focused goals to named sub-agents and get their results back.\n\n## What it does\n\nSpawns the sub-agents listed in `spawns` — each entry picks an `agent` from\nthe roster and gives it a `goal`, an independent sub-task. ONE entry delegates\nand waits for that single result. SEVERAL entries fan out and run\nCONCURRENTLY; you suspend once and all results come back together, in entry\norder. A sub-agent's final text is returned to you as the result; that text is\nNOT shown to the user, so relay what matters.\n\n## When to use\n\n- The goal fits a sub-agent type: a read-only scout for broad searches, a\n  general-purpose worker for a self-contained coding task, an architect for a\n  plan.\n- Delegating independent work keeps your own context clean, or the answer means\n  sweeping many files and you only need the conclusion, not the file dumps.\n- You have SEVERAL independent goals: put them ALL in the `spawns` array of a\n  single call — that is what makes them run in parallel. **If the user asks to\n  run sub-agents \"in parallel\", you MUST batch the goals into one call's\n  `spawns` array** — a call with a single entry suspends you until that one\n  child returns, so one-entry-per-turn is strictly sequential, never parallel.\n\n## When NOT to use\n\n- A single-fact lookup where you already know the file or symbol — just look it\n  up yourself.\n- Orchestrating sub-agents programmatically — loop over a list, branch the next\n  spawn on a prior result, or chain a dependency where each step feeds the next —\n  use `run_workflow` instead. (Plain parallelism is not this: just batch the\n  entries in one call, see above.)\n- Work already delegated — do not re-spawn for the same thing.\n\n## Preconditions\n\n- Delegation must be enabled for this agent, otherwise the tool is not offered.\n- Pick each entry's `agent` only from the roster names shown on the parameter;\n  authorization is enforced by the permission guard, not by this schema.\n- `background=true` is only valid with exactly ONE `spawns` entry (a fan-out\n  batch always runs in the foreground).",
-        "name": "spawn_subagent",
+        "description": "Launch a sub-agent to handle a focused, self-contained task and get its result back.\n\n## What it does\n\nSpawns one sub-agent per call: pick a `subagent_type` from the roster, give it the full task as `prompt`, and label it with a short `description` (3–5 words, shown to the user). The agent works in its own context and returns its final text as this call's result; that text is NOT shown to the user, so relay what matters.\n\n**Parallelism**: emit SEVERAL Task calls in ONE assistant turn — they run CONCURRENTLY and their results come back together. Issuing one Task per turn is strictly sequential; when work is independent, always batch the calls into a single turn.\n\n## When to use\n\n- The task fits a sub-agent type: a read-only scout for broad searches, a general-purpose worker for a self-contained coding task, an architect for a plan.\n- Delegating independent work keeps your own context clean, or the answer means sweeping many files and you only need the conclusion, not the file dumps.\n\n## When NOT to use\n\n- A single-fact lookup where you already know the file or symbol — just look it up yourself.\n- Work that needs your accumulated conversation context — a sub-agent starts fresh and sees ONLY its `prompt`, so make the prompt self-contained: the goal, the constraints, and what to return.",
+        "name": "Task",
         "parameters": {
           "properties": {
             "background": {
-              "description": "Run the sub-agent in the background instead of waiting for it. With background=true you immediately get a 'started' acknowledgement and keep working; the sub-agent runs concurrently and its result is delivered to you automatically when it finishes — you never poll or wait. Use it for independent, longer-running work (research, a broad scan) you want off the critical path. Omit it (the default) to delegate and wait for the result inline. Only valid with exactly ONE spawns entry (a fan-out batch is always foreground).",
+              "description": "Run the sub-agent in the background instead of waiting for it. With background=true you immediately get a 'started' acknowledgement and keep working; the sub-agent runs concurrently and its result is delivered to you automatically when it finishes — you never poll or wait. Use it for independent, longer-running work (research, a broad scan) you want off the critical path. Omit it (the default) to delegate and wait for the result inline. Only valid on a turn with exactly ONE Task call (a parallel batch is always foreground).",
               "type": "boolean"
             },
-            "spawns": {
-              "description": "The sub-agents to spawn. ONE entry delegates and waits for that single result. SEVERAL entries fan out and run CONCURRENTLY; their results return together, in entry order. Always batch independent goals into one call — spawning one entry per turn is strictly sequential, never parallel.",
-              "items": {
-                "properties": {
-                  "agent": {
-                    "description": "Named sub-agent to delegate to. Available: explore; general-purpose; plan",
-                    "enum": [
-                      "explore",
-                      "general-purpose",
-                      "plan"
-                    ],
-                    "type": "string"
-                  },
-                  "goal": {
-                    "description": "The focused goal for this sub-agent.",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "agent",
-                  "goal"
-                ],
-                "type": "object"
-              },
-              "minItems": 1,
-              "type": "array"
+            "description": {
+              "description": "A short (3-5 word) description of the task.",
+              "type": "string"
+            },
+            "prompt": {
+              "description": "The task for the agent to perform.",
+              "type": "string"
+            },
+            "subagent_type": {
+              "description": "The type of specialized agent to use for this task. Available: explore; general-purpose; plan",
+              "enum": [
+                "explore",
+                "general-purpose",
+                "plan"
+              ],
+              "type": "string"
             }
           },
           "required": [
-            "spawns"
+            "description",
+            "prompt",
+            "subagent_type"
           ],
           "type": "object"
         }
@@ -297,18 +289,20 @@
     },
     {
       "function": {
-        "description": "Maintain a structured task list for the current task by rewriting it whole.\n\n## What it does\n\nA single call replace-alls the entire checklist — you always send the FULL\nlist, never a delta. Each item is `{id, content, status}` where `status` is one\nof `pending`, `in_progress`, or `completed`. Omitting an item deletes it.\n\n## When to use\n\n- The task is multi-step or non-trivial (roughly three or more distinct steps),\n  or the user handed you several tasks at once.\n- Mark a todo `in_progress` BEFORE you start it and `completed` the moment it is\n  fully done — keep exactly ONE item `in_progress` at a time.\n- Update the list in real time as work lands, so it always reflects reality.\n\n## When NOT to use\n\n- A single, straightforward step, or a purely conversational / informational\n  request — the bookkeeping overhead is not worth it.\n- Work that is one or two actions; just do it and report.\n\n## Preconditions\n\n- The `todo_write` capability must be enabled for this agent, otherwise the tool\n  is not offered.\n- Only mark `completed` when the item truly succeeded; if it is blocked, errored,\n  or tests still fail, leave it `in_progress` and add a follow-up item.",
-        "name": "todo_write",
+        "description": "Use this tool to create and manage a structured task list for the current session.\n\n## When to use\n\n- Complex multi-step work (roughly three or more distinct steps), or the user handed you several tasks at once.\n- Mark a todo `in_progress` BEFORE you start it and `completed` the moment it is fully done — keep exactly ONE item `in_progress` at a time.\n- Update the list in real time as work lands; you may batch a TodoWrite with your next tool calls in the same turn.\n\n## When NOT to use\n\n- A single, straightforward step, or a purely conversational / informational request — the bookkeeping overhead is not worth it.\n\n## Shape\n\nA call replaces the entire list — always send the FULL list, never a delta; omitting an item deletes it. Each item is `{content, status, activeForm}`: `content` in imperative form (\"Run tests\"), `status` one of `pending` / `in_progress` / `completed`, `activeForm` in present-continuous form (\"Running tests\"), shown while the item is in progress.\n\nOnly mark `completed` when the item truly succeeded; if it is blocked, errored, or tests still fail, keep it `in_progress` and add a follow-up item.",
+        "name": "TodoWrite",
         "parameters": {
           "properties": {
             "todos": {
-              "description": "The full checklist (replace-all). Each item: {id, content, status}.",
+              "description": "The full checklist (replace-all). Each item: {content, status, activeForm}.",
               "items": {
                 "properties": {
-                  "content": {
+                  "activeForm": {
+                    "description": "Present-continuous form shown while in_progress, e.g. 'Running tests'.",
                     "type": "string"
                   },
-                  "id": {
+                  "content": {
+                    "description": "Imperative form of the task, e.g. 'Run tests'.",
                     "type": "string"
                   },
                   "status": {
@@ -321,9 +315,9 @@
                   }
                 },
                 "required": [
-                  "id",
                   "content",
-                  "status"
+                  "status",
+                  "activeForm"
                 ],
                 "type": "object"
               },
@@ -340,23 +334,26 @@
     },
     {
       "function": {
-        "description": "Ask the user to resolve a decision only they can make, offering preset choices.\n\n## What it does\n\nPresents 1–3 questions at once. Each question has a short `header` chip, the\n`question` text, and optional `choices` (each `{id, label, description}`). When\n`allow_freeform` is true (the default) the user may type their own answer instead\nof picking a choice. An optional top-level `reason` says why you are asking. The\nuser's selections are returned so you can proceed.\n\n## When to use\n\n- You are genuinely blocked on a decision that is the user's to make — one you\n  cannot settle from the request, the code, or sensible defaults — AND guessing\n  wrong would cost more than the round-trip.\n- A fork where the options are mutually exclusive and you can enumerate them.\n\n## When NOT to use\n\n- A reasonable default or guess exists: make it, state the assumption, and keep\n  working — do not stop to ask.\n- Do not ask \"should I proceed?\" / \"is this right?\", and do not ask for facts you\n  can verify yourself in the codebase or decisions that have a conventional\n  default.\n\n## Preconditions\n\n- The `ask_user_question` capability must be enabled for this agent, otherwise\n  the tool is not offered.\n- At most 3 questions, each with at most 5 choices; a question that supplies no\n  choices MUST allow freeform answers.",
-        "name": "ask_user_question",
+        "description": "Use this tool only when you are blocked on a decision that is genuinely the user's to make: one you cannot resolve from the request, the code, or sensible defaults.\n\n- Presents 1–4 questions at once. Each question has the complete `question` text (ending with a question mark), a very short `header` chip (max 12 chars, e.g. \"Auth method\"), 2–4 `options` (each `{label, description}` — concise label, trade-off in the description), and `multiSelect` (true when several answers may be picked together).\n- Do not add an \"Other\" option — the user can always type a custom answer; it is provided automatically.\n- If you recommend an option, put it first and append \"(Recommended)\" to its label.\n- The user's selections are returned so you can proceed.\n\nWhen NOT to use: a reasonable default exists (make it, state the assumption, keep working); \"should I proceed?\" / \"is this right?\" check-ins; facts you can verify yourself in the codebase.",
+        "name": "AskUserQuestion",
         "parameters": {
           "properties": {
             "questions": {
               "items": {
                 "properties": {
-                  "allow_freeform": {
+                  "header": {
+                    "description": "Very short chip label (max 12 chars), e.g. 'Auth method'.",
+                    "type": "string"
+                  },
+                  "multiSelect": {
+                    "description": "Allow selecting several options.",
                     "type": "boolean"
                   },
-                  "choices": {
+                  "options": {
+                    "description": "Distinct choices. An 'Other' free-text option is always added automatically.",
                     "items": {
                       "properties": {
                         "description": {
-                          "type": "string"
-                        },
-                        "id": {
                           "type": "string"
                         },
                         "label": {
@@ -364,35 +361,31 @@
                         }
                       },
                       "required": [
-                        "id",
-                        "label"
+                        "label",
+                        "description"
                       ],
                       "type": "object"
                     },
+                    "maxItems": 4,
+                    "minItems": 2,
                     "type": "array"
                   },
-                  "header": {
-                    "type": "string"
-                  },
-                  "id": {
-                    "type": "string"
-                  },
                   "question": {
+                    "description": "The complete question, ending with a question mark.",
                     "type": "string"
                   }
                 },
                 "required": [
-                  "id",
-                  "question"
+                  "question",
+                  "header",
+                  "options",
+                  "multiSelect"
                 ],
                 "type": "object"
               },
-              "maxItems": 3,
+              "maxItems": 4,
               "minItems": 1,
               "type": "array"
-            },
-            "reason": {
-              "type": "string"
             }
           },
           "required": [
@@ -419,7 +412,7 @@
         }
       ],
       "name": "stable_prefix",
-      "segment_hash": "14f3d8f6dc1b9b1fe11680f39e211ef72f420664be20a5486d6b479582312485"
+      "segment_hash": "7dfca3f0e5e4d137ef25d6f0f6c18e68903dd32092ead4b547c3c6860b77beee"
     },
     {
       "content": [],
@@ -443,7 +436,7 @@
           "content": [
             {
               "__canonical_tag__": "text_block",
-              "text": "When you delegate independent work to sub-agents, batch ALL the goals into ONE spawn_subagent call's spawns array so they run concurrently and the results return together. Spawning one per turn is sequential, not parallel."
+              "text": "When you delegate independent work to sub-agents, emit ALL the Task calls in ONE assistant turn so they run concurrently and the results return together. Issuing one Task per turn is sequential, not parallel."
             }
           ],
           "origin": "system",
@@ -451,7 +444,7 @@
         }
       ],
       "name": "dynamic_suffix",
-      "segment_hash": "eafc73a560e834c8cd30fdb32c2e02275784f8307e79508e47504e8a114b6367"
+      "segment_hash": "fe99700326d9dd769b021540bb1b99f3dd86984ab0c4a09c1e29951d48f2433d"
     }
   ]
 }

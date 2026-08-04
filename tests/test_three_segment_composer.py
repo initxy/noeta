@@ -506,12 +506,12 @@ def test_todos_do_not_change_stable_or_semi_stable_hash() -> None:
 
 _SPAWN_SCHEMA = {
     "type": "function",
-    "function": {"name": "spawn_subagent", "parameters": {}},
+    "function": {"name": "Task", "parameters": {}},
 }
 
 
 def _delegating_composer() -> ThreeSegmentComposer:
-    """A composer that offers delegation (``spawn_subagent`` in the tool
+    """A composer that offers delegation (``Task`` in the tool
     surface), the precondition for the concurrency reminder."""
     return ThreeSegmentComposer(
         system_prompt="you are a helpful agent",
@@ -542,7 +542,7 @@ def test_concurrency_reminder_appended_when_delegation_offered_and_not_spawned()
     reminders = _system_reminders(view)
     assert len(reminders) == 1
     text = reminders[0]
-    assert "spawn_subagent" in text
+    assert "Task" in text
     # The neutral View must not bake in the Anthropic-only tag (else Anthropic
     # double-wraps and OpenAI leaks the literal tag into its system message).
     assert "<system-reminder>" not in text
@@ -553,7 +553,7 @@ def test_concurrency_reminder_self_limits_after_first_spawn() -> None:
     disappears — a long delegation run is not nagged every turn."""
     spawned = Message(
         role="assistant",
-        content=[ToolUseBlock(call_id="c1", tool_name="spawn_subagent", arguments={})],
+        content=[ToolUseBlock(call_id="c1", tool_name="Task", arguments={})],
     )
     view = _delegating_composer().compose(
         _task_with(
@@ -575,5 +575,5 @@ def test_todo_and_concurrency_reminders_coexist() -> None:
     reminders = _system_reminders(view)
     assert len(reminders) == 2
     assert any("todo list" in r for r in reminders)
-    assert any("spawn_subagent" in r for r in reminders)
+    assert any("Task" in r for r in reminders)
     assert all("<system-reminder>" not in r for r in reminders)

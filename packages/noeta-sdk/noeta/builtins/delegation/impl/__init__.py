@@ -1,4 +1,4 @@
-"""``spawn_subagent`` — the delegation control tool: its schema, its member
+"""``Task`` — the delegation control tool: its schema, its member
 parsing, and its translation into a spawn Decision.
 
 The reserved ``SPAWN_SUBAGENT_TOOL`` name stays kernel-side because the subtask
@@ -48,9 +48,6 @@ __all__ = [
 _SPAWN_SUBAGENT_DESCRIPTION = load_markdown(__package__, "spawn_subagent")
 #: Property-level prose long enough to iterate on like documentation lives in
 #: the same ``.md`` resource package, under ``<tool>_<property>.md``.
-_SPAWN_SUBAGENT_SPAWNS_DESCRIPTION = load_markdown(
-    __package__, "spawn_subagent_spawns"
-)
 _SPAWN_SUBAGENT_BACKGROUND_DESCRIPTION = load_markdown(
     __package__, "spawn_subagent_background"
 )
@@ -68,17 +65,15 @@ def spawn_subagent_tool_schema(
     spawn entry's ``agent`` property with the allowed-name ``enum`` and appends
     the human-readable roster to its description.
 
-    The parameters advertise the **batch form**: a required ``spawns`` array of
-    ``{agent, goal}`` entries, one entry meaning delegate-and-wait and several
-    meaning a one-call concurrent fan-out. The array IS the schema because a
-    single call carrying N entries is the only shape the models reliably batch
-    — they essentially never emit two spawn tool calls in one turn, whatever
-    the description or the user demands. :func:`_spawn_call_members` also
-    accepts a top-level ``{agent, goal}`` single form, which the workflow
-    orchestration fabricates.
+    The parameters follow the reference agent's shape: ONE sub-agent per
+    call — ``{description, prompt, subagent_type}`` — and parallelism is
+    several ``Task`` tool_use blocks in one assistant turn (the translation
+    flattens the turn's calls into one fan-out). ``description`` is a short
+    UI label and does not reach the child; ``prompt`` is the child's whole
+    goal, so it must be self-contained.
     """
     agent_prop = enum_roster_prop(
-        "Named sub-agent to delegate to.", agent_directory
+        "The type of specialized agent to use for this task.", agent_directory
     )
     return {
         "type": "function",
@@ -88,25 +83,18 @@ def spawn_subagent_tool_schema(
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "spawns": {
-                        "type": "array",
-                        "minItems": 1,
-                        "description": _SPAWN_SUBAGENT_SPAWNS_DESCRIPTION,
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "agent": agent_prop,
-                                "goal": {
-                                    "type": "string",
-                                    "description": (
-                                        "The focused goal for this sub-agent."
-                                    ),
-                                },
-                            },
-                            "required": ["agent", "goal"],
-                        },
+                    "description": {
+                        "type": "string",
+                        "description": (
+                            "A short (3-5 word) description of the task."
+                        ),
                     },
-                    # A single spawn with background=true does NOT block this
+                    "prompt": {
+                        "type": "string",
+                        "description": "The task for the agent to perform.",
+                    },
+                    "subagent_type": agent_prop,
+                    # A single Task with background=true does NOT block this
                     # turn: the parent gets a "started" receipt and keeps going,
                     # and the sub-agent's result arrives as a notice when it
                     # finishes (docs/adr/background-subagent.md).
@@ -115,32 +103,31 @@ def spawn_subagent_tool_schema(
                         "description": _SPAWN_SUBAGENT_BACKGROUND_DESCRIPTION,
                     },
                 },
-                "required": ["spawns"],
+                "required": ["description", "prompt", "subagent_type"],
             },
         },
     }
 
 
 def _spawn_call_members(args: dict[str, Any]) -> list[tuple[str, str]] | None:
-    """The ``(agent, goal)`` members of ONE ``spawn_subagent`` call.
+    """The ``(agent, goal)`` members of ONE ``Task`` call.
 
-    Two accepted shapes: the advertised ``spawns`` array, and a top-level
-    ``{agent, goal}`` when ``spawns`` is absent (the shape the workflow
-    orchestration fabricates). Returns ``None`` when ``spawns`` is present but
-    malformed, so the caller acks a recoverable error instead of letting empty
-    agent names fail the task later at the permission guard.
+    The advertised shape is a single ``{description, prompt, subagent_type}``
+    per call; the legacy ``{agent, goal}`` top-level pair (the shape the
+    workflow orchestration fabricates) is still accepted. Returns ``None``
+    when neither field pair is usable, so the caller acks a recoverable error
+    instead of letting empty agent names fail the task later at the
+    permission guard.
     """
-    if "spawns" not in args:
-        return [(str(args.get("agent", "")), str(args.get("goal", "")))]
-    raw = args.get("spawns")
-    if not isinstance(raw, (list, tuple)) or not raw:
-        return None
-    members: list[tuple[str, str]] = []
-    for entry in raw:
-        if not isinstance(entry, dict) or "agent" not in entry or "goal" not in entry:
+    if "subagent_type" in args or "prompt" in args:
+        agent = args.get("subagent_type")
+        prompt = args.get("prompt")
+        if not isinstance(agent, str) or not isinstance(prompt, str):
             return None
-        members.append((str(entry.get("agent", "")), str(entry.get("goal", ""))))
-    return members
+        return [(agent, prompt)]
+    if "agent" in args or "goal" in args:
+        return [(str(args.get("agent", "")), str(args.get("goal", "")))]
+    return None
 
 
 def _maybe_spawn_decision(
@@ -152,9 +139,9 @@ def _maybe_spawn_decision(
     """Translate ``spawn_subagent`` tool_use(s) into a spawn decision, or fail
     closed on a mixed batch.
 
-    Routing turns on the flattened member total across the turn's spawn calls:
+    Routing turns on the flattened member total across the turn's Task calls:
 
-    * mixed with any non-spawn tool call, or a malformed ``spawns`` argument →
+    * mixed with any non-Task tool call, or a malformed argument shape →
       a recoverable error ack (``patch=None``, one failed ``ToolResultBlock``
       per call_id). The task is NOT terminated; the model can retry.
     * exactly one member → :class:`SpawnSubtaskDecision`.
@@ -163,7 +150,7 @@ def _maybe_spawn_decision(
       sharing its ``call_id`` numbered by ``member_index`` (which is what the
       resume pairing counts on).
 
-    The ``spawn_subagent`` tool is never invoked through the ToolRuntime.
+    The ``Task`` tool is never invoked through the ToolRuntime.
     """
     tool_uses = [
         b for b in response.content if isinstance(b, ToolUseBlock)
@@ -179,7 +166,7 @@ def _maybe_spawn_decision(
             assistant_message,
             assistant_thinking,
             patch=None,
-            text="spawn_subagent cannot be mixed with other tool calls in the same turn",
+            text="Task cannot be mixed with other tool calls in the same turn",
             valid=False,
         )
     members_per_call: list[tuple[ToolUseBlock, list[tuple[str, str]]]] = []
@@ -192,8 +179,8 @@ def _maybe_spawn_decision(
                 assistant_thinking,
                 patch=None,
                 text=(
-                    "spawn_subagent: 'spawns' must be a non-empty array of "
-                    "{agent, goal} objects"
+                    "Task requires string 'subagent_type' and 'prompt' "
+                    "arguments"
                 ),
                 valid=False,
             )
@@ -237,7 +224,7 @@ def _maybe_spawn_decision(
 
 
 def translate_spawn_subagent(ctx: ControlTranslateContext) -> Optional[Decision]:
-    """The ``spawn_subagent`` routing seam the mount binds into a spec."""
+    """The ``Task`` routing seam the mount binds into a spec."""
     return _maybe_spawn_decision(
         ctx.response,
         ctx.assistant_message,

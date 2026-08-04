@@ -26,7 +26,7 @@ __all__ = [
 def todo_reminder(view: ReminderView) -> Optional[str]:
     """List the *unfinished* todos so the model does not go blind on its plan.
 
-    ``TaskState.todos`` is folded state the model writes through ``todo_write``
+    ``TaskState.todos`` is folded state the model writes through ``TodoWrite``
     but otherwise never sees again. An empty or all-completed list renders
     nothing — a finished checklist must not nag.
     """
@@ -44,7 +44,7 @@ def todo_reminder(view: ReminderView) -> Optional[str]:
     return (
         "Your current todo list (unfinished items only). Keep it updated as "
         "you make progress — mark items in_progress / completed via "
-        "todo_write so it stays accurate:\n"
+        "TodoWrite so it stays accurate:\n"
         + "\n".join(lines)
     )
 
@@ -52,16 +52,16 @@ def todo_reminder(view: ReminderView) -> Optional[str]:
 def delegation_reminder(view: ReminderView) -> Optional[str]:
     """Just-in-time fan-out nudge while delegation is offered and unused.
 
-    Live only while ``delegation_enabled`` and no ``spawn_subagent`` has landed
+    Live only while ``delegation_enabled`` and no ``Task`` spawn has landed
     yet, so it stops nudging the moment the first sub-agent is spawned.
     """
     if not view.delegation_enabled or view.already_spawned:
         return None
     return (
-        "When you delegate independent work to sub-agents, batch ALL the "
-        "goals into ONE spawn_subagent call's spawns array so they run "
-        "concurrently and the results return together. Spawning one per "
-        "turn is sequential, not parallel."
+        "When you delegate independent work to sub-agents, emit ALL the "
+        "Task calls in ONE assistant turn so they run concurrently and the "
+        "results return together. Issuing one Task per turn is sequential, "
+        "not parallel."
     )
 
 

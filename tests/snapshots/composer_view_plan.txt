@@ -198,23 +198,26 @@
     },
     {
       "function": {
-        "description": "Ask the user to resolve a decision only they can make, offering preset choices.\n\n## What it does\n\nPresents 1–3 questions at once. Each question has a short `header` chip, the\n`question` text, and optional `choices` (each `{id, label, description}`). When\n`allow_freeform` is true (the default) the user may type their own answer instead\nof picking a choice. An optional top-level `reason` says why you are asking. The\nuser's selections are returned so you can proceed.\n\n## When to use\n\n- You are genuinely blocked on a decision that is the user's to make — one you\n  cannot settle from the request, the code, or sensible defaults — AND guessing\n  wrong would cost more than the round-trip.\n- A fork where the options are mutually exclusive and you can enumerate them.\n\n## When NOT to use\n\n- A reasonable default or guess exists: make it, state the assumption, and keep\n  working — do not stop to ask.\n- Do not ask \"should I proceed?\" / \"is this right?\", and do not ask for facts you\n  can verify yourself in the codebase or decisions that have a conventional\n  default.\n\n## Preconditions\n\n- The `ask_user_question` capability must be enabled for this agent, otherwise\n  the tool is not offered.\n- At most 3 questions, each with at most 5 choices; a question that supplies no\n  choices MUST allow freeform answers.",
-        "name": "ask_user_question",
+        "description": "Use this tool only when you are blocked on a decision that is genuinely the user's to make: one you cannot resolve from the request, the code, or sensible defaults.\n\n- Presents 1–4 questions at once. Each question has the complete `question` text (ending with a question mark), a very short `header` chip (max 12 chars, e.g. \"Auth method\"), 2–4 `options` (each `{label, description}` — concise label, trade-off in the description), and `multiSelect` (true when several answers may be picked together).\n- Do not add an \"Other\" option — the user can always type a custom answer; it is provided automatically.\n- If you recommend an option, put it first and append \"(Recommended)\" to its label.\n- The user's selections are returned so you can proceed.\n\nWhen NOT to use: a reasonable default exists (make it, state the assumption, keep working); \"should I proceed?\" / \"is this right?\" check-ins; facts you can verify yourself in the codebase.",
+        "name": "AskUserQuestion",
         "parameters": {
           "properties": {
             "questions": {
               "items": {
                 "properties": {
-                  "allow_freeform": {
+                  "header": {
+                    "description": "Very short chip label (max 12 chars), e.g. 'Auth method'.",
+                    "type": "string"
+                  },
+                  "multiSelect": {
+                    "description": "Allow selecting several options.",
                     "type": "boolean"
                   },
-                  "choices": {
+                  "options": {
+                    "description": "Distinct choices. An 'Other' free-text option is always added automatically.",
                     "items": {
                       "properties": {
                         "description": {
-                          "type": "string"
-                        },
-                        "id": {
                           "type": "string"
                         },
                         "label": {
@@ -222,35 +225,31 @@
                         }
                       },
                       "required": [
-                        "id",
-                        "label"
+                        "label",
+                        "description"
                       ],
                       "type": "object"
                     },
+                    "maxItems": 4,
+                    "minItems": 2,
                     "type": "array"
                   },
-                  "header": {
-                    "type": "string"
-                  },
-                  "id": {
-                    "type": "string"
-                  },
                   "question": {
+                    "description": "The complete question, ending with a question mark.",
                     "type": "string"
                   }
                 },
                 "required": [
-                  "id",
-                  "question"
+                  "question",
+                  "header",
+                  "options",
+                  "multiSelect"
                 ],
                 "type": "object"
               },
-              "maxItems": 3,
+              "maxItems": 4,
               "minItems": 1,
               "type": "array"
-            },
-            "reason": {
-              "type": "string"
             }
           },
           "required": [
@@ -277,7 +276,7 @@
         }
       ],
       "name": "stable_prefix",
-      "segment_hash": "489be0d332cb317822894d724e11c5d85666fe03a9d6d29cb96f399a33c28f74"
+      "segment_hash": "da464c407e9fe825d2a947ef707ad6938532d71ac369b3c4af9fa35004510d90"
     },
     {
       "content": [],

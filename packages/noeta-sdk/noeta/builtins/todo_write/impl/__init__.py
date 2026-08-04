@@ -20,11 +20,17 @@ from noeta.policies.control_semantics import (
     ControlTranslateContext,
     ack_patch_decision,
 )
-from noeta.protocols.decisions import Decision, TaskStatePatch
+from noeta.protocols.decisions import (
+    Decision,
+    TaskStatePatch,
+    ToolCall,
+    ToolCallsDecision,
+)
 from noeta.protocols.messages import (
     LLMResponse,
     Message,
     ThinkingBlock,
+    ToolResultBlock,
     ToolUseBlock,
 )
 from noeta.protocols.resources import load_markdown
@@ -32,6 +38,7 @@ from noeta.protocols.resources import load_markdown
 
 __all__ = [
     "TODO_WRITE_TOOL",
+    "TODO_WRITE_ACK",
     "TODO_WRITE_STATUSES",
     "todo_write_tool_schema",
     "validate_todos",
@@ -41,13 +48,19 @@ __all__ = [
 
 
 #: Model-visible **control** tool name for durable checklist updates.
-TODO_WRITE_TOOL = "todo_write"
+TODO_WRITE_TOOL = "TodoWrite"
 #: Allowed ``status`` values for a todo item.
 TODO_WRITE_STATUSES = ("pending", "in_progress", "completed")
+#: The reference agent's ack text, returned verbatim on a valid update.
+TODO_WRITE_ACK = (
+    "Todos have been modified successfully. Ensure that you continue to use "
+    "the todo list to track your progress. Please proceed with the current "
+    "tasks if applicable"
+)
 #: Input caps. Over-cap → malformed (recoverable, no state write).
 _TODO_MAX_ITEMS = 50
-_TODO_MAX_ID_LEN = 64
 _TODO_MAX_CONTENT_LEN = 500
+_TODO_MAX_ACTIVE_FORM_LEN = 500
 
 
 _TODO_WRITE_DESCRIPTION = load_markdown(__package__, "todo_write")
@@ -71,19 +84,31 @@ def todo_write_tool_schema() -> dict[str, Any]:
                         "type": "array",
                         "description": (
                             "The full checklist (replace-all). Each item: "
-                            "{id, content, status}."
+                            "{content, status, activeForm}."
                         ),
                         "items": {
                             "type": "object",
                             "properties": {
-                                "id": {"type": "string"},
-                                "content": {"type": "string"},
+                                "content": {
+                                    "type": "string",
+                                    "description": (
+                                        "Imperative form of the task, e.g. "
+                                        "'Run tests'."
+                                    ),
+                                },
                                 "status": {
                                     "type": "string",
                                     "enum": list(TODO_WRITE_STATUSES),
                                 },
+                                "activeForm": {
+                                    "type": "string",
+                                    "description": (
+                                        "Present-continuous form shown while "
+                                        "in_progress, e.g. 'Running tests'."
+                                    ),
+                                },
                             },
-                            "required": ["id", "content", "status"],
+                            "required": ["content", "status", "activeForm"],
                         },
                     },
                 },
@@ -103,21 +128,13 @@ def validate_todos(
         return False, "todos must be a list"
     if len(todos) > _TODO_MAX_ITEMS:
         return False, f"too many todos (max {_TODO_MAX_ITEMS})"
-    seen_ids: set[str] = set()
     normalized: list[dict[str, Any]] = []
     for item in todos:
         if not isinstance(item, dict):
             return False, "each todo must be an object"
-        tid = item.get("id")
         content = item.get("content")
         status = item.get("status")
-        if not isinstance(tid, str) or not tid:
-            return False, "each todo needs a non-empty string id"
-        if len(tid) > _TODO_MAX_ID_LEN:
-            return False, f"todo id too long (max {_TODO_MAX_ID_LEN})"
-        if tid in seen_ids:
-            return False, f"duplicate todo id: {tid!r}"
-        seen_ids.add(tid)
+        active_form = item.get("activeForm")
         if not isinstance(content, str) or not content:
             return False, "each todo needs non-empty string content"
         if len(content) > _TODO_MAX_CONTENT_LEN:
@@ -126,7 +143,15 @@ def validate_todos(
             return False, (
                 "todo status must be one of " + ", ".join(TODO_WRITE_STATUSES)
             )
-        normalized.append({"id": tid, "content": content, "status": status})
+        if not isinstance(active_form, str) or not active_form:
+            return False, "each todo needs non-empty string activeForm"
+        if len(active_form) > _TODO_MAX_ACTIVE_FORM_LEN:
+            return False, (
+                f"todo activeForm too long (max {_TODO_MAX_ACTIVE_FORM_LEN})"
+            )
+        normalized.append(
+            {"content": content, "status": status, "activeForm": active_form}
+        )
     return True, normalized
 
 
@@ -135,29 +160,35 @@ def _maybe_todo_write_decision(
     assistant_message: Message,
     *,
     assistant_thinking: tuple[ThinkingBlock, ...] = (),
+    control_tool_names: frozenset[str] = frozenset(),
 ) -> Decision | None:
-    """Translate a ``todo_write`` call into a neutral state-patch Decision, or
-    ``None`` when the turn holds no ``todo_write``.
+    """Translate a ``TodoWrite`` call into a neutral Decision, or ``None`` when
+    the turn holds no ``TodoWrite``.
 
-    ``todo_write`` must be the **sole** tool call in the turn; mixing it with
-    any other call, or a malformed ``todos`` arg, yields a patch-free ack
-    carrying the error so the model can retry — the task is NOT terminated.
+    A solo call becomes the classic state-patch ack. A call BATCHED with other
+    runtime tool calls — the reference agent's habitual shape — becomes a
+    :class:`ToolCallsDecision` carrying the todos patch, the TodoWrite ack as a
+    pre-answered result, and the remaining calls for the ToolRuntime, so the
+    batching costs no extra round trip. A malformed ``todos`` arg (or a second
+    TodoWrite in the same turn) yields a recoverable error ack instead — the
+    task is NOT terminated.
     """
     tool_uses = [b for b in response.content if isinstance(b, ToolUseBlock)]
     todo_blocks = [b for b in tool_uses if b.tool_name == TODO_WRITE_TOOL]
     if not todo_blocks:
         return None
 
-    if len(todo_blocks) != len(tool_uses) or len(todo_blocks) != 1:
+    if len(todo_blocks) != 1:
         return ack_patch_decision(
             tool_uses,
             assistant_message,
             assistant_thinking,
             patch=None,
-            text="todo_write must be the only tool call in the turn",
+            text="TodoWrite may appear at most once per turn",
             valid=False,
         )
-    ok, result = validate_todos(todo_blocks[0].arguments)
+    todo_block = todo_blocks[0]
+    ok, result = validate_todos(todo_block.arguments)
     if not ok:
         assert isinstance(result, str)
         return ack_patch_decision(
@@ -169,22 +200,67 @@ def _maybe_todo_write_decision(
             valid=False,
         )
     assert isinstance(result, list)
-    return ack_patch_decision(
-        tool_uses,
-        assistant_message,
-        assistant_thinking,
-        patch=TaskStatePatch(set_todos=list(result)),
-        text=f"todos updated: {len(result)} item(s)",
-        valid=True,
+    patch = TaskStatePatch(set_todos=list(result))
+    others = [b for b in tool_uses if b is not todo_block]
+    control_others = [
+        b for b in others if b.tool_name in control_tool_names
+    ]
+    if control_others:
+        # Another CONTROL tool shares the turn (Task / AskUserQuestion): the
+        # ToolRuntime could never answer it, so the mix stays a recoverable
+        # error rather than a half-run batch.
+        return ack_patch_decision(
+            tool_uses,
+            assistant_message,
+            assistant_thinking,
+            patch=None,
+            text=(
+                "TodoWrite cannot be batched with another control tool "
+                f"({control_others[0].tool_name}); issue them in separate turns"
+            ),
+            valid=False,
+        )
+    if not others:
+        return ack_patch_decision(
+            tool_uses,
+            assistant_message,
+            assistant_thinking,
+            patch=patch,
+            text=TODO_WRITE_ACK,
+            valid=True,
+        )
+    # Mixed turn: the todos patch + the TodoWrite ack ride the SAME decision
+    # that carries the remaining calls to the ToolRuntime — one turn, one
+    # batched result message, every tool_use answered exactly once.
+    return ToolCallsDecision(
+        calls=[
+            ToolCall(
+                tool_name=b.tool_name,
+                arguments=dict(b.arguments),
+                call_id=b.call_id,
+            )
+            for b in others
+        ],
+        state_patch=patch,
+        assistant_message=assistant_message,
+        assistant_thinking=assistant_thinking,
+        preacked_results=(
+            ToolResultBlock(
+                call_id=todo_block.call_id,
+                output=TODO_WRITE_ACK,
+                success=True,
+            ),
+        ),
     )
 
 
 def translate_todo_write(ctx: ControlTranslateContext) -> Optional[Decision]:
-    """The ``todo_write`` routing seam the mount binds into a ``ControlToolSpec``."""
+    """The ``TodoWrite`` routing seam the mount binds into a ``ControlToolSpec``."""
     return _maybe_todo_write_decision(
         ctx.response,
         ctx.assistant_message,
         assistant_thinking=ctx.assistant_thinking,
+        control_tool_names=ctx.control_tool_names,
     )
 
 

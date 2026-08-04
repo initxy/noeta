@@ -139,7 +139,7 @@ def test_translate_control_tool_carries_thinking_on_spawn() -> None:
     thinking = ThinkingBlock(text="why delegate", signature="sig-spawn")
     tool = ToolUseBlock(
         call_id="s1",
-        tool_name="spawn_subagent",
+        tool_name="Task",
         arguments={"agent": "coder", "goal": "write tests"},
     )
     response = LLMResponse(
@@ -151,7 +151,7 @@ def test_translate_control_tool_carries_thinking_on_spawn() -> None:
     decision = translate_control_tool(
         response,
         assistant_message,
-        specs=(ControlToolSpec("spawn_subagent", translate_spawn_subagent),),
+        specs=(ControlToolSpec("Task", translate_spawn_subagent),),
     )
     assert isinstance(decision, SpawnSubtaskDecision)
     assert decision.assistant_thinking == (thinking,)
@@ -163,7 +163,7 @@ def test_translate_control_tool_carries_thinking_on_todo_write() -> None:
     thinking = ThinkingBlock(text="plan todos", signature="sig-todo")
     tool = ToolUseBlock(
         call_id="t1",
-        tool_name="todo_write",
+        tool_name="TodoWrite",
         arguments={"items": [{"id": "a", "content": "x", "status": "todo"}]},
     )
     response = LLMResponse(
@@ -173,7 +173,7 @@ def test_translate_control_tool_carries_thinking_on_todo_write() -> None:
     decision = translate_control_tool(
         response,
         assistant_message,
-        specs=(ControlToolSpec("todo_write", translate_todo_write),),
+        specs=(ControlToolSpec("TodoWrite", translate_todo_write),),
     )
     assert isinstance(decision, StatePatchDecision)
     assert decision.assistant_thinking == (thinking,)
@@ -186,10 +186,19 @@ def test_translate_control_tool_carries_thinking_on_ask() -> None:
     thinking = ThinkingBlock(text="need clarification", signature="sig-ask")
     tool = ToolUseBlock(
         call_id="q1",
-        tool_name="ask_user_question",
+        tool_name="AskUserQuestion",
         arguments={
-            "questions": [{"id": "q", "question": "which color?"}],
-            "reason": "scope unclear",
+            "questions": [
+                {
+                    "question": "Which color?",
+                    "header": "Color",
+                    "options": [
+                        {"label": "Red", "description": "warm"},
+                        {"label": "Blue", "description": "cool"},
+                    ],
+                    "multiSelect": False,
+                }
+            ],
         },
     )
     response = LLMResponse(
@@ -199,7 +208,7 @@ def test_translate_control_tool_carries_thinking_on_ask() -> None:
     decision = translate_control_tool(
         response,
         assistant_message,
-        specs=(ControlToolSpec("ask_user_question", translate_ask_user_question),),
+        specs=(ControlToolSpec("AskUserQuestion", translate_ask_user_question),),
         content_store=cs,
     )
     assert isinstance(decision, YieldForHumanDecision)
@@ -212,7 +221,7 @@ def test_translate_control_tool_thinking_empty_for_non_reasoning() -> None:
     are added to a non-reasoning recording)."""
     tool = ToolUseBlock(
         call_id="t1",
-        tool_name="todo_write",
+        tool_name="TodoWrite",
         arguments={"items": [{"id": "a", "content": "x", "status": "todo"}]},
     )
     response = LLMResponse(stop_reason="tool_use", content=[tool])
@@ -220,7 +229,7 @@ def test_translate_control_tool_thinking_empty_for_non_reasoning() -> None:
     decision = translate_control_tool(
         response,
         assistant_message,
-        specs=(ControlToolSpec("todo_write", translate_todo_write),),
+        specs=(ControlToolSpec("TodoWrite", translate_todo_write),),
     )
     assert isinstance(decision, StatePatchDecision)
     assert decision.assistant_thinking == ()
@@ -247,7 +256,7 @@ def test_thinking_reattached_after_todo_write_control_tool() -> None:
             thinking,
             ToolUseBlock(
                 call_id="c1",
-                tool_name="todo_write",
+                tool_name="TodoWrite",
                 arguments={
                     "items": [
                         {"id": "a", "content": "step one", "status": "todo"},
@@ -273,7 +282,7 @@ def test_thinking_reattached_after_todo_write_control_tool() -> None:
             system_prompt="",
             model="gpt-4o",
             control_translate_specs=(
-                ControlToolSpec("todo_write", translate_todo_write),
+                ControlToolSpec("TodoWrite", translate_todo_write),
             ),
         ),
         tools=tools,

@@ -121,6 +121,10 @@ class ControlTranslateContext:
     assistant_message: Message
     assistant_thinking: tuple[ThinkingBlock, ...]
     content_store: Optional[ContentStore]
+    #: Every mounted control tool's model-visible name. Lets a translate that
+    #: hands residual calls to the ToolRuntime (TodoWrite's mixed batch) refuse
+    #: a co-occurring CONTROL call, which the runtime could never answer.
+    control_tool_names: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -166,6 +170,7 @@ def translate_control_tool(
             b for b in response.content if isinstance(b, ThinkingBlock)
         ),
         content_store=content_store,
+        control_tool_names=frozenset(spec.name for spec in specs),
     )
     for spec in specs:
         decision = spec.translate(ctx)
@@ -196,7 +201,7 @@ def translate_control_tool(
 #: and the ToolRuntime never invokes it. The name stays kernel-side because
 #: ``execution.subtask_drain`` routes on it: the drain is mechanism that must
 #: match the recorded tool name.
-SPAWN_SUBAGENT_TOOL = "spawn_subagent"
+SPAWN_SUBAGENT_TOOL = "Task"
 
 #: Model-visible **control** tool name: launch a model-authored orchestration
 #: script that fans agents out as real subtasks. The ``react`` built-in's

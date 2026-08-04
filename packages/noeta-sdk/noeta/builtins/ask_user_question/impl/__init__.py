@@ -64,19 +64,18 @@ __all__ = [
 ]
 
 
-ASK_USER_QUESTION_TOOL = "ask_user_question"
+ASK_USER_QUESTION_TOOL = "AskUserQuestion"
 QUESTION_HANDLE_PREFIX = "question-"
 QUESTION_BODY_MEDIA_TYPE = "application/json"
 
 _HANDLE_SAFE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-_MAX_QUESTIONS = 3
-_MAX_QUESTION_ID_LEN = 64
+_MAX_QUESTIONS = 4
+_MIN_OPTIONS = 2
+_MAX_OPTIONS = 4
 _MAX_QUESTION_TEXT_LEN = 500
-_MAX_HEADER_LEN = 40
-_MAX_CHOICES = 5
-_MAX_CHOICE_LABEL_LEN = 80
-_MAX_CHOICE_DESCRIPTION_LEN = 300
-_MAX_REASON_LEN = 500
+_MAX_HEADER_LEN = 12
+_MAX_OPTION_LABEL_LEN = 80
+_MAX_OPTION_DESCRIPTION_LEN = 300
 _MAX_ANSWER_TEXT_LEN = 4000
 
 
@@ -122,27 +121,53 @@ def ask_user_question_tool_schema() -> dict[str, Any]:
                         "items": {
                             "type": "object",
                             "properties": {
-                                "id": {"type": "string"},
-                                "question": {"type": "string"},
-                                "header": {"type": "string"},
-                                "choices": {
+                                "question": {
+                                    "type": "string",
+                                    "description": (
+                                        "The complete question, ending with "
+                                        "a question mark."
+                                    ),
+                                },
+                                "header": {
+                                    "type": "string",
+                                    "description": (
+                                        "Very short chip label (max 12 "
+                                        "chars), e.g. 'Auth method'."
+                                    ),
+                                },
+                                "options": {
                                     "type": "array",
+                                    "minItems": _MIN_OPTIONS,
+                                    "maxItems": _MAX_OPTIONS,
+                                    "description": (
+                                        "Distinct choices. An 'Other' "
+                                        "free-text option is always added "
+                                        "automatically."
+                                    ),
                                     "items": {
                                         "type": "object",
                                         "properties": {
-                                            "id": {"type": "string"},
                                             "label": {"type": "string"},
                                             "description": {"type": "string"},
                                         },
-                                        "required": ["id", "label"],
+                                        "required": ["label", "description"],
                                     },
                                 },
-                                "allow_freeform": {"type": "boolean"},
+                                "multiSelect": {
+                                    "type": "boolean",
+                                    "description": (
+                                        "Allow selecting several options."
+                                    ),
+                                },
                             },
-                            "required": ["id", "question"],
+                            "required": [
+                                "question",
+                                "header",
+                                "options",
+                                "multiSelect",
+                            ],
                         },
                     },
-                    "reason": {"type": "string"},
                 },
                 "required": ["questions"],
             },
@@ -165,33 +190,17 @@ def validate_question_arguments(
     arguments: Any,
 ) -> tuple[bool, "tuple[list[dict[str, Any]], Optional[str]] | str"]:
     if not isinstance(arguments, dict):
-        return False, "ask_user_question arguments must be an object"
+        return False, "AskUserQuestion arguments must be an object"
     raw_questions = arguments.get("questions")
     if not isinstance(raw_questions, list):
         return False, "questions must be a list"
     if not 1 <= len(raw_questions) <= _MAX_QUESTIONS:
         return False, f"questions must contain 1-{_MAX_QUESTIONS} items"
-    reason = arguments.get("reason")
-    if reason is not None:
-        if not isinstance(reason, str):
-            return False, "reason must be a string"
-        if len(reason) > _MAX_REASON_LEN:
-            return False, f"reason too long (max {_MAX_REASON_LEN})"
 
-    seen_question_ids: set[str] = set()
     questions: list[dict[str, Any]] = []
-    for item in raw_questions:
+    for index, item in enumerate(raw_questions):
         if not isinstance(item, dict):
             return False, "each question must be an object"
-        qid = item.get("id")
-        if not isinstance(qid, str) or not qid:
-            return False, "each question needs a non-empty string id"
-        if len(qid) > _MAX_QUESTION_ID_LEN or not is_question_id(qid):
-            return False, "question id must match ^[A-Za-z0-9_-]{1,64}$"
-        if qid in seen_question_ids:
-            return False, f"duplicate question id: {qid!r}"
-        seen_question_ids.add(qid)
-
         question = item.get("question")
         if not isinstance(question, str) or not question:
             return False, "each question needs a non-empty question string"
@@ -199,73 +208,62 @@ def validate_question_arguments(
             return False, f"question too long (max {_MAX_QUESTION_TEXT_LEN})"
 
         header = item.get("header")
-        if header is not None:
-            if not isinstance(header, str):
-                return False, "header must be a string"
-            if len(header) > _MAX_HEADER_LEN:
-                return False, f"header too long (max {_MAX_HEADER_LEN})"
+        if not isinstance(header, str) or not header:
+            return False, "each question needs a non-empty header"
+        if len(header) > _MAX_HEADER_LEN:
+            return False, f"header too long (max {_MAX_HEADER_LEN} chars)"
 
-        allow_freeform = item.get("allow_freeform", True)
-        if not isinstance(allow_freeform, bool):
-            return False, "allow_freeform must be a boolean"
+        multi_select = item.get("multiSelect")
+        if not isinstance(multi_select, bool):
+            return False, "each question needs a boolean multiSelect"
 
-        choices, error = _normalize_choices(item.get("choices"))
+        options, error = _normalize_options(item.get("options"))
         if error is not None:
             return False, error
-        if not choices and not allow_freeform:
-            return False, (
-                "each question must provide choices or allow freeform answers"
-            )
         questions.append(
             {
-                "id": qid,
+                # The index doubles as the stable key answers reference —
+                # questions carry no model-supplied id in the reference shape.
+                "id": str(index),
                 "question": question,
                 "header": header,
-                "choices": choices,
-                "allow_freeform": allow_freeform,
+                "options": options,
+                "multiSelect": multi_select,
             }
         )
-    return True, (questions, reason)
+    return True, (questions, None)
 
 
-def _normalize_choices(raw: Any) -> tuple[list[dict[str, Any]], Optional[str]]:
-    if raw is None:
-        return [], None
+def _normalize_options(raw: Any) -> tuple[list[dict[str, Any]], Optional[str]]:
     if not isinstance(raw, list):
-        return [], "choices must be a list when present"
-    if not 1 <= len(raw) <= _MAX_CHOICES:
-        return [], f"choices must contain 1-{_MAX_CHOICES} items"
+        return [], "options must be a list"
+    if not _MIN_OPTIONS <= len(raw) <= _MAX_OPTIONS:
+        return [], (
+            f"options must contain {_MIN_OPTIONS}-{_MAX_OPTIONS} items"
+        )
     seen: set[str] = set()
-    choices: list[dict[str, Any]] = []
+    options: list[dict[str, Any]] = []
     for item in raw:
         if not isinstance(item, dict):
-            return [], "each choice must be an object"
-        cid = item.get("id")
-        if not isinstance(cid, str) or not cid:
-            return [], "each choice needs a non-empty string id"
-        if len(cid) > _MAX_QUESTION_ID_LEN or not is_question_id(cid):
-            return [], "choice id must match ^[A-Za-z0-9_-]{1,64}$"
-        if cid in seen:
-            return [], f"duplicate choice id: {cid!r}"
-        seen.add(cid)
+            return [], "each option must be an object"
         label = item.get("label")
         if not isinstance(label, str) or not label:
-            return [], "each choice needs a non-empty string label"
-        if len(label) > _MAX_CHOICE_LABEL_LEN:
-            return [], f"choice label too long (max {_MAX_CHOICE_LABEL_LEN})"
+            return [], "each option needs a non-empty string label"
+        if len(label) > _MAX_OPTION_LABEL_LEN:
+            return [], f"option label too long (max {_MAX_OPTION_LABEL_LEN})"
+        if label in seen:
+            return [], f"duplicate option label: {label!r}"
+        seen.add(label)
         description = item.get("description")
-        if description is not None:
-            if not isinstance(description, str):
-                return [], "choice description must be a string"
-            if len(description) > _MAX_CHOICE_DESCRIPTION_LEN:
-                return [], (
-                    "choice description too long "
-                    f"(max {_MAX_CHOICE_DESCRIPTION_LEN})"
-                )
-        choices.append(
-            {"id": cid, "label": label, "description": description}
-        )
-    return choices, None
+        if not isinstance(description, str) or not description:
+            return [], "each option needs a non-empty string description"
+        if len(description) > _MAX_OPTION_DESCRIPTION_LEN:
+            return [], (
+                "option description too long "
+                f"(max {_MAX_OPTION_DESCRIPTION_LEN})"
+            )
+        options.append({"label": label, "description": description})
+    return options, None
 
 
 def put_questions_body(
@@ -326,7 +324,12 @@ def normalize_answer_document(
 ) -> dict[str, dict[str, Any]]:
     """Validate and normalize a submitted answer body.
 
-    ``raw`` may be either ``{"answers": {...}}`` or the direct answer map.
+    ``raw`` may be either ``{"answers": {...}}`` or the direct answer map,
+    keyed by the question's index key (``"0"``, ``"1"``, …). Each answer is
+    ``{"selected": [labels...], "other": text}``: ``selected`` must be labels
+    of the question's options (at most one unless ``multiSelect``), and
+    ``other`` is the always-available free-text slot (the auto-appended
+    "Other" option). At least one of the two must be present.
     """
     if not isinstance(raw, dict):
         raise AnswerValidationError("answer body must be an object")
@@ -348,54 +351,52 @@ def normalize_answer_document(
         raw_answer = answers_raw[qid]
         if not isinstance(raw_answer, dict):
             raise AnswerValidationError(f"answer {qid!r} must be an object")
-        # A chosen option and a freeform note may COEXIST: validate each field
-        # independently and require AT LEAST one. A missing or blank text counts
-        # as absent, so "pick a choice and leave the other box empty" is just the
-        # choice; the normalized shape is always {choice_id, text} with None for
-        # the absent field.
-        raw_choice = raw_answer.get("choice_id")
-        raw_text = raw_answer.get("text")
-        # A present but non-string text is malformed, not absent; reject it
-        # explicitly. None and a blank string still mean "no text given".
-        if raw_text is not None and not isinstance(raw_text, str):
-            raise AnswerValidationError(f"answer {qid!r} text must be a string")
-        has_choice = raw_choice is not None
-        has_text = isinstance(raw_text, str) and raw_text.strip() != ""
-        if not has_choice and not has_text:
+        raw_selected = raw_answer.get("selected")
+        raw_other = raw_answer.get("other")
+        if raw_selected is None:
+            selected: list[str] = []
+        elif isinstance(raw_selected, list) and all(
+            isinstance(x, str) for x in raw_selected
+        ):
+            selected = list(raw_selected)
+        else:
             raise AnswerValidationError(
-                f"answer {qid!r} must contain a choice_id or non-empty text"
+                f"answer {qid!r} selected must be a list of strings"
             )
-        choice_id: Optional[str] = None
-        if has_choice:
-            if not isinstance(raw_choice, str) or not raw_choice:
+        if raw_other is not None and not isinstance(raw_other, str):
+            raise AnswerValidationError(f"answer {qid!r} other must be a string")
+        has_other = isinstance(raw_other, str) and raw_other.strip() != ""
+        if not selected and not has_other:
+            raise AnswerValidationError(
+                f"answer {qid!r} must contain selected labels or 'other' text"
+            )
+        allowed = {
+            str(option.get("label"))
+            for option in question.get("options") or []
+            if isinstance(option, dict)
+        }
+        for label in selected:
+            if label not in allowed:
                 raise AnswerValidationError(
-                    f"answer {qid!r} choice_id must be a non-empty string"
+                    f"answer {qid!r} selected label {label!r} is not an option"
                 )
-            choices = question.get("choices")
-            if not isinstance(choices, list):
-                choices = []
-            allowed = {
-                str(choice.get("id"))
-                for choice in choices
-                if isinstance(choice, dict)
-            }
-            if raw_choice not in allowed:
+        if len(selected) > 1 and not question.get("multiSelect", False):
+            raise AnswerValidationError(
+                f"answer {qid!r} selected several labels but multiSelect is off"
+            )
+        if len(set(selected)) != len(selected):
+            raise AnswerValidationError(
+                f"answer {qid!r} selected the same label twice"
+            )
+        other: Optional[str] = None
+        if has_other:
+            if len(raw_other) > _MAX_ANSWER_TEXT_LEN:
                 raise AnswerValidationError(
-                    f"answer {qid!r} choice_id {raw_choice!r} is not allowed"
+                    f"answer {qid!r} other text too long "
+                    f"(max {_MAX_ANSWER_TEXT_LEN})"
                 )
-            choice_id = raw_choice
-        text: Optional[str] = None
-        if has_text:
-            if not question.get("allow_freeform", True):
-                raise AnswerValidationError(
-                    f"answer {qid!r} does not allow freeform text"
-                )
-            if len(raw_text) > _MAX_ANSWER_TEXT_LEN:
-                raise AnswerValidationError(
-                    f"answer {qid!r} text too long (max {_MAX_ANSWER_TEXT_LEN})"
-                )
-            text = raw_text
-        normalized[qid] = {"choice_id": choice_id, "text": text}
+            other = raw_other
+        normalized[qid] = {"selected": selected, "other": other}
     return normalized
 
 
