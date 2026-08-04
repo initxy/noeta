@@ -22,9 +22,9 @@ MANIFEST = PluginManifest(
         c("tool", "Grep", "noeta.builtins.fs.impl.read:GrepTool"),
         c("tool", "Edit", "noeta.builtins.fs.impl.edit:ReplaceTextTool"),
         c("tool", "Write", "noeta.builtins.fs.impl.edit:WriteFileTool"),
-        c("tool", "shell_run", "noeta.builtins.fs.impl.shell:ShellRunTool"),
-        c("tool", "shell_poll", "noeta.builtins.fs.impl.shell:ShellPollTool"),
-        c("tool", "shell_kill", "noeta.builtins.fs.impl.shell:ShellKillTool"),
+        c("tool", "Bash", "noeta.builtins.fs.impl.shell:ShellRunTool"),
+        c("tool", "BashOutput", "noeta.builtins.fs.impl.shell:ShellPollTool"),
+        c("tool", "KillShell", "noeta.builtins.fs.impl.shell:ShellKillTool"),
         # Band 100 sorts first, so this base pack is constructed before any
         # capability pack that appends to it.
         c(

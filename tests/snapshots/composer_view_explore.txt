@@ -110,8 +110,8 @@
     },
     {
       "function": {
-        "description": "Executes a shell command in the workspace and returns its output.\n\n- Runs with `cwd` at the workspace root, a scrubbed (secret-free) environment, and capped output — the full stdout/stderr are offloaded as artifacts and you get the tail inline plus the return code.\n- `timeout` is in milliseconds: default 120000, max 600000.\n- `run_in_background: true` launches the command detached (a server, a long build or test run): the call returns a `job_id` and an output ref immediately and you keep working. Read its output with `shell_poll`, stop it with `shell_kill`. A background job's lifetime follows the session, not this task.\n- On a strict host the command must match an allowlist (git status/diff, pytest, npm/pnpm test, and read-only grep/rg/find/ls) and shell metacharacters are rejected; otherwise the full command runs through bash (pipes, redirection, chaining) and anything not on the allowlist needs a one-time approval.\n- The process is not sandboxed — it runs real workspace code, so use only in a trusted workspace.\n- To only read a file, search content, or list files, prefer `read` / `grep` / `glob` — they are cheaper and need no approval.",
-        "name": "shell_run",
+        "description": "Executes a shell command in the workspace and returns its output.\n\n- Runs with `cwd` at the workspace root and a scrubbed (secret-free) environment. Output is stdout (plus a labeled stderr section when both streams have content), capped at 30000 characters with the middle elided; the full streams are recorded for audit.\n- `timeout` is in milliseconds: default 120000, max 600000. A non-zero exit or a timeout comes back as an error carrying the same output.\n- Provide a short `description` (5–10 words) of what the command does — it is shown to the user while the command runs.\n- `run_in_background: true` launches the command detached (a server, a long build or test run): you get a shell ID back immediately and keep working. Read its incremental output with `BashOutput`, stop it with `KillShell`. A background job's lifetime follows the session, not this task.\n- On a strict host the command must match an allowlist (git status/diff, pytest, npm/pnpm test, and read-only grep/rg/find/ls) and shell metacharacters are rejected; otherwise the full command runs through bash (pipes, redirection, chaining) and anything not on the allowlist needs a one-time approval.\n- The process is not sandboxed — it runs real workspace code, so use only in a trusted workspace.\n- To read a file, search content, or list files, prefer `Read` / `Grep` / `Glob` — they are cheaper and need no approval. Avoid `cat`/`grep`/`find` here for those jobs.",
+        "name": "Bash",
         "parameters": {
           "additionalProperties": false,
           "properties": {
@@ -138,17 +138,20 @@
     },
     {
       "function": {
-        "description": "Checks the status and latest output of a background shell job.\n\n- Give the `job_id` returned by `shell_run` with `run_in_background: true`. Returns the status (`running` or `exited`), an `exit_code` once finished, and a ref to a fresh snapshot of the output so far — dereference the ref to read the bytes.\n- `truncated: true` means the output overflowed the cap and the snapshot is the most-recent tail (oldest output dropped). Safe and cheap to call repeatedly.\n- To stop the job use `shell_kill`; to start a new command use `shell_run`.",
-        "name": "shell_poll",
+        "description": "Retrieves the output of a background shell started with `Bash` `run_in_background: true`.\n\n- Give the `bash_id` the launch returned. Each call returns ONLY the output produced since your previous check (like tailing a log), plus a status line (`running`, or `exited`/`killed` with the exit code).\n- Optional `filter`: a regular expression applied per line — only matching lines of the new output are returned.\n- A buffer-overflow note means the job printed faster than you polled and the oldest undelivered output was dropped.\n- Safe and cheap to call repeatedly. To stop the job use `KillShell`.",
+        "name": "BashOutput",
         "parameters": {
           "additionalProperties": false,
           "properties": {
-            "job_id": {
+            "bash_id": {
+              "type": "string"
+            },
+            "filter": {
               "type": "string"
             }
           },
           "required": [
-            "job_id"
+            "bash_id"
           ],
           "type": "object"
         }
@@ -157,17 +160,17 @@
     },
     {
       "function": {
-        "description": "Stops a background shell job you started.\n\n- Give the `job_id` from a `shell_run` call with `run_in_background: true`. Sends SIGTERM, then SIGKILL after a short grace. The call returns immediately; the job's final output snapshot stays readable via its ref.\n- Use it to stop a server, build, or test run you launched and no longer need (e.g. started on the wrong port and want to restart).\n- To only check status or read output, use `shell_poll` instead.\n- Privileged: an operator policy may require approval or deny it.",
-        "name": "shell_kill",
+        "description": "Kills a background shell started with `Bash` `run_in_background: true`.\n\n- Give the `shell_id` the launch returned. Sends SIGTERM, then SIGKILL after a short grace. The call returns immediately; the job's exit is reported through the usual background-completion notice.",
+        "name": "KillShell",
         "parameters": {
           "additionalProperties": false,
           "properties": {
-            "job_id": {
+            "shell_id": {
               "type": "string"
             }
           },
           "required": [
-            "job_id"
+            "shell_id"
           ],
           "type": "object"
         }
@@ -209,7 +212,7 @@
         }
       ],
       "name": "stable_prefix",
-      "segment_hash": "67ae93bb17197329a0b78e34148886bbca67648001f5aed2d261f41910d12e62"
+      "segment_hash": "c14e2287a4dabee736919a753e5a319cf4755e759323f5934e165df341a7fabb"
     },
     {
       "content": [],

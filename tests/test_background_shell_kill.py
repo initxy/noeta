@@ -356,7 +356,7 @@ def test_driver_cancel_kills_session_background_jobs(tmp_path: Path) -> None:
 
 def test_shell_kill_tool_metadata() -> None:
     tool = ShellKillTool()
-    assert tool.name == "shell_kill"
+    assert tool.name == "KillShell"
     assert tool.risk_level == "high"
     assert tool.description  # hand-written canonical description
 
@@ -377,11 +377,13 @@ def test_shell_kill_tool_happy_path(tmp_path: Path) -> None:
         ctx,
     )
     assert started.success, started.summary
-    job_id = started.output["job_id"]
+    import re as _re
+
+    job_id = _re.search(r"background with ID: (\S+)", started.output).group(1)
     time.sleep(0.1)
-    result = kill.invoke({"job_id": job_id}, ctx)
+    result = kill.invoke({"shell_id": job_id}, ctx)
     assert result.success
-    assert result.output["status"] in ("killing", "killed")
+    assert "terminated" in result.output
     state = _await_terminal(reg, job_id)
     assert state["status"] == "killed"
 
@@ -399,7 +401,7 @@ def test_shell_kill_tool_unknown_job(tmp_path: Path) -> None:
     reg, _, store = _registry()
     kill = ShellKillTool()
     ctx = ToolContext(artifact_store=store, background_runner=reg)
-    result = kill.invoke({"job_id": "bg-nope"}, ctx)
+    result = kill.invoke({"shell_id": "bg-nope"}, ctx)
     assert not result.success
     assert "unknown" in result.summary.lower()
 

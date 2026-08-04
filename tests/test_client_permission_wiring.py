@@ -82,7 +82,7 @@ _ALL_TOOL_NAMES = [
     "Grep",
     "Write",
     "Edit",
-    "shell_run",
+    "Bash",
 ]
 
 
@@ -94,14 +94,14 @@ def test_approval_set_default_gates_high_risk_only():
     refs = _builtin_refs()
     got = _approval_set_for("default", refs)
     # The high-risk built-ins, and only those.
-    assert set(got) == {"Write", "Edit", "shell_run"}
+    assert set(got) == {"Write", "Edit", "Bash"}
 
 
 def test_approval_set_accept_edits_exempts_the_editors():
     refs = _builtin_refs()
     got = _approval_set_for("acceptEdits", refs)
     # Edit-class tools are exempted; shell_run stays gated.
-    assert set(got) == {"shell_run"}
+    assert set(got) == {"Bash"}
 
 
 def test_approval_set_bypass_empty():
@@ -209,7 +209,7 @@ def test_accept_edits_write_runs_without_approval(tmp_path: Path):
     )
     options = Options(
         system_prompt=_PROMPT,
-        allowed_tools=("Write", "shell_run"),
+        allowed_tools=("Write", "Bash"),
         permission_mode="acceptEdits",
     )
     envelopes = query(
@@ -228,9 +228,9 @@ def test_accept_edits_write_runs_without_approval(tmp_path: Path):
 
 
 def test_accept_edits_pure_function_still_gates_shell_run():
-    refs = _builtin_refs(["Write", "Edit", "shell_run", "Read"])
+    refs = _builtin_refs(["Write", "Edit", "Bash", "Read"])
     got = _approval_set_for("acceptEdits", refs)
-    assert set(got) == {"shell_run"}
+    assert set(got) == {"Bash"}
 
 
 def test_bypass_mode_pure_function_stores_empty_gate(tmp_path: Path):
@@ -246,7 +246,7 @@ def test_bypass_mode_pure_function_stores_empty_gate(tmp_path: Path):
     )
     try:
         assert client._host.permission_mode == "bypassPermissions"
-        refs = [builtin_tool_ref(n) for n in ["Write", "shell_run"]]
+        refs = [builtin_tool_ref(n) for n in ["Write", "Bash"]]
         assert _approval_set_for("bypassPermissions", refs) == ()
     finally:
         client.shutdown()
@@ -493,11 +493,11 @@ def test_default_mode_allowlisted_shell_runs_without_approval(tmp_path: Path):
     ``default`` — no approval suspend, the tool executes."""
     ws = _ws(tmp_path)
     provider = FakeLLMProvider(
-        responses=[_tooluse("s1", "shell_run", {"command": "git status"}), _end()]
+        responses=[_tooluse("s1", "Bash", {"command": "git status"}), _end()]
     )
     options = Options(
         system_prompt=_PROMPT,
-        allowed_tools=("shell_run",),
+        allowed_tools=("Bash",),
         permission_mode="default",
     )
     envelopes = query(
@@ -514,11 +514,11 @@ def test_default_mode_unlisted_shell_suspends_then_approve_runs(tmp_path: Path):
     ``default``; approving resumes and runs it."""
     ws = _ws(tmp_path)
     provider = FakeLLMProvider(
-        responses=[_tooluse("s1", "shell_run", {"command": "echo hi"}), _end()]
+        responses=[_tooluse("s1", "Bash", {"command": "echo hi"}), _end()]
     )
     options = Options(
         system_prompt=_PROMPT,
-        allowed_tools=("shell_run",),
+        allowed_tools=("Bash",),
         permission_mode="default",
     )
     client = Client(options, provider=provider, workspace_dir=ws,
@@ -543,11 +543,11 @@ def test_bypass_mode_unlisted_shell_runs_without_approval(tmp_path: Path):
     approval gate at all (ARBITRARY)."""
     ws = _ws(tmp_path)
     provider = FakeLLMProvider(
-        responses=[_tooluse("s1", "shell_run", {"command": "echo hi"}), _end()]
+        responses=[_tooluse("s1", "Bash", {"command": "echo hi"}), _end()]
     )
     options = Options(
         system_prompt=_PROMPT,
-        allowed_tools=("shell_run",),
+        allowed_tools=("Bash",),
         permission_mode="bypassPermissions",
     )
     envelopes = query(

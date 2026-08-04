@@ -12,6 +12,8 @@ inline into an event: only refs ride ``BackgroundShellStarted`` /
 
 from __future__ import annotations
 
+import re
+
 import sys
 import time
 from pathlib import Path
@@ -253,10 +255,10 @@ def test_shell_run_background_true_returns_handle(tmp_path: Path) -> None:
     )
     result = tool.invoke({"command": "printf hi", "run_in_background": True}, ctx)
     assert result.success
-    assert result.output["status"] == "running"
-    assert "job_id" in result.output
-    assert "ref" in result.output
-    _await_exit(reg, result.output["job_id"])
+    match = re.search(r"background with ID: (\S+)", result.output)
+    assert match, result.output
+    assert "BashOutput" in result.output
+    _await_exit(reg, match.group(1))
 
 
 def test_shell_run_background_without_runner_errors_cleanly(tmp_path: Path) -> None:
@@ -277,9 +279,8 @@ def test_shell_run_background_false_unchanged(tmp_path: Path) -> None:
     ctx = ToolContext(artifact_store=store)
     result = tool.invoke({"command": "printf hi"}, ctx)
     assert result.success
-    assert result.output["returncode"] == 0
-    assert "stdout_tail" in result.output  # the sync result shape
-    assert "job_id" not in result.output
+    assert result.output == "hi"  # the sync plain-text shape, no job handle
+    assert "background with ID" not in result.output
 
 
 def test_shell_run_background_reuses_mode_gate(tmp_path: Path) -> None:
@@ -308,13 +309,27 @@ def test_shell_poll_tool_returns_status_ref(tmp_path: Path) -> None:
         metadata={"task_id": "t-poll-tool", "trace_id": "tr"},
     )
     started = run.invoke({"command": "printf hi", "run_in_background": True}, ctx)
-    job_id = started.output["job_id"]
-    _await_exit(reg, job_id)
-    result = poll.invoke({"job_id": job_id}, ctx)
-    assert result.success
-    assert result.output["status"] == "exited"
-    assert "ref" in result.output
-    assert result.output["exit_code"] == 0
+    job_id = re.search(r"background with ID: (\S+)", started.output).group(1)
+    # Poll THROUGH THE TOOL until the job exits: each call returns only the
+    # new output, so collecting across calls must yield the whole stream.
+    import time
+
+    seen = ""
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        result = poll.invoke({"bash_id": job_id}, ctx)
+        assert result.success
+        seen += result.output
+        if "status: exited" in result.output:
+            break
+        time.sleep(0.05)
+    else:  # pragma: no cover - timing failure
+        raise AssertionError("job did not exit in time")
+    assert "status: exited (exit code 0)" in result.output
+    # The incremental output rode inline — no ref, no hash — and repeated
+    # polls never re-delivered it.
+    assert seen.count("hi") == 1
+    assert "ref" not in seen
 
 
 def test_shell_poll_low_risk(tmp_path: Path) -> None:

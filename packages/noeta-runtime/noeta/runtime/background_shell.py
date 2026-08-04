@@ -141,6 +141,12 @@ class _JobHandle:
     #: head is dropped. Surfaced on ``poll`` and the ``Polled`` / ``Exited``
     #: payloads so the model knows it is reading the tail, not the whole output.
     truncated: bool = False
+    #: Monotonic count of bytes ever appended (never decremented on the tail
+    #: drop); with ``delivered_total`` it derives the incremental slice a
+    #: ``BashOutput`` poll hands the model (only output since the last poll).
+    total_written: int = 0
+    #: How many appended bytes have already been delivered via ``poll``.
+    delivered_total: int = 0
     status: str = "running"  # "running" | "exited" | "killed"
     exit_code: Optional[int] = None
     watcher: Optional[threading.Thread] = None
@@ -284,7 +290,7 @@ class ProcessRegistry:
                     "reason": (
                         f"too many background jobs "
                         f"({running}/{self._max_jobs_per_root_task}); kill one with "
-                        f"shell_kill first"
+                        f"KillShell first"
                     ),
                 }
             self._jobs.setdefault(root_task_id, {})[job_id] = handle
@@ -339,6 +345,17 @@ class ProcessRegistry:
             # 'running' job already carrying an exit_code).
             status = handle.status
             exit_code = handle.exit_code
+            # The incremental slice: bytes appended since the last poll, taken
+            # from the buffer tail. A gap larger than the buffer means the
+            # oldest undelivered bytes were tail-dropped — reported as a count
+            # so the model knows the delta itself has a hole.
+            undelivered = handle.total_written - handle.delivered_total
+            take = min(undelivered, len(handle.buffer))
+            new_output = (
+                bytes(handle.buffer[len(handle.buffer) - take:]) if take else b""
+            )
+            new_output_dropped = undelivered - take
+            handle.delivered_total = handle.total_written
         self._event_log.system_emit(
             task_id=handle.root_task_id,
             type="BackgroundShellPolled",
@@ -360,6 +377,9 @@ class ProcessRegistry:
             "offset": ref.size,
             # Surfaced to the model so it knows this snapshot is the tail.
             "truncated": truncated,
+            # Only the output produced since the previous poll rides inline.
+            "new_output": new_output.decode("utf-8", errors="replace"),
+            "new_output_dropped": new_output_dropped,
         }
         if status in ("exited", "killed"):
             out["exit_code"] = exit_code
@@ -567,6 +587,7 @@ class ProcessRegistry:
                     break
                 with handle.lock:
                     handle.buffer.extend(chunk)
+                    handle.total_written += len(chunk)
                     if len(handle.buffer) > handle.output_cap:
                         # Tail-truncate (keep the most recent output), mirroring
                         # Tail-truncate (keep the most recent output), mirroring

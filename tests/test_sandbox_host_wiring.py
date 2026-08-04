@@ -467,7 +467,7 @@ def _fs_spec() -> AgentSpec:
         tools=(
             ToolRef(name="Read", risk_level="low", version="1"),
             ToolRef(name="Write", risk_level="high", version="1"),
-            ToolRef(name="shell_run", risk_level="high", version="1"),
+            ToolRef(name="Bash", risk_level="high", version="1"),
         ),
         plugins=(),
         default_budget=BudgetSpec(max_iterations=20),
@@ -533,7 +533,7 @@ def test_host_with_attach_config_routes_fs_tools_to_container(
     # No explicit ref → the attach path's default container.
     engine = _build(host, task_id="t1")
     backend = engine._tools["Read"].exec_env
-    for name in ("Read", "Write", "shell_run"):
+    for name in ("Read", "Write", "Bash"):
         assert engine._tools[name].exec_env is backend
     assert backend.base_url == "http://box:8080"
     # the fs root is the lexical CONTAINER workdir, not the host workspace_dir

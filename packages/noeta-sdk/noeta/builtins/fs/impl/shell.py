@@ -1,4 +1,4 @@
-"""``shell_run`` plus the two tools that manage the background jobs it starts.
+"""``Bash`` plus the two tools that manage the background jobs it starts.
 
 The tier is fixed at construction: ``ALLOWLIST`` rejects shell metacharacters
 before tokenisation and runs the structurally matched argv directly with no
@@ -6,13 +6,15 @@ shell, so nothing is ever executed as a substring of the model's string, while
 ``ARBITRARY`` is a real ``bash -c`` whose safety boundary is the host's
 PermissionGuard plus approval predicate rather than an argv wall. Either way a
 command gets ``cwd = workspace.root``, a bounded timeout, a scrubbed
-environment, and an output cap that offloads the full streams to artifacts —
-and nothing beyond that: the spawned process is **not** sandboxed and can write
-files anywhere on the host, so ``shell_run`` suits a trusted workspace only.
+environment, and a capped inline rendering (the full streams still go to the
+ContentStore as audit artifacts) — and nothing beyond that: the spawned process
+is **not** sandboxed and can write files anywhere on the host, so ``Bash``
+suits a trusted workspace only.
 """
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -30,20 +32,17 @@ from noeta.runtime.shell_policy import (
     _matches_allowlist,
     _parse_argv,
     _resolve_timeout,
-    _STDERR_TAIL_BYTES,
-    _STDOUT_TAIL_BYTES,
 )
-from noeta.runtime.subproc import RunOutcome, tail_bytes
+from noeta.runtime.subproc import RunOutcome
 from noeta.runtime.workspace import WorkspaceRoot
 from noeta.tools.invocation import require_str
 from noeta.protocols.resources import load_markdown
 from noeta.tools.limits import (
-    INLINE_CONTENT_MAX_BYTES,
+    SHELL_INLINE_MAX_CHARS,
     SUMMARY_EMBED_MAX_BYTES,
-    fit_output_fields,
+    elide_middle,
     truncate_bytes,
 )
-from noeta.tools.refs import ref_json
 
 
 __all__ = [
@@ -57,13 +56,27 @@ def _err(name: str, message: str) -> ToolResult:
     return ToolResult(success=False, summary=f"{name}: {message}")
 
 
+def _render_streams(stdout: bytes, stderr: bytes) -> str:
+    """The model-facing body: stdout, then stderr under a label only when both
+    streams carry content (matching the familiar single-stream view when only
+    one does)."""
+    out_text = stdout.decode("utf-8", errors="replace").rstrip("\n")
+    err_text = stderr.decode("utf-8", errors="replace").rstrip("\n")
+    if out_text and err_text:
+        body = f"{out_text}\nstderr:\n{err_text}"
+    else:
+        body = out_text or err_text
+    return elide_middle(body, SHELL_INLINE_MAX_CHARS)
+
+
 @dataclass
 class ShellRunTool:
-    """Shell runner with a strict (allowlist) and a full-bash (arbitrary) tier.
+    """Shell runner with a strict (allowlist) and a full-bash (arbitrary) tier
+    (tool name ``Bash``).
 
     Honest boundary: Noeta guarantees cwd = workspace, scrubbed env, bounded
-    timeout, and output cap. It does **not** sandbox the spawned process —
-    commands execute workspace code, which can do arbitrary local IO.
+    timeout, and a capped inline rendering. It does **not** sandbox the spawned
+    process — commands execute workspace code, which can do arbitrary local IO.
     Trusted-workspace use only.
     """
 
@@ -79,7 +92,7 @@ class ShellRunTool:
     #: sandbox container. Background spawns always go through the host's
     #: ``background_runner`` instead.
     exec_env: ExecEnv = field(default_factory=LocalExecEnv)
-    name: str = "shell_run"
+    name: str = "Bash"
     description: str = field(default=load_markdown(__package__, "shell_run"))
     # High risk so PermissionGuard treats this as privileged.
     risk_level: str = "high"
@@ -103,7 +116,7 @@ class ShellRunTool:
 
     def invoke(self, arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         if self.mode is ShellMode.OFF:
-            return _err(self.name, "shell_run is disabled")
+            return _err(self.name, "Bash is disabled")
         command = arguments.get("command")
         if not isinstance(command, str) or not command.strip():
             return _err(self.name, "requires non-empty 'command'")
@@ -154,6 +167,7 @@ class ShellRunTool:
             command=command,
             outcome=outcome,
             ctx=ctx,
+            timeout_s=timeout_s,
         )
 
     def _spawn_background(
@@ -162,9 +176,9 @@ class ShellRunTool:
         """Hand the validated argv to the host's background runner.
 
         The runner spawns detached and records ``BackgroundShellStarted`` on the
-        launching task's stream, so the ``{job_id, ref}`` handle can be returned
-        immediately. A ``None`` runner means the host did not enable background
-        execution, which must refuse rather than fall back to a blocking run."""
+        launching task's stream, so the job handle can be returned immediately.
+        A ``None`` runner means the host did not enable background execution,
+        which must refuse rather than fall back to a blocking run."""
         runner = ctx.background_runner
         if runner is None:
             return _err(self.name, "background execution is not available on this host")
@@ -183,15 +197,15 @@ class ShellRunTool:
         # ("kill one first") rather than a crash.
         if spawned.get("rejected"):
             return _err(self.name, str(spawned["reason"]))
+        job_id = spawned["job_id"]
         summary_cmd = truncate_bytes(command, SUMMARY_EMBED_MAX_BYTES)
         return ToolResult(
             success=True,
-            output={
-                "job_id": spawned["job_id"],
-                "status": "running",
-                "ref": spawned["ref"],
-            },
-            summary=f"{self.name} {summary_cmd} → background ({spawned['job_id']})",
+            output=(
+                f"Command running in background with ID: {job_id}\n"
+                "Read its output with BashOutput; stop it with KillShell."
+            ),
+            summary=f"{self.name} {summary_cmd} → background ({job_id})",
         )
 
 
@@ -201,74 +215,68 @@ def _build_shell_result(
     command: str,
     outcome: RunOutcome,
     ctx: ToolContext,
+    timeout_s: int,
 ) -> ToolResult:
-    stdout_tail, _ = tail_bytes(outcome.stdout, _STDOUT_TAIL_BYTES)
-    stderr_tail, _ = tail_bytes(outcome.stderr, _STDERR_TAIL_BYTES)
-    # ContentStore.put dedups on hash, so calling once + reusing the ref
-    # keeps the artifact list and the `output.*_ref` JSON form in sync.
-    stdout_ref_obj = (
-        ctx.artifact_store.put(outcome.stdout, media_type="text/plain")
-        if outcome.stdout
-        else None
-    )
-    stderr_ref_obj = (
-        ctx.artifact_store.put(outcome.stderr, media_type="text/plain")
-        if outcome.stderr
-        else None
-    )
-    output: dict[str, Any] = {
-        "command": truncate_bytes(command, 512),
-        "returncode": outcome.returncode,
-        "duration_ms": outcome.duration_ms,
-        "stdout_tail": stdout_tail,
-        "stderr_tail": stderr_tail,
-        "stdout_truncated": outcome.stdout_truncated,
-        "stderr_truncated": outcome.stderr_truncated,
-        "timed_out": outcome.timed_out,
-    }
-    if stdout_ref_obj is not None:
-        output["stdout_ref"] = ref_json(stdout_ref_obj)
-    if stderr_ref_obj is not None:
-        output["stderr_ref"] = ref_json(stderr_ref_obj)
-    output = fit_output_fields(
-        output,
-        shrink_order=["stderr_tail", "stdout_tail", "command"],
-        max_bytes=INLINE_CONTENT_MAX_BYTES,
-    )
+    # The FULL streams are the audit artifacts; only the capped rendering
+    # rides inline, and no ref ever enters the model-facing text.
+    artifacts = []
+    if outcome.stdout:
+        artifacts.append(
+            ctx.artifact_store.put(outcome.stdout, media_type="text/plain")
+        )
+    if outcome.stderr:
+        artifacts.append(
+            ctx.artifact_store.put(outcome.stderr, media_type="text/plain")
+        )
+    body = _render_streams(outcome.stdout, outcome.stderr)
     summary_cmd = truncate_bytes(command, SUMMARY_EMBED_MAX_BYTES)
-    status = "OK" if outcome.returncode == 0 else f"exit={outcome.returncode}"
     if outcome.timed_out:
-        status = "timeout"
-    artifacts = [
-        ref for ref in (stdout_ref_obj, stderr_ref_obj) if ref is not None
-    ]
+        return ToolResult(
+            success=False,
+            output=body,
+            artifacts=artifacts,
+            summary=(
+                f"Command timed out after {timeout_s}s"
+            ),
+        )
+    if outcome.returncode != 0:
+        return ToolResult(
+            success=False,
+            output=body,
+            artifacts=artifacts,
+            summary=f"Exit code {outcome.returncode}",
+        )
     return ToolResult(
         success=True,
-        output=output,
+        output=body if body else "(no output)",
         artifacts=artifacts,
-        summary=f"{tool_name} {summary_cmd} → {status} ({outcome.duration_ms}ms)",
+        summary=f"{tool_name} {summary_cmd} → OK ({outcome.duration_ms}ms)",
     )
 
 
 @dataclass
 class ShellPollTool:
-    """Pull the latest snapshot + status of a background job.
+    """Pull the output a background job produced since the last check (tool
+    name ``BashOutput``).
 
-    Thin by design: it returns ``{status, ref, offset}``, never the bytes, so
-    the model dereferences ``ref`` through the ordinary deref path instead of
-    this becoming a second, fat cursor-read tool. The host runner mints a fresh
-    content-addressed snapshot and records ``BackgroundShellPolled(ref,
-    offset)``, so the model reads exactly the prefix it was shown.
+    Each call returns ONLY the new output (plus the job status), so repeated
+    polling reads like tailing a log. The host runner still mints a
+    content-addressed snapshot per poll and records ``BackgroundShellPolled``,
+    so a resume reproduces exactly the prefix the model had seen.
     """
 
-    name: str = "shell_poll"
+    name: str = "BashOutput"
     description: str = field(default=load_markdown(__package__, "shell_poll"))
     risk_level: str = "low"
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",
-            "properties": {"job_id": {"type": "string"}},
-            "required": ["job_id"],
+            "properties": {
+                "bash_id": {"type": "string"},
+                # optional per-line regex filter on the new output
+                "filter": {"type": "string"},
+            },
+            "required": ["bash_id"],
             "additionalProperties": False,
         }
     )
@@ -278,53 +286,74 @@ class ShellPollTool:
         if runner is None:
             return _err(self.name, "background execution is not available on this host")
         job_id = require_str(
-            arguments, "job_id", lambda m: _err(self.name, m),
-            message="requires a non-empty 'job_id'",
+            arguments, "bash_id", lambda m: _err(self.name, m),
+            message="requires a non-empty 'bash_id'",
         )
         if isinstance(job_id, ToolResult):
             return job_id
+        line_filter = arguments.get("filter")
+        if line_filter is not None:
+            if not isinstance(line_filter, str):
+                return _err(self.name, "'filter' must be a string")
+            try:
+                filter_re = re.compile(line_filter)
+            except re.error as exc:
+                return _err(self.name, f"invalid 'filter' regex: {exc}")
+        else:
+            filter_re = None
         state = runner.poll(job_id)
         if state.get("status") == "unknown":
             return _err(self.name, f"unknown background job {job_id!r}")
-        output: dict[str, Any] = {
-            "status": state["status"],
-            "ref": state["ref"],
-            "offset": state["offset"],
-            # Tells the model the snapshot is only the tail: the buffer
-            # overflowed ``output_cap`` and the oldest output was dropped.
-            "truncated": bool(state.get("truncated")),
-        }
-        if "exit_code" in state:
-            output["exit_code"] = state["exit_code"]
+
+        status = state["status"]
+        status_line = f"status: {status}"
+        if status in ("exited", "killed") and state.get("exit_code") is not None:
+            status_line += f" (exit code {state['exit_code']})"
+        new_output = str(state.get("new_output") or "")
+        if filter_re is not None and new_output:
+            new_output = "\n".join(
+                line for line in new_output.splitlines() if filter_re.search(line)
+            )
+        parts = [status_line]
+        dropped = int(state.get("new_output_dropped") or 0)
+        if dropped:
+            parts.append(
+                f"[{dropped} bytes of older output dropped (buffer overflow)]"
+            )
+        if new_output:
+            parts.append(elide_middle(new_output, SHELL_INLINE_MAX_CHARS))
+        else:
+            parts.append("(no new output)")
         return ToolResult(
             success=True,
-            output=output,
-            summary=f"{self.name} {job_id} → {state['status']}",
+            output="\n".join(parts),
+            summary=f"{self.name} {job_id} → {status}",
         )
 
 
 @dataclass
 class ShellKillTool:
-    """Terminate a background shell job the model started.
+    """Terminate a background shell job the model started (tool name
+    ``KillShell``).
 
     Lets the agent stop a job it launched wrong — a server on the wrong port, a
     build it must restart — so it is never stuck waiting on a human. The call
     returns immediately; the host's watcher sends SIGTERM then SIGKILL after a
     grace, reaps the process, records ``BackgroundShellKilled`` and fires the
-    same completion notice a background ``shell_run`` exit does, so the model
+    same completion notice a background ``Bash`` exit does, so the model
     learns the job ended.
     """
 
-    name: str = "shell_kill"
+    name: str = "KillShell"
     description: str = field(default=load_markdown(__package__, "shell_kill"))
-    # High risk so PermissionGuard gates it exactly like ``shell_run``: an
+    # High risk so PermissionGuard gates it exactly like ``Bash``: an
     # operator policy can deny it or require approval.
     risk_level: str = "high"
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",
-            "properties": {"job_id": {"type": "string"}},
-            "required": ["job_id"],
+            "properties": {"shell_id": {"type": "string"}},
+            "required": ["shell_id"],
             "additionalProperties": False,
         }
     )
@@ -334,8 +363,8 @@ class ShellKillTool:
         if runner is None:
             return _err(self.name, "background execution is not available on this host")
         job_id = require_str(
-            arguments, "job_id", lambda m: _err(self.name, m),
-            message="requires a non-empty 'job_id'",
+            arguments, "shell_id", lambda m: _err(self.name, m),
+            message="requires a non-empty 'shell_id'",
         )
         if isinstance(job_id, ToolResult):
             return job_id
@@ -344,8 +373,6 @@ class ShellKillTool:
             return _err(self.name, f"unknown background job {job_id!r}")
         return ToolResult(
             success=True,
-            output={"job_id": job_id, "status": result["status"]},
+            output=f"Shell {job_id} is being terminated ({result['status']})",
             summary=f"{self.name} {job_id} → {result['status']}",
         )
-
-

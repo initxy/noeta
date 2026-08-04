@@ -155,7 +155,7 @@ def test_unknown_builtin_name_raises_keyerror() -> None:
     assert "not_a_tool" in msg
     # Enumeration must include every builtin (spot-check two representatives).
     assert "Read" in msg
-    assert "shell_run" in msg
+    assert "Bash" in msg
 
 
 def test_illegal_tool_entry_raises_typeerror() -> None:
@@ -239,7 +239,7 @@ def test_builtin_tool_ref_inventory_complete() -> None:
         "Edit", "Write",
         # fs shell — the background triplet is catalogued together so
         # ``tools=None`` can whitelist all three at once.
-        "shell_run", "shell_poll", "shell_kill",
+        "Bash", "BashOutput", "KillShell",
         # web — not an fs tool, but catalogued so ``tools=None`` includes it.
         "webfetch",
         # web_search is only built when NOETA_WEB_SEARCH_API_KEY is set; the
@@ -421,9 +421,9 @@ def test_builtin_tool_whitelist_is_pinned() -> None:
         "Glob",
         "Grep",
         "Read",
-        "shell_kill",
-        "shell_poll",
-        "shell_run",
+        "KillShell",
+        "BashOutput",
+        "Bash",
         "web_search",
         "webfetch",
         "Write",
@@ -453,11 +453,11 @@ def test_disallowed_tools_subtracts_from_builtin_set() -> None:
     main, _ = compile_options(
         Options(
             system_prompt="hi",
-            disallowed_tools=("shell_run", "Edit"),
+            disallowed_tools=("Bash", "Edit"),
         )
     )
     names = {t.name for t in main.tools}
-    assert "shell_run" not in names
+    assert "Bash" not in names
     assert "Edit" not in names
     assert len(names) == len(builtin_tool_classes()) - 2
 
