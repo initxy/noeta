@@ -18,7 +18,7 @@
 | `system_prompt` | `str \| SystemPromptPreset` —— **必填** | 一个逐字的字符串，或一个在编译时解析的具名 preset |
 | `name` | `str = "main"` | 与某个 `agents` 键冲突的名字会抛出 `ValueError` |
 | `agents` | `Mapping[str, AgentDefinition] = {}` | 一个**扁平**的 dict，从不嵌套 |
-| `allowed_tools` | `tuple[str \| ToolLike, ...] \| None = None` | 一个**替换式**白名单：给了 tuple 就意味着*只有*这些工具。`None` = 全部 11 个内置工具；`()` = 没有工具 |
+| `allowed_tools` | `tuple[str \| ToolLike, ...] \| None = None` | 一个**替换式**白名单：给了 tuple 就意味着*只有*这些工具。`None` = 全部 10 个内置工具；`()` = 没有工具 |
 | `disallowed_tools` | `tuple[str, ...] = ()` | 从当前适用的基础列表中减掉；不存在的名字会被忽略 |
 | `permission_mode` | `"default"` \| `"acceptEdits"` \| `"bypassPermissions"` | 在编译时校验 |
 | `max_turns` | `int \| None` | `budget.max_iterations` 的语法糖；两个都设会抛出 `ValueError` |
@@ -70,13 +70,13 @@ print(model_capabilities(["claude-sonnet-4-6", "gpt-4o-mini"]))
 #    'gpt-4o-mini': {'supports_vision': False}}
 ```
 
-两个模式元组返回的顺序就是选择器应当展示的顺序，而不是字典序。`model_capabilities` 对每个模型只返回一个键 `supports_vision`——与 provider 自身的视觉门控同名——未收录的选择器返回 `False`，而不是去承诺一个我们无法担保的能力。
+两个模式元组返回的顺序就是选择器应当展示的顺序，而不是字典序。`model_capabilities` 对每个模型只返回一个键 `supports_vision`——与 provider 自身的视觉门控同名——未收录的选择器返回 `True`：适配器会放行未知模型的图片、把裁决权交给 provider，所以门控不能拦下请求本身会接受的东西。只有目录里明确标记 `supports_vision=False` 的行才会拒绝。
 
 ## 插件激活
 
 `Options.plugins` 指名*这个 agent* 使用哪些已加载的插件。激活会进入身份：每个被识别的名字都会折进 `AgentSpec.plugins` 元组，而能力门控就是对那个元组做一次成员检查。
 
-`DEFAULT_PLUGINS` 是 `("fs", "web")`。这两个在这个意义上是**身份惰性**的：激活它们不会打开任何能力开关，也不会改变工具集——无论如何，默认的 11 个工具都是从 `fs` 和 `web` 的 manifest 里读出来的。但它们确实会出现在编译后的 `AgentSpec.plugins` 元组里，因此把它们去掉是一次实实在在的身份变更：
+`DEFAULT_PLUGINS` 是 `("fs", "web")`。这两个在这个意义上是**身份惰性**的：激活它们不会打开任何能力开关，也不会改变工具集——无论如何，默认的 10 个工具都是从 `fs` 和 `web` 的 manifest 里读出来的。但它们确实会出现在编译后的 `AgentSpec.plugins` 元组里，因此把它们去掉是一次实实在在的身份变更：
 
 ```python
 compile_options(Options(system_prompt="x"))[0].plugins             # → ('fs', 'web')
@@ -85,7 +85,7 @@ compile_options(Options(system_prompt="x", plugins=()))[0].plugins # → ()
 
 一个名字必须是下面三者之一，否则编译会大声失败：
 
-- 一个携带身份的**内置能力包**——`memory`、`browser`、`mcp`、`TodoWrite`、`AskUserQuestion`、`skill_invocation`、`delegation`；
+- 一个携带身份的**内置能力包**——`memory`、`browser`、`mcp`、`todo_write`、`ask_user_question`、`skill_invocation`、`delegation`；
 - 一个**身份惰性**的内置名字，之所以被识别，是为了让打错字仍然失败——`app`、`fs`、`governance`、`presets`、`providers`、`react`、`reminders`、`sandbox`、`skills`、`storage`、`web`、`workspace`；
 - 交给 `Client` 的那个 `PluginSet` 里某个 **插件的名字**。
 
@@ -174,6 +174,12 @@ compile_options(options, *, plugins=None, preset_prompts=None)
 | --- | --- | --- |
 | `memory_dir` / `global_memory_dir` | `None` | 宿主级的存储根 |
 | `memory_root_resolver` | `None` | `(task_id) -> Path \| None`，按任务的根 |
+
+**插件运维配置。**
+
+| 字段 | 默认值 | 用途 |
+| --- | --- | --- |
+| `plugin_config` | `{}` | `插件名 -> {键: 值}`，由 session pack 通过 `ctx.config("<name>")` 读取。第三方名字原样透传；对 SDK 自己推导的那四个（`fs` / `skills` / `workspace` / `memory`），host 给的键是**逐键覆盖**的。见[写一个插件](../how-to/write-a-plugin.md) |
 
 **总开关与策略。**
 

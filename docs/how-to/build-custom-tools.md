@@ -89,7 +89,7 @@ client = Client(options, provider=my_provider, workspace_dir="./")
 
 `allowed_tools` **is** the selection: a custom tool is available only if it
 appears there, so list your own alongside the built-ins you want. `None`
-selects the 11-name built-in whitelist and picks up nothing custom.
+selects the 10-name built-in whitelist and picks up nothing custom.
 `disallowed_tools` subtracts names from the parsed list; it never adds
 anything.
 
@@ -198,7 +198,7 @@ both halves of this page.
 ## Next steps
 
 - [Connect MCP](connect-mcp.md) — remote MCP servers and their `mcp__` namespace
-- [Built-in tools](../reference/tools.md) — the 11-name whitelist and its risk
+- [Built-in tools](../reference/tools.md) — the 10-name whitelist and its risk
   levels
 - [Guard vs Observer](../concepts/guard-observer.md) — how the permission system
   decides

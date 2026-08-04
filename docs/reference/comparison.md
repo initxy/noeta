@@ -59,7 +59,7 @@ and hooks, and it manages the conversation for you.
 | **What is persisted** | The conversation, managed for you | An event ledger; state is `fold(events)`, never stored as the primary copy |
 | **Suspend / wake** | Resume a session | `WakeCondition` matching + `Dispatcher` + `Lease`, delivered exactly once |
 | **Compaction** | Automatic summarisation | `CompactionRequested` / `Compacted` events; originals stay on the stream |
-| **Tools** | Built-in tools, `@tool`, MCP | 11 built-in tools, `@tool` (carrying `version` and `risk_level`), MCP over stdio and HTTP, plus in-process SDK MCP servers |
+| **Tools** | Built-in tools, `@tool`, MCP | 10 built-in tools, `@tool` (carrying `version` and `risk_level`), MCP over stdio and HTTP, plus in-process SDK MCP servers |
 | **Permissions** | `permission_mode`, an approval callback, hooks | `permission_mode` (`default` / `acceptEdits` / `bypassPermissions`), `can_use_tool`, and Guards that rule before the act |
 | **Extension** | Hooks | Sixteen manifest-declared surfaces plus the single-writer rule (observers cannot mutate) |
 | **Concurrency** | One client in-process | `Client.start_workers(n)` for a resident pool; multi-host on Postgres |

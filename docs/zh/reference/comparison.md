@@ -25,7 +25,7 @@ Claude Agent SDK 是一个在 Claude 上构建 agent 的客户端库。它提供
 | **持久化什么** | 那场对话，由它替你管理 | 一本事件账本；状态是 `fold(events)`，从不作为主副本存下来 |
 | **挂起 / 唤醒** | 恢复一个 session | `WakeCondition` 匹配 + `Dispatcher` + `Lease`，恰好一次投递 |
 | **压缩** | 自动摘要 | `CompactionRequested` / `Compacted` 事件；原文仍留在流上 |
-| **工具** | 内置工具、`@tool`、MCP | 11 个内置工具、`@tool`（携带 `version` 和 `risk_level`）、基于 stdio 和 HTTP 的 MCP，外加进程内 SDK MCP 服务器 |
+| **工具** | 内置工具、`@tool`、MCP | 10 个内置工具、`@tool`（携带 `version` 和 `risk_level`）、基于 stdio 和 HTTP 的 MCP，外加进程内 SDK MCP 服务器 |
 | **权限** | `permission_mode`、一个审批回调、钩子 | `permission_mode`（`default` / `acceptEdits` / `bypassPermissions`）、`can_use_tool`，以及在动作之前裁决的 Guard |
 | **扩展** | 钩子 | 十六个由 manifest 声明的 Surface，加上单写者规则（observer 不能改动任何东西） |
 | **并发** | 进程内一个 client | `Client.start_workers(n)` 提供常驻池；在 Postgres 上支持多主机 |

@@ -33,7 +33,7 @@ priority = 500
 | 字段 | 形状 | 含义 |
 | --- | --- | --- |
 | `name` | `str`，必填 | 这个插件的身份——加载时的去重键**以及**激活名 |
-| `requires-noeta` | `str \| None` | 一个版本范围（仅作参考） |
+| `requires-noeta` | `str \| None` | 一个版本范围——加载时会判定（告警；`strict` 下拒绝） |
 | `config-schema` | `table \| None` | 面向运维配置的可选 schema |
 | `contributions` | 表数组 | 一个贡献一条 |
 
@@ -88,7 +88,24 @@ def stay_brief(view):
 
 ## 版本约束：`requires-noeta`
 
-`requires-noeta` 记录这个插件是针对哪个 SDK 版本范围写的。它**仅作参考**——loader 不会拒绝一个范围不被满足的插件——但它是宿主在审计一组插件时会读的那个字段，也是当某个贡献开始依赖一个更新的 Surface 时该去调整的字段。从一个已加载的插件上读它：
+`requires-noeta` 记录这个插件是针对哪个 SDK 版本范围写的，loader 在加载时会拿它跟已安装的 `noeta-sdk` 版本**做实际判定**：
+
+| 结果 | 默认 | `load_plugins(strict=True)` |
+| --- | --- | --- |
+| 范围被满足 | 静默 | 静默 |
+| 范围不被满足 | 抛出 `PluginVersionWarning`，指名插件、它声明的范围和已安装的版本；**插件照常加载** | 抛出 `PluginError`，加载失败 |
+| 无法识别的版本表达式 | 抛出 `PluginVersionWarning`："unrecognized requires-noeta specifier … not enforced" | 同样只是告警；**绝不**转成拒绝 |
+| `noeta-sdk` 没有安装元数据（仓库内直接跑源码） | 视为满足，只记一条 debug 日志 | 同上 |
+
+默认只告警，是因为一个范围是作者对"我测过什么"的声明，而不是一把锁：拿它来拒绝，会在 SDK 第一次打出插件还没来得及重测的补丁版本时，直接搞坏一个本来能跑的部署。`strict=True` 面向的是把"针对本 SDK 测过"当作发布闸门的部署。
+
+判定器刻意做得很小、不引入依赖——支持 `>=`、`>`、`<=`、`<`、`==`、`!=` 作用在点分版本号上，用逗号做 AND 连接，空格随便写。比这更复杂的东西（`~=`、extras、epoch、预发布标记）一律读作"无法识别"并如实报出来，而不是去猜——一个插件绝不会因为一种 loader 从未承诺理解的写法而被拒绝。
+
+```toml
+requires-noeta = ">=0.6,<1.0"
+```
+
+从一个已加载的插件上读它：
 
 ```python
 print(pset.get("memory").manifest.requires_noeta)   # → '>=0.4'
@@ -123,6 +140,7 @@ load_plugins(
     trust_store=None,            # Path | None — defaults to ~/.noeta/trust.json
     registry=None,               # SurfaceRegistry | None — defaults to standard_registry()
     entry_point_group="noeta.plugins",
+    strict=False,                # bool —— 拒绝一个不被满足的 requires-noeta
 ) -> PluginSet
 ```
 
@@ -131,6 +149,7 @@ load_plugins(
 - `entry_points=True` 通过 `importlib.metadata` 发现 `noeta.plugins` 组；传一个 entry-point 样式对象的可迭代对象（每个暴露 `.name` 和 `.dist`）则改为注入它们。一个所属分发未随包提供 `noeta-plugin.toml` 的 entry point 会大声失败。
 - `modules` 的条目可以是一个点分模块、一个 `.py` 文件、一个目录（按来源 3 或来源 4 的方式扫描），或一份 `.toml` manifest。
 - `user_dirs` 无条件加载；`workspace_dirs` 只在该目录位于信任存储中时才加载。两者都会扫描携带 `noeta-plugin.toml` 的子目录（零执行）**以及**顶层的 `*.py` 单文件插件（会被执行——那是一个受信目录），并跳过以 `_` 开头的文件。
+- `strict=True` 把一个不被满足的 `requires-noeta` 从告警变成 `PluginError`（见上面那张表）。无法解析的版本表达式仍然只是告警。
 
 跨来源的重复插件 **名字**是一个错误，并会指名两个来源。
 
@@ -152,8 +171,10 @@ load_plugins(
 | `activation_session_packs(only=None)` | `session_pack` 工厂 | 是 |
 | `activation_control_tools(only=None)` | `control_tool` 工厂 | 是 |
 | `process_hooks()` | 来自外部插件的 `(guards, observers)`，按 `(plugin, name)` 顺序 | 是 |
+| `host_skills_dirs()` | 外部插件的 `skills` 路径，按 `(plugin, name)` 顺序 | 是 |
+| `host_mcp_servers()` | 外部插件的 `((alias, plugin, SdkMcpServer), …)` | 是 |
 
-`Client` 在构建期间调用这些激活投影和 `process_hooks`，而绝不在某一轮里调用。内置插件被排除在它们全部之外——内置项的效果搭乘的是 `compile_options` 按名字处理的那套激活词汇。`only=` 参数把解析限制在某个 agent 实际激活的那些名字上，因此一个被加载但未被激活的插件，它的模块体永远不会运行。
+`Client` 在构建期间调用这些激活投影、`process_hooks` 以及那两个 `host_*` 投影，而绝不在某一轮里调用。`host_*` 这一对和 `process_hooks` 都**不**接受 `only=`：它们的 Surface 是进程级或 host 接线的，加载本身就让它们生效。内置插件被排除在它们全部之外——内置项的效果搭乘的是 `compile_options` 按名字处理的那套激活词汇。`only=` 参数把解析限制在某个 agent 实际激活的那些名字上，因此一个被加载但未被激活的插件，它的模块体永远不会运行。
 
 ## 信任存储
 
@@ -178,10 +199,15 @@ pset = load_plugins(workspace_dirs=["./workspace/.noeta/plugins"])
 加载故障是**大声的**，并在启动时让 client 构建失败，绝不会落在会话中途的某一轮。
 
 - 一份糟糕或缺失的 manifest、一个损坏的文件、一个无法 import 的 `ref`、一个缺失的 `ref` 属性，或一个没通过其 Surface 校验器的值，都会抛出指名该插件的 `PluginError`。
-- **任何冲突**——两个插件声称同一个键、跨来源的重复插件名、第二个 `policy` 或 `provider`——都会抛出 `PluginError` 并**指名双方。不存在覆盖。**
+- **任何冲突**——两个插件声称同一个键、跨来源的重复插件名、第二个 `policy` 或 `provider`、一个配方已经占用的 `mcp_server` 别名——都会抛出 `PluginError` 并**指名双方。不存在覆盖。**
+- 一个**写了但不是整数的 `priority`** 会抛出 `PluginError`，指名插件和那条贡献。按 priority 排序的 Surface 是按整数排的，把它强行折成 0，会把这条贡献放到它作者本想让它待在末尾的那个档位的最前面；完全不写 `priority` 仍然是文档规定的默认值 `0`。
 - 一个**未知的激活名**会在编译时抛出 `ValueError`。
 
-唯一不抛异常的跳过，是一个未受信的 `workspace_dirs` 条目：它会以 `UntrustedPluginDirWarning` 告警并被跳过。
+有三种不抛异常的跳过，每一种都带告警：
+
+- 一个未受信的 `workspace_dirs` 条目——`UntrustedPluginDirWarning`；
+- **在 `enabled` 白名单生效时，一个名字无法被静态读出的单文件插件**——`UnnamedPluginFileWarning`。白名单授权的是*名字*，而一个只有跑起来才知道自己叫什么的文件，压根没有名字可供授权；为了搞清楚它叫什么而去执行它，等于把这道门自己拆了。加一行模块级的 `noeta_plugin_name = "..."`（或者一个 `PluginBuilder("...")` 字面量）就能让这个文件可被门控。**没有**白名单时，这个文件仍然像以前一样被执行并加载。
+- 一个不被满足或无法解析的 `requires-noeta`——`PluginVersionWarning`（见上；`strict=True` 会把"不被满足"这一种变成 `PluginError`）。
 
 ```python
 from noeta.sdk import PluginError, load_plugins

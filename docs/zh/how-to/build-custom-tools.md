@@ -71,7 +71,7 @@ options = Options(
 client = Client(options, provider=my_provider, workspace_dir="./")
 ```
 
-`allowed_tools` **就是**这份选择：一个自定义工具只有出现在里面才可用，所以要把你自己的工具和你想要的内置工具一起列出来。`None` 选中那份 11 个名字的内置白名单，且不会捎上任何自定义工具。`disallowed_tools` 从解析出来的列表里减掉名字；它从不添加任何东西。
+`allowed_tools` **就是**这份选择：一个自定义工具只有出现在里面才可用，所以要把你自己的工具和你想要的内置工具一起列出来。`None` 选中那份 10 个名字的内置白名单，且不会捎上任何自定义工具。`disallowed_tools` 从解析出来的列表里减掉名字；它从不添加任何东西。
 
 ## 3. 选对风险级别
 
@@ -166,6 +166,6 @@ assert called == ["fetch_weather"]
 ## 下一步
 
 - [连接 MCP](connect-mcp.md) —— 远程 MCP 服务器及其 `mcp__` 命名空间
-- [内置工具](../reference/tools.md) —— 那份 11 个名字的白名单及各自的风险级别
+- [内置工具](../reference/tools.md) —— 那份 10 个名字的白名单及各自的风险级别
 - [Guard 与 Observer](../concepts/guard-observer.md) —— 权限系统如何裁决
 - [SDK 参考](../reference/sdk.md) —— `@tool`、`create_sdk_mcp_server` 与 `ToolResult` 的完整说明

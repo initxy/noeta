@@ -100,7 +100,7 @@ ref     = "house_style.observers:ship_to_siem"
 
 ### `provider`
 
-wiring · host-wired · 冲突 **single-valued** · sorted。一个 `LLMProvider` 适配器；整个加载集里最多一个，并且它会与 `Options.provider` 冲突。官方适配器不在这里声明——它们住在 `providers` 内置项里，经由 `noeta.sdk.providers` 获取。
+wiring · host-wired · 冲突 **single-valued** · sorted。一个 `LLMProvider` 适配器；整个加载集里最多一个。**由宿主自行解析的清单项**——声明出来是为了可审计，由宿主手工解析并接线，绝不自动消费：宿主把自己挑中的适配器作为 `Client(provider=...)` 或 `Options.provider` 传进去，这也正是为什么这里的一条贡献不可能悄悄把它替换掉。与 `sandbox_provider` 是同一套做法（见那一节，以及 `tests/test_extension_surfaces.py`）。官方适配器不在这里声明——它们住在 `providers` 内置项里，经由 `noeta.sdk.providers` 获取。
 
 ```toml
 [[tool.noeta.contributions]]
@@ -154,32 +154,46 @@ priority = 1100
 
 ## host 平面
 
-这些由宿主挑选并绑定。它们从不按 agent 生效，也从不是 `AgentSpec` 身份的一部分。
+这些由宿主绑定。它们从不按 agent 生效，也不是 `AgentSpec` 身份的一部分——只有 `mcp_server` 一节里注明的那一个后果例外。
+
+这四个里有两个由 `Client` **自动消费**：`skills` 路径和 `mcp_server` 贡献只要插件被加载就生效，既不需要激活，也不需要宿主写代码。另外两个是**由宿主自行解析的清单项**——见各自小节。
 
 ### `mcp_server`
 
-host · host-wired · 冲突 `alias` · sorted。一个可连接的 MCP 服务器 spec，按它的工具所加的那个别名前缀（`mcp__{alias}__{tool}`）作键。没有内置项声明它——`mcp` 内置项是纯声明的。
+host · host-wired · 冲突 `alias` · sorted。一个**进程内**的 MCP 服务器：值就是 `SdkMcpServer`，与 `Options.mcp_servers` 里放的东西完全一样，所以用 `create_sdk_mcp_server` 来构造。`Client` 在构建时把每个已加载插件的贡献并入生效的 `Options.mcp_servers`；服务器捆绑的那些 `@tool` 函数会像任何已声明的工具一样挂载。host-wired 意味着这里不涉及激活——把插件加载进来，服务器就在这个进程里了——但因为那些工具进入了 agent 的工具集，它们确实会进入编译出的身份，这一点和在 `Options` 上声明一个服务器是一样的。
+
+贡献的**名字就是别名**，它和 `Options.mcp_servers`（其别名是服务器自己的 `name`）共用同一个命名空间。撞车——插件对插件，或者插件对配方——会抛出一个同时指名双方的 `PluginError`。没有覆盖一说。一个不是 `SdkMcpServer` 的值会在构建时以一条指名该插件的消息大声失败。
+
+**远程** MCP 服务器不走这个 Surface。它是每一轮按别名经 `HostConfig.mcp_server_resolver` 寻址的，因为它的 spec 带着 url 和凭据，而这些绝不该放进一份静态 manifest。没有内置项声明 `mcp_server`——`mcp` 内置项是纯声明的。
 
 ```toml
 [[tool.noeta.contributions]]
 surface = "mcp_server"
-name    = "tickets"
-ref     = "house_style.mcp:TICKETS_SERVER"
+name    = "tickets"                          # 别名
+ref     = "house_style.mcp:TICKETS_SERVER"   # 一个 SdkMcpServer
 ```
 
 ### `skills`
 
-host · host-wired · 冲突 `none` · sorted。一个纯资源 Surface：一个指向 skill 包目录的 `path`，会被并入 skill 目录。没有 `ref`，因为什么都不会被 import。
+host · host-wired · 冲突 `none` · sorted。一个纯资源 Surface：一个指向 skill 包目录的 `path`。没有 `ref`，因为什么都不会被 import。每个已加载插件的目录都会加入 skill 合并的**最低那一层**，它们彼此之间按 `(plugin, 贡献名)` 排序，因此完整的优先级是
+
+```
+内置  <  插件贡献的  <  全局 ~/.noeta/skills  <  工作区 .noeta/skills
+```
+
+所以用户自己工作区里的技能永远会盖住同名的插件技能。这些技能包由与其他各层相同的 `SkillIndexer` 建索引，因此整套 frontmatter 契约——`disable-model-invocation`、`allowed-tools`、`priority`——它们全都白拿。
+
+**路径必须是绝对路径。** 同一份 manifest 可能从 wheel 的 package data、一个裸 `.toml`、或者一个单文件 `.py` 读出来，而这几种来源对"相对路径相对于什么"并无共识；与其让它随安装方式不同而指向不同目录，加载器直接以一个指名该插件的 `PluginError` 拒绝。用模块自身的位置拼出来：`str(Path(__file__).parent / "skills")`。一个磁盘上不存在的路径**不是**错误——它索引成一个空层，因此一个按条件发布的技能包只是什么都不贡献而已。
 
 ```toml
 [[tool.noeta.contributions]]
 surface = "skills"
-path    = "house_style/skills"
+path    = "/opt/house-style/skills"   # 绝对路径
 ```
 
 ### `sandbox_provider`
 
-host · host-wired · 冲突 `name` · sorted。一个部署可以绑定的容器执行适配器。内置语料：`sandbox` 声明了两个 AIO Sandbox 适配器，`aio-exec-env`（`AioSandboxExecEnv`）和 `aio-browser`（`AioBrowserBackend`）。
+host · host-wired · 冲突 `name` · sorted。一个部署可以绑定的容器执行适配器。**由宿主自行解析的清单项**——声明出来是为了可审计，由宿主手工解析并接线，绝不自动消费。声明一条会让它可被发现、可做撞车检查，而且完全不执行任何插件代码；随后宿主挑出这次部署想要的那一个并接上（`pset.get("...").resolve(registry)`）。没有任何东西自动绑定它，因为一个进程只有一个 sandbox 后端，而那到底是哪一个属于部署方的决定，不该由"恰好装了哪个插件"来定。可运行的范例在 `tests/test_extension_surfaces.py`（`test_sandbox_provider_end_to_end_from_plugin_surface_to_reattach`）。内置语料：`sandbox` 声明了两个 AIO Sandbox 适配器，`aio-exec-env`（`AioSandboxExecEnv`）和 `aio-browser`（`AioBrowserBackend`）。
 
 ```toml
 [[tool.noeta.contributions]]
@@ -215,7 +229,7 @@ plugins = load_plugins(registry=reg)          # the host's surface is live
 
 ## 内置语料
 
-Noeta 的十八个内置项就是参考 manifest，每个一个目录，位于 `packages/noeta-sdk/noeta/builtins/<name>/__init__.py`：`app`、`AskUserQuestion`、`browser`、`delegation`、`fs`、`governance`、`mcp`、`memory`、`presets`、`providers`、`react`、`reminders`、`sandbox`、`skills`、`storage`、`TodoWrite`、`web`、`workspace`。上面每一节都点名了演示它的那些内置项；`mcp`、`providers` 和 `storage` 是纯声明的，贡献数为零。新增一项第一方能力，就是在那里新增一个目录。
+Noeta 的十八个内置项就是参考 manifest，每个一个目录，位于 `packages/noeta-sdk/noeta/builtins/<name>/__init__.py`：`app`、`ask_user_question`、`browser`、`delegation`、`fs`、`governance`、`mcp`、`memory`、`presets`、`providers`、`react`、`reminders`、`sandbox`、`skills`、`storage`、`todo_write`、`web`、`workspace`。（插件名一律是 snake_case；上面 `control_tool` 一节里首字母大写的 `TodoWrite` / `AskUserQuestion` 是那些内置项挂载的**模型可见工具**名。）上面每一节都点名了演示它的那些内置项；`mcp`、`providers` 和 `storage` 是纯声明的，贡献数为零。新增一项第一方能力，就是在那里新增一个目录。
 
 ## 下一步
 

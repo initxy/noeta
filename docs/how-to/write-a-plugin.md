@@ -108,12 +108,29 @@ scope, collision, ordering) is in the
 | `control_tool(factory, priority=...)` | a control-tool mount | yes |
 | `policy(factory)` | the agent's decision policy (single-valued) | yes |
 | `guard(obj)` / `observer(fn)` | governance hooks | **no — process-wide** |
-| `sandbox_provider(obj)` | a sandbox backend the host selects | no — host wiring |
+| `contribute("skills", name=..., path="/abs/dir")` | a directory of `SKILL.md` packs | no — host-wired, in force once loaded |
+| `contribute("mcp_server", server, name="<alias>")` | an in-process `SdkMcpServer` (`create_sdk_mcp_server`) | no — host-wired, in force once loaded |
+| `sandbox_provider(obj)` | a sandbox backend the host selects | no — host-resolved listing |
 
 > **Governance is not opt-out.** A loaded `guard` or `observer` is in force for
 > **every** agent in the process, whether or not that agent activated the
 > plugin — an agent author must not be able to skip compliance interception or
 > audit by omitting an activation. Everything else follows per-agent activation.
+
+> **Host-wired is not opt-out either, for a different reason.** `skills` and
+> `mcp_server` are the host's catalogue, not an agent's feature: loading the
+> plugin is what puts them in the process. The `skills` path must be
+> **absolute** (build it from `Path(__file__).parent`), and its packs sit at the
+> lowest tier — the user's own `~/.noeta/skills` and workspace `.noeta/skills`
+> still shadow a same-named skill. `provider` and `sandbox_provider` are
+> **host-resolved listings**: declaring one makes it discoverable and
+> collision-checked, and the host wires the one it chose by hand.
+
+> **A skill's `allowed-tools` cannot name your plugin's own tools.** The
+> recognition set is the static list of tool names a session can mount, so a
+> `SKILL.md` you ship declaring `allowed-tools: [Read, my_plugin_tool]` grants
+> `Read` and drops the rest with a warning. Gate a plugin tool with a `guard`
+> instead.
 
 ## 4. Contribute something with teeth
 
@@ -143,16 +160,43 @@ plugin.guard(BlockShellGuard(), name="block_shell")
 ```python
 pset = load_plugins(modules=["./block_shell.py"])
 client = Client(options, provider=my_provider, workspace_dir=".", plugins=pset)
-# the guard now gates shell_run for every agent — no activation needed
+# the guard now gates Bash for every agent — no activation needed
 ```
 
 ## 5. Take operator config
 
 A manifest may declare a `config-schema` table describing the operator config
-the plugin expects. Host-supplied config reaches a `session_pack` contribution
-through `SessionBuildContext.config("<plugin name>")` — each pack parses only
-its own entry. Validate it and raise on bad input: the loader wraps the raise in
-a `PluginError` naming your plugin, so a misconfiguration fails the client build
+the plugin expects. The host supplies it as `HostConfig.plugin_config`, keyed by
+plugin name, and it reaches a `session_pack` contribution through
+`SessionBuildContext.config("<plugin name>")` — each pack parses only its own
+entry:
+
+```python
+# the host side
+client = Client(
+    options,
+    provider=my_provider,
+    plugins=pset,
+    host_config=HostConfig(plugin_config={"house-style": {"max_words": 120}}),
+)
+```
+
+```python
+# your pack side
+def build_house_style_pack(ctx):
+    max_words = ctx.config("house-style").get("max_words")
+    if max_words is None:
+        return PackContribution()        # self-gate: unconfigured ⇒ contribute nothing
+    ...
+```
+
+A name the SDK derives nothing for — every third-party plugin — is passed
+through verbatim. For the four built-ins the SDK configures itself (`fs`,
+`skills`, `workspace`, `memory`) the host's keys are overlaid **per key**, so
+overriding one leaves the rest in place.
+
+Validate it and raise on bad input: the loader wraps the raise in a
+`PluginError` naming your plugin, so a misconfiguration fails the client build
 **loudly at startup** rather than a mid-session turn.
 
 ## 6. Package it for distribution
