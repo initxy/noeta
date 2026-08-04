@@ -21,7 +21,7 @@ from noeta.protocols.decisions import (
     FinishDecision,
 )
 from noeta.protocols.errors import CATEGORY_OVERFLOW
-from noeta.protocols.messages import LLMResponse, Message, TextBlock
+from noeta.protocols.messages import LLMResponse, Message, TextBlock, Usage
 from noeta.protocols.step_context import StepContext
 from noeta.protocols.token_estimate import estimate_messages_tokens
 from noeta.runtime.llm import RuntimeLLMClient
@@ -339,3 +339,224 @@ def test_summarize_round_trip_is_recorded() -> None:
         "LLMResponseRecorded",
         "LLMRequestFinished",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Observed-density clamp: a gateway that reports garbage usage must not be
+# able to pin the summary boundary at 0
+# ---------------------------------------------------------------------------
+
+
+def _usage_response(text: str, input_tokens: int) -> LLMResponse:
+    """An ``end_turn`` turn whose reported input count is under our control."""
+    return LLMResponse(
+        stop_reason="end_turn",
+        content=[TextBlock(text=text)],
+        usage=Usage(uncached=input_tokens, output=5),
+    )
+
+
+def test_sloppy_gateway_usage_still_compacts() -> None:
+    """A provider that reports a nonsense ``input_tokens`` must not disable
+    compaction.
+
+    The policy converts ``tail_token_budget`` (REAL provider tokens) into the
+    chars/4 unit the boundary accumulates in, by dividing by the observed
+    ``real / estimate`` density. The numerator is whatever the provider said —
+    so a gateway reporting a flat ``input_tokens=10`` for a multi-thousand-token
+    request drives the density toward zero, inflates the protected tail past
+    the whole history, and every compaction dies on ``compaction_no_progress``
+    with nothing in the logs to explain it. The clamp bounds the damage to a
+    factor of four, which the tail budget absorbs.
+
+    Reachable in production precisely because an uncatalogued model now
+    compacts at all (D4) — and an uncatalogued model is exactly the sloppy
+    gateway population.
+    """
+    policy, provider, *_ = _policy(
+        [
+            # Turn 1: a normal round-trip that records the garbage baseline.
+            _usage_response("ok", input_tokens=10),
+            # Turn 2: the summarize call the triggered compaction makes.
+            _summary_resp(),
+        ]
+    )
+
+    first = policy.decide(_ctx(), _medium_view())
+    assert isinstance(first, FinishDecision)
+
+    second = policy.decide(_ctx(), _big_view())
+    assert isinstance(second, CompactionRequestedDecision), (
+        "a nonsense usage report collapsed the density and pinned the boundary"
+    )
+    assert second.boundary_count > 0
+    assert second.summary == "condensed summary of the conversation"
+
+
+def test_density_clamp_bounds_both_directions() -> None:
+    """The band sits outside the chars/4 heuristic's honest spread — which
+    reaches ~4–7 on pure-CJK payloads — so it can only ever catch a
+    non-measurement, never distort a genuine one."""
+    from noeta.builtins.react.impl.react import _DENSITY_MAX, _DENSITY_MIN
+
+    policy, *_ = _policy([_summary_resp()])
+    # Absurdly low (the sloppy-gateway shape) and absurdly high (a provider
+    # inflating counts, which would shrink the tail to nothing) both clamp.
+    policy._last_estimate_at_call = 2_600
+    policy._last_input_tokens_at_call = 10
+    assert policy._observed_density() == _DENSITY_MIN
+    policy._last_input_tokens_at_call = 2_600_000
+    assert policy._observed_density() == _DENSITY_MAX
+    # A believable ratio passes through untouched.
+    policy._last_input_tokens_at_call = 3_120
+    assert policy._observed_density() == 3_120 / 2_600
+
+
+# ---------------------------------------------------------------------------
+# Options.compaction_model — the cheap summarizer (D7)
+# ---------------------------------------------------------------------------
+
+
+def _policy_with_compaction_model(
+    responses: list[LLMResponse],
+    compaction_model: Any,
+    *,
+    compaction_max_output_tokens: int | None = None,
+) -> tuple[ReActPolicy, FakeLLMProvider]:
+    provider = FakeLLMProvider(responses=responses)
+    client = RuntimeLLMClient(
+        provider=provider,
+        event_log=InMemoryEventLog(),
+        content_store=InMemoryContentStore(),
+    )
+    policy = ReActPolicy(
+        llm=client,
+        tools={"echo": FakeTool(name="echo", script={("hi",): "ok"})},
+        system_prompt="sys",
+        model="gpt-4o",
+        context_window=2000,
+        max_output_tokens=500,
+        compaction_buffer=100,
+        tail_token_budget=200,
+        composer_version="three_segment.v3",
+        compaction_model=compaction_model,
+        compaction_max_output_tokens=compaction_max_output_tokens,
+    )
+    return policy, provider
+
+
+def test_compaction_model_routes_only_the_summarize_call() -> None:
+    """Set, it moves the summarize round-trip to the cheap model and leaves
+    every decide turn on the main one — condensing text the strong model
+    already produced is the one mechanical step in the loop."""
+    policy, provider = _policy_with_compaction_model(
+        [_usage_response("ok", input_tokens=400), _summary_resp()],
+        "claude-haiku-4-5",
+    )
+
+    assert isinstance(policy.decide(_ctx(), _medium_view()), FinishDecision)
+    assert isinstance(
+        policy.decide(_ctx(), _big_view()), CompactionRequestedDecision
+    )
+
+    decide_request, summarize_request = provider.received_requests
+    assert decide_request.model == "gpt-4o"
+    assert summarize_request.model == "claude-haiku-4-5"
+
+
+def test_compaction_model_unset_is_byte_identical() -> None:
+    """Default ``None`` must reproduce the pre-knob request exactly — same
+    model, same canonical bytes — so a host that never opts in sees no change
+    and a recording made before the knob existed still resumes byte-equal."""
+    from noeta.protocols.canonical import to_canonical_bytes
+
+    sent: list[Any] = []
+    for compaction_model in (None, "gpt-4o"):
+        policy, provider = _policy_with_compaction_model(
+            [_summary_resp()], compaction_model
+        )
+        assert isinstance(
+            policy.decide(_ctx(), _big_view()), CompactionRequestedDecision
+        )
+        (summarize_request,) = provider.received_requests
+        assert summarize_request.model == "gpt-4o"
+        sent.append(to_canonical_bytes(summarize_request))
+
+    # Unset and "explicitly the main model" are the same request, which is the
+    # concrete meaning of "no behaviour change unless opted in".
+    assert sent[0] == sent[1]
+
+
+def test_summarize_request_opts_out_of_tool_use() -> None:
+    """The summarize round-trip carries the live tool schemas (the collapsed
+    prefix still holds tool blocks), so only the metadata opt-out stops a
+    summarizer from answering with a tool call — an only-``tool_use`` response
+    has no text and would die as ``compaction_summary_failed``. Decide turns
+    must NOT carry the opt-out: the main loop's whole point is tool use."""
+    policy, provider, *_ = _policy(
+        [_usage_response("ok", input_tokens=400), _summary_resp()]
+    )
+
+    assert isinstance(policy.decide(_ctx(), _medium_view()), FinishDecision)
+    assert isinstance(
+        policy.decide(_ctx(), _big_view()), CompactionRequestedDecision
+    )
+
+    decide_request, summarize_request = provider.received_requests
+    assert decide_request.metadata.get("tool_choice") is None
+    assert summarize_request.metadata.get("tool_choice") == "none"
+
+
+def test_compaction_model_ceiling_caps_the_summarize_request() -> None:
+    """The summarize request's ``max_tokens`` must be valid for the model that
+    SERVES it: with a compaction model set, the host-derived ceiling replaces
+    the main model's cap, which may exceed the summarizer's real limit — a
+    provider 400 that would kill every proactive compaction."""
+    policy, provider = _policy_with_compaction_model(
+        [_summary_resp()],
+        "claude-haiku-4-5",
+        compaction_max_output_tokens=300,
+    )
+    assert isinstance(
+        policy.decide(_ctx(), _big_view()), CompactionRequestedDecision
+    )
+    (summarize_request,) = provider.received_requests
+    assert summarize_request.max_tokens == 300
+
+
+def test_compaction_model_without_ceiling_falls_back_to_main_cap() -> None:
+    """An old caller that threads ``compaction_model`` but not the ceiling
+    keeps the pre-knob behaviour: the main model's cap rides the request."""
+    policy, provider = _policy_with_compaction_model(
+        [_summary_resp()], "claude-haiku-4-5"
+    )
+    assert isinstance(
+        policy.decide(_ctx(), _big_view()), CompactionRequestedDecision
+    )
+    (summarize_request,) = provider.received_requests
+    assert summarize_request.max_tokens == 500
+
+
+# ---------------------------------------------------------------------------
+# Errored round-trips must not move the trigger baseline
+# ---------------------------------------------------------------------------
+
+
+def test_errored_round_trip_does_not_pin_the_trigger_baseline() -> None:
+    """Exception-shaped errors carry an empty Usage, but a 200-shape error
+    (e.g. a gateway overflow body) can carry the provider's REAL count — for a
+    request whose history is about to change. The baseline must only ever come
+    from a successful round-trip; nothing may depend on the downstream
+    ``_BASELINE_INVALIDATED`` reset to clean up after an errored one."""
+    error = LLMResponse(
+        stop_reason="error",
+        content=[],
+        usage=Usage(uncached=1234, output=0),
+        raw={"category": "fatal"},
+    )
+    policy, *_ = _policy([error], context_window=1_000_000)
+
+    decision = policy.decide(_ctx(), _medium_view())
+
+    assert isinstance(decision, FailDecision)
+    assert policy._last_input_tokens_at_call == 0

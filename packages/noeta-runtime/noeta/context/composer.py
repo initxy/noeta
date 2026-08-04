@@ -51,6 +51,24 @@ COMPOSER_VERSION = "three_segment.v5"
 _PLAN_MEDIA_TYPE = "application/json"
 
 
+#: Sanity band for the observed real-tokens-per-estimated-token ratio. The
+#: honest spread of the chars/4 heuristic across real payloads runs from ~0.5
+#: (prose with long words) through ~2 (dense JSON) up to ~4–7 for pure-CJK
+#: text (the estimator counts code points; CJK tokenises at ~1–1.7 tokens per
+#: character), so the band must sit ABOVE that spread — a clamp that binds on
+#: a genuine CJK measurement over-protects the tail by the clamped factor. It
+#: exists only to stop a NON-measurement from
+#: propagating. A provider or gateway that reports garbage usage — e.g.
+#: ``input_tokens=10`` against a ~2600-token estimate — yields ~0.004, which
+#: divides the tail budget by 250 and protects a "tail" larger than the whole
+#: history: the summary boundary pins at 0 and every compaction dies on
+#: ``compaction_no_progress``. Clamping degrades that to "trust the estimate,
+#: roughly", which is the same direction the unmeasured first turn already
+#: takes.
+_DENSITY_MIN = 0.25
+_DENSITY_MAX = 8.0
+
+
 def _density(real_baseline: int, estimated: int) -> float:
     """REAL provider tokens per chars/4 estimated token, from the last round-trip.
 
@@ -58,10 +76,15 @@ def _density(real_baseline: int, estimated: int) -> float:
     compaction that zeroed the baseline — which leaves the caller's arithmetic in
     pure estimate units. The Policy computes the same ratio rather than sharing
     this one: the two bands do not import each other, and their inputs differ.
+
+    Clamped to ``[_DENSITY_MIN, _DENSITY_MAX]``: both operands are provider-
+    reported numbers, so a gateway that reports nonsense would otherwise scale
+    the tail budget by an arbitrary factor. Pure and deterministic — a resumed
+    run clamps the same recorded operands identically.
     """
     if real_baseline <= 0 or estimated <= 0:
         return 1.0
-    return real_baseline / estimated
+    return min(_DENSITY_MAX, max(_DENSITY_MIN, real_baseline / estimated))
 #: Role of the single summary message swapped in for a compacted prefix:
 #: ``user`` keeps it provider-neutral and outside the ``system`` stable_prefix.
 _SUMMARY_ROLE = "user"

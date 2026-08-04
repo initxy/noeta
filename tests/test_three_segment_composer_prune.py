@@ -371,3 +371,57 @@ def test_no_baseline_reproduces_pure_estimate_behaviour() -> None:
     plan = from_canonical_bytes(store.get(view.plan_ref))
     assert isinstance(plan, ContextPlan)
     assert plan.cleared_outputs == []  # valve stays shut
+
+
+def test_density_clamp_keeps_a_nonsense_baseline_from_erasing_the_tail() -> None:
+    """The tail budget is converted with the observed real/estimate density,
+    and ``last_input_tokens`` is whatever the PROVIDER reported.
+
+    A gateway that reports a flat, nonsense count (``10`` for a payload the
+    heuristic estimates in the thousands) drives the ratio toward zero, which
+    divides the tail budget by an arbitrary factor and protects a "tail" the
+    whole history fits inside — pruning is then a permanent no-op, and the
+    Policy's mirror of the same arithmetic pins the summary boundary at 0. The
+    clamp bounds the ratio at ``_DENSITY_MIN``, so the tail grows by at most 4x
+    and the oldest outputs still clear.
+
+    The inverse case matters too: an inflated count would shrink the tail
+    toward nothing and clear outputs the model still needs.
+    """
+    from noeta.context.composer import _DENSITY_MAX, _DENSITY_MIN, _density
+
+    assert _density(10, 2_600) == _DENSITY_MIN
+    assert _density(2_600_000, 2_600) == _DENSITY_MAX
+    # A believable ratio is untouched — the band only catches non-measurements.
+    assert _density(3_120, 2_600) == 3_120 / 2_600
+    # And the unmeasured cases still read as parity.
+    assert _density(0, 2_600) == 1.0
+    assert _density(2_600, 0) == 1.0
+
+    store = InMemoryContentStore()
+    msgs = (
+        _tool_turn("c1", "a" * 400)
+        + _tool_turn("c2", "b" * 400)
+        + _tool_turn("c3", "c" * 400)
+    )
+    estimate = estimate_messages_tokens(msgs)  # 312
+    task = _task(msgs)
+    # Valve open (the estimate is over the window), baseline nonsense.
+    task.runtime.last_input_tokens = 10
+
+    # Clamped: budget = 20 / 0.25 = 80, well inside the 312-token history, so
+    # the older outputs clear. Unclamped it would be 20 / (10/312) = 624 —
+    # twice the whole history, and nothing would EVER clear again.
+    view = _composer(
+        store, tail_token_budget=20, available_window=estimate // 2
+    ).compose(task)
+    dynamic = view.segments[2].content
+    by_call = {
+        b.call_id: b
+        for m in dynamic
+        for b in m.content
+        if isinstance(b, ToolResultBlock)
+    }
+    assert by_call["c3"].output == "c" * 400  # newest always verbatim
+    assert by_call["c1"].output == "[tool output cleared]"
+    assert by_call["c2"].output == "[tool output cleared]"

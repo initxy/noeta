@@ -108,6 +108,35 @@ def test_enforce_reinjects_dropped_constraint_verbatim() -> None:
     assert "be careful with secret files." in out
 
 
+def test_reinjected_block_is_idempotent_across_summarize_passes() -> None:
+    """The re-injected block is itself part of the NEXT compaction's input (the
+    summarize input opens on the previous note), so detection has to survive its
+    own output. The list bullet is stripped at detection, which makes the
+    round-trip a fixed point: a constraint the model keeps dropping is
+    re-injected in the same form every pass instead of accumulating one bullet
+    per compaction."""
+    constraint = "Do not touch config/secrets.yaml ever."
+    first = enforce_verbatim_constraints("note one", [constraint])
+    assert constraint in first
+    # Pass 2: the previous note is scanned as part of the summarize input.
+    detected = extract_safety_constraints(
+        [Message(role="user", content=[TextBlock(text=first)])]
+    )
+    assert detected == [constraint]
+    second = enforce_verbatim_constraints("note two", detected)
+    assert constraint in second
+    assert "- - " not in second
+    # ... and a third pass is a fixed point too.
+    third = enforce_verbatim_constraints(
+        "note three",
+        extract_safety_constraints(
+            [Message(role="user", content=[TextBlock(text=second)])]
+        ),
+    )
+    assert third.count(constraint) == 1
+    assert "- - " not in third
+
+
 def test_enforce_reinjects_chinese_constraint_verbatim() -> None:
     constraints = ["禁止访问 /etc/shadow 这个文件。"]
     summary = "User wants a refactor; be careful with sensitive files."

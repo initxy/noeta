@@ -138,10 +138,19 @@ def test_boundary_indexes_raw_runtime_not_view_projection() -> None:
     # the prior summary collapsed 4 → 1 and a skill prefix was prepended).
     assert 0 < boundary <= len(task.runtime.messages)
 
-    # The summarize request the policy sent must be raw_runtime[:boundary] —
-    # NOT iter_messages()[:something]. The fake provider records what it saw.
+    # What the policy SENDS is the bounded form — the previous summary message
+    # (the composer's stand-in for raw[:4]) followed by the raw delta
+    # raw[4:boundary]. Both halves are raw-history coordinates: the delta slice
+    # is taken with ``summary_boundary`` and the fresh boundary, never with an
+    # iter_messages() index. The fake provider records what it saw.
     summarize_req = provider.received_requests[0]
-    assert summarize_req.messages == list(task.runtime.messages[:boundary])
+    assert summarize_req.messages[0].content[0].text == "earlier summary"
+    assert summarize_req.messages[1:] == list(
+        task.runtime.messages[4:boundary]
+    )
+    # Bounded, not from-zero: the already-collapsed prefix is represented by the
+    # one summary message, not re-sent message by message.
+    assert task.runtime.messages[0] not in summarize_req.messages
 
     # Now feed that boundary back through the composer the way fold would, and
     # confirm it drops exactly raw_runtime[:boundary] and prepends ONE summary.

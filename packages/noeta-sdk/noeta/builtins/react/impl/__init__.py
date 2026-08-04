@@ -68,9 +68,17 @@ def build_react_policy_factory(
     output_schema: Optional[dict[str, Any]],
     thinking: Optional[str],
     effort: Optional[str],
+    compaction_model: Optional[str] = None,
+    compaction_max_output_tokens: Optional[int] = None,
 ) -> Callable[[Any], Policy]:
     """The ``(llm) -> Policy`` factory the builder falls back to; ``Options.policy``
-    and a plugin's ``policy`` contribution both outrank it."""
+    and a plugin's ``policy`` contribution both outrank it.
+
+    ``compaction_model`` / ``compaction_max_output_tokens`` default here
+    (unlike their siblings) so a caller predating the knobs — a third-party
+    ``PolicyFactoryBuilder`` implementation, or a test constructing the
+    factory directly — keeps working unchanged.
+    """
 
     def factory(llm: Any) -> Policy:
         return ReActPolicy(
@@ -89,6 +97,8 @@ def build_react_policy_factory(
             output_schema=output_schema,
             thinking=thinking,
             effort=effort,
+            compaction_model=compaction_model,
+            compaction_max_output_tokens=compaction_max_output_tokens,
         )
 
     return factory
