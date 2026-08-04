@@ -28,7 +28,7 @@ are compared for equality.
 | `system_prompt` | `str \| SystemPromptPreset` — **required** | a verbatim string, or a named preset resolved at compile time |
 | `name` | `str = "main"` | a name that collides with an `agents` key raises `ValueError` |
 | `agents` | `Mapping[str, AgentDefinition] = {}` | a **flat** dict, never nested |
-| `allowed_tools` | `tuple[str \| ToolLike, ...] \| None = None` | a **replacement** allowlist: a tuple means *only* those tools. `None` = all 11 built-ins; `()` = no tools |
+| `allowed_tools` | `tuple[str \| ToolLike, ...] \| None = None` | a **replacement** allowlist: a tuple means *only* those tools. `None` = all 10 built-ins; `()` = no tools |
 | `disallowed_tools` | `tuple[str, ...] = ()` | subtracted from whichever base list applies; absent names are ignored |
 | `permission_mode` | `"default"` \| `"acceptEdits"` \| `"bypassPermissions"` | validated at compile time |
 | `max_turns` | `int \| None` | sugar for `budget.max_iterations`; setting both raises `ValueError` |
@@ -84,7 +84,8 @@ print(model_capabilities(["claude-sonnet-4-6", "gpt-4o-mini"]))
 Both mode tuples come back in the order a picker should show them, not sorted.
 `model_capabilities` returns exactly one key per model, `supports_vision` — the
 same name the provider's own vision guard uses — and an uncatalogued selector
-reports `False` rather than a capability we cannot vouch for.
+reports `True`: the adapter admits its images and defers to the provider, so
+the gate must not block what the request would accept.
 
 ## Plugin activation
 
@@ -94,7 +95,7 @@ capability gating is a membership test on that tuple.
 
 `DEFAULT_PLUGINS` is `("fs", "web")`. Both are **identity-inert** in the sense
 that activating them turns on no capability flag and changes no tool set — the
-default 11 tools are read from the `fs` and `web` manifests either way. They do
+default 10 tools are read from the `fs` and `web` manifests either way. They do
 still appear in the compiled `AgentSpec.plugins` tuple, so dropping them is a
 real identity change:
 
@@ -106,7 +107,7 @@ compile_options(Options(system_prompt="x", plugins=()))[0].plugins # → ()
 A name must be one of three things, or compilation fails loudly:
 
 - a **built-in feature bundle** that carries identity — `memory`, `browser`,
-  `mcp`, `TodoWrite`, `AskUserQuestion`, `skill_invocation`, `delegation`;
+  `mcp`, `todo_write`, `ask_user_question`, `skill_invocation`, `delegation`;
 - an **identity-inert built-in** name, recognised so a typo still fails —
   `app`, `fs`, `governance`, `presets`, `providers`, `react`, `reminders`,
   `sandbox`, `skills`, `storage`, `web`, `workspace`;
@@ -216,6 +217,12 @@ Supplying both forms raises `ValueError`, as does a partial explicit triple. All
 | --- | --- | --- |
 | `memory_dir` / `global_memory_dir` | `None` | host-level store roots |
 | `memory_root_resolver` | `None` | `(task_id) -> Path \| None` per-task root |
+
+**Plugin operator config.**
+
+| Field | Default | Purpose |
+| --- | --- | --- |
+| `plugin_config` | `{}` | `plugin name -> {key: value}`, read by a session pack as `ctx.config("<name>")`. A third-party name passes through verbatim; for the four the SDK derives itself (`fs` / `skills` / `workspace` / `memory`) the host's keys are overlaid **per key**. See [Write a plugin](../how-to/write-a-plugin.md) |
 
 **Kill-switches and policy.**
 

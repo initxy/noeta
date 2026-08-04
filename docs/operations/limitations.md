@@ -150,15 +150,16 @@ channel, and deliver the reply with `answer`.
 
 ## Growth and cost
 
-### An uncatalogued model silently disables compaction and pricing
+### An uncatalogued model falls back to conservative compaction and $0 pricing
 
 **What it means:** Compaction knobs and cost are both derived from the model
 catalog in the `providers` built-in. For a model the catalog does not describe,
-`derive_compaction_config` returns `COMPACTION_OFF` — context compaction never
-engages, so a long conversation runs until the provider itself rejects the
-request. Pricing degrades the same way: an unpriced model costs `0.0` per
-round-trip, so `GovernanceState.cost` stays zero and a `max_cost_usd` budget
-can never fire. Neither degradation raises.
+`derive_compaction_config` warns once and falls back to conservative knobs
+(context window 128,000 / max output 16,384) — compaction stays on, but a model
+with a larger real window compacts earlier than it needs to. Pricing degrades
+to `0.0` per round-trip with its own warn-once log line, so
+`GovernanceState.cost` stays zero and a `max_cost_usd` budget can never fire.
+Neither degradation raises beyond the warning.
 
 **When you hit it:** You point `Options.model` at a gateway model id, a
 fine-tune, or a self-hosted model that is not in `CATALOG`.

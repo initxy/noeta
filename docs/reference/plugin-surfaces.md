@@ -148,9 +148,14 @@ ref     = "house_style.observers:ship_to_siem"
 ### `provider`
 
 wiring · host-wired · collision **single-valued** · sorted. An `LLMProvider`
-adapter; at most one across the loaded set, and it collides with
-`Options.provider`. The official adapters are not declared here — they live in
-the `providers` built-in, reached through `noeta.sdk.providers`.
+adapter; at most one across the loaded set. **Host-resolved listing** — declared
+for auditability, resolved and wired by the host by hand, never auto-consumed:
+the host passes the adapter it chose as `Client(provider=...)` or
+`Options.provider`, which is also why a contribution here cannot silently
+replace it. Same pattern as `sandbox_provider` (see that section, and
+`tests/test_extension_surfaces.py`). The official adapters are not declared
+here — they live in the `providers` built-in, reached through
+`noeta.sdk.providers`.
 
 ```toml
 [[tool.noeta.contributions]]
@@ -224,40 +229,88 @@ priority = 1100
 
 ## Host plane
 
-The host selects and binds these. They are never per-agent, and never part of
-`AgentSpec` identity.
+The host binds these. They are never per-agent, and never part of `AgentSpec`
+identity — with the one consequence noted under `mcp_server` below.
+
+Two of the four are **consumed automatically** by `Client`: a `skills` path and
+an `mcp_server` contribution take effect as soon as the plugin is loaded, with
+no activation and no host code. The other two are **host-resolved listings** —
+see their sections.
 
 ### `mcp_server`
 
-host · host-wired · collision `alias` · sorted. A connectable MCP server spec,
-keyed by the alias its tools are prefixed with (`mcp__{alias}__{tool}`). No
-built-in declares one — the `mcp` built-in is declaration-only.
+host · host-wired · collision `alias` · sorted. An **in-process** MCP server:
+the value is an `SdkMcpServer`, exactly what `Options.mcp_servers` carries, so
+build it with `create_sdk_mcp_server`. `Client` folds every loaded plugin's
+contribution into the effective `Options.mcp_servers` at build; the server's
+bundled `@tool` functions mount like any declared tool. Host-wired means no
+activation is involved — loading the plugin is what puts the server in the
+process — but because those tools join the agent's tool set, they do enter the
+compiled identity, the same as a server declared on `Options`.
+
+The contribution's **name is the alias**, sharing one namespace with
+`Options.mcp_servers` (whose alias is the server's own `name`). A clash — plugin
+against plugin, or plugin against the recipe — is a `PluginError` naming both
+sides. There is no override. A value that is not an `SdkMcpServer` fails at
+build with a message naming the plugin.
+
+A **remote** MCP server is not this surface. It is addressed per turn by alias
+through `HostConfig.mcp_server_resolver`, because its spec carries a url and a
+credential that a static manifest must never hold. No built-in declares an
+`mcp_server` — the `mcp` built-in is declaration-only.
 
 ```toml
 [[tool.noeta.contributions]]
 surface = "mcp_server"
-name    = "tickets"
-ref     = "house_style.mcp:TICKETS_SERVER"
+name    = "tickets"                      # the alias
+ref     = "house_style.mcp:TICKETS_SERVER"   # an SdkMcpServer
 ```
 
 ### `skills`
 
 host · host-wired · collision `none` · sorted. A resource-only surface: a `path`
-to a directory of skill packs, merged into the skill catalogue. No `ref`, because
-nothing is imported.
+to a directory of skill packs. No `ref`, because nothing is imported. Every
+loaded plugin's directories join the **lowest tier** of the skill merge, ordered
+`(plugin, contribution name)` among themselves, so the full precedence is
+
+```
+built-in  <  plugin-contributed  <  global ~/.noeta/skills  <  workspace .noeta/skills
+```
+
+A user's own workspace skill therefore always shadows a same-named plugin one.
+The packs are indexed by the same `SkillIndexer` as every other tier, so they
+inherit the whole frontmatter contract — `disable-model-invocation`,
+`allowed-tools`, `priority` — for free.
+
+**The path must be absolute.** A manifest is read from a wheel's package data, a
+bare `.toml`, or a single `.py`, and those roots disagree about what a relative
+path would be relative to; rather than resolve it differently depending on how
+the plugin was installed, the loader refuses one with a `PluginError` naming the
+plugin. Build it from the module's own location:
+`str(Path(__file__).parent / "skills")`. A path that does not exist on disk is
+**not** an error — it indexes as an empty tier, so a pack that ships
+conditionally simply contributes nothing.
 
 ```toml
 [[tool.noeta.contributions]]
 surface = "skills"
-path    = "house_style/skills"
+path    = "/opt/house-style/skills"   # absolute
 ```
 
 ### `sandbox_provider`
 
 host · host-wired · collision `name` · sorted. The container-execution adapters a
-deployment can bind. Built-in corpus: `sandbox` declares the two AIO Sandbox
-adapters, `aio-exec-env` (`AioSandboxExecEnv`) and `aio-browser`
-(`AioBrowserBackend`).
+deployment can bind. **Host-resolved listing** — declared for auditability,
+resolved and wired by the host by hand, never auto-consumed. Declaring one makes
+it discoverable and collision-checked without executing any plugin code; the
+host then picks the one its deployment wants and wires it
+(`pset.get("...").resolve(registry)`). Nothing auto-binds it, because a process
+has exactly one sandbox backend and which one that is belongs to the deployment,
+not to whichever plugin happened to be installed. The worked pattern is in
+`tests/test_extension_surfaces.py`
+(`test_sandbox_provider_end_to_end_from_plugin_surface_to_reattach`). Built-in
+corpus: `sandbox` declares the two AIO Sandbox adapters, `aio-exec-env`
+(`AioSandboxExecEnv`) and `aio-browser` (`AioBrowserBackend`).
 
 ```toml
 [[tool.noeta.contributions]]
@@ -303,9 +356,11 @@ plugins = load_plugins(registry=reg)          # the host's surface is live
 
 Noeta's eighteen built-ins are the reference manifests, one directory each at
 `packages/noeta-sdk/noeta/builtins/<name>/__init__.py`: `app`,
-`AskUserQuestion`, `browser`, `delegation`, `fs`, `governance`, `mcp`,
+`ask_user_question`, `browser`, `delegation`, `fs`, `governance`, `mcp`,
 `memory`, `presets`, `providers`, `react`, `reminders`, `sandbox`, `skills`,
-`storage`, `TodoWrite`, `web`, `workspace`. Each section above names the ones
+`storage`, `todo_write`, `web`, `workspace`. (Plugin names stay snake_case; the
+capitalised `TodoWrite` / `AskUserQuestion` in the `control_tool` section above
+are the *model-visible tool* names those built-ins mount.) Each section above names the ones
 that demonstrate it; `mcp`, `providers` and `storage` are declaration-only, with
 zero contributions. Adding a first-party capability is adding a directory there.
 

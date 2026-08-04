@@ -54,8 +54,10 @@ enter the system through the SDK's content-put call, which returns the
 `ContentRef` a caller wraps in an `ImageBlock`.
 
 **Vision capability is gated, and a mismatch is loud.** The model catalog
-carries `supports_vision`; an unlisted model is treated as non-vision, failing
-closed. Both image-capable adapters refuse a top-level `ImageBlock` bound for a
+carries `supports_vision`; a catalogued non-vision model refuses images with a
+fatal error, while an unlisted model admits them and lets the provider be the
+authority (it rejects unsupported input with its own clear error). Both
+image-capable adapters refuse a top-level `ImageBlock` bound for a catalogued
 non-vision model with a fatal error before anything goes on the wire, and the
 Chat-compatible adapter refuses every `ImageBlock` outright. Tool-result images
 ride nested on the tool-result block rather than as top-level content, so the

@@ -44,7 +44,7 @@ bare top-level keys (the mirrored `noeta-plugin.toml`).
 | Field | Shape | Meaning |
 | --- | --- | --- |
 | `name` | `str`, required | the plugin's identity — the load-time dedup key **and** the activation name |
-| `requires-noeta` | `str \| None` | a version range (advisory) |
+| `requires-noeta` | `str \| None` | a version range — checked at load (warn; refuse under `strict`) |
 | `config-schema` | `table \| None` | an optional schema for operator config |
 | `contributions` | array of tables | one entry per contribution |
 
@@ -110,10 +110,32 @@ contributions without a second import.
 
 ## Version pinning: `requires-noeta`
 
-`requires-noeta` records the SDK range a plugin was written against. It is
-**advisory** — the loader does not refuse a plugin whose range is unsatisfied —
-but it is the field a host reads when auditing a set, and the field to bump when
-a contribution starts relying on a newer surface. Read it off a loaded plugin:
+`requires-noeta` records the SDK range a plugin was written against, and the
+loader **evaluates it** against the installed `noeta-sdk` version at load:
+
+| Outcome | Default | `load_plugins(strict=True)` |
+| --- | --- | --- |
+| range satisfied | silent | silent |
+| range unsatisfied | `PluginVersionWarning` naming the plugin, its declared range and the installed version; **the plugin still loads** | `PluginError`, the load fails |
+| specifier not understood | `PluginVersionWarning` "unrecognized requires-noeta specifier … not enforced" | same warning; **never** enforced |
+| `noeta-sdk` has no installed metadata (an in-repo checkout) | treated as satisfied, logged at debug | same |
+
+Warning-by-default because a range is the author's claim about what they tested,
+not a lock: refusing on it would break a working deployment the first time the
+SDK took a patch bump the plugin had not been re-tested against. `strict=True`
+is for a deployment where "tested against this SDK" is a release gate.
+
+The evaluator is deliberately minimal and dependency-free — `>=`, `>`, `<=`,
+`<`, `==`, `!=` over dotted releases, AND-joined by commas, whitespace
+tolerated. Anything richer (`~=`, extras, epochs, pre-release markers) reads as
+unrecognised and is reported rather than guessed at, so a plugin is never
+refused over a spelling the loader did not promise to understand.
+
+```toml
+requires-noeta = ">=0.6,<1.0"
+```
+
+Read it off a loaded plugin:
 
 ```python
 print(pset.get("memory").manifest.requires_noeta)   # → '>=0.4'
@@ -153,6 +175,7 @@ load_plugins(
     trust_store=None,            # Path | None — defaults to ~/.noeta/trust.json
     registry=None,               # SurfaceRegistry | None — defaults to standard_registry()
     entry_point_group="noeta.plugins",
+    strict=False,                # bool — refuse an unsatisfied requires-noeta
 ) -> PluginSet
 ```
 
@@ -177,6 +200,9 @@ load_plugins(
   is in the trust store. Both scan sub-directories carrying a
   `noeta-plugin.toml` (zero execution) **and** top-level `*.py` single-file
   plugins (executed — a trusted directory), skipping files starting with `_`.
+- `strict=True` turns an unsatisfied `requires-noeta` from a warning into a
+  `PluginError` (see the table above). An unparseable specifier still only
+  warns.
 
 A cross-source duplicate plugin **name** is an error naming both origins.
 
@@ -200,9 +226,14 @@ so one build imports each `ref` at most once.
 | `activation_session_packs(only=None)` | `session_pack` factories | yes |
 | `activation_control_tools(only=None)` | `control_tool` factories | yes |
 | `process_hooks()` | `(guards, observers)` from external plugins, in `(plugin, name)` order | yes |
+| `host_skills_dirs()` | external plugins' `skills` paths, in `(plugin, name)` order | yes |
+| `host_mcp_servers()` | external plugins' `((alias, plugin, SdkMcpServer), …)` | yes |
 
-`Client` calls the activation projections and `process_hooks` during the build,
-never on a turn. Built-in plugins are excluded from all of them — their effect
+`Client` calls the activation projections, `process_hooks` and the two
+`host_*` projections during the build, never on a turn. The `host_*` pair and
+`process_hooks` take **no** `only=`: their surfaces are process-wide or
+host-wired, so loading is what puts them in force. Built-in plugins are
+excluded from all of them — their effect
 rides the activation vocabulary `compile_options` handles by name. The `only=`
 argument restricts resolution to the names some agent actually activates, so a
 loaded-but-unactivated plugin's module body never runs.
@@ -238,12 +269,28 @@ mid-session turn.
   `ref` attribute, or a value that fails its surface validator raises
   `PluginError` naming the plugin.
 - **Any collision** — two plugins claiming the same key, a cross-source
-  duplicate plugin name, a second `policy` or `provider` — raises `PluginError`
-  **naming both sides. There is no override.**
+  duplicate plugin name, a second `policy` or `provider`, an `mcp_server` alias
+  the recipe already uses — raises `PluginError` **naming both sides. There is
+  no override.**
+- A **`priority` that is present but not an integer** raises `PluginError`
+  naming the plugin and the contribution. A priority-ordered surface orders on
+  an int, so a coerced one would put the contribution at the front of a band its
+  author meant to sit at the back of; an absent `priority` is still the
+  documented default, `0`.
 - An **unknown activation name** raises `ValueError` at compile time.
 
-The single non-raising skip is an untrusted `workspace_dirs` entry, which warns
-with `UntrustedPluginDirWarning` and is skipped.
+Three non-raising skips, each with a warning:
+
+- an untrusted `workspace_dirs` entry — `UntrustedPluginDirWarning`;
+- a **single-file plugin whose name cannot be read statically while an
+  `enabled` allow-list is in force** — `UnnamedPluginFileWarning`. The allow-list
+  authorizes *names*, so a file whose name can only be learned by running it
+  offers no name to authorize, and executing it to find out would defeat the
+  gate. Declare a module-level `noeta_plugin_name = "..."` (or a
+  `PluginBuilder("...")` literal) to make the file gateable. With **no**
+  allow-list the file is still executed and loaded as before.
+- an unsatisfied or unparseable `requires-noeta` — `PluginVersionWarning` (see
+  above; `strict=True` turns the unsatisfied case into a `PluginError`).
 
 ```python
 from noeta.sdk import PluginError, load_plugins

@@ -6,7 +6,7 @@ manifests; it does not run any plugin code. An agent then *activates* the
 plugins it wants. That two-step split is the whole idea: a host decides what is
 available, an agent decides what it uses.
 
-Noeta ships its own capabilities the same way. The 11 default tools, the
+Noeta ships its own capabilities the same way. The 10 default tools, the
 default guards, and the three compose-time reminders are all built-in plugins,
 resolved through the same loader as anything you write. (Provider adapters
 ship in the SDK too, but a host constructs them directly from

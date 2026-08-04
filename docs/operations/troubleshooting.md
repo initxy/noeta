@@ -167,14 +167,16 @@ suffix (`claude-sonnet-4-5-20250929`); also check your key's access tier.
 
 ## Something degrades silently
 
-### A long conversation never compacts, and cost stays $0.00
+### An uncatalogued model warns, compacts conservatively, and costs $0.00
 
-**Symptom.** Context grows until the provider rejects the request, and
+**Symptom.** Logs carry a one-time `noeta` warning naming the model; compaction
+engages with a conservative 128K window even if the real model is larger, and
 `GovernanceState.cost` stays zero no matter how many turns run.
 
-**Cause.** Both compaction and pricing derive from the model catalog. A model the
-catalog does not describe gets `COMPACTION_OFF` and a price of `0.0` per
-round-trip. Neither degradation raises, so nothing tells you.
+**Cause.** Both compaction and pricing derive from the model catalog. A model
+the catalog does not describe gets conservative compaction defaults
+(context window 128,000 / max output 16,384) and a price of `0.0` per
+round-trip — each announced by a warn-once log line rather than silently.
 
 **Fix.** Add a `ModelSpec` row for the model. `CATALOG` and `ModelSpec` are
 re-exported from `noeta.sdk.providers`; the row's `context_window`,

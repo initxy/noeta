@@ -81,9 +81,15 @@ client = Client(options, provider=my_provider, workspace_dir=".", plugins=pset)
 | `control_tool(factory, priority=...)` | 一次控制工具挂载 | 是 |
 | `policy(factory)` | 该 agent 的决策 Policy（单值） | 是 |
 | `guard(obj)` / `observer(fn)` | 治理钩子 | **否 —— 进程级** |
-| `sandbox_provider(obj)` | host 选定的一个 sandbox 后端 | 否 —— host 接线 |
+| `contribute("skills", name=..., path="/abs/dir")` | 一个装着 `SKILL.md` 技能包的目录 | 否 —— host 接线，一经加载即生效 |
+| `contribute("mcp_server", server, name="<alias>")` | 一个进程内的 `SdkMcpServer`（`create_sdk_mcp_server`） | 否 —— host 接线，一经加载即生效 |
+| `sandbox_provider(obj)` | host 选定的一个 sandbox 后端 | 否 —— 由 host 自行解析的清单项 |
 
 > **治理不可退出。** 一个被加载的 `guard` 或 `observer` 对进程里的**每一个** agent 都生效，无论那个 agent 有没有激活该插件 —— agent 的作者不应该能靠省略一次激活来跳过合规拦截或审计。其余一切都跟随按 agent 的激活。
+
+> **host 接线同样不可退出，但理由不同。** `skills` 和 `mcp_server` 属于 host 的目录清单，而不是某个 agent 的功能：把插件加载进来，它们就在这个进程里了。`skills` 的路径必须是**绝对路径**（用 `Path(__file__).parent` 拼出来），而且它的技能包位于最低那一层 —— 用户自己的 `~/.noeta/skills` 和工作区 `.noeta/skills` 里的同名技能依然会把它盖掉。`provider` 和 `sandbox_provider` 则是**由 host 自行解析的清单项**：声明一条只是让它可被发现、可做撞车检查，具体接哪一个由 host 手工决定。
+
+> **技能的 `allowed-tools` 写不了你插件自己的工具。** 那份可识别名单是一次会话能挂载的工具名的静态集合，所以你随插件发布的 `SKILL.md` 里写 `allowed-tools: [Read, my_plugin_tool]`，只会授予 `Read`，其余的会带一条告警被丢弃。要给插件工具加闸，请改用 `guard`。
 
 ## 4. 贡献一点有牙齿的东西
 
@@ -112,12 +118,35 @@ plugin.guard(BlockShellGuard(), name="block_shell")
 ```python
 pset = load_plugins(modules=["./block_shell.py"])
 client = Client(options, provider=my_provider, workspace_dir=".", plugins=pset)
-# the guard now gates shell_run for every agent — no activation needed
+# the guard now gates Bash for every agent — no activation needed
 ```
 
 ## 5. 接收运维方配置
 
-manifest 可以声明一个 `config-schema` 表，描述该插件期望的运维方配置。host 提供的配置通过 `SessionBuildContext.config("<plugin name>")` 到达一条 `session_pack` 贡献 —— 每个 pack 只解析属于自己的那一项。校验它并在输入有问题时抛错：加载器会把这次抛错包成一个指名你插件的 `PluginError`，因此一次配置错误会**在启动时大声地**让客户端构建失败，而不是拖到会话中途的某一轮。
+manifest 可以声明一个 `config-schema` 表，描述该插件期望的运维方配置。host 通过 `HostConfig.plugin_config` 按插件名提供这份配置，它经由 `SessionBuildContext.config("<plugin name>")` 到达一条 `session_pack` 贡献 —— 每个 pack 只解析属于自己的那一项：
+
+```python
+# host 这一侧
+client = Client(
+    options,
+    provider=my_provider,
+    plugins=pset,
+    host_config=HostConfig(plugin_config={"house-style": {"max_words": 120}}),
+)
+```
+
+```python
+# 你的 pack 这一侧
+def build_house_style_pack(ctx):
+    max_words = ctx.config("house-style").get("max_words")
+    if max_words is None:
+        return PackContribution()        # 自我关闭：没配置就什么都不贡献
+    ...
+```
+
+SDK 自己不推导的名字 —— 也就是所有第三方插件 —— 原样透传。对 SDK 自行配置的那四个内置（`fs`、`skills`、`workspace`、`memory`），host 给的键是**逐键覆盖**的，所以覆盖其中一个不会把其余的抹掉。
+
+校验它并在输入有问题时抛错：加载器会把这次抛错包成一个指名你插件的 `PluginError`，因此一次配置错误会**在启动时大声地**让客户端构建失败，而不是拖到会话中途的某一轮。
 
 ## 6. 打包分发
 

@@ -2,7 +2,7 @@
 
 一个插件是一个包——或者一个单独的 `.py` 文件——它携带一份**静态 manifest**，列出它向 Noeta 贡献了什么。加载一个插件就是读取这些 manifest；它不运行任何插件代码。随后某个 agent 再去*激活*它想要的插件。这两步拆分就是全部要点：宿主决定什么是可用的，agent 决定它用什么。
 
-Noeta 自己的能力也是这样发布的。11 个默认工具、默认的那组 guard、三条 compose 时的 reminder，全都是内置插件，经由与你所写之物完全相同的 loader 解析。（provider 适配器同样随 SDK 发布，但 host 直接从 `noeta.sdk.providers` 构造它们——`providers` 内置插件不向任何 surface 贡献内容。）
+Noeta 自己的能力也是这样发布的。10 个默认工具、默认的那组 guard、三条 compose 时的 reminder，全都是内置插件，经由与你所写之物完全相同的 loader 解析。（provider 适配器同样随 SDK 发布，但 host 直接从 `noeta.sdk.providers` 构造它们——`providers` 内置插件不向任何 surface 贡献内容。）
 
 <p align="center"><img src="../../assets/diagrams/plugin-system.svg" alt="插件系统：manifest 到 loader 到 registry 再到按 agent 的激活，跨三个平面与十六个 Surface" width="820"></p>
 
