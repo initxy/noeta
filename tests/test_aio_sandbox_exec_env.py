@@ -225,35 +225,110 @@ def test_non_shell_ops_use_the_adapter_default_timeout() -> None:
     # File/stat ops carry no per-command budget, so they keep the adapter
     # default rather than borrowing a shell command's timeout.
     fake = FakeAio({"/v1/file/read": _ok({"content": ""})})
-    _env(fake, timeout_s=45.0).read_bytes(Path("/w/f"))
+    _env(fake, timeout_s=45.0).read_text(Path("/w/f"))
     assert fake.timeouts == [45.0]
 
 
 # -- reads ------------------------------------------------------------------ #
+#
+# /v1/file/read is TEXT-ONLY (FileReadRequest has no ``encoding`` field —
+# v1.11.0 OpenAPI; read is asymmetric with write). ``read_text`` uses the
+# endpoint natively; the byte-exact ``read_bytes`` runs ``base64 -w0`` through
+# /v1/shell/exec and decodes locally.
 
 
-def test_read_bytes_requests_base64_and_decodes() -> None:
+def test_read_bytes_runs_container_base64_and_decodes() -> None:
     payload = b"\x00\x01binary\xff"
-    fake = FakeAio({"/v1/file/read": _ok(
-        {"content": base64.b64encode(payload).decode("ascii"), "line_count": 1})})
+    encoded = base64.b64encode(payload).decode("ascii")
+    fake = FakeAio({"/v1/shell/exec": _exec_ok(output=encoded + "\n")})
     env = _env(fake)
     assert env.read_bytes(Path("/w/f.bin")) == payload
     path, body, _ = fake.calls[0]
+    assert path == "/v1/shell/exec"
+    # Stat guards refine missing/unreadable BEFORE base64 runs; the payload
+    # transfer itself is ``base64 -w0`` so the merged output stream stays
+    # single-line ASCII. The subshell wrap is load-bearing: the exec session's
+    # shell is persistent, and a bare ``exit`` kills it and wedges the request.
+    assert body["command"] == (
+        "( if [ ! -e /w/f.bin ]; then exit 40; "
+        "elif [ ! -r /w/f.bin ]; then exit 41; "
+        "else base64 -w0 -- /w/f.bin; fi )"
+    )
+
+
+def test_read_bytes_missing_maps_to_filenotfounderror() -> None:
+    fake = FakeAio({"/v1/shell/exec": _exec_ok(exit_code=40)})
+    with pytest.raises(FileNotFoundError):
+        _env(fake).read_bytes(Path("/w/missing"))
+
+
+def test_read_bytes_unreadable_maps_to_permissionerror() -> None:
+    fake = FakeAio({"/v1/shell/exec": _exec_ok(exit_code=41)})
+    with pytest.raises(PermissionError):
+        _env(fake).read_bytes(Path("/w/locked"))
+
+
+def test_read_bytes_other_shell_failure_is_sandbox_error() -> None:
+    fake = FakeAio({"/v1/shell/exec": _exec_ok(
+        exit_code=1, output="base64: /w/dir: Is a directory")})
+    with pytest.raises(AioSandboxError):
+        _env(fake).read_bytes(Path("/w/dir"))
+
+
+def test_read_bytes_non_base64_output_is_loud_never_corrupt() -> None:
+    # Anything that leaks into the merged output stream and is not base64
+    # must fault loudly — silently returning garbage bytes is the one
+    # unacceptable failure mode for the byte-exact path.
+    fake = FakeAio({"/v1/shell/exec": _exec_ok(output="not base64 !!")})
+    with pytest.raises(AioSandboxError):
+        _env(fake).read_bytes(Path("/w/f.bin"))
+
+
+def test_read_bytes_recovers_payload_from_spill_file() -> None:
+    # AIO truncated the inline echo and spilled the full stream: the payload
+    # must come from the spill (read whole, via the text endpoint — base64 is
+    # pure ASCII), never from the lossy inline echo.
+    payload = b"\xffbig binary\x00" * 4
+    encoded = base64.b64encode(payload).decode("ascii")
+    fake = FakeAio({
+        "/v1/shell/exec": _exec_ok(
+            output=encoded[:10], full_output_file_path="/tmp/spill.out"
+        ),
+        "/v1/file/read": _ok({"content": encoded + "\n"}),
+    })
+    env = _env(fake)
+    assert env.read_bytes(Path("/w/big.bin")) == payload
+    read_path, read_body, _ = fake.calls[1]
+    assert read_path == "/v1/file/read"
+    assert read_body == {"file": "/tmp/spill.out"}
+
+
+def test_read_text_uses_the_text_endpoint_natively() -> None:
+    fake = FakeAio({"/v1/file/read": _ok({"content": "héllo\n"})})
+    assert _env(fake).read_text(Path("/w/f.txt")) == "héllo\n"
+    path, body, _ = fake.calls[0]
     assert path == "/v1/file/read"
-    assert body == {"file": "/w/f.bin", "encoding": "base64"}
+    # No ``encoding`` field: FileReadRequest does not define one, and the
+    # server would silently ignore it (that silence is exactly the drift the
+    # old contract corrupted every read on).
+    assert body == {"file": "/w/f.txt"}
 
 
-def test_read_text_decodes_utf8() -> None:
-    fake = FakeAio({"/v1/file/read": _ok(
-        {"content": base64.b64encode("héllo".encode()).decode("ascii")})})
-    assert _env(fake).read_text(Path("/w/f.txt")) == "héllo"
-
-
-def test_read_missing_maps_to_filenotfounderror() -> None:
+def test_read_text_missing_maps_to_filenotfounderror() -> None:
     fake = FakeAio({"/v1/file/read": {"success": False, "message": "no file",
                                       "data": {"error_type": "not_found"}}})
     with pytest.raises(FileNotFoundError):
-        _env(fake).read_bytes(Path("/w/missing"))
+        _env(fake).read_text(Path("/w/missing"))
+
+
+def test_read_text_non_utf8_encoding_takes_the_byte_path() -> None:
+    # The endpoint decodes as UTF-8 server-side, so any other encoding must
+    # ride the byte-exact shell path and decode locally.
+    payload = "café".encode("latin-1")
+    encoded = base64.b64encode(payload).decode("ascii")
+    fake = FakeAio({"/v1/shell/exec": _exec_ok(output=encoded + "\n")})
+    assert _env(fake).read_text(Path("/w/f.txt"), encoding="latin-1") == "café"
+    assert fake.calls[0][0] == "/v1/shell/exec"
 
 
 # -- writes ----------------------------------------------------------------- #
@@ -451,13 +526,14 @@ def test_tree_snapshot_nonzero_exit_raises_sandbox_error() -> None:
 
 def test_tree_snapshot_parses_spill_file_when_inline_output_truncated() -> None:
     # AIO spilled the full stream to a container file: the snapshot must read
-    # THAT (whole, via /v1/file/read) and never parse the lossy inline echo.
+    # THAT (whole, via the text endpoint — the listing is pure ASCII) and
+    # never parse the lossy inline echo.
     full = f"F {_b64(b'/opt/skills/demo/refs/a.md')}\n"
     fake = FakeAio({
         "/v1/shell/exec": _exec_ok(
             output="F truncated…", full_output_file_path="/tmp/spill.log"
         ),
-        "/v1/file/read": _ok({"content": _b64(full.encode("utf-8"))}),
+        "/v1/file/read": _ok({"content": full}),
     })
     snap = _env(fake).tree_snapshot([Path("/opt/skills")], content_name="SKILL.md")
     assert snap.files == (Path("/opt/skills/demo/refs/a.md"),)
@@ -471,14 +547,14 @@ def test_tree_snapshot_parses_spill_file_when_inline_output_truncated() -> None:
 
 def test_api_key_rides_as_header() -> None:
     fake = FakeAio({"/v1/file/read": _ok({"content": ""})})
-    _env(fake, api_key="secret").read_bytes(Path("/w/f"))
+    _env(fake, api_key="secret").read_text(Path("/w/f"))
     _, _, headers = fake.calls[0]
     assert headers["X-AIO-API-Key"] == "secret"
 
 
 def test_no_api_key_sends_no_auth_header() -> None:
     fake = FakeAio({"/v1/file/read": _ok({"content": ""})})
-    _env(fake).read_bytes(Path("/w/f"))
+    _env(fake).read_text(Path("/w/f"))
     _, _, headers = fake.calls[0]
     assert "X-AIO-API-Key" not in headers
 
@@ -494,7 +570,7 @@ def test_unknown_error_type_is_generic_sandbox_error() -> None:
     fake = FakeAio({"/v1/file/read": {"success": False, "message": "weird",
                                       "data": {"error_type": "io_error"}}})
     with pytest.raises(AioSandboxError):
-        _env(fake).read_bytes(Path("/w/x"))
+        _env(fake).read_text(Path("/w/x"))
 
 
 def test_empty_base_url_rejected() -> None:
@@ -509,13 +585,13 @@ def test_transport_exception_becomes_sandbox_error() -> None:
         raise ConnectionError("refused")
 
     with pytest.raises(AioSandboxError):
-        AioSandboxExecEnv(base_url=BASE, post=boom).read_bytes(Path("/w/f"))
+        AioSandboxExecEnv(base_url=BASE, post=boom).read_text(Path("/w/f"))
 
 
 def test_fence_token_placeholder_is_accepted() -> None:
     # Reserved seam field: accepted and stored, but it sends no fence header.
     fake = FakeAio({"/v1/file/read": _ok({"content": ""})})
     env = _env(fake, fence_token=None)
-    env.read_bytes(Path("/w/f"))
+    env.read_text(Path("/w/f"))
     _, _, headers = fake.calls[0]
     assert not any(h.lower().startswith("x-aio-fence") for h in headers)

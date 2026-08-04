@@ -9,6 +9,7 @@ seam never learns which executor it runs on.
 from __future__ import annotations
 
 import base64
+import codecs
 import json
 import shlex
 import time
@@ -80,6 +81,13 @@ _AIO_ERROR_TYPES: dict[str, type[OSError]] = {
     "already_exists": FileExistsError,
 }
 
+#: Guard exit codes for the shell-side ``read_bytes`` path: the guards run
+#: before ``base64`` so a stat fault refines into the same stdlib ``OSError``
+#: subclass the ``error_type`` map gives the ``/v1/file/*`` endpoints
+#: (``base64``'s own exit code cannot tell the two apart).
+_READ_EXIT_NOT_FOUND = 40
+_READ_EXIT_NO_PERM = 41
+
 
 class AioSandboxExecEnv:
     """:class:`ExecEnv` backed by an AIO Sandbox container over HTTP.
@@ -90,9 +98,9 @@ class AioSandboxExecEnv:
     code above the seam is identical either way, so a tool's model-facing
     contract and its recorded output shape do not depend on the executor.
 
-    The wire contract (field names, the base64 read/write encoding, the merged
-    ``output`` stream) is captured only here and pinned by fake-transport tests.
-    The mapping decisions worth calling out:
+    The wire contract (field names, the base64 write encoding, the shell-side
+    ``base64`` read path, the merged ``output`` stream) is captured only here
+    and pinned by fake-transport tests. The mapping decisions worth calling out:
 
     * **``run_argv``** joins the argv with :func:`shlex.join` and prefixes
       ``cd <cwd> && `` — cwd is expressed lexically rather than relying on an
@@ -106,9 +114,15 @@ class AioSandboxExecEnv:
       tail (see ``_read_spill``) so the recovered bytes — not the lossy inline
       echo — feed the ``output_cap`` and a big build log never trips the
       response ``_total_cap``.
-    * **byte fidelity** — reads request ``encoding="base64"`` and decode; writes
-      send base64. This is the byte-exact path (edit / apply_patch hash the
-      bytes for TOCTOU), and it is the single most contract-sensitive field.
+    * **byte fidelity** — ``/v1/file/read`` is TEXT-ONLY: ``FileReadRequest``
+      carries no ``encoding`` field (confirmed against the v1.11.0 OpenAPI;
+      read is asymmetric with write, which does take ``encoding="base64"``)
+      and ``content`` arrives as server-decoded UTF-8 text. ``read_text`` uses
+      the endpoint natively; the byte-exact path (``read_bytes`` — edit hashes
+      the bytes for TOCTOU, image reads need them verbatim) instead runs
+      ``base64 -w0`` through ``/v1/shell/exec`` and decodes locally, with
+      guard exit codes refining missing/unreadable into ``FileNotFoundError``
+      / ``PermissionError``. Writes send base64 to ``/v1/file/write``.
     * **``glob`` / ``rglob``** are expressed with shell ``globstar`` (``rglob``
       = ``glob('**/'+pattern)``, matching pathlib's own definition), so they
       depend on ``bash`` with ``globstar`` in the image. Their pathlib semantics
@@ -237,19 +251,53 @@ class AioSandboxExecEnv:
     # -- file reads ------------------------------------------------------- #
 
     def read_bytes(self, path: Path) -> bytes:
-        data = self._call(
-            "/v1/file/read", {"file": str(path), "encoding": "base64"}
+        # ``/v1/file/read`` cannot return bytes (see the class docstring), so
+        # the byte-exact path encodes in the container and decodes here — the
+        # same transport ``tree_snapshot`` already leans on. ``validate=True``
+        # makes any non-base64 leakage (an error message in the merged output
+        # stream) a loud fault instead of silently corrupt bytes. The guards
+        # run in a subshell because the exec session's shell is persistent — a
+        # bare ``exit`` kills it and wedges the request (verified live).
+        q = shlex.quote(str(path))
+        outcome = self._shell(
+            f"( if [ ! -e {q} ]; then exit {_READ_EXIT_NOT_FOUND}; "
+            f"elif [ ! -r {q} ]; then exit {_READ_EXIT_NO_PERM}; "
+            f"else base64 -w0 -- {q}; fi )"
         )
-        content = data.get("content")
-        if not isinstance(content, str):
-            raise AioSandboxError(f"read {path}: response missing 'content'")
+        code = int(outcome.get("exit_code", 1))
+        if code == _READ_EXIT_NOT_FOUND:
+            raise FileNotFoundError(f"read {path}: no such file")
+        if code == _READ_EXIT_NO_PERM:
+            raise PermissionError(f"read {path}: permission denied")
+        if code != 0:
+            raise AioSandboxError(f"read {path}: {outcome.get('output', '')!r}")
+        text = outcome.get("output") or ""
+        spill_path = outcome.get("full_output_file_path")
+        if isinstance(spill_path, str) and spill_path:
+            # Inline echo truncated, full stream spilled to a container file.
+            # The spill is pure ASCII base64, so the text endpoint reads it
+            # whole with no fidelity concern (bounded by ``_total_cap`` like
+            # any response).
+            text = self._read_content(spill_path)
         try:
-            return base64.b64decode(content)
+            return base64.b64decode("".join(text.split()), validate=True)
         except (ValueError, TypeError) as exc:
             raise AioSandboxError(f"read {path}: bad base64 content: {exc}") from exc
 
     def read_text(self, path: Path, *, encoding: str = "utf-8") -> str:
-        return self.read_bytes(path).decode(encoding)
+        if codecs.lookup(encoding).name != "utf-8":
+            # The endpoint decodes as UTF-8 server-side; any other encoding
+            # must take the byte-exact path and decode locally.
+            return self.read_bytes(path).decode(encoding)
+        return self._read_content(str(path))
+
+    def _read_content(self, path: str) -> str:
+        """Whole-file text via ``/v1/file/read`` — the endpoint's native shape."""
+        data = self._call("/v1/file/read", {"file": path})
+        content = data.get("content")
+        if not isinstance(content, str):
+            raise AioSandboxError(f"read {path}: response missing 'content'")
+        return content
 
     # -- file writes ------------------------------------------------------ #
 
@@ -382,11 +430,11 @@ class AioSandboxExecEnv:
         if isinstance(spill_path, str) and spill_path:
             # The inline echo was truncated and the full stream spilled to a
             # container file — parse the spill, never the lossy echo. Unlike
-            # run_argv's tail, the snapshot needs the WHOLE stream; a skill-tier
-            # listing is orders of magnitude below the response cap.
-            text = self.read_bytes(Path(spill_path)).decode(
-                "utf-8", errors="replace"
-            )
+            # run_argv's tail, the snapshot needs the WHOLE stream; the listing
+            # is ASCII (both fields base64), so the text endpoint reads it
+            # directly, and a skill-tier listing is orders of magnitude below
+            # the response cap.
+            text = self._read_content(spill_path)
         files: set[Path] = set()
         contents: dict[Path, bytes] = {}
         for line in text.splitlines():
@@ -495,8 +543,8 @@ class AioSandboxExecEnv:
     def _read_spill(self, path: str, cap: int) -> bytes:
         """Return the bounded tail of a ``full_output_file_path`` spill.
 
-        Reading the whole file would re-enter ``/v1/file/read`` and hit the
-        very ``_total_cap`` the spill exists to dodge, so pull only the last
+        Reading the whole file would hit the very response ``_total_cap`` the
+        spill exists to dodge, so pull only the last
         ``cap + 1`` bytes with ``tail -c`` (the ``+1`` lets ``cap_stream`` still
         flag truncation). ``tail``'s own output is bounded by ``cap`` and so is
         always well under the response cap. Any read fault (missing file,
