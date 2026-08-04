@@ -93,9 +93,11 @@ _WEB_PROMPT = _load_prompt("web")
 
 #: The read-mostly tool set shared by explore and plan: every built-in tool
 #: except the write family (Edit / Write). ``Bash`` is in the
-#: allowlist because read-only investigation needs it (ls / git log / git diff /
-#: find / cat …); "no writes" is enforced by the prompt, with the approval gate
-#: on ``high``-risk shell as the backstop.
+#: allowlist because read-only investigation needs what the fs tools cannot do
+#: (ls / find / git status / git log / git diff); reading and searching go
+#: through ``Read`` / ``Glob`` / ``Grep``, never the shell. "No writes" is
+#: enforced by the prompt, with the approval gate on ``high``-risk shell as the
+#: backstop.
 _SCOUT_TOOLS = (
     "Glob",
     "Grep",
@@ -146,8 +148,8 @@ _WEB_TOOLS = (
 
 
 # ---------------------------------------------------------------------------
-# main's delegation roster. Every name here lands in main's ``spawn_subagent``
-# schema, so adding one changes main's stable prefix for every deployment.
+# main's delegation roster. Every name here lands in main's ``Task`` schema,
+# so adding one changes main's stable prefix for every deployment.
 # ---------------------------------------------------------------------------
 
 
@@ -193,8 +195,8 @@ OFFICIAL_SUBAGENTS: dict[str, AgentDefinition] = {
 #: token churn in its own context and returns a distilled answer to the parent.
 #:
 #: **Deliberately NOT in ``OFFICIAL_SUBAGENTS``.** Registering it there would put
-#: ``web`` in ``main``'s spawnable roster and so change ``main``'s
-#: ``spawn_subagent`` schema for EVERY deployment, including non-sandbox ones
+#: ``web`` in ``main``'s spawnable roster and so change ``main``'s ``Task``
+#: schema for EVERY deployment, including non-sandbox ones
 #: where the browser cannot work at all. Browsing only makes sense under a
 #: sandbox, so wiring ``web`` in is a host-activation decision
 #: (:func:`sandbox_browser_options`), never an SDK default. ``web`` is the sole
@@ -278,8 +280,8 @@ def sandbox_browser_options() -> Options:
     because that is the point at which the browser tool pack can actually work.
     Main deliberately does not open ``browser`` itself: given ``browser_*`` tools
     directly it would shortcut delegation — a one-line ``browser_navigate``
-    always beats a ``spawn_subagent`` hop — and lose the context isolation that
-    makes ``web`` worth having.
+    always beats a ``Task`` hop — and lose the context isolation that makes
+    ``web`` worth having.
 
     Never a silent default: a deployment without a sandbox keeps
     :func:`main_options`, whose roster and stable prefix this function does not

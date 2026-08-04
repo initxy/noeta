@@ -177,11 +177,11 @@ def ask_user_question_tool_schema() -> dict[str, Any]:
 
 def validate_call_id(call_id: Any) -> tuple[bool, str]:
     if not isinstance(call_id, str) or not call_id:
-        return False, "ask_user_question call_id must be a non-empty string"
+        return False, "AskUserQuestion call_id must be a non-empty string"
     if not is_question_id(call_id):
         return (
             False,
-            "ask_user_question call_id must match ^[A-Za-z0-9_-]{1,64}$",
+            "AskUserQuestion call_id must match ^[A-Za-z0-9_-]{1,64}$",
         )
     return True, call_id
 
@@ -430,7 +430,7 @@ def _maybe_ask_user_question_decision(
             assistant_message,
             assistant_thinking,
             patch=None,
-            text="ask_user_question must be the only tool call in the turn",
+            text="AskUserQuestion must be the only tool call in the turn",
             valid=False,
         )
     block = ask_blocks[0]

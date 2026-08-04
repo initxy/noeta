@@ -30,11 +30,11 @@ suspend and resume across many sub-agent spawns and survive a crash.
 
 ## When NOT to use
 
-- For a single one-off delegation — just use `spawn_subagent` instead; reaching
-  for a whole script to wrap one spawn is overkill.
-- For plain parallelism with no loop / branch / dependency — batch the goals
-  into one `spawn_subagent` call's `spawns` array instead; they fan out
-  concurrently without a workflow.
+- For a single one-off delegation — just use `Task` instead; reaching for a
+  whole script to wrap one spawn is overkill.
+- For plain parallelism with no loop / branch / dependency — emit SEVERAL
+  `Task` calls in ONE assistant turn instead; that single turn IS the fan-out,
+  and they run concurrently without a workflow.
 - For work you can do yourself with the file/search/shell tools; the sub-agents
   you spawn do the actual I/O, so a workflow only pays off when the work is
   multi-step or branches across agents.
