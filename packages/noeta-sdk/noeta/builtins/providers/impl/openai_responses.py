@@ -39,6 +39,7 @@ from noeta.protocols.messages import (
     ToolResultBlock,
     ToolUseBlock,
     Usage,
+    is_host_injected,
 )
 from noeta.protocols.values import ContentRef
 from noeta.builtins.providers.impl import catalog
@@ -818,7 +819,7 @@ def _message_to_responses(
         # tell an arbitrary model "this is not the user speaking", so
         # ``HOST_INJECTED_PREAMBLE`` rides in front of the content.
         # ``human`` / ``None`` mean the human's own words → user.
-        if message.origin in ("system", "memory"):
+        if is_host_injected(message):
             return [
                 {
                     "type": "message",

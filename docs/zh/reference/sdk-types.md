@@ -81,15 +81,21 @@ for env in client.events(task_id):
 
 `as_messages(envelopes, content_store) -> list[ViewItem]`（`client/messages.py`）是把一条信封流纯粹地投影成人类可读视图。`content_store` 必须是与那条流**配对的**那一个，因为投影会经由它解引用大体积正文。
 
-`ViewItem` 是五个冻结类型的联合：
+`ViewItem` 是六个冻结类型的联合：
 
 | 类型 | 字段 |
 | --- | --- |
 | `AssistantMessage` | `text` |
 | `UserMessage` | `text` |
+| `InjectedMessage` | `text`、`origin` |
 | `ToolUse` | `call_id`、`tool_name`、`arguments` |
 | `ToolResultView` | `call_id`、`tool_name`、`success`、`output: str \| None` |
 | `Result` | `answer`、`status` —— 为 `"failed"` 时，`answer` 里放的是失败原因 |
+
+每个条目的类型就是它的作者。宿主注入的用户通道消息（`origin` 为 `"system"` 的提醒
+/注入上下文、`"memory"` 的跨任务记忆召回）投影为 `InjectedMessage`，绝不会是
+`UserMessage`——区分真实用户输入与宿主背景上下文只需一次 `isinstance` 判断；只渲染
+`UserMessage` / `AssistantMessage` 的对话 UI 要展示注入内容必须显式选择，而不会误显示。
 
 `Client.messages(task_id)` 和 `QueryResult.messages()` 已经替你对着正确的存储调用了它，因此只有当你自己同时握着信封和存储时，才需要动用 `as_messages`。
 

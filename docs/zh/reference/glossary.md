@@ -216,7 +216,7 @@ View 分三部分组装。`stable_prefix` 携带系统 prompt 消息和 provider
 
 ### Origin
 
-`Message` 上一个可选的作者标记——`human`、`system` 或 `memory`——默认为 `None`，意思是这个 role 的自然作者。role 与 origin 是两个不同的维度：role 说的是这一轮走的是哪条通道，origin 说的是谁写的它。**单写者保护**：只有 Engine 的记录路径可以写它，而在模型或工具输出里伪造出来的标记只是文本。
+`Message` 上一个可选的作者标记——`human`、`system` 或 `memory`——默认为 `None`，意思是这个 role 的自然作者。role 与 origin 是两个不同的维度：role 说的是这一轮走的是哪条通道，origin 说的是谁写的它。**单写者保护**：只有 Engine 的记录路径可以写它，而在模型或工具输出里伪造出来的标记只是文本。在 SDK 消息视图里，origin 为 `system` / `memory` 的消息投影为 `InjectedMessage`，绝不会是 `UserMessage`。
 
 ### TaskState
 

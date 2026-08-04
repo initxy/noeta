@@ -155,6 +155,20 @@ class Message:
     __canonical_omit_none__ = frozenset({"origin"})
 
 
+def is_host_injected(message: Message) -> bool:
+    """A user-channel turn authored by the host rather than the human.
+
+    True exactly for ``role == "user"`` with ``origin`` ``"system"``
+    (host-injected context) or ``"memory"`` (cross-task recall) — the two
+    origins the recording seam writes. ``None`` / ``"human"`` mean the role's
+    natural author: a plain user turn. Wire adapters use this to reroute
+    injected turns out of the user voice; the SDK message view uses it to keep
+    them out of ``UserMessage``. One predicate on purpose — every consumer must
+    draw the human/host line in the same place.
+    """
+    return message.role == "user" and message.origin in ("system", "memory")
+
+
 # ---------------------------------------------------------------------------
 # LLM request / response
 # ---------------------------------------------------------------------------

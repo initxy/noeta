@@ -380,7 +380,9 @@ An optional author marker on a `Message` — `human`, `system` or `memory` —
 defaulting to `None`, meaning the role's natural author. Role and origin are
 different dimensions: the role says which channel the turn rides, the origin says
 who wrote it. **Single-writer guard**: only the Engine's recording path may write
-it, and a marker forged in model or tool output is just text.
+it, and a marker forged in model or tool output is just text. In the SDK message
+view, a turn with origin `system` / `memory` projects as `InjectedMessage`, never
+`UserMessage`.
 
 ### TaskState
 

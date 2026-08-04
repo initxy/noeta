@@ -38,6 +38,7 @@ from noeta.protocols.messages import (
     ToolResultBlock,
     ToolUseBlock,
     Usage,
+    is_host_injected,
 )
 from noeta.protocols.values import ContentRef
 from noeta.builtins.providers.impl import catalog
@@ -249,7 +250,7 @@ class AnthropicProvider:
                     "system must use LLMRequest.system field, not messages array"
                 )
             wire = _message_to_anthropic(message, self._image_resolver, vision)
-            injected = _is_host_injected(message)
+            injected = is_host_injected(message)
             if (
                 (injected or prev_injected)
                 and wire["role"] == "user"
@@ -553,15 +554,6 @@ def _flatten_text_blocks(message: Message) -> str:
     )
 
 
-def _is_host_injected(message: Message) -> bool:
-    """A user-channel turn authored by the host rather than the human.
-
-    ``human`` / ``None`` mean the role's natural author, rendered as a plain
-    user turn.
-    """
-    return message.role == "user" and message.origin in ("system", "memory")
-
-
 def _wrap_system_reminder(text: str) -> str:
     """Anthropic-only tag syntax; it lives here so it never enters the ledger."""
     return f"<system-reminder>\n{text}\n</system-reminder>"
@@ -590,7 +582,7 @@ def _user_message_to_anthropic(
     — they don't appear in user history, matching OpenAICompatProvider's
     tolerance. Any non-vision image misroute was already rejected by the vision
     guard upstream."""
-    wrap = _is_host_injected(message)
+    wrap = is_host_injected(message)
     blocks: list[dict[str, Any]] = []
     for block in message.content:
         if isinstance(block, ToolResultBlock):

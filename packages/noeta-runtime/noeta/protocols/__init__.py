@@ -27,6 +27,7 @@ from noeta.protocols.messages import (
     ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
+    is_host_injected,
 )
 from noeta.protocols.step_context import StepContext
 
@@ -52,4 +53,5 @@ __all__: list[str] = [
     "ToolResultBlock",
     "ToolUseBlock",
     "Unsubscribe",
+    "is_host_injected",
 ]
