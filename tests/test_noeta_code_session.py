@@ -157,8 +157,8 @@ def test_default_agent_exposes_full_fs_pack() -> None:
         "Bash",
         "BashOutput",
         "KillShell",
-        "webfetch",
-        "web_search",
+        "WebFetch",
+        "WebSearch",
     }
     assert frozenset(r.name for r in official_specs()["main"].tools) == expected
 

@@ -104,15 +104,15 @@ def _assert_output_json_safe(result: ToolResult) -> None:
 
 def test_webfetch_identity_low_risk() -> None:
     tool = WebFetchTool(transport=FakeFetchTransport())
-    assert tool.name == "webfetch"
+    assert tool.name == "WebFetch"
     assert tool.risk_level == "low"
     assert tool.description.strip()
 
 
 def test_build_web_tools_exposes_webfetch() -> None:
     tools = build_web_tools()
-    assert set(tools) == {"webfetch"}
-    assert tools["webfetch"].risk_level == "low"
+    assert set(tools) == {"WebFetch"}
+    assert tools["WebFetch"].risk_level == "low"
 
 
 # ---------------------------------------------------------------------------
@@ -127,9 +127,8 @@ def test_webfetch_renders_markdown_and_offloads() -> None:
 
     result = tool.invoke({"url": "https://x"}, ctx)
     assert result.success is True
-    assert result.output["url"] == "https://x"
-    assert result.output["title"] == "Cats & Kittens"  # entity unescaped
-    md = result.output["content"]
+    md = result.output
+    assert md.startswith("Title: Cats & Kittens\nURL: https://x\n\n")  # entity unescaped
     assert "# About cats" in md
     assert "[cute](https://example.com/cute)" in md
     assert "- soft" in md
@@ -138,13 +137,14 @@ def test_webfetch_renders_markdown_and_offloads() -> None:
     # and a place for a page to smuggle instructions.
     assert "track()" not in md
     assert "color:red" not in md
+    # No ref/hash rides the model-facing text; the artifact is audit-side.
+    assert "content_ref" not in md
     _assert_output_json_safe(result)
 
     assert len(result.artifacts) == 1
     ref = result.artifacts[0]
-    assert result.output["content_ref"]["hash"] == ref.hash
-    assert store.get(ref).decode("utf-8") == md
-    assert result.output["content_ref"]["media_type"] == "text/markdown"
+    assert ref.media_type == "text/markdown"
+    assert store.get(ref).decode("utf-8") in md
 
 
 def test_webfetch_deterministic_same_bytes_same_artifact() -> None:
@@ -156,7 +156,7 @@ def test_webfetch_deterministic_same_bytes_same_artifact() -> None:
     b = tool.invoke({"url": "https://x"}, ctx_b)
     # Resume relies on identical input bytes → identical artifact.
     assert a.artifacts[0].hash == b.artifacts[0].hash
-    assert a.output["content"] == b.output["content"]
+    assert a.output == b.output
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +178,7 @@ def test_webfetch_degrades_on_transport_failure() -> None:
     ctx, _ = _ctx()
     result = WebFetchTool(transport=transport).invoke({"url": "https://boom"}, ctx)
     assert result.success is False
-    assert "webfetch failed" in result.summary
+    assert "WebFetch failed" in result.summary
     _assert_output_json_safe(result)
 
 
@@ -212,15 +212,12 @@ def test_webfetch_large_page_truncates_inline_keeps_full_artifact() -> None:
     ctx, store = _ctx()
     result = WebFetchTool(transport=transport).invoke({"url": "https://big"}, ctx)
     assert result.success is True
-    assert result.output["truncated"] is True
-    assert _encode_output(result.output)
-    from noeta.tools.limits import encoded_len
-
-    # Inline output stays under the ceiling, but nothing is lost — the full
-    # markdown survives in the artifact for a follow-up read.
-    assert encoded_len(result.output) <= INLINE_CONTENT_MAX_BYTES
+    # Inline output is bounded with a notice, but nothing is lost — the full
+    # markdown survives in the artifact for audit.
+    assert "(Content truncated: showing the first" in result.output
+    assert len(result.output) < 110_000
     ref = result.artifacts[0]
-    assert len(store.get(ref)) > len(result.output["content"].encode("utf-8"))
+    assert len(store.get(ref)) > len(result.output.encode("utf-8"))
 
 
 # ---------------------------------------------------------------------------
@@ -296,13 +293,13 @@ def test_html_to_markdown_basic_structure() -> None:
 def test_build_web_tools_sandbox_uses_container_fetch_transport() -> None:
     fake = FakeExecEnv(stdout=_PAGE.encode("utf-8"))
     tools = build_web_tools(exec_env=fake)
-    assert set(tools) == {"webfetch"}
-    assert isinstance(tools["webfetch"].transport, ContainerCurlFetchTransport)
+    assert set(tools) == {"WebFetch"}
+    assert isinstance(tools["WebFetch"].transport, ContainerCurlFetchTransport)
 
 
 def test_container_fetch_runs_curl_and_renders_markdown() -> None:
     fake = FakeExecEnv(stdout=_PAGE.encode("utf-8"))
-    tool = build_web_tools(exec_env=fake)["webfetch"]
+    tool = build_web_tools(exec_env=fake)["WebFetch"]
     ctx, store = _ctx()
 
     result = tool.invoke({"url": "https://x"}, ctx)
@@ -317,11 +314,11 @@ def test_container_fetch_runs_curl_and_renders_markdown() -> None:
     # body and the model reads a 403 notice as page content.
     assert "--fail" in argv
     # the scripted HTML is rendered by the SAME html_to_markdown as the httpx path
-    md = result.output["content"]
+    md = result.output
     assert "# About cats" in md
     assert "[cute](https://example.com/cute)" in md
     assert "- soft" in md
-    assert result.output["title"] == "Cats & Kittens"
+    assert md.startswith("Title: Cats & Kittens\n")
     _assert_output_json_safe(result)
 
 
@@ -331,19 +328,19 @@ def test_container_fetch_nonzero_exit_degrades() -> None:
     fake = FakeExecEnv(
         stdout=b"", returncode=22, stderr=b"curl: (22) 403 Forbidden"
     )
-    tool = build_web_tools(exec_env=fake)["webfetch"]
+    tool = build_web_tools(exec_env=fake)["WebFetch"]
     ctx, _ = _ctx()
     result = tool.invoke({"url": "https://private"}, ctx)
     assert result.success is False
-    assert "webfetch failed" in result.summary
+    assert "WebFetch failed" in result.summary
     assert "403" in result.summary
     _assert_output_json_safe(result)
 
 
 def test_container_fetch_timeout_degrades() -> None:
     fake = FakeExecEnv(stdout=b"", returncode=-1, timed_out=True)
-    tool = build_web_tools(exec_env=fake)["webfetch"]
+    tool = build_web_tools(exec_env=fake)["WebFetch"]
     ctx, _ = _ctx()
     result = tool.invoke({"url": "https://slow"}, ctx)
     assert result.success is False
-    assert "webfetch failed" in result.summary
+    assert "WebFetch failed" in result.summary

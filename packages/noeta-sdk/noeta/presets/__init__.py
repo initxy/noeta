@@ -103,13 +103,13 @@ _SCOUT_TOOLS = (
     "Bash",
     "BashOutput",
     "KillShell",
-    "webfetch",
+    "WebFetch",
 )
 
 
 #: general-purpose's tool allowlist: the full built-in set, the same surface as
 #: main, so it searches with ``Grep`` / ``Glob``, edits with ``Edit``, and
-#: fetches with ``webfetch`` instead of being forced back through
+#: fetches with ``WebFetch`` instead of being forced back through
 #: ``Bash``. Its ``delegation`` capability stays off — a leaf
 #: worker that spawns nothing further cannot fan out without bound.
 _GENERAL_PURPOSE_TOOLS = (
@@ -120,15 +120,15 @@ _GENERAL_PURPOSE_TOOLS = (
     "Bash",
     "BashOutput",
     "KillShell",
-    "web_search",
-    "webfetch",
+    "WebSearch",
+    "WebFetch",
     "Write",
 )
 
 
 #: The ``web`` subagent's whitelist-filtered base tools — the supporting cast
 #: around browsing: read/write to save findings, read-only shell, and
-#: ``webfetch`` for a raw fetch when no interaction is needed. The browser pack
+#: ``WebFetch`` for a raw fetch when no interaction is needed. The browser pack
 #: (``browser_*``) is deliberately absent: it is gated by the ``browser``
 #: activation plus a live sandbox backend, not by this whitelist. No ``Edit``
 #: either — a browser worker writes fresh notes rather than editing a
@@ -140,7 +140,7 @@ _WEB_TOOLS = (
     "Bash",
     "BashOutput",
     "KillShell",
-    "webfetch",
+    "WebFetch",
     "Write",
 )
 

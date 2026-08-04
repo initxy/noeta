@@ -135,7 +135,7 @@ def _assert_output_json_safe(result: ToolResult) -> None:
 
 def test_web_search_identity_low_risk() -> None:
     tool = WebSearchTool(transport=FakeSearchTransport())
-    assert tool.name == "web_search"
+    assert tool.name == "WebSearch"
     assert tool.risk_level == "low"
     assert tool.description.strip()
     assert tool.input_schema["required"] == ["query"]
@@ -153,22 +153,20 @@ def test_web_search_renders_markdown_and_offloads() -> None:
 
     result = WebSearchTool(transport=transport).invoke({"query": "cats"}, ctx)
     assert result.success is True
-    assert result.output["query"] == "cats"
-    assert result.output["count"] == 2
-    md = result.output["content"]
-    # numbered list, titles linked, snippets present.
+    md = result.output
+    # numbered list, titles linked, snippets present — no envelope, no ref.
     assert "1. [About cats](https://example.com/cats)" in md
     assert "2. [Kitten care](https://example.com/kittens)" in md
     assert "Cats are small carnivorous mammals." in md
     assert "Kittens need warmth and frequent feeding." in md
+    assert "content_ref" not in md
     _assert_output_json_safe(result)
 
-    # full markdown is the artifact; content_ref points at it.
+    # full markdown is the audit artifact.
     assert len(result.artifacts) == 1
     ref = result.artifacts[0]
-    assert result.output["content_ref"]["hash"] == ref.hash
     assert store.get(ref).decode("utf-8") == md
-    assert result.output["content_ref"]["media_type"] == "text/markdown"
+    assert ref.media_type == "text/markdown"
 
 
 def test_web_search_deterministic_same_hits_same_artifact() -> None:
@@ -178,7 +176,7 @@ def test_web_search_deterministic_same_hits_same_artifact() -> None:
     a = WebSearchTool(transport=transport).invoke({"query": "cats"}, ctx_a)
     b = WebSearchTool(transport=transport).invoke({"query": "cats"}, ctx_b)
     assert a.artifacts[0].hash == b.artifacts[0].hash
-    assert a.output["content"] == b.output["content"]
+    assert a.output == b.output
 
 
 def test_web_search_count_clamped_and_forwarded() -> None:
@@ -211,7 +209,7 @@ def test_web_search_degrades_on_transport_failure() -> None:
     ctx, _ = _ctx()
     result = WebSearchTool(transport=transport).invoke({"query": "boom"}, ctx)
     assert result.success is False
-    assert "web_search failed" in result.summary
+    assert "WebSearch failed" in result.summary
     _assert_output_json_safe(result)
 
 
@@ -255,12 +253,10 @@ def test_web_search_large_result_truncates_inline_keeps_full_artifact() -> None:
     ctx, store = _ctx()
     result = WebSearchTool(transport=transport).invoke({"query": "big"}, ctx)
     assert result.success is True
-    assert result.output["truncated"] is True
-    # inline output respects the canonical byte ceiling ...
-    assert encoded_len(result.output) <= INLINE_CONTENT_MAX_BYTES
+    assert "(Results truncated: showing the first" in result.output
     # ... but the full markdown survives in the artifact, longer than inline.
     ref = result.artifacts[0]
-    assert len(store.get(ref)) > len(result.output["content"].encode("utf-8"))
+    assert len(store.get(ref)) > len(result.output.encode("utf-8"))
 
 
 # ---------------------------------------------------------------------------
@@ -273,8 +269,8 @@ def test_build_web_tools_omits_web_search_without_key(
 ) -> None:
     monkeypatch.delenv(SEARCH_API_KEY_ENV, raising=False)
     tools = build_web_tools()
-    assert set(tools) == {"webfetch"}
-    assert "web_search" not in tools
+    assert set(tools) == {"WebFetch"}
+    assert "WebSearch" not in tools
 
 
 def test_build_web_tools_includes_web_search_with_key(
@@ -282,9 +278,9 @@ def test_build_web_tools_includes_web_search_with_key(
 ) -> None:
     monkeypatch.setenv(SEARCH_API_KEY_ENV, "tvly-test-key")
     tools = build_web_tools()
-    assert set(tools) == {"webfetch", "web_search"}
-    assert tools["web_search"].risk_level == "low"
-    assert isinstance(tools["web_search"], WebSearchTool)
+    assert set(tools) == {"WebFetch", "WebSearch"}
+    assert tools["WebSearch"].risk_level == "low"
+    assert isinstance(tools["WebSearch"], WebSearchTool)
 
 
 def test_build_web_tools_blank_key_omits_web_search(
@@ -292,7 +288,7 @@ def test_build_web_tools_blank_key_omits_web_search(
 ) -> None:
     monkeypatch.setenv(SEARCH_API_KEY_ENV, "   ")  # whitespace-only ⇒ no key
     tools = build_web_tools()
-    assert "web_search" not in tools
+    assert "WebSearch" not in tools
 
 
 # ---------------------------------------------------------------------------
@@ -371,8 +367,8 @@ def test_build_web_tools_sandbox_uses_container_search_transport(
     monkeypatch.setenv(SEARCH_API_KEY_ENV, "tvly-test-key")
     fake = FakeExecEnv(stdout=json.dumps(_TAVILY_JSON).encode("utf-8"))
     tools = build_web_tools(exec_env=fake)
-    assert set(tools) == {"webfetch", "web_search"}
-    assert isinstance(tools["web_search"].transport, ContainerCurlSearchTransport)
+    assert set(tools) == {"WebFetch", "WebSearch"}
+    assert isinstance(tools["WebSearch"].transport, ContainerCurlSearchTransport)
 
 
 def test_container_search_runs_curl_post_and_parses(
@@ -380,12 +376,12 @@ def test_container_search_runs_curl_post_and_parses(
 ) -> None:
     monkeypatch.setenv(SEARCH_API_KEY_ENV, "tvly-test-key")
     fake = FakeExecEnv(stdout=json.dumps(_TAVILY_JSON).encode("utf-8"))
-    tool = build_web_tools(exec_env=fake)["web_search"]
+    tool = build_web_tools(exec_env=fake)["WebSearch"]
     ctx, _ = _ctx()
 
     result = tool.invoke({"query": "cats"}, ctx)
     assert result.success is True
-    assert result.output["count"] == 2
+    assert "1. " in result.output and "2. " in result.output
     # a curl POST to the Tavily endpoint with the JSON body, HTTP errors failing
     # the run (--fail), and the bearer key delivered OUT-OF-BAND via --config
     argv = fake.calls[0]
@@ -402,7 +398,7 @@ def test_container_search_runs_curl_post_and_parses(
     config_path = argv[argv.index("-K") + 1]
     assert (config_path, b'header = "Authorization: Bearer tvly-test-key"\n') in fake.writes
     assert config_path in fake.unlinks
-    md = result.output["content"]
+    md = result.output
     assert "1. [About cats](https://example.com/cats)" in md
     assert "2. [Kittens](https://example.com/kittens)" in md
     _assert_output_json_safe(result)
@@ -432,9 +428,9 @@ def test_container_search_nonzero_exit_degrades(
     fake = FakeExecEnv(
         stdout=b"", returncode=22, stderr=b"curl: (22) 401 Unauthorized"
     )
-    tool = build_web_tools(exec_env=fake)["web_search"]
+    tool = build_web_tools(exec_env=fake)["WebSearch"]
     ctx, _ = _ctx()
     result = tool.invoke({"query": "q"}, ctx)
     assert result.success is False
-    assert "web_search failed" in result.summary
+    assert "WebSearch failed" in result.summary
     assert "401" in result.summary

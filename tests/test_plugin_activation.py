@@ -144,16 +144,16 @@ def test_unknown_child_activation_names_the_child() -> None:
 def test_external_tool_follows_activation() -> None:
     """An agent that activates a plugin gets its tool; a sibling does not."""
     activation = {
-        "extra": PluginActivation(tools=("web_search",)),
+        "extra": PluginActivation(tools=("WebSearch",)),
     }
     # allowed_tools=() so the base is empty and the plugin tool is the only add.
     active = _bare(allowed_tools=(), plugins=DEFAULT_PLUGINS + ("extra",))
     main_active, _ = compile_options(active, plugins=activation)
-    assert "web_search" in {t.name for t in main_active.tools}
+    assert "WebSearch" in {t.name for t in main_active.tools}
 
     inactive = _bare(allowed_tools=())  # DEFAULT_PLUGINS only, no "extra"
     main_inactive, _ = compile_options(inactive, plugins=activation)
-    assert "web_search" not in {t.name for t in main_inactive.tools}
+    assert "WebSearch" not in {t.name for t in main_inactive.tools}
 
 
 def test_external_prompt_fragment_follows_activation() -> None:

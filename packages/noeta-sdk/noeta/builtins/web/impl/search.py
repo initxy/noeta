@@ -4,7 +4,7 @@
 :class:`SearchTransport`, renders the ranked hits (each ``title`` / ``url`` /
 ``snippet``) into a compact Markdown list, offloads the **full** rendering to a
 ContentStore artifact, and returns a small inline object
-``{query, count, content, content_ref, truncated}``. It is ``webfetch``'s sibling
+a plain Markdown hit list. It is ``WebFetch``'s sibling
 in the web pack: a read-only lookup with no workspace mutation, so
 ``risk_level="low"``.
 
@@ -35,10 +35,7 @@ import httpx
 
 from noeta.protocols.tool import Tool, ToolContext, ToolResult
 from noeta.tools.limits import (
-    INLINE_CONTENT_MAX_BYTES,
     SUMMARY_EMBED_MAX_BYTES,
-    encoded_len,
-    fit_output_fields,
     truncate_bytes,
 )
 from noeta.protocols.resources import load_markdown
@@ -61,6 +58,9 @@ SEARCH_API_KEY_ENV = "NOETA_WEB_SEARCH_API_KEY"
 
 _SEARCH_MEDIA_TYPE = "text/markdown"
 _MAX_QUERY_BYTES = 512
+#: Inline cap on the rendered hit list — far above any real result set; the
+#: fence exists so a pathological backend response cannot swamp the context.
+_INLINE_RESULT_MAX_CHARS = 100_000
 _MAX_TITLE_BYTES = 200
 _MAX_URL_BYTES = 512
 _MAX_SNIPPET_BYTES = 1000
@@ -159,7 +159,7 @@ class WebSearchTool:
     """Run a web search and return ranked hits rendered to Markdown."""
 
     transport: SearchTransport
-    name: str = "web_search"
+    name: str = "WebSearch"
     description: str = field(default=load_markdown(__package__, "web_search"))
     risk_level: str = "low"
     input_schema: dict[str, Any] = field(
@@ -178,50 +178,37 @@ class WebSearchTool:
         query = arguments.get("query")
         if not isinstance(query, str) or not query.strip():
             return ToolResult(
-                success=False, summary="web_search requires a non-empty 'query'"
+                success=False, summary="WebSearch requires a non-empty 'query'"
             )
         count = _clamp_count(arguments.get("count"))
         try:
             results = self.transport.search(query, count)
         except Exception as exc:  # noqa: BLE001 — degrade, don't crash the step
-            return ToolResult(success=False, summary=f"web_search failed: {exc}")
+            return ToolResult(success=False, summary=f"WebSearch failed: {exc}")
 
         if not results:
             return ToolResult(
-                success=False, summary=f"web_search found no results for {query!r}"
+                success=False, summary=f"WebSearch found no results for {query!r}"
             )
 
         markdown = results_to_markdown(results)
-        # The full rendering is the artifact; a bounded view rides inline. The
-        # model can deref the ref for the rest of a long result list.
+        # The full rendering is the audit artifact; the model reads the plain
+        # Markdown hit list directly — no envelope, no ref.
         ref = ctx.artifact_store.put(
             markdown.encode("utf-8"), media_type=_SEARCH_MEDIA_TYPE
         )
-        output: dict[str, Any] = {
-            "query": truncate_bytes(query, _MAX_QUERY_BYTES),
-            "count": len(results),
-            "content": markdown,
-            "content_ref": {
-                "hash": ref.hash,
-                "size": ref.size,
-                "media_type": ref.media_type,
-            },
-            "truncated": False,
-        }
-        # Hard canonical-encoded ceiling: if the inline ``content`` does not
-        # fit, shrink it to an excerpt and mark truncated (the full list is the
-        # artifact; the model derefs ``content_ref`` for the rest).
-        if encoded_len(output) > INLINE_CONTENT_MAX_BYTES:
-            output["truncated"] = True
-            output = fit_output_fields(
-                output,
-                shrink_order=["content", "query"],
-                max_bytes=INLINE_CONTENT_MAX_BYTES,
+        body = markdown
+        if len(body) > _INLINE_RESULT_MAX_CHARS:
+            total = len(body)
+            body = body[:_INLINE_RESULT_MAX_CHARS] + (
+                f"\n(Results truncated: showing the first "
+                f"{_INLINE_RESULT_MAX_CHARS} of {total} characters. Refine "
+                "the query or lower 'count'.)"
             )
         summary_query = truncate_bytes(query, SUMMARY_EMBED_MAX_BYTES)
         return ToolResult(
             success=True,
-            output=output,
+            output=body,
             artifacts=[ref],
             summary=f"searched {summary_query!r} ({len(results)} hits)",
         )

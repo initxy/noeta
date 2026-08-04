@@ -16,8 +16,8 @@ MANIFEST = PluginManifest(
     name="web",
     requires_noeta=">=0.4",
     contributions=(
-        c("tool", "webfetch", "noeta.builtins.web.impl.fetch:WebFetchTool"),
-        c("tool", "web_search", "noeta.builtins.web.impl.search:WebSearchTool"),
+        c("tool", "WebFetch", "noeta.builtins.web.impl.fetch:WebFetchTool"),
+        c("tool", "WebSearch", "noeta.builtins.web.impl.search:WebSearchTool"),
         # The session-construction half: band 200 —
         # appends directly after the fs pack, preserving the merged
         # fs-then-web insertion order.

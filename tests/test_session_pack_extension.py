@@ -243,14 +243,14 @@ def test_builder_interleaves_a_pack_between_priority_bands(
     inputs = _build(tmp_path, packs)
 
     order = list(inputs.tools)
-    idx = GOLDEN_DEFAULT_TOOLS.index("webfetch")
+    idx = GOLDEN_DEFAULT_TOOLS.index("WebFetch")
     expected = (
         GOLDEN_DEFAULT_TOOLS[: idx + 1]
         + ["toy_between"]
         + GOLDEN_DEFAULT_TOOLS[idx + 1 :]
     )
     assert order == expected
-    assert order[order.index("webfetch") + 1] == "toy_between"  # after web (200)
+    assert order[order.index("WebFetch") + 1] == "toy_between"  # after web (200)
     assert order[order.index("toy_between") + 1] == "memory_write"  # before memory (300)
 
 

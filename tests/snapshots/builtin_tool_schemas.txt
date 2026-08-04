@@ -192,6 +192,43 @@
     "risk_level": "low"
   },
   {
+    "description": "Fetches a public URL and returns its content rendered as Markdown.\n\n- Performs a GET on `url`, converts the HTML to compact Markdown (headings, links, list items; scripts, styles, and `<head>` stripped), and returns a `Title:` / `URL:` header followed by the page body. A pathologically long page is truncated with a notice naming the total size.\n- Only public pages: an intranet or logged-in URL answers 401/403 (or is unreachable) and the call fails with the cause named — don't retry those.\n- Redirects are followed. To search the web rather than fetch a known page, use `WebSearch`.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "name": "WebFetch",
+    "risk_level": "low"
+  },
+  {
+    "description": "Searches the web and returns the ranked hits as a Markdown list.\n\n- Issues `query` against a web search backend; each hit is a numbered `[title](url)` line plus a short snippet. Optional `count` (default 5, max 20) caps how many hits return.\n- Use it for fresh or unknown information; follow up on a promising hit with `WebFetch` to read the page itself.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "type": "integer"
+        },
+        "query": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "name": "WebSearch",
+    "risk_level": "low"
+  },
+  {
     "description": "Writes a file to the workspace, creating it or overwriting an existing one.\n\n- Creating a new file always works, and missing parent directories are created. Overwriting an existing file requires you to have `Read` it this session (and its content not to have changed since), so you never blindly clobber a file you haven't seen.\n- `file_path` is workspace-relative. A path outside the workspace (absolute, `..`, or through a symlink) needs the owner's authorization: the call pauses, they approve the directory once, and it stays open afterwards. Don't route around a pause — say what you need and why.\n- `content` is UTF-8 text and always the FULL file body — never write a partial file or use placeholders. The change is recorded as a unified diff artifact.\n- For a small change to an existing file, prefer `Edit` — it replaces a surgical region instead of the whole body.",
     "input_schema": {
       "additionalProperties": false,
@@ -211,42 +248,5 @@
     },
     "name": "Write",
     "risk_level": "high"
-  },
-  {
-    "description": "Runs a web search and returns the top ranked hits rendered to Markdown.\n\n- Issues `query` against a web search backend and returns `{query, count, content, content_ref, truncated}`, where `content` is a numbered Markdown list of hits (each a `[title](url)` line plus a short snippet). The full rendering is offloaded as an artifact; when inline content would exceed the byte budget you get an excerpt plus the ref and `truncated: true`. Optional `count` (default 5, max 20) caps how many hits to return.\n- Use it to discover URLs and current information you do not already have — finding pages, checking recent facts, locating documentation or sources on the open web.\n- It does not read a specific page you already have: to fetch a known URL's content use `webfetch`; to read a workspace file use `read`. It searches the public web, not the workspace.\n- `query` must be a non-empty string. The tool is only available when a search backend key is configured; if it is absent here, the capability is not enabled for this session.",
-    "input_schema": {
-      "additionalProperties": false,
-      "properties": {
-        "count": {
-          "type": "integer"
-        },
-        "query": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "query"
-      ],
-      "type": "object"
-    },
-    "name": "web_search",
-    "risk_level": "low"
-  },
-  {
-    "description": "Fetches a public web page over HTTP(S) and returns its content rendered to Markdown.\n\n- Performs a GET on `url`, converts the HTML to compact Markdown (headings, links, list items; scripts, styles, and `<head>` stripped), and returns `{url, title, content, content_ref, truncated}`. The full rendering is offloaded as an artifact; when inline content would exceed the byte budget you get an excerpt plus the ref and `truncated: true`.\n- `url` must be a well-formed `http://` or `https://` URL.\n- The page must be publicly reachable: webfetch sends no credentials, so authenticated / logged-in / intranet URLs fail (e.g. 401/403). Use an authenticated tool for those.\n- It fetches a URL you already have; it does not search. To read a workspace file, use `read`.",
-    "input_schema": {
-      "additionalProperties": false,
-      "properties": {
-        "url": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "url"
-      ],
-      "type": "object"
-    },
-    "name": "webfetch",
-    "risk_level": "low"
   }
 ]
