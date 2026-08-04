@@ -1292,8 +1292,21 @@ class InteractionDriver:
                 reopened_by=self._principal.identity,
                 reason="new goal",
             )
+        # ``refresh_content``: a new goal re-runs the contributed init hooks
+        # before the goal lands, exactly as ``seed_start`` does — the memory
+        # index resident is the reason. A hook re-reads its source at
+        # invocation, so a memory written by an EARLIER turn of this same task
+        # reaches the index HERE instead of waiting for a whole new task (the
+        # Engine is cached, so its build-time state can be arbitrarily old).
+        # Idempotent by the recorder's unchanged-hash rule: an untouched source
+        # appends nothing, so the common turn is byte-identical, and a refresh
+        # moves the resident's bytes but never its placement (the activation
+        # anchor is first-write-wins).
         return self._seed_woken(
-            task_id, handle=NEXT_GOAL_WAKE_HANDLE, prelude=prelude
+            task_id,
+            handle=NEXT_GOAL_WAKE_HANDLE,
+            prelude=prelude,
+            refresh_content=True,
         )
 
     def notify_background_exit(
@@ -2339,6 +2352,7 @@ class InteractionDriver:
         handle: str,
         prelude: Optional[WokenPrelude],
         condition: Optional[WakeCondition] = None,
+        refresh_content: bool = False,
     ) -> SeededTurn:
         """Wake the task on ``handle`` and take the matched lease — no drive.
 
@@ -2360,6 +2374,11 @@ class InteractionDriver:
         :class:`SeededTurn` then carries ``prelude=None`` and the drive runs
         the bare step. The approval prelude (executes the
         approved tool) keeps the drive-side path.
+
+        ``refresh_content`` re-runs the session's content ``init`` hooks in the
+        same window, ahead of the prelude — the new-goal path opts in, so a
+        resident whose source changed mid-task (the memory index) is refreshed
+        before the goal is recorded.
         """
         host = self._host
         expected: Optional[str] = None
@@ -2410,14 +2429,21 @@ class InteractionDriver:
                     expected=expected,
                 )
         if prelude is not None and getattr(prelude, "durable_at_seed", False):
-            engine = self._apply_seed_prelude(task_id, lease, prelude)
+            engine = self._apply_seed_prelude(
+                task_id, lease, prelude, refresh_content=refresh_content
+            )
             return SeededTurn(
                 task_id=task_id, lease=lease, prelude=None, engine=engine
             )
         return SeededTurn(task_id=task_id, lease=lease, prelude=prelude)
 
     def _apply_seed_prelude(
-        self, task_id: str, lease: Any, prelude: WokenPrelude
+        self,
+        task_id: str,
+        lease: Any,
+        prelude: WokenPrelude,
+        *,
+        refresh_content: bool = False,
     ) -> Any:
         """Apply an append-type prelude synchronously under the seed's lease:
         ``note_woken`` + the prelude's durable events land before the
@@ -2427,6 +2453,12 @@ class InteractionDriver:
         (a prelude-written ``ModelBound`` drives the next turn);
         the drive itself is then prelude-less — its woken machine reconciles
         the already-durable ``TaskWoken`` and runs the bare step.
+
+        ``refresh_content`` runs the contributed content ``init`` hooks between
+        ``note_woken`` and the prelude — the same generic seam ``seed_start``
+        drives pre-loop, in the same order, so a resident refreshes ahead of
+        the message the prelude records. Off by default: only the new-goal path
+        asks for it (see :meth:`seed_send_goal`).
         """
         host = self._host
         task = fold(host.event_log, host.content_store, task_id)
@@ -2435,6 +2467,18 @@ class InteractionDriver:
             task, lease_id=lease.lease_id, wake_event=lease.wake_event
         )
         try:
+            # Inside the compensation guard with the prelude: a hook that
+            # raises (an unreadable store, a content-store fault) must
+            # re-suspend the task like any other half-seeded turn, not strand
+            # it ``running`` on an already-durable ``TaskWoken``.
+            if refresh_content:
+                task = run_content_init(
+                    host.event_log,
+                    host.content_store,
+                    task,
+                    init_hooks=getattr(engine, "content_init_hooks", ()),
+                    lease_id=lease.lease_id,
+                )
             prelude(engine, task, lease_id=lease.lease_id)
         except Exception:
             # ``TaskWoken`` is already durable; propagating with the turn
