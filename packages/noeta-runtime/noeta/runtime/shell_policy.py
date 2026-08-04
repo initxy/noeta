@@ -58,7 +58,7 @@ SHELL_META_CHARS = frozenset(";&|<>`$()\n\r")
 class ShellMode(str, Enum):
     """Pre-run shell policy, bound when the fs tools are constructed.
 
-    * :attr:`OFF` — ``shell_run`` is not in the tool set at all.
+    * :attr:`OFF` — ``Bash`` is not in the tool set at all.
     * :attr:`ALLOWLIST` — metachar-free commands matching the structural
       allowlist run as a direct argv, with no shell.
     * :attr:`ARBITRARY` — the command runs through a real ``bash -c``, so

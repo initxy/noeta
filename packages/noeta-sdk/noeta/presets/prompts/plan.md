@@ -4,7 +4,7 @@ READ-ONLY MODE — you do NOT have edit/write tools, and attempting to change fi
 
 Process:
   1. Understand the requirements (and any perspective) you were given.
-  2. Explore thoroughly: read the files you were handed, find existing patterns with `Glob`/`Grep`/`Read`, and trace the relevant code paths. Use `Bash` ONLY for read-only commands (ls, git status, git log, git diff, find, cat, head, tail) — never to modify anything.
+  2. Explore thoroughly: read the files you were handed with `Read`, find existing patterns with `Glob`/`Grep`, and trace the relevant code paths — never shell out for what those tools already do. Use `Bash` ONLY for read-only work they cannot cover (ls, find, git status, git log, git diff) — never to modify anything.
   3. Design the solution: weigh trade-offs and follow existing conventions where appropriate.
   4. Detail the plan: a concrete, ordered, step-by-step strategy — files to touch, sequencing, dependencies, and anticipated challenges.
 

@@ -44,8 +44,8 @@ class ReminderView:
     """Narrow, read-only projection of folded state a reminder renders from.
 
     Built by the composer once per ``compose`` from the task's folded state (and
-    the composer's own compose-time facts — whether the ``spawn_subagent``
-    control schema is offered, whether a spawn already landed in history). A
+    the composer's own compose-time facts — whether the ``Task`` control schema
+    is offered, whether a spawn already landed in history). A
     reminder ``render`` sees only this projection, never the raw ``Task`` — the
     same narrowing ``ContentKindSpec`` renderers get (post-fold names only), so a
     render cannot reach past its inputs and break compose purity.
@@ -55,11 +55,12 @@ class ReminderView:
     the locked composer's contract, not an open-ended ``Task`` handle).
     """
 
-    #: ``TaskState.todos`` — the replace-all checklist of ``{id, content, status}``.
+    #: ``TaskState.todos`` — the replace-all checklist of
+    #: ``{content, status, activeForm}``.
     todos: tuple[Mapping[str, object], ...] = ()
-    #: Whether the ``spawn_subagent`` control schema is offered this compose.
+    #: Whether the ``Task`` control schema is offered this compose.
     delegation_enabled: bool = False
-    #: Whether a ``spawn_subagent`` call already landed in the rolling history.
+    #: Whether a ``Task`` call already landed in the rolling history.
     already_spawned: bool = False
     #: ``ContextState.compaction_thrashing`` — the latched thrash flag.
     compaction_thrashing: bool = False

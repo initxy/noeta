@@ -43,6 +43,44 @@ def _git_diff_validate(tail: list[str]) -> bool:
     return True
 
 
+def _git_log_validate(tail: list[str]) -> bool:
+    # ``git log`` is pure history inspection: it writes no file, and unlike
+    # ``git diff`` it does NOT honour a repo-configured external diff driver
+    # unless ``--ext-diff`` is passed — so with that flag off the whole
+    # subcommand executes nothing. Bound the shape the way ``git diff`` is
+    # bounded: a curated flag set plus path-shaped args (which also covers
+    # ``-n``'s count and ``-L``'s range), rejecting every other ``-``-prefixed
+    # token, so ``--ext-diff`` (and any future flag) has to be added here
+    # deliberately rather than arriving for free.
+    allowed_flags = {
+        "--oneline",
+        "--stat",
+        "--name-only",
+        "--name-status",
+        "--graph",
+        "--decorate",
+        "--no-merges",
+        "--patch",
+        "-p",
+        "-n",
+        "--",
+    }
+    for arg in tail:
+        if arg in allowed_flags:
+            continue
+        # ``-L <start>,<end>:<file>`` (line-range trace), ``-5`` / ``-n 5``
+        # (commit count), ``--max-count=5``.
+        if arg.startswith("-L") or arg.startswith("--max-count="):
+            continue
+        if arg.startswith("-") and arg[1:].isdigit():
+            continue
+        if arg.startswith("-"):
+            return False
+        if not _is_safe_path_arg(arg):
+            return False
+    return True
+
+
 def _pytest_validate(tail: list[str]) -> bool:
     # The shell-meta scan already blocked the dangerous tokens; what remains to
     # reject is the interactive prompt, which would hang the call.
@@ -101,6 +139,7 @@ def _find_validate(tail: list[str]) -> bool:
 DEFAULT_SHELL_RULES: tuple[AllowRule, ...] = (
     AllowRule("git", "status", _git_status_validate, "git_status"),
     AllowRule("git", "diff", _git_diff_validate, "git_diff"),
+    AllowRule("git", "log", _git_log_validate, "git_log"),
     AllowRule("pytest", None, _pytest_validate, "pytest"),
     AllowRule("uv", "run", _uv_run_pytest_validate, "uv_run_pytest"),
     AllowRule("npm", "test", _trivial_validate, "npm_test"),

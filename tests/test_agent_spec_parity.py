@@ -41,7 +41,7 @@ from tests._snapshot import assert_snapshot, stable_json
 # A fixed system prompt for the "bare Options()" case: ``Options.system_prompt``
 # is required (no default), so the minimal recipe still needs one string. Every
 # other field is left at its default — this is the DEFAULT_PLUGINS contract the
-# redesign must preserve (all 11 built-in fs/web tools on, memory/browser off,
+# redesign must preserve (all 10 built-in fs/web tools on, memory/browser off,
 # no control tools), captured here as concrete bytes.
 _BARE_SYSTEM_PROMPT = "You are a helpful assistant."
 
