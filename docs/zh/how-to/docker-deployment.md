@@ -192,7 +192,7 @@ Noeta 从环境读取 provider 和 sandbox 的凭证 —— 永远不要硬编�
 | --- | --- |
 | `ANTHROPIC_API_KEY` | Anthropic provider |
 | `OPENAI_API_KEY` | OpenAI 兼容 provider |
-| `NOETA_WEB_SEARCH_API_KEY` | `web_search` 工具 |
+| `NOETA_WEB_SEARCH_API_KEY` | `WebSearch` 工具 |
 | `SANDBOX_API_KEY` | sandbox 容器认证（连接时读取） |
 
 ## 下一步

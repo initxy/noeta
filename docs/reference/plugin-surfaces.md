@@ -28,8 +28,8 @@ These enter `AgentSpec` identity and reach an agent only where
 
 identity · per-agent · collision `name` · sorted. A built-in tool name, or an
 object exposing `.ref` — a `@tool`-decorated function or a Tool class. Built-in
-corpus: `fs` declares nine (`read`, `glob`, `grep`, `edit`, `write`,
-`apply_patch`, `shell_run`, `shell_poll`, `shell_kill`), `web` two, `memory`
+corpus: `fs` declares eight (`Read`, `Glob`, `Grep`, `Edit`, `Write`,
+`Bash`, `BashOutput`, `KillShell`), `web` two, `memory`
 four.
 
 ```toml
@@ -100,8 +100,8 @@ that translates into an engine decision instead of a `Tool.invoke`. The `ref` is
 a `(ControlToolBuildContext) -> ControlToolMount | None` factory that
 **self-gates**, returning `None` when it does not apply — mounting *is*
 enablement. Built-in corpus, in schema render order (locked by byte-equality
-goldens, because that order feeds the stable-prefix hash): `spawn_subagent`
-(100, `delegation`), `todo_write` (200), `ask_user_question` (300),
+goldens, because that order feeds the stable-prefix hash): `Task`
+(100, `delegation`), `TodoWrite` (200), `AskUserQuestion` (300),
 `run_workflow` (500) and `structured_output` (600, both `react`).
 
 ```toml
@@ -303,9 +303,9 @@ plugins = load_plugins(registry=reg)          # the host's surface is live
 
 Noeta's eighteen built-ins are the reference manifests, one directory each at
 `packages/noeta-sdk/noeta/builtins/<name>/__init__.py`: `app`,
-`ask_user_question`, `browser`, `delegation`, `fs`, `governance`, `mcp`,
+`AskUserQuestion`, `browser`, `delegation`, `fs`, `governance`, `mcp`,
 `memory`, `presets`, `providers`, `react`, `reminders`, `sandbox`, `skills`,
-`storage`, `todo_write`, `web`, `workspace`. Each section above names the ones
+`storage`, `TodoWrite`, `web`, `workspace`. Each section above names the ones
 that demonstrate it; `mcp`, `providers` and `storage` are declaration-only, with
 zero contributions. Adding a first-party capability is adding a directory there.
 

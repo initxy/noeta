@@ -8,20 +8,20 @@
 
 | 代理 | 角色 | 工具 | 激活 |
 | --- | --- | --- | --- |
-| `main` | 默认的编码代理：完整的内置工具面，派生那三个子代理。 | 全部内置工具集（不设 `allowed_tools`），外加它的 `memory` 激活所打开的记忆工具 | `fs`、`web`、`todo_write`、`ask_user_question`、`skill_invocation`、`memory`、`mcp`；`delegation` 由它的 `agents` 名册推导而来 |
-| `general-purpose` | 自给自足的编码工人：完整的读 / 写 / 编辑 / shell 集合，不做委派。 | `apply_patch`、`edit`、`glob`、`grep`、`read`、`shell_kill`、`shell_poll`、`shell_run`、`web_search`、`webfetch`、`write` | `skill_invocation`、`mcp` |
-| `explore` | 只读侦察兵：glob/grep/read 加只读 shell，扇出去汇报事实，从不编辑。 | `glob`、`grep`、`read`、`shell_kill`、`shell_poll`、`shell_run`、`webfetch` | `skill_invocation` |
-| `plan` | 只读架构师：读代码，返回一份具体、有序的实施计划，从不写入。 | `glob`、`grep`、`read`、`shell_kill`、`shell_poll`、`shell_run`、`webfetch` | `ask_user_question` |
+| `main` | 默认的编码代理：完整的内置工具面，派生那三个子代理。 | 全部内置工具集（不设 `allowed_tools`），外加它的 `memory` 激活所打开的记忆工具 | `fs`、`web`、`TodoWrite`、`AskUserQuestion`、`skill_invocation`、`memory`、`mcp`；`delegation` 由它的 `agents` 名册推导而来 |
+| `general-purpose` | 自给自足的编码工人：完整的读 / 写 / 编辑 / shell 集合，不做委派。 | `Edit`、`Glob`、`Grep`、`Read`、`KillShell`、`BashOutput`、`Bash`、`WebSearch`、`WebFetch`、`Write` | `skill_invocation`、`mcp` |
+| `explore` | 只读侦察兵：glob/grep/read 加只读 shell，扇出去汇报事实，从不编辑。 | `Glob`、`Grep`、`Read`、`KillShell`、`BashOutput`、`Bash`、`WebFetch` | `skill_invocation` |
+| `plan` | 只读架构师：读代码，返回一份具体、有序的实施计划，从不写入。 | `Glob`、`Grep`、`Read`、`KillShell`、`BashOutput`、`Bash`、`WebFetch` | `AskUserQuestion` |
 
-`explore` 和 `plan` 列出了 `shell_run`，但它们的 prompt 把它限制在只读命令上；高风险 shell 上的审批门是兜底。`general-purpose` 是一个叶子工人——它从不再往下派生，这就限住了扇出。
+`explore` 和 `plan` 列出了 `Bash`，但它们的 prompt 把它限制在只读命令上；高风险 shell 上的审批门是兜底。`general-purpose` 是一个叶子工人——它从不再往下派生，这就限住了扇出。
 
 ## 激活名
 
 | 名字 | 它启用什么 |
 | --- | --- |
-| `todo_write` | `todo_write` control tool（基于 state-patch 的进度跟踪）。 |
-| `ask_user_question` | 模型可以通过 `ask_user_question` control tool 让出以获取人类输入。 |
-| `delegation` | `spawn_subagent` control tool。任何带 `agents` 名册的 agent 都会推导出它；显式写出它则是把派生权授予一个子 agent。 |
+| `TodoWrite` | `TodoWrite` control tool（基于 state-patch 的进度跟踪）。 |
+| `AskUserQuestion` | 模型可以通过 `AskUserQuestion` control tool 让出以获取人类输入。 |
+| `delegation` | `Task` control tool。任何带 `agents` 名册的 agent 都会推导出它；显式写出它则是把派生权授予一个子 agent。 |
 | `skill_invocation` | 用于模型驱动的 skill 选择的 `skill` control tool。 |
 | `memory` | 跨任务记忆：`memory_write` / `memory_read` / `memory_search` / `memory_archive` 四个工具，外加用户消息接缝上的自动召回。 |
 | `mcp` | MCP 工具继承：自身 spec 也打开了 `mcp` 的子任务，会继承父任务已启用的 MCP 服务器。 |

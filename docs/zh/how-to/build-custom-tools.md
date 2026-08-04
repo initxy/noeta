@@ -83,7 +83,7 @@ client = Client(options, provider=my_provider, workspace_dir="./")
 | `medium` | 需要审批 | 需要审批 | 自动放行 |
 | `high` | 需要审批 | 需要审批 | 自动放行 |
 
-`acceptEdits` 与 `default` 的唯一差别是豁免了三个内置编辑工具（`edit`、`write`、`apply_patch`）；对自定义工具没有任何影响。
+`acceptEdits` 与 `default` 的唯一差别是豁免了两个内置编辑工具（`Edit`、`Write`）；对自定义工具没有任何影响。
 
 把会写文件、运行命令或发起外部 API 调用的工具标成 `"high"`。只读查询是 `"low"`。
 
@@ -111,7 +111,7 @@ options = Options(
 )
 ```
 
-进程内服务器的工具保留其**裸的** `@tool` 名字 —— 模型看到的是 `fetch_weather`，而不是 `mcp__weather-tools__fetch_weather`。服务器名字只是一个分组标签，不是命名空间，所以挑那些不会和内置工具撞车的工具名（用 `fetch_weather`，别用 `read`）。它的工具会被直接加进 agent 的工具集；它们不需要 `allowed_tools` 条目。
+进程内服务器的工具保留其**裸的** `@tool` 名字 —— 模型看到的是 `fetch_weather`，而不是 `mcp__weather-tools__fetch_weather`。服务器名字只是一个分组标签，不是命名空间，所以挑那些不会和内置工具撞车的工具名（用 `fetch_weather`，别用 `Read`）。它的工具会被直接加进 agent 的工具集；它们不需要 `allowed_tools` 条目。
 
 > `mcp__{alias}__{tool}` 这个前缀属于**远程** MCP 服务器，由 host 按回合连接 —— 见[连接 MCP](connect-mcp.md)。那些之所以要加命名空间，是因为互相独立的第三方服务器确实会在工具名上撞车。
 

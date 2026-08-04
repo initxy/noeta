@@ -39,7 +39,7 @@ It returns a `VerdictResult` carrying one of three verdicts plus an optional
 reason:
 
 ```python
-VerdictResult.deny("shell_run is disabled for this agent")
+VerdictResult.deny("Bash is disabled for this agent")
 ```
 
 `REQUIRE_APPROVAL` opens no parallel lifecycle. The Engine maps it to the same

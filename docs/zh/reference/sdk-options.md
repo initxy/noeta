@@ -51,7 +51,7 @@
 | 模式 | 哪些工具需要审批 |
 | --- | --- |
 | `"default"` | 声明的 `risk_level` 不是 `low` 的每一个工具 |
-| `"acceptEdits"` | 同样的规则，但减去三个编辑类工具 `edit` / `write` / `apply_patch` |
+| `"acceptEdits"` | 同样的规则，但减去三个编辑类工具 `Edit` / `Write` |
 | `"bypassPermissions"` | 一个都不需要——用于受信任的非交互式运行 |
 
 模式只决定被门控的集合。`Guard` 仍然可以拒绝，而 `Options.can_use_tool` 仍然会去裁决那些被门控拦下的调用。
@@ -85,7 +85,7 @@ compile_options(Options(system_prompt="x", plugins=()))[0].plugins # → ()
 
 一个名字必须是下面三者之一，否则编译会大声失败：
 
-- 一个携带身份的**内置能力包**——`memory`、`browser`、`mcp`、`todo_write`、`ask_user_question`、`skill_invocation`、`delegation`；
+- 一个携带身份的**内置能力包**——`memory`、`browser`、`mcp`、`TodoWrite`、`AskUserQuestion`、`skill_invocation`、`delegation`；
 - 一个**身份惰性**的内置名字，之所以被识别，是为了让打错字仍然失败——`app`、`fs`、`governance`、`presets`、`providers`、`react`、`reminders`、`sandbox`、`skills`、`storage`、`web`、`workspace`；
 - 交给 `Client` 的那个 `PluginSet` 里某个 **插件的名字**。
 
@@ -110,7 +110,7 @@ options = Options(
 
 | 字段 | 说明 |
 | --- | --- |
-| `description` | **必填且非空**——它会被渲染进 `spawn_subagent` 的 schema，好让模型知道该把活交给谁 |
+| `description` | **必填且非空**——它会被渲染进 `Task` 的 schema，好让模型知道该把活交给谁 |
 | `prompt` | 必填 |
 | `tools` | `None` ⇒ 全部内置工具 |
 | `model` | 路由提示 |
@@ -180,11 +180,11 @@ compile_options(options, *, plugins=None, preset_prompts=None)
 | 字段 | 默认值 | 用途 |
 | --- | --- | --- |
 | `workflow_allowed` | `False` | 暴露 `run_workflow`（同时还需要具备委派能力） |
-| `max_background_jobs_per_root_task` | `8` | 超过上限时一次后台 `shell_run` 会被拒绝，而不是排队 |
-| `max_background_subagents_per_root_task` | `8` | 对 `spawn_subagent(background=True)` 同理 |
+| `max_background_jobs_per_root_task` | `8` | 超过上限时一次后台 `Bash` 会被拒绝，而不是排队 |
+| `max_background_subagents_per_root_task` | `8` | 对 `Task(background=True)` 同理 |
 | `instructions_enabled` | `False` | 加载工作区根的 `NOETA.md`，否则 `AGENTS.md` |
 | `instructions_file` | `None` | 只读这一个路径，不做搜索 |
-| `instructions_discovery` | `False` | 由 `read` 触发的子目录 instructions 文件发现 |
+| `instructions_discovery` | `False` | 由 `Read` 触发的子目录 instructions 文件发现 |
 | `write_mode` | `"dry_run"` | `"apply"` 才执行真实写入 |
 
 ## Sandbox 与存储的接线类型

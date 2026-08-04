@@ -273,6 +273,17 @@ The line runs between **identity** and **scope**, and only one side is banned:
 **"Run"**:
 Not a first-class concept. Always use Task.
 
+**Model-visible tool names**:
+The provider-visible tool `name` strings follow the Claude Code surface —
+`Read`, `Glob`, `Grep`, `Edit`, `Write`, `Bash`, `BashOutput`, `KillShell`,
+`WebFetch`, `WebSearch`, `TodoWrite`, `AskUserQuestion`, `Task` — because
+models carry their strongest trained prior on those exact names and schemas.
+Everything that is NOT model-visible keeps its snake_case identifier: plugin
+and contribution names, capability flags (`todo_write`, `ask_user_question`,
+`delegation`), event vocabulary, and the `.md` description resource basenames.
+The `Task` tool name coexists with the core Task primitive; prose says "the
+Task tool" when it means the delegation control tool.
+
 **Enforcement**:
 `scripts/lint-naming.py` (part of `make check`) scans `.py` / `.md` / `.toml` / `.yaml` / `.yml` / `.cfg` / `.ini` and fails on `class Run`, `class Workflow`, `class Session`, `class Mutator`, `class Pattern`, and on the identifiers `WorkflowRunner` / `WorkflowPolicy` / `WorkflowSpec` / `SessionStore` / `ConversationManager` wherever they appear. Inside `packages/` and `examples/` it additionally fails any **compound** identifier containing "session" unless the token is on the scope allow-list above (plus `start_new_session`, `subprocess.Popen`'s own keyword) or contains `session_pack`; the bare prose word is fine. `tests/` is out of scope — a test harness stands in for a host, which is the layer that may own the concept. Files that catalogue the bans (`CONTEXT.md`, `docs/adr/`, `CHANGELOG.md`, the lint script and its test) are exempt.
 

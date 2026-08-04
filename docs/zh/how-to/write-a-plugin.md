@@ -101,8 +101,8 @@ class BlockShellGuard:
     priority = 25
 
     def check(self, action, ctx) -> VerdictResult:
-        if isinstance(action, ProposedToolCall) and action.call.tool_name == "shell_run":
-            return VerdictResult.deny("shell_run is disabled by block-shell")
+        if isinstance(action, ProposedToolCall) and action.call.tool_name == "Bash":
+            return VerdictResult.deny("Bash is disabled by block-shell")
         return VerdictResult.allow()
 
 

@@ -82,8 +82,8 @@ options = Options(
 `allowed_tools` is a **replacement** allowlist, not an addition. A tuple means
 *exactly* those entries — decorated tools by value, built-in tools by name — so
 this agent has `word_count` and nothing else. `None` (the default) selects the
-full built-in set: `read`, `glob`, `grep`, `edit`, `write`, `apply_patch`,
-`shell_run`, `shell_poll`, `shell_kill`, `webfetch`, `web_search`. `()` means no
+full built-in set: `Read`, `Glob`, `Grep`, `Edit`, `Write`,
+`Bash`, `BashOutput`, `KillShell`, `WebFetch`, `WebSearch`. `()` means no
 tools. `disallowed_tools` subtracts from whichever base list applies; it never
 adds.
 
@@ -92,7 +92,7 @@ adds.
 | Mode | Gated calls |
 | --- | --- |
 | `default` | every tool whose `risk_level` is not `low` |
-| `acceptEdits` | same, minus the built-in `edit` / `write` / `apply_patch` |
+| `acceptEdits` | same, minus the built-in `Edit` / `Write` |
 | `bypassPermissions` | none |
 
 `word_count` is `high`, so under `default` it will suspend and wait for you.

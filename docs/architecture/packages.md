@@ -113,7 +113,7 @@ Eighteen built-ins ship in `noeta-sdk`:
 | Group | Built-ins | Fills |
 | --- | --- | --- |
 | Tool packs | `fs`, `web`, `memory`, `browser`, `app`, `workspace` | `tool`, `session_pack`, `prompt_fragment`, `reminder_provider` |
-| Control tools | `todo_write`, `ask_user_question`, `delegation`, `react` | `control_tool` |
+| Control tools | `TodoWrite`, `AskUserQuestion`, `delegation`, `react` | `control_tool` |
 | Context | `skills`, `reminders` | `session_pack`, `reminder` |
 | Governance | `governance` | `guard`, `observer` |
 | Agents | `presets` | `agent` |

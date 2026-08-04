@@ -5,7 +5,7 @@ Demonstrated SDK capability
 Sub-agent delegation. Naming child recipes in ``Options.agents`` is the whole
 opt-in: a non-empty roster makes the compiler derive the parent's
 ``delegation`` activation, which mounts the model-visible
-``spawn_subagent(agent, goal)`` control tool. A spawn builds a child Task from
+``Task(description, prompt, subagent_type)`` control tool. A spawn builds a child Task from
 the named :class:`noeta.sdk.AgentDefinition`'s own prompt, tools and model,
 runs it to terminal, folds the result back and resumes the parent, all on one
 in-process stack.
@@ -38,7 +38,7 @@ from noeta.sdk import (
 )
 from noeta.sdk.testing import FakeLLMProvider
 
-# The one import outside ``noeta.sdk``: ``spawn_subagent`` is a control tool
+# The one import outside ``noeta.sdk``: ``Task`` is a control tool
 # whose wire name is runtime vocabulary, not recipe surface, so it has no
 # ``noeta.sdk`` home. Only a script faking a model's tool call needs the name
 # at all, and importing the constant beats a hardcoded string that would drift
@@ -53,7 +53,11 @@ def _spawn_call(agent: str, goal: str) -> LLMResponse:
             ToolUseBlock(
                 call_id="spawn-1",
                 tool_name=SPAWN_SUBAGENT_TOOL,
-                arguments={"agent": agent, "goal": goal},
+                arguments={
+                    "description": "delegated step",
+                    "prompt": goal,
+                    "subagent_type": agent,
+                },
             )
         ],
         usage=Usage(uncached=1, output=1),

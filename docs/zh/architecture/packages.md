@@ -76,7 +76,7 @@ noeta.protocols
 | 分组 | built-in | 填充 |
 | --- | --- | --- |
 | 工具包 | `fs`、`web`、`memory`、`browser`、`app`、`workspace` | `tool`、`session_pack`、`prompt_fragment`、`reminder_provider` |
-| 控制工具 | `todo_write`、`ask_user_question`、`delegation`、`react` | `control_tool` |
+| 控制工具 | `TodoWrite`、`AskUserQuestion`、`delegation`、`react` | `control_tool` |
 | 上下文 | `skills`、`reminders` | `session_pack`、`reminder` |
 | 治理 | `governance` | `guard`、`observer` |
 | agent | `presets` | `agent` |

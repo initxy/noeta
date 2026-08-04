@@ -64,8 +64,8 @@ everything.
 
 **Cause.** `permission_mode` selected an approval set. `default` gates every tool
 whose declared `risk_level` is not `low`; `acceptEdits` applies the same rule but
-exempts `edit`, `write`, and `apply_patch`; `bypassPermissions` gates nothing. A
-`shell_run` whose command is outside the effective shell allowlist is gated per
+exempts `Edit` and `Write`; `bypassPermissions` gates nothing. A
+`Bash` whose command is outside the effective shell allowlist is gated per
 call, independently of the mode.
 
 **Fix.** Resolve it with `Client.approve` / `Client.deny`, or with a programmatic
@@ -75,7 +75,7 @@ unattended.
 
 ### Write refused: path resolves outside the workspace
 
-**Symptom.** `edit`, `write`, or `apply_patch` returns an error saying the path
+**Symptom.** `Edit` or `Write` returns an error saying the path
 resolves outside the workspace, or outside the writable allow-list.
 
 **Cause.** Write tools resolve through the `WorkspaceRoot` fence. The target is

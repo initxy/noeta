@@ -13,11 +13,11 @@ agents go through the flat `Options.agents` dict instead.
 | Agent | Role | Tools | Activation |
 | --- | --- | --- | --- |
 | `main` | Default coding agent: full built-in tool surface, spawns the three subagents. | Full built-in set (`allowed_tools` unset), plus the memory tools its `memory` activation opens | `fs`, `web`, `todo_write`, `ask_user_question`, `skill_invocation`, `memory`, `mcp`; `delegation` is derived from its `agents` roster |
-| `general-purpose` | Self-contained coding worker: full read/write/edit/shell set, no delegation. | `apply_patch`, `edit`, `glob`, `grep`, `read`, `shell_kill`, `shell_poll`, `shell_run`, `web_search`, `webfetch`, `write` | `skill_invocation`, `mcp` |
-| `explore` | Read-only scout: glob/grep/read + read-only shell, fans out to report facts, never edits. | `glob`, `grep`, `read`, `shell_kill`, `shell_poll`, `shell_run`, `webfetch` | `skill_invocation` |
-| `plan` | Read-only architect: reads the code and returns a concrete ordered implementation plan, never writes. | `glob`, `grep`, `read`, `shell_kill`, `shell_poll`, `shell_run`, `webfetch` | `ask_user_question` |
+| `general-purpose` | Self-contained coding worker: full read/write/edit/shell set, no delegation. | `Edit`, `Glob`, `Grep`, `Read`, `KillShell`, `BashOutput`, `Bash`, `WebSearch`, `WebFetch`, `Write` | `skill_invocation`, `mcp` |
+| `explore` | Read-only scout: glob/grep/read + read-only shell, fans out to report facts, never edits. | `Glob`, `Grep`, `Read`, `KillShell`, `BashOutput`, `Bash`, `WebFetch` | `skill_invocation` |
+| `plan` | Read-only architect: reads the code and returns a concrete ordered implementation plan, never writes. | `Glob`, `Grep`, `Read`, `KillShell`, `BashOutput`, `Bash`, `WebFetch` | `AskUserQuestion` |
 
-`explore` and `plan` list `shell_run`, but their prompts restrict it to
+`explore` and `plan` list `Bash`, but their prompts restrict it to
 read-only commands; the approval gate on high-risk shell is the backstop.
 `general-purpose` is a leaf worker — it never spawns further, which bounds
 fan-out.
@@ -26,9 +26,9 @@ fan-out.
 
 | Name | What it enables |
 | --- | --- |
-| `todo_write` | The `todo_write` control tool (state-patch based progress tracking). |
-| `ask_user_question` | The model can yield for human input via the `ask_user_question` control tool. |
-| `delegation` | The `spawn_subagent` control tool. Derived for any agent with an `agents` roster; naming it explicitly grants a child the right to spawn. |
+| `TodoWrite` | The `TodoWrite` control tool (state-patch based progress tracking). |
+| `AskUserQuestion` | The model can yield for human input via the `AskUserQuestion` control tool. |
+| `delegation` | The `Task` control tool. Derived for any agent with an `agents` roster; naming it explicitly grants a child the right to spawn. |
 | `skill_invocation` | The `skill` control tool for model-driven skill selection. |
 | `memory` | Cross-task memory: the `memory_write` / `memory_read` / `memory_search` / `memory_archive` tools plus auto-recall at the user-message seam. |
 | `mcp` | MCP tool inheritance: subtasks whose own spec also opens `mcp` inherit the parent's enabled MCP servers. |

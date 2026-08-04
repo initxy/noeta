@@ -8,19 +8,19 @@ Tool names are provider-safe `snake_case` and are the exact strings the model
 calls. Each tool carries a `risk_level` that decides whether a call needs
 approval.
 
-A bare `Options()` — that is, `allowed_tools=None` — mounts **eleven** tools:
-the `fs` pack (`read`, `glob`, `grep`, `edit`, `write`, `apply_patch`,
-`shell_run`, `shell_poll`, `shell_kill`) and the `web` pack (`webfetch`,
-`web_search`).
+A bare `Options()` — that is, `allowed_tools=None` — mounts **ten** tools:
+the `fs` pack (`Read`, `Glob`, `Grep`, `Edit`, `Write`,
+`Bash`, `BashOutput`, `KillShell`) and the `web` pack (`WebFetch`,
+`WebSearch`).
 
 ```python
 from noeta.sdk import Options
 options = Options(system_prompt="…")          # allowed_tools defaults to None
-# the agent sees: read, glob, grep, edit, write, apply_patch,
-#                 shell_run, shell_poll, shell_kill, webfetch, web_search
+# the agent sees: Read, Glob, Grep, Edit, Write,
+#                 Bash, BashOutput, KillShell, WebFetch, WebSearch
 ```
 
-Ten of those need no configuration; `web_search` needs an API key. Everything
+Ten of those need no configuration; `WebSearch` needs an API key. Everything
 else on this page is gated somewhere else — memory and browser on an agent
 activation, `open_app` on a host-wired gateway, `run_skill_script` on the
 `skills` plugin config, MCP on a per-session registration.
@@ -32,15 +32,14 @@ Declared by the `fs` built-in plugin manifest
 
 | Tool | Risk | What it does | Source |
 | --- | --- | --- | --- |
-| `read` | low | Read a file (UTF-8), optionally sliced by line `offset` / `limit`. The full body is always offloaded as an artifact ref. **Reads are unfenced** — see below. | `noeta/builtins/fs/impl/read.py` |
-| `glob` | low | Match a glob pattern (`**` recurses) under `path` and return the matching paths, sorted and capped. | `noeta/builtins/fs/impl/read.py` |
-| `grep` | low | Content search with a Python `re` regex, scoped by `path` and filtered by `glob`. | `noeta/builtins/fs/impl/read.py` |
-| `edit` | high | Replace an exact `old` substring in an existing file; `replace_all` switches from unique-match to every occurrence. | `noeta/builtins/fs/impl/edit.py` |
-| `write` | high | Write a file — create it, or overwrite one already `read` this session. The parent directory must exist; `content` caps at 64 KB. | `noeta/builtins/fs/impl/edit.py` |
-| `apply_patch` | high | Apply up to 16 `replace` / `create` edits atomically — all succeed or the batch rolls back. | `noeta/builtins/fs/impl/patch.py` |
-| `shell_run` | high | Run a command in the workspace; `run_in_background` detaches it and returns a `job_id`. | `noeta/builtins/fs/impl/shell.py` |
-| `shell_poll` | low | Read status (`running` / `exited`), exit code, and a fresh output snapshot of a background job. | `noeta/builtins/fs/impl/shell.py` |
-| `shell_kill` | high | Stop a background job you started (SIGTERM, then SIGKILL after a grace period). | `noeta/builtins/fs/impl/shell.py` |
+| `Read` | low | Read a file (UTF-8), optionally sliced by line `offset` / `limit`. The full body is always offloaded as an artifact ref. **Reads are unfenced** — see below. | `noeta/builtins/fs/impl/read.py` |
+| `Glob` | low | Match a glob pattern (`**` recurses) under `path` and return the matching paths, sorted and capped. | `noeta/builtins/fs/impl/read.py` |
+| `Grep` | low | Content search with a Python `re` regex, scoped by `path` and filtered by `Glob`. | `noeta/builtins/fs/impl/read.py` |
+| `Edit` | high | Replace an exact `old` substring in an existing file; `replace_all` switches from unique-match to every occurrence. | `noeta/builtins/fs/impl/edit.py` |
+| `Write` | high | Write a file — create it, or overwrite one already `Read` this session. The parent directory must exist; `content` caps at 64 KB. | `noeta/builtins/fs/impl/edit.py` |
+| `Bash` | high | Run a command in the workspace; `run_in_background` detaches it and returns a `job_id`. | `noeta/builtins/fs/impl/shell.py` |
+| `BashOutput` | low | Read status (`running` / `exited`), exit code, and a fresh output snapshot of a background job. | `noeta/builtins/fs/impl/shell.py` |
+| `KillShell` | high | Stop a background job you started (SIGTERM, then SIGKILL after a grace period). | `noeta/builtins/fs/impl/shell.py` |
 
 The three write tools stage a proposed diff instead of touching disk while
 `HostConfig.write_mode` is `"dry_run"` (the default); `"apply"` performs real
@@ -48,7 +47,7 @@ writes.
 
 ### Reads are unfenced
 
-The workspace root fences **writes**. For `read`, `glob` and `grep` it only
+The workspace root fences **writes**. For `Read`, `Glob` and `Grep` it only
 anchors *relative* paths: an absolute path is read where it points — a
 neighbouring checkout, a skill pack's bundled reference, anything the server
 process can read. This is deliberate (an agent routinely needs to read outside
@@ -56,12 +55,12 @@ its workspace) and it is why the boundary that matters is the **process's own**
 file permissions, not the workspace root. A deployment that must not expose a
 path should not run the agent as a user who can read it.
 
-Writes are the fenced half: `write` / `edit` / `apply_patch` resolve inside the
+Writes are the fenced half: `Write` / `Edit` resolve inside the
 workspace root. `HostConfig.write_roots` answers "may this task write here,
 outside its workspace?" per call; with no resolver an out-of-workspace write
-simply fails. `write` additionally honours an optional workspace-relative
+simply fails. `Write` additionally honours an optional workspace-relative
 `allowed_path_globs` whitelist bound at construction (empty = unrestricted);
-`edit` and `apply_patch` ignore it.
+`Edit` ignores it.
 
 ### Shell modes
 
@@ -69,7 +68,7 @@ simply fails. `write` additionally honours an optional workspace-relative
 
 | Mode | Effect |
 | --- | --- |
-| `OFF` | `shell_run` is not in the pack at all. |
+| `OFF` | `Bash` is not in the pack at all. |
 | `ALLOWLIST` | Default. Only the structural allowlist below passes, argv-only. |
 | `ARBITRARY` | Any command without shell metacharacters runs through bash. |
 
@@ -79,8 +78,8 @@ Under `ALLOWLIST` these argv patterns pass
 - `git status` / `git diff`
 - `pytest` / `uv run pytest`
 - `npm test` / `pnpm test`
-- `grep` / `rg` / `find` / `ls` — read-only search and listing, so an
-  ALLOWLIST-mode agent without its own `grep` / `glob` tool can still search the
+- `Grep` / `rg` / `find` / `ls` — read-only search and listing, so an
+  ALLOWLIST-mode agent without its own `Grep` / `Glob` tool can still search the
   workspace. Their validators reject the flags that shell out to another program
   or mutate the filesystem.
 
@@ -91,7 +90,7 @@ that survive the metachar scan.
 
 Shell metacharacters (`|`, `;`, `&&`, `>`, …) are rejected before tokenization.
 This is **path-containment plus an allowlist, not a process sandbox** —
-`shell_run` spawns external programs in the trusted workspace.
+`Bash` spawns external programs in the trusted workspace.
 
 ## Web tools
 
@@ -99,8 +98,8 @@ Declared by the `web` built-in plugin manifest.
 
 | Tool | Risk | What it does | Source |
 | --- | --- | --- | --- |
-| `webfetch` | low | Fetch a public web page over HTTP(S) and render it to Markdown. Always available. | `noeta/builtins/web/impl/fetch.py` |
-| `web_search` | low | Run a web search and return ranked hits as Markdown. **Mounted only when `NOETA_WEB_SEARCH_API_KEY` is set.** | `noeta/builtins/web/impl/search.py` |
+| `WebFetch` | low | Fetch a public web page over HTTP(S) and render it to Markdown. Always available. | `noeta/builtins/web/impl/fetch.py` |
+| `WebSearch` | low | Run a web search and return ranked hits as Markdown. **Mounted only when `NOETA_WEB_SEARCH_API_KEY` is set.** | `noeta/builtins/web/impl/search.py` |
 
 ## App tools
 
@@ -163,9 +162,9 @@ self-gates: mounting *is* enablement.
 
 | Tool | Mounted when | Plugin |
 | --- | --- | --- |
-| `spawn_subagent` | the agent activates `delegation` (derived automatically when it has children) | `delegation` |
-| `todo_write` | the agent activates `todo_write` | `todo_write` |
-| `ask_user_question` | the agent activates `ask_user_question` | `ask_user_question` |
+| `Task` | the agent activates `delegation` (derived automatically when it has children) | `delegation` |
+| `TodoWrite` | the agent activates `TodoWrite` | `TodoWrite` |
+| `AskUserQuestion` | the agent activates `AskUserQuestion` | `AskUserQuestion` |
 | `skill` | the agent activates `skill_invocation` **and** the merged skill menu is non-empty | `skills` |
 | `run_workflow` | `HostConfig.workflow_allowed` is on (and the agent can delegate) | `react` |
 | `structured_output` | `Options.output_schema` is set | `react` |

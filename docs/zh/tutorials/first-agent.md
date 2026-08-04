@@ -60,14 +60,14 @@ options = Options(
 )
 ```
 
-`allowed_tools` 是一份**替换式**白名单，而不是追加。给一个元组就意味着*恰好*是这些条目 —— 装饰过的工具按值给出，内置工具按名字给出 —— 所以这个 agent 只有 `word_count`，别无其他。`None`（默认值）选中完整的内置集合：`read`、`glob`、`grep`、`edit`、`write`、`apply_patch`、`shell_run`、`shell_poll`、`shell_kill`、`webfetch`、`web_search`。`()` 表示没有工具。`disallowed_tools` 从当前适用的基准列表里做减法；它从不做加法。
+`allowed_tools` 是一份**替换式**白名单，而不是追加。给一个元组就意味着*恰好*是这些条目 —— 装饰过的工具按值给出，内置工具按名字给出 —— 所以这个 agent 只有 `word_count`，别无其他。`None`（默认值）选中完整的内置集合：`Read`、`Glob`、`Grep`、`Edit`、`Write`、`Bash`、`BashOutput`、`KillShell`、`WebFetch`、`WebSearch`。`()` 表示没有工具。`disallowed_tools` 从当前适用的基准列表里做减法；它从不做加法。
 
 `permission_mode` 决定哪些调用要停下来等人工审批：
 
 | 模式 | 需要设门的调用 |
 | --- | --- |
 | `default` | 每一个 `risk_level` 不为 `low` 的工具 |
-| `acceptEdits` | 同上，但豁免内置的 `edit` / `write` / `apply_patch` |
+| `acceptEdits` | 同上，但豁免内置的 `Edit` / `Write` |
 | `bypassPermissions` | 无 |
 
 `word_count` 是 `high`，所以在 `default` 下它会挂起并等你。

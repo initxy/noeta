@@ -4,16 +4,16 @@
 
 工具名是 provider 安全的 `snake_case`，也是模型调用时使用的确切字符串。每个工具都携带一个 `risk_level`，由它决定一次调用是否需要审批。
 
-一个裸的 `Options()`——也就是 `allowed_tools=None`——会挂载**十一个**工具：`fs` 包（`read`、`glob`、`grep`、`edit`、`write`、`apply_patch`、`shell_run`、`shell_poll`、`shell_kill`）和 `web` 包（`webfetch`、`web_search`）。
+一个裸的 `Options()`——也就是 `allowed_tools=None`——会挂载**十个**工具：`fs` 包（`Read`、`Glob`、`Grep`、`Edit`、`Write`、`Bash`、`BashOutput`、`KillShell`）和 `web` 包（`WebFetch`、`WebSearch`）。
 
 ```python
 from noeta.sdk import Options
 options = Options(system_prompt="…")          # allowed_tools defaults to None
-# the agent sees: read, glob, grep, edit, write, apply_patch,
-#                 shell_run, shell_poll, shell_kill, webfetch, web_search
+# the agent sees: Read, Glob, Grep, Edit, Write,
+#                 Bash, BashOutput, KillShell, WebFetch, WebSearch
 ```
 
-其中十个无需任何配置；`web_search` 需要一个 API key。本页其余的一切都在别处被门控——memory 和 browser 在 agent 激活上，`open_app` 在宿主接线的网关上，`run_skill_script` 在 `skills` 的插件配置上，MCP 在每会话的注册上。
+其中十个无需任何配置；`WebSearch` 需要一个 API key。本页其余的一切都在别处被门控——memory 和 browser 在 agent 激活上，`open_app` 在宿主接线的网关上，`run_skill_script` 在 `skills` 的插件配置上，MCP 在每会话的注册上。
 
 ## 文件系统工具
 
@@ -21,23 +21,22 @@ options = Options(system_prompt="…")          # allowed_tools defaults to None
 
 | 工具 | 风险 | 做什么 | 源码 |
 | --- | --- | --- | --- |
-| `read` | low | 读一个文件（UTF-8），可按行用 `offset` / `limit` 切片。完整正文总是作为一个 artifact ref 卸载出去。**读取不受围栏限制**——见下文。 | `noeta/builtins/fs/impl/read.py` |
-| `glob` | low | 在 `path` 下匹配一个 glob 模式（`**` 递归），返回匹配到的路径，已排序并有上限。 | `noeta/builtins/fs/impl/read.py` |
-| `grep` | low | 用 Python `re` 正则做内容搜索，按 `path` 限定范围、按 `glob` 过滤。 | `noeta/builtins/fs/impl/read.py` |
-| `edit` | high | 在一个已存在的文件里替换一个精确的 `old` 子串；`replace_all` 把"唯一匹配"切换成"每一处"。 | `noeta/builtins/fs/impl/edit.py` |
-| `write` | high | 写一个文件——新建它，或覆盖一个本会话内已经 `read` 过的文件。父目录必须存在；`content` 上限 64 KB。 | `noeta/builtins/fs/impl/edit.py` |
-| `apply_patch` | high | 原子地应用至多 16 处 `replace` / `create` 编辑——要么全部成功，要么整批回滚。 | `noeta/builtins/fs/impl/patch.py` |
-| `shell_run` | high | 在工作区里运行一条命令；`run_in_background` 让它脱离并返回一个 `job_id`。 | `noeta/builtins/fs/impl/shell.py` |
-| `shell_poll` | low | 读取一个后台作业的状态（`running` / `exited`）、退出码和一份新的输出快照。 | `noeta/builtins/fs/impl/shell.py` |
-| `shell_kill` | high | 停掉一个你启动的后台作业（SIGTERM，宽限期后 SIGKILL）。 | `noeta/builtins/fs/impl/shell.py` |
+| `Read` | low | 读一个文件（UTF-8），可按行用 `offset` / `limit` 切片。完整正文总是作为一个 artifact ref 卸载出去。**读取不受围栏限制**——见下文。 | `noeta/builtins/fs/impl/read.py` |
+| `Glob` | low | 在 `path` 下匹配一个 glob 模式（`**` 递归），返回匹配到的路径，已排序并有上限。 | `noeta/builtins/fs/impl/read.py` |
+| `Grep` | low | 用 Python `re` 正则做内容搜索，按 `path` 限定范围、按 `Glob` 过滤。 | `noeta/builtins/fs/impl/read.py` |
+| `Edit` | high | 在一个已存在的文件里替换一个精确的 `old` 子串；`replace_all` 把"唯一匹配"切换成"每一处"。 | `noeta/builtins/fs/impl/edit.py` |
+| `Write` | high | 写一个文件——新建它，或覆盖一个本会话内已经 `Read` 过的文件。父目录必须存在；`content` 上限 64 KB。 | `noeta/builtins/fs/impl/edit.py` |
+| `Bash` | high | 在工作区里运行一条命令；`run_in_background` 让它脱离并返回一个 `job_id`。 | `noeta/builtins/fs/impl/shell.py` |
+| `BashOutput` | low | 读取一个后台作业的状态（`running` / `exited`）、退出码和一份新的输出快照。 | `noeta/builtins/fs/impl/shell.py` |
+| `KillShell` | high | 停掉一个你启动的后台作业（SIGTERM，宽限期后 SIGKILL）。 | `noeta/builtins/fs/impl/shell.py` |
 
 当 `HostConfig.write_mode` 为 `"dry_run"`（默认）时，三个写工具只暂存一份提议的 diff，而不碰磁盘；`"apply"` 才执行真实写入。
 
 ### 读取不受围栏限制
 
-工作区根围住的是**写入**。对 `read`、`glob` 和 `grep`，它只锚定*相对*路径：一个绝对路径指向哪里就读哪里——隔壁的一份 checkout、某个 skill 包捆绑的参考资料，任何服务器进程能读到的东西。这是刻意的（一个 agent 本来就经常需要读它工作区之外的东西），也正因如此，真正要紧的边界是**进程自身的**文件权限，而不是工作区根。一个不能暴露某条路径的部署，就不该以一个能读到它的用户身份来跑这个 agent。
+工作区根围住的是**写入**。对 `Read`、`Glob` 和 `Grep`，它只锚定*相对*路径：一个绝对路径指向哪里就读哪里——隔壁的一份 checkout、某个 skill 包捆绑的参考资料，任何服务器进程能读到的东西。这是刻意的（一个 agent 本来就经常需要读它工作区之外的东西），也正因如此，真正要紧的边界是**进程自身的**文件权限，而不是工作区根。一个不能暴露某条路径的部署，就不该以一个能读到它的用户身份来跑这个 agent。
 
-写入才是受围栏的那一半：`write` / `edit` / `apply_patch` 在工作区根之内解析。`HostConfig.write_roots` 逐次调用地回答"这个任务可以写到它工作区之外的这里吗？"；没有 resolver 时，一次工作区外的写入直接失败。`write` 还额外遵守一个可选的、构造时绑定的工作区相对 `allowed_path_globs` 白名单（为空即不限制）；`edit` 和 `apply_patch` 忽略它。
+写入才是受围栏的那一半：`Write` / `Edit` 在工作区根之内解析。`HostConfig.write_roots` 逐次调用地回答"这个任务可以写到它工作区之外的这里吗？"；没有 resolver 时，一次工作区外的写入直接失败。`Write` 还额外遵守一个可选的、构造时绑定的工作区相对 `allowed_path_globs` 白名单（为空即不限制）；`Edit` 忽略它。
 
 ### Shell 模式
 
@@ -45,7 +44,7 @@ options = Options(system_prompt="…")          # allowed_tools defaults to None
 
 | 模式 | 效果 |
 | --- | --- |
-| `OFF` | `shell_run` 根本不在这个包里。 |
+| `OFF` | `Bash` 根本不在这个包里。 |
 | `ALLOWLIST` | 默认。只有下面这份结构化白名单能通过，且仅限 argv。 |
 | `ARBITRARY` | 任何不含 shell 元字符的命令都经由 bash 运行。 |
 
@@ -54,11 +53,11 @@ options = Options(system_prompt="…")          # allowed_tools defaults to None
 - `git status` / `git diff`
 - `pytest` / `uv run pytest`
 - `npm test` / `pnpm test`
-- `grep` / `rg` / `find` / `ls` —— 只读的搜索与列举，因此一个处于 ALLOWLIST 模式、又没有自己的 `grep` / `glob` 工具的 agent 仍然能搜索工作区。它们的校验器会拒绝那些会调起另一个程序或改动文件系统的参数。
+- `Grep` / `rg` / `find` / `ls` —— 只读的搜索与列举，因此一个处于 ALLOWLIST 模式、又没有自己的 `Grep` / `Glob` 工具的 agent 仍然能搜索工作区。它们的校验器会拒绝那些会调起另一个程序或改动文件系统的参数。
 
 宿主配置可以追加更多规则（`{"program": …, "subcommand": …}`）；内置的那些始终保留。运维配置的规则比精心挑选的内置项更宽松：它的意思是"这个程序可以运行"，接受任何通过了元字符扫描的尾部参数。
 
-Shell 元字符（`|`、`;`、`&&`、`>`、…）在分词之前就被拒绝。这是**路径包含加白名单，不是一个进程 sandbox**——`shell_run` 是在受信任的工作区里派生外部程序。
+Shell 元字符（`|`、`;`、`&&`、`>`、…）在分词之前就被拒绝。这是**路径包含加白名单，不是一个进程 sandbox**——`Bash` 是在受信任的工作区里派生外部程序。
 
 ## Web 工具
 
@@ -66,8 +65,8 @@ Shell 元字符（`|`、`;`、`&&`、`>`、…）在分词之前就被拒绝。�
 
 | 工具 | 风险 | 做什么 | 源码 |
 | --- | --- | --- | --- |
-| `webfetch` | low | 通过 HTTP(S) 抓取一个公开网页并渲染成 Markdown。始终可用。 | `noeta/builtins/web/impl/fetch.py` |
-| `web_search` | low | 执行一次网络搜索并把排序后的结果作为 Markdown 返回。**只在设置了 `NOETA_WEB_SEARCH_API_KEY` 时挂载。** | `noeta/builtins/web/impl/search.py` |
+| `WebFetch` | low | 通过 HTTP(S) 抓取一个公开网页并渲染成 Markdown。始终可用。 | `noeta/builtins/web/impl/fetch.py` |
+| `WebSearch` | low | 执行一次网络搜索并把排序后的结果作为 Markdown 返回。**只在设置了 `NOETA_WEB_SEARCH_API_KEY` 时挂载。** | `noeta/builtins/web/impl/search.py` |
 
 ## App 工具
 
@@ -116,9 +115,9 @@ Control tool 是面向模型的 schema，它翻译成 engine 决策，而不是�
 
 | 工具 | 何时挂载 | 插件 |
 | --- | --- | --- |
-| `spawn_subagent` | agent 激活了 `delegation`（有子 agent 时自动推导） | `delegation` |
-| `todo_write` | agent 激活了 `todo_write` | `todo_write` |
-| `ask_user_question` | agent 激活了 `ask_user_question` | `ask_user_question` |
+| `Task` | agent 激活了 `delegation`（有子 agent 时自动推导） | `delegation` |
+| `TodoWrite` | agent 激活了 `TodoWrite` | `TodoWrite` |
+| `AskUserQuestion` | agent 激活了 `AskUserQuestion` | `AskUserQuestion` |
 | `skill` | agent 激活了 `skill_invocation` **并且**合并后的 skill 菜单非空 | `skills` |
 | `run_workflow` | `HostConfig.workflow_allowed` 打开（且该 agent 能委派） | `react` |
 | `structured_output` | 设置了 `Options.output_schema` | `react` |
