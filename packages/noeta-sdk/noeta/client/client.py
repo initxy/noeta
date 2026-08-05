@@ -1203,6 +1203,7 @@ class Client:
         *,
         reason: Optional[str] = None,
         interrupted_by: str = "user",
+        force: bool = False,
     ) -> DriveOutcome:
         """Stop an in-flight turn, keeping the conversation live (driver
         ``interrupt``).
@@ -1215,10 +1216,23 @@ class Client:
 
         Safe to call from another thread while a turn is being driven: the
         cancel registry it marks is thread-safe, and the Engine polls it at
-        every turn boundary.
+        every turn boundary — and, since the cooperative seams reach into the
+        blocking waits themselves (the LLM round's abandonable wait, the retry
+        backoff, the tool-batch boundaries), a plain interrupt normally lands
+        within milliseconds.
+
+        ``force=True`` is the double-Esc escalation for a step wedged past
+        every cooperative seam (a tool ignoring its timeout): the wedged
+        step's lease is force-cleared (its thread is fenced — late writes are
+        rejected), the dirty attempt is sealed by step-attempt recovery, and
+        the task settles at the interrupted next-goal suspend. Call plain
+        ``interrupt`` first; ``force`` assumes the mark is already armed.
         """
         return self._driver.interrupt(
-            task_id=task_id, reason=reason, interrupted_by=interrupted_by
+            task_id=task_id,
+            reason=reason,
+            interrupted_by=interrupted_by,
+            force=force,
         )
 
     def close(

@@ -964,6 +964,7 @@ class GenericEngineResolver:
             child_model_binding=_child_model_binding,
             child_provider=inherited_provider,
             cancel_check=cancel_check,
+            discard_cancellation=lambda: self.discard_cancellation(root_id),
         )
         return host
 

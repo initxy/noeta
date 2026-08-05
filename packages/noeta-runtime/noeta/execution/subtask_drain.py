@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from noeta.core.engine import suspend_on_human_handle
 from noeta.core.fold import fold
 from noeta.execution.recorder import run_content_init
 from noeta.policies.control_semantics import (
@@ -30,9 +31,16 @@ from noeta.protocols.dispatcher import Dispatcher
 from noeta.protocols.engine import EngineProtocol
 from noeta.protocols.errors import CodedError, TaskCancellationRequested
 from noeta.protocols.event_log import EventLogFull
-from noeta.protocols.events import TaskCancelledPayload
+from noeta.protocols.events import (
+    SUSPEND_REASON_INTERRUPTED,
+    TaskCancelledPayload,
+)
 from noeta.protocols.messages import TextBlock, ToolResultBlock, ToolUseBlock
-from noeta.protocols.wake import SubtaskCompleted, SubtaskGroupCompleted
+from noeta.protocols.wake import (
+    NEXT_GOAL_WAKE_HANDLE,
+    SubtaskCompleted,
+    SubtaskGroupCompleted,
+)
 from noeta.runtime.worker import keep_lease_alive
 
 
@@ -219,6 +227,12 @@ class DrainHost:
     #: ``None`` (no host registry, or the in-process session-runner path) ⇒ no
     #: cancellation.
     cancel_check: Optional[Callable[[], bool]] = None
+    #: Drops the tree's cancel-registry mark once a STOPPED (interrupted /
+    #: closed — not cancelled) drain has settled its root, mirroring the
+    #: worker's ``_discard_cancellation`` — without it the mark pre-aborts the
+    #: conversation's next resumed turn. Bound by the resolver to the root id;
+    #: ``None`` (no registry) ⇒ nothing to drop.
+    discard_cancellation: Optional[Callable[[], None]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -656,14 +670,24 @@ def _drive_member_to_terminal(host: DrainHost, member_id: str) -> None:
 def _abort_cancelled_drain(
     host: DrainHost, root_id: str, waiters: list["_DelegationFrame"]
 ) -> Any:
-    """cancel-cascade teardown. The in-flight child's lease is already
-    released (loop-top release, or the descent/resume helper's self-release
-    on the raise). Mark every spawned-but-unfinished member across all
-    waiter frames — the in-flight child plus its not-yet-driven
+    """Human-stop teardown of a delegation drain. The in-flight child's lease
+    is already released (loop-top release, or the descent/resume helper's
+    self-release on the raise). Mark every spawned-but-unfinished member
+    across all waiter frames — the in-flight child plus its not-yet-driven
     siblings/cousins — cancelled with a ``TaskCancelled`` event, so fold and
-    the read-models show them terminal rather than orphaned-pending, then
-    return the already-terminal root (its ``TaskCancelled`` was written by
-    the control-plane ``cancel``)."""
+    the read-models show them terminal rather than orphaned-pending.
+
+    Then branch on what stopped the drain, read off the folded root:
+
+    * **terminal** — the control-plane ``cancel`` already wrote the root's
+      ``TaskCancelled``; hand the terminal root back (the historical path).
+    * **not terminal** — an ``interrupt`` (or ``close``) stopped the drain:
+      the root is still suspended on its member wake with a dangling spawn
+      ``tool_use``. Settle it like the worker's stopped-turn landing
+      (:func:`_settle_stopped_root`) so the conversation rests resumable at
+      the next-goal suspend instead of stranded waiting on children that
+      will never complete.
+    """
     seen: set[str] = set()
     for frame in waiters:
         for cid in frame.remaining:
@@ -671,7 +695,116 @@ def _abort_cancelled_drain(
                 continue
             seen.add(cid)
             _emit_child_cancelled(host, cid)
-    return fold(host.event_log, host.content_store, root_id)
+    root = fold(host.event_log, host.content_store, root_id)
+    if root.status == "terminal":
+        return root
+    return _settle_stopped_root(host, root)
+
+
+#: Where a turn begins — the scan-back boundary for "did a stop land in THIS
+#: turn". Mirrors the worker's copy (same rationale: the crash-recovery
+#: attempt window is a different bound and the two are free to drift).
+_TURN_OPENERS = ("TaskStarted", "TaskWoken", "TaskRewound", "TaskForked")
+
+
+def _stopped_turn_reason(host: DrainHost, task_id: str) -> Optional[str]:
+    """``"interrupted"`` when this turn's tail carries ``TurnInterrupted``,
+    else ``None`` (a ``close`` keeps the default reason — its own event
+    already records the archive). Must run BEFORE the settle's ``note_woken``
+    writes a fresh turn opener, or the scan would stop short of the marker."""
+    for env in reversed(host.event_log.read(task_id)):
+        if env.type in _TURN_OPENERS:
+            return None
+        if env.type == "TurnInterrupted":
+            return SUSPEND_REASON_INTERRUPTED
+        if env.type == "ConversationClosed":
+            return None
+    return None
+
+
+def _unpaired_spawn_call_ids(parent: Any) -> list[str]:
+    """Every parent spawn ``ToolUseBlock`` with no paired tool result yet, in
+    message order — the generic sweep behind :func:`_pending_spawn_call_id`,
+    used by the stopped-root settle to close ALL dangling spawns at once."""
+    resolved: set[str] = set()
+    for msg in parent.runtime.messages:
+        if msg.role == "tool":
+            for block in msg.content:
+                if isinstance(block, ToolResultBlock):
+                    resolved.add(block.call_id)
+    out: list[str] = []
+    for msg in parent.runtime.messages:
+        if msg.role != "assistant":
+            continue
+        for block in msg.content:
+            if (
+                isinstance(block, ToolUseBlock)
+                and block.tool_name in _SPAWN_TOOL_NAMES
+                and block.call_id not in resolved
+            ):
+                out.append(block.call_id)
+    return out
+
+
+def _settle_stopped_root(host: DrainHost, root: Any) -> Any:
+    """Land an interrupted / closed drain's non-terminal root at the
+    next-goal suspend — the same rest the worker's ``_settle_stopped_turn``
+    reaches for a plain stopped turn.
+
+    The cascade above terminal-marked every unfinished child, and each
+    child terminal fired the ``ChildLifecycleObserver``'s parent wake, so
+    the root's dispatcher row is ready for a targeted claim. A host without
+    that observer refuses the lease and we hand back the folded root
+    unchanged — the pre-fix degraded shape, never worse.
+
+    Before suspending, every dangling spawn ``tool_use`` is closed with a
+    ``success=False`` "interrupted" result — without that the resumed
+    conversation's next provider request carries a dangling function call
+    that providers reject with a fatal 400. The registry mark is dropped
+    last (mirroring the worker), so a later resumed turn is not pre-aborted.
+    """
+    lease = host.dispatcher.lease(
+        worker_id="noeta-drain-settle",
+        lease_seconds=600.0,
+        task_id=root.task_id,
+    )
+    if lease is None:
+        return root
+    # The reason scan must see the pre-settle stream (note_woken below opens
+    # a fresh turn, which would bound the scan too early).
+    reason = _stopped_turn_reason(host, root.task_id)
+    engine = host.parent_engine(root.task_id, is_root=True)
+    settled = fold(host.event_log, host.content_store, root.task_id)
+    if lease.wake_event is not None:
+        settled = engine.note_woken(
+            settled, lease_id=lease.lease_id, wake_event=lease.wake_event
+        )
+    stopped = "interrupted: the delegation was stopped before this subtask completed"
+    for call_id in _unpaired_spawn_call_ids(settled):
+        settled = engine.append_subagent_result_message(
+            settled,
+            call_id=call_id,
+            output=stopped,
+            success=False,
+            error=stopped,
+            lease_id=lease.lease_id,
+        )
+    settled = suspend_on_human_handle(
+        engine,
+        settled,
+        handle=NEXT_GOAL_WAKE_HANDLE,
+        lease_id=lease.lease_id,
+        suspend_reason=reason,
+    )
+    host.dispatcher.release(
+        lease.lease_id,
+        next_state="suspended",
+        wake_on=settled.wake_on,
+        consumed_wake_event=lease.wake_event,
+    )
+    if host.discard_cancellation is not None:
+        host.discard_cancellation()
+    return settled
 
 
 def _emit_child_cancelled(host: DrainHost, child_id: str) -> None:
