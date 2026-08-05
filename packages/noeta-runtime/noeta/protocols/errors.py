@@ -129,6 +129,7 @@ class UserQuestionNotPending(NoetaError):
 CATEGORY_TRANSIENT = "transient"
 CATEGORY_OVERFLOW = "overflow"
 CATEGORY_FATAL = "fatal"
+CATEGORY_ABORTED = "aborted"
 
 
 class TransientError(NoetaError):
@@ -180,6 +181,23 @@ class FatalError(NoetaError):
     ) -> None:
         super().__init__(*args)
         self.retry_after = retry_after
+
+
+class AbortedError(NoetaError):
+    """The client side abandoned this LLM call — a human stop, not a failure.
+
+    Raised by a provider adapter when its ``should_abort`` predicate turns
+    truthy mid-stream (the adapter breaks out of the SSE drain, closing the
+    connection), and translated by ``RuntimeLLMClient`` into an
+    ``LLMResponse(stop_reason="error", raw={"category": "aborted"})`` that is
+    never retried — the very next Engine cancel poll abandons the whole
+    decision, so the response exists only to keep the recorded
+    Started/Recorded/Finished trio well-formed. Not a member of the
+    transient/overflow/fatal taxonomy: those describe the provider; this one
+    describes the caller.
+    """
+
+    category = CATEGORY_ABORTED
 
 
 class MalformedToolArgumentsError(TransientError, ValueError):

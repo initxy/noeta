@@ -325,6 +325,14 @@ class StreamingProvider(Protocol):
     ``request_headers`` is folded into this signature rather than composed with
     :class:`HeaderAwareProvider` so the two optional capabilities never form a
     probe matrix; a provider that ignores headers accepts and drops them.
+    ``should_abort`` is folded in for the same reason: a client-side stop
+    predicate the adapter polls between stream events, raising
+    :class:`noeta.protocols.errors.AbortedError` from inside its stream
+    context (which closes the connection) when it turns truthy. ``None`` — and
+    every historical recording — means never abort. The runtime probes the
+    adapter's signature and withholds the argument from a pre-abort adapter,
+    so accepting it is backward-compatible but not mandatory; an adapter that
+    drops it merely runs to completion after being abandoned.
 
     Adapters must guarantee that the returned ``LLMResponse`` is shape-identical
     to what the batch path would produce for the same content, and that a
@@ -337,6 +345,7 @@ class StreamingProvider(Protocol):
         request: LLMRequest,
         on_delta: Callable[[StreamDelta], None],
         request_headers: Optional[dict[str, str]] = None,
+        should_abort: Optional[Callable[[], bool]] = None,
     ) -> LLMResponse: ...
 
 
