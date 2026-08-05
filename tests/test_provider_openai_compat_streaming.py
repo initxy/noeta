@@ -20,6 +20,7 @@ import pytest
 import respx
 
 from noeta.protocols.errors import (
+    AbortedError,
     ContextOverflowError,
     FatalError,
     TransientError,
@@ -490,6 +491,78 @@ def test_401_on_open_maps_to_fatal() -> None:
 
     with pytest.raises(FatalError):
         _make_provider().complete_streaming(_basic_request(), lambda _d: None)
+
+
+# ---------------------------------------------------------------------------
+# Client abort: should_abort polled per SSE event
+# ---------------------------------------------------------------------------
+
+
+class _CloseRecordingStream(httpx.SyncByteStream):
+    """Records whether httpx closed the stream — the observable proof that
+    ``AbortedError`` was raised from inside the ``with client.stream(...)``
+    block, so the context exit released the connection."""
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+        self.closed = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield self._body
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@respx.mock
+def test_should_abort_mid_stream_raises_aborted_and_closes_stream() -> None:
+    """A predicate turning truthy mid-stream surfaces as ``AbortedError`` —
+    not re-bucketed into ``TransientError`` by the transport handler — with no
+    further chunks fed and the stream context exited (connection closed)."""
+    body = _sse_body(
+        _chunk(delta={"role": "assistant", "content": ""}),
+        _chunk(delta={"content": "Hel"}),
+        _chunk(delta={"content": "lo"}),
+        _chunk(finish_reason="stop"),
+    )
+    stream = _CloseRecordingStream(body)
+    respx.post(CHAT_ENDPOINT).mock(
+        return_value=httpx.Response(200, stream=stream, headers=SSE_HEADERS)
+    )
+
+    deltas: list[StreamDelta] = []
+    with pytest.raises(AbortedError):
+        _make_provider().complete_streaming(
+            _basic_request(),
+            deltas.append,
+            should_abort=lambda: bool(deltas),
+        )
+
+    # The poll runs before each chunk: the flip lands right after the first
+    # delta, so the second fragment never reaches the sink.
+    assert [d.text for d in deltas] == ["Hel"]
+    assert stream.closed
+
+
+@respx.mock
+def test_never_truthy_should_abort_leaves_stream_untouched() -> None:
+    """A predicate that never fires must be behaviorally invisible — same
+    deltas, same response as the default ``should_abort=None`` path."""
+    respx.post(CHAT_ENDPOINT).mock(
+        return_value=_stream_response(
+            _chunk(delta={"content": "Hel"}),
+            _chunk(delta={"content": "lo"}),
+            _chunk(finish_reason="stop"),
+        )
+    )
+
+    deltas, response = _complete_streaming(
+        _make_provider(), _basic_request(), should_abort=lambda: False
+    )
+
+    assert [d.text for d in deltas] == ["Hel", "lo"]
+    assert response.stop_reason == "end_turn"
+    assert response.content == [TextBlock(text="Hello")]
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ from typing import Any, Callable, Literal, Optional
 import httpx
 
 from noeta.protocols.errors import (
+    AbortedError,
     ContextOverflowError,
     FatalError,
     TransientError,
@@ -158,6 +159,7 @@ class OpenAICompatProvider:
         request: LLMRequest,
         on_delta: Callable[[StreamDelta], None],
         request_headers: Optional[dict[str, str]] = None,
+        should_abort: Optional[Callable[[], bool]] = None,
     ) -> LLMResponse:
         """Stream a Chat Completions request, firing ``on_delta`` per fragment.
 
@@ -167,7 +169,9 @@ class OpenAICompatProvider:
         streamed and batch results shape-identical. Tool-call fragments
         accumulate without firing deltas — partial argument JSON is
         undecodable. ``request_headers`` are transport-only and never
-        recorded.
+        recorded. ``should_abort`` is the client-side stop predicate, polled
+        per SSE event; when it turns truthy :class:`AbortedError` is raised
+        from inside the stream context, closing the connection.
         """
         body = self._build_request_body(request)
         body["stream"] = True
@@ -192,6 +196,11 @@ class OpenAICompatProvider:
                     except httpx.HTTPStatusError as exc:
                         raise _translate_http_error(exc) from exc
                 for _event, data in iter_sse_events(http_response.iter_lines()):
+                    # Raised from inside the stream context so the exit closes
+                    # the connection; ``AbortedError`` is not an httpx type, so
+                    # the transient translation below never re-buckets it.
+                    if should_abort is not None and should_abort():
+                        raise AbortedError("client abort mid-stream")
                     if data.strip() == "[DONE]":
                         accumulator.saw_done = True
                         break
