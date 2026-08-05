@@ -38,6 +38,9 @@ class AskAnswerCodec:
 
     * ``question_handle(question_id) -> handle`` — the wake handle a
       suspended-on-question task waits on.
+    * ``question_id_from_handle(handle) -> question_id | None`` — the inverse,
+      so the driver's ``interrupt`` can recognise a question suspend from its
+      wake handle (returns ``None`` for any non-question handle).
     * ``load_questions_body(content_store, ref) -> questions`` — decode the
       spilled pending-question body.
     * ``normalize_answer_document(raw, questions) -> answers`` — validate a
@@ -45,6 +48,7 @@ class AskAnswerCodec:
     """
 
     question_handle: Callable[[str], str]
+    question_id_from_handle: Callable[[str], Optional[str]]
     load_questions_body: Callable[[Any, Any], list[dict[str, Any]]]
     normalize_answer_document: Callable[
         [Any, list[dict[str, Any]]], dict[str, dict[str, Any]]

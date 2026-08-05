@@ -499,6 +499,16 @@ def _on_user_question_answered(
     )
 
 
+def _on_user_question_withdrawn(
+    task: Task, env: EventEnvelope, content_store: ContentStore  # noqa: ARG001
+) -> None:
+    # Symmetric with the answer pop, but records no answer: a withdrawn question
+    # simply leaves ``pending_questions`` (the durable withdraw event on the
+    # stream is the audit; the paired tool_result the writer appends closes the
+    # dangling ask tool_use).
+    task.governance.pending_questions.pop(env.payload.question_id, None)
+
+
 def _on_subtask_denied(
     task: Task, env: EventEnvelope, content_store: ContentStore
 ) -> None:
@@ -977,6 +987,7 @@ _HANDLERS = {
     "ToolCallApprovalResolved": _on_tool_call_approval_resolved,
     "UserQuestionRequested": _on_user_question_requested,
     "UserQuestionAnswered": _on_user_question_answered,
+    "UserQuestionWithdrawn": _on_user_question_withdrawn,
     "SubtaskDenied": _on_subtask_denied,
     "TaskCancelled": _on_task_cancelled,
     "ModelBound": _on_model_bound,

@@ -83,6 +83,9 @@ _SUMMARY_FIELDS_BY_EVENT: dict[str, tuple[str, ...]] = {
     "UserQuestionAnswered": (
         "question_id", "call_id", "answers_ref", "answer_count", "answered_by",
     ),
+    "UserQuestionWithdrawn": (
+        "question_id", "call_id", "withdrawn_by", "reason",
+    ),
     "SubtaskSpawned":      ("subtask_id", "agent_name"),
     "SubtaskCompleted":    ("subtask_id",),
     "SubtaskDenied":       ("agent_name", "reason"),

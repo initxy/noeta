@@ -70,6 +70,7 @@ from noeta.protocols.events import (
     TurnInterruptedPayload,
     UserQuestionAnsweredPayload,
     UserQuestionRequestedPayload,
+    UserQuestionWithdrawnPayload,
 )
 from noeta.protocols.messages import Usage
 from noeta.protocols.values import EVENT_PAYLOAD_MAX_BYTES
@@ -188,6 +189,7 @@ _PAYLOAD_RESTORERS: dict[str, Callable[[Any], Any]] = {
     "ToolCallApprovalResolved":  lambda d: ToolCallApprovalResolvedPayload(**d),
     "UserQuestionRequested": lambda d: UserQuestionRequestedPayload(**d),
     "UserQuestionAnswered": lambda d: UserQuestionAnsweredPayload(**d),
+    "UserQuestionWithdrawn": lambda d: UserQuestionWithdrawnPayload(**d),
     "LLMRequestStarted":   lambda d: _restore_llm_request_started_payload(d),
     "LLMResponseRecorded": lambda d: LLMResponseRecordedPayload(**d),
     "AssistantThinkingRecorded": lambda d: AssistantThinkingRecordedPayload(**d),

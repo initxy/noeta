@@ -82,6 +82,7 @@ from noeta.protocols.events import (
     TaskWokenPayload,
     ToolCallApprovalResolvedPayload,
     UserQuestionAnsweredPayload,
+    UserQuestionWithdrawnPayload,
 )
 from noeta.protocols.hooks import (
     GuardContext,
@@ -692,6 +693,11 @@ class Engine:
         """Record a structured HITL answer and append the paired tool result."""
         return _answer_user_question(self, task, question_id=question_id, answers=answers, answered_by=answered_by, lease_id=lease_id, trace_id=trace_id)
 
+    def withdraw_user_question(self, task: Task, *, question_id: str, withdrawn_by: Optional[str] = None, reason: Optional[str] = None, lease_id: str, trace_id: Optional[str] = None) -> Task:
+        """Drop a pending HITL question without an answer and append the paired
+        withdrawal tool result (the ``interrupt``/Stop-on-question landing)."""
+        return _withdraw_user_question(self, task, question_id=question_id, withdrawn_by=withdrawn_by, reason=reason, lease_id=lease_id, trace_id=trace_id)
+
     # -- wake bookkeeping -------------------------------------------------
 
     def note_woken(
@@ -1298,6 +1304,48 @@ def _answer_user_question(engine: Engine, task: Task, *, question_id: str, answe
                 output={"question_id": question_id, "answers": answers},
                 success=True,
                 error=None,
+            )
+        ],
+    )
+    return engine._append_message(
+        task, msg, lease_id=lease_id, trace_id=resolved_trace
+    )
+
+
+def _withdraw_user_question(engine: Engine, task: Task, *, question_id: str, withdrawn_by: Optional[str], reason: Optional[str], lease_id: str, trace_id: Optional[str]) -> Task:
+    # Mirrors ``_answer_user_question`` but records no answer: emit the neutral
+    # withdrawal audit (fold pops ``pending_questions``) and close the dangling
+    # ``ask_user_question`` tool_use with a ``success=False`` result so a later
+    # turn's transcript stays well-formed. Unlike the answer path, no answer body
+    # is stored and the model turn is NOT driven (the caller parks the task idle).
+    pending = task.governance.pending_questions.get(question_id)
+    if pending is None:
+        raise UserQuestionNotPending(
+            f"no pending user question for question_id {question_id!r}"
+        )
+    call_id = str(pending["call_id"])
+    resolved_trace = trace_id or engine._latest_trace_id(task.task_id)
+    env = engine._emit(
+        task_id=task.task_id,
+        type_="UserQuestionWithdrawn",
+        payload=UserQuestionWithdrawnPayload(
+            question_id=question_id,
+            call_id=call_id,
+            withdrawn_by=withdrawn_by,
+            reason=reason,
+        ),
+        lease_id=lease_id,
+        trace_id=resolved_trace,
+    )
+    apply_event(task, env, engine._content_store)
+    msg = Message(
+        role="tool",
+        content=[
+            ToolResultBlock(
+                call_id=call_id,
+                output={"question_id": question_id, "withdrawn": True},
+                success=False,
+                error="Question withdrawn by user (no answer provided).",
             )
         ],
     )
