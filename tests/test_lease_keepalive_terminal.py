@@ -129,17 +129,32 @@ def _host(
 def test_force_terminal_on_lost_lease_writes_lease_free_terminal(
     tmp_path: Path,
 ) -> None:
+    """The helper converges a task stranded RUNNING — and only that.
+
+    A task resting at a durable suspend is a resumable landing (it is exactly
+    what a ``force`` interrupt leaves behind after stripping a wedged step's
+    lease), so the helper must leave it alone; the hang the helper exists for
+    is the mid-step fold, ``running`` with nothing left to drive it.
+    """
     ws = tmp_path / "ws"
     ws.mkdir()
     host, _, event_log = _host(ws, responses=[_end_turn("hi")])
     driver = InteractionDriver(host)
 
     started = driver.start(goal="hello", agent="main")
-    # A normally-finishing interactive turn rests at a next-goal suspend.
+    # A normally-finishing interactive turn rests at a next-goal suspend —
+    # resumable, so the helper is a no-op here.
     assert started.status == "suspended"
     assert started.wake_handle == NEXT_GOAL_WAKE_HANDLE
     task_id = started.task_id
-    assert fold(host.event_log, host.content_store, task_id).status != "terminal"
+    driver._force_terminal_on_lost_lease(task_id, InvalidLease("lease gone"))
+    assert fold(host.event_log, host.content_store, task_id).status == "suspended"
+    assert not any(e.type == "TaskFailed" for e in event_log.read(task_id))
+
+    # Open the next turn WITHOUT driving it: the fold is now ``running`` with
+    # no worker — the genuinely stranded shape the helper converges.
+    driver.seed_send_goal(task_id=task_id, goal="second")
+    assert fold(host.event_log, host.content_store, task_id).status == "running"
 
     driver._force_terminal_on_lost_lease(task_id, InvalidLease("lease gone"))
 
@@ -159,6 +174,8 @@ def test_force_terminal_on_lost_lease_is_idempotent(tmp_path: Path) -> None:
     host, _, event_log = _host(ws, responses=[_end_turn()])
     driver = InteractionDriver(host)
     task_id = driver.start(goal="x", agent="main").task_id
+    # A running (stranded) fold is the shape the helper converges.
+    driver.seed_send_goal(task_id=task_id, goal="second")
 
     driver._force_terminal_on_lost_lease(task_id, InvalidLease("a"))
     after_first = len(event_log.read(task_id))

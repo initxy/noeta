@@ -936,11 +936,15 @@ class InteractionDriver:
         control-plane ``TaskFailed`` (``system_emit``, no lease / no
         ``state_patch``) so fold always reaches a terminal. No-op when the task
         already terminal — a racing reclaim/cancel won, or the step did land
-        its own terminal before the lease lapsed.
+        its own terminal before the lease lapsed — and equally when it rests
+        **suspended**: a durable suspend IS a resumable landing, and it is
+        exactly what a ``force`` interrupt leaves behind after stripping this
+        step's lease — the fenced zombie's own ``InvalidLease`` must not
+        bulldoze that rest into a terminal.
         """
         host = self._host
         task = fold(host.event_log, host.content_store, task_id)
-        if getattr(task, "status", None) == "terminal":
+        if getattr(task, "status", None) in ("terminal", "suspended"):
             return
         host.event_log.system_emit(
             task_id=task_id,
@@ -1795,6 +1799,7 @@ class InteractionDriver:
         *,
         reason: Optional[str] = None,
         interrupted_by: str = "user",
+        force: bool = False,
     ) -> DriveOutcome:
         """Stop an in-flight turn WITHOUT ending the conversation.
 
@@ -1819,16 +1824,32 @@ class InteractionDriver:
         that away is :meth:`rewind`'s job, and the two compose — interrupt to
         stop, rewind to un-say.
 
-        Granularity is the turn boundary. The cooperative-cancel poll sits at
-        the top of the loop and again right after the Policy decides, so an
-        interrupt lands before the next tool call or the next model round —
-        it cannot abort a tool call already executing.
+        Semantically the landing is the turn boundary — the cooperative-cancel
+        poll sits at the top of the loop and again right after the Policy
+        decides — but the boundary is reached promptly: the mark reaches into
+        the blocking waits themselves (the LLM round's abandonable wait and
+        sliced retry backoff, the tool batch's between-call polls, the
+        foreground/background shell reap), so a stop normally lands in
+        milliseconds. What it cannot do is abort a non-shell tool call
+        already executing; that is ``force=True``'s job below.
 
         Refuses a terminal task (:class:`TaskAlreadyTerminalError`, matching
         ``cancel`` / ``close`` / ``reopen``). On an already-idle conversation
         it is a clean no-op landing: the marker records the request, the
         registry mark is consumed by the next lease, and the task stays exactly
         as resumable as it was.
+
+        ``force=True`` is the second escalation — for a step genuinely wedged
+        past every cooperative seam (a tool that ignores its timeout). It runs
+        every gentle step above, then abandons the wedged step outright:
+        ``dispatcher.enqueue`` force-clears the stuck lease (fencing the
+        abandoned thread — its later writes raise ``InvalidLease`` and land
+        nowhere), and a fresh targeted lease runs the standard step-attempt
+        recovery, which seals the dirty window and — under the still-armed
+        registry mark — settles the task at the interrupted next-goal suspend.
+        Scoped to a wedged TOP-LEVEL turn (folded ``running``); a delegation
+        tree still tears down cooperatively via the mark. The map is Esc /
+        double-Esc: first interrupt cooperative, second one forced.
         """
         host = self._host
         task = fold(host.event_log, host.content_store, task_id)
@@ -1861,7 +1882,7 @@ class InteractionDriver:
         # silently swallowed by a stop they issued before sending it. cancel /
         # close can mark unconditionally because their landing is terminal or
         # archived; an interrupt has to leave the conversation usable.
-        if self._turn_in_flight(task_id):
+        if self._turn_in_flight(task_id, task):
             request = getattr(host, "request_cancellation", None)
             if callable(request):
                 request(task_id)
@@ -1879,6 +1900,51 @@ class InteractionDriver:
         # Deliberately NOT ``forget_turn_carriers``: unlike cancel / close this
         # conversation stays live, and the next turn re-notes its own carriers
         # anyway — dropping them here would only discard the current turn's.
+        if force:
+            forced = self._force_stop_running_turn(task_id)
+            if forced is not None:
+                return forced
+        return self._outcome(task_id)
+
+    def _force_stop_running_turn(self, task_id: str) -> Optional[DriveOutcome]:
+        """Abandon a wedged top-level step and settle the task interrupted.
+
+        Three existing primitives, no new machinery:
+
+        1. ``dispatcher.enqueue`` — the documented force-clear: the wedged
+           generation's lease dies, so every later write from the abandoned
+           step thread raises ``InvalidLease`` (the lease-fence invariant) —
+           it cannot corrupt the settled stream.
+        2. a fresh **targeted** lease on the now-ready row. ``None`` means a
+           resident worker won the claim race — fine: it runs the exact same
+           reconciliation below, so just report the fold.
+        3. :func:`run_leased_task` — its wake-less ``running`` branch is the
+           step-attempt recovery: the dirty window (the wedged call's Started
+           with no Finished) is sealed, and the re-drive — under the registry
+           mark the gentle pass armed — aborts on its first poll and lands
+           ``suspended("interrupted")``, discarding the mark. A window whose
+           activity classifies unsafe (an interrupted approval) parks with a
+           notice instead, which is equally a settled, resumable stop.
+
+        Returns ``None`` when there is nothing to force (top-level fold not
+        ``running``) so the caller keeps the gentle-path outcome.
+        """
+        host = self._host
+        task = fold(host.event_log, host.content_store, task_id)
+        if task.status != "running":
+            return None
+        host.dispatcher.enqueue(task_id)
+        lease = host.dispatcher.lease(
+            worker_id="noeta-force-stop",
+            lease_seconds=600.0,
+            task_id=task_id,
+        )
+        if lease is None:
+            return None
+        with keep_lease_alive(host.dispatcher, lease):
+            run_leased_task(
+                host, lease, next_goal_handle=NEXT_GOAL_WAKE_HANDLE
+            )
         return self._outcome(task_id)
 
     def _withdraw_pending_question(
@@ -2135,15 +2201,43 @@ class InteractionDriver:
         self._restore_dispatcher_to_baseline(child.task_id, forked)
         return self._outcome(child.task_id)
 
-    def _turn_in_flight(self, task_id: str) -> bool:
-        """Is a worker currently driving ``task_id``?
+    def _turn_in_flight(self, task_id: str, task: Optional[Task] = None) -> bool:
+        """Is a turn currently in flight for ``task_id``?
 
-        The expiry-aware lease probe, so a zombie lease (TTL lapsed after its
-        worker died) reads as idle rather than making an interrupt arm a mark
-        nothing will ever consume. A dispatcher / test double without the seam
-        answers ``True``: marking an idle task is recoverable (one swallowed
-        turn), failing to mark a live one is not (the stop does nothing at all).
+        Two probes, either one suffices:
+
+        * the folded ``task.status == "running"`` — this is what catches the
+          ``release_yield`` hand-off window (``dispatch_seeded`` → resident
+          worker), where the turn is durably open (``TaskWoken`` folded) but
+          no lease is held for a poll interval. Without it an interrupt
+          landing in that window armed nothing, the worker picked the task up
+          and drove the WHOLE turn — Esc as a silent no-op. The armed mark is
+          consumed by that worker's first top-of-loop poll instead.
+        * the expiry-aware lease probe, so a zombie lease (TTL lapsed after
+          its worker died) reads as idle rather than making an interrupt arm
+          a mark nothing will ever consume. (A crashed drive can leave
+          ``running`` with no lease too; its mark is likewise consumed — by
+          recovery's re-drive poll — or cleared by ``send_goal``.) A
+          dispatcher / test double without the seam answers ``True``: marking
+          an idle task is recoverable (one swallowed turn), failing to mark a
+          live one is not (the stop does nothing at all).
         """
+        if task is not None and task.status == "running":
+            return True
+        # A delegation drain in flight: the ROOT rests suspended on its member
+        # wake (leases live on the children, one at a time), yet the turn is
+        # very much running — in the children. The drain's cancel predicate is
+        # keyed by this root id, so arming the mark here is what tears the
+        # tree down; without this arm an interrupt during delegation was a
+        # complete no-op (neither probe below fires for the parked root).
+        if (
+            task is not None
+            and task.status == "suspended"
+            and isinstance(
+                task.wake_on, (SubtaskCompleted, SubtaskGroupCompleted)
+            )
+        ):
+            return True
         active = getattr(self._host.dispatcher, "has_active_lease", None)
         if not callable(active):
             return True
