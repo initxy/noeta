@@ -232,8 +232,14 @@ re-invokes what the ledger already records.
 The third human stop. `cancel` writes `TaskCancelled` and the conversation is
 terminal; `close` archives it; **`interrupt`** writes `TurnInterrupted` and
 stops only the in-flight turn, leaving the task resting at its next-goal
-suspend, reopenable by simply typing again. Its granularity *is* the turn
-boundary — it cannot abort a tool call already executing. The interrupted turn's
+suspend, reopenable by simply typing again. It lands at the turn boundary,
+and the boundary is reached promptly: the in-flight LLM round is an
+abandonable wait (aborted in milliseconds, in any phase), the retry backoff
+is cancel-sliced, a tool batch polls between calls, and a foreground shell is
+reaped like a background one. A tool call wedged past all of that is the job
+of `interrupt(force=True)` — the double-Esc escalation: the wedged step's
+lease is force-cleared, the dirty attempt is sealed by step-attempt recovery,
+and the task settles at the interrupted suspend. The interrupted turn's
 events stay on the stream as real history; un-saying them is rewind's job.
 
 When `interrupt` lands on a task suspended on a pending `ask_user_question` (no
