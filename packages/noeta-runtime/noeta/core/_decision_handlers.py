@@ -22,6 +22,7 @@ from typing import Any, Callable, Container, Optional, Protocol
 
 from noeta.protocols.canonical import to_canonical_bytes
 from noeta.protocols.content_store import ContentStore
+from noeta.protocols.errors import TaskCancellationRequested
 from noeta.protocols.values import ContentRef, EVENT_PAYLOAD_MAX_BYTES
 from noeta.protocols.decisions import (
     CompactionRequestedDecision,
@@ -1891,6 +1892,7 @@ def handle_tool_calls(
     *,
     lease_id: str,
     trace_id: str,
+    cancelled: Optional[Callable[[], bool]] = None,
 ) -> Optional[Task]:
     """Run each call past its Guard, then batch the results.
 
@@ -1900,6 +1902,15 @@ def handle_tool_calls(
     call converted to ``yield_for_human``. This is the **only**
     Decision handler whose return type is ``Optional[Task]`` —
     routed via ``run_one_step``'s special case, not ``dispatch_exit``.
+
+    ``cancelled`` is the Engine's cooperative-cancel predicate, polled
+    between the batch's calls so a human stop that lands during call N
+    does not sit through calls N+1…: the not-yet-executed calls get
+    synthesized ``success=False`` results (the same balance-the-batch
+    move the approval branch makes), the batched message flushes, and
+    :class:`TaskCancellationRequested` unwinds to the worker's settle.
+    Calls already executed keep their real results — real history, per
+    the interrupt contract. ``None`` (resume) ⇒ no poll.
     """
     if ctx.tool_invoker is None:
         raise RuntimeError("Engine got tool_calls but no ToolRuntime.")
@@ -1910,6 +1921,32 @@ def handle_tool_calls(
     result_blocks: list[ToolResultBlock] = list(decision.preacked_results)
     executed: list[tuple[ToolCall, ToolResult]] = []
     for idx, call in enumerate(decision.calls):
+        if cancelled is not None and cancelled():
+            # Structural invariant (see the DENY branch below): every
+            # tool_use the model emitted must get a matching tool_result, so
+            # the stopped batch closes its remaining calls before the raise —
+            # otherwise the resumed request carries dangling function calls
+            # that providers reject with a fatal 400.
+            for remaining in decision.calls[idx:]:
+                stopped = "interrupted: a human stop landed during this batch"
+                result_blocks.append(
+                    ToolResultBlock(
+                        call_id=remaining.call_id,
+                        output=stopped,
+                        success=False,
+                        error=stopped,
+                    )
+                )
+            batched = Message(role="tool", content=list(result_blocks))
+            task.runtime.messages.append(batched)
+            ctx.emit(
+                task_id=task.task_id,
+                type_="MessagesAppended",
+                payload=put_messages(ctx.content_store, [batched]),
+                lease_id=lease_id,
+                trace_id=trace_id,
+            )
+            raise TaskCancellationRequested(task.task_id)
         verdict = ctx.guard(ProposedToolCall(call=call), task)
         if verdict.verdict is Verdict.DENY:
             reason = verdict.reason or "denied"
