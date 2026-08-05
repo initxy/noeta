@@ -490,9 +490,10 @@ def translate_ask_user_question(ctx: ControlTranslateContext) -> Optional[Decisi
 
 #: The answer-side codec the kernel driver's ``answer`` path consumes, carried
 #: on the ask mount's typed ``answer_codec`` field. Built once at import — the
-#: three functions are stateless.
+#: functions are stateless.
 ASK_ANSWER_CODEC = AskAnswerCodec(
     question_handle=question_handle,
+    question_id_from_handle=question_id_from_handle,
     load_questions_body=load_questions_body,
     normalize_answer_document=normalize_answer_document,
 )

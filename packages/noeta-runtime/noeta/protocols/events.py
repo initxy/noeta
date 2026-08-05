@@ -722,6 +722,26 @@ class UserQuestionAnsweredPayload:
     answered_by: Optional[str] = None
 
 
+@dataclass(frozen=True, slots=True)
+class UserQuestionWithdrawnPayload:
+    """Neutral audit for a pending structured human-input request that was
+    withdrawn without an answer.
+
+    Written when a human ``interrupt`` (Stop) lands on a task suspended on a
+    question: the pending question is dropped and the conversation parks idle at
+    the next-goal suspend, WITHOUT a model turn. Fold pops the entry from
+    ``pending_questions`` (mirroring :class:`UserQuestionAnsweredPayload`'s pop)
+    but records no answer; the dangling ``ask_user_question`` tool_use is closed
+    by a paired ``success=False`` tool_result the withdraw writer appends, so a
+    later turn's transcript stays well-formed. ``withdrawn_by`` is a
+    host/identity tag (``"host"`` by default)."""
+
+    question_id: str
+    call_id: str
+    withdrawn_by: Optional[str] = None
+    reason: Optional[str] = None
+
+
 # -- LLM events -------------------------------------------------------------
 #
 # These payloads are the typed shapes an LLM provider adapter emits. They

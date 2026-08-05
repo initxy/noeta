@@ -54,6 +54,7 @@ from noeta.protocols.events import (
     BackgroundSubagentDeliveredPayload,
     EventEnvelope,
     InjectionRequestedPayload,
+    SUSPEND_REASON_INTERRUPTED,
     TaskCancelledPayload,
     TaskFailedPayload,
     TaskForkedPayload,
@@ -79,6 +80,7 @@ from noeta.runtime.worker import (
     AppendMessagePrelude,
     AnswerUserQuestionPrelude,
     ResolveApprovalPrelude,
+    WithdrawUserQuestionPrelude,
     WokenPrelude,
     keep_lease_alive,
     run_leased_task,
@@ -1842,6 +1844,13 @@ class InteractionDriver:
             origin="system",
             trace_id=self._trace_id(task_id),
         )
+        # Stop pressed while suspended on a pending ``ask_user_question``: there
+        # is no turn in flight to cancel, so withdraw the question and re-park at
+        # the next-goal suspend (the "Esc" landing) — the prior turn's output
+        # stays in history, the overlay clears, and the user resumes by typing.
+        # A no-op for any other suspend (no codec / non-question handle), so the
+        # common interrupt path below is unchanged.
+        self._withdraw_pending_question(task_id, task, withdrawn_by=interrupted_by)
         # AFTER the durable marker (see the docstring) — the in-flight ReAct
         # loop polls this at its next turn boundary and abandons the round.
         #
@@ -1871,6 +1880,69 @@ class InteractionDriver:
         # conversation stays live, and the next turn re-notes its own carriers
         # anyway — dropping them here would only discard the current turn's.
         return self._outcome(task_id)
+
+    def _withdraw_pending_question(
+        self, task_id: str, task: Task, *, withdrawn_by: str
+    ) -> bool:
+        """Withdraw a pending ``ask_user_question`` and re-park at next-goal.
+
+        The ``interrupt``-on-question landing (the "Esc" semantic). A no-op —
+        returning ``False`` — unless the task is suspended on a question handle:
+        it detects that WITHOUT hardcoding the ``"question-"`` prefix in the
+        kernel by asking the session's :class:`AskAnswerCodec`
+        (``question_id_from_handle``), and WITHOUT raising on a session that
+        never mounted ``ask_user_question`` (no codec ⇒ ``None`` ⇒ no-op).
+
+        On a match it reuses the vetted wake+lease+durable-prelude seam
+        (:meth:`_seed_woken` with :class:`WithdrawUserQuestionPrelude`) to write
+        ``TaskWoken`` → ``UserQuestionWithdrawn`` → the paired ``success=False``
+        tool_result closing the dangling ask tool_use — then, INSTEAD of driving
+        a model turn (:meth:`drive_seeded`), settles the held lease straight onto
+        the next-goal suspend (``suspend_on_human_handle`` +
+        ``dispatcher.release``, mirroring the worker's ``_settle_stopped_turn``).
+        No ``run_one_step`` / LLM call. The conversation is left idle and
+        resumable by ``send_goal``, exactly like a normal turn boundary.
+        """
+        wake_on = getattr(task, "wake_on", None)
+        if task.status != "suspended" or not isinstance(
+            wake_on, HumanResponseReceived
+        ):
+            return False
+        host = self._host
+        engine = host.resolve_engine(task)
+        codec = getattr(engine, "answer_codec", None)
+        if codec is None:
+            return False
+        qid = codec.question_id_from_handle(wake_on.handle)
+        if qid is None or qid not in task.governance.pending_questions:
+            return False
+        # Wake on the question handle and apply the withdraw prelude durably at
+        # seed (TaskWoken + UserQuestionWithdrawn + paired tool_result), then
+        # settle to idle without a drive.
+        seed = self._seed_woken(
+            task_id,
+            handle=wake_on.handle,
+            prelude=WithdrawUserQuestionPrelude(
+                question_id=qid, withdrawn_by=withdrawn_by
+            ),
+        )
+        lease = seed.lease
+        settle_engine = seed.engine or engine
+        folded = fold(host.event_log, host.content_store, task_id)
+        folded = suspend_on_human_handle(
+            settle_engine,
+            folded,
+            handle=NEXT_GOAL_WAKE_HANDLE,
+            lease_id=lease.lease_id,
+            suspend_reason=SUSPEND_REASON_INTERRUPTED,
+        )
+        host.dispatcher.release(
+            lease.lease_id,
+            next_state="suspended",
+            wake_on=folded.wake_on,
+            consumed_wake_event=lease.wake_event,
+        )
+        return True
 
     def reopen(
         self,

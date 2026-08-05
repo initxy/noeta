@@ -57,6 +57,7 @@ __all__ = [
     "ReliabilityKind",
     "ReliabilitySink",
     "ResolveApprovalPrelude",
+    "WithdrawUserQuestionPrelude",
     "WokenPrelude",
     "WorkerLoop",
     "WorkerOutcome",
@@ -380,6 +381,33 @@ class AnswerUserQuestionPrelude:
             question_id=self.question_id,
             answers=self.answers,
             answered_by=self.answered_by,
+            lease_id=lease_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class WithdrawUserQuestionPrelude:
+    """Question-withdraw prelude — drop the pending question + paired result.
+
+    The ``interrupt``/Stop-on-question counterpart of
+    :class:`AnswerUserQuestionPrelude`: it records the withdrawal audit and
+    closes the dangling ask tool_use with a ``success=False`` result, but stores
+    no answer. Pure appends → seed-time safe. The caller does NOT drive a model
+    turn after this; it parks the task at the next-goal suspend."""
+
+    question_id: str
+    withdrawn_by: str = "host"
+    reason: Optional[str] = None
+
+    #: Pure appends (withdraw audit + paired tool result) — seed-time safe.
+    durable_at_seed: ClassVar[bool] = True
+
+    def __call__(self, engine: Any, task: Any, *, lease_id: str) -> Any:
+        return engine.withdraw_user_question(
+            task,
+            question_id=self.question_id,
+            withdrawn_by=self.withdrawn_by,
+            reason=self.reason,
             lease_id=lease_id,
         )
 

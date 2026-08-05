@@ -18,6 +18,7 @@ from tests._read_models.detail import build_code_session_detail
 from noeta.core.fold import fold
 from noeta.core.snapshot import rehydrate_task, serialize_task_state
 from noeta.builtins.ask_user_question.impl import ASK_USER_QUESTION_TOOL
+from noeta.execution.multi_turn import NEXT_GOAL_WAKE_HANDLE
 from noeta.policies.control_semantics import SPAWN_SUBAGENT_TOOL
 from noeta.protocols.canonical import from_canonical_bytes, to_canonical_bytes
 from noeta.protocols.events import (
@@ -336,6 +337,70 @@ def test_answer_records_audit_tool_result_and_continues(tmp_path: Path) -> None:
         and msg.content[0].call_id == "q1"
         for msg in resumed_request.messages
     )
+
+
+def test_interrupt_withdraws_pending_question_and_parks_idle(tmp_path: Path) -> None:
+    # Stop (interrupt) on a question suspend withdraws the question and parks
+    # the conversation idle at the next-goal suspend — WITHOUT driving a model
+    # turn. The prior turn's output stays; the dangling ask tool_use is closed
+    # by a success=False tool_result.
+    ws = _make_ws(tmp_path)
+    host, driver, provider = _session(ws, [_ask()])
+    out = driver.start(goal="do the work", agent="main")
+    assert out.wake_handle == "question-q1"
+    requests_after_ask = len(provider.received_requests)
+
+    result = driver.interrupt(out.task_id, interrupted_by="tester")
+    assert result.status == "suspended"
+    assert result.wake_handle == NEXT_GOAL_WAKE_HANDLE
+    # No model turn was driven by the withdrawal.
+    assert len(provider.received_requests) == requests_after_ask
+
+    types = _types(host, out.task_id)
+    i_interrupt = types.index("TurnInterrupted")
+    assert types[i_interrupt + 1] == "TaskWoken"
+    assert types[i_interrupt + 2] == "UserQuestionWithdrawn"
+    assert types[i_interrupt + 3] == "MessagesAppended"
+    assert "TaskSuspended" in types[i_interrupt + 4:]
+
+    folded = fold(host.event_log, host.content_store, out.task_id)
+    assert folded.governance.pending_questions == {}
+    # No answer audit was recorded for a withdrawal.
+    assert folded.governance.question_answers == []
+    tool_messages = [m for m in folded.runtime.messages if m.role == "tool"]
+    block = tool_messages[-1].content[0]
+    assert isinstance(block, ToolResultBlock)
+    assert block.call_id == "q1"
+    assert block.success is False
+    assert block.output == {"question_id": "q1", "withdrawn": True}
+
+
+def test_interrupt_withdraw_then_send_goal_resumes(tmp_path: Path) -> None:
+    # The full "Esc" flow: ask → Stop (withdraw) → type again drives a valid
+    # turn. The resumed request composes the withdrawal tool_result immediately
+    # followed by the new user goal, and the model finishes normally.
+    ws = _make_ws(tmp_path)
+    host, driver, provider = _session(ws, [_ask(), _end("continued")])
+    out = driver.start(goal="do the work", agent="main")
+    driver.interrupt(out.task_id, interrupted_by="tester")
+
+    resumed = driver.send_goal(out.task_id, goal="never mind, just build it")
+    # This harness is single-turn (multi_turn=False), so a driven turn
+    # terminates — the point here is the transcript composes validly and the
+    # model runs, not the post-turn park.
+    assert resumed.status == "terminal"
+
+    # The resumed model turn saw the withdrawal tool_result closing the ask.
+    resumed_request = provider.received_requests[-1]
+    assert any(
+        msg.role == "tool"
+        and isinstance(msg.content[0], ToolResultBlock)
+        and msg.content[0].call_id == "q1"
+        and msg.content[0].success is False
+        for msg in resumed_request.messages
+    )
+    folded = fold(host.event_log, host.content_store, out.task_id)
+    assert folded.governance.pending_questions == {}
 
 
 def test_answer_accepts_choice_and_freeform_together(tmp_path: Path) -> None:

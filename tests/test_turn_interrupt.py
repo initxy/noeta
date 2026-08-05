@@ -233,6 +233,19 @@ def test_interrupt_on_an_idle_conversation_leaves_it_usable(tmp_path: Path) -> N
     assert any("turn2" in t for t in texts)
 
 
+def test_interrupt_on_next_goal_suspend_does_not_withdraw(tmp_path: Path) -> None:
+    """The question-withdraw branch is inert on a next-goal suspend: no pending
+    question, so interrupt stays the plain idle no-op — no UserQuestionWithdrawn,
+    no TaskWoken churn."""
+    driver, host, event_log, provider, task_id = _started(tmp_path)
+
+    driver.interrupt(task_id, reason="nothing running")
+
+    types = [e.type for e in event_log.read(task_id)]
+    assert "UserQuestionWithdrawn" not in types
+    assert "TurnInterrupted" in types
+
+
 def test_interrupt_refuses_a_terminal_task(tmp_path: Path) -> None:
     driver, _, _, _, task_id = _started(tmp_path)
     driver.cancel(task_id)
