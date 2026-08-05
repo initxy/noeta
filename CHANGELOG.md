@@ -8,6 +8,74 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-08-05
+
+Covers both packages (lockstep). Patch bump: additive API (memory keywords /
+recall judge / write-time stamps, interrupt-withdraw) plus internal breaking
+changes tolerated pre-1.0.
+
+### Added — interrupt withdraws a pending user question (Esc semantics)
+
+- `interrupt` (Stop) now handles a task **suspended on a pending
+  `ask_user_question`**. Previously that suspend had no turn in flight, so
+  `interrupt` only wrote a `TurnInterrupted` marker and the question stayed
+  stuck; the only escapes were `answer` (must supply a valid answer), `cancel`
+  (terminal, not reopenable), or `rewind` (discards the turn's output). Now
+  `interrupt` **withdraws the question**: it writes a new neutral
+  `UserQuestionWithdrawn` audit event, closes the dangling ask tool call with a
+  paired `success=False` tool result (so a later turn's transcript stays
+  well-formed), and parks the conversation idle at the next-goal suspend —
+  **without driving a model turn**. This is the "Esc" landing: the question
+  clears, the prior turn's output stays in history, and the user resumes by
+  typing. `Client.interrupt` is unchanged — the frontend Stop button needs no
+  change. Approval suspends are out of scope (they keep `deny` as their
+  graceful escape).
+- New event `UserQuestionWithdrawn` (`UserQuestionWithdrawnPayload`) with its
+  fold reducer (pops `pending_questions`, records no answer), payload restorer,
+  and audit classification. `AskAnswerCodec` grows a `question_id_from_handle`
+  field so the kernel recognises a question suspend without hardcoding the
+  handle prefix or importing the built-in.
+
+### Added — memory: cross-lingual keywords, date stamps, ledger receipts, write-time dedup
+
+- Frontmatter `keywords` (comma-separated retrieval aliases; `，`/`、`/`;`
+  separators accepted) joins the recall match surface as a tier-2 rule. Each
+  item matches the text as a WHOLE phrase — word-prefix for ASCII items
+  (`deploy` meets "deployment"/"deploys", never mid-word) and substring for
+  CJK — so items neither decompose into noisy bigrams nor miss English
+  inflections, and deliberate short terms (`ci`) floored out of name/summary
+  matching stay reachable. This is the deterministic cross-lingual bridge — a
+  Chinese question now reaches an English-named memory through its Chinese
+  keywords (auto-recall was silently dead across languages: CJK bigrams and
+  English word tokens never intersect). `memory_write` grows a `keywords`
+  parameter; the memory policy and consolidation prompts instruct models and
+  the curator to maintain the aliases. Keywords are matcher-only: never
+  rendered into the index, so keyword maintenance moves no index bytes.
+- `memory_write` always stamps `created` (sticky across rewrites) and
+  `updated` (always today) into the frontmatter, plus a `source_task` ledger
+  receipt when the runtime threads a task id — a doubted memory can be checked
+  against the session that wrote it instead of trusted or discarded.
+- `memory_write` under a NEW name reports similar existing memories
+  (name/summary token overlap, advisory — the write still lands), so the model
+  can merge while the context that caused the write is live. Param frontmatter
+  now merges per-field with any fence the text carries instead of replacing it
+  (the old rule silently destroyed unrecognized fields on every rewrite).
+- The consolidation prompt gains explicit duties: resolve contradictions
+  BETWEEN memories (keep the newer fact, archive the older, note the
+  supersession) and maintain cross-lingual keywords.
+- **Recall judge** (`Options.recall_model`, off by default): when set, a
+  lexical auto-recall miss at turn intake is retried through one small-model
+  call — the model reads the incoming message plus the memory index (aliases
+  included) and picks the memories worth surfacing; picks ride in as tier-2
+  pointers and are recorded like any recall, so replay never re-judges. A
+  lexical hit never spends the call; any judge failure degrades to a plain
+  miss. Same knob pattern as `compaction_model` — hosts typically point both
+  at the same cheap model.
+- **Breaking (SDK internal shape):** `MemoryStore.entries()` /
+  `MemoryEntries` are now `(name, summary, type, keywords)` quadruples (was
+  triples). Match primitives moved to
+  `noeta.builtins.memory.impl.matching` (re-exported from `impl.index`).
+
 ## [0.6.1] - 2026-08-04
 
 Covers both packages (lockstep). Patch bump: bug fixes plus additive API
@@ -1496,7 +1564,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.5.5...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/initxy/noeta/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/initxy/noeta/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/initxy/noeta/compare/v0.5.5...v0.6.0
 [0.5.5]: https://github.com/initxy/noeta/compare/v0.5.4...v0.5.5
