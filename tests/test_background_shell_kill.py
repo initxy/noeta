@@ -201,9 +201,6 @@ def test_terminate_skips_signal_when_process_already_reaped(
         def send_signal(self, sig: int) -> None:  # pragma: no cover
             raise AssertionError("send_signal called on a reaped process")
 
-    class _FakeHandle:
-        popen = _FakePopen()
-
     called = {"killpg": False, "getpgid": False}
     monkeypatch.setattr(
         os, "killpg", lambda *a: called.__setitem__("killpg", True)
@@ -212,7 +209,7 @@ def test_terminate_skips_signal_when_process_already_reaped(
         os, "getpgid", lambda *a: (called.__setitem__("getpgid", True), 1)[1]
     )
 
-    reg._terminate(_FakeHandle(), 15)  # SIGTERM
+    reg._terminate(_FakePopen(), 15)  # SIGTERM
 
     assert called == {"killpg": False, "getpgid": False}
 
