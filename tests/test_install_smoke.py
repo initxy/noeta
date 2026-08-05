@@ -8,7 +8,7 @@ The distribution boundary has to hold on the shipped artifacts, in two closures:
   only) runs a turn to its terminal event.
 * **sdk closure** — both wheels together carry the public surface AND the
   capability impls: ``noeta.builtins`` ships in the sdk wheel and the parts
-  doorway resolves the default 11-tool set from it.
+  doorway resolves the default 10-tool set from it.
 
 The wheels — not an editable install — are the artifact under
 test: the packaged metadata + module tree must be enough on their own
@@ -121,7 +121,7 @@ def test_wheel_install_imports_public_surface(tmp_path: Path) -> None:
     imports fully offline and the capability impls are present.
 
     ``noeta.builtins`` (manifests + impls) ships in the noeta-sdk wheel, and the
-    parts doorway resolves the default 11-tool set from it. The wheels must also
+    parts doorway resolves the default 10-tool set from it. The wheels must also
     install no ``noeta`` console script — the libraries ship no entry point at
     all.
     """
@@ -164,7 +164,7 @@ def test_wheel_install_imports_public_surface(tmp_path: Path) -> None:
     )
 
     # 3. Import the public surface in the fresh venv, fully offline — and
-    # prove the impls arrived: the loader-resolved default set is the 11 fs/web
+    # prove the impls arrived: the loader-resolved default set is the 10 fs/web
     # tools, reachable only if the sdk wheel carries ``noeta.builtins`` and its
     # impl modules.
     smoke = subprocess.run(
@@ -185,7 +185,7 @@ def test_wheel_install_imports_public_surface(tmp_path: Path) -> None:
                 "load_plugins, PluginBuilder; "
                 "from noeta.client.parts import builtin_tool_classes; "
                 "n = len(builtin_tool_classes()); "
-                "assert n == 11, f'expected the 11 default tools, got {n}'; "
+                "assert n == 10, f'expected the 10 default tools, got {n}'; "
                 # ...and touching one lazy attribute exercises the doorway:
                 # the class arrives from the sdk wheel's storage built-in.
                 "cls = noeta.sdk.storage.SqliteEventLog; "
