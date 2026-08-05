@@ -8,6 +8,80 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-08-05
+
+Covers both packages (lockstep). Patch bump: additive API
+(`StepContext.cancelled`, `AbortedError`, `StreamingProvider.should_abort`,
+`interrupt(force=...)`) plus interrupt-latency bug fixes.
+
+### Changed — interrupt lands in milliseconds, not after the round returns
+
+- Pressing Stop no longer waits out the in-flight work. Interrupt still lands
+  at the turn boundary, but the boundary is now reached promptly, because the
+  cooperative-cancel mark reaches into the blocking waits themselves:
+  - **The LLM round-trip is an abandonable wait.** With a cancel seam wired,
+    `RuntimeLLMClient` runs the provider call on an I/O thread the step thread
+    can stop waiting for — safe because `LLMProvider` is contractually pure —
+    so a stop lands in milliseconds in any phase, including pre-first-byte
+    silence. The abandoned round records the normal Started/Recorded/Finished
+    trio with a new `category="aborted"` error response; streaming deltas are
+    muted the moment the wait is abandoned.
+  - **The transient-retry loop is cancel-aware.** Previously an interrupt
+    during a rate-limit backoff sat through up to 8 further provider calls and
+    ~2 minutes of sleep; now each attempt re-checks the mark and the backoff
+    is sliced around it.
+  - **Streaming adapters abort mid-stream.** `complete_streaming` grows an
+    optional `should_abort` predicate (folded into the signature like
+    `request_headers`); the three builtin adapters poll it per SSE event and
+    close the connection, so an abandoned call stops burning tokens within a
+    chunk interval. The runtime probes the adapter signature, so third-party
+    adapters on the old signature keep working unchanged.
+  - **Tool batches poll between calls.** A stop landing during call N of a
+    parallel batch closes calls N+1… with paired `success=False` interrupted
+    results (history stays balanced for the resumed request) and unwinds.
+  - **Foreground shell commands are reaped.** Interrupt / cancel / close now
+    kill a running foreground shell's process group exactly like background
+    jobs (SIGTERM → grace → SIGKILL); the tool returns a failed
+    "interrupted" result instead of blocking to its timeout.
+  - The compaction summarize call inherits cancellability; the memory recall
+    judge's provider call gets a bounded (default 10 s), abort-aware wait so a
+    wedged judge can never stall turn intake.
+- Recordings are untouched: resume/replay paths carry no cancel seam and stay
+  byte-identical.
+
+### Added — `interrupt(force=True)`: the double-Esc hard stop
+
+- For a step wedged past every cooperative seam (a tool ignoring its
+  timeout): force-clears the wedged step's lease (`dispatcher.enqueue`'s
+  documented force-clear — the abandoned thread is lease-fenced, its late
+  writes rejected), seals the dirty attempt via step-attempt recovery, and
+  settles the task at the interrupted next-goal suspend. The conversation
+  resumes by typing. `Client.interrupt` passes `force` through; map double-Esc
+  to it in interactive frontends.
+- `_force_terminal_on_lost_lease` now leaves a **suspended** task alone (a
+  durable suspend is a resumable landing); only a genuinely stranded
+  `running` fold is converged to terminal.
+
+### Fixed — interrupts that were silently dropped
+
+- **Yield-window drop:** an interrupt landing in the `release_yield` hand-off
+  window (worker-pool path, between seeding a turn and a resident worker
+  claiming it) armed nothing — Esc was a silent no-op and the worker drove
+  the whole turn. The turn-in-flight gate now also recognises the folded
+  `running` status.
+- **Delegation drop:** an interrupt during a foreground delegation neither
+  armed the mark (the root rests suspended on its member wake with no lease)
+  nor settled the root — it was left stranded on a wake that could never
+  fire, with a dangling spawn tool call and a stale cancel mark that
+  pre-aborted the next turn. Both fixed: the gate treats a
+  delegation-suspended root as in flight, and an interrupted drain now
+  cascade-cancels the children, closes dangling spawn calls with failed
+  interrupted results, parks the root at the interrupted next-goal suspend,
+  and drops the mark.
+
+See the new ADR `docs/adr/interrupt-responsiveness.md` for the design
+(abandonment-over-cancellation, force-as-enqueue) and rejected alternatives.
+
 ## [0.6.2] - 2026-08-05
 
 Covers both packages (lockstep). Patch bump: additive API (memory keywords /
@@ -1564,7 +1638,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/initxy/noeta/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/initxy/noeta/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/initxy/noeta/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/initxy/noeta/compare/v0.5.5...v0.6.0
