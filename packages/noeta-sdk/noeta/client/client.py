@@ -609,6 +609,7 @@ class Client:
             thinking=options.thinking,
             effort=options.effort,
             compaction_model=options.compaction_model,
+            recall_model=options.recall_model,
             # Extension points.
             # policy: the custom Options.policy IS the ``(llm) -> Policy``
             # factory (it also carries the .ref compile_options put in the

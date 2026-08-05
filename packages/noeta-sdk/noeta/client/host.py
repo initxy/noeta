@@ -544,6 +544,11 @@ class SdkHost(GenericEngineResolver):
     # Wiring-only summarizer model override (Options.compaction_model): when set,
     # the ReActPolicy routes ONLY the compaction summarize call to this model.
     compaction_model: Optional[str] = None
+    # Wiring-only recall-judge model (Options.recall_model): when set, a lexical
+    # auto-recall miss at turn intake is retried through this model, which reads
+    # the message + memory index and picks the relevant memories. None = judge
+    # off, recall stays purely lexical.
+    recall_model: Optional[str] = None
     # Positive int or None; engine-level inline char cap for tool output. None = no
     # truncation. A resumed session must reuse the value the original run used, or
     # it re-derives different tool-output bytes.
@@ -1924,7 +1929,18 @@ class SdkHost(GenericEngineResolver):
         if agent != CONSOLIDATION_AGENT_NAME and agent_activates(spec, "memory"):
             impl = memory_impl()
             store = impl.load_memory_store(root=self.memory_root(task_id))
-            providers.append(impl.memory_reminder_provider(store))
+            # The recall judge (Options.recall_model): a lexical miss is
+            # retried through one small-model call over [message + index].
+            # Bound to the DEFAULT provider — the judge predates any model
+            # binding for the turn, and alias resolution happens here for the
+            # same layering reason the compaction model resolves here.
+            judge = None
+            llm = self.providers.get(self.default_provider)
+            if self.recall_model and llm is not None:
+                judge = impl.build_recall_judge(
+                    llm, resolve_model_alias(self.recall_model)
+                )
+            providers.append(impl.memory_reminder_provider(store, judge=judge))
         providers.extend(self.reminder_providers.get(agent, {}).get(TURN_INTAKE, ()))
         return tuple(providers)
 

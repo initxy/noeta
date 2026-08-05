@@ -23,6 +23,7 @@ from noeta.builtins.memory.impl.index import (
     format_recall_text,
     match_memories_tiered,
 )
+from noeta.builtins.memory.impl.judge import RecallJudge
 from noeta.execution.reminders import (
     RecallView,
     Reminder,
@@ -67,7 +68,7 @@ def recall_memories(store: MemoryStore, text: str) -> tuple[RecallHit, ...]:
     high-confidence early hits keep their bodies and the tail degrades.
     """
     entries = store.entries()
-    summaries = {name: summary for name, summary, _type in entries}
+    summaries = {name: summary for name, summary, _type, _kw in entries}
     hits: list[RecallHit] = []
     spent = 0
     for name, by_name in match_memories_tiered(entries, text):
@@ -87,7 +88,9 @@ def recall_memories(store: MemoryStore, text: str) -> tuple[RecallHit, ...]:
     return tuple(hits)
 
 
-def memory_reminder_provider(store: MemoryStore) -> ReminderProvider:
+def memory_reminder_provider(
+    store: MemoryStore, judge: Optional[RecallJudge] = None
+) -> ReminderProvider:
     """The built-in memory auto-recall as a track-A ``reminder_provider``.
 
     A provider on the ``turn_intake``
@@ -98,9 +101,26 @@ def memory_reminder_provider(store: MemoryStore) -> ReminderProvider:
     miss). Bound to a live ``store`` at wiring time, exactly like the memory
     tools — the ``memory`` built-in plugin *declares* this provider (the listing
     surface), while the store binding stays host wiring.
+
+    ``judge`` (host-wired from ``Options.recall_model``) is the semantic
+    fallback: consulted ONLY when the lexical pass returns nothing — a
+    lexical hit never spends the call — and its picks ride as tier-2
+    pointers, because a judge is a guess and a guess is worth a pointer,
+    not a body. A judged name whose file has meanwhile vanished degrades
+    to a bare-name pointer, same as any tier-2 hit with no summary.
     """
     def provider(view: RecallView) -> tuple[Reminder, ...]:
         hits = recall_memories(store, view.text)
+        if not hits and judge is not None:
+            entries = store.entries()
+            if entries:
+                summaries = {
+                    name: summary for name, summary, _t, _k in entries
+                }
+                hits = tuple(
+                    RecallHit(name=name, text=summaries.get(name, ""), full=False)
+                    for name in judge(entries, view.text)
+                )
         if not hits:
             return ()
         return (Reminder(text=format_recall_text(hits), origin="memory"),)
