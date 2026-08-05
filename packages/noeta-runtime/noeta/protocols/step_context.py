@@ -42,6 +42,13 @@ class StepContext:
     loop makes. The Engine injects a callback bound to the task it is stepping
     and remains the sole physical writer; the client only notifies. ``None``
     means emit-only, for callers that build a StepContext without one.
+
+    ``cancelled`` is the Engine's cooperative-cancel predicate, handed down so
+    a blocking callee — the LLM round-trip and its retry backoff — can notice
+    a human stop *while* it waits instead of only at the Engine's own turn
+    boundaries. It is the same predicate ``run_one_step`` polls; ``None``
+    (resume, replay, hosts that wire no cancel seam) disarms every downstream
+    abort site, which is what keeps recordings byte-identical on those paths.
     """
 
     task_id: str
@@ -49,3 +56,4 @@ class StepContext:
     trace_id: str
     last_input_tokens: int = 0
     apply_event: Optional[Callable[["EventEnvelope"], None]] = None
+    cancelled: Optional[Callable[[], bool]] = None
