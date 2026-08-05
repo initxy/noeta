@@ -28,6 +28,10 @@ from noeta.builtins.memory.impl.index import (
     memory_content_kind,
     render_memory_index_text,
 )
+from noeta.builtins.memory.impl.judge import (
+    RecallJudge,
+    build_recall_judge,
+)
 from noeta.builtins.memory.impl.recall import (
     append_user_message_with_recall,
     memory_reminder_provider,
@@ -63,7 +67,9 @@ __all__ = [
     "MemorySearchTool",
     "MemoryStore",
     "MemoryWriteTool",
+    "RecallJudge",
     "append_user_message_with_recall",
+    "build_recall_judge",
     "memory_content_kind",
     "build_memory_pack",
     "build_memory_session_pack",

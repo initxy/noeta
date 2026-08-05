@@ -12,6 +12,7 @@ What NOT to save:
   - Secrets: credentials, tokens, keys — never, in any form.
 
 Hygiene:
-  - Before writing, check the memory index (use `memory_search` when unsure) for an existing memory on the topic — `memory_write` with the same name overwrites, so update that memory instead of creating a near-duplicate.
+  - Before writing, check the memory index (use `memory_search` when unsure) for an existing memory on the topic — `memory_write` with the same name overwrites, so update that memory instead of creating a near-duplicate. If `memory_write` reports similar existing memories, read them and merge rather than keeping the duplicate.
   - Keep memory names as stable kebab-case slugs, and set a one-line `description` plus a `type` so the index stays scannable.
+  - Set `keywords` with retrieval aliases in every language the user works in (e.g. both English and Chinese terms): auto-recall matches literal tokens, so a memory keyed in one language is invisible to questions asked in another.
   - When a memory is outdated or superseded, `memory_archive` it rather than leaving it stale.

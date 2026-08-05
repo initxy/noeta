@@ -19,18 +19,26 @@ channel, the runtime is untouched.
 
 Memory files may open with an optional frontmatter fence (``---`` lines
 around ``key: value`` pairs — parsed by a minimal in-module parser, NO
-yaml dependency). ``description`` overrides the first-line index summary
-and ``type`` tags the entry; a file without (or with a malformed) fence
-keeps the v1 first-line behavior byte-for-byte.
+yaml dependency). ``description`` overrides the first-line index summary,
+``type`` tags the entry, and ``keywords`` carries comma-separated retrieval
+aliases (matcher-only — the cross-lingual recall surface); a file without
+(or with a malformed) fence keeps the v1 first-line behavior byte-for-byte.
+``memory_write`` additionally stamps ``created`` / ``updated`` dates and a
+``source_task`` ledger receipt, so every tool-written memory records when
+it was true and which task's history backs it.
 
 Layering note: this module deliberately knows nothing about the content
-channel — the store hands over plain ``(name, summary, type)`` tuples; the
-pure index pieces live beside it in ``noeta.builtins.memory.impl.index``
-and the recall glue in ``noeta.builtins.memory.impl.recall``.
+channel — the store hands over plain ``(name, summary, type, keywords)``
+tuples; the pure index pieces live beside it in
+``noeta.builtins.memory.impl.index`` and the recall glue in
+``noeta.builtins.memory.impl.recall``. The one sibling it imports is
+``matching`` (pure token primitives, no channel deps) so the write tool's
+near-duplicate check speaks the exact recall vocabulary.
 """
 
 from __future__ import annotations
 
+import datetime
 import os
 import re
 import tempfile
@@ -38,6 +46,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from noeta.builtins.memory.impl.matching import (
+    SUMMARY_MIN_OVERLAP,
+    match_tokens,
+)
 from noeta.protocols.resources import load_markdown
 from noeta.protocols.tool import Tool, ToolContext, ToolResult
 from noeta.tools.limits import INLINE_CONTENT_MAX_BYTES, truncate_bytes
@@ -81,6 +93,22 @@ _SUMMARY_MAX_CHARS = 200
 
 #: The frontmatter fence line.
 _FENCE = "---"
+
+#: Tool-composed fence keys, in the order they are written. Unknown keys a
+#: memory already carries are preserved after these, sorted — the write tool
+#: merges per-field and never drops data it does not recognize.
+_FENCE_KEY_ORDER = (
+    "description",
+    "type",
+    "keywords",
+    "created",
+    "updated",
+    "source_task",
+)
+
+#: Near-duplicate note cap — the write result names at most this many
+#: similar existing memories.
+_SIMILAR_MAX = 3
 
 #: Archived memories live in this subdirectory of the store root; the
 #: non-recursive ``*.md`` globs of ``entries()`` / ``search()`` never
@@ -137,12 +165,14 @@ def _first_line_summary(text: str) -> str:
     return ""
 
 
-def _entry_summary_and_type(text: str) -> tuple[str, str]:
-    """The index fields of one memory file: ``(summary, type)``.
+def _entry_fields(text: str) -> tuple[str, str, str]:
+    """The entry fields of one memory file: ``(summary, type, keywords)``.
 
     Frontmatter ``description`` wins the summary; otherwise the first
     non-empty BODY line (the fence never leaks into the fallback). An
-    unrecognized ``type`` value is treated as absent (``""``)."""
+    unrecognized ``type`` value is treated as absent (``""``). ``keywords``
+    is passed through raw — it feeds the matcher, never the rendered
+    index."""
     fields, body = _split_frontmatter(text)
     mem_type = fields.get("type", "")
     if mem_type not in MEMORY_TYPES:
@@ -153,7 +183,26 @@ def _entry_summary_and_type(text: str) -> tuple[str, str]:
         if description
         else _first_line_summary(body)
     )
-    return summary, mem_type
+    return summary, mem_type, fields.get("keywords", "")
+
+
+def _compose_frontmatter(fields: dict[str, str]) -> str:
+    """Render a fence block: known keys in fixed order, the rest sorted.
+
+    Deterministic on purpose — the same fields always produce the same
+    bytes, so a rewrite that changes nothing moves nothing. Empty values
+    are omitted rather than written as blank lines."""
+    keys = [k for k in _FENCE_KEY_ORDER if fields.get(k)]
+    keys += sorted(
+        k for k in fields if k not in _FENCE_KEY_ORDER and fields[k]
+    )
+    lines = [_FENCE, *(f"{k}: {fields[k]}" for k in keys), _FENCE]
+    return "\n".join(lines) + "\n"
+
+
+def _today() -> str:
+    """Today as ``YYYY-MM-DD`` — module-level so tests can pin it."""
+    return datetime.date.today().isoformat()
 
 
 @dataclass(frozen=True)
@@ -162,10 +211,11 @@ class MemoryStore:
 
     A missing root is a valid empty store (a workspace without memories
     configures nothing and pays nothing). ``write`` creates the root on
-    first use; ``entries()`` lists ``(name, summary, type)`` triples
-    sorted by name — the deterministic index shape the content channel
-    renders. ``search()`` grep-scans the same top-level files;
-    ``archive()`` retires one into ``archive/`` (never deletes).
+    first use; ``entries()`` lists ``(name, summary, type, keywords)``
+    quadruples sorted by name — the deterministic shape the content
+    channel renders (keywords excluded) and the recall matcher consumes.
+    ``search()`` grep-scans the same top-level files; ``archive()``
+    retires one into ``archive/`` (never deletes).
     """
 
     root: Path
@@ -219,11 +269,11 @@ class MemoryStore:
         except (OSError, UnicodeDecodeError):
             return None
 
-    def entries(self) -> tuple[tuple[str, str, str], ...]:
-        out: list[tuple[str, str, str]] = []
+    def entries(self) -> tuple[tuple[str, str, str, str], ...]:
+        out: list[tuple[str, str, str, str]] = []
         for name, text in self._iter_memories():
-            summary, mem_type = _entry_summary_and_type(text)
-            out.append((name, summary, mem_type))
+            summary, mem_type, keywords = _entry_fields(text)
+            out.append((name, summary, mem_type, keywords))
         return tuple(out)
 
     def search(self, query: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
@@ -309,6 +359,11 @@ class MemoryWriteTool:
     ``risk_level="medium"``: it mutates durable cross-session state, but
     only inside the slug-confined memory directory (never the workspace),
     so it does not rank with arbitrary fs writes.
+
+    Every write stamps ``created`` / ``updated`` dates and (when the
+    runtime threads one) a ``source_task`` ledger receipt into the
+    frontmatter, and a write under a NEW name reports existing memories
+    it looks like — see ``invoke`` for why each lives on the write path.
     """
 
     store: MemoryStore
@@ -350,6 +405,15 @@ class MemoryWriteTool:
                         "Optional memory category shown in the index."
                     ),
                 },
+                "keywords": {
+                    "type": "string",
+                    "description": (
+                        "Optional comma-separated retrieval aliases — "
+                        "synonyms and cross-language equivalents (e.g. "
+                        "both English and Chinese terms) that should "
+                        "auto-recall this memory."
+                    ),
+                },
             },
             "required": ["name", "text"],
             "additionalProperties": False,
@@ -365,6 +429,7 @@ class MemoryWriteTool:
             return _err(self.name, "requires non-empty string 'text'")
         description = arguments.get("description")
         mem_type = arguments.get("type")
+        keywords = arguments.get("keywords")
         if description is not None:
             # One line means one ``splitlines`` line — the same rule the
             # frontmatter parser applies on read-back.
@@ -380,29 +445,85 @@ class MemoryWriteTool:
                 f"invalid 'type' {mem_type!r} (one of: "
                 f"{', '.join(MEMORY_TYPES)})",
             )
-        if description or mem_type:
-            # The params win: the tool composes the frontmatter block,
-            # replacing any fence the text itself carries. Without params
-            # a text-carried fence is accepted as-is.
-            _, body = _split_frontmatter(text)
-            fence = [_FENCE]
-            if description:
-                fence.append(
-                    f"description: {description[:_SUMMARY_MAX_CHARS]}"
-                )
-            if mem_type:
-                fence.append(f"type: {mem_type}")
-            fence.append(_FENCE)
-            text = "\n".join(fence) + "\n" + body
+        if keywords is not None and (
+            not isinstance(keywords, str)
+            or len(keywords.splitlines()) > 1
+        ):
+            return _err(self.name, "'keywords' must be a one-line string")
+
+        # Per-field merge: the text's own fence is the base, params
+        # overlay the fields they name, and everything else the fence
+        # carried is preserved — the old replace-the-whole-fence rule
+        # silently destroyed curator-maintained fields (keywords, dates)
+        # on every parametered rewrite.
+        fields, body = _split_frontmatter(text)
+        if description:
+            fields["description"] = description[:_SUMMARY_MAX_CHARS]
+        if mem_type:
+            fields["type"] = mem_type
+        if keywords:
+            fields["keywords"] = keywords
+
+        # Timestamps are the tool's, not the model's: ``created`` sticks
+        # to the value the memory already holds (on disk first — the text
+        # a model resends often predates the file), ``updated`` always
+        # moves. Staleness judgement needs dates no one remembered to ask
+        # for, so the tool stamps them unconditionally.
+        prior = self.store.read(name)  # type: ignore[arg-type]
+        prior_fields = (
+            _split_frontmatter(prior)[0] if prior is not None else {}
+        )
+        today = _today()
+        fields["created"] = (
+            prior_fields.get("created") or fields.get("created") or today
+        )
+        fields["updated"] = today
+
+        # The ledger receipt: which task's history backs this note. Turns
+        # a memory from an unverifiable assertion into a pointer INTO the
+        # ledger — a doubted memory can be checked against its source
+        # session instead of trusted or discarded.
+        task_id = ctx.metadata.get("task_id")
+        if isinstance(task_id, str) and task_id:
+            fields["source_task"] = task_id
+
+        # Near-duplicate probe, NEW names only (rewriting a memory is the
+        # cure, not the disease). Symmetric with recall: would this new
+        # entry's name-or-summary line recall an existing one? Advisory —
+        # the write always proceeds; the note rides the result so the
+        # model can merge while the context that caused the write is
+        # still live, which a background pass never sees.
+        similar: list[str] = []
+        if prior is None:
+            probe = match_tokens(
+                f"{name} {fields.get('description') or _first_line_summary(body)}"
+            )
+            for other_name, other_summary, _t, _kw in self.store.entries():
+                if match_tokens(other_name) & probe or len(
+                    match_tokens(other_summary) & probe
+                ) >= SUMMARY_MIN_OVERLAP:
+                    similar.append(other_name)
+
+        text = _compose_frontmatter(fields) + body
         try:
             self.store.write(name, text)  # type: ignore[arg-type]
         except (OSError, ValueError) as exc:
             return _err(self.name, f"write failed: {exc}")
-        return ToolResult(
-            success=True,
-            output={"name": name, "bytes": len(text.encode("utf-8"))},
-            summary=f"{self.name}: stored {name!r}",
-        )
+        output: dict[str, Any] = {
+            "name": name,
+            "bytes": len(text.encode("utf-8")),
+        }
+        summary = f"{self.name}: stored {name!r}"
+        if similar:
+            shown = similar[:_SIMILAR_MAX]
+            output["similar"] = shown
+            summary += (
+                f" — similar existing memor"
+                f"{'y' if len(shown) == 1 else 'ies'}: "
+                f"{', '.join(shown)}; consider updating instead of "
+                f"duplicating"
+            )
+        return ToolResult(success=True, output=output, summary=summary)
 
 
 @dataclass

@@ -125,8 +125,8 @@ def test_store_entries_sorted_with_first_line_summary(tmp_path: Path) -> None:
     store.write("zeta", "# Zeta heading\nbody")
     store.write("alpha", "\n\nplain first line\nmore")
     assert store.entries() == (
-        ("alpha", "plain first line", ""),
-        ("zeta", "Zeta heading", ""),
+        ("alpha", "plain first line", "", ""),
+        ("zeta", "Zeta heading", "", ""),
     )
 
 
@@ -139,7 +139,7 @@ def test_store_entries_ignore_foreign_files(tmp_path: Path) -> None:
     store = _store(tmp_path)
     store.write("real", "memory body")
     store.root.joinpath("not-a-memory.txt").write_text("x", encoding="utf-8")
-    assert [name for name, _, _ in store.entries()] == ["real"]
+    assert [name for name, _, _, _ in store.entries()] == ["real"]
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +155,7 @@ def test_entries_frontmatter_description_and_type_win(tmp_path: Path) -> None:
         "# Deploy\nsteps...",
     )
     assert store.entries() == (
-        ("deploy", "How we deploy safely", "procedural"),
+        ("deploy", "How we deploy safely", "procedural", ""),
     )
 
 
@@ -164,7 +164,7 @@ def test_entries_frontmatter_fallback_skips_fence_block(tmp_path: Path) -> None:
     # line — never a line inside the fence.
     store = _store(tmp_path)
     store.write("note", "---\ntype: reference\n---\n\n# Real heading\nbody")
-    assert store.entries() == (("note", "Real heading", "reference"),)
+    assert store.entries() == (("note", "Real heading", "reference", ""),)
 
 
 def test_entries_frontmatter_invalid_type_treated_absent(tmp_path: Path) -> None:
@@ -172,7 +172,7 @@ def test_entries_frontmatter_invalid_type_treated_absent(tmp_path: Path) -> None
     store.write(
         "note", "---\ndescription: A note\ntype: banana\n---\nbody"
     )
-    assert store.entries() == (("note", "A note", ""),)
+    assert store.entries() == (("note", "A note", "", ""),)
 
 
 def test_entries_frontmatter_unknown_keys_ignored(tmp_path: Path) -> None:
@@ -181,7 +181,7 @@ def test_entries_frontmatter_unknown_keys_ignored(tmp_path: Path) -> None:
         "note",
         "---\nauthor: someone\ndescription: Known key wins\n---\nbody",
     )
-    assert store.entries() == (("note", "Known key wins", ""),)
+    assert store.entries() == (("note", "Known key wins", "", ""),)
 
 
 def test_entries_malformed_fence_is_plain_body(tmp_path: Path) -> None:
@@ -192,8 +192,8 @@ def test_entries_malformed_fence_is_plain_body(tmp_path: Path) -> None:
     # Non-``key: value`` line inside the fence: same degradation.
     store.write("badline", "---\nnot a key value line\n---\nbody")
     assert store.entries() == (
-        ("badline", "---", ""),
-        ("unclosed", "---", ""),
+        ("badline", "---", "", ""),
+        ("unclosed", "---", "", ""),
     )
 
 
@@ -206,7 +206,20 @@ def _ctx() -> ToolContext:
     return ToolContext(artifact_store=InMemoryContentStore())
 
 
-def test_write_tool_persists_memory_file(tmp_path: Path) -> None:
+def _pin_today(monkeypatch, value: str = "2026-08-05") -> None:
+    """Pin the write tool's date stamp — the tests own the calendar."""
+    from noeta.builtins.memory.impl import store as store_mod
+
+    monkeypatch.setattr(store_mod, "_today", lambda: value)
+
+
+def test_write_tool_persists_memory_file_with_date_stamps(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The tool always stamps ``created`` / ``updated`` — staleness
+    # judgement needs dates no model remembers to ask for. The body
+    # itself lands byte-exact after the fence.
+    _pin_today(monkeypatch)
     store = _store(tmp_path)
     tool = MemoryWriteTool(store=store)
     assert tool.name == MEMORY_WRITE_TOOL_NAME
@@ -215,8 +228,27 @@ def test_write_tool_persists_memory_file(tmp_path: Path) -> None:
     )
     assert result.success
     assert (store.root / "deploy.md").read_text(encoding="utf-8") == (
+        "---\ncreated: 2026-08-05\nupdated: 2026-08-05\n---\n"
         "use make deploy"
     )
+    # The fence never leaks into the index summary: first BODY line wins.
+    assert store.entries() == (("deploy", "use make deploy", "", ""),)
+
+
+def test_write_tool_created_sticks_updated_moves(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = _store(tmp_path)
+    tool = MemoryWriteTool(store=store)
+    _pin_today(monkeypatch, "2026-08-01")
+    assert tool.invoke({"name": "note", "text": "v1"}, _ctx()).success
+    _pin_today(monkeypatch, "2026-08-05")
+    assert tool.invoke({"name": "note", "text": "v2"}, _ctx()).success
+    text = store.read("note")
+    assert text is not None
+    assert "created: 2026-08-01" in text  # birth date survives the rewrite
+    assert "updated: 2026-08-05" in text
+    assert text.endswith("---\nv2")
 
 
 def test_write_tool_rejects_missing_or_invalid_arguments(
@@ -229,7 +261,10 @@ def test_write_tool_rejects_missing_or_invalid_arguments(
     assert not tool.invoke({"name": "n", "text": 7}, _ctx()).success
 
 
-def test_write_tool_params_compose_frontmatter(tmp_path: Path) -> None:
+def test_write_tool_params_compose_frontmatter(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _pin_today(monkeypatch)
     store = _store(tmp_path)
     tool = MemoryWriteTool(store=store)
     result = tool.invoke(
@@ -238,46 +273,136 @@ def test_write_tool_params_compose_frontmatter(tmp_path: Path) -> None:
             "text": "# Deploy\nsteps",
             "description": "How we deploy",
             "type": "procedural",
+            "keywords": "deploy, release, 部署, 发版",
         },
         _ctx(),
     )
     assert result.success
     assert store.read("deploy") == (
-        "---\ndescription: How we deploy\ntype: procedural\n---\n"
+        "---\ndescription: How we deploy\ntype: procedural\n"
+        "keywords: deploy, release, 部署, 发版\n"
+        "created: 2026-08-05\nupdated: 2026-08-05\n---\n"
         "# Deploy\nsteps"
     )
-    assert store.entries() == (("deploy", "How we deploy", "procedural"),)
+    assert store.entries() == (
+        ("deploy", "How we deploy", "procedural", "deploy, release, 部署, 发版"),
+    )
 
 
-def test_write_tool_params_win_over_text_fence(tmp_path: Path) -> None:
-    # The text carries its own fence, but params are given: the tool
-    # strips the text's block and composes a fresh one from the params.
+def test_write_tool_merges_params_over_text_fence_per_field(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Per-field merge: a param overrides the field it names; every other
+    # field the text's fence carries survives — including keys the tool
+    # does not recognize. The old replace-the-whole-fence rule silently
+    # destroyed curator-maintained fields on every parametered rewrite.
+    _pin_today(monkeypatch)
     store = _store(tmp_path)
     tool = MemoryWriteTool(store=store)
     result = tool.invoke(
         {
             "name": "note",
-            "text": "---\ndescription: stale\ntype: user\n---\nbody line",
+            "text": (
+                "---\ndescription: stale\ntype: user\n"
+                "keywords: 记忆, recall\nowner: xiyang\n---\nbody line"
+            ),
             "description": "fresh",
         },
         _ctx(),
     )
     assert result.success
-    assert store.read("note") == "---\ndescription: fresh\n---\nbody line"
-    assert store.entries() == (("note", "fresh", ""),)
+    assert store.read("note") == (
+        "---\ndescription: fresh\ntype: user\nkeywords: 记忆, recall\n"
+        "created: 2026-08-05\nupdated: 2026-08-05\nowner: xiyang\n---\n"
+        "body line"
+    )
+    assert store.entries() == (("note", "fresh", "user", "记忆, recall"),)
 
 
-def test_write_tool_no_params_keeps_text_fence_as_is(tmp_path: Path) -> None:
+def test_write_tool_no_params_keeps_text_fence_fields(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _pin_today(monkeypatch)
     store = _store(tmp_path)
     text = "---\ndescription: self-made\n---\nbody"
     assert MemoryWriteTool(store=store).invoke(
         {"name": "note", "text": text}, _ctx()
     ).success
-    assert store.read("note") == text
-    assert store.entries() == (("note", "self-made", ""),)
+    assert store.read("note") == (
+        "---\ndescription: self-made\n"
+        "created: 2026-08-05\nupdated: 2026-08-05\n---\nbody"
+    )
+    assert store.entries() == (("note", "self-made", "", ""),)
 
 
-def test_write_tool_rejects_invalid_type_and_description(
+def test_write_tool_stamps_source_task_from_runtime_metadata(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The ledger receipt: when the ToolRuntime threads a task_id through
+    # the metadata bag, the memory records which task's history backs it.
+    _pin_today(monkeypatch)
+    store = _store(tmp_path)
+    ctx = ToolContext(
+        artifact_store=InMemoryContentStore(),
+        metadata={"task_id": "task-123", "trace_id": "t"},
+    )
+    assert MemoryWriteTool(store=store).invoke(
+        {"name": "note", "text": "body"}, ctx
+    ).success
+    text = store.read("note")
+    assert text is not None
+    assert "source_task: task-123" in text
+    # A hand-built context without task identity stamps nothing.
+    assert MemoryWriteTool(store=store).invoke(
+        {"name": "bare", "text": "body"}, _ctx()
+    ).success
+    assert "source_task" not in (store.read("bare") or "?")
+
+
+def test_write_tool_new_name_reports_similar_existing(
+    tmp_path: Path,
+) -> None:
+    # The near-duplicate probe fires at write time — while the context
+    # that caused the write is still live — and is advisory: the write
+    # itself always lands.
+    store = _store(tmp_path)
+    tool = MemoryWriteTool(store=store)
+    assert tool.invoke(
+        {"name": "deploy-process", "text": "How we deploy"}, _ctx()
+    ).success
+    result = tool.invoke(
+        {"name": "deploy-pipeline", "text": "Pipeline notes"}, _ctx()
+    )
+    assert result.success
+    assert result.output["similar"] == ["deploy-process"]
+    assert "consider updating instead" in result.summary
+    assert store.read("deploy-pipeline") is not None  # advisory, not a veto
+
+
+def test_write_tool_update_never_reports_itself_similar(
+    tmp_path: Path,
+) -> None:
+    # Rewriting an existing memory is the cure, not the disease: an
+    # update carries no similarity note, and an unrelated new memory
+    # stays quiet too.
+    store = _store(tmp_path)
+    tool = MemoryWriteTool(store=store)
+    assert tool.invoke(
+        {"name": "deploy-process", "text": "How we deploy"}, _ctx()
+    ).success
+    updated = tool.invoke(
+        {"name": "deploy-process", "text": "How we deploy, v2"}, _ctx()
+    )
+    assert updated.success
+    assert "similar" not in updated.output
+    fresh = tool.invoke(
+        {"name": "postgres-pooling", "text": "Use pgbouncer."}, _ctx()
+    )
+    assert fresh.success
+    assert "similar" not in fresh.output
+
+
+def test_write_tool_rejects_invalid_type_description_keywords(
     tmp_path: Path,
 ) -> None:
     tool = MemoryWriteTool(store=_store(tmp_path))
@@ -287,6 +412,10 @@ def test_write_tool_rejects_invalid_type_and_description(
     assert not tool.invoke({**args, "description": 7}, _ctx()).success
     assert not tool.invoke(
         {**args, "description": "two\nlines"}, _ctx()
+    ).success
+    assert not tool.invoke({**args, "keywords": 7}, _ctx()).success
+    assert not tool.invoke(
+        {**args, "keywords": "two\nlines"}, _ctx()
     ).success
 
 
@@ -533,10 +662,12 @@ def test_engine_write_then_read_memory_end_to_end(tmp_path: Path) -> None:
     result = engine.run_one_step(task, lease_id=lease_id)
 
     assert result.status == "terminal"
-    # write memory = one file on disk
-    assert (store.root / "deploy.md").read_text(encoding="utf-8") == (
-        "deploy with make deploy"
-    )
+    # write memory = one file on disk: stamped fence + byte-exact body,
+    # with the ledger receipt naming the very task that wrote it.
+    stored = (store.root / "deploy.md").read_text(encoding="utf-8")
+    assert stored.endswith("---\ndeploy with make deploy")
+    assert "created: " in stored and "updated: " in stored
+    assert f"source_task: {task.task_id}" in stored
     # read full text = ordinary tool-result channel (ToolResultRecorded.output_ref is dereferenceable)
     recorded = [
         e for e in log.read(task.task_id) if e.type == "ToolResultRecorded"

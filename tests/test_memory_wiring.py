@@ -154,7 +154,7 @@ def test_memory_entries_snapshot_shared_with_hashes(tmp_path: Path) -> None:
     )
     inputs = _inputs(ws, memory_enabled=True, memory_dir=mem)
     entries = load_memory_store(root=mem).entries()
-    assert [n for n, _, _ in entries] == ["deploy-notes"]
+    assert [n for n, _, _, _ in entries] == ["deploy-notes"]
     resolved = inputs.content_hashes(MEMORY_KIND, MEMORY_INDEX_NAME)
     assert resolved is not None
     assert resolved[1] == memory_index_hash(entries)

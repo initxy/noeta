@@ -28,7 +28,6 @@ from noeta.builtins.memory.impl.index import (
     RECALL_BODY_MAX_BYTES,
     RECALL_TOTAL_MAX_BYTES,
     RecallHit,
-    _tokens,
     build_memory_renderer,
     format_recall_text,
     match_memories,
@@ -39,6 +38,7 @@ from noeta.builtins.memory.impl.index import (
 from noeta.core.engine import Engine
 from noeta.core.fold import fold
 from noeta.core.wiring import wire_default_observers
+from noeta.builtins.memory.impl.matching import match_tokens as _tokens
 from noeta.builtins.memory.impl.recall import (
     append_user_message_with_recall,
     recall_memories,
@@ -61,8 +61,8 @@ from noeta.builtins.memory.impl.store import MemoryStore
 
 
 _ENTRIES = (
-    ("deploy-process", "How we deploy", ""),
-    ("naming-rules", "Module naming conventions", ""),
+    ("deploy-process", "How we deploy", "", ""),
+    ("naming-rules", "Module naming conventions", "", ""),
 )
 
 
@@ -81,7 +81,7 @@ def test_index_text_lists_entries_and_mentions_read_tool() -> None:
 
 def test_index_hash_is_stable_and_tracks_content() -> None:
     assert memory_index_hash(_ENTRIES) == memory_index_hash(_ENTRIES)
-    changed = (*_ENTRIES, ("new-memory", "Something new", ""))
+    changed = (*_ENTRIES, ("new-memory", "Something new", "", ""))
     assert memory_index_hash(changed) != memory_index_hash(_ENTRIES)
 
 
@@ -91,7 +91,7 @@ def test_index_bytes_unchanged_for_frontmatterless_store() -> None:
     of exactly the rendered bytes."""
     import hashlib
 
-    entries = (*_ENTRIES, ("bare-name", "", ""))
+    entries = (*_ENTRIES, ("bare-name", "", "", ""))
     text = render_memory_index_text(entries)
     assert text == (
         "Long-term memory index. Each entry is one stored memory; call\n"
@@ -112,9 +112,9 @@ def test_index_bytes_unchanged_for_frontmatterless_store() -> None:
 
 def test_index_text_annotates_typed_entries() -> None:
     entries = (
-        ("deploy-process", "How we deploy", "procedural"),
-        ("me", "", "user"),
-        ("naming-rules", "Module naming conventions", ""),
+        ("deploy-process", "How we deploy", "procedural", ""),
+        ("me", "", "user", ""),
+        ("naming-rules", "Module naming conventions", "", ""),
     )
     text = render_memory_index_text(entries)
     assert "- deploy-process (procedural): How we deploy" in text
@@ -172,7 +172,7 @@ def test_match_no_hit_returns_empty() -> None:
 
 
 def test_match_multiple_hits_keep_index_order_and_cap() -> None:
-    entries = tuple((f"topic-{i}", "s", "") for i in range(8))
+    entries = tuple((f"topic-{i}", "s", "", "") for i in range(8))
     text = "about " + " ".join(f"topic-{i}" for i in range(8))
     hits = match_memories(entries, text, max_hits=3)
     assert hits == ("topic-0", "topic-1", "topic-2")
@@ -185,7 +185,7 @@ def test_match_two_letter_name_token_no_longer_hits() -> None:
     whole memory body inline — off a passing mention. The memory stays
     reachable through its real token, and through ``memory_search``.
     """
-    entries = (("ci-pipeline", "CI notes", ""),)
+    entries = (("ci-pipeline", "CI notes", "", ""),)
     assert match_memories(entries, "the ci failed") == ()
     assert match_memories(entries, "the pipeline failed") == ("ci-pipeline",)
 
@@ -196,13 +196,13 @@ def test_match_ignores_stopword_only_overlap() -> None:
     Both tiers read the same filtered tokens, so ``how-we-deploy`` does not
     hit on "how" (stopword) or "we" (two letters) — only on "deploy".
     """
-    entries = (("how-we-deploy", "what the team should do for a release", ""),)
+    entries = (("how-we-deploy", "what the team should do for a release", "", ""),)
     assert match_memories(entries, "how are you? what should we do?") == ()
     assert match_memories(entries, "how do we deploy?") == ("how-we-deploy",)
 
 
 def test_match_summary_needs_two_distinct_tokens() -> None:
-    entries = (("mem-a", "release checklist for services", ""),)
+    entries = (("mem-a", "release checklist for services", "", ""),)
     # Two distinct summary tokens in the text → tier-2 hit.
     assert match_memories(entries, "walk the release checklist") == ("mem-a",)
     # A single shared token is too noisy — no hit.
@@ -215,23 +215,23 @@ def test_match_name_hits_order_before_summary_hits() -> None:
     # ``zz-target`` sorts after the summary hit but its NAME matches, so
     # it must come first: tier 1 wholly precedes tier 2.
     entries = (
-        ("aa-notes", "postgres connection pooling notes", ""),
-        ("zz-target", "unrelated summary", ""),
+        ("aa-notes", "postgres connection pooling notes", "", ""),
+        ("zz-target", "unrelated summary", "", ""),
     )
     text = "zz-target plus postgres connection tricks"
     assert match_memories(entries, text) == ("zz-target", "aa-notes")
 
 
 def test_match_type_never_participates() -> None:
-    entries = (("mem-a", "nothing shared", "procedural"),)
+    entries = (("mem-a", "nothing shared", "procedural", ""),)
     assert match_memories(entries, "procedural knowledge please") == ()
 
 
 def test_match_cap_spans_both_tiers() -> None:
     entries = (
-        ("release-notes", "s", ""),
-        ("release-plan", "s", ""),
-        ("aa-other", "release checklist steps", ""),
+        ("release-notes", "s", "", ""),
+        ("release-plan", "s", "", ""),
+        ("aa-other", "release checklist steps", "", ""),
     )
     hits = match_memories(entries, "release checklist steps", max_hits=2)
     # Both name hits fill the cap; the tier-2 hit is squeezed out.
@@ -251,7 +251,7 @@ def _runtime() -> tuple[InMemoryEventLog, InMemoryContentStore, InMemoryDispatch
 
 
 def _composer(
-    cs: InMemoryContentStore, entries: tuple[tuple[str, str, str], ...]
+    cs: InMemoryContentStore, entries: tuple[tuple[str, str, str, str], ...]
 ) -> ThreeSegmentComposer:
     return ThreeSegmentComposer(
         system_prompt="memory test agent",
@@ -702,14 +702,107 @@ def test_mixed_script_text_tokenises_both_halves() -> None:
 
 
 def test_cjk_recall_matches_a_cjk_memory() -> None:
-    entries = (("记忆检索设计", "分层注入与二元组匹配", "project"),)
+    entries = (("记忆检索设计", "分层注入与二元组匹配", "project", ""),)
     assert match_memories(entries, "记忆检索到底怎么做的") == ("记忆检索设计",)
     assert match_memories(entries, "完全无关的问题") == ()
 
 
 def test_cjk_query_does_not_reach_an_english_memory() -> None:
     # Honest limit of token matching: bigrams cannot bridge languages. A
-    # Chinese question never finds a wholly English memory — that gap
-    # needs semantic retrieval, not a wider tokeniser.
-    entries = (("memory-recall", "tiered recall injection", "project"),)
+    # Chinese question never finds a wholly English memory on its own —
+    # that bridge is the ``keywords`` field's job (below).
+    entries = (("memory-recall", "tiered recall injection", "project", ""),)
     assert match_memories(entries, "记忆检索怎么做") == ()
+
+
+# ---------------------------------------------------------------------------
+# Keywords — curator-authored aliases; the deterministic cross-lingual bridge
+# ---------------------------------------------------------------------------
+
+
+def test_keywords_bridge_a_cjk_query_to_an_english_memory() -> None:
+    # The cross-lingual fix: an English-named memory with Chinese
+    # keywords is reachable from a wholly Chinese question. One filtered
+    # keyword token suffices — keywords are curator-chosen aliases,
+    # name-grade signal.
+    entries = (
+        ("memory-recall", "tiered recall injection", "project", "记忆, 检索"),
+    )
+    assert match_memories(entries, "记忆到底怎么召回的") == ("memory-recall",)
+    # And the reverse bridge: an English query meets a Chinese memory.
+    entries = (("记忆检索设计", "分层注入", "project", "recall, injection"),)
+    assert match_memories(entries, "how does recall work?") == ("记忆检索设计",)
+
+
+def test_keyword_hit_rides_tier2_never_a_body(tmp_path: Path) -> None:
+    # A keyword match is a curator's guess, not the user naming the
+    # memory: it must surface as a POINTER (tier-2), body left to
+    # memory_read — end to end through the store.
+    from noeta.builtins.memory.impl.matching import match_memories_tiered
+
+    entries = (
+        ("deploy-notes", "how we ship", "", "release, rollout"),
+    )
+    assert match_memories_tiered(entries, "when is the release?") == (
+        ("deploy-notes", False),
+    )
+    store = MemoryStore(root=tmp_path / "memories")
+    store.write(
+        "deploy-notes",
+        "---\ndescription: how we ship\nkeywords: release, 发版\n---\n"
+        "Use make deploy.",
+    )
+    for query in ("when is the release?", "发版流程是什么"):
+        hits = recall_memories(store, query)
+        assert [(h.name, h.full) for h in hits] == [("deploy-notes", False)]
+        assert hits[0].text == "how we ship"
+        assert "make deploy" not in format_recall_text(hits)
+
+
+def test_keywords_do_not_loosen_the_name_tier() -> None:
+    # A name hit stays tier-1 even when keywords also match; keywords
+    # only ever ADD tier-2 hits.
+    from noeta.builtins.memory.impl.matching import match_memories_tiered
+
+    entries = (("deploy-notes", "how we ship", "", "deploy"),)
+    assert match_memories_tiered(entries, "check deploy-notes") == (
+        ("deploy-notes", True),
+    )
+
+
+def test_keywords_match_as_phrases_not_bigrams() -> None:
+    # Keyword items are matched WHOLE against the text. A multi-character
+    # Chinese keyword no longer decomposes into bigrams, so sharing one
+    # common word with it ("流程") is not a hit — only the phrase is.
+    entries = (("deploy-notes", "how we ship", "", "部署流程"),)
+    assert match_memories(entries, "这个流程有问题") == ()
+    assert match_memories(entries, "部署流程是什么") == ("deploy-notes",)
+
+
+def test_ascii_keyword_prefix_matches_morphology_not_midword() -> None:
+    # An ASCII item anchors at a word start: "deploy" meets its own
+    # inflections ("deployment", "deploys") — poor-man's stemming — but
+    # an item never fires from inside another word.
+    entries = (("deploy-notes", "how we ship", "", "deploy"),)
+    assert match_memories(entries, "the deployment failed") == (
+        "deploy-notes",
+    )
+    assert match_memories(entries, "we deploys stuff") == ("deploy-notes",)
+    art = (("art-notes", "gallery visits", "", "art"),)
+    assert match_memories(art, "startup costs are rising") == ()
+    assert match_memories(art, "the art gallery") == ("art-notes",)
+
+
+def test_short_deliberate_keywords_are_reachable() -> None:
+    # The word rule floors "ci" out of names and summaries; a keyword
+    # item is an author's explicit choice, so it stays matchable.
+    entries = (("ci-pipeline", "build automation notes", "", "ci, cd"),)
+    assert match_memories(entries, "the ci failed again") == ("ci-pipeline",)
+
+
+def test_keyword_separators_accept_chinese_punctuation() -> None:
+    # A Chinese-writing model reaches for ，/、 — rejecting those would
+    # silently disable the aliases it wrote.
+    entries = (("deploy-notes", "how we ship", "", "部署、发版，rollout"),)
+    assert match_memories(entries, "发版计划定了吗") == ("deploy-notes",)
+    assert match_memories(entries, "rollout plan?") == ("deploy-notes",)

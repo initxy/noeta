@@ -377,6 +377,20 @@ class Options:
         the same reason :attr:`model` is: which model condensed a summary does
         not change what the agent *is*, and the summary itself is recorded, so
         a resumed run replays the recorded note rather than re-deriving it.
+    recall_model:
+        Optional model (alias or real id) that turns on the **memory recall
+        judge**: when the lexical auto-recall matcher finds nothing for an
+        incoming user message, this model reads the message plus the memory
+        index and picks the relevant memories, which ride in as tier-2
+        pointers. ``None`` (the default) keeps recall purely lexical — no
+        LLM call ever enters the intake path. Judging is a semantic
+        read-and-select over one message and an index, so — like
+        :attr:`compaction_model` — it is the kind of call a small model
+        serves well; hosts typically point both at the same cheap model.
+        Resolved through the same alias table as :attr:`model`; served by
+        the default provider. A host routing hint — **excluded from
+        identity** for the same reason: the judge's picks are recorded, so
+        a resumed run replays the recorded recall rather than re-judging.
     metadata:
         Observational labels. Also excluded from identity.
     provider:
@@ -508,6 +522,7 @@ class Options:
     # regardless because of its mapping-valued fields.
     model: Optional[str] = field(default=None, compare=False)
     compaction_model: Optional[str] = field(default=None, compare=False)
+    recall_model: Optional[str] = field(default=None, compare=False)
     metadata: Mapping[str, str] = field(default_factory=dict, compare=False)
     provider: Optional[LLMProvider] = field(default=None, compare=False)
     cwd: str | Path | None = field(default=None, compare=False)

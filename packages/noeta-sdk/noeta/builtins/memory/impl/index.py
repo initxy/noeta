@@ -1,17 +1,25 @@
-"""Memory index material — renderer, hash, matching, recall formatting.
+"""Memory index material — renderer, hash, recall formatting.
 
-Red line: every function here is pure over the ``(name, summary, type)``
-entries snapshot taken at wiring time. Nothing touches the disk at compose
-time, so the same ledger always composes to the same bytes; the impure half
-(reading the store) lives in :mod:`~noeta.builtins.memory.impl.recall`.
+Red line: every function here is pure over the ``(name, summary, type,
+keywords)`` entries snapshot taken at wiring time. Nothing touches the disk
+at compose time, so the same ledger always composes to the same bytes; the
+impure half (reading the store) lives in
+:mod:`~noeta.builtins.memory.impl.recall`, and the match primitives in
+:mod:`~noeta.builtins.memory.impl.matching` (re-exported here so import
+sites predating the split keep working).
 """
 
 from __future__ import annotations
 
 import hashlib
-import re
 from dataclasses import dataclass
 
+from noeta.builtins.memory.impl.matching import (
+    DEFAULT_RECALL_MAX_HITS,
+    MemoryEntries,
+    match_memories,
+    match_memories_tiered,
+)
 from noeta.context.composer import ContentResolve, RenderedContent
 from noeta.context.content_channel import ContentKindSpec, ContentRenderer
 from noeta.protocols.messages import Message, TextBlock
@@ -36,15 +44,10 @@ MEMORY_INDEX_VERSION = "1"
 #: memories are NOT disguised as ``pinned`` dynamically-generated skills).
 MEMORY_DRIFT_POLICY = "evolving"
 
-#: The index source shape: ``(name, summary, type)`` triples, sorted by
-#: name (``MemoryStore.entries()`` produces exactly this). ``summary`` is
-#: the frontmatter description or the first non-empty body line; ``type``
-#: is the validated frontmatter type or ``""``.
-MemoryEntries = tuple[tuple[str, str, str], ...]
-
 
 __all__ = [
     "DEFAULT_RECALL_MAX_HITS",
+    "MemoryEntries",
     "RECALL_BODY_MAX_BYTES",
     "RECALL_TOTAL_MAX_BYTES",
     "RecallHit",
@@ -58,9 +61,6 @@ __all__ = [
 ]
 
 
-#: Recall injection cap — keeps a chatty match from flooding the turn.
-DEFAULT_RECALL_MAX_HITS = 5
-
 #: Per-body inline cap. A tier-1 hit whose file is larger than this does NOT
 #: ride inline: it degrades WHOLE to its index line (the tier-2 pointer
 #: shape), so the model still learns the memory exists and pays for the text
@@ -73,50 +73,6 @@ RECALL_BODY_MAX_BYTES = 4096
 #: is spent the remaining hits ride as pointer lines, so a five-hit turn has a
 #: bounded worst case instead of five whole files.
 RECALL_TOTAL_MAX_BYTES = 16384
-
-_TOKEN_RE = re.compile(r"[a-z0-9]+")
-#: Scripts written without spaces (CJK ideographs, kana, hangul). The word
-#: rule finds *nothing* in them, so they are tokenised separately.
-_CJK_RUN_RE = re.compile(
-    r"[぀-ヿ㐀-䶿一-鿿豈-﫿가-힯]+"
-)
-#: Word tokens shorter than this never match. Applies to the WORD rule only
-#: — a CJK bigram is 2 characters by construction and must stay exempt, or
-#: recall goes silently dead for every space-free script. Three (not two)
-#: because a tier-1 hit spends a whole memory body on ONE shared token, and
-#: two-letter fragments (``db``, ``ci``, the tail of a hyphenated slug) share
-#: far too easily with ordinary prose; a two-letter term is still reachable
-#: through ``memory_search``.
-_MIN_TOKEN_LEN = 3
-
-#: Word tokens too common to be evidence of anything. Same reasoning as the
-#: length floor and the same blast radius: without it a memory named
-#: ``user-preferences`` fires tier-1 — a whole body inline — on any message
-#: containing "user". Deliberately small and closed: a stopword list is a
-#: precision knob, not a language model, and every entry here is a word no
-#: author would choose as the distinguishing half of a memory slug. The CJK
-#: path never consults it.
-_STOPWORDS: frozenset[str] = frozenset(
-    {
-        "about", "after", "again", "all", "and", "any", "are", "been",
-        "before", "being", "but", "can", "could", "did", "does", "for",
-        "from", "had", "has", "have", "her", "him", "his", "how", "into",
-        "its", "just", "like", "may", "more", "much", "not", "now", "one",
-        "only", "other", "our", "out", "over", "please", "same", "she",
-        "should", "some", "such", "than", "that", "the", "their", "them",
-        "then", "there", "these", "they", "this", "those", "too", "use",
-        "very", "was", "were", "what", "when", "where", "which", "who",
-        "why", "will", "with", "would", "you", "your",
-    }
-)
-#: Tier-2 (summary) matching needs this many distinct overlapping tokens
-#: — a single shared prose word is too noisy to recall on. In a
-#: space-free script the same threshold reads as "one shared word of 3+
-#: characters, or two shared 2-character words", since an n-character run
-#: yields n-1 bigrams. That is deliberately a shade looser than the word
-#: rule, and it is affordable because a tier-2 hit costs one index line
-#: rather than a whole memory body (see :func:`format_recall_text`).
-_SUMMARY_MIN_OVERLAP = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,7 +100,11 @@ def render_memory_index_text(entries: MemoryEntries) -> str:
         "may have changed since before relying on it.",
         "",
     ]
-    for name, summary, mem_type in entries:
+    for name, summary, mem_type, _keywords in entries:
+        # ``keywords`` is matcher-only material: rendering it would spend
+        # index bytes on aliases the model does not need (it reads both
+        # languages natively) — and keeping it out keeps the index hash
+        # stable across keyword-maintenance passes.
         label = f"{name} ({mem_type})" if mem_type else name
         lines.append(f"- {label}: {summary}" if summary else f"- {label}")
     return "\n".join(lines)
@@ -209,114 +169,6 @@ def memory_content_kind(entries: MemoryEntries) -> ContentKindSpec:
         renderer=build_memory_renderer(entries),
         hashes=_hashes,
         policy=MEMORY_DRIFT_POLICY,
-    )
-
-
-def _tokens(value: str) -> set[str]:
-    """Match tokens, by script.
-
-    A space-separated run is one token per word, **filtered**: a word shorter
-    than :data:`_MIN_TOKEN_LEN` or listed in :data:`_STOPWORDS` is not
-    evidence, so it never reaches either tier. The filter is what keeps
-    tier-1's threshold of one honest — one shared token buys a whole memory
-    body, so that token has to mean something.
-
-    A CJK run becomes its **character bigrams**, because the word rule finds
-    nothing at all in a script written without spaces — a wholly
-    Chinese/Japanese/Korean message would yield an empty token set, which
-    :func:`match_memories_tiered` early-returns on, making recall silently
-    dead rather than merely weak. The length floor and the stopword set are
-    the word rule's alone and MUST NOT touch bigrams: every bigram is exactly
-    2 characters, so a shared floor would delete the space-free path outright.
-
-    Bigrams are the standard segmenter-free approximation ("记忆机制" →
-    ``{记忆, 忆机, 机制}``, which a "记忆" query meets) and keep this module's
-    red line intact: pure, deterministic, no dictionary, no service. A
-    single-character run falls back to the character itself so a
-    one-character term still matches something.
-    """
-    lowered = value.lower()
-    tokens = {
-        t
-        for t in _TOKEN_RE.findall(lowered)
-        if len(t) >= _MIN_TOKEN_LEN and t not in _STOPWORDS
-    }
-    for run in _CJK_RUN_RE.findall(lowered):
-        if len(run) == 1:
-            tokens.add(run)
-        else:
-            tokens.update(run[i : i + 2] for i in range(len(run) - 1))
-    return tokens
-
-
-def match_memories_tiered(
-    entries: MemoryEntries,
-    text: str,
-    *,
-    max_hits: int = DEFAULT_RECALL_MAX_HITS,
-) -> tuple[tuple[str, bool], ...]:
-    """Two-tier recall matching, pure and deterministic — with the tier.
-
-    Returns ``(name, by_name)`` pairs where ``by_name`` marks a tier-1 hit.
-    The tier is not bookkeeping — it is the confidence signal the injector
-    spends on, so it has to survive the call (see :func:`format_recall_text`
-    for what the difference buys).
-
-    Tier 1: a memory hits when any token of its NAME appears in the user
-    text — names are author-chosen slugs, so one *filtered* shared token is
-    high-signal (:func:`_tokens` has already dropped stopwords and words
-    under :data:`_MIN_TOKEN_LEN`, which is what stops a slug like
-    ``deploy-the-thing`` from firing on "the"). Tier 2: an entry not already
-    hit by name hits when its SUMMARY shares at least
-    ``_SUMMARY_MIN_OVERLAP`` distinct tokens, because prose needs more
-    evidence than a slug. The ``type`` field never participates.
-
-    Order is tier-1 hits in index order, then tier-2 hits in index order,
-    capped at ``max_hits`` overall. Vector / semantic retrieval is out of
-    scope: its backing service would arrive behind an adapter, swapping this
-    function whole.
-    """
-    text_tokens = _tokens(text)
-    if not text_tokens:
-        return ()
-    name_hits: list[tuple[str, bool]] = []
-    summary_hits: list[tuple[str, bool]] = []
-    for name, summary, _type in entries:
-        if _tokens(name) & text_tokens:
-            name_hits.append((name, True))
-        elif len(_tokens(summary) & text_tokens) >= _SUMMARY_MIN_OVERLAP:
-            summary_hits.append((name, False))
-    return tuple((name_hits + summary_hits)[:max_hits])
-
-
-def match_memories(
-    entries: MemoryEntries,
-    text: str,
-    *,
-    max_hits: int = DEFAULT_RECALL_MAX_HITS,
-) -> tuple[str, ...]:
-    """Two-tier recall matching, pure and deterministic.
-
-    Tier 1 (the v1 rule): a memory hits when any token of its NAME
-    appears as a word in the user text (case-insensitive) — names are
-    author-chosen slugs, so one shared token is high-signal. Tier 2: an
-    entry NOT already hit by name hits when its SUMMARY shares at least
-    ``_SUMMARY_MIN_OVERLAP`` distinct tokens with the text (prose needs
-    more evidence than a slug). The ``type`` field never participates.
-
-    Output order: all tier-1 hits in index (name-sorted) order, then all
-    tier-2 hits in index order, capped at ``max_hits`` overall. Vector /
-    semantic retrieval is out of scope (its backing service would arrive
-    behind an adapter, swapping this function).
-
-    The tier-blind view: names only. :func:`match_memories_tiered` is the
-    implementation, and the one to call when the tier matters.
-    """
-    return tuple(
-        name
-        for name, _by_name in match_memories_tiered(
-            entries, text, max_hits=max_hits
-        )
     )
 
 

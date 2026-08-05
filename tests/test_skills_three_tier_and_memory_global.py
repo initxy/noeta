@@ -232,7 +232,7 @@ def test_memory_root_is_global_not_workspace_derived(tmp_path: Path) -> None:
 
     inputs = _inputs(ws, memory_enabled=True, global_memory_dir=glob_mem)
     entries = load_memory_store(root=glob_mem).entries()
-    names = [n for n, _, _ in entries]
+    names = [n for n, _, _, _ in entries]
     assert names == ["deploy"]
     assert "stale" not in names
     # The build's index fingerprint matches the GLOBAL directory's entries —
@@ -257,7 +257,7 @@ def test_memory_unchanged_across_workspace_switch(tmp_path: Path) -> None:
     inputs_b = _inputs(ws_b, memory_enabled=True, global_memory_dir=glob_mem)
 
     entries = load_memory_store(root=glob_mem).entries()
-    assert [n for n, _, _ in entries] == ["shared"]
+    assert [n for n, _, _, _ in entries] == ["shared"]
     resolved_a = inputs_a.content_hashes(MEMORY_KIND, MEMORY_INDEX_NAME)
     resolved_b = inputs_b.content_hashes(MEMORY_KIND, MEMORY_INDEX_NAME)
     assert resolved_a is not None and resolved_b is not None
