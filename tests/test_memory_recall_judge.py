@@ -8,10 +8,16 @@
   to a lexical miss, never a failed turn.
 * Reminder provider — the judge is consulted only on a lexical MISS, its
   picks ride as tier-2 pointers, and an empty store never spends a call.
+* Bounded wait (interrupt-responsiveness D9) — the judge's provider call is
+  abort-aware (cancel poll) and wall-clock capped, so a stop pressed during
+  recall or a wedged provider degrades to a miss instead of stalling turn
+  intake; the abandoned daemon call's result has no consumer.
 """
 
 from __future__ import annotations
 
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -59,6 +65,26 @@ class _ScriptedProvider:
 class _ExplodingProvider:
     def complete(self, request):  # noqa: ANN001 - protocol shape
         raise RuntimeError("provider down")
+
+
+class _BlockedProvider:
+    """Blocks inside ``complete`` until released — a wedged/slow judge call."""
+
+    def __init__(self) -> None:
+        self.release = threading.Event()
+        self.entered = threading.Event()
+        self.finished = threading.Event()
+        self.calls = 0
+
+    def complete(self, request):  # noqa: ANN001 - protocol shape
+        self.calls += 1
+        self.entered.set()
+        assert self.release.wait(timeout=10.0), "test forgot to release"
+        self.finished.set()
+        return LLMResponse(
+            stop_reason="end_turn",
+            content=[TextBlock(text='["deploy-process"]')],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +154,73 @@ def test_judge_empty_entries_skips_the_call() -> None:
 def test_judge_provider_failure_degrades_to_miss() -> None:
     judge = build_recall_judge(_ExplodingProvider(), "small-model-1")
     assert judge(_ENTRIES, "怎么上线？") == ()  # never raises
+
+
+# ---------------------------------------------------------------------------
+# Bounded wait — abort poll + wall-clock cap (interrupt-responsiveness D9)
+# ---------------------------------------------------------------------------
+
+
+def test_judge_abort_mid_call_returns_miss_promptly() -> None:
+    """A stop flipping the abort predicate while the provider call is blocked
+    abandons the wait — recall returns ``()`` with the provider still open."""
+    provider = _BlockedProvider()
+    flag = threading.Event()
+    judge = build_recall_judge(
+        provider, "small-model-1", should_abort=flag.is_set
+    )
+
+    result: list[tuple[str, ...]] = []
+    intake = threading.Thread(
+        target=lambda: result.append(judge(_ENTRIES, "怎么上线？"))
+    )
+    intake.start()
+    assert provider.entered.wait(timeout=5.0)
+    flag.set()
+    intake.join(timeout=5.0)
+    assert not intake.is_alive(), "judge must return without the provider"
+
+    assert result == [()]
+    # The wait was abandoned, not completed; the orphan's late result has no
+    # consumer.
+    assert not provider.finished.is_set()
+    provider.release.set()
+    assert provider.finished.wait(timeout=5.0)
+
+
+def test_judge_wall_clock_cap_bounds_a_wedged_provider() -> None:
+    """No cancel at all: the cap alone turns a wedged provider into a miss —
+    turn intake can never be stalled past the cap."""
+    provider = _BlockedProvider()
+    judge = build_recall_judge(
+        provider, "small-model-1", timeout_seconds=0.2
+    )
+
+    start = time.monotonic()
+    assert judge(_ENTRIES, "怎么上线？") == ()
+    assert time.monotonic() - start < 2.0  # the cap, not the 10 s wedge
+    assert not provider.finished.is_set()
+    provider.release.set()
+
+
+def test_judge_pre_armed_abort_never_spends_the_call() -> None:
+    provider = _BlockedProvider()
+    judge = build_recall_judge(
+        provider, "small-model-1", should_abort=lambda: True
+    )
+    assert judge(_ENTRIES, "怎么上线？") == ()
+    assert provider.calls == 0
+
+
+def test_judge_normal_call_unchanged_under_abort_seam() -> None:
+    """An armed-but-never-tripped seam changes nothing about the results."""
+    provider = _ScriptedProvider(reply='["deploy-process"]')
+    judge = build_recall_judge(
+        provider, "small-model-1", should_abort=lambda: False
+    )
+    assert judge(_ENTRIES, "怎么上线？") == ("deploy-process",)
+    (request,) = provider.requests
+    assert request.model == "small-model-1"
 
 
 # ---------------------------------------------------------------------------
@@ -247,3 +340,42 @@ def test_host_recall_model_binds_the_judge(tmp_path: Path) -> None:
     (lexical_only,) = bare.intake_reminder_providers("main")
     assert lexical_only(_view("怎么上线？")) == ()
     assert silent_llm.received_requests == []
+
+
+def test_host_wires_judge_abort_to_task_cancellation(tmp_path: Path) -> None:
+    """End-to-end D9 wiring: the host binds the judge's abort poll to its
+    cancellation registry keyed by the intake ``task_id`` — the same registry
+    the ``interrupt`` / ``cancel`` verbs arm — so a stop pressed while the
+    judge call is blocked returns the intake reminder pass promptly as a
+    miss instead of stalling turn entry."""
+    from tests._sdk_session import make_host, make_registry, runner_main_spec
+
+    mem = tmp_path / "memories"
+    MemoryStore(root=mem).write(
+        "deploy-process",
+        "---\ndescription: How we deploy safely\n---\nAlways run make deploy.",
+    )
+    provider = _BlockedProvider()
+    host = make_host(
+        make_registry(runner_main_spec("main", memory=True)),
+        workspace_dir=tmp_path,
+        provider=provider,
+        model="stub-model",
+        global_memory_dir=mem,
+        recall_model="judge-model",
+    )
+    (intake,) = host.intake_reminder_providers("main", task_id="root-1")
+
+    result: list[tuple] = []
+    turn = threading.Thread(
+        target=lambda: result.append(intake(_view("怎么上线？")))
+    )
+    turn.start()
+    assert provider.entered.wait(timeout=5.0)  # judge call in flight
+    host.request_cancellation("root-1")  # what interrupt/cancel arm
+    turn.join(timeout=5.0)
+    assert not turn.is_alive(), "intake must return without the provider"
+
+    assert result == [()]  # a stop during recall is just a miss
+    assert not provider.finished.is_set()  # abandoned, not completed
+    provider.release.set()

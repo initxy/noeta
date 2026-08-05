@@ -15,6 +15,8 @@ so the summarize call is the first — and only — LLM round-trip of the step.
 
 from __future__ import annotations
 
+import threading
+
 from noeta.context.composer import RenderedContent, ThreeSegmentComposer
 from noeta.builtins.react.impl import ReActPolicy
 from noeta.protocols.decisions import CompactionRequestedDecision, FailDecision
@@ -138,3 +140,106 @@ def test_nonempty_summary_still_compacts() -> None:
     )
     assert isinstance(decision, CompactionRequestedDecision)
     assert decision.summary == "real note"
+
+
+# ---------------------------------------------------------------------------
+# Interrupt mid-summarize (interrupt-responsiveness D9)
+# ---------------------------------------------------------------------------
+
+
+class _BlockedSummarizeProvider:
+    """Blocks inside ``complete`` until released — a summarize call in flight."""
+
+    def __init__(self) -> None:
+        self.release = threading.Event()
+        self.entered = threading.Event()
+        self.finished = threading.Event()
+
+    def complete(self, request):  # noqa: ANN001 - protocol shape
+        self.entered.set()
+        assert self.release.wait(timeout=10.0), "test forgot to release"
+        self.finished.set()
+        return LLMResponse(
+            stop_reason="end_turn", content=[TextBlock(text="late note")]
+        )
+
+
+def test_interrupt_mid_summarize_aborts_without_a_compaction() -> None:
+    """D9 pin: the summarize call goes through ``RuntimeLLMClient.complete``
+    with the step ctx, so the abandonable wait already covers it — no extra
+    wiring. A stop flipping ``ctx.cancelled`` while the summarize provider
+    call is blocked makes ``decide()`` return promptly (provider still open),
+    the aborted response becomes ``FailDecision(compaction_summary_failed)``
+    — never a ``CompactionRequestedDecision``, so no ``Compacted`` can be
+    recorded from the abandoned summary — and at engine level the post-decide
+    cancel poll then raises before ANY decision is acted on."""
+    store = InMemoryContentStore()
+    log = InMemoryEventLog()
+    composer = ThreeSegmentComposer(
+        system_prompt="sys",
+        tools={},
+        content_store=store,
+        skill_renderer=_skill_renderer,
+        tail_token_budget=300,
+    )
+    task = Task(task_id="t-1")
+    task.runtime.messages = _runtime_messages(12)
+    view = composer.compose(task)
+
+    provider = _BlockedSummarizeProvider()
+    client = RuntimeLLMClient(
+        provider=provider,
+        event_log=log,
+        content_store=store,
+        abandon_poll_seconds=0.01,
+    )
+    policy = ReActPolicy(
+        llm=client,
+        tools={},
+        system_prompt="sys",
+        model="gpt-4o",
+        context_window=600,
+        max_output_tokens=50,
+        compaction_buffer=50,
+        tail_token_budget=200,
+        composer_version="three_segment.v3",
+    )
+    flag = threading.Event()
+    ctx = StepContext(
+        task_id="t-1", lease_id="l-1", trace_id="tr-1",
+        cancelled=flag.is_set,
+    )
+
+    result: list[object] = []
+    step = threading.Thread(
+        target=lambda: result.append(policy.decide(ctx, view))
+    )
+    step.start()
+    assert provider.entered.wait(timeout=5.0)  # summarize call in flight
+    flag.set()  # the human stop lands
+    step.join(timeout=5.0)
+    assert not step.is_alive(), "decide() must return without the provider"
+
+    # The provider is STILL blocked — the wait was abandoned, not completed.
+    assert not provider.finished.is_set()
+
+    # The aborted summarize is a clean failure, never a compaction decision.
+    (decision,) = result
+    assert isinstance(decision, FailDecision)
+    assert decision.reason == "compaction_summary_failed"
+
+    # Only the recorded trio reached the stream — nothing compaction-shaped —
+    # and it records the abort (errored response, unsuccessful round-trip).
+    events = log.read("t-1")
+    assert [e.type for e in events] == [
+        "LLMRequestStarted",
+        "LLMResponseRecorded",
+        "LLMRequestFinished",
+    ]
+    assert events[1].payload.stop_reason == "error"
+    assert events[2].payload.success is False
+
+    # Releasing the orphan later adds nothing to the stream.
+    provider.release.set()
+    assert provider.finished.wait(timeout=5.0)
+    assert len(log.read("t-1")) == 3
