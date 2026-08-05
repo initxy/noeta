@@ -20,7 +20,6 @@ from __future__ import annotations
 import threading
 import time
 from pathlib import Path
-from typing import Any
 
 from noeta.client import Client, Options
 from noeta.core.fold import fold
