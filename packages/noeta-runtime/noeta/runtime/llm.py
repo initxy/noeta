@@ -12,6 +12,8 @@ reader rebuild typed Blocks.
 
 from __future__ import annotations
 
+import inspect
+import threading
 import time
 import uuid
 from typing import Any, Callable, Mapping, Optional
@@ -23,6 +25,7 @@ from noeta.protocols.canonical import (
 from noeta.protocols.content_store import ContentStore
 from noeta.protocols.errors import (
     CATEGORY_FATAL,
+    AbortedError,
     ContextOverflowError,
     FatalError,
     TransientError,
@@ -153,6 +156,17 @@ def _default_sleep(seconds: float) -> None:
 #: that attempt.
 _DEFAULT_MAX_RETRIES = 8
 
+#: How often the abandonable wait re-polls the cancel predicate while a
+#: provider call is in flight (and how finely the retry backoff is sliced).
+#: This bounds interrupt latency on the LLM path, so it is deliberately small;
+#: the poll is one lock-guarded set lookup.
+_DEFAULT_ABANDON_POLL_SECONDS = 0.05
+
+#: Message carried by the aborted-response ``raw['error']`` on every abort
+#: path, so a transcript reader sees one spelling whether the round was
+#: abandoned mid-wait, refused pre-attempt, or cut mid-backoff.
+_ABORT_MESSAGE = "aborted: human stop while the LLM round was in flight"
+
 
 def _error_response(exc: Exception) -> LLMResponse:
     """Translate a provider exception into a typed error ``LLMResponse``.
@@ -176,12 +190,33 @@ def _error_response(exc: Exception) -> LLMResponse:
     )
 
 
+def _streaming_accepts_abort(provider: LLMProvider) -> bool:
+    """Does this provider's ``complete_streaming`` take ``should_abort``?
+
+    The parameter is folded into the :class:`StreamingProvider` signature
+    (same rationale as ``request_headers`` — no probe matrix), but a
+    ``runtime_checkable`` Protocol only proves the method exists, not its
+    arity. A third-party adapter on the pre-abort signature must keep working,
+    so the runtime probes once and simply withholds the predicate from an
+    adapter that cannot accept it — such an adapter merely forgoes fast orphan
+    shutdown; the abandonable wait above it is unaffected.
+    """
+    if not isinstance(provider, StreamingProvider):
+        return False
+    try:
+        sig = inspect.signature(provider.complete_streaming)
+    except (TypeError, ValueError):  # builtins / C-accelerated callables
+        return False
+    return "should_abort" in sig.parameters
+
+
 def _call_provider(
     provider: LLMProvider,
     req: LLMRequest,
     ctx: StepContext,
     provider_headers: Optional[Callable[[StepContext], Mapping[str, str]]] = None,
     on_delta: Optional[Callable[[StreamDelta], None]] = None,
+    should_abort: Optional[Callable[[], bool]] = None,
 ) -> LLMResponse:
     # Streaming subsumes the header capability (its signature already carries
     # request_headers), so probing streaming first keeps the two optional
@@ -190,6 +225,10 @@ def _call_provider(
         headers = (
             dict(provider_headers(ctx)) if provider_headers is not None else None
         )
+        if should_abort is not None and _streaming_accepts_abort(provider):
+            return provider.complete_streaming(
+                req, on_delta, headers, should_abort=should_abort
+            )
         return provider.complete_streaming(req, on_delta, headers)
     if provider_headers is not None and isinstance(provider, HeaderAwareProvider):
         return provider.complete_with_headers(req, dict(provider_headers(ctx)))
@@ -220,6 +259,7 @@ class RuntimeLLMClient:
         ] = None,
         max_retries: int = _DEFAULT_MAX_RETRIES,
         sleep: Optional[Callable[[float], None]] = None,
+        abandon_poll_seconds: float = _DEFAULT_ABANDON_POLL_SECONDS,
     ) -> None:
         self._provider = provider
         self._event_log = event_log
@@ -238,6 +278,7 @@ class RuntimeLLMClient:
         # Injectable sleep so tests never wall-clock-sleep through a backoff.
         self._max_retries = max_retries
         self._sleep = sleep or _default_sleep
+        self._abandon_poll_s = abandon_poll_seconds
 
     def complete(
         self,
@@ -254,11 +295,19 @@ class RuntimeLLMClient:
         # are not user-facing output (the compaction summarize call). Sink
         # exceptions are swallowed: deltas are observational and must never
         # fail or retry an LLM call.
+        #
+        # ``muted`` closes the abandonment gap: once the step thread stops
+        # waiting for an abandoned provider call, the orphan I/O thread may
+        # keep streaming for a while — without the gate the user keeps seeing
+        # tokens arrive for a round that is already thrown away.
+        muted = threading.Event()
         on_delta: Optional[Callable[[StreamDelta], None]] = None
         if allow_stream and self._delta_sink is not None:
             sink = self._delta_sink
 
             def on_delta(delta: StreamDelta) -> None:
+                if muted.is_set():
+                    return
                 try:
                     sink(ctx, call_id, delta)
                 except Exception:  # noqa: BLE001 — observational channel
@@ -285,7 +334,7 @@ class RuntimeLLMClient:
         # EventLog rebuilds the same state.
         t0 = self._clock()
         resp = self._invoke_with_retry(
-            req, ctx, call_id=call_id, on_delta=on_delta
+            req, ctx, call_id=call_id, on_delta=on_delta, muted=muted
         )
         t1 = self._clock()
         latency_ms = max(0, int((t1 - t0) * 1000))
@@ -358,6 +407,7 @@ class RuntimeLLMClient:
         *,
         call_id: str,
         on_delta: Optional[Callable[[StreamDelta], None]] = None,
+        muted: Optional[threading.Event] = None,
     ) -> LLMResponse:
         """Call the provider, retrying transient failures with backoff.
 
@@ -368,17 +418,40 @@ class RuntimeLLMClient:
         folds the same state either way. Each scheduled backoff does record an
         ``LLMRetryScheduled`` — a fold no-op, present purely so a live
         consumer sees "rate-limited, retrying" instead of a silent stall.
+
+        When ``ctx.cancelled`` is wired (a live drive under a host cancel
+        seam), every wait in here is abortable: the provider call itself runs
+        on a daemon I/O thread the step thread can stop waiting for
+        (:meth:`_call_abandonable` — safe because providers are contractually
+        pure), the backoff sleep is sliced around the same poll, and each new
+        attempt re-checks the predicate first. All abort paths resolve to the
+        same ``category="aborted"`` error response; the Engine's own poll
+        right after ``decide`` then abandons the whole decision, so the
+        response only exists to keep the recorded trio well-formed.
+        ``ctx.cancelled is None`` (resume / replay) keeps the historical
+        inline, single-sleep behavior byte-for-byte.
         """
+        should_abort = ctx.cancelled
         attempt = 0
         while True:
+            if should_abort is not None and should_abort():
+                return _error_response(AbortedError(_ABORT_MESSAGE))
             try:
-                return _call_provider(
-                    self._provider,
-                    req,
-                    ctx,
-                    self._provider_headers,
-                    on_delta,
+                resp = self._dispatch_provider_call(
+                    req, ctx,
+                    on_delta=on_delta,
+                    should_abort=should_abort,
+                    muted=muted,
                 )
+                if resp is None:
+                    # Abandoned mid-wait: the orphan I/O thread owns the
+                    # in-flight HTTP call now; its eventual result is dropped.
+                    return _error_response(AbortedError(_ABORT_MESSAGE))
+                return resp
+            except AbortedError as exc:
+                # The adapter noticed ``should_abort`` mid-stream and closed
+                # the connection itself. Never retried, never bucketed fatal.
+                return _error_response(exc)
             except (
                 TransientError,
                 ContextOverflowError,
@@ -389,6 +462,10 @@ class RuntimeLLMClient:
                 delay = retry_policy(exc, attempt=attempt)
                 if delay is None or attempt >= self._max_retries:
                     return _error_response(exc)
+                if should_abort is not None and should_abort():
+                    # A stop that landed during the failed attempt: don't
+                    # schedule work for a round the user already discarded.
+                    return _error_response(AbortedError(_ABORT_MESSAGE))
                 attempt += 1
                 self._emit(
                     ctx,
@@ -402,8 +479,120 @@ class RuntimeLLMClient:
                         error=str(exc)[:500],
                     ),
                 )
-                self._sleep(delay)
+                if self._backoff_wait(delay, should_abort):
+                    return _error_response(AbortedError(_ABORT_MESSAGE))
             except Exception as exc:  # noqa: BLE001 — protocol contract
                 # A provider that did not translate its failure cleanly:
                 # bucket it fatal, so an unrecognised error cannot loop.
                 return _error_response(exc)
+
+    def _dispatch_provider_call(
+        self,
+        req: LLMRequest,
+        ctx: StepContext,
+        *,
+        on_delta: Optional[Callable[[StreamDelta], None]],
+        should_abort: Optional[Callable[[], bool]],
+        muted: Optional[threading.Event],
+    ) -> Optional[LLMResponse]:
+        """One provider attempt — inline, or abandonable when cancel is wired.
+
+        ``None`` means "abandoned": the wait was given up mid-flight and no
+        response will ever be observed for this attempt.
+        """
+        if should_abort is None:
+            return _call_provider(
+                self._provider, req, ctx, self._provider_headers, on_delta
+            )
+        return self._call_abandonable(
+            req, ctx,
+            on_delta=on_delta,
+            should_abort=should_abort,
+            muted=muted,
+        )
+
+    def _call_abandonable(
+        self,
+        req: LLMRequest,
+        ctx: StepContext,
+        *,
+        on_delta: Optional[Callable[[StreamDelta], None]],
+        should_abort: Callable[[], bool],
+        muted: Optional[threading.Event],
+    ) -> Optional[LLMResponse]:
+        """Run the provider call on a daemon I/O thread; wait abandonably.
+
+        The step thread polls ``should_abort`` between short waits and walks
+        away the moment it turns truthy — this is what turns "interrupt waits
+        out the whole generation" into "interrupt lands in milliseconds", and
+        it works in every phase, including the pre-first-byte silence no
+        chunk-loop check can cover. Abandonment is safe because
+        :class:`~noeta.protocols.messages.LLMProvider` is contractually pure:
+        the orphan call writes no events and holds no Task, so its eventual
+        return value simply has no consumer. ``muted`` is set on abandonment
+        so the orphan's remaining deltas stop reaching the sink; the adapter's
+        own ``should_abort`` check (when its signature accepts one) then
+        closes the connection within a chunk interval, bounding the orphan's
+        token burn. A truthy poll racing a just-completed call is benign in
+        both directions: the discarded response mirrors what the Engine's own
+        post-``decide`` poll would have done with it.
+        """
+        outcome: list[tuple[str, Any]] = []
+        done = threading.Event()
+
+        def _run() -> None:
+            try:
+                outcome.append(
+                    (
+                        "ok",
+                        _call_provider(
+                            self._provider,
+                            req,
+                            ctx,
+                            self._provider_headers,
+                            on_delta,
+                            should_abort,
+                        ),
+                    )
+                )
+            except BaseException as exc:  # noqa: BLE001 — re-raised on the step thread
+                outcome.append(("err", exc))
+            finally:
+                done.set()
+
+        worker = threading.Thread(
+            target=_run, name="noeta-llm-io", daemon=True
+        )
+        worker.start()
+        while not done.wait(self._abandon_poll_s):
+            if should_abort():
+                if muted is not None:
+                    muted.set()
+                return None
+        kind, value = outcome[0]
+        if kind == "err":
+            raise value  # translated by _invoke_with_retry's handlers
+        response: LLMResponse = value
+        return response
+
+    def _backoff_wait(
+        self, delay: float, should_abort: Optional[Callable[[], bool]]
+    ) -> bool:
+        """Wait out one retry backoff; ``True`` ⇒ aborted before it elapsed.
+
+        With no cancel seam this is the historical single ``sleep(delay)``
+        (and the injected test sleep sees exactly one call, as before). With
+        one, the delay is sliced so a stop pressed mid-backoff is honored
+        within one poll interval instead of after the full ~30 s cap.
+        """
+        if should_abort is None:
+            self._sleep(delay)
+            return False
+        remaining = delay
+        while remaining > 0:
+            if should_abort():
+                return True
+            step = min(self._abandon_poll_s, remaining)
+            self._sleep(step)
+            remaining -= step
+        return should_abort()
