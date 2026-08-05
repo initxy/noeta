@@ -30,6 +30,7 @@ import httpx
 
 from noeta.protocols.errors import (
     CATEGORY_OVERFLOW,
+    AbortedError,
     ContextOverflowError,
     FatalError,
     TransientError,
@@ -220,13 +221,15 @@ class AnthropicProvider:
         request: LLMRequest,
         on_delta: Callable[[StreamDelta], None],
         request_headers: Optional[dict[str, str]] = None,
+        should_abort: Optional[Callable[[], bool]] = None,
     ) -> LLMResponse:
         # Still the blocking one-shot contract of ``complete``: the full
         # ``LLMResponse`` is the return value and ``on_delta`` only fires as a
         # side effect. This IS the transport for both entry points —
         # ``complete_with_headers`` calls straight into here with a discarding
-        # sink — so the wire body, the parse and the error taxonomy cannot
-        # drift between a previewed turn and a silent one.
+        # sink (and no ``should_abort``: batch semantics are unchanged) — so
+        # the wire body, the parse and the error taxonomy cannot drift between
+        # a previewed turn and a silent one.
         _guard_vision_capability(request)
         body = self._build_request_body(request)
         body["stream"] = True
@@ -252,6 +255,13 @@ class AnthropicProvider:
                 for event_name, data in iter_sse_events(
                     http_response.iter_lines()
                 ):
+                    # Client-side stop: polled per event and raised from
+                    # INSIDE the stream context, so the exit closes the
+                    # connection and the model stops burning tokens.
+                    # ``AbortedError`` is neither an httpx type nor transient,
+                    # so it passes the handler below untranslated.
+                    if should_abort is not None and should_abort():
+                        raise AbortedError("client abort mid-stream")
                     accumulator.feed(event_name, data)
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             raise TransientError(str(exc)) from exc

@@ -23,6 +23,7 @@ from typing import Any, Callable, Literal, Optional
 import httpx
 
 from noeta.protocols.errors import (
+    AbortedError,
     ContextOverflowError,
     FatalError,
     TransientError,
@@ -183,6 +184,7 @@ class OpenAIResponsesProvider:
         request: LLMRequest,
         on_delta: Callable[[StreamDelta], None],
         request_headers: Optional[dict[str, str]] = None,
+        should_abort: Optional[Callable[[], bool]] = None,
     ) -> LLMResponse:
         """Streamed variant of :meth:`complete_with_headers`.
 
@@ -201,6 +203,13 @@ class OpenAIResponsesProvider:
         (``invalid_encrypted_content``) self-heals with the same one-shot
         strip-and-retry as the batch path — that 400 always surfaces before
         any stream starts, and the retried request streams as well.
+
+        ``should_abort`` is the client-side stop predicate, polled per SSE
+        event inside :meth:`_consume_stream`; a truthy poll raises
+        :class:`AbortedError` from inside the stream context, closing the
+        connection. It is not an ``httpx.HTTPStatusError``, so it can never
+        trip the one-shot ciphertext retry, and it bypasses both translation
+        clauses below untouched.
         """
         _guard_vision_capability(request)
         body = self._build_request_body(request)
@@ -225,7 +234,7 @@ class OpenAIResponsesProvider:
                     # the context closes.
                     http_response.read()
                 http_response.raise_for_status()
-                return self._consume_stream(http_response, on_delta)
+                return self._consume_stream(http_response, on_delta, should_abort)
 
         try:
             try:
@@ -254,9 +263,14 @@ class OpenAIResponsesProvider:
         self,
         http_response: httpx.Response,
         on_delta: Callable[[StreamDelta], None],
+        should_abort: Optional[Callable[[], bool]] = None,
     ) -> LLMResponse:
         """Drain one Responses SSE stream: emit deltas, parse the terminal
         response object with the batch parser.
+
+        ``should_abort`` is polled before each event; truthy raises
+        :class:`AbortedError` — from inside the caller's stream context, so
+        propagation closes the connection.
 
         Event handling (the SSE ``event:`` name is authoritative; the JSON
         ``type`` field is the fallback for nameless frames):
@@ -290,6 +304,8 @@ class OpenAIResponsesProvider:
         """
         final_payload: Optional[dict[str, Any]] = None
         for event_name, data in iter_sse_events(http_response.iter_lines()):
+            if should_abort is not None and should_abort():
+                raise AbortedError("client abort mid-stream")
             try:
                 payload = json.loads(data)
             except json.JSONDecodeError:

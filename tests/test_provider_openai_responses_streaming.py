@@ -21,6 +21,7 @@ import pytest
 import respx
 
 from noeta.protocols.errors import (
+    AbortedError,
     ContextOverflowError,
     FatalError,
     TransientError,
@@ -682,6 +683,81 @@ def test_invalid_encrypted_content_without_reasoning_stays_fatal_streamed() -> N
     with pytest.raises(FatalError):
         _make_provider().complete_streaming(_basic_request(), _DeltaRecorder())
     assert len(route.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Client abort: should_abort polled per SSE event
+# ---------------------------------------------------------------------------
+
+
+class _CloseRecordingStream(httpx.SyncByteStream):
+    """Records whether httpx closed the stream — the observable proof that
+    ``AbortedError`` was raised from inside the ``with client.stream(...)``
+    block, so the context exit released the connection."""
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+        self.closed = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield self._body
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@respx.mock
+def test_should_abort_mid_stream_raises_aborted_and_closes_stream() -> None:
+    """A predicate turning truthy mid-stream surfaces as ``AbortedError`` —
+    not re-bucketed into ``TransientError`` by the transport handler, and not
+    fed to the one-shot ciphertext retry (that only catches
+    ``httpx.HTTPStatusError``): exactly one request goes out. No further
+    events are consumed and the stream context exits (connection closed)."""
+    final = _final_payload(output=[_message_output("Hello")])
+    stream = _CloseRecordingStream(
+        _sse([_text_delta("Hel"), _text_delta("lo"), _completed(final)])
+    )
+    route = respx.post(ENDPOINT).mock(
+        return_value=httpx.Response(
+            200, stream=stream, headers={"content-type": "text/event-stream"}
+        )
+    )
+
+    recorder = _DeltaRecorder()
+    with pytest.raises(AbortedError):
+        _make_provider().complete_streaming(
+            _basic_request(),
+            recorder,
+            should_abort=lambda: bool(recorder.deltas),
+        )
+
+    # The poll runs before each event: the flip lands right after the first
+    # delta, so the second fragment never reaches the sink — and the abort
+    # never triggered the inner strip-and-retry.
+    assert recorder.as_tuples == [("text", "Hel", 0)]
+    assert stream.closed
+    assert len(route.calls) == 1
+
+
+@respx.mock
+def test_never_truthy_should_abort_leaves_stream_untouched() -> None:
+    """A predicate that never fires must be behaviorally invisible — same
+    deltas, same response as the default ``should_abort=None`` path."""
+    final = _final_payload(output=[_message_output("Hello")])
+    respx.post(ENDPOINT).mock(
+        return_value=_stream_response(
+            [_text_delta("Hel"), _text_delta("lo"), _completed(final)]
+        )
+    )
+
+    recorder = _DeltaRecorder()
+    response = _make_provider().complete_streaming(
+        _basic_request(), recorder, should_abort=lambda: False
+    )
+
+    assert recorder.as_tuples == [("text", "Hel", 0), ("text", "lo", 0)]
+    assert response.stop_reason == "end_turn"
+    assert response.content == [TextBlock(text="Hello")]
 
 
 # ---------------------------------------------------------------------------

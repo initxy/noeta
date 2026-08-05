@@ -23,6 +23,7 @@ import pytest
 import respx
 
 from noeta.protocols.errors import (
+    AbortedError,
     ContextOverflowError,
     FatalError,
     TransientError,
@@ -589,6 +590,88 @@ def test_vision_guard_applies_before_stream_open() -> None:
     with pytest.raises(FatalError, match="supports_vision=False"):
         _make_provider().complete_streaming(request, _DeltaRecorder())
     assert not route.called
+
+
+# ---------------------------------------------------------------------------
+# Client abort — should_abort polled per SSE event
+# ---------------------------------------------------------------------------
+
+
+class _CloseRecordingStream(httpx.SyncByteStream):
+    """Records whether httpx closed the stream — the observable proof that
+    ``AbortedError`` was raised from *inside* the ``with client.stream(...)``
+    block, so the context exit released the connection."""
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+        self.closed = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield self._body
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@respx.mock
+def test_should_abort_mid_stream_raises_aborted_and_closes_stream() -> None:
+    """A predicate turning truthy mid-stream must surface as ``AbortedError``
+    — not re-bucketed into ``TransientError`` by the transport handler — with
+    no further events fed and the stream context exited (connection closed)."""
+    body = _sse(
+        _message_start(),
+        _block_start(0, {"type": "text", "text": ""}),
+        _block_delta(0, {"type": "text_delta", "text": "Hel"}),
+        _block_delta(0, {"type": "text_delta", "text": "lo!"}),
+        _block_stop(0),
+        _message_delta("end_turn", output_tokens=7),
+        _MESSAGE_STOP,
+    )
+    stream = _CloseRecordingStream(body)
+    respx.post(MESSAGES_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200, stream=stream, headers={"content-type": "text/event-stream"}
+        )
+    )
+
+    sink = _DeltaRecorder()
+    with pytest.raises(AbortedError):
+        _make_provider().complete_streaming(
+            _basic_request(), sink, None, should_abort=lambda: bool(sink.deltas)
+        )
+
+    # The poll runs before each feed: the flip lands right after the first
+    # delta, so the second fragment never reaches the sink.
+    assert sink.deltas == [StreamDelta(kind="text", text="Hel", index=0)]
+    assert stream.closed
+
+
+@respx.mock
+def test_never_truthy_should_abort_leaves_stream_untouched() -> None:
+    """A predicate that never fires must be behaviorally invisible — same
+    deltas, same response as the default ``should_abort=None`` path."""
+    body = _sse(
+        _message_start(),
+        _block_start(0, {"type": "text", "text": ""}),
+        _block_delta(0, {"type": "text_delta", "text": "Hel"}),
+        _block_delta(0, {"type": "text_delta", "text": "lo!"}),
+        _block_stop(0),
+        _message_delta("end_turn", output_tokens=7),
+        _MESSAGE_STOP,
+    )
+    respx.post(MESSAGES_ENDPOINT).mock(return_value=_sse_response(body))
+
+    sink = _DeltaRecorder()
+    response = _make_provider().complete_streaming(
+        _basic_request(), sink, None, should_abort=lambda: False
+    )
+
+    assert sink.deltas == [
+        StreamDelta(kind="text", text="Hel", index=0),
+        StreamDelta(kind="text", text="lo!", index=0),
+    ]
+    assert response.stop_reason == "end_turn"
+    assert response.content == [TextBlock(text="Hello!")]
 
 
 # ---------------------------------------------------------------------------
