@@ -80,7 +80,7 @@ Shell 元字符（`|`、`;`、`&&`、`>`、…）在分词之前就被拒绝。�
 
 | 工具 | 风险 | 做什么 | 源码 |
 | --- | --- | --- | --- |
-| `memory_write` | medium | 向存储写入一个 Markdown 记忆文件。可选的 `description`（一行索引摘要）和 `type`（`user` / `project` / `procedural` / `reference`）会作为一个 frontmatter 块存下来，这个块由工具自己组装。 | `noeta/builtins/memory/impl/store.py` |
+| `memory_write` | medium | 向存储写入一个 Markdown 记忆文件。可选的 `description`（一行索引摘要）、`type`（`user` / `project` / `procedural` / `reference`）和 `keywords`（逗号分隔的检索别名——跨语言召回的桥梁）会作为一个 frontmatter 块存下来，这个块由工具自己组装，并与文本自带的 fence 逐字段合并；工具还会盖上 `created` / `updated` 日期和一条 `source_task` 账本回执，且以新名字写入时会报告相似的既有记忆，让模型合并而不是重复。 | `noeta/builtins/memory/impl/store.py` |
 | `memory_read` | low | 按需读取一条已存记忆的完整文本。 | `noeta/builtins/memory/impl/store.py` |
 | `memory_search` | low | 在名字和全文上做大小写不敏感的子串匹配，返回 grep 风格的摘录（每条记忆至多 3 行，至多 10 条记忆；`truncated` 标志会告诉你还有更多命中）。 | `noeta/builtins/memory/impl/store.py` |
 | `memory_archive` | medium | 把一条过时的记忆退役到存储的 `archive/` 子目录——它从索引、召回和搜索中消失，但文件从不被删除，因此人可以把它恢复回来。 | `noeta/builtins/memory/impl/store.py` |

@@ -147,6 +147,8 @@ agent 可以调用的一个外部动作。`name` / `input_schema` / `description
 
 第三种人为停止。`cancel` 写入 `TaskCancelled`，对话进入终止；`close` 把它归档；而 **`interrupt`** 写入 `TurnInterrupted`，只停掉进行中的这一轮，任务停在它的下一目标挂起上，再打一次字就能重开。它的粒度*就是*轮次边界——它无法中止一次已经在执行的工具调用。被中断那一轮的事件仍作为真实历史留在流上；把它们"收回去"是 rewind 的职责。
 
+当 `interrupt` 落在一个挂起于待回答 `ask_user_question` 的任务上（此时没有进行中的轮次）时，它转而**撤回该问题**：写入 `UserQuestionWithdrawn`，用一个配对的 `success=False` 工具结果关闭悬空的 ask 工具调用，并把对话停在下一目标挂起、进入空闲——不驱动任何模型轮次。这就是 "Esc" 落点：问题浮层消失，此前那一轮的输出仍留在历史里，用户打字即可续。审批挂起仍以 `deny` 作为其优雅退出。
+
 ### Rewind and fork
 
 两个分支动词，共用一个锚点——一条用户目标 `MessagesAppended` 的 seq——只在新基线落在哪里上有区别。**Rewind** 向同一条流追加 `TaskRewound`，因此被锚定的那一轮以及它之后的一切都成为被折叠过去的死历史（什么都不会被删除），那一段所编辑的工作区文件会被还原。**Fork** 向一个**新**任务的流追加 `TaskForked`，对源任务什么都不写，因此两个分支都活下来；一个 fork 是兄弟，不是子任务，而且它分叉的是对话，不是工作区。
@@ -224,12 +226,12 @@ View 分三部分组装。`stable_prefix` 携带系统 prompt 消息和 provider
 
 ### Memory
 
-跨任务的长期记忆：基于文件、由模型管理。改动走 `memory_write` 和 `memory_archive`（退役，绝不删除）；读取走 `memory_read` 和 `memory_search`。**常驻索引**是一个内容通道使用者，因此压缩绝不会把它冲掉，而**自动召回**是 `turn_intake` 接缝上的一个轨道 A provider。由 `plugins=("memory", …)` 激活，属于 agent 身份的一部分——在官方 agent 中只有 `main` 打开它。
+跨任务的长期记忆：基于文件、由模型管理。改动走 `memory_write` 和 `memory_archive`（退役，绝不删除）；读取走 `memory_read` 和 `memory_search`。**常驻索引**是一个内容通道使用者，因此压缩绝不会把它冲掉，而**自动召回**是 `turn_intake` 接缝上的一个轨道 A provider。召回按字面 token 匹配（名字、摘要，以及 frontmatter 的 `keywords` 别名——确定性的跨语言桥梁）；设置 `Options.recall_model` 后，字面 miss 会经由一次小模型调用重试（**recall judge**：读消息加索引、挑出相关记忆），选中项以指针形态注入并照常落账；`memory_write` 会盖上 `created` / `updated` 日期和一条 `source_task` 账本回执。由 `plugins=("memory", …)` 激活，属于 agent 身份的一部分——在官方 agent 中只有 `main` 打开它。
 → [按租户隔离记忆](../how-to/multi-tenant-memory.md)
 
 ### Memory consolidation
 
-对记忆存储的异步策展流程。一个保留名 agent（`__consolidation__`）作为普通根任务运行，被喂入一份近期活动的摘要，然后合并重复项、归档被取代的记忆、补齐明显的缺口。它由宿主的停止接缝在一个防抖标记之后触发，从不被注入到一个活的任务里，而且它只能归档，绝不能删除。
+对记忆存储的异步策展流程。一个保留名 agent（`__consolidation__`）作为普通根任务运行，被喂入一份近期活动的摘要，然后合并重复项、归档被取代的记忆、裁决记忆之间的互相矛盾、维护跨语言的 `keywords` 别名、补齐明显的缺口。它由宿主的停止接缝在一个防抖标记之后触发，从不被注入到一个活的任务里，而且它只能归档，绝不能删除。
 → [query / Client](sdk-client.md)
 
 ## 插件与扩展

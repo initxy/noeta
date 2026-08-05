@@ -236,6 +236,14 @@ suspend, reopenable by simply typing again. Its granularity *is* the turn
 boundary — it cannot abort a tool call already executing. The interrupted turn's
 events stay on the stream as real history; un-saying them is rewind's job.
 
+When `interrupt` lands on a task suspended on a pending `ask_user_question` (no
+turn is in flight), it **withdraws the question** instead: it writes
+`UserQuestionWithdrawn`, closes the dangling ask tool call with a paired
+`success=False` tool result, and parks the conversation idle at the next-goal
+suspend — no model turn is driven. This is the "Esc" landing: the question
+overlay clears, the prior turn's output stays in history, and the user resumes
+by typing. Approval suspends keep `deny` as their graceful escape.
+
 ### Rewind and fork
 
 The two branch verbs, sharing one anchor — the seq of a user-goal
@@ -396,7 +404,13 @@ Cross-task long-term memory: file-based and model-managed. Mutation is
 `memory_write` and `memory_archive` (retire, never delete); reading is
 `memory_read` and `memory_search`. The **resident index** is a content-channel
 tenant, so compaction never flushes it, and **auto-recall** is a track-A
-provider on the `turn_intake` seam. Activated by `plugins=("memory", …)`, part
+provider on the `turn_intake` seam. Recall matches literal tokens (names,
+summaries, and the frontmatter `keywords` aliases — the deterministic
+cross-lingual bridge); with `Options.recall_model` set, a lexical miss is
+retried through one small-model call over the message plus the index (the
+**recall judge**), whose picks ride in as pointers and are recorded like any
+recall; `memory_write` stamps `created` / `updated` dates and a
+`source_task` ledger receipt. Activated by `plugins=("memory", …)`, part
 of agent identity — among the official agents only `main` opens it.
 → [Multi-tenant memory](../how-to/multi-tenant-memory.md)
 
@@ -404,9 +418,10 @@ of agent identity — among the official agents only `main` opens it.
 
 The asynchronous curation pass over the memory store. A reserved-name agent
 (`__consolidation__`) runs as an ordinary root task, is fed a digest of recent
-activity, and merges duplicates, archives superseded memories and fills clear
-gaps. It is triggered at the host's stop seams behind a debounce marker, never
-injected into a live task, and it can only archive, never delete.
+activity, and merges duplicates, archives superseded memories, resolves
+contradictions between memories, maintains cross-lingual `keywords`, and fills
+clear gaps. It is triggered at the host's stop seams behind a debounce marker,
+never injected into a live task, and it can only archive, never delete.
 → [query / Client](sdk-client.md)
 
 ## Plugins and extension
