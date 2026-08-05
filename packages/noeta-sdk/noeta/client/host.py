@@ -1028,8 +1028,10 @@ class SdkHost(GenericEngineResolver):
         a cancelled / closed conversation does not leave its long-running
         ``shell_run(background)`` processes orphaned. Reuses the ``ProcessRegistry``
         per-job kill primitive (``kill_root_task`` → SIGTERM → SIGKILL per job; the
-        watchers reap + record ``BackgroundShellKilled``). Safe no-op when the
-        registry is unbuilt (returns ``[]``)."""
+        watchers reap + record ``BackgroundShellKilled``). The same cascade reaps a
+        registered FOREGROUND run, so a step thread blocked in ``communicate()``
+        returns immediately with an interrupted result instead of running out
+        the timeout. Safe no-op when the registry is unbuilt (returns ``[]``)."""
         registry = self._process_registry
         if registry is None:
             return []
@@ -1937,8 +1939,25 @@ class SdkHost(GenericEngineResolver):
             judge = None
             llm = self.providers.get(self.default_provider)
             if self.recall_model and llm is not None:
+                # Abort seam (interrupt-responsiveness D9): the judge's
+                # bounded wait polls the SAME cancellation registry the
+                # ``interrupt`` / ``cancel`` verbs arm, keyed by the intake
+                # task id — a stop pressed during recall degrades to a
+                # lexical miss promptly instead of stalling turn entry.
+                # ``task_id=None`` (a caller without a task) leaves only
+                # the judge's wall-clock cap.
+                should_abort: Optional[Callable[[], bool]] = None
+                if task_id is not None:
+                    tid = str(task_id)
+
+                    def _judge_abort(tid: str = tid) -> bool:
+                        return self.is_cancelled(tid)
+
+                    should_abort = _judge_abort
                 judge = impl.build_recall_judge(
-                    llm, resolve_model_alias(self.recall_model)
+                    llm,
+                    resolve_model_alias(self.recall_model),
+                    should_abort=should_abort,
                 )
             providers.append(impl.memory_reminder_provider(store, judge=judge))
         providers.extend(self.reminder_providers.get(agent, {}).get(TURN_INTAKE, ()))
