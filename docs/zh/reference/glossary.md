@@ -145,7 +145,7 @@ agent 可以调用的一个外部动作。`name` / `input_schema` / `description
 
 ### Interrupt
 
-第三种人为停止。`cancel` 写入 `TaskCancelled`，对话进入终止；`close` 把它归档；而 **`interrupt`** 写入 `TurnInterrupted`，只停掉进行中的这一轮，任务停在它的下一目标挂起上，再打一次字就能重开。它的粒度*就是*轮次边界——它无法中止一次已经在执行的工具调用。被中断那一轮的事件仍作为真实历史留在流上；把它们"收回去"是 rewind 的职责。
+第三种人为停止。`cancel` 写入 `TaskCancelled`，对话进入终止；`close` 把它归档；而 **`interrupt`** 写入 `TurnInterrupted`，只停掉进行中的这一轮，任务停在它的下一目标挂起上，再打一次字就能重开。它落在轮次边界上，而这个边界会被迅速抵达：进行中的 LLM 轮次是一次可放弃的等待（任意阶段都能在毫秒级中止），重试退避按取消轮询切片，工具批次在调用之间轮询，前台 shell 也会像后台 shell 一样被回收。一个卡死到所有协作缝隙之外的工具调用则交给 `interrupt(force=True)`——双击 Esc 的升级路径：被卡住那一步的租约被强制清除，脏的尝试窗口由 step-attempt recovery 封印，任务落回被中断的挂起点。被中断那一轮的事件仍作为真实历史留在流上；把它们"收回去"是 rewind 的职责。
 
 当 `interrupt` 落在一个挂起于待回答 `ask_user_question` 的任务上（此时没有进行中的轮次）时，它转而**撤回该问题**：写入 `UserQuestionWithdrawn`，用一个配对的 `success=False` 工具结果关闭悬空的 ask 工具调用，并把对话停在下一目标挂起、进入空闲——不驱动任何模型轮次。这就是 "Esc" 落点：问题浮层消失，此前那一轮的输出仍留在历史里，用户打字即可续。审批挂起仍以 `deny` 作为其优雅退出。
 

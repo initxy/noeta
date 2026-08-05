@@ -28,6 +28,7 @@ Rule of thumb: the wider the impact (spanning multiple modules), the more it bel
 [worker-queue-routing](worker-queue-routing.md) ·
 [step-attempt-recovery](step-attempt-recovery.md) ·
 [mid-turn-goal-injection](mid-turn-goal-injection.md) ·
+[interrupt-responsiveness](interrupt-responsiveness.md) ·
 [multi-host-lease-fencing](multi-host-lease-fencing.md) ·
 [subtask-fanout-and-durable-wake](subtask-fanout-and-durable-wake.md) ·
 [subtask-parallel-execution](subtask-parallel-execution.md) ·
