@@ -915,12 +915,18 @@ class Engine:
             # iteration, but the field behind it never moved. The Engine stays
             # the sole physical writer of RuntimeState: it owns the task and
             # supplies the applier; the client only notifies.
+            # ``cancelled`` rides along so the LLM client can abandon a
+            # blocking provider wait (and its retry backoff) the moment a
+            # human stop lands, instead of holding the turn until the round
+            # returns. ``None`` (resume / replay) disarms every downstream
+            # abort site — recordings stay byte-identical on those paths.
             ctx = StepContext(
                 task_id=task.task_id, lease_id=lease_id, trace_id=trace_id,
                 last_input_tokens=task.runtime.last_input_tokens,
                 apply_event=lambda env: apply_event(
                     task, env, self._content_store
-                ))
+                ),
+                cancelled=cancelled)
             view = self._composer.compose(task)
             _emit_context_plan(
                 self._emit, self._content_store, task, view, lease_id, trace_id
@@ -976,9 +982,13 @@ class Engine:
             if isinstance(decision, ToolCallsDecision):
                 # tool_calls is the only loop-continuing handler, special-cased
                 # here so dispatch_exit's `-> Task` return type stays honest.
+                # ``cancelled`` rides along so a stop landing during call N of
+                # a batch doesn't sit through calls N+1… (the handler closes
+                # the remaining calls and raises).
                 suspended = handle_tool_calls(
                     self._ctx, task, decision,
                     lease_id=lease_id, trace_id=trace_id,
+                    cancelled=cancelled,
                 )
                 if suspended is not None:
                     return suspended
