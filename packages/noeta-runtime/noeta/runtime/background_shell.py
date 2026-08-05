@@ -167,6 +167,27 @@ class _JobHandle:
     kill_signal: int = int(signal.SIGTERM)
 
 
+@dataclass
+class _ForegroundHandle:
+    """Live state for one FOREGROUND shell command (off-ledger, never persisted).
+
+    Foreground runs are the tool call's own synchronous result — no watcher, no
+    buffer, no ``BackgroundShell*`` events. The table entry exists ONLY so the
+    human-stop family (interrupt / cancel / close) can reap the process group a
+    step thread is blocked on in ``communicate()``; the tool thread owns the
+    ``Popen`` and does the reap itself once the group dies and the pipes close.
+    """
+
+    popen: subprocess.Popen[bytes]
+    #: Lifetime OWNER = the session root task, same keying as ``_JobHandle`` so
+    #: one ``kill_root_task`` cascade reaches both kinds.
+    root_task_id: str
+    #: Set (under the registry lock) by the kill cascade BEFORE it signals, so
+    #: the tool call — once ``communicate`` returns — reports *interrupted*
+    #: rather than a plain non-zero exit. Read via ``unregister_foreground``.
+    killed: bool = False
+
+
 @dataclass(frozen=True)
 class _Orphan:
     """An orphan job reconstructed from the durable log.
@@ -217,6 +238,10 @@ class ProcessRegistry:
         # is owned by the session, so it must survive the subtask's terminal
         # and be reachable by the close / cancel cascade.
         self._jobs: dict[str, dict[str, _JobHandle]] = {}
+        # Sibling table for FOREGROUND runs, same root-task keying: an entry
+        # lives only for the duration of one blocking ``shell_run`` call so the
+        # human-stop cascade can reap the group the step thread is waiting on.
+        self._foreground: dict[str, list[_ForegroundHandle]] = {}
 
     # -- spawn -------------------------------------------------------------
 
@@ -385,6 +410,72 @@ class ProcessRegistry:
             out["exit_code"] = exit_code
         return out
 
+    # -- foreground tracking -----------------------------------------------
+
+    def register_foreground(
+        self, *, popen: subprocess.Popen[bytes], spawned_by_task_id: str
+    ) -> _ForegroundHandle:
+        """Track a FOREGROUND command for the session kill cascade.
+
+        Called by ``shell_run`` right after the spawn and BEFORE the blocking
+        ``communicate()``, so an interrupt / cancel / close landing mid-run
+        finds the group in :meth:`kill_root_task` and reaps it — the blocked
+        wait then returns immediately instead of running out the timeout. The
+        caller MUST pair this with :meth:`unregister_foreground` in a
+        ``finally``. Root resolution mirrors ``spawn``: a subtask-run command
+        is owned by the session, so the session-level stop reaches it.
+        """
+        root_task_id = self._resolve_root_task_id(spawned_by_task_id)
+        handle = _ForegroundHandle(popen=popen, root_task_id=root_task_id)
+        with self._lock:
+            self._foreground.setdefault(root_task_id, []).append(handle)
+        return handle
+
+    def unregister_foreground(self, handle: _ForegroundHandle) -> bool:
+        """Drop a foreground entry once its ``communicate()`` has returned.
+
+        Returns ``True`` iff the kill cascade reaped this run, so the tool
+        reports *interrupted* rather than a plain non-zero exit. Idempotent:
+        an already-removed handle (e.g. after :meth:`purge_root_task`) still
+        answers from its own ``killed`` mark.
+        """
+        with self._lock:
+            entries = self._foreground.get(handle.root_task_id)
+            if entries is not None:
+                try:
+                    entries.remove(handle)
+                except ValueError:
+                    pass
+                if not entries:
+                    del self._foreground[handle.root_task_id]
+            return handle.killed
+
+    def _kill_foreground(
+        self, handle: _ForegroundHandle, *, grace_s: float = DEFAULT_KILL_GRACE_S
+    ) -> None:
+        """SIGTERM a foreground run's group, then SIGKILL after ``grace_s``.
+
+        Same escalation discipline as :meth:`kill`, minus the watcher: the tool
+        thread blocked in ``communicate()`` owns the ``Popen`` and reaps it as
+        soon as the group dies and the pipes close, so this only signals — and
+        the grace wait runs on a short-lived daemon thread so the caller
+        (the control-plane interrupt / cancel / close) is never blocked."""
+        self._terminate(handle.popen, signal.SIGTERM)
+
+        def _escalate() -> None:
+            try:
+                handle.popen.wait(timeout=grace_s)
+                return  # SIGTERM reaped it within the grace.
+            except subprocess.TimeoutExpired:
+                pass
+            self._terminate(handle.popen, signal.SIGKILL)
+
+        threading.Thread(
+            target=_escalate,
+            name=f"fg-kill-{handle.popen.pid}",
+            daemon=True,
+        ).start()
+
     # -- kill --------------------------------------------------------------
 
     def kill(self, job_id: str, *, grace_s: float = DEFAULT_KILL_GRACE_S) -> dict[str, Any]:
@@ -413,7 +504,7 @@ class ProcessRegistry:
         # Only the FIRST kill signals and arms the escalation timer; a
         # redundant kill must not stack a second timer.
         if not already_killing:
-            self._terminate(handle, signal.SIGTERM)
+            self._terminate(handle.popen, signal.SIGTERM)
             timer = threading.Thread(
                 target=self._escalate_after_grace,
                 args=(handle, grace_s),
@@ -428,9 +519,20 @@ class ProcessRegistry:
 
         Jobs are keyed by the ROOT task, so this reaches every job of the
         session including ones a subtask spawned. The session-close cascade
-        routes through here too, so there is one kill primitive, not two."""
+        routes through here too, so there is one kill primitive, not two.
+
+        Also reaps any registered FOREGROUND run (interrupt / cancel / close
+        landing while a step thread is blocked in ``communicate()``): the
+        handle is marked killed BEFORE the signal so the returning tool call
+        reads *interrupted*, never a plain exit. Foreground reaps are not
+        itemized in the return — the tool call reports its own result."""
         with self._lock:
             job_ids = list(self._jobs.get(root_task_id, {}).keys())
+            fg_handles = list(self._foreground.get(root_task_id, ()))
+            for fg in fg_handles:
+                fg.killed = True
+        for fg in fg_handles:
+            self._kill_foreground(fg)
         return [self.kill(job_id) for job_id in job_ids]
 
     def purge_root_task(self, root_task_id: str) -> None:
@@ -446,6 +548,10 @@ class ProcessRegistry:
         already reaped the OS processes."""
         with self._lock:
             self._jobs.pop(root_task_id, None)
+            # Foreground entries are transient (the tool call unregisters in a
+            # ``finally``); dropping any straggler here is pure hygiene, and a
+            # late ``unregister_foreground`` still answers from its own mark.
+            self._foreground.pop(root_task_id, None)
 
     # -- crash recovery / orphan reaping -----------------------------------
 
@@ -538,21 +644,21 @@ class ProcessRegistry:
         if verdict is ProbeResult.CONFIRMED:
             self._kill_pid(orphan.pid)
 
-    def _terminate(self, handle: _JobHandle, sig: int) -> None:
-        """Send ``sig`` to the job's whole process GROUP, swallowing a
+    def _terminate(self, popen: subprocess.Popen[bytes], sig: int) -> None:
+        """Send ``sig`` to the process's whole GROUP, swallowing a
         dead-process race.
 
-        The job leads its own group (``start_new_session=True``), so
-        signalling the group also reaps backgrounded grandchildren
-        (``bash -c "server & wait"``) that a single-PID signal would orphan.
-        A failed signal is benign: the terminal event is the watcher's job
-        either way."""
-        # PID-reuse guard: once the watcher has reaped the child (returncode
-        # set), the pid may be recycled onto an unrelated process and
+        Background jobs and foreground runs alike lead their own group
+        (``start_new_session=True``), so signalling the group also reaps
+        backgrounded grandchildren (``bash -c "server & wait"``) that a
+        single-PID signal would orphan. A failed signal is benign: the
+        terminal outcome is the reaping thread's job either way."""
+        # PID-reuse guard: once the child has been reaped (returncode set),
+        # the pid may be recycled onto an unrelated process and
         # ``os.getpgid(pid)`` would resolve a stranger's group to ``killpg``.
-        if handle.popen.returncode is not None:
+        if popen.returncode is not None:
             return
-        send_group_signal(handle.popen.pid, sig)
+        send_group_signal(popen.pid, sig)
 
     def _escalate_after_grace(self, handle: _JobHandle, grace_s: float) -> None:
         """Daemon thread: wait ``grace_s``, then SIGKILL if still alive.
@@ -569,7 +675,7 @@ class ProcessRegistry:
             if handle.notified:
                 return  # the watcher already reaped it during the grace
             handle.kill_signal = int(signal.SIGKILL)
-        self._terminate(handle, signal.SIGKILL)
+        self._terminate(handle.popen, signal.SIGKILL)
 
     # -- watcher (daemon thread) -------------------------------------------
 

@@ -33,7 +33,7 @@ from noeta.runtime.shell_policy import (
     _parse_argv,
     _resolve_timeout,
 )
-from noeta.runtime.subproc import RunOutcome
+from noeta.runtime.subproc import RunOutcome, runner_with_spawn_hook
 from noeta.runtime.workspace import WorkspaceRoot
 from noeta.tools.invocation import require_str
 from noeta.protocols.resources import load_markdown
@@ -155,20 +155,59 @@ class ShellRunTool:
                     "run the command in the foreground instead",
                 )
             return self._spawn_background(exec_argv, command, ctx)
-        outcome = self.exec_env.run_argv(
-            exec_argv,
-            cwd=self.workspace.root,
-            timeout_s=timeout_s,
-            output_cap=self.output_cap,
-            runner=self.runner,
-        )
+        outcome, interrupted = self._run_foreground(exec_argv, timeout_s, ctx)
         return _build_shell_result(
             self.name,
             command=command,
             outcome=outcome,
             ctx=ctx,
             timeout_s=timeout_s,
+            interrupted=interrupted,
         )
+
+    def _run_foreground(
+        self, exec_argv: list[str], timeout_s: int, ctx: ToolContext
+    ) -> tuple[RunOutcome, bool]:
+        """Run the blocking command, registered in the session kill table.
+
+        The registration (via the default runner's ``on_spawn`` hook) is what
+        lets the human-stop family — interrupt / cancel / close — reap the
+        group while this thread is blocked in ``communicate()``: the wait
+        returns immediately and the second value reports *interrupted*, so the
+        result never masquerades as a plain exit or a timeout. Registration
+        engages only where a real HOST group exists to kill: the default local
+        runner (an injected test runner spawns nothing; a sandbox backend
+        ignores ``runner`` and runs remotely) and a host whose runner exposes
+        the foreground surface (``getattr`` so a plain spawn/poll/kill double
+        skips cleanly). Unregistration always lands, in the ``finally``."""
+        runner = self.runner
+        registry = ctx.background_runner
+        register = getattr(registry, "register_foreground", None)
+        unregister = getattr(registry, "unregister_foreground", None)
+        task_id = str(ctx.metadata.get("task_id", ""))
+        handle_box: list[Any] = []
+        if runner is None and callable(register) and callable(unregister) and task_id:
+
+            def _on_spawn(proc: subprocess.Popen[bytes]) -> None:
+                handle_box.append(
+                    register(popen=proc, spawned_by_task_id=task_id)
+                )
+
+            runner = runner_with_spawn_hook(_on_spawn)
+        interrupted = False
+        try:
+            outcome = self.exec_env.run_argv(
+                exec_argv,
+                cwd=self.workspace.root,
+                timeout_s=timeout_s,
+                output_cap=self.output_cap,
+                runner=runner,
+            )
+        finally:
+            if handle_box:
+                assert unregister is not None  # guarded with ``register`` above
+                interrupted = bool(unregister(handle_box[0]))
+        return outcome, interrupted
 
     def _spawn_background(
         self, argv: list[str], command: str, ctx: ToolContext
@@ -216,6 +255,7 @@ def _build_shell_result(
     outcome: RunOutcome,
     ctx: ToolContext,
     timeout_s: int,
+    interrupted: bool = False,
 ) -> ToolResult:
     # The FULL streams are the audit artifacts; only the capped rendering
     # rides inline, and no ref ever enters the model-facing text.
@@ -230,6 +270,16 @@ def _build_shell_result(
         )
     body = _render_streams(outcome.stdout, outcome.stderr)
     summary_cmd = truncate_bytes(command, SUMMARY_EMBED_MAX_BYTES)
+    if interrupted:
+        # The session kill cascade reaped the group mid-run (user stop) —
+        # checked BEFORE the timeout branch so a kill racing the deadline
+        # still reads as the interrupt it was, never a generic timeout.
+        return ToolResult(
+            success=False,
+            output=body,
+            artifacts=artifacts,
+            summary="Command interrupted (stop requested)",
+        )
     if outcome.timed_out:
         return ToolResult(
             success=False,

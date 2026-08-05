@@ -26,6 +26,7 @@ __all__ = [
     "RunOutcome",
     "cap_stream",
     "run_argv",
+    "runner_with_spawn_hook",
     "tail_bytes",
 ]
 
@@ -62,6 +63,7 @@ def _default_run(
     capture_output: bool = True,
     timeout: Optional[float] = None,
     check: bool = False,
+    on_spawn: Optional[Callable[["subprocess.Popen[bytes]"], None]] = None,
 ) -> "subprocess.CompletedProcess[bytes]":
     """``subprocess.run``-shaped default runner that reaps the WHOLE process
     group on timeout.
@@ -71,6 +73,11 @@ def _default_run(
     escalates SIGTERM → grace → SIGKILL against the group, then re-raises the
     same ``TimeoutExpired`` (carrying whatever output was captured) that
     ``subprocess.run`` would, so callers need no separate timeout branch.
+
+    ``on_spawn`` is called with the just-spawned ``Popen`` BEFORE the blocking
+    wait — the seam ``shell_run`` uses to register the group in the session
+    kill table so a human stop can reap it mid-run. A hook that raises must
+    not leak a running child, so the group is reaped before re-raising.
     """
     del check  # parity with the subprocess.run call shape; never used here
     kwargs: dict[str, Any] = {}
@@ -88,6 +95,12 @@ def _default_run(
         start_new_session=True,
         **kwargs,
     )
+    if on_spawn is not None:
+        try:
+            on_spawn(proc)
+        except BaseException:
+            _kill_process_group(proc)
+            raise
     try:
         stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -99,6 +112,23 @@ def _default_run(
             argv, timeout or 0.0, output=stdout, stderr=stderr
         )
     return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+
+
+def runner_with_spawn_hook(
+    on_spawn: Callable[["subprocess.Popen[bytes]"], None],
+) -> Callable[..., "subprocess.CompletedProcess[bytes]"]:
+    """The default runner, plus an ``on_spawn`` callback on the fresh ``Popen``.
+
+    Lets a caller of :func:`run_argv` observe the spawned process (register its
+    group in a kill table) without changing the runner seam's
+    ``subprocess.run`` shape — the hook rides inside the returned runner."""
+
+    def _run(
+        argv: list[str], **kwargs: Any
+    ) -> "subprocess.CompletedProcess[bytes]":
+        return _default_run(argv, on_spawn=on_spawn, **kwargs)
+
+    return _run
 
 
 def tail_bytes(buf: bytes, n: int) -> tuple[str, bool]:

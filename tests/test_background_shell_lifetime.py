@@ -23,6 +23,7 @@ batch (``make build``) result must not be reaped when its subtask completes.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -347,3 +348,75 @@ def test_session_close_with_no_jobs_is_clean(tmp_path: Path) -> None:
     outcome = driver.start(goal="kick off", agent="main")
     # No jobs spawned — close must not raise.
     driver.close(outcome.task_id)
+
+
+# ---------------------------------------------------------------------------
+# FOREGROUND runs ride the same session kill cascade
+# ---------------------------------------------------------------------------
+
+
+def _spawn_sleeper() -> subprocess.Popen[bytes]:
+    """A 30 s sleeper spawned the way the foreground runner spawns: its own
+    group leader — the shape the group-signal kill relies on."""
+    return subprocess.Popen(
+        _py("import time; time.sleep(30)"),
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def _await_reaped(proc: subprocess.Popen[bytes], timeout_s: float = 8.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    while proc.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert proc.poll() is not None, "foreground group not reaped promptly"
+
+
+def test_interrupt_reaps_registered_foreground_group(tmp_path: Path) -> None:
+    """``InteractionDriver.interrupt`` reaches a registered FOREGROUND run
+    through the SAME ``kill_background_shells`` → ``kill_root_task`` cascade
+    the background jobs use: the group dies promptly (a blocked
+    ``communicate()`` would return immediately) and the handle reads back
+    *killed*, which is what makes the tool report an interrupted result."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    host = _make_host(ws, responses=[_end_turn("hi")])
+    driver = InteractionDriver(host)
+    outcome = driver.start(goal="kick off", agent="main")
+    task_id = outcome.task_id
+
+    reg = host._process_registry  # noqa: SLF001 — reach the wired registry
+    assert reg is not None
+    proc = _spawn_sleeper()
+    handle = reg.register_foreground(popen=proc, spawned_by_task_id=task_id)
+    try:
+        driver.interrupt(task_id)
+        _await_reaped(proc)
+    finally:
+        killed = reg.unregister_foreground(handle)
+        if proc.poll() is None:  # never leak the sleeper on a failed assert
+            proc.kill()
+        proc.wait()
+    assert killed is True
+
+
+def test_foreground_registration_keyed_under_session_root(tmp_path: Path) -> None:
+    """A foreground run registered by a SUBTASK is keyed under the session
+    ROOT (same root resolution as ``spawn``), so the session-level stop
+    reaches it there."""
+    log = InMemoryEventLog()
+    store = InMemoryContentStore()
+    _seed_subtask_chain(log, root="root", sub="sub")
+    reg = _registry_with_chain(log, store)
+    proc = _spawn_sleeper()
+    handle = reg.register_foreground(popen=proc, spawned_by_task_id="sub")
+    try:
+        assert handle.root_task_id == "root"
+        reg.kill_root_task("root")
+        _await_reaped(proc)
+    finally:
+        killed = reg.unregister_foreground(handle)
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+    assert killed is True
