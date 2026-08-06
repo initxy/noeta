@@ -8,6 +8,66 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-08-06
+
+Covers both packages (lockstep). Patch bump: additive API
+(`ControlTranslateContext.view`, `ReminderView.summary_boundary`, the
+`RecallHistory` control tool + `collapsed-context` reminder) plus a
+compaction-note template change.
+
+### Added — compaction escape hatch: the collapsed originals stay reachable
+
+- New `RecallHistory` control tool (react built-in, `recall_history` host
+  flag, schema/routing band 550): renders a bounded, deterministic slice of
+  the compaction-collapsed prefix (`rolling_history[:summary_boundary]`)
+  straight off the composed View at translate time — no runtime handler, no
+  new Decision or event vocabulary. Conversation-born content (error text,
+  earlier model output) lives in no file, so `Read` could never recover it;
+  this channel can. Recall output re-enters history as a normal tool result,
+  so the tail prune clears it once it ages out.
+- New `collapsed-context` compose-time reminder (react built-in, priority
+  350): while `summary_boundary > 0`, points at the live collapsed range and
+  names `RecallHistory`. Backed by the widened `ReminderView.summary_boundary`
+  projection; `default_reminder_specs()` now collects `reminder`
+  contributions from every built-in manifest, not just `reminders`.
+- `ControlTranslateContext` gains a neutral optional `view` field (threaded
+  through `translate_control_tool`), so a control tool can answer from folded
+  state.
+
+### Changed — the compaction note carries end-of-span continuity sections
+
+- `summarize.md` gains sections `8. Current Work` and `9. Next Step`,
+  describing the END of the span the note covers (the summarize input stops
+  at the boundary), with an explicit defer-to-later-messages sentence and an
+  anti-tangent guardrail adapted from Claude Code's compact prompt. Both are
+  rewritten on every pass — the one exception to note carry-forward. This
+  amends the context-compaction ADR (rejected alternative 8 partially
+  adopted, reframed): model-derived in-flight work previously vanished at the
+  note/tail seam once it aged past the protected tail.
+- Section 5 (All user messages) is hardened against transcript-shaped
+  injection: only user-role turns count as user messages, and quoted
+  "user:"-style text inside assistant messages is attributed to the
+  assistant.
+- Section 6 (Pending Tasks) now includes follow-up work the assistant
+  identified while working, not only work explicitly requested.
+
+### Changed — main-agent prompt: exploration budget, delegation trigger, HITL respect
+
+Trace-driven fixes to `main.md` / `main-web.md` (from a real task that spent
+82.6% of wall time exploring before its first edit, burned 15 minutes in a
+search rabbit hole, and overruled the user's answer in its final summary):
+
+- Rule 1 scopes the search mandate: a named target or few-file change means
+  locate-and-edit, not a repo survey, and an answered search is never
+  repeated.
+- Rule 9 gains a spin self-check: consecutive rounds with no edit and no new
+  fact mean stop exploring — act on what you have or name the blocker.
+- Rule 10 gains a delegation trigger: a hunt that takes more than a few
+  rounds goes to an `explore` sub-agent.
+- New rule (12 in `main.md`, 13 in `main-web.md`): a user's answer to a
+  clarifying question settles the matter — conflicts get surfaced and
+  re-asked, never silently overruled.
+
 ## [0.6.3] - 2026-08-05
 
 Covers both packages (lockstep). Patch bump: additive API
@@ -1638,7 +1698,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.3...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.4...HEAD
+[0.6.4]: https://github.com/initxy/noeta/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/initxy/noeta/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/initxy/noeta/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/initxy/noeta/compare/v0.6.0...v0.6.1
