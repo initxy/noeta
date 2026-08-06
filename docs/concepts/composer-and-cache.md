@@ -159,9 +159,11 @@ head:
   half-empty context never forces the model to re-run a tool.
 - **Compose-time reminders** are pure renderers appended at the very end of the
   tail: unfinished todos, a delegation nudge, a read-strategy hint while
-  compaction thrashes. They are View-only — never written to the message
-  stream, never recorded as events — and re-derived from folded state on every
-  compose, so resume reproduces them for free.
+  compaction thrashes, and — once a compaction has collapsed a prefix — a
+  pointer at the collapsed range the `RecallHistory` tool can read back. They
+  are View-only — never written to the message stream, never recorded as
+  events — and re-derived from folded state on every compose, so resume
+  reproduces them for free.
 
 Everything a turn was built from lands in the plan body: the segment hashes,
 the skills that actually rendered, the messages kept versus cleared, the

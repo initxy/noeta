@@ -121,7 +121,7 @@ seams   = ["turn_intake"]
 
 ### `reminder`
 
-wiring · per-agent · 冲突 `name` · **priority**。轨道 B：一个 `render(view) -> str | None`，它是一个 fold 投影的**纯**函数，渲染在动态后缀的尾端。从不被记录，每次 compose 都重新推导，因此稳定前缀在构造上就不会被它触碰。内置语料：`reminders` 贡献了 `unfinished-todos`（100）、`delegation-nudge`（200）和 `read-suggestion`（300）。
+wiring · per-agent · 冲突 `name` · **priority**。轨道 B：一个 `render(view) -> str | None`，它是一个 fold 投影的**纯**函数，渲染在动态后缀的尾端。从不被记录，每次 compose 都重新推导，因此稳定前缀在构造上就不会被它触碰。内置语料：`reminders` 贡献了 `unfinished-todos`（100）、`delegation-nudge`（200）和 `read-suggestion`（300）；`react` 贡献了 `collapsed-context`（350）——指向压缩折叠区间的指针，其 `RecallHistory` 工具可以把那段原文读回来。
 
 ```toml
 [[tool.noeta.contributions]]
