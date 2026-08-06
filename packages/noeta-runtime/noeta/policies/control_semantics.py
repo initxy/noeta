@@ -26,6 +26,7 @@ from noeta.protocols.messages import (
     ThinkingBlock,
     ToolResultBlock,
 )
+from noeta.protocols.view import View
 
 
 # Every name here is imported back by built-in control tools across the wheel
@@ -125,6 +126,13 @@ class ControlTranslateContext:
     #: hands residual calls to the ToolRuntime (TodoWrite's mixed batch) refuse
     #: a co-occurring CONTROL call, which the runtime could never answer.
     control_tool_names: frozenset[str] = frozenset()
+    #: The composed View the turn was decided against — the same folded-state
+    #: projection the Policy already holds, threaded through so a translate can
+    #: answer from folded state (RecallHistory renders the collapsed prefix off
+    #: ``view.rolling_history[:view.summary_boundary]``). ``None`` when the
+    #: caller predates the field; a translate that needs it must degrade to a
+    #: recoverable ack, not raise.
+    view: Optional[View] = None
 
 
 @dataclass(frozen=True)
@@ -152,6 +160,7 @@ def translate_control_tool(
     *,
     specs: Sequence[ControlToolSpec],
     content_store: Optional[ContentStore] = None,
+    view: Optional[View] = None,
 ) -> Decision | None:
     """Translate a control-tool ``tool_use`` turn into a neutral Decision.
 
@@ -171,6 +180,7 @@ def translate_control_tool(
         ),
         content_store=content_store,
         control_tool_names=frozenset(spec.name for spec in specs),
+        view=view,
     )
     for spec in specs:
         decision = spec.translate(ctx)

@@ -53,6 +53,8 @@ _SCHEMA_RUN_WORKFLOW = r'''{"function":{"description":"Run a short Python orches
 
 _SCHEMA_STRUCTURED_OUTPUT = r'''{"function":{"description":"Provide your final answer as a structured object matching the required JSON schema. Call this exactly once when you are done.","name":"structured_output","parameters":{"type":"object"}},"type":"function"}'''
 
+_SCHEMA_RECALL_HISTORY = r'''{"function":{"description":"Recall original messages that compaction collapsed into the summary note at the head of the conversation.\n\nThe originals are retained in full \u2014 the note merely stands in for them in the prompt. Use this tool when the note lacks a detail you need: the exact text of an earlier error, code you produced or discussed before compaction, or the precise wording of an earlier exchange. The collapsed range is [0, boundary); the current boundary is reported in every result and in the collapsed-context reminder.\n\nResults are a read-only rendering of the original messages; long blocks are truncated with a marker. Page through a large range with repeated calls, advancing `offset`.","name":"RecallHistory","parameters":{"properties":{"limit":{"description":"How many messages to view (default 20, max 50).","type":"integer"},"offset":{"description":"0-based index of the first collapsed message to view; the valid range is [0, boundary).","type":"integer"}},"required":["offset"],"type":"object"}},"type":"function"}'''
+
 
 def _list(*schemas: str) -> str:
     """The canonical bytes of the ordered control-schema LIST, composed from the
@@ -169,6 +171,36 @@ def test_workflow_alone(tmp_path: Path) -> None:
     schemas = _control_schemas(tmp_path, workflow_enabled=True)
     assert _names(schemas) == ["run_workflow"]
     assert _canonical(schemas) == _list(_SCHEMA_RUN_WORKFLOW)
+
+
+# (b) recall_history alone — host-computed flag, not a spec activation.
+def test_recall_history_alone(tmp_path: Path) -> None:
+    schemas = _control_schemas(
+        tmp_path, capability_flags={"recall_history": True}
+    )
+    assert _names(schemas) == ["RecallHistory"]
+    assert _canonical(schemas) == _list(_SCHEMA_RECALL_HISTORY)
+
+
+# (b') recall_history renders after run_workflow (550 > 500) and BEFORE
+# structured_output (550 < 600) — the terminal answer tool stays last.
+def test_recall_history_precedes_structured_output(tmp_path: Path) -> None:
+    schemas = _control_schemas(
+        tmp_path,
+        workflow_enabled=True,
+        capability_flags={"recall_history": True},
+        structured_output_schema={"type": "object"},
+    )
+    assert _names(schemas) == [
+        "run_workflow",
+        "RecallHistory",
+        "structured_output",
+    ]
+    assert _canonical(schemas) == _list(
+        _SCHEMA_RUN_WORKFLOW,
+        _SCHEMA_RECALL_HISTORY,
+        _SCHEMA_STRUCTURED_OUTPUT,
+    )
 
 
 # (c) full combination — exact render ORDER + byte-exact full list.

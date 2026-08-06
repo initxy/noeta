@@ -329,7 +329,10 @@ def test_default_host_byte_equal_to_direct_builder(tmp_path: Path) -> None:
             },
         },
         require_approval_tools=_approval_set_for("default", main_spec.tools),
-        capability_flags={},
+        # ``recall_history`` is unconditionally on in the SdkHost bag (the
+        # host wires compaction for every session), so the direct-builder
+        # side carries it too for byte equality.
+        capability_flags={"recall_history": True},
         hooks_pre_tool_use=(),
         repetition_threshold=0,
         repetition_action="require_approval",

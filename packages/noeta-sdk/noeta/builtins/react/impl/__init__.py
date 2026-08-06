@@ -33,21 +33,35 @@ from .react import (
     enforce_verbatim_constraints,
     extract_safety_constraints,
 )
+from .recall_history import (
+    RECALL_HISTORY_TOOL,
+    build_recall_history_control_tool,
+    collapsed_context_reminder,
+    recall_history_tool_schema,
+    render_collapsed_slice,
+    translate_recall_history,
+)
 
 
 __all__ = [
     "OrchestrationPolicy",
+    "RECALL_HISTORY_TOOL",
     "ReActPolicy",
     "STRUCTURED_OUTPUT_TOOL",
     "StructuredOutputPolicy",
     "WORKFLOW_SYSTEM_PROMPT",
     "build_react_policy_factory",
+    "build_recall_history_control_tool",
     "build_run_workflow_control_tool",
     "build_structured_output_control_tool",
+    "collapsed_context_reminder",
     "enforce_verbatim_constraints",
     "extract_safety_constraints",
+    "recall_history_tool_schema",
+    "render_collapsed_slice",
     "run_workflow_tool_schema",
     "structured_output_tool_schema",
+    "translate_recall_history",
     "translate_run_workflow",
 ]
 

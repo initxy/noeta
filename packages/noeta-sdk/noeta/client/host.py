@@ -1653,6 +1653,14 @@ class SdkHost(GenericEngineResolver):
                 "ask_user_question": ask_user_question_enabled,
                 "skill_invocation": agent_activates(spec, "skill_invocation"),
                 "workflow": self.workflow_allowed and delegation_enabled,
+                # Host-computed like ``workflow``, not a spec activation: the
+                # collapsed-history escape hatch belongs to every agent whose
+                # history can compact, and this host wires compaction for every
+                # session (``compaction=derive_compaction_config(model)``
+                # below), so the flag is unconditionally on. The orchestration
+                # engine's bag omits it — a deterministic script never
+                # converses, so it has nothing to recall.
+                "recall_history": True,
             },
             # The per-plugin config bag: each pack parses only its own entry. The
             # per-task memory root rides the top-precedence ``memory_dir`` slot so
