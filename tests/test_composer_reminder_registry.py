@@ -81,21 +81,24 @@ def test_render_all_skips_none() -> None:
     assert registry.render_all(ReminderView()) == ["shown"]
 
 
-def test_default_specs_are_the_three_builtins() -> None:
-    """The loader-resolved base carries exactly the three built-ins in the order
-    todo -> delegation -> read, resolved from the ``reminders`` manifest and
-    never statically imported."""
+def test_default_specs_are_the_builtin_corpus() -> None:
+    """The loader-resolved base carries the built-in corpus in the order
+    todo -> delegation -> read -> collapsed-context, resolved from the built-in
+    manifests (the classic three on ``reminders``, the compaction pointer on
+    ``react``) and never statically imported."""
     registry = ReminderRegistry(default_reminder_specs())
     assert [s.name for s in registry.specs()] == [
         "unfinished-todos",
         "delegation-nudge",
         "read-suggestion",
+        "collapsed-context",
     ]
     # priorities keep that order and match the declared table
     assert [s.priority for s in registry.specs()] == [
         BUILTIN_REMINDER_PRIORITIES["unfinished-todos"],
         BUILTIN_REMINDER_PRIORITIES["delegation-nudge"],
         BUILTIN_REMINDER_PRIORITIES["read-suggestion"],
+        350,
     ]
 
 

@@ -64,6 +64,12 @@ class ReminderView:
     already_spawned: bool = False
     #: ``ContextState.compaction_thrashing`` — the latched thrash flag.
     compaction_thrashing: bool = False
+    #: ``ContextState.summary_boundary`` — how many leading raw-history
+    #: messages the compaction note currently stands in for (``0`` = nothing
+    #: collapsed). Lets a reminder point at the collapsed range (the
+    #: ``collapsed-context`` reminder names the ``RecallHistory`` tool over
+    #: ``[0, summary_boundary)``).
+    summary_boundary: int = 0
 
 
 #: A reminder render: the folded-state projection -> reminder text (or ``None``

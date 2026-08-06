@@ -382,18 +382,19 @@ _REMINDER_SPEC_CACHE: Optional[tuple[ReminderSpec, ...]] = None
 def default_reminder_specs() -> tuple[ReminderSpec, ...]:
     """The built-in compose-time reminders, **loader-resolved**.
 
-    The ``reminders`` manifest declares each render (ref + priority) as inert
-    data; resolving it here at the sanctioned execution boundary gives the
-    kernel builder its ``base_reminders`` injection without a static edge into
-    builtins. Memoized; the renders are import-stable module-level functions.
+    Every built-in manifest may declare ``reminder`` contributions (ref +
+    priority) as inert data — the three classics live on the ``reminders``
+    manifest, the compaction ``collapsed-context`` pointer on ``react`` beside
+    the tool it names. Resolving them here at the sanctioned execution boundary
+    gives the kernel builder its ``base_reminders`` injection without a static
+    edge into builtins. Memoized; the renders are import-stable module-level
+    functions.
     """
     global _REMINDER_SPEC_CACHE
     if _REMINDER_SPEC_CACHE is None:
         builtins_mod = importlib.import_module("noeta.builtins")
         specs: list[ReminderSpec] = []
         for manifest in builtins_mod.builtin_manifests():
-            if manifest.name != "reminders":
-                continue
             for c in manifest.contributions:
                 if c.surface != "reminder" or c.ref is None:
                     continue

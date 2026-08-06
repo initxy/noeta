@@ -356,7 +356,7 @@ class ReActPolicy:
             return self._compaction_decision(
                 ctx, view, reason="overflow", estimated=estimated
             )
-        return self._response_to_decision(response)
+        return self._response_to_decision(response, view)
 
     # ------------------------------------------------------------------
     # ③ compaction (D-3)
@@ -872,7 +872,7 @@ class ReActPolicy:
     # ------------------------------------------------------------------
 
     def _response_to_decision(
-        self, response: LLMResponse
+        self, response: LLMResponse, view: View
     ) -> Decision:
         history_content = _strip_thinking(response.content)
         if response.stop_reason == "tool_use":
@@ -880,15 +880,18 @@ class ReActPolicy:
                 role="assistant", content=history_content
             )
             # B3: route any enabled control-tool call (ask_user_question →
-            # todo_write → spawn_subagent → skill → run_workflow, in that
-            # fixed order) through the single translation seam. ``None`` means
-            # no control tool matched — fall through to the normal tool_calls
-            # path.
+            # todo_write → spawn_subagent → skill → run_workflow →
+            # recall_history, in that fixed order) through the single
+            # translation seam. ``None`` means no control tool matched — fall
+            # through to the normal tool_calls path. The View rides along so a
+            # translate can answer from folded state (RecallHistory renders
+            # the collapsed prefix).
             control = translate_control_tool(
                 response,
                 assistant_message,
                 specs=self._control_translate_specs,
                 content_store=self._content_store,
+                view=view,
             )
             if control is not None:
                 return control

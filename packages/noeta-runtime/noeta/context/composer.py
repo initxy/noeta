@@ -725,6 +725,7 @@ class ThreeSegmentComposer:
             delegation_enabled=delegation_enabled,
             already_spawned=already_spawned,
             compaction_thrashing=task.context.compaction_thrashing,
+            summary_boundary=max(0, task.context.summary_boundary),
         )
         texts = self._reminders.render_all(view)
         if not texts:

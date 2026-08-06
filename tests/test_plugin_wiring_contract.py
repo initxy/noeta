@@ -741,7 +741,9 @@ def test_already_spawned_scan_is_skipped_for_a_non_delegating_agent() -> None:
     class _Task:
         runtime = _Runtime()
         state = type("S", (), {"todos": ()})()
-        context = type("C", (), {"compaction_thrashing": False})()
+        context = type(
+            "C", (), {"compaction_thrashing": False, "summary_boundary": 0}
+        )()
 
     assert composer._append_reminders(
         _Task(), [], delegation_enabled=False
