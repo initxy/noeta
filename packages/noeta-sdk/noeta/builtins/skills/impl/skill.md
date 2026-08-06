@@ -19,9 +19,3 @@ activation uses. There are no other arguments: just the skill name.
   only from the listed ones.
 - A skill is already active — do not re-activate it.
 - No listed skill covers the task — just proceed without one.
-
-## Preconditions
-
-- The `skill_invocation` capability must be enabled AND the workspace must have at
-  least one indexed skill, otherwise the tool is not offered.
-- The `skill` value must be one of the names in the roster shown on the parameter.

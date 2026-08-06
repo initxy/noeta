@@ -6,6 +6,8 @@ Spawns one sub-agent per call: pick a `subagent_type` from the roster, give it t
 
 **Parallelism**: emit SEVERAL Task calls in ONE assistant turn — they run CONCURRENTLY and their results come back together. Issuing one Task per turn is strictly sequential; when work is independent, always batch the calls into a single turn.
 
+Once you have delegated a piece of work, do not also do it yourself — wait for the result and build on it.
+
 ## When to use
 
 - The task fits a sub-agent type: a read-only scout for broad searches, a general-purpose worker for a self-contained coding task, an architect for a plan.
