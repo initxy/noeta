@@ -91,6 +91,22 @@ def _is_summarize(request: LLMRequest) -> bool:
     return _SUMMARY_MARKER in _system_text(request)
 
 
+def test_summarize_template_carries_the_continuity_sections() -> None:
+    """The note template ends on the two end-of-span continuity sections
+    (Current Work / Next Step), keeps them out of the carry-forward rule, and
+    still opens with the marker line the fake providers key on."""
+    from noeta.builtins.react.impl.react import _SUMMARIZE_SYSTEM_PROMPT
+
+    assert _SUMMARIZE_SYSTEM_PROMPT.startswith(_SUMMARY_MARKER)
+    assert "8. Current Work:" in _SUMMARIZE_SYSTEM_PROMPT
+    assert "9. Next Step:" in _SUMMARIZE_SYSTEM_PROMPT
+    # The sections describe the END of the covered span and defer to the
+    # verbatim continuation — the wording that keeps them honest.
+    assert "supersede this section" in _SUMMARIZE_SYSTEM_PROMPT
+    # Rewritten each pass: the one exception to note carry-forward.
+    assert "superseded, not carried forward" in _SUMMARIZE_SYSTEM_PROMPT
+
+
 # ---------------------------------------------------------------------------
 # (a) the summarize request carries the live tool schemas
 # ---------------------------------------------------------------------------

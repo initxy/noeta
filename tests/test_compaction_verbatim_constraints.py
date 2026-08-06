@@ -237,19 +237,23 @@ def test_summarize_prompt_uses_durable_sections() -> None:
         assert section in text, f"missing section: {section}"
 
 
-def test_summarize_prompt_drops_current_work_and_next_step() -> None:
-    """The prompt asks for no Current Work / Next Step section: the latest
-    state is kept verbatim in the protected tail, so re-narrating it wastes
-    budget and risks a summary that disagrees with the tail it sits next to."""
+def test_summarize_prompt_carries_end_of_span_continuity_sections() -> None:
+    """The prompt asks for Current Work / Next Step scoped to the END of the
+    covered span (the summarize input stops at the boundary, so this is
+    about-to-be-lost content, not tail duplication), defers to the verbatim
+    continuation, and rewrites both sections each pass instead of carrying
+    them forward — the 2026-08-06 amendment to the context-compaction ADR."""
     resp = LLMResponse(
         stop_reason="end_turn", content=[TextBlock(text="note")]
     )
     policy, provider = _policy([resp])
     text = _summarize_system_text(policy, provider, _big_view_with_constraint(
         "Do not touch x.y"
-    )).lower()
-    assert "current work" not in text
-    assert "next step" not in text
+    ))
+    assert "8. Current Work:" in text
+    assert "9. Next Step:" in text
+    assert "supersede this section" in text
+    assert "superseded, not carried forward" in text
 
 
 def test_summarize_prompt_files_section_is_path_list_only() -> None:
