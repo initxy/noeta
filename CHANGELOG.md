@@ -8,6 +8,31 @@ Noeta is pre-1.0: while on `0.x`, minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-08-06
+
+Covers `noeta-sdk` only (`noeta-runtime` stays at 0.6.4). Patch bump:
+prompt-preset and tool-description text only, no API change.
+
+### Changed — agent prompts aligned with Claude Code's communication guidance
+
+- `main`/`main-web` presets: rule 7 now caps mid-run narration — one sentence
+  before the first tool call, then quiet by default (at most a one-line status
+  note on a load-bearing fact or direction change; never announcing the next
+  tool call, never restating an explanation). Rule 2 restricts comments to
+  constraints the code cannot show; rule 8 asks for brevity through
+  selectivity (complete sentences, shape matched to the question); rule 9 adds
+  "recommend, don't survey".
+- `general-purpose` preset: dropped the ReAct-era "reason briefly before each
+  tool call" rule — with thinking-capable models it double-spends reasoning
+  and trains narration.
+- `Read` tool: nudges partial reads (`offset`/`limit`) when the target region
+  is known, and forbids re-reading a file just to verify your own edit.
+- `Bash` tool: the avoid-list widens to `cat`/`head`/`tail`/`grep`/`find`/
+  `sed`, and `Edit` joins the preferred dedicated tools.
+- `Task` tool: once work is delegated, the caller must not redo it inline.
+- `skill` tool: dropped the dead-weight Preconditions section (it described
+  when the tool is absent — unobservable by any reader of the description).
+
 ## [0.6.4] - 2026-08-06
 
 Covers both packages (lockstep). Patch bump: additive API
@@ -1698,7 +1723,8 @@ Initial preview release.
   checkout.
 - Single-host, single-worker durable execution with exactly-once wake recovery.
 
-[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.4...HEAD
+[Unreleased]: https://github.com/initxy/noeta/compare/v0.6.5...HEAD
+[0.6.5]: https://github.com/initxy/noeta/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/initxy/noeta/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/initxy/noeta/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/initxy/noeta/compare/v0.6.1...v0.6.2
