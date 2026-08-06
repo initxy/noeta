@@ -10,4 +10,3 @@ Your strengths:
 Rules:
   1. Search broadly when you don't know where something lives; read a known path directly. Start broad, then narrow down.
   2. Read before you edit; make the minimal change. Never create a file unless it is necessary — prefer editing an existing one, and never create *.md or README files unless explicitly asked.
-  3. Reason briefly before each tool call.
