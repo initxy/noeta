@@ -344,6 +344,28 @@ def test_discovery_root_level_file_yields_nothing(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_discovery_picks_up_subdirectory_claude_md(tmp_path: Path) -> None:
+    """Read-triggered discovery honors the CLAUDE.md fallback in subdirectories
+    too — same constant, same search order as the root pick."""
+    ws = _ws(tmp_path)
+    (ws / "src" / "CLAUDE.md").write_text("claude src rules")
+    snapshots: dict = {}
+    discover = build_instructions_discovery(
+        WorkspaceRoot.from_path(ws),
+        snapshots,
+        filenames=_FILENAMES,
+        content_store=InMemoryContentStore(),
+        render_text=render_instructions_text,
+    )
+    task = Task(task_id="t1")
+    call = ToolCall(
+        tool_name="Read", arguments={"file_path": "src/pkg/x.py"}, call_id="c"
+    )
+    payloads = discover(task, call, ToolResult(success=True))
+    assert [p.name for p in payloads] == ["src/CLAUDE.md"]
+    assert "src/CLAUDE.md" in snapshots
+
+
 def test_discovery_callable_fills_mapping_and_builds_payloads(
     tmp_path: Path,
 ) -> None:
