@@ -28,6 +28,8 @@ from noeta.protocols.decisions import (
     ToolCall,
     ToolCallsDecision,
 )
+from noeta.core.fold import fold
+from noeta.protocols.events import TaskCreatedPayload
 from noeta.protocols.messages import (
     LLMRequest,
     LLMResponse,
@@ -457,3 +459,69 @@ def test_rejection_without_an_assistant_turn_still_spends_the_budget() -> None:
     # the same call is terminal instead of looping.
     spent = SimpleNamespace(rolling_history=[nudge] * MAX_STRUCTURED_OUTPUT_NUDGES)
     assert isinstance(policy.decide(SimpleNamespace(), spent), FailDecision)
+
+
+# ---------------------------------------------------------------------------
+# The resolver claim path keeps the schema contract
+# ---------------------------------------------------------------------------
+
+
+def test_worker_claimed_schema_child_keeps_the_structured_contract(
+    tmp_path: Path,
+) -> None:
+    """A schema-carrying helper claimed OUTSIDE the drain — a resident
+    worker's untargeted ``tick()`` resolves the child through
+    ``resolve_engine`` — must build the SAME schema-shaped engine the drain's
+    targeted descent builds: the ``StructuredOutputPolicy`` receipt wrapper
+    on, sourced from the durable ``TaskCreated.inputs.output_schema``.
+    Regression: this path used to ignore the recorded schema, so a claimed
+    helper silently lost its structured-output contract."""
+    provider = FakeLLMProvider(responses=[])
+    host, _driver = _session(_ws(tmp_path), provider)
+    schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+    host.event_log.emit(
+        task_id="root",
+        type="TaskCreated",
+        payload=TaskCreatedPayload(
+            goal="root", policy_name="react", agent_name="main"
+        ),
+    )
+    host.event_log.emit(
+        task_id="helper",
+        type="TaskCreated",
+        payload=TaskCreatedPayload(
+            goal="extract",
+            policy_name="react",
+            agent_name="explore",
+            parent_task_id="root",
+            subtask_depth=1,
+            inputs={"output_schema": schema},
+        ),
+    )
+    host.event_log.emit(
+        task_id="plain",
+        type="TaskCreated",
+        payload=TaskCreatedPayload(
+            goal="extract",
+            policy_name="react",
+            agent_name="explore",
+            parent_task_id="root",
+            subtask_depth=1,
+        ),
+    )
+
+    helper_engine = host.resolve_engine(
+        fold(host.event_log, host.content_store, "helper")
+    )
+    assert isinstance(
+        helper_engine._policy, StructuredOutputPolicy  # noqa: SLF001
+    )
+
+    # The schema-shaped build bypasses the shared Engine cache: a schema-free
+    # sibling with the same bindings resolves a PLAIN engine right after.
+    plain_engine = host.resolve_engine(
+        fold(host.event_log, host.content_store, "plain")
+    )
+    assert not isinstance(
+        plain_engine._policy, StructuredOutputPolicy  # noqa: SLF001
+    )

@@ -43,6 +43,16 @@ class Budget:
     ``None`` on a field means no cap on that dimension. One instance holds the
     caps for every Task its ``BudgetGuard`` sees; the counters they are checked
     against are each Task's own folded governance state.
+
+    **Dimension warning — these caps span the Task's WHOLE life.** The folded
+    counters (`iterations` / ``tool_calls`` / ``cost_usd``) accumulate
+    durably and never reset. On the multi-turn conversation path one Task IS
+    the whole conversation, so a cap sized for "one turn's worth" is silently
+    a conversation-lifetime cap: once tripped, every later turn is denied, the
+    turn parks as ``turn_failed``, and no Engine rebuild or process restart
+    clears it (the counters refold from the ledger). Size caps for the longest
+    conversation you are willing to fund, not for a single turn — or leave
+    them ``None``.
     """
 
     max_iterations: Optional[int] = None

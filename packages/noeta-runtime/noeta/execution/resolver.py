@@ -526,6 +526,19 @@ class GenericEngineResolver:
                     workspace = self._bound_workspace_for(parent)
                 if provider is None:
                     provider = self._bound_provider_for(parent)
+        # A workflow helper spawned via ``agent(goal, schema=...)`` carries its
+        # per-helper JSON Schema in the durable ``TaskCreated.inputs`` — thread
+        # it so a child claimed HERE (a resident worker's untargeted ``tick()``,
+        # ahead of the drain's targeted descent) still mounts the
+        # ``structured_output`` control schema + receipt wrapper the drain path
+        # builds. Without this the claimed helper silently loses its schema
+        # contract. ``None`` for every root / plain child keeps the cached
+        # build byte-identical.
+        subtask_schema = (
+            _subtask_output_schema(self.event_log, task_id)
+            if is_subtask
+            else None
+        )
         if name == "unnamed" and self.unnamed_fallback is not None:
             return self._engine_for_agent(
                 self.unnamed_fallback,
@@ -539,6 +552,7 @@ class GenericEngineResolver:
                 task_id=task_id,
                 exec_env_ref=exec_env_ref,
                 policy_wrapper=subtask_wrapper,
+                structured_output_schema=subtask_schema,
             )
         agent = self._lookup_agent(name, task_id=task_id)
         # ask_user_question comes from agent identity, masked to depth-0
@@ -559,6 +573,7 @@ class GenericEngineResolver:
             task_id=task_id,
             exec_env_ref=exec_env_ref,
             policy_wrapper=subtask_wrapper,
+            structured_output_schema=subtask_schema,
         )
 
     def _bound_model_for(self, task: Any) -> str:
@@ -982,6 +997,7 @@ class GenericEngineResolver:
         task_id: Optional[str] = None,
         exec_env_ref: Optional[str] = None,
         policy_wrapper: Any = _POLICY_WRAPPER_UNSET,
+        structured_output_schema: Optional[dict[str, Any]] = None,
     ) -> Engine:
         """Per-agent Engine builder + cache.
 
@@ -1003,6 +1019,14 @@ class GenericEngineResolver:
         ``spawnable`` (filtered to known agents) — never a host
         input. When delegation is off (agent declares none, or the deployment
         disabled it) the set is empty so no spawn_subagent schema is exposed.
+
+        ``structured_output_schema`` (a workflow helper's per-helper JSON
+        Schema) BYPASSES the cache entirely: the schema shapes the Engine, so
+        it can neither share a slot with schema-free builds nor leave a
+        schema-shaped engine behind for them. Sharing a cached Engine across
+        tasks is safe for everything else because the Policy keeps no
+        cross-task mutable state (the step cap reads the Engine-threaded
+        per-turn count; the compaction baselines are keyed per task).
         """
         resolved_model = model if model else self.model
         effective_ask = (
@@ -1061,6 +1085,30 @@ class GenericEngineResolver:
             if policy_wrapper is _POLICY_WRAPPER_UNSET
             else policy_wrapper
         )
+        # A per-helper structured-output schema SHAPES the Engine (the
+        # ``structured_output`` control mount + the StructuredOutputPolicy
+        # receipt wrapper), so a schema-carrying build must never enter the
+        # shared cache: keyed in, it would collide with every other schema for
+        # the same agent; keyed out, it would leak the schema-shaped engine to
+        # schema-free siblings. Build it uncached — the same choice the
+        # delegation drain makes for its child engines.
+        if structured_output_schema is not None:
+            return self._build_engine(
+                agent,
+                resolved_model,
+                delegation_enabled=eff_delegation,
+                allowed_subtask_agents=eff_subtask_agents,
+                ask_user_question_enabled=effective_ask,
+                policy_wrapper=effective_wrapper,
+                workspace=workspace,
+                provider=provider,
+                permission_mode=permission_mode,
+                mcp_aliases=mcp_aliases,
+                effort=effort,
+                task_id=task_id,
+                exec_env_ref=exec_env_ref,
+                structured_output_schema=structured_output_schema,
+            )
         # ``_engine_cache_scope`` is a host-defined
         # partition for engine material that varies per TASK beyond the
         # standard dimensions (e.g. the SdkHost's per-tenant memory root, whose

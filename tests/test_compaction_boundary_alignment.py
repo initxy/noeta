@@ -259,7 +259,9 @@ def test_boundary_snaps_forward_off_a_tool_result_message() -> None:
     history = _paired_history()
     policy = _bare_policy(tail_token_budget=20)
 
-    boundary = policy._summary_boundary(history)
+    boundary = policy._summary_boundary(
+        history, policy._baseline_state("t-1")
+    )
 
     # The raw cutoff is 2 (the tool-result message); snapping forward gives 3.
     assert boundary == 3
@@ -277,7 +279,10 @@ def test_boundary_never_points_at_a_tool_result_across_budgets() -> None:
     result — i.e. the boundary never orphans a ``tool_result``."""
     history = _paired_history()
     for budget in range(0, 60):
-        boundary = _bare_policy(tail_token_budget=budget)._summary_boundary(history)
+        policy = _bare_policy(tail_token_budget=budget)
+        boundary = policy._summary_boundary(
+            history, policy._baseline_state("t-1")
+        )
         assert 0 <= boundary <= len(history)
         if 0 < boundary < len(history):
             assert not _carries_tool_result(history[boundary]), (

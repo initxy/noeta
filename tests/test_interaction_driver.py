@@ -503,6 +503,66 @@ def test_fail_turn_parks_for_the_human(tmp_path: Path) -> None:
     )
 
 
+def test_max_steps_budget_renews_on_the_next_turn(tmp_path: Path) -> None:
+    """A turn that dies at the step ceiling must not poison the conversation:
+    the cap is per driven turn (Engine-threaded ``steps_in_turn``), so the
+    human's next message gets a FULL budget again.
+
+    Regression for the cached-Engine counter bug: the ReAct step counter used
+    to live on the Policy instance, which the Engine cache keeps for the whole
+    conversation — after enough turns the residue exhausted ``max_steps`` and
+    EVERY later turn park-failed with ``react_max_steps_exceeded`` until
+    something rebuilt the Engine."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    responses = [
+        # Turn 1: two tool rounds, then the per-turn cap (max_steps=2) trips.
+        _tool_call("c1", "read_file", {"path": "x.py"}),
+        _tool_call("c2", "read_file", {"path": "x.py"}),
+        # Turn 2: finishes immediately — reachable ONLY if the budget renewed.
+        _end_turn("recovered"),
+    ]
+    dispatcher = InMemoryDispatcher()
+    event_log = InMemoryEventLog(lease_validator=dispatcher)
+    content_store = InMemoryContentStore()
+    host = SdkHost(
+        event_log=event_log,
+        content_store=content_store,
+        dispatcher=dispatcher,
+        provider=FakeLLMProvider(responses=responses),
+        model="gpt-test",
+        workspace_dir=ws,
+        write_mode=FsWriteMode.DRY_RUN,
+        shell_mode=ShellMode.ALLOWLIST,
+        max_steps=2,
+        policy_wrapper=multi_turn_policy_wrapper,
+        registry=official_agent_registry(),
+        aliases={"default": "main"},
+        require_approval_tools=(),)
+    driver = InteractionDriver(host)
+
+    first = driver.start(goal="loop", agent="main")
+    suspended = [
+        e for e in event_log.read(first.task_id) if e.type == "TaskSuspended"
+    ]
+    assert suspended[-1].payload.reason == (
+        f"{TURN_FAILED_SUSPEND_TAG}: react_max_steps_exceeded"
+    )
+
+    second = driver.send_goal(first.task_id, goal="try again")
+    assert second.status == "suspended"
+    assert second.wake_handle == NEXT_GOAL_WAKE_HANDLE
+    suspended = [
+        e for e in event_log.read(first.task_id) if e.type == "TaskSuspended"
+    ]
+    # The second turn decided normally (the end_turn was consumed) — it parked
+    # on the ordinary next-goal handle, NOT another turn_failed.
+    assert not str(suspended[-1].payload.reason or "").startswith(
+        TURN_FAILED_SUSPEND_TAG
+    )
+    assert "TaskFailed" not in [e.type for e in event_log.read(first.task_id)]
+
+
 # ---------------------------------------------------------------------------
 # close / reopen — the L0 ConversationClosed lifecycle
 # ---------------------------------------------------------------------------

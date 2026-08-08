@@ -49,6 +49,17 @@ class StepContext:
     boundaries. It is the same predicate ``run_one_step`` polls; ``None``
     (resume, replay, hosts that wire no cancel seam) disarms every downstream
     abort site, which is what keeps recordings byte-identical on those paths.
+
+    ``steps_in_turn`` is how many ``decide()`` calls the current driven turn
+    (one ``Engine.run_one_step`` drive) has already made — ``0`` on the turn's
+    first decide. It is the step-cap's SOLE counter: a Policy compares it
+    against its ``max_steps`` ceiling so a runaway tool loop is bounded PER
+    TURN. The count deliberately does NOT live on the Policy instance — a
+    cached Engine's Policy outlives turns and even tasks (the Engine cache key
+    omits ``task_id``), so an instance counter silently accumulates across a
+    whole conversation (and across conversations sharing the cache slot) until
+    every later turn dies at the ceiling. Threaded here, the budget resets at
+    each turn by construction.
     """
 
     task_id: str
@@ -57,3 +68,4 @@ class StepContext:
     last_input_tokens: int = 0
     apply_event: Optional[Callable[["EventEnvelope"], None]] = None
     cancelled: Optional[Callable[[], bool]] = None
+    steps_in_turn: int = 0

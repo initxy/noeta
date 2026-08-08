@@ -408,10 +408,14 @@ class SdkHost(GenericEngineResolver):
     policy_wrapper: Optional[Callable[[Policy], Policy]] = None
     unnamed_fallback: Optional[Any] = None
     permission_mode: str = "default"
-    # Max steps per ReActPolicy turn; the SDK host default matches the coding
-    # budget's max_iterations so a long session doesn't hit the inner ReAct cap
-    # first.
-    max_steps: int = 200
+    # Max decide() steps per driven turn (the Engine threads the per-turn step
+    # index through StepContext; the ReAct policy fails the turn with
+    # ``react_max_steps_exceeded`` at the ceiling, and the budget renews every
+    # turn). Deliberately enormous: this is a runaway-loop backstop, not a
+    # working budget — real turns end on their own long before it, and a tight
+    # cap has already bricked long conversations once (when the counter lived
+    # on the cached Policy instance and never reset).
+    max_steps: int = 1_000_000
     # Filesystem write mode; DRY_RUN is the safe default.
     write_mode: FsWriteMode = FsWriteMode.DRY_RUN
     # shell_run allowlist / allow-all switch; ALLOWLIST by default, matching the

@@ -151,7 +151,11 @@ def test_trigger_estimate_no_usage_falls_back_to_pure_estimate() -> None:
     """First turn / no recorded usage (``last_input_tokens == 0``) → the mix
     collapses to the pure chars/4 estimate."""
     policy, *_ = _policy([_summary_resp()])
-    assert policy._trigger_estimate(_ctx_usage(0), estimated=1234) == 1234
+    state = policy._baseline_state("t-1")
+    assert (
+        policy._trigger_estimate(_ctx_usage(0), estimated=1234, state=state)
+        == 1234
+    )
 
 
 def test_trigger_estimate_real_usage_raises_above_pure_estimate() -> None:
@@ -159,23 +163,27 @@ def test_trigger_estimate_real_usage_raises_above_pure_estimate() -> None:
     under-counts) is used as the baseline; with no appended delta yet the mix
     returns ``max(estimated, last_input_tokens)`` — never below the real size."""
     policy, *_ = _policy([_summary_resp()])
+    state = policy._baseline_state("t-1")
     # baseline 5000 >> pure estimate 800; no delta (last_estimate_at_call == 0
     # but estimated 800 < baseline so the +delta clamps to estimated-0=800,
     # then max(800, 5000+800)=5800) — the real usage dominates.
-    assert policy._last_estimate_at_call == 0
-    got = policy._trigger_estimate(_ctx_usage(5000), estimated=800)
+    assert state.last_estimate_at_call == 0
+    got = policy._trigger_estimate(_ctx_usage(5000), estimated=800, state=state)
     assert got == 5000 + 800  # baseline + (estimated - 0)
     assert got > 800          # the mix can only RAISE the trigger size
 
 
 def test_trigger_estimate_adds_appended_delta() -> None:
-    """After a real round-trip pins ``_last_estimate_at_call``, the next turn's
+    """After a real round-trip pins ``last_estimate_at_call``, the next turn's
     growth (a new tool result) is the chars/4 delta added on top of the real
     baseline."""
     policy, *_ = _policy([_summary_resp()])
-    policy._last_estimate_at_call = 1000   # last request we actually sent
+    state = policy._baseline_state("t-1")
+    state.last_estimate_at_call = 1000     # last request we actually sent
     # this turn the request grew to 1300 (≈ a 300-token tool result appended)
-    got = policy._trigger_estimate(_ctx_usage(4000), estimated=1300)
+    got = policy._trigger_estimate(
+        _ctx_usage(4000), estimated=1300, state=state
+    )
     assert got == 4000 + 300               # real baseline + appended delta
 
 
@@ -184,8 +192,11 @@ def test_trigger_estimate_clamps_shrunk_estimate() -> None:
     negative — it is clamped to 0 so the mix never dips below the real
     baseline (and ``max`` with the pure estimate still applies)."""
     policy, *_ = _policy([_summary_resp()])
-    policy._last_estimate_at_call = 2000
-    got = policy._trigger_estimate(_ctx_usage(3000), estimated=500)
+    state = policy._baseline_state("t-1")
+    state.last_estimate_at_call = 2000
+    got = policy._trigger_estimate(
+        _ctx_usage(3000), estimated=500, state=state
+    )
     assert got == max(500, 3000 + 0)       # delta clamped, baseline wins
 
 
@@ -400,16 +411,17 @@ def test_density_clamp_bounds_both_directions() -> None:
     from noeta.builtins.react.impl.react import _DENSITY_MAX, _DENSITY_MIN
 
     policy, *_ = _policy([_summary_resp()])
+    state = policy._baseline_state("t-1")
     # Absurdly low (the sloppy-gateway shape) and absurdly high (a provider
     # inflating counts, which would shrink the tail to nothing) both clamp.
-    policy._last_estimate_at_call = 2_600
-    policy._last_input_tokens_at_call = 10
-    assert policy._observed_density() == _DENSITY_MIN
-    policy._last_input_tokens_at_call = 2_600_000
-    assert policy._observed_density() == _DENSITY_MAX
+    state.last_estimate_at_call = 2_600
+    state.last_input_tokens_at_call = 10
+    assert policy._observed_density(state) == _DENSITY_MIN
+    state.last_input_tokens_at_call = 2_600_000
+    assert policy._observed_density(state) == _DENSITY_MAX
     # A believable ratio passes through untouched.
-    policy._last_input_tokens_at_call = 3_120
-    assert policy._observed_density() == 3_120 / 2_600
+    state.last_input_tokens_at_call = 3_120
+    assert policy._observed_density(state) == 3_120 / 2_600
 
 
 # ---------------------------------------------------------------------------
@@ -559,4 +571,58 @@ def test_errored_round_trip_does_not_pin_the_trigger_baseline() -> None:
     decision = policy.decide(_ctx(), _medium_view())
 
     assert isinstance(decision, FailDecision)
-    assert policy._last_input_tokens_at_call == 0
+    assert policy._baseline_state("t-1").last_input_tokens_at_call == 0
+
+
+# ---------------------------------------------------------------------------
+# Baselines are task-scoped: one cached policy instance serves many tasks
+# ---------------------------------------------------------------------------
+
+
+def test_one_tasks_baseline_never_bleeds_into_another() -> None:
+    """The policy instance is cached inside an Engine shared by every task
+    with equal bindings, so the trigger baselines MUST be keyed per task: a
+    conversation that pinned a near-window real usage must not make a fresh
+    conversation's first turn fire the proactive trigger (which, with a tiny
+    history, dies as non-retryable ``compaction_no_progress`` before the new
+    conversation ever reaches the provider)."""
+    ok = LLMResponse(
+        stop_reason="end_turn",
+        content=[TextBlock(text="ok")],
+        usage=Usage(uncached=100_000, output=5),
+    )
+    ok2 = LLMResponse(stop_reason="end_turn", content=[TextBlock(text="hi")])
+    # window = 2000-500-100 = 1400; task A's recorded usage (100k) dwarfs it.
+    policy, provider, *_ = _policy([ok, ok2])
+
+    a = StepContext(task_id="task-a", lease_id="l", trace_id="t")
+    first = policy.decide(a, _medium_view())
+    assert isinstance(first, FinishDecision)
+    assert (
+        policy._baseline_state("task-a").last_input_tokens_at_call == 100_000
+    )
+
+    # Task B on the SAME instance: fresh baseline → pure (tiny) estimate →
+    # no trigger → a normal provider round-trip, not a compaction death.
+    b = StepContext(task_id="task-b", lease_id="l", trace_id="t")
+    second = policy.decide(b, _medium_view())
+    assert isinstance(second, FinishDecision)
+    assert len(provider.received_requests) == 2
+    # And B's round-trip did not disturb A's pinned baseline.
+    assert (
+        policy._baseline_state("task-a").last_input_tokens_at_call == 100_000
+    )
+
+
+def test_baseline_table_evicts_oldest_beyond_the_cap() -> None:
+    """The per-task table is bounded: pushing past the cap drops the oldest
+    entries, and an evicted task simply restarts from the fresh-entry
+    fallback (pure estimate) — no unbounded growth on a long-lived host."""
+    from noeta.builtins.react.impl.react import _MAX_TRACKED_TASK_BASELINES
+
+    policy, *_ = _policy([_summary_resp()])
+    for i in range(_MAX_TRACKED_TASK_BASELINES + 10):
+        policy._baseline_state(f"task-{i}")
+    assert len(policy._baselines) == _MAX_TRACKED_TASK_BASELINES
+    assert "task-0" not in policy._baselines
+    assert f"task-{_MAX_TRACKED_TASK_BASELINES + 9}" in policy._baselines
