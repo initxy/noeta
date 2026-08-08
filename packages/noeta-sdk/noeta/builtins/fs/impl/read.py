@@ -11,17 +11,13 @@ the ContentStore as the audit artifact, never into the model-facing text.
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
+import json
 import os
-import re
-
-try:  # CPython's regex AST walker (sre_parse → re._parser in 3.11)
-    from re import _parser as _re_parser
-except ImportError:  # pragma: no cover - <3.11 fallback
-    import sre_parse as _re_parser  # type: ignore[no-redef]
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Optional
 
 from noeta.protocols.tool import ToolContext, ToolResult
 from noeta.tools.invocation import (
@@ -37,11 +33,11 @@ from noeta.tools.limits import (
 from noeta.protocols.resources import load_markdown
 from noeta.runtime.workspace import (
     WorkspaceRoot,
-    path_within,
     resolve_anywhere,
     tool_error,
 )
 from noeta.runtime.exec_env import ExecEnv, LocalExecEnv
+from noeta.runtime.subproc import RunOutcome
 
 
 __all__ = [
@@ -54,11 +50,9 @@ __all__ = [
 # Display caps: a longer underlying result is truncated with a notice so the
 # model knows to narrow its query.
 _MAX_GLOB_MATCHES = 200
-_MAX_GREP_MATCHES = 50
-#: Max bytes of any single line fed to ``regex.search``. Nested-quantifier
-#: patterns are already rejected up front; this bounds the linear-but-heavy
-#: case so a single very long line can't dominate a scan.
-_MAX_GREP_SCAN_LINE_BYTES = 8192
+#: ``Grep``'s implicit ``head_limit`` when the model passes none — the
+#: reference surface's default (an explicit 0 lifts it entirely).
+_GREP_DEFAULT_HEAD_LIMIT = 250
 _DEFAULT_READ_LIMIT = 2000  # lines
 #: Per-line visible-char cap. A minified file can be one multi-MB line, which
 #: would otherwise dominate the whole inline budget; the untouched body is
@@ -67,29 +61,42 @@ _MAX_LINE_CHARS = 2000
 _LINE_TRUNC_MARKER = " … [line truncated]"
 _READ_FILE_MEDIA_TYPE = "text/plain"
 
-#: Directory names never walked by ``Glob`` / ``Grep`` (dependency and cache
-#: trees). Hidden directories (leading ``.``) are skipped by a separate rule,
-#: so this set only needs the un-dotted offenders. An explicitly targeted
-#: ``path`` is still searched — the filter applies to the walk beneath the
-#: search root, not to the root itself.
-_SKIPPED_DIRS = frozenset(
-    {
-        "node_modules",
-        "__pycache__",
-        "venv",
-        "dist",
-        "build",
-        "target",
-    }
+#: ``Glob`` / ``Grep`` shell out to ripgrep through ``ExecEnv.run_argv`` — the
+#: reference agent's engine, so the walk semantics (gitignore-aware, hidden
+#: skipped, symlinks not followed, binary skipped) and the regex dialect
+#: (linear-time, no lookaround/backreferences) are the ones the model was
+#: trained on, identically on the local host and inside a sandbox container.
+#: rg is a hard requirement of these two tools; a missing binary fails loud
+#: with an install hint.
+_RG_TIMEOUT_S = 60
+#: Ceiling on captured rg output — far above what the display caps can show.
+#: A capped ``--json`` stream ends mid-line; the decoder skips the partial
+#: tail and renders the complete prefix.
+_RG_OUTPUT_CAP = 16 * 1024 * 1024
+
+_RG_MISSING = (
+    "ripgrep (rg) is required but was not found in the execution environment "
+    "— install it (https://github.com/BurntSushi/ripgrep) or add it to the "
+    "sandbox image"
 )
 
-#: ``re`` opcodes that backtrack; POSSESSIVE_REPEAT / atomic groups do not.
-_BACKTRACKING_REPEATS = frozenset(
-    {_re_parser.MAX_REPEAT, _re_parser.MIN_REPEAT}
-)
 
-#: The parser's "unbounded" upper-bound sentinel (``*`` / ``+`` / ``{n,}``).
-_MAXREPEAT = getattr(_re_parser, "MAXREPEAT", 4294967295)
+def _run_rg(exec_env: ExecEnv, argv: list[str], cwd: Path) -> "RunOutcome | str":
+    """One bounded rg invocation; a ``str`` return is the human-facing failure."""
+    try:
+        outcome = exec_env.run_argv(
+            argv, cwd=cwd, timeout_s=_RG_TIMEOUT_S, output_cap=_RG_OUTPUT_CAP
+        )
+    except OSError:
+        return _RG_MISSING
+    if outcome.timed_out:
+        return (
+            f"search timed out after {_RG_TIMEOUT_S}s — narrow the pattern "
+            "or path"
+        )
+    if outcome.returncode == 127:  # how a sandbox shell reports a missing binary
+        return _RG_MISSING  # pragma: no cover - container-only path
+    return outcome
 
 
 # ``Read`` cannot know whether the bound model is vision-capable —
@@ -158,134 +165,91 @@ def _detect_image_media_type(raw: bytes) -> Optional[str]:
     return None
 
 
-def _contains_repeat(node: Any) -> bool:
-    """True if the parsed regex ``node`` contains a backtracking repeat at any depth."""
-    if isinstance(node, _re_parser.SubPattern):
-        for op, args in node:
-            if op in _BACKTRACKING_REPEATS:
-                return True
-            if _contains_repeat(args):
-                return True
-        return False
-    if isinstance(node, (tuple, list)):
-        return any(_contains_repeat(x) for x in node)
-    return False
+def _glob_segments(pattern: str) -> tuple[str, ...]:
+    """Split a relative glob pattern into path segments, dropping no-ops."""
+    return tuple(seg for seg in pattern.split("/") if seg not in ("", "."))
 
 
-def _has_nested_repeat(node: Any) -> bool:
-    """True if a backtracking repeat has a body that itself repeats (any depth)."""
-    if isinstance(node, _re_parser.SubPattern):
-        for op, args in node:
-            if op in _BACKTRACKING_REPEATS:
-                body = args[2] if isinstance(args, tuple) and len(args) >= 3 else None
-                if body is not None and _contains_repeat(body):
-                    return True
-            if _has_nested_repeat(args):
-                return True
-        return False
-    if isinstance(node, (tuple, list)):
-        return any(_has_nested_repeat(x) for x in node)
-    return False
+def _glob_match(parts: tuple[str, ...], pats: tuple[str, ...]) -> bool:
+    """pathlib-style glob over path segments: ``*`` / ``?`` / ``[...]`` stay
+    inside one segment, ``**`` spans zero or more segments."""
+    if not pats:
+        return not parts
+    head, rest = pats[0], pats[1:]
+    if head == "**":
+        return any(_glob_match(parts[i:], rest) for i in range(len(parts) + 1))
+    return (
+        bool(parts)
+        and fnmatch.fnmatchcase(parts[0], head)
+        and _glob_match(parts[1:], rest)
+    )
 
 
-def _find_branches(node: Any) -> list[list]:
-    """Collect every ``BRANCH``'s alternative-list reachable within ``node``."""
-    found: list[list] = []
-    if isinstance(node, _re_parser.SubPattern):
-        for op, args in node:
-            if op == _re_parser.BRANCH and isinstance(args, tuple) and len(args) == 2:
-                found.append(args[1])
-            found.extend(_find_branches(args))
-    elif isinstance(node, (tuple, list)):
-        for x in node:
-            found.extend(_find_branches(x))
-    return found
+@dataclass
+class _FileHits:
+    """One file's rows decoded from the ``rg --json`` event stream."""
+
+    rel: str
+    #: ``(1-based line number, text, is_match)`` in stream order.
+    rows: list[tuple[int, str, bool]]
+    match_lines: int = 0
 
 
-def _leading_literal_and_nullable(alt: Any) -> tuple[Optional[int], bool]:
-    """``(fixed leading literal or None, nullable)`` for one alternation branch.
+def _decode_rg_events(
+    stdout: bytes,
+    rel_of: Callable[[str], str],
+    *,
+    only_matching: bool = False,
+) -> list[_FileHits]:
+    """Fold ``rg --json`` events into per-file ordered line rows.
 
-    Only a fixed leading ``LITERAL`` can prove two branches start differently,
-    so anything wilder — char class, any, group, a repeat with a positive
-    minimum — yields ``None``. Running out of tokens means the branch matches
-    the empty string (``nullable``)."""
-    if not isinstance(alt, (list, _re_parser.SubPattern)):
-        return (None, False)
-    for op, args in alt:
-        if op == _re_parser.AT:            # zero-width anchor: keep scanning
-            continue
-        if op == _re_parser.LITERAL:
-            return (args, False)
-        if op in _BACKTRACKING_REPEATS:
-            mn = args[0] if isinstance(args, tuple) else 0
-            if mn == 0:                    # optional leading element: skip past
-                continue
-            return (None, False)
-        return (None, False)               # class / any / group / branch → wild
-    return (None, True)                    # nothing left → matches the empty string
-
-
-def _alternation_is_overlap_prone(alternatives: list) -> bool:
-    """A ``BRANCH``'s alternatives can overlap-match (→ exponential backtracking
-    once that branch sits under an unbounded repeat) when a branch is nullable
-    (matches empty) or two branches share a fixed leading literal.
-
-    CPython's parser factors a shared prefix out of an alternation, so the
-    classic "one alternative is a prefix of another" case (``a|ab``, ``aa|a``)
-    reaches this check as a branch with an EMPTY (nullable) alternative."""
-    leading: list[int] = []
-    for alt in alternatives:
-        lit, nullable = _leading_literal_and_nullable(alt)
-        if nullable:
-            return True
-        if lit is not None:
-            leading.append(lit)
-    return len(leading) != len(set(leading))
-
-
-def _has_overlapping_alternation_repeat(node: Any) -> bool:
-    """True if an UNBOUNDED backtracking repeat wraps an overlap-prone
-    alternation — the alternation-ambiguity class of ReDoS the nested-quantifier
-    check misses (``(a|a)*``, ``(a|ab)*``, ``(a?|b)+``)."""
-    if isinstance(node, _re_parser.SubPattern):
-        for op, args in node:
-            if (
-                op in _BACKTRACKING_REPEATS
-                and isinstance(args, tuple)
-                and len(args) >= 3
-                and args[1] == _MAXREPEAT
-            ):
-                for alts in _find_branches(args[2]):
-                    if _alternation_is_overlap_prone(alts):
-                        return True
-            if _has_overlapping_alternation_repeat(args):
-                return True
-        return False
-    if isinstance(node, (tuple, list)):
-        return any(_has_overlapping_alternation_repeat(x) for x in node)
-    return False
-
-
-def _pattern_is_redos_prone(pattern: str) -> bool:
-    """Reject the two structural necessary conditions for exponential
-    backtracking:
-
-    * **nested unbounded quantifiers** — ``(a+)+``, ``(.*)*``, ``(\\d+\\.)+`` …;
-    * **an unbounded repeat over an overlapping alternation** — ``(a|a)*``,
-      ``(a|ab)*``, ``(a?|b)+`` (the ambiguity class the nested check misses).
-
-    grep runs in-process on the engine worker thread and CPython's ``re`` holds
-    the GIL for the whole match, so a pathological pattern would freeze the
-    entire process with no possible timeout — a separate thread cannot preempt a
-    GIL-holding C match. Refusing the pattern up front is the only GIL-safe
-    guard, and it is deliberately conservative: safe shapes like ``(a+b)+`` are
-    rejected too, and the model is told to flatten the pattern.
+    A multiline match spans several lines and every spanned line counts as a
+    match line; with ``only_matching`` each submatch becomes its own row
+    (``rg -o``) and context events are dropped. Binary files never emit
+    match events, so they drop out silently, and a non-utf8 path or line (rg
+    encodes those as base64 ``bytes``) is skipped like the utf-8-only scan
+    always skipped it. A cap-truncated stream just ends mid-line: the
+    partial tail fails to parse and everything before it renders normally.
     """
-    try:
-        parsed = _re_parser.parse(pattern)
-    except re.error:  # pragma: no cover - compile guard already reported it
-        return False
-    return _has_nested_repeat(parsed) or _has_overlapping_alternation_repeat(parsed)
+    by_path: dict[str, _FileHits] = {}
+    order: list[_FileHits] = []
+    for raw in stdout.split(b"\n"):
+        if not raw:
+            continue
+        try:
+            event = json.loads(raw)
+        except ValueError:
+            continue
+        if event.get("type") not in ("match", "context"):
+            continue
+        data = event.get("data") or {}
+        path_text = (data.get("path") or {}).get("text")
+        text = (data.get("lines") or {}).get("text")
+        first_line = data.get("line_number")
+        if path_text is None or text is None or first_line is None:
+            continue
+        is_match = event["type"] == "match"
+        if only_matching and not is_match:
+            continue
+        hits = by_path.get(path_text)
+        if hits is None:
+            hits = _FileHits(rel=rel_of(path_text), rows=[])
+            by_path[path_text] = hits
+            order.append(hits)
+        if only_matching:
+            for sub in data.get("submatches") or []:
+                sub_text = (sub.get("match") or {}).get("text")
+                if sub_text is None:
+                    continue
+                for j, part in enumerate(sub_text.splitlines() or [""]):
+                    hits.rows.append((first_line + j, part, True))
+                    hits.match_lines += 1
+            continue
+        for i, line in enumerate(text.splitlines() or [""]):
+            hits.rows.append((first_line + i, line, is_match))
+            if is_match:
+                hits.match_lines += 1
+    return order
 
 
 def _clip_line(line: str) -> str:
@@ -299,14 +263,6 @@ def _reminder(text: str) -> str:
     """A host-authored inline notice, in the envelope the model is trained to
     read as ambient context rather than file content."""
     return f"<system-reminder>{text}</system-reminder>"
-
-
-def _walk_is_skipped(rel_parts: tuple[str, ...]) -> bool:
-    """Whether a walked entry (parts relative to the search root) is skipped:
-    anything under a hidden or dependency/cache directory, or itself hidden."""
-    return any(
-        part.startswith(".") or part in _SKIPPED_DIRS for part in rel_parts
-    )
 
 
 @dataclass
@@ -526,8 +482,11 @@ class GlobTool:
     Optional ``path`` chooses the tree to search — workspace-relative, or
     absolute to search outside it, resolved unfenced like ``Grep``'s.
     ``pattern`` stays relative to that root, which is what keeps every walk
-    bounded. Results are newline-separated POSIX paths sorted by modification
-    time (newest first), capped with a notice.
+    bounded. The walk is ``rg --files`` (gitignore-aware, hidden skipped,
+    symlinks not followed); the pattern then matches with pathlib glob
+    semantics, so ``*.py`` stays top-level and ``**/*.py`` recurses. Results
+    are newline-separated POSIX paths sorted by modification time (newest
+    first), capped with a notice.
     """
 
     workspace: WorkspaceRoot
@@ -569,30 +528,45 @@ class GlobTool:
         root = resolve_anywhere(self.workspace, self.name, path_arg)
         if isinstance(root, ToolResult):
             return root
+        if not self.exec_env.is_dir(root):
+            # A missing or non-directory root yields the empty result, not an
+            # rg usage error — probing a tree that may not exist is routine.
+            return ToolResult(
+                success=True,
+                output="No files found",
+                summary=f"glob {pattern!r}: 0 of 0 match(es)",
+            )
 
-        try:
-            raw_matches = list(self.exec_env.glob(root, pattern))
-        except (OSError, ValueError) as exc:
-            return tool_error(self.name, f"glob failed: {exc}")
+        ran = _run_rg(
+            self.exec_env,
+            ["rg", "--files", "--no-config", "--no-messages", "--", str(root)],
+            self.workspace.root,
+        )
+        if isinstance(ran, str):
+            return tool_error(self.name, ran)
+        # Exit 1 = clean walk, zero files. Exit 2 with a silent stderr is
+        # per-entry IO noise (--no-messages) — the listing rg did produce
+        # stands; only a spoken error (bad invocation) fails the call.
+        reason = ran.stderr.decode("utf-8", errors="replace").strip()
+        if ran.returncode not in (0, 1) and reason:
+            return tool_error(self.name, f"rg: {reason}")
 
+        pats = _glob_segments(pattern)
         entries: list[tuple[float, str]] = []
-        for match in raw_matches:
-            # The searched tree may contain symlinks, so a match whose real path
-            # escapes the tree that was asked about is dropped. Checked against
-            # the search root rather than the workspace, or an out-of-workspace
-            # search would discard every result.
-            resolved = self.workspace.canonicalise(os.fspath(match))
-            if not path_within(resolved, root):
+        for line in ran.stdout.decode("utf-8", errors="replace").splitlines():
+            match = Path(line)
+            try:
+                rel_parts = match.relative_to(root).parts
+            except ValueError:  # pragma: no cover - rg stays under its root
+                continue
+            if not _glob_match(rel_parts, pats):
                 continue
             try:
-                rel_parts = resolved.relative_to(root).parts
-            except ValueError:  # pragma: no cover - path_within already held
+                entries.append(
+                    (self.exec_env.mtime(match), self.workspace.relative(match))
+                )
+            except OSError:  # pragma: no cover - deleted mid-walk
                 continue
-            if _walk_is_skipped(rel_parts):
-                continue
-            entries.append(
-                (self.exec_env.mtime(resolved), self.workspace.relative(resolved))
-            )
         # Newest first, alphabetical tiebreak — recency is the model's usual
         # relevance signal when it scans a truncated list top-down.
         entries.sort(key=lambda e: (-e[0], e[1]))
@@ -600,7 +574,7 @@ class GlobTool:
         shown = [rel for _, rel in entries[:_MAX_GLOB_MATCHES]]
 
         if not shown:
-            output = "No files found"
+            output = "No files found (hidden and gitignored files are not listed)"
         else:
             output = "\n".join(shown)
             if total > len(shown):
@@ -608,6 +582,11 @@ class GlobTool:
                     f"\n(Results truncated: showing {len(shown)} of {total} "
                     "matches, newest first. Narrow the pattern.)"
                 )
+        if ran.stdout_truncated:
+            output += (
+                "\n(rg output exceeded the capture cap — the listing is "
+                "partial; narrow the pattern or path.)"
+            )
         summary_pat = truncate_bytes(pattern, SUMMARY_EMBED_MAX_BYTES)
         return ToolResult(
             success=True,
@@ -633,12 +612,17 @@ def _optional_count(arguments: dict[str, Any], key: str) -> "int | None | str":
 class GrepTool:
     """Regex search across the workspace or a sub-tree (tool name ``Grep``).
 
-    ``pattern`` is a Python ``re`` regex, screened for catastrophic
-    backtracking before it runs (grep executes in-process on the engine worker
-    thread, where a GIL-holding pathological match could not be preempted).
-    Output modes, case folding, context lines and ``head_limit`` follow the
-    reference agent's surface; the walk skips hidden and dependency/cache
-    directories and silently skips unreadable or binary files.
+    The search IS ripgrep — ``pattern`` is an rg regex (linear-time; no
+    lookaround or backreferences) and the walk carries rg's defaults:
+    gitignore-aware, hidden and binary skipped, symlinks not followed. The
+    parameter surface is the reference agent's, verbatim: output modes,
+    ``-i``, ``-n`` (content mode, default ON), ``context`` with ``-C`` as
+    its alias plus ``-A`` / ``-B``, ``-o`` (only-matching), ``type`` (rg's
+    own file-type names), ``head_limit`` (``head -N``; default 250, 0 =
+    unlimited) and ``offset``. ``-u`` (``--no-ignore --hidden``) is this
+    tool's one extension beyond that surface. rg's stream is consumed as
+    ``--json`` events and re-rendered so caps and relative paths stay under
+    this tool's control.
     """
 
     workspace: WorkspaceRoot
@@ -653,16 +637,21 @@ class GrepTool:
                 "pattern": {"type": "string"},
                 "path": {"type": "string"},
                 "glob": {"type": "string"},
+                "type": {"type": "string"},
                 "output_mode": {
                     "type": "string",
                     "enum": list(_GREP_OUTPUT_MODES),
                 },
                 "-i": {"type": "boolean"},
                 "-n": {"type": "boolean"},
+                "-o": {"type": "boolean"},
+                "-u": {"type": "boolean"},
                 "-A": {"type": "integer", "minimum": 0},
                 "-B": {"type": "integer", "minimum": 0},
                 "-C": {"type": "integer", "minimum": 0},
-                "head_limit": {"type": "integer", "minimum": 1},
+                "context": {"type": "integer", "minimum": 0},
+                "head_limit": {"type": "integer", "minimum": 0},
+                "offset": {"type": "integer", "minimum": 0},
                 "multiline": {"type": "boolean"},
             },
             "required": ["pattern"],
@@ -685,7 +674,11 @@ class GrepTool:
                 "'output_mode' must be one of: " + ", ".join(_GREP_OUTPUT_MODES),
             )
         case_insensitive = bool(arguments.get("-i"))
-        line_numbers = bool(arguments.get("-n"))
+        # The reference surface shows line numbers in content mode unless
+        # explicitly switched off.
+        line_numbers = bool(arguments.get("-n", True))
+        only_matching = bool(arguments.get("-o")) and mode == "content"
+        unrestricted = bool(arguments.get("-u"))
         multiline = bool(arguments.get("multiline"))
         after = _optional_count(arguments, "-A")
         if isinstance(after, str):
@@ -693,34 +686,30 @@ class GrepTool:
         before = _optional_count(arguments, "-B")
         if isinstance(before, str):
             return tool_error(self.name, before)
-        around = _optional_count(arguments, "-C")
+        around = _optional_count(arguments, "context")
         if isinstance(around, str):
             return tool_error(self.name, around)
-        head_limit_raw = arguments.get("head_limit")
-        if head_limit_raw is not None and (
-            isinstance(head_limit_raw, bool)
-            or not isinstance(head_limit_raw, int)
-            or head_limit_raw < 1
-        ):
-            return tool_error(self.name, "'head_limit' must be a positive integer")
-        head_limit: Optional[int] = head_limit_raw
+        if around is None:  # ``-C`` is context's alias
+            around = _optional_count(arguments, "-C")
+            if isinstance(around, str):
+                return tool_error(self.name, around)
+        head_limit_raw = _optional_count(arguments, "head_limit")
+        if isinstance(head_limit_raw, str):
+            return tool_error(
+                self.name, head_limit_raw + " (0 means unlimited)"
+            )
+        if head_limit_raw is None:
+            head_limit: Optional[int] = _GREP_DEFAULT_HEAD_LIMIT
+        elif head_limit_raw == 0:
+            head_limit = None  # explicit 0 = unlimited
+        else:
+            head_limit = head_limit_raw
+        offset = _optional_count(arguments, "offset")
+        if isinstance(offset, str):
+            return tool_error(self.name, offset)
+        offset = offset or 0
         ctx_before = around if around is not None else (before or 0)
         ctx_after = around if around is not None else (after or 0)
-
-        flags = re.IGNORECASE if case_insensitive else 0
-        if multiline:
-            flags |= re.MULTILINE | re.DOTALL
-        try:
-            regex = re.compile(pattern, flags)
-        except re.error as exc:
-            return tool_error(self.name, f"invalid regex: {exc}")
-        if _pattern_is_redos_prone(pattern):
-            return tool_error(
-                self.name,
-                "pattern risks catastrophic backtracking — nested quantifiers "
-                "(e.g. '(a+)+') or an unbounded repeat over an overlapping "
-                "alternation (e.g. '(a|a)*'); flatten it to a linear pattern",
-            )
 
         path_arg = arguments.get("path")
         if path_arg is None or path_arg == "":
@@ -734,130 +723,164 @@ class GrepTool:
         glob_filter = arguments.get("glob")
         if glob_filter is not None and not isinstance(glob_filter, str):
             return tool_error(self.name, "'glob' must be a string")
+        if glob_filter and not _looks_relative(glob_filter):
+            return tool_error(
+                self.name,
+                "'glob' must be relative to the searched directory (no leading "
+                "'/' / '..') — use 'path' to search another tree",
+            )
 
-        candidates = self._candidate_files(resolved, glob_filter)
+        type_filter = arguments.get("type")
+        if type_filter is not None and not isinstance(type_filter, str):
+            return tool_error(self.name, "'type' must be a string")
 
-        if mode == "files_with_matches":
-            return self._run_files_mode(candidates, regex, multiline, head_limit)
-        if mode == "count":
-            return self._run_count_mode(candidates, regex, multiline, head_limit)
-        return self._run_content_mode(
-            candidates,
-            regex,
-            multiline=multiline,
-            line_numbers=line_numbers,
-            ctx_before=ctx_before,
-            ctx_after=ctx_after,
-            head_limit=head_limit,
+        target_is_file = self.exec_env.is_file(resolved)
+        if target_is_file or self.exec_env.is_dir(resolved):
+            argv = ["rg", "--json", "--no-config", "--no-messages"]
+            if not target_is_file:
+                # Deterministic single-threaded walk, so a capped result keeps
+                # a stable prefix across repeated searches.
+                argv.append("--sort=path")
+                if unrestricted:
+                    argv += ["--no-ignore", "--hidden"]
+                # glob / type / ignore filters scope the WALK; an explicitly
+                # targeted file is always searched (the same rule that lets a
+                # hidden search root be named directly).
+                if glob_filter:
+                    argv += ["--glob", glob_filter]
+                if type_filter:
+                    argv += ["--type", type_filter]
+            if case_insensitive:
+                argv.append("--ignore-case")
+            if multiline:
+                argv += ["--multiline", "--multiline-dotall"]
+            if mode == "content" and not only_matching and (ctx_before or ctx_after):
+                argv += [
+                    "--before-context", str(ctx_before),
+                    "--after-context", str(ctx_after),
+                ]
+            argv += ["--regexp", pattern, "--", str(resolved)]
+
+            ran = _run_rg(self.exec_env, argv, self.workspace.root)
+            if isinstance(ran, str):
+                return tool_error(self.name, ran)
+            # Exit 2 with something on stderr is a usage error (bad regex,
+            # unknown type). Exit 2 with a SILENT stderr is per-file IO noise
+            # (--no-messages suppresses only that class): rg still printed
+            # every match it could reach, so the search stands — the same
+            # skip-unreadable-files behaviour the walk has always had.
+            reason = ran.stderr.decode("utf-8", errors="replace").strip()
+            if ran.returncode not in (0, 1) and reason:
+                return tool_error(self.name, f"rg: {reason}")
+            partial = ran.stdout_truncated
+            hits = _decode_rg_events(
+                ran.stdout,
+                lambda p: self.workspace.relative(Path(p)),
+                only_matching=only_matching,
+            )
+        else:
+            # A missing search root yields the empty result, not an rg usage
+            # error — probing a tree that may not exist is routine.
+            hits = []
+            partial = False
+
+        # A zero-match answer must not read as "nowhere in the tree" when the
+        # walk filters part of it — name the escape hatch.
+        empty_note = (
+            ""
+            if unrestricted or target_is_file
+            else (
+                "\n(hidden and gitignored files are not searched; pass "
+                "-u: true to include them)"
+            )
         )
 
-    # -- matching helpers ---------------------------------------------------
-
-    def _match_lines(
-        self, text: str, regex: "re.Pattern[str]", multiline: bool
-    ) -> list[int]:
-        """0-based line numbers containing a match (a multiline match reports
-        every line its span covers)."""
-        if not multiline:
-            return [
-                i
-                for i, line in enumerate(text.splitlines())
-                if regex.search(
-                    truncate_bytes(line, _MAX_GREP_SCAN_LINE_BYTES)
-                )
-            ]
-        hits: list[int] = []
-        line_starts = _line_start_offsets(text)
-        seen: set[int] = set()
-        for m in regex.finditer(text):
-            first = _offset_to_line(line_starts, m.start())
-            last = _offset_to_line(
-                line_starts, max(m.start(), m.end() - 1)
+        if mode == "files_with_matches":
+            result = self._run_files_mode(hits, head_limit, offset, empty_note)
+        elif mode == "count":
+            result = self._run_count_mode(hits, head_limit, offset, empty_note)
+        else:
+            result = self._run_content_mode(
+                hits,
+                line_numbers=line_numbers,
+                with_context=not only_matching and bool(ctx_before or ctx_after),
+                head_limit=head_limit,
+                offset=offset,
+                empty_note=empty_note,
             )
-            for ln in range(first, last + 1):
-                if ln not in seen:
-                    seen.add(ln)
-                    hits.append(ln)
-        return hits
+        if partial:
+            # A capture-cap hit means the decoded stream — and therefore
+            # everything above — is a prefix. Say so rather than letting a
+            # short list read as complete.
+            result = replace(
+                result,
+                output=result.output
+                + "\n(rg output exceeded the capture cap — results are "
+                "partial; narrow the query.)",
+            )
+        return result
 
-    def _iter_matching(
-        self,
-        candidates: list[Path],
-        regex: "re.Pattern[str]",
-        multiline: bool,
-    ) -> Iterable[tuple[str, str, list[int]]]:
-        """Yield ``(rel_path, text, matching 0-based line numbers)`` per file
-        with at least one match, skipping unreadable / non-utf8 files."""
-        for file_path in candidates:
-            try:
-                text = self.exec_env.read_text(file_path, encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            if "\x00" in text:  # NUL ⇒ binary, even though it decodes
-                continue
-            lines = self._match_lines(text, regex, multiline)
-            if lines:
-                yield self.workspace.relative(file_path), text, lines
+    # -- rendering helpers --------------------------------------------------
+
+    @staticmethod
+    def _window(
+        items: list[Any], head_limit: Optional[int], offset: int
+    ) -> list[Any]:
+        """The reference surface's ``| tail -n +N | head -N`` slice:
+        ``offset`` skips, then ``head_limit`` caps (``None`` = unlimited)."""
+        rest = items[offset:] if offset else items
+        return rest if head_limit is None else rest[:head_limit]
 
     def _run_files_mode(
         self,
-        candidates: list[Path],
-        regex: "re.Pattern[str]",
-        multiline: bool,
+        hits: list[_FileHits],
         head_limit: Optional[int],
+        offset: int,
+        empty_note: str,
     ) -> ToolResult:
-        cap = head_limit if head_limit is not None else _MAX_GLOB_MATCHES
-        paths: list[str] = []
-        truncated = False
-        for rel, _text, _lines in self._iter_matching(
-            candidates, regex, multiline
-        ):
-            if len(paths) >= cap:
-                truncated = True
-                break
-            paths.append(rel)
-        if not paths:
+        paths = [h.rel for h in hits if h.match_lines]
+        shown = self._window(paths, head_limit, offset)
+        if not shown:
             return ToolResult(
-                success=True, output="No matches found", summary="grep: 0 files"
+                success=True,
+                output="No matches found" + empty_note,
+                summary="grep: 0 files",
             )
-        output = "\n".join(paths)
-        if truncated:
+        output = "\n".join(shown)
+        if len(paths) > offset + len(shown):
             output += (
-                f"\n(Results truncated: first {cap} files shown. Narrow the "
-                "query or raise head_limit.)"
+                f"\n(Results truncated: {len(shown)} of {len(paths)} files "
+                "shown. Narrow the query or raise head_limit.)"
             )
         return ToolResult(
             success=True,
             output=output,
-            summary=f"grep: {len(paths)} file(s)",
+            summary=f"grep: {len(shown)} file(s)",
         )
 
     def _run_count_mode(
         self,
-        candidates: list[Path],
-        regex: "re.Pattern[str]",
-        multiline: bool,
+        hits: list[_FileHits],
         head_limit: Optional[int],
+        offset: int,
+        empty_note: str,
     ) -> ToolResult:
-        cap = head_limit if head_limit is not None else _MAX_GLOB_MATCHES
-        rows: list[str] = []
-        total = 0
-        truncated = False
-        for rel, _text, lines in self._iter_matching(
-            candidates, regex, multiline
-        ):
-            if len(rows) >= cap:
-                truncated = True
-                break
-            rows.append(f"{rel}:{len(lines)}")
-            total += len(lines)
+        with_matches = [h for h in hits if h.match_lines]
+        windowed = self._window(with_matches, head_limit, offset)
+        rows = [f"{h.rel}:{h.match_lines}" for h in windowed]
+        total = sum(h.match_lines for h in windowed)
         if not rows:
             return ToolResult(
-                success=True, output="No matches found", summary="grep: 0 matches"
+                success=True,
+                output="No matches found" + empty_note,
+                summary="grep: 0 matches",
             )
         output = "\n".join(rows)
-        if truncated:
-            output += f"\n(Results truncated: first {cap} files shown.)"
+        if len(with_matches) > offset + len(rows):
+            output += (
+                f"\n(Results truncated: {len(rows)} of {len(with_matches)} "
+                "files shown.)"
+            )
         return ToolResult(
             success=True,
             output=output,
@@ -866,48 +889,56 @@ class GrepTool:
 
     def _run_content_mode(
         self,
-        candidates: list[Path],
-        regex: "re.Pattern[str]",
+        hits: list[_FileHits],
         *,
-        multiline: bool,
         line_numbers: bool,
-        ctx_before: int,
-        ctx_after: int,
+        with_context: bool,
         head_limit: Optional[int],
+        offset: int,
+        empty_note: str,
     ) -> ToolResult:
-        cap = min(head_limit, _MAX_GREP_MATCHES) if head_limit else _MAX_GREP_MATCHES
-        blocks: list[str] = []
-        shown = 0
+        # Render everything first, then slice: content-mode head_limit /
+        # offset are ``head`` / ``tail`` over OUTPUT lines — context rows and
+        # ``--`` separators count — exactly the reference surface's reading.
+        rendered: list[tuple[str, bool]] = []  # (output line, is a match line)
         total = 0
-        for rel, text, match_lines in self._iter_matching(
-            candidates, regex, multiline
-        ):
-            total += len(match_lines)
-            budget = cap - shown
-            if budget <= 0:
-                continue  # keep counting the total for the notice
-            take = match_lines[:budget]
-            shown += len(take)
-            blocks.append(
-                _render_content_block(
-                    rel,
-                    text,
-                    take,
-                    line_numbers=line_numbers,
-                    ctx_before=ctx_before,
-                    ctx_after=ctx_after,
-                )
-            )
-        if shown == 0:
+        for h in hits:
+            if not h.rows:
+                continue
+            total += h.match_lines
+            if rendered and with_context:
+                rendered.append(("--", False))
+            prev_line: Optional[int] = None
+            for line_no, text, is_match in h.rows:
+                if (
+                    with_context
+                    and prev_line is not None
+                    and line_no > prev_line + 1
+                ):
+                    rendered.append(("--", False))
+                clipped = _clip_line(text)
+                if line_numbers:
+                    sep = ":" if is_match else "-"
+                    rendered.append(
+                        (f"{h.rel}{sep}{line_no}{sep}{clipped}", is_match)
+                    )
+                else:
+                    rendered.append(
+                        (f"{h.rel}{':' if is_match else '-'}{clipped}", is_match)
+                    )
+                prev_line = line_no
+        if total == 0:
             return ToolResult(
-                success=True, output="No matches found", summary="grep: 0 matches"
+                success=True,
+                output="No matches found" + empty_note,
+                summary="grep: 0 matches",
             )
-        separator = "--\n" if (ctx_before or ctx_after) else ""
-        output = ("\n" + separator).join(blocks)
-        # The 32 KB inline budget is a fence, not the working rule — the match
-        # cap keeps ordinary output far below it. Trim whole lines if a wall of
-        # clipped-wide lines still overflows.
-        out_lines = output.splitlines()
+        window = self._window(rendered, head_limit, offset)
+        shown = sum(1 for _, is_match in window if is_match)
+        out_lines = [line for line, _ in window]
+        # The 32 KB inline budget is a fence, not the working rule — the
+        # default head_limit keeps ordinary output far below it. Trim whole
+        # lines if a wall of clipped-wide lines still overflows.
         while (
             len(out_lines) > 1
             and len("\n".join(out_lines).encode("utf-8")) > INLINE_OUTPUT_MAX_BYTES
@@ -925,96 +956,3 @@ class GrepTool:
             summary=f"grep: {shown} of {total} match(es)",
         )
 
-    def _candidate_files(
-        self, resolved: Path, glob_filter: Optional[str]
-    ) -> list[Path]:
-        if self.exec_env.is_file(resolved):
-            return [resolved]
-        if not self.exec_env.is_dir(resolved):
-            return []
-        if glob_filter:
-            it = self.exec_env.glob(resolved, glob_filter)
-        else:
-            it = self.exec_env.rglob(resolved, "*")
-        files: list[Path] = []
-        for entry in it:
-            try:
-                rel_parts = entry.relative_to(resolved).parts
-            except ValueError:
-                continue
-            if _walk_is_skipped(rel_parts):
-                continue
-            try:
-                # Skipping symlinks keeps the walk inside one physical tree, so
-                # a link cannot make the same file appear twice or send an
-                # rglob around a cycle. Reads are unfenced, so this is a
-                # traversal rule, not a containment one — a caller who wants
-                # the link's target greps the target directly.
-                if self.exec_env.is_file(entry) and not self.exec_env.is_symlink(entry):
-                    files.append(entry)
-            except OSError:
-                continue
-        # Deterministic order, so a repeated search returns the same prefix
-        # once the match cap bites.
-        files.sort(key=lambda p: self.workspace.relative(p))
-        return files
-
-
-def _line_start_offsets(text: str) -> list[int]:
-    """Byte-free char offsets where each line starts, for span→line mapping."""
-    starts = [0]
-    for i, ch in enumerate(text):
-        if ch == "\n":
-            starts.append(i + 1)
-    return starts
-
-
-def _offset_to_line(line_starts: list[int], offset: int) -> int:
-    """0-based line number containing char ``offset`` (binary search)."""
-    lo, hi = 0, len(line_starts) - 1
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        if line_starts[mid] <= offset:
-            lo = mid
-        else:
-            hi = mid - 1
-    return lo
-
-
-def _render_content_block(
-    rel: str,
-    text: str,
-    match_lines: list[int],
-    *,
-    line_numbers: bool,
-    ctx_before: int,
-    ctx_after: int,
-) -> str:
-    """Render one file's matches in ripgrep style: ``path:line:content`` for
-    match lines, ``path-line-content`` for context lines, contiguous ranges
-    merged, ranges separated by ``--``."""
-    lines = text.splitlines()
-    total = len(lines)
-    match_set = set(match_lines)
-    # Merge each match's context window into maximal contiguous ranges.
-    ranges: list[tuple[int, int]] = []
-    for ln in sorted(match_set):
-        lo = max(0, ln - ctx_before)
-        hi = min(total - 1, ln + ctx_after)
-        if ranges and lo <= ranges[-1][1] + 1:
-            ranges[-1] = (ranges[-1][0], max(ranges[-1][1], hi))
-        else:
-            ranges.append((lo, hi))
-    parts: list[str] = []
-    for gi, (lo, hi) in enumerate(ranges):
-        if gi > 0 and (ctx_before or ctx_after):
-            parts.append("--")
-        for ln in range(lo, hi + 1):
-            body = _clip_line(lines[ln])
-            is_match = ln in match_set
-            sep = ":" if is_match else "-"
-            if line_numbers:
-                parts.append(f"{rel}{sep}{ln + 1}{sep}{body}")
-            else:
-                parts.append(f"{rel}{sep}{body}")
-    return "\n".join(parts)

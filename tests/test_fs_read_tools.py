@@ -4,11 +4,12 @@ Reads are deliberately unfenced while writes are not: observation is reversible,
 so naming an absolute path reads it wherever it points. These tests pin that
 asymmetry together with the plain-text output contracts — ``Read`` in ``cat -n``
 form, ``Glob`` as a newline path list (mtime-sorted), ``Grep`` in ripgrep-style
-lines with output modes — plus the budgets, the walk filtering, and the ReDoS
-guard that stops ``Grep`` running a pattern which would pin the worker thread.
+lines with output modes — plus the budgets and the rg walk semantics
+(gitignore-aware, hidden skipped, ``-u`` opens both) that ``Glob`` / ``Grep``
+inherit by shelling out to ripgrep.
 
 Each tool runs against a real ``InMemoryContentStore`` so the artifact path is
-real.
+real, and against the real ``rg`` binary — a hard requirement of the suite.
 """
 
 from __future__ import annotations
@@ -297,9 +298,11 @@ def test_glob_sorts_by_mtime_newest_first(tmp_path: Path) -> None:
     assert result.output.splitlines() == ["new.py", "old.py"]
 
 
-def test_glob_skips_hidden_and_dependency_dirs(tmp_path: Path) -> None:
+def test_glob_skips_hidden_and_gitignored_dirs(tmp_path: Path) -> None:
     ctx, workspace = _ctx_and_workspace(tmp_path)
     (workspace.root / "keep.py").write_text("")
+    (workspace.root / ".git").mkdir()  # rg only honours .gitignore in a repo
+    (workspace.root / ".gitignore").write_text("node_modules/\n")
     (workspace.root / "node_modules").mkdir()
     (workspace.root / "node_modules" / "dep.py").write_text("")
     (workspace.root / ".hidden").mkdir()
@@ -312,7 +315,7 @@ def test_glob_no_matches(tmp_path: Path) -> None:
     ctx, workspace = _ctx_and_workspace(tmp_path)
     result = GlobTool(workspace=workspace).invoke({"pattern": "*.zig"}, ctx)
     assert result.success is True
-    assert result.output == "No files found"
+    assert result.output.startswith("No files found")
 
 
 def test_glob_pattern_required(tmp_path: Path) -> None:
@@ -383,7 +386,7 @@ def test_glob_drops_symlink_to_outside(tmp_path: Path) -> None:
     (workspace.root / "leak.py").symlink_to(outside)
     result = GlobTool(workspace=workspace).invoke({"pattern": "*.py"}, ctx)
     assert result.success is True
-    assert result.output == "No files found"
+    assert result.output.startswith("No files found")
 
 
 def test_glob_drops_a_symlink_escaping_the_searched_tree(tmp_path: Path) -> None:
@@ -396,7 +399,7 @@ def test_glob_drops_a_symlink_escaping_the_searched_tree(tmp_path: Path) -> None
         {"pattern": "*.py", "path": "inner"}, ctx
     )
     assert result.success is True
-    assert result.output == "No files found"
+    assert result.output.startswith("No files found")
 
 
 def test_glob_bounded_under_many_matches(tmp_path: Path) -> None:
@@ -434,9 +437,22 @@ def test_grep_default_mode_lists_files(tmp_path: Path) -> None:
     assert set(result.output.splitlines()) == {"a.py", "c.txt"}
 
 
-def test_grep_no_matches(tmp_path: Path) -> None:
+def test_grep_no_matches_names_the_escape_hatch(tmp_path: Path) -> None:
     ctx, workspace = _grep_fixture(tmp_path)
     result = GrepTool(workspace=workspace).invoke({"pattern": "unicorn"}, ctx)
+    assert result.success is True
+    # The default walk filters hidden / gitignored files, so a zero-match
+    # answer always names the -u escape hatch rather than reading as
+    # "nowhere in the tree".
+    assert result.output.startswith("No matches found")
+    assert "-u: true" in result.output
+
+
+def test_grep_no_matches_is_plain_when_unrestricted(tmp_path: Path) -> None:
+    ctx, workspace = _grep_fixture(tmp_path)
+    result = GrepTool(workspace=workspace).invoke(
+        {"pattern": "unicorn", "-u": True}, ctx
+    )
     assert result.success is True
     assert result.output == "No matches found"
 
@@ -453,12 +469,66 @@ def test_grep_content_mode_with_line_numbers(tmp_path: Path) -> None:
     assert "c.txt:2:and needle twice" in lines
 
 
-def test_grep_content_mode_without_line_numbers(tmp_path: Path) -> None:
+def test_grep_content_mode_line_numbers_default_on(tmp_path: Path) -> None:
+    # The reference surface defaults -n to true in content mode.
     ctx, workspace = _grep_fixture(tmp_path)
     result = GrepTool(workspace=workspace).invoke(
         {"pattern": "needle here", "output_mode": "content"}, ctx
     )
+    assert result.output.splitlines() == ["a.py:2:needle here"]
+
+
+def test_grep_content_mode_without_line_numbers(tmp_path: Path) -> None:
+    ctx, workspace = _grep_fixture(tmp_path)
+    result = GrepTool(workspace=workspace).invoke(
+        {"pattern": "needle here", "output_mode": "content", "-n": False}, ctx
+    )
     assert result.output.splitlines() == ["a.py:needle here"]
+
+
+def test_grep_context_param_with_dash_c_alias(tmp_path: Path) -> None:
+    ctx, workspace = _ctx_and_workspace(tmp_path)
+    (workspace.root / "f.txt").write_text("one\nhit\nthree\n")
+    tool = GrepTool(workspace=workspace)
+    via_context = tool.invoke(
+        {"pattern": "hit", "output_mode": "content", "context": 1}, ctx
+    )
+    via_alias = tool.invoke(
+        {"pattern": "hit", "output_mode": "content", "-C": 1}, ctx
+    )
+    assert via_context.output == via_alias.output
+    assert "f.txt-1-one" in via_context.output.splitlines()
+
+
+def test_grep_only_matching_prints_matched_parts(tmp_path: Path) -> None:
+    ctx, workspace = _ctx_and_workspace(tmp_path)
+    (workspace.root / "f.txt").write_text("say needle_a and needle_b\n")
+    result = GrepTool(workspace=workspace).invoke(
+        {"pattern": r"needle_\w", "output_mode": "content", "-o": True}, ctx
+    )
+    assert result.output.splitlines() == [
+        "f.txt:1:needle_a",
+        "f.txt:1:needle_b",
+    ]
+
+
+def test_grep_offset_skips_leading_results(tmp_path: Path) -> None:
+    ctx, workspace = _grep_fixture(tmp_path)
+    result = GrepTool(workspace=workspace).invoke(
+        {"pattern": "needle", "offset": 1}, ctx
+    )
+    assert result.output.splitlines()[0] == "c.txt"
+
+
+def test_grep_head_limit_zero_is_unlimited(tmp_path: Path) -> None:
+    ctx, workspace = _ctx_and_workspace(tmp_path)
+    (workspace.root / "many.txt").write_text("needle\n" * 300)
+    result = GrepTool(workspace=workspace).invoke(
+        {"pattern": "needle", "output_mode": "content", "head_limit": 0}, ctx
+    )
+    assert result.success is True
+    assert "(Showing" not in result.output
+    assert len(result.output.splitlines()) == 300
 
 
 def test_grep_case_insensitive(tmp_path: Path) -> None:
@@ -527,15 +597,82 @@ def test_grep_multiline_spans_lines(tmp_path: Path) -> None:
     assert "m.py:3:):" in lines
 
 
-def test_grep_skips_hidden_and_dependency_dirs(tmp_path: Path) -> None:
+def _hidden_and_ignored_fixture(tmp_path: Path) -> tuple[ToolContext, WorkspaceRoot]:
+    """keep.py + a gitignored node_modules tree + a hidden .github tree, with
+    the ``.git`` marker rg needs before it honours ``.gitignore``."""
     ctx, workspace = _ctx_and_workspace(tmp_path)
     (workspace.root / "keep.py").write_text("needle\n")
+    (workspace.root / ".git").mkdir()
+    (workspace.root / ".gitignore").write_text("node_modules/\n")
     (workspace.root / "node_modules").mkdir()
     (workspace.root / "node_modules" / "dep.py").write_text("needle\n")
-    (workspace.root / ".git").mkdir()
-    (workspace.root / ".git" / "config").write_text("needle\n")
+    (workspace.root / ".github").mkdir()
+    (workspace.root / ".github" / "ci.yml").write_text("needle\n")
+    return ctx, workspace
+
+
+def test_grep_skips_hidden_and_gitignored_dirs(tmp_path: Path) -> None:
+    ctx, workspace = _hidden_and_ignored_fixture(tmp_path)
     result = GrepTool(workspace=workspace).invoke({"pattern": "needle"}, ctx)
     assert result.output.splitlines() == ["keep.py"]
+
+
+def test_grep_unrestricted_searches_hidden_and_gitignored_dirs(
+    tmp_path: Path,
+) -> None:
+    ctx, workspace = _hidden_and_ignored_fixture(tmp_path)
+    result = GrepTool(workspace=workspace).invoke(
+        {"pattern": "needle", "-u": True}, ctx
+    )
+    assert set(result.output.splitlines()) == {
+        ".github/ci.yml",
+        "keep.py",
+        "node_modules/dep.py",
+    }
+
+
+def test_grep_hidden_root_is_searched_when_targeted(tmp_path: Path) -> None:
+    ctx, workspace = _hidden_and_ignored_fixture(tmp_path)
+    result = GrepTool(workspace=workspace).invoke(
+        {"pattern": "needle", "path": ".github"}, ctx
+    )
+    assert result.output.splitlines() == [".github/ci.yml"]
+
+
+def test_grep_type_filter(tmp_path: Path) -> None:
+    ctx, workspace = _grep_fixture(tmp_path)
+    result = GrepTool(workspace=workspace).invoke(
+        {"pattern": "needle", "type": "py"}, ctx
+    )
+    assert result.output.splitlines() == ["a.py"]
+
+
+def test_grep_unknown_type_rejected_by_rg(tmp_path: Path) -> None:
+    ctx, workspace = _ctx_and_workspace(tmp_path)
+    result = GrepTool(workspace=workspace).invoke(
+        {"pattern": "x", "type": "no-such-type"}, ctx
+    )
+    assert result.success is False
+    assert "no-such-type" in result.summary
+
+
+def test_grep_explicit_file_target_bypasses_the_type_filter(
+    tmp_path: Path,
+) -> None:
+    ctx, workspace = _grep_fixture(tmp_path)
+    result = GrepTool(workspace=workspace).invoke(
+        {"pattern": "needle", "path": "c.txt", "type": "py"}, ctx
+    )
+    assert result.output.splitlines() == ["c.txt"]
+
+
+def test_grep_absolute_glob_filter_rejected(tmp_path: Path) -> None:
+    ctx, workspace = _ctx_and_workspace(tmp_path)
+    result = GrepTool(workspace=workspace).invoke(
+        {"pattern": "x", "glob": "/etc/**"}, ctx
+    )
+    assert result.success is False
+    assert "'path'" in result.summary
 
 
 def test_grep_scoped_to_path(tmp_path: Path) -> None:
@@ -584,7 +721,7 @@ def test_grep_invalid_regex_rejected(tmp_path: Path) -> None:
     ctx, workspace = _ctx_and_workspace(tmp_path)
     result = GrepTool(workspace=workspace).invoke({"pattern": "([unclosed"}, ctx)
     assert result.success is False
-    assert "invalid regex" in result.summary
+    assert "regex parse error" in result.summary
 
 
 def test_grep_bad_output_mode_rejected(tmp_path: Path) -> None:
@@ -596,18 +733,23 @@ def test_grep_bad_output_mode_rejected(tmp_path: Path) -> None:
     assert "output_mode" in result.summary
 
 
-def test_grep_rejects_catastrophic_backtracking_pattern(tmp_path: Path) -> None:
+def test_grep_lookaround_rejected_by_the_rg_dialect(tmp_path: Path) -> None:
     ctx, workspace = _ctx_and_workspace(tmp_path)
-    result = GrepTool(workspace=workspace).invoke({"pattern": "(a+)+$"}, ctx)
+    result = GrepTool(workspace=workspace).invoke(
+        {"pattern": r"foo(?=bar)"}, ctx
+    )
     assert result.success is False
-    assert "catastrophic backtracking" in result.summary
+    assert "look-around" in result.summary
 
 
-def test_grep_rejects_overlapping_alternation_backtracking(tmp_path: Path) -> None:
+def test_grep_nested_quantifiers_are_fine_in_linear_time(tmp_path: Path) -> None:
     ctx, workspace = _ctx_and_workspace(tmp_path)
-    for pattern in ["(a|a)*", "(a|ab)*x", "(a?|b)+"]:
-        result = GrepTool(workspace=workspace).invoke({"pattern": pattern}, ctx)
-        assert result.success is False, pattern
+    (workspace.root / "n.py").write_text("aa.bb. needle\n")
+    result = GrepTool(workspace=workspace).invoke(
+        {"pattern": r"(\w+\.)+ needle"}, ctx
+    )
+    assert result.success is True
+    assert result.output.splitlines() == ["n.py"]
 
 
 def test_grep_allows_ordinary_quantifiers(tmp_path: Path) -> None:
@@ -616,6 +758,77 @@ def test_grep_allows_ordinary_quantifiers(tmp_path: Path) -> None:
     result = GrepTool(workspace=workspace).invoke({"pattern": "a+ needle"}, ctx)
     assert result.success is True
     assert result.output.splitlines() == ["n.py"]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read anything")
+def test_grep_survives_an_unreadable_file(tmp_path: Path) -> None:
+    # rg exits 2 when any file cannot be opened, even though every reachable
+    # match was printed — that must stay a silent per-file skip, not a failure.
+    ctx, workspace = _ctx_and_workspace(tmp_path)
+    (workspace.root / "ok.txt").write_text("needle\n")
+    locked = workspace.root / "locked.txt"
+    locked.write_text("needle\n")
+    locked.chmod(0)
+    try:
+        result = GrepTool(workspace=workspace).invoke({"pattern": "needle"}, ctx)
+    finally:
+        locked.chmod(0o644)
+    assert result.success is True
+    assert result.output.splitlines() == ["ok.txt"]
+
+
+def test_grep_content_head_limit_is_an_output_line_cap(tmp_path: Path) -> None:
+    # The reference surface reads content-mode head_limit as ``head -N``:
+    # context lines count too, so -C cannot balloon past what was asked for.
+    ctx, workspace = _ctx_and_workspace(tmp_path)
+    (workspace.root / "ctx.txt").write_text("hit\nx\n" * 10)
+    result = GrepTool(workspace=workspace).invoke(
+        {"pattern": "hit", "output_mode": "content", "-C": 1, "head_limit": 4},
+        ctx,
+    )
+    assert result.success is True
+    body = [
+        line
+        for line in result.output.splitlines()
+        if not line.startswith("(Showing")
+    ]
+    assert len(body) == 4
+
+
+def test_grep_notes_a_capped_rg_stream(tmp_path: Path) -> None:
+    from dataclasses import replace as dc_replace
+
+    from noeta.runtime.exec_env import LocalExecEnv
+
+    class _CappedStream(LocalExecEnv):
+        def run_argv(self, argv, **kwargs):  # type: ignore[override]
+            return dc_replace(
+                super().run_argv(argv, **kwargs), stdout_truncated=True
+            )
+
+    ctx, workspace = _ctx_and_workspace(tmp_path)
+    (workspace.root / "a.txt").write_text("needle\n")
+    result = GrepTool(workspace=workspace, exec_env=_CappedStream()).invoke(
+        {"pattern": "needle"}, ctx
+    )
+    assert result.success is True
+    assert "a.txt" in result.output.splitlines()[0]
+    assert "partial" in result.output
+
+
+def test_grep_reports_a_missing_rg_binary(tmp_path: Path) -> None:
+    from noeta.runtime.exec_env import LocalExecEnv
+
+    class _NoRg(LocalExecEnv):
+        def run_argv(self, argv, **kwargs):  # type: ignore[override]
+            raise FileNotFoundError("rg")
+
+    ctx, workspace = _ctx_and_workspace(tmp_path)
+    result = GrepTool(workspace=workspace, exec_env=_NoRg()).invoke(
+        {"pattern": "x"}, ctx
+    )
+    assert result.success is False
+    assert "ripgrep" in result.summary
 
 
 def test_grep_skips_binary_files(tmp_path: Path) -> None:
@@ -638,14 +851,14 @@ def test_grep_caps_long_lines(tmp_path: Path) -> None:
     assert len(line) < 2200
 
 
-def test_grep_many_matches_reports_total(tmp_path: Path) -> None:
+def test_grep_default_head_limit_is_250(tmp_path: Path) -> None:
     ctx, workspace = _ctx_and_workspace(tmp_path)
-    (workspace.root / "many.txt").write_text("needle\n" * 120)
+    (workspace.root / "many.txt").write_text("needle\n" * 300)
     result = GrepTool(workspace=workspace).invoke(
         {"pattern": "needle", "output_mode": "content"}, ctx
     )
     assert result.success is True
-    assert "Showing 50 of 120 matches" in result.output
+    assert "Showing 250 of 300 matches" in result.output
 
 
 @pytest.mark.parametrize(
@@ -654,8 +867,11 @@ def test_grep_many_matches_reports_total(tmp_path: Path) -> None:
         {"pattern": ""},
         {"pattern": "x", "path": 3},
         {"pattern": "x", "glob": 3},
+        {"pattern": "x", "type": 3},
         {"pattern": "x", "-A": -1},
-        {"pattern": "x", "head_limit": 0},
+        {"pattern": "x", "context": -1},
+        {"pattern": "x", "head_limit": -1},
+        {"pattern": "x", "offset": -1},
     ],
 )
 def test_grep_arg_validation(tmp_path: Path, arg_overrides: dict[str, object]) -> None:

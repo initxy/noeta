@@ -33,10 +33,10 @@ Declared by the `fs` built-in plugin manifest
 | Tool | Risk | What it does | Source |
 | --- | --- | --- | --- |
 | `Read` | low | Read a file (UTF-8), optionally sliced by line `offset` / `limit`. The full body is always offloaded as an artifact ref. **Reads are unfenced** — see below. | `noeta/builtins/fs/impl/read.py` |
-| `Glob` | low | Match a glob pattern (`**` recurses) under `path` and return the matching paths, sorted and capped. | `noeta/builtins/fs/impl/read.py` |
-| `Grep` | low | Content search with a Python `re` regex, scoped by `path` and filtered by `Glob`. | `noeta/builtins/fs/impl/read.py` |
+| `Glob` | low | Match a glob pattern (`**` recurses) under `path` and return the matching paths, sorted and capped. The walk is `rg --files`: gitignore-aware, hidden skipped. | `noeta/builtins/fs/impl/read.py` |
+| `Grep` | low | Content search with a ripgrep regex, scoped by `path`, filtered by `glob` / `type`, opened up by `-u`. Runs `rg` through the `ExecEnv`, which must have it installed. | `noeta/builtins/fs/impl/read.py` |
 | `Edit` | high | Replace an exact `old` substring in an existing file; `replace_all` switches from unique-match to every occurrence. | `noeta/builtins/fs/impl/edit.py` |
-| `Write` | high | Write a file — create it, or overwrite one already `Read` this session. The parent directory must exist; `content` caps at 64 KB. | `noeta/builtins/fs/impl/edit.py` |
+| `Write` | high | Write a file — create it (missing parent directories are created), or overwrite one already `Read` this session. `content` caps at 8 MB. | `noeta/builtins/fs/impl/edit.py` |
 | `Bash` | high | Run a command in the workspace; `run_in_background` detaches it and returns a `job_id`. | `noeta/builtins/fs/impl/shell.py` |
 | `BashOutput` | low | Read status (`running` / `exited`), exit code, and a fresh output snapshot of a background job. | `noeta/builtins/fs/impl/shell.py` |
 | `KillShell` | high | Stop a background job you started (SIGTERM, then SIGKILL after a grace period). | `noeta/builtins/fs/impl/shell.py` |
